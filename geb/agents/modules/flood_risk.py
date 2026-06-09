@@ -619,7 +619,17 @@ class FloodRiskModule:
         household_points: gpd.GeoDataFrame = (
             self.households.var.household_points.copy().to_crs(flood_depth.rio.crs)
         )
-
+        if (
+            (
+                self.households.model.config["agent_settings"]["households"][
+                    "warning_response"
+                ]
+            )
+            & (self.households.config["adapt"])
+        ):
+            raise ValueError(
+                "Warning: Both warning response and adaptation are enabled in the model configuration. This may lead to unintended consequences as both mechanisms currently influence the same protective measure of flood-proofing buildings. Please use either adapt or warning response, but not both."
+            )
         if self.households.model.config["agent_settings"]["households"][
             "warning_response"
         ]:
@@ -639,24 +649,19 @@ class FloodRiskModule:
                 np.asarray(self.households.var.actions_taken)[:, 1] == 1, "sandbags"
             ] = True
 
+            # Add lead_time information for timing-based damage reduction
+            household_points["action_lead_time"] = self.households.var.action_lead_time
+
             # spatial join to get household attributes to buildings
             buildings: gpd.GeoDataFrame = gpd.sjoin_nearest(
                 buildings, household_points, how="left", exclusive=True
             )
-
-            # Assign object types for buildings based on protective measures taken
             buildings["object_type"] = "building_unprotected"  # reset
-            buildings.loc[buildings["elevated_possessions"], "object_type"] = (
-                "building_elevated_possessions"
+            # Assign object types for buildings centroid based on protective measures taken
+            buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
+            buildings_centroid["maximum_damage"] = (
+                self.households.var.max_dam_buildings_content
             )
-            buildings.loc[buildings["sandbags"], "object_type"] = (
-                "building_with_sandbags"
-            )
-            buildings.loc[
-                buildings["elevated_possessions"] & buildings["sandbags"], "object_type"
-            ] = "building_all_forecast_based"
-            # TODO: need to move the update of the actions takens by households to outside the flood function
-
             # Save the buildings with actions taken
             output_path = (
                 self.households.model.output_folder
@@ -665,31 +670,91 @@ class FloodRiskModule:
             )
             # Ensure the action_maps directory exists before writing the file
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            buildings.to_parquet(output_path)
+            damage_reduction_over_leadtime = self.households.model.config[
+                "agent_settings"
+            ]["households"]["warning_system"]["damage_reduction_over_leadtime"]
+            if damage_reduction_over_leadtime:
+                elevated_mask = buildings["elevated_possessions"] == True
+                # Early action: >48 hours lead time
+                early_mask = elevated_mask & (buildings["action_lead_time"] > 48)
+                buildings.loc[early_mask, "object_type"] = (
+                    "building_elevated_possessions_early"
+                )
+                print(f"Early action buildings: {early_mask.sum()}")
 
-            # Assign object types for buildings centroid based on protective measures taken
-            buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
-            buildings_centroid["object_type"] = np.select(
-                [
-                    (
-                        buildings_centroid["elevated_possessions"]
-                        & buildings_centroid["sandbags"]
-                    ),
-                    buildings_centroid["elevated_possessions"],
-                    buildings_centroid["sandbags"],
-                ],
-                [
-                    "building_all_forecast_based",
-                    "building_elevated_possessions",
-                    "building_with_sandbags",
-                ],
-                default="building_unprotected",
-            )
-            buildings_centroid["maximum_damage"] = (
-                self.households.var.max_dam_buildings_content
-            )
+                # Medium action: 24-48 hours lead time
+                medium_mask = (
+                    elevated_mask
+                    & (buildings["action_lead_time"] > 24)
+                    & (buildings["action_lead_time"] <= 48)
+                )
+                buildings.loc[medium_mask, "object_type"] = (
+                    "building_elevated_possessions_medium"
+                )
+                print(f"Medium action buildings: {medium_mask.sum()}")
 
-        if self.households.config["adapt"]:
+                # Late action: <24 hours lead time
+                late_mask = elevated_mask & (buildings["action_lead_time"] <= 24)
+                buildings.loc[late_mask, "object_type"] = (
+                    "building_elevated_possessions_late"
+                )
+                print(f"Late action buildings: {late_mask.sum()}")
+
+                # Summary of object types
+                object_type_counts = buildings["object_type"].value_counts()
+                print("Building object type counts:")
+                for obj_type, count in object_type_counts.items():
+                    print(f"  {obj_type}: {count}")
+                buildings.to_parquet(output_path)
+                # Timing-based object type assignment for buildings_centroid
+                buildings_centroid["object_type"] = np.select(
+                    [
+                        (buildings_centroid["elevated_possessions"])
+                        & (buildings_centroid["action_lead_time"] > 48),
+                        (buildings_centroid["elevated_possessions"])
+                        & (buildings_centroid["action_lead_time"] > 24)
+                        & (buildings_centroid["action_lead_time"] <= 48),
+                        (buildings_centroid["elevated_possessions"])
+                        & (buildings_centroid["action_lead_time"] <= 24),
+                    ],
+                    [
+                        "building_elevated_possessions_early",
+                        "building_elevated_possessions_medium",
+                        "building_elevated_possessions_late",
+                    ],
+                    default="building_unprotected",
+                )
+            else:
+                # Assign object types for buildings based on protective measures taken
+                buildings.loc[buildings["elevated_possessions"], "object_type"] = (
+                    "building_elevated_possessions"
+                )
+                buildings.loc[buildings["sandbags"], "object_type"] = (
+                    "building_with_sandbags"
+                )
+                buildings.loc[
+                    buildings["elevated_possessions"] & buildings["sandbags"],
+                    "object_type",
+                ] = "building_all_forecast_based"
+                buildings.to_parquet(output_path)
+
+                buildings_centroid["object_type"] = np.select(
+                    [
+                        (
+                            buildings_centroid["elevated_possessions"]
+                            & buildings_centroid["sandbags"]
+                        ),
+                        buildings_centroid["elevated_possessions"],
+                        buildings_centroid["sandbags"],
+                    ],
+                    [
+                        "building_all_forecast_based",
+                        "building_elevated_possessions",
+                        "building_with_sandbags",
+                    ],
+                    default="building_unprotected",
+                )
+        elif self.households.config["adapt"]:
             household_points["building_id"] = (
                 self.households.var.building_id_of_household
             )  # first assign building id to household points gdf

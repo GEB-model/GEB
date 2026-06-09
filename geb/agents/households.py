@@ -1,8 +1,8 @@
 """This module contains the Households agent class for simulating household behavior in the GEB model."""
 
 import json
-from datetime import datetime, timedelta
 import logging
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -12,13 +12,7 @@ import osmnx as ox
 import pandas as pd
 import xarray as xr
 from pyproj import CRS
-from rasterio.features import geometry_mask, shapes
-from rasterio.transform import Affine
-from rasterstats import point_query, zonal_stats
-from scipy import interpolate
-from shapely import unary_union
-from shapely.geometry import Polygon, shape
-from rasterio.features import rasterize
+from rasterio.features import geometry_mask, rasterize
 
 from geb.geb_types import ArrayFloat32, TwoDArrayFloat32
 from geb.workflows.io import read_geom
@@ -97,7 +91,13 @@ class Households(AgentBaseClass):
     return_periods: np.ndarray
     config: dict
 
-    def __init__(self, model: GEBModel, agents: Agents, reduncancy: float,logger: logging.Logger | None = None) -> None:
+    def __init__(
+        self,
+        model: GEBModel,
+        agents: Agents,
+        reduncancy: float,
+        logger: logging.Logger | None = None,
+    ) -> None:
         """Initialize the Households agent module.
 
         Args:
@@ -111,7 +111,7 @@ class Households(AgentBaseClass):
                 the number of agents, e.g. 0.2 means 20% more space is allocated than the number of agents.
         """
         super().__init__(model)
-        
+
         self.logger = logger or logging.getLogger(__name__)  # model logger
         self.agents = agents
         self.reduncancy = reduncancy
@@ -329,7 +329,7 @@ class Households(AgentBaseClass):
     @property
     def name(self) -> str:
         """Return the name of the agent type."""
-        return "agents.households"       
+        return "agents.households"
 
     def load_objects(self) -> None:
         """Load buildings, roads, and rail geometries from model files."""
@@ -503,7 +503,7 @@ class Households(AgentBaseClass):
 
         # Replace NaNs with False (i.e., buildings not in the adapting households list)
         self.buildings["flood_proofed"] = self.buildings["flood_proofed"].fillna(False)
-    
+
     def load_wlranges_and_measures(self) -> None:
         """Loads the water level ranges and appropriate measures, and the implementation times for measures."""
         with open(self.model.files["dict"]["measures/implementation_times"], "r") as f:
@@ -637,49 +637,13 @@ class Households(AgentBaseClass):
             max_n=self.max_n,
             extra_dims_names=["measure_type"],
         )
-
-        # initiate array for warning level [0 = no warning, 1 = measures, 2 = evacuate]
-        self.var.warning_level = DynamicArray(
+        # initiate array for storing the water level range that triggered the warning (if any)
+        self.var.triggered_wlrange = DynamicArray(
             np.zeros(self.n, np.int32), max_n=self.max_n
         )
-
-        # initiate array for storing the trigger of the warning
-        self.var.possible_warning_triggers = ["critical_infrastructure", "water_levels"]
-        self.var.warning_trigger = DynamicArray(
-            np.zeros((self.n, len(self.var.possible_warning_triggers)), dtype=bool),
-            extra_dims_names=["trigger_type"],
-            max_n=self.max_n,
-        )
-
-        # initiate array for response probability (between 0 and 1)
-        # using a fixed seed for reproducibility
-        rng = np.random.default_rng(42)
-        self.var.response_probability = DynamicArray(
-            rng.random(self.n), max_n=self.max_n
-        )
-
-        # initiate array for evacuation status [0=not evacuated, 1=evacuated]
-        self.var.evacuated = DynamicArray(np.zeros(self.n, np.int32), max_n=self.max_n)
-
-        # initiate array for storing the recommended measures received with the warnings
-        self.var.possible_measures_to_recommend = [
-            "elevate possessions",
-            "evacuate",
-        ]
-        self.var.recommended_measures = DynamicArray(
-            np.zeros(
-                (self.n, len(self.var.possible_measures_to_recommend)), dtype=bool
-            ),
-            extra_dims_names=["measure_type"],
-            max_n=self.max_n,
-        )
-
-        # initiate array for storing the actions taken by the household
-        self.var.possible_actions = ["elevate possessions", "evacuate"]
-        self.var.actions_taken = DynamicArray(
-            np.zeros((self.n, len(self.var.possible_actions)), dtype=bool),
-            extra_dims_names=["measure_type"],
-            max_n=self.max_n,
+        # initiate array for storing the lead time of the households action
+        self.var.action_lead_time = DynamicArray(
+            np.zeros(self.n, np.int32), max_n=self.max_n
         )
 
         # initiate array with risk perception [dummy data for now]
@@ -1139,7 +1103,7 @@ class Households(AgentBaseClass):
 
     def create_flood_probability_maps(
         self, date_time: datetime, strategy: int = 1, exceedance: bool = True
-    ) -> xr.DataArray|xr.Dataset:
+    ) -> xr.DataArray | xr.Dataset:
         """Creates flood probability maps based on the ensemble of flood maps for different warning strategies.
 
         Args:
@@ -1209,10 +1173,12 @@ class Households(AgentBaseClass):
             probability = condition.sum(dim="member") / condition.sizes["member"]
 
             if probability.y.values[0] < probability.y.values[-1]:
-                self.logger.info("flipping y axis so it can be used for zonal stats later")
-                probability: Unknown | DataArray = probability.sortby("y", ascending=False)
-            
-
+                self.logger.info(
+                    "flipping y axis so it can be used for zonal stats later"
+                )
+                probability: Unknown | DataArray = probability.sortby(
+                    "y", ascending=False
+                )
 
             # Save probability map as a zarr file
             if exceedance:
@@ -1231,12 +1197,9 @@ class Households(AgentBaseClass):
             )
             probability = write_zarr(da=probability, path=file_path, crs=crs)
             probability_maps.append(
-                probability.expand_dims(
-                    time=[date_time],
-                    range_id=[range_id]
-                )
+                probability.expand_dims(time=[date_time], range_id=[range_id])
             )
-        
+
         probability_maps = xr.combine_by_coords(probability_maps)
 
         return probability_maps
@@ -1347,6 +1310,7 @@ class Households(AgentBaseClass):
             return buildings["flooded"].copy()
         else:
             return buildings
+
     def calculate_communication_efficiency_probability(
         self,
         target_households: gpd.GeoDataFrame,
@@ -1438,84 +1402,86 @@ class Households(AgentBaseClass):
         lead_time = (moment_of_flooding - current_time).total_seconds() / 3600
         lead_time = max(lead_time, 0)  # Ensure non-negative lead time
         return lead_time
-    
+
     def pick_recommendations(
         self, available_measures: list[str], evacuate: bool, lead_time: float
-        ) -> list[str]:
-            """
-            Decide which recommendations to include in the warning based on the lead time available.
+    ) -> list[str]:
+        """
+        Decide which recommendations to include in the warning based on the lead time available.
 
-            Args:
-                available_measures (set[str]): Set of possible in-place measures to recommend.
-                evacuate (bool): Whether evacuation is requested.
-                lead_time (float): Lead time available in hours.
+        Args:
+            available_measures (set[str]): Set of possible in-place measures to recommend.
+            evacuate (bool): Whether evacuation is requested.
+            lead_time (float): Lead time available in hours.
 
-            Returns:
-                chosen (list[str]): List of measures to recommend.
-            """
-            # Get implementation times for measures
-            implementation_times = self.var.implementation_times
-            available_measures = [
-                m for m in available_measures if m and m in implementation_times
-            ]
-            
-            self.logger.debug(f"Available_measures: {available_measures}")
-            self.logger.debug(f"Implementation_times keys: {list(implementation_times.keys())}")
+        Returns:
+            chosen (list[str]): List of measures to recommend.
+        """
+        # Get implementation times for measures
+        implementation_times = self.var.implementation_times
+        available_measures = [
+            m for m in available_measures if m and m in implementation_times
+        ]
 
-            # Filter out empty strings and invalid measures to prevent KeyError
-            valid_measures = {
-                m for m in available_measures if m and m in implementation_times
-            }
-            self.logger.debug(f"Valid_measures after filtering: {valid_measures}")
+        self.logger.debug(f"Available_measures: {available_measures}")
+        self.logger.debug(
+            f"Implementation_times keys: {list(implementation_times.keys())}"
+        )
 
-            # Sort the measures by their implementation times and alphabetically
-            sorted_inplace_measures_per_time = sorted(
-                valid_measures,
-                key=lambda measure: (implementation_times[measure], measure),
+        # Filter out empty strings and invalid measures to prevent KeyError
+        valid_measures = {
+            m for m in available_measures if m and m in implementation_times
+        }
+        self.logger.debug(f"Valid_measures after filtering: {valid_measures}")
+
+        # Sort the measures by their implementation times and alphabetically
+        sorted_inplace_measures_per_time = sorted(
+            valid_measures,
+            key=lambda measure: (implementation_times[measure], measure),
+        )
+
+        # Get evacuation time
+        evac_time = implementation_times["evacuate"]
+
+        # Non-evacuation case
+        # If all measures fit in the lead time, return all
+        if not evacuate:
+            total = sum(
+                implementation_times[measure]
+                for measure in sorted_inplace_measures_per_time
             )
+            if lead_time >= total:
+                return sorted_inplace_measures_per_time
 
-            # Get evacuation time
-            evac_time = implementation_times["evacuate"]
-
-            # Non-evacuation case
-            # If all measures fit in the lead time, return all
-            if not evacuate:
-                total = sum(
-                    implementation_times[measure]
-                    for measure in sorted_inplace_measures_per_time
-                )
-                if lead_time >= total:
-                    return sorted_inplace_measures_per_time
-
-                else:
-                    # If not, pick as many measures as possible within the lead time
-                    chosen_measures = []
-                    used_time = 0
-                    for measure in sorted_inplace_measures_per_time:
-                        imp_time = implementation_times[measure]
-                        if used_time + imp_time <= lead_time:
-                            chosen_measures.append(measure)
-                            used_time += imp_time
-                    if not chosen_measures:
-                        print("No measures fit within the lead time")
-                    return chosen_measures
             else:
-                # Evacuation case
-                # If there is no time for evacuation, nothing to recommend
-                if evac_time > lead_time:
-                    print("Not enough time for evacuation, cannot recommend it")
-                    return []
-                else:
-                    # If there is time for evacuation, check if any in-place measures fit as well
-                    chosen_measures = ["evacuate"]
-                    used_time = evac_time
-                    for measure in sorted_inplace_measures_per_time:
-                        imp_time = implementation_times[measure]
-                        if used_time + imp_time <= lead_time:
-                            chosen_measures.append(measure)
-                            used_time += imp_time
+                # If not, pick as many measures as possible within the lead time
+                chosen_measures = []
+                used_time = 0
+                for measure in sorted_inplace_measures_per_time:
+                    imp_time = implementation_times[measure]
+                    if used_time + imp_time <= lead_time:
+                        chosen_measures.append(measure)
+                        used_time += imp_time
+                if not chosen_measures:
+                    print("No measures fit within the lead time")
+                return chosen_measures
+        else:
+            # Evacuation case
+            # If there is no time for evacuation, nothing to recommend
+            if evac_time > lead_time:
+                print("Not enough time for evacuation, cannot recommend it")
+                return []
+            else:
+                # If there is time for evacuation, check if any in-place measures fit as well
+                chosen_measures = ["evacuate"]
+                used_time = evac_time
+                for measure in sorted_inplace_measures_per_time:
+                    imp_time = implementation_times[measure]
+                    if used_time + imp_time <= lead_time:
+                        chosen_measures.append(measure)
+                        used_time += imp_time
 
-                    return chosen_measures
+                return chosen_measures
 
     def warning_communication(
         self,
@@ -1560,7 +1526,7 @@ class Households(AgentBaseClass):
             raise ValueError(
                 "Communication efficiency is too low to warn any households. Please increase it or check the target households."
             )
-   
+
         rng = np.random.default_rng(seed=42)  # Fixed seed for reproducibility
         if weight_by_socioeconomic_factors:
             # Calculate individual communication efficiency probabilities based on socio-economic factors
@@ -1582,14 +1548,14 @@ class Households(AgentBaseClass):
                 size=n_to_select,
                 replace=False,  # Each household can only be selected once for warning
             )
-        
+
         selected_households = target_households.loc[chosen_indices]
         n_feasible_warnings = len(selected_households)
 
         self.logger.info(
             f"Communication efficiency resulted in {n_feasible_warnings} out of {n_target_households} households receiving warning by using random sampling {'with' if weight_by_socioeconomic_factors else 'without'} socio-economic weighting."
         )
-        
+
         # Get lead time in hours
         lead_time = self.compute_lead_time()
         self.logger.info(f"Lead time for warning: {lead_time:.0f} hours")
@@ -1616,8 +1582,6 @@ class Households(AgentBaseClass):
         possible_warning_triggers = self.var.possible_warning_triggers
 
         n_warned_households = 0
-        self.var.triggered_wlrange = np.full(self.n, np.nan)
-        self.var.action_lead_time = np.full(self.n, np.nan)
         n_ranges = len(self.var.wlranges_and_measures)
         for household_id in selected_households.index:
             current_level = int(self.var.warning_level[household_id])
@@ -1652,7 +1616,7 @@ class Households(AgentBaseClass):
     def water_level_warning_strategy(
         self,
         date_time: datetime.datetime,
-        warning_type: str = 'building_based',
+        warning_type: str = "building_based",
         prob_threshold: float = 0.6,
         buildings_hit_threshold: float = 0.1,
         area_hit_threshold: float = 0.1,
@@ -1676,7 +1640,7 @@ class Households(AgentBaseClass):
             exceedance: Whether to create a probability map based on exceedance of a critical water thresholds or a probability of a waterlevel range.
             strategy_id: Identifier of the warning strategy (1 for water level ranges with measures).
         """
-        
+
         # Get the range ids and initialize the warning_log
         range_ids = list(self.var.wlranges_and_measures.keys())
         warning_log = []
@@ -1685,7 +1649,9 @@ class Households(AgentBaseClass):
 
         # Create probability maps
         # TODO: Only create flood probability maps if they do not exist yet
-        probability_maps = self.create_flood_probability_maps(strategy=strategy_id, date_time=date_time, exceedance=exceedance)
+        probability_maps = self.create_flood_probability_maps(
+            strategy=strategy_id, date_time=date_time, exceedance=exceedance
+        )
 
         # Load households and postal codes
         buildings = self.var.buildings.copy()
@@ -1700,15 +1666,19 @@ class Households(AgentBaseClass):
         # because household_points.index corresponds to the arrays in self.var
         if "Education" not in households.columns:
             households["Education"] = households.index.map(
-                lambda idx: self.var.education_level.data[idx]
-                if idx < len(self.var.education_level.data)
-                else np.nan
+                lambda idx: (
+                    self.var.education_level.data[idx]
+                    if idx < len(self.var.education_level.data)
+                    else np.nan
+                )
             )
         if "Income" not in households.columns:
             households["Income"] = households.index.map(
-                lambda idx: self.var.income.data[idx]
-                if idx < len(self.var.income.data)
-                else np.nan
+                lambda idx: (
+                    self.var.income.data[idx]
+                    if idx < len(self.var.income.data)
+                    else np.nan
+                )
             )
 
         postal_codes = self.postal_codes
@@ -1717,22 +1687,27 @@ class Households(AgentBaseClass):
         # Intersection flood maps with buildings or postal codes
         for range_id in range_ids:
             probability_map = probability_maps.sel(range_id=range_id)
-            flood_probability_map: xr.DataArray = probability_map[list(probability_map.data_vars)[0]]
-            
-            if warning_type == 'building_based':
+            flood_probability_map: xr.DataArray = probability_map[
+                list(probability_map.data_vars)[0]
+            ]
+
+            if warning_type == "building_based":
                 hit = self.identify_flooded_buildings(
                     buildings, flood_probability_map, prob_threshold, return_series=True
                 )
                 buildings[f"hit_r{range_id}"] = hit
 
-            elif warning_type == 'area_based':
+            elif warning_type == "area_based":
                 if postal_codes.crs != flood_probability_map.rio.crs:
                     postal_codes = postal_codes.to_crs(flood_probability_map.rio.crs)
 
                 # Rasterize postal codes to the same grid as the probability map
                 pc_mask = rasterize(
                     ((geom, i) for i, geom in enumerate(postal_codes.geometry)),
-                    out_shape=(flood_probability_map.rio.height, flood_probability_map.rio.width),
+                    out_shape=(
+                        flood_probability_map.rio.height,
+                        flood_probability_map.rio.width,
+                    ),
                     transform=flood_probability_map.rio.transform(),
                     all_touched=True,
                     fill=-1,
@@ -1756,21 +1731,25 @@ class Households(AgentBaseClass):
 
                         issue_warning = percentage >= area_hit_threshold
                         postal_codes.loc[i, f"hit_r{range_id}"] = issue_warning
-                        postal_codes.loc[
-                            postal_code, f"issue_warning_r{range_id}"
-                        ] = issue_warning
+                        postal_codes.loc[postal_code, f"issue_warning_r{range_id}"] = (
+                            issue_warning
+                        )
 
                         if issue_warning:
                             self.logger.info(
-                                 f"Warning issued to postal code {postal_code} on {date_time.isoformat()} for range {range_id}: {percentage:.0%} of pixels > {prob_threshold}"
+                                f"Warning issued to postal code {postal_code} on {date_time.isoformat()} for range {range_id}: {percentage:.0%} of pixels > {prob_threshold}"
                             )
 
-        if warning_type == 'building_based':
+        if warning_type == "building_based":
             # Calculate fraction of flooded buildings per postal code
             hit_cols = [f"hit_r{rid}" for rid in range_ids]
-            building_fraction_hit_per_postal_code = buildings.groupby("postcode")[hit_cols].mean()
+            building_fraction_hit_per_postal_code = buildings.groupby("postcode")[
+                hit_cols
+            ].mean()
             building_fraction_hit_per_postal_code_map = postal_codes.merge(
-                building_fraction_hit_per_postal_code.reset_index(), on="postcode", how="right"
+                building_fraction_hit_per_postal_code.reset_index(),
+                on="postcode",
+                how="right",
             )
             building_fraction_hit_per_postal_code_map.to_parquet(
                 warnings_folder
@@ -1782,12 +1761,12 @@ class Households(AgentBaseClass):
 
             # Iterate through each postal code and check the fraction of flooded buildings
             for postal_code, row in building_fraction_hit_per_postal_code.iterrows():
-                 for range_id in range_ids:
+                for range_id in range_ids:
                     percentage_flooded = row[f"hit_r{range_id}"]
                     issue_warning = percentage_flooded >= buildings_hit_threshold
-                    postal_codes.loc[
-                        postal_code, f"issue_warning_r{range_id}"
-                    ] = issue_warning
+                    postal_codes.loc[postal_code, f"issue_warning_r{range_id}"] = (
+                        issue_warning
+                    )
                     if issue_warning:
                         self.logger.info(
                             f"Warning issued to postal code {postal_code} on {date_time.isoformat()} for range {range_id}: {percentage_flooded:.0%} of buildings flooded"
@@ -1798,7 +1777,7 @@ class Households(AgentBaseClass):
         triggered_ranges = []
         evacuate = False
         for postal_code, row in postal_codes.iterrows():
-             for range_id in range_ids:         
+            for range_id in range_ids:
                 issue_warning = row[f"issue_warning_r{range_id}"]
                 if issue_warning:
                     # Get the measures and evacuation flag from the json dictionary to use in the warning communication function
@@ -1812,7 +1791,9 @@ class Households(AgentBaseClass):
 
                     if measures or evacuate:
                         # Filter the affected households based on the postal code
-                        affected_households = households[households["postcode"] == postal_code]
+                        affected_households = households[
+                            households["postcode"] == postal_code
+                        ]
 
                         n_warned_households = self.warning_communication(
                             target_households=affected_households,
@@ -1828,7 +1809,7 @@ class Households(AgentBaseClass):
                             {
                                 "date_time": date_time.isoformat(),
                                 "postcode": postal_code,
-                                'warning_type': warning_type,
+                                "warning_type": warning_type,
                                 "measures": measures,
                                 "triggered_ranges": triggered_ranges,
                                 "n_affected_households": len(affected_households),
@@ -2099,15 +2080,19 @@ class Households(AgentBaseClass):
         # Add education and income data here as well for consistency
         if "Education" not in households.columns:
             households["Education"] = households.index.map(
-                lambda idx: self.var.education_level.data[idx]
-                if idx < len(self.var.education_level.data)
-                else np.nan
+                lambda idx: (
+                    self.var.education_level.data[idx]
+                    if idx < len(self.var.education_level.data)
+                    else np.nan
+                )
             )
         if "Income" not in households.columns:
             households["Income"] = households.index.map(
-                lambda idx: self.var.income.data[idx]
-                if idx < len(self.var.income.data)
-                else np.nan
+                lambda idx: (
+                    self.var.income.data[idx]
+                    if idx < len(self.var.income.data)
+                    else np.nan
+                )
             )
 
         # Load substations and critical facilities
@@ -2324,79 +2309,50 @@ class Households(AgentBaseClass):
         Raises:
             ValueError: If an unknown warning type is specified in the configuration.
         """
-        print("Running emergency response decision-making for households...")
-        print(f"Date/time: {date_time}")
+        self.logger.info("Running emergency response decision-making for households...")
+        self.logger.info(f"Date/time: {date_time}")
 
         # Get warning system config settings
         warning_config = self.model.config["agent_settings"]["households"][
             "warning_system"
         ]
         warning_type = warning_config["strategies"]["warning_type"]
-        print(f"Warning type: {warning_type}")
+        self.logger.info(f"Warning type: {warning_type}")
 
         # Determine response rate based on warning type
-        if warning_type == "impact_based":
-            responsive_ratio = warning_config["response_rates"]["impact_based_warnings"]
-
-        elif warning_type == "flood_general":
+        if warning_type == "building_based":
             responsive_ratio = warning_config["response_rates"][
-                "flood_general_warnings"
+                "building_based_warnings"
             ]
+
+        elif warning_type == "area_based":
+            responsive_ratio = warning_config["response_rates"]["area_based_warnings"]
         else:
             raise ValueError(
-                f"Unknown warning type: {warning_type} selected in config, choose 'impact_based' or 'flood_general'."
+                f"Unknown warning type: {warning_type} selected in config, choose 'building_based' or 'area_based'."
             )
 
-        print(f"Responsive ratio: {responsive_ratio}")
-        print(f"Responsive ratio: {responsive_ratio * 100:.2f}%")
+        self.logger.info(f"Responsive ratio: {responsive_ratio * 100:.2f}%")
 
         # Get lead time in hours
         lead_time = self.compute_lead_time()
-        print(f"Lead time: {lead_time:.1f} hours")
+        self.logger.info(f"Lead time: {lead_time:.1f} hours")
 
         # Filter households that did not evacuate, were warned and are responsive
         not_evacuated_ids = self.var.evacuated == 0
         warned_ids = self.var.warning_reached == 1
         responsive_ids = self.var.response_probability < responsive_ratio
 
-        print("\n--- HOUSEHOLD FILTERING ---")
-        print(f"Total households: {len(self.var.household_points)}")
-        print(f"Not evacuated: {np.sum(not_evacuated_ids)}")
-        print(f"Warned: {np.sum(warned_ids)}")
-        print(f"Responsive: {np.sum(responsive_ids)}")
-
-        if np.sum(warned_ids) > 0:
-            print(
-                f"Households that received warnings: {np.where(warned_ids)[0][:10]}..."
-            )  # Show first 10
-            # Check what recommended measures they have
-            warned_household_indices = np.where(warned_ids)[0][:5]  # Check first 5
-            print("\nRecommended measures for first few warned households:")
-            for idx in warned_household_indices:
-                measures_for_hh = self.var.recommended_measures[idx]
-                if np.any(measures_for_hh):
-                    recommended_actions = [
-                        self.var.possible_measures[i]
-                        for i, has_measure in enumerate(measures_for_hh)
-                        if has_measure
-                    ]
-                    print(f"  Household {idx}: {recommended_actions}")
-                else:
-                    print(f"  Household {idx}: No measures recommended")
-
-        if np.sum(responsive_ids) == 0:
-            print(
-                f"WARNING: No households are responsive (all response_probability >= {responsive_ratio})"
-            )
-            print(
-                f"Response probabilities range: {self.var.response_probability.min():.3f} - {self.var.response_probability.max():.3f}"
-            )
+        self.logger.info(f"Total households: {len(self.var.household_points)}")
+        self.logger.info(f"Non-evacuated households: {np.sum(not_evacuated_ids)}")
+        self.logger.info(f"Warned households: {np.sum(warned_ids)}")
+        self.logger.info(f"Responsive households: {np.sum(responsive_ids)}")
 
         # Combine the filters and apply it to household_points
         eligible_ids = np.asarray(warned_ids & not_evacuated_ids & responsive_ids)
         eligible_households = self.var.households_with_postal_codes.loc[eligible_ids]
 
-        print(f"Eligible households for action: {len(eligible_households)}")
+        self.logger.info(f"Eligible households for action: {len(eligible_households)}")
 
         # Get the list of possible actions for eligible households
         # (this is a list of all possible actions, not the recommended actions given by the warning strategies)
@@ -2406,22 +2362,15 @@ class Households(AgentBaseClass):
         # Initialize an empty list to log actions taken
         actions_log = []
 
-        print("\n--- PROCESSING ELIGIBLE HOUSEHOLDS ---")
+        self.logger.info(
+            "Processing eligible households for action based on warnings and lead time..."
+        )
 
         # For every eligible household, do the recommended measures in the communicated warning
         for i, household_id in enumerate(eligible_households.index):
-            print(
-                f"\nProcessing household {household_id} ({i + 1}/{len(eligible_households)})"
+            self.logger.info(
+                f"Processing household {household_id} ({i + 1}/{len(eligible_households)})"
             )
-
-            # Check what was recommended for this household
-            recommended_for_hh = self.var.recommended_measures[household_id]
-            recommended_actions = [
-                self.var.possible_measures[i]
-                for i, has_measure in enumerate(recommended_for_hh)
-                if has_measure
-            ]
-            print(f"  Recommended actions: {recommended_actions}")
 
             # Check if elevated possessions action is being taken for the FIRST TIME
             # (before updating actions_taken array)
@@ -2597,9 +2546,6 @@ class Households(AgentBaseClass):
         Args:
             date_time: The forecast date time for which to update the households geodataframe.
         """
-<<<<<<< HEAD
-        household_points: gpd.GeoDataFrame = self.var.household_points.copy()
-=======
         household_points: gpd.GeoDataFrame = (
             self.var.households_with_postal_codes.copy()
         )
@@ -2607,7 +2553,6 @@ class Households(AgentBaseClass):
         action_maps_folder: Path = self.model.output_folder / "action_maps"
         action_maps_folder.mkdir(parents=True, exist_ok=True)
 
->>>>>>> cf97c6b046a395cd4914d7d5fbd13329e71ca3ac
         global_vars = [
             "warning_reached",
             "warning_level",
@@ -2676,362 +2621,6 @@ class Households(AgentBaseClass):
             / f"households_with_warning_parameters_{date_time.strftime('%Y%m%dT%H%M%S')}.geoparquet"
         )
 
-<<<<<<< HEAD
-    def flood(self, flood_depth: xr.DataArray) -> float:
-        """This function computes the damages for the assets and land use types in the model.
-
-        Args:
-            flood_depth: The flood map containing water levels for the flood event [m].
-
-        Returns:
-            The total flood damages for the event for all assets and land use types.
-
-        """
-        flood_depth: xr.DataArray = flood_depth.compute()
-
-        buildings: gpd.GeoDataFrame = self.buildings.copy().to_crs(flood_depth.rio.crs)
-
-        household_points: gpd.GeoDataFrame = self.var.household_points.copy().to_crs(
-            flood_depth.rio.crs
-        )
-
-        if self.model.config["agent_settings"]["households"]["warning_response"]:
-            # make sure household points and actions taken have the same length
-            assert len(household_points) == self.var.actions_taken.shape[0]
-
-            # add columns for protective actions
-            # DISABLED: Sandbags measure not being used
-            # household_points["sandbags"] = False
-            household_points["elevated_possessions"] = False
-
-            # mark households that took protective actions and add timing info
-            household_points.loc[
-                np.asarray(self.var.actions_taken)[:, 0] == 1, "elevated_possessions"
-            ] = True
-
-            # Add lead_time information for timing-based damage reduction
-            household_points["action_lead_time"] = self.var.action_lead_time
-
-            # Debug lead times
-            valid_lead_times = pd.notna(household_points["action_lead_time"])
-            print(f"Households with valid lead times: {valid_lead_times.sum()}")
-            if valid_lead_times.sum() > 0:
-                lead_time_stats = household_points.loc[
-                    valid_lead_times, "action_lead_time"
-                ]
-                print(
-                    f"Lead time range: {lead_time_stats.min():.1f} - {lead_time_stats.max():.1f} hours"
-                )
-                print(f"Average lead time: {lead_time_stats.mean():.1f} hours")
-            print()
-            # DISABLED: Sandbags measure not being used
-            # household_points.loc[
-            #     np.asarray(self.var.actions_taken)[:, 1] == 1, "sandbags"
-            # ] = True
-
-            # spatial join to get household attributes to buildings
-            print(
-                f"Before spatial join: {len(buildings)} buildings, {len(household_points)} households"
-            )
-            print(
-                f"Households with elevated possessions: {household_points['elevated_possessions'].sum()}"
-            )
-            print(
-                f"Households with action_lead_time data: {pd.notna(household_points['action_lead_time']).sum()}"
-            )
-
-            buildings: gpd.GeoDataFrame = gpd.sjoin_nearest(
-                buildings, household_points, how="left", exclusive=True
-            )
-
-            print(f"After spatial join: {len(buildings)} buildings")
-            print(
-                f"Buildings with household match: {pd.notna(buildings.get('elevated_possessions', pd.Series())).sum()}"
-            )
-            print(
-                f"Buildings with elevated possessions: {buildings.get('elevated_possessions', pd.Series()).sum()}"
-            )
-
-            # Assign object types for buildings based on protective measures taken and timing
-            buildings["object_type"] = "building_unprotected"  # reset
-
-            # Timing-based object type assignment for elevated possessions
-            elevated_mask = buildings["elevated_possessions"] == True
-            print(f"Buildings with elevated possessions mask: {elevated_mask.sum()}")
-
-            # Early action: >48 hours lead time
-            early_mask = elevated_mask & (buildings["action_lead_time"] > 48)
-            buildings.loc[early_mask, "object_type"] = (
-                "building_elevated_possessions_early"
-            )
-            print(f"Early action buildings: {early_mask.sum()}")
-
-            # Medium action: 24-48 hours lead time
-            medium_mask = (
-                elevated_mask
-                & (buildings["action_lead_time"] > 24)
-                & (buildings["action_lead_time"] <= 48)
-            )
-            buildings.loc[medium_mask, "object_type"] = (
-                "building_elevated_possessions_medium"
-            )
-            print(f"Medium action buildings: {medium_mask.sum()}")
-
-            # Late action: <24 hours lead time
-            late_mask = elevated_mask & (buildings["action_lead_time"] <= 24)
-            buildings.loc[late_mask, "object_type"] = (
-                "building_elevated_possessions_late"
-            )
-            print(f"Late action buildings: {late_mask.sum()}")
-
-            # Summary of object types
-            object_type_counts = buildings["object_type"].value_counts()
-            print("Building object type counts:")
-            for obj_type, count in object_type_counts.items():
-                print(f"  {obj_type}: {count}")
-            print()
-            # DISABLED: Sandbags measure not being used
-            # buildings.loc[buildings["sandbags"], "object_type"] = (
-            #     "building_with_sandbags"
-            # )
-            # buildings.loc[
-            #     buildings["elevated_possessions"] & buildings["sandbags"], "object_type"
-            # ] = "building_all_forecast_based"
-            # TODO: need to move the update of the actions takens by households to outside the flood function
-
-            # Save the buildings with actions taken
-            # Create the action_maps directory if it doesn't exist
-            action_maps_dir = self.model.output_folder / "action_maps"
-            action_maps_dir.mkdir(parents=True, exist_ok=True)
-
-            buildings.to_parquet(
-                action_maps_dir / "buildings_with_protective_measures.geoparquet"
-            )
-
-            # Assign object types for buildings centroid based on protective measures taken and timing
-            buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
-            # buildings_centroid = buildings.to_crs(flood_depth.rio.crs)
-            # buildings_centroid["geometry"] = buildings.geometry.centroid
-
-            print(f"Buildings_centroid: {len(buildings_centroid)} points")
-            print(
-                f"Buildings_centroid with elevated possessions: {buildings_centroid['elevated_possessions'].sum()}"
-            )
-
-            # Timing-based object type assignment for buildings_centroid
-            buildings_centroid["object_type"] = np.select(
-                [
-                    (buildings_centroid["elevated_possessions"])
-                    & (buildings_centroid["action_lead_time"] > 48),
-                    (buildings_centroid["elevated_possessions"])
-                    & (buildings_centroid["action_lead_time"] > 24)
-                    & (buildings_centroid["action_lead_time"] <= 48),
-                    (buildings_centroid["elevated_possessions"])
-                    & (buildings_centroid["action_lead_time"] <= 24),
-                ],
-                [
-                    "building_elevated_possessions_early",
-                    "building_elevated_possessions_medium",
-                    "building_elevated_possessions_late",
-                ],
-                default="building_unprotected",
-            )
-
-            # Summary of object types for buildings_centroid
-            centroid_object_type_counts = buildings_centroid[
-                "object_type"
-            ].value_counts()
-            print("Buildings_centroid object type counts:")
-            for obj_type, count in centroid_object_type_counts.items():
-                print(f"  {obj_type}: {count}")
-            print()
-            # Original code with sandbags (disabled):
-            # buildings_centroid["object_type"] = np.select(
-            #     [
-            #         (
-            #             buildings_centroid["elevated_possessions"]
-            #             & buildings_centroid["sandbags"]
-            #         ),
-            #         buildings_centroid["elevated_possessions"],
-            #         buildings_centroid["sandbags"],
-            #     ],
-            #     [
-            #         "building_all_forecast_based",
-            #         "building_elevated_possessions",
-            #         "building_with_sandbags",
-            #     ],
-            #     default="building_unprotected",
-            # )
-            buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
-
-        # if self.config["adapt"]:
-        #     household_points["building_id"] = (
-        #         self.var.building_id_of_household
-        #     )  # first assign building id to household points gdf
-        #     household_points = household_points.merge(
-        #         buildings[["id", "flood_proofed"]],
-        #         left_on="building_id",
-        #         right_on="id",
-        #         how="left",
-        #     )  # now merge to get flood proofed status
-
-        #     buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
-
-        #     buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
-
-        #     buildings["object_type"] = np.where(
-        #         buildings["flood_proofed"],
-        #         "building_flood_proofed",
-        #         "building_unprotected",
-        #     )
-
-        #     buildings_centroid["object_type"] = np.where(
-        #         buildings_centroid["flood_proofed"],
-        #         "building_protected",
-        #         "building_unprotected",
-        #     )
-
-        else:
-            household_points["protect_building"] = False
-
-            buildings: gpd.GeoDataFrame = gpd.sjoin_nearest(
-                buildings, household_points, how="left", exclusive=True
-            )
-
-            buildings["object_type"] = "building_unprotected"
-
-            # Right now there is no condition to make the households protect their buildings outside of the warning response
-            buildings.loc[buildings["protect_building"], "object_type"] = (
-                "building_protected"
-            )
-
-            buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
-
-            # buildings_centroid = buildings.to_crs(flood_depth.rio.crs)
-            # buildings_centroid["geometry"] = buildings.geometry.centroid
-            # buildings_centroid.to_parquet(
-            #     self.model.output_folder
-            #     / "buildings_centroid_for_content_damage.geoparquet"
-            # )
-
-            # Use only the basic object types that exist in the vulnerability curves for non-warning scenarios
-            buildings_centroid["object_type"] = buildings_centroid[
-                "protect_building"
-            ].apply(lambda x: "building_protected" if x else "building_unprotected")
-            buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
-
-        # Create the folder to save damage maps if it doesn't exist
-        damage_folder: Path = self.model.output_folder / "damage_maps"
-        damage_folder.mkdir(parents=True, exist_ok=True)
-
-        damages_buildings_content = VectorScanner(
-            features=buildings_centroid,
-            hazard=flood_depth,
-            vulnerability_curves=self.buildings_content_curve,
-        )
-
-        total_damages_content = damages_buildings_content.sum()
-
-        # save it to a gpkg file
-        gdf_content = buildings_centroid.copy()
-        gdf_content["damage"] = damages_buildings_content
-        category_name: str = "buildings_content"
-        filename: str = f"damage_map_{category_name}.geoparquet"
-        gdf_content.to_parquet(damage_folder / filename)
-
-        print(f"damages to building content are: {total_damages_content}")
-
-        # Compute damages for buildings structure
-        damages_buildings_structure: pd.Series = VectorScanner(
-            features=buildings.rename(columns={"maximum_damage_m2": "maximum_damage"}),  # ty:ignore[invalid-argument-type]
-            hazard=flood_depth,
-            vulnerability_curves=self.buildings_structure_curve,
-        )
-
-        total_damage_structure = damages_buildings_structure.sum()
-
-        print(f"damages to building structure are: {total_damage_structure}")
-
-        # save it to a gpkg file
-        gdf_structure = buildings.copy()
-        gdf_structure["damage"] = damages_buildings_structure
-        category_name: str = "buildings_structure"
-        filename: str = f"damage_map_{category_name}.geoparquet"
-        gdf_structure.to_parquet(damage_folder / filename)
-
-        print(
-            f"Total damages to buildings are: {total_damages_content + total_damage_structure}"
-        )
-
-        agriculture = from_landuse_raster_to_polygon(
-            self.HRU.decompress(self.HRU.var.land_owners != -1),
-            self.HRU.transform,
-            self.model.crs,
-        )
-        agriculture["object_type"] = "agriculture"
-        agriculture["maximum_damage"] = self.var.max_dam_agriculture_m2
-
-        agriculture = agriculture.to_crs(flood_depth.rio.crs)
-
-        damages_agriculture = VectorScanner(
-            features=agriculture,
-            hazard=flood_depth,
-            vulnerability_curves=self.var.agriculture_curve,
-        )
-        total_damages_agriculture = damages_agriculture.sum()
-        print(f"damages to agriculture are: {total_damages_agriculture}")
-
-        # Load landuse and make turn into polygons
-        forest = from_landuse_raster_to_polygon(
-            self.HRU.decompress(self.HRU.var.land_use_type == FOREST),
-            self.HRU.transform,
-            self.model.crs,
-        )
-        forest["object_type"] = "forest"
-        forest["maximum_damage"] = self.var.max_dam_forest_m2
-
-        forest = forest.to_crs(flood_depth.rio.crs)
-
-        damages_forest = VectorScanner(
-            features=forest,
-            hazard=flood_depth,
-            vulnerability_curves=self.var.forest_curve,
-        )
-        total_damages_forest = damages_forest.sum()
-        print(f"damages to forest are: {total_damages_forest}")
-
-        roads = self.roads.to_crs(flood_depth.rio.crs)
-        damages_roads = VectorScanner(
-            features=roads.rename(columns={"maximum_damage_m": "maximum_damage"}),
-            hazard=flood_depth,
-            vulnerability_curves=self.var.road_curves,
-        )
-        total_damages_roads = damages_roads.sum()
-        print(f"damages to roads are: {total_damages_roads} ")
-
-        rail = self.rail.to_crs(flood_depth.rio.crs)
-        damages_rail = VectorScanner(
-            features=rail.rename(columns={"maximum_damage_m": "maximum_damage"}),
-            hazard=flood_depth,
-            vulnerability_curves=self.var.rail_curve,
-        )
-        total_damages_rail = damages_rail.sum()
-        print(f"damages to rail are: {total_damages_rail}")
-
-        total_flood_damages = (
-            total_damage_structure
-            + total_damages_content
-            + total_damages_roads
-            + total_damages_rail
-            + total_damages_forest
-            + total_damages_agriculture
-        )
-        print(f"the total flood damages are: {total_flood_damages}")
-
-        return total_flood_damages
-
-=======
->>>>>>> cf97c6b046a395cd4914d7d5fbd13329e71ca3ac
     def water_demand(
         self,
         household_demand_to_grid_fn: Callable[

@@ -100,8 +100,8 @@ agent_settings:
       damage_reduction_over_leadtime: true # Whether to consider the reduction of damage over lead time due to more effective warnings. The earlier the action the more damage reduction.
       evacuation_lead_time_threshold: 24 # Lead time threshold for evacuation warnings (hours)
       response_rates: # Response rates for different warning types
-        flood_general_warnings: 0.35 # Response rate for flood general warnings (0.0-1.0)
-        impact_based_warnings: 0.4 # Response rate for impact-based warnings with specific measures (0.0-1.0)
+        area_based_warnings: 0.35 # Response rate for area-based warnings (0.0-1.0)
+        building_based_warnings: 0.4 # Response rate for building-based warnings with specific measures (0.0-1.0)
       strategies: # Warning strategy settings
         water_level_warnings: true # Enable water level based warnings with measures
         critical_infrastructure_warnings: false  # Enable critical infrastructure based evacuation warnings  
