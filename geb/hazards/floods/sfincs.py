@@ -588,7 +588,7 @@ class SFINCSRootModel:
                 nlevels=20,
                 nrmax=500,
             )
-
+            sf.write_grid()
             sf.write_subgrid()
         else:
             self.logger.info(
@@ -619,10 +619,9 @@ class SFINCSRootModel:
                 # set the modified grids back to the model
                 sf.set_grid(elevation, name="dep")
                 sf.set_grid(mannings, name="manning")
+                sf.write_grid()
 
         # write all components, except forcing which must be done after the model building
-        sf.write_grid()
-        sf.write_subgrid()
         sf.write_geoms()
         sf.write_states()
         sf.write_config()
