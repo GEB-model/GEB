@@ -9,6 +9,7 @@ and read simulation results.
 import logging
 import math
 import shutil
+import time
 import warnings
 from datetime import datetime
 from pathlib import Path
@@ -566,6 +567,7 @@ class SFINCSRootModel:
                 f"Setting up SFINCS subgrid with {grid_size_multiplier} subgrid pixels..."
             )
             # only burn rivers that are wider than the subgrid pixel size
+            start_time = time.perf_counter()
             sf.setup_subgrid(
                 datasets_dep=DEMs,
                 datasets_rgh=[
@@ -588,8 +590,18 @@ class SFINCSRootModel:
                 nlevels=20,
                 nrmax=500,
             )
+            first_subgrid_time = time.perf_counter() - start_time
+            self.logger.info(f"Subgrid setup took {first_subgrid_time:.2f} seconds")
+            self.logger.info("Writing grid files...")
             sf.write_grid()
+            write_grid_time = time.perf_counter() - start_time - first_subgrid_time
+            self.logger.info(f"Grid writing took {write_grid_time:.2f} seconds")
+            self.logger.info("Writing subgrid files...")
             sf.write_subgrid()
+            subgrid_time = (
+                time.perf_counter() - start_time - first_subgrid_time - write_grid_time
+            )
+            self.logger.info(f"Subgrid writing took {subgrid_time:.2f} seconds")
         else:
             self.logger.info(
                 "Setting up SFINCS without subgrid - burning rivers into main grid..."
