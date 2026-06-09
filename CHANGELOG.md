@@ -4,6 +4,7 @@
 - Reorganize output folder so that all output files are saved under the run name ([#852](https://github.com/GEB-model/GEB/issues/852)). This allows us to keep files from different runs nicely separated.
 - Migrate to new Destination Earth API ([#846](https://github.com/GEB-model/GEB/issues/844)).
 - Interactive charts option for discharge plots on evaluation dashboard. 
+- Simplification and optimalization of geb init-multiple functionality, solving https://github.com/GEB-model/GEB/issues/629
 
 Important notes:
 - In this version, the output folder is re-organized. For a specific run name (e.g., default or spinup) all files (i.e., reported data, evaluation data, flood maps etc.) are saved in the folder output/run_name.
