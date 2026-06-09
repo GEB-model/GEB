@@ -637,10 +637,6 @@ class Households(AgentBaseClass):
             max_n=self.max_n,
             extra_dims_names=["measure_type"],
         )
-        # initiate array for storing the water level range that triggered the warning (if any)
-        self.var.triggered_wlrange = DynamicArray(
-            np.zeros(self.n, np.int32), max_n=self.max_n
-        )
         # initiate array for storing the lead time of the households action
         self.var.action_lead_time = DynamicArray(
             np.zeros(self.n, np.int32), max_n=self.max_n
@@ -1489,7 +1485,6 @@ class Households(AgentBaseClass):
         measures: list[str],
         evacuate: bool,
         trigger: str,
-        triggered_wlrange: int | None = None,
         communication_efficiency: float = 1,
         evacuation_lead_time_threshold: int = 48,
         weight_by_socioeconomic_factors: bool = False,
@@ -1505,7 +1500,6 @@ class Households(AgentBaseClass):
             measures: List of recommended protective measures to communicate (strings).
             evacuate: Whether evacuation should be advised for this warning.
             trigger: Identifier of the trigger that initiated the warning.
-            triggered_wlrange: The water level range that triggered the warning, if applicable.
             communication_efficiency: Fraction of target households that successfully receive the warning (0 to 1).
             evacuation_lead_time_threshold: Maximum lead time in hours for which evacuation warnings can be effective.
             weight_by_socioeconomic_factors: Whether to weight the selection of households by socio-economic factors (education, income) or select randomly.
@@ -1578,6 +1572,7 @@ class Households(AgentBaseClass):
 
         # Get possible measures and triggers (this is a list of all possible measures, not the recommended measures given by the warning strategies)
         # Used only to make sure the indices are correct when updating the arrays (self.var.recommended_measures, self.var.warning_trigger)
+        # TODO: Include water level ranges in the log files
         possible_measures_to_recommend = self.var.possible_measures
         possible_warning_triggers = self.var.possible_warning_triggers
 
@@ -1586,11 +1581,6 @@ class Households(AgentBaseClass):
         for household_id in selected_households.index:
             current_level = int(self.var.warning_level[household_id])
             self.var.action_per_range = np.zeros((self.n, n_ranges), dtype=int)
-            if triggered_wlrange is not None:
-                range_idx = list(self.var.wlranges_and_measures.keys()).index(
-                    triggered_wlrange
-                )
-                self.var.action_per_range[household_id, range_idx] = desired_level
             # Only send a warning if the desired level is higher than current level
             if desired_level > current_level:
                 for measure in recommended_measures:
@@ -1602,12 +1592,6 @@ class Households(AgentBaseClass):
             self.var.warning_reached[household_id] = 1
             trigger_idx = possible_warning_triggers.index(trigger)
             self.var.warning_trigger[household_id, trigger_idx] = True
-            if triggered_wlrange is not None:
-                old_val = self.var.triggered_wlrange[household_id]
-                self.logger.debug(
-                    f"DEBUG: household_id={household_id}, oude triggered_wlrange={old_val}, nieuwe triggered_wlrange={triggered_wlrange}, trigger={trigger}"
-                )
-                self.var.triggered_wlrange[household_id] = triggered_wlrange
             n_warned_households += 1
         self.logger.info(f"Warning targeted to reach {n_target_households} households")
         self.logger.info(f"Warning reached {n_warned_households} households")
@@ -2383,7 +2367,7 @@ class Households(AgentBaseClass):
             )
 
             # For measure in recommended measures, add new measures to existing actions_taken array
-            # Use OR operation to preserve previously taken actions while adding new ones
+            # Use an OR operation to preserve previously taken actions while adding new ones
             for i, measure_recommended in enumerate(
                 self.var.recommended_measures[household_id]
             ):
@@ -2397,7 +2381,6 @@ class Households(AgentBaseClass):
             # If evacuation is among the actions taken, mark household as evacuated
             if self.var.actions_taken[household_id, evac_idx]:
                 self.var.evacuated[household_id] = 1
-                print(f"  Household {household_id} evacuated")
 
             # Log the actions taken
             actions = []
@@ -2405,15 +2388,9 @@ class Households(AgentBaseClass):
                 if self.var.actions_taken[household_id, j]:
                     actions.append(action)
 
-            print(f"  Actions taken: {actions}")
-
-            # Haal de warning_level (range_id) op voor deze household
+            # Get the warning_level (range_id) for this household
             warning_level = int(self.var.warning_level[household_id])
-            # Haal de triggering wlrange op voor deze household
-            triggered_wlrange = None
-            if hasattr(self.var, "triggered_wlrange"):
-                triggered_wlrange = self.var.triggered_wlrange[household_id]
-            # Haal alle acties per range op voor deze household
+            # Get all actions per range for this household
             action_per_range = None
             if hasattr(self.var, "action_per_range"):
                 action_per_range = self.var.action_per_range[household_id].tolist()
@@ -2427,7 +2404,6 @@ class Households(AgentBaseClass):
                     "household_id": household_id,
                     "actions": actions,
                     "warning_level": warning_level,
-                    "triggered_wlrange": triggered_wlrange,
                     "action_per_range": action_per_range,
                 }
             )
