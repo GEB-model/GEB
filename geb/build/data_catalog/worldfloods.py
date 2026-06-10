@@ -195,7 +195,8 @@ class WorldFloodsV2(Adapter):
                             # merge all geometries with the same value into a single geometry
                             flood_map_vector = flood_map_vector.union_all()
                             flood_map_vector = gpd.GeoDataFrame(
-                                {"geometry": [flood_map_vector], "name": [file.stem]}
+                                {"geometry": [flood_map_vector], "name": [file.stem]},
+                                crs="EPSG:4326",
                             )
                             all_flood_maps_vectors.append(flood_map_vector)
 
