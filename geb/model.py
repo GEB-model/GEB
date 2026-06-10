@@ -479,6 +479,9 @@ class GEBModel(Module):
                         # Run warning strategies based on config settings
                         # Check whether water level warnings are enabled
                         if warning_config["strategies"]["water_level_warnings"]:
+                            self.logger.info(
+                                f"Running water level based warning strategy with {warning_type} warnings..."
+                            )
                             self.agents.households.water_level_warning_strategy(
                                 date_time=self.current_time,
                                 warning_type=warning_type,
@@ -493,8 +496,15 @@ class GEBModel(Module):
                         if warning_config["strategies"][
                             "critical_infrastructure_warnings"
                         ]:
+                            config_asset_type = warning_config["strategies"][
+                                "critical_infrastructure_warnings"
+                            ]["asset_type"]
+
                             self.agents.households.critical_infrastructure_warning_strategy(
-                                date_time=self.current_time, exceedance=True
+                                date_time=self.current_time,
+                                config_asset_type=config_asset_type,
+                                prob_threshold=prob_threshold,
+                                exceedance=True,
                             )
 
                         # Run household decision-making to convert warnings into actions

@@ -511,13 +511,28 @@ class Households(AgentBaseClass):
 
         with open(self.model.files["dict"]["measures/wl_ranges"], "r") as f:
             wlranges_and_measures = json.load(f)
-            # convert the keys (range ids) to integers and store them in a new dictionary
-            print("Loaded water level ranges and measures:")
+
+            # Check whether the old format is being used
+            first_key = next(iter(wlranges_and_measures))
+
+            if first_key.isdigit():
+                raise ValueError(
+                    "Invalid wl_ranges.json structure. Expected:\n"
+                    "{\n"
+                    '    "residential_buildings": {"1": {...}, "2": {...}},\n'
+                    '    "energy_stations": {"1": {...}, "2": {...}}\n'
+                    "}"
+                )
+
             self.var.wlranges_and_measures = {
-                int(key): value for key, value in wlranges_and_measures.items()
+                asset_type: {
+                    int(range_id): range_info for range_id, range_info in ranges.items()
+                }
+                for asset_type, ranges in wlranges_and_measures.items()
             }
-        print(
-            "Loaded water level ranges with associated measures and their implementation times."
+        self.logger.info(
+            "Loaded water level ranges with associated measures and their implementation times for %d asset types.",
+            len(self.var.wlranges_and_measures),
         )
 
     def assign_household_attributes(self) -> None:
@@ -1098,14 +1113,16 @@ class Households(AgentBaseClass):
         return ensemble_damage_maps
 
     def create_flood_probability_maps(
-        self, date_time: datetime, strategy: int = 1, exceedance: bool = True
+        self,
+        date_time: datetime,
+        strategy: str = "residential_buildings",
+        exceedance: bool = True,
     ) -> xr.DataArray | xr.Dataset:
         """Creates flood probability maps based on the ensemble of flood maps for different warning strategies.
 
         Args:
             date_time: The forecast date time for which to create the probability maps.
-            strategy: Identifier of the warning strategy (1 for water level ranges with measures,
-                2 for energy substations, 3 for vulnerable/emergency facilities).
+            strategy: The warning strategy to use (e.g., 'residential_buildings', 'energy_stations').
             exceedance: Whether to calculate flood exceedance probability maps (instead of regular probability maps).
 
         Returns:
@@ -1131,26 +1148,19 @@ class Households(AgentBaseClass):
                 / "flood_prob_maps"
                 / f"forecast_{date_time.isoformat().replace(':', '').replace('-', '')}"
             )
+        if strategy not in self.var.wlranges_and_measures:
+            raise ValueError(
+                f"Unknown strategy '{strategy}'. "
+                f"Available strategies: {list(self.var.wlranges_and_measures.keys())}"
+            )
 
-        # Define water level ranges based on the chosen strategy (check the arguments for more info)
-        if strategy == 1:
-            # Water level ranges associated to specific measures (based on "impact" scale)
-            ranges = []
+        ranges = []
+
+        for range_id, range_info in self.var.wlranges_and_measures[strategy].items():
             if exceedance:
-                for key, value in self.var.wlranges_and_measures.items():
-                    ranges.append((key, value["min"], None))
+                ranges.append((range_id, range_info["min"], None))
             else:
-                for key, value in self.var.wlranges_and_measures.items():
-                    ranges.append((key, value["min"], value["max"]))
-        elif strategy == 2:
-            # Water level range for energy substations (based on critical hit > 30 cm of flood)
-            # TODO: need to make it not hard coded
-            ranges = [(1, 0.3, None)]
-
-        else:
-            # Water level range for vulnerable and emergency facilities (flooded or not)
-            # TODO: need to make it not hard coded
-            ranges = [(1, 0.05, None)]
+                ranges.append((range_id, range_info["min"], range_info["max"]))
 
         probability_maps = []
         # Loop over water level ranges to calculate probability maps
@@ -1179,10 +1189,10 @@ class Households(AgentBaseClass):
             # Save probability map as a zarr file
             if exceedance:
                 file_name = (
-                    f"prob_exceedance_map_range{range_id}_strategy{strategy}.zarr"
+                    f"prob_exceedance_map_range{range_id}_strategy_{strategy}.zarr"
                 )
             else:
-                file_name = f"prob_map_range{range_id}_strategy{strategy}.zarr"
+                file_name = f"prob_map_range{range_id}_strategy_{strategy}.zarr"
             file_path = prob_folder / file_name
             file_path.mkdir(parents=True, exist_ok=True)
 
@@ -1580,7 +1590,7 @@ class Households(AgentBaseClass):
         n_ranges = len(self.var.wlranges_and_measures)
         for household_id in selected_households.index:
             current_level = int(self.var.warning_level[household_id])
-            self.var.action_per_range = np.zeros((self.n, n_ranges), dtype=int)
+
             # Only send a warning if the desired level is higher than current level
             if desired_level > current_level:
                 for measure in recommended_measures:
@@ -1608,7 +1618,6 @@ class Households(AgentBaseClass):
         evacuation_lead_time_threshold: int = 48,
         weight_by_socioeconomic_factors: bool = False,
         exceedance: bool = True,
-        strategy_id: int = 1,
     ) -> None:
         """Implements the water level warning strategy based on flood probability maps BUCKETS PER MEASURE.
 
@@ -1622,11 +1631,11 @@ class Households(AgentBaseClass):
             evacuation_lead_time_threshold: The threshold for the lead time required for evacuation.
             weight_by_socioeconomic_factors: Whether to consider the social economic factors in the distribution of warnings.
             exceedance: Whether to create a probability map based on exceedance of a critical water thresholds or a probability of a waterlevel range.
-            strategy_id: Identifier of the warning strategy (1 for water level ranges with measures).
         """
 
         # Get the range ids and initialize the warning_log
-        range_ids = list(self.var.wlranges_and_measures.keys())
+        residential_wlranges = self.var.wlranges_and_measures["residential_buildings"]
+        range_ids = list(residential_wlranges.keys())
         warning_log = []
         warnings_folder = self.model.output_folder / "warning_logs"
         warnings_folder.mkdir(exist_ok=True, parents=True)
@@ -1634,7 +1643,7 @@ class Households(AgentBaseClass):
         # Create probability maps
         # TODO: Only create flood probability maps if they do not exist yet
         probability_maps = self.create_flood_probability_maps(
-            strategy=strategy_id, date_time=date_time, exceedance=exceedance
+            strategy="residential_buildings", date_time=date_time, exceedance=exceedance
         )
 
         # Load households and postal codes
@@ -1766,10 +1775,8 @@ class Households(AgentBaseClass):
                 if issue_warning:
                     # Get the measures and evacuation flag from the json dictionary to use in the warning communication function
                     triggered_ranges.append(range_id)
-                    recom_measure = self.var.wlranges_and_measures[range_id]["measure"]
-                    evacuate = (
-                        evacuate or self.var.wlranges_and_measures[range_id]["evacuate"]
-                    )
+                    recom_measure = residential_wlranges[range_id]["measure"]
+                    evacuate = evacuate or residential_wlranges[range_id]["evacuate"]
                     if recom_measure:
                         measures.extend(recom_measure)
 
@@ -1958,101 +1965,84 @@ class Households(AgentBaseClass):
 
         return buildings
 
-    def assign_energy_substations_to_postal_codes(
-        self, substations: gpd.GeoDataFrame, postal_codes: gpd.GeoDataFrame
+    def assign_CI_to_postal_codes(
+        self, assets: gpd.GeoDataFrame, postal_codes: gpd.GeoDataFrame
     ) -> None:
-        """Assign energy substations to postal codes based on spatial proximity. Every postal code gets assigned to the nearest substation.
+        """Assign critical infrastructure assets to postal codes based on spatial proximity. Every postal code gets assigned to the nearest asset.
 
         Args:
-            substations: GeoDataFrame of energy substations.
+            assets: GeoDataFrame of critical infrastructure assets.
             postal_codes: GeoDataFrame of postal codes.
         """
+        asset_type = self.model.config["hazards"]["floods"][
+            "critical_infrastructure_warning_strategy"
+        ]["asset_type"]
+        if asset_type == "energy_substations":
+            postal_codes_with_assets = gpd.sjoin_nearest(
+                postal_codes,
+                assets[["fid", "geometry"]],
+                how="left",
+                distance_col="distance",
+            )
+            # Rename the fid_right column for clarity
+            postal_codes_with_assets.rename(
+                columns={"fid_right": "asset_id"},
+                inplace=True,
+            )
+
+        elif asset_type == "critical_facilities":
+            critical_facilities_centroid = assets.copy()
+            critical_facilities_centroid["geometry"] = (
+                critical_facilities_centroid.geometry.centroid
+            )
+
+            # Spatial join to assign postal codes to critical facilities based on their centroid
+            critical_facilities_with_postal_codes = gpd.sjoin(
+                critical_facilities_centroid[
+                    ["id", "addr:city", "amenity", "name", "source", "geometry"]
+                ],
+                postal_codes[["postcode", "geometry"]],
+                how="left",
+                predicate="within",
+            )
+            critical_facilities_with_postal_codes.drop(
+                columns=["index_right"], inplace=True
+            )
+
+            # Rename the id column for clarity and drop fid so it can save to gpkg
+            postal_codes_with_assets = critical_facilities_with_postal_codes.rename(
+                columns={"id": "asset_id"}
+            )
+        else:
+            raise ValueError(
+                f"Invalid asset type: {asset_type}. Must be 'energy_substations' or 'critical_facilities'. Will be elaborated later to include more types of critical infrastructure assets."
+            )
         # TODO: need to improve this with Thiessen polygons or similar
-        postal_codes_with_substations = gpd.sjoin_nearest(
-            postal_codes,
-            substations[["fid", "geometry"]],
-            how="left",
-            distance_col="distance",
-        )
-        # Rename the fid_right column for clarity
-        postal_codes_with_substations.rename(
-            columns={"fid_right": "substation_id"},
-            inplace=True,
-        )
 
-        # Save the postal codes with associated energy substations to a file
+        # Save the postal codes with associated critical infrastructure assets to a file
         path = (
             self.model.input_folder
             / "geom"
             / "assets"
-            / "postal_codes_with_energy_substations.geoparquet"
+            / f"postal_codes_with_critical_infrastructure_{asset_type}.geoparquet"
         )
-        postal_codes_with_substations.to_parquet(path)
-
-    def assign_critical_facilities_to_postal_codes(
-        self, critical_facilities: gpd.GeoDataFrame, postal_codes: gpd.GeoDataFrame
-    ) -> None:
-        """Assign critical facilities (vulnerable and emergency) to postal codes based on spatial intersection. Every facility gets assigned to the postal code it is located in.
-
-        Args:
-            critical_facilities: GeoDataFrame of critical facilities.
-            postal_codes: GeoDataFrame of postal codes.
-        """
-        # Use the centroid of the critical facilities to assign them to postal codes
-        critical_facilities_centroid = critical_facilities.copy()
-        critical_facilities_centroid["geometry"] = (
-            critical_facilities_centroid.geometry.centroid
-        )
-
-        # Spatial join to assign postal codes to critical facilities based on their centroid
-        critical_facilities_with_postal_codes = gpd.sjoin(
-            critical_facilities_centroid[
-                ["id", "addr:city", "amenity", "name", "source", "geometry"]
-            ],
-            postal_codes[["postcode", "geometry"]],
-            how="left",
-            predicate="within",
-        )
-        critical_facilities_with_postal_codes.drop(
-            columns=["index_right"], inplace=True
-        )
-
-        # Rename the id column for clarity and drop fid so it can save to gpkg
-        critical_facilities_with_postal_codes = (
-            critical_facilities_with_postal_codes.rename(columns={"id": "facility_id"})
-        )
-
-        # Save the critical facilities with postal codes to a file
-        path = (
-            self.model.input_folder
-            / "geom"
-            / "assets"
-            / "critical_facilities_with_postal_codes.geoparquet"
-        )
-        critical_facilities_with_postal_codes.to_parquet(path)
+        postal_codes_with_assets.to_parquet(path)
 
     def critical_infrastructure_warning_strategy(
-        self, date_time: datetime, exceedance: bool = False
+        self,
+        date_time: datetime,
+        config_asset_type: str,
+        prob_threshold: float,
+        exceedance: bool = False,
     ) -> None:
         """This function implements an evacuation warning strategy based on critical infrastructure elements, such as energy substations, vulnerable and emergency facilities.
 
         Args:
             date_time: The forecast date time for which to implement the warning strategy.
+            config_asset_type: The type of critical infrastructure for which to issue warnings.
+            prob_threshold: The probability threshold for issuing warnings.
             exceedance: Whether to consider exceedance probabilities.
         """
-        # Check if critical infrastructure warnings are enabled in config
-        warning_config = self.model.config["agent_settings"]["households"][
-            "warning_system"
-        ]
-        if not warning_config["strategies"]["critical_infrastructure_warnings"]:
-            print(
-                f"Critical infrastructure warnings disabled in config for {date_time.isoformat()}"
-            )
-            return
-
-        # Get probability threshold from config
-        prob_threshold = warning_config["probability_threshold"]
-
         # Get the household points, needed to issue warnings
         households = gpd.GeoDataFrame(
             geometry=gpd.points_from_xy(
@@ -2060,189 +2050,76 @@ class Households(AgentBaseClass):
             ),
             crs="EPSG:4326",
         )
-
-        # Add education and income data here as well for consistency
-        if "Education" not in households.columns:
-            households["Education"] = households.index.map(
-                lambda idx: (
-                    self.var.education_level.data[idx]
-                    if idx < len(self.var.education_level.data)
-                    else np.nan
-                )
+        affected_postcodes = []
+        for asset_type in config_asset_type:
+            self.logger.info(
+                f"Running critical infrastructure based warning strategy for asset type {asset_type}..."
             )
-        if "Income" not in households.columns:
-            households["Income"] = households.index.map(
-                lambda idx: (
-                    self.var.income.data[idx]
-                    if idx < len(self.var.income.data)
-                    else np.nan
-                )
-            )
-
-        # Load substations and critical facilities
-        substations = read_geom(self.model.files["geom"]["assets/energy_substations"])
-        critical_facilities = read_geom(
-            self.model.files["geom"]["assets/critical_facilities"]
-        )
-
-        # Load postal codes with associated substations and critical facilities
-        path = self.model.input_folder / "geom" / "assets"
-        postal_codes_with_substations = read_geom(
-            path / "postal_codes_with_energy_substations.geoparquet"
-        )
-        critical_facilities_with_postal_codes = read_geom(
-            path / "critical_facilities_with_postal_codes.geoparquet"
-        )
-
-        ## For energy substations:
-        # The strategy id is used in the create_flood_probability_maps function to define the right water level range, so it makes sure you get the right probability map for that specific strategy
-        # strategy_id = 2 means wl_range > 30 cm for energy substations
-        strategy_id = 2
-
-        # Create flood probability maps associated to the critical hit of energy substations
-        # Need to give the number (id) of strategy as argument
-        self.create_flood_probability_maps(
-            strategy=strategy_id, date_time=date_time, exceedance=exceedance
-        )
-
-        # Get the probability map for the specific day and strategy using dynamic path building
-        if exceedance:
-            folder_name = "flood_prob_exceedance_maps"
-            file_prefix = "prob_exceedance_map"
-        else:
-            folder_name = "flood_prob_maps"
-            file_prefix = "prob_map"
-
-        prob_energy_hit_path = Path(
-            self.model.output_folder
-            / folder_name
-            / f"forecast_{date_time.isoformat().replace(':', '').replace('-', '')}"
-            / f"{file_prefix}_range1_strategy{strategy_id}.zarr"
-        )
-
-        # Open the probability map
-        prob_map = read_zarr(prob_energy_hit_path)
-        affine = prob_map.rio.transform()
-
-        # Ensure prob_map is 2D by squeezing out any singleton dimensions
-        prob_array = prob_map.values
-        while prob_array.ndim > 2:
-            prob_array = prob_array.squeeze()
-
-        # Sample the probability map at the substations locations
-        x = xr.DataArray(substations.geometry.x.values, dims="z")
-        y = xr.DataArray(substations.geometry.y.values, dims="z")
-        substations["probability"] = prob_map.sel(x=x, y=y, method="nearest").values
-
-        # Filter substations that have a flood hit probability > threshold
-        critical_hits_energy = substations[substations["probability"] >= prob_threshold]
-
-        # Create an empty list to store the postcodes
-        affected_postcodes_energy = []
-
-        # If there are critical hits, issue warnings
-        if not critical_hits_energy.empty:
-            print(f"Critical hits for energy substations: {len(critical_hits_energy)}")
-
-            # Get the postcodes that will be affected by the critical hits of energy substations
-            affected_postcodes_energy = postal_codes_with_substations[
-                postal_codes_with_substations["substation_id"].isin(
-                    critical_hits_energy["fid"]
-                )
-            ]["postcode"].unique()
-
-        ## For vulnerable and emergency facilities:
-        # strategy_id = 3 means wl_range > 10 cm for vulnerable and emergency facilities (flooded or not)
-        strategy_id = 3
-
-        # Create flood probability map for vulnerable and emergency facilities
-        self.create_flood_probability_maps(
-            strategy=strategy_id, date_time=date_time, exceedance=exceedance
-        )
-
-        # Get the probability map for the specific day and strategy using dynamic path building
-        if exceedance:
-            folder_name = "flood_prob_exceedance_maps"
-            file_prefix = "prob_exceedance_map"
-        else:
-            folder_name = "flood_prob_maps"
-            file_prefix = "prob_map"
-
-        prob_critical_facilities_hit_path = Path(
-            self.model.output_folder
-            / folder_name
-            / f"forecast_{date_time.isoformat().replace(':', '').replace('-', '')}"
-            / f"{file_prefix}_range1_strategy{strategy_id}.zarr"
-        )
-
-        # Open the probability map
-        prob_map = read_zarr(prob_critical_facilities_hit_path)
-        affine = prob_map.rio.transform()
-
-        # Ensure prob_map is 2D by squeezing out any singleton dimensions
-        prob_array = prob_map.values
-        while prob_array.ndim > 2:
-            prob_array = prob_array.squeeze()
-
-        # Sample the probability map at the facilities locations using their centroid (can be improved later to use whole area of the polygon)
-        critical_facilities = critical_facilities.copy()
-        x = xr.DataArray(critical_facilities.geometry.centroid.x.values, dims="z")
-        y = xr.DataArray(critical_facilities.geometry.centroid.y.values, dims="z")
-        critical_facilities["probability"] = prob_map.sel(
-            x=x, y=y, method="nearest"
-        ).values
-
-        # Filter facilities that have a flood hit probability > threshold
-        critical_hits_facilities = critical_facilities[
-            critical_facilities["probability"] >= prob_threshold
-        ]
-        # Create an empty list to store the postcodes
-        affected_postcodes_facilities = []
-
-        # If there are critical hits, issue warnings
-        if not critical_hits_facilities.empty:
-            print(
-                f"Critical hits for vulnerable/emergency facilities: {len(critical_hits_facilities)}"
-            )
-
-            # Get the postcodes that will be affected by the critical hits of facilities
-            affected_postcodes_facilities = critical_facilities_with_postal_codes[
-                critical_facilities_with_postal_codes["facility_id"].isin(
-                    critical_hits_facilities["id"]
-                )
-            ]["postcode"].unique()
-
-        # Function to keep track of what triggered the warning for each postal code
-        def trigger_label(postcode: str) -> str:
-            """Determine the trigger label for a given postcode based on affected postcodes from both strategies.
-
-            Args:
-                postcode: The postcode to evaluate.
-
-            Returns:
-                A string indicating the trigger type.
-
-            Raises:
-                ValueError: If the postcode is not found in either affected postcodes list.
-            """
-            e = postcode in affected_postcodes_energy
-            f = postcode in affected_postcodes_facilities
-            if e and f:
-                return "energy_and_facilities"
-            elif e:
-                return "energy"
-            elif f:
-                return "facilities"
-            else:
+            # Load substations and critical facilities
+            assets = read_geom(self.model.files["geom"][f"assets/{asset_type}"])
+            if assets.empty:
                 raise ValueError(
-                    f"Postcode {postcode} not found in either affected postcodes list."
+                    f"No assets found for type {asset_type}. Please check the input/files.yml whether the reference of the asset is similar to the one defined in the config."
                 )
 
-        # Combine affected_postcodes from both strategies and remove duplicates
-        affected_postcodes = np.unique(
-            np.concatenate(
-                (affected_postcodes_energy, affected_postcodes_facilities), axis=0
+            # Create flood probability maps associated to the critical hit of energy substations
+            # Need to give the number (id) of strategy as argument
+            probability_maps = self.create_flood_probability_maps(
+                strategy=asset_type, date_time=date_time, exceedance=exceedance
             )
+            flood_probability_map: xr.DataArray = probability_maps[
+                list(probability_maps.data_vars)[0]
+            ]
+
+            # Ensure prob_map is 2D by squeezing out any singleton dimensions
+            prob_array = flood_probability_map.values
+            while prob_array.ndim > 2:
+                prob_array = prob_array.squeeze()
+
+            # Sample the probability map at the substations locations
+            x = xr.DataArray(assets.geometry.x.values, dims="z")
+            y = xr.DataArray(assets.geometry.y.values, dims="z")
+            assets["probability"] = flood_probability_map.sel(
+                x=x, y=y, method="nearest"
+            ).values
+
+            # Filter substations that have a flood hit probability > threshold
+            critical_hits_CI = assets[assets["probability"] >= prob_threshold]
+
+            postal_codes_with_critical_infrastructure = gpd.read_parquet(
+                self.model.input_folder
+                / "geom"
+                / "assets"
+                / f"postal_codes_with_critical_infrastructure_{asset_type}.geoparquet"
+            )
+
+            # If there are critical hits, issue warnings
+            if not critical_hits_CI.empty:
+                self.logger.info(
+                    f"Critical hits for {asset_type}: {len(critical_hits_CI)}"
+                )
+                # Get the postcodes that will be indirect affected by the critical infrastructure assets
+                affected_assets = postal_codes_with_critical_infrastructure[
+                    postal_codes_with_critical_infrastructure["asset_id"].isin(
+                        critical_hits_CI["asset_id"]
+                    )
+                ]
+                affected_assets["asset_type"] = asset_type
+                affected_postcodes.append(
+                    affected_assets[["postcode", "asset_id", "asset_type"]]
+                )
+
+        # Combine affected_postcodes from all asset types and remove duplicates
+        affected_postcodes = pd.concat(affected_postcodes, ignore_index=True)
+        affected_postcodes = (
+            affected_postcodes.groupby("postcode")
+            .agg(
+                {
+                    "asset_type": lambda x: list(x.unique()),
+                    "asset_id": lambda x: list(x.unique()),
+                }
+            )
+            .reset_index()
         )
 
         # Create an empty log to store the warnings
@@ -2250,6 +2127,9 @@ class Households(AgentBaseClass):
 
         # Issue warnings to the households in the affected postcodes
         for postcode in affected_postcodes:
+            asset_type = affected_postcodes.loc[
+                affected_postcodes["postcode"] == postcode, "asset_type"
+            ]
             affected_households = households[households["postcode"] == postcode]
             n_warned_households = self.warning_communication(
                 target_households=affected_households,
@@ -2257,26 +2137,21 @@ class Households(AgentBaseClass):
                 evacuate=True,
                 trigger="critical_infrastructure",
             )
-            trigger = trigger_label(postcode)
 
             print(
-                f"Evacuation warning issued to postal code {postcode} on {date_time.isoformat()} (trigger: {trigger})"
+                f"Evacuation warning issued to postal code {postcode} on {date_time.isoformat()} (trigger: {asset_type})"
             )
             warning_log.append(
                 {
                     "date_time": date_time.isoformat(),
                     "postcode": postcode,
                     "n_warned_households": n_warned_households,
-                    "trigger": trigger,
+                    "trigger": asset_type,
                 }
             )
 
         # Save warning log
-        warning_config = self.model.config["agent_settings"]["households"][
-            "warning_system"
-        ]
-        subfolder_name = warning_config["strategies"]["warning_type"]
-        warnings_folder = self.model.output_folder / "warning_logs" / subfolder_name
+        warnings_folder = self.model.output_folder / "warning_logs"
         warnings_folder.mkdir(exist_ok=True, parents=True)
         path = (
             warnings_folder
@@ -2390,10 +2265,7 @@ class Households(AgentBaseClass):
 
             # Get the warning_level (range_id) for this household
             warning_level = int(self.var.warning_level[household_id])
-            # Get all actions per range for this household
-            action_per_range = None
-            if hasattr(self.var, "action_per_range"):
-                action_per_range = self.var.action_per_range[household_id].tolist()
+
             actions_log.append(
                 {
                     "lead_time": lead_time,
@@ -2404,14 +2276,11 @@ class Households(AgentBaseClass):
                     "household_id": household_id,
                     "actions": actions,
                     "warning_level": warning_level,
-                    "action_per_range": action_per_range,
                 }
             )
-
-        print("\n=== SUMMARY ===")
-        print(f"Total actions logged: {len(actions_log)}")
+        self.logger.info(f"Total number of households acted: {len(actions_log)}")
         total_actions = sum(len(entry["actions"]) for entry in actions_log)
-        print(f"Total individual actions taken: {total_actions}")
+        self.logger.info(f"Total individual actions taken: {total_actions}")
 
         # Save actions log
         actions_log_folder = self.model.output_folder / "actions_logs"
@@ -2537,8 +2406,6 @@ class Households(AgentBaseClass):
             "recommended_measures",
             "warning_trigger",
             "actions_taken",
-            "triggered_wlrange",
-            "action_per_range",
             "action_lead_time",
         ]
 
@@ -2581,14 +2448,6 @@ class Households(AgentBaseClass):
         for i, action in enumerate(possible_actions):
             if action == "elevate possessions":
                 household_points["elevated_possessions"] = self.var.actions_taken[:, i]
-
-        # Add action_per_range columns
-        if hasattr(self.var, "action_per_range"):
-            range_ids = list(self.var.wlranges_and_measures.keys())
-            for idx, range_id in enumerate(range_ids):
-                household_points[f"action_range_{range_id}"] = (
-                    self.var.action_per_range[:, idx]
-                )
         # Create the action_maps directory if it doesn't exist
         action_maps_dir = self.model.output_folder / "action_maps"
         action_maps_dir.mkdir(parents=True, exist_ok=True)

@@ -103,9 +103,12 @@ agent_settings:
         area_based_warnings: 0.35 # Response rate for area-based warnings (0.0-1.0)
         building_based_warnings: 0.4 # Response rate for building-based warnings with specific measures (0.0-1.0)
       strategies: # Warning strategy settings
-        water_level_warnings: true # Enable water level based warnings with measures
-        critical_infrastructure_warnings: false  # Enable critical infrastructure based evacuation warnings  
+        residential_buildings: true # Enable water level based warnings with measures for residential buildings
         warning_type: "area_based" # Type of warnings: "area_based" for basic flood warnings or "building_based" for impact-based warnings
+        critical_infrastructure_warnings: false  # Enable critical infrastructure based evacuation warnings  
+        asset_type: 
+          - 'energy_substations'
+        
 
     expected_utility:
       flood_risk_calculations:
