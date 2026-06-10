@@ -80,8 +80,6 @@ class DischargeMetrics(NamedTuple):
     RRMSE: float = float("nan")
 
 
-
-
 def _calculate_discharge_validation_metrics(
     validation_df: pd.DataFrame,
 ) -> DischargeMetrics:
@@ -2039,14 +2037,20 @@ class Hydrology:
                     # errors, so the default benchmark excludes them from summary scores.
                     continue
 
-                validation_df: pd.DataFrame = create_validation_df(
-                    self.model.output_folder,
-                    run_name,
-                    station_id,
-                    observed_discharge_series,
-                    correct_discharge_observations,
-                    discharge_observations_to_GEB_upstream_area_ratio,
-                )
+                try:
+                    validation_df: pd.DataFrame = create_validation_df(
+                        self.model.output_folder,
+                        run_name,
+                        station_id,
+                        observed_discharge_series,
+                        correct_discharge_observations,
+                        discharge_observations_to_GEB_upstream_area_ratio,
+                    )
+                except FileNotFoundError:
+                    self.model.logger.warning(
+                        "Skipping station %s: no simulation output found.", station_id
+                    )
+                    continue
 
                 minimum_valid_steps = (
                     minimum_timeseries_length_years
