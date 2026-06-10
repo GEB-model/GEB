@@ -94,7 +94,7 @@ $GEB_DATA_ROOT/merit_hydro_dir/v1/dir/
 $GEB_DATA_ROOT/merit_hydro_elv/v1/elv/
 ```
 
-On Snellius, `GEB_DATA_ROOT` is set automatically to `/gpfs/work5/0/prjs2035/GEB/data` unless it is already defined.
+On Snellius, `GEB_DATA_ROOT` is set automatically to the GEB snellius project storage folder unless it is already defined.
 
 During `geb build`, GEB checks which tiles are needed for the model region. If any required tile is missing, GEB stops and prints the exact filenames and target folder.
 
