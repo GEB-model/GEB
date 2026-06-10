@@ -152,8 +152,14 @@ class SFINCSRootModel:
         """
         if not self.exists():
             raise FileNotFoundError(f"SFINCS model not found in {self.path}")
+        time_start = time.perf_counter()
+        self.logger.info(f"Reading SFINCS model from {self.path}...")
         self.sfincs_model = SfincsModel(root=str(self.path), mode="r")
+        time_SFincs_read = time.perf_counter() - time_start
+        self.logger.info(f"SFINCS model read in {time_SFincs_read:.2f} seconds")
         self.sfincs_model.read()
+        time_SFincs_read_full = time.perf_counter() - time_start
+        self.logger.info(f"SFINCS model read in {time_SFincs_read_full:.2f} seconds")
 
         self.rivers: gpd.GeoDataFrame = read_geom(self.path / "rivers.geoparquet")
         self.subbasins: gpd.GeoDataFrame = read_geom(self.path / "subbasins.geoparquet")
@@ -349,8 +355,11 @@ class SFINCSRootModel:
             DEM.pop("path", None)
             DEM.pop("fill_depressions", None)
             DEM["reproj_method"] = "bilinear"
-
+        time_start = time.perf_counter()
+        self.logger.info("Setting up SFINCS model dep (DEMs)...")
         sf.setup_dep(datasets_dep=DEMs)
+        time_setup_dep = time.perf_counter() - time_start
+        self.logger.info(f"SFINCS model dep setup took {time_setup_dep:.2f} seconds")
 
         # Remove rivers that are not represented in the grid and have no upstream rivers
         # TODO: Make an upstream flag in preprocessing for upstream rivers that is more
@@ -368,7 +377,11 @@ class SFINCSRootModel:
         del rivers
 
         flood_plain: gpd.GeoDataFrame = self.get_flood_plain()
+        time_start = time.perf_counter()
+        self.logger.info("Setting up SFINCS model mask...")
         sf.setup_mask_active(flood_plain, reset_mask=True)
+        time_setup_mask = time.perf_counter() - time_start
+        self.logger.info(f"SFINCS model mask setup took {time_setup_mask:.2f} seconds")
 
         self.rivers["outflow_elevation"] = np.nan
         self.rivers["outflow_point_xy"] = None
