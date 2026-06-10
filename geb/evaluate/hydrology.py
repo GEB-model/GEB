@@ -80,46 +80,6 @@ class DischargeMetrics(NamedTuple):
     RRMSE: float = float("nan")
 
 
-def _recreate_output_folder(output_folder: Path) -> None:
-    """Remove an existing output path and recreate it as a directory.
-
-    Args:
-        output_folder: Output folder path to recreate.
-
-    """
-    if output_folder.is_symlink() or output_folder.is_file():
-        # `shutil.rmtree` intentionally refuses symlinks; unlinking preserves
-        # the target directory and only removes the compatibility link.
-        output_folder.unlink()
-    elif output_folder.exists():
-        shutil.rmtree(output_folder)
-    output_folder.mkdir(parents=True, exist_ok=True)
-
-
-def _resolve_report_folder(output_folder: Path, run_name: str) -> Path:
-    """Resolve the report folder for standard and merged-model output layouts.
-
-    Standard model runs store reports under ``output/<run_name>/report``. Older
-    merged model outputs store the same run under ``output/report/<run_name>``.
-
-    Args:
-        output_folder: Run-specific output folder from the model configuration.
-        run_name: Name of the run to evaluate.
-
-    Returns:
-        Existing report folder path, or the standard report folder path when no
-        compatible report folder exists.
-
-    """
-    standard_report_folder: Path = output_folder / "report"
-    if standard_report_folder.exists():
-        return standard_report_folder
-
-    merged_report_folder: Path = output_folder.parent / "report" / run_name
-    if merged_report_folder.exists():
-        return merged_report_folder
-
-    return standard_report_folder
 
 
 def _calculate_discharge_validation_metrics(
@@ -712,7 +672,7 @@ def _plot_outflow_discharge_timeseries(
     Returns:
         Number of outflow plots created (dimensionless).
     """
-    report_folder: Path = _resolve_report_folder(output_folder, run_name)
+    report_folder: Path = output_folder / "report"
     routing_dir: Path = report_folder / "hydrology.routing"
     if not routing_dir.exists():
         model.logger.info(
@@ -732,7 +692,7 @@ def _plot_outflow_discharge_timeseries(
     outflow_plot_folder: Path = eval_plot_folder / "outflow"
     outflow_plot_folder.mkdir(parents=True, exist_ok=True)
     total_area_m2: float = _get_total_model_area_m2(model)
-    report_folder = _resolve_report_folder(output_folder, run_name)
+    report_folder = output_folder / "report"
     frozen_fraction_series_name: str = "_top_soil_frozen_fraction"
     frozen_fraction_series: pd.Series | None = None
     frozen_fraction_path: Path = (
@@ -944,7 +904,7 @@ def create_validation_df(
         ValueError: If NaN values are found in the GEB discharge data after loading.
     """
     # Check if the hydrology.routing directory exists
-    report_folder: Path = _resolve_report_folder(output_folder, run_name)
+    report_folder: Path = output_folder / "report"
     routing_dir = report_folder / "hydrology.routing"
     if not routing_dir.exists():
         raise FileNotFoundError(
@@ -1988,7 +1948,9 @@ class Hydrology:
             FileNotFoundError: If the run folder does not exist in the report directory.
             ValueError: If a non-existing frequency label is encountered in the discharge observations data.
         """
-        _recreate_output_folder(self.evaluate_discharge_output_folder)
+        output_folder = self.evaluate_discharge_output_folder
+        shutil.rmtree(output_folder)
+        output_folder.mkdir(parents=True, exist_ok=True)
 
         if minimum_upstream_area_km2 is None:
             minimum_upstream_area_km2 = self.model.config["hydrology"]["evaluation"][
@@ -2031,7 +1993,7 @@ class Hydrology:
 
         self.model.logger.info(f"Loaded discharge simulation from {run_name} run.")
 
-        report_folder: Path = _resolve_report_folder(self.model.output_folder, run_name)
+        report_folder: Path = self.model.output_folder / "report"
         if not report_folder.exists():
             raise FileNotFoundError(
                 f"Run folder '{run_name}' does not exist in the report directory. Did you run the model?"
