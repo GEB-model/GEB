@@ -386,15 +386,36 @@ class FloodRiskModule:
             (self.households.return_periods.size, self.households.n), np.float32
         )
 
-        # DataFrame mapping buildings to household agents
+
+        #Low ELevation Coastal Zone mask
+        lecz_mask = self.households.var.in_lecz.data ==1
+        #Buildings belonging to LECZ
+        lecz_building_ids = np.unique(
+            self.households.var.building_id_of_household[lecz_mask]
+        )
+        #Agent dataframe for LECZ
         agent_df = pd.DataFrame(
-            {"building_id_of_household": self.households.var.building_id_of_household}
+            {
+                "building_id_of_household":
+                    self.households.var.building_id_of_household[lecz_mask]
+            }
         )
 
-        # subset building to those exposed to flooding
-        buildings = self.households.buildings[
-            self.households.buildings["flooded"]
-        ].copy()
+
+        # # DataFrame mapping buildings to household agents all households
+        # agent_df = pd.DataFrame(
+        #     {"building_id_of_household": self.households.var.building_id_of_household}
+        # )
+
+        # # subset building to those exposed to flooding
+        # buildings = self.households.buildings[
+        #     self.households.buildings["flooded"]
+        # ].copy()
+        buildings = self.households.buildings[(
+            self.households.buildings["flooded"])
+            & (self.households.buildings["id"].isin(lecz_building_ids))
+            ].copy()
+        
         flooded_building_ids = np.array(buildings["id"])
 
         # Cache building geometries — they don't change between years.
@@ -489,9 +510,18 @@ class FloodRiskModule:
                 "damages": damage_buildings["damages"].values,
                 "damages_flood_proofed": damage_buildings["damages_flood_proofed"].values,
             })
-            damages_do_not_adapt[i], damages_adapt[i] = (
+            # damages_do_not_adapt[i], damages_adapt[i] = (
+            #     self.households.assign_damages_to_agents(agent_df, out)
+            # )
+            # damages only for LECZ households
+            damages_do_not_adapt_lecz, damages_adapt_lecz = (
                 self.households.assign_damages_to_agents(agent_df, out)
             )
+
+            # insert into full household arrays
+            damages_do_not_adapt[i, lecz_mask] = damages_do_not_adapt_lecz
+            damages_adapt[i, lecz_mask] = damages_adapt_lecz
+
             if verbose:
                 print(
                     f"Damages rp{return_period}: {round(damages_do_not_adapt[i].sum() / 1e6)} million"

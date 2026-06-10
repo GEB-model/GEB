@@ -573,6 +573,8 @@ class Households(AgentBaseClass):
             hh_footprint_m2 = np.zeros(self.n, dtype=np.float32)
             hh_structural_value_usd = np.zeros(self.n, dtype=np.float32)
 
+
+
         self.var.household_building_area = DynamicArray(hh_footprint_m2, max_n=self.max_n)
 
         adaptation_costs = np.maximum(hh_structural_value_usd * 0.05, 10_800).astype(np.int64)
@@ -607,6 +609,31 @@ class Households(AgentBaseClass):
         self.model.logger.info(
             f"Household attributes assigned for {self.n} households with {self.population} people."
         )
+
+        # Low elevation coastal zone households
+        lecz = read_geom(
+            self.model.files["geom"]["coastal/low_elevation_coastal_zone_mask"]
+        )
+
+        household_points = self.var.household_points.to_crs(lecz.crs)
+
+        joined = gpd.sjoin(
+            household_points,
+            lecz,
+            predicate="within",
+            how = "left",
+        )
+
+        self.var.in_lecz = DynamicArray(
+            joined.index_right.notna().values,
+            max_n=self.max_n,
+        )
+
+        #debug statement
+        # print(
+        #     f"Households in LECZ:"
+        #     f"{self.var.in_lecz.sum}/{self.n}"
+        # )
 
     def assign_households_to_postal_codes(self) -> None:
         """This function associates the household points with their postal codes to get the correct geometry for the warning function."""
@@ -646,7 +673,7 @@ class Households(AgentBaseClass):
             f"{len(households_with_postal_codes[households_with_postal_codes['postcode'].notnull()])} households assigned to {households_with_postal_codes['postcode'].nunique()} postal codes."
         )
 
-    def return_period_flood(self) -> np.ndarray:
+    def return_period_flood(self, flood_protection_standard: int = 10) -> np.ndarray:
         """Simulate a flood event based on return periods and determine which households are flooded.
 
         Returns:
@@ -660,7 +687,7 @@ class Households(AgentBaseClass):
         sorted_return_periods = return_periods_arr[sort_idx]
         probabilities = 1.0 / sorted_return_periods
 
-        if p_random >= probabilities.max():
+        if p_random >= probabilities.max() or p_random >= 1 / flood_protection_standard:
             return np.array([], dtype=int)
 
         # find the event corresponding to the random draw
@@ -2457,6 +2484,9 @@ class Households(AgentBaseClass):
 
         n_households = self.n
         print(f"Total N households: {n_households}")
+
+        lecz_mask = self.var.in_lecz.data == 1
+        print(f"Total N households in LECZ: {lecz_mask.sum()}")
 
         # print percentage of households that adapted
         print(f"N households that adapted: {len(household_adapting_flood)}")

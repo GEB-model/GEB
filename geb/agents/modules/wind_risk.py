@@ -117,22 +117,39 @@ class WindRiskModule:
     
         windstorm_config = self.model.config.get("hazards", {}).get("windstorm", {})
         debug_damage_stats = bool(windstorm_config.get("debug_damage_stats", False))
-        only_flooded_buildings = bool(windstorm_config.get("only_flooded_buildings", True))
-        wind_threshold = float(windstorm_config.get("wind_threshold_ms", 20.0))
+        #only_flooded_buildings = bool(windstorm_config.get("only_flooded_buildings", True))
+        # wind_threshold = float(windstorm_config.get("wind_threshold_ms", 20.0))
 
         # DataFrame mapping buildings to household agents
-        agent_df = pd.DataFrame(
-            {"building_id_of_household": self.households.var.building_id_of_household}
+        # agent_df = pd.DataFrame(
+        #     {"building_id_of_household": self.households.var.building_id_of_household}
+        # )
+
+
+        # if "n_occupants" in self.households.buildings.columns:
+        #     mask = self.households.buildings["n_occupants"] > 0
+        # else:
+        #     mask = pd.Series(True, index=self.households.buildings.index)
+        # # Optional filter to focus only on flooded households (only if flood data available)
+        # if only_flooded_buildings and "flooded" in self.households.buildings.columns:
+        #     mask &= self.households.buildings["flooded"]
+        # buildings = self.households.buildings[mask]
+
+        #LECZ mask
+        lecz_mask = self.households.var.in_lecz.data == 1
+
+        lecz_building_ids = np.unique(
+            self.households.var.building_id_of_household[lecz_mask]
         )
 
-        if "n_occupants" in self.households.buildings.columns:
-            mask = self.households.buildings["n_occupants"] > 0
-        else:
-            mask = pd.Series(True, index=self.households.buildings.index)
-        # Optional filter to focus only on flooded households (only if flood data available)
-        if only_flooded_buildings and "flooded" in self.households.buildings.columns:
-            mask &= self.households.buildings["flooded"]
-        buildings = self.households.buildings[mask]
+        agent_df = pd.DataFrame(
+            {
+                "building_id_of_household":
+                    self.households.var.building_id_of_household[lecz_mask]
+            }
+        )
+
+        buildings= self.households.buildings[(self.households.buildings["id"].isin(lecz_building_ids))].copy()
     
         # threshold used only for prefiltering
         wind_threshold = float(
@@ -322,10 +339,16 @@ class WindRiskModule:
                 out.to_parquet(
                     fn_export / f"building_wind_damages_rp{rp}_{self.households.model.current_time.year}.parquet"
                 )
-    
-            damages_unprotected_w[i], damages_adapt_w[i] = (
+            
+            damages_do_not_adapt_lecz, damages_adapt_lecz = (
                 self.households.assign_wdamages_to_agents(agent_df, out)
             )
+
+            damages_unprotected_w[i, lecz_mask] = damages_do_not_adapt_lecz
+            damages_adapt_w[i, lecz_mask] = damages_adapt_lecz
+            # damages_unprotected_w[i], damages_adapt_w[i] = (
+            #     self.households.assign_wdamages_to_agents(agent_df, out)
+            # )
     
             if verbose:
                 print(f"Wind Damages rp{rp}: {round(damages_unprotected_w[i].sum() / 1e6)} million")
