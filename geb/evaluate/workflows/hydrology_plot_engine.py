@@ -15,97 +15,93 @@ import pandas as pd
 from matplotlib.lines import Line2D
 from matplotlib.transforms import blended_transform_factory
 
-_SKILL_SCORE_MAP_METRIC_CONFIGS: list[dict] = [
+_DISPLAYED_SKILL_SCORE_CONFIGS: tuple[dict[str, object], ...] = (
     {
         "col": "KGE",
-        "label": "KGE (−)",
+        "label": "KGE",
         "title": "Kling-Gupta Efficiency (KGE)",
+        "unit": "(−)",
+        "ylim": (-1.0, 1.0),
+        "reference": 1.0,
         "cmap": "RdYlGn",
         "vmin": -1.0,
         "vmax": 1.0,
-    },
-    {
-        "col": "KGE_modified",
-        "label": "modified KGE (−)",
-        "title": "Modified Kling-Gupta Efficiency (KGE')",
-        "cmap": "RdYlGn",
-        "vmin": -1.0,
-        "vmax": 1.0,
+        "color": "#1f77b4",
     },
     {
         "col": "KGE_correlation",
-        "label": "KGE correlation r (−)",
+        "label": "KGE r",
         "title": "KGE correlation component",
+        "unit": "(−)",
+        "ylim": (-1.0, 1.0),
+        "reference": 1.0,
         "cmap": "RdYlGn",
         "vmin": -1.0,
         "vmax": 1.0,
+        "color": "#17becf",
     },
     {
         "col": "KGE_bias_ratio",
-        "label": "KGE bias ratio β (−)",
+        "label": "β",
         "title": "KGE bias-ratio component",
+        "unit": "(−)",
+        "ylim": (0.0, 2.0),
+        "reference": 1.0,
         "cmap": "viridis",
         "vmin": 0.0,
         "vmax": 2.0,
+        "color": "#ff7f0e",
     },
     {
         "col": "KGE_variability_ratio",
-        "label": "KGE variability ratio α (−)",
+        "label": "α",
         "title": "KGE variability-ratio component",
+        "unit": "(−)",
+        "ylim": (0.0, 2.0),
+        "reference": 1.0,
         "cmap": "viridis",
         "vmin": 0.0,
         "vmax": 2.0,
+        "color": "#bcbd22",
     },
     {
         "col": "NSE",
-        "label": "NSE (−)",
+        "label": "NSE",
         "title": "Nash-Sutcliffe Efficiency (NSE)",
+        "unit": "(−)",
+        "ylim": (-1.0, 1.0),
+        "reference": 1.0,
         "cmap": "RdYlGn",
         "vmin": -1.0,
         "vmax": 1.0,
+        "color": "#2ca02c",
     },
     {
         "col": "R2",
-        "label": "R² (−)",
+        "label": "R²",
         "title": "Coefficient of Determination (R²)",
+        "unit": "(−)",
+        "ylim": (0.0, 1.0),
+        "reference": 1.0,
         "cmap": "YlGn",
         "vmin": 0.0,
         "vmax": 1.0,
-    },
-    {
-        "col": "RMSE",
-        "label": "RMSE (m³/s)",
-        "title": "Root Mean Squared Error (RMSE)",
-        "cmap": "YlOrRd_r",
-        "vmin": 0.0,
-        # Upper bound set to 95th percentile to avoid outlier compression
-        "vmax": None,
+        "color": "#9467bd",
     },
     {
         "col": "RRMSE",
-        "label": "RRMSE (−)",
+        "label": "RRMSE",
         "title": "Relative Root Mean Squared Error (RRMSE)",
+        "unit": "(−)",
+        "ylim": None,
+        "robust_error_ylim": True,
+        "reference": 0.0,
         "cmap": "YlOrRd_r",
         "vmin": 0.0,
         "vmax": None,
+        "color": "#d62728",
     },
-]
-
-_SKILL_SCORE_SCATTER_CONFIGS: list[dict[str, str]] = [
-    {"col": "KGE", "label": "KGE", "color": "#1f77b4", "panel": "skill"},
-    {
-        "col": "KGE_modified",
-        "label": "KGE'",
-        "color": "#bcbd22",
-        "panel": "skill",
-    },
-    {"col": "NSE", "label": "NSE", "color": "#2ca02c", "panel": "skill"},
-    {"col": "R", "label": "R", "color": "#17becf", "panel": "skill"},
-    {"col": "R2", "label": "R2", "color": "#9467bd", "panel": "skill"},
-    {"col": "RMSE", "label": "RMSE", "color": "#d62728", "panel": "error"},
-    {"col": "RRMSE", "label": "RRMSE", "color": "#ff7f0e", "panel": "error"},
-]
-
+)
 
 def _plot_skill_score_map_single(
     evaluation_gdf: gpd.GeoDataFrame,
@@ -275,8 +271,8 @@ def plot_skill_score_maps(
     maps_folder = output_folder / "skill_score_maps"
     maps_folder.mkdir(parents=True, exist_ok=True)
 
-    for cfg in _SKILL_SCORE_MAP_METRIC_CONFIGS:
-        col: str = cfg["col"]
+    for cfg in _DISPLAYED_SKILL_SCORE_CONFIGS:
+        col: str = str(cfg["col"])
         if col not in evaluation_gdf.columns:
             logger.info("Metric '%s' not in evaluation data, skipping.", col)
             continue
@@ -295,9 +291,9 @@ def plot_skill_score_maps(
         _plot_skill_score_map_single(
             evaluation_gdf=evaluation_gdf,
             metric_col=col,
-            metric_label=cfg["label"],
-            metric_title=cfg["title"],
-            cmap_name=cfg["cmap"],
+            metric_label=f"{cfg['label']} {cfg['unit']}",
+            metric_title=str(cfg["title"]),
+            cmap_name=str(cfg["cmap"]),
             vmin=float(cfg["vmin"]),
             vmax=vmax,
             output_path=maps_folder / f"skill_score_map_{col.lower()}",
@@ -419,91 +415,7 @@ def plot_skill_score_boxplots(
         )
         return
 
-    comparison_metric_configs: list[dict] = [
-        {
-            "col": "KGE",
-            "label": "KGE",
-            "title": "Kling-Gupta Efficiency",
-            "ylim": (-1.0, 1.0),
-            "reference": 1.0,
-            "unit": "(−)",
-        },
-        {
-            "col": "KGE_modified",
-            "label": "KGE'",
-            "title": "Modified Kling-Gupta Efficiency",
-            "ylim": (-1.0, 1.0),
-            "reference": 1.0,
-            "unit": "(−)",
-        },
-        {
-            "col": "NSE",
-            "label": "NSE",
-            "title": "Nash-Sutcliffe Efficiency",
-            "ylim": (-1.0, 1.0),
-            "reference": 1.0,
-            "unit": "(−)",
-        },
-        {
-            "col": "R2",
-            "label": "R²",
-            "title": "Coefficient of Determination",
-            "ylim": (0.0, 1.0),
-            "reference": 1.0,
-            "unit": "(−)",
-        },
-        {
-            "col": "RMSE",
-            "label": "RMSE",
-            "title": "Root Mean Squared Error",
-            "ylim": None,
-            "robust_error_ylim": True,
-            "reference": 0.0,
-            "unit": "(m³/s)",
-        },
-        {
-            "col": "RRMSE",
-            "label": "RRMSE",
-            "title": "Relative RMSE",
-            "ylim": None,
-            "robust_error_ylim": True,
-            "reference": 0.0,
-            "unit": "(−)",
-        },
-    ]
-    geb_only_metric_configs: list[dict] = [
-        comparison_metric_configs[0],
-        comparison_metric_configs[1],
-        {
-            "col": "KGE_correlation",
-            "label": "r",
-            "title": "KGE correlation",
-            "ylim": (-1.0, 1.0),
-            "reference": 1.0,
-            "unit": "(−)",
-        },
-        {
-            "col": "KGE_bias_ratio",
-            "label": "β",
-            "title": "KGE bias ratio",
-            "ylim": (0.0, 2.0),
-            "reference": 1.0,
-            "unit": "(−)",
-        },
-        {
-            "col": "KGE_variability_ratio",
-            "label": "α",
-            "title": "KGE variability ratio",
-            "ylim": (0.0, 2.0),
-            "reference": 1.0,
-            "unit": "(−)",
-        },
-        *comparison_metric_configs[2:],
-    ]
-    is_pure_geb_plot: bool = include_geb and not external_models and not matched_only
-    metric_configs: list[dict] = (
-        geb_only_metric_configs if is_pure_geb_plot else comparison_metric_configs
-    )
+    metric_configs: tuple[dict[str, object], ...] = _DISPLAYED_SKILL_SCORE_CONFIGS
 
     geb_color: str = "#1f77b4"
     external_colors: dict[str, str] = dict(
@@ -520,12 +432,9 @@ def plot_skill_score_boxplots(
     logger.info("Creating evaluation metrics skill score plots...")
 
     with plt.style.context("dark_background"):
-        if is_pure_geb_plot:
-            fig, axes = plt.subplots(
-                1, len(metric_configs), figsize=(2.6 * len(metric_configs), 4.2)
-            )
-        else:
-            fig, axes = plt.subplots(2, 3, figsize=(14, 8))
+        fig, axes = plt.subplots(
+            1, len(metric_configs), figsize=(2.6 * len(metric_configs), 4.2)
+        )
         fig.patch.set_facecolor("black")
         plot_subtitle: str = (
             " (matched stations only)" if matched_only and external_models else ""
@@ -540,7 +449,7 @@ def plot_skill_score_boxplots(
 
         axes_flat: np.ndarray = np.atleast_1d(axes).ravel()
         for axis, config in zip(axes_flat, metric_configs, strict=False):
-            metric_col: str = config["col"]
+            metric_col: str = str(config["col"])
             geb_metric_values: np.ndarray = (
                 evaluation_df[metric_col].dropna().to_numpy(dtype=float)
                 if include_geb and metric_col in evaluation_df.columns
@@ -587,7 +496,7 @@ def plot_skill_score_boxplots(
                 )
 
             axis.axhline(
-                config["reference"],
+                float(config["reference"]),
                 color="0.5",
                 linewidth=0.8,
                 linestyle="--",
@@ -602,7 +511,7 @@ def plot_skill_score_boxplots(
                 pad=18,
             )
             if config["ylim"] is not None:
-                axis.set_ylim(*config["ylim"])
+                axis.set_ylim(*cast(tuple[float, float], config["ylim"]))
             elif config.get("robust_error_ylim", False):
                 combined_metric_values: np.ndarray = np.concatenate(
                     [metric_values for _, metric_values in models_with_data]
@@ -699,13 +608,13 @@ def _plot_metric_trendline(
 
 def _get_robust_metric_ylim(
     metric_values: pd.Series,
-    panel: str,
+    use_error_limits: bool,
 ) -> tuple[float, float]:
     """Get y-limits that keep scatterplots readable when metric outliers exist.
 
     Args:
         metric_values: Metric values plotted on one axis.
-        panel: Panel name, either `skill` or `error`.
+        use_error_limits: Whether to use nonnegative error-metric limits.
 
     Returns:
         Lower and upper y-axis limits.
@@ -715,7 +624,7 @@ def _get_robust_metric_ylim(
     if finite_values.size == 0:
         return (0.0, 1.0)
 
-    if panel == "skill":
+    if not use_error_limits:
         lower_limit: float = max(float(np.nanpercentile(finite_values, 2)), -2.0)
         upper_limit: float = min(float(np.nanpercentile(finite_values, 98)), 1.05)
         return (lower_limit - 0.05, upper_limit + 0.05)
@@ -746,12 +655,21 @@ def plot_skill_scores_vs_upstream_area(
         pd.to_numeric(evaluation_df["upstream_area_GEB"], errors="coerce") / 1_000_000.0
     )
 
-    fig, axes = plt.subplots(2, 3, figsize=(14, 8), sharex=True)
+    fig, axes = plt.subplots(
+        1,
+        len(_DISPLAYED_SKILL_SCORE_CONFIGS),
+        figsize=(2.6 * len(_DISPLAYED_SKILL_SCORE_CONFIGS), 4.2),
+        sharex=True,
+    )
     fig.patch.set_facecolor("black")
 
     has_values: bool = False
-    for axis, cfg in zip(axes.flat, _SKILL_SCORE_SCATTER_CONFIGS, strict=True):
-        metric_col: str = cfg["col"]
+    for axis, cfg in zip(
+        np.atleast_1d(axes).ravel(),
+        _DISPLAYED_SKILL_SCORE_CONFIGS,
+        strict=True,
+    ):
+        metric_col: str = str(cfg["col"])
         if metric_col not in evaluation_df.columns:
             logger.info("Metric '%s' not in evaluation data, skipping.", metric_col)
             axis.set_visible(False)
@@ -766,17 +684,17 @@ def plot_skill_scores_vs_upstream_area(
             axis.set_visible(False)
             continue
 
-        panel: str = cfg["panel"]
         has_values = True
+        use_error_limits: bool = bool(cfg.get("robust_error_ylim", False))
         y_limits: tuple[float, float] = _get_robust_metric_ylim(
-            metric_values[valid_mask], panel=panel
+            metric_values[valid_mask], use_error_limits=use_error_limits
         )
         axis.scatter(
             upstream_area_km2[valid_mask],
             metric_values[valid_mask],
             s=14,
             alpha=0.45,
-            color=cfg["color"],
+            color=str(cfg["color"]),
             edgecolors="white",
             linewidths=0.15,
         )
@@ -784,7 +702,7 @@ def plot_skill_scores_vs_upstream_area(
             axis=axis,
             upstream_area_km2=upstream_area_km2,
             metric_values=metric_values,
-            color=cfg["color"],
+            color=str(cfg["color"]),
             y_limits=y_limits,
         )
         axis.set_xscale("log")
@@ -792,8 +710,8 @@ def plot_skill_scores_vs_upstream_area(
         axis.set_facecolor("black")
         axis.grid(True, color="0.25", linewidth=0.5)
         axis.tick_params(colors="white")
-        axis.set_title(cfg["label"], color=cfg["color"], fontweight="bold")
-        axis.set_ylabel("Score (-)" if panel == "skill" else "Error")
+        axis.set_title(str(cfg["label"]), color=str(cfg["color"]), fontweight="bold")
+        axis.set_ylabel("Error" if use_error_limits else "Score (-)")
         axis.text(
             0.98,
             0.05,
@@ -818,7 +736,7 @@ def plot_skill_scores_vs_upstream_area(
         fontweight="bold",
         fontsize=14,
     )
-    for axis in axes[-1, :]:
+    for axis in np.atleast_1d(axes).ravel():
         axis.set_xlabel("Upstream area (km2)")
 
     fig.text(

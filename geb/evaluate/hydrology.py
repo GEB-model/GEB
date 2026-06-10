@@ -20,7 +20,6 @@ from scores.continuous import (
     nse as calculate_nse,
     rmse as calculate_rmse,
 )
-from scores.continuous.correlation import pearsonr as calculate_pearsonr
 from tqdm import tqdm
 
 from geb.evaluate.workflows.dashboard import create_discharge_folium_map
@@ -76,7 +75,6 @@ class DischargeMetrics(NamedTuple):
     KGE_bias_ratio: float = float("nan")
     KGE_variability_ratio: float = float("nan")
     NSE: float = float("nan")
-    R: float = float("nan")
     R2: float = float("nan")
     RMSE: float = float("nan")
     RRMSE: float = float("nan")
@@ -134,12 +132,10 @@ def _calculate_discharge_validation_metrics(
             columns named `discharge_observations` and `discharge_simulations` (m3/s).
 
     Returns:
-        DischargeMetrics with KGE, modified KGE, its correlation/bias/variability
-        components, NSE, R, coefficient of determination R2, RMSE, and RRMSE;
-        all NaN when there are fewer than 2 valid pairs.
+        DischargeMetrics with KGE, modified KGE, KGE correlation/bias/variability
+        components, NSE, coefficient of determination R2, RMSE, and RRMSE; all
+        NaN when there are fewer than 2 valid pairs.
 
-    Raises:
-        TypeError: If the `scores` KGE result does not include component values.
     """
     discharge_columns: list[str] = [
         "discharge_observations",
@@ -174,16 +170,13 @@ def _calculate_discharge_validation_metrics(
         observed_discharge_array,
         include_components=True,
     )
-    if not isinstance(kge_result, xr.Dataset):
-        raise TypeError("Expected KGE components as an xarray Dataset.")
-    kge_components: xr.Dataset = kge_result
-    kge: float = float(kge_components["kge"].item())
-    kge_correlation: float = float(kge_components["rho"].item())
-    kge_bias_ratio: float = float(kge_components["beta"].item())
-    kge_variability_ratio: float = float(kge_components["alpha"].item())
+    kge: float = float(kge_result["kge"].item())
+    kge_correlation: float = float(kge_result["rho"].item())
+    kge_bias_ratio: float = float(kge_result["beta"].item())
+    kge_variability_ratio: float = float(kge_result["alpha"].item())
 
     # Modified KGE uses the coefficient-of-variation ratio gamma, which is not
-    # exposed by `scores`, so calculate it directly from the original formula.
+    # included by `scores`, so calculate it directly from the original formula.
     observed_discharge_variation: float = (
         float("nan")
         if observed_discharge_mean == 0.0
@@ -210,12 +203,6 @@ def _calculate_discharge_validation_metrics(
     # Remaining skill scores and error metrics use the same filtered time steps.
     nse: float = float(
         calculate_nse(simulated_discharge_array, observed_discharge_array).item()
-    )
-    r_value: float = float(
-        calculate_pearsonr(
-            simulated_discharge_array,
-            observed_discharge_array,
-        ).item()
     )
     rmse: float = float(
         calculate_rmse(simulated_discharge_array, observed_discharge_array).item()
@@ -244,7 +231,6 @@ def _calculate_discharge_validation_metrics(
         KGE_bias_ratio=kge_bias_ratio,
         KGE_variability_ratio=kge_variability_ratio,
         NSE=nse,
-        R=r_value,
         R2=coefficient_of_determination,
         RMSE=rmse,
         RRMSE=rrmse,
@@ -1040,7 +1026,7 @@ def _plot_discharge_validation_graphs(
     upstream_area_ratio: float,
     kge: float,
     nse: float,
-    r_value: float,
+    r2_value: float,
     eval_plot_folder: Path,
     include_yearly_plots: bool,
     frequency: str,
@@ -1056,7 +1042,7 @@ def _plot_discharge_validation_graphs(
             (dimensionless).
         kge: Kling-Gupta efficiency (dimensionless).
         nse: Nash-Sutcliffe efficiency (dimensionless).
-        r_value: Pearson correlation coefficient (dimensionless).
+        r2_value: Coefficient of determination (dimensionless).
         eval_plot_folder: Output directory for generated plots.
         include_yearly_plots: Whether to generate per-year timeseries plots.
         frequency: Data frequency string for plot titles (e.g., "daily", "hourly").
@@ -1082,8 +1068,8 @@ def _plot_discharge_validation_graphs(
     ax.set_xlim(validation_df.index.min(), validation_df.index.max())
     ax.legend(loc="upper right", fontsize=10)
 
-    if np.isfinite(r_value):
-        ax.text(0.02, 0.9, f"$R^2$={r_value:.2f}", transform=ax.transAxes, fontsize=12)
+    if np.isfinite(r2_value):
+        ax.text(0.02, 0.9, f"$R^2$={r2_value:.2f}", transform=ax.transAxes, fontsize=12)
         ax.text(0.02, 0.85, f"KGE={kge:.2f}", transform=ax.transAxes, fontsize=12)
         ax.text(0.02, 0.8, f"NSE={nse:.2f}", transform=ax.transAxes, fontsize=12)
     else:
@@ -1149,7 +1135,7 @@ def _plot_discharge_validation_graphs(
             ax.legend()
 
             ax.text(
-                0.02, 0.9, f"$R^2$={r_value:.2f}", transform=ax.transAxes, fontsize=12
+                0.02, 0.9, f"$R^2$={r2_value:.2f}", transform=ax.transAxes, fontsize=12
             )
             ax.text(0.02, 0.85, f"KGE={kge:.2f}", transform=ax.transAxes, fontsize=12)
             ax.text(0.02, 0.8, f"NSE={nse:.2f}", transform=ax.transAxes, fontsize=12)
@@ -1972,7 +1958,7 @@ class Hydrology:
         """Evaluate the discharge grid from GEB against observations from the discharge observations database.
 
         Compares simulated discharge from the GEB model with observed discharge data from
-        gauging stations. Calculates performance metrics (KGE, NSE, R) and creates
+        gauging stations. Calculates discharge skill scores and creates
         evaluation plots and interactive maps for analysis.
 
         Notes:
@@ -1993,7 +1979,7 @@ class Hydrology:
                 If omitted, `hydrology.evaluation.discharge.minimum_timeseries_length_years` is used.
 
         Returns:
-            Dictionary containing mean metrics (KGE, NSE, R). In addition, the returned dictionary contains
+            Dictionary containing median discharge skill scores. In addition, the returned dictionary contains
             frequency-specific metrics (e.g., KGE_hourly, KGE_daily).
             Stations with hourly data are also evaluated on the daily resampled data, and those metrics are included in
             the returned dictionary. Stations with only daily data are not evaluated on the hourly data.
@@ -2121,7 +2107,7 @@ class Hydrology:
                         upstream_area_ratio=discharge_observations_to_GEB_upstream_area_ratio,
                         kge=discharge_metrics.KGE,
                         nse=discharge_metrics.NSE,
-                        r_value=discharge_metrics.R,
+                        r2_value=discharge_metrics.R2,
                         eval_plot_folder=self.evaluate_discharge_output_folder,
                         include_yearly_plots=include_yearly_plots,
                         frequency=frequency_label,
@@ -2462,7 +2448,7 @@ class Hydrology:
     ) -> None:
         """Create skill score violin+boxplot graphs for each evaluation metric.
 
-        Produces a 2×3 grid of violin/box plots across gauging stations.
+        Produces one row of violin/box plots across gauging stations.
         When ``matched_only=False`` (default), the plot is GEB-only unless
         ``include_external=True`` is passed. If external evaluation data are
         available, a matched-stations plot is generated automatically as an

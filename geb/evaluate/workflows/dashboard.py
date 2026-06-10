@@ -71,16 +71,18 @@ def _inject_station_images_macro(
 def _build_metric_colormaps() -> tuple[
     cm.LinearColormap, cm.LinearColormap, cm.LinearColormap
 ]:
-    """Create the standard KGE, NSE, and R colormaps (0 red → 1 green).
+    """Create the standard KGE, NSE, and KGE-correlation colormaps (0 red → 1 green).
 
     Returns:
-        Tuple of (colormap_r, colormap_kge, colormap_nse).
+        Tuple of (colormap_correlation, colormap_kge, colormap_nse).
     """
     colors = ["red", "orange", "yellow", "blue", "green"]
-    colormap_r = cm.LinearColormap(colors=colors, vmin=0, vmax=1, caption="R")
+    colormap_correlation = cm.LinearColormap(
+        colors=colors, vmin=0, vmax=1, caption="KGE correlation"
+    )
     colormap_kge = cm.LinearColormap(colors=colors, vmin=0, vmax=1, caption="KGE")
     colormap_nse = cm.LinearColormap(colors=colors, vmin=0, vmax=1, caption="NSE")
-    return colormap_r, colormap_kge, colormap_nse
+    return colormap_correlation, colormap_kge, colormap_nse
 
 
 def create_discharge_folium_map(
@@ -94,7 +96,7 @@ def create_discharge_folium_map(
 ) -> folium.Map:
     """Create an interactive Folium discharge evaluation map.
 
-    Stations are shown as circle markers coloured by KGE, NSE, or R
+    Stations are shown as circle markers coloured by KGE, NSE, or KGE correlation
     (switchable via layer control) and sized by upstream area.  River widths
     are scaled by mean discharge.  An optional upstream-area-ratio layer is
     included when all stations have the ratio available.  Station PNG plots
@@ -104,7 +106,7 @@ def create_discharge_folium_map(
 
     Args:
         evaluation_gdf: Per-station GeoDataFrame with columns ``KGE``,
-            ``NSE``, ``R``, ``upstream_area_GEB``,
+            ``NSE``, ``KGE_correlation``, ``upstream_area_GEB``,
             ``discharge_observations_to_GEB_upstream_area_ratio``, and a
             point geometry.
         output_path: Full path (including filename) where the HTML file is
@@ -170,7 +172,7 @@ def create_discharge_folium_map(
         z_index=2,
     ).add_to(m)
 
-    colormap_r, colormap_kge, colormap_nse = _build_metric_colormaps()
+    colormap_correlation, colormap_kge, colormap_nse = _build_metric_colormaps()
 
     layer_upstream: folium.FeatureGroup | None = None
     colormap_upstream: cm.LinearColormap | None = None
@@ -193,7 +195,7 @@ def create_discharge_folium_map(
 
     layer_kge = folium.FeatureGroup(name="KGE", show=True)
     layer_nse = folium.FeatureGroup(name="NSE", show=False)
-    layer_r = folium.FeatureGroup(name="R", show=False)
+    layer_correlation = folium.FeatureGroup(name="KGE correlation", show=False)
 
     popup_width = 800
 
@@ -231,7 +233,7 @@ def create_discharge_folium_map(
         )
 
         for layer, colormap, metric in [
-            (layer_r, colormap_r, "R"),
+            (layer_correlation, colormap_correlation, "KGE_correlation"),
             (layer_kge, colormap_kge, "KGE"),
             (layer_nse, colormap_nse, "NSE"),
         ]:
@@ -265,7 +267,7 @@ def create_discharge_folium_map(
             ).add_to(layer_upstream)
 
     for colormap, layer in [
-        (colormap_r, layer_r),
+        (colormap_correlation, layer_correlation),
         (colormap_kge, layer_kge),
         (colormap_nse, layer_nse),
     ]:

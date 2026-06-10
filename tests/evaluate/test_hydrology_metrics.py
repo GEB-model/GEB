@@ -22,7 +22,7 @@ def test_discharge_metrics_use_coefficient_of_determination_for_r2() -> None:
 
     metrics = _calculate_discharge_validation_metrics(validation_df)
 
-    assert metrics.R == pytest.approx(1.0)
+    assert metrics.KGE_correlation == pytest.approx(1.0)
     assert metrics.R2 == pytest.approx(-0.5)
 
 

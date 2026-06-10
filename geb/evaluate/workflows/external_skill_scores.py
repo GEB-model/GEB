@@ -27,11 +27,33 @@ GOOGLE_STREAMFLOW_METRIC_ROOT: Path = Path(
 
 _PLOTTED_SKILL_SCORE_COLUMNS: tuple[str, ...] = (
     "KGE",
+    "KGE_correlation",
+    "KGE_bias_ratio",
+    "KGE_variability_ratio",
     "NSE",
     "R2",
-    "RMSE",
     "RRMSE",
 )
+
+
+def _standardize_external_metric_columns(skill_score_df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize external metric names to the GEB evaluation column names.
+
+    Args:
+        skill_score_df: External skill-score table.
+
+    Returns:
+        Skill-score table with Pearson-r source values stored as
+        `KGE_correlation` and no standalone `R` column.
+    """
+    standardized_df: pd.DataFrame = skill_score_df.copy()
+    if "R" in standardized_df.columns:
+        if "KGE_correlation" not in standardized_df.columns:
+            standardized_df["KGE_correlation"] = standardized_df["R"]
+        if "R2" not in standardized_df.columns:
+            standardized_df["R2"] = standardized_df["R"] ** 2
+        standardized_df = standardized_df.drop(columns=["R"])
+    return standardized_df
 
 
 def _format_grdc_station_keys(station_ids: pd.Series) -> set[str]:
@@ -176,9 +198,7 @@ def _assemble_google_streamflow_metrics(
     """
     google_metrics_df: pd.DataFrame = pd.concat(metric_series.values(), axis=1)
     google_metrics_df.index = google_metrics_df.index.str.upper()
-    if "R" in google_metrics_df.columns:
-        google_metrics_df["R2"] = google_metrics_df["R"] ** 2
-    return google_metrics_df.dropna(how="all")
+    return _standardize_external_metric_columns(google_metrics_df).dropna(how="all")
 
 
 def _find_google_metric_folders(folder: Path) -> list[Path]:
@@ -351,7 +371,9 @@ def read_external_evaluation_raw(
     for csv_path in csv_paths:
         external_evaluation_df: pd.DataFrame = pd.read_csv(csv_path, index_col=0)
         external_evaluation_df.index = external_evaluation_df.index.map(str).str.upper()
-        external_models[csv_path.stem] = external_evaluation_df
+        external_models[csv_path.stem] = _standardize_external_metric_columns(
+            external_evaluation_df
+        )
 
     google_metrics_df: pd.DataFrame = read_google_streamflow_skill_scores(
         folder, logger

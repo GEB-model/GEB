@@ -27,9 +27,9 @@ def test_google_streamflow_metrics_url_points_to_zenodo_archive() -> None:
 def test_read_external_evaluation_raw_reads_csv_scores(
     tmp_path: Path,
 ) -> None:
-    """External CSV reading keeps score-only tables unchanged."""
+    """External CSV reading normalizes station IDs and metric columns."""
     utrecht_df: pd.DataFrame = pd.DataFrame(
-        {"KGE": [0.8, 0.7]},
+        {"KGE": [0.8, 0.7], "R": [0.9, 0.8]},
         index=pd.Index(["station_a", "station_b"]),
     )
     google_df: pd.DataFrame = pd.DataFrame(
@@ -47,6 +47,9 @@ def test_read_external_evaluation_raw_reads_csv_scores(
     )
 
     assert external_models["utrecht"].index.to_list() == ["STATION_A", "STATION_B"]
+    assert "R" not in external_models["utrecht"].columns
+    assert external_models["utrecht"].loc["STATION_A", "KGE_correlation"] == 0.9
+    assert external_models["utrecht"].loc["STATION_A", "R2"] == pytest.approx(0.81)
     assert external_models["google_streamflow"].index.to_list() == [
         "STATION_A",
         "STATION_B",
@@ -187,7 +190,8 @@ def test_read_google_streamflow_skill_scores_from_extracted_metrics(
 
     assert google_df.index.to_list() == ["GRDC_1001", "GRDC_1002"]
     assert google_df.loc["GRDC_1001", "KGE"] == 0.8
-    assert google_df.loc["GRDC_1001", "R"] == 0.9
+    assert "R" not in google_df.columns
+    assert google_df.loc["GRDC_1001", "KGE_correlation"] == 0.9
     assert google_df.loc["GRDC_1001", "R2"] == pytest.approx(0.81)
 
 
