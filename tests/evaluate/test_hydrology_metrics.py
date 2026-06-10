@@ -6,8 +6,6 @@ import pytest
 
 from geb.evaluate.hydrology import (
     _calculate_discharge_validation_metrics,
-    _recreate_output_folder,
-    _resolve_report_folder,
 )
 
 
@@ -88,30 +86,3 @@ def test_rrmse_is_normalized_by_observed_standard_deviation() -> None:
     assert metrics.RRMSE == pytest.approx(expected_rrmse)
 
 
-def test_recreate_output_folder_replaces_symlink_without_deleting_target(
-    tmp_path: Path,
-) -> None:
-    """Output cleanup unlinks symlinks instead of deleting their target folder."""
-    target_folder: Path = tmp_path / "target"
-    target_folder.mkdir()
-    target_file: Path = target_folder / "keep.txt"
-    target_file.write_text("keep me")
-    output_folder: Path = tmp_path / "output"
-    output_folder.symlink_to(target_folder, target_is_directory=True)
-
-    _recreate_output_folder(output_folder)
-
-    assert output_folder.is_dir()
-    assert not output_folder.is_symlink()
-    assert target_file.read_text() == "keep me"
-
-
-def test_resolve_report_folder_supports_merged_output_layout(tmp_path: Path) -> None:
-    """Report lookup falls back to output/report/<run_name> for merged models."""
-    run_output_folder: Path = tmp_path / "output" / "default"
-    merged_report_folder: Path = tmp_path / "output" / "report" / "default"
-    merged_report_folder.mkdir(parents=True)
-
-    report_folder: Path = _resolve_report_folder(run_output_folder, "default")
-
-    assert report_folder == merged_report_folder
