@@ -25,6 +25,38 @@ _SKILL_SCORE_MAP_METRIC_CONFIGS: list[dict] = [
         "vmax": 1.0,
     },
     {
+        "col": "KGE_modified",
+        "label": "modified KGE (−)",
+        "title": "Modified Kling-Gupta Efficiency (KGE')",
+        "cmap": "RdYlGn",
+        "vmin": -1.0,
+        "vmax": 1.0,
+    },
+    {
+        "col": "KGE_correlation",
+        "label": "KGE correlation r (−)",
+        "title": "KGE correlation component",
+        "cmap": "RdYlGn",
+        "vmin": -1.0,
+        "vmax": 1.0,
+    },
+    {
+        "col": "KGE_bias_ratio",
+        "label": "KGE bias ratio β (−)",
+        "title": "KGE bias-ratio component",
+        "cmap": "viridis",
+        "vmin": 0.0,
+        "vmax": 2.0,
+    },
+    {
+        "col": "KGE_variability_ratio",
+        "label": "KGE variability ratio α (−)",
+        "title": "KGE variability-ratio component",
+        "cmap": "viridis",
+        "vmin": 0.0,
+        "vmax": 2.0,
+    },
+    {
         "col": "NSE",
         "label": "NSE (−)",
         "title": "Nash-Sutcliffe Efficiency (NSE)",
@@ -61,6 +93,12 @@ _SKILL_SCORE_MAP_METRIC_CONFIGS: list[dict] = [
 
 _SKILL_SCORE_SCATTER_CONFIGS: list[dict[str, str]] = [
     {"col": "KGE", "label": "KGE", "color": "#1f77b4", "panel": "skill"},
+    {
+        "col": "KGE_modified",
+        "label": "KGE'",
+        "color": "#bcbd22",
+        "panel": "skill",
+    },
     {"col": "NSE", "label": "NSE", "color": "#2ca02c", "panel": "skill"},
     {"col": "R", "label": "R", "color": "#17becf", "panel": "skill"},
     {"col": "R2", "label": "R2", "color": "#9467bd", "panel": "skill"},
@@ -381,11 +419,19 @@ def plot_skill_score_boxplots(
         )
         return
 
-    metric_configs: list[dict] = [
+    comparison_metric_configs: list[dict] = [
         {
             "col": "KGE",
             "label": "KGE",
             "title": "Kling-Gupta Efficiency",
+            "ylim": (-1.0, 1.0),
+            "reference": 1.0,
+            "unit": "(−)",
+        },
+        {
+            "col": "KGE_modified",
+            "label": "KGE'",
+            "title": "Modified Kling-Gupta Efficiency",
             "ylim": (-1.0, 1.0),
             "reference": 1.0,
             "unit": "(−)",
@@ -425,6 +471,39 @@ def plot_skill_score_boxplots(
             "unit": "(−)",
         },
     ]
+    geb_only_metric_configs: list[dict] = [
+        comparison_metric_configs[0],
+        comparison_metric_configs[1],
+        {
+            "col": "KGE_correlation",
+            "label": "r",
+            "title": "KGE correlation",
+            "ylim": (-1.0, 1.0),
+            "reference": 1.0,
+            "unit": "(−)",
+        },
+        {
+            "col": "KGE_bias_ratio",
+            "label": "β",
+            "title": "KGE bias ratio",
+            "ylim": (0.0, 2.0),
+            "reference": 1.0,
+            "unit": "(−)",
+        },
+        {
+            "col": "KGE_variability_ratio",
+            "label": "α",
+            "title": "KGE variability ratio",
+            "ylim": (0.0, 2.0),
+            "reference": 1.0,
+            "unit": "(−)",
+        },
+        *comparison_metric_configs[2:],
+    ]
+    is_pure_geb_plot: bool = include_geb and not external_models and not matched_only
+    metric_configs: list[dict] = (
+        geb_only_metric_configs if is_pure_geb_plot else comparison_metric_configs
+    )
 
     geb_color: str = "#1f77b4"
     external_colors: dict[str, str] = dict(
@@ -441,7 +520,12 @@ def plot_skill_score_boxplots(
     logger.info("Creating evaluation metrics skill score plots...")
 
     with plt.style.context("dark_background"):
-        fig, axes = plt.subplots(2, 3, figsize=(14, 8))
+        if is_pure_geb_plot:
+            fig, axes = plt.subplots(
+                1, len(metric_configs), figsize=(2.6 * len(metric_configs), 4.2)
+            )
+        else:
+            fig, axes = plt.subplots(2, 3, figsize=(14, 8))
         fig.patch.set_facecolor("black")
         plot_subtitle: str = (
             " (matched stations only)" if matched_only and external_models else ""
@@ -454,7 +538,8 @@ def plot_skill_score_boxplots(
             y=1.01,
         )
 
-        for axis, config in zip(axes.flat, metric_configs, strict=False):
+        axes_flat: np.ndarray = np.atleast_1d(axes).ravel()
+        for axis, config in zip(axes_flat, metric_configs, strict=False):
             metric_col: str = config["col"]
             geb_metric_values: np.ndarray = (
                 evaluation_df[metric_col].dropna().to_numpy(dtype=float)
@@ -533,6 +618,9 @@ def plot_skill_score_boxplots(
             axis.spines["bottom"].set_visible(False)
             axis.yaxis.label.set_color("white")
             axis.grid(axis="y", color="0.25", linewidth=0.5)
+
+        for axis in axes_flat[len(metric_configs) :]:
+            axis.set_visible(False)
 
         legend_handles: list[Line2D] = [
             Line2D([0], [0], color=color, linewidth=5, label=name)

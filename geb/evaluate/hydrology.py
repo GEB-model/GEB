@@ -11,10 +11,16 @@ import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import xarray as xr
 from matplotlib import colormaps as mcolormaps
 from matplotlib.collections import LineCollection
 from matplotlib.lines import Line2D
-from permetrics.regression import RegressionMetric
+from scores.continuous import (
+    kge as calculate_kge,
+    nse as calculate_nse,
+    rmse as calculate_rmse,
+)
+from scores.continuous.correlation import pearsonr as calculate_pearsonr
 from tqdm import tqdm
 
 from geb.evaluate.workflows.dashboard import create_discharge_folium_map
@@ -65,11 +71,57 @@ class DischargeMetrics(NamedTuple):
     """Discharge validation skill scores for a single station and time period."""
 
     KGE: float = float("nan")
+    KGE_modified: float = float("nan")
+    KGE_correlation: float = float("nan")
+    KGE_bias_ratio: float = float("nan")
+    KGE_variability_ratio: float = float("nan")
     NSE: float = float("nan")
     R: float = float("nan")
     R2: float = float("nan")
     RMSE: float = float("nan")
     RRMSE: float = float("nan")
+
+
+def _recreate_output_folder(output_folder: Path) -> None:
+    """Remove an existing output path and recreate it as a directory.
+
+    Args:
+        output_folder: Output folder path to recreate.
+
+    """
+    if output_folder.is_symlink() or output_folder.is_file():
+        # `shutil.rmtree` intentionally refuses symlinks; unlinking preserves
+        # the target directory and only removes the compatibility link.
+        output_folder.unlink()
+    elif output_folder.exists():
+        shutil.rmtree(output_folder)
+    output_folder.mkdir(parents=True, exist_ok=True)
+
+
+def _resolve_report_folder(output_folder: Path, run_name: str) -> Path:
+    """Resolve the report folder for standard and merged-model output layouts.
+
+    Standard model runs store reports under ``output/<run_name>/report``. Older
+    merged model outputs store the same run under ``output/report/<run_name>``.
+
+    Args:
+        output_folder: Run-specific output folder from the model configuration.
+        run_name: Name of the run to evaluate.
+
+    Returns:
+        Existing report folder path, or the standard report folder path when no
+        compatible report folder exists.
+
+    """
+    standard_report_folder: Path = output_folder / "report"
+    if standard_report_folder.exists():
+        return standard_report_folder
+
+    merged_report_folder: Path = output_folder.parent / "report" / run_name
+    if merged_report_folder.exists():
+        return merged_report_folder
+
+    return standard_report_folder
 
 
 def _calculate_discharge_validation_metrics(
@@ -82,39 +134,121 @@ def _calculate_discharge_validation_metrics(
             columns named `discharge_observations` and `discharge_simulations` (m3/s).
 
     Returns:
-        DischargeMetrics with KGE, NSE, R, R2, RMSE, RRMSE; all NaN when there are
-        fewer than 2 valid pairs.
+        DischargeMetrics with KGE, modified KGE, its correlation/bias/variability
+        components, NSE, R, coefficient of determination R2, RMSE, and RRMSE;
+        all NaN when there are fewer than 2 valid pairs.
+
+    Raises:
+        TypeError: If the `scores` KGE result does not include component values.
     """
-    valid_pairs_df: pd.DataFrame = validation_df[
-        ["discharge_observations", "discharge_simulations"]
-    ].dropna()
+    discharge_columns: list[str] = [
+        "discharge_observations",
+        "discharge_simulations",
+    ]
+    valid_pairs_df: pd.DataFrame = validation_df[discharge_columns].dropna()
     if valid_pairs_df.shape[0] < 2:
         return DischargeMetrics()
 
+    # Keep observed and simulated values aligned after dropping incomplete pairs.
     observed_discharge_values: np.ndarray = valid_pairs_df[
         "discharge_observations"
-    ].values
+    ].to_numpy(dtype=float)
     simulated_discharge_values: np.ndarray = valid_pairs_df[
         "discharge_simulations"
-    ].values
-    evaluator: RegressionMetric = RegressionMetric(
-        observed_discharge_values, simulated_discharge_values
+    ].to_numpy(dtype=float)
+    observed_discharge_array: xr.DataArray = xr.DataArray(
+        observed_discharge_values, dims=["time"]
+    )
+    simulated_discharge_array: xr.DataArray = xr.DataArray(
+        simulated_discharge_values, dims=["time"]
     )
 
-    kge: float = float(evaluator.kling_gupta_efficiency())
-    nse: float = float(evaluator.nash_sutcliffe_efficiency())
-    r_value: float = float(evaluator.pearson_correlation_coefficient())
-    r2: float = float(evaluator.pearson_correlation_coefficient_square())
-    rmse: float = float(evaluator.root_mean_squared_error())
-    # RRMSE = RMSE / mean(observed); protected against zero mean
-    mean_observed_discharge: float = float(np.mean(observed_discharge_values))
+    observed_discharge_mean: float = float(np.mean(observed_discharge_values))
+    simulated_discharge_mean: float = float(np.mean(simulated_discharge_values))
+    observed_discharge_std: float = float(np.std(observed_discharge_values))
+    simulated_discharge_std: float = float(np.std(simulated_discharge_values))
+
+    # KGE and its original Gupta et al. components are available from `scores`.
+    kge_result: xr.DataArray | xr.Dataset = calculate_kge(
+        simulated_discharge_array,
+        observed_discharge_array,
+        include_components=True,
+    )
+    if not isinstance(kge_result, xr.Dataset):
+        raise TypeError("Expected KGE components as an xarray Dataset.")
+    kge_components: xr.Dataset = kge_result
+    kge: float = float(kge_components["kge"].item())
+    kge_correlation: float = float(kge_components["rho"].item())
+    kge_bias_ratio: float = float(kge_components["beta"].item())
+    kge_variability_ratio: float = float(kge_components["alpha"].item())
+
+    # Modified KGE uses the coefficient-of-variation ratio gamma, which is not
+    # exposed by `scores`, so calculate it directly from the original formula.
+    observed_discharge_variation: float = (
+        float("nan")
+        if observed_discharge_mean == 0.0
+        else observed_discharge_std / observed_discharge_mean
+    )
+    simulated_discharge_variation: float = (
+        float("nan")
+        if simulated_discharge_mean == 0.0
+        else simulated_discharge_std / simulated_discharge_mean
+    )
+    modified_kge_variability_ratio: float = (
+        float("nan")
+        if observed_discharge_variation == 0.0
+        else simulated_discharge_variation / observed_discharge_variation
+    )
+    kge_modified: float = 1.0 - float(
+        np.sqrt(
+            (kge_correlation - 1.0) ** 2
+            + (kge_bias_ratio - 1.0) ** 2
+            + (modified_kge_variability_ratio - 1.0) ** 2
+        )
+    )
+
+    # Remaining skill scores and error metrics use the same filtered time steps.
+    nse: float = float(
+        calculate_nse(simulated_discharge_array, observed_discharge_array).item()
+    )
+    r_value: float = float(
+        calculate_pearsonr(
+            simulated_discharge_array,
+            observed_discharge_array,
+        ).item()
+    )
+    rmse: float = float(
+        calculate_rmse(simulated_discharge_array, observed_discharge_array).item()
+    )
     rrmse: float = (
-        rmse / mean_observed_discharge
-        if mean_observed_discharge > 0.0
-        else float("nan")
+        float("nan") if observed_discharge_std == 0.0 else rmse / observed_discharge_std
     )
 
-    return DischargeMetrics(KGE=kge, NSE=nse, R=r_value, R2=r2, RMSE=rmse, RRMSE=rrmse)
+    # R2 is the coefficient of determination, not squared Pearson correlation.
+    residual_sum_of_squares: float = float(
+        np.sum((observed_discharge_values - simulated_discharge_values) ** 2)
+    )
+    total_sum_of_squares: float = float(
+        np.sum((observed_discharge_values - np.mean(observed_discharge_values)) ** 2)
+    )
+    coefficient_of_determination: float = (
+        float("nan")
+        if total_sum_of_squares == 0.0
+        else 1.0 - residual_sum_of_squares / total_sum_of_squares
+    )
+
+    return DischargeMetrics(
+        KGE=kge,
+        KGE_modified=kge_modified,
+        KGE_correlation=kge_correlation,
+        KGE_bias_ratio=kge_bias_ratio,
+        KGE_variability_ratio=kge_variability_ratio,
+        NSE=nse,
+        R=r_value,
+        R2=coefficient_of_determination,
+        RMSE=rmse,
+        RRMSE=rrmse,
+    )
 
 
 def _plot_validation_return_periods(
@@ -592,7 +726,8 @@ def _plot_outflow_discharge_timeseries(
     Returns:
         Number of outflow plots created (dimensionless).
     """
-    routing_dir: Path = output_folder / "report" / "hydrology.routing"
+    report_folder: Path = _resolve_report_folder(output_folder, run_name)
+    routing_dir: Path = report_folder / "hydrology.routing"
     if not routing_dir.exists():
         model.logger.info(
             f"No hydrology routing directory found at {routing_dir}. Skipping outflow plots."
@@ -611,16 +746,15 @@ def _plot_outflow_discharge_timeseries(
     outflow_plot_folder: Path = eval_plot_folder / "outflow"
     outflow_plot_folder.mkdir(parents=True, exist_ok=True)
     total_area_m2: float = _get_total_model_area_m2(model)
-    report_folder: Path = output_folder / "report"
+    report_folder = _resolve_report_folder(output_folder, run_name)
     frozen_fraction_series_name: str = "_top_soil_frozen_fraction"
     frozen_fraction_series: pd.Series | None = None
-    run_folder: Path = report_folder / run_name
     frozen_fraction_path: Path = (
-        run_folder / "hydrology.landsurface" / frozen_fraction_series_name
+        report_folder / "hydrology.landsurface" / frozen_fraction_series_name
     ).with_suffix(".parquet")
     if frozen_fraction_path.exists():
         frozen_fraction_series = _read_evaluation_series_with_date_index(
-            run_folder,
+            report_folder,
             "hydrology.landsurface",
             frozen_fraction_series_name,
         )
@@ -824,7 +958,8 @@ def create_validation_df(
         ValueError: If NaN values are found in the GEB discharge data after loading.
     """
     # Check if the hydrology.routing directory exists
-    routing_dir = output_folder / "report" / "hydrology.routing"
+    report_folder: Path = _resolve_report_folder(output_folder, run_name)
+    routing_dir = report_folder / "hydrology.routing"
     if not routing_dir.exists():
         raise FileNotFoundError(
             f"Hydrology routing directory does not exist: {routing_dir}"
@@ -1867,9 +2002,7 @@ class Hydrology:
             FileNotFoundError: If the run folder does not exist in the report directory.
             ValueError: If a non-existing frequency label is encountered in the discharge observations data.
         """
-        if self.evaluate_discharge_output_folder.exists():
-            shutil.rmtree(self.evaluate_discharge_output_folder)
-        self.evaluate_discharge_output_folder.mkdir(parents=True, exist_ok=True)
+        _recreate_output_folder(self.evaluate_discharge_output_folder)
 
         if minimum_upstream_area_km2 is None:
             minimum_upstream_area_km2 = self.model.config["hydrology"]["evaluation"][
@@ -1912,8 +2045,8 @@ class Hydrology:
 
         self.model.logger.info(f"Loaded discharge simulation from {run_name} run.")
 
-        # check if run file exists, if not, raise an error
-        if not (self.model.output_folder / "report").exists():
+        report_folder: Path = _resolve_report_folder(self.model.output_folder, run_name)
+        if not report_folder.exists():
             raise FileNotFoundError(
                 f"Run folder '{run_name}' does not exist in the report directory. Did you run the model?"
             )
@@ -2331,9 +2464,10 @@ class Hydrology:
 
         Produces a 2×3 grid of violin/box plots across gauging stations.
         When ``matched_only=False`` (default), the plot is GEB-only unless
-        ``include_external=True`` is passed. When ``matched_only=True``, both
-        GEB and external data are restricted to their overlapping stations for
-        a fair comparison.
+        ``include_external=True`` is passed. If external evaluation data are
+        available, a matched-stations plot is generated automatically as an
+        additional output. When ``matched_only=True``, only the matched-stations
+        plot is generated for backwards compatibility.
 
         Args:
             export: Save the figure to disk.
@@ -2358,12 +2492,15 @@ class Hydrology:
         should_include_external: bool = (
             include_external or matched_only or not include_geb
         )
+        evaluation_metrics_path: Path = (
+            self.evaluate_discharge_output_folder / "evaluation_metrics.xlsx"
+        )
+        snapped_locations_path: Path = self.model.files["geom"][
+            "discharge/discharge_snapped_locations"
+        ]
         evaluation_df, external_models = _prepare_skill_score_boxplot_inputs(
-            evaluation_metrics_path=self.evaluate_discharge_output_folder
-            / "evaluation_metrics.xlsx",
-            snapped_locations_path=self.model.files["geom"][
-                "discharge/discharge_snapped_locations"
-            ],
+            evaluation_metrics_path=evaluation_metrics_path,
+            snapped_locations_path=snapped_locations_path,
             external_evaluation_folder=external_evaluation_folder,
             configured_external_evaluation_folder=configured_folder,
             model_folder=self.model.input_folder.parent,
@@ -2390,6 +2527,33 @@ class Hydrology:
             include_geb=include_geb,
             matched_only=matched_only,
         )
+
+        if not matched_only and include_geb:
+            matched_evaluation_df, matched_external_models = (
+                _prepare_skill_score_boxplot_inputs(
+                    evaluation_metrics_path=evaluation_metrics_path,
+                    snapped_locations_path=snapped_locations_path,
+                    external_evaluation_folder=external_evaluation_folder,
+                    configured_external_evaluation_folder=configured_folder,
+                    model_folder=self.model.input_folder.parent,
+                    output_folder=self.evaluate_discharge_output_folder,
+                    logger=self.model.logger,
+                    minimum_upstream_area_km2=minimum_upstream_area_km2,
+                    include_geb=include_geb,
+                    matched_only=True,
+                    include_external=True,
+                )
+            )
+            if matched_external_models and not matched_evaluation_df.empty:
+                _plot_skill_score_boxplots(
+                    evaluation_df=matched_evaluation_df,
+                    external_models=matched_external_models,
+                    output_folder=self.evaluate_discharge_output_folder,
+                    logger=self.model.logger,
+                    export=export,
+                    include_geb=include_geb,
+                    matched_only=True,
+                )
 
     def plot_skill_scores_vs_upstream_area(
         self,
