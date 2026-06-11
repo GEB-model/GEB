@@ -27,6 +27,7 @@ from geb.hazards.floods.workflows.construct_storm_surge_hydrographs import (
 from geb.module import Module
 from geb.reporter import Reporter
 from geb.store import Bucket, Store
+from geb.agents.
 from geb.workflows.io import read_geom, read_params, read_zarr
 
 from .evaluate import Evaluate
@@ -448,6 +449,20 @@ class GEBModel(Module):
             weight_by_socioeconomic_factors = warning_config[
                 "weight_by_socioeconomic_factors"
             ]
+            # Determine response rate based on warning type
+            if warning_type == "building_based":
+                responsive_ratio = warning_config["response_rates"][
+                    "building_based_warnings"
+                ]
+
+            elif warning_type == "area_based":
+                responsive_ratio = warning_config["response_rates"][
+                    "area_based_warnings"
+                ]
+            else:
+                raise ValueError(
+                    f"Unknown warning type: {warning_type} selected in config, choose 'building_based' or 'area_based'."
+                )
             for dt in forecast_issue_dates:
                 self.logger.debug(
                     "Checking forecast issue datetime: %s vs current model time: %s",
@@ -482,7 +497,7 @@ class GEBModel(Module):
                             self.logger.info(
                                 f"Running water level based warning strategy with {warning_type} warnings..."
                             )
-                            self.agents.households.water_level_warning_strategy(
+                            self.agents.households.early_warning_module.water_level_warning_strategy(
                                 date_time=self.current_time,
                                 warning_type=warning_type,
                                 prob_threshold=prob_threshold,
@@ -500,7 +515,7 @@ class GEBModel(Module):
                                 "critical_infrastructure_warnings"
                             ]["asset_type"]
 
-                            self.agents.households.critical_infrastructure_warning_strategy(
+                            self.agents.households.early_warning_module.critical_infrastructure_warning_strategy(
                                 date_time=self.current_time,
                                 config_asset_type=config_asset_type,
                                 prob_threshold=prob_threshold,
@@ -508,12 +523,14 @@ class GEBModel(Module):
                             )
 
                         # Run household decision-making to convert warnings into actions
-                        self.agents.households.household_decision_making(
-                            date_time=self.current_time
+                        self.agents.households.early_warning_module.household_decision_making(
+                            date_time=self.current_time,
+                            warning_type=warning_type,
+                            responsive_ratio=responsive_ratio,
                         )
 
                         # Update household geodataframe with warning parameters
-                        self.agents.households.update_households_geodataframe_w_warning_variables(
+                        self.agents.households.early_warning_module.update_households_geodataframe_w_warning_variables(
                             date_time=self.current_time
                         )
                         print()
