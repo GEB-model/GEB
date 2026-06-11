@@ -12,6 +12,7 @@ from typing import cast
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
+import rioxarray  # noqa: F401  # needed for rioxarray to register itself as an xarray extension
 import xarray as xr
 from dotenv import load_dotenv
 from llvmlite import binding

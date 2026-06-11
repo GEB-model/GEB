@@ -24,8 +24,10 @@ class Evaluate:
         model: The GEB model instance.
     """
 
-    def __init__(self, model: GEBModel) -> None:
+    def __init__(self, model: GEBModel | None) -> None:
         """Initialize the Evaluate class."""
+        if model is None:
+            return
         self.model: GEBModel = model
         self.hydrology = Hydrology(model, self)
         self.hydrodynamics = Hydrodynamics(model, self)

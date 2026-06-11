@@ -8,7 +8,7 @@ import subprocess
 import sys
 from operator import attrgetter
 from pathlib import Path
-from typing import Any, Callable, cast
+from typing import Any, Callable
 
 import click
 
@@ -51,7 +51,7 @@ def get_available_evaluation_methods() -> list[str]:
     Returns:
         Sorted list of fully-qualified evaluation method names.
     """
-    evaluator = Evaluate(cast(Any, None))
+    evaluator = Evaluate(model=None)
     available_methods: list[str] = []
 
     for sub_name in evaluator.sub_evaluators:
@@ -638,7 +638,7 @@ def evaluate(
         # If it's method help, show method docstring
 
         try:
-            evaluator = Evaluate(cast(Any, None))
+            evaluator = Evaluate(model=None)
             attr = attrgetter(method)(evaluator)
             click.echo(f"\nHelp for method '{method}':\n")
             if attr.__doc__:
