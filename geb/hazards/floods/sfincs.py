@@ -367,6 +367,8 @@ class SFINCSRootModel:
             DEM.pop("name", None)
             DEM.pop("path", None)
             DEM.pop("fill_depressions", None)
+            DEM.pop("coastal_only", None)
+            DEM.pop("coastal_zmin", None)
             DEM["reproj_method"] = "bilinear"
 
             DEM["elevtn"] = clip_with_geometry(
