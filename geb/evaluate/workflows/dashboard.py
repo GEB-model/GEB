@@ -1,6 +1,5 @@
 """Functions for creating interactive Folium discharge evaluation maps."""
 
-import base64
 import html
 import json
 import math
@@ -30,12 +29,78 @@ _ESRI_TOPO_ATTR = (
 
 
 StationMarkerIndex = dict[str, str | list[str]]
-_METRIC_COLORS: list[str] = ["red", "orange", "yellow", "blue", "green"]
 _WATERBODY_STYLE: dict[int, dict[str, str]] = {
     1: {"color": "#4FC3F7", "label": "Lake"},
     2: {"color": "#FF8A65", "label": "Reservoir"},
     3: {"color": "#81C784", "label": "Lake (controlled)"},
 }
+
+_METRIC_LAYER_CONFIGS: list[dict] = [
+    {
+        "col": "KGE",
+        "name": "KGE",
+        "colors": ["red", "orange", "yellow", "blue", "green"],
+        "vmin": -1.0,
+        "vmax": 1.0,
+        "show": True,
+    },
+    {
+        "col": "KGE_modified",
+        "name": "mKGE",
+        "colors": ["red", "orange", "yellow", "blue", "green"],
+        "vmin": -1.0,
+        "vmax": 1.0,
+        "show": False,
+    },
+    {
+        "col": "KGE_correlation",
+        "name": "KGE correlation",
+        "colors": ["red", "orange", "yellow", "blue", "green"],
+        "vmin": 0.0,
+        "vmax": 1.0,
+        "show": False,
+    },
+    {
+        "col": "KGE_bias_ratio",
+        "name": "KGE bias (β)",
+        "colors": ["red", "orange", "green", "orange", "red"],
+        "vmin": 0.0,
+        "vmax": 2.0,
+        "show": False,
+    },
+    {
+        "col": "KGE_variability_ratio",
+        "name": "KGE variability (α)",
+        "colors": ["red", "orange", "green", "orange", "red"],
+        "vmin": 0.0,
+        "vmax": 2.0,
+        "show": False,
+    },
+    {
+        "col": "NSE",
+        "name": "NSE",
+        "colors": ["red", "orange", "yellow", "blue", "green"],
+        "vmin": -1.0,
+        "vmax": 1.0,
+        "show": False,
+    },
+    {
+        "col": "R2",
+        "name": "R²",
+        "colors": ["red", "orange", "yellow", "blue", "green"],
+        "vmin": 0.0,
+        "vmax": 1.0,
+        "show": False,
+    },
+    {
+        "col": "RRMSE",
+        "name": "RRMSE",
+        "colors": ["green", "blue", "yellow", "orange", "red"],
+        "vmin": 0.0,
+        "vmax": 1.0,
+        "show": False,
+    },
+]
 
 
 class _JavascriptMacro(MacroElement):
@@ -235,9 +300,15 @@ def build_discharge_dashboard_chart_data(
         "stationName": station_name,
         "frequency": frequency,
         "metrics": {
-            "KGE": _as_finite_float(metrics["KGE"]),
-            "NSE": _as_finite_float(metrics["NSE"]),
-            "R": _as_finite_float(metrics["R"]),
+            "KGE": _as_finite_float(metrics.get("KGE")),
+            "KGE_modified": _as_finite_float(metrics.get("KGE_modified")),
+            "KGE_correlation": _as_finite_float(metrics.get("KGE_correlation")),
+            "KGE_bias_ratio": _as_finite_float(metrics.get("KGE_bias_ratio")),
+            "KGE_variability_ratio": _as_finite_float(metrics.get("KGE_variability_ratio")),
+            "NSE": _as_finite_float(metrics.get("NSE")),
+            "R2": _as_finite_float(metrics.get("R2")),
+            "RMSE": _as_finite_float(metrics.get("RMSE")),
+            "RRMSE": _as_finite_float(metrics.get("RRMSE")),
             "upstreamAreaRatio": _as_finite_float(upstream_area_ratio),
         },
         "timeseries": _build_timeseries_payload(validation_df),
@@ -254,29 +325,21 @@ def build_discharge_dashboard_chart_data(
 
 def _inject_popup_chart_script(
     m: folium.Map,
-    station_images: dict[str, dict[str, str]],
-    station_chart_data: dict[str, dict[str, Any]] | None = None,
+    station_chart_data: dict[str, dict[str, Any]],
 ) -> None:
     """Add lazy-rendered station popup charts.
 
     Chart payloads are stored once in ``window._stationCharts`` and rendered
-    with Plotly only when the popup is opened. PNG images remain available as a
-    fallback for stations that do not have chart data.
+    with Plotly only when the popup is opened.
 
     Args:
         m: Folium map to inject the macro into.
-        station_images: Mapping of station ID string to a dict with keys
-            ``"returnPeriod"`` and ``"timeSeries"`` holding
-            ``data:image/png;base64,…`` URIs.
-        station_chart_data: Optional mapping of station ID string to interactive
-            chart data with discharge values (m3/s).
+        station_chart_data: Mapping of station ID string to interactive chart
+            data with discharge values (m3/s).
     """
-    images_js = json.dumps(station_images, separators=(",", ":"))
-    charts_js = json.dumps(station_chart_data or {}, separators=(",", ":"))
+    charts_js = json.dumps(station_chart_data, separators=(",", ":"))
     _JavascriptMacro(
-        "window._stationImages="
-        + images_js
-        + ";\nwindow._stationCharts="
+        "window._stationCharts="
         + charts_js
         + ";\n"
         + """
@@ -414,19 +477,16 @@ def _inject_popup_chart_script(
   function renderStation(el, stationId) {
     if (el.dataset.rendered === 'true') return;
     var data = window._stationCharts[stationId];
-    var images = window._stationImages[stationId];
-    if (!data && images) {
-      el.innerHTML = '<img src="' + images.returnPeriod + '"><img src="' + images.timeSeries + '">';
-      el.dataset.rendered = 'true';
-      return;
-    }
     if (!data) return;
     var metrics = data.metrics || {};
     var safeStationId = encodeURIComponent(stationId);
     el.innerHTML = '<div class="geb-popup__title">' + escapeHtml(data.stationName || stationId) + '</div>' +
       '<div class="geb-popup__subtitle">Station ' + escapeHtml(stationId) + ' · ' + escapeHtml(data.frequency || 'discharge') + '</div>' +
-      '<div class="geb-popup__metrics">' + metricHtml('KGE', metrics.KGE) + metricHtml('NSE', metrics.NSE) +
-      metricHtml('R', metrics.R) + metricHtml('Area ratio', metrics.upstreamAreaRatio) + '</div>' +
+      '<div class="geb-popup__metrics">' + metricHtml('KGE', metrics.KGE) + metricHtml('mKGE', metrics.KGE_modified) +
+      metricHtml('r', metrics.KGE_correlation) + metricHtml('β', metrics.KGE_bias_ratio) +
+      metricHtml('α', metrics.KGE_variability_ratio) + metricHtml('NSE', metrics.NSE) +
+      metricHtml('R²', metrics.R2) + metricHtml('RMSE', metrics.RMSE) +
+      metricHtml('RRMSE', metrics.RRMSE) + metricHtml('Area ratio', metrics.upstreamAreaRatio) + '</div>' +
       '<div class="geb-popup__chart-title">Return periods</div>' + makeChartDiv('geb-return-' + safeStationId) +
       '<div class="geb-popup__chart-title">Discharge time series</div>' + makeChartDiv('geb-time-' + safeStationId);
     el.dataset.rendered = 'true';
@@ -566,36 +626,6 @@ def _inject_station_search_script(
 """
     ).add_to(m)
 
-
-def _build_metric_colormaps() -> tuple[
-    cm.LinearColormap, cm.LinearColormap, cm.LinearColormap
-]:
-    """Create the standard KGE, NSE, and KGE-correlation colormaps (0 red → 1 green).
-
-    Returns:
-        Tuple of (colormap_correlation, colormap_kge, colormap_nse).
-    """
-    colors = ["red", "orange", "yellow", "blue", "green"]
-    colormap_correlation = cm.LinearColormap(
-        colors=colors, vmin=0, vmax=1, caption="KGE correlation"
-    )
-    colormap_kge = cm.LinearColormap(colors=colors, vmin=0, vmax=1, caption="KGE")
-    colormap_nse = cm.LinearColormap(colors=colors, vmin=0, vmax=1, caption="NSE")
-    return colormap_correlation, colormap_kge, colormap_nse
-
-
-def _image_data_uri(path: Path) -> str:
-    """Encode a PNG file as a browser data URI.
-
-    Args:
-        path: Path to the PNG image.
-
-    Returns:
-        Base64 PNG data URI.
-    """
-    with open(path, "rb") as image_file:
-        encoded_image: str = base64.b64encode(image_file.read()).decode("utf-8")
-    return f"data:image/png;base64,{encoded_image}"
 
 
 def _add_station_marker(
@@ -739,44 +769,36 @@ def _add_waterbody_layers(
 def create_discharge_folium_map(
     evaluation_gdf: gpd.GeoDataFrame,
     output_path: Path,
-    timeseries_plot_folder: Path,
-    return_period_plot_folder: Path,
     region_geom: gpd.GeoDataFrame,
     rivers: gpd.GeoDataFrame,
+    station_chart_data: dict[str, dict[str, Any]],
     waterbodies: gpd.GeoDataFrame | None = None,
-    station_chart_data: dict[str, dict[str, Any]] | None = None,
 ) -> folium.Map:
     """Create an interactive Folium discharge evaluation map.
 
-    Stations are shown as circle markers coloured by KGE, NSE, or KGE correlation
+    Stations are shown as circle markers coloured by each discharge metric
     (switchable via layer control) and sized by upstream area.  River widths
     are scaled by mean discharge.  An optional upstream-area-ratio layer is
-    included when all stations have the ratio available.  Station popup plots
-    are lazy-rendered from compact chart data where available, with PNG fallback
-    for stations without chart data. Lakes and reservoirs are rendered as dot
-    markers when ``waterbodies`` is provided.
+    included when all stations have the ratio available.  Station popup charts
+    are lazy-rendered with Plotly when the popup is opened. Lakes and
+    reservoirs are rendered as dot markers when ``waterbodies`` is provided.
 
     Args:
-        evaluation_gdf: Per-station GeoDataFrame with columns ``KGE``,
-            ``NSE``, ``KGE_correlation``, ``upstream_area_GEB``,
+        evaluation_gdf: Per-station GeoDataFrame with discharge metric columns,
+            ``upstream_area_GEB``,
             ``discharge_observations_to_GEB_upstream_area_ratio``, and a
             point geometry.
         output_path: Full path (including filename) where the HTML file is
             saved.
-        timeseries_plot_folder: Directory containing
-            ``timeseries_plot_<id>.png`` for each station.
-        return_period_plot_folder: Directory containing
-            ``return_period_fit_<id>.png`` for each station.
         region_geom: Basin/region boundary GeoDataFrame used to fit the map
             extent and render the catchment outline.
         rivers: River network GeoDataFrame with a ``discharge_m3_per_s``
             column used to scale river line widths.
+        station_chart_data: Interactive chart data keyed by station ID string.
+            Discharge values are expected in m3/s.
         waterbodies: Optional GeoDataFrame with columns ``waterbody_type``
             (1 = lake, 2 = reservoir, 3 = lake control) and polygon
             geometries. Centroids are used for dot placement.
-        station_chart_data: Optional interactive chart data keyed by station ID.
-            Discharge values are expected in m3/s. If a station is missing,
-            the dashboard falls back to the PNG images in the plot folders.
 
     Returns:
         The Folium map object (already saved to ``output_path``).
@@ -827,7 +849,19 @@ def create_discharge_folium_map(
         z_index=2,
     ).add_to(discharge_map)
 
-    colormap_correlation, colormap_kge, colormap_nse = _build_metric_colormaps()
+    metric_layers: list[tuple[folium.FeatureGroup, cm.LinearColormap, str]] = [
+        (
+            folium.FeatureGroup(name=cfg["name"], show=cfg["show"]),
+            cm.LinearColormap(
+                colors=cfg["colors"],
+                vmin=cfg["vmin"],
+                vmax=cfg["vmax"],
+                caption=cfg["name"],
+            ),
+            cfg["col"],
+        )
+        for cfg in _METRIC_LAYER_CONFIGS
+    ]
 
     layer_upstream: folium.FeatureGroup | None = None
     colormap_upstream: cm.LinearColormap | None = None
@@ -837,7 +871,7 @@ def create_discharge_folium_map(
         .any()
     ):
         colormap_upstream = cm.LinearColormap(
-            colors=_METRIC_COLORS,
+            colors=["red", "orange", "yellow", "blue", "green"],
             vmin=0.5,
             vmax=2.0,
             caption="Upstream Area Ratio",
@@ -848,16 +882,7 @@ def create_discharge_folium_map(
         evaluation_gdf["upstream_area_GEB"].max()
     )
 
-    layer_kge = folium.FeatureGroup(name="KGE", show=True)
-    layer_nse = folium.FeatureGroup(name="NSE", show=False)
-    layer_correlation = folium.FeatureGroup(name="KGE correlation", show=False)
-
     popup_width = 800
-
-    # PNG images are only embedded for stations without chart data to keep the
-    # dashboard responsive when thousands of stations are evaluated.
-    station_images: dict[str, dict[str, str]] = {}
-    station_chart_data = station_chart_data or {}
     station_marker_index: list[StationMarkerIndex] = []
 
     for station_id, row in evaluation_gdf.iterrows():
@@ -868,18 +893,9 @@ def create_discharge_folium_map(
             if "station_name" in row.index and pd.notna(row["station_name"])
             else station_id_str
         )
-        if station_id_str not in station_chart_data:
-            station_images[station_id_str] = {
-                "returnPeriod": _image_data_uri(
-                    return_period_plot_folder / f"return_period_fit_{station_id}.png"
-                ),
-                "timeSeries": _image_data_uri(
-                    timeseries_plot_folder / f"timeseries_plot_{station_id}.png"
-                ),
-            }
 
         # Popup HTML contains only an empty placeholder. The popupopen handler
-        # fills it with interactive charts or fallback PNG images on demand.
+        # fills it with interactive charts on demand.
         escaped_station_id: str = html.escape(station_id_str, quote=True)
         popup_html = (
             f"<div class='geb-popup' data-station-id='{escaped_station_id}' "
@@ -926,11 +942,7 @@ def create_discharge_folium_map(
             }
         )
 
-    for colormap, layer in [
-        (colormap_correlation, layer_correlation),
-        (colormap_kge, layer_kge),
-        (colormap_nse, layer_nse),
-    ]:
+    for layer, colormap, _ in metric_layers:
         colormap.add_to(discharge_map)
         layer.add_to(discharge_map)
 
@@ -938,8 +950,8 @@ def create_discharge_folium_map(
         colormap_upstream.add_to(discharge_map)
         layer_upstream.add_to(discharge_map)
 
-    # Inject station chart/image data as single JS globals shared by all layers.
-    _inject_popup_chart_script(discharge_map, station_images, station_chart_data)
+    # Inject station chart data as a single JS global shared by all layers.
+    _inject_popup_chart_script(discharge_map, station_chart_data)
     _inject_station_search_script(discharge_map, station_marker_index)
 
     # Waterbodies: render lakes and reservoirs as dot markers at polygon centroids.

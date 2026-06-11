@@ -1910,7 +1910,6 @@ class Hydrology:
         include_yearly_plots: bool = True,
         correct_discharge_observations: bool = False,
         create_plots: bool = True,
-        interactive_dashboard_charts: bool = False,
         minimum_upstream_area_km2: float | None = None,
         minimum_timeseries_length_years: float | None = None,
     ) -> dict[str, float | None]:
@@ -1932,8 +1931,6 @@ class Hydrology:
             correct_discharge_observations: Whether to correct the discharge observations discharge timeseries for the difference
                 in upstream area between the discharge observations station and the discharge from GEB.
             create_plots: Whether to create evaluation plots. Set to False to only calculate the evaluation metrics and save the results without plotting.
-            interactive_dashboard_charts: Whether dashboard popups should use
-                interactive Plotly charts instead of the default static PNG plots.
             minimum_upstream_area_km2: Optional minimum modeled upstream area threshold for station evaluation (km2).
                 If omitted, `hydrology.evaluation.discharge.minimum_upstream_area_km2` is used.
             minimum_timeseries_length_years: Optional minimum paired observation-simulation timeseries length for station evaluation (years).
@@ -2082,16 +2079,15 @@ class Hydrology:
                         include_yearly_plots=include_yearly_plots,
                         frequency=frequency_label,
                     )
-                    if interactive_dashboard_charts:
-                        station_dashboard_charts[str(station_id)] = (
-                            build_discharge_dashboard_chart_data(
-                                validation_df=validation_df,
-                                station_name=discharge_observations_station_name,
-                                upstream_area_ratio=discharge_observations_to_GEB_upstream_area_ratio,
-                                metrics=discharge_metrics._asdict(),
-                                frequency=frequency_label,
-                            )
+                    station_dashboard_charts[str(station_id)] = (
+                        build_discharge_dashboard_chart_data(
+                            validation_df=validation_df,
+                            station_name=discharge_observations_station_name,
+                            upstream_area_ratio=discharge_observations_to_GEB_upstream_area_ratio,
+                            metrics=discharge_metrics._asdict(),
+                            frequency=frequency_label,
                         )
+                    )
 
                 station_evaluation: dict[str, Any] = {
                     "station_ID": station_id,
@@ -2211,33 +2207,13 @@ class Hydrology:
                     evaluation_gdf=evaluation_gdf,
                     output_path=self.evaluate_discharge_output_folder
                     / "discharge_evaluation_map.html",
-                    timeseries_plot_folder=self.evaluate_discharge_output_folder
-                    / "timeseries",
-                    return_period_plot_folder=self.evaluate_discharge_output_folder
-                    / "return_periods",
                     region_geom=region_geom,
                     rivers=rivers,
+                    station_chart_data=station_dashboard_charts,
                     waterbodies=waterbodies,
-                    station_chart_data=station_dashboard_charts
-                    if interactive_dashboard_charts
-                    else None,
                 )
 
                 self.model.logger.info("Discharge evaluation dashboard created.")
-
-                # GEB standalone plot — all GEB stations.
-                self.plot_skill_score_boxplots(
-                    export=True, include_geb=True, matched_only=False
-                )
-                self.plot_skill_score_maps(export=True)
-
-                # When external evaluation data are present, also produce a
-                # combined plot restricted to stations present in both datasets
-                # so the comparison is fair.
-                if self._read_external_evaluation_raw():
-                    self.plot_skill_score_boxplots(
-                        export=True, include_geb=True, matched_only=True
-                    )
 
                 # GEB standalone plot — all GEB stations.
                 self.plot_skill_score_boxplots(
@@ -2288,18 +2264,15 @@ class Hydrology:
         self,
         run_name: str = "default",
         correct_discharge_observations: bool = False,
-        interactive_dashboard_charts: bool = False,
         output_filename: str = "discharge_evaluation_map.html",
         **kwargs: Any,
     ) -> dict[str, str]:
         """Create only the discharge evaluation dashboard.
 
         This reuses ``evaluation_metrics.geoparquet`` from a previous
-        ``evaluate_discharge`` run. By default, station popups use the static
-        PNG plots created by ``evaluate_discharge``. Interactive Plotly chart
-        payloads can be rebuilt from the reported discharge time series when
-        ``interactive_dashboard_charts`` is enabled. Static station plots and
-        skill-score plots are not regenerated.
+        ``evaluate_discharge`` run. Interactive Plotly chart payloads are
+        rebuilt from the reported discharge time series. Static station plots
+        and skill-score plots are not regenerated.
 
         Args:
             run_name: Name of the simulation run to use for river and station
@@ -2307,8 +2280,6 @@ class Hydrology:
             correct_discharge_observations: Whether to correct simulated discharge
                 by the observed-to-GEB upstream-area ratio (dimensionless), matching
                 the option in ``evaluate_discharge``.
-            interactive_dashboard_charts: Whether dashboard popups should use
-                interactive Plotly charts instead of the default static PNG plots.
             output_filename: Dashboard HTML filename written inside the discharge
                 evaluation output folder.
             **kwargs: Ignored additional keyword arguments for CLI compatibility.
@@ -2353,25 +2324,22 @@ class Hydrology:
         for river_id in discharge.columns:
             rivers.loc[river_id, "discharge_m3_per_s"] = discharge[river_id].mean()
 
-        station_dashboard_charts: dict[str, dict[str, Any]] | None = None
-        if interactive_dashboard_charts:
-            station_dashboard_charts = self._build_saved_station_dashboard_charts(
+        station_dashboard_charts: dict[str, dict[str, Any]] = (
+            self._build_saved_station_dashboard_charts(
                 evaluation_gdf=evaluation_gdf,
                 run_name=run_name,
                 correct_discharge_observations=correct_discharge_observations,
             )
+        )
 
         dashboard_path: Path = self.evaluate_discharge_output_folder / output_path
         create_discharge_folium_map(
             evaluation_gdf=evaluation_gdf,
             output_path=dashboard_path,
-            timeseries_plot_folder=self.evaluate_discharge_output_folder / "timeseries",
-            return_period_plot_folder=self.evaluate_discharge_output_folder
-            / "return_periods",
             region_geom=region_geom,
             rivers=rivers,
-            waterbodies=waterbodies,
             station_chart_data=station_dashboard_charts,
+            waterbodies=waterbodies,
         )
         self.model.logger.info(
             "Discharge evaluation dashboard created: %s", dashboard_path
@@ -2402,10 +2370,7 @@ class Hydrology:
         required_columns: set[str] = {
             "station_name",
             "discharge_observations_to_GEB_upstream_area_ratio",
-            "KGE",
-            "NSE",
-            "R",
-        }
+        } | set(DischargeMetrics._fields)
         missing_columns: set[str] = required_columns.difference(evaluation_gdf.columns)
         if missing_columns:
             raise ValueError(
@@ -2465,143 +2430,8 @@ class Hydrology:
                 )
                 metrics: dict[str, float] = {
                     metric_name: float(station_row[metric_name])
-                    for metric_name in ("KGE", "NSE", "R")
-                }
-                station_dashboard_charts[station_id_text] = (
-                    build_discharge_dashboard_chart_data(
-                        validation_df=validation_df,
-                        station_name=str(station_row["station_name"]),
-                        upstream_area_ratio=upstream_area_ratio,
-                        metrics=metrics,
-                        frequency=frequency_label,
-                    )
-                )
-
-        return station_dashboard_charts
-
-    def _read_external_evaluation_raw(
-        self, external_evaluation_folder: str | Path | None = None
-    ) -> dict[str, pd.DataFrame]:
-        """Read external model evaluation CSVs without matching to GEB stations.
-
-        Source-specific filters, such as the Utrecht GRDC station criteria, are
-        applied before the external scores are returned.
-
-        Args:
-            run_name: Name of the simulation run to use for river and station
-                discharge time series.
-            correct_discharge_observations: Whether to correct simulated discharge
-                by the observed-to-GEB upstream-area ratio (dimensionless), matching
-                the option in ``evaluate_discharge``.
-            interactive_dashboard_charts: Whether dashboard popups should use
-                interactive Plotly charts instead of the default static PNG plots.
-            output_filename: Dashboard HTML filename written inside the discharge
-                evaluation output folder.
-            **kwargs: Ignored additional keyword arguments for CLI compatibility.
-
-        Returns:
-            Mapping from model label to prepared external DataFrame (index =
-            station name, columns = metrics and optional metadata).
-        """
-        configured_folder: str | Path | None = self.model.config["hydrology"][
-            "evaluation"
-        ]["discharge"].get("external_evaluation_folder")
-        external_models: dict[str, pd.DataFrame] = _read_external_evaluation_raw(
-            external_evaluation_folder=external_evaluation_folder,
-            configured_external_evaluation_folder=configured_folder,
-            model_folder=self.model.input_folder.parent,
-            logger=self.model.logger,
-        )
-        return external_models
-
-    def _build_saved_station_dashboard_charts(
-        self,
-        evaluation_gdf: gpd.GeoDataFrame,
-        run_name: str,
-        correct_discharge_observations: bool,
-    ) -> dict[str, dict[str, Any]]:
-        """Build interactive dashboard chart data for saved evaluation stations.
-
-        Args:
-            evaluation_gdf: Saved per-station discharge evaluation metrics.
-            run_name: Name of the simulation run to use for discharge time series.
-            correct_discharge_observations: Whether to correct simulated discharge
-                by the observed-to-GEB upstream-area ratio (dimensionless).
-
-        Returns:
-            Mapping from station ID to compact chart payloads with discharge values
-            (m3/s).
-
-        Raises:
-            ValueError: If saved metrics are missing required station columns.
-        """
-        required_columns: set[str] = {
-            "station_name",
-            "discharge_observations_to_GEB_upstream_area_ratio",
-            "KGE",
-            "NSE",
-            "R",
-        }
-        missing_columns: set[str] = required_columns.difference(evaluation_gdf.columns)
-        if missing_columns:
-            raise ValueError(
-                "Saved discharge evaluation metrics are missing columns: "
-                + ", ".join(sorted(missing_columns))
-            )
-
-        discharge_observations_hourly: pd.DataFrame = read_table(
-            self.model.files["table"]["discharge/discharge_observations_hourly"]
-        )
-        discharge_observations_daily: pd.DataFrame = read_table(
-            self.model.files["table"]["discharge/discharge_observations_daily"]
-        )
-        if not discharge_observations_hourly.empty:
-            discharge_observations_hourly = regularize_discharge_timeseries(
-                discharge_observations_hourly
-            )
-        if not discharge_observations_daily.empty:
-            discharge_observations_daily = regularize_discharge_timeseries(
-                discharge_observations_daily
-            )
-
-        evaluation_by_station_id: dict[str, pd.Series] = {
-            str(station_id): station_row
-            for station_id, station_row in evaluation_gdf.iterrows()
-        }
-        station_dashboard_charts: dict[str, dict[str, Any]] = {}
-        for frequency_label, discharge_observations_df in zip(
-            ["hourly", "daily"],
-            [discharge_observations_hourly, discharge_observations_daily],
-            strict=True,
-        ):
-            if discharge_observations_df.empty:
-                continue
-            for station_id in discharge_observations_df.columns:
-                station_id_text: str = str(station_id)
-                if station_id_text not in evaluation_by_station_id:
-                    continue
-
-                station_row: pd.Series = evaluation_by_station_id[station_id_text]
-                upstream_area_ratio: float = float(
-                    station_row["discharge_observations_to_GEB_upstream_area_ratio"]
-                )
-                observed_discharge_series: pd.Series = discharge_observations_df[
-                    station_id
-                ]
-                if isinstance(observed_discharge_series, pd.DataFrame):
-                    observed_discharge_series.columns = ["Q"]
-                observed_discharge_series.name = "Q"
-                validation_df: pd.DataFrame = create_validation_df(
-                    output_folder=self.model.output_folder,
-                    run_name=run_name,
-                    station_id=station_id,
-                    observed_discharge=observed_discharge_series,
-                    correct_discharge_observations=correct_discharge_observations,
-                    discharge_observations_to_GEB_upstream_area_ratio=upstream_area_ratio,
-                )
-                metrics: dict[str, float] = {
-                    metric_name: float(station_row[metric_name])
-                    for metric_name in ("KGE", "NSE", "R")
+                    for metric_name in DischargeMetrics._fields
+                    if metric_name in station_row.index
                 }
                 station_dashboard_charts[station_id_text] = (
                     build_discharge_dashboard_chart_data(
