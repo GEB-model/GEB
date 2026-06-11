@@ -24,7 +24,7 @@ class MIRCAOSHarvestedGrids(Adapter):
             )
         super().__init__(*args, **kwargs)
 
-    def fetch(self, url: str) -> MIRCAOS:
+    def fetch(self, url: str) -> MIRCAOSHarvestedGrids:
         """Fetch the MIRCA-OS dataset.
 
         Because manual download is required, this method prompts the user to
@@ -34,7 +34,7 @@ class MIRCAOSHarvestedGrids(Adapter):
             url: The URL to download the dataset from.
 
         Returns:
-            MIRCAOS: The adapter instance.
+            MIRCAOSHarvestedGrids: The adapter instance.
         """
         if not self.is_ready:
             manual_folder = self.root / "Annual Harvested Area Grids"

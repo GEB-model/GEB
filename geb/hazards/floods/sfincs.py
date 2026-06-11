@@ -58,6 +58,7 @@ from geb.workflows.methods import get_utm_zone
 from geb.workflows.raster import (
     calculate_cell_area_m2,
     clip_region,
+    clip_with_geometry,
     coord_to_pixel,
     pad_to_grid_alignment,
     pad_xy,
@@ -290,7 +291,9 @@ class SFINCSRootModel:
         subbasins: gpd.GeoDataFrame = subbasins.to_crs(mask.rio.crs)
         rivers: gpd.GeoDataFrame = rivers.to_crs(mask.rio.crs)
 
-        self.logger.info("Starting SFINCS model build...")
+        self.logger.info(
+            f"Starting SFINCS model build for subbasins {subbasins.index.tolist()}"
+        )
         # build base model
         sf: SfincsModel = SfincsModel(root=str(self.path), mode="w+", write_gis=True)
         self.sfincs_model = sf
@@ -343,13 +346,43 @@ class SFINCSRootModel:
         ]
 
         # Remove unnecessary keys (to avoid warnings) and set reproj_method to bilinear for all DEMs
+        DEMs_in_area_of_interest = []
         for DEM in DEMs:
+            assert isinstance(DEM["elevtn"], xr.Dataset), (
+                "DEM must contain an 'elevtn' key with an xarray Dataset"
+            )
+            DEM_bounds = DEM["elevtn"].rio.bounds()
+            subbasin_bounds = self.subbasins.total_bounds
+
+            # check if any overlap between DEM and subbasins, if not, do not
+            # include the DEM in further analysis
+            if not (
+                DEM_bounds[0] <= subbasin_bounds[2]
+                and DEM_bounds[2] >= subbasin_bounds[0]
+                and DEM_bounds[1] <= subbasin_bounds[3]
+                and DEM_bounds[3] >= subbasin_bounds[1]
+            ):
+                continue
+
             DEM.pop("name", None)
             DEM.pop("path", None)
             DEM.pop("fill_depressions", None)
+            DEM.pop("coastal_only", None)
+            DEM.pop("coastal_zmin", None)
             DEM["reproj_method"] = "bilinear"
 
-        sf.setup_dep(datasets_dep=DEMs)
+            DEM["elevtn"] = clip_with_geometry(
+                DEM["elevtn"]["elevtn"], self.subbasins, all_touched=True, drop=True
+            ).to_dataset(name="elevtn")
+
+            DEMs_in_area_of_interest.append(DEM)
+
+        if not DEMs_in_area_of_interest:
+            raise ValueError(
+                "None of the provided DEMs overlap with the area of interest"
+            )
+
+        sf.setup_dep(datasets_dep=DEMs_in_area_of_interest)
 
         # Remove rivers that are not represented in the grid and have no upstream rivers
         # TODO: Make an upstream flag in preprocessing for upstream rivers that is more
@@ -1658,7 +1691,13 @@ class MultipleSFINCSSimulations:
 
         Returns:
             An xarray DataArray containing the maximum flood depth.
+
+        Raises:
+            ValueError: If no simulations are available to read flood depth from.
         """
+        if not self.simulations:
+            raise ValueError("No simulations available to read flood depth from.")
+
         flood_depths: list[xr.DataArray] = []
         for simulation in self.simulations:
             simulation_max_flood_depth: xr.DataArray = simulation.read_max_flood_depth(
@@ -1946,6 +1985,7 @@ class SFINCSSimulation:
         runoff_m: xr.DataArray,
         river_network: FlwdirRaster,
         river_ids: TwoDArrayInt32,
+        river_ids_no_waterbodies_removed: TwoDArrayInt32,
         basin_ids: TwoDArrayInt32,
         upstream_area: TwoDArrayFloat32,
         cell_area: TwoDArrayFloat32,
@@ -1968,6 +2008,7 @@ class SFINCSSimulation:
             runoff_m: xarray DataArray containing runoff values in m per time step.
             river_network: FlwdirRaster representing the river network flow directions.
             river_ids: 2D numpy array of river segment IDs for each cell in the grid.
+            river_ids_no_waterbodies_removed: 2D numpy array of river segment IDs for each cell in the grid, without water bodies removed.
             basin_ids: 2D numpy array of basin IDs for each cell in the grid.
             upstream_area: 2D numpy array of upstream area values for each cell in the grid.
             cell_area: 2D numpy array of cell area values for each cell in the grid.
@@ -1982,16 +2023,18 @@ class SFINCSSimulation:
         # mask out all basins that are not in the model
         mask: TwoDArrayBool = np.isin(basin_ids, self.root_model.rivers.index)
         runoff_m = xr.where(mask, runoff_m, 0.0)  # set runoff to 0 outside model basins
-        river_ids = np.where(
-            mask, river_ids, -1
+        river_ids_no_waterbodies_removed = np.where(
+            mask, river_ids_no_waterbodies_removed, -1
         )  # set river IDs to -1 outside model basins
 
         # first, we want to create unique IDs for each river cell. To allow us to map
         # it back to the original river segment, we create IDs as follows:
         # inflow_ID = river_segment_ID * INFLOW_MULTIPLICATION_FACTOR + offset
         # where offset is a number from 0 to N-1, with N being the number of cells in the river segment
-        river_inflow_IDs = np.full_like(river_ids, -1, dtype=np.int64)
-        xy_per_river_segment = value_indices(river_ids, ignore_value=-1)
+        inflow_IDs = np.full_like(river_ids_no_waterbodies_removed, -1, dtype=np.int64)
+        xy_per_river_segment = value_indices(
+            river_ids_no_waterbodies_removed, ignore_value=-1
+        )
         for ID, (ys, xs) in xy_per_river_segment.items():
             assert len(ys) < INFLOW_MULTIPLICATION_FACTOR - 2, (
                 f"River segment has more than {INFLOW_MULTIPLICATION_FACTOR - 2} cells, which is not supported. "
@@ -2011,21 +2054,26 @@ class SFINCSSimulation:
                 assert inflow_ID < 9_223_372_036_854_775_807, (
                     "Inflow ID exceeds maximum int64 value."
                 )
-                river_inflow_IDs[ys_up_to_down[i], xs_up_to_down[i]] = inflow_ID
+                inflow_IDs[ys_up_to_down[i], xs_up_to_down[i]] = inflow_ID
 
-        river_cells: TwoDArrayBool = river_inflow_IDs != -1
-        river_ids_mapping: ArrayInt64 = river_inflow_IDs[river_cells]
+        river_cells: TwoDArrayBool = inflow_IDs != -1
+        river_ids_mapping: ArrayInt64 = inflow_IDs[river_cells]
+
+        reservoir_cells = (river_ids_no_waterbodies_removed != -1) & (~river_cells)
 
         # starting from each river cell, create an upstream basin map for which
         # the discharge will be accumulated
         # .basins() must have river IDs starting from 1, so we use IDs from 1 to N + 1
         # then, we subtract 1 to make it zero based again
+        idxs = np.where(river_cells.ravel())[0]
         subbasins: ArrayInt64 = river_network.basins(
-            np.where(river_cells.ravel())[0],
-            ids=np.arange(1, river_ids_mapping.size + 1, step=1, dtype=np.int64),
+            idxs=idxs,
+            ids=np.arange(1, idxs.size + 1, step=1, dtype=np.int64),
         )[mask]
         assert not (subbasins == 0).any()
-        subbasins -= 1  # make zero based
+        subbasins -= (
+            1  # make zero based. -1 is now used for areas without upstream river cells
+        )
 
         timestep_size: xr.DataArray = runoff_m.time.diff(dim="time").astype(
             "timedelta64[s]"
@@ -2069,11 +2117,13 @@ class SFINCSSimulation:
             river: gpd.GeoSeries = self.root_model.rivers.loc[river_ID]
 
             # confirm we have the correct inflow point
-            xy_low_res = river["hydrography_xy"][inflow_offset]
-            assert river_inflow_IDs[xy_low_res[1], xy_low_res[0]] == inflow_idx
+            xy_low_res = river["hydrography_xy_no_waterbodies_removed"][inflow_offset]
+            assert inflow_IDs[xy_low_res[1], xy_low_res[0]] == inflow_idx
 
             # find the high-res location corresponding to the low-res inflow point
-            hydrography_upstream_area_m2 = river["hydrography_upstream_area_m2"]
+            hydrography_upstream_area_m2 = river[
+                "hydrography_upstream_area_m2_no_waterbodies_removed"
+            ]
             upstream_area_low_res = hydrography_upstream_area_m2[inflow_offset]
             hydrography_high_res_lons_lats = river["hydrography_high_res_lons_lats"]
             hydrography_high_res_upstream_area_m2 = river[
