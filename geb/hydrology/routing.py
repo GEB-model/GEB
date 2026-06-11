@@ -1498,14 +1498,16 @@ class Routing(Module):
             != -1
         )
 
-        self.rivers: gpd.GeoDataFrame = self.load_rivers(
-            grid_linear_mapping=self.grid.linear_mapping, is_waterbody=is_waterbody
+        self.rivers, self.river_ids, self.river_ids_no_waterbodies_removed = (
+            self.load_rivers(
+                grid_linear_mapping=self.grid.linear_mapping,
+                is_waterbody=is_waterbody,
+            )
+        )
+        self.basin_ids: TwoDArrayInt32 = self.hydrology.grid.load2d(
+            self.model.files["grid"]["routing/basin_ids"], compress=False
         )
         self.active_rivers = self.get_active_rivers()
-
-        self.river_ids = self.grid.load2d(
-            self.model.files["grid"]["routing/river_ids"],
-        )
 
         self.retention_basin_ids: ArrayInt32 = self.grid.load2d(
             self.model.files["grid"]["routing/retention_basin_ids"],
@@ -1573,8 +1575,10 @@ class Routing(Module):
             self.spinup()
 
     def load_rivers(
-        self, grid_linear_mapping: TwoDArrayInt32, is_waterbody: TwoDArrayBool
-    ) -> gpd.GeoDataFrame:
+        self,
+        grid_linear_mapping: TwoDArrayInt32,
+        is_waterbody: TwoDArrayBool,
+    ) -> tuple[gpd.GeoDataFrame, ArrayInt32, ArrayInt32]:
         """Load the river network geometries.
 
         Args:
@@ -1582,20 +1586,34 @@ class Routing(Module):
             is_waterbody: A 2D boolean array indicating which cells are waterbodies.
 
         Returns:
-            A GeoDataFrame containing the river network geometries.
+            A GeoDataFrame containing the river network geometries, the updated river IDs and the original river IDs before removing waterbodies.
         """
         rivers: gpd.GeoDataFrame = read_geom(self.model.files["geom"]["routing/rivers"])
+
+        # set river ID to -1 for waterbody cells
+        river_ids = self.grid.load2d(
+            self.model.files["grid"]["routing/river_ids"], compress=False
+        )
+        # keep a copy of the original river IDs before removing waterbodies,
+        # which is needed for some output variables
+        river_ids_no_waterbodies_removed = self.grid.compress(river_ids)
+        river_ids[is_waterbody] = -1  # set river ID to -1 for waterbody cells
+        river_ids: ArrayInt32 = self.grid.compress(river_ids)
 
         # select only hydrography_xy that are not in waterbodies
         # and store the mask to filter other columns as well
         not_waterbody_mask = rivers["hydrography_xy"].apply(
             lambda xys: [not is_waterbody[xy[1], xy[0]] for xy in xys]
         )
+        rivers["hydrography_xy_no_waterbodies_removed"] = rivers["hydrography_xy"]
         rivers["hydrography_xy"] = [
             [xy for xy, m in zip(xys, mask) if m]
             for xys, mask in zip(rivers["hydrography_xy"], not_waterbody_mask)
         ]
 
+        rivers["hydrography_upstream_area_m2_no_waterbodies_removed"] = rivers[
+            "hydrography_upstream_area_m2"
+        ]
         rivers["hydrography_upstream_area_m2"] = [
             [ua for ua, m in zip(uas, mask) if m]
             for uas, mask in zip(
@@ -1610,7 +1628,7 @@ class Routing(Module):
         rivers["hydrography_linear"] = rivers["hydrography_xy"].apply(
             lambda xys: [grid_linear_mapping[xy[1], xy[0]] for xy in xys]
         )
-        return rivers
+        return rivers, river_ids, river_ids_no_waterbodies_removed
 
     def set_router(self) -> None:
         """Initialize the routing algorithm based on the configuration.
@@ -2253,6 +2271,29 @@ class Routing(Module):
             (~rivers["is_downstream_outflow"])
             & (~rivers["is_further_downstream_outflow"])
         ]
+
+        to_remove: set[int] = set()
+        for river in active_rivers.itertuples():
+            if not river.represented_in_grid:
+                to_search: set[int] = {river.Index}
+                upstream_rivers: set[int] = set()
+
+                while to_search:
+                    current_id: int = to_search.pop()
+                    upstream_rivers_of_this_river: pd.DataFrame = rivers[
+                        rivers["downstream_ID"] == current_id
+                    ]
+                    for upstream_river in upstream_rivers_of_this_river.itertuples():
+                        if upstream_river.represented_in_grid:  # ty:ignore[unresolved-attribute]
+                            upstream_rivers.add(upstream_river.Index)  # ty:ignore[unresolved-attribute]
+                        else:
+                            to_search.add(upstream_river.Index)  # ty:ignore[unresolved-attribute]
+
+                if not upstream_rivers:
+                    to_remove.add(river.Index)
+
+        active_rivers = active_rivers[~active_rivers.index.isin(to_remove)]
+
         return active_rivers.copy()
 
     def get_active_and_downstream_outflow_rivers(self) -> gpd.GeoDataFrame:

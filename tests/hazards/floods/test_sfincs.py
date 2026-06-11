@@ -188,9 +188,7 @@ def create_sfincs_models(
         A list of SFINCSRootModel instances.
     """
     if split:
-        river_graph = create_river_graph(
-            geb_model.hydrology.routing.active_rivers, subbasins
-        )
+        river_graph = create_river_graph(geb_model.hydrology.routing.active_rivers)
 
         # 2e8 nicely splits the test area into 2 parts. If changing the test area, this value
         # may need to be adjusted.
