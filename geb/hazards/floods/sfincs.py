@@ -417,7 +417,7 @@ class SFINCSRootModel:
             sf.mask.create_active(
                 include_polygon=low_elevation_coastal_zone_mask,
                 reset_mask=False,
-            )  # TODO: CHECK IF BUFFER SHOULD BE ADDED. This was supported in hydromt-sfincs 1.x, but not in 2.x.
+            )
 
             # setup the coastal boundary conditions
             sf.mask.create_boundary(
