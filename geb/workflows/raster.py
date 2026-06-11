@@ -1626,7 +1626,12 @@ def clip_with_geometry(
     Raises:
         ValueError: If the DataArray does not have x and y coordinates.
         ValueError: If the geometry is not in the same CRS as the DataArray.
+        ValueError: If the DataArray does not have a nodata value defined.
+        ValueError: If the DataArray or GeoDataFrame are not the correct types.
     """
+    if not isinstance(da, xr.DataArray):
+        raise ValueError("da must be a DataArray")
+
     if not isinstance(gdf, gpd.GeoDataFrame):
         raise ValueError("gdf must be a GeoDataFrame")
 

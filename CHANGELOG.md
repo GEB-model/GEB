@@ -19,6 +19,8 @@ Important notes:
 - Make model building fully deterministic ([#821](https://github.com/GEB-model/GEB/issues/821)).
 - Implement retry mechanism for 429 web error GLOPOP-SG data adapter. Zenodo rate limited making too many range requests. If we get rate limited now, we now go to sleep for a bit and try again later.
 - Further reduce memory use of reporter by using numpy views for identical time series data.
+- In a recent change, discharges were explicitly set to nan in waterbodies (good). This led to a case where rivers had 0 river width in the hydrodynamic model, which led to raised errors. Now, we fix this by looking further downstream of waterbodies to find a valid discharge for estimating river widths. This is also better, because perviously the default alpha for river width was used.
+- Do not simulate flood events for rivers that are fully in waterbodies. We do so by updating the "represented_in_grid" for water bodies.
 - In a recent change, discharges were explictly set to nan in reservoirs (good). This led to a case where rivers had 0 river width in the hydrodynamic model, which led to raised errors. Now, we fix this by looking further downstream of reservoirs to find a valid discharge for estimating river widths. This is also better, because perviously the default alpha for river width was used.
 - Add `geb tool merge` command to merge outputs from multiple GEB cluster sub-models into a single merged model directory that can be evaluated directly with `geb evaluate`.
 - Add `plot_skill_score_maps()` to plot skill scores per station on a satellite basemap for each metric.
