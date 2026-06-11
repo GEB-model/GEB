@@ -6,7 +6,6 @@ import inspect
 import json
 import subprocess
 import sys
-from operator import attrgetter
 from pathlib import Path
 from typing import Any, Callable
 
@@ -51,14 +50,11 @@ def get_available_evaluation_methods() -> list[str]:
     Returns:
         Sorted list of fully-qualified evaluation method names.
     """
-    evaluator = Evaluate(model=None)
     available_methods: list[str] = []
 
-    for sub_name in evaluator.sub_evaluators:
-        sub_evaluator = getattr(evaluator, sub_name)
-
+    for sub_name, sub_cls in Evaluate.SUB_EVALUATOR_CLASSES.items():
         # This returns a list of (name, value) tuples for methods only
-        methods = inspect.getmembers(sub_evaluator, predicate=inspect.ismethod)
+        methods = inspect.getmembers(sub_cls, predicate=inspect.isfunction)
 
         for attr_name, _ in methods:
             if not attr_name.startswith("_"):
@@ -638,11 +634,12 @@ def evaluate(
         # If it's method help, show method docstring
 
         try:
-            evaluator = Evaluate(model=None)
-            attr = attrgetter(method)(evaluator)
+            sub_name, method_name = method.split(".")
+            sub_cls = Evaluate.SUB_EVALUATOR_CLASSES[sub_name]
+            method_func = getattr(sub_cls, method_name)
             click.echo(f"\nHelp for method '{method}':\n")
-            if attr.__doc__:
-                click.echo(attr.__doc__)
+            if method_func.__doc__:
+                click.echo(method_func.__doc__)
             else:
                 click.echo("No documentation found for this method.")
         except Exception:
