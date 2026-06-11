@@ -243,7 +243,7 @@ class WorldFloodsV2(Adapter):
 
         # parse observation_date to datetime and convert to UTC timezone
         metadata["observation_date"] = (
-            pd.to_datetime(metadata["observation_date"])
+            pd.to_datetime(metadata["observation_date"], format="mixed")
             .dt.tz_convert("UTC")
             .dt.tz_localize(None)
         )
