@@ -1492,7 +1492,6 @@ dependencies = [
     { name = "pyarrow" },
     { name = "pyflwdir" },
     { name = "pyogrio" },
-    { name = "pyquadkey2" },
     { name = "pyresample" },
     { name = "pystac" },
     { name = "pytest" },
@@ -1576,8 +1575,8 @@ requires-dist = [
     { name = "h5netcdf", specifier = ">=1.8.1" },
     { name = "h5py", specifier = ">=3.16.0" },
     { name = "hda", specifier = ">=2.39" },
-    { name = "hydromt-sfincs", specifier = "==2.0.0rc3" },
     { name = "huggingface-hub", specifier = ">=1.18.0" },
+    { name = "hydromt-sfincs", specifier = "==2.0.0rc3" },
     { name = "imageio", specifier = ">=2.37.2" },
     { name = "jupyter", marker = "extra == 'display'", specifier = ">=1.1.1" },
     { name = "matplotlib", specifier = ">=3.10.7" },
@@ -1597,7 +1596,6 @@ requires-dist = [
     { name = "pybind11", marker = "extra == 'plantfate'", specifier = ">=2.13.6" },
     { name = "pyflwdir", specifier = ">=0.5.11" },
     { name = "pyogrio", specifier = ">=0.9.0" },
-    { name = "pyquadkey2", specifier = ">=0.3.2" },
     { name = "pyresample", specifier = ">=1.32.0" },
     { name = "pystac", specifier = ">=1.14.3" },
     { name = "pytest" },
@@ -4623,18 +4621,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/e8/8b/a3f0618b03957de9db5489a04558a8826f43906628bb0b766033aa3b5548/pyproj-3.7.2-cp314-cp314t-win32.whl", hash = "sha256:c9b6f1d8ad3e80a0ee0903a778b6ece7dca1d1d40f6d114ae01bc8ddbad971aa", size = 6056848, upload-time = "2025-08-14T12:05:37.553Z" },
     { url = "https://files.pythonhosted.org/packages/bc/56/413240dd5149dd3291eda55aa55a659da4431244a2fd1319d0ae89407cfb/pyproj-3.7.2-cp314-cp314t-win_amd64.whl", hash = "sha256:1914e29e27933ba6f9822663ee0600f169014a2859f851c054c88cf5ea8a333c", size = 6517676, upload-time = "2025-08-14T12:05:39.126Z" },
     { url = "https://files.pythonhosted.org/packages/15/73/a7141a1a0559bf1a7aa42a11c879ceb19f02f5c6c371c6d57fd86cefd4d1/pyproj-3.7.2-cp314-cp314t-win_arm64.whl", hash = "sha256:d9d25bae416a24397e0d85739f84d323b55f6511e45a522dd7d7eae70d10c7e4", size = 6391844, upload-time = "2025-08-14T12:05:40.745Z" },
-]
-
-[[package]]
-name = "pyquadkey2"
-version = "0.3.4"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/f2/9b/b883339dab12d4125f4a0163af24045a7cb262f12de52dae89ac25bafd79/pyquadkey2-0.3.4.tar.gz", hash = "sha256:708915514e2d18d7c55b39db83d8ee0f16721e78d7547b46b056e54eff94fb71", size = 12241, upload-time = "2026-04-28T08:43:59.328Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/52/0c/c2c6b44d3e43c02881709039a5055020c56cd042c716cf98b6538b2d6aba/pyquadkey2-0.3.4-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:809dab06037b4f6ff6dd229b43d9dfb69f78cbfa1a836a7a9044b9a8fc5fa1be", size = 43935, upload-time = "2026-04-28T08:43:53.44Z" },
-    { url = "https://files.pythonhosted.org/packages/aa/1c/1dc2bb5f9a039405a47a09a3d4a237e82c805af7aaf358a4fa7b86152351/pyquadkey2-0.3.4-cp314-cp314-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:cabd08559a870824749589a9ad68ef3cf759b6df28050a81fc8b514d634fc4f6", size = 175864, upload-time = "2026-04-28T08:43:54.772Z" },
-    { url = "https://files.pythonhosted.org/packages/37/68/a8d9e287f0c8afee2b301c84f124c6f083f15c5a2dc4cc742edc9b09c6fb/pyquadkey2-0.3.4-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:51961eceb5acc3f9dc15677d2a12047de01e078e037bc8681149760d22e52df8", size = 173459, upload-time = "2026-04-28T08:43:56.388Z" },
-    { url = "https://files.pythonhosted.org/packages/1d/e5/25055f1c7db4f75bc7a5ffd8b91fbb40d9aee413a875785836d86bb1dff3/pyquadkey2-0.3.4-cp314-cp314-win_amd64.whl", hash = "sha256:9553d86325caeb24dcd75242af3df062e2b4deb95fe4abb1fc9914c6a88117a7", size = 40962, upload-time = "2026-04-28T08:43:58.034Z" },
 ]
 
 [[package]]
