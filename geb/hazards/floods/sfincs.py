@@ -344,10 +344,10 @@ class SFINCSRootModel:
         # Remove unnecessary keys (to avoid warnings) and set reproj_method to bilinear for all DEMs
         DEMs_in_area_of_interest = []
         for DEM in DEMs:
-            assert isinstance(DEM["elevtn"], xr.Dataset), (
-                "DEM must contain an 'elevtn' key with an xarray Dataset"
+            assert isinstance(DEM["elevation"], xr.Dataset), (
+                "DEM must contain an 'elevation' key with an xarray Dataset"
             )
-            DEM_bounds = DEM["elevtn"].rio.bounds()
+            DEM_bounds = DEM["elevation"].rio.bounds()
             subbasin_bounds = self.subbasins.total_bounds
 
             # check if any overlap between DEM and subbasins, if not, do not
@@ -367,9 +367,12 @@ class SFINCSRootModel:
             DEM.pop("coastal_zmin", None)
             DEM["reproj_method"] = "bilinear"
 
-            DEM["elevtn"] = clip_with_geometry(
-                DEM["elevtn"]["elevtn"], self.subbasins, all_touched=True, drop=True
-            ).to_dataset(name="elevtn")
+            DEM["elevation"] = clip_with_geometry(
+                DEM["elevation"]["elevation"],
+                self.subbasins,
+                all_touched=True,
+                drop=True,
+            ).to_dataset(name="elevation")
 
             DEMs_in_area_of_interest.append(DEM)
 
