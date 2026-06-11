@@ -13,6 +13,7 @@ import yaml
 from geb.geb_types import ThreeDArrayFloat32, TwoDArrayFloat32
 from geb.hazards.floods import Floods
 from geb.module import Module
+from geb.workflows.io import read_table
 
 if TYPE_CHECKING:
     from geb.model import GEBModel
@@ -33,12 +34,34 @@ class HazardDriver(Module):
         super().__init__(model)
 
         self.model: GEBModel = model
-        # extract the longest flood event in days
+        self.config = self.model.config["hazards"]
         if "events" not in self.model.config["hazards"]["floods"]:
-            self.model.config["hazards"]["floods"]["events"] = []
-        flood_events: list[dict[str, Any]] = self.model.config["hazards"]["floods"][
-            "events"
-        ]
+            self.config["floods"]["events"] = []
+        flood_events: list[dict[str, Any]] = self.config["floods"]["events"]
+
+        if (
+            not self.model.in_spinup
+            and self.config["floods"]["run_for_validation_events"]
+        ):
+            validation_events = read_table(
+                self.model.files["table"]["observations/flood_metadata"]
+            )
+            for event in validation_events.itertuples():
+                date: pd.Timestamp = event.observation_date  # ty:ignore[unresolved-attribute]
+                start_time = date.to_pydatetime().replace(
+                    minute=0, second=0, microsecond=0
+                ) - timedelta(days=5)
+                end_time = date.to_pydatetime().replace(
+                    minute=0, second=0, microsecond=0
+                ) + timedelta(days=5, hours=1)
+                flood_events.append(
+                    {
+                        "start_time": start_time,
+                        "end_time": end_time,
+                    }
+                )
+
+        # extract the longest flood event in days
         if flood_events == [] or flood_events is None:
             longest_flood_event_in_days: int = 0
         else:

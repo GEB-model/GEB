@@ -8,11 +8,11 @@ import rioxarray  # noqa: F401
 from .base import Adapter
 
 
-class MIRCAOS(Adapter):
+class MIRCAOSHarvestedGrids(Adapter):
     """Adapter for MIRCA-OS datasets."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        """Initialize the MIRCAOS adapter.
+        """Initialize the MIRCAOSHarvestedGrids adapter.
 
         Args:
             *args: Positional arguments to pass to the Adapter constructor.
@@ -24,7 +24,7 @@ class MIRCAOS(Adapter):
             )
         super().__init__(*args, **kwargs)
 
-    def fetch(self, url: str) -> MIRCAOS:
+    def fetch(self, url: str) -> MIRCAOSHarvestedGrids:
         """Fetch the MIRCA-OS dataset.
 
         Because manual download is required, this method prompts the user to
@@ -34,7 +34,7 @@ class MIRCAOS(Adapter):
             url: The URL to download the dataset from.
 
         Returns:
-            MIRCAOS: The adapter instance.
+            MIRCAOSHarvestedGrids: The adapter instance.
         """
         if not self.is_ready:
             manual_folder = self.root / "Annual Harvested Area Grids"

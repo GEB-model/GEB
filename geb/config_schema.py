@@ -183,11 +183,43 @@ class RoutingConfig(BaseModel):
     )
 
 
+class DischargeEvaluationConfig(BaseModel):
+    """Configuration for discharge evaluation."""
+
+    minimum_upstream_area_km2: float = Field(
+        400.0,
+        ge=0.0,
+        description="Minimum modeled upstream area for stations included in discharge evaluation (km2).",
+    )
+    minimum_timeseries_length_years: float = Field(
+        5.0,
+        ge=0.0,
+        description="Minimum paired observation-simulation timeseries length for stations included in discharge evaluation (years).",
+    )
+    external_evaluation_folder: str | None = Field(
+        "external_evaluation_data/",
+        description="Folder with external discharge evaluation CSV files. Relative paths are resolved from the model folder.",
+    )
+
+
+class HydrologyEvaluationConfig(BaseModel):
+    """Configuration for hydrology evaluation."""
+
+    discharge: DischargeEvaluationConfig = Field(
+        default_factory=DischargeEvaluationConfig,
+        description="Discharge evaluation configuration.",
+    )
+
+
 class HydrologyConfig(BaseModel):
     """Configuration for hydrology."""
 
     routing: RoutingConfig = Field(
         default_factory=RoutingConfig, description="Routing configuration."
+    )
+    evaluation: HydrologyEvaluationConfig = Field(
+        default_factory=HydrologyEvaluationConfig,
+        description="Hydrology evaluation configuration.",
     )
 
 

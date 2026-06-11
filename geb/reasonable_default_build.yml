@@ -21,6 +21,8 @@ setup_cell_area:
 
 setup_hydrography:
 
+setup_retention_basins:
+
 setup_elevation:
 
 setup_coastal_sfincs_model_regions:
@@ -208,3 +210,5 @@ setup_osm_land_polygons:
 setup_groundwater_well_observations:
 
 setup_meteorological_stations_observations:
+
+setup_flood_observations:

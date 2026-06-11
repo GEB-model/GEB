@@ -530,7 +530,8 @@ class ReturnPeriodModel:
             fontsize=8,
             verticalalignment="bottom",
             horizontalalignment="left",
-            bbox=dict(boxstyle="round", facecolor="white", alpha=0.8, edgecolor=color),
+            bbox=dict(boxstyle="round", facecolor="black", alpha=1.0, edgecolor=color),
+            color="white",
         )
 
         ax.set_xscale("log")

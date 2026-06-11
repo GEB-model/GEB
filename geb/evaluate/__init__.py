@@ -24,8 +24,10 @@ class Evaluate:
         model: The GEB model instance.
     """
 
-    def __init__(self, model: GEBModel) -> None:
+    def __init__(self, model: GEBModel | None) -> None:
         """Initialize the Evaluate class."""
+        if model is None:
+            return
         self.model: GEBModel = model
         self.hydrology = Hydrology(model, self)
         self.hydrodynamics = Hydrodynamics(model, self)
@@ -72,6 +74,9 @@ class Evaluate:
                 f"Method {method} is not implemented in Evaluate class."
             ) from exc
 
+        self.model.in_spinup = False
+        self.run_name = run_name
+
         # Merge run_name into kwargs to pass all evaluation options as keyword arguments.
         all_kwargs = {
             "run_name": run_name,
@@ -84,6 +89,10 @@ class Evaluate:
     @property
     def output_folder_evaluate(self) -> Path:
         """Returns the output folder for evaluation results."""
-        folder: Path = self.model.output_folder / "evaluate"
+        folder: Path = (
+            Path(self.model.config["general"]["output_folder"])
+            / self.run_name
+            / "evaluate"
+        )
         folder.mkdir(parents=True, exist_ok=True)
         return folder

@@ -301,6 +301,8 @@ class GridVariables(Bucket):
     river_width_beta: ArrayFloat32
     overland_flow_buffer: TwoDArrayFloat32
     overland_flow_buffer_weights: ArrayFloat32
+    buffer: TwoDArrayFloat64
+    retention_basin_storage_m3: ArrayFloat32
 
 
 class Grid(BaseVariables):

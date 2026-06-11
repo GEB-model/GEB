@@ -598,6 +598,77 @@ def test_interpolate_na_along_dim_integer_fillvalue() -> None:
     # Check that -9999 values are filled
     assert not np.any(result.values == -9999)
     assert result.dims == da.dims
+
+
+def test_interpolate_na_2d_with_mask() -> None:
+    """Test the interpolate_na_2d function with an optional mask."""
+    # Create a 5x5 array with NaN in the middle and some other cells
+    data = np.array(
+        [
+            [1, 1, 1, 1, 1],
+            [1, np.nan, np.nan, np.nan, 1],
+            [1, np.nan, 2, np.nan, 1],
+            [1, np.nan, np.nan, np.nan, 1],
+            [1, 1, 1, 1, 1],
+        ],
+        dtype=np.float32,
+    )
+    da = xr.DataArray(data, dims=("y", "x"), attrs={"_FillValue": np.nan})
+
+    # Mask that only includes the inner 3x3
+    mask_data = np.zeros((5, 5), dtype=bool)
+    mask_data[1:4, 1:4] = True
+    mask = xr.DataArray(mask_data, dims=("y", "x"))
+
+    # Interpolate with mask
+    # The cell at (2,2) is 2 and is within the mask.
+    # The cells around it (1,1), (1,2), (1,3), (2,1), (2,3), (3,1), (3,2), (3,3) are NaN and within mask.
+    # They should be filled with 2.
+    # Outer cells should NOT be used for interpolation since they are outside the mask.
+
+    result = interpolate_na_2d(da, mask=mask)
+
+    # Inner 3x3 (except center which was already 2) should be 2
+    expected_inner = np.full((3, 3), 2.0)
+    np.testing.assert_array_equal(result.values[1:4, 1:4], expected_inner)
+
+    # Outer cells should remain 1 (they weren't NaN, but even if they were,
+    # they shouldn't be filled if they are outside the mask)
+    assert result.values[0, 0] == 1
+    assert result.values[4, 4] == 1
+
+
+def test_interpolate_na_along_dim_with_mask() -> None:
+    """Test the interpolate_na_along_dim function with an optional mask."""
+    # Create a 2x3x3 array (time, y, x)
+    data = np.array(
+        [
+            [[1, 1, 1], [1, np.nan, 1], [1, 1, 1]],
+            [[3, 3, 3], [3, 4, 3], [3, 3, 3]],
+        ],
+        dtype=np.float32,
+    )
+    da = xr.DataArray(data, dims=("time", "y", "x"), attrs={"_FillValue": np.nan})
+
+    # Mask that excludes the center cell (1, 1)
+    mask_data = np.ones((3, 3), dtype=bool)
+    mask_data[1, 1] = False  # Do NOT interpolate center cell
+    mask = xr.DataArray(mask_data, dims=("y", "x"))
+
+    result = interpolate_na_along_dim(da, mask=mask)
+
+    # Center cell at time 0 was NaN and mask was False there.
+    # It should still be NaN.
+    assert np.isnan(result.values[0, 1, 1])
+
+    # If we set mask to True at (1,1)
+    mask_data[1, 1] = True
+    mask = xr.DataArray(mask_data, dims=("y", "x"))
+    result = interpolate_na_along_dim(da, mask=mask)
+
+    # Now it should be filled. At time 0, center cell neighbors are 1.
+    assert result.values[0, 1, 1] == 1.0
+
     assert result.coords.equals(da.coords)
 
 
