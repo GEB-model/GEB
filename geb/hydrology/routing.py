@@ -1842,19 +1842,20 @@ class Routing(Module):
             average_discharge: ArrayFloat32 = (
                 self.var.sum_of_all_discharge_steps / (self.var.discharge_step_count)
             ).astype(np.float64)
-
             # re-arranged formula for alpha, where we use the observed average river width and the average discharge to calculate alpha
-            alpha: ArrayFloat32 = np.where(
-                (
-                    (~np.isnan(self.observed_average_river_width))
-                    & (self.grid.var.waterbody_ids == -1)
-                ),
-                self.observed_average_river_width / (average_discharge**beta_array),
+            alpha: ArrayFloat32 = np.full_like(
+                self.observed_average_river_width,
                 default_alpha,
-            )
-            alpha: ArrayFloat32 = np.where(
-                self.grid.var.waterbody_ids == -1, alpha, np.float32(np.nan)
-            )
+                dtype=np.float32,
+            )  # default alpha everywhere
+            calculate_alpha = (~np.isnan(self.observed_average_river_width)) & (
+                self.grid.var.waterbody_ids == -1
+            )  # decide where alpha should be calculated
+            alpha[calculate_alpha] = self.observed_average_river_width[
+                calculate_alpha
+            ] / (
+                average_discharge[calculate_alpha] ** beta_array[calculate_alpha]
+            )  # calculate alpha
 
         return alpha, beta_array
 

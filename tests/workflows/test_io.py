@@ -339,6 +339,40 @@ def test_write_zarr_rounds_shards_up_to_chunk_multiple() -> None:
     assert zarr_array.shards == (6, 9)
 
 
+def test_write_zarr_fill_value_consistency() -> None:
+    """Test that _FillValue in attributes and fill_value in zarr metadata are consistent.
+
+    Verifies that the fill value remains consistent across both CF attributes
+    and Zarr-native metadata for both integer and floating point data types.
+    """
+    x = np.linspace(-4, 4, 9)
+    y = np.linspace(7, 0, 8)
+
+    # test integer fill value
+    values_int = np.zeros((y.size, x.size), dtype=np.int8)
+    da_int = xr.DataArray(values_int, coords={"x": x, "y": y}, dims=["y", "x"])
+    fill_value_int = -2
+    da_int.attrs["_FillValue"] = fill_value_int
+
+    path_int = tmp_folder / "test_fill_value_int.zarr"
+    write_zarr(da_int, path_int, crs=4326, progress=False)
+
+    z_int = zarr.open_array(path_int / "test_fill_value_int", mode="r")
+    assert z_int.attrs["_FillValue"] == fill_value_int
+    assert z_int.fill_value == fill_value_int
+
+    # test float fill value
+    values_float = np.zeros((y.size, x.size), dtype=np.float32)
+    da_float = xr.DataArray(values_float, coords={"x": x, "y": y}, dims=["y", "x"])
+    da_float.attrs["_FillValue"] = np.nan
+
+    path_float = tmp_folder / "test_fill_value_float.zarr"
+    write_zarr(da_float, path_float, crs=4326, progress=False)
+
+    z_float = zarr.open_array(path_float / "test_fill_value_float", mode="r")
+    assert np.isnan(z_float.fill_value)
+
+
 def test_write_zarr_stores_per_shard_when_shards_are_configured(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
