@@ -1,4 +1,9 @@
 # dev
+
+# v1.0.0b28
+- Add setup_flood_observations build method working with WorldFloodsV2
+- Automatically run SFINCS for events that are set up for validation in addition to configured events.
+- Fix: also set nodata in zarr default zarr.json-file for correct displaying in QGIS.
 - Require MERIT Hydro dir/elv tiles to be downloaded manually and report missing tile filenames during build.
 - Update MODFLOW to v6.7 ([#801](https://github.com/GEB-model/GEB/issues/801)).
 - Reorganize output folder so that all output files are saved under the run name ([#852](https://github.com/GEB-model/GEB/issues/852)). This allows us to keep files from different runs nicely separated.
