@@ -181,9 +181,9 @@ class Floods(Module):
             self.model.files["dict"]["hydrodynamics/DEM_config"]
         )
         for entry in self.DEM_config:
-            entry["elevtn"] = read_zarr(
+            entry["elevation"] = read_zarr(
                 self.model.files["other"][entry["path"]]
-            ).to_dataset(name="elevtn")
+            ).to_dataset(name="elevation")
 
         self.HRU = model.hydrology.HRU
 

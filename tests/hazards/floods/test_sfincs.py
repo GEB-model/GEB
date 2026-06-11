@@ -99,6 +99,8 @@ def build_sfincs(
     subbasins: gpd.GeoDataFrame,
     name: str,
     rivers: gpd.GeoDataFrame,
+    coastal: bool = False,
+    **kwargs: Any,
 ) -> SFINCSRootModel:
     """Build a SFINCS model instance, including the static grids and configuration.
 
@@ -108,6 +110,8 @@ def build_sfincs(
         subbasins: A GeoDataFrame defining the subbasins to build the SFINCS model for.
         name: The name of the SFINCS model. Used for the folder name.
         rivers: A GeoDataFrame with the river network.
+        coastal: Whether to include coastal cells in the SFINCS model.
+        **kwargs: Additional keyword arguments to pass to the SFINCS model build method.
 
     Returns:
         A SFINCS model instance with static grids and configuration written.
@@ -119,16 +123,18 @@ def build_sfincs(
         geb_model.hazard_driver.floods.DEM_config.copy()
     )
     for entry in DEM_config:
-        if "elevtn" not in entry:
-            entry["elevtn"] = read_zarr(
+        if "elevation" not in entry:
+            entry["elevation"] = read_zarr(
                 geb_model.model.files["other"][entry["path"]]
-            ).to_dataset(name="elevtn")
+            ).to_dataset(name="elevation")
 
     sfincs_model.build(
         subbasins=subbasins,
         DEMs=DEM_config,
         rivers=rivers,
-        discharge_by_river=geb_model.hazard_driver.floods.discharge_by_river("spinup"),
+        discharge_by_river=geb_model.hazard_driver.floods.discharge_by_river(
+            run_name="spinup"
+        ),
         river_width_alpha=geb_model.model.hydrology.grid.decompress(
             geb_model.hydrology.grid.var.river_width_alpha
         ),
@@ -155,8 +161,10 @@ def build_sfincs(
         )
         if "routing/custom_rivers" in geb_model.files["geom"]
         else None,
-        overwrite="auto",
+        coastal=coastal,
+        overwrite=True,
         write_figures=True,
+        **kwargs,
     )
     geb_model.close()
 
@@ -268,9 +276,11 @@ def test_accumulated_runoff(
                 ]
             )
 
-            geb_model.hazard_driver.floods.DEM_config[0]["elevtn"] = dem.rio.reproject(
-                dst_crs=dem.rio.estimate_utm_crs(),
-            ).to_dataset(name="elevtn")
+            geb_model.hazard_driver.floods.DEM_config[0]["elevation"] = (
+                dem.rio.reproject(
+                    dst_crs=dem.rio.estimate_utm_crs(),
+                ).to_dataset(name="elevation")
+            )
 
         subbasins = read_geom(geb_model.model.files["geom"]["routing/subbasins"])
         rivers = geb_model.hydrology.routing.rivers
@@ -333,6 +343,7 @@ def test_accumulated_runoff(
                 flood_map_output_interval_seconds=(
                     end_time - start_time
                 ).total_seconds(),
+                setup_river_outflow=False,
             )
 
             simulation.set_accumulated_runoff_forcing(
@@ -477,6 +488,7 @@ def test_discharge_from_nodes(geb_model: GEBModel, use_gpu: bool) -> None:
             start_time=start_time,
             end_time=end_time,
             flood_map_output_interval_seconds=(end_time - start_time).total_seconds(),
+            setup_river_outflow=False,
         )
 
         nodes, timeseries = create_discharge_timeseries(
@@ -555,6 +567,7 @@ def test_setup_thin_dams(geb_model: GEBModel) -> None:
             start_time=start_time,
             end_time=end_time,
             flood_map_output_interval_seconds=86400,
+            setup_river_outflow=False,
         )
 
         simulation_without_dam.set_discharge_forcing_from_nodes(
@@ -577,6 +590,7 @@ def test_setup_thin_dams(geb_model: GEBModel) -> None:
             start_time=start_time,
             end_time=end_time,
             flood_map_output_interval_seconds=86400,
+            setup_river_outflow=False,
         )
         simulation_with_dam.setup_thin_dams(vertical_dam)
 
@@ -600,6 +614,7 @@ def test_setup_thin_dams(geb_model: GEBModel) -> None:
             start_time=start_time,
             end_time=end_time,
             flood_map_output_interval_seconds=86400,
+            setup_river_outflow=False,
         )
 
         simulation_with_multiple_dams.setup_thin_dams(multiple_dams)
@@ -661,10 +676,92 @@ def test_read(geb_model: GEBModel) -> None:
         assert sfincs_model_build.rivers.equals(sfincs_model_read.rivers)
         assert sfincs_model_build.subbasins.equals(sfincs_model_read.subbasins)
 
-        for key in sfincs_model_build.sfincs_model.config:
-            assert (
-                sfincs_model_build.sfincs_model.config[key]
-                == sfincs_model_read.sfincs_model.config[key]
-            )
+        for key, value in sfincs_model_build.sfincs_model.config.data:
+            assert getattr(sfincs_model_build.sfincs_model.config.data, key) == value
 
         sfincs_model_read.cleanup()
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_coastal_waterlevel_forcing(geb_model: GEBModel) -> None:
+    """Test SFINCS with coastal water level forcing.
+
+    Args:
+        geb_model: A GEB model instance with SFINCS configured.
+    """
+    with WorkingDirectory(working_directory):
+        start_time: datetime = datetime(2000, 1, 1, 0)
+        end_time: datetime = datetime(2000, 1, 2, 0)
+
+        subbasins = read_geom(geb_model.model.files["geom"]["routing/subbasins"])
+        sfincs_model = build_sfincs(
+            geb_model,
+            subgrid=False,
+            subbasins=subbasins,
+            name=TEST_MODEL_NAME,
+            rivers=geb_model.hydrology.routing.rivers,
+            coastal=True,
+            coastal_boundary_exclude_mask=None,
+            low_elevation_coastal_zone_mask=gpd.GeoDataFrame(
+                columns=["geometry"],
+                geometry=[
+                    read_geom(
+                        geb_model.model.files["geom"]["routing/subbasins"]
+                    ).union_all()
+                ],
+                crs=subbasins.crs,
+            ),
+            maximum_elevation_for_coastal_boundary_cells_m=10_000,
+        )
+
+        simulation = sfincs_model.create_simulation(
+            simulation_name="coastal_forcing_test",
+            start_time=start_time,
+            end_time=end_time,
+            flood_map_output_interval_seconds=(end_time - start_time).total_seconds(),
+            setup_river_outflow=False,
+        )
+
+        rivers = sfincs_model.rivers.copy().reset_index()
+        downstream_outflow = rivers[rivers["is_downstream_outflow"]].iloc[:1].copy()
+        downstream_outflow["geometry"] = downstream_outflow["geometry"].apply(
+            get_start_point
+        )
+
+        # SFINCS needs locations in its own CRS for the manual elevation check
+        downstream_outflow = downstream_outflow.to_crs(sfincs_model.sfincs_model.crs)
+
+        # Get elevation at these points
+        elevation = sfincs_model.elevation.sel(
+            x=xr.DataArray(downstream_outflow.geometry.x, dims="points"),
+            y=xr.DataArray(downstream_outflow.geometry.y, dims="points"),
+            method="nearest",
+        ).values
+
+        water_level_m = np.nanmax(elevation) + 5.0
+
+        timeseries = pd.DataFrame(
+            {
+                "time": pd.date_range(start=start_time, end=end_time, freq="h"),
+                **{i: water_level_m for i in downstream_outflow.index},
+            }
+        ).set_index("time")
+
+        simulation.set_coastal_waterlevel_forcing(
+            locations=downstream_outflow,
+            timeseries=timeseries,
+        )
+
+        assert (simulation.path / "sfincs.bnd").exists()
+        assert (simulation.path / "sfincs.bzs").exists()
+
+        simulation.run(gpu=False)
+        flood_depth = simulation.read_final_flood_depth(minimum_flood_depth=0.01)
+
+        total_flood_volume = simulation.get_flood_volume(flood_depth)
+        assert total_flood_volume > 0, "No flooding occurred"
+
+        plot_flood_map(flood_depth, "flood_depth_coastal_test")
+
+        simulation.cleanup()
+        sfincs_model.cleanup()
