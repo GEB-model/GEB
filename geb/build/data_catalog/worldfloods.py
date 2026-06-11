@@ -242,11 +242,9 @@ class WorldFloodsV2(Adapter):
         metadata = metadata.rename(columns={"satellite date": "observation_date"})
 
         # parse observation_date to datetime and convert to UTC timezone
-        metadata["observation_date"] = (
-            pd.to_datetime(metadata["observation_date"], format="mixed")
-            .dt.tz_convert("UTC")
-            .dt.tz_localize(None)
-        )
+        metadata["observation_date"] = pd.to_datetime(
+            metadata["observation_date"], format="mixed", utc=True
+        ).dt.tz_localize(None)
 
         assert len(metadata) == len(flood_events), (
             "Metadata and flood maps should have the same number of entries."
