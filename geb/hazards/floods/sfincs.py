@@ -348,8 +348,8 @@ class SFINCSRootModel:
         # Remove unnecessary keys (to avoid warnings) and set reproj_method to bilinear for all DEMs
         DEMs_in_area_of_interest = []
         for DEM in DEMs:
-            assert isinstance(DEM["elevtn"], xr.DataArray), (
-                "DEM must contain an 'elevtn' key with an xarray DataArray"
+            assert isinstance(DEM["elevtn"], xr.Dataset), (
+                "DEM must contain an 'elevtn' key with an xarray Dataset"
             )
             DEM_bounds = DEM["elevtn"].rio.bounds()
             subbasin_bounds = self.subbasins.total_bounds
