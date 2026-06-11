@@ -8,8 +8,14 @@ import pandas as pd
 import pytest
 
 from geb.evaluate.workflows.external_skill_scores import (
+    GLOFAS_CSV_NAME,
+    GLOFAS_MODEL_NAME,
+    GOOGLE_STREAMFLOW_ARCHIVE_NAME,
+    GOOGLE_STREAMFLOW_CSV_NAME,
     GOOGLE_STREAMFLOW_METRICS_URL,
     GOOGLE_STREAMFLOW_MODEL_NAME,
+    get_external_model_output_suffix,
+    prepare_pairwise_skill_score_boxplot_inputs,
     prepare_skill_score_boxplot_inputs,
     read_external_evaluation_raw,
     read_google_streamflow_skill_scores,
@@ -44,13 +50,14 @@ def test_read_external_evaluation_raw_reads_csv_scores(
         configured_external_evaluation_folder=tmp_path,
         model_folder=tmp_path,
         logger=logging.getLogger(__name__),
+        auto_fetch_google_streamflow=False,
     )
 
     assert external_models["utrecht"].index.to_list() == ["STATION_A", "STATION_B"]
     assert "R" not in external_models["utrecht"].columns
     assert external_models["utrecht"].loc["STATION_A", "KGE_correlation"] == 0.9
     assert external_models["utrecht"].loc["STATION_A", "R2"] == pytest.approx(0.81)
-    assert external_models["google_streamflow"].index.to_list() == [
+    assert external_models[GOOGLE_STREAMFLOW_MODEL_NAME].index.to_list() == [
         "STATION_A",
         "STATION_B",
     ]
@@ -79,7 +86,7 @@ def test_prepare_skill_score_boxplot_inputs_matches_after_geb_filter(
     evaluation_df.to_excel(evaluation_metrics_path, index=False)
     external_df.to_csv(external_folder / "reference.csv")
 
-    prepared_geb_df, external_models = prepare_skill_score_boxplot_inputs(
+    plot_inputs = prepare_skill_score_boxplot_inputs(
         evaluation_metrics_path=evaluation_metrics_path,
         snapped_locations_path=tmp_path / "unused.geoparquet",
         external_evaluation_folder=None,
@@ -90,10 +97,55 @@ def test_prepare_skill_score_boxplot_inputs_matches_after_geb_filter(
         minimum_upstream_area_km2=400.0,
         include_geb=True,
         matched_only=True,
+        auto_fetch_google_streamflow=False,
     )
 
-    assert prepared_geb_df["station_name"].to_list() == ["station_a"]
-    assert external_models["reference"].index.to_list() == ["STATION_A"]
+    assert plot_inputs.evaluation_df["station_name"].to_list() == ["station_a"]
+    assert plot_inputs.external_models["reference"].index.to_list() == ["STATION_A"]
+    assert "GEB upstream area >= 400 km2" in plot_inputs.filter_summary
+
+
+def test_prepare_skill_score_boxplot_inputs_applies_utrecht_paper_threshold(
+    tmp_path: Path,
+) -> None:
+    """Utrecht comparisons apply the configured 400 km2 paper threshold."""
+    evaluation_metrics_path: Path = tmp_path / "evaluation_metrics.xlsx"
+    external_folder: Path = tmp_path / "external"
+    external_folder.mkdir()
+    output_folder: Path = tmp_path / "output"
+    output_folder.mkdir()
+    evaluation_df: pd.DataFrame = pd.DataFrame(
+        {
+            "station_name": ["station_a", "station_b"],
+            "upstream_area_GEB": [500_000_000.0, 300_000_000.0],
+            "KGE": [0.8, 0.7],
+        }
+    )
+    utrecht_df: pd.DataFrame = pd.DataFrame(
+        {"KGE": [0.6, 0.5]},
+        index=pd.Index(["station_a", "station_b"]),
+    )
+    evaluation_df.to_excel(evaluation_metrics_path, index=False)
+    utrecht_df.to_csv(external_folder / "utrecht_1km.csv")
+
+    plot_inputs = prepare_skill_score_boxplot_inputs(
+        evaluation_metrics_path=evaluation_metrics_path,
+        snapped_locations_path=tmp_path / "unused.geoparquet",
+        external_evaluation_folder=None,
+        configured_external_evaluation_folder=external_folder,
+        model_folder=tmp_path,
+        output_folder=output_folder,
+        logger=logging.getLogger(__name__),
+        minimum_upstream_area_km2=0.0,
+        include_geb=True,
+        matched_only=True,
+        auto_fetch_google_streamflow=False,
+    )
+
+    assert plot_inputs.evaluation_df["station_name"].to_list() == ["station_a"]
+    assert plot_inputs.external_models["utrecht_1km"].index.to_list() == ["STATION_A"]
+    assert "GEB upstream area >= 0 km2" in plot_inputs.filter_summary
+    assert "utrecht_1km: upstream area >= 400 km2" in plot_inputs.filter_summary
 
 
 def test_prepare_skill_score_boxplot_inputs_can_skip_external_models(
@@ -119,7 +171,7 @@ def test_prepare_skill_score_boxplot_inputs_can_skip_external_models(
     evaluation_df.to_excel(evaluation_metrics_path, index=False)
     external_df.to_csv(external_folder / "reference.csv")
 
-    prepared_geb_df, external_models = prepare_skill_score_boxplot_inputs(
+    plot_inputs = prepare_skill_score_boxplot_inputs(
         evaluation_metrics_path=evaluation_metrics_path,
         snapped_locations_path=tmp_path / "unused.geoparquet",
         external_evaluation_folder=None,
@@ -131,10 +183,11 @@ def test_prepare_skill_score_boxplot_inputs_can_skip_external_models(
         include_geb=True,
         matched_only=False,
         include_external=False,
+        auto_fetch_google_streamflow=False,
     )
 
-    assert prepared_geb_df["station_name"].to_list() == ["station_a"]
-    assert external_models == {}
+    assert plot_inputs.evaluation_df["station_name"].to_list() == ["station_a"]
+    assert plot_inputs.external_models == {}
 
 
 def _write_google_metric_file(
@@ -177,6 +230,32 @@ def _write_google_metrics_tree(root_folder: Path) -> Path:
     return metric_folder
 
 
+def _write_glofas_metrics_tree(root_folder: Path) -> Path:
+    """Write a small GloFAS-style extracted metrics tree.
+
+    Args:
+        root_folder: Folder receiving the `metrics/` tree.
+
+    Returns:
+        Folder containing the GloFAS per-metric CSV files.
+    """
+    metric_folder: Path = (
+        root_folder
+        / "metrics"
+        / "hydrograph_metrics"
+        / "per_metric"
+        / "glofas"
+        / "2014"
+        / "glofas_prediction"
+    )
+    metric_folder.mkdir(parents=True)
+    _write_google_metric_file(metric_folder, "KGE.csv", [0.4, 0.3])
+    _write_google_metric_file(metric_folder, "NSE.csv", [0.2, 0.1])
+    _write_google_metric_file(metric_folder, "Pearson-r.csv", [0.7, 0.6])
+    _write_google_metric_file(metric_folder, "RMSE.csv", [2.2, 2.3])
+    return metric_folder
+
+
 def test_read_google_streamflow_skill_scores_from_extracted_metrics(
     tmp_path: Path,
 ) -> None:
@@ -200,6 +279,7 @@ def test_read_external_evaluation_raw_finds_nested_google_metrics(
 ) -> None:
     """Google streamflow metrics are discovered inside nested external folders."""
     _write_google_metrics_tree(tmp_path / "global_streamflow_model_paper")
+    _write_glofas_metrics_tree(tmp_path / "global_streamflow_model_paper")
 
     external_models: dict[str, pd.DataFrame] = read_external_evaluation_raw(
         external_evaluation_folder=None,
@@ -211,6 +291,9 @@ def test_read_external_evaluation_raw_finds_nested_google_metrics(
     google_df: pd.DataFrame = external_models[GOOGLE_STREAMFLOW_MODEL_NAME]
     assert google_df.index.to_list() == ["GRDC_1001", "GRDC_1002"]
     assert google_df.loc["GRDC_1001", "KGE"] == 0.8
+    glofas_df: pd.DataFrame = external_models[GLOFAS_MODEL_NAME]
+    assert glofas_df.index.to_list() == ["GRDC_1001", "GRDC_1002"]
+    assert glofas_df.loc["GRDC_1001", "KGE"] == 0.4
 
 
 def test_read_google_streamflow_skill_scores_from_metrics_archive(
@@ -219,6 +302,7 @@ def test_read_google_streamflow_skill_scores_from_metrics_archive(
     """Google streamflow metrics are read from the Zenodo metrics archive layout."""
     metrics_source_folder: Path = tmp_path / "source"
     _write_google_metrics_tree(metrics_source_folder)
+    _write_glofas_metrics_tree(metrics_source_folder)
     metrics_archive_path: Path = tmp_path / "metrics.tgz"
     with tarfile.open(metrics_archive_path, "w:gz") as archive:
         archive.add(metrics_source_folder / "metrics", arcname="metrics")
@@ -230,6 +314,56 @@ def test_read_google_streamflow_skill_scores_from_metrics_archive(
 
     assert google_df.index.to_list() == ["GRDC_1001", "GRDC_1002"]
     assert google_df.loc["GRDC_1002", "NSE"] == 0.5
+
+
+def test_read_external_evaluation_raw_fetches_google_metrics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Google metrics are fetched, archived, and normalized into external data."""
+    metrics_source_folder: Path = tmp_path / "source"
+    _write_google_metrics_tree(metrics_source_folder)
+    _write_glofas_metrics_tree(metrics_source_folder)
+    source_archive_path: Path = tmp_path / "source_metrics.tgz"
+    with tarfile.open(source_archive_path, "w:gz") as archive:
+        archive.add(metrics_source_folder / "metrics", arcname="metrics")
+
+    def fake_fetch_google_streamflow_metrics_archive(
+        output_path: Path,
+        logger: logging.Logger,
+    ) -> Path:
+        """Copy a fixture archive instead of downloading from Zenodo.
+
+        Args:
+            output_path: Archive path to create.
+            logger: Unused logger matching the production fetch signature.
+
+        Returns:
+            Created archive path.
+        """
+        output_path.write_bytes(source_archive_path.read_bytes())
+        return output_path
+
+    monkeypatch.setattr(
+        "geb.evaluate.workflows.external_skill_scores.fetch_google_streamflow_metrics_archive",
+        fake_fetch_google_streamflow_metrics_archive,
+    )
+    external_folder: Path = tmp_path / "external"
+
+    external_models: dict[str, pd.DataFrame] = read_external_evaluation_raw(
+        external_evaluation_folder=None,
+        configured_external_evaluation_folder=external_folder,
+        model_folder=tmp_path,
+        logger=logging.getLogger(__name__),
+    )
+
+    google_df: pd.DataFrame = external_models[GOOGLE_STREAMFLOW_MODEL_NAME]
+    assert len(google_df) == 2
+    glofas_df: pd.DataFrame = external_models[GLOFAS_MODEL_NAME]
+    assert len(glofas_df) == 2
+    assert (external_folder / GOOGLE_STREAMFLOW_ARCHIVE_NAME).exists()
+    assert (external_folder / GOOGLE_STREAMFLOW_CSV_NAME).exists()
+    assert (external_folder / GLOFAS_CSV_NAME).exists()
 
 
 def test_prepare_skill_score_boxplot_inputs_matches_google_by_grdc_station_id(
@@ -248,7 +382,7 @@ def test_prepare_skill_score_boxplot_inputs_matches_google_by_grdc_station_id(
     )
     evaluation_df.to_excel(evaluation_metrics_path, index=False)
 
-    prepared_geb_df, external_models = prepare_skill_score_boxplot_inputs(
+    plot_inputs = prepare_skill_score_boxplot_inputs(
         evaluation_metrics_path=evaluation_metrics_path,
         snapped_locations_path=tmp_path / "unused.geoparquet",
         external_evaluation_folder=None,
@@ -259,12 +393,74 @@ def test_prepare_skill_score_boxplot_inputs_matches_google_by_grdc_station_id(
         minimum_upstream_area_km2=400.0,
         include_geb=True,
         matched_only=True,
+        auto_fetch_google_streamflow=False,
     )
 
-    assert prepared_geb_df["station_ID"].to_list() == [1001]
-    assert external_models[GOOGLE_STREAMFLOW_MODEL_NAME].index.to_list() == [
-        "GRDC_1001"
+    assert plot_inputs.evaluation_df["station_ID"].to_list() == [1001]
+    assert plot_inputs.external_models[
+        GOOGLE_STREAMFLOW_MODEL_NAME
+    ].index.to_list() == ["GRDC_1001"]
+    assert "GEB upstream area >= 400 km2" in plot_inputs.filter_summary
+    assert "Google Streamflow: upstream area" not in plot_inputs.filter_summary
+
+
+def test_prepare_pairwise_skill_score_boxplot_inputs_keeps_model_specific_matches(
+    tmp_path: Path,
+) -> None:
+    """Pairwise matched plots use each external model's own station overlap."""
+    evaluation_metrics_path: Path = tmp_path / "evaluation_metrics.xlsx"
+    external_folder: Path = tmp_path / "external"
+    external_folder.mkdir()
+    evaluation_df: pd.DataFrame = pd.DataFrame(
+        {
+            "station_ID": [1001, 1002, 1003],
+            "station_name": ["utrecht_a", "google_b", "shared_c"],
+            "upstream_area_GEB": [450_000_000.0, 550_000_000.0, 700_000_000.0],
+            "KGE": [0.8, 0.7, 0.6],
+        }
+    )
+    utrecht_df: pd.DataFrame = pd.DataFrame(
+        {"KGE": [0.2, 0.3]},
+        index=pd.Index(["utrecht_a", "shared_c"]),
+    )
+    google_df: pd.DataFrame = pd.DataFrame(
+        {"KGE": [0.4, 0.5]},
+        index=pd.Index(["GRDC_1002", "GRDC_1003"]),
+    )
+    evaluation_df.to_excel(evaluation_metrics_path, index=False)
+    utrecht_df.to_csv(external_folder / "utrecht_1km.csv")
+    google_df.to_csv(external_folder / GOOGLE_STREAMFLOW_CSV_NAME)
+
+    pairwise_inputs = prepare_pairwise_skill_score_boxplot_inputs(
+        evaluation_metrics_path=evaluation_metrics_path,
+        external_evaluation_folder=None,
+        configured_external_evaluation_folder=external_folder,
+        model_folder=tmp_path,
+        output_folder=tmp_path,
+        logger=logging.getLogger(__name__),
+        minimum_upstream_area_km2=0.0,
+        auto_fetch_google_streamflow=False,
+    )
+
+    assert pairwise_inputs["utrecht_1km"].evaluation_df["station_ID"].to_list() == [
+        1001,
+        1003,
     ]
+    assert pairwise_inputs[GOOGLE_STREAMFLOW_MODEL_NAME].evaluation_df[
+        "station_ID"
+    ].to_list() == [1002, 1003]
+    assert pairwise_inputs["utrecht_1km"].external_models[
+        "utrecht_1km"
+    ].index.to_list() == ["UTRECHT_A", "SHARED_C"]
+    assert pairwise_inputs[GOOGLE_STREAMFLOW_MODEL_NAME].external_models[
+        GOOGLE_STREAMFLOW_MODEL_NAME
+    ].index.to_list() == ["GRDC_1002", "GRDC_1003"]
+    assert "GEB upstream area >= 0 km2" in pairwise_inputs[
+        GOOGLE_STREAMFLOW_MODEL_NAME
+    ].filter_summary
+    assert get_external_model_output_suffix("Google Streamflow") == (
+        "_matched_google_streamflow"
+    )
 
 
 def test_prepare_skill_score_boxplot_inputs_matches_google_with_snapped_index(
@@ -285,7 +481,7 @@ def test_prepare_skill_score_boxplot_inputs_matches_google_with_snapped_index(
     )
     snapped_locations_gdf.to_parquet(snapped_locations_path)
 
-    prepared_geb_df, external_models = prepare_skill_score_boxplot_inputs(
+    plot_inputs = prepare_skill_score_boxplot_inputs(
         evaluation_metrics_path=tmp_path / "missing_evaluation_metrics.xlsx",
         snapped_locations_path=snapped_locations_path,
         external_evaluation_folder=None,
@@ -296,12 +492,13 @@ def test_prepare_skill_score_boxplot_inputs_matches_google_with_snapped_index(
         minimum_upstream_area_km2=400.0,
         include_geb=False,
         matched_only=True,
+        auto_fetch_google_streamflow=False,
     )
 
-    assert prepared_geb_df.empty
-    assert external_models[GOOGLE_STREAMFLOW_MODEL_NAME].index.to_list() == [
-        "GRDC_1001"
-    ]
+    assert plot_inputs.evaluation_df.empty
+    assert plot_inputs.external_models[
+        GOOGLE_STREAMFLOW_MODEL_NAME
+    ].index.to_list() == ["GRDC_1001"]
 
 
 def test_prepare_skill_score_boxplot_inputs_uses_snapped_index_when_metrics_empty(
@@ -328,7 +525,7 @@ def test_prepare_skill_score_boxplot_inputs_uses_snapped_index_when_metrics_empt
     )
     snapped_locations_gdf.to_parquet(snapped_locations_path)
 
-    _, external_models = prepare_skill_score_boxplot_inputs(
+    plot_inputs = prepare_skill_score_boxplot_inputs(
         evaluation_metrics_path=evaluation_metrics_path,
         snapped_locations_path=snapped_locations_path,
         external_evaluation_folder=None,
@@ -339,8 +536,9 @@ def test_prepare_skill_score_boxplot_inputs_uses_snapped_index_when_metrics_empt
         minimum_upstream_area_km2=400.0,
         include_geb=False,
         matched_only=True,
+        auto_fetch_google_streamflow=False,
     )
 
-    assert external_models[GOOGLE_STREAMFLOW_MODEL_NAME].index.to_list() == [
-        "GRDC_1001"
-    ]
+    assert plot_inputs.external_models[
+        GOOGLE_STREAMFLOW_MODEL_NAME
+    ].index.to_list() == ["GRDC_1001"]

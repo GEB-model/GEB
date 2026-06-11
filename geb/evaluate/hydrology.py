@@ -24,8 +24,10 @@ from tqdm import tqdm
 
 from geb.evaluate.workflows.dashboard import create_discharge_folium_map
 from geb.evaluate.workflows.external_skill_scores import (
+    get_external_model_output_suffix as _get_external_model_output_suffix,
     get_geb_station_keys as _get_geb_station_keys,
     prepare_external_evaluation as _prepare_external_evaluation,
+    prepare_pairwise_skill_score_boxplot_inputs as _prepare_pairwise_skill_score_boxplot_inputs,
     prepare_skill_score_boxplot_inputs as _prepare_skill_score_boxplot_inputs,
     read_external_evaluation_raw as _read_external_evaluation_raw,
 )
@@ -2432,8 +2434,12 @@ class Hydrology:
             include_external: Include external model scores in non-matched plots.
                 External scores are always included for `matched_only=True` and
                 when `include_geb=False`.
-            **kwargs: Ignored (CLI compatibility).
+            **kwargs: Ignored CLI compatibility options. Supports
+                `minimum_upstream_areakm2` as a backwards-compatible alias for
+                `minimum_upstream_area_km2`.
         """
+        if minimum_upstream_area_km2 is None:
+            minimum_upstream_area_km2 = kwargs.pop("minimum_upstream_areakm2", None)
         if minimum_upstream_area_km2 is None:
             minimum_upstream_area_km2 = self.model.config["hydrology"]["evaluation"][
                 "discharge"
@@ -2450,7 +2456,7 @@ class Hydrology:
         snapped_locations_path: Path = self.model.files["geom"][
             "discharge/discharge_snapped_locations"
         ]
-        evaluation_df, external_models = _prepare_skill_score_boxplot_inputs(
+        plot_inputs = _prepare_skill_score_boxplot_inputs(
             evaluation_metrics_path=evaluation_metrics_path,
             snapped_locations_path=snapped_locations_path,
             external_evaluation_folder=external_evaluation_folder,
@@ -2464,47 +2470,44 @@ class Hydrology:
             include_external=should_include_external,
         )
 
-        if include_geb and evaluation_df.empty:
+        if include_geb and plot_inputs.evaluation_df.empty:
             self.model.logger.info(
                 "No discharge stations found for evaluation. Skipping skill score graphs."
             )
             return
 
         _plot_skill_score_boxplots(
-            evaluation_df=evaluation_df,
-            external_models=external_models,
+            evaluation_df=plot_inputs.evaluation_df,
+            external_models=plot_inputs.external_models,
             output_folder=self.evaluate_discharge_output_folder,
             logger=self.model.logger,
             export=export,
             include_geb=include_geb,
             matched_only=matched_only,
+            filter_summary=plot_inputs.filter_summary,
         )
 
         if not matched_only and include_geb:
-            matched_evaluation_df, matched_external_models = (
-                _prepare_skill_score_boxplot_inputs(
-                    evaluation_metrics_path=evaluation_metrics_path,
-                    snapped_locations_path=snapped_locations_path,
-                    external_evaluation_folder=external_evaluation_folder,
-                    configured_external_evaluation_folder=configured_folder,
-                    model_folder=self.model.input_folder.parent,
-                    output_folder=self.evaluate_discharge_output_folder,
-                    logger=self.model.logger,
-                    minimum_upstream_area_km2=minimum_upstream_area_km2,
-                    include_geb=include_geb,
-                    matched_only=True,
-                    include_external=True,
-                )
+            pairwise_plot_inputs = _prepare_pairwise_skill_score_boxplot_inputs(
+                evaluation_metrics_path=evaluation_metrics_path,
+                external_evaluation_folder=external_evaluation_folder,
+                configured_external_evaluation_folder=configured_folder,
+                model_folder=self.model.input_folder.parent,
+                output_folder=self.evaluate_discharge_output_folder,
+                logger=self.model.logger,
+                minimum_upstream_area_km2=minimum_upstream_area_km2,
             )
-            if matched_external_models and not matched_evaluation_df.empty:
+            for model_name, matched_plot_inputs in pairwise_plot_inputs.items():
                 _plot_skill_score_boxplots(
-                    evaluation_df=matched_evaluation_df,
-                    external_models=matched_external_models,
+                    evaluation_df=matched_plot_inputs.evaluation_df,
+                    external_models=matched_plot_inputs.external_models,
                     output_folder=self.evaluate_discharge_output_folder,
                     logger=self.model.logger,
                     export=export,
                     include_geb=include_geb,
                     matched_only=True,
+                    filter_summary=matched_plot_inputs.filter_summary,
+                    output_name_suffix=_get_external_model_output_suffix(model_name),
                 )
 
     def plot_skill_scores_vs_upstream_area(

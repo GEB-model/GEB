@@ -13,7 +13,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib.lines import Line2D
-from matplotlib.transforms import blended_transform_factory
 
 _DISPLAYED_SKILL_SCORE_CONFIGS: tuple[dict[str, object], ...] = (
     {
@@ -32,6 +31,7 @@ _DISPLAYED_SKILL_SCORE_CONFIGS: tuple[dict[str, object], ...] = (
         "col": "KGE_correlation",
         "label": "KGE r",
         "title": "KGE correlation component",
+        "compact_title": "Correlation",
         "unit": "(−)",
         "ylim": (-1.0, 1.0),
         "reference": 1.0,
@@ -44,6 +44,7 @@ _DISPLAYED_SKILL_SCORE_CONFIGS: tuple[dict[str, object], ...] = (
         "col": "KGE_bias_ratio",
         "label": "β",
         "title": "KGE bias-ratio component",
+        "compact_title": "Bias ratio",
         "unit": "(−)",
         "ylim": (0.0, 2.0),
         "reference": 1.0,
@@ -56,6 +57,7 @@ _DISPLAYED_SKILL_SCORE_CONFIGS: tuple[dict[str, object], ...] = (
         "col": "KGE_variability_ratio",
         "label": "α",
         "title": "KGE variability-ratio component",
+        "compact_title": "Variability ratio",
         "unit": "(−)",
         "ylim": (0.0, 2.0),
         "reference": 1.0,
@@ -81,7 +83,7 @@ _DISPLAYED_SKILL_SCORE_CONFIGS: tuple[dict[str, object], ...] = (
         "label": "R²",
         "title": "Coefficient of Determination (R²)",
         "unit": "(−)",
-        "ylim": (0.0, 1.0),
+        "ylim": (-1.0, 1.0),
         "reference": 1.0,
         "cmap": "YlGn",
         "vmin": 0.0,
@@ -102,6 +104,7 @@ _DISPLAYED_SKILL_SCORE_CONFIGS: tuple[dict[str, object], ...] = (
         "color": "#d62728",
     },
 )
+
 
 def _plot_skill_score_map_single(
     evaluation_gdf: gpd.GeoDataFrame,
@@ -383,6 +386,138 @@ def _get_robust_error_metric_ylim(metric_values: np.ndarray) -> tuple[float, flo
     return (0.0, max(visible_upper_limit * 1.1, 1.0))
 
 
+def _get_skill_score_config(metric_col: str) -> dict[str, object]:
+    """Get the display configuration for a skill-score metric.
+
+    Args:
+        metric_col: Name of the metric column in the evaluation data.
+
+    Returns:
+        Plot display configuration for the requested metric.
+
+    Raises:
+        ValueError: If the metric column is not configured for plotting.
+    """
+    for metric_config in _DISPLAYED_SKILL_SCORE_CONFIGS:
+        if metric_config["col"] == metric_col:
+            return metric_config
+    raise ValueError(f"No skill-score plot configuration found for '{metric_col}'.")
+
+
+def _get_boxplot_axis_layout(
+    fig: plt.Figure,
+) -> dict[str, plt.Axes]:
+    """Create the grouped layout for discharge skill-score boxplots.
+
+    The top row contains the headline skill scores at equal size. The lower-left
+    row contains the three smaller KGE components so their relationship to KGE
+    is visually explicit without competing with the primary metrics.
+
+    Args:
+        fig: Matplotlib figure that receives the axes.
+
+    Returns:
+        Metric-column-to-axis mapping.
+    """
+    outer_grid = fig.add_gridspec(
+        nrows=2,
+        ncols=4,
+        height_ratios=[3.2, 1.6],
+        hspace=0.72,
+        wspace=0.30,
+    )
+    axes_by_metric: dict[str, plt.Axes] = {
+        "KGE": fig.add_subplot(outer_grid[0, 0]),
+        "NSE": fig.add_subplot(outer_grid[0, 1]),
+        "R2": fig.add_subplot(outer_grid[0, 2]),
+        "RRMSE": fig.add_subplot(outer_grid[0, 3]),
+    }
+    component_grid = outer_grid[1, 0].subgridspec(
+        nrows=1,
+        ncols=3,
+        wspace=0.42,
+    )
+    axes_by_metric["KGE_correlation"] = fig.add_subplot(component_grid[0, 0])
+    axes_by_metric["KGE_bias_ratio"] = fig.add_subplot(component_grid[0, 1])
+    axes_by_metric["KGE_variability_ratio"] = fig.add_subplot(component_grid[0, 2])
+
+    spacer_axes: list[plt.Axes] = [
+        fig.add_subplot(outer_grid[1, column_index]) for column_index in range(1, 4)
+    ]
+    for spacer_axis in spacer_axes:
+        spacer_axis.set_visible(False)
+
+    return axes_by_metric
+
+
+def _annotate_metric_sample_sizes(
+    axis: plt.Axes,
+    models_with_data: list[tuple[str, np.ndarray]],
+    model_colors: dict[str, str],
+    compact: bool,
+) -> None:
+    """Add median and station-count labels below a metric axis.
+
+    Args:
+        axis: Axis receiving the labels.
+        models_with_data: Model names and finite metric values to summarize.
+        model_colors: Mapping from model name to plot color.
+        compact: Whether the labels are drawn in a smaller component axis.
+    """
+    label_blocks: list[str] = [
+        f"{model_name}:\nmed={float(np.median(metric_values)):.2f}\nn={len(metric_values)}"
+        for model_name, metric_values in models_with_data
+    ]
+    label_color: str = model_colors.get("GEB", "#1f77b4")
+    axis.text(
+        0.5,
+        -0.20 if compact else -0.11,
+        "\n\n".join(label_blocks),
+        transform=axis.transAxes,
+        ha="center",
+        va="top",
+        fontsize=6,
+        linespacing=0.9,
+        color=label_color,
+        bbox={
+            "boxstyle": "round,pad=0.20",
+            "facecolor": "black",
+            "edgecolor": "0.25",
+            "alpha": 0.75,
+        },
+        clip_on=False,
+    )
+
+
+def _add_filter_summary(
+    fig: plt.Figure,
+    filter_summary: str,
+) -> None:
+    """Add the applied filtering criteria to the lower-right plot area.
+
+    Args:
+        fig: Figure receiving the annotation.
+        filter_summary: Multi-line description of station filters.
+    """
+    if not filter_summary:
+        return
+    fig.text(
+        0.985,
+        0.18,
+        filter_summary,
+        ha="right",
+        va="bottom",
+        fontsize=8,
+        color="white",
+        bbox={
+            "boxstyle": "round,pad=0.35",
+            "facecolor": "black",
+            "edgecolor": "0.35",
+            "alpha": 0.82,
+        },
+    )
+
+
 def plot_skill_score_boxplots(
     evaluation_df: pd.DataFrame,
     external_models: dict[str, pd.DataFrame],
@@ -391,6 +526,8 @@ def plot_skill_score_boxplots(
     export: bool = True,
     include_geb: bool = True,
     matched_only: bool = False,
+    filter_summary: str = "",
+    output_name_suffix: str = "",
 ) -> None:
     """Create skill score violin+boxplot graphs for each evaluation metric.
 
@@ -402,6 +539,8 @@ def plot_skill_score_boxplots(
         export: Save the figure to disk.
         include_geb: Include GEB in the plot.
         matched_only: Whether the plotted data were restricted to matched stations.
+        filter_summary: Description of filters to annotate in the plot.
+        output_name_suffix: Optional suffix appended to the output file stem.
     """
     if include_geb and evaluation_df.empty:
         logger.info(
@@ -415,7 +554,18 @@ def plot_skill_score_boxplots(
         )
         return
 
-    metric_configs: tuple[dict[str, object], ...] = _DISPLAYED_SKILL_SCORE_CONFIGS
+    metric_order: tuple[str, ...] = (
+        "KGE",
+        "NSE",
+        "R2",
+        "RRMSE",
+        "KGE_correlation",
+        "KGE_bias_ratio",
+        "KGE_variability_ratio",
+    )
+    metric_configs: tuple[dict[str, object], ...] = tuple(
+        _get_skill_score_config(metric_col) for metric_col in metric_order
+    )
 
     geb_color: str = "#1f77b4"
     external_colors: dict[str, str] = dict(
@@ -432,9 +582,8 @@ def plot_skill_score_boxplots(
     logger.info("Creating evaluation metrics skill score plots...")
 
     with plt.style.context("dark_background"):
-        fig, axes = plt.subplots(
-            1, len(metric_configs), figsize=(2.6 * len(metric_configs), 4.2)
-        )
+        fig = plt.figure(figsize=(15.5, 6.8), constrained_layout=False)
+        axes_by_metric = _get_boxplot_axis_layout(fig)
         fig.patch.set_facecolor("black")
         plot_subtitle: str = (
             " (matched stations only)" if matched_only and external_models else ""
@@ -444,11 +593,11 @@ def plot_skill_score_boxplots(
             fontsize=14,
             fontweight="bold",
             color="white",
-            y=1.01,
+            y=0.98,
         )
 
-        axes_flat: np.ndarray = np.atleast_1d(axes).ravel()
-        for axis, config in zip(axes_flat, metric_configs, strict=False):
+        for config in metric_configs:
+            axis = axes_by_metric[str(config["col"])]
             metric_col: str = str(config["col"])
             geb_metric_values: np.ndarray = (
                 evaluation_df[metric_col].dropna().to_numpy(dtype=float)
@@ -483,17 +632,13 @@ def plot_skill_score_boxplots(
             ):
                 bar_color: str = model_colors[model_name]
                 _draw_violin_box(axis, metric_values, x_position, bar_color)
-                transform = blended_transform_factory(axis.transData, axis.transAxes)
-                axis.text(
-                    x_position,
-                    1.03,
-                    f"med={float(np.median(metric_values)):.2f}  n={len(metric_values)}",
-                    transform=transform,
-                    ha="center",
-                    va="bottom",
-                    fontsize=7,
-                    color="white",
-                )
+            is_component_axis: bool = metric_col.startswith("KGE_")
+            _annotate_metric_sample_sizes(
+                axis,
+                models_with_data,
+                model_colors,
+                compact=is_component_axis,
+            )
 
             axis.axhline(
                 float(config["reference"]),
@@ -503,12 +648,17 @@ def plot_skill_score_boxplots(
                 zorder=0,
             )
             axis.set_facecolor("black")
+            title_text: str = str(
+                config.get("compact_title", config["title"])
+                if is_component_axis
+                else config["title"]
+            )
             axis.set_title(
-                f"{config['label']} — {config['title']} {config['unit']}",
-                fontsize=9,
+                f"{config['label']}\n{title_text} {config['unit']}",
+                fontsize=8 if is_component_axis else 9,
                 fontweight="bold",
                 color="white",
-                pad=18,
+                pad=8,
             )
             if config["ylim"] is not None:
                 axis.set_ylim(*cast(tuple[float, float], config["ylim"]))
@@ -518,7 +668,9 @@ def plot_skill_score_boxplots(
                 )
                 axis.set_ylim(*_get_robust_error_metric_ylim(combined_metric_values))
             axis.set_xticks([])
-            axis.tick_params(axis="y", labelsize=8, colors="white")
+            axis.tick_params(
+                axis="y", labelsize=7 if is_component_axis else 8, colors="white"
+            )
             axis.set_xlabel("")
             for spine in axis.spines.values():
                 spine.set_edgecolor("0.4")
@@ -527,9 +679,6 @@ def plot_skill_score_boxplots(
             axis.spines["bottom"].set_visible(False)
             axis.yaxis.label.set_color("white")
             axis.grid(axis="y", color="0.25", linewidth=0.5)
-
-        for axis in axes_flat[len(metric_configs) :]:
-            axis.set_visible(False)
 
         legend_handles: list[Line2D] = [
             Line2D([0], [0], color=color, linewidth=5, label=name)
@@ -545,16 +694,17 @@ def plot_skill_score_boxplots(
                 frameon=True,
                 framealpha=1.0,
                 edgecolor="0.4",
-                bbox_to_anchor=(0.5, -0.04),
+                bbox_to_anchor=(0.5, 0.03),
             )
             legend.get_frame().set_facecolor("black")
             for text in legend.get_texts():
                 text.set_color("white")
 
-        plt.tight_layout()
+        _add_filter_summary(fig, filter_summary)
+        fig.subplots_adjust(left=0.055, right=0.985, top=0.85, bottom=0.22)
 
         if export:
-            suffix: str = (
+            suffix: str = output_name_suffix or (
                 "_external_only"
                 if not include_geb
                 else "_matched"
