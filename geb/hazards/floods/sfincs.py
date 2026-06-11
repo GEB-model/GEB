@@ -477,14 +477,15 @@ class SFINCSRootModel:
 
         # do the river burning only if there are active rivers in the model
         # or if custom rivers to burn are provided
-        if not self.active_rivers.empty or (
-            custom_rivers_to_burn is not None and not custom_rivers_to_burn.empty
-        ):
+        if (
+            not self.active_rivers.empty
+            and any(self.active_rivers["represented_in_grid"])
+        ) or (custom_rivers_to_burn is not None and not custom_rivers_to_burn.empty):
             river_representative_points = []
             for ID in self.active_rivers.index:
                 river_representative_points.append(
                     get_representative_river_points(
-                        ID, self.rivers, ~np.isnan(river_width_alpha)
+                        ID, self.active_rivers, ~np.isnan(river_width_alpha)
                     )
                 )
 
@@ -1366,7 +1367,8 @@ class SFINCSRootModel:
 
         # here we only select the rivers that have an upstream forcing point
         rivers_with_return_period: gpd.GeoDataFrame = self.active_rivers[
-            ~self.active_rivers["is_downstream_outflow"]
+            (~self.active_rivers["is_downstream_outflow"])
+            & (self.rivers.loc[self.active_rivers.index, "represented_in_grid"])
         ].copy()
 
         rivers_with_return_period = self.assign_return_periods(

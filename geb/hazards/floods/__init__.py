@@ -680,7 +680,15 @@ class Floods(Module):
             for sfincs_inland_root_model in sfincs_inland_root_models:
                 inflow_nodes = sfincs_inland_root_model.active_rivers[
                     ~sfincs_inland_root_model.active_rivers["is_downstream_outflow"]
+                    & (
+                        sfincs_inland_root_model.rivers.loc[
+                            sfincs_inland_root_model.active_rivers.index,
+                            "represented_in_grid",
+                        ]
+                    )
                 ]
+                if inflow_nodes.empty:
+                    continue
                 inflow_nodes["geometry"] = inflow_nodes["geometry"].apply(
                     get_start_point
                 )
