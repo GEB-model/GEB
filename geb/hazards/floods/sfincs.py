@@ -416,7 +416,15 @@ class SFINCSRootModel:
                 all_touched=True,
             )
         else:
+            time_start = time.perf_counter()
+            self.logger.info("Calculating outflow boundary conditions...")
             self.calculate_outflow_conditions(area=flood_plain)
+            time_setup_outflow = time.perf_counter() - time_start
+            self.logger.info(
+                f"SFINCS model outflow setup took {time_setup_outflow:.2f} seconds"
+            )
+            self.logger.info("Setting up river outflow boundary conditions...")
+            time_start = time.perf_counter()
             if setup_river_outflow_boundary:
                 outflow_points = self.rivers[self.rivers["is_outflow_boundary"]][
                     "outflow_point_xy"
@@ -468,6 +476,10 @@ class SFINCSRootModel:
 
                 # must be performed BEFORE burning rivers.
                 self.setup_river_outflow_boundary()
+            time_setup_river_outflow = time.perf_counter() - time_start
+            self.logger.info(
+                f"SFINCS model river outflow setup took {time_setup_river_outflow:.2f} seconds"
+            )
 
         # We are only interested in flooding within the subbasins of interest.
         # This area of interest mask is used later to filter the flood maps.
