@@ -196,9 +196,7 @@ def create_sfincs_models(
         A list of SFINCSRootModel instances.
     """
     if split:
-        river_graph = create_river_graph(
-            geb_model.hydrology.routing.active_rivers, subbasins
-        )
+        river_graph = create_river_graph(geb_model.hydrology.routing.active_rivers)
 
         # 2e8 nicely splits the test area into 2 parts. If changing the test area, this value
         # may need to be adjusted.
@@ -315,9 +313,13 @@ def test_accumulated_runoff(
         )
         runoff_m: xr.DataArray = runoff_m.rio.write_crs(4326)
 
-        river_ids: TwoDArrayInt32 = geb_model.hydrology.grid.load2d(
-            geb_model.files["grid"]["routing/river_ids"], compress=False
+        river_ids = geb_model.hydrology.grid.decompress(
+            geb_model.hydrology.routing.river_ids, fillvalue=-1
         )
+        river_ids_no_waterbodies_removed = geb_model.hydrology.grid.decompress(
+            geb_model.hydrology.routing.river_ids_no_waterbodies_removed, fillvalue=-1
+        )
+
         basin_ids: TwoDArrayInt32 = geb_model.hydrology.grid.load2d(
             geb_model.files["grid"]["routing/basin_ids"], compress=False
         )
@@ -348,6 +350,7 @@ def test_accumulated_runoff(
                 runoff_m=runoff_m,
                 river_network=geb_model.hydrology.routing.river_network,
                 river_ids=river_ids,
+                river_ids_no_waterbodies_removed=river_ids_no_waterbodies_removed,
                 basin_ids=basin_ids,
                 upstream_area=upstream_area,
                 cell_area=cell_area,

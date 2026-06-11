@@ -521,7 +521,7 @@ def _get_xy(
 
 
 def get_representative_river_points(
-    river_ID: set, rivers: pd.DataFrame, is_valid_river: TwoDArrayBool
+    river_ID: int, rivers: pd.DataFrame, is_valid_river: TwoDArrayBool
 ) -> list[tuple[int, int]]:
     """Get representative river points for a given river ID.
 
@@ -537,31 +537,46 @@ def get_representative_river_points(
     Returns:
         A list of tuples (x, y) representing the coordinates of the representative points.
         If no valid points are found, an empty list is returned.
+
+    Raises:
+        ValueError: If no valid xy coordinates are found for the river or its upstream rivers.
     """
-    river = rivers.loc[river_ID]
+    river: pd.Series = rivers.loc[river_ID]
     if river["represented_in_grid"]:
-        xy = _get_xy(river, is_valid_river=is_valid_river, up_to_downstream=True)
-        return [xy]
+        xys: list[tuple[int, int]] = [
+            _get_xy(river, is_valid_river=is_valid_river, up_to_downstream=True)
+        ]
 
     else:
-        river_IDs = set([river_ID])
-        representitative_rivers = set()
+        river_IDs: set[int] = set([river_ID])
+        representitative_rivers: set[int] = set()
         while river_IDs:
-            river_ID = river_IDs.pop()
-            river = rivers.loc[river_ID]
+            river_ID: int = river_IDs.pop()
+            river: pd.Series = rivers.loc[river_ID]
             if not river["represented_in_grid"]:
-                upstream_rivers = rivers[rivers["downstream_ID"] == river_ID]
+                upstream_rivers: pd.DataFrame = rivers[
+                    rivers["downstream_ID"] == river_ID
+                ]
                 river_IDs.update(upstream_rivers.index)
             else:
                 representitative_rivers.add(river_ID)
 
-        representitative_rivers = rivers[rivers.index.isin(representitative_rivers)]
-        xys = []
-        for river_ID, river in representitative_rivers.iterrows():
-            xy = _get_xy(river, is_valid_river=is_valid_river, up_to_downstream=False)
+        representitative_rivers: pd.DataFrame = rivers[
+            rivers.index.isin(representitative_rivers)
+        ]
+        xys: list[tuple[int, int]] = []
+        for _, river in representitative_rivers.iterrows():
+            xy: tuple[int, int] = _get_xy(
+                river, is_valid_river=is_valid_river, up_to_downstream=False
+            )
             xys.append(xy)
 
-        return xys
+    if len(xys) == 0:
+        raise ValueError(
+            f"No valid xy coordinates found for river {river_ID} or its upstream rivers."
+        )
+
+    return xys
 
 
 def get_river_parameters_by_river(
