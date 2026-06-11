@@ -50,22 +50,22 @@ from geb.workflows.extreme_value_analysis import (
 from geb.workflows.io import read_geom, read_table
 from geb.workflows.timeseries import regularize_discharge_timeseries
 
-OBSERVATIONS_COLOR = "#FED65D"
+OBSERVATIONS_COLOR = "#E6900A"
 SIMULATIONS_DEFAULT_COLOR = "#278DD9"
 
-# Configure global dark style for all plots in this module
-mpl.rcParams["figure.facecolor"] = "#000000"
-mpl.rcParams["axes.facecolor"] = "#000000"
-mpl.rcParams["axes.edgecolor"] = "white"
-mpl.rcParams["axes.labelcolor"] = "white"
-mpl.rcParams["xtick.color"] = "white"
-mpl.rcParams["ytick.color"] = "white"
-mpl.rcParams["text.color"] = "white"
-mpl.rcParams["figure.edgecolor"] = "white"
-mpl.rcParams["grid.color"] = "white"
-mpl.rcParams["legend.labelcolor"] = "white"
-mpl.rcParams["savefig.facecolor"] = "#000000"
-mpl.rcParams["savefig.edgecolor"] = "#000000"
+# Configure global style for all plots in this module
+mpl.rcParams["figure.facecolor"] = "white"
+mpl.rcParams["axes.facecolor"] = "white"
+mpl.rcParams["axes.edgecolor"] = "0.15"
+mpl.rcParams["axes.labelcolor"] = "black"
+mpl.rcParams["xtick.color"] = "black"
+mpl.rcParams["ytick.color"] = "black"
+mpl.rcParams["text.color"] = "black"
+mpl.rcParams["figure.edgecolor"] = "black"
+mpl.rcParams["grid.color"] = "0.8"
+mpl.rcParams["legend.labelcolor"] = "black"
+mpl.rcParams["savefig.facecolor"] = "white"
+mpl.rcParams["savefig.edgecolor"] = "white"
 
 
 class DischargeMetrics(NamedTuple):
@@ -518,12 +518,12 @@ def _plot_outflow_line_with_context(
 
 
 def _style_dark_timeseries_axis(axis: plt.Axes) -> None:
-    """Apply the shared dark styling used for hydrology timeseries plots.
+    """Apply the shared styling used for hydrology timeseries plots.
 
     Args:
         axis: Axis to style.
     """
-    # Styling is now mostly handled via global mpl.rcParams
+    # Styling is handled via global mpl.rcParams
     pass
 
 
@@ -562,7 +562,7 @@ def _format_full_timeseries_axis(
         draw_zero_line: Whether to add a horizontal zero reference line.
     """
     if draw_zero_line:
-        axis.axhline(0, color="white", linewidth=0.8, linestyle="--")
+        axis.axhline(0, color="0.4", linewidth=0.8, linestyle="--")
     axis.set_title(title)
     axis.set_ylabel(y_label)
     axis.set_xlabel("Time")
@@ -572,7 +572,7 @@ def _format_full_timeseries_axis(
     axis.xaxis.set_major_formatter(
         mdates.ConciseDateFormatter(axis.xaxis.get_major_locator())
     )
-    axis.grid(True, alpha=0.2, color="white")
+    axis.grid(True, alpha=0.5, color="0.8")
 
 
 def _format_yearly_timeseries_axis(
@@ -594,14 +594,14 @@ def _format_yearly_timeseries_axis(
     year_start: pd.Timestamp = pd.Timestamp(year=year, month=1, day=1)  # ty:ignore[invalid-assignment]
     year_end: pd.Timestamp = pd.Timestamp(year=year, month=12, day=31, hour=23)  # ty:ignore[invalid-assignment]
     if draw_zero_line:
-        axis.axhline(0, color="white", linewidth=0.8, linestyle="--")
+        axis.axhline(0, color="0.4", linewidth=0.8, linestyle="--")
     axis.set_xlim(mdates.date2num(year_start), mdates.date2num(year_end))
     axis.margins(x=0)
     axis.xaxis.set_major_locator(mdates.MonthLocator())
     axis.xaxis.set_major_formatter(mdates.DateFormatter("%b"))
     axis.set_title(title)
     axis.set_ylabel(y_label)
-    axis.grid(True, alpha=0.2, color="white")
+    axis.grid(True, alpha=0.5, color="0.8")
 
 
 def _add_dark_legend(
@@ -611,7 +611,7 @@ def _add_dark_legend(
     fontsize: float,
     bbox_to_anchor: tuple[float, float] | None = None,
 ) -> None:
-    """Add a legend with consistent dark-theme styling.
+    """Add a legend with consistent styling.
 
     Args:
         axis: Axis receiving the legend.
@@ -626,7 +626,6 @@ def _add_dark_legend(
         ncol=ncol,
         fontsize=fontsize,
         frameon=False,
-        labelcolor="white",
     )
 
 
@@ -760,10 +759,7 @@ def _plot_outflow_discharge_timeseries(
         _set_outflow_axis_limits(ax, outflow_series)
         ax.legend(
             handles=[Line2D([0], [0], color=SIMULATIONS_DEFAULT_COLOR, linewidth=1.1)],
-            labels=["GEB outflow simulation (blue = unfrozen, white = fully frozen)"],
-            facecolor="#000000",
-            edgecolor="white",
-            labelcolor="white",
+            labels=["GEB outflow simulation (blue = unfrozen, grey = fully frozen)"],
         )
         ax.set_title(
             f"GEB river outflow for outlet {outlet_id}, mean: {outflow_series.mean():.2f} m3/s"
@@ -788,7 +784,6 @@ def _plot_outflow_discharge_timeseries(
             1,
             figsize=(10, max(3.2 * len(outflow_years), 4.5)),
             sharey=True,
-            facecolor="#000000",
         )
         if len(outflow_years) == 1:
             yearly_axes = [yearly_axes]
@@ -824,7 +819,7 @@ def _plot_outflow_discharge_timeseries(
             )
             axis.set_ylabel("Discharge [m3/s]")
             _set_outflow_axis_limits(axis, yearly_outflow_series)
-            axis.grid(True, alpha=0.2, color="white")
+            axis.grid(True, alpha=0.5, color="0.8")
             axis.margins(x=0)
             axis.xaxis.set_major_locator(mdates.MonthLocator())
             axis.xaxis.set_major_formatter(mdates.DateFormatter("%b"))
@@ -840,7 +835,6 @@ def _plot_outflow_discharge_timeseries(
                 fontsize=7,
                 va="top",
                 ha="left",
-                color="white",
                 clip_on=False,
             )
 
@@ -1607,7 +1601,6 @@ def _add_yearly_totals_caption(
         va="top",
         ha="left",
         linespacing=1.15,
-        color="white",
         clip_on=False,
     )
 
@@ -2911,7 +2904,7 @@ class Hydrology:
             ]
         )
         context_colors: dict[str, str] = {
-            "potential_evapotranspiration": "white",
+            "potential_evapotranspiration": "#555555",
         }
         context_linestyles: dict[str, str] = {
             "potential_evapotranspiration": ":",
@@ -2941,7 +2934,7 @@ class Hydrology:
             series_name: series * conversion_factor_mm_per_m3
             for series_name, series in context_series.items()
         }
-        full_figure, full_axis = plt.subplots(figsize=(15, 14), facecolor="#000000")
+        full_figure, full_axis = plt.subplots(figsize=(15, 14))
         _style_water_balance_axis(full_axis)
         for column_name in component_columns:
             full_axis.plot(
@@ -2985,7 +2978,6 @@ class Hydrology:
             1,
             figsize=(15, max(7.2 * len(years), 11.0)),
             sharey=True,
-            facecolor="#000000",
         )
         if len(years) == 1:
             yearly_axes = [yearly_axes]
@@ -3061,7 +3053,6 @@ class Hydrology:
             bbox_to_anchor=(0.5, 0.02),
             ncol=min(3, len(yearly_labels)),
             frameon=False,
-            labelcolor="white",
         )
         yearly_figure.subplots_adjust(
             left=0.05,
@@ -3143,7 +3134,7 @@ class Hydrology:
             "precipitation": "#72b7b2",
             "runoff": "#f58518",
             "snow": "#4c78a8",
-            "potential_evapotranspiration": "white",
+            "potential_evapotranspiration": "#555555",
             "transpiration": "#54a24b",
         }
         top_soil_context_linestyles: dict[str, str] = {
@@ -3183,7 +3174,7 @@ class Hydrology:
             for column_name in top_soil_component_columns
         }
         if "storage_change" in top_soil_component_colors:
-            top_soil_component_colors["storage_change"] = "white"
+            top_soil_component_colors["storage_change"] = "black"
 
         top_soil_time_index: pd.DatetimeIndex = pd.DatetimeIndex(
             signed_top_soil_water_balance_df_m3_per_timestep.index
@@ -3200,7 +3191,7 @@ class Hydrology:
             for series_name, series in top_soil_context_series.items()
         }
         top_soil_full_figure, top_soil_full_axis = plt.subplots(
-            figsize=(15, 13.0), facecolor="#000000"
+            figsize=(15, 13.0)
         )
         _style_water_balance_axis(top_soil_full_axis)
         for column_name in top_soil_component_columns:
@@ -3254,7 +3245,6 @@ class Hydrology:
             1,
             figsize=(15, max(6.4 * len(top_soil_years), 10.0)),
             sharey=True,
-            facecolor="#000000",
         )
         if len(top_soil_years) == 1:
             top_soil_yearly_axes = [top_soil_yearly_axes]
@@ -3395,7 +3385,7 @@ class Hydrology:
         }
 
         time_index: pd.DatetimeIndex = pd.DatetimeIndex(water_storage_df_m.index)
-        full_figure, full_axis = plt.subplots(figsize=(14, 6.5), facecolor="#000000")
+        full_figure, full_axis = plt.subplots(figsize=(14, 6.5))
         _style_water_balance_axis(full_axis)
         for column_name in component_columns:
             full_axis.plot(
@@ -3427,7 +3417,6 @@ class Hydrology:
             1,
             figsize=(14, max(3.2 * len(years), 5.0)),
             sharey=True,
-            facecolor="#000000",
         )
         if len(years) == 1:
             yearly_axes = [yearly_axes]

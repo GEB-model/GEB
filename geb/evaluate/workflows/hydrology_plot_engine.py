@@ -64,7 +64,7 @@ _DISPLAYED_SKILL_SCORE_CONFIGS: tuple[dict[str, object], ...] = (
         "cmap": "viridis",
         "vmin": 0.0,
         "vmax": 2.0,
-        "color": "#bcbd22",
+        "color": "#8B8C00",
     },
     {
         "col": "NSE",
@@ -137,8 +137,6 @@ def _plot_skill_score_map_single(
     norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
 
     fig, ax = plt.subplots(figsize=(10, 9))
-    fig.patch.set_facecolor("black")
-    ax.set_facecolor("black")
 
     region_3857.plot(
         ax=ax,
@@ -177,10 +175,7 @@ def _plot_skill_score_map_single(
         ax.legend(
             fontsize=8,
             loc="lower right",
-            framealpha=0.6,
-            facecolor="black",
-            edgecolor="white",
-            labelcolor="white",
+            framealpha=0.8,
         )
 
     # Satellite basemap
@@ -195,9 +190,9 @@ def _plot_skill_score_map_single(
     # Colorbar
     sm = plt.cm.ScalarMappable(cmap=cmap_name, norm=norm)
     cbar = fig.colorbar(sm, ax=ax, fraction=0.03, pad=0.02, aspect=30)
-    cbar.set_label(metric_label, fontsize=11, color="white")
-    cbar.ax.yaxis.set_tick_params(color="white", labelcolor="white")
-    cbar.outline.set_edgecolor("white")  # ty:ignore[call-non-callable]
+    cbar.set_label(metric_label, fontsize=11)
+    cbar.ax.yaxis.set_tick_params(color="black", labelcolor="black")
+    cbar.outline.set_edgecolor("0.3")  # ty:ignore[call-non-callable]
 
     # Scale bar: round ~15% of the map width to a nice number (e.g. 152 km → 200 km)
     x_min, x_max = ax.get_xlim()
@@ -244,10 +239,10 @@ def _plot_skill_score_map_single(
         arrowprops=dict(arrowstyle="-|>", color="white", lw=1.5),
     )
 
-    ax.set_title(metric_title, fontsize=13, fontweight="bold", color="white", pad=10)
-    ax.tick_params(colors="white", labelsize=8)
+    ax.set_title(metric_title, fontsize=13, fontweight="bold", pad=10)
+    ax.tick_params(labelsize=8)
     for spine in ax.spines.values():
-        spine.set_edgecolor("white")
+        spine.set_edgecolor("0.3")
 
     plt.tight_layout()
     for ext in ("svg", "png"):
@@ -341,7 +336,7 @@ def _draw_violin_box(
         positions=[position],
         widths=violin_width * 0.35,
         patch_artist=True,
-        medianprops={"color": "white", "linewidth": 2.0, "zorder": 5},
+        medianprops={"color": "black", "linewidth": 2.0, "zorder": 5},
         boxprops={
             "facecolor": bar_color,
             "alpha": 0.9,
@@ -481,9 +476,9 @@ def _annotate_metric_sample_sizes(
         color=label_color,
         bbox={
             "boxstyle": "round,pad=0.20",
-            "facecolor": "black",
-            "edgecolor": "0.25",
-            "alpha": 0.75,
+            "facecolor": "0.95",
+            "edgecolor": "0.75",
+            "alpha": 0.9,
         },
         clip_on=False,
     )
@@ -508,12 +503,11 @@ def _add_filter_summary(
         ha="right",
         va="bottom",
         fontsize=8,
-        color="white",
         bbox={
             "boxstyle": "round,pad=0.35",
-            "facecolor": "black",
-            "edgecolor": "0.35",
-            "alpha": 0.82,
+            "facecolor": "0.95",
+            "edgecolor": "0.7",
+            "alpha": 0.9,
         },
     )
 
@@ -581,145 +575,136 @@ def plot_skill_score_boxplots(
 
     logger.info("Creating evaluation metrics skill score plots...")
 
-    with plt.style.context("dark_background"):
-        fig = plt.figure(figsize=(15.5, 6.8), constrained_layout=False)
-        axes_by_metric = _get_boxplot_axis_layout(fig)
-        fig.patch.set_facecolor("black")
-        plot_subtitle: str = (
-            " (matched stations only)" if matched_only and external_models else ""
+    fig = plt.figure(figsize=(15.5, 6.8), constrained_layout=False)
+    axes_by_metric = _get_boxplot_axis_layout(fig)
+    plot_subtitle: str = (
+        " (matched stations only)" if matched_only and external_models else ""
+    )
+    fig.suptitle(
+        f"Discharge Evaluation — Skill Score Distributions{plot_subtitle}",
+        fontsize=14,
+        fontweight="bold",
+        y=0.98,
+    )
+
+    for config in metric_configs:
+        axis = axes_by_metric[str(config["col"])]
+        metric_col: str = str(config["col"])
+        geb_metric_values: np.ndarray = (
+            evaluation_df[metric_col].dropna().to_numpy(dtype=float)
+            if include_geb and metric_col in evaluation_df.columns
+            else np.array([], dtype=float)
         )
-        fig.suptitle(
-            f"Discharge Evaluation — Skill Score Distributions{plot_subtitle}",
-            fontsize=14,
+        external_metric_values: dict[str, np.ndarray] = {
+            model_name: values
+            for model_name, model_df in external_models.items()
+            if metric_col in model_df.columns
+            for values in (model_df[metric_col].dropna().to_numpy(dtype=float),)
+            if values.size > 0
+        }
+
+        if geb_metric_values.size == 0 and not external_metric_values:
+            axis.set_visible(False)
+            continue
+
+        models_with_data: list[tuple[str, np.ndarray]] = []
+        if geb_metric_values.size > 0:
+            models_with_data.append(("GEB", geb_metric_values))
+        models_with_data.extend(external_metric_values.items())
+
+        x_positions = (
+            np.linspace(-0.4, 0.4, len(models_with_data))
+            if len(models_with_data) > 1
+            else np.array([0.0])
+        )
+
+        for (model_name, metric_values), x_position in zip(
+            models_with_data, x_positions, strict=True
+        ):
+            bar_color: str = model_colors[model_name]
+            _draw_violin_box(axis, metric_values, x_position, bar_color)
+        is_component_axis: bool = metric_col.startswith("KGE_")
+        _annotate_metric_sample_sizes(
+            axis,
+            models_with_data,
+            model_colors,
+            compact=is_component_axis,
+        )
+
+        axis.axhline(
+            float(config["reference"]),
+            color="0.5",
+            linewidth=0.8,
+            linestyle="--",
+            zorder=0,
+        )
+        title_text: str = str(
+            config.get("compact_title", config["title"])
+            if is_component_axis
+            else config["title"]
+        )
+        axis.set_title(
+            f"{config['label']}\n{title_text} {config['unit']}",
+            fontsize=8 if is_component_axis else 9,
             fontweight="bold",
-            color="white",
-            y=0.98,
+            pad=8,
+        )
+        if config["ylim"] is not None:
+            axis.set_ylim(*cast(tuple[float, float], config["ylim"]))
+        elif config.get("robust_error_ylim", False):
+            combined_metric_values: np.ndarray = np.concatenate(
+                [metric_values for _, metric_values in models_with_data]
+            )
+            axis.set_ylim(*_get_robust_error_metric_ylim(combined_metric_values))
+        axis.set_xticks([])
+        axis.tick_params(
+            axis="y", labelsize=7 if is_component_axis else 8,
+        )
+        axis.set_xlabel("")
+        for spine in axis.spines.values():
+            spine.set_edgecolor("0.7")
+        axis.spines["top"].set_visible(False)
+        axis.spines["right"].set_visible(False)
+        axis.spines["bottom"].set_visible(False)
+        axis.grid(axis="y", color="0.85", linewidth=0.5)
+
+    legend_handles: list[Line2D] = [
+        Line2D([0], [0], color=color, linewidth=5, label=name)
+        for name, color in model_colors.items()
+        if name == "GEB" or name in external_colors
+    ]
+    if legend_handles:
+        legend = fig.legend(
+            handles=legend_handles,
+            loc="lower center",
+            ncol=len(legend_handles),
+            fontsize=9,
+            frameon=True,
+            framealpha=1.0,
+            edgecolor="0.7",
+            bbox_to_anchor=(0.5, 0.03),
         )
 
-        for config in metric_configs:
-            axis = axes_by_metric[str(config["col"])]
-            metric_col: str = str(config["col"])
-            geb_metric_values: np.ndarray = (
-                evaluation_df[metric_col].dropna().to_numpy(dtype=float)
-                if include_geb and metric_col in evaluation_df.columns
-                else np.array([], dtype=float)
-            )
-            external_metric_values: dict[str, np.ndarray] = {
-                model_name: values
-                for model_name, model_df in external_models.items()
-                if metric_col in model_df.columns
-                for values in (model_df[metric_col].dropna().to_numpy(dtype=float),)
-                if values.size > 0
-            }
+    _add_filter_summary(fig, filter_summary)
+    fig.subplots_adjust(left=0.055, right=0.985, top=0.85, bottom=0.22)
 
-            if geb_metric_values.size == 0 and not external_metric_values:
-                axis.set_visible(False)
-                continue
-
-            models_with_data: list[tuple[str, np.ndarray]] = []
-            if geb_metric_values.size > 0:
-                models_with_data.append(("GEB", geb_metric_values))
-            models_with_data.extend(external_metric_values.items())
-
-            x_positions = (
-                np.linspace(-0.4, 0.4, len(models_with_data))
-                if len(models_with_data) > 1
-                else np.array([0.0])
+    if export:
+        suffix: str = output_name_suffix or (
+            "_external_only"
+            if not include_geb
+            else "_matched"
+            if matched_only and external_models
+            else ""
+        )
+        for extension in ("svg", "png"):
+            output_path: Path = (
+                output_folder / f"evaluation_skill_scores{suffix}.{extension}"
             )
+            plt.savefig(output_path, bbox_inches="tight", dpi=150)
+            logger.info("Skill score plot saved to: %s", output_path)
 
-            for (model_name, metric_values), x_position in zip(
-                models_with_data, x_positions, strict=True
-            ):
-                bar_color: str = model_colors[model_name]
-                _draw_violin_box(axis, metric_values, x_position, bar_color)
-            is_component_axis: bool = metric_col.startswith("KGE_")
-            _annotate_metric_sample_sizes(
-                axis,
-                models_with_data,
-                model_colors,
-                compact=is_component_axis,
-            )
-
-            axis.axhline(
-                float(config["reference"]),
-                color="0.5",
-                linewidth=0.8,
-                linestyle="--",
-                zorder=0,
-            )
-            axis.set_facecolor("black")
-            title_text: str = str(
-                config.get("compact_title", config["title"])
-                if is_component_axis
-                else config["title"]
-            )
-            axis.set_title(
-                f"{config['label']}\n{title_text} {config['unit']}",
-                fontsize=8 if is_component_axis else 9,
-                fontweight="bold",
-                color="white",
-                pad=8,
-            )
-            if config["ylim"] is not None:
-                axis.set_ylim(*cast(tuple[float, float], config["ylim"]))
-            elif config.get("robust_error_ylim", False):
-                combined_metric_values: np.ndarray = np.concatenate(
-                    [metric_values for _, metric_values in models_with_data]
-                )
-                axis.set_ylim(*_get_robust_error_metric_ylim(combined_metric_values))
-            axis.set_xticks([])
-            axis.tick_params(
-                axis="y", labelsize=7 if is_component_axis else 8, colors="white"
-            )
-            axis.set_xlabel("")
-            for spine in axis.spines.values():
-                spine.set_edgecolor("0.4")
-            axis.spines["top"].set_visible(False)
-            axis.spines["right"].set_visible(False)
-            axis.spines["bottom"].set_visible(False)
-            axis.yaxis.label.set_color("white")
-            axis.grid(axis="y", color="0.25", linewidth=0.5)
-
-        legend_handles: list[Line2D] = [
-            Line2D([0], [0], color=color, linewidth=5, label=name)
-            for name, color in model_colors.items()
-            if name == "GEB" or name in external_colors
-        ]
-        if legend_handles:
-            legend = fig.legend(
-                handles=legend_handles,
-                loc="lower center",
-                ncol=len(legend_handles),
-                fontsize=9,
-                frameon=True,
-                framealpha=1.0,
-                edgecolor="0.4",
-                bbox_to_anchor=(0.5, 0.03),
-            )
-            legend.get_frame().set_facecolor("black")
-            for text in legend.get_texts():
-                text.set_color("white")
-
-        _add_filter_summary(fig, filter_summary)
-        fig.subplots_adjust(left=0.055, right=0.985, top=0.85, bottom=0.22)
-
-        if export:
-            suffix: str = output_name_suffix or (
-                "_external_only"
-                if not include_geb
-                else "_matched"
-                if matched_only and external_models
-                else ""
-            )
-            for extension in ("svg", "png"):
-                output_path: Path = (
-                    output_folder / f"evaluation_skill_scores{suffix}.{extension}"
-                )
-                plt.savefig(output_path, bbox_inches="tight", dpi=150)
-                logger.info("Skill score plot saved to: %s", output_path)
-
-        plt.show()
-        plt.close()
+    plt.show()
+    plt.close()
 
     logger.info("Skill score plots created.")
 
@@ -811,8 +796,6 @@ def plot_skill_scores_vs_upstream_area(
         figsize=(2.6 * len(_DISPLAYED_SKILL_SCORE_CONFIGS), 4.2),
         sharex=True,
     )
-    fig.patch.set_facecolor("black")
-
     has_values: bool = False
     for axis, cfg in zip(
         np.atleast_1d(axes).ravel(),
@@ -843,10 +826,9 @@ def plot_skill_scores_vs_upstream_area(
             upstream_area_km2[valid_mask],
             metric_values[valid_mask],
             s=14,
-            alpha=0.45,
+            alpha=0.55,
             color=str(cfg["color"]),
-            edgecolors="white",
-            linewidths=0.15,
+            edgecolors="none",
         )
         _plot_metric_trendline(
             axis=axis,
@@ -857,9 +839,7 @@ def plot_skill_scores_vs_upstream_area(
         )
         axis.set_xscale("log")
         axis.set_ylim(*y_limits)
-        axis.set_facecolor("black")
-        axis.grid(True, color="0.25", linewidth=0.5)
-        axis.tick_params(colors="white")
+        axis.grid(True, color="0.85", linewidth=0.5)
         axis.set_title(str(cfg["label"]), color=str(cfg["color"]), fontweight="bold")
         axis.set_ylabel("Error" if use_error_limits else "Score (-)")
         axis.text(
@@ -869,11 +849,11 @@ def plot_skill_scores_vs_upstream_area(
             transform=axis.transAxes,
             ha="right",
             va="bottom",
-            color="0.75",
+            color="0.45",
             fontsize=8,
         )
         for spine in axis.spines.values():
-            spine.set_edgecolor("white")
+            spine.set_edgecolor("0.7")
 
     if not has_values:
         logger.warning("No valid skill scores found for upstream-area scatterplot.")
@@ -882,7 +862,6 @@ def plot_skill_scores_vs_upstream_area(
 
     fig.suptitle(
         "Discharge Skill Scores vs Upstream Area",
-        color="white",
         fontweight="bold",
         fontsize=14,
     )
@@ -895,7 +874,7 @@ def plot_skill_scores_vs_upstream_area(
         "Each panel uses robust y-limits; trendlines are linear fits vs log10(upstream area) after excluding clipped outliers.",
         ha="right",
         va="bottom",
-        color="0.7",
+        color="0.45",
         fontsize=8,
     )
 
