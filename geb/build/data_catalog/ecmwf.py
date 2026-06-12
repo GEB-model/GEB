@@ -86,6 +86,19 @@ def generate_forecast_steps(forecast_date: datetime) -> str:
     return "/".join(str(step) for step in steps)  # return step string for MARS request
 
 
+def make_hdates_for_cycle_date(
+    forecast_cycle_date: pd.Timestamp, n_hindcast_years: int
+) -> str:
+    forecast_cycle_date = pd.to_datetime(
+        forecast_cycle_date
+    )  # Ensure input is a Timestamp
+    start_year = forecast_cycle_date.year - n_hindcast_years
+    return "/".join(
+        f"{year}-{forecast_cycle_date.month:02d}-{forecast_cycle_date.day:02d}"
+        for year in range(start_year, forecast_cycle_date.year)
+    )
+
+
 class ECMWFForecasts(Adapter):
     """Data adapter for obtaining ECMWF forecast data from MARS Archive."""
 
@@ -100,6 +113,9 @@ class ECMWFForecasts(Adapter):
         bounds: tuple[float, float, float, float],
         forecast_start: date | datetime,
         forecast_end: date | datetime,
+        hindcast_cycle_start_date: date | datetime,
+        hindcast_cycle_end_date: date | datetime,
+        n_hindcast_years: int,
         forecast_model: str,
         forecast_resolution: str,
         forecast_horizon: int,
@@ -170,10 +186,29 @@ class ECMWFForecasts(Adapter):
         )
         bounds_str: str = f"{bounds[3]}/{bounds[0]}/{bounds[1]}/{bounds[2]}"  # setup bounds -- > bounds should be in North/West/South/East format for MARS
 
-        forecast_date_list = pd.date_range(
-            forecast_start, forecast_end, freq="24H"
-        )  # Generate list of forecast dates at 24-hour intervals
         earliest_allowed_date = date(2010, 1, 1)  # Set earliest allowed forecast date
+
+        if (
+            forecast_product == "hindcast"
+        ):  # If downloading hindcast data, check if the forecast start date is less then 20 years apart from the forecast cycle date, otherwise there will be no data available
+            assert n_hindcast_years <= 20, (
+                "ECMWF hindcast data is only available for up to 20 years before the forecast cycle date. Please adjust the n_hindcast_years parameter in your build.yml file to be 20 or less."
+            )
+
+            HINDCAST_RUN_DAYS = [1, 5, 9, 13, 17, 21, 25, 29]
+            forecast_date_list = [
+                d
+                for d in pd.date_range(
+                    hindcast_cycle_start_date, hindcast_cycle_end_date, freq="24H"
+                )
+                if d.day in HINDCAST_RUN_DAYS
+            ]
+
+        else:
+            forecast_date_list = pd.date_range(
+                forecast_start, forecast_end, freq="24H"
+            )  # Generate list of forecast dates at 24-hour intervals
+
         for forecast_date in forecast_date_list:  # Loop through all forecast dates
             if (
                 forecast_date.date() < earliest_allowed_date
@@ -226,9 +261,10 @@ class ECMWFForecasts(Adapter):
                     )
 
                 if forecast_product == "hindcast":
-                    mars_stream = "enfh"  # Ensemble hindcast stream
+                    mars_stream: str = "enfh"  # Ensemble hindcast stream
                 else:
                     mars_stream: str = "enfo"  # Ensemble forecast stream
+
                 mars_time: str = forecast_date.strftime(
                     "%H"
                 )  # Extract hour from forecast date for initialization time
@@ -242,23 +278,44 @@ class ECMWFForecasts(Adapter):
                     bounds_str  # Set bounding box area in North/West/South/East format
                 )
 
-                # retrieve steps from mars
-                mars_request: dict[
-                    str, Any
-                ] = {  # Build MARS request dictionary with all parameters
-                    "class": mars_class,
-                    "hdate": forecast_date.strftime("%Y-%m-%d"),
-                    "date": "2025-01-01",
-                    "expver": mars_expver,
-                    "levtype": mars_levtype,
-                    "param": mars_param,
-                    "step": mars_step,
-                    "stream": mars_stream,
-                    "time": mars_time,
-                    "type": mars_type,
-                    "grid": mars_grid,
-                    "area": mars_area,
-                }
+                if forecast_product == "forecast":
+                    # retrieve steps from mars
+                    mars_request: dict[
+                        str, Any
+                    ] = {  # Build MARS request dictionary with all parameters
+                        "class": mars_class,
+                        "date": forecast_date.strftime("%Y-%m-%d"),
+                        "expver": mars_expver,
+                        "levtype": mars_levtype,
+                        "param": mars_param,
+                        "step": mars_step,
+                        "stream": mars_stream,
+                        "time": mars_time,
+                        "type": mars_type,
+                        "grid": mars_grid,
+                        "area": mars_area,
+                    }
+                elif forecast_product == "hindcast":
+                    # retrieve steps from mars
+                    mars_request: dict[
+                        str, Any
+                    ] = {  # Build MARS request dictionary with all parameters
+                        "class": mars_class,
+                        "hdate": make_hdates_for_cycle_date(
+                            forecast_cycle_date=forecast_date.strftime("%Y-%m-%d"),
+                            n_hindcast_years=n_hindcast_years,
+                        ),
+                        "date": forecast_date.strftime("%Y-%m-%d"),
+                        "expver": mars_expver,
+                        "levtype": mars_levtype,
+                        "param": mars_param,
+                        "step": mars_step,
+                        "stream": mars_stream,
+                        "time": mars_time,
+                        "type": mars_type,
+                        "grid": mars_grid,
+                        "area": mars_area,
+                    }
 
                 output_filename = format_path(
                     self.path,

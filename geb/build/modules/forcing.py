@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta
 from functools import partial
 from io import BytesIO
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, AnyStr
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -1353,46 +1353,48 @@ class Forcing:
     @build_method(depends_on=["set_ssp", "set_time_range"])
     def setup_forecasts(
         self,
+        forecast_product: str,  # "forecast" or "hindcast"
         forecast_start: date | datetime,
         forecast_end: date | datetime,
+        hindcast_cycle_start_date: date | datetime,
+        hindcast_cycle_end_date: date | datetime,
+        n_hindcast_years: int,
         forecast_provider: str,
         forecast_model: str,
         forecast_resolution: float,
         forecast_horizon: int,
         forecast_timestep_hours: int,
         n_ensemble_members: int,
-        forecast_product: str = "hindcast",  # "forecast" or "hindcast"
     ) -> None:
         if forecast_provider == "ECMWF":
             self.setup_forecasts_ECMWF(
+                forecast_product,
                 forecast_start,
                 forecast_end,
+                hindcast_cycle_start_date,
+                hindcast_cycle_end_date,
+                n_hindcast_years,
                 forecast_model,
                 forecast_resolution,
                 forecast_horizon,
                 forecast_timestep_hours,
                 n_ensemble_members,
-                forecast_product,
             )
 
     def setup_forecasts_ECMWF(
         self,
+        forecast_product: AnyStr,  # "forecast" or "hindcast"
         forecast_start: date | datetime,
         forecast_end: date | datetime,
+        hindcast_cycle_start_date: date | datetime,
+        hindcast_cycle_end_date: date | datetime,
+        n_hindcast_years: int,
         forecast_model: str,
         forecast_resolution: float,
         forecast_horizon: int,
         forecast_timestep_hours: int,
-        n_ensemble_members: int = 50,
-        forecast_product: str = "hindcast",  # "forecast" or "hindcast"
+        n_ensemble_members: int,
     ) -> None:
-        """Sets up ECMWF forecast or hindcast data.
-
-        For medium-range ECMWF hindcasts:
-        - stream should be "enfh"
-        - horizon is usually up to 15 days = 360 hours
-        - hindcasts use hdate in the MARS request
-        """
         MARS_codes: dict[str, float] = {
             "tp": 228.128,
             "t2m": 167.128,
@@ -1410,19 +1412,10 @@ class Forcing:
             )
 
         if forecast_product == "hindcast":
-            mars_stream = "enfh"
-            forecast_horizon = min(forecast_horizon, 360)
-
-            # ECMWF medium-range forecasts are issued at 00 and 12 UTC.
-            # Hindcasts should be requested for matching issue dates/times.
-            forecast_issue_dates = pd.date_range(
-                start=forecast_start,
-                end=forecast_end,
-                freq="12H",
+            assert n_hindcast_years <= 20, (
+                f"ECMWF hindcast data is only available for up to 20 years before the forecast cycle date. Please adjust the n_hindcast_years parameter in build.yml (currently {n_hindcast_years})."
             )
-
-            base_folder = "hindcasts"
-
+            mars_stream = "enfh"
         else:
             mars_stream = None
 
@@ -1449,9 +1442,10 @@ class Forcing:
             forecast_horizon=forecast_horizon,
             forecast_timestep_hours=forecast_timestep_hours,
             n_ensemble_members=n_ensemble_members,
-            # New arguments that your ECMWF catalog adapter should use
             forecast_product=forecast_product,
-            mars_stream=mars_stream,
+            hindcast_cycle_start_date=hindcast_cycle_start_date,
+            hindcast_cycle_end_date=hindcast_cycle_end_date,
+            n_hindcast_years=n_hindcast_years,
         )
 
         for forecast_issue_date in forecast_issue_dates:
@@ -1470,20 +1464,25 @@ class Forcing:
                 forecast_timestep_hours=forecast_timestep_hours,
                 n_ensemble_members=n_ensemble_members,
                 reproject_like=self.other["climate/pr_kg_per_m2_per_s"],
-                # New arguments for hindcast retrieval
                 forecast_product=forecast_product,
-                mars_stream=mars_stream,
+                hindcast_cycle_start_date=hindcast_cycle_start_date,
+                hindcast_cycle_end_date=hindcast_cycle_end_date,
+                n_hindcast_years=n_hindcast_years,
             )
 
-            if forecast_model == "both_control_and_probabilistic":
-                base_name = (
-                    f"{base_folder}/ECMWF/merged_control_ensemble/"
-                    f"{forecast_issue_date_str}"
-                )
+            if forecast_product == "hindcast":
+                if forecast_model == "both_control_and_probabilistic":
+                    base_name = (
+                        f"{base_folder}/ECMWF/{forecast_product}/merged_control_ensemble/"
+                        f"{forecast_issue_date_str}"
+                    )
+                else:
+                    base_name = f"{base_folder}/ECMWF/{forecast_product}/{forecast_model}/{forecast_issue_date_str}"
             else:
-                base_name = (
-                    f"{base_folder}/ECMWF/{forecast_model}/{forecast_issue_date_str}"
-                )
+                if forecast_model == "both_control_and_probabilistic":
+                    base_name = f"{base_folder}/ECMWF/merged_control_ensemble/{forecast_issue_date_str}"
+                else:
+                    base_name = f"{base_folder}/ECMWF/{forecast_model}/{forecast_issue_date_str}"
 
             pr = ECMWF_forecast["tp"].rename("precipitation")
             pr = pr.where(pr >= 0, 0)
