@@ -272,7 +272,7 @@ class SFINCSRootModel:
             self.logger.info(
                 "Overwrite is False and model exists, reading existing model..."
             )
-            return self.read()
+            return self
 
         if not isinstance(grid_size_multiplier, int) or grid_size_multiplier <= 0:
             raise ValueError("grid_size_multiplier must be a positive integer")
