@@ -5,13 +5,9 @@ comparing ECMWF ensemble forecasts against ERA5 reanalysis data for precipitatio
 Supports both intensity and cumulative precipitation plotting.
 """
 
-from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import contextily as ctx
-import geopandas as gpd
-import matplotlib.colors as mcolors
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
@@ -35,53 +31,32 @@ class MeteorologicalForecasts:
         self.evaluator = evaluator
 
     def evaluate_forecasts(
-        self,
-        spinup_name: str = "spinup",
-        run_name: str = "default",
-        include_spinup: bool = False,
-        include_yearly_plots: bool = False,
-        correct_Q_obs: bool = False,
-        lead_times: list[int] | None = [1, 2, 5, 7],
-        *args: Any,
-        **kwargs: Any,
+        self, model: Any, output_folder: Path, *args: Any, **kwargs: Any
     ) -> None:
         """Evaluate meteorological forecasts by comparing different forecast types at different initialisation times (00:00 (not yet vs 12:00) UTC).
 
         It compares ERA5 reanalysis data against forecast types such as ensemble forecasts and deterministic forecasts.
 
         Args:
-            spinup_name: Name of the spinup run (not used for meteorological evaluation).
-            run_name: Name of the simulation run (not used for meteorological evaluation).
-            include_spinup: Whether to include spinup run (not used for meteorological evaluation).
-            include_yearly_plots: Whether to create yearly plots (not used for meteorological evaluation).
-            correct_Q_obs: Whether to correct Q_obs data (not used for meteorological evaluation).
-            lead_times: List of lead times in days to plot. If None, all available forecasts are plotted.
+            model: The forecast model to evaluate.
+            output_folder: The folder to save evaluation outputs.
             *args: Additional positional arguments.
             **kwargs: Additional keyword arguments.
 
         Raises:
             ValueError: If the forecast model path does not exist.
         """
-        print("Evaluating meteorological forecasts...")
         # Create forecast output folder within the evaluate folder
-        # forecast_folder: Path = self.output_folder_evaluate / "forecasts"
-        forecast_folder: Path = self.evaluator.output_folder_evaluate / "forecasts"
+        forecast_folder: Path = output_folder / "forecasts"
         forecast_folder.mkdir(parents=True, exist_ok=True)
-
-        processing_forecasts = (
-            self.model.config.get("general", {})
-            .get("forecasts", {})
-            .get("processing", [])
-        )
 
         # Base path for forecast data
         forecast_base_path: Path = (
-            # self.model.input_folder / "other" / "forecasts" / "ECMWF"
-            self.model.input_folder
+            model.input_folder
             / "other"
             / "forecasts"
             / "ECMWF"
-            / processing_forecasts  # or self.config["general"]["forecasts"]["processing"]
+            / "merged_control_ensemble"
         )
 
         if not forecast_base_path.exists():
@@ -89,24 +64,8 @@ class MeteorologicalForecasts:
                 f"Forecast model path does not exist: {forecast_base_path}"
             )
 
-        # Extract event datetime from model configuration
-        flood_events = (
-            self.model.config.get("hazards", {}).get("floods", {}).get("events", [])
-        )
-        moment_of_flooding: pd.Timestamp | None = None
-
-        # Check for optional moment_of_flooding setting
-        if flood_events and "moment_of_flooding" in flood_events[0]:
-            moment_of_flooding = pd.to_datetime(
-                str(flood_events[0]["moment_of_flooding"])
-            )
-
         def evaluate_precipitation_forecasts(
-            plot_type: str = "intensity",
-            moment_of_flooding: pd.Timestamp | None = None,
-            lead_times: list[int] | None = None,
-            *args: Any,
-            **kwargs: Any,
+            plot_type: str = "intensity", *args: Any, **kwargs: Any
         ) -> None:
             """Evaluate precipitation forecasts by plotting rainfall data over time for different forecast initialisations.
 
@@ -115,8 +74,6 @@ class MeteorologicalForecasts:
 
             Args:
                 plot_type: Type of plot to generate. Either "intensity" for mm/h or "cumulative" for mm.
-                moment_of_flooding: Optional moment when flooding actually occurred. If None, no flooding line is shown.
-                lead_times: List of lead times in days to plot. If None, all available forecasts are plotted.
                 *args: Additional positional arguments.
                 **kwargs: Additional keyword arguments.
 
@@ -130,10 +87,7 @@ class MeteorologicalForecasts:
                 )
 
             def load_forecast_data(
-                init_folder: Path,
-                plot_type: str = "intensity",
-                spatial_aggregation: str = "mean",
-                moment_of_flooding: pd.Timestamp | None = None,
+                init_folder: Path, plot_type: str = "intensity"
             ) -> tuple[
                 xarray.DataArray, xarray.DataArray, np.ndarray, xarray.DataArray
             ]:
@@ -145,7 +99,6 @@ class MeteorologicalForecasts:
                 Args:
                     init_folder: Path to forecast initialisation folder containing zarr files.
                     plot_type: If "cumulative", calculate cumulative precipitation. If "intensity", use intensity.
-                    moment_of_flooding: Optional moment when flooding actually occurred for debug plotting.
 
                 Returns:
                     Tuple containing ERA5 clipped data, control forecast, control time coordinates,
@@ -154,33 +107,23 @@ class MeteorologicalForecasts:
                 Raises:
                     FileNotFoundError: If no precipitation zarr file found in init_folder.
                 """
-                # If init_folder is already a .zarr store, use it directly
-                if init_folder.suffix == ".zarr":
-                    pr_file = init_folder
-                else:
-                    zarr_files: list[Path] = list(init_folder.glob("*.zarr"))
+                zarr_files: list[Path] = list(init_folder.glob("*.zarr"))
 
-                    # Look for files containing 'pr' (precipitation)
-                    pr_files: list[Path] = [
-                        f for f in zarr_files if "pr" in f.name.lower()
-                    ]
+                # Look for files containing 'pr' (precipitation)
+                pr_files: list[Path] = [f for f in zarr_files if "pr" in f.name.lower()]
 
-                    if not pr_files:
-                        raise FileNotFoundError(
-                            f"No precipitation zarr file found in {init_folder}"
-                        )
+                if not pr_files:
+                    raise FileNotFoundError(
+                        f"No precipitation zarr file found in {init_folder}"
+                    )
 
-                    if len(pr_files) > 1:
-                        print(
-                            f"Warning: Multiple precipitation files found in {init_folder}, using first: {pr_files[0]}"
-                        )
-                    pr_file = pr_files[0]
+                if len(pr_files) > 1:
+                    print(
+                        f"Warning: Multiple precipitation files found in {init_folder}, using first: {pr_files[0]}"
+                    )
 
                 era5_path = (
-                    self.model.input_folder
-                    / "other"
-                    / "climate"
-                    / "pr_kg_per_m2_per_s.zarr"
+                    model.input_folder / "other" / "climate" / "pr_kg_per_m2_per_s.zarr"
                 )
 
                 # ERA5
@@ -188,133 +131,38 @@ class MeteorologicalForecasts:
                 era5_mm_per_h: xarray.DataArray = (
                     era5_ds * 3600
                 )  # Convert from m/s to mm/h
+                era5_max_mm_per_h: xarray.DataArray = era5_mm_per_h.max(dim=["y", "x"])
 
                 # Load ensemble data (including control)
-                ens_ds = read_zarr(pr_file)
+                ens_ds = read_zarr(init_folder / pr_files[0].name)
                 ens_time = ens_ds["time"].values
                 ens_mm_per_h: xarray.DataArray = (
                     ens_ds * 3600
                 )  # Convert from m/s to mm/h
-
-                if spatial_aggregation == "max":
-                    era5_spatial: xarray.DataArray = era5_mm_per_h.max(dim=["y", "x"])
-                    ens_spatial: xarray.DataArray = ens_mm_per_h.max(dim=["y", "x"])
-                else:  # mean
-                    era5_spatial = era5_mm_per_h.mean(dim=["y", "x"])
-                    ens_spatial = ens_mm_per_h.mean(dim=["y", "x"])
+                ens_max_mm_per_h: xarray.DataArray = ens_mm_per_h.max(dim=["y", "x"])
 
                 # ERA5 clip on time range control
-                era5_clipped = era5_spatial.sel(time=slice(ens_time[0], ens_time[-1]))
+                era5_clipped = era5_max_mm_per_h.sel(
+                    time=slice(ens_time[0], ens_time[-1])
+                )
 
                 # Apply cumulative sum if requested
                 if plot_type == "cumulative":
-                    # For cumulative: ensure both ERA5 and ensemble start from 0 at forecast start time
-                    # First clip ERA5 to ensemble time range
-                    era5_clipped_spatial = era5_mm_per_h.sel(
-                        time=slice(ens_time[0], ens_time[-1])
+                    era5_processed: xarray.DataArray = era5_clipped.cumsum(dim="time")
+                    ens_processed: xarray.DataArray = ens_max_mm_per_h.cumsum(
+                        dim="time"
                     )
-
-                    # Calculate spatial maximum first, then cumulative sum (consistent with other processing)
-                    era5_cumulative = era5_clipped_spatial.cumsum(dim="time")
-                    era5_clipped_max = era5_cumulative.max(dim=["y", "x"])
-
-                    # Reset to start from 0 by subtracting initial values
-                    era5_initial = era5_clipped_max.isel(time=0)
-                    era5_processed = era5_clipped_max - era5_initial
-
-                    # For ensemble data: spatial max first, then cumulative sum, then reset
-                    ens_cumulative = ens_mm_per_h.cumsum(dim="time")
-                    ens_cumulative_max = ens_cumulative.max(dim=["y", "x"])
-                    # Reset ensemble to start from 0 as well (same as ERA5)
-                    ens_initial = ens_cumulative_max.isel(time=0)
-                    ens_processed: xarray.DataArray = ens_cumulative_max - ens_initial
                 else:
                     era5_processed: xarray.DataArray = era5_clipped
-                    ens_processed: xarray.DataArray = ens_spatial
+                    ens_processed: xarray.DataArray = ens_max_mm_per_h
 
                 # Control is member 0
-                # control_processed: xarray.DataArray = ens_processed.isel(member=0)
+                control_processed: xarray.DataArray = ens_processed.isel(member=0)
 
                 # Ensemble data (all members)
-                ensemble_processed: xarray.DataArray = ens_processed
-                # ensemble_processed: xarray.DataArray = ens_processed.isel(
-                #     member=slice(1, None)
-                # )
-
-                # Create debug line plot for ERA5 data over time
-                init_time_str = init_folder.name  # e.g., '20240429T000000'
-                try:
-                    # Parse initialization time for readable filename
-                    init_datetime = pd.to_datetime(
-                        init_time_str, format="%Y%m%dT%H%M%S"
-                    )
-                    readable_time = init_datetime.strftime("%Y%m%d_%H%M")
-                except (ValueError, TypeError):
-                    # Fallback if time parsing fails
-                    readable_time = init_time_str
-
-                # Create debug plot
-                fig_debug, ax_debug = plt.subplots(figsize=(12, 6))
-
-                # Plot ERA5 data over time
-                time_values = (
-                    pd.to_datetime(ens_time)
-                    if hasattr(ens_time[0], "astype")
-                    else ens_time
+                ensemble_processed: xarray.DataArray = ens_processed.isel(
+                    member=slice(1, None)
                 )
-                ax_debug.plot(
-                    time_values,
-                    era5_processed.values,
-                    color="black",
-                    linewidth=2,
-                    marker="o",
-                    markersize=4,
-                    label="ERA5 Max Precipitation",
-                )
-
-                # Add moment of flooding line if available
-                if moment_of_flooding is not None:
-                    ax_debug.axvline(
-                        moment_of_flooding,
-                        color="red",
-                        linestyle="--",
-                        linewidth=2,
-                        alpha=0.8,
-                        label="Moment of Flooding",
-                    )
-
-                # Format the plot
-                ax_debug.set_title(
-                    f"ERA5 Debug Plot - {plot_type.title()} Precipitation\n"
-                    f"Init: {readable_time}",
-                    fontsize=14,
-                    fontweight="bold",
-                )
-                ax_debug.set_xlabel("Time", fontsize=12)
-
-                if plot_type == "cumulative":
-                    ax_debug.set_ylabel("Cumulative Precipitation (mm)", fontsize=12)
-                else:
-                    ax_debug.set_ylabel("Precipitation Intensity (mm/h)", fontsize=12)
-
-                ax_debug.grid(True, alpha=0.3)
-                ax_debug.legend()
-
-                # Format x-axis with daily major ticks and hourly minor ticks
-                ax_debug.xaxis.set_major_locator(mdates.DayLocator())
-                ax_debug.xaxis.set_major_formatter(mdates.DateFormatter("%d-%m"))
-                ax_debug.xaxis.set_minor_locator(mdates.HourLocator(interval=6))
-                ax_debug.xaxis.set_minor_formatter(mdates.DateFormatter("%H:%M"))
-                ax_debug.tick_params(axis="x", rotation=45)
-
-                # Save debug plot
-                debug_filename = f"era5_debug_{plot_type}_{readable_time}.png"
-                debug_path = forecast_folder / debug_filename
-                plt.tight_layout()
-                plt.savefig(debug_path, dpi=300, bbox_inches="tight")
-                plt.close(fig_debug)
-
-                print(f"Debug plot saved: {debug_path}")
 
                 return era5_processed, control_processed, ens_time, ensemble_processed
 
@@ -325,26 +173,19 @@ class MeteorologicalForecasts:
                 """Format the time axis for the plots."""
                 ax.set_xlim(x_ticks[0], x_ticks[-1])
                 ax.set_xticks(x_ticks)
-                ax.xaxis.set_major_formatter(mdates.DateFormatter("%d-%m-%Y"))
-                ax.tick_params(axis="x", rotation=45, labelsize=20)
-                ax.tick_params(axis="y", labelsize=20)
-                # Align text so right edge aligns with tick mark (not center)
-                for label in ax.get_xticklabels():
-                    label.set_horizontalalignment("right")
+                ax.xaxis.set_major_formatter(mdates.DateFormatter("%d-%m %H:%M"))
+                ax.tick_params(axis="x", rotation=45)
                 ax.grid(True)
 
             def plot_rainfall_data(
                 ax: plt.Axes,
                 era5_data: xarray.DataArray,
+                control_data: xarray.DataArray,
                 ensemble_data: xarray.DataArray,
                 control_time: np.ndarray,
                 init_time_str: str,
-                ensemble_spread: bool = False,
-                plot_type: str = "cumulative",
+                plot_type: str = "intensity",
                 show_legend: bool = False,
-                moment_of_flooding: pd.Timestamp | None = None,
-                spatial_ax: plt.Axes | None = None,
-                spatial_data: dict | None = None,
                 x_start: pd.Timestamp = pd.Timestamp("2024-04-26 00:00"),  # ty:ignore[invalid-parameter-default]
                 x_end: pd.Timestamp = pd.Timestamp("2024-05-16 00:00"),  # ty:ignore[invalid-parameter-default]
             ) -> None:
@@ -357,26 +198,16 @@ class MeteorologicalForecasts:
                     ensemble_data: Ensemble forecast precipitation data (mm/h for intensity, mm for cumulative).
                     control_time: Time array for the forecast data (e.g. timesteps corresponding to the data).
                     init_time_str: Initialization time identifier string (e.g., '20240429T000000').
-                    moment_of_flooding: Optional moment when flooding actually occurred. If None, no flooding line is shown.
                     plot_type: If "cumulative", format for cumulative data. If "intensity", format for intensity.
                     show_legend: Whether to show the legend on this subplot.
                     x_start: Start time for x-axis.
                     x_end: End time for x-axis.
-                    spatial_ax: Optional matplotlib axes object for spatial plot.
-                    spatial_data: Optional dictionary with spatial data for plotting.
                 """
                 # Parse initialization time string to readable format
                 init_datetime: pd.Timestamp = pd.to_datetime(
                     init_time_str, format="%Y%m%dT%H%M%S"
                 )
                 init_time_readable: str = init_datetime.strftime("%d %B %Y, %H:%M UTC")
-
-                # Calculate lead time in days if moment of flooding is available
-                if moment_of_flooding is not None:
-                    lead_time_days: float = (
-                        moment_of_flooding - init_datetime
-                    ).total_seconds() / (24 * 3600)
-
                 # Plot ERA5 and control
                 ax.plot(
                     control_time,
@@ -386,68 +217,52 @@ class MeteorologicalForecasts:
                     linewidth=2,
                     alpha=0.8,
                 )
-                # ax.plot(
-                #     control_time,
-                #     control_data,
-                #     color="green",
-                #     label="Control",
-                #     linewidth=2,
-                #     alpha=0.8,
-                # )
+                ax.plot(
+                    control_time,
+                    control_data,
+                    color="green",
+                    label="Control",
+                    linewidth=2,
+                    alpha=0.8,
+                )
 
-                if ensemble_spread:
-                    # Calculate min and max across all ensemble members for each time step
-                    ensemble_min: xarray.DataArray = ensemble_data.min(dim="member")
-                    ensemble_max: xarray.DataArray = ensemble_data.max(dim="member")
+                # Calculate min and max across all ensemble members for each time step
+                ensemble_min: xarray.DataArray = ensemble_data.min(dim="member")
+                ensemble_max: xarray.DataArray = ensemble_data.max(dim="member")
 
-                    # Plot ensemble spread as filled area between min and max
-                    ax.fill_between(
-                        control_time,
-                        ensemble_min,
-                        ensemble_max,
-                        color="blue",
-                        alpha=0.2,
-                        label="Ensemble spread of all the members",
-                    )
-                else:
-                    # Plot each ensemble member as a thin line
-                    for member in range(ensemble_data.sizes["member"]):
-                        ax.plot(
-                            control_time,
-                            ensemble_data.isel(member=member),
-                            color="blue",
-                            alpha=0.3,
-                            linewidth=0.5,
-                            label="Ensemble members" if member == 0 else None,
-                        )
+                # Plot ensemble spread as filled area between min and max
+                ax.fill_between(
+                    control_time,
+                    ensemble_min,
+                    ensemble_max,
+                    color="blue",
+                    alpha=0.2,
+                    label="Ensemble spread of all the members",
+                )
 
                 # Add moment of flooding line
-                moment_of_inundation: pd.Timestamp = pd.Timestamp(
-                    "2021-07-14T22:00:00.000000000"
+                moment_of_inundation: pd.Timestamp = pd.Timestamp(  # ty:ignore[invalid-assignment]
+                    "2024-05-06T00:00:00.000000000"
                 )
                 ax.axvline(
                     moment_of_inundation,  # ty:ignore[invalid-argument-type]
                     color="red",
                     linestyle="--",
                     linewidth=2,
-                    label="Flood event",
+                    label="Moment of Flooding Guaíba Lake",
                 )
 
                 # Set title and formatting
                 ax.set_title(
-                    f"Initialisation date: {init_time_readable} (Lead time: $\\mathbf{{{lead_time_days:.1f}}}$ days)",
-                    fontsize=20,
+                    f"Forecast Initialization: {init_time_readable}", fontsize=18
                 )
 
                 if plot_type == "cumulative":
                     ax.set_yticks(
-                        range(0, 200, 50)
+                        range(0, 1501, 250)
                     )  # Adjusted for cumulative mm values
-                    ax.set_ylim(
-                        0, 200
-                    )  # Adjust y-axis limit for cumulative precipitation
                 else:
-                    ax.set_yticks(range(0, 25, 5))  # For intensity mm/h values
+                    ax.set_yticks(range(0, 47, 5))  # For intensity mm/h values
 
                 x_ticks: pd.DatetimeIndex = pd.date_range(
                     start=x_start, end=x_end, freq="12h"
@@ -455,197 +270,41 @@ class MeteorologicalForecasts:
                 format_time_axis(ax, x_ticks)
 
                 if show_legend:
-                    ax.legend(fontsize=20, loc="upper left", bbox_to_anchor=(1.02, 1))
-
-                # Create spatial plot if requested and data is provided
-                if (
-                    spatial_ax is not None
-                    and spatial_data is not None
-                    and plot_type == "cumulative"
-                ):
-                    # Load region boundary for spatial plot
-                    region = gpd.read_parquet(
-                        Path(self.model.input_folder / "geom" / "mask.geoparquet")
-                    )
-
-                    # Use ensemble cumulative data for spatial plot
-                    data_to_plot = spatial_data["control_cumulative"]
-
-                    # Calculate individual min/max for this spatial plot
-                    individual_values = data_to_plot.values.flatten()
-                    individual_values = individual_values[
-                        ~np.isnan(individual_values)
-                    ]  # Remove NaN
-                    individual_vmin = np.min(individual_values)
-                    individual_vmax = np.max(individual_values)
-
-                    # Create the spatial plot with individual scaling
-                    im = data_to_plot.plot(
-                        ax=spatial_ax,
-                        cmap="viridis",
-                        add_colorbar=False,
-                        alpha=0.45,
-                        zorder=1,
-                        vmin=individual_vmin,
-                        vmax=individual_vmax,
-                    )
-
-                    # Add region boundary
-                    region.boundary.plot(
-                        ax=spatial_ax, color="black", linestyle="-", linewidth=2
-                    )
-                    target_crs = region.crs
-                    ctx.add_basemap(
-                        spatial_ax,
-                        crs=target_crs,
-                        source="OpenStreetMap.Mapnik",
-                        zoom=12,
-                        zorder=0,
-                    )
-
-                    # Format the spatial plot
-                    init_datetime = pd.to_datetime(
-                        init_time_str, format="%Y%m%dT%H%M%S"
-                    )
-                    init_readable = init_datetime.strftime("%d %B %Y, %H:%M")
-
-                    # Calculate lead time for spatial plot
-                    if moment_of_flooding is not None:
-                        spatial_lead_time_days: float = (
-                            moment_of_flooding - init_datetime
-                        ).total_seconds() / (24 * 3600)
-
-                    spatial_ax.set_title(
-                        f"Control Forecast Spatial Cumulative Rainfall\n{spatial_lead_time_days:.1f} day lead time\n(Initialized: {init_readable})",
-                        fontsize=20,
-                    )
-                    spatial_ax.set_xlabel("Longitude", fontsize=20)
-                    spatial_ax.tick_params(axis="x", labelsize=20, rotation=45)
-                    # Align x-tick labels to the right
-                    for label in spatial_ax.get_xticklabels():
-                        label.set_horizontalalignment("right")
-                    spatial_ax.set_ylabel("Latitude", fontsize=20)
-                    spatial_ax.tick_params(axis="y", labelsize=20)
-
-                    # Store the image data and individual min/max for later colorbar creation
-                    spatial_ax._colorbar_image = im
-                    spatial_ax._colorbar_vmin = individual_vmin
-                    spatial_ax._colorbar_vmax = individual_vmax
+                    ax.legend(fontsize=12, loc="upper right")
 
             # Main evaluation logic
-            forecast_initialisations: list[str] = sorted(
-                [item.name for item in forecast_base_path.iterdir() if item.is_dir()]
-            )
-            print(
-                f"Found forecast initialisations (chronologically ordered): {forecast_initialisations}"
-            )
-
-            # Filter forecast initialisations based on lead times if specified
-            if lead_times is not None and moment_of_flooding is not None:
-                filtered_initialisations: list[str] = []
-                for init_time_str in forecast_initialisations:
-                    try:
-                        # Parse initialization time
-                        init_datetime = pd.to_datetime(
-                            init_time_str, format="%Y%m%dT%H%M%S"
-                        )
-                        # Calculate lead time in days
-                        lead_time_days = (
-                            moment_of_flooding - init_datetime
-                        ).total_seconds() / (24 * 3600)
-                        # Round to nearest integer for comparison
-                        lead_time_rounded = round(lead_time_days)
-                        if lead_time_rounded in lead_times:
-                            filtered_initialisations.append(init_time_str)
-                    except (ValueError, TypeError):
-                        print(
-                            f"Warning: Could not parse initialization time '{init_time_str}', skipping."
-                        )
-                        continue
-
-                forecast_initialisations = filtered_initialisations
-                print(
-                    f"Filtered to {len(forecast_initialisations)} forecasts based on lead times {lead_times}: {forecast_initialisations}"
-                )
-            elif lead_times is not None and moment_of_flooding is None:
-                print(
-                    "Warning: lead_times specified but no moment_of_flooding found in config. Using all forecasts."
-                )
+            forecast_initialisations: list[str] = [
+                item.name for item in forecast_base_path.iterdir() if item.is_dir()
+            ]
+            print(f"Found forecast initialisations: {forecast_initialisations}")
 
             num_forecasts: int = len(forecast_initialisations)
 
-            # Calculate grid dimensions - for cumulative plots: 2 columns (timeline + ensemble spatial), for intensity: 2 columns
-            if plot_type == "cumulative":
-                num_cols: int = 2  # Timeline grid: 2 columns
-                timeline_rows: int = (
-                    num_forecasts + num_cols - 1
-                ) // num_cols  # Standard 2x2 grid for timelines
-                num_rows: int = timeline_rows + 1  # Add one extra row for spatial plots
-                fig_width = 32
-            else:
-                num_cols: int = 2  # Just timelines
-                num_rows: int = (
-                    num_forecasts + num_cols - 1
-                ) // num_cols  # Standard grid calculation
-                fig_width = 20
+            # Calculate grid dimensions - 2 columns, enough rows for all forecasts
+            num_cols: int = 2
+            num_rows: int = (
+                num_forecasts + num_cols - 1
+            ) // num_cols  # Ceiling division
 
-            # Create subplots
-            if plot_type == "cumulative":
-                # Create figure and subplots normally, then adjust spacing
-                fig, axes = plt.subplots(
-                    num_rows, num_cols, figsize=(fig_width, 6 * num_rows)
-                )
-                if num_rows == 1:
-                    axes = axes.reshape(1, -1)
-                elif num_cols == 1:
-                    axes = axes.reshape(-1, 1)
-            else:
-                fig, axes = plt.subplots(
-                    num_rows,
-                    num_cols,
-                    figsize=(fig_width, 4 * num_rows),
-                    sharex=True,
-                    sharey=True,
-                )
-
-            # Calculate global min/max for consistent colorbar scaling across spatial plots
-            if plot_type == "cumulative":
-                # Pre-calculate min/max values from all spatial data
-                all_spatial_values = []
-                for idx, init_time in enumerate(forecast_initialisations):
-                    if idx in [
-                        0,
-                        num_forecasts - 1,
-                    ]:  # Only for spatial plots (first and last)
-                        init_folder: Path = forecast_base_path / init_time
-                        zarr_files = list(init_folder.glob("*.zarr"))
-                        pr_files = [f for f in zarr_files if "pr" in f.name.lower()]
-                        if pr_files:
-                            ens_ds = read_zarr(init_folder / pr_files[0].name)
-                            ens_mm_per_h_spatial = ens_ds * 3600
-                            control_forecast = ens_mm_per_h_spatial.isel(member=0)
-                            control_cumulative = control_forecast.cumsum(
-                                dim="time"
-                            ).isel(time=-1)
-                            all_spatial_values.extend(
-                                control_cumulative.values.flatten()
-                            )
-
-                if all_spatial_values:
-                    all_spatial_values = np.array(all_spatial_values)
-                    all_spatial_values = all_spatial_values[
-                        ~np.isnan(all_spatial_values)
-                    ]  # Remove NaN
+            # Create subplots in 2-column grid
+            fig, axes = plt.subplots(
+                num_rows, num_cols, figsize=(20, 4 * num_rows), sharex=True, sharey=True
+            )
+            plt.rcParams.update(
+                {
+                    #'font.family': 'Times New Roman',
+                    "axes.titlesize": 14,
+                    "axes.labelsize": 12,
+                    "xtick.labelsize": 16,
+                    "ytick.labelsize": 16,
+                }
+            )
 
             # Handle single subplot case
             if num_forecasts == 1:
                 axes = np.array([axes])
 
-            for idx, init_folder in enumerate(forecast_initialisations):
-                init_time_str = init_folder.stem.split("_")[-1]
-                init_time = pd.to_datetime(
-                    init_time_str, format="%Y%m%dT%H%M%S"
-                )  # Validate format
+            for idx, init_time in enumerate(forecast_initialisations):
                 print(
                     f"Processing forecast initialisation: {init_time}"
                 )  # Log the iteration of forecasts
@@ -658,68 +317,28 @@ class MeteorologicalForecasts:
 
                 # Load data for this initialisation
                 era5_data, control_data, time_data, ensemble_data = load_forecast_data(
-                    init_folder,
-                    plot_type=plot_type,
-                    moment_of_flooding=moment_of_flooding,
+                    init_folder, plot_type=plot_type
                 )
 
-                # Load spatial data for cumulative plots
-                spatial_data = None
-                if plot_type == "cumulative":
-                    # Load full spatial data for ensemble cumulative plots
-                    zarr_files = list(init_folder.glob("*.zarr"))
-                    pr_files = [f for f in zarr_files if "pr" in f.name.lower()]
-
-                    if pr_files:
-                        # Ensemble spatial data
-                        ens_ds = read_zarr(init_folder / pr_files[0].name)
-                        ens_mm_per_h_spatial = ens_ds * 3600  # Convert to mm/h
-
-                        # Calculate spatial cumulative rainfall (excluding control member 0)
-                        control_forecast = ens_mm_per_h_spatial.isel(member=0)
-                        # Cumulative over time per gridcel, then final timestep, then max over members
-                        control_cumulative = control_forecast.cumsum(dim="time").isel(
-                            time=-1
-                        )
-
-                        spatial_data = {"control_cumulative": control_cumulative}
-
-                if plot_type == "cumulative":
-                    # For cumulative: 2x2 grid for timeline plots, spatial plots in extra row
-                    row_idx = idx // 2
-                    col_idx = idx % 2
-                    timeline_ax = axes[row_idx, col_idx]
-                    ensemble_spatial_ax = None
-                    show_legend_flag = (
-                        row_idx == 0 and col_idx == 1
-                    )  # Top-right subplot
-
-                    # Spatial plots only for first and last forecast (in bottom row)
-                    if idx == 0:  # First forecast
-                        ensemble_spatial_ax = axes[-1, 0]  # Bottom left
-                    elif idx == num_forecasts - 1:  # Last forecast
-                        ensemble_spatial_ax = axes[-1, 1]  # Bottom right
+                show_legend_flag: bool = row_idx == 0 and col_idx == 1
+                # Get the correct axis
+                if num_rows == 1:
+                    current_ax: plt.Axes = axes[col_idx] if num_cols > 1 else axes
                 else:
-                    # For intensity: original 2-column layout
-                    row_idx = idx // 2
-                    col_idx = idx % 2
-                    timeline_ax = (
-                        axes[row_idx, col_idx] if num_rows > 1 else axes[col_idx]
+                    current_ax: plt.Axes = (
+                        axes[row_idx, col_idx] if num_cols > 1 else axes[row_idx]
                     )
-                    ensemble_spatial_ax = None
-                    show_legend_flag = row_idx == 0 and col_idx == 1
-                # Plot timeline data
+
+                # Plot data
                 plot_rainfall_data(
-                    ax=timeline_ax,
+                    ax=current_ax,
                     era5_data=era5_data,
+                    control_data=control_data,
                     ensemble_data=ensemble_data,
                     control_time=time_data,
                     init_time_str=init_time,
-                    moment_of_flooding=moment_of_flooding,
                     plot_type=plot_type,
-                    show_legend=show_legend_flag,
-                    spatial_ax=ensemble_spatial_ax,
-                    spatial_data=spatial_data,
+                    show_legend=show_legend_flag,  # Only show legend on first right subplot
                 )
 
             # Hide unused subplots if odd number of forecasts
@@ -728,253 +347,43 @@ class MeteorologicalForecasts:
                     idx: int = row * num_cols + col
 
                     # Get current axis using same logic as above
-                    if plot_type == "cumulative":
-                        # For cumulative plots: 2x2 grid for timelines, spatial plots in last row
-                        timeline_rows = (num_forecasts + num_cols - 1) // num_cols
-                        if row < timeline_rows:
-                            # Timeline plots in 2x2 grid
-                            current_ax: plt.Axes = axes[row, col]
-                        elif row == timeline_rows:
-                            # Spatial plots in last row (only first two positions)
-                            if col < 2:
-                                current_ax: plt.Axes = axes[row, col]
-                            else:
-                                continue  # Skip extra columns in spatial row
-                        else:
-                            continue  # Skip if indices are out of bounds
+                    if num_rows == 1:
+                        current_ax: plt.Axes = axes[col] if num_cols > 1 else axes
                     else:
-                        # For intensity plots: handle different axis configurations
-                        if num_rows == 1 and num_cols == 1:
-                            current_ax: plt.Axes = axes
-                        elif num_rows == 1:
-                            current_ax: plt.Axes = axes[col]
-                        elif num_cols == 1:
-                            current_ax: plt.Axes = axes[row]
-                        else:
-                            current_ax: plt.Axes = axes[row, col]
+                        current_ax: plt.Axes = (
+                            axes[row, col] if num_cols > 1 else axes[row]
+                        )
 
-                    if plot_type == "cumulative":
-                        # For cumulative plots: handle 2x2 timeline grid + spatial row
-                        timeline_rows = (num_forecasts + num_cols - 1) // num_cols
-                        timeline_idx = row * num_cols + col
-
-                        if row < timeline_rows:
-                            # Timeline plots in 2x2 grid
-                            if timeline_idx >= num_forecasts:
-                                # Hide unused timeline subplot
-                                current_ax.set_visible(False)
-                            else:
-                                # Show x-axis labels only on bottom timeline row
-                                is_bottom_timeline_row = row == timeline_rows - 1
-                                subplot_below_is_empty = (
-                                    row + 1
-                                ) * num_cols + col >= num_forecasts
-
-                                if is_bottom_timeline_row or subplot_below_is_empty:
-                                    current_ax.tick_params(labelbottom=True)
-                                    # Don't add individual x-axis labels - will use central label
-
-                                # Show y-axis labels and label only on left middle subplot
-                                if col == 0:
-                                    current_ax.tick_params(labelleft=True)
-                                    # Don't add individual y-axis labels - will use central label
-                        elif row == timeline_rows:
-                            # Spatial plots row
-                            if col < 2:  # Only first two columns can have spatial plots
-                                # Show labels for spatial plots
-                                current_ax.tick_params(labelbottom=True, labelleft=True)
+                    if idx >= num_forecasts:
+                        # Hide unused subplot
+                        current_ax.set_visible(False)
                     else:
-                        # Original logic for intensity plots
-                        if idx >= num_forecasts:
-                            # Hide unused subplot
-                            current_ax.set_visible(False)
-                        else:
-                            # Show x-axis labels on bottom row OR if the subplot below is empty
-                            subplot_below_is_empty: bool = (
-                                row + 1
-                            ) * num_cols + col >= num_forecasts
-                            is_bottom_row: bool = row == num_rows - 1
+                        # Show x-axis labels on bottom row OR if the subplot below is empty
+                        subplot_below_is_empty: bool = (
+                            row + 1
+                        ) * num_cols + col >= num_forecasts
+                        is_bottom_row: bool = row == num_rows - 1
 
-                            if is_bottom_row or subplot_below_is_empty:
-                                current_ax.tick_params(labelbottom=True)
+                        if is_bottom_row or subplot_below_is_empty:
+                            current_ax.tick_params(labelbottom=True)
 
-                            # Show y-axis labels on leftmost column
-                            if col == 0:
-                                current_ax.tick_params(labelleft=True)
+                        # Show y-axis labels on leftmost column
+                        if col == 0:
+                            current_ax.tick_params(labelleft=True)
             # Final plot formatting
             if plot_type == "cumulative":
                 plot_title: str = "ERA5 vs ECMWF Control & Probabilistic Cumulative Precipitation Forecasts"
                 output_filename: str = "ERA5_vs_ECMWF_Control_&_Probabilistic_Cumulative_Precipitation_Forecasts.png"
-
-                # Add central axis labels for timeline plots only
-                timeline_rows = (num_forecasts + num_cols - 1) // num_cols
-
-                # Calculate position for timeline plots (excluding spatial row)
-                timeline_height = timeline_rows * 6  # Each timeline row is 6 units high
-                total_height = num_rows * 6  # Total figure height units
-                spatial_height = 6  # Spatial row height
-
-                # Position labels for timeline plots
-                timeline_center_x = 0.435  # Center horizontally
-                timeline_center_y = 0.78  # Moved higher for better positioning
-
-                # Y-position for x-axis label: at bottom of timeline area (above spatial plots)
-                timeline_bottom_y = 0.505
-
-                fig.text(
-                    timeline_center_x,
-                    timeline_bottom_y,
-                    "Date (UTC)",
-                    ha="center",
-                    va="top",
-                    fontsize=20,
-                    fontweight="bold",
-                )
-                fig.text(
-                    0.02,
-                    timeline_center_y,
-                    "Cumulative Rainfall [mm]",
-                    va="center",
-                    rotation="vertical",
-                    fontsize=20,
-                    fontweight="bold",
-                )
-
+                ylabel: str = "Cumulative Rainfall [mm]"
             else:
                 plot_title: str = "ERA5 vs ECMWF Control & Probabilistic Maximum Intensity Precipitation Forecasts"
                 output_filename: str = "ERA5_vs_ECMWF_Control_&_Probabilistic_Precipitation_Forecasts_Maximum_Intensity.png"
                 ylabel: str = "Rainfall intensity [mm/h]"
-                # Set global axis labels for intensity plots (original behavior)
-                fig.text(0.5, 0.02, "Date (UTC)", ha="center", fontsize=20)
-                fig.text(
-                    0.02, 0.5, ylabel, va="center", rotation="vertical", fontsize=20
-                )
+            fig.suptitle(plot_title, fontsize=22, y=0.95)
+            fig.text(0.5, 0.02, "Date (UTC)", ha="center", fontsize=18)
+            fig.text(0.02, 0.5, ylabel, va="center", rotation="vertical", fontsize=18)
 
-            fig.suptitle(plot_title, fontsize=22, y=1.05)  # Moved title higher
-
-            if plot_type == "cumulative":
-                # Apply initial layout first
-                plt.tight_layout(rect=[0.03, 0.03, 0.97, 0.95])
-
-                # Now manually adjust spacing between different sections
-                if num_rows > 1:  # Only if we have both timeline and spatial plots
-                    timeline_rows = (num_forecasts + num_cols - 1) // num_cols
-
-                    # First, compress timeline plots to create more space
-                    for row in range(timeline_rows):
-                        for col in range(num_cols):
-                            if (
-                                row * num_cols + col < num_forecasts
-                            ):  # Only if subplot exists
-                                timeline_ax = axes[row, col]
-                                pos = timeline_ax.get_position()
-
-                                # Compress timeline plots to upper 65% of figure
-                                new_height = pos.height * 0.8
-                                new_y = 0.595 + (timeline_rows - 1 - row) * (
-                                    new_height + 0.12
-                                )
-
-                                timeline_ax.set_position(
-                                    [pos.x0, new_y, pos.width, new_height]
-                                )
-
-                    # Move spatial plots to bottom with large gap
-                    for col in range(min(2, num_cols)):  # Max 2 spatial plots
-                        if timeline_rows < num_rows:  # If spatial plots exist
-                            spatial_ax = axes[-1, col]  # Bottom row (spatial plots)
-                            pos = spatial_ax.get_position()
-
-                            # Calculate centered positioning within the subplot column
-                            # Original column width and position
-                            original_col_width = pos.width
-                            original_col_center = pos.x0 + original_col_width / 2
-
-                            # Desired spatial plot width (wider than original)
-                            spatial_width = original_col_width + 0.125
-
-                            # Center the spatial plot in its column
-                            centered_x = original_col_center - spatial_width / 2
-
-                            # Add extra horizontal offset for separation between spatial plots
-                            horizontal_offset = (
-                                -0.02 if col == 0 else 0
-                            )  # Move left plot further left, right plot further right
-
-                            # Place spatial plots in bottom 35% of figure, centered in columns with separation
-                            spatial_ax.set_position(
-                                [
-                                    centered_x
-                                    + horizontal_offset,  # Apply horizontal separation
-                                    0.02,  # Bottom position
-                                    spatial_width,  # Narrower width for more separation
-                                    0.45,
-                                ]
-                            )
-
-                    # Now create colorbars for the repositioned spatial plots
-                    fig = axes[0, 0].get_figure()  # Get figure reference
-                    for col in range(min(2, num_cols)):
-                        if timeline_rows < num_rows:
-                            spatial_ax = axes[-1, col]
-                            # Check if this spatial axis has colorbar data stored
-                            if hasattr(spatial_ax, "_colorbar_image"):
-                                im = spatial_ax._colorbar_image
-                                vmin = spatial_ax._colorbar_vmin
-                                vmax = spatial_ax._colorbar_vmax
-
-                                # Get current spatial plot position for manual colorbar positioning
-                                spatial_pos = spatial_ax.get_position()
-
-                                # Create colorbar with manual positioning to avoid shrinking spatial plots
-                                cbar_width = 0.03
-                                cbar_pad = 0.02
-
-                                # Create new axis for colorbar manually positioned
-                                cbar_ax = fig.add_axes(
-                                    [
-                                        spatial_pos.x1
-                                        + cbar_pad,  # Right of spatial plot
-                                        spatial_pos.y0
-                                        + spatial_pos.height * 0.05,  # Align vertically
-                                        cbar_width,  # Colorbar width
-                                        spatial_pos.height
-                                        * 0.9,  # Match spatial plot height
-                                    ]
-                                )
-
-                                # Create colorbar in the manually positioned axis
-                                cbar = plt.colorbar(im, cax=cbar_ax)
-                                cbar.set_label("Rainfall [mm]", fontsize=20)
-
-                                # Set colorbar tick fontsize
-                                cbar.ax.tick_params(labelsize=20)
-
-                                # Set individual tick values ensuring min and max are always shown
-                                if vmin is not None and vmax is not None:
-                                    # Create 6 ticks including exact min and max
-                                    if vmax > vmin:  # Ensure we have a valid range
-                                        # Create 4 intermediate values between min and max
-                                        intermediate_values = np.linspace(vmin, vmax, 6)
-                                        # Ensure the exact min and max are represented
-                                        tick_values = intermediate_values
-                                        tick_values[0] = vmin  # Ensure exact min
-                                        tick_values[-1] = vmax  # Ensure exact max
-                                    else:
-                                        # Fallback for edge case where min == max
-                                        tick_values = [vmin] * 6
-
-                                    cbar.set_ticks(tick_values)
-                                    cbar.set_ticklabels(
-                                        [f"{val:.0f}" for val in tick_values]
-                                    )
-
-                                # Clean up stored data
-                                delattr(spatial_ax, "_colorbar_image")
-                                delattr(spatial_ax, "_colorbar_vmin")
-                                delattr(spatial_ax, "_colorbar_vmax")
-            else:
-                plt.tight_layout(rect=[0.03, 0.03, 0.97, 0.95])
+            plt.tight_layout(rect=(0.03, 0.03, 0.97, 0.95))
 
             # Save plot
             plt.savefig(
@@ -982,1191 +391,6 @@ class MeteorologicalForecasts:
             )
             plt.close()
 
-        def issue_rainfall_warning(
-            processing_forecasts: str,
-            moment_of_flooding: pd.Timestamp | None = None,
-            threshold_time_unit: str = "daily",
-            daily_cumulative_thresholds_mm_per_day: dict[str, float] = {
-                # "yellow": 50.0,  # 50 mm/day threshold
-                "orange": 50.0,  # 50 mm/day threshold
-                "purple": 100.0,  # 100 mm/day threshold
-            },
-            ensemble_probability_thresholds: dict[str, float] = {
-                # "yellow": 0.15,  # 15% of ensemble members exceed threshold
-                "orange": 0.30,  # 30% of ensemble members exceed threshold
-                # "red": 0.45,  # 45% of ensemble members exceed threshold
-                "purple": 0.60,  # 60% of ensemble members exceed threshold
-            },
-        ) -> None:
-            """Generate rainfall warning timeline showing warning evolution across forecast initializations.
-
-            Creates timeline visualizations showing how warnings evolve from forecast initializations
-            to the actual event, comparing ERA5 reanalysis, deterministic control forecasts, and
-            probabilistic ensemble forecasts. The event datetime is automatically extracted from the
-            first event in hazards.floods.events configuration.
-
-            Args:
-                processing_forecasts: The type of forecasts being processed.
-                moment_of_flooding: Optional moment when flooding actually occurred. If None, no flooding line is shown.
-                threshold_time_unit: Time unit for thresholds ("daily" or "hourly").
-                daily_cumulative_thresholds_mm_per_day: Warning thresholds for rainfall per time unit.
-                ensemble_probability_thresholds: Probability thresholds for ensemble warnings.
-
-            Raises:
-                ValueError: If no flood events are configured or event end_time format is invalid.
-                FileNotFoundError: If required forecast or ERA5 data files are missing.
-                ValueError: If no precipitation forecast file is found for a given initialization.
-                ValueError: If threshold_time_unit is not "daily" or "hourly".
-            """
-            print("Issuing rainfall warnings based on forecasts...")
-
-            # Validate threshold time unit
-            if threshold_time_unit not in ["daily", "hourly"]:
-                raise ValueError(
-                    f"threshold_time_unit must be 'daily' or 'hourly', got '{threshold_time_unit}'"
-                )
-
-            # Create dynamic warning system based on input thresholds
-            # Combine all threshold levels from both dictionaries
-            all_warning_levels = set(
-                daily_cumulative_thresholds_mm_per_day.keys()
-            ) | set(ensemble_probability_thresholds.keys())
-
-            # Define color mapping for warning levels (dynamic)
-            color_mapping = {
-                "yellow": "#FFD700",  # Gold
-                "orange": "#FF8C00",  # Dark orange
-                "red": "#FF0000",  # Red
-                "purple": "#8B008B",  # Dark magenta
-                "green": "#00FF00",  # Green (if needed)
-                "blue": "#0000FF",  # Blue (if needed)
-            }
-
-            # Sort warning levels for consistent ordering
-            sorted_levels = sorted(all_warning_levels)
-
-            def create_binary_threshold_arrays(
-                data_array: xarray.DataArray,
-                thresholds: dict[str, float],
-                time_unit: str,
-            ) -> dict[str, xarray.DataArray]:
-                """Create binary arrays where 1 indicates threshold exceedance.
-
-                Args:
-                    data_array: Precipitation data (mm/h for input, processed based on time_unit).
-                    thresholds: Dictionary with threshold values.
-                    time_unit: Time unit for thresholds ("daily" or "hourly").
-
-                Returns:
-                    Dictionary of binary arrays for each threshold level.
-
-                Raises:
-                    ValueError: If time_unit is not "daily" or "hourly".
-                """
-                if time_unit == "daily":
-                    # For daily thresholds, resample hourly data to daily cumulative precipitation (mm/day)
-                    processed_data = data_array.resample(time="1D").sum()
-                elif time_unit == "hourly":
-                    # For hourly thresholds, use hourly intensity directly (mm/h)
-                    processed_data = data_array.copy()
-                else:
-                    raise ValueError(f"Unsupported time_unit: {time_unit}")
-
-                binary_arrays = {}
-                # Create independent binary threshold arrays
-                # Each threshold is evaluated separately - a grid cell can exceed multiple thresholds
-                for level_name, threshold_value in thresholds.items():
-                    # Create binary array: 1 where threshold exceeded, 0 otherwise
-                    # Create boolean mask and convert to int, ensuring no NaN values remain
-                    threshold_mask = processed_data >= threshold_value
-                    binary_arrays[level_name] = threshold_mask.fillna(False).astype(int)
-
-                return binary_arrays
-
-            def create_deterministic_warning_timeseries(
-                binary_arrays: dict[str, xarray.DataArray],
-                data_array: xarray.DataArray,
-            ) -> xarray.DataArray:
-                """Create warning level time series for deterministic forecasts (ERA5, control).
-
-                Uses binary threshold exceedance arrays to assign warning levels to each grid cell
-                and timestep. Higher warning levels override lower ones when multiple thresholds
-                are exceeded.
-
-                Args:
-                    binary_arrays: Binary threshold exceedance arrays for each warning level.
-                    data_array: Precipitation data for spatial structure reference (processed based on time unit).
-
-                Returns:
-                    DataArray with warning levels (0-3) for each grid cell and timestep.
-                        0 = No warning, 1 = Yellow, 2 = Orange, 3 = Red.
-
-                Raises:
-                    ValueError: If binary_arrays is empty or data_array contains only NaN values.
-                """
-                if not binary_arrays:
-                    raise ValueError("binary_arrays cannot be empty")
-
-                # Initialize warnings array with zeros, preserving spatial and temporal structure
-                clean_data = data_array.fillna(0)
-                if clean_data.size == 0 or clean_data.isnull().all():
-                    raise ValueError(
-                        "data_array contains only NaN values after cleaning"
-                    )
-
-                warnings_array = xarray.zeros_like(clean_data, dtype=int)
-
-                # Convert binary arrays to final warning levels using "highest wins" logic
-                # Unlike the binary arrays, each grid cell gets exactly ONE warning level (0-N)
-                # If multiple thresholds exceeded, highest level overwrites lower ones
-                # Create dynamic level mapping based on input thresholds
-                level_mapping = {}
-                for i, level in enumerate(sorted_levels, start=1):
-                    if level in daily_cumulative_thresholds_mm_per_day:
-                        level_mapping[level] = i
-
-                for level_name, level_value in level_mapping.items():
-                    if level_name in binary_arrays:
-                        # Set warning level where threshold exceeded - higher levels overwrite lower ones
-                        exceeded_mask = binary_arrays[level_name] == 1
-                        warnings_array = warnings_array.where(
-                            ~exceeded_mask, level_value
-                        )
-
-                # Ensure no NaN values remain before final conversion
-                warnings_array = warnings_array.fillna(0)
-                return warnings_array.astype(int)
-
-            def create_ensemble_warning_timeseries(
-                ensemble_data: xarray.DataArray,
-                thresholds: dict[str, float],
-                probability_thresholds: dict[str, float],
-                time_unit: str,
-            ) -> xarray.DataArray:
-                """Create warning level time series for ensemble forecasts with probability thresholds.
-
-                Uses probabilistic approach where warnings are issued when a certain percentage
-                of ensemble members exceed precipitation thresholds. Special levels (e.g., purple)
-                use the highest precipitation threshold but with higher probability requirements.
-
-                Args:
-                    ensemble_data: Precipitation ensemble data with member dimension (mm/h input).
-                        Will be processed based on time_unit: resampled to mm/day for daily, kept as mm/h for hourly.
-                    thresholds: Dictionary with precipitation threshold values.
-                    probability_thresholds: Probability thresholds for ensemble warnings.
-                        May contain levels not in thresholds dict (these use highest precip threshold).
-                    time_unit: Time unit for thresholds ("daily" or "hourly").
-
-                Returns:
-                    DataArray with warning levels (0-N) for each grid cell and timestep.
-                        0 = No warning, higher numbers = escalating warning levels based on input thresholds.
-
-                Raises:
-                    ValueError: If ensemble_data lacks member dimension or contains only NaN values.
-                    ValueError: If thresholds or probability_thresholds are empty.
-                    ValueError: If time_unit is not "daily" or "hourly".
-                """
-                # Input validation
-                if not thresholds:
-                    raise ValueError("thresholds dictionary cannot be empty")
-                if not probability_thresholds:
-                    raise ValueError(
-                        "probability_thresholds dictionary cannot be empty"
-                    )
-                if "member" not in ensemble_data.dims:
-                    raise ValueError("ensemble_data must have 'member' dimension")
-                if time_unit not in ["daily", "hourly"]:
-                    raise ValueError(f"Unsupported time_unit: {time_unit}")
-
-                # Process data based on time unit
-                if time_unit == "daily":
-                    # For daily thresholds, resample hourly ensemble data to daily cumulative precipitation (mm/day)
-                    processed_data = ensemble_data.resample(time="1D").sum()
-                elif time_unit == "hourly":
-                    # For hourly thresholds, use hourly intensity directly (mm/h)
-                    processed_data = ensemble_data.copy()
-
-                # Initialize warnings array (no member dimension in output)
-                clean_ensemble_data = processed_data.fillna(0)
-                if clean_ensemble_data.size == 0 or clean_ensemble_data.isnull().all():
-                    raise ValueError(
-                        "ensemble_data contains only NaN values after cleaning"
-                    )
-
-                # Create warnings array efficiently
-                warnings_array = xarray.zeros_like(
-                    clean_ensemble_data.isel(member=0), dtype=int
-                )
-
-                # Process warning levels with probability thresholds
-                # Create dynamic hierarchy based on input thresholds (ordered by their values)
-                # Get all levels that exist in both dictionaries for hierarchical processing
-                common_levels = set(thresholds.keys()) & set(
-                    probability_thresholds.keys()
-                )
-
-                # Sort by precipitation threshold value for "highest wins" logic
-                sorted_common_levels = sorted(
-                    common_levels, key=lambda x: thresholds[x]
-                )
-
-                # Create dynamic level mapping
-                level_mapping = {}
-                for i, level_name in enumerate(sorted_common_levels, start=1):
-                    level_mapping[level_name] = i
-
-                # Iterate through each warning level in hierarchical order
-                for level_name, level_value in level_mapping.items():
-                    # Check if this warning level is configured in both dictionaries
-                    if (
-                        level_name in thresholds
-                        and level_name in probability_thresholds
-                    ):
-                        # Create binary threshold exceedance array for this warning level
-                        # Compare ensemble data against precipitation threshold (e.g., 50mm for yellow)
-                        # Result: 4D boolean array [time, y, x, member] where True = threshold exceeded
-                        threshold_exceeded = (
-                            (clean_ensemble_data >= thresholds[level_name])
-                            .fillna(False)
-                            .astype(int)
-                        )  # Handle NaN and convert True/False to 1/0
-
-                        # Calculate exceedance probability across ensemble members
-                        # Mean over 'member' dimension gives probability (0.0 to 1.0) per grid cell per timestep
-                        # Example: 5 of 20 members exceed threshold → 0.25 (25% probability)
-                        exceedance_probability = threshold_exceeded.mean(dim="member")
-
-                        # Get minimum required probability for this warning level
-                        # Example: yellow needs 15%, orange needs 30%, red needs 45% of members
-                        prob_threshold = probability_thresholds[level_name]
-
-                        # Create mask where probability threshold is exceeded
-                        # True where enough ensemble members exceed the precipitation threshold
-                        prob_exceeded_mask = exceedance_probability >= prob_threshold
-
-                        # Apply "highest wins" logic - set warning level where criteria met
-                        # Higher warning levels (processed later) will overwrite lower ones
-                        # Example: grid cell with yellow=True, orange=True → final result = orange (2)
-                        warnings_array = warnings_array.where(
-                            ~prob_exceeded_mask, level_value
-                        )
-
-                # Handle special warning levels that are only in probability_thresholds
-                # These use the highest precipitation threshold but with different probability requirements
-                special_levels = set(probability_thresholds.keys()) - set(
-                    thresholds.keys()
-                )
-                for special_level in special_levels:
-                    if special_level in probability_thresholds:
-                        # Use the highest available precipitation threshold for special levels
-                        if thresholds:
-                            highest_precip_threshold = max(thresholds.values())
-                            threshold_exceeded = (
-                                (clean_ensemble_data >= highest_precip_threshold)
-                                .fillna(False)
-                                .astype(int)
-                            )
-                            exceedance_probability = threshold_exceeded.mean(
-                                dim="member"
-                            )
-
-                            special_prob_threshold = probability_thresholds[
-                                special_level
-                            ]
-                            special_exceeded_mask = (
-                                exceedance_probability >= special_prob_threshold
-                            )
-
-                            # Special level gets the highest level number (overwrites all others)
-                            special_level_value = len(sorted_levels)
-                            warnings_array = warnings_array.where(
-                                ~special_exceeded_mask, special_level_value
-                            )
-                return warnings_array.astype(int)
-
-            def save_warning_timeseries(
-                output_folder: Path,
-                forecast_init: str,
-                era5_warnings: xarray.DataArray,
-                control_warnings: xarray.DataArray,
-                ensemble_warnings: xarray.DataArray,
-            ) -> None:
-                """Save warning time series as zarr files for further analysis.
-
-                Args:
-                    output_folder: Path to output folder.
-                    forecast_init: Forecast initialization time string.
-                    era5_warnings: ERA5 warning time series.
-                    control_warnings: Control forecast warning time series.
-                    ensemble_warnings: Ensemble forecast warning time series.
-                """
-                # Create subfolder for this forecast initialization
-                init_folder = output_folder / f"timeseries_{forecast_init}"
-                init_folder.mkdir(exist_ok=True)
-
-                # Create dynamic warning levels metadata
-                warning_levels_str = "0=No Warning"
-                for i, level in enumerate(sorted_levels, start=1):
-                    warning_levels_str += f", {i}={level.title()}"
-
-                # Define base clean attributes to avoid NaN conversion issues
-                base_attrs = {
-                    "description": "Rainfall warning levels per grid cell and timestep",
-                    "forecast_init": forecast_init,
-                    "warning_levels": warning_levels_str,
-                    "units": "warning_level",
-                    "created_at": str(pd.Timestamp.now()),
-                }
-
-                # Save ERA5 warnings with clean attributes
-                era5_clean = era5_warnings.copy()
-                era5_clean.attrs.clear()
-                era5_clean.attrs.update(base_attrs)
-                era5_clean.attrs["source"] = "ERA5 reanalysis"
-                era5_clean.attrs["method"] = "deterministic"
-                # Force computation to avoid chunk inheritance from previous runs
-                era5_clean = era5_clean.compute()
-                era5_clean.to_zarr(init_folder / "era5_warnings.zarr", mode="w")
-
-                # Save control warnings with clean attributes
-                control_clean = control_warnings.copy()
-                control_clean.attrs.clear()
-                control_clean.attrs.update(base_attrs)
-                control_clean.attrs["source"] = "ECMWF control forecast"
-                control_clean.attrs["method"] = "deterministic"
-                # Force computation to avoid chunk inheritance from previous runs
-                control_clean = control_clean.compute()
-                control_clean.to_zarr(init_folder / "control_warnings.zarr", mode="w")
-
-                # Save ensemble warnings with clean attributes
-                ensemble_clean = ensemble_warnings.copy()
-                ensemble_clean.attrs.clear()
-                ensemble_clean.attrs.update(base_attrs)
-                ensemble_clean.attrs["source"] = "ECMWF ensemble forecast"
-                ensemble_clean.attrs["method"] = "probabilistic"
-                # Force computation to avoid chunk inheritance from previous runs
-                ensemble_clean = ensemble_clean.compute()
-                ensemble_clean.to_zarr(init_folder / "ensemble_warnings.zarr", mode="w")
-
-                print(f"Saved warning time series for {forecast_init} to {init_folder}")
-
-            def create_spatial_warning_maps(
-                forecast_lead_times_days: list[int], moment_of_flooding: pd.Timestamp
-            ) -> None:
-                """Create comprehensive spatial warning maps including maximum warning levels.
-
-                Creates a single plot with lead times as columns and warning types (ERA5, Control, Ensemble) as rows,
-                showing the highest warning level reached during the 10-day forecast period for different lead times.
-
-                Args:
-                    forecast_lead_times_days: Lead times (days before event) to analyze.
-                    moment_of_flooding: The moment when flooding actually occurred.
-                Raises:
-                    ValueError: If no suitable forecast is found for a given lead time.
-                """
-                # Create dynamic warning system based on input thresholds
-                # Create ordered list: start with white (no warning), then sorted threshold levels
-                warning_colors = ["white"]  # No warning = white
-                warning_labels = ["No Warning"]
-
-                # Add colors and labels for each threshold level
-                for level in sorted_levels:
-                    warning_colors.append(
-                        color_mapping.get(level, "#808080")
-                    )  # Default to gray if unknown
-                    warning_labels.append(f"{level.title()} Warning")
-
-                warning_cmap = mcolors.ListedColormap(warning_colors)
-
-                region = gpd.read_parquet(
-                    Path(self.model.input_folder / "geom" / "mask.geoparquet")
-                )
-
-                print("Creating Maximum Warning Level Maps for all lead times...")
-
-                # Collect data for all lead times
-                lead_time_data = {}
-
-                for target_lead in forecast_lead_times_days:
-                    print(f"Processing {target_lead}-day lead time...")
-
-                    # Find forecast closest to target lead time
-                    best_forecast = None
-                    best_diff = float("inf")
-                    actual_lead = None
-
-                    for forecast_init in available_forecasts:
-                        init_datetime = datetime.strptime(
-                            forecast_init, "%Y%m%dT%H%M%S"
-                        )
-
-                        lead_time = (
-                            moment_of_flooding - init_datetime
-                        ).total_seconds() / (24 * 3600)
-                        diff = abs(lead_time - target_lead)
-
-                        if diff < best_diff:
-                            best_diff = diff
-                            best_forecast = forecast_init
-                            actual_lead = lead_time
-
-                    if best_forecast is None:
-                        raise ValueError(
-                            f"No suitable forecast found for {target_lead}-day lead time."
-                        )
-
-                    init_time_str = best_forecast
-                    timeseries_folder = warnings_folder / f"timeseries_{init_time_str}"
-
-                    if not timeseries_folder.exists():
-                        raise ValueError(
-                            f"Warning time series not found for {init_time_str}"
-                        )
-
-                    # Load warning time series data
-                    era5_warnings = read_zarr(timeseries_folder / "era5_warnings.zarr")
-                    control_warnings = read_zarr(
-                        timeseries_folder / "control_warnings.zarr"
-                    )
-                    ensemble_warnings = read_zarr(
-                        timeseries_folder / "ensemble_warnings.zarr"
-                    )
-                    target_crs = era5_warnings.rio.crs
-                    # Calculate maximum warning level over 10-day forecast period for each grid cell
-                    era5_max_warning = era5_warnings.max(dim="time")
-                    control_max_warning = control_warnings.max(dim="time")
-                    ensemble_max_warning = ensemble_warnings.max(dim="time")
-
-                    # Store data for this lead time
-                    lead_time_data[target_lead] = {
-                        "era5": era5_max_warning,
-                        "control": control_max_warning,
-                        "ensemble": ensemble_max_warning,
-                        "actual_lead": actual_lead,
-                        "init_time": init_time_str,
-                    }
-
-                # Create combined plot: rows = warning types, columns = lead times
-                num_rows = 3  # ERA5, Control, Ensemble
-                num_cols = len(forecast_lead_times_days)
-
-                fig, axes = plt.subplots(num_rows, num_cols, figsize=(6 * num_cols, 15))
-
-                # Handle case of single column
-                if num_cols == 1:
-                    axes = axes.reshape(-1, 1)
-
-                warning_type_names = ["ERA5", "Control Forecast", "Ensemble Forecast"]
-                warning_type_keys = ["era5", "control", "ensemble"]
-
-                # Plot each combination of warning type and lead time
-                for row_idx, (type_name, type_key) in enumerate(
-                    zip(warning_type_names, warning_type_keys)
-                ):
-                    for col_idx, target_lead in enumerate(forecast_lead_times_days):
-                        ax = axes[row_idx, col_idx]
-
-                        # Get data for this lead time and warning type
-                        data = lead_time_data[target_lead][type_key]
-                        actual_lead = lead_time_data[target_lead]["actual_lead"]
-                        init_time = lead_time_data[target_lead]["init_time"]
-
-                        # Plot the maximum warning levels
-                        im = data.plot(
-                            ax=ax,
-                            cmap=warning_cmap,
-                            vmin=0,
-                            vmax=len(sorted_levels),
-                            add_colorbar=False,
-                            alpha=0.5,
-                            zorder=1,
-                        )
-                        region.boundary.plot(
-                            ax=ax,
-                            color="black",
-                            linestyle="--",
-                            linewidth=1.5,
-                            zorder=2,
-                            alpha=0.5,
-                        )
-                        ctx.add_basemap(
-                            ax,
-                            crs=target_crs,
-                            source="OpenStreetMap.Mapnik",
-                            zoom=12,
-                            zorder=0,
-                        )
-
-                        # Set titles
-                        if row_idx == 0:  # Top row gets lead time info
-                            ax.set_title(
-                                f"{target_lead}-day lead time\n{type_name}\n({init_time} forecast)",
-                                fontsize=12,
-                            )
-                        else:
-                            ax.set_title(f"{type_name}", fontsize=12)
-
-                        # Set axis labels
-                        if row_idx == num_rows - 1:  # Bottom row
-                            ax.set_xlabel("Longitude")
-                        else:
-                            ax.set_xlabel("")
-
-                        if col_idx == 0:  # Left column
-                            ax.set_ylabel("Latitude")
-                        else:
-                            ax.set_ylabel("")
-
-                # Add single colorbar for all subplots positioned on the right side
-                cbar = fig.colorbar(
-                    im,
-                    ax=axes.ravel().tolist(),
-                    shrink=0.8,
-                    aspect=30,
-                    pad=0.02,
-                    fraction=0.05,
-                    location="right",
-                )
-                cbar.set_ticks(range(len(sorted_levels) + 1))  # +1 for 'No Warning'
-                cbar.set_ticklabels(warning_labels)
-                cbar.set_label("Maximum Warning Level", fontsize=14)
-
-                # Overall title
-                plt.suptitle(
-                    "Maximum Meteorological Warning Levels Over 10-Day Period\nComparison Across Lead Times and Forecast Types",
-                    fontsize=16,
-                    y=0.98,
-                )
-
-                # plt.tight_layout()
-
-                # Save the combined plot
-                output_filename = "maximum_warnings_all_lead_times.png"
-                plt.savefig(
-                    warnings_folder / output_filename, dpi=300, bbox_inches="tight"
-                )
-                plt.close()
-                print(f"Saved combined maximum warning level map: {output_filename}")
-
-                # Create comprehensive consolidated timeline showing all information in one figure
-                print("Creating comprehensive consolidated warning timeline...")
-
-                # Prepare dictionaries with full time series data for timeline plotting
-                era5_warnings_dict = {}
-                control_warnings_dict = {}
-                ensemble_warnings_dict = {}
-
-                for target_lead in forecast_lead_times_days:
-                    if target_lead in lead_time_data:
-                        init_time_str = lead_time_data[target_lead]["init_time"]
-                        timeseries_folder = (
-                            warnings_folder / f"timeseries_{init_time_str}"
-                        )
-
-                        # Load full time series (not just maximum)
-                        era5_warnings_full = read_zarr(
-                            timeseries_folder / "era5_warnings.zarr"
-                        )
-                        control_warnings_full = read_zarr(
-                            timeseries_folder / "control_warnings.zarr"
-                        )
-                        ensemble_warnings_full = read_zarr(
-                            timeseries_folder / "ensemble_warnings.zarr"
-                        )
-
-                        # Store in dictionaries with lead time as key
-                        lead_time_key = f"{target_lead}day"
-                        era5_warnings_dict[lead_time_key] = era5_warnings_full
-                        control_warnings_dict[lead_time_key] = control_warnings_full
-                        ensemble_warnings_dict[lead_time_key] = ensemble_warnings_full
-
-                # Create dynamic warning level colors and labels based on threshold levels
-                warning_level_colors = {0: "#90EE90"}  # No warning = light green
-                warning_labels = {0: "No Warning"}
-
-                # Map warning levels dynamically based on sorted threshold levels
-                for i, level in enumerate(sorted_levels, start=1):
-                    warning_level_colors[i] = color_mapping.get(level, "#808080")
-                    warning_labels[i] = f"{level.title()} Warning"
-
-                # Enhanced forecast type styling with line styles for lead time distinction
-                base_forecast_colors = {
-                    "ERA5": "#2E2E2E",  # Dark gray base
-                    "Control": "#1E90FF",  # DodgerBlue base
-                    "Ensemble": "#9400D3",  # DarkViolet base
-                }
-
-                # Different line styles for each lead time (professional distinction)
-                lead_time_styles = {
-                    0: {
-                        "linestyle": "-",
-                        "linewidth": 3.0,
-                        "alpha": 0.9,
-                    },  # Solid line (longest lead)
-                    1: {
-                        "linestyle": "--",
-                        "linewidth": 2.8,
-                        "alpha": 0.85,
-                    },  # Dashed line
-                    2: {
-                        "linestyle": "-.",
-                        "linewidth": 2.6,
-                        "alpha": 0.8,
-                    },  # Dash-dot line
-                    3: {
-                        "linestyle": ":",
-                        "linewidth": 2.4,
-                        "alpha": 0.75,
-                    },  # Dotted line (shortest lead)
-                }
-
-                forecast_styles = {
-                    "ERA5": {
-                        "marker": "s",
-                        "markersize": 7,
-                    },
-                    "Control": {
-                        "marker": "o",
-                        "markersize": 6,
-                    },
-                    "Ensemble": {
-                        "marker": "^",
-                        "markersize": 6,
-                    },
-                }
-
-                # Create single comprehensive timeline plot with simplified layout (no colorbar)
-                fig, ax_main = plt.subplots(figsize=(20, 10))
-
-                # Define small y-offset for each forecast initialization (0.05 units per lead time)
-                y_offset_per_lead = 0.05
-
-                plt.rcParams.update(
-                    {
-                        "axes.titlesize": 16,
-                        "axes.labelsize": 14,
-                        "xtick.labelsize": 12,
-                        "ytick.labelsize": 12,
-                        "legend.fontsize": 11,
-                    }
-                )
-
-                # Validate that we have data for at least one lead time
-                valid_lead_times = []
-                for lead_time in forecast_lead_times_days:
-                    lead_time_str = f"{lead_time}day"
-                    if lead_time_str in era5_warnings_dict:
-                        valid_lead_times.append(lead_time)
-
-                if not valid_lead_times:
-                    print("Error: No valid lead time data found for plotting")
-                    return
-
-                print(f"Creating timeline for lead times: {valid_lead_times}")
-                total_lead_times = len(valid_lead_times)
-
-                # Process and plot all lead times and forecast types on main plot
-                legend_handles = []
-                legend_labels = []
-
-                # Store forecast initialization dates for legend
-                lead_time_init_dates = {}
-                for lead_time in valid_lead_times:
-                    lead_time_str = f"{lead_time}day"
-                    if lead_time_str in era5_warnings_dict:
-                        # Get initialization time from the first available forecast for this lead time
-                        for target_lead in forecast_lead_times_days:
-                            if (
-                                target_lead == lead_time
-                                and target_lead in lead_time_data
-                            ):
-                                init_time_str = lead_time_data[target_lead]["init_time"]
-                                init_datetime = datetime.strptime(
-                                    init_time_str, "%Y%m%dT%H%M%S"
-                                )
-                                formatted_date = init_datetime.strftime(
-                                    "%d-%m-%Y %H:%M"
-                                )
-                                lead_time_init_dates[lead_time] = formatted_date
-                                break
-
-                # Create legend handles for forecast types (one per type, showing base color)
-                for fc_type, base_color in base_forecast_colors.items():
-                    style = forecast_styles[fc_type]
-                    # Create dummy scatter for legend using base color
-                    dummy_scatter = ax_main.scatter(
-                        [],
-                        [],
-                        color=base_color,
-                        marker=style["marker"],
-                        s=120,
-                        alpha=0.9,
-                        edgecolor="white",
-                        linewidth=2,
-                        label=f"{fc_type} Forecast",
-                    )
-                    legend_handles.append(dummy_scatter)
-                    legend_labels.append(f"{fc_type} Forecast")
-
-                # Add separator line in legend
-                separator_line = plt.Line2D(
-                    [0],
-                    [0],
-                    color="gray",
-                    linewidth=0,
-                    label="Lead Times & Init Dates:",
-                )
-                legend_handles.append(separator_line)
-                legend_labels.append("Lead Times & Init Dates:")
-
-                # Add lead time examples to legend with line styles and initialization dates
-                for lead_idx, lead_time in enumerate(valid_lead_times):
-                    if lead_idx < len(lead_time_styles):
-                        line_style = lead_time_styles[lead_idx]
-                        init_date = lead_time_init_dates.get(lead_time, "Unknown")
-
-                        # Create line example for legend
-                        lead_line = plt.Line2D(
-                            [0],
-                            [0],
-                            color=base_forecast_colors[
-                                "ERA5"
-                            ],  # Use ERA5 color as neutral example
-                            linestyle=line_style["linestyle"],
-                            linewidth=line_style["linewidth"],
-                            alpha=line_style["alpha"],
-                            label=f"{lead_time}d lead ({init_date})",
-                        )
-                        legend_handles.append(lead_line)
-                        legend_labels.append(f"{lead_time}d lead ({init_date})")
-
-                # Main plotting loop for all lead times
-                for lead_idx, lead_time in enumerate(valid_lead_times):
-                    lead_time_str = f"{lead_time}day"
-
-                    # Load warning data for this lead time
-                    era5_warnings = era5_warnings_dict[lead_time_str]
-                    control_warnings = control_warnings_dict[lead_time_str]
-                    ensemble_warnings = ensemble_warnings_dict[lead_time_str]
-
-                    # Calculate domain-maximum warning level at each timestep
-                    era5_max_warning = era5_warnings.max(dim=["y", "x"])
-                    control_max_warning = control_warnings.max(dim=["y", "x"])
-                    ensemble_max_warning = ensemble_warnings.max(dim=["y", "x"])
-
-                    # Get time coordinates
-                    time_coords = era5_warnings.time.values
-
-                    # Validate data before plotting
-                    if len(time_coords) == 0:
-                        print(
-                            f"Warning: No time coordinates found for lead time {lead_time}"
-                        )
-                        continue
-
-                    # Calculate y-offset for this lead time (small offset to distinguish forecasts)
-                    lead_y_offset = lead_idx * y_offset_per_lead
-
-                    # Plot each forecast type with gradient colors and y-offset
-                    forecast_data = {
-                        "ERA5": era5_max_warning.values,
-                        "Control": control_max_warning.values,
-                        "Ensemble": ensemble_max_warning.values,
-                    }
-
-                    # Validate each forecast data array
-                    valid_forecast_data = {}
-                    for fc_type, values in forecast_data.items():
-                        if (
-                            values is not None
-                            and len(values) > 0
-                            and not np.all(np.isnan(values))
-                        ):
-                            valid_forecast_data[fc_type] = values
-                        else:
-                            print(
-                                f"Warning: Invalid data for {fc_type} at lead time {lead_time}"
-                            )
-
-                    forecast_data = valid_forecast_data
-
-                    for fc_type, warning_values in forecast_data.items():
-                        style = forecast_styles[fc_type]
-                        base_color = base_forecast_colors[fc_type]
-
-                        # Get line style for this lead time
-                        if lead_idx < len(lead_time_styles):
-                            line_style = lead_time_styles[lead_idx]
-                        else:
-                            line_style = lead_time_styles[0]  # Fallback to solid line
-
-                        # Apply y-offset to warning values (small shift to distinguish different forecasts)
-                        warning_values_offset = warning_values + lead_y_offset
-
-                        # Plot connected line with markers
-                        ax_main.plot(
-                            time_coords,
-                            warning_values_offset,
-                            color=base_color,
-                            linestyle=line_style["linestyle"],
-                            linewidth=line_style["linewidth"],
-                            alpha=line_style["alpha"],
-                            marker=style["marker"],
-                            markersize=style["markersize"],
-                            markerfacecolor=base_color,
-                            markeredgecolor="white",
-                            markeredgewidth=1.5,
-                            zorder=15,
-                        )
-
-                    # Add lead time labels on the right side with line style indicators
-                    if lead_idx < len(lead_time_styles):
-                        line_style = lead_time_styles[lead_idx]
-                        # Create line style indicator text
-                        style_indicators = {
-                            "-": "─────",
-                            "--": "─ ─ ─",
-                            "-.": "─ · ─",
-                            ":": "· · · ·",
-                        }
-                        line_indicator = style_indicators.get(
-                            line_style["linestyle"], "─────"
-                        )
-
-                        # Use transAxes for reliable positioning
-                        ax_main.text(
-                            0.98,  # Stay within plot bounds
-                            0.85 - (lead_idx * 0.1),  # Stagger labels vertically
-                            f"{lead_time}d {line_indicator}",
-                            transform=ax_main.transAxes,
-                            fontsize=11,
-                            fontweight="bold",
-                            ha="right",
-                            va="center",
-                            color="black",
-                            bbox=dict(
-                                boxstyle="round,pad=0.4",
-                                facecolor="lightblue",
-                                alpha=0.8,
-                                edgecolor="navy",
-                                linewidth=1.5,
-                            ),
-                        )
-
-                # Add lead time information as text annotation
-                lead_times_text = "Lead Times: " + ", ".join(
-                    [f"{lt}d" for lt in forecast_lead_times_days]
-                )
-                ax_main.text(
-                    0.02,
-                    0.98,
-                    lead_times_text,
-                    transform=ax_main.transAxes,
-                    fontsize=12,
-                    fontweight="bold",
-                    ha="left",
-                    va="top",
-                    bbox=dict(
-                        boxstyle="round,pad=0.5",
-                        facecolor="lightyellow",
-                        alpha=0.9,
-                        edgecolor="orange",
-                    ),
-                )
-
-                # Add flooding moment to main plot if present
-                if moment_of_flooding is not None:
-                    flood_line = ax_main.axvline(
-                        moment_of_flooding,
-                        color="#FF0000",
-                        linestyle="--",
-                        linewidth=3,
-                        alpha=0.8,
-                        zorder=20,
-                        label="Moment of Flooding",
-                    )
-                    legend_handles.append(flood_line)
-                    legend_labels.append("Moment of Flooding")
-
-                # Add legend directly to main plot
-                legend = ax_main.legend(
-                    legend_handles,
-                    legend_labels,
-                    loc="upper left",
-                    fontsize=11,
-                    frameon=True,
-                    fancybox=True,
-                    shadow=True,
-                    ncol=1,
-                    title="Forecast Types & Lead Times",
-                    title_fontsize=12,
-                    bbox_to_anchor=(0.02, 0.85),
-                )
-                legend.get_frame().set_facecolor("white")
-                legend.get_frame().set_alpha(0.95)
-                legend.get_title().set_fontweight("bold")
-
-                # Enhanced y-axis formatting for main plot
-                max_level = len(sorted_levels)
-                ax_main.set_ylim(-0.5, max_level + 0.5)
-
-                # Set y-ticks at warning levels
-                y_ticks = []
-                y_tick_labels = []
-                max_level = len(sorted_levels)
-                for level in range(max_level + 1):  # +1 for 'No Warning'
-                    y_ticks.append(level)
-                    y_tick_labels.append(warning_labels[level])
-
-                ax_main.set_yticks(y_ticks)
-                ax_main.set_yticklabels(y_tick_labels)
-
-                # Color the y-axis tick labels according to warning colors
-                max_level = len(sorted_levels)
-                for tick, level in zip(ax_main.get_yticklabels(), range(max_level + 1)):
-                    tick.set_color(warning_level_colors[level])
-                    tick.set_fontweight("bold")
-                    tick.set_fontsize(12)
-
-                # Add subtle background colors for warning levels (removed colorbar blocks)
-                max_level = len(sorted_levels)
-                for level in range(max_level + 1):  # +1 for 'No Warning'
-                    ax_main.axhspan(
-                        level - 0.4,
-                        level + 0.4,
-                        color=warning_level_colors[level],
-                        alpha=0.1,
-                        zorder=0,
-                    )
-                # Enhanced grid and formatting for main plot
-                ax_main.grid(True, alpha=0.3, zorder=1)
-                ax_main.set_title(
-                    "Meteorological Warning Timeline: Domain Maximum Warning Levels\n"
-                    "Different Colors Show Different Lead Times for Each Forecast Type",
-                    fontsize=18,
-                    fontweight="bold",
-                    pad=20,
-                )
-                ax_main.set_ylabel("Warning Level", fontsize=14, fontweight="bold")
-
-                # Enhanced time axis formatting with daily ticks
-                ax_main.xaxis.set_major_locator(mdates.DayLocator())
-                ax_main.xaxis.set_major_formatter(mdates.DateFormatter("%d-%m"))
-                ax_main.xaxis.set_minor_locator(mdates.HourLocator(interval=12))
-                ax_main.xaxis.set_minor_formatter(mdates.DateFormatter("%H:%M"))
-
-                # Rotate labels for better readability
-                ax_main.tick_params(axis="x", which="major", rotation=45, labelsize=11)
-                ax_main.tick_params(axis="x", which="minor", rotation=45, labelsize=9)
-                ax_main.set_xlabel("Date (UTC)", fontsize=14, fontweight="bold")
-
-                # Final layout adjustments with simplified layout
-                try:
-                    plt.tight_layout(pad=2.0)
-
-                    # Save the comprehensive plot with error handling
-                    comprehensive_filename = (
-                        "Comprehensive_Warning_Timeline_All_Data.png"
-                    )
-                    output_path = warnings_folder / comprehensive_filename
-
-                    # Ensure output directory exists
-                    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-                    plt.savefig(
-                        output_path,
-                        dpi=300,
-                        bbox_inches="tight",
-                        facecolor="white",
-                        edgecolor="none",
-                        format="png",
-                        pad_inches=0.1,
-                    )
-                    print(f"Successfully saved plot to: {output_path}")
-
-                except Exception as e:
-                    print(f"Error saving plot: {e}")
-
-                plt.close()
-
-                print(
-                    f"Comprehensive warning timeline saved as: {comprehensive_filename}"
-                )
-                print("Comprehensive warning timeline plot completed successfully!")
-
-            # Step 1: Initialize output directory for warning results
-            warnings_folder: Path = (
-                self.evaluator.output_folder_evaluate
-                / "forecasts"
-                / "rainfall_warnings"
-            )
-            warnings_folder.mkdir(parents=True, exist_ok=True)
-
-            # Step 2: Extract flood event datetime from model configuration
-            flood_events = (
-                self.model.config.get("hazards", {}).get("floods", {}).get("events", [])
-            )
-            if not flood_events:
-                raise ValueError(
-                    "No flood events found in model configuration. "
-                    "Please define events under hazards.floods.events with end_time."
-                )
-
-            # Use the end_time from the first event
-            first_event = flood_events[0]
-            if "end_time" not in first_event:
-                raise ValueError(
-                    "Flood event must have an 'end_time' field in the configuration."
-                )
-
-            try:
-                # Parse the end_time which should be in ISO format like '2021-07-20 09:00:00'
-                event_datetime: datetime = datetime.fromisoformat(
-                    str(first_event["end_time"]).replace(" ", "T")
-                )
-            except (ValueError, TypeError) as e:
-                raise ValueError(
-                    f"Invalid event end_time format: {first_event['end_time']}. "
-                    f"Expected ISO format like '2021-07-20 09:00:00'. Error: {e}"
-                )
-
-            # Step 3: Get all available forecast initializations and sort chronologically
-            forecast_base_path: Path = (
-                self.model.input_folder
-                / "other"
-                / "forecasts"
-                / "ECMWF"
-                / processing_forecasts
-            )
-
-            if not forecast_base_path.exists():
-                raise FileNotFoundError(
-                    f"Forecast path does not exist: {forecast_base_path}"
-                )
-
-            available_forecasts: list[str] = [
-                item.name
-                for item in forecast_base_path.iterdir()
-                if item.is_dir() and len(item.name) == 15  # YYYYMMDDTHHMMSS format
-            ]
-            available_forecasts.sort()  # Chronological order for lead time analysis
-
-            print("Available forecasts:", available_forecasts)
-            # Load ERA5 data once
-            era5_path: Path = (
-                self.model.input_folder
-                / "other"
-                / "climate"
-                / "pr_kg_per_m2_per_s.zarr"
-            )
-            if not era5_path.exists():
-                raise FileNotFoundError(f"ERA5 data not found: {era5_path}")
-
-            era5_ds = read_zarr(era5_path)
-            era5_mm_per_h: xarray.DataArray = era5_ds * 3600  # Convert from m/s to mm/h
-
-            # Main processing loop for all forecasts
-            for forecast_init in available_forecasts:
-                print(f"Processing forecast initialization: {forecast_init}")
-
-                # Parse initialization time
-                init_datetime: datetime = datetime.strptime(
-                    forecast_init, "%Y%m%dT%H%M%S"
-                )
-
-                forecast_folder: Path = forecast_base_path / forecast_init
-                pr_files: list[Path] = list(forecast_folder.glob("*pr*.zarr"))
-
-                if not pr_files:
-                    raise ValueError(
-                        f"No precipitation forecast file found for initialization {forecast_init}"
-                    )
-
-                # Load forecast data
-                forecast_ds = read_zarr(pr_files[0])
-                forecast_time = forecast_ds["time"].values
-                forecast_mm_per_h: xarray.DataArray = (
-                    forecast_ds * 3600
-                )  # Convert to mm/h
-
-                # Resample to daily data
-                # ERA5 data for the same period
-                era5_period: xarray.DataArray = era5_mm_per_h.sel(
-                    time=slice(forecast_time[0], forecast_time[-1])
-                )
-
-                # Create warning time series for different data sources
-                era5_binary_arrays = create_binary_threshold_arrays(
-                    era5_period,
-                    daily_cumulative_thresholds_mm_per_day,
-                    threshold_time_unit,
-                )
-                # Use appropriate data for warning timeseries based on time unit
-                era5_data_for_timeseries = (
-                    era5_period
-                    if threshold_time_unit == "hourly"
-                    else era5_period.resample(time="1D").sum()
-                )
-                era5_warning_timeseries = create_deterministic_warning_timeseries(
-                    era5_binary_arrays, era5_data_for_timeseries
-                )
-
-                # Create warning time series for control forecast (deterministic)
-                control_binary_arrays = create_binary_threshold_arrays(
-                    forecast_mm_per_h.isel(member=0),
-                    daily_cumulative_thresholds_mm_per_day,
-                    threshold_time_unit,
-                )
-                # Use appropriate data for warning timeseries based on time unit
-                control_data_for_timeseries = (
-                    forecast_mm_per_h.isel(member=0)
-                    if threshold_time_unit == "hourly"
-                    else forecast_mm_per_h.isel(member=0).resample(time="1D").sum()
-                )
-                control_warning_timeseries = create_deterministic_warning_timeseries(
-                    control_binary_arrays, control_data_for_timeseries
-                )
-
-                ensemble_warning_timeseries = create_ensemble_warning_timeseries(
-                    forecast_mm_per_h.isel(member=slice(1, None)),
-                    daily_cumulative_thresholds_mm_per_day,
-                    ensemble_probability_thresholds,
-                    threshold_time_unit,
-                )
-
-                # Save detailed warning time series for spatial analysis
-                save_warning_timeseries(
-                    warnings_folder,
-                    forecast_init,
-                    era5_warning_timeseries,
-                    control_warning_timeseries,
-                    ensemble_warning_timeseries,
-                )
-
-            # Create visualization outputs
-            print("\nCreating Warning Visualizations")
-
-            # Define standard lead times for spatial analysis
-            standard_lead_times = [1, 2, 5, 7]  # days before event
-
-            # Create maximum warning level maps for key lead times
-            create_spatial_warning_maps(
-                standard_lead_times, moment_of_flooding=moment_of_flooding
-            )
-
-            print("Rainfall warning analysis completed successfully!")
-
-        # # Call the rainfall evaluation functions
-        # evaluate_precipitation_forecasts(
-        #     plot_type="intensity", moment_of_flooding=moment_of_flooding, lead_times=lead_times
-        # )
-        evaluate_precipitation_forecasts(
-            plot_type="cumulative",
-            moment_of_flooding=moment_of_flooding,
-            lead_times=lead_times,
-        )
-
-        # # Call the rainfall warning analysis
-        # issue_rainfall_warning(
-        #     processing_forecasts, moment_of_flooding=moment_of_flooding
-        # )
+        # Call the rainfall evaluation functions
+        evaluate_precipitation_forecasts(plot_type="intensity")
+        evaluate_precipitation_forecasts(plot_type="cumulative")

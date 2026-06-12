@@ -1,6 +1,5 @@
 """This module contains the Households agent class for simulating household behavior in the GEB model."""
 
-import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
@@ -94,7 +93,6 @@ class Households(AgentBaseClass):
         model: GEBModel,
         agents: Agents,
         reduncancy: float,
-        logger: logging.Logger | None = None,
     ) -> None:
         """Initialize the Households agent module.
 
@@ -1041,6 +1039,9 @@ class Households(AgentBaseClass):
             assets: GeoDataFrame of critical infrastructure assets.
             asset_type: Type of critical infrastructure assets.
             postal_codes: GeoDataFrame of postal codes.
+
+        Raises:
+            ValueError: If the asset type is not recognized.
         """
         if asset_type == "energy_substations":
             postal_codes_with_assets = gpd.sjoin_nearest(

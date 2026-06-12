@@ -23,11 +23,7 @@ from geb.evaluate.workflows.dashboard import (
 )
 from geb.evaluate.workflows.hydrology_plot_engine import (
     plot_skill_score_boxplots as _plot_skill_score_boxplots,
-)
-from geb.evaluate.workflows.hydrology_plot_engine import (
     plot_skill_score_maps as _plot_skill_score_maps,
-)
-from geb.evaluate.workflows.hydrology_plot_engine import (
     plot_skill_scores_vs_upstream_area as _plot_skill_scores_vs_upstream_area,
 )
 from geb.hydrology.routing import read_discharge_per_river

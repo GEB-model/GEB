@@ -14,24 +14,18 @@ from shapely.geometry.point import Point
 
 from geb.geb_types import (
     ArrayFloat32,
-    TwoDArrayFloat32,
-)
-from geb.geb_types import (
     TwoDArrayFloat as TwoDArrayFloat,
+    TwoDArrayFloat32,
 )
 from geb.hazards.floods.workflows.utils import get_start_point
 from geb.hydrology.routing import (
     get_upstream_represented_xys as get_upstream_represented_xys,
 )
-from geb.hydrology.routing import (
-    read_discharge_per_river,
-)
 from geb.module import Module
 from geb.store import Bucket
 from geb.workflows.io import read_geom, read_table
 
-from ...hydrology.landcovers import OPEN_WATER as OPEN_WATER
-from ...hydrology.landcovers import SEALED as SEALED
+from ...hydrology.landcovers import OPEN_WATER as OPEN_WATER, SEALED as SEALED
 from ...workflows.io import (
     read_params,
     read_zarr,

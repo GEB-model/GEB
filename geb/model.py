@@ -27,7 +27,6 @@ from geb.hazards.floods.workflows.construct_storm_surge_hydrographs import (
 from geb.module import Module
 from geb.reporter import Reporter
 from geb.store import Bucket, Store
-from geb.agents.
 from geb.workflows.io import read_geom, read_params, read_zarr
 
 from .evaluate import Evaluate
@@ -1084,15 +1083,15 @@ class GEBModel(Module):
                 model_build_end_date
             )
 
-        # if self.spinup_start.date() < model_build_start_date:
-        #    raise ValueError(
-        #        "Spinup start date cannot be before model build start date. Adjust the time range in your build configuration and rebuild the model or adjust the spinup time of the model."
-        #    )
+        if self.spinup_start.date() < model_build_start_date:
+            raise ValueError(
+                "Spinup start date cannot be before model build start date. Adjust the time range in your build configuration and rebuild the model or adjust the spinup time of the model."
+            )
 
-        # if self.run_end.date() > model_build_end_date:
-        #    raise ValueError(
-        #        "Run end date cannot be after model build end date. Adjust the time range in your build configuration and rebuild the model or adjust the simulation end time of the model."
-        #    )
+        if self.run_end.date() > model_build_end_date:
+            raise ValueError(
+                "Run end date cannot be after model build end date. Adjust the time range in your build configuration and rebuild the model or adjust the simulation end time of the model."
+            )
 
     def create_done_file(self) -> None:
         """Create a file to indicate that the model run or spinup is done."""

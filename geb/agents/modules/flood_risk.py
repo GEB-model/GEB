@@ -556,6 +556,9 @@ class FloodRiskModule:
         Returns:
             The total flood damages for the event for all assets and land use types.
 
+        Raises:
+            NotImplementedError: If the flood function is not implemented for the global damage model.
+            ValueError: If both warning response and adaptation are enabled in the model configuration, as this may lead to unintended consequences.
         """
         if self.model.config["hazards"]["floods"]["damage_model"] == "global":
             raise NotImplementedError(

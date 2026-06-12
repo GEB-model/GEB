@@ -37,7 +37,12 @@ class EarlyWarningModule:
         self.load_wlranges_and_measures()
 
     def load_wlranges_and_measures(self) -> None:
-        """Loads the water level ranges and appropriate measures, and the implementation times for measures."""
+        """
+        Loads the water level ranges and appropriate measures, and the implementation times for measures.
+
+        Raises:
+            ValueError: If the wl_ranges.json structure is invalid.
+        """
         with open(self.model.files["dict"]["measures/implementation_times"], "r") as f:
             self.households.var.implementation_times = json.load(f)
 
@@ -270,6 +275,9 @@ class EarlyWarningModule:
         Returns:
             Probability maps for each water level range OR Probability exceedance maps for each lower bound of the water level ranges
             for that forecast initialization date.
+
+        Raises:
+            ValueError: If the specified strategy is not recognized.
         """
         # Load the ensemble of flood maps for that specific date time
         ensemble_flood_maps = self.load_ensemble_flood_maps(date_time=date_time)
@@ -434,9 +442,24 @@ class EarlyWarningModule:
             damage_probability_map.to_parquet(output_path)
 
     def identify_flooded_buildings(
-        self, buildings, prob_map, prob_threshold, return_series=False
-    ):
-        """Identifies which buildings are flooded based on the flood probability map and a specified probability threshold."""
+        self,
+        buildings: gpd.GeoDataFrame,
+        prob_map: xr.DataArray,
+        prob_threshold: float,
+        return_series: bool = False,
+    ) -> gpd.GeoDataFrame | pd.Series:
+        """
+        Identifies which buildings are flooded based on the flood probability map and a specified probability threshold.
+
+        Args:
+            buildings: GeoDataFrame with building geometries.
+            prob_map: GeoDataFrame with flood probability values.
+            prob_threshold: Probability threshold for identifying flooded buildings.
+            return_series: If True, returns a pandas Series; otherwise, returns a GeoDataFrame.
+
+        Returns:
+            GeoDataFrame or Series with flooded building information.
+        """
         prob_map = prob_map >= prob_threshold  # convert to boolean mask
 
         buildings["flooded"] = False  # Initialize the flooded column
@@ -461,7 +484,17 @@ class EarlyWarningModule:
         else:
             return buildings
 
-    def get_weight(self, weights_table, row):
+    def get_weight(self, weights_table: pd.DataFrame, row: pd.Series) -> float:
+        """
+        Get the communication efficiency weight for a household based on its education and income.
+
+        Args:
+            weights_table: DataFrame with communication efficiency weights indexed by education and income categories.
+            row: Series with the household's education and income information.
+
+        Returns:
+            The communication efficiency weight for the household.
+        """
         edu = row["Education"]
         inc = row["Income_Category"]
         return weights_table.loc[edu, inc]
@@ -480,8 +513,6 @@ class EarlyWarningModule:
 
         Args:
             target_households: GeoDataFrame with household data including education and income.
-            base_efficiency: Base probability for communication efficiency (0-1).
-            use_socioeconomic_factors: Whether to use socio-economic factors or fallback to random.
 
         Returns:
             Series with communication efficiency probabilities for each household.
@@ -662,6 +693,9 @@ class EarlyWarningModule:
 
         Returns:
             int: Number of households that were successfully warned.
+
+        Raises:
+            ValueError: If communication_efficiency is too low to warn any households.
         """
         self.logger.info("Running the warning communication for households...")
         # Get the number of target households
@@ -766,7 +800,8 @@ class EarlyWarningModule:
         weight_by_socioeconomic_factors: bool = False,
         exceedance: bool = True,
     ) -> None:
-        """Implements the water level warning strategy based on flood probability maps BUCKETS PER MEASURE.
+        """
+        Implements the water level warning strategy based on flood probability maps BUCKETS PER MEASURE.
 
         Args:
             date_time: The forecast date time for which to implement the warning strategy.
@@ -779,7 +814,6 @@ class EarlyWarningModule:
             weight_by_socioeconomic_factors: Whether to consider the social economic factors in the distribution of warnings.
             exceedance: Whether to create a probability map based on exceedance of a critical water thresholds or a probability of a waterlevel range.
         """
-
         # Get the range ids and initialize the warning_log
         residential_wlranges = self.households.var.wlranges_and_measures[
             "residential_buildings"
@@ -972,13 +1006,17 @@ class EarlyWarningModule:
         prob_threshold: float,
         exceedance: bool = False,
     ) -> None:
-        """This function implements an evacuation warning strategy based on critical infrastructure elements, such as energy substations, vulnerable and emergency facilities.
+        """
+        This function implements an evacuation warning strategy based on critical infrastructure elements, such as energy substations, vulnerable and emergency facilities.
 
         Args:
             date_time: The forecast date time for which to implement the warning strategy.
             config_asset_type: The type of critical infrastructure for which to issue warnings.
             prob_threshold: The probability threshold for issuing warnings.
             exceedance: Whether to consider exceedance probabilities.
+
+        Raises:
+            ValueError: If no assets are found for the specified asset type.
         """
         # Get the household points, needed to issue warnings
         households = gpd.GeoDataFrame(
@@ -1104,15 +1142,13 @@ class EarlyWarningModule:
     def household_decision_making(
         self, date_time: datetime, warning_type: str, responsive_ratio: float
     ) -> None:
-        """Simulate household emergency response decisions based on warnings and lead time.
+        """
+        Simulate household emergency response decisions based on warnings and lead time.
 
         Args:
             date_time: The forecast date time for which to run the decision-making.
             warning_type: The type of warning strategy that was implemented (building_based or area_based).
             responsive_ratio: The ratio of responsive households.
-
-        Raises:
-            ValueError: If an unknown warning type is specified in the configuration.
         """
         self.logger.info("Running emergency response decision-making for households...")
         self.logger.info(f"Date/time: {date_time}")
