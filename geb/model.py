@@ -239,9 +239,8 @@ class GEBModel(Module):
         forecast_members: list[str] | None = None
         forecast_end_dt: datetime.datetime | None = None
         forecast_data: dict[str, xr.DataArray] = {}
-        print(
-            f"DEBUG: Starting to load forecast data for {len(self.forcing.loaders)} loaders",
-            flush=True,
+        self.logger.info(
+            f"Starting to load forecast data for {len(self.forcing.loaders)} loaders"
         )
         for loader_name, loader in self.forcing.loaders.items():
             if loader.supports_forecast:
@@ -250,41 +249,26 @@ class GEBModel(Module):
                         f"forecasts/{self.config['general']['forecasts']['provider']}/{self.config['general']['forecasts']['ensemble']}/{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}/{loader_name}_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}"
                     ]
                 )
-
-                # Check if forecast file exists for this variable
-                if forecast_file_path.exists():
-                    print(
-                        f"DEBUG: Forecast file exists for {loader_name}, loading...",
-                        flush=True,
-                    )
-                    # open one forecast to see the number of members
-                    forecast_data[loader_name] = read_zarr(forecast_file_path)
-                    # these are the forecast members to loop over
-                    variable_forecast_members: list[str] = [
-                        i.item() for i in forecast_data[loader_name].member.values
-                    ]
-                    variable_forecast_end_dt = (
-                        forecast_data[loader_name].time.values[-1]
-                    ).item()  # get the end datetime of the forecast
-
-                    if forecast_members is None:
-                        forecast_members: list[str] = variable_forecast_members
-                        forecast_end_dt = variable_forecast_end_dt
-                    else:
-                        if forecast_members != variable_forecast_members:
-                            raise ValueError(
-                                "Forecast members do not match between variables."
-                            )
-                        if forecast_end_dt != variable_forecast_end_dt:
-                            raise ValueError(
-                                "Forecast end datetimes do not match between variables."
-                            )
+                
+                variable_forecast_members: list[str] = [
+                            i.item() for i in forecast_data[loader_name].member.values
+                        ]
+                variable_forecast_end_dt = (
+                    forecast_data[loader_name].time.values[-1]
+                ).item()  # get the end datetime of the forecast
+                if forecast_members is None:
+                    forecast_members: list[str] = variable_forecast_members
+                    forecast_end_dt = variable_forecast_end_dt
                 else:
-                    print(
-                        f"DEBUG: Forecast file does NOT exist for {loader_name}",
-                        flush=True,
-                    )
-
+                    if forecast_members != variable_forecast_members:
+                        raise ValueError(
+                            "Forecast members do not match between variables."
+                        )
+                    if forecast_end_dt != variable_forecast_end_dt:
+                        raise ValueError(
+                            "Forecast end datetimes do not match between variables."
+                        )
+               
         assert len(forecast_data) > 0, (
             "No forecast data found for any variable. Please check the forecast files."
         )  # ensure that forecast data was found
