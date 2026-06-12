@@ -246,13 +246,9 @@ class GEBModel(Module):
         for loader_name, loader in self.forcing.loaders.items():
             if loader.supports_forecast:
                 forecast_file_path = (
-                    self.input_folder
-                    / "other"
-                    / "forecasts"
-                    / self.config["general"]["forecasts"]["provider"]
-                    / self.config["general"]["forecasts"]["processing"]
-                    / forecast_issue_datetime.strftime("%Y%m%dT%H%M%S")
-                    / f"{loader_name}_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}.zarr"
+                    self.files["other"][
+                        f"forecasts/{self.config['general']['forecasts']['provider']}/{self.config['general']['forecasts']['ensemble']}/{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}/{loader_name}_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}"
+                    ]
                 )
 
                 # Check if forecast file exists for this variable
