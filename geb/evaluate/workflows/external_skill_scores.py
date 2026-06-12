@@ -23,6 +23,7 @@ GOOGLE_STREAMFLOW_METRIC_FILES: dict[str, str] = {
     "KGE": "KGE.csv",
     "NSE": "NSE.csv",
     "R": "Pearson-r.csv",
+    "KGE_bias_ratio": "Beta-KGE.csv",
     "RMSE": "RMSE.csv",
 }
 GOOGLE_STREAMFLOW_METRIC_ROOT: Path = Path(
@@ -37,6 +38,9 @@ GLOFAS_CSV_NAME: str = "glofas.csv"
 EXTERNAL_MODEL_MINIMUM_UPSTREAM_AREA_KM2: dict[str, float] = {
     # Utrecht 1 km evaluation uses stations with upstream area >= 400 km2.
     "utrecht": 400.0,
+    # GloFAS uses a 3-arcmin grid; the paper removes small GRDC basins to
+    # reduce drainage-network area mismatches at that resolution.
+    "glofas": 500.0,
 }
 
 _PLOTTED_SKILL_SCORE_COLUMNS: tuple[str, ...] = (
@@ -58,11 +62,13 @@ class SkillScorePlotInputs:
         evaluation_df: Filtered GEB skill-score table.
         external_models: Filtered external skill-score tables keyed by model label.
         filter_summary: Short human-readable summary of applied filters.
+        minimum_upstream_area_km2: Effective GEB upstream-area threshold (km2).
     """
 
     evaluation_df: pd.DataFrame
     external_models: dict[str, pd.DataFrame]
     filter_summary: str
+    minimum_upstream_area_km2: float | None = None
 
 
 @dataclass(frozen=True)
@@ -118,6 +124,20 @@ def _get_external_model_minimum_upstream_area_km2(model_name: str) -> float | No
     return None
 
 
+def _has_positive_upstream_area_threshold(
+    minimum_upstream_area_km2: float | None,
+) -> bool:
+    """Check whether an upstream-area threshold should be described.
+
+    Args:
+        minimum_upstream_area_km2: Minimum upstream-area threshold (km2).
+
+    Returns:
+        True when the threshold is positive and should be shown.
+    """
+    return minimum_upstream_area_km2 is not None and minimum_upstream_area_km2 > 0.0
+
+
 def _get_external_filter_summary(external_models: dict[str, pd.DataFrame]) -> str:
     """Describe configured paper-specific external-model filters.
 
@@ -132,7 +152,7 @@ def _get_external_filter_summary(external_models: dict[str, pd.DataFrame]) -> st
         minimum_upstream_area_km2 = _get_external_model_minimum_upstream_area_km2(
             model_name
         )
-        if minimum_upstream_area_km2 is not None:
+        if _has_positive_upstream_area_threshold(minimum_upstream_area_km2):
             filter_parts.append(
                 f"{model_name}: upstream area >= {minimum_upstream_area_km2:g} km2"
             )
@@ -154,9 +174,11 @@ def _format_filter_summary(
     Returns:
         Multi-line filter summary for the plot.
     """
-    filter_lines: list[str] = [
-        f"GEB upstream area >= {geb_minimum_upstream_area_km2:g} km2"
-    ]
+    filter_lines: list[str] = []
+    if _has_positive_upstream_area_threshold(geb_minimum_upstream_area_km2):
+        filter_lines.append(
+            f"GEB upstream area >= {geb_minimum_upstream_area_km2:g} km2"
+        )
     external_summary: str = _get_external_filter_summary(external_models)
     if external_summary:
         filter_lines.append(external_summary)
@@ -186,20 +208,30 @@ def _empty_skill_score_plot_inputs(
             external_models=external_models,
             matched_only=True,
         ),
+        minimum_upstream_area_km2=geb_minimum_upstream_area_km2,
     )
 
 
-def _standardize_external_metric_columns(skill_score_df: pd.DataFrame) -> pd.DataFrame:
+def _standardize_external_metric_columns(
+    skill_score_df: pd.DataFrame,
+    model_name: str = "",
+) -> pd.DataFrame:
     """Normalize external metric names to the GEB evaluation column names.
 
     Args:
         skill_score_df: External skill-score table.
+        model_name: External model label used for source-specific metric cleanup.
 
     Returns:
         Skill-score table with Pearson-r source values stored as
-        `KGE_correlation` and no standalone `R` column.
+        `KGE_correlation` and no standalone `R` column. Utrecht `R2` columns
+        are treated as COD/NSE, while `R2` derived from `R` is Pearson r squared.
     """
     standardized_df: pd.DataFrame = skill_score_df.copy()
+    if "utrecht" in model_name.lower() and "R2" in standardized_df.columns:
+        if "NSE" not in standardized_df.columns:
+            standardized_df["NSE"] = standardized_df["R2"]
+        standardized_df = standardized_df.drop(columns=["R2"])
     if "R" in standardized_df.columns:
         if "KGE_correlation" not in standardized_df.columns:
             standardized_df["KGE_correlation"] = standardized_df["R"]
@@ -643,16 +675,29 @@ def _load_or_fetch_external_archive_model_metrics(
         Normalized skill-score table.
     """
     csv_path: Path = folder / archive_model.csv_name
+    missing_csv_columns: set[str] = set()
     if csv_path.exists():
         metrics_df: pd.DataFrame = pd.read_csv(csv_path, index_col=0)
         metrics_df.index = metrics_df.index.map(str).str.upper()
+        metrics_df = _standardize_external_metric_columns(
+            metrics_df,
+            model_name=archive_model.model_name,
+        )
+        missing_csv_columns = {"KGE_bias_ratio"} - set(metrics_df.columns)
         logger.info(
             "Loaded normalized %s metrics for %d stations from %s.",
             archive_model.model_name,
             len(metrics_df),
             csv_path,
         )
-        return _standardize_external_metric_columns(metrics_df)
+        if not missing_csv_columns:
+            return metrics_df
+        logger.info(
+            "Rebuilding %s metrics from archive because %s is missing %s.",
+            archive_model.model_name,
+            csv_path,
+            sorted(missing_csv_columns),
+        )
 
     metrics_df: pd.DataFrame = read_external_archive_skill_scores(
         folder,
@@ -686,7 +731,7 @@ def _load_or_fetch_external_archive_model_metrics(
                 len(metrics_df),
             )
 
-    if not metrics_df.empty and not csv_path.exists():
+    if not metrics_df.empty and (not csv_path.exists() or missing_csv_columns):
         _save_external_archive_model_csv(
             metrics_df,
             csv_path,
@@ -747,7 +792,8 @@ def _read_external_csv_models(
         external_evaluation_df.index = external_evaluation_df.index.map(str).str.upper()
         model_name: str = _get_external_model_name(csv_path)
         external_models[model_name] = _standardize_external_metric_columns(
-            external_evaluation_df
+            external_evaluation_df,
+            model_name=model_name,
         )
         logger.info(
             "Loaded external model '%s' metrics for %d stations from %s.",
@@ -796,11 +842,11 @@ def _add_archive_models(
         folder: External evaluation folder.
         logger: Logger used for processing diagnostics.
         auto_fetch_google_streamflow: Whether to fetch Google's archive when
-            local archive models are missing.
+    local archive models are missing.
     """
     for archive_model in GOOGLE_METRICS_ARCHIVE_MODELS:
         metrics_df: pd.DataFrame | None = external_models.get(archive_model.model_name)
-        if metrics_df is None:
+        if metrics_df is None or "KGE_bias_ratio" not in metrics_df.columns:
             metrics_df = _load_or_fetch_external_archive_model_metrics(
                 folder,
                 archive_model,
@@ -1108,6 +1154,26 @@ def _prepare_pairwise_matched_skill_score_boxplot_input(
             geb_minimum_upstream_area_km2=effective_minimum_upstream_area_km2,
             external_models={model_name: model_df},
         )
+    if "KGE" in matched_evaluation_df.columns and "KGE" in external_model_df.columns:
+        station_name_keys: pd.Series = matched_evaluation_df["station_name"].map(
+            lambda station_name: (
+                str(station_name).strip().upper() if pd.notna(station_name) else ""
+            )
+        )
+        grdc_station_keys: pd.Series = matched_evaluation_df.get(
+            "station_ID", pd.Series(index=matched_evaluation_df.index, dtype=object)
+        ).map(lambda station_id: _format_grdc_station_key(station_id) or "")
+        external_station_keys: set[str] = set(external_model_df.index.str.upper())
+        external_keys: pd.Series = station_name_keys.where(
+            station_name_keys.isin(external_station_keys),
+            grdc_station_keys.where(grdc_station_keys.isin(external_station_keys)),
+        )
+        matched_evaluation_df["KGE_difference"] = (
+            pd.to_numeric(matched_evaluation_df["KGE"], errors="coerce").to_numpy()
+            - pd.to_numeric(
+                external_model_df.reindex(external_keys)["KGE"], errors="coerce"
+            ).to_numpy()
+        )
 
     external_models: dict[str, pd.DataFrame] = {model_name: external_model_df}
     return SkillScorePlotInputs(
@@ -1118,6 +1184,7 @@ def _prepare_pairwise_matched_skill_score_boxplot_input(
             external_models=external_models,
             matched_only=True,
         ),
+        minimum_upstream_area_km2=effective_minimum_upstream_area_km2,
     )
 
 
@@ -1285,6 +1352,7 @@ def prepare_skill_score_boxplot_inputs(
             external_models=external_models,
             matched_only=matched_only,
         ),
+        minimum_upstream_area_km2=minimum_upstream_area_km2,
     )
 
 

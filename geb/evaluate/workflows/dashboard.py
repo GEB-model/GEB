@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import branca.colormap as cm
+import branca.element
 import folium
 import geopandas as gpd
 import numpy as np
@@ -29,10 +30,9 @@ _ESRI_TOPO_ATTR = (
 
 
 StationMarkerIndex = dict[str, str | list[str]]
+RESERVOIR_WATERBODY_TYPE: int = 2
 _WATERBODY_STYLE: dict[int, dict[str, str]] = {
-    1: {"color": "#4FC3F7", "label": "Lake"},
-    2: {"color": "#FF8A65", "label": "Reservoir"},
-    3: {"color": "#81C784", "label": "Lake (controlled)"},
+    RESERVOIR_WATERBODY_TYPE: {"color": "#FF8A65", "label": "Reservoir"},
 }
 
 _METRIC_LAYER_CONFIGS: list[dict] = [
@@ -86,7 +86,7 @@ _METRIC_LAYER_CONFIGS: list[dict] = [
     },
     {
         "col": "R2",
-        "name": "R²",
+        "name": "Pearson r²",
         "colors": ["red", "orange", "yellow", "blue", "green"],
         "vmin": 0.0,
         "vmax": 1.0,
@@ -206,7 +206,7 @@ def _pick_timeseries_points(
 
 def _build_timeseries_payload(
     validation_df: pd.DataFrame,
-    maximum_points: int = 700,
+    maximum_points: int = 250,
 ) -> dict[str, list[str] | list[float | None]]:
     """Build the popup payload for one discharge time-series chart.
 
@@ -254,23 +254,27 @@ def _build_return_period_payload(
 
     Returns:
         Dictionary with return periods (years) and fitted discharge values (m3/s).
+        Returns empty lists if the fit fails or the series is too short.
     """
-    model = ReturnPeriodModel(
-        series=series,
-        return_periods=return_periods_years,
-        fixed_shape=0.0,
-        selection_strategy="first_significant",
-    )
-    return {
-        "returnPeriod": [
-            _as_finite_float(value)
-            for value in model.rl_table["T_years"].to_numpy(dtype=float)
-        ],
-        "discharge": [
-            _as_finite_float(value)
-            for value in model.rl_table["GPD_POT_RL"].to_numpy(dtype=float)
-        ],
-    }
+    try:
+        model = ReturnPeriodModel(
+            series=series,
+            return_periods=return_periods_years,
+            fixed_shape=0.0,
+            selection_strategy="first_significant",
+        )
+        return {
+            "returnPeriod": [
+                _as_finite_float(value)
+                for value in model.rl_table["T_years"].to_numpy(dtype=float)
+            ],
+            "discharge": [
+                _as_finite_float(value)
+                for value in model.rl_table["GPD_POT_RL"].to_numpy(dtype=float)
+            ],
+        }
+    except Exception:
+        return {"returnPeriod": [], "discharge": []}
 
 
 def build_discharge_dashboard_chart_data(
@@ -286,7 +290,7 @@ def build_discharge_dashboard_chart_data(
         validation_df: Observed/simulated discharge dataframe (m3/s).
         station_name: Human-readable station name.
         upstream_area_ratio: Observed-to-model upstream-area ratio (dimensionless).
-        metrics: Discharge skill metrics such as ``KGE``, ``NSE``, and ``R``
+        metrics: Discharge skill metrics such as ``KGE``, ``NSE``, and ``R2``
             (dimensionless).
         frequency: Data frequency label, for example ``"daily"`` or ``"hourly"``.
 
@@ -304,7 +308,9 @@ def build_discharge_dashboard_chart_data(
             "KGE_modified": _as_finite_float(metrics.get("KGE_modified")),
             "KGE_correlation": _as_finite_float(metrics.get("KGE_correlation")),
             "KGE_bias_ratio": _as_finite_float(metrics.get("KGE_bias_ratio")),
-            "KGE_variability_ratio": _as_finite_float(metrics.get("KGE_variability_ratio")),
+            "KGE_variability_ratio": _as_finite_float(
+                metrics.get("KGE_variability_ratio")
+            ),
             "NSE": _as_finite_float(metrics.get("NSE")),
             "R2": _as_finite_float(metrics.get("R2")),
             "RMSE": _as_finite_float(metrics.get("RMSE")),
@@ -326,23 +332,33 @@ def build_discharge_dashboard_chart_data(
 def _inject_popup_chart_script(
     m: folium.Map,
     station_chart_data: dict[str, dict[str, Any]],
+    output_path: Path,
 ) -> None:
-    """Add lazy-rendered station popup charts.
+    """Write station chart data to a companion JS file and wire up popup rendering.
 
-    Chart payloads are stored once in ``window._stationCharts`` and rendered
-    with Plotly only when the popup is opened.
+    Chart payloads are saved to ``<stem>_charts.js`` next to the HTML output
+    and loaded via a synchronous ``<script>`` tag so ``window._stationCharts``
+    is always populated before any popup opens.
 
     Args:
         m: Folium map to inject the macro into.
         station_chart_data: Mapping of station ID string to interactive chart
             data with discharge values (m3/s).
+        output_path: Path of the HTML output file; the companion JS is saved
+            alongside it.
     """
-    charts_js = json.dumps(station_chart_data, separators=(",", ":"))
-    _JavascriptMacro(
+    charts_filename = output_path.stem + "_charts.js"
+    charts_js_path = output_path.parent / charts_filename
+    charts_js_path.write_text(
         "window._stationCharts="
-        + charts_js
-        + ";\n"
-        + """
+        + json.dumps(station_chart_data, separators=(",", ":"))
+        + ";"
+    )
+    m.get_root().header.add_child(
+        branca.element.Element(f'<script src="{charts_filename}"></script>')
+    )
+    _JavascriptMacro(
+        """
 (function(){
   var plotlyUrl = 'https://cdn.plot.ly/plotly-2.35.2.min.js';
   var colors = { observed: '#facc15', simulated: '#38bdf8' };
@@ -485,7 +501,7 @@ def _inject_popup_chart_script(
       '<div class="geb-popup__metrics">' + metricHtml('KGE', metrics.KGE) + metricHtml('mKGE', metrics.KGE_modified) +
       metricHtml('r', metrics.KGE_correlation) + metricHtml('β', metrics.KGE_bias_ratio) +
       metricHtml('α', metrics.KGE_variability_ratio) + metricHtml('NSE', metrics.NSE) +
-      metricHtml('R²', metrics.R2) + metricHtml('RMSE', metrics.RMSE) +
+      metricHtml('r²', metrics.R2) + metricHtml('RMSE', metrics.RMSE) +
       metricHtml('RRMSE', metrics.RRMSE) + metricHtml('Area ratio', metrics.upstreamAreaRatio) + '</div>' +
       '<div class="geb-popup__chart-title">Return periods</div>' + makeChartDiv('geb-return-' + safeStationId) +
       '<div class="geb-popup__chart-title">Discharge time series</div>' + makeChartDiv('geb-time-' + safeStationId);
@@ -627,7 +643,6 @@ def _inject_station_search_script(
     ).add_to(m)
 
 
-
 def _add_station_marker(
     layer: folium.FeatureGroup,
     coords: list[float],
@@ -711,23 +726,27 @@ def _add_waterbody_layers(
     discharge_map: folium.Map,
     waterbodies: gpd.GeoDataFrame,
 ) -> None:
-    """Add lake and reservoir point layers to the discharge map.
+    """Add reservoir point layers to the discharge map.
 
     Args:
         discharge_map: Folium map receiving waterbody layers.
         waterbodies: Waterbody GeoDataFrame with polygon geometries and
-            ``waterbody_type`` identifiers.
+            ``waterbody_type`` identifiers. Only reservoirs are rendered.
     """
     waterbody_layers: dict[int, folium.FeatureGroup] = {
         waterbody_type: folium.FeatureGroup(name=style["label"] + "s", show=True)
         for waterbody_type, style in _WATERBODY_STYLE.items()
     }
-    waterbodies_wgs84: gpd.GeoDataFrame = waterbodies.to_crs(epsg=4326)
+    reservoir_mask: pd.Series = (
+        waterbodies["waterbody_type"].astype(int) == RESERVOIR_WATERBODY_TYPE
+    )
+    reservoirs: gpd.GeoDataFrame = waterbodies.loc[reservoir_mask].copy()
+    if reservoirs.empty:
+        return
+
+    waterbodies_wgs84: gpd.GeoDataFrame = reservoirs.to_crs(epsg=4326)
     for _, waterbody_row in waterbodies_wgs84.iterrows():
-        waterbody_type: int = int(waterbody_row["waterbody_type"])
-        waterbody_style: dict[str, str] | None = _WATERBODY_STYLE.get(waterbody_type)
-        if waterbody_style is None:
-            continue
+        waterbody_style: dict[str, str] = _WATERBODY_STYLE[RESERVOIR_WATERBODY_TYPE]
 
         centroid = waterbody_row.geometry.centroid
         area_km2: float | None = (
@@ -760,7 +779,7 @@ def _add_waterbody_layers(
             popup=folium.Popup("".join(popup_lines), max_width=200),
             tooltip=f"{waterbody_style['label']} {waterbody_row.get('waterbody_id', '')}",
             z_index=500,
-        ).add_to(waterbody_layers[waterbody_type])
+        ).add_to(waterbody_layers[RESERVOIR_WATERBODY_TYPE])
 
     for waterbody_layer in waterbody_layers.values():
         waterbody_layer.add_to(discharge_map)
@@ -773,15 +792,19 @@ def create_discharge_folium_map(
     rivers: gpd.GeoDataFrame,
     station_chart_data: dict[str, dict[str, Any]],
     waterbodies: gpd.GeoDataFrame | None = None,
+    minimum_river_upstream_area_km2: float = 5000.0,
 ) -> folium.Map:
     """Create an interactive Folium discharge evaluation map.
 
     Stations are shown as circle markers coloured by each discharge metric
-    (switchable via layer control) and sized by upstream area.  River widths
-    are scaled by mean discharge.  An optional upstream-area-ratio layer is
-    included when all stations have the ratio available.  Station popup charts
-    are lazy-rendered with Plotly when the popup is opened. Lakes and
-    reservoirs are rendered as dot markers when ``waterbodies`` is provided.
+    (switchable via layer control) and sized by upstream area.  An optional
+    upstream-area-ratio layer is included when all stations have the ratio
+    available.  Station popup charts are lazy-rendered with Plotly when the
+    popup is opened. Reservoirs are rendered as dot markers when ``waterbodies``
+    is provided; lakes are skipped because they make large dashboards slow.
+
+    Station chart data is saved to a companion ``<stem>_charts.js`` file next
+    to ``output_path`` to keep the HTML file small enough for browser loading.
 
     Args:
         evaluation_gdf: Per-station GeoDataFrame with discharge metric columns,
@@ -792,13 +815,17 @@ def create_discharge_folium_map(
             saved.
         region_geom: Basin/region boundary GeoDataFrame used to fit the map
             extent and render the catchment outline.
-        rivers: River network GeoDataFrame with a ``discharge_m3_per_s``
-            column used to scale river line widths.
+        rivers: River network GeoDataFrame (geometry only; rivers are rendered
+            at uniform width).
         station_chart_data: Interactive chart data keyed by station ID string.
             Discharge values are expected in m3/s.
         waterbodies: Optional GeoDataFrame with columns ``waterbody_type``
-            (1 = lake, 2 = reservoir, 3 = lake control) and polygon
-            geometries. Centroids are used for dot placement.
+            (2 = reservoir) and polygon geometries. Centroids are used for dot
+            placement.
+        minimum_river_upstream_area_km2: Minimum upstream area (km²) for
+            rivers shown on the map. Larger values reduce file size.  Rivers
+            with an ``uparea_m2`` column smaller than this threshold are
+            dropped before rendering.  Set to ``0`` to include all rivers.
 
     Returns:
         The Folium map object (already saved to ``output_path``).
@@ -822,30 +849,15 @@ def create_discharge_folium_map(
         z_index=1,
     ).add_to(discharge_map)
 
-    max_discharge = np.nanmax(rivers["discharge_m3_per_s"])
-    max_discharge_sqrt: float | None = (
-        None if np.isnan(max_discharge) else math.sqrt(max_discharge.item())
-    )
-    min_line_weight, max_line_weight = 0.5, 5.0
-
-    def _river_style(feature: dict) -> dict:
-        discharge = feature["properties"]["discharge_m3_per_s"]
-        if discharge is None or max_discharge_sqrt is None:
-            return {"color": "gray", "weight": min_line_weight}
-        return {
-            "color": "blue",
-            "weight": (
-                math.sqrt(discharge)
-                / max_discharge_sqrt
-                * (max_line_weight - min_line_weight)
-                + min_line_weight
-            ),
-        }
-
+    rivers_for_map: gpd.GeoDataFrame = rivers
+    if minimum_river_upstream_area_km2 > 0 and "uparea_m2" in rivers_for_map.columns:
+        rivers_for_map = rivers_for_map[
+            rivers_for_map["uparea_m2"] >= minimum_river_upstream_area_km2 * 1e6
+        ]
     folium.GeoJson(
-        rivers[["geometry", "discharge_m3_per_s"]].to_json(),
+        rivers_for_map[["geometry"]].to_json(),
         name="Rivers",
-        style_function=_river_style,
+        style_function=lambda x: {"color": "#4A90D9", "weight": 1.0, "opacity": 0.6},
         z_index=2,
     ).add_to(discharge_map)
 
@@ -951,10 +963,10 @@ def create_discharge_folium_map(
         layer_upstream.add_to(discharge_map)
 
     # Inject station chart data as a single JS global shared by all layers.
-    _inject_popup_chart_script(discharge_map, station_chart_data)
+    _inject_popup_chart_script(discharge_map, station_chart_data, output_path)
     _inject_station_search_script(discharge_map, station_marker_index)
 
-    # Waterbodies: render lakes and reservoirs as dot markers at polygon centroids.
+    # Waterbodies: render reservoirs only; lakes make the dashboard too heavy.
     if waterbodies is not None and not waterbodies.empty:
         _add_waterbody_layers(discharge_map, waterbodies)
 

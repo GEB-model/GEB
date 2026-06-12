@@ -9,8 +9,8 @@ from geb.evaluate.hydrology import (
 )
 
 
-def test_discharge_metrics_use_coefficient_of_determination_for_r2() -> None:
-    """R2 is coefficient of determination, not squared Pearson correlation."""
+def test_discharge_metrics_use_squared_pearson_correlation_for_r2() -> None:
+    """R2 is squared Pearson correlation; COD is represented by NSE."""
     validation_df: pd.DataFrame = pd.DataFrame(
         {
             "discharge_observations": [1.0, 2.0, 3.0],
@@ -21,7 +21,8 @@ def test_discharge_metrics_use_coefficient_of_determination_for_r2() -> None:
     metrics = _calculate_discharge_validation_metrics(validation_df)
 
     assert metrics.KGE_correlation == pytest.approx(1.0)
-    assert metrics.R2 == pytest.approx(-0.5)
+    assert metrics.R2 == pytest.approx(1.0)
+    assert metrics.NSE == pytest.approx(-0.5)
 
 
 def test_discharge_metrics_include_kge_components() -> None:
@@ -84,5 +85,4 @@ def test_rrmse_is_normalized_by_observed_standard_deviation() -> None:
         metrics.RMSE / observed_discharge_m3_per_s.std()
     )
     assert metrics.RRMSE == pytest.approx(expected_rrmse)
-
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import cast
 
@@ -13,6 +14,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib.lines import Line2D
+from scipy.stats import linregress
 
 _DISPLAYED_SKILL_SCORE_CONFIGS: tuple[dict[str, object], ...] = (
     {
@@ -81,7 +83,7 @@ _DISPLAYED_SKILL_SCORE_CONFIGS: tuple[dict[str, object], ...] = (
     {
         "col": "R2",
         "label": "R²",
-        "title": "Coefficient of Determination (R²)",
+        "title": "Squared Pearson Correlation (R²)",
         "unit": "(−)",
         "ylim": (-1.0, 1.0),
         "reference": 1.0,
@@ -255,6 +257,7 @@ def plot_skill_score_maps(
     region_geom: gpd.GeoDataFrame,
     output_folder: Path,
     logger: logging.Logger,
+    difference_gdfs: dict[str, pd.DataFrame] | None = None,
 ) -> None:
     """Plot per-station skill scores on a satellite basemap, one map per metric.
 
@@ -265,6 +268,8 @@ def plot_skill_score_maps(
         region_geom: Basin/region boundary overlaid on each map.
         output_folder: Root folder under which ``skill_score_maps/`` is created.
         logger: Logger to use for progress messages.
+        difference_gdfs: Optional matched GEB-vs-external station tables with
+            ``KGE_difference`` values (dimensionless).
     """
     maps_folder = output_folder / "skill_score_maps"
     maps_folder.mkdir(parents=True, exist_ok=True)
@@ -285,7 +290,6 @@ def plot_skill_score_maps(
             if cfg["vmax"] is None
             else float(cfg["vmax"])
         )
-
         _plot_skill_score_map_single(
             evaluation_gdf=evaluation_gdf,
             metric_col=col,
@@ -298,6 +302,46 @@ def plot_skill_score_maps(
             region_geom=region_geom,
         )
         logger.info("Saved skill score map for %s.", col)
+
+    for model_name, difference_df in (difference_gdfs or {}).items():
+        if "KGE_difference" not in difference_df:
+            continue
+        has_geometry: bool = "geometry" in difference_df
+        if not has_geometry and not {"x", "y"}.issubset(difference_df):
+            logger.info("No station geometry found for %s difference map.", model_name)
+            continue
+        difference_gdf: gpd.GeoDataFrame = (
+            gpd.GeoDataFrame(
+                difference_df,
+                geometry="geometry",
+                crs=getattr(difference_df, "crs", None),
+            )
+            if has_geometry
+            else gpd.GeoDataFrame(
+                difference_df,
+                geometry=gpd.points_from_xy(difference_df["x"], difference_df["y"]),
+                crs="EPSG:4326",
+            )
+        )
+        valid_values: np.ndarray = (
+            difference_gdf["KGE_difference"].dropna().to_numpy(dtype=float)
+        )
+        if valid_values.size == 0:
+            continue
+        visible_limit: float = max(float(np.nanpercentile(abs(valid_values), 95)), 0.05)
+        output_suffix: str = re.sub(r"[^a-z0-9]+", "_", model_name.lower()).strip("_")
+        _plot_skill_score_map_single(
+            evaluation_gdf=difference_gdf,
+            metric_col="KGE_difference",
+            metric_label="KGE difference (-)",
+            metric_title=f"KGE Difference: GEB - {model_name}",
+            cmap_name="RdBu",
+            vmin=-visible_limit,
+            vmax=visible_limit,
+            output_path=maps_folder / f"skill_score_difference_map_{output_suffix}",
+            region_geom=region_geom,
+        )
+        logger.info("Saved skill score difference map for %s.", model_name)
 
     logger.info("All skill score maps saved to: %s", maps_folder)
 
@@ -445,71 +489,163 @@ def _get_boxplot_axis_layout(
     return axes_by_metric
 
 
-def _annotate_metric_sample_sizes(
+def _annotate_metric_medians(
     axis: plt.Axes,
     models_with_data: list[tuple[str, np.ndarray]],
-    model_colors: dict[str, str],
+    x_positions: np.ndarray,
     compact: bool,
 ) -> None:
-    """Add median and station-count labels below a metric axis.
+    """Add median labels below each metric violin.
 
     Args:
         axis: Axis receiving the labels.
         models_with_data: Model names and finite metric values to summarize.
-        model_colors: Mapping from model name to plot color.
+        x_positions: Violin x positions in axis data coordinates.
         compact: Whether the labels are drawn in a smaller component axis.
     """
-    label_blocks: list[str] = [
-        f"{model_name}:\nmed={float(np.median(metric_values)):.2f}\nn={len(metric_values)}"
-        for model_name, metric_values in models_with_data
-    ]
-    label_color: str = model_colors.get("GEB", "#1f77b4")
-    axis.text(
-        0.5,
-        -0.20 if compact else -0.11,
-        "\n\n".join(label_blocks),
-        transform=axis.transAxes,
-        ha="center",
-        va="top",
-        fontsize=6,
-        linespacing=0.9,
-        color=label_color,
-        bbox={
-            "boxstyle": "round,pad=0.20",
-            "facecolor": "0.95",
-            "edgecolor": "0.75",
-            "alpha": 0.9,
-        },
-        clip_on=False,
-    )
+    base_label_y: float = -0.25 if compact else -0.11
+    for label_index, ((_, metric_values), x_position) in enumerate(
+        zip(
+            models_with_data,
+            x_positions,
+            strict=True,
+        )
+    ):
+        label_y: float = (
+            base_label_y - 0.09 * label_index
+            if compact and len(models_with_data) > 1
+            else base_label_y
+        )
+        # Compact component axes are narrow, so stagger labels vertically to
+        # keep neighboring medians legible when comparing two models.
+        label_fontsize: float = 5.5 if compact else 7.0
+        axis.text(
+            float(x_position),
+            label_y,
+            f"med={float(np.median(metric_values)):.2f}",
+            transform=axis.get_xaxis_transform(),
+            ha="center",
+            va="top",
+            fontsize=label_fontsize,
+            color="0.25",
+            clip_on=False,
+        )
 
 
-def _add_filter_summary(
-    fig: plt.Figure,
-    filter_summary: str,
-) -> None:
-    """Add the applied filtering criteria to the lower-right plot area.
+def _has_positive_upstream_area_threshold(
+    minimum_upstream_area_km2: float | None,
+) -> bool:
+    """Check whether an upstream-area threshold should be shown.
 
     Args:
-        fig: Figure receiving the annotation.
-        filter_summary: Multi-line description of station filters.
+        minimum_upstream_area_km2: Minimum upstream-area threshold (km2).
+
+    Returns:
+        True when the threshold is positive and should be displayed.
     """
-    if not filter_summary:
-        return
-    fig.text(
-        0.985,
-        0.18,
-        filter_summary,
-        ha="right",
-        va="bottom",
-        fontsize=8,
-        bbox={
-            "boxstyle": "round,pad=0.35",
-            "facecolor": "0.95",
-            "edgecolor": "0.7",
-            "alpha": 0.9,
-        },
-    )
+    return minimum_upstream_area_km2 is not None and minimum_upstream_area_km2 > 0.0
+
+
+def _format_boxplot_upstream_area_label(
+    minimum_upstream_area_km2: float | None,
+) -> str:
+    """Format an upstream-area threshold for titles.
+
+    Args:
+        minimum_upstream_area_km2: Minimum upstream-area threshold (km2).
+
+    Returns:
+        Human-readable upstream-area threshold.
+    """
+    if not _has_positive_upstream_area_threshold(minimum_upstream_area_km2):
+        return ""
+    return f"upstream area >= {minimum_upstream_area_km2:g} km2"
+
+
+def _format_boxplot_output_context(
+    minimum_upstream_area_km2: float | None,
+    station_count: int | None,
+) -> str:
+    """Format plot metadata for output filenames.
+
+    Args:
+        minimum_upstream_area_km2: Minimum upstream-area threshold (km2).
+        station_count: Number of plotted GEB stations.
+
+    Returns:
+        Filename-safe suffix containing the threshold and station count.
+    """
+    context_parts: list[str] = []
+    if _has_positive_upstream_area_threshold(minimum_upstream_area_km2):
+        area_label: str = f"{minimum_upstream_area_km2:g}".replace(".", "p")
+        context_parts.append(f"upstream_area_{area_label}km2")
+    if station_count is not None:
+        context_parts.append(f"n{station_count}")
+    return f"_{'_'.join(context_parts)}" if context_parts else ""
+
+
+def _format_boxplot_title_context(
+    minimum_upstream_area_km2: float | None,
+    station_count: int | None,
+    matched_only: bool,
+    has_external_models: bool,
+) -> str:
+    """Format plot metadata for the boxplot title.
+
+    Args:
+        minimum_upstream_area_km2: Minimum upstream-area threshold (km2).
+        station_count: Number of plotted GEB stations.
+        matched_only: Whether GEB and external stations are restricted to overlap.
+        has_external_models: Whether external model scores are plotted.
+
+    Returns:
+        Parenthesized title context, or an empty string when no metadata is known.
+    """
+    context_parts: list[str] = []
+    if matched_only and has_external_models:
+        context_parts.append("matched stations only")
+    if upstream_area_label := _format_boxplot_upstream_area_label(
+        minimum_upstream_area_km2
+    ):
+        context_parts.append(upstream_area_label)
+    if station_count is not None:
+        context_parts.append(f"n={station_count}")
+    return f" ({'; '.join(context_parts)})" if context_parts else ""
+
+
+def _get_external_model_plot_order(model_name: str) -> tuple[int, str]:
+    """Get a stable display order for final external-model comparisons.
+
+    Args:
+        model_name: External model label.
+
+    Returns:
+        Sort key with priority and lower-case model label.
+    """
+    model_name_lower: str = model_name.lower()
+    for priority, model_key in enumerate(("utrecht", "google", "glofas")):
+        if model_key in model_name_lower:
+            return priority, model_name_lower
+    return 99, model_name_lower
+
+
+def _format_external_model_short_name(model_name: str) -> str:
+    """Format an external model name for compact axis labels.
+
+    Args:
+        model_name: External model label.
+
+    Returns:
+        Short display label.
+    """
+    model_name_lower: str = model_name.lower()
+    if "utrecht" in model_name_lower:
+        return "Utrecht"
+    if "google" in model_name_lower:
+        return "Google"
+    if "glofas" in model_name_lower:
+        return "GloFAS"
+    return model_name
 
 
 def plot_skill_score_boxplots(
@@ -520,8 +656,9 @@ def plot_skill_score_boxplots(
     export: bool = True,
     include_geb: bool = True,
     matched_only: bool = False,
-    filter_summary: str = "",
     output_name_suffix: str = "",
+    minimum_upstream_area_km2: float | None = None,
+    station_count: int | None = None,
 ) -> None:
     """Create skill score violin+boxplot graphs for each evaluation metric.
 
@@ -533,8 +670,10 @@ def plot_skill_score_boxplots(
         export: Save the figure to disk.
         include_geb: Include GEB in the plot.
         matched_only: Whether the plotted data were restricted to matched stations.
-        filter_summary: Description of filters to annotate in the plot.
         output_name_suffix: Optional suffix appended to the output file stem.
+        minimum_upstream_area_km2: Minimum modeled upstream area threshold for
+            plotted GEB stations (km2).
+        station_count: Number of plotted GEB stations.
     """
     if include_geb and evaluation_df.empty:
         logger.info(
@@ -577,11 +716,17 @@ def plot_skill_score_boxplots(
 
     fig = plt.figure(figsize=(15.5, 6.8), constrained_layout=False)
     axes_by_metric = _get_boxplot_axis_layout(fig)
-    plot_subtitle: str = (
-        " (matched stations only)" if matched_only and external_models else ""
+    displayed_station_count: int | None = (
+        station_count if station_count is not None else len(evaluation_df)
+    )
+    plot_context: str = _format_boxplot_title_context(
+        minimum_upstream_area_km2=minimum_upstream_area_km2,
+        station_count=displayed_station_count,
+        matched_only=matched_only,
+        has_external_models=bool(external_models),
     )
     fig.suptitle(
-        f"Discharge Evaluation — Skill Score Distributions{plot_subtitle}",
+        f"Discharge Evaluation — Skill Score Distributions{plot_context}",
         fontsize=14,
         fontweight="bold",
         y=0.98,
@@ -624,10 +769,10 @@ def plot_skill_score_boxplots(
             bar_color: str = model_colors[model_name]
             _draw_violin_box(axis, metric_values, x_position, bar_color)
         is_component_axis: bool = metric_col.startswith("KGE_")
-        _annotate_metric_sample_sizes(
+        _annotate_metric_medians(
             axis,
             models_with_data,
-            model_colors,
+            x_positions,
             compact=is_component_axis,
         )
 
@@ -658,7 +803,8 @@ def plot_skill_score_boxplots(
             axis.set_ylim(*_get_robust_error_metric_ylim(combined_metric_values))
         axis.set_xticks([])
         axis.tick_params(
-            axis="y", labelsize=7 if is_component_axis else 8,
+            axis="y",
+            labelsize=7 if is_component_axis else 8,
         )
         axis.set_xlabel("")
         for spine in axis.spines.values():
@@ -685,10 +831,13 @@ def plot_skill_score_boxplots(
             bbox_to_anchor=(0.5, 0.03),
         )
 
-    _add_filter_summary(fig, filter_summary)
     fig.subplots_adjust(left=0.055, right=0.985, top=0.85, bottom=0.22)
 
     if export:
+        context_suffix: str = _format_boxplot_output_context(
+            minimum_upstream_area_km2=minimum_upstream_area_km2,
+            station_count=displayed_station_count,
+        )
         suffix: str = output_name_suffix or (
             "_external_only"
             if not include_geb
@@ -698,7 +847,8 @@ def plot_skill_score_boxplots(
         )
         for extension in ("svg", "png"):
             output_path: Path = (
-                output_folder / f"evaluation_skill_scores{suffix}.{extension}"
+                output_folder
+                / f"evaluation_skill_scores{suffix}{context_suffix}.{extension}"
             )
             plt.savefig(output_path, bbox_inches="tight", dpi=150)
             logger.info("Skill score plot saved to: %s", output_path)
@@ -709,13 +859,153 @@ def plot_skill_score_boxplots(
     logger.info("Skill score plots created.")
 
 
+def plot_kge_external_model_comparison(
+    model_kge_values: dict[str, tuple[np.ndarray, np.ndarray, int, float | None]],
+    output_folder: Path,
+    logger: logging.Logger,
+    export: bool = True,
+) -> None:
+    """Create one KGE-only comparison plot for all external models.
+
+    Args:
+        model_kge_values: Mapping from external model name to a tuple with GEB
+            KGE values, external-model KGE values, matched station count, and
+            effective GEB upstream-area threshold (km2).
+        output_folder: Folder where output figures are saved.
+        logger: Logger to use for progress messages.
+        export: Save the figure to disk.
+    """
+    ordered_model_items: list[
+        tuple[str, tuple[np.ndarray, np.ndarray, int, float | None]]
+    ] = sorted(
+        model_kge_values.items(),
+        key=lambda item: _get_external_model_plot_order(item[0]),
+    )
+    if not ordered_model_items:
+        logger.info("No matched external KGE data found. Skipping KGE comparison plot.")
+        return
+
+    geb_color: str = "#1f77b4"
+    external_color: str = "#d62728"
+    fig, axis = plt.subplots(figsize=(8.8, 4.9), constrained_layout=False)
+
+    x_tick_positions: list[float] = []
+    x_tick_labels: list[str] = []
+    median_label_y: float = -0.94
+    for group_index, (model_name, model_values) in enumerate(ordered_model_items):
+        geb_values, external_values, station_count, minimum_upstream_area_km2 = (
+            model_values
+        )
+        finite_geb_values: np.ndarray = geb_values[np.isfinite(geb_values)]
+        finite_external_values: np.ndarray = external_values[
+            np.isfinite(external_values)
+        ]
+        if finite_geb_values.size == 0 or finite_external_values.size == 0:
+            continue
+
+        group_position: float = float(group_index)
+        x_positions: np.ndarray = np.array(
+            [group_position - 0.18, group_position + 0.18]
+        )
+        _draw_violin_box(
+            axis, finite_geb_values, x_positions[0], geb_color, violin_width=0.28
+        )
+        _draw_violin_box(
+            axis,
+            finite_external_values,
+            x_positions[1],
+            external_color,
+            violin_width=0.28,
+        )
+        for x_position, metric_values in zip(
+            x_positions,
+            (finite_geb_values, finite_external_values),
+            strict=True,
+        ):
+            axis.text(
+                float(x_position),
+                median_label_y,
+                f"med={float(np.median(metric_values)):.2f}",
+                ha="center",
+                va="bottom",
+                fontsize=7,
+                color="0.25",
+                bbox={
+                    "boxstyle": "round,pad=0.12",
+                    "facecolor": "white",
+                    "edgecolor": "none",
+                    "alpha": 0.75,
+                },
+            )
+
+        threshold_label: str = (
+            f"\n>= {minimum_upstream_area_km2:g} km2"
+            if _has_positive_upstream_area_threshold(minimum_upstream_area_km2)
+            else ""
+        )
+        x_tick_positions.append(group_position)
+        x_tick_labels.append(
+            f"{_format_external_model_short_name(model_name)}\nn={station_count}{threshold_label}"
+        )
+
+    if not x_tick_positions:
+        logger.info("No finite matched KGE data found. Skipping KGE comparison plot.")
+        plt.close(fig)
+        return
+
+    axis.axhline(1.0, color="0.5", linewidth=0.8, linestyle="--", zorder=0)
+    axis.set_ylim(-1.0, 1.0)
+    axis.set_ylabel("KGE (-)")
+    axis.set_xticks(x_tick_positions)
+    axis.set_xticklabels(x_tick_labels, fontsize=8)
+    axis.set_title(
+        "Discharge Evaluation — KGE Comparison Across Matched External Models",
+        fontsize=12,
+        fontweight="bold",
+        pad=12,
+    )
+    axis.grid(axis="y", color="0.85", linewidth=0.5)
+    for spine in axis.spines.values():
+        spine.set_edgecolor("0.7")
+    axis.spines["top"].set_visible(False)
+    axis.spines["right"].set_visible(False)
+    axis.spines["bottom"].set_visible(False)
+
+    axis.legend(
+        handles=[
+            Line2D([0], [0], color=geb_color, linewidth=5, label="GEB"),
+            Line2D([0], [0], color=external_color, linewidth=5, label="External model"),
+        ],
+        loc="lower center",
+        ncol=2,
+        fontsize=9,
+        frameon=True,
+        framealpha=1.0,
+        edgecolor="0.7",
+        bbox_to_anchor=(0.5, -0.34),
+    )
+    fig.subplots_adjust(left=0.09, right=0.98, top=0.84, bottom=0.33)
+
+    if export:
+        for extension in ("svg", "png"):
+            output_path: Path = (
+                output_folder
+                / f"evaluation_skill_scores_kge_external_comparison.{extension}"
+            )
+            plt.savefig(output_path, bbox_inches="tight", dpi=150)
+            logger.info("KGE external comparison plot saved to: %s", output_path)
+
+    plt.show()
+    plt.close(fig)
+
+
 def _plot_metric_trendline(
     axis: plt.Axes,
     upstream_area_km2: pd.Series,
     metric_values: pd.Series,
     color: str,
     y_limits: tuple[float, float],
-) -> None:
+) -> tuple[float, float] | None:
     """Plot a linear trendline for one metric against log-scaled upstream area.
 
     Args:
@@ -724,6 +1014,10 @@ def _plot_metric_trendline(
         metric_values: Metric values to fit.
         color: Trendline color.
         y_limits: Visible y-axis limits used to exclude extreme outliers from the fit.
+
+    Returns:
+        Tuple with slope per log10(km2) and p-value, or `None` when too few
+        values are available.
     """
     valid_mask: pd.Series = (
         upstream_area_km2.gt(0)
@@ -731,14 +1025,32 @@ def _plot_metric_trendline(
         & metric_values.between(y_limits[0], y_limits[1])
     )
     if valid_mask.sum() < 2:
-        return
+        return None
 
     log_area: np.ndarray = np.log10(upstream_area_km2[valid_mask].to_numpy(dtype=float))
     values: np.ndarray = metric_values[valid_mask].to_numpy(dtype=float)
-    slope, intercept = np.polyfit(log_area, values, deg=1)
+    trend_result = linregress(log_area, values)
     trend_x: np.ndarray = np.logspace(log_area.min(), log_area.max(), 100)
-    trend_y: np.ndarray = slope * np.log10(trend_x) + intercept
+    trend_y: np.ndarray = (
+        trend_result.slope * np.log10(trend_x) + trend_result.intercept
+    )
     axis.plot(trend_x, trend_y, color=color, linewidth=1.8, alpha=0.95)
+    return (
+        float(trend_result.slope),
+        float(trend_result.pvalue),
+    )
+
+
+def _format_p_value(p_value: float) -> str:
+    """Format a regression p-value compactly for plot annotations.
+
+    Args:
+        p_value: Trendline p-value (dimensionless).
+
+    Returns:
+        Compact p-value label.
+    """
+    return "p<0.001" if p_value < 0.001 else f"p={p_value:.3f}"
 
 
 def _get_robust_metric_ylim(
@@ -790,18 +1102,32 @@ def plot_skill_scores_vs_upstream_area(
         pd.to_numeric(evaluation_df["upstream_area_GEB"], errors="coerce") / 1_000_000.0
     )
 
-    fig, axes = plt.subplots(
-        1,
-        len(_DISPLAYED_SKILL_SCORE_CONFIGS),
-        figsize=(2.6 * len(_DISPLAYED_SKILL_SCORE_CONFIGS), 4.2),
-        sharex=True,
+    metric_order: tuple[str, ...] = (
+        "KGE",
+        "KGE_correlation",
+        "KGE_bias_ratio",
+        "KGE_variability_ratio",
+        "NSE",
+        "RRMSE",
     )
+    metric_configs: tuple[dict[str, object], ...] = tuple(
+        _get_skill_score_config(metric_col) for metric_col in metric_order
+    )
+    fig = plt.figure(figsize=(12.5, 7.2))
+    grid = fig.add_gridspec(2, 4, hspace=0.42, wspace=0.3)
+    axes_by_metric: dict[str, plt.Axes] = {
+        "KGE": fig.add_subplot(grid[0, 0]),
+        "KGE_correlation": fig.add_subplot(grid[0, 1]),
+        "KGE_bias_ratio": fig.add_subplot(grid[0, 2]),
+        "KGE_variability_ratio": fig.add_subplot(grid[0, 3]),
+        "NSE": fig.add_subplot(grid[1, 0:2]),
+        "RRMSE": fig.add_subplot(grid[1, 2:4]),
+    }
     has_values: bool = False
-    for axis, cfg in zip(
-        np.atleast_1d(axes).ravel(),
-        _DISPLAYED_SKILL_SCORE_CONFIGS,
-        strict=True,
-    ):
+    total_valid_station_count: int = int(upstream_area_km2.gt(0).sum())
+    plot_color: str = "#1f77b4"
+    for cfg in metric_configs:
+        axis: plt.Axes = axes_by_metric[str(cfg["col"])]
         metric_col: str = str(cfg["col"])
         if metric_col not in evaluation_df.columns:
             logger.info("Metric '%s' not in evaluation data, skipping.", metric_col)
@@ -827,31 +1153,39 @@ def plot_skill_scores_vs_upstream_area(
             metric_values[valid_mask],
             s=14,
             alpha=0.55,
-            color=str(cfg["color"]),
+            color=plot_color,
             edgecolors="none",
         )
-        _plot_metric_trendline(
+        trend_stats: tuple[float, float] | None = _plot_metric_trendline(
             axis=axis,
             upstream_area_km2=upstream_area_km2,
             metric_values=metric_values,
-            color=str(cfg["color"]),
+            color=plot_color,
             y_limits=y_limits,
         )
+        if trend_stats is not None:
+            slope, p_value = trend_stats
+            axis.text(
+                0.04,
+                0.92,
+                f"slope={slope:.2f}\n{_format_p_value(p_value)}",
+                transform=axis.transAxes,
+                ha="left",
+                va="top",
+                color="black",
+                fontsize=8,
+                bbox={
+                    "boxstyle": "round,pad=0.2",
+                    "facecolor": "0.9",
+                    "edgecolor": "none",
+                    "alpha": 0.75,
+                },
+            )
         axis.set_xscale("log")
         axis.set_ylim(*y_limits)
         axis.grid(True, color="0.85", linewidth=0.5)
-        axis.set_title(str(cfg["label"]), color=str(cfg["color"]), fontweight="bold")
+        axis.set_title(str(cfg["label"]), color=plot_color, fontweight="bold")
         axis.set_ylabel("Error" if use_error_limits else "Score (-)")
-        axis.text(
-            0.98,
-            0.05,
-            f"n={int(valid_mask.sum())}",
-            transform=axis.transAxes,
-            ha="right",
-            va="bottom",
-            color="0.45",
-            fontsize=8,
-        )
         for spine in axis.spines.values():
             spine.set_edgecolor("0.7")
 
@@ -865,20 +1199,22 @@ def plot_skill_scores_vs_upstream_area(
         fontweight="bold",
         fontsize=14,
     )
-    for axis in np.atleast_1d(axes).ravel():
+    for axis in axes_by_metric.values():
         axis.set_xlabel("Upstream area (km2)")
 
+    # Robust y-limits keep the main scatter visible; trendlines are fitted vs
+    # log10(upstream area) after excluding values outside the visible limits.
     fig.text(
-        0.995,
-        0.01,
-        "Each panel uses robust y-limits; trendlines are linear fits vs log10(upstream area) after excluding clipped outliers.",
+        0.985,
+        0.02,
+        f"n={total_valid_station_count}",
         ha="right",
         va="bottom",
         color="0.45",
         fontsize=8,
     )
 
-    plt.tight_layout()
+    fig.subplots_adjust(left=0.07, right=0.98, top=0.9, bottom=0.1)
     output_path: Path = output_folder / "skill_scores_vs_upstream_area"
     for ext in ("svg", "png"):
         plt.savefig(f"{output_path}.{ext}", bbox_inches="tight", dpi=200)

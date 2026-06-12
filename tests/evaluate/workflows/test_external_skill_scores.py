@@ -35,7 +35,7 @@ def test_read_external_evaluation_raw_reads_csv_scores(
 ) -> None:
     """External CSV reading normalizes station IDs and metric columns."""
     utrecht_df: pd.DataFrame = pd.DataFrame(
-        {"KGE": [0.8, 0.7], "R": [0.9, 0.8]},
+        {"KGE": [0.8, 0.7], "R": [0.9, 0.8], "R2": [0.4, 0.3]},
         index=pd.Index(["station_a", "station_b"]),
     )
     google_df: pd.DataFrame = pd.DataFrame(
@@ -56,6 +56,7 @@ def test_read_external_evaluation_raw_reads_csv_scores(
     assert external_models["utrecht"].index.to_list() == ["STATION_A", "STATION_B"]
     assert "R" not in external_models["utrecht"].columns
     assert external_models["utrecht"].loc["STATION_A", "KGE_correlation"] == 0.9
+    assert external_models["utrecht"].loc["STATION_A", "NSE"] == pytest.approx(0.4)
     assert external_models["utrecht"].loc["STATION_A", "R2"] == pytest.approx(0.81)
     assert external_models[GOOGLE_STREAMFLOW_MODEL_NAME].index.to_list() == [
         "STATION_A",
@@ -144,7 +145,7 @@ def test_prepare_skill_score_boxplot_inputs_applies_utrecht_paper_threshold(
 
     assert plot_inputs.evaluation_df["station_name"].to_list() == ["station_a"]
     assert plot_inputs.external_models["utrecht_1km"].index.to_list() == ["STATION_A"]
-    assert "GEB upstream area >= 0 km2" in plot_inputs.filter_summary
+    assert "GEB upstream area >= 0 km2" not in plot_inputs.filter_summary
     assert "utrecht_1km: upstream area >= 400 km2" in plot_inputs.filter_summary
 
 
@@ -226,6 +227,7 @@ def _write_google_metrics_tree(root_folder: Path) -> Path:
     _write_google_metric_file(metric_folder, "KGE.csv", [0.8, 0.7])
     _write_google_metric_file(metric_folder, "NSE.csv", [0.6, 0.5])
     _write_google_metric_file(metric_folder, "Pearson-r.csv", [0.9, 0.8])
+    _write_google_metric_file(metric_folder, "Beta-KGE.csv", [1.1, 1.2])
     _write_google_metric_file(metric_folder, "RMSE.csv", [1.2, 1.3])
     return metric_folder
 
@@ -252,6 +254,7 @@ def _write_glofas_metrics_tree(root_folder: Path) -> Path:
     _write_google_metric_file(metric_folder, "KGE.csv", [0.4, 0.3])
     _write_google_metric_file(metric_folder, "NSE.csv", [0.2, 0.1])
     _write_google_metric_file(metric_folder, "Pearson-r.csv", [0.7, 0.6])
+    _write_google_metric_file(metric_folder, "Beta-KGE.csv", [0.9, 0.8])
     _write_google_metric_file(metric_folder, "RMSE.csv", [2.2, 2.3])
     return metric_folder
 
@@ -272,6 +275,7 @@ def test_read_google_streamflow_skill_scores_from_extracted_metrics(
     assert "R" not in google_df.columns
     assert google_df.loc["GRDC_1001", "KGE_correlation"] == 0.9
     assert google_df.loc["GRDC_1001", "R2"] == pytest.approx(0.81)
+    assert google_df.loc["GRDC_1001", "KGE_bias_ratio"] == pytest.approx(1.1)
 
 
 def test_read_external_evaluation_raw_finds_nested_google_metrics(
@@ -401,7 +405,7 @@ def test_prepare_skill_score_boxplot_inputs_matches_google_by_grdc_station_id(
         GOOGLE_STREAMFLOW_MODEL_NAME
     ].index.to_list() == ["GRDC_1001"]
     assert "GEB upstream area >= 400 km2" in plot_inputs.filter_summary
-    assert "Google Streamflow: upstream area" not in plot_inputs.filter_summary
+    assert "Google Streamflow: upstream area >=" not in plot_inputs.filter_summary
 
 
 def test_prepare_pairwise_skill_score_boxplot_inputs_keeps_model_specific_matches(
@@ -452,15 +456,68 @@ def test_prepare_pairwise_skill_score_boxplot_inputs_keeps_model_specific_matche
     assert pairwise_inputs["utrecht_1km"].external_models[
         "utrecht_1km"
     ].index.to_list() == ["UTRECHT_A", "SHARED_C"]
+    assert pairwise_inputs["utrecht_1km"].evaluation_df["KGE_difference"].to_list() == [
+        pytest.approx(0.6),
+        pytest.approx(0.3),
+    ]
     assert pairwise_inputs[GOOGLE_STREAMFLOW_MODEL_NAME].external_models[
         GOOGLE_STREAMFLOW_MODEL_NAME
     ].index.to_list() == ["GRDC_1002", "GRDC_1003"]
-    assert "GEB upstream area >= 0 km2" in pairwise_inputs[
-        GOOGLE_STREAMFLOW_MODEL_NAME
-    ].filter_summary
+    assert pairwise_inputs[GOOGLE_STREAMFLOW_MODEL_NAME].evaluation_df[
+        "KGE_difference"
+    ].to_list() == [pytest.approx(0.3), pytest.approx(0.1)]
+    assert (
+        pairwise_inputs[GOOGLE_STREAMFLOW_MODEL_NAME].minimum_upstream_area_km2 == 0.0
+    )
+    assert (
+        "upstream area >="
+        not in pairwise_inputs[GOOGLE_STREAMFLOW_MODEL_NAME].filter_summary
+    )
     assert get_external_model_output_suffix("Google Streamflow") == (
         "_matched_google_streamflow"
     )
+
+
+def test_prepare_pairwise_skill_score_boxplot_inputs_applies_glofas_threshold(
+    tmp_path: Path,
+) -> None:
+    """GloFAS pairwise plots apply the 500 km2 paper threshold."""
+    evaluation_metrics_path: Path = tmp_path / "evaluation_metrics.xlsx"
+    external_folder: Path = tmp_path / "external"
+    external_folder.mkdir()
+    evaluation_df: pd.DataFrame = pd.DataFrame(
+        {
+            "station_ID": [1001, 1002],
+            "station_name": ["small_basin", "large_basin"],
+            "upstream_area_GEB": [450_000_000.0, 550_000_000.0],
+            "KGE": [0.8, 0.7],
+        }
+    )
+    glofas_df: pd.DataFrame = pd.DataFrame(
+        {"KGE": [0.2, 0.3]},
+        index=pd.Index(["GRDC_1001", "GRDC_1002"]),
+    )
+    evaluation_df.to_excel(evaluation_metrics_path, index=False)
+    glofas_df.to_csv(external_folder / GLOFAS_CSV_NAME)
+
+    pairwise_inputs = prepare_pairwise_skill_score_boxplot_inputs(
+        evaluation_metrics_path=evaluation_metrics_path,
+        external_evaluation_folder=None,
+        configured_external_evaluation_folder=external_folder,
+        model_folder=tmp_path,
+        output_folder=tmp_path,
+        logger=logging.getLogger(__name__),
+        minimum_upstream_area_km2=0.0,
+        auto_fetch_google_streamflow=False,
+    )
+
+    glofas_inputs = pairwise_inputs[GLOFAS_MODEL_NAME]
+    assert glofas_inputs.minimum_upstream_area_km2 == 500.0
+    assert glofas_inputs.evaluation_df["station_ID"].to_list() == [1002]
+    assert glofas_inputs.external_models[GLOFAS_MODEL_NAME].index.to_list() == [
+        "GRDC_1002"
+    ]
+    assert "GEB upstream area >= 500 km2" in glofas_inputs.filter_summary
 
 
 def test_prepare_skill_score_boxplot_inputs_matches_google_with_snapped_index(
