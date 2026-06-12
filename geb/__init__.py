@@ -12,6 +12,7 @@ from typing import cast
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
+import rioxarray  # noqa: F401  # needed for rioxarray to register itself as an xarray extension
 import xarray as xr
 from dotenv import load_dotenv
 from llvmlite import binding
@@ -41,6 +42,16 @@ if Path("/research/BETA-IVM-HPC/GEB").exists():
         "SFINCS_CONTAINER_GPU",
         "/ada-software/containers/sfincs-gpu.coldeze_combo_ccall.sif",
     )
+elif Path("/gpfs/work5/0/prjs2035/GEB").exists():
+    os.environ["GEB_DATA_ROOT"] = "/gpfs/work5/0/prjs2035/GEB/datacatalog/"
+    os.environ["SFINCS_SIF_CONTAINER"] = os.getenv(
+        "SFINCS_SIF_CONTAINER",
+        "/gpfs/work5/0/prjs2035/GEB/containers/sfincs-cpu-v2.3.0-mt-Faber-Release.sif",
+    )  # not implemented yet
+    os.environ["SFINCS_SIF_CONTAINER_GPU"] = os.getenv(
+        "SFINCS_SIF_CONTAINER_GPU",
+        "/gpfs/work5/0/prjs2035/GEB/containers/sfincs-gpu.coldeze_combo_ccall.sif",
+    )  # not implemented yet
 else:
     os.environ["SFINCS_SIF_CONTAINER"] = os.getenv(
         "SFINCS_SIF_CONTAINER",

@@ -609,7 +609,7 @@ class GEBModel(Module):
             self.hydrology.routing.set_router()
             self.hydrology.groundwater.initalize_modflow_model()
 
-        self.report_folder = self.model.output_folder / "report" / self.model.run_name
+        self.report_folder = self.model.output_folder / "report"
 
         if create_reporter:
             self.reporter = Reporter(
@@ -663,6 +663,7 @@ class GEBModel(Module):
 
         self.logger.info("Model run finished, finalizing report...")
         self.reporter.finalize()
+        self.create_done_file()
 
     def run_yearly(self) -> None:
         """Run the model in yearly mode, where timesteps are yearly rather than daily.
@@ -717,6 +718,7 @@ class GEBModel(Module):
 
         self.logger.info("Model run finished, finalizing report...")
         self.reporter.finalize()
+        self.create_done_file()
 
     def refresh_agent_attributes(self, agent_type: str = "households") -> None:
         """Initiate the model to update household adaptation attributes to pre-spinup state after an updated build or adding/ renaming of agent variables.
@@ -823,6 +825,7 @@ class GEBModel(Module):
         self.store.save()
 
         self.reporter.finalize()
+        self.create_done_file()
 
     def _store_spinup_time_range(self) -> None:
         """Store the spinup time range in the variable store.
@@ -854,18 +857,17 @@ class GEBModel(Module):
         #        f"Run start time does not match the stored time range. Stored: {self.var._run_start}, Configured: {self.run_start}"
         #    )
 
-    def estimate_return_periods(self) -> None:
+    def estimate_return_periods(self, run_name: str = "spinup") -> None:
         """Estimate flood maps for different return periods."""
         current_time: datetime.datetime = self.run_start
-        self.config["general"]["name"] = "estimate_return_periods"
 
         self._initialize(
             create_reporter=False,
+            in_spinup=run_name == self.model.config["general"]["spinup_name"],
             current_time=current_time,
             n_timesteps=0,
             timestep_length=relativedelta(years=1),
             load_data_from_store=True,
-            # omit="agents",
             simulate_hydrology=True,
             clean_report_folder=False,
         )
@@ -875,7 +877,7 @@ class GEBModel(Module):
         if subbasins["is_coastal"].any():
             generate_storm_surge_hydrographs(self)
 
-        self.hazard_driver.floods.get_return_period_maps()
+        self.hazard_driver.floods.get_return_period_maps(run_name)
 
     def evaluate(self, *args: Any, **kwargs: Any) -> Any:
         """Call the evaluator to evaluate the model results.
@@ -969,7 +971,7 @@ class GEBModel(Module):
         Returns:
             Path to the folder where output files will be saved.
         """
-        return Path(self.config["general"]["output_folder"])
+        return Path(self.config["general"]["output_folder"]) / self.model.run_name
 
     @property
     def input_folder(self) -> Path:
@@ -1091,6 +1093,10 @@ class GEBModel(Module):
         #    raise ValueError(
         #        "Run end date cannot be after model build end date. Adjust the time range in your build configuration and rebuild the model or adjust the simulation end time of the model."
         #    )
+
+    def create_done_file(self) -> None:
+        """Create a file to indicate that the model run or spinup is done."""
+        (self.output_folder / "done.txt").touch()
 
     @property
     def spinup_start(self) -> datetime.datetime:
