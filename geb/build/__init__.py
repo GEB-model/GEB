@@ -3285,11 +3285,15 @@ class GEBModel(
         """Check if the version in the version file is the same as the current version.
 
         If the version is not current, print a warning with the updates that need to be made to update to the current version.
+
+        Raises:
+            ValueError: If the version file does not exist, which likely means that the model was built with an older version of the code that did not include versioning.
         """
         # No version file exists, so we create one with the current version
         if not self.version_path.exists():
-            self.set_current_version()
-            return
+            raise ValueError(
+                "Version file does not exist. This likely means that the model was built with an older version of the code that did not include versioning. You should re-build the model and the next time this command should work"
+            )
         version_info = self.version_path.read_text()
         if self.version_is_current():
             self.logger.info("Version is already current.")
