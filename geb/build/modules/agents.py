@@ -1612,6 +1612,7 @@ class Agents(BuildModelBase):
                 method="nearest",
             )
 
+            buildings_gdl = buildings_gdl.copy()
             buildings_gdl["grid_idx"] = cells.values[0]
             # drop buildings without grid_idx
             buildings_gdl = buildings_gdl[buildings_gdl["grid_idx"] != 0]

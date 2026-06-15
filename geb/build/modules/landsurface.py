@@ -221,6 +221,7 @@ class LandSurface(BuildModelBase):
 
         DEM_raster: xr.DataArray
         for DEM in DEMs:
+            custom_dem = False
             # FABDEM is already handled above, so we just use it from there
             if DEM["name"] == "fabdem":
                 DEM_raster: xr.DataArray = fabdem
@@ -235,8 +236,8 @@ class LandSurface(BuildModelBase):
                     DEM_raster = DEM_raster.where(
                         DEM_raster <= DEM["zmax"], DEM["zmax"]
                     )
-
             else:
+                custom_dem = True
                 # custom DEMs must have a path
                 if "path" not in DEM:
                     raise ValueError(
@@ -277,15 +278,28 @@ class LandSurface(BuildModelBase):
             if "band" in DEM_raster.dims:
                 DEM_raster: xr.DataArray = DEM_raster.isel(band=0)
 
-            DEM_raster = clip_with_geometry(
-                DEM_raster,
-                gpd.GeoDataFrame(geometry=[potential_flood_area_with_buffer], crs=4326),
-                all_touched=True,
-                drop=True,
-            )
+            if not custom_dem:
+                potential_flood_area_with_buffer_gdf = gpd.GeoDataFrame(
+                    geometry=[potential_flood_area_with_buffer], crs=4326
+                )
+            else:
+                potential_flood_area_with_buffer_gdf = gpd.GeoDataFrame(
+                    geometry=[potential_flood_area_with_buffer], crs=4326
+                )
+                potential_flood_area_with_buffer_gdf = (
+                    potential_flood_area_with_buffer_gdf.to_crs(crs_value)
+                )
+                DEM_raster = DEM_raster.rio.write_crs(crs_value)
 
             DEM_raster = convert_nodata(
                 DEM_raster.astype(np.float32, keep_attrs=True), np.nan
+            )
+
+            DEM_raster = clip_with_geometry(
+                DEM_raster,
+                potential_flood_area_with_buffer_gdf,
+                all_touched=True,
+                drop=True,
             )
 
             if DEM.get("fill_depressions", False):
