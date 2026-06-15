@@ -39,7 +39,7 @@ hazards:
       - 250
       - 500
       - 1000
-    shape:
+    hydrograph_shape:
       method: triangular  # triangular (default), direct, or anchor
       # window_days: 3.5  # days before AND after peak to extract (total window = 2 × window_days; default 3.5 → ±3.5 days = 7 days total)
       # tolerance: 0.1    # ±fraction tolerance around anchor discharge (default 0.1 = ±10%)

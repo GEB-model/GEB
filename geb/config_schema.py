@@ -130,7 +130,7 @@ class FloodsConfig(BaseModel):
     events: list[FloodEventConfig] = Field(
         default_factory=list, description="List of flood events."
     )
-    shape: ShapeConfig = Field(
+    hydrograph_shape: ShapeConfig = Field(
         default_factory=ShapeConfig,
         description="Hydrograph shape configuration for return-period maps.",
     )

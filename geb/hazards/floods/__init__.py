@@ -639,7 +639,7 @@ class Floods(Module):
                     rivers=region_rivers,
                     coastal=False,
                 )
-                _shape_config = self.config.get("shape", {})
+                _shape_config = self.config.get("hydrograph_shape", {})
                 sfincs_inland_root_model.estimate_discharge_for_return_periods(
                     discharge_by_river=self.discharge_by_river_spinup_and_run,
                     return_periods=self.config["return_periods"],

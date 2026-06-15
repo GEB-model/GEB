@@ -1453,7 +1453,7 @@ class SFINCSRootModel:
                         river_idx=river_idx,
                         return_period=return_period,
                     )
-                else:  # anchor
+                elif hydrograph_shape == "anchor":
                     assert anchor_discharge is not None
                     hydrograph_df = create_hydrograph_from_discharge_shape(
                         discharge_series,
@@ -1464,6 +1464,11 @@ class SFINCSRootModel:
                         output_path=figures_path,
                         river_idx=river_idx,
                         return_period=return_period,
+                    )
+                else:
+                    raise ValueError(
+                        f"Unknown hydrograph_shape '{hydrograph_shape}'. "
+                        "Choose 'triangular', 'direct', or 'anchor'."
                     )
 
                 hydrograph_dict: dict[str, Any] = {

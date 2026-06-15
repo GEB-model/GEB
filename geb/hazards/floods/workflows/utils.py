@@ -502,6 +502,7 @@ def create_hydrograph_from_discharge_shape(
             mean_shape_at_anchor,
             color="blue",
             linewidth=2,
+            linestyle="--",
             label=f"Mean shape at anchor ({anchor_discharge:.1f} m³/s)",
         )
         ax.plot(
@@ -509,7 +510,6 @@ def create_hydrograph_from_discharge_shape(
             scaled_shape,
             color="purple",
             linewidth=2,
-            linestyle="--",
             label=f"Scaled hydrograph (RP={return_period}, {peak_discharge:.1f} m³/s)",
         )
         ax.axhline(
