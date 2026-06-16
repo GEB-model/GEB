@@ -1,6 +1,7 @@
 """Build methods for the hydrography for GEB."""
 
 import os
+import warnings
 from datetime import timedelta
 from pathlib import Path
 from typing import Literal
@@ -1098,8 +1099,19 @@ class Hydrography(BuildModelBase):
             # load the coastline from the data catalog
             coastlines = self.data_catalog.fetch("open_street_map_coastlines").read()
 
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    category=UserWarning,
+                )
+                mask = gpd.GeoDataFrame.from_features(
+                    self.geom["mask"].buffer(0.04).__geo_interface__,
+                    crs=self.geom["mask"].crs,
+                )
+
             # clip the coastline to overlapping with mask
-            coastlines = gpd.overlay(coastlines, self.geom["mask"], how="intersection")
+            coastlines = gpd.overlay(coastlines, mask, how="intersection")
+
             # merge all coastlines into a single linestring
             coastlines = gpd.GeoDataFrame(
                 geometry=[coastlines.union_all()], crs=coastlines.crs
@@ -1112,7 +1124,6 @@ class Hydrography(BuildModelBase):
             if not coastlines.empty:
                 bbox = coastlines.minimum_rotated_rectangle().iloc[0]  # get the Polygon
                 bbox_gdf = gpd.GeoDataFrame(geometry=[bbox], crs=coastlines.crs)
-                import warnings
 
                 with warnings.catch_warnings():
                     warnings.filterwarnings(
