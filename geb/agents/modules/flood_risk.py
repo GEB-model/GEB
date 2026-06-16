@@ -45,7 +45,12 @@ class FloodRiskModule:
 
         flood_maps = {}
         for return_period in self.households.return_periods:
-            file_path = f"output/spinup/flood_maps/{return_period}.zarr"
+            file_path = (
+                self.model.output_folder.parent
+                / self.model.config["general"]["spinup_name"]
+                / "flood_maps"
+                / f"{return_period}.zarr"
+            )
             flood_maps[return_period] = read_zarr(file_path)
         self.households.flood_maps = flood_maps
 
