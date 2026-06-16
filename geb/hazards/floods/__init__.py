@@ -527,7 +527,7 @@ class Floods(Module):
                     flood_depth=flood_depth
                 )
 
-    def get_return_period_maps(self, split_coastal: bool = True) -> None:
+    def get_return_period_maps(self, run_name: str, split_coastal: bool = True) -> None:
         """Generates flood maps for specified return periods using the SFINCS model.
 
         Args:
@@ -730,13 +730,30 @@ class Floods(Module):
                 simulations.append(sfincs_inland_simulation)
 
             simulation = MultipleSFINCSSimulations(simulations=simulations)
+            if simulations:
+                simulation.run(
+                    gpu=self.config.get("SFINCS", {}).get("gpu", "auto"),
+                )
+                flood_depth_return_period: xr.DataArray = simulation.read_max_flood_depth(
+                                self.config["minimum_flood_depth"], split_coastal=split_coastal
+                )
+            else:
+                self.model.logger.warning(
+                    "No rivers found that are represented in grid and/or are not fully inside waterbodies. Creating dummy empty flood map."
+                )
+                dummy_sfincs_model = SFINCSRootModel(
+                    self.model.simulation_root, "dummy", logger=self.model.logger
+                )
+                dummy_mask = dummy_sfincs_model.create_mask(
+                    self.DEM_config,
+                    subbasins[~subbasins["is_downstream_outflow"]],
+                    self.config["grid_size_multiplier"],
+                )
 
-            simulation.run(
-                gpu=self.config.get("SFINCS", {}).get("gpu", "auto"),
-            )
-            flood_depth_return_period: xr.DataArray = simulation.read_max_flood_depth(
-                self.config["minimum_flood_depth"], split_coastal=split_coastal
-            )
+                flood_depth_return_period = dummy_mask.astype(np.float32)
+                flood_depth_return_period[:] = 0
+                flood_depth_return_period.attrs["_FillValue"] = np.nan
+            
 
             if not split_coastal:
                 # mask floodplain with land polygons to remove inundation in the sea
