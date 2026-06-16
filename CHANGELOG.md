@@ -1,5 +1,6 @@
 # dev
 - Re-organize evaluate hydrodynamics to have all functions outside the method body.
+- Make destination earth API more robust.
 
 # v1.0.0b28
 - Add setup_flood_observations build method working with WorldFloodsV2
