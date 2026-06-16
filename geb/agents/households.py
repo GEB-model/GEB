@@ -132,193 +132,14 @@ class Households(AgentBaseClass):
             self.early_warning_module = EarlyWarningModule(
                 model=self.model, households=self
             )
-            self.load_critical_infrastructure()
-            self.early_warning_module.load_wlranges_and_measures()
+            # TODO: move warning_system config out of households in the yml file
+            if self.model.config["agent_settings"]["households"]["warning_system"][
+                "strategies"
+            ]["critical_infrastructure_warnings"]:
+                self.load_critical_infrastructure()
 
         if self.model.in_spinup:
             self.spinup()
-        else:
-            # In run mode, reload warning configuration data after store loading
-            # to ensure JSON updates are reflected immediately
-            if self.model.config["agent_settings"]["households"]["warning_response"]:
-                self.early_warning_module.load_wlranges_and_measures()
-
-            # Check if sensitivity analysis should run
-            self._check_and_run_sensitivity_analysis()
-
-    def _check_and_run_sensitivity_analysis(self) -> None:
-        """Check if sensitivity analysis is enabled and run it if configured.
-
-        This method checks the model configuration for sensitivity analysis settings
-        and runs the analysis if enabled. Results are saved to the output folder.
-        """
-        if not self.config.get("warning_response", False):
-            return
-
-        sensitivity_config = self.config.get("warning_system", {}).get(
-            "sensitivity", {}
-        )
-
-        if not sensitivity_config.get("enabled", False):
-            return
-
-        # Only run if auto_run is enabled (default: False for manual control)
-        if not sensitivity_config.get("auto_run", False):
-            return
-
-        print("\n" + "=" * 80)
-        print("SENSITIVITY ANALYSIS: Auto-run enabled in configuration")
-        print("=" * 80 + "\n")
-
-        # Import here to avoid circular imports
-        from geb.agents.sensitivity_analysis import SensitivityAnalyzer
-
-        # Initialize and run sensitivity analysis
-        analyzer = SensitivityAnalyzer(households=self, config=sensitivity_config)
-
-        # Get forecast dates: either from config, auto-detect from flood maps, or use defaults
-        forecast_dates = self._get_forecast_dates_for_sensitivity(sensitivity_config)
-
-        if not forecast_dates:
-            print("⚠️  No forecast dates found. Skipping sensitivity analysis.")
-            return
-
-        print(f"📅 Found {len(forecast_dates)} forecast dates to analyze:")
-        for date in forecast_dates:
-            print(f"    - {date.strftime('%Y-%m-%d %H:%M:%S')}")
-        print()
-
-        # Run the analysis
-        results_df = analyzer.run_sensitivity_analysis(forecast_dates=forecast_dates)
-
-        # Create visualizations
-        print("\nGenerating visualizations...")
-        analyzer.create_visualizations(results_df)
-
-        print(f"\n{'=' * 80}")
-        print("SENSITIVITY ANALYSIS COMPLETE")
-        print(f"Output folder: {analyzer.output_folder}")
-        print(f"{'=' * 80}\n")
-
-    def _get_forecast_dates_for_sensitivity(
-        self, sensitivity_config: dict
-    ) -> list[datetime.datetime]:
-        """Auto-detect forecast dates from existing flood probability exceedance maps.
-
-        Searches for all forecast folders in output/flood_prob_exceedance_maps/ and
-        extracts the forecast dates from the folder names.
-
-        Args:
-            sensitivity_config: Sensitivity configuration dictionary (unused, kept for compatibility).
-
-        Returns:
-            List of datetime objects representing forecast dates found in flood maps.
-            Empty list if no flood maps are found.
-        """
-        import datetime
-
-        print(
-            "🔍 Auto-detecting forecast dates from flood probability exceedance maps..."
-        )
-
-        exceedance_folder = self.model.output_folder / "flood_prob_exceedance_maps"
-
-        if not exceedance_folder.exists():
-            print(f"⚠️  Flood exceedance folder not found: {exceedance_folder}")
-            print("    No forecast dates available for sensitivity analysis.")
-            return []
-
-        # Find all forecast_* folders
-        forecast_folders = sorted(exceedance_folder.glob("forecast_*"))
-
-        if not forecast_folders:
-            print(f"⚠️  No forecast folders found in {exceedance_folder}")
-            return []
-
-        forecast_dates = []
-        for folder in forecast_folders:
-            # Extract date from folder name: forecast_20240115T000000
-            folder_name = folder.name
-            date_str = folder_name.replace("forecast_", "")
-
-            try:
-                # Parse date: 20240115T000000 -> 2024-01-15T00:00:00
-                date = datetime.datetime.strptime(date_str, "%Y%m%dT%H%M%S")
-                forecast_dates.append(date)
-            except ValueError:
-                print(f"⚠️  Could not parse date from folder: {folder_name}")
-                continue
-
-        if forecast_dates:
-            print(
-                f"✅ Auto-detected {len(forecast_dates)} forecast dates from flood maps"
-            )
-        else:
-            print("⚠️  No valid forecast dates found in flood maps.")
-
-        return forecast_dates
-
-    def run_sensitivity_analysis(
-        self,
-        forecast_dates: list[datetime.datetime] | None = None,
-        custom_config: dict | None = None,
-    ) -> pd.DataFrame:
-        """Manually run sensitivity analysis for warning system parameters.
-
-        This method allows you to run sensitivity analysis programmatically,
-        independent of the auto_run configuration setting.
-
-        Args:
-            forecast_dates: List of forecast dates to evaluate. If None, uses defaults.
-            custom_config: Custom sensitivity configuration to override model.yml settings.
-                If None, uses configuration from model.yml.
-
-        Returns:
-            DataFrame containing all sensitivity analysis results.
-
-        Example:
-            >>> import datetime
-            >>> dates = [datetime.datetime(2024, 1, 15)]
-            >>> results = households.run_sensitivity_analysis(forecast_dates=dates)
-            >>> print(results.groupby('warning_type')['n_households_warned'].mean())
-        """
-        import datetime
-
-        from geb.agents.sensitivity_analysis import SensitivityAnalyzer
-
-        # Use custom config or get from model
-        if custom_config is None:
-            sensitivity_config = self.config.get("warning_system", {}).get(
-                "sensitivity", {}
-            )
-        else:
-            sensitivity_config = custom_config
-
-        # Use provided dates or defaults
-        if forecast_dates is None:
-            forecast_dates = [
-                datetime.datetime(2024, 1, 15, 0, 0, 0),
-                datetime.datetime(2024, 2, 1, 0, 0, 0),
-            ]
-
-        print("\n" + "=" * 80)
-        print("SENSITIVITY ANALYSIS: Manual run")
-        print("=" * 80 + "\n")
-
-        # Initialize and run
-        analyzer = SensitivityAnalyzer(households=self, config=sensitivity_config)
-        results_df = analyzer.run_sensitivity_analysis(forecast_dates=forecast_dates)
-
-        # Create visualizations
-        print("\nGenerating visualizations...")
-        analyzer.create_visualizations(results_df)
-
-        print(f"\n{'=' * 80}")
-        print("SENSITIVITY ANALYSIS COMPLETE")
-        print(f"Output folder: {analyzer.output_folder}")
-        print(f"{'=' * 80}\n")
-
-        return results_df
 
     @property
     def name(self) -> str:
@@ -335,10 +156,7 @@ class Households(AgentBaseClass):
             "COST_STRUCTURAL_USD_SQM",
             "COST_CONTENTS_USD_SQM",
         ]
-        self.buildings = read_table(
-            self.model.files["geom"]["assets/open_building_map"],
-            columns=columns_to_load,
-        )
+        self.buildings = read_geom(self.model.files["geom"]["assets/open_building_map"])
 
         self.buildings["object_type"] = (
             "building_unprotected"  # before it was "building_structure"
@@ -895,9 +713,9 @@ class Households(AgentBaseClass):
 
         NOTE: This function is currently disabled due to missing infrastructure data.
         """
-        asset_type = self.model.config["hazards"]["floods"][
-            "critical_infrastructure_warning_strategy"
-        ]["asset_type"]
+        asset_type = self.model.config["agent_settings"]["households"][
+            "warning_system"
+        ]["strategies"]["asset_type"]
         # Load postal codes
         postal_codes = self.postal_codes.copy()
 
@@ -982,6 +800,7 @@ class Households(AgentBaseClass):
 
         # Update the buildings (global variable) for later use
         self.buildings = pd.DataFrame(buildings).drop("geometry", axis=1)
+        # self.buildings = buildings
 
     def update_buildings_w_critical_infrastructure(
         self, critical_infrastructure: gpd.GeoDataFrame

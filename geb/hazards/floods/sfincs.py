@@ -315,7 +315,7 @@ class SFINCSRootModel:
         del subbasins
 
         resolution: tuple[float, float] = subbasins_burned.rio.resolution()
-        if abs(abs(resolution[0]) - abs(resolution[1])) > 1e-8:
+        if abs(abs(resolution[0]) - abs(resolution[1])) > 1e-7:
             raise ValueError("DEM resolution must be square pixels")
 
         geotransformation = subbasins_burned.rio.transform(recalc=True)

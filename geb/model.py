@@ -27,7 +27,7 @@ from geb.hazards.floods.workflows.construct_storm_surge_hydrographs import (
 from geb.module import Module
 from geb.reporter import Reporter
 from geb.store import Bucket, Store
-from geb.workflows.io import read_geom, read_params, read_zarr
+from geb.workflows.io import read_geom, read_params
 
 from .evaluate import Evaluate
 from .forcing import Forcing
@@ -244,15 +244,13 @@ class GEBModel(Module):
         )
         for loader_name, loader in self.forcing.loaders.items():
             if loader.supports_forecast:
-                forecast_file_path = (
-                    self.files["other"][
-                        f"forecasts/{self.config['general']['forecasts']['provider']}/{self.config['general']['forecasts']['ensemble']}/{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}/{loader_name}_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}"
-                    ]
-                )
-                
+                forecast_file_path = self.files["other"][
+                    f"forecasts/{self.config['general']['forecasts']['provider']}/{self.config['general']['forecasts']['ensemble']}/{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}/{loader_name}_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}"
+                ]
+
                 variable_forecast_members: list[str] = [
-                            i.item() for i in forecast_data[loader_name].member.values
-                        ]
+                    i.item() for i in forecast_data[loader_name].member.values
+                ]
                 variable_forecast_end_dt = (
                     forecast_data[loader_name].time.values[-1]
                 ).item()  # get the end datetime of the forecast
@@ -268,7 +266,7 @@ class GEBModel(Module):
                         raise ValueError(
                             "Forecast end datetimes do not match between variables."
                         )
-               
+
         assert len(forecast_data) > 0, (
             "No forecast data found for any variable. Please check the forecast files."
         )  # ensure that forecast data was found
@@ -346,7 +344,6 @@ class GEBModel(Module):
 
         Raises:
             ValueError: If forecast directories do not have the expected datetime format.
-            RuntimeError: If forecast file for the current timestep is not found when forecasts are enabled in the config.
         """
         # only if forecasts is used, and if we are not already in multiverse (avoiding infinite recursion)
         # and if the current date is in the list of forecast days
@@ -356,14 +353,13 @@ class GEBModel(Module):
             is None  # only start multiverse if not already in one
             and self.current_time.date()
         ):
-            # Discover all available forecast initialization directories
-            forecast_base_path = (
-                self.input_folder
-                / "other"
-                / "forecasts"
-                / self.config["general"]["forecasts"]["provider"]
-                / self.config["general"]["forecasts"]["processing"]
-            )
+            # forecast issue dates are extracted from self.files['other'] keys
+            # which are stored as: forecasts/PROVIDER/ENSEMBLE/YYYYMMDDTHHMMSS/...
+            provider: str = self.config["general"]["forecasts"]["provider"]
+            ensemble: str = self.config["general"]["forecasts"]["processing"]
+            forecast_prefix: str = f"forecasts/{provider}/{ensemble}/"
+
+            other_files: dict[str, Path] = self.files.get("other", {})
 
             # extract unique forecast issue datetimes from files keys
             forecast_issue_dates: list[datetime.datetime] = sorted(
@@ -376,42 +372,6 @@ class GEBModel(Module):
                 }
             )
 
-            if forecast_base_path.exists():
-                forecast_dirs: list[Path] = [
-                    d
-                    for d in forecast_base_path.iterdir()
-                    if d.is_dir()
-                    and d.name.startswith(
-                        "2024"
-                    )  # assuming forecasts start with year 2024
-                ]  # get all forecast initialization directories
-            else:
-                forecast_dirs = []
-            forecast_issue_dates: list[
-                datetime.datetime
-            ] = []  # list to store forecast issue dates
-
-            for forecast_dir in forecast_dirs:
-                if (
-                    len(forecast_dir.name) == 15 and forecast_dir.name[8] == "T"
-                ):  # YYYYMMDDTHHMMSS format
-                    dt = datetime.datetime.strptime(forecast_dir.name, "%Y%m%dT%H%M%S")
-
-                    # Check if this forecast directory contains precipitation data
-                    forecast_files = list(forecast_dir.glob("**/*.zarr"))
-
-                    if (
-                        forecast_files
-                    ):  # Only include forecasts that have precipitation data
-                        forecast_issue_dates.append(dt)
-                else:
-                    raise RuntimeError(
-                        f"Forecast file {f.name} does not have a valid datetime format. Expected format: 'YYYYMMDDTHHMMSS'."
-                    )
-
-            forecast_issue_dates = list(
-                set(forecast_issue_dates)
-            )  # only keep unique dates
             # Get warning system config settings
             warning_config = self.model.config["agent_settings"]["households"][
                 "warning_system"
@@ -460,10 +420,10 @@ class GEBModel(Module):
                         dt, datetime.time(0)
                     )  # Convert date back to datetime for the multiverse method
 
-                    self.multiverse(
-                        forecast_issue_datetime=dt,
-                        return_mean_discharge=True,
-                    )  # run the multiverse for the current timestep
+                    # self.multiverse(
+                    #     forecast_issue_datetime=dt,
+                    #     return_mean_discharge=True,
+                    # )  # run the multiverse for the current timestep
 
                     # after the multiverse has run all members for one day, if warning response is enabled, run the warning system
                     if self.config["agent_settings"]["households"]["warning_response"]:

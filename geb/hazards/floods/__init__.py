@@ -20,6 +20,7 @@ from geb.geb_types import (
 from geb.hazards.floods.workflows.utils import get_start_point
 from geb.hydrology.routing import (
     get_upstream_represented_xys as get_upstream_represented_xys,
+    read_discharge_per_river,
 )
 from geb.module import Module
 from geb.store import Bucket

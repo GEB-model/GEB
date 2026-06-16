@@ -35,9 +35,10 @@ class FloodRiskModule:
         self.load_damage_curves()
         self.alter_damage_curves_based_on_actions()
         self.load_max_damage_values()
-        self.load_flood_maps()
+        if self.model.config["hazards"]["floods"]["flood_risk"]:
+            self.load_return_period_flood_maps()
 
-    def load_flood_maps(self) -> None:
+    def load_return_period_flood_maps(self) -> None:
         """Load flood maps for different return periods. This might be quite ineffecient for RAM, but faster then loading them each timestep for now."""
         self.households.return_periods = np.array(
             self.model.config["hazards"]["floods"]["return_periods"]
