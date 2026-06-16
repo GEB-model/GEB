@@ -463,18 +463,12 @@ class Observations(BuildModelBase):
 
     @build_method(required=True)
     def setup_flood_observations(self) -> None:
-        """Set up flood observations from WorldFloodsV2.
-
-        Downloads the full dataset from Hugging Face if not already present,
-        clips the metadata to the model region, and saves the results.
-        """
-        # Fetch metadata (this also downloads the data if needed)
-        floods, metadata, flood_maps = self.data_catalog.fetch("worldfloodsv2").read(
+        """Set up flood observations."""
+        floods, flood_maps = self.data_catalog.fetch("worldfloodsv2").read(
             region=self.region
         )
 
         self.set_geom(floods, name="observations/floods")
-        self.set_table(metadata, name="observations/flood_metadata")
 
         for name, flood_map in flood_maps.items():
-            self.set_other(flood_map, name=f"observations/flood_maps/{name}")
+            self.set_other(flood_map, name=f"observations/floods/{name}")
