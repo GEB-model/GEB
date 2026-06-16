@@ -527,7 +527,7 @@ class Floods(Module):
                     flood_depth=flood_depth
                 )
 
-    def get_return_period_maps(self, run_name: str) -> None:
+    def get_return_period_maps(self, split_coastal: bool = True) -> None:
         """Generates flood maps for specified return periods using the SFINCS model.
 
         Args:
@@ -730,43 +730,65 @@ class Floods(Module):
                 simulations.append(sfincs_inland_simulation)
 
             simulation = MultipleSFINCSSimulations(simulations=simulations)
-            if simulations:
-                simulation.run(
-                    gpu=self.config.get("SFINCS", {}).get("gpu", "auto"),
-                )
-                flood_depth_return_period: xr.DataArray = (
-                    simulation.read_max_flood_depth(self.config["minimum_flood_depth"])
-                )
-            else:
-                self.model.logger.warning(
-                    "No rivers found that are represented in grid and/or are not fully inside waterbodies. Creating dummy empty flood map."
-                )
-                dummy_sfincs_model = SFINCSRootModel(
-                    self.model.simulation_root, "dummy", logger=self.model.logger
-                )
-                dummy_mask = dummy_sfincs_model.create_mask(
-                    self.DEM_config,
-                    subbasins[~subbasins["is_downstream_outflow"]],
-                    self.config["grid_size_multiplier"],
-                )
 
-                flood_depth_return_period = dummy_mask.astype(np.float32)
-                flood_depth_return_period[:] = 0
-                flood_depth_return_period.attrs["_FillValue"] = np.nan
-
-            # mask floodplain with land polygons to remove inundation in the sea
-            if coastal and coastal_boundary_exclude_mask is not None:
-                flood_depth_return_period = flood_depth_return_period.rio.clip(
-                    coastal_boundary_exclude_mask.geometry,
-                    coastal_boundary_exclude_mask.crs,
-                    invert=False,
-                )
-
-            write_zarr(
-                flood_depth_return_period,
-                self.model.output_folder / "flood_maps" / f"{return_period}.zarr",
-                crs=flood_depth_return_period.rio.crs,
+            simulation.run(
+                gpu=self.config.get("SFINCS", {}).get("gpu", "auto"),
             )
+            flood_depth_return_period: xr.DataArray = simulation.read_max_flood_depth(
+                self.config["minimum_flood_depth"], split_coastal=split_coastal
+            )
+
+            if not split_coastal:
+                # mask floodplain with land polygons to remove inundation in the sea
+                if coastal and coastal_boundary_exclude_mask is not None:
+                    flood_depth_return_period = flood_depth_return_period.rio.clip(
+                        coastal_boundary_exclude_mask.geometry,
+                        coastal_boundary_exclude_mask.crs,
+                        invert=False,
+                    )
+
+                write_zarr(
+                    flood_depth_return_period,
+                    self.model.output_folder / "flood_maps" / f"{return_period}.zarr",
+                    crs=flood_depth_return_period.rio.crs,
+                )
+            elif split_coastal:
+                coastal_flood_depth, inland_flood_depth, rp_map = (
+                    flood_depth_return_period
+                )
+                if coastal and coastal_boundary_exclude_mask is not None:
+                    coastal_flood_depth = coastal_flood_depth.rio.clip(
+                        coastal_boundary_exclude_mask.geometry,
+                        coastal_boundary_exclude_mask.crs,
+                        invert=False,
+                    )
+
+                write_zarr(
+                    coastal_flood_depth,
+                    self.model.output_folder
+                    / "flood_maps"
+                    / f"{return_period}_coastal.zarr",
+                    crs=coastal_flood_depth.rio.crs,
+                )
+                write_zarr(
+                    inland_flood_depth,
+                    self.model.output_folder
+                    / "flood_maps"
+                    / f"{return_period}_inland.zarr",
+                    crs=inland_flood_depth.rio.crs,
+                )
+                if coastal and coastal_boundary_exclude_mask is not None:
+                    rp_map = rp_map.rio.clip(
+                        coastal_boundary_exclude_mask.geometry,
+                        coastal_boundary_exclude_mask.crs,
+                        invert=False,
+                    )
+
+                write_zarr(
+                    rp_map,
+                    self.model.output_folder / "flood_maps" / f"{return_period}.zarr",
+                    crs=rp_map.rio.crs,
+                )
 
             # simulation.cleanup()
 
