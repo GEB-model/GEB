@@ -10,7 +10,6 @@ import logging
 import math
 import shutil
 import warnings
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -42,6 +41,7 @@ from geb.geb_types import (
     TwoDArrayFloat64,
     TwoDArrayInt32,
 )
+from geb.hazards.event import Event
 from geb.hydrology.routing import get_river_width
 from geb.workflows.extreme_value_analysis import ReturnPeriodModel
 from geb.workflows.io import (
@@ -583,7 +583,10 @@ class SFINCSRootModel:
 
             rivers_to_burn.to_parquet(self.path / "rivers_to_burn.geoparquet")
         else:
-            rivers_to_burn = None
+            rivers_to_burn = gpd.GeoDataFrame(
+                columns=["geometry", "width", "depth", "manning"],
+                crs=self.crs,
+            )
 
         # if sfincs is run with subgrid, we set up the subgrid, with burned in rivers and mannings
         # roughness within the subgrid. If not, we burn the rivers directly into the main grid,
@@ -607,7 +610,7 @@ class SFINCSRootModel:
                         )
                     }
                 ]
-                if rivers_to_burn is not None
+                if not rivers_to_burn.empty
                 else [],
                 write_dep_tif=True,
                 write_man_tif=True,
@@ -630,7 +633,7 @@ class SFINCSRootModel:
                 ]
             )
 
-            if rivers_to_burn is not None:
+            if not rivers_to_burn.empty:
                 # retrieve the elevation and mannings grids
                 # burn the rivers into these grids
                 # and write the burned grids back to the model
@@ -1722,12 +1725,10 @@ class SFINCSSimulation:
 
     def __init__(
         self,
+        event: Event,
         sfincs_root_model_path: Path,
         sfincs_root_model_name: str,
         logger: logging.Logger,
-        simulation_name: str,
-        start_time: datetime,
-        end_time: datetime,
         spinup_seconds: int = 86400,
         write_figures: bool = True,
         flood_map_output_interval_seconds: int | None = None,
@@ -1736,24 +1737,22 @@ class SFINCSSimulation:
         """Initializes a SFINCSSimulation with specific forcing and configuration.
 
         Args:
+            event: The event for which to run the simulation.
             sfincs_root_model_path: Path to the root SFINCS model directory.
             sfincs_root_model_name: Name of the root SFINCS model.
             logger: A logging.Logger instance for logging messages.
-            simulation_name: A string representing the name of the simulation.
-                Also used to create the path to write the file to disk.
-            start_time: The start time of the simulation as a datetime object.
-            end_time: The end time of the simulation as a datetime object.
             spinup_seconds: The number of seconds to use for model spin-up. Defaults to 86400 (1 day).
             write_figures: Whether to generate and save figures for the model. Defaults to False.
             flood_map_output_interval_seconds: The interval in seconds at which to output flood maps. Defaults to None (15 minutes).
                 None means no output.
             setup_river_outflow: Whether to set up river outflow boundary conditions. Defaults to True.
+
+        Raises:
+            ValueError: If flood_map_output_interval_seconds is not None when exporting final intensity.
         """
         self.logger = logger
-        self._name = simulation_name
+        self.event = event
         self.write_figures = write_figures
-        self.start_time = start_time
-        self.end_time = end_time
 
         # Read a new independent instance of the SFINCS model to avoid shared state
         self.root_model: SFINCSRootModel = SFINCSRootModel(
@@ -1765,17 +1764,40 @@ class SFINCSSimulation:
         sfincs_model = self.root_model.sfincs_model
         sfincs_model.root.set(self.path, mode="w+")
 
+        if event.export_final_intensity:
+            if flood_map_output_interval_seconds is not None:
+                raise ValueError(
+                    "flood_map_output_interval_seconds must be None when exporting final intensity."
+                )
+            if (
+                self.event.start_time.microsecond != 0
+                or self.event.end_time.microsecond != 0
+            ):
+                raise ValueError(
+                    "Event start and end times must be rounded to the nearest second when exporting final intensity."
+                )
+
+            # Here, we need to export the final flood map at the end of the simulation,
+            # so we set the output interval to the total simulation duration.
+            flood_map_output_interval_seconds = int(
+                (self.event.end_time - self.event.start_time).total_seconds()
+            )
+        else:
+            if flood_map_output_interval_seconds is None:
+                flood_map_output_interval_seconds = 999999999  # Very large number to effectively disable intermediate flood map outputs
+
         sfincs_model.config.update(
             alpha=0.5,  # alpha is the parameter for the CFL-condition reduction. Decrease for additional numerical stability, minimum value is 0.1 and maximum is 0.75 (0.5 default value)
             # h73table=1,  # use h^(7/3) table for friction calculation. This is slightly less accurate but up to 30% faster, disabled by default. Enabling this may cause instability issues in the GPU runs, so use with caution.
             nc_deflate_level=9,  # compression level for netcdf output files (0-9)
             tspinup=spinup_seconds,  # spinup time in seconds
-            dtout=flood_map_output_interval_seconds
-            or 999999999,  # output flood maps every n seconds, 0 means no output
+            dtmapout=flood_map_output_interval_seconds,  # output interval for flood maps in seconds
             dtmaxout=999999999,  # only report max flood depth at the end of the simulation
-            tref=to_sfincs_datetime(start_time),  # reference time for the simulation
-            tstart=to_sfincs_datetime(start_time),  # simulation start time
-            tstop=to_sfincs_datetime(end_time),  # simulation end time
+            tref=to_sfincs_datetime(
+                self.event.start_time
+            ),  # reference time for the simulation
+            tstart=to_sfincs_datetime(self.event.start_time),  # simulation start time
+            tstop=to_sfincs_datetime(self.event.end_time),  # simulation end time
             **make_relative_paths(
                 sfincs_model.config.data, model_root=self.root_path, new_root=self.path
             ),
@@ -1853,7 +1875,9 @@ class SFINCSSimulation:
             # Create DataFrame with constant water level for each outflow point
             elevation_time_series_constant: pd.DataFrame = pd.DataFrame(
                 data=outflow_points["outflow_elevation"].to_dict(),
-                index=pd.date_range(start=self.start_time, end=self.end_time, freq="h"),
+                index=pd.date_range(
+                    start=self.event.start_time, end=self.event.end_time, freq="h"
+                ),
             )
 
             self.sfincs_model.water_level.create(
@@ -1938,10 +1962,6 @@ class SFINCSSimulation:
         self.sfincs_model.discharge_points.write()
         self.sfincs_model.config.write()
 
-        assert self.end_time == timeseries.index[-1], (
-            "End time of timeseries does not match simulation end time, this will lead to accounting errors"
-        )
-
         # the last timestep will not be used in SFINCS because it is the end time, which is why we
         # discard it
         self.total_discharge_volume_m3 += (
@@ -1998,7 +2018,7 @@ class SFINCSSimulation:
 
         # select only the time range needed
         runoff_m: xr.DataArray = runoff_m.sel(
-            time=slice(self.start_time, self.end_time)
+            time=slice(self.event.start_time, self.event.end_time)
         )
 
         # mask out all basins that are not in the model
@@ -2212,7 +2232,7 @@ class SFINCSSimulation:
             simulation_root=self.path,
             method="max",
             minimum_flood_depth=minimum_flood_depth,
-            end_time=self.end_time,
+            end_time=self.event.end_time,
             mask=self.root_model.area_of_interest,
         )
         return flood_map
@@ -2231,7 +2251,8 @@ class SFINCSSimulation:
             simulation_root=self.path,
             method="final",
             minimum_flood_depth=minimum_flood_depth,
-            end_time=self.end_time,
+            end_time=self.event.end_time,
+            mask=self.root_model.area_of_interest,
         )
         return flood_map
 
@@ -2296,7 +2317,7 @@ class SFINCSSimulation:
     @property
     def name(self) -> str:
         """Returns the name of the simulation."""
-        return self._name
+        return self.event.name
 
     def has_outflow_boundary(self) -> bool:
         """Checks if the SFINCS model has an outflow boundary condition.

@@ -3,7 +3,7 @@
 import copy
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -11,6 +11,7 @@ import xarray as xr
 import yaml
 
 from geb.geb_types import ThreeDArrayFloat32, TwoDArrayFloat32
+from geb.hazards.event import Event
 from geb.hazards.floods import Floods
 from geb.module import Module
 from geb.workflows.io import read_table
@@ -37,7 +38,17 @@ class HazardDriver(Module):
         self.config = self.model.config["hazards"]
         if "events" not in self.model.config["hazards"]["floods"]:
             self.config["floods"]["events"] = []
-        flood_events: list[dict[str, Any]] = self.config["floods"]["events"]
+
+        self.flood_events: list[Event] = [
+            Event(
+                kind="flood",
+                name=f"{event['start_time'].strftime(format='%Y%m%dT%H%M%S')} - {event['end_time'].strftime(format='%Y%m%dT%H%M%S')}",
+                start_time=event["start_time"],
+                end_time=event["end_time"],
+                export_max_intensity=True,
+            )
+            for event in self.config["floods"]["events"]
+        ]
 
         if (
             not self.model.in_spinup
@@ -46,27 +57,28 @@ class HazardDriver(Module):
             validation_events = read_table(
                 self.model.files["table"]["observations/flood_metadata"]
             )
-            for event in validation_events.itertuples():
-                date: pd.Timestamp = event.observation_date  # ty:ignore[unresolved-attribute]
+            for _, event in validation_events.iterrows():
+                date: pd.Timestamp = event["observation_date"]
                 start_time = date.to_pydatetime().replace(
                     minute=0, second=0, microsecond=0
                 ) - timedelta(days=5)
-                end_time = date.to_pydatetime().replace(
-                    minute=0, second=0, microsecond=0
-                ) + timedelta(days=5, hours=1)
-                flood_events.append(
-                    {
-                        "start_time": start_time,
-                        "end_time": end_time,
-                    }
+
+                event = Event(
+                    kind="flood",
+                    name=event["event id"],
+                    start_time=start_time,
+                    end_time=date,
+                    export_final_intensity=True,
                 )
 
+                self.flood_events.append(event)
+
         # extract the longest flood event in days
-        if flood_events == [] or flood_events is None:
+        if self.flood_events == [] or self.flood_events is None:
             longest_flood_event_in_days: int = 0
         else:
             flood_event_lengths: list[timedelta] = [
-                event["end_time"] - event["start_time"] for event in flood_events
+                event.end_time - event.start_time for event in self.flood_events
             ]
             longest_flood_event_in_days = max(flood_event_lengths).days
 
@@ -259,20 +271,26 @@ class HazardDriver(Module):
                             index=False,
                         )
 
-            for event in self.model.config["hazards"]["floods"]["events"]:
-                assert isinstance(event["start_time"], datetime), (
-                    f"Start time {event['start_time']} must be a datetime object."
+            for event in self.flood_events:
+                assert isinstance(event.start_time, datetime), (
+                    f"Start time {event.start_time} must be a datetime object."
                 )
-                assert isinstance(event["end_time"], datetime), (
-                    f"End time {event['end_time']} must be a datetime object."
+                assert isinstance(event.end_time, datetime), (
+                    f"End time {event.end_time} must be a datetime object."
                 )
-                assert event["end_time"] >= event["start_time"], (
-                    f"End time {event['end_time']} must be greater than or equal to start time {event['start_time']}."
+                assert event.end_time >= event.start_time, (
+                    f"End time {event.end_time} must be greater than or equal to start time {event.start_time}."
                 )
 
                 routing_substeps: int = self.floods.var.discharge_per_timestep[0].shape[
                     0
                 ]
+
+                if self.model.multiverse_name:
+                    event_name: str = self.model.multiverse_name + "/" + event_name
+                    event.name = (
+                        event_name  # Update the event name with the multiverse name
+                    )
 
                 # since we are at the end of the timestep, we need to check if the current time plus the timestep length is greater than or equal to the start time of the event
                 timestep_end_time: datetime = (
@@ -281,34 +299,35 @@ class HazardDriver(Module):
                     - self.model.timestep_length / routing_substeps
                 )
                 if (
-                    timestep_end_time >= event["end_time"]
-                    and event["end_time"] + self.model.timestep_length
-                    > timestep_end_time
+                    timestep_end_time >= event.end_time
+                    and event.end_time + self.model.timestep_length > timestep_end_time
                 ) or (
-                    event["end_time"] > self.model.simulation_end
-                    and event["start_time"] < timestep_end_time
+                    event.end_time > self.model.simulation_end
+                    and event.start_time < timestep_end_time
                     and self.model.current_timestep == self.model.n_timesteps - 1
                 ):
-                    event: dict[str, datetime] = copy.deepcopy(event)
+                    event: Event = copy.deepcopy(event)
 
                     # the actual end time is the end of the day of the simulation. Therefore,
                     # its the simulation end time plus one timestep length
                     if (
-                        event["end_time"]
+                        event.end_time
                         > self.model.simulation_end + self.model.timestep_length
                     ):
                         print(
                             f"Warning: Flood event {event} ends after the model end time {self.model.simulation_end}. Simulating only part of flood event."
                         )
-                        event["end_time"] = (
+                        event.end_time = (
                             self.model.simulation_end + self.model.timestep_length
                         )
-                        assert event["end_time"] > event["start_time"]
+                        assert event.end_time > event.start_time
 
                     if self.model.in_spinup:
                         msg = f"Flood event {event} cannot be simulated during spinup. Please adjust the flood event times or the spinup time in the configuration."
                         self.model.logger.error(msg)
                         raise ValueError(msg)
 
-                    print("Running floods for event:", event)
-                    self.floods.run(event)
+                    print(
+                        f"Running floods for event from {event.start_time} to {event.end_time}"
+                    )
+                    self.floods.run_single_event(event)
