@@ -1,6 +1,7 @@
 """Implements build methods for the land surface submodel, responsible for land surface characteristics and processes."""
 
 import copy
+import warnings
 from pathlib import Path
 
 import geopandas as gpd
@@ -177,7 +178,13 @@ class LandSurface(BuildModelBase):
             )
 
             # buffer coastlines with 0.2 degrees
-            coastlines_with_buffer = coastlines.buffer(0.2, resolution=8)
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    category=UserWarning,
+                )
+                coastlines_with_buffer = coastlines.buffer(0.2, resolution=8)
+
             coastlines_with_buffer = coastlines_with_buffer.union_all()
 
             # merge the buffered coastlines with the potential flood area with buffer
