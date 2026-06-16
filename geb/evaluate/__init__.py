@@ -24,6 +24,13 @@ class Evaluate:
         model: The GEB model instance.
     """
 
+    SUB_EVALUATOR_CLASSES = {
+        "hydrology": Hydrology,
+        "hydrodynamics": Hydrodynamics,
+        "energy": Energy,
+        "meteorological_forecasts": MeteorologicalForecasts,
+    }
+
     def __init__(self, model: GEBModel) -> None:
         """Initialize the Evaluate class."""
         self.model: GEBModel = model
@@ -35,11 +42,7 @@ class Evaluate:
     @property
     def sub_evaluators(self) -> list[str]:
         """Returns a list of available sub-evaluators."""
-        return [
-            attr
-            for attr, _ in self.__dict__.items()
-            if not attr.startswith("_") and attr != "model"
-        ]
+        return list(self.SUB_EVALUATOR_CLASSES.keys())
 
     def run(
         self,

@@ -620,7 +620,17 @@ def check_attrs(da1: xr.DataArray, da2: xr.DataArray) -> bool:
         ):
             assert np.isnan(da2.attrs["_FillValue"]), f"attribute {key} is not equal"
         else:
-            assert da1.attrs[key] == da2.attrs[key], f"attribute {key} is not equal"
+            value1 = da1.attrs[key]
+            value2 = da2.attrs[key]
+            if isinstance(value1, dict):
+                assert isinstance(value2, dict), f"attribute {key} is not equal"
+                assert value1.keys() == value2.keys(), f"attribute {key} is not equal"
+                for sub_key in value1.keys():
+                    assert value1[sub_key] == value2[sub_key], (
+                        f"attribute {key} is not equal"
+                    )
+            else:
+                assert da1.attrs[key] == da2.attrs[key], f"attribute {key} is not equal"
 
     return True
 
@@ -870,6 +880,7 @@ def write_zarr(
         array_encoding: dict[str, Any] = {
             "chunks": storage_chunks,
             "filters": filters,
+            "fill_value": da.attrs["_FillValue"],
         }
         if pre_compressor is not None:
             array_encoding["compressors"] = (
