@@ -109,7 +109,6 @@ class FloodsConfig(BaseModel):
         0.0,
         description="Value to fix the shape parameter (xi) of the GPD. Set to 0.0 to force an Exponential (Gumbel) tail, or null to allow it to be fitted.",
     )
-    flood_risk: bool = Field(False, description="Whether to calculate flood risk.")
     events: list[FloodEventConfig] = Field(
         default_factory=list, description="List of flood events."
     )
