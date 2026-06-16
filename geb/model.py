@@ -550,6 +550,68 @@ class GEBModel(Module):
         self.reporter.finalize()
         self.create_done_file()
 
+    def multirun_yearly(self) -> None:
+        """Run the model in yearly mode for multiple years, where timesteps are yearly rather than daily.
+
+        This depends on a spinup run that was run in daily mode.
+
+        Notes:
+            Cannot be run in combination with hydrology simulation.
+            This mode is experimential and is not fully tested.
+
+        Raises:
+            ValueError: If the start or end time is not at the beginning or end of a year, respectively.
+            ValueError: If flood simulation is enabled in the config, as this is not compatible with yearly mode.
+        """
+        current_time: datetime.datetime = self.run_start
+        end_time: datetime.datetime = self.run_end
+        if self.config["hazards"]["floods"]["simulate"] is True:
+            raise ValueError(
+                "Yearly mode is not compatible with flood simulation. Please set 'simulate' to False in the config."
+            )
+
+        if not (current_time.month == 1 and current_time.day == 1):
+            raise ValueError(
+                "In yearly mode start time should be the first day of the year"
+            )
+
+        if not (end_time.month == 12 and end_time.day == 31):
+            raise ValueError(
+                "In yearly mode end time should be the last day of the year"
+            )
+
+        n_timesteps = end_time.year - current_time.year + 1
+        # only report household attributes (for now)
+        self.config["report"] = {
+            key: value
+            for key, value in self.config["report"].items()
+            if key.startswith("agents.households")
+        }
+
+        for run in range(
+            25
+        ):  # run the model 5 times to test the multirun functionality
+            self.store = Store(self)
+
+            self.config["general"]["name"] = f"run_yearly_{run}"
+            current_time: datetime.datetime = self.run_start
+            end_time: datetime.datetime = self.run_end
+            self._initialize(
+                create_reporter=True,
+                current_time=current_time,
+                n_timesteps=n_timesteps,
+                timestep_length=relativedelta(years=1),
+                simulate_hydrology=False,
+                clean_report_folder=False,
+                load_data_from_store=True,
+            )
+
+            self.step_to_end()
+
+            self.logger.info("Model run finished, finalizing report...")
+            self.reporter.finalize()
+            self.create_done_file()
+
     def run_yearly(self) -> None:
         """Run the model in yearly mode, where timesteps are yearly rather than daily.
 
