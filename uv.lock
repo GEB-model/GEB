@@ -1454,7 +1454,7 @@ http = [
 
 [[package]]
 name = "geb"
-version = "1.0.0b28"
+version = "1.0.0b29"
 source = { editable = "." }
 dependencies = [
     { name = "cartopy" },
