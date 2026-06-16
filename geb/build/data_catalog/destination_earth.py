@@ -7,8 +7,11 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import aiohttp
+import fsspec
 import numpy as np
 import xarray as xr
+import zarr.storage
+from fsspec.asyn import AsyncFileSystem
 
 from geb.workflows.raster import convert_nodata
 
@@ -110,28 +113,41 @@ class DestinationEarth(Adapter):
         """
         for attempt in range(N_CONNECTION_ATTEMPTS):
             try:
-                da: xr.DataArray = xr.open_dataset(
-                    self.url,
-                    storage_options={"headers": self.get_authentication_header()},
+                fs: AsyncFileSystem = fsspec.filesystem(
+                    protocol="https",
+                    headers=self.get_authentication_header(),
+                    asynchronous=True,
+                    client_kwargs={
+                        "trust_env": True,
+                        "raise_for_status": True,
+                    },
+                    timeout=30,
+                )
+                store = zarr.storage.FsspecStore(path=self.url, fs=fs)
+
+                ds: xr.Dataset = xr.open_dataset(
+                    filename_or_obj=store,  # ty:ignore[invalid-argument-type]
                     chunks={},
                     engine="zarr",
-                )[variable].rename(
-                    {"valid_time": "time", "latitude": "y", "longitude": "x"}
+                    zarr_format=2,
+                    consolidated=True,
                 )
                 break
-            except aiohttp.ClientResponseError:
+
+            except (aiohttp.ClientResponseError, aiohttp.ClientPayloadError) as e:
                 print(
-                    f"Error connecting to Destination Earth API. This could be due to erroneous credentials or a temporary server issue. Retrying ({attempt}/{N_CONNECTION_ATTEMPTS})..."
+                    f"Error connecting to Destination Earth API: {e}. Retrying ({attempt + 1}/{N_CONNECTION_ATTEMPTS})..."
                 )
-                time.sleep(RETRY_DELAY_SECONDS)
+                time.sleep(RETRY_DELAY_SECONDS * (2**attempt))
         else:
             raise ConnectionError(
-                "Failed to connect to Destination Earth API after 3 attempts."
+                f"Failed to connect to Destination Earth API after {N_CONNECTION_ATTEMPTS} attempts."
             )
 
-        da: xr.DataArray = da.drop_vars(
-            ["number", "surface", "depthBelowLandLayer"], errors="ignore"
-        )
+        da: xr.DataArray = ds[variable]
+        da: xr.DataArray = da.rename(
+            {"valid_time": "time", "latitude": "y", "longitude": "x"}
+        ).drop_vars(["number", "surface", "depthBelowLandLayer"], errors="ignore")
 
         buffer: float = 0.5
         buffered_bounds: tuple[float, float, float, float] = (
