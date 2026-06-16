@@ -742,9 +742,9 @@ class KinematicWave(Router):
                         discharge_at_retention_basin_m3_per_timestep / dt
                     )
 
-                    # limit inflow into basins (5% per timestep (hour))
+                    # limit inflow into basins (20% per timestep (hour))
                     inflow_limit_m3_per_timestep: np.float32 = (
-                        np.float32(0.05) * retention_max_storage_m3[node_retention_id]
+                        np.float32(0.20) * retention_max_storage_m3[node_retention_id]
                     )
 
                     # determine available storage in the retention basin every hour; can not be negative
@@ -797,10 +797,14 @@ class KinematicWave(Router):
                             diverted_volume_m3
                         )
 
-                    # the basins also release water once they have started filling up, by 1% of the current storage per timestep
-                    # thereby, retention basin release is slowing down once the river flow is below activation threshold (outflow can not be negative)
+                    # the basins also release water once they have started filling up, by 1% of the current storage per timestep,
+                    # but only if the river flow is below the activation threshold.
                     # retention storage is updated accordingly, as well as retention outflow. Outflow is added to discharge_at_retention_basin (back to river)
-                    if retention_storage_m3[node_retention_id] > np.float32(0.0):
+                    if (
+                        retention_storage_m3[node_retention_id] > np.float32(0.0)
+                        and discharge_before_diversion_m3_per_s
+                        <= activation_threshold_m3_per_s
+                    ):
                         outflow_volume_m3: np.float32 = (
                             np.float32(0.01) * retention_storage_m3[node_retention_id]
                         )
@@ -979,14 +983,14 @@ class Accuflux(Router):
         self.river_length = river_length.ravel()
 
         # retention basin parameters
-        self.retention_max_storage_m3 = retention_max_storage_m3.ravel()
-        self.retention_node_id = retention_node_id.ravel()
-        self.controlled_retention = controlled_retention.ravel()
+        self.retention_max_storage_m3 = retention_max_storage_m3
+        self.retention_node_id = retention_node_id
+        self.controlled_retention = controlled_retention
         self.retention_activation_threshold_controlled_m3_s = (
-            retention_activation_threshold_controlled_m3_s.ravel()
+            retention_activation_threshold_controlled_m3_s
         )
         self.retention_activation_threshold_uncontrolled_m3_s = (
-            retention_activation_threshold_uncontrolled_m3_s.ravel()
+            retention_activation_threshold_uncontrolled_m3_s
         )
 
     def get_available_storage(
@@ -1198,9 +1202,9 @@ class Accuflux(Router):
                 # Compute discharge before diversion into ret. basins to check against activation threshold
                 Q_before_diversion_m3_per_s = inflow_volume_m3 / dt
 
-                # define inflow limit of 5% per ts of max capacity per timestep
+                # define inflow limit of 20% per ts of max capacity per timestep
                 inflow_limit_m3: np.float32 = (
-                    np.float32(0.05) * retention_max_storage_m3[node_retention_id]
+                    np.float32(0.2) * retention_max_storage_m3[node_retention_id]
                 )
 
                 # Check available storage per timestep in each retention basin to determine how much water can be diverted; available storage can not be negative
@@ -1248,8 +1252,13 @@ class Accuflux(Router):
                     # Reduce the flow remaining to the river
                     inflow_volume_m3 -= diverted_volume_m3
 
-                # Outflow: 1% of current storage per timestep when basin has storage > 0, so outflow naturally slows down; retention basin storage is updated, as well as retention outflow.
-                if retention_storage_m3[node_retention_id] > np.float32(0.0):
+                # Outflow: 1% of current storage per timestep when basin has storage > 0,
+                # but only if the river flow is below the activation threshold.
+                # retention basin storage is updated, as well as retention outflow.
+                if (
+                    retention_storage_m3[node_retention_id] > np.float32(0.0)
+                    and Q_before_diversion_m3_per_s <= activation_threshold_m3_per_s
+                ):
                     outflow_volume: np.float32 = (
                         np.float32(0.01) * retention_storage_m3[node_retention_id]
                     )
@@ -1571,6 +1580,15 @@ class Routing(Module):
 
             assert self.model.current_time == inflow_per_location.index[0]
 
+        # Can be removed in August 2026
+        self.grid.var.retention_basin_storage_m3_per_substep: TwoDArrayFloat32 = (
+            np.full(
+                (24, mask.size),
+                0,
+                dtype=np.float32,
+            )
+        )
+
         if self.model.in_spinup:
             self.spinup()
 
@@ -1778,6 +1796,13 @@ class Routing(Module):
             0,
             dtype=self.grid.var.discharge_m3_s_substep.dtype,
         )
+        self.grid.var.retention_basin_storage_m3_per_substep: TwoDArrayFloat32 = (
+            np.full(
+                (24, self.grid.var.discharge_m3_s_substep.size),
+                0,
+                dtype=np.float32,
+            )
+        )
 
         # initialize retention basin storage with zero
         self.grid.var.retention_basin_storage_m3 = np.zeros(
@@ -1920,6 +1945,12 @@ class Routing(Module):
         self.grid.var.discharge_m3_s_per_substep: TwoDArrayFloat32 = np.full_like(
             self.grid.var.discharge_m3_s_per_substep,
             fill_value=np.nan,
+        )
+        self.grid.var.retention_basin_storage_m3_per_substep: TwoDArrayFloat32 = (
+            np.full_like(
+                self.grid.var.discharge_m3_s_per_substep,
+                fill_value=np.nan,
+            )
         )
 
         if __debug__:
@@ -2125,6 +2156,19 @@ class Routing(Module):
             assert not np.isnan(discharge_m3_s_substep[self.river_ids != -1]).any()
 
             self.grid.var.discharge_m3_s_per_substep[hour, :] = discharge_m3_s_substep
+
+            retention_basin_storage_m3_substep = self.grid.full_compressed(
+                0, dtype=np.float32
+            )
+            retention_mask = self.retention_basin_ids != -1
+            retention_basin_storage_m3_substep[retention_mask] = (
+                self.grid.var.retention_basin_storage_m3[
+                    self.retention_basin_ids[retention_mask]
+                ]
+            )
+            self.grid.var.retention_basin_storage_m3_per_substep[hour, :] = (
+                retention_basin_storage_m3_substep
+            )
 
             self.var.sum_of_all_discharge_steps += discharge_m3_s_substep
             self.var.discharge_step_count += 1
