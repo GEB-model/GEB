@@ -192,7 +192,7 @@ class DischargeEvaluationConfig(BaseModel):
         description="Minimum modeled upstream area for stations included in discharge evaluation (km2).",
     )
     minimum_timeseries_length_years: float = Field(
-        5.0,
+        10.0,
         ge=0.0,
         description="Minimum paired observation-simulation timeseries length for stations included in discharge evaluation (years).",
     )

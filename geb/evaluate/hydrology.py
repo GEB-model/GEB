@@ -56,6 +56,8 @@ from geb.workflows.timeseries import regularize_discharge_timeseries
 
 OBSERVATIONS_COLOR = "#E6900A"
 SIMULATIONS_DEFAULT_COLOR = "#278DD9"
+GOOGLE_GLOFAS_EVALUATION_START_YEAR: int = 2014
+GOOGLE_GLOFAS_EVALUATION_END_YEAR: int = 2021
 
 # Configure global style for all plots in this module
 mpl.rcParams["figure.facecolor"] = "white"
@@ -84,6 +86,16 @@ class DischargeMetrics(NamedTuple):
     R2: float = float("nan")
     RMSE: float = float("nan")
     RRMSE: float = float("nan")
+
+
+class DischargeEvaluationPaths(NamedTuple):
+    """Output paths for one discharge evaluation period."""
+
+    suffix: str
+    label: str
+    plot_folder: Path
+    xlsx: Path
+    geoparquet: Path
 
 
 def _calculate_discharge_validation_metrics(
@@ -966,6 +978,75 @@ def create_validation_df(
     )
 
     return validation_df
+
+
+def _get_discharge_evaluation_paths(
+    output_folder: Path,
+    start_year: int | None,
+    end_year: int | None,
+) -> DischargeEvaluationPaths:
+    """Get output paths for one discharge evaluation period.
+
+    Args:
+        output_folder: Root discharge evaluation output folder.
+        start_year: First calendar year included in the evaluation, or `None`
+            for the first available year.
+        end_year: Last calendar year included in the evaluation, or `None` for
+            the last available year.
+
+    Returns:
+        Period-specific output suffix, label, plot folder, and metric file paths.
+
+    Raises:
+        ValueError: If both years are provided and `start_year` is after
+            `end_year`.
+    """
+    if start_year is not None and end_year is not None and start_year > end_year:
+        raise ValueError("start_year must be smaller than or equal to end_year.")
+    suffix: str = ""
+    if start_year is not None or end_year is not None:
+        start_label: str = str(start_year) if start_year is not None else "start"
+        end_label: str = str(end_year) if end_year is not None else "end"
+        suffix = f"_{start_label}_{end_label}"
+    return DischargeEvaluationPaths(
+        suffix=suffix,
+        label="the full overlapping period" if not suffix else suffix[1:],
+        plot_folder=output_folder if not suffix else output_folder / f"period{suffix}",
+        xlsx=output_folder / f"evaluation_metrics{suffix}.xlsx",
+        geoparquet=output_folder / f"evaluation_metrics{suffix}.geoparquet",
+    )
+
+
+def _filter_validation_df_to_years(
+    validation_df: pd.DataFrame,
+    start_year: int | None,
+    end_year: int | None,
+) -> pd.DataFrame:
+    """Filter a validation dataframe to an inclusive calendar-year period.
+
+    Args:
+        validation_df: Validation dataframe indexed by time.
+        start_year: First calendar year included in the evaluation, or `None`
+            for the first available year.
+        end_year: Last calendar year included in the evaluation, or `None` for
+            the last available year.
+
+    Returns:
+        Validation dataframe restricted to the requested calendar years.
+    """
+    if start_year is None and end_year is None:
+        return validation_df
+    start_time: pd.Timestamp | None = (
+        pd.Timestamp(year=start_year, month=1, day=1)
+        if start_year is not None
+        else None
+    )
+    end_time: pd.Timestamp | None = (
+        pd.Timestamp(year=end_year + 1, month=1, day=1) - pd.Timedelta("1ns")
+        if end_year is not None
+        else None
+    )
+    return validation_df.loc[start_time:end_time]
 
 
 def _plot_discharge_validation_graphs(
@@ -1884,6 +1965,9 @@ class Hydrology:
         create_plots: bool = True,
         minimum_upstream_area_km2: float | None = None,
         minimum_timeseries_length_years: float | None = None,
+        start_year: int | None = None,
+        end_year: int | None = None,
+        clean_output: bool = False,
     ) -> dict[str, float | None]:
         """Evaluate the discharge grid from GEB against observations from the discharge observations database.
 
@@ -1907,6 +1991,13 @@ class Hydrology:
                 If omitted, `hydrology.evaluation.discharge.minimum_upstream_area_km2` is used.
             minimum_timeseries_length_years: Optional minimum paired observation-simulation timeseries length for station evaluation (years).
                 If omitted, `hydrology.evaluation.discharge.minimum_timeseries_length_years` is used.
+            start_year: Optional first calendar year included in the skill-score
+                calculation. If omitted, the first overlapping year is used.
+            end_year: Optional last calendar year included in the skill-score
+                calculation. If omitted, the last overlapping year is used.
+            clean_output: Whether to remove the existing discharge evaluation
+                output folder before writing new files. Defaults to `False` so
+                period-specific evaluations do not delete full-period outputs.
 
         Returns:
             Dictionary containing median discharge skill scores. In addition, the returned dictionary contains
@@ -1919,8 +2010,21 @@ class Hydrology:
             ValueError: If a non-existing frequency label is encountered in the discharge observations data.
         """
         output_folder = self.evaluate_discharge_output_folder
-        shutil.rmtree(output_folder)
         output_folder.mkdir(parents=True, exist_ok=True)
+        if clean_output:
+            shutil.rmtree(output_folder)
+            output_folder.mkdir(parents=True, exist_ok=True)
+        evaluation_paths: DischargeEvaluationPaths = _get_discharge_evaluation_paths(
+            output_folder=output_folder,
+            start_year=start_year,
+            end_year=end_year,
+        )
+        if create_plots:
+            evaluation_paths.plot_folder.mkdir(parents=True, exist_ok=True)
+        self.model.logger.info(
+            "Evaluating discharge skill scores for %s.",
+            evaluation_paths.label,
+        )
 
         if minimum_upstream_area_km2 is None:
             minimum_upstream_area_km2 = self.model.config["hydrology"]["evaluation"][
@@ -1931,13 +2035,22 @@ class Hydrology:
             minimum_upstream_area_km2,
         )
         if minimum_timeseries_length_years is None:
-            minimum_timeseries_length_years = self.model.config["hydrology"][
-                "evaluation"
-            ]["discharge"]["minimum_timeseries_length_years"]
-        self.model.logger.info(
-            "Using %.2f years as the minimum paired timeseries length for discharge evaluation.",
-            minimum_timeseries_length_years,
-        )
+            if start_year is not None and end_year is not None:
+                # A fixed evaluation window is already a time constraint; applying
+                # a minimum-length filter on top would wrongly exclude stations
+                # (e.g. the 8-year 2014-2021 Google/GloFAS window).
+                minimum_timeseries_length_years = 0.0
+                self.model.logger.info(
+                    "start_year and end_year both provided; disabling timeseries-length filter."
+                )
+            else:
+                minimum_timeseries_length_years = self.model.config["hydrology"][
+                    "evaluation"
+                ]["discharge"]["minimum_timeseries_length_years"]
+                self.model.logger.info(
+                    "Using %.2f years as the minimum paired timeseries length for discharge evaluation.",
+                    minimum_timeseries_length_years,
+                )
 
         # load input data files
         discharge_observations_hourly: pd.DataFrame = read_table(
@@ -2024,6 +2137,11 @@ class Hydrology:
                         "Skipping station %s: no simulation output found.", station_id
                     )
                     continue
+                validation_df = _filter_validation_df_to_years(
+                    validation_df=validation_df,
+                    start_year=start_year,
+                    end_year=end_year,
+                )
 
                 minimum_valid_steps = (
                     minimum_timeseries_length_years
@@ -2047,7 +2165,7 @@ class Hydrology:
                         kge=discharge_metrics.KGE,
                         nse=discharge_metrics.NSE,
                         r2_value=discharge_metrics.R2,
-                        eval_plot_folder=self.evaluate_discharge_output_folder,
+                        eval_plot_folder=evaluation_paths.plot_folder,
                         include_yearly_plots=include_yearly_plots,
                         frequency=frequency_label,
                     )
@@ -2146,7 +2264,7 @@ class Hydrology:
             evaluation_df = pd.DataFrame(evaluation_per_station).set_index("station_ID")
 
         evaluation_df.to_excel(
-            self.evaluate_discharge_output_folder / "evaluation_metrics.xlsx",
+            evaluation_paths.xlsx,
             index=True,
         )
 
@@ -2157,7 +2275,12 @@ class Hydrology:
             crs="EPSG:4326",
         )  # create a geodataframe from the evaluation dataframe
         evaluation_gdf.to_parquet(
-            self.evaluate_discharge_output_folder / "evaluation_metrics.geoparquet",
+            evaluation_paths.geoparquet,
+        )
+        self.model.logger.info(
+            "Saved discharge evaluation metrics to %s and %s.",
+            evaluation_paths.xlsx,
+            evaluation_paths.geoparquet,
         )
 
         # Return median metrics if available
@@ -2177,8 +2300,8 @@ class Hydrology:
 
                 create_discharge_folium_map(
                     evaluation_gdf=evaluation_gdf,
-                    output_path=self.evaluate_discharge_output_folder
-                    / "discharge_evaluation_map.html",
+                    output_path=evaluation_paths.plot_folder
+                    / f"discharge_evaluation_map{evaluation_paths.suffix}.html",
                     region_geom=region_geom,
                     rivers=rivers,
                     station_chart_data=station_dashboard_charts,
@@ -2189,16 +2312,28 @@ class Hydrology:
 
                 # GEB standalone plot — all GEB stations.
                 self.plot_skill_score_boxplots(
-                    export=True, include_geb=True, matched_only=False
+                    export=True,
+                    include_geb=True,
+                    matched_only=False,
+                    start_year=start_year,
+                    end_year=end_year,
                 )
-                self.plot_skill_score_maps(export=True)
+                self.plot_skill_score_maps(
+                    export=True,
+                    start_year=start_year,
+                    end_year=end_year,
+                )
 
                 # When external evaluation data are present, also produce a
                 # combined plot restricted to stations present in both datasets
                 # so the comparison is fair.
                 if self._read_external_evaluation_raw():
                     self.plot_skill_score_boxplots(
-                        export=True, include_geb=True, matched_only=True
+                        export=True,
+                        include_geb=True,
+                        matched_only=True,
+                        start_year=start_year,
+                        end_year=end_year,
                     )
 
             scores: dict[str, float | None] = {
@@ -2554,6 +2689,8 @@ class Hydrology:
         export: bool = True,
         minimum_upstream_area_km2: float | None = None,
         external_evaluation_folder: str | Path | None = None,
+        start_year: int | None = None,
+        end_year: int | None = None,
         **kwargs: Any,
     ) -> None:
         """Plot per-station skill scores on a satellite basemap, one map per metric.
@@ -2568,21 +2705,30 @@ class Hydrology:
                 If omitted, `hydrology.evaluation.discharge.minimum_upstream_area_km2` is used.
             external_evaluation_folder: Optional folder containing external
                 model skill scores or Google streamflow `metrics.tgz`.
+            start_year: Optional first calendar year of the evaluation metrics
+                file to plot.
+            end_year: Optional last calendar year of the evaluation metrics file
+                to plot.
             **kwargs: Ignored (CLI compatibility).
         """
         if minimum_upstream_area_km2 is None:
             minimum_upstream_area_km2 = self.model.config["hydrology"]["evaluation"][
                 "discharge"
             ]["minimum_upstream_area_km2"]
-        geoparquet_path = (
-            self.evaluate_discharge_output_folder / "evaluation_metrics.geoparquet"
+        evaluation_paths: DischargeEvaluationPaths = _get_discharge_evaluation_paths(
+            output_folder=self.evaluate_discharge_output_folder,
+            start_year=start_year,
+            end_year=end_year,
         )
-        xlsx_path = self.evaluate_discharge_output_folder / "evaluation_metrics.xlsx"
+        if export:
+            evaluation_paths.plot_folder.mkdir(parents=True, exist_ok=True)
 
-        if geoparquet_path.exists():
-            evaluation_gdf: gpd.GeoDataFrame = gpd.read_parquet(geoparquet_path)
-        elif xlsx_path.exists():
-            eval_df: pd.DataFrame = pd.read_excel(xlsx_path)
+        if evaluation_paths.geoparquet.exists():
+            evaluation_gdf: gpd.GeoDataFrame = gpd.read_parquet(
+                evaluation_paths.geoparquet
+            )
+        elif evaluation_paths.xlsx.exists():
+            eval_df: pd.DataFrame = pd.read_excel(evaluation_paths.xlsx)
             evaluation_gdf = gpd.GeoDataFrame(
                 eval_df,
                 geometry=gpd.points_from_xy(eval_df["x"], eval_df["y"]),
@@ -2621,20 +2767,25 @@ class Hydrology:
             _plot_skill_score_maps(
                 evaluation_gdf=evaluation_gdf,
                 region_geom=region_geom,
-                output_folder=self.evaluate_discharge_output_folder,
+                output_folder=evaluation_paths.plot_folder,
                 logger=self.model.logger,
                 difference_gdfs={
                     model_name: plot_inputs.evaluation_df
                     for model_name, plot_inputs in _prepare_pairwise_skill_score_boxplot_inputs(
-                        evaluation_metrics_path=xlsx_path,
+                        evaluation_metrics_path=evaluation_paths.xlsx,
                         external_evaluation_folder=external_evaluation_folder,
                         configured_external_evaluation_folder=self.model.config[
                             "hydrology"
                         ]["evaluation"]["discharge"].get("external_evaluation_folder"),
                         model_folder=self.model.input_folder.parent,
-                        output_folder=self.evaluate_discharge_output_folder,
+                        output_folder=evaluation_paths.plot_folder,
                         logger=self.model.logger,
                         minimum_upstream_area_km2=minimum_upstream_area_km2,
+                        archive_evaluation_metrics_path=_get_discharge_evaluation_paths(
+                            output_folder=self.evaluate_discharge_output_folder,
+                            start_year=GOOGLE_GLOFAS_EVALUATION_START_YEAR,
+                            end_year=GOOGLE_GLOFAS_EVALUATION_END_YEAR,
+                        ).xlsx,
                     ).items()
                 },
             )
@@ -2647,6 +2798,8 @@ class Hydrology:
         minimum_upstream_area_km2: float | None = None,
         external_evaluation_folder: str | Path | None = None,
         include_external: bool = False,
+        start_year: int | None = None,
+        end_year: int | None = None,
         **kwargs: Any,
     ) -> None:
         """Create skill score violin+boxplot graphs for each evaluation metric.
@@ -2669,6 +2822,10 @@ class Hydrology:
             include_external: Include external model scores in non-matched plots.
                 External scores are always included for `matched_only=True` and
                 when `include_geb=False`.
+            start_year: Optional first calendar year of the evaluation metrics
+                file to plot.
+            end_year: Optional last calendar year of the evaluation metrics file
+                to plot.
             **kwargs: Ignored CLI compatibility options. Supports
                 `minimum_upstream_areakm2` as a backwards-compatible alias for
                 `minimum_upstream_area_km2`.
@@ -2685,24 +2842,28 @@ class Hydrology:
         should_include_external: bool = (
             include_external or matched_only or not include_geb
         )
-        evaluation_metrics_path: Path = (
-            self.evaluate_discharge_output_folder / "evaluation_metrics.xlsx"
+        evaluation_paths: DischargeEvaluationPaths = _get_discharge_evaluation_paths(
+            output_folder=self.evaluate_discharge_output_folder,
+            start_year=start_year,
+            end_year=end_year,
         )
+        evaluation_paths.plot_folder.mkdir(parents=True, exist_ok=True)
         snapped_locations_path: Path = self.model.files["geom"][
             "discharge/discharge_snapped_locations"
         ]
         plot_inputs = _prepare_skill_score_boxplot_inputs(
-            evaluation_metrics_path=evaluation_metrics_path,
+            evaluation_metrics_path=evaluation_paths.xlsx,
             snapped_locations_path=snapped_locations_path,
             external_evaluation_folder=external_evaluation_folder,
             configured_external_evaluation_folder=configured_folder,
             model_folder=self.model.input_folder.parent,
-            output_folder=self.evaluate_discharge_output_folder,
+            output_folder=evaluation_paths.plot_folder,
             logger=self.model.logger,
             minimum_upstream_area_km2=minimum_upstream_area_km2,
             include_geb=include_geb,
             matched_only=matched_only,
             include_external=should_include_external,
+            archive_models_only=bool(evaluation_paths.suffix),
         )
 
         if include_geb and plot_inputs.evaluation_df.empty:
@@ -2714,7 +2875,7 @@ class Hydrology:
         _plot_skill_score_boxplots(
             evaluation_df=plot_inputs.evaluation_df,
             external_models=plot_inputs.external_models,
-            output_folder=self.evaluate_discharge_output_folder,
+            output_folder=evaluation_paths.plot_folder,
             logger=self.model.logger,
             export=export,
             include_geb=include_geb,
@@ -2725,13 +2886,18 @@ class Hydrology:
 
         if not matched_only and include_geb:
             pairwise_plot_inputs = _prepare_pairwise_skill_score_boxplot_inputs(
-                evaluation_metrics_path=evaluation_metrics_path,
+                evaluation_metrics_path=evaluation_paths.xlsx,
                 external_evaluation_folder=external_evaluation_folder,
                 configured_external_evaluation_folder=configured_folder,
                 model_folder=self.model.input_folder.parent,
-                output_folder=self.evaluate_discharge_output_folder,
+                output_folder=evaluation_paths.plot_folder,
                 logger=self.model.logger,
                 minimum_upstream_area_km2=minimum_upstream_area_km2,
+                archive_evaluation_metrics_path=_get_discharge_evaluation_paths(
+                    output_folder=self.evaluate_discharge_output_folder,
+                    start_year=GOOGLE_GLOFAS_EVALUATION_START_YEAR,
+                    end_year=GOOGLE_GLOFAS_EVALUATION_END_YEAR,
+                ).xlsx,
             )
             kge_comparison_values: dict[
                 str, tuple[np.ndarray, np.ndarray, int, float | None]
@@ -2740,7 +2906,7 @@ class Hydrology:
                 _plot_skill_score_boxplots(
                     evaluation_df=matched_plot_inputs.evaluation_df,
                     external_models=matched_plot_inputs.external_models,
-                    output_folder=self.evaluate_discharge_output_folder,
+                    output_folder=evaluation_paths.plot_folder,
                     logger=self.model.logger,
                     export=export,
                     include_geb=include_geb,
@@ -2765,7 +2931,7 @@ class Hydrology:
 
             _plot_kge_external_model_comparison(
                 model_kge_values=kge_comparison_values,
-                output_folder=self.evaluate_discharge_output_folder,
+                output_folder=evaluation_paths.plot_folder,
                 logger=self.model.logger,
                 export=export,
             )
@@ -2774,6 +2940,8 @@ class Hydrology:
         self,
         export: bool = True,
         minimum_upstream_area_km2: float | None = None,
+        start_year: int | None = None,
+        end_year: int | None = None,
         **kwargs: Any,
     ) -> None:
         """Plot upstream area against discharge skill scores.
@@ -2786,22 +2954,31 @@ class Hydrology:
             export: Whether to save the figure to disk.
             minimum_upstream_area_km2: Optional minimum modeled upstream area threshold for plotted stations (km2).
                 If omitted, `hydrology.evaluation.discharge.minimum_upstream_area_km2` is used.
+            start_year: Optional first calendar year of the evaluation metrics
+                file to plot.
+            end_year: Optional last calendar year of the evaluation metrics file
+                to plot.
             **kwargs: Ignored (CLI compatibility).
         """
         if minimum_upstream_area_km2 is None:
             minimum_upstream_area_km2 = self.model.config["hydrology"]["evaluation"][
                 "discharge"
             ]["minimum_upstream_area_km2"]
-        evaluation_path: Path = (
-            self.evaluate_discharge_output_folder / "evaluation_metrics.xlsx"
+        evaluation_paths: DischargeEvaluationPaths = _get_discharge_evaluation_paths(
+            output_folder=self.evaluate_discharge_output_folder,
+            start_year=start_year,
+            end_year=end_year,
         )
-        if not evaluation_path.exists():
+        if export:
+            evaluation_paths.plot_folder.mkdir(parents=True, exist_ok=True)
+        if not evaluation_paths.xlsx.exists():
             self.model.logger.warning(
-                "No evaluation_metrics.xlsx file found. Run evaluate_discharge first."
+                "No %s file found. Run evaluate_discharge first.",
+                evaluation_paths.xlsx.name,
             )
             return
 
-        evaluation_df: pd.DataFrame = pd.read_excel(evaluation_path)
+        evaluation_df: pd.DataFrame = pd.read_excel(evaluation_paths.xlsx)
         before_filter_count: int = len(evaluation_df)
         evaluation_df = evaluation_df[
             evaluation_df["upstream_area_GEB"]
@@ -2823,9 +3000,69 @@ class Hydrology:
         if export:
             _plot_skill_scores_vs_upstream_area(
                 evaluation_df=evaluation_df,
-                output_folder=self.evaluate_discharge_output_folder,
+                output_folder=evaluation_paths.plot_folder,
                 logger=self.model.logger,
             )
+
+    def plot_discharge_skill_scores(
+        self,
+        export: bool = True,
+        minimum_upstream_area_km2: float | None = None,
+        external_evaluation_folder: str | Path | None = None,
+        include_geb: bool = True,
+        matched_only: bool = False,
+        include_external: bool = False,
+        start_year: int | None = None,
+        end_year: int | None = None,
+        **kwargs: Any,
+    ) -> None:
+        """Plot all discharge skill score figures in one call.
+
+        Runs :meth:`plot_skill_score_maps`, :meth:`plot_skill_score_boxplots`,
+        and :meth:`plot_skill_scores_vs_upstream_area` with shared settings.
+
+        Args:
+            export: Whether to save all figures to disk.
+            minimum_upstream_area_km2: Optional minimum modeled upstream area
+                threshold applied to every plot (km2). If omitted,
+                ``hydrology.evaluation.discharge.minimum_upstream_area_km2``
+                from the model config is used.
+            external_evaluation_folder: Optional folder containing external
+                model skill scores or Google Streamflow ``metrics.tgz``.
+            include_geb: Include GEB in the boxplots.
+            matched_only: Restrict boxplots to stations matched with an
+                external model only.
+            include_external: Include external model scores in non-matched
+                boxplots.
+            start_year: Optional first calendar year of the evaluation metrics
+                file to plot.
+            end_year: Optional last calendar year of the evaluation metrics file
+                to plot.
+            **kwargs: Ignored (CLI compatibility).
+        """
+        self.plot_skill_score_maps(
+            export=export,
+            minimum_upstream_area_km2=minimum_upstream_area_km2,
+            external_evaluation_folder=external_evaluation_folder,
+            start_year=start_year,
+            end_year=end_year,
+        )
+        self.plot_skill_score_boxplots(
+            export=export,
+            minimum_upstream_area_km2=minimum_upstream_area_km2,
+            external_evaluation_folder=external_evaluation_folder,
+            include_geb=include_geb,
+            matched_only=matched_only,
+            include_external=include_external,
+            start_year=start_year,
+            end_year=end_year,
+        )
+        self.plot_skill_scores_vs_upstream_area(
+            export=export,
+            minimum_upstream_area_km2=minimum_upstream_area_km2,
+            start_year=start_year,
+            end_year=end_year,
+        )
 
     def plot_water_circle(
         self,

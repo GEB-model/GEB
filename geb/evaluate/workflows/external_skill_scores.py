@@ -7,16 +7,20 @@ import re
 import tarfile
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.request import urlretrieve
+from urllib.request import urlopen, urlretrieve
 
 import pandas as pd
 
 from geb.workflows.io import read_geom
 
 GOOGLE_STREAMFLOW_MODEL_NAME: str = "Google Streamflow"
-GLOFAS_MODEL_NAME: str = "GloFAS"
+GLOFAS_MODEL_NAME: str = "GloFAS all"
+GLOFAS_NON_CALIBRATED_MODEL_NAME: str = "GloFAS non-calibrated"
 GOOGLE_STREAMFLOW_METRICS_URL: str = (
     "https://zenodo.org/records/10397664/files/metrics.tgz?download=1"
+)
+GOOGLE_STREAMFLOW_METADATA_URL: str = (
+    "https://zenodo.org/records/10397664/files/metadata.tgz?download=1"
 )
 GOOGLE_STREAMFLOW_LEAD_TIME: str = "0"
 GOOGLE_STREAMFLOW_METRIC_FILES: dict[str, str] = {
@@ -35,6 +39,11 @@ GLOFAS_METRIC_ROOT: Path = Path(
     "metrics/hydrograph_metrics/per_metric/glofas/2014/glofas_prediction"
 )
 GLOFAS_CSV_NAME: str = "glofas.csv"
+GLOFAS_NON_CALIBRATED_CSV_NAME: str = "glofas_non_calibrated.csv"
+GLOFAS_CALIBRATION_METADATA_CSV_NAME: str = "GRDC_GloFASv4_additional_information.csv"
+GLOFAS_CALIBRATION_METADATA_ARCHIVE_MEMBER: str = (
+    f"metadata/{GLOFAS_CALIBRATION_METADATA_CSV_NAME}"
+)
 EXTERNAL_MODEL_MINIMUM_UPSTREAM_AREA_KM2: dict[str, float] = {
     # Utrecht 1 km evaluation uses stations with upstream area >= 400 km2.
     "utrecht": 400.0,
@@ -102,6 +111,15 @@ _ARCHIVE_MODEL_BY_CSV_NAME: dict[str, GoogleMetricsArchiveModel] = {
     archive_model.csv_name: archive_model
     for archive_model in GOOGLE_METRICS_ARCHIVE_MODELS
 }
+_IGNORED_EXTERNAL_CSV_NAMES: set[str] = {
+    GLOFAS_CALIBRATION_METADATA_CSV_NAME,
+    GLOFAS_NON_CALIBRATED_CSV_NAME,
+}
+_ARCHIVE_MODEL_NAMES: set[str] = {
+    GOOGLE_STREAMFLOW_MODEL_NAME,
+    GLOFAS_MODEL_NAME,
+    GLOFAS_NON_CALIBRATED_MODEL_NAME,
+}
 
 
 def _get_external_model_minimum_upstream_area_km2(model_name: str) -> float | None:
@@ -122,6 +140,36 @@ def _get_external_model_minimum_upstream_area_km2(model_name: str) -> float | No
         if model_key in model_name_normalized:
             return minimum_upstream_area_km2
     return None
+
+
+def _filter_to_archive_models(
+    external_models: dict[str, pd.DataFrame],
+) -> dict[str, pd.DataFrame]:
+    """Keep external models whose scores come from Google's metrics archive.
+
+    Args:
+        external_models: External model tables keyed by model label.
+
+    Returns:
+        External model tables for Google Streamflow and GloFAS variants only.
+    """
+    return {
+        model_name: model_df
+        for model_name, model_df in external_models.items()
+        if model_name in _ARCHIVE_MODEL_NAMES
+    }
+
+
+def _is_archive_external_model(model_name: str) -> bool:
+    """Check whether an external model uses Google's 2014-2021 archive scores.
+
+    Args:
+        model_name: External model label.
+
+    Returns:
+        True when the model is Google Streamflow or a GloFAS archive variant.
+    """
+    return model_name in _ARCHIVE_MODEL_NAMES
 
 
 def _has_positive_upstream_area_threshold(
@@ -224,14 +272,15 @@ def _standardize_external_metric_columns(
 
     Returns:
         Skill-score table with Pearson-r source values stored as
-        `KGE_correlation` and no standalone `R` column. Utrecht `R2` columns
-        are treated as COD/NSE, while `R2` derived from `R` is Pearson r squared.
+        `KGE_correlation` and no standalone `R` column. Utrecht `R2` is kept
+        as-is when NSE is also present; otherwise it is renamed to NSE (legacy
+        exports that provided only COD). `R2` derived from `R` is Pearson r².
     """
     standardized_df: pd.DataFrame = skill_score_df.copy()
     if "utrecht" in model_name.lower() and "R2" in standardized_df.columns:
         if "NSE" not in standardized_df.columns:
-            standardized_df["NSE"] = standardized_df["R2"]
-        standardized_df = standardized_df.drop(columns=["R2"])
+            # Older Utrecht exports only provide R2 (COD); treat it as NSE.
+            standardized_df = standardized_df.rename(columns={"R2": "NSE"})
     if "R" in standardized_df.columns:
         if "KGE_correlation" not in standardized_df.columns:
             standardized_df["KGE_correlation"] = standardized_df["R"]
@@ -656,6 +705,129 @@ def _get_archive_paths(folder: Path) -> list[Path]:
     return archive_paths
 
 
+def _read_glofas_calibration_station_keys(
+    folder: Path,
+    logger: logging.Logger,
+    auto_fetch_google_streamflow: bool,
+) -> set[str]:
+    """Read GRDC station keys used to calibrate GloFAS v4.
+
+    Args:
+        folder: External evaluation folder.
+        logger: Logger used for processing diagnostics.
+        auto_fetch_google_streamflow: Whether to fetch Zenodo metadata if the
+            calibration CSV is not already present.
+
+    Returns:
+        GRDC station keys in the `GRDC_<station_id>` format.
+
+    Raises:
+        ValueError: If the metadata table does not contain a recognizable GRDC
+            station identifier column.
+    """
+    metadata_path: Path = folder / GLOFAS_CALIBRATION_METADATA_ARCHIVE_MEMBER
+    legacy_metadata_path: Path = folder / GLOFAS_CALIBRATION_METADATA_CSV_NAME
+    if not metadata_path.exists() and legacy_metadata_path.exists():
+        metadata_path = legacy_metadata_path
+
+    if not metadata_path.exists() and auto_fetch_google_streamflow:
+        metadata_path.parent.mkdir(parents=True, exist_ok=True)
+        logger.info(
+            "Fetching GloFAS calibration metadata from %s to %s.",
+            GOOGLE_STREAMFLOW_METADATA_URL,
+            metadata_path,
+        )
+        with urlopen(GOOGLE_STREAMFLOW_METADATA_URL) as metadata_response:
+            with tarfile.open(fileobj=metadata_response, mode="r|gz") as archive:
+                for member in archive:
+                    if member.name != GLOFAS_CALIBRATION_METADATA_ARCHIVE_MEMBER:
+                        continue
+                    member_file = archive.extractfile(member)
+                    if member_file is not None:
+                        metadata_path.write_bytes(member_file.read())
+                    break
+
+    if not metadata_path.exists():
+        logger.info(
+            "No GloFAS calibration metadata found at %s; skipping non-calibrated "
+            "GloFAS subset.",
+            folder,
+        )
+        return set()
+
+    metadata_df: pd.DataFrame = pd.read_csv(metadata_path)
+    station_column_name: str | None = next(
+        (
+            column_name
+            for column_name in ("grdc_number", "station_id_num_GRDC")
+            if column_name in metadata_df.columns
+        ),
+        None,
+    )
+    if station_column_name is None:
+        raise ValueError(
+            f"GloFAS calibration metadata at {metadata_path} does not contain "
+            "a 'grdc_number' or 'station_id_num_GRDC' column."
+        )
+
+    calibration_station_keys: set[str] = _format_grdc_station_keys(
+        metadata_df[station_column_name]
+    )
+    logger.info(
+        "Loaded %d GloFAS calibration station keys from %s.",
+        len(calibration_station_keys),
+        metadata_path,
+    )
+    return calibration_station_keys
+
+
+def _add_glofas_non_calibrated_model(
+    external_models: dict[str, pd.DataFrame],
+    folder: Path,
+    logger: logging.Logger,
+    auto_fetch_google_streamflow: bool,
+) -> None:
+    """Add a GloFAS skill-score table excluding calibrated stations.
+
+    Args:
+        external_models: External model tables keyed by model label.
+        folder: External evaluation folder.
+        logger: Logger used for processing diagnostics.
+        auto_fetch_google_streamflow: Whether to fetch Zenodo metadata when the
+            GloFAS calibration CSV is not already present.
+    """
+    if GLOFAS_NON_CALIBRATED_MODEL_NAME in external_models:
+        return
+    glofas_df: pd.DataFrame | None = external_models.get(GLOFAS_MODEL_NAME)
+    if glofas_df is None or glofas_df.empty:
+        return
+
+    calibration_station_keys: set[str] = _read_glofas_calibration_station_keys(
+        folder=folder,
+        logger=logger,
+        auto_fetch_google_streamflow=auto_fetch_google_streamflow,
+    )
+    if not calibration_station_keys:
+        return
+
+    non_calibrated_df: pd.DataFrame = glofas_df[
+        ~glofas_df.index.str.upper().isin(calibration_station_keys)
+    ].copy()
+    if non_calibrated_df.empty:
+        logger.info(
+            "No non-calibrated GloFAS stations remain after metadata filtering."
+        )
+        return
+
+    external_models[GLOFAS_NON_CALIBRATED_MODEL_NAME] = non_calibrated_df
+    logger.info(
+        "%s metrics available for %d stations after excluding %d calibrated gauges.",
+        GLOFAS_NON_CALIBRATED_MODEL_NAME,
+        len(non_calibrated_df),
+        len(glofas_df) - len(non_calibrated_df),
+    )
+
+
 def _load_or_fetch_external_archive_model_metrics(
     folder: Path,
     archive_model: GoogleMetricsArchiveModel,
@@ -783,7 +955,11 @@ def _read_external_csv_models(
         External model tables keyed by model label.
     """
     external_models: dict[str, pd.DataFrame] = {}
-    csv_paths: list[Path] = sorted(folder.glob("*.csv"))
+    csv_paths: list[Path] = [
+        csv_path
+        for csv_path in sorted(folder.glob("*.csv"))
+        if csv_path.name not in _IGNORED_EXTERNAL_CSV_NAMES
+    ]
     if csv_paths:
         logger.info("Reading external evaluation data from %s.", folder)
 
@@ -842,7 +1018,7 @@ def _add_archive_models(
         folder: External evaluation folder.
         logger: Logger used for processing diagnostics.
         auto_fetch_google_streamflow: Whether to fetch Google's archive when
-    local archive models are missing.
+            local archive models are missing.
     """
     for archive_model in GOOGLE_METRICS_ARCHIVE_MODELS:
         metrics_df: pd.DataFrame | None = external_models.get(archive_model.model_name)
@@ -860,6 +1036,12 @@ def _add_archive_models(
                 archive_model.model_name,
                 len(metrics_df),
             )
+    _add_glofas_non_calibrated_model(
+        external_models=external_models,
+        folder=folder,
+        logger=logger,
+        auto_fetch_google_streamflow=auto_fetch_google_streamflow,
+    )
 
 
 def read_external_evaluation_raw(
@@ -893,8 +1075,18 @@ def read_external_evaluation_raw(
         logger.info("No external evaluation data folder configured, skipping.")
         return {}
 
-    if folder.is_file() and folder.name == "metrics.tgz":
-        return _read_archive_file_models(folder, logger)
+    if folder.is_file() and folder.suffix == ".tgz":
+        archive_models: dict[str, pd.DataFrame] = _read_archive_file_models(
+            folder,
+            logger,
+        )
+        _add_glofas_non_calibrated_model(
+            external_models=archive_models,
+            folder=folder.parent,
+            logger=logger,
+            auto_fetch_google_streamflow=auto_fetch_google_streamflow,
+        )
+        return archive_models
 
     if not folder.exists():
         if not auto_fetch_google_streamflow:
@@ -1236,6 +1428,7 @@ def prepare_skill_score_boxplot_inputs(
     matched_only: bool,
     include_external: bool = True,
     auto_fetch_google_streamflow: bool = True,
+    archive_models_only: bool = False,
 ) -> SkillScorePlotInputs:
     """Prepare GEB and external skill-score tables for boxplot rendering.
 
@@ -1254,6 +1447,8 @@ def prepare_skill_score_boxplot_inputs(
         include_external: Whether external model scores should be included.
         auto_fetch_google_streamflow: Whether to download Google's original
             metrics archive when no local Google metrics are found.
+        archive_models_only: Whether to exclude non-archive external models,
+            such as Utrecht, from the comparison.
 
     Returns:
         Prepared GEB/external tables and the filter summary for plot annotation.
@@ -1267,6 +1462,8 @@ def prepare_skill_score_boxplot_inputs(
             logger=logger,
             auto_fetch_google_streamflow=auto_fetch_google_streamflow,
         )
+        if archive_models_only:
+            external_models = _filter_to_archive_models(external_models)
     evaluation_df: pd.DataFrame = load_geb_skill_score_metrics(
         evaluation_metrics_path=evaluation_metrics_path,
         minimum_upstream_area_km2=minimum_upstream_area_km2,
@@ -1365,6 +1562,8 @@ def prepare_pairwise_skill_score_boxplot_inputs(
     logger: logging.Logger,
     minimum_upstream_area_km2: float,
     auto_fetch_google_streamflow: bool = True,
+    archive_models_only: bool = False,
+    archive_evaluation_metrics_path: Path | None = None,
 ) -> dict[str, SkillScorePlotInputs]:
     """Prepare separate matched GEB-vs-external skill-score plot inputs.
 
@@ -1379,9 +1578,20 @@ def prepare_pairwise_skill_score_boxplot_inputs(
             retained GEB stations (km2).
         auto_fetch_google_streamflow: Whether to download Google's original
             metrics archive when no local Google metrics are found.
+        archive_models_only: Whether to exclude non-archive external models,
+            such as Utrecht, from the comparison.
+        archive_evaluation_metrics_path: Optional GEB metrics file covering the
+            Google/GloFAS archive period. Required when Google Streamflow or
+            GloFAS external scores are present.
 
     Returns:
         Mapping from external model label to pairwise matched plot inputs.
+
+    Raises:
+        FileNotFoundError: If Google Streamflow or GloFAS external scores are
+            present but the requested archive-period GEB metrics file is missing.
+        ValueError: If the archive-period GEB metrics file exists but contains
+            no stations.
     """
     external_models: dict[str, pd.DataFrame] = read_external_evaluation_raw(
         external_evaluation_folder=external_evaluation_folder,
@@ -1390,19 +1600,57 @@ def prepare_pairwise_skill_score_boxplot_inputs(
         logger=logger,
         auto_fetch_google_streamflow=auto_fetch_google_streamflow,
     )
+    if archive_models_only:
+        external_models = _filter_to_archive_models(external_models)
     if not external_models:
         return {}
 
-    evaluation_df: pd.DataFrame = load_geb_skill_score_metrics(
-        evaluation_metrics_path=evaluation_metrics_path,
-        minimum_upstream_area_km2=minimum_upstream_area_km2,
-        logger=logger,
+    has_archive_models: bool = any(
+        _is_archive_external_model(model_name) for model_name in external_models
     )
-    if evaluation_df.empty:
-        return {}
+    if has_archive_models:
+        if archive_evaluation_metrics_path is None:
+            raise FileNotFoundError(
+                "Google/GloFAS external scores are present, but no "
+                "archive-period GEB metrics path was provided."
+            )
+        if not archive_evaluation_metrics_path.exists():
+            logger.error(
+                "Google/GloFAS external scores are present, but %s is missing. "
+                "Run `geb evaluate hydrology.evaluate_discharge --start-year 2014 "
+                "--end-year 2021` before plotting external archive comparisons.",
+                archive_evaluation_metrics_path,
+            )
+            raise FileNotFoundError(
+                f"Missing archive-period GEB metrics file: {archive_evaluation_metrics_path}"
+            )
 
     pairwise_plot_inputs: dict[str, SkillScorePlotInputs] = {}
+    evaluation_df_by_path: dict[Path, pd.DataFrame] = {}
     for model_name, model_df in external_models.items():
+        model_evaluation_metrics_path: Path = (
+            archive_evaluation_metrics_path
+            if _is_archive_external_model(model_name)
+            and archive_evaluation_metrics_path is not None
+            else evaluation_metrics_path
+        )
+        if model_evaluation_metrics_path not in evaluation_df_by_path:
+            evaluation_df_by_path[model_evaluation_metrics_path] = (
+                load_geb_skill_score_metrics(
+                    evaluation_metrics_path=model_evaluation_metrics_path,
+                    minimum_upstream_area_km2=minimum_upstream_area_km2,
+                    logger=logger,
+                )
+            )
+        evaluation_df: pd.DataFrame = evaluation_df_by_path[
+            model_evaluation_metrics_path
+        ]
+        if evaluation_df.empty:
+            if _is_archive_external_model(model_name):
+                raise ValueError(
+                    f"Archive-period GEB metrics file contains no stations: {model_evaluation_metrics_path}"
+                )
+            continue
         plot_inputs: SkillScorePlotInputs = (
             _prepare_pairwise_matched_skill_score_boxplot_input(
                 evaluation_df=evaluation_df,

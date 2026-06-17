@@ -20,7 +20,7 @@ _DISPLAYED_SKILL_SCORE_CONFIGS: tuple[dict[str, object], ...] = (
     {
         "col": "KGE",
         "label": "KGE",
-        "title": "Kling-Gupta Efficiency (KGE)",
+        "title": "KGE",
         "unit": "(−)",
         "ylim": (-1.0, 1.0),
         "reference": 1.0,
@@ -31,9 +31,9 @@ _DISPLAYED_SKILL_SCORE_CONFIGS: tuple[dict[str, object], ...] = (
     },
     {
         "col": "KGE_correlation",
-        "label": "KGE r",
-        "title": "KGE correlation component",
-        "compact_title": "Correlation",
+        "label": "KGE correlation (r)",
+        "title": "KGE correlation (r)",
+        "compact_title": "r",
         "unit": "(−)",
         "ylim": (-1.0, 1.0),
         "reference": 1.0,
@@ -44,9 +44,9 @@ _DISPLAYED_SKILL_SCORE_CONFIGS: tuple[dict[str, object], ...] = (
     },
     {
         "col": "KGE_bias_ratio",
-        "label": "β",
-        "title": "KGE bias-ratio component",
-        "compact_title": "Bias ratio",
+        "label": "KGE bias ratio (β)",
+        "title": "KGE bias ratio (β)",
+        "compact_title": "β",
         "unit": "(−)",
         "ylim": (0.0, 2.0),
         "reference": 1.0,
@@ -57,9 +57,9 @@ _DISPLAYED_SKILL_SCORE_CONFIGS: tuple[dict[str, object], ...] = (
     },
     {
         "col": "KGE_variability_ratio",
-        "label": "α",
-        "title": "KGE variability-ratio component",
-        "compact_title": "Variability ratio",
+        "label": "KGE variability ratio (α)",
+        "title": "KGE variability ratio (α)",
+        "compact_title": "α",
         "unit": "(−)",
         "ylim": (0.0, 2.0),
         "reference": 1.0,
@@ -71,7 +71,7 @@ _DISPLAYED_SKILL_SCORE_CONFIGS: tuple[dict[str, object], ...] = (
     {
         "col": "NSE",
         "label": "NSE",
-        "title": "Nash-Sutcliffe Efficiency (NSE)",
+        "title": "NSE",
         "unit": "(−)",
         "ylim": (-1.0, 1.0),
         "reference": 1.0,
@@ -82,10 +82,10 @@ _DISPLAYED_SKILL_SCORE_CONFIGS: tuple[dict[str, object], ...] = (
     },
     {
         "col": "R2",
-        "label": "R²",
-        "title": "Squared Pearson Correlation (R²)",
+        "label": "R² (Pearson r²)",
+        "title": "R² (Pearson r²)",
         "unit": "(−)",
-        "ylim": (-1.0, 1.0),
+        "ylim": (0.0, 1.0),
         "reference": 1.0,
         "cmap": "YlGn",
         "vmin": 0.0,
@@ -95,7 +95,7 @@ _DISPLAYED_SKILL_SCORE_CONFIGS: tuple[dict[str, object], ...] = (
     {
         "col": "RRMSE",
         "label": "RRMSE",
-        "title": "Relative Root Mean Squared Error (RRMSE)",
+        "title": "RRMSE",
         "unit": "(−)",
         "ylim": None,
         "robust_error_ylim": True,
@@ -242,7 +242,7 @@ def _plot_skill_score_map_single(
     )
 
     ax.set_title(metric_title, fontsize=13, fontweight="bold", pad=10)
-    ax.tick_params(labelsize=8)
+    ax.tick_params(labelbottom=False, labelleft=False, bottom=False, left=False)
     for spine in ax.spines.values():
         spine.set_edgecolor("0.3")
 
@@ -293,7 +293,7 @@ def plot_skill_score_maps(
         _plot_skill_score_map_single(
             evaluation_gdf=evaluation_gdf,
             metric_col=col,
-            metric_label=f"{cfg['label']} {cfg['unit']}",
+            metric_label=str(cfg["label"]),
             metric_title=str(cfg["title"]),
             cmap_name=str(cfg["cmap"]),
             vmin=float(cfg["vmin"]),
@@ -310,18 +310,38 @@ def plot_skill_score_maps(
         if not has_geometry and not {"x", "y"}.issubset(difference_df):
             logger.info("No station geometry found for %s difference map.", model_name)
             continue
-        difference_gdf: gpd.GeoDataFrame = (
-            gpd.GeoDataFrame(
-                difference_df,
-                geometry="geometry",
-                crs=getattr(difference_df, "crs", None),
-            )
-            if has_geometry
-            else gpd.GeoDataFrame(
+        if not has_geometry:
+            difference_df = gpd.GeoDataFrame(
                 difference_df,
                 geometry=gpd.points_from_xy(difference_df["x"], difference_df["y"]),
                 crs="EPSG:4326",
             )
+        unmatched_difference_df: gpd.GeoDataFrame = gpd.GeoDataFrame(
+            evaluation_gdf.loc[~evaluation_gdf.index.isin(difference_df.index)].copy(),
+            geometry="geometry",
+            crs=evaluation_gdf.crs,
+        )
+        unmatched_difference_df["KGE_difference"] = np.nan
+        matched_station_count: int = len(difference_df)
+        if not unmatched_difference_df.empty:
+            # Difference maps otherwise hide whole regions where the external
+            # source has no station match, which can look like a plotting error.
+            difference_df = pd.concat(
+                [difference_df, unmatched_difference_df],
+                axis=0,
+                copy=False,
+            )
+            logger.info(
+                "%s difference map shows %d matched stations and %d unmatched "
+                "eligible GEB stations.",
+                model_name,
+                matched_station_count,
+                len(unmatched_difference_df),
+            )
+        difference_gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
+            difference_df,
+            geometry="geometry",
+            crs=getattr(difference_df, "crs", None),
         )
         valid_values: np.ndarray = (
             difference_gdf["KGE_difference"].dropna().to_numpy(dtype=float)
@@ -352,6 +372,7 @@ def _draw_violin_box(
     position: float,
     bar_color: str,
     violin_width: float = 0.35,
+    violin_values: np.ndarray | None = None,
 ) -> None:
     """Draw a violin and boxplot for one model metric distribution.
 
@@ -361,14 +382,19 @@ def _draw_violin_box(
         position: X-axis position of the distribution.
         bar_color: Color used for the violin and box.
         violin_width: Width of the violin plot.
+        violin_values: Optional values used only for the violin kernel density.
+            The boxplot and median still use `values`.
     """
-    if len(values) >= 3:
+    density_values: np.ndarray = values if violin_values is None else violin_values
+    density_values = density_values[np.isfinite(density_values)]
+    if len(density_values) >= 3:
         parts = axis.violinplot(
-            values,
+            density_values,
             positions=[position],
             showmedians=False,
             showextrema=False,
             widths=violin_width,
+            bw_method=0.15,
         )
         for body in cast(list, parts["bodies"]):
             body.set_facecolor(bar_color)
@@ -448,9 +474,8 @@ def _get_boxplot_axis_layout(
 ) -> dict[str, plt.Axes]:
     """Create the grouped layout for discharge skill-score boxplots.
 
-    The top row contains the headline skill scores at equal size. The lower-left
-    row contains the three smaller KGE components so their relationship to KGE
-    is visually explicit without competing with the primary metrics.
+    The top row keeps KGE next to its three component scores. The bottom row
+    contains the remaining headline skill scores across the full figure width.
 
     Args:
         fig: Matplotlib figure that receives the axes.
@@ -460,31 +485,31 @@ def _get_boxplot_axis_layout(
     """
     outer_grid = fig.add_gridspec(
         nrows=2,
-        ncols=4,
-        height_ratios=[3.2, 1.6],
-        hspace=0.72,
-        wspace=0.30,
+        ncols=1,
+        height_ratios=[1.0, 1.0],
+        hspace=0.80,
     )
-    axes_by_metric: dict[str, plt.Axes] = {
-        "KGE": fig.add_subplot(outer_grid[0, 0]),
-        "NSE": fig.add_subplot(outer_grid[0, 1]),
-        "R2": fig.add_subplot(outer_grid[0, 2]),
-        "RRMSE": fig.add_subplot(outer_grid[0, 3]),
-    }
-    component_grid = outer_grid[1, 0].subgridspec(
+    # KGE gets 4× the width of each component panel so it reads as the primary score.
+    kge_grid = outer_grid[0, 0].subgridspec(
+        nrows=1,
+        ncols=4,
+        wspace=0.20,
+        width_ratios=[4, 1, 1, 1],
+    )
+    other_metric_grid = outer_grid[1, 0].subgridspec(
         nrows=1,
         ncols=3,
-        wspace=0.42,
+        wspace=0.28,
     )
-    axes_by_metric["KGE_correlation"] = fig.add_subplot(component_grid[0, 0])
-    axes_by_metric["KGE_bias_ratio"] = fig.add_subplot(component_grid[0, 1])
-    axes_by_metric["KGE_variability_ratio"] = fig.add_subplot(component_grid[0, 2])
-
-    spacer_axes: list[plt.Axes] = [
-        fig.add_subplot(outer_grid[1, column_index]) for column_index in range(1, 4)
-    ]
-    for spacer_axis in spacer_axes:
-        spacer_axis.set_visible(False)
+    axes_by_metric: dict[str, plt.Axes] = {
+        "KGE": fig.add_subplot(kge_grid[0, 0]),
+        "KGE_correlation": fig.add_subplot(kge_grid[0, 1]),
+        "KGE_bias_ratio": fig.add_subplot(kge_grid[0, 2]),
+        "KGE_variability_ratio": fig.add_subplot(kge_grid[0, 3]),
+        "NSE": fig.add_subplot(other_metric_grid[0, 0]),
+        "R2": fig.add_subplot(other_metric_grid[0, 1]),
+        "RRMSE": fig.add_subplot(other_metric_grid[0, 2]),
+    }
 
     return axes_by_metric
 
@@ -503,7 +528,7 @@ def _annotate_metric_medians(
         x_positions: Violin x positions in axis data coordinates.
         compact: Whether the labels are drawn in a smaller component axis.
     """
-    base_label_y: float = -0.25 if compact else -0.11
+    base_label_y: float = -0.11
     for label_index, ((_, metric_values), x_position) in enumerate(
         zip(
             models_with_data,
@@ -511,13 +536,7 @@ def _annotate_metric_medians(
             strict=True,
         )
     ):
-        label_y: float = (
-            base_label_y - 0.09 * label_index
-            if compact and len(models_with_data) > 1
-            else base_label_y
-        )
-        # Compact component axes are narrow, so stagger labels vertically to
-        # keep neighboring medians legible when comparing two models.
+        label_y: float = base_label_y
         label_fontsize: float = 5.5 if compact else 7.0
         axis.text(
             float(x_position),
@@ -644,6 +663,10 @@ def _format_external_model_short_name(model_name: str) -> str:
     if "google" in model_name_lower:
         return "Google"
     if "glofas" in model_name_lower:
+        if "non-calibrated" in model_name_lower or "non_calibrated" in model_name_lower:
+            return "GloFAS non-cal"
+        if "all" in model_name_lower:
+            return "GloFAS all"
         return "GloFAS"
     return model_name
 
@@ -714,7 +737,7 @@ def plot_skill_score_boxplots(
 
     logger.info("Creating evaluation metrics skill score plots...")
 
-    fig = plt.figure(figsize=(15.5, 6.8), constrained_layout=False)
+    fig = plt.figure(figsize=(13.0, 6.5), constrained_layout=False)
     axes_by_metric = _get_boxplot_axis_layout(fig)
     displayed_station_count: int | None = (
         station_count if station_count is not None else len(evaluation_df)
@@ -729,7 +752,7 @@ def plot_skill_score_boxplots(
         f"Discharge Evaluation — Skill Score Distributions{plot_context}",
         fontsize=14,
         fontweight="bold",
-        y=0.98,
+        y=0.97,
     )
 
     for config in metric_configs:
@@ -776,20 +799,21 @@ def plot_skill_score_boxplots(
             compact=is_component_axis,
         )
 
-        axis.axhline(
-            float(config["reference"]),
-            color="0.5",
-            linewidth=0.8,
-            linestyle="--",
-            zorder=0,
-        )
-        title_text: str = str(
-            config.get("compact_title", config["title"])
-            if is_component_axis
-            else config["title"]
-        )
+        if is_component_axis:
+            title_str: str = str(config["title"])
+            last_space_paren: int = title_str.rfind(" (")
+            if last_space_paren != -1:
+                axis_title: str = (
+                    title_str[:last_space_paren]
+                    + "\n"
+                    + title_str[last_space_paren + 1 :]
+                )
+            else:
+                axis_title = title_str
+        else:
+            axis_title = str(config["title"])
         axis.set_title(
-            f"{config['label']}\n{title_text} {config['unit']}",
+            axis_title,
             fontsize=8 if is_component_axis else 9,
             fontweight="bold",
             pad=8,
@@ -828,10 +852,10 @@ def plot_skill_score_boxplots(
             frameon=True,
             framealpha=1.0,
             edgecolor="0.7",
-            bbox_to_anchor=(0.5, 0.03),
+            bbox_to_anchor=(0.5, 0.01),
         )
 
-    fig.subplots_adjust(left=0.055, right=0.985, top=0.85, bottom=0.22)
+    fig.subplots_adjust(left=0.055, right=0.985, top=0.88, bottom=0.14)
 
     if export:
         context_suffix: str = _format_boxplot_output_context(
@@ -845,9 +869,11 @@ def plot_skill_score_boxplots(
             if matched_only and external_models
             else ""
         )
+        boxplots_folder: Path = output_folder / "skill_score_boxplots"
+        boxplots_folder.mkdir(parents=True, exist_ok=True)
         for extension in ("svg", "png"):
             output_path: Path = (
-                output_folder
+                boxplots_folder
                 / f"evaluation_skill_scores{suffix}{context_suffix}.{extension}"
             )
             plt.savefig(output_path, bbox_inches="tight", dpi=150)
@@ -891,6 +917,8 @@ def plot_kge_external_model_comparison(
 
     x_tick_positions: list[float] = []
     x_tick_labels: list[str] = []
+    visible_y_min: float = -1.0
+    visible_y_max: float = 1.0
     median_label_y: float = -0.94
     for group_index, (model_name, model_values) in enumerate(ordered_model_items):
         geb_values, external_values, station_count, minimum_upstream_area_km2 = (
@@ -908,7 +936,12 @@ def plot_kge_external_model_comparison(
             [group_position - 0.18, group_position + 0.18]
         )
         _draw_violin_box(
-            axis, finite_geb_values, x_positions[0], geb_color, violin_width=0.28
+            axis,
+            finite_geb_values,
+            x_positions[0],
+            geb_color,
+            violin_width=0.28,
+            violin_values=np.clip(finite_geb_values, visible_y_min, visible_y_max),
         )
         _draw_violin_box(
             axis,
@@ -916,6 +949,7 @@ def plot_kge_external_model_comparison(
             x_positions[1],
             external_color,
             violin_width=0.28,
+            violin_values=np.clip(finite_external_values, visible_y_min, visible_y_max),
         )
         for x_position, metric_values in zip(
             x_positions,
@@ -954,8 +988,8 @@ def plot_kge_external_model_comparison(
         return
 
     axis.axhline(1.0, color="0.5", linewidth=0.8, linestyle="--", zorder=0)
-    axis.set_ylim(-1.0, 1.0)
-    axis.set_ylabel("KGE (-)")
+    axis.set_ylim(visible_y_min, visible_y_max)
+    axis.set_ylabel("KGE")
     axis.set_xticks(x_tick_positions)
     axis.set_xticklabels(x_tick_labels, fontsize=8)
     axis.set_title(
@@ -987,9 +1021,11 @@ def plot_kge_external_model_comparison(
     fig.subplots_adjust(left=0.09, right=0.98, top=0.84, bottom=0.33)
 
     if export:
+        boxplots_folder: Path = output_folder / "skill_score_boxplots"
+        boxplots_folder.mkdir(parents=True, exist_ok=True)
         for extension in ("svg", "png"):
             output_path: Path = (
-                output_folder
+                boxplots_folder
                 / f"evaluation_skill_scores_kge_external_comparison.{extension}"
             )
             plt.savefig(output_path, bbox_inches="tight", dpi=150)
@@ -1113,15 +1149,17 @@ def plot_skill_scores_vs_upstream_area(
     metric_configs: tuple[dict[str, object], ...] = tuple(
         _get_skill_score_config(metric_col) for metric_col in metric_order
     )
-    fig = plt.figure(figsize=(12.5, 7.2))
-    grid = fig.add_gridspec(2, 4, hspace=0.42, wspace=0.3)
+    fig = plt.figure(figsize=(13.5, 7.2), constrained_layout=True)
+    # 6-column grid: KGE spans 3 cols (half width), each KGE component 1 col.
+    # NSE and RRMSE each span 3 cols in the bottom row.
+    grid = fig.add_gridspec(2, 6)
     axes_by_metric: dict[str, plt.Axes] = {
-        "KGE": fig.add_subplot(grid[0, 0]),
-        "KGE_correlation": fig.add_subplot(grid[0, 1]),
-        "KGE_bias_ratio": fig.add_subplot(grid[0, 2]),
-        "KGE_variability_ratio": fig.add_subplot(grid[0, 3]),
-        "NSE": fig.add_subplot(grid[1, 0:2]),
-        "RRMSE": fig.add_subplot(grid[1, 2:4]),
+        "KGE": fig.add_subplot(grid[0, 0:3]),
+        "KGE_correlation": fig.add_subplot(grid[0, 3]),
+        "KGE_bias_ratio": fig.add_subplot(grid[0, 4]),
+        "KGE_variability_ratio": fig.add_subplot(grid[0, 5]),
+        "NSE": fig.add_subplot(grid[1, 0:3]),
+        "RRMSE": fig.add_subplot(grid[1, 3:6]),
     }
     has_values: bool = False
     total_valid_station_count: int = int(upstream_area_km2.gt(0).sum())
@@ -1144,10 +1182,14 @@ def plot_skill_scores_vs_upstream_area(
             continue
 
         has_values = True
-        use_error_limits: bool = bool(cfg.get("robust_error_ylim", False))
-        y_limits: tuple[float, float] = _get_robust_metric_ylim(
-            metric_values[valid_mask], use_error_limits=use_error_limits
-        )
+        if cfg["ylim"] is not None:
+            y_limits: tuple[float, float] = cast(tuple[float, float], cfg["ylim"])
+            use_error_limits: bool = False
+        else:
+            use_error_limits = bool(cfg.get("robust_error_ylim", False))
+            y_limits = _get_robust_metric_ylim(
+                metric_values[valid_mask], use_error_limits=use_error_limits
+            )
         axis.scatter(
             upstream_area_km2[valid_mask],
             metric_values[valid_mask],
@@ -1184,8 +1226,8 @@ def plot_skill_scores_vs_upstream_area(
         axis.set_xscale("log")
         axis.set_ylim(*y_limits)
         axis.grid(True, color="0.85", linewidth=0.5)
-        axis.set_title(str(cfg["label"]), color=plot_color, fontweight="bold")
-        axis.set_ylabel("Error" if use_error_limits else "Score (-)")
+        axis.set_title(str(cfg["title"]), color=plot_color, fontweight="bold")
+        axis.set_ylabel("Error" if use_error_limits else "Score")
         for spine in axis.spines.values():
             spine.set_edgecolor("0.7")
 
@@ -1214,8 +1256,9 @@ def plot_skill_scores_vs_upstream_area(
         fontsize=8,
     )
 
-    fig.subplots_adjust(left=0.07, right=0.98, top=0.9, bottom=0.1)
-    output_path: Path = output_folder / "skill_scores_vs_upstream_area"
+    scatterplots_folder: Path = output_folder / "skill_score_scatterplots"
+    scatterplots_folder.mkdir(parents=True, exist_ok=True)
+    output_path: Path = scatterplots_folder / "skill_scores_vs_upstream_area"
     for ext in ("svg", "png"):
         plt.savefig(f"{output_path}.{ext}", bbox_inches="tight", dpi=200)
     plt.close(fig)
