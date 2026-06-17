@@ -714,7 +714,7 @@ class Forcing(BuildModelBase):
             self.set_other(mask, name=f"{name}_mask")
 
         da = da.clip(min_value, max_value)
-        da = da.transpose("idxs", "time")
+        da = da.transpose("idxs", "time", ...)
 
         scaling_factor, in_dtype, out_dtype = calculate_scaling(
             da, min_value, max_value, offset=offset, precision=precision

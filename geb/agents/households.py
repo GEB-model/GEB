@@ -508,17 +508,8 @@ class Households(AgentBaseClass):
 
     def assign_households_and_buildings_to_postal_codes(self) -> None:
         """This function associates the household points with their postal codes to get the correct geometry for the warning function."""
-        households = gpd.GeoDataFrame(
-            geometry=gpd.points_from_xy(
-                self.var.locations.data[:, 0], self.var.locations.data[:, 1]
-            ),
-            crs="EPSG:4326",
-        )
-
         # Associate households with their postal codes to use it later in the warning function
-        postal_codes: gpd.GeoDataFrame = read_geom(
-            self.model.files["geom"]["postal_codes"]
-        )
+        postal_codes = self.postal_codes.copy()
         postal_codes["postcode"] = postal_codes["postcode"].astype(str)
 
         # Buildings

@@ -27,7 +27,7 @@ from geb.hazards.floods.workflows.construct_storm_surge_hydrographs import (
 from geb.module import Module
 from geb.reporter import Reporter
 from geb.store import Bucket, Store
-from geb.workflows.io import read_geom, read_params
+from geb.workflows.io import read_geom, read_params, read_zarr
 
 from .evaluate import Evaluate
 from .forcing import Forcing
@@ -245,8 +245,9 @@ class GEBModel(Module):
         for loader_name, loader in self.forcing.loaders.items():
             if loader.supports_forecast:
                 forecast_file_path = self.files["other"][
-                    f"forecasts/{self.config['general']['forecasts']['provider']}/{self.config['general']['forecasts']['ensemble']}/{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}/{loader_name}_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}"
+                    f"forecasts/{self.config['general']['forecasts']['provider']}/{self.config['general']['forecasts']['processing']}/{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}/{loader_name}_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}"
                 ]
+                forecast_data[loader_name] = read_zarr(forecast_file_path)
 
                 variable_forecast_members: list[str] = [
                     i.item() for i in forecast_data[loader_name].member.values
@@ -403,12 +404,6 @@ class GEBModel(Module):
                     f"Unknown warning type: {warning_type} selected in config, choose 'building_based' or 'area_based'."
                 )
             for dt in forecast_issue_dates:
-                self.logger.debug(
-                    "Checking forecast issue datetime: %s vs current model time: %s",
-                    dt,
-                    self.current_time,
-                )
-
                 if (
                     dt == self.current_time
                 ):  # change to include hours (for when we move to hourly)
@@ -432,7 +427,8 @@ class GEBModel(Module):
                         )
                         # Run warning strategies based on config settings
                         # Check whether water level warnings are enabled
-                        if warning_config["strategies"]["water_level_warnings"]:
+                        # TODO: Think of better names (and hierarchy) for the strategies in the config file
+                        if warning_config["strategies"]["residential_buildings"]:
                             self.logger.info(
                                 f"Running water level based warning strategy with {warning_type} warnings..."
                             )
@@ -445,7 +441,7 @@ class GEBModel(Module):
                                 communication_efficiency=communication_efficiency,
                                 evacuation_lead_time_threshold=evacuation_lead_time_threshold,
                                 weight_by_socioeconomic_factors=weight_by_socioeconomic_factors,
-                                exceedance=True,
+                                exceedance=False,
                             )
                         if warning_config["strategies"][
                             "critical_infrastructure_warnings"

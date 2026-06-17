@@ -145,7 +145,22 @@ class EarlyWarningModule:
         members = []
         rivers_gdf = None
 
-        for member in range(1, 50 + 1):
+        # TODO: get the number of members dynamically from the flood maps folder instead of hardcoding 50
+
+        # Get the number of members from the flood maps folder
+        flood_maps_folder = (
+            self.model.output_folder
+            / "flood_maps"
+            / f"forecast_{date_time.strftime('%Y%m%dT%H%M%S')}"
+        )
+        member_folders = [
+            f
+            for f in flood_maps_folder.iterdir()
+            if f.is_dir() and f.name.startswith("member_")
+        ]
+        num_members = len(member_folders)
+
+        for member in range(num_members):
             member_folder = (
                 self.model.output_folder
                 / "flood_maps"
@@ -166,6 +181,8 @@ class EarlyWarningModule:
 
             # open flood map for this ensemble member
             flood_map_da = read_zarr(flood_map_path)
+
+            # TODO: check this hardcoded CRS
             flood_map_da.rio.write_crs("EPSG:4326", inplace=True)
 
             # Apply river mask to this member if available
@@ -263,7 +280,7 @@ class EarlyWarningModule:
         self,
         date_time: datetime,
         strategy: str = "residential_buildings",
-        exceedance: bool = True,
+        exceedance: bool = False,
     ) -> xr.DataArray | xr.Dataset:
         """Creates flood probability maps based on the ensemble of flood maps for different warning strategies.
 
@@ -323,10 +340,10 @@ class EarlyWarningModule:
             )
             if wl_max is not None:
                 condition = (daily_ensemble >= wl_min) & (daily_ensemble <= wl_max)
-                self.logger.debug(f"Using range: {wl_min} <= x <= {wl_max}")
+                self.logger.info(f"Using range: {wl_min} <= x <= {wl_max}")
             else:
                 condition = daily_ensemble >= wl_min
-                self.logger.debug(f"Using exceedance: x >= {wl_min}")
+                self.logger.info(f"Using exceedance: x >= {wl_min}")
 
             probability = condition.sum(dim="member") / condition.sizes["member"]
 
@@ -350,15 +367,18 @@ class EarlyWarningModule:
 
             probability = probability.astype(np.float32)
             probability = probability.rio.write_nodata(np.nan)
-            crs = (
-                probability.rio.crs if probability.rio.crs is not None else "EPSG:4326"
-            )
             probability = write_zarr(da=probability, path=file_path, crs=crs)
-            probability_maps.append(
-                probability.expand_dims(time=[date_time], range_id=[range_id])
-            )
+            # probability_maps.append(
+            #     probability.expand_dims(time=[date_time], range_id=[range_id])
+            # )
+            probability_maps.append(probability)
 
-        probability_maps = xr.combine_by_coords(probability_maps)
+        range_ids = [range_id for range_id, _, _ in ranges]
+        probability_maps = xr.concat(
+            probability_maps,
+            dim=xr.DataArray(range_ids, dims="range_id", name="range_id"),
+            join="exact",
+        ).expand_dims(time=[date_time])
 
         return probability_maps
 
@@ -578,7 +598,7 @@ class EarlyWarningModule:
         Returns:
             float: Lead time in hours.
         """
-        moment_of_flooding = self.model.config["hazards"]["floods"]["events"][0][
+        moment_of_flooding = self.model.config["hazards"]["floods"][
             "moment_of_flooding"
         ]
         current_time = self.model.current_time
@@ -605,6 +625,7 @@ class EarlyWarningModule:
         available_measures = [
             m for m in available_measures if m and m in implementation_times
         ]
+        # TODO: available measures is huge, need to know why
 
         self.logger.debug(f"Available_measures: {available_measures}")
         self.logger.debug(
@@ -751,6 +772,9 @@ class EarlyWarningModule:
         evac_feasible = "evacuate" in recommended_measures
         evac_policy = lead_time <= evacuation_lead_time_threshold
         if evac_feasible and not evac_policy:
+            self.logger.info(
+                f"Evacuation feasible but not recommended because of >{evacuation_lead_time_threshold} lead time policy."
+            )
             recommended_measures.remove("evacuate")
             evac_feasible = False
 
@@ -830,14 +854,8 @@ class EarlyWarningModule:
         )
 
         # Load households and postal codes
-        buildings = self.households.buildings.copy()
-        households = gpd.GeoDataFrame(
-            geometry=gpd.points_from_xy(
-                self.households.var.locations.data[:, 0],
-                self.households.var.locations.data[:, 1],
-            ),
-            crs="EPSG:4326",
-        )
+        buildings = self.households.var.buildings.copy()
+        households = self.households.var.households_with_postal_codes.copy()
         # Add education and income data to the households
         # IMPORTANT: We use the index of households to correctly map the data
         # because household_points.index corresponds to the arrays in self.var
@@ -861,13 +879,9 @@ class EarlyWarningModule:
         postal_codes = self.households.postal_codes
         # Maybe load this as a global var (?) instead of loading it each time
 
-        # Intersection flood maps with buildings or postal codes
+        # Check intersection between flood maps and buildings or postal codes
         for range_id in range_ids:
-            probability_map = probability_maps.sel(range_id=range_id)
-            flood_probability_map: xr.DataArray = probability_map[
-                list(probability_map.data_vars)[0]
-            ]
-
+            flood_probability_map = probability_maps.sel(range_id=range_id)
             if warning_type == "building_based":
                 hit = self.identify_flooded_buildings(
                     buildings, flood_probability_map, prob_threshold, return_series=True
@@ -941,19 +955,27 @@ class EarlyWarningModule:
                 for range_id in range_ids:
                     percentage_flooded = row[f"hit_r{range_id}"]
                     issue_warning = percentage_flooded >= buildings_hit_threshold
-                    postal_codes.loc[postal_code, f"issue_warning_r{range_id}"] = (
-                        issue_warning
-                    )
+                    postal_codes.loc[
+                        postal_codes["postcode"] == postal_code,
+                        f"issue_warning_r{range_id}",
+                    ] = issue_warning
                     if issue_warning:
                         self.logger.info(
                             f"Warning issued to postal code {postal_code} on {date_time.isoformat()} for range {range_id}: {percentage_flooded:.0%} of buildings flooded"
                         )
-        # Warning Communication - Communicate the warning to the households in the postal code and store the details in the warning log
+                    # TODO: need to think on how to include warning recommendation straight after this, instead of in a separate loop
+
+        # Filter only postal codes that need to be warned
+        warning_cols = [f"issue_warning_r{range_id}" for range_id in range_ids]
+        postal_codes_to_warn = postal_codes[postal_codes[warning_cols].any(axis=1)]
+
+        # Communicate the warning to the households in the postal code and store the details in the warning log
         # Initialize measures and evacuate flag
         measures = []
         triggered_ranges = []
         evacuate = False
-        for postal_code, row in postal_codes.iterrows():
+        for i, row in postal_codes_to_warn.iterrows():
+            postal_code = row["postcode"]
             for range_id in range_ids:
                 issue_warning = row[f"issue_warning_r{range_id}"]
                 if issue_warning:
@@ -964,40 +986,38 @@ class EarlyWarningModule:
                     if recom_measure:
                         measures.extend(recom_measure)
 
-                    if measures or evacuate:
-                        # Filter the affected households based on the postal code
-                        affected_households = households[
-                            households["postcode"] == postal_code
-                        ]
+            if measures or evacuate:
+                # Filter the affected households based on the postal code
+                affected_households = households[households["postcode"] == postal_code]
 
-                        n_warned_households = self.warning_communication(
-                            target_households=affected_households,
-                            measures=measures,
-                            evacuate=evacuate,
-                            trigger="water_levels",
-                            communication_efficiency=communication_efficiency,
-                            evacuation_lead_time_threshold=evacuation_lead_time_threshold,
-                            weight_by_socioeconomic_factors=weight_by_socioeconomic_factors,
-                        )
+                n_warned_households = self.warning_communication(
+                    target_households=affected_households,
+                    measures=measures,
+                    evacuate=evacuate,
+                    trigger="water_levels",
+                    communication_efficiency=communication_efficiency,
+                    evacuation_lead_time_threshold=evacuation_lead_time_threshold,
+                    weight_by_socioeconomic_factors=weight_by_socioeconomic_factors,
+                )
 
-                        warning_log.append(
-                            {
-                                "date_time": date_time.isoformat(),
-                                "postcode": postal_code,
-                                "warning_type": warning_type,
-                                "measures": measures,
-                                "triggered_ranges": triggered_ranges,
-                                "n_affected_households": len(affected_households),
-                                "n_warned_households": n_warned_households,
-                            }
-                        )
+                warning_log.append(
+                    {
+                        "date_time": date_time.isoformat(),
+                        "postcode": postal_code,
+                        "warning_type": warning_type,
+                        "measures": measures,
+                        "triggered_ranges": triggered_ranges,
+                        "n_affected_households": len(affected_households),
+                        "n_warned_households": n_warned_households,
+                    }
+                )
 
-                        # Save the warning log to a csv file
-                        path = (
-                            warnings_folder
-                            / f"warning_log_water_levels_{date_time.isoformat().replace(':', '').replace('-', '')}.csv"
-                        )
-                        pd.DataFrame(warning_log).to_csv(path, index=False)
+                # Save the warning log to a csv file
+                path = (
+                    warnings_folder
+                    / f"warning_log_water_levels_{date_time.isoformat().replace(':', '').replace('-', '')}.csv"
+                )
+                pd.DataFrame(warning_log).to_csv(path, index=False)
 
     def critical_infrastructure_warning_strategy(
         self,
@@ -1019,13 +1039,7 @@ class EarlyWarningModule:
             ValueError: If no assets are found for the specified asset type.
         """
         # Get the household points, needed to issue warnings
-        households = gpd.GeoDataFrame(
-            geometry=gpd.points_from_xy(
-                self.households.var.locations.data[:, 0],
-                self.households.var.locations.data[:, 1],
-            ),
-            crs="EPSG:4326",
-        )
+        households = self.households.var.households_with_postal_codes.copy()
         affected_postcodes = []
         for asset_type in config_asset_type:
             self.logger.info(
@@ -1193,10 +1207,6 @@ class EarlyWarningModule:
 
         # For every eligible household, do the recommended measures in the communicated warning
         for i, household_id in enumerate(eligible_households.index):
-            self.logger.info(
-                f"Processing household {household_id} ({i + 1}/{len(eligible_households)})"
-            )
-
             # Check if elevated possessions action is being taken for the FIRST TIME
             # (before updating actions_taken array)
             elevated_possessions_idx = possible_actions.index("elevate possessions")
