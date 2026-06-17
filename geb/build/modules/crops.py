@@ -1139,7 +1139,9 @@ class Crops(BuildModelBase):
             for crop in region_data.columns:
                 if crop == "_crop_price_inflation":
                     continue
-                crop_data = region_data[crop].to_numpy()
+                
+                # first copy data from dataframe
+                crop_data = region_data[crop].to_numpy().copy()
                 if np.isnan(crop_data).all():
                     continue
                 changes_data = region_data["_crop_price_inflation"].to_numpy()
@@ -1169,6 +1171,8 @@ class Crops(BuildModelBase):
                         )
                         for i, change in zip(range(j, k), scaled_crop_price_inflation):
                             crop_data[i] = crop_data[i - 1] * change
+
+                # then set it back after adjustments
                 if adjust_currency and not crop == "_crop_price_LCU_USD":
                     conversion_data = region_data["_crop_price_LCU_USD"].to_numpy()
                     data.loc[region_id, crop] = crop_data / conversion_data

@@ -1678,7 +1678,7 @@ class Hydrography(BuildModelBase):
         model_time_step = pd.date_range(
             self.start_date,
             end=self.end_date + timedelta(hours=23),
-            freq="H",
+            freq="h",
             inclusive="both",
         )
 

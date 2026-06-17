@@ -293,7 +293,7 @@ class WaterBodyVariables(Bucket):
     lake_area: ArrayFloat32
     lake_factor: ArrayFloat32
     waterbody_mapping: ArrayInt32
-    waterbody_data: pd.DataFrame
+    average_discharge_m3_per_s: ArrayFloat32
     capacity: ArrayFloat64
     waterbody_type: ArrayInt32
     outflow_height: ArrayFloat32
@@ -386,16 +386,17 @@ class WaterBodies(Module):
             == self.grid.var.waterbody_outflow_points
         ).all()
 
-        self.var.waterbody_data = self.load_waterbody_data(order_of_waterbodies_in_grid)
+        waterbody_data = self.load_waterbody_data(order_of_waterbodies_in_grid)
 
-        self.var.waterbody_type = self.var.waterbody_data["waterbody_type"].values
+        self.var.waterbody_type = waterbody_data["waterbody_type"].values.copy()
         # change water body type to LAKE if it is a control lake, thus currently modelled as normal lake
         self.var.waterbody_type[self.var.waterbody_type == LAKE_CONTROL] = LAKE
 
         assert (np.isin(self.var.waterbody_type, [LAKE, RESERVOIR])).all()
 
-        self.var.lake_area = self.var.waterbody_data["average_area"].values
-        self.var.capacity = self.var.waterbody_data["volume_total"].values
+        self.var.lake_area = waterbody_data["average_area"].values.copy()
+        self.var.capacity = waterbody_data["volume_total"].values.copy()
+        self.var.average_discharge_m3_per_s = waterbody_data["average_discharge"].values.copy()
 
         self.grid.var.capacity = self.map_to_grid_outflow(
             self.var.capacity, fill_value=0
@@ -404,12 +405,12 @@ class WaterBodies(Module):
         # lake discharge at outlet to calculate alpha: parameter of channel width, gravity and weir coefficient
         # Lake parameter A (suggested  value equal to outflow width in [m])
         average_discharge = np.maximum(
-            self.var.waterbody_data["average_discharge"].values,
+            self.var.average_discharge_m3_per_s,
             0.1,
         )
 
         # channel width in [m]
-        river_width = get_river_width(average_discharge)
+        river_width: ArrayFloat32 = get_river_width(average_discharge)
 
         self.var.lake_factor = get_lake_factor(
             river_width,

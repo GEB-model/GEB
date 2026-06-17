@@ -56,7 +56,7 @@ class HydroLakes(Adapter):
                     "Lake_area": "average_area",
                     "Lake_type": "waterbody_type",
                 }
-            )
+            )  # ty:ignore[invalid-assignment]
             gdf["average_area"] *= 1e6  # convert from km^2 to m^2
             gdf["volume_total"] *= 1e6
             gdf.to_parquet(
