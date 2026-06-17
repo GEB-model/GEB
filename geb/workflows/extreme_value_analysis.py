@@ -294,14 +294,16 @@ class ReturnPeriodModel:
                 f"Series must have at least {min_exceed} non-NaN values for fitting. Found only {self.n_non_nan}."
             )
 
-        series = series.fillna(0)
+        series: pd.Series = series.fillna(0)
 
-        n_data_points_per_week = math.ceil(pd.Timedelta("7D") / series.index.freq)  # ty:ignore[unresolved-attribute]
+        n_data_points_per_week: int = math.ceil(
+            pd.Timedelta("7D").value / series.index.freq.nanos  # ty:ignore[unresolved-attribute]
+        )  
 
         self.series = series
         # Resample to daily maxima to ensure independence of observations (de-clustering)
         self.years_non_nan = (
-            (self.n_non_nan * self.series.index.freq) / pd.Timedelta(days=1)  # ty:ignore[unresolved-attribute]
+            (self.n_non_nan * self.series.index.freq.nanos) / pd.Timedelta(days=1).value  # ty:ignore[unresolved-attribute]
         ) / 365.2425
 
         # Create candidate thresholds u based on quantiles

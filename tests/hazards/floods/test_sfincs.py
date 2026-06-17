@@ -346,9 +346,6 @@ def test_accumulated_runoff(
                 event=event,
                 spinup_seconds=0,
                 write_figures=True,
-                flood_map_output_interval_seconds=(
-                    end_time - start_time
-                ).total_seconds(),
                 setup_river_outflow=False,
             )
 
@@ -500,7 +497,6 @@ def test_discharge_from_nodes(geb_model: GEBModel, use_gpu: bool) -> None:
         )
         simulation = sfincs_model.create_simulation(
             event=event,
-            flood_map_output_interval_seconds=(end_time - start_time).total_seconds(),
             setup_river_outflow=False,
         )
 
@@ -586,7 +582,6 @@ def test_setup_thin_dams(geb_model: GEBModel) -> None:
         )
         simulation_without_dam = sfincs_model.create_simulation(
             event=event_no_dam,
-            flood_map_output_interval_seconds=86400,
             setup_river_outflow=False,
         )
 
@@ -614,7 +609,6 @@ def test_setup_thin_dams(geb_model: GEBModel) -> None:
         )
         simulation_with_dam = sfincs_model.create_simulation(
             event=event_dam,
-            flood_map_output_interval_seconds=86400,
             setup_river_outflow=False,
         )
         simulation_with_dam.setup_thin_dams(vertical_dam)
@@ -643,7 +637,6 @@ def test_setup_thin_dams(geb_model: GEBModel) -> None:
         )
         simulation_with_multiple_dams = sfincs_model.create_simulation(
             event=event_multiple_dams,
-            flood_map_output_interval_seconds=86400,
             setup_river_outflow=False,
         )
 
@@ -703,6 +696,8 @@ def test_read(geb_model: GEBModel) -> None:
             assert isinstance(sfincs_model_build.cell_area, xr.DataArray)
             assert (sfincs_model_build.cell_area == sfincs_model_read.cell_area).all()
         assert sfincs_model_build.path == sfincs_model_read.path
+        for col in sfincs_model_build.rivers.columns:
+            assert sfincs_model_build.rivers[col].equals(sfincs_model_read.rivers[col])
         assert sfincs_model_build.rivers.equals(sfincs_model_read.rivers)
         assert sfincs_model_build.subbasins.equals(sfincs_model_read.subbasins)
 
@@ -753,7 +748,6 @@ def test_coastal_waterlevel_forcing(geb_model: GEBModel) -> None:
         )
         simulation = sfincs_model.create_simulation(
             event=event,
-            flood_map_output_interval_seconds=(end_time - start_time).total_seconds(),
             setup_river_outflow=False,
         )
 

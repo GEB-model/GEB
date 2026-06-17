@@ -92,7 +92,11 @@ def write_table(df: pd.DataFrame, fp: Path) -> None:
                 bool_cols.append(name)
             elif pa.types.is_floating(t):
                 float_cols.append(name)
-            elif pa.types.is_string(t) or pa.types.is_binary(t):
+            elif (
+                pa.types.is_string(t)
+                or pa.types.is_large_string(t)
+                or pa.types.is_binary(t)
+            ):
                 dict_cols.append(name)
             else:
                 raise ValueError(f"Unsupported column type {t} for column {name}")
