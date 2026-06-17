@@ -44,25 +44,30 @@ def read_discharge_per_river(
     Returns:
         A DataFrame with the discharge for each river, with columns "discharge_m3_per_s" and "hydrography_xy".
     """
-    discharge = pd.DataFrame()
+    discharge_data = {}
     for river_id in rivers.index:
         assert isinstance(river_id, int)
         xys: list[tuple[int, int]] = get_upstream_represented_xys(river_id, all_rivers)
         if len(xys) == 1:
-            discharge[river_id] = read_table(
+            discharge_data[river_id] = read_table(
                 folder / f"river_outflow_hourly_m3_per_s_{river_id}.parquet"
             )[f"river_outflow_hourly_m3_per_s_{river_id}"]
         else:
+            total_discharge_part = None
             for i in range(len(xys)):
                 discharge_part = read_table(
                     folder / f"river_outflow_hourly_m3_per_s_{river_id}_{i}.parquet"
                 )[f"river_outflow_hourly_m3_per_s_{river_id}_{i}"]
-                if river_id not in discharge:
-                    discharge[river_id] = discharge_part
+                if total_discharge_part is None:
+                    total_discharge_part = discharge_part
                 else:
-                    discharge[river_id] += discharge_part
+                    total_discharge_part += discharge_part
+            discharge_data[river_id] = total_discharge_part
 
-    return discharge
+    if not discharge_data:
+        return pd.DataFrame()
+
+    return pd.concat(discharge_data, axis=1)
 
 
 def get_upstream_represented_xys(
