@@ -557,7 +557,7 @@ class GEBModel(Module):
 
         Notes:
             Cannot be run in combination with hydrology simulation.
-            Runs the model {n_runs} times to test the multirun functionality.
+            Runs the model n_runs times to test the multirun functionality.
         Raises:
             ValueError: If the start or end time is not at the beginning or end of a year, respectively.
             ValueError: If flood simulation is enabled in the config, as this is not compatible with yearly mode.
