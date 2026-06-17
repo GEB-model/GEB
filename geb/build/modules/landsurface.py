@@ -340,7 +340,7 @@ class LandSurface(BuildModelBase):
         global_countries["geometry"] = global_countries.to_crs(
             "ESRI:54009"
         ).centroid.to_crs(global_countries.crs)
-        global_countries = global_countries.set_index("ISO3")
+        global_countries = global_countries.set_index("ISO3")  # ty:ignore[invalid-assignment]
 
         self.set_geom(global_countries, name="global_countries")
 
