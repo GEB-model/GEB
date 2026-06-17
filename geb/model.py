@@ -550,15 +550,14 @@ class GEBModel(Module):
         self.reporter.finalize()
         self.create_done_file()
 
-    def multirun_yearly(self) -> None:
-        """Run the model in yearly mode for multiple years, where timesteps are yearly rather than daily.
+    def multirun_yearly(self, n_runs: int = 25) -> None:
+        """Run the model in yearly mode multiple times, where timesteps are yearly rather than daily.
 
         This depends on a spinup run that was run in daily mode.
 
         Notes:
             Cannot be run in combination with hydrology simulation.
-            This mode is experimential and is not fully tested.
-
+            Runs the model {n_runs} times to test the multirun functionality.
         Raises:
             ValueError: If the start or end time is not at the beginning or end of a year, respectively.
             ValueError: If flood simulation is enabled in the config, as this is not compatible with yearly mode.
@@ -589,8 +588,8 @@ class GEBModel(Module):
         }
 
         for run in range(
-            25
-        ):  # run the model 5 times to test the multirun functionality
+            n_runs
+        ):  # run the model {n_runs} times and store results in a folder for each run
             self.store = Store(self)
 
             self.config["general"]["name"] = f"run_yearly_{run}"
