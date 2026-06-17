@@ -5,12 +5,10 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import numpy.typing as npt
-import pandas as pd
 
 from geb.geb_types import ArrayBool, ArrayFloat32, ArrayFloat64, ArrayInt32
 from geb.store import DynamicArray
 
-from ..hydrology.waterbodies import RESERVOIR
 from .general import AgentBaseClass
 
 if TYPE_CHECKING:
@@ -211,8 +209,13 @@ class ReservoirOperators(AgentBaseClass):
         )
 
         total_monthly_inflow: ArrayFloat64 = (
-            self.model.hydrology.waterbodies.var.average_discharge_m3_per_s * 30 * 24 * 3600
-        )[self.model.hydrology.waterbodies.is_reservoir]  # convert from m3/s to m3/month, assuming 30 days in a month
+            self.model.hydrology.waterbodies.var.average_discharge_m3_per_s
+            * 30
+            * 24
+            * 3600
+        )[
+            self.model.hydrology.waterbodies.is_reservoir
+        ]  # convert from m3/s to m3/month, assuming 30 days in a month
 
         # Make all reservoirs irrigation reservoirs. This could be changed in the future
         self.var.reservoir_purpose = np.full_like(
@@ -230,15 +233,15 @@ class ReservoirOperators(AgentBaseClass):
             :, np.newaxis
         ]
 
-        self.var.multi_year_monthly_total_irrigation_demand_m3: ArrayFloat32 = (
+        self.var.multi_year_monthly_total_irrigation_demand_m3 = (
             self.var.multi_year_monthly_total_inflow * 0.25
         )
 
-        self.var.multi_year_monthly_usable_command_area_release_m3: ArrayFloat32 = (
+        self.var.multi_year_monthly_usable_command_area_release_m3 = (
             self.var.multi_year_monthly_total_inflow * 0.25
         )
 
-        self.var.hydrological_year_counter: int = (
+        self.var.hydrological_year_counter = (
             0  # Number of hydrological years for each reservoir
         )
 
