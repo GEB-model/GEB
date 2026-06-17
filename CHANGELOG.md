@@ -1,5 +1,5 @@
 # dev
-- Implement a multirun_yearly model method to allow users to create multiple duplicate model runs.
+- Add an cli method to allow users to create multiple duplicate model runs. Ran by parsing geb run-yearly --multi -n-runs 5.
 - Load return-period flood maps from the spinup output folder (output/{spinup_name}/flood_maps/{return_period}.zarr).
 - Re-organize evaluate hydrodynamics to have all functions outside the method body.
 - Make destination earth API more robust.
