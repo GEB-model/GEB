@@ -315,14 +315,14 @@ def run_yearly(multi: bool, n_runs: int | None, **kwargs: Any) -> None:
         **kwargs: Keyword arguments to pass to the run_yearly function.
 
     Raises:
-        click.ClickException: If ``--multi`` is set without ``--n-runs``, or if
+        click.ClickException: If ``--multi`` is set without ``-n-runs``, or if
             ``--n-runs`` is provided without ``--multi``.
     """
     if multi and n_runs is None:
-        raise click.ClickException("--n-runs is required when --multi is set.")
+        raise click.ClickException("-n-runs is required when --multi is set.")
 
     if not multi and n_runs is not None:
-        raise click.ClickException("--n-runs can only be used together with --multi.")
+        raise click.ClickException("-n-runs can only be used together with --multi.")
 
     if not multi:
         run_model_with_method(method="run_yearly", **kwargs)
