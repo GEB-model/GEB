@@ -12,6 +12,7 @@ import numpy as np
 import xarray as xr
 import zarr.storage
 from fsspec.asyn import AsyncFileSystem
+from aiohttp_retry import RetryClient, ExponentialRetry
 
 from geb.workflows.raster import convert_nodata
 
@@ -20,6 +21,15 @@ from .base import Adapter
 N_CONNECTION_ATTEMPTS = 3
 RETRY_DELAY_SECONDS = 5
 
+async def get_retry_client(**kwargs):
+    retry_options = ExponentialRetry(
+        attempts=100,
+        start_timeout=10,
+        max_timeout=3600,
+        factor=2,
+        retry_all_server_errors=True,
+    )
+    return RetryClient(retry_options=retry_options, **kwargs)
 
 class DestinationEarth(Adapter):
     """Data adapter for obtaining ERA5 data from the Destination Earth."""
@@ -116,12 +126,13 @@ class DestinationEarth(Adapter):
                 fs: AsyncFileSystem = fsspec.filesystem(
                     protocol="https",
                     headers=self.get_authentication_header(),
+                    get_client=get_retry_client,
                     asynchronous=True,
                     client_kwargs={
                         "trust_env": True,
-                        "raise_for_status": True,
+                        "raise_for_status": False,  # Let RetryClient and fsspec handle status codes
                     },
-                    timeout=30,
+                    timeout=600,
                 )
                 store = zarr.storage.FsspecStore(path=self.url, fs=fs)
 
