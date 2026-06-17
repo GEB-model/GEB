@@ -1734,7 +1734,7 @@ class SFINCSSimulation:
         sfincs_root_model_name: str,
         logger: logging.Logger,
         spinup_seconds: int = 86400,
-        write_figures: bool = True,
+        write_figures: bool = False,
         flood_map_output_interval_seconds: int | None = None,
         setup_river_outflow: bool = True,
     ) -> None:
