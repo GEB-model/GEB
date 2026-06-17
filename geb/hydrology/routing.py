@@ -1,7 +1,7 @@
 """Routing algorithms for river networks."""
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import geopandas as gpd
 import numpy as np
@@ -9,7 +9,7 @@ import pandas as pd
 import pyflwdir
 import pyflwdir.core
 from numba import njit
-from typing import Any
+
 from geb.geb_types import (
     ArrayBool,
     ArrayFloat32,
@@ -1629,16 +1629,20 @@ class Routing(Module):
             lambda xys: [not is_waterbody[xy[1], xy[0]] for xy in xys]
         )
         rivers["hydrography_xy_no_waterbodies_removed"] = rivers["hydrography_xy"]
-        
-        def remove_masked_river_cells(xys: list[tuple[int, int]], mask: list[bool]) -> np.ndarray[tuple[int], np.dtype[Any]]:
-            array: np.ndarray[tuple[int], np.dtype[Any]] = np.empty(sum(mask), dtype=object)
+
+        def remove_masked_river_cells(
+            xys: list[tuple[int, int]], mask: list[bool]
+        ) -> np.ndarray[tuple[int], np.dtype[Any]]:
+            array: np.ndarray[tuple[int], np.dtype[Any]] = np.empty(
+                sum(mask), dtype=object
+            )
             i: int = 0
-            for (xy, m) in zip(xys, mask):
+            for xy, m in zip(xys, mask):
                 if m:
                     array[i] = np.array(xy, dtype=object)
                     i += 1
             return array
-        
+
         rivers["hydrography_xy"] = [
             remove_masked_river_cells(xys, mask)
             for xys, mask in zip(rivers["hydrography_xy"], not_waterbody_mask)

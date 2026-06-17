@@ -298,7 +298,7 @@ class ReturnPeriodModel:
 
         n_data_points_per_week: int = math.ceil(
             pd.Timedelta("7D").value / series.index.freq.nanos  # ty:ignore[unresolved-attribute]
-        )  
+        )
 
         self.series = series
         # Resample to daily maxima to ensure independence of observations (de-clustering)
