@@ -2,6 +2,9 @@
 - Re-organize evaluate hydrodynamics to have all functions outside the method body.
 - Make destination earth API more robust (twice).
 - Use localtime rather that UTC time for logging.
+- Use Event tuple rather than dictionary to track events through model.
+- Refactor evaluation of hydrodynamics. There is now a new "evaluate_flood" that evaluates the flood observations set in the build process. In the future, "evaluate_hydrodynamics" should be removed entirely, but we first need to add the ability to add custom flood maps to the setup_flood_observations build method.
+- Several fixes for hydromt-sfincs 2.0.
 
 # v1.0.0b28
 - Add setup_flood_observations build method working with WorldFloodsV2

@@ -18,7 +18,7 @@ from matplotlib.colors import LightSource
 from matplotlib.lines import Line2D
 from rasterio.features import geometry_mask
 
-from geb.workflows.io import read_geom, read_table, read_zarr
+from geb.workflows.io import read_geom, read_zarr
 
 if TYPE_CHECKING:
     from geb.evaluate import Evaluate
@@ -209,7 +209,9 @@ def calculate_performance_metrics(
         / "group_0"
         / "subbasins.geoparquet"
     ).to_crs(observation.rio.crs)
-    subbasins[~subbasins.index.isin(rivers[rivers["is_downstream_outflow"]].index)]
+    subbasins = subbasins[
+        ~subbasins.index.isin(rivers[rivers["is_downstream_outflow"]].index)
+    ]
     subbasins = gpd.GeoDataFrame(geometry=[subbasins.union_all()], crs=subbasins.crs)
 
     rivers = rivers.to_crs(3857)
@@ -270,7 +272,7 @@ def calculate_performance_metrics(
     )
     csi_pct: float = calculate_critical_success_index(simulated, observation) * 100
 
-    flooded_pixels = float(simulated.sum().item())
+    flooded_pixels = float((simulated == 1).sum().item())
 
     # Calculate resolution in meters from coordinate spacing
     x_res = float(np.abs(simulated.x[1] - simulated.x[0]))
@@ -848,10 +850,8 @@ class Hydrodynamics:
             )
 
         # Read validation events
-        validation_events_file = self.model.files["table"][
-            "observations/flood_metadata"
-        ]
-        validation_events = read_table(validation_events_file)
+        validation_events_file = self.model.files["geom"]["observations/floods"]
+        validation_events = read_geom(validation_events_file)
 
         for _, event_row in validation_events.iterrows():
             date: pd.Timestamp = event_row["observation_date"]
@@ -860,29 +860,28 @@ class Hydrodynamics:
             ) - timedelta(days=5)
             end_time = date
 
-            event_id = event_row["event id"]
-            event_name = f"{start_time.strftime('%Y%m%dT%H%M%S')} - {end_time.strftime('%Y%m%dT%H%M%S')}"
-            print(f"Evaluating validation event: {event_id} ({event_name})")
+            event_name = event_row["name"]
+            print(f"Evaluating validation event: {event_name}")
 
             # Create event-specific folder
-            event_folder = eval_flood_folders / event_id
+            event_folder = eval_flood_folders / event_name
             event_folder.mkdir(parents=True, exist_ok=True)
 
             # Find observation file from model files (setup via setup_flood_observations)
-            obs_file = self.model.files["other"][f"observations/flood_maps/{event_id}"]
+            obs_file = self.model.files["other"][
+                f"observations/flood_maps/{event_name}"
+            ]
 
             if not obs_file.exists():
                 raise FileNotFoundError(
-                    f"Observation file for event {event_id} not found at {obs_file}. Please check the path in the config file and ensure setup_flood_observations was run correctly."
+                    f"Observation file for event {event_name} not found at {obs_file}. Please check the path in the config file and ensure setup_flood_observations was run correctly."
                 )
 
-            # Check for flood map file (validation events use export_final_intensity=True)
-            # and name = event id
-            flood_map_path = flood_maps_folder / f"{event_id}_final.zarr"
+            flood_map_path = flood_maps_folder / f"{event_name}_final.zarr"
 
             if not flood_map_path.exists():
                 raise FileNotFoundError(
-                    f"Flood map for event {event_id} not found at {flood_map_path}. Please check the path in the config file and ensure the simulation was run correctly."
+                    f"Flood map for event {event_name} not found at {flood_map_path}. Please check the path in the config file and ensure the simulation was run correctly."
                 )
 
             calculate_performance_metrics(

@@ -1532,11 +1532,15 @@ class SFINCSRootModel:
         timeseries.columns = range(len(timeseries.columns))
         locations_copy.index = range(len(locations_copy.index))
 
-        simulation: SFINCSSimulation = self.create_simulation(
-            simulation_name=f"rp_{return_period}_coastal",
+        event = Event(
+            kind="flood",
+            name=f"rp_{return_period}_coastal",
             start_time=timeseries.index[0],
             end_time=timeseries.index[-1],
+            create_max_intensity_map=True,
         )
+
+        simulation: SFINCSSimulation = self.create_simulation(event=event)
 
         # set coastal forcing model
         simulation.set_coastal_waterlevel_forcing(
@@ -1955,6 +1959,7 @@ class SFINCSSimulation:
         if not (in_masked_area > 0).all():
             raise ValueError("Some forcing locations are outside the active model area")
 
+        nodes.index.name = None  # SFINCS expects the index to be unnamed
         self.sfincs_model.discharge_points.create(
             locations=nodes, timeseries=timeseries, merge=True
         )
@@ -2237,11 +2242,18 @@ class SFINCSSimulation:
         )
         return flood_map
 
-    def read_final_flood_depth(self, minimum_flood_depth: float | int) -> xr.DataArray:
+    def read_final_flood_depth(
+        self,
+        minimum_flood_depth: float | int,
+        area_of_interest: Literal[None, "all"] = None,
+    ) -> xr.DataArray:
         """Reads the final flood depth map from the simulation output.
 
         Args:
             minimum_flood_depth: Minimum flood depth to consider [m]. Values below this threshold are set to zero.
+            area_of_interest: The area of interest for the flood depth map. Can be None or "all". If None
+                (default), the flood depth map will be masked to the model's area of interest.
+                If "all", the full flood depth map will be returned without masking.
 
         Returns:
             An xarray DataArray containing the final flood depth.
@@ -2252,7 +2264,7 @@ class SFINCSSimulation:
             method="final",
             minimum_flood_depth=minimum_flood_depth,
             end_time=self.event.end_time,
-            mask=self.root_model.area_of_interest,
+            mask=self.root_model.area_of_interest if area_of_interest is None else None,
         )
         return flood_map
 

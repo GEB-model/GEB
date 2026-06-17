@@ -733,11 +733,17 @@ class Floods(Module):
                 Q: pd.DataFrame = pd.concat(Q, axis=1)
                 Q.index = pd.to_datetime(Q.index)
 
+                event = Event(
+                    kind="flood",
+                    name=f"rp_{return_period}",
+                    start_time=Q.index[0].to_pydatetime(),
+                    end_time=Q.index[-1].to_pydatetime(),
+                    create_max_intensity_map=True,
+                )
+
                 sfincs_inland_simulation: SFINCSSimulation = (
                     sfincs_inland_root_model.create_simulation(
-                        simulation_name=f"rp_{return_period}",
-                        start_time=Q.index[0],
-                        end_time=Q.index[-1],
+                        event=event,
                     )
                 )
 

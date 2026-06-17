@@ -14,7 +14,7 @@ from geb.geb_types import ThreeDArrayFloat32, TwoDArrayFloat32
 from geb.hazards.event import Event
 from geb.hazards.floods import Floods
 from geb.module import Module
-from geb.workflows.io import read_table
+from geb.workflows.io import read_geom
 
 if TYPE_CHECKING:
     from geb.model import GEBModel
@@ -45,7 +45,7 @@ class HazardDriver(Module):
                 name=f"{event['start_time'].strftime(format='%Y%m%dT%H%M%S')} - {event['end_time'].strftime(format='%Y%m%dT%H%M%S')}",
                 start_time=event["start_time"],
                 end_time=event["end_time"],
-                export_max_intensity=True,
+                create_max_intensity_map=True,
             )
             for event in self.config["floods"]["events"]
         ]
@@ -54,8 +54,8 @@ class HazardDriver(Module):
             not self.model.in_spinup
             and self.config["floods"]["run_for_validation_events"]
         ):
-            validation_events = read_table(
-                self.model.files["table"]["observations/flood_metadata"]
+            validation_events = read_geom(
+                self.model.files["geom"]["observations/floods"]
             )
             for _, event in validation_events.iterrows():
                 date: pd.Timestamp = event["observation_date"]
@@ -65,10 +65,10 @@ class HazardDriver(Module):
 
                 event = Event(
                     kind="flood",
-                    name=event["event id"],
+                    name=event["name"],
                     start_time=start_time,
                     end_time=date,
-                    export_final_intensity=True,
+                    create_final_intensity_map=True,
                 )
 
                 self.flood_events.append(event)
