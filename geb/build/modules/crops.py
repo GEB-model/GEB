@@ -1139,7 +1139,7 @@ class Crops(BuildModelBase):
             for crop in region_data.columns:
                 if crop == "_crop_price_inflation":
                     continue
-                
+
                 # first copy data from dataframe
                 crop_data = region_data[crop].to_numpy().copy()
                 if np.isnan(crop_data).all():

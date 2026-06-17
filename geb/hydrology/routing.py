@@ -1663,7 +1663,9 @@ class Routing(Module):
             lambda xys: len(xys) > 0
         )
         rivers["hydrography_linear"] = rivers["hydrography_xy"].apply(
-            lambda xys: np.array([grid_linear_mapping[xy[1], xy[0]].item() for xy in xys])
+            lambda xys: np.array(
+                [grid_linear_mapping[xy[1], xy[0]].item() for xy in xys]
+            )
         )
         return rivers, river_ids, river_ids_no_waterbodies_removed
 

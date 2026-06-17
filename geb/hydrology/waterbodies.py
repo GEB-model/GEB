@@ -395,7 +395,9 @@ class WaterBodies(Module):
 
         self.var.lake_area = waterbody_data["average_area"].values.copy()
         self.var.capacity = waterbody_data["volume_total"].values.copy()
-        self.var.average_discharge_m3_per_s = waterbody_data["average_discharge"].values.copy()
+        self.var.average_discharge_m3_per_s = waterbody_data[
+            "average_discharge"
+        ].values.copy()
 
         self.grid.var.capacity = self.map_to_grid_outflow(
             self.var.capacity, fill_value=0

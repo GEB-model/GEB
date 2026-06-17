@@ -908,7 +908,9 @@ def write_zarr(
 
         if "time" in da.coords:
             # apply delta encoding to time coordinates, which are often more compressible with this encoding
-            maximum_difference: int = np.abs(np.diff(da.coords["time"])).max().astype(np.int64).item()
+            maximum_difference: int = (
+                np.abs(np.diff(da.coords["time"])).max().astype(np.int64).item()
+            )
             if maximum_difference > np.iinfo("i4").max:
                 dtype_to_encode_time = "i8"
             elif maximum_difference > np.iinfo("i2").max:
