@@ -199,7 +199,9 @@ def parse_MIRCA_crop_calendar(
                     # class in this unit (e.g. Wheat1, Wheat2, Wheat3). Only two
                     # rotation windows can be represented per farmer group, so we
                     # keep the two largest-area seasons and discard the rest.
-                    crop_rotations: list[tuple[int, int, int | float]] = crop_rotations[-2:]
+                    crop_rotations: list[tuple[int, int, int | float]] = crop_rotations[
+                        -2:
+                    ]
                     warnings.warn(
                         "More than 2 distinct crop rotations found for the same crop "
                         "class in one MIRCA unit; discarding the rotation(s) with the "
@@ -265,7 +267,10 @@ def parse_MIRCA_crop_calendar(
                             )
 
                             parsed_calendar[unit_code].append(crop_rotation_entry)
-                            assert crop_rotation_entry[1][0][2] != crop_rotation_entry[1][1][2]
+                            assert (
+                                crop_rotation_entry[1][0][2]
+                                != crop_rotation_entry[1][1][2]
+                            )
 
                 else:
                     raise NotImplementedError

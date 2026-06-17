@@ -8,6 +8,7 @@ from importlib.metadata import version
 from importlib.resources import files
 from pathlib import Path
 from typing import cast
+
 import netCDF4  # noqa: F401  # Needed to solve: https://github.com/pydata/xarray/issues/7259
 import numpy as np
 import numpy.typing as npt
