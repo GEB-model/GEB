@@ -15,6 +15,7 @@ full version (requires large context window): https://docs.geb.sh/llms-full.txt
 - Units: Include units for parameters and return values unless they are standard SI defaults (e.g., hydrology in meters).
 - Monetary units: All monetary amounts are nominal USD for the stated year; indicate the year when appropriate.
 - When a new config options is added, a default configuration must be added to `geb/reasonable_default_config.yml`.
+- When a new config is added, or removed, ensure that the config schema `geb/config_schema.py` is updated accordingly.
 
 ## How Copilot should generate or modify code
 

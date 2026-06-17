@@ -934,6 +934,14 @@ class Reporter:
                                     "function": f"sample_xy,{yx[1]},{yx[0]}",
                                     "substeps": 24,
                                 }
+                                retention_basin_reporters[
+                                    f"retention_basin_storage_m3_{basin_ID}"
+                                ] = {
+                                    "varname": "grid.var.retention_basin_storage_m3_per_substep",
+                                    "type": "grid",
+                                    "function": f"sample_xy,{yx[1]},{yx[0]}",
+                                    "substeps": 24,
+                                }
 
                             report_config = multi_level_merge(
                                 report_config,

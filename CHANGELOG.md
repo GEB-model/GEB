@@ -1,7 +1,14 @@
 # dev
+
+# v1.0.0b29
 - Load return-period flood maps from the spinup output folder (output/{spinup_name}/flood_maps/{return_period}.zarr).
 - Re-organize evaluate hydrodynamics to have all functions outside the method body.
-- Make destination earth API more robust.
+- Make destination earth API more robust (twice).
+- Use localtime rather that UTC time for logging.
+- Use Event tuple rather than dictionary to track events through model.
+- Refactor evaluation of hydrodynamics. There is now a new "evaluate_flood" that evaluates the flood observations set in the build process. In the future, "evaluate_hydrodynamics" should be removed entirely, but we first need to add the ability to add custom flood maps to the setup_flood_observations build method.
+- Several fixes for hydromt-sfincs 2.0.
+- Update to pandas 3.0. This update has been prepared for a while and tested, but there may be potential issues popping up due to different copy behaviour in pandas 3.0. See [here](https://pandas.pydata.org/docs/whatsnew/v3.0.0.html#consistent-copy-view-behaviour-with-copy-on-write) for more details.
 
 # v1.0.0b28
 - Add setup_flood_observations build method working with WorldFloodsV2

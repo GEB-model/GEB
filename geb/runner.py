@@ -9,6 +9,7 @@ import pstats
 import shutil
 import subprocess
 import sys
+import time
 import zipfile
 from collections.abc import Callable
 from datetime import datetime
@@ -178,6 +179,7 @@ def create_logger(name: str) -> logging.Logger:
     formatter = logging.Formatter(
         "%(asctime)s - %(levelname)s - %(message)s", datefmt="%d-%m %H:%M:%S"
     )
+    formatter.converter = time.localtime
 
     # set log level to debug
     logger.setLevel(loglevel)
