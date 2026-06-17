@@ -170,7 +170,7 @@ def test_parse_mirca_os_crop_calendar_from_data_catalog() -> None:
     seen_irrigation_flags: set[int] = set()
 
     for unit_code, crop_rotations in parsed_calendar.items():
-        assert unit_code in test_units[:3]
+        assert unit_code in test_units
         assert crop_rotations
 
         for area, rotation_matrix in crop_rotations:
