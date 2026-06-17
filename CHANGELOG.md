@@ -1,6 +1,7 @@
 # v1.0.0b29
 - Re-organize evaluate hydrodynamics to have all functions outside the method body.
 - Make destination earth API more robust (twice).
+- Use localtime rather that UTC time for logging.
 
 # v1.0.0b28
 - Add setup_flood_observations build method working with WorldFloodsV2
