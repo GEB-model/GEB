@@ -17,6 +17,7 @@ from shapely.geometry import LineString
 
 from geb.cli import CONFIG_DEFAULT
 from geb.geb_types import TwoDArrayFloat64, TwoDArrayInt32
+from geb.hazards.event import Event
 from geb.hazards.floods import create_river_graph, group_subbasins
 from geb.hazards.floods.sfincs import SFINCSRootModel, SFINCSSimulation
 from geb.hazards.floods.workflows.utils import get_start_point
@@ -334,15 +335,17 @@ def test_accumulated_runoff(
         total_flood_volume_across_models: float = 0.0
         total_discharge_volume_across_models: float = 0.0
         for sfincs_model in sfincs_models:
-            simulation: SFINCSSimulation = sfincs_model.create_simulation(
-                simulation_name=f"accumulated_runoff_forcing_{sfincs_model.name}",
+            event = Event(
+                kind="flood",
+                name=f"accumulated_runoff_forcing_{sfincs_model.name}",
                 start_time=start_time,
                 end_time=end_time,
+                create_final_intensity_map=True,
+            )
+            simulation: SFINCSSimulation = sfincs_model.create_simulation(
+                event=event,
                 spinup_seconds=0,
                 write_figures=True,
-                flood_map_output_interval_seconds=(
-                    end_time - start_time
-                ).total_seconds(),
                 setup_river_outflow=False,
             )
 
@@ -363,8 +366,8 @@ def test_accumulated_runoff(
                     get_start_point
                 )
                 date_range = pd.date_range(
-                    simulation.start_time,
-                    simulation.end_time,
+                    event.start_time,
+                    event.end_time,
                     freq="h",
                     inclusive="both",
                 )
@@ -382,7 +385,7 @@ def test_accumulated_runoff(
 
                 simulation.set_river_inflow(inflow_nodes, timeseries)
                 discharge_m3 = (
-                    (simulation.end_time - simulation.start_time).total_seconds()
+                    (event.end_time - event.start_time).total_seconds()
                     * discharge_m3_per_s
                     * len(inflow_nodes)
                 )
@@ -395,7 +398,9 @@ def test_accumulated_runoff(
             assert not simulation.has_outflow_boundary()
 
             simulation.run(gpu=False)
-            flood_depth = simulation.read_final_flood_depth(minimum_flood_depth=0.00)
+            flood_depth = simulation.read_final_flood_depth(
+                minimum_flood_depth=0.00, area_of_interest="all"
+            )
             total_flood_volume = simulation.get_flood_volume(flood_depth)
 
             basin_id_grid = geb_model.hydrology.grid.load2d(
@@ -483,11 +488,15 @@ def test_discharge_from_nodes(geb_model: GEBModel, use_gpu: bool) -> None:
             rivers=geb_model.hydrology.routing.rivers,
         )
 
-        simulation = sfincs_model.create_simulation(
-            simulation_name="nodes_forcing_test",
+        event = Event(
+            kind="flood",
+            name="nodes_forcing_test",
             start_time=start_time,
             end_time=end_time,
-            flood_map_output_interval_seconds=(end_time - start_time).total_seconds(),
+            create_final_intensity_map=True,
+        )
+        simulation = sfincs_model.create_simulation(
+            event=event,
             setup_river_outflow=False,
         )
 
@@ -506,7 +515,9 @@ def test_discharge_from_nodes(geb_model: GEBModel, use_gpu: bool) -> None:
         assert not simulation.has_outflow_boundary()
 
         simulation.run(gpu=use_gpu)
-        flood_depth = simulation.read_final_flood_depth(minimum_flood_depth=0.00)
+        flood_depth = simulation.read_final_flood_depth(
+            minimum_flood_depth=0.00, area_of_interest="all"
+        )
         total_flood_volume = simulation.get_flood_volume(flood_depth)
 
         # compare to total discharge volume
@@ -562,11 +573,15 @@ def test_setup_thin_dams(geb_model: GEBModel) -> None:
         )
 
         # simulation without dam
-        simulation_without_dam = sfincs_model.create_simulation(
-            simulation_name="thin_dams_test_no_dam",
+        event_no_dam = Event(
+            kind="flood",
+            name="thin_dams_test_no_dam",
             start_time=start_time,
             end_time=end_time,
-            flood_map_output_interval_seconds=86400,
+            create_final_intensity_map=True,
+        )
+        simulation_without_dam = sfincs_model.create_simulation(
+            event=event_no_dam,
             setup_river_outflow=False,
         )
 
@@ -579,17 +594,21 @@ def test_setup_thin_dams(geb_model: GEBModel) -> None:
 
         simulation_without_dam.run(gpu=False)
         flood_depth_without_dam = simulation_without_dam.read_final_flood_depth(
-            minimum_flood_depth=0.00
+            minimum_flood_depth=0.00, area_of_interest="all"
         )
 
         plot_flood_map(flood_depth_without_dam, "flood_depth_no_dam")
 
         # simulation with dam
-        simulation_with_dam = sfincs_model.create_simulation(
-            simulation_name="thin_dams_test",
+        event_dam = Event(
+            kind="flood",
+            name="thin_dams_test",
             start_time=start_time,
             end_time=end_time,
-            flood_map_output_interval_seconds=86400,
+            create_final_intensity_map=True,
+        )
+        simulation_with_dam = sfincs_model.create_simulation(
+            event=event_dam,
             setup_river_outflow=False,
         )
         simulation_with_dam.setup_thin_dams(vertical_dam)
@@ -603,17 +622,21 @@ def test_setup_thin_dams(geb_model: GEBModel) -> None:
 
         simulation_with_dam.run(gpu=False)
         flood_depth_with_dam = simulation_with_dam.read_final_flood_depth(
-            minimum_flood_depth=0.00
+            minimum_flood_depth=0.00, area_of_interest="all"
         )
 
         plot_flood_map(flood_depth_with_dam, "flood_depth_with_dam")
 
         # simulation with multiple dams
-        simulation_with_multiple_dams = sfincs_model.create_simulation(
-            simulation_name="thin_dams_test_multiple_dams",
+        event_multiple_dams = Event(
+            kind="flood",
+            name="thin_dams_test_multiple_dams",
             start_time=start_time,
             end_time=end_time,
-            flood_map_output_interval_seconds=86400,
+            create_final_intensity_map=True,
+        )
+        simulation_with_multiple_dams = sfincs_model.create_simulation(
+            event=event_multiple_dams,
             setup_river_outflow=False,
         )
 
@@ -628,7 +651,7 @@ def test_setup_thin_dams(geb_model: GEBModel) -> None:
         simulation_with_multiple_dams.run(gpu=False)
         flood_depth_with_multiple_dams = (
             simulation_with_multiple_dams.read_final_flood_depth(
-                minimum_flood_depth=0.00
+                minimum_flood_depth=0.00, area_of_interest="all"
             )
         )
 
@@ -673,6 +696,8 @@ def test_read(geb_model: GEBModel) -> None:
             assert isinstance(sfincs_model_build.cell_area, xr.DataArray)
             assert (sfincs_model_build.cell_area == sfincs_model_read.cell_area).all()
         assert sfincs_model_build.path == sfincs_model_read.path
+        for col in sfincs_model_build.rivers.columns:
+            assert sfincs_model_build.rivers[col].equals(sfincs_model_read.rivers[col])
         assert sfincs_model_build.rivers.equals(sfincs_model_read.rivers)
         assert sfincs_model_build.subbasins.equals(sfincs_model_read.subbasins)
 
@@ -714,11 +739,15 @@ def test_coastal_waterlevel_forcing(geb_model: GEBModel) -> None:
             maximum_elevation_for_coastal_boundary_cells_m=10_000,
         )
 
-        simulation = sfincs_model.create_simulation(
-            simulation_name="coastal_forcing_test",
+        event = Event(
+            kind="flood",
+            name="coastal_forcing_test",
             start_time=start_time,
             end_time=end_time,
-            flood_map_output_interval_seconds=(end_time - start_time).total_seconds(),
+            create_final_intensity_map=True,
+        )
+        simulation = sfincs_model.create_simulation(
+            event=event,
             setup_river_outflow=False,
         )
 
@@ -756,7 +785,9 @@ def test_coastal_waterlevel_forcing(geb_model: GEBModel) -> None:
         assert (simulation.path / "sfincs.bzs").exists()
 
         simulation.run(gpu=False)
-        flood_depth = simulation.read_final_flood_depth(minimum_flood_depth=0.01)
+        flood_depth = simulation.read_final_flood_depth(
+            minimum_flood_depth=0.01, area_of_interest="all"
+        )
 
         total_flood_volume = simulation.get_flood_volume(flood_depth)
         assert total_flood_volume > 0, "No flooding occurred"

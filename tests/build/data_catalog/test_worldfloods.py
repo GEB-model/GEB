@@ -21,10 +21,13 @@ def test_worldfloods_data_adapter() -> None:
     logger = logging.getLogger("test_worldfloods")
     data_adapter = WorldFloodsV2(
         folder="worldfloodsv2",
-        local_version=1,
-        filename="metadata.parquet",
+        local_version=2,
+        filename="flood_maps.geoparquet",
         cache="global",
-    ).fetch(url="isp-uv-es/WorldFloodsv2")
+    )
+    data_adapter.logger = logger
+
+    data_adapter = data_adapter.fetch(url="isp-uv-es/WorldFloodsv2")
 
     region: gpd.GeoDataFrame = gpd.GeoDataFrame.from_features(
         [
@@ -47,13 +50,13 @@ def test_worldfloods_data_adapter() -> None:
         crs="EPSG:4326",
     )
 
-    floods, metadata, flood_maps = data_adapter.read(region=region)
+    floods, flood_maps = data_adapter.read(region=region)
 
-    assert "observation_date" in metadata.columns
-    assert pd.api.types.is_datetime64_any_dtype(metadata["observation_date"])
-    assert not metadata["observation_date"].isnull().any()
+    assert "observation_date" in floods.columns
+    assert pd.api.types.is_datetime64_any_dtype(floods["observation_date"])
+    assert not floods["observation_date"].isnull().any()
 
     # Check if we have at least one map read
-    sample_event = metadata["event id"].iloc[0]
+    sample_event = floods["name"].iloc[0]
     assert sample_event in flood_maps
     assert isinstance(flood_maps[sample_event], xr.DataArray)

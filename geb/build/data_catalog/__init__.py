@@ -1127,8 +1127,8 @@ data_catalog: dict[str, dict[str, Any]] = {
     "worldfloodsv2": {
         "adapter": WorldFloodsV2(
             folder="worldfloodsv2",
-            local_version=1,
-            filename="metadata.parquet",
+            local_version=2,
+            filename="flood_maps.geoparquet",
             cache="global",
         ),
         "url": "isp-uv-es/WorldFloodsv2",

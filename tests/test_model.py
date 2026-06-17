@@ -397,6 +397,7 @@ def test_run() -> None:
             }
         )
         args["config"]["hazards"]["floods"]["simulate"] = True
+        args["config"]["hazards"]["floods"]["run_for_validation_events"] = True
 
         run_model_with_method(method="run", **args)
 

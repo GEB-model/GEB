@@ -19,10 +19,8 @@ from tqdm import tqdm
 from geb.geb_types import TwoDArrayInt8
 from geb.workflows.io import (
     read_geom,
-    read_table,
     read_zarr,
     write_geom,
-    write_table,
     write_zarr,
 )
 
@@ -210,17 +208,26 @@ class WorldFloodsV2(Adapter):
                     all_flood_maps_vectors, ignore_index=True
                 )  # ty:ignore[invalid-assignment]
 
+                metadata: pd.DataFrame = metadata.rename(
+                    columns={"event id": "name", "satellite date": "satellite_date"}
+                )
+
+                all_flood_maps_vectors: gpd.GeoDataFrame = all_flood_maps_vectors.merge(
+                    metadata,
+                    left_on="name",
+                    right_on="name",
+                    how="inner",
+                )  # ty:ignore[invalid-assignment]
                 write_geom(
                     all_flood_maps_vectors,
-                    self.root / "flood_maps.parquet",
+                    self.root / "flood_maps.geoparquet",
                     write_covering_bbox=True,
                 )
-                write_table(metadata, self.root / "metadata.parquet")
         return self
 
     def read(
         self, region: gpd.GeoDataFrame
-    ) -> tuple[gpd.GeoDataFrame, pd.DataFrame, dict[str, xr.DataArray]]:
+    ) -> tuple[gpd.GeoDataFrame, dict[str, xr.DataArray]]:
         """Read the WorldFloodsv2 metadata.
 
         Args:
@@ -230,31 +237,21 @@ class WorldFloodsV2(Adapter):
             The flood maps and metadata as GeoDataFrames.
         """
         floods: gpd.GeoDataFrame = read_geom(
-            self.root / "flood_maps.parquet", bbox=region.total_bounds
+            self.root / "flood_maps.geoparquet", bbox=region.total_bounds
         )
         # filter actual overlapping
         floods = floods[floods.intersects(region.union_all())]
 
-        metadata = read_table(self.root / "metadata.parquet")
-        flood_events = floods["name"].unique()
-        metadata = metadata[metadata["event id"].isin(flood_events)]
-
-        metadata = metadata.rename(columns={"satellite date": "observation_date"})
-
         # parse observation_date to datetime and convert to UTC timezone
-        metadata["observation_date"] = pd.to_datetime(
-            metadata["observation_date"], format="mixed", utc=True
+        floods["observation_date"] = pd.to_datetime(
+            floods["satellite_date"], format="mixed", utc=True
         ).dt.tz_localize(None)
 
-        assert len(metadata) == len(flood_events), (
-            "Metadata and flood maps should have the same number of entries."
-        )
-
         flood_maps: dict[str, xr.DataArray] = {}
-        for _, row in metadata.iterrows():
-            flood_name = row["event id"]
+        for _, row in floods.iterrows():
+            flood_name = row["name"]
             raster_path = self.root / "rasters" / f"{flood_name}.zarr"
             flood_raster = read_zarr(raster_path)
             flood_maps[flood_name] = flood_raster
 
-        return floods, metadata, flood_maps
+        return floods, flood_maps

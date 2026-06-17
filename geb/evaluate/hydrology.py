@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 import geopandas as gpd
-import matplotlib as mpl
 import matplotlib.colors as mcolors
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
@@ -42,20 +41,6 @@ from geb.workflows.timeseries import regularize_discharge_timeseries
 
 OBSERVATIONS_COLOR = "#FED65D"
 SIMULATIONS_DEFAULT_COLOR = "#278DD9"
-
-# Configure global dark style for all plots in this module
-mpl.rcParams["figure.facecolor"] = "#000000"
-mpl.rcParams["axes.facecolor"] = "#000000"
-mpl.rcParams["axes.edgecolor"] = "white"
-mpl.rcParams["axes.labelcolor"] = "white"
-mpl.rcParams["xtick.color"] = "white"
-mpl.rcParams["ytick.color"] = "white"
-mpl.rcParams["text.color"] = "white"
-mpl.rcParams["figure.edgecolor"] = "white"
-mpl.rcParams["grid.color"] = "white"
-mpl.rcParams["legend.labelcolor"] = "white"
-mpl.rcParams["savefig.facecolor"] = "#000000"
-mpl.rcParams["savefig.edgecolor"] = "#000000"
 
 
 class DischargeMetrics(NamedTuple):

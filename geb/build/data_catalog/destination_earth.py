@@ -11,6 +11,7 @@ import fsspec
 import numpy as np
 import xarray as xr
 import zarr.storage
+from aiohttp_retry import ExponentialRetry, RetryClient
 from fsspec.asyn import AsyncFileSystem
 
 from geb.workflows.raster import convert_nodata
@@ -19,6 +20,25 @@ from .base import Adapter
 
 N_CONNECTION_ATTEMPTS = 3
 RETRY_DELAY_SECONDS = 5
+
+
+async def get_retry_client(**kwargs: Any) -> RetryClient:
+    """Create a RetryClient with exponential backoff for handling transient errors.
+
+    Args:
+        **kwargs: Additional keyword arguments to pass to the RetryClient constructor.
+
+    Returns:
+        An instance of RetryClient configured with exponential backoff.
+    """
+    retry_options = ExponentialRetry(
+        attempts=100,
+        start_timeout=10,
+        max_timeout=3600,
+        factor=2,
+        retry_all_server_errors=True,
+    )
+    return RetryClient(retry_options=retry_options, **kwargs)
 
 
 class DestinationEarth(Adapter):
@@ -116,12 +136,13 @@ class DestinationEarth(Adapter):
                 fs: AsyncFileSystem = fsspec.filesystem(
                     protocol="https",
                     headers=self.get_authentication_header(),
+                    get_client=get_retry_client,
                     asynchronous=True,
                     client_kwargs={
                         "trust_env": True,
-                        "raise_for_status": True,
+                        "raise_for_status": False,  # Let RetryClient and fsspec handle status codes
                     },
-                    timeout=30,
+                    timeout=600,
                 )
                 store = zarr.storage.FsspecStore(path=self.url, fs=fs)
 

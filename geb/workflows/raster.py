@@ -782,7 +782,7 @@ def pad_to_grid_alignment(
         ValueError: If ``grid_size_multiplier`` is not a positive integer.
     """
     if not isinstance(grid_size_multiplier, int) or grid_size_multiplier <= 0:
-        raise ValueError("grid_size_multiplier must be a positive integer")
+        raise ValueError("grid_size_multiplier must be a positive integer >= 1")
 
     array_rio = da.rio
     x_dim: str = array_rio.x_dim
