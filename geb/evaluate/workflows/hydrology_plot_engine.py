@@ -13,6 +13,7 @@ import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.colorbar import Colorbar
 from matplotlib.lines import Line2D
 from scipy.stats import linregress
 
@@ -82,8 +83,8 @@ _DISPLAYED_SKILL_SCORE_CONFIGS: tuple[dict[str, object], ...] = (
     },
     {
         "col": "R2",
-        "label": "R² (Pearson r²)",
-        "title": "R² (Pearson r²)",
+        "label": "Pearson r²",
+        "title": "Pearson r²",
         "unit": "(−)",
         "ylim": (0.0, 1.0),
         "reference": 1.0,
@@ -106,6 +107,9 @@ _DISPLAYED_SKILL_SCORE_CONFIGS: tuple[dict[str, object], ...] = (
         "color": "#d62728",
     },
 )
+
+_MINIMUM_MAP_RIVER_UPSTREAM_AREA_KM2: float = 100.0
+_RIVER_LINEWIDTH_EDGES: tuple[float, ...] = (0.35, 0.60, 0.90, 1.30, 1.80, 2.60)
 
 
 def _plot_skill_score_map_single(
@@ -252,12 +256,279 @@ def _plot_skill_score_map_single(
     plt.close(fig)
 
 
+def _plot_river_background(
+    axis: plt.Axes,
+    rivers: gpd.GeoDataFrame,
+) -> None:
+    """Plot major rivers with logarithmic widths beneath skill-score stations.
+
+    Rivers with less than 100 km² upstream area are omitted to keep the map
+    legible. Line widths increase logarithmically from 0.35 points at 100 km²
+    to 2.5 points at 1,000,000 km².
+
+    Args:
+        axis: Map axes receiving the river background.
+        rivers: River segments in the plot CRS with ``uparea_m2`` values
+            (square meters).
+
+    Raises:
+        ValueError: If ``rivers`` does not contain an ``uparea_m2`` column.
+    """
+    if "uparea_m2" not in rivers.columns:
+        raise ValueError("River geometry must contain an 'uparea_m2' column.")
+
+    minimum_upstream_area_m2: float = _MINIMUM_MAP_RIVER_UPSTREAM_AREA_KM2 * 1_000_000.0
+    major_rivers: gpd.GeoDataFrame = rivers[
+        (rivers["uparea_m2"] >= minimum_upstream_area_m2)
+        & rivers.geometry.notna()
+        & ~rivers.geometry.is_empty
+    ].copy()
+    if major_rivers.empty:
+        return
+
+    upstream_area_km2: pd.Series = major_rivers["uparea_m2"].clip(lower=1e6) / 1e6
+    log_upstream_area_km2: np.ndarray = np.log10(
+        upstream_area_km2.to_numpy(dtype=float)
+    )
+    major_rivers["_plot_linewidth"] = np.clip(
+        0.35 + 2.15 * (log_upstream_area_km2 - 2.0) / 4.0,
+        0.35,
+        2.5,
+    )
+
+    # Draw small rivers first so the major channels remain visible at confluences.
+    for lower_width, upper_width in zip(
+        _RIVER_LINEWIDTH_EDGES[:-1],
+        _RIVER_LINEWIDTH_EDGES[1:],
+        strict=True,
+    ):
+        width_band: gpd.GeoDataFrame = major_rivers[
+            (major_rivers["_plot_linewidth"] >= lower_width)
+            & (major_rivers["_plot_linewidth"] < upper_width)
+        ]
+        if width_band.empty:
+            continue
+
+        band_linewidth: float = (lower_width + upper_width) / 2.0
+        # The dark halo keeps blue rivers readable over both bright and dark tiles.
+        width_band.plot(
+            ax=axis,
+            color="#163A59",
+            linewidth=band_linewidth + 0.7,
+            alpha=0.55,
+            zorder=2.5,
+        )
+        width_band.plot(
+            ax=axis,
+            color="#4A90D9",
+            linewidth=band_linewidth,
+            alpha=0.9,
+            zorder=3,
+        )
+
+
+def _plot_kge_component_maps(
+    evaluation_gdf: gpd.GeoDataFrame,
+    metric_configs: tuple[
+        dict[str, object],
+        dict[str, object],
+        dict[str, object],
+        dict[str, object],
+    ],
+    output_path: Path,
+    region_geom: gpd.GeoDataFrame,
+    rivers: gpd.GeoDataFrame | None = None,
+) -> None:
+    """Plot KGE and its three components in a two-by-two map grid.
+
+    Each panel uses its metric-specific color scale because KGE and correlation
+    range from -1 to 1, while the bias and variability ratios use 0 to 2.
+
+    Args:
+        evaluation_gdf: Per-station metrics with point geometry in any CRS.
+        metric_configs: Four metric configuration dictionaries in display order:
+            KGE, KGE correlation, KGE bias ratio, and KGE variability ratio.
+        output_path: Output path stem (no extension); ``.svg`` and ``.png`` are saved.
+        region_geom: Basin/region boundary overlaid on each map.
+        rivers: Optional river network with ``uparea_m2`` values (square meters).
+            Rivers are drawn below gauging stations using upstream-area-scaled
+            widths.
+
+    Raises:
+        KeyError: If a configured metric is absent from ``evaluation_gdf``.
+        ValueError: If there are not exactly four metric configurations or a
+            metric configuration has no finite color scale.
+    """
+    if len(metric_configs) != 4:
+        raise ValueError("Exactly four KGE metric configurations are required.")
+
+    for metric_config in metric_configs:
+        configured_column: str = str(metric_config["col"])
+        if configured_column not in evaluation_gdf.columns:
+            raise KeyError(
+                f"Metric '{configured_column}' is missing from evaluation data."
+            )
+        if metric_config["vmin"] is None or metric_config["vmax"] is None:
+            raise ValueError(
+                f"Metric '{configured_column}' requires finite vmin and vmax values."
+            )
+
+    gdf_3857: gpd.GeoDataFrame = evaluation_gdf.to_crs("EPSG:3857")
+    region_3857: gpd.GeoDataFrame = region_geom.to_crs("EPSG:3857")
+    rivers_3857: gpd.GeoDataFrame | None = (
+        rivers.to_crs("EPSG:3857") if rivers is not None else None
+    )
+
+    fig: plt.Figure
+    axes: np.ndarray
+    fig, axes = plt.subplots(
+        2,
+        2,
+        figsize=(15, 12),
+        constrained_layout=True,
+    )
+
+    for ax, cfg in zip(axes.flat, metric_configs, strict=True):
+        metric_col: str = str(cfg["col"])
+        vmin_value: object = cfg["vmin"]
+        vmax_value: object = cfg["vmax"]
+        assert vmin_value is not None
+        assert vmax_value is not None
+        cmap_name: str = str(cfg["cmap"])
+        norm: mcolors.Normalize = mcolors.Normalize(
+            vmin=float(cast(float, vmin_value)),
+            vmax=float(cast(float, vmax_value)),
+        )
+
+        region_3857.plot(
+            ax=ax,
+            color="none",
+            edgecolor="white",
+            linewidth=0.6,
+            alpha=0.7,
+            zorder=2,
+        )
+
+        if rivers_3857 is not None:
+            _plot_river_background(axis=ax, rivers=rivers_3857)
+
+        valid_mask: pd.Series = gdf_3857[metric_col].notna()
+        if valid_mask.any():
+            ax.scatter(
+                gdf_3857.loc[valid_mask, "geometry"].x,
+                gdf_3857.loc[valid_mask, "geometry"].y,
+                c=gdf_3857.loc[valid_mask, metric_col],
+                cmap=cmap_name,
+                norm=norm,
+                s=12,
+                zorder=4,
+                linewidths=0.2,
+                edgecolors="white",
+            )
+        if (~valid_mask).any():
+            ax.scatter(
+                gdf_3857.loc[~valid_mask, "geometry"].x,
+                gdf_3857.loc[~valid_mask, "geometry"].y,
+                c="grey",
+                marker="x",
+                s=10,
+                zorder=3,
+                linewidths=0.5,
+                label="No data",
+            )
+            ax.legend(fontsize=8, loc="lower right", framealpha=0.8)
+
+        ctx.add_basemap(
+            ax,
+            crs="EPSG:3857",
+            source=ctx.providers.Esri.WorldImagery,  # ty:ignore[unresolved-attribute]
+            attribution=False,
+            zoom="auto",
+        )
+
+        scalar_mappable: plt.cm.ScalarMappable = plt.cm.ScalarMappable(
+            cmap=cmap_name,
+            norm=norm,
+        )
+        scalar_mappable.set_array([])
+        colorbar: Colorbar = fig.colorbar(
+            scalar_mappable,
+            ax=ax,
+            fraction=0.035,
+            pad=0.02,
+            aspect=28,
+        )
+        colorbar.set_label(str(cfg["label"]), fontsize=10)
+        colorbar.ax.yaxis.set_tick_params(color="black", labelcolor="black")
+        colorbar.outline.set_edgecolor("0.3")  # ty:ignore[call-non-callable]
+
+        ax.set_title(str(cfg["label"]), fontsize=12, fontweight="bold", pad=8)
+        ax.tick_params(labelbottom=False, labelleft=False, bottom=False, left=False)
+        for spine in ax.spines.values():
+            spine.set_edgecolor("0.3")
+
+    # One orientation aid is enough because all panels have identical extents.
+    lower_right_axis: plt.Axes = axes[1, 1]
+    x_min, x_max = lower_right_axis.get_xlim()
+    y_min, y_max = lower_right_axis.get_ylim()
+    map_width_m: float = x_max - x_min
+    map_height_m: float = y_max - y_min
+    bar_m: float = round(
+        map_width_m * 0.15 / 10 ** np.floor(np.log10(map_width_m * 0.15))
+    ) * 10 ** np.floor(np.log10(map_width_m * 0.15))
+    bar_label: str = f"{int(bar_m / 1_000)} km" if bar_m >= 1_000 else f"{int(bar_m)} m"
+    bar_x0: float = x_min + map_width_m * 0.03
+    bar_y: float = y_min + map_height_m * 0.03
+    lower_right_axis.plot(
+        [bar_x0, bar_x0 + bar_m],
+        [bar_y, bar_y],
+        color="white",
+        linewidth=3,
+        solid_capstyle="butt",
+        zorder=5,
+    )
+    lower_right_axis.text(
+        bar_x0 + bar_m / 2,
+        bar_y + map_height_m * 0.012,
+        bar_label,
+        color="white",
+        fontsize=8,
+        ha="center",
+        va="bottom",
+        zorder=5,
+    )
+    lower_right_axis.annotate(
+        "N",
+        xy=(0.96, 0.12),
+        xytext=(0.96, 0.06),
+        xycoords="axes fraction",
+        textcoords="axes fraction",
+        ha="center",
+        va="bottom",
+        fontsize=10,
+        color="white",
+        fontweight="bold",
+        arrowprops=dict(arrowstyle="-|>", color="white", lw=1.5),
+    )
+
+    fig.suptitle(
+        "KGE and its components",
+        fontsize=14,
+        fontweight="bold",
+    )
+
+    for extension in ("svg", "png"):
+        fig.savefig(f"{output_path}.{extension}", bbox_inches="tight", dpi=200)
+    plt.close(fig)
+
+
 def plot_skill_score_maps(
     evaluation_gdf: gpd.GeoDataFrame,
     region_geom: gpd.GeoDataFrame,
     output_folder: Path,
     logger: logging.Logger,
     difference_gdfs: dict[str, pd.DataFrame] | None = None,
+    rivers: gpd.GeoDataFrame | None = None,
 ) -> None:
     """Plot per-station skill scores on a satellite basemap, one map per metric.
 
@@ -270,9 +541,38 @@ def plot_skill_score_maps(
         logger: Logger to use for progress messages.
         difference_gdfs: Optional matched GEB-vs-external station tables with
             ``KGE_difference`` values (dimensionless).
+        rivers: Optional river network with ``uparea_m2`` values (square meters)
+            for the combined KGE component map background.
     """
     maps_folder = output_folder / "skill_score_maps"
     maps_folder.mkdir(parents=True, exist_ok=True)
+
+    kge_metric_columns: tuple[str, str, str, str] = (
+        "KGE",
+        "KGE_correlation",
+        "KGE_bias_ratio",
+        "KGE_variability_ratio",
+    )
+    if all(column_name in evaluation_gdf.columns for column_name in kge_metric_columns):
+        kge_metric_configs: tuple[
+            dict[str, object],
+            dict[str, object],
+            dict[str, object],
+            dict[str, object],
+        ] = (
+            _get_skill_score_config(kge_metric_columns[0]),
+            _get_skill_score_config(kge_metric_columns[1]),
+            _get_skill_score_config(kge_metric_columns[2]),
+            _get_skill_score_config(kge_metric_columns[3]),
+        )
+        _plot_kge_component_maps(
+            evaluation_gdf=evaluation_gdf,
+            metric_configs=kge_metric_configs,
+            output_path=maps_folder / "skill_score_map_kge_components",
+            region_geom=region_geom,
+            rivers=rivers,
+        )
+        logger.info("Saved KGE component skill score map.")
 
     for cfg in _DISPLAYED_SKILL_SCORE_CONFIGS:
         col: str = str(cfg["col"])
@@ -288,7 +588,7 @@ def plot_skill_score_maps(
         vmax: float = (
             float(np.nanpercentile(valid_values, 95))
             if cfg["vmax"] is None
-            else float(cfg["vmax"])
+            else float(cast(float, cfg["vmax"]))
         )
         _plot_skill_score_map_single(
             evaluation_gdf=evaluation_gdf,
@@ -296,7 +596,7 @@ def plot_skill_score_maps(
             metric_label=str(cfg["label"]),
             metric_title=str(cfg["title"]),
             cmap_name=str(cfg["cmap"]),
-            vmin=float(cfg["vmin"]),
+            vmin=float(cast(float, cfg["vmin"])),
             vmax=vmax,
             output_path=maps_folder / f"skill_score_map_{col.lower()}",
             region_geom=region_geom,
@@ -372,7 +672,7 @@ def _draw_violin_box(
     position: float,
     bar_color: str,
     violin_width: float = 0.35,
-    violin_values: np.ndarray | None = None,
+    violin_limits: tuple[float, float] | None = None,
 ) -> None:
     """Draw a violin and boxplot for one model metric distribution.
 
@@ -382,11 +682,16 @@ def _draw_violin_box(
         position: X-axis position of the distribution.
         bar_color: Color used for the violin and box.
         violin_width: Width of the violin plot.
-        violin_values: Optional values used only for the violin kernel density.
-            The boxplot and median still use `values`.
+        violin_limits: Optional visible y-axis limits. Values outside these
+            limits are excluded from the violin density but retained in the
+            boxplot and median.
     """
-    density_values: np.ndarray = values if violin_values is None else violin_values
-    density_values = density_values[np.isfinite(density_values)]
+    density_values: np.ndarray = values[np.isfinite(values)]
+    if violin_limits is not None:
+        lower_limit, upper_limit = violin_limits
+        density_values = density_values[
+            (density_values >= lower_limit) & (density_values <= upper_limit)
+        ]
     if len(density_values) >= 3:
         parts = axis.violinplot(
             density_values,
@@ -471,6 +776,7 @@ def _get_skill_score_config(metric_col: str) -> dict[str, object]:
 
 def _get_boxplot_axis_layout(
     fig: plt.Figure,
+    single_model: bool,
 ) -> dict[str, plt.Axes]:
     """Create the grouped layout for discharge skill-score boxplots.
 
@@ -479,6 +785,7 @@ def _get_boxplot_axis_layout(
 
     Args:
         fig: Matplotlib figure that receives the axes.
+        single_model: Whether only one model distribution is plotted.
 
     Returns:
         Metric-column-to-axis mapping.
@@ -489,12 +796,11 @@ def _get_boxplot_axis_layout(
         height_ratios=[1.0, 1.0],
         hspace=0.80,
     )
-    # KGE gets 4× the width of each component panel so it reads as the primary score.
     kge_grid = outer_grid[0, 0].subgridspec(
         nrows=1,
         ncols=4,
         wspace=0.20,
-        width_ratios=[4, 1, 1, 1],
+        width_ratios=[2.4 if single_model else 4.0, 1, 1, 1],
     )
     other_metric_grid = outer_grid[1, 0].subgridspec(
         nrows=1,
@@ -697,6 +1003,7 @@ def plot_skill_score_boxplots(
         minimum_upstream_area_km2: Minimum modeled upstream area threshold for
             plotted GEB stations (km2).
         station_count: Number of plotted GEB stations.
+
     """
     if include_geb and evaluation_df.empty:
         logger.info(
@@ -734,11 +1041,15 @@ def plot_skill_score_boxplots(
     model_colors: dict[str, str] = (
         {"GEB": geb_color} if include_geb else {}
     ) | external_colors
+    single_model: bool = len(model_colors) == 1
 
     logger.info("Creating evaluation metrics skill score plots...")
 
-    fig = plt.figure(figsize=(13.0, 6.5), constrained_layout=False)
-    axes_by_metric = _get_boxplot_axis_layout(fig)
+    fig = plt.figure(
+        figsize=(8.2, 5.4) if single_model else (13.0, 6.5),
+        constrained_layout=False,
+    )
+    axes_by_metric = _get_boxplot_axis_layout(fig, single_model=single_model)
     displayed_station_count: int | None = (
         station_count if station_count is not None else len(evaluation_df)
     )
@@ -786,11 +1097,25 @@ def plot_skill_score_boxplots(
             else np.array([0.0])
         )
 
+        y_limits: tuple[float, float] = (
+            cast(tuple[float, float], config["ylim"])
+            if config["ylim"] is not None
+            else _get_robust_error_metric_ylim(
+                np.concatenate([metric_values for _, metric_values in models_with_data])
+            )
+        )
+
         for (model_name, metric_values), x_position in zip(
             models_with_data, x_positions, strict=True
         ):
-            bar_color: str = model_colors[model_name]
-            _draw_violin_box(axis, metric_values, x_position, bar_color)
+            _draw_violin_box(
+                axis,
+                metric_values,
+                x_position,
+                model_colors[model_name],
+                violin_width=0.28 if single_model else 0.35,
+                violin_limits=y_limits,
+            )
         is_component_axis: bool = metric_col.startswith("KGE_")
         _annotate_metric_medians(
             axis,
@@ -818,13 +1143,7 @@ def plot_skill_score_boxplots(
             fontweight="bold",
             pad=8,
         )
-        if config["ylim"] is not None:
-            axis.set_ylim(*cast(tuple[float, float], config["ylim"]))
-        elif config.get("robust_error_ylim", False):
-            combined_metric_values: np.ndarray = np.concatenate(
-                [metric_values for _, metric_values in models_with_data]
-            )
-            axis.set_ylim(*_get_robust_error_metric_ylim(combined_metric_values))
+        axis.set_ylim(*y_limits)
         axis.set_xticks([])
         axis.tick_params(
             axis="y",
@@ -841,10 +1160,9 @@ def plot_skill_score_boxplots(
     legend_handles: list[Line2D] = [
         Line2D([0], [0], color=color, linewidth=5, label=name)
         for name, color in model_colors.items()
-        if name == "GEB" or name in external_colors
     ]
-    if legend_handles:
-        legend = fig.legend(
+    if len(legend_handles) > 1:
+        fig.legend(
             handles=legend_handles,
             loc="lower center",
             ncol=len(legend_handles),
@@ -855,7 +1173,12 @@ def plot_skill_score_boxplots(
             bbox_to_anchor=(0.5, 0.01),
         )
 
-    fig.subplots_adjust(left=0.055, right=0.985, top=0.88, bottom=0.14)
+    fig.subplots_adjust(
+        left=0.07 if single_model else 0.055,
+        right=0.985,
+        top=0.82 if single_model else 0.88,
+        bottom=0.10 if single_model else 0.14,
+    )
 
     if export:
         context_suffix: str = _format_boxplot_output_context(
@@ -941,7 +1264,7 @@ def plot_kge_external_model_comparison(
             x_positions[0],
             geb_color,
             violin_width=0.28,
-            violin_values=np.clip(finite_geb_values, visible_y_min, visible_y_max),
+            violin_limits=(visible_y_min, visible_y_max),
         )
         _draw_violin_box(
             axis,
@@ -949,7 +1272,7 @@ def plot_kge_external_model_comparison(
             x_positions[1],
             external_color,
             violin_width=0.28,
-            violin_values=np.clip(finite_external_values, visible_y_min, visible_y_max),
+            violin_limits=(visible_y_min, visible_y_max),
         )
         for x_position, metric_values in zip(
             x_positions,

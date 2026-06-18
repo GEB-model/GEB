@@ -109,8 +109,8 @@ def _calculate_discharge_validation_metrics(
 
     Returns:
         DischargeMetrics with KGE, modified KGE, KGE correlation/bias/variability
-        components, NSE, squared Pearson correlation R2, RMSE, and RRMSE; all NaN
-        when there are fewer than 2 valid pairs.
+        components, NSE, squared Pearson correlation r² (stored as `R2`), RMSE,
+        and RRMSE; all NaN when there are fewer than 2 valid pairs.
 
     """
     discharge_columns: list[str] = [
@@ -187,8 +187,8 @@ def _calculate_discharge_validation_metrics(
         float("nan") if observed_discharge_std == 0.0 else rmse / observed_discharge_std
     )
 
-    # R2 is squared Pearson correlation so it is comparable with external
-    # Google Streamflow metrics. COD is represented by NSE.
+    # The legacy R2 column stores Pearson r² for compatibility with external
+    # Google Streamflow metrics. Uppercase R² is reserved for COD.
     pearson_r2: float = kge_correlation**2
 
     return DischargeMetrics(
@@ -2764,11 +2764,33 @@ class Hydrology:
 
         if export:
             region_geom: gpd.GeoDataFrame = read_geom(self.model.files["geom"]["mask"])
+            all_rivers: gpd.GeoDataFrame = read_geom(
+                self.model.files["geom"]["routing/rivers"]
+            )
+            connector_columns: tuple[str, str, str] = (
+                "is_downstream_outflow",
+                "is_upstream_of_downstream_basin",
+                "is_further_downstream_outflow",
+            )
+            available_connector_columns: list[str] = [
+                column_name
+                for column_name in connector_columns
+                if column_name in all_rivers.columns
+            ]
+            rivers: gpd.GeoDataFrame = all_rivers.copy()
+            if available_connector_columns:
+                # Artificial basin connectors should not appear as natural rivers.
+                connector_mask: pd.Series = (
+                    all_rivers[available_connector_columns].fillna(False).any(axis=1)
+                )
+                rivers = all_rivers[~connector_mask].copy()
+
             _plot_skill_score_maps(
                 evaluation_gdf=evaluation_gdf,
                 region_geom=region_geom,
                 output_folder=evaluation_paths.plot_folder,
                 logger=self.model.logger,
+                rivers=rivers,
                 difference_gdfs={
                     model_name: plot_inputs.evaluation_df
                     for model_name, plot_inputs in _prepare_pairwise_skill_score_boxplot_inputs(
