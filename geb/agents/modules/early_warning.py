@@ -607,7 +607,7 @@ class EarlyWarningModule:
         return lead_time
 
     def pick_recommendations(
-        self, available_measures: list[str], evacuate: bool, lead_time: float
+        self, available_measures: set[str], evacuate: bool, lead_time: float
     ) -> list[str]:
         """
         Decide which recommendations to include in the warning based on the lead time available.
@@ -622,21 +622,11 @@ class EarlyWarningModule:
         """
         # Get implementation times for measures
         implementation_times = self.households.var.implementation_times
-        available_measures = [
-            m for m in available_measures if m and m in implementation_times
-        ]
-        # TODO: available measures is huge, need to know why
-
-        self.logger.debug(f"Available_measures: {available_measures}")
-        self.logger.debug(
-            f"Implementation_times keys: {list(implementation_times.keys())}"
-        )
 
         # Filter out empty strings and invalid measures to prevent KeyError
         valid_measures = {
             m for m in available_measures if m and m in implementation_times
         }
-        self.logger.debug(f"Valid_measures after filtering: {valid_measures}")
 
         # Sort the measures by their implementation times and alphabetically
         sorted_inplace_measures_per_time = sorted(
@@ -667,13 +657,14 @@ class EarlyWarningModule:
                         chosen_measures.append(measure)
                         used_time += imp_time
                 if not chosen_measures:
-                    print("No measures fit within the lead time")
+                    self.logger.info("No measures fit within the lead time")
+                self.logger.info(f"Recommended measures: {chosen_measures}")
                 return chosen_measures
         else:
             # Evacuation case
             # If there is no time for evacuation, nothing to recommend
             if evac_time > lead_time:
-                print("Not enough time for evacuation, cannot recommend it")
+                self.logger.info("Not enough time for evacuation, cannot recommend it")
                 return []
             else:
                 # If there is time for evacuation, check if any in-place measures fit as well
@@ -684,13 +675,13 @@ class EarlyWarningModule:
                     if used_time + imp_time <= lead_time:
                         chosen_measures.append(measure)
                         used_time += imp_time
-
+                self.logger.info(f"Recommended measures: {chosen_measures}")
                 return chosen_measures
 
     def warning_communication(
         self,
         target_households: gpd.GeoDataFrame,
-        measures: list[str],
+        measures: set[str],
         evacuate: bool,
         trigger: str,
         communication_efficiency: float = 1,
@@ -705,7 +696,7 @@ class EarlyWarningModule:
 
         Args:
             target_households: GeoDataFrame of household points targeted by the warning.
-            measures: List of recommended protective measures to communicate (strings).
+            measures: Set of recommended protective measures to communicate (strings).
             evacuate: Whether evacuation should be advised for this warning.
             trigger: Identifier of the trigger that initiated the warning.
             communication_efficiency: Fraction of target households that successfully receive the warning (0 to 1).
@@ -968,14 +959,20 @@ class EarlyWarningModule:
         # Filter only postal codes that need to be warned
         warning_cols = [f"issue_warning_r{range_id}" for range_id in range_ids]
         postal_codes_to_warn = postal_codes[postal_codes[warning_cols].any(axis=1)]
+        postal_codes_to_warn.to_parquet(
+            warnings_folder
+            / f"postal_codes_to_warn_{date_time.isoformat().replace(':', '').replace('-', '')}.parquet"
+        )
 
         # Communicate the warning to the households in the postal code and store the details in the warning log
-        # Initialize measures and evacuate flag
-        measures = []
-        triggered_ranges = []
-        evacuate = False
         for i, row in postal_codes_to_warn.iterrows():
             postal_code = row["postcode"]
+
+            # Initialize measures and evacuate flag
+            measures = set()
+            triggered_ranges = []
+            evacuate = False
+
             for range_id in range_ids:
                 issue_warning = row[f"issue_warning_r{range_id}"]
                 if issue_warning:
@@ -984,7 +981,7 @@ class EarlyWarningModule:
                     recom_measure = residential_wlranges[range_id]["measure"]
                     evacuate = evacuate or residential_wlranges[range_id]["evacuate"]
                     if recom_measure:
-                        measures.extend(recom_measure)
+                        measures.update(recom_measure)
 
             if measures or evacuate:
                 # Filter the affected households based on the postal code
@@ -1181,7 +1178,6 @@ class EarlyWarningModule:
         self.logger.info(
             f"Total households: {len(self.households.var.household_points)}"
         )
-        self.logger.info(f"Non-evacuated households: {np.sum(not_evacuated_ids)}")
         self.logger.info(f"Warned households: {np.sum(warned_ids)}")
         self.logger.info(f"Responsive households: {np.sum(responsive_ids)}")
 
@@ -1259,6 +1255,9 @@ class EarlyWarningModule:
         self.logger.info(f"Total number of households acted: {len(actions_log)}")
         total_actions = sum(len(entry["actions"]) for entry in actions_log)
         self.logger.info(f"Total individual actions taken: {total_actions}")
+        self.logger.info(
+            f"Households evacuated: {np.sum(self.households.var.evacuated)}"
+        )
 
         # Save actions log
         actions_log_folder = self.model.output_folder / "actions_logs"
@@ -1303,12 +1302,12 @@ class EarlyWarningModule:
             )
 
         # add columns in the household points geodataframe
+
         for name in [
             "warning_reached",
             "warning_level",
             "response_probability",
             "evacuated",
-            "warning_trigger",
             "action_lead_time",
         ]:
             if hasattr(self.households.var, name):

@@ -21,6 +21,7 @@ general:
 
 hazards:
   floods:
+    damage_model:
     simulate: false
     forcing_method: accumulated_runoff  # headwater_points, accumulated_runoff
     minimum_flood_depth: 0.05
@@ -54,7 +55,7 @@ hazards:
     observation_files:
     - 20210712T090000 - 20210720T090000.zarr # list of observations files for all floods, should be formatted start date - end date.zarr
   damage:
-    simulate: false
+    simulate: true
   erosion:
     simulate: false
 
@@ -99,7 +100,7 @@ agent_settings:
       communication_efficiency: 1.0 # Communication efficiency: fraction of households that can be reached (0.0-1.0)
       weight_by_socioeconomic_factors: false # Whether to consider the social economic factors in the distribution of warnings.
       damage_reduction_over_leadtime: false # Whether to consider the reduction of damage over lead time due to more effective warnings. The earlier the action the more damage reduction.
-      evacuation_lead_time_threshold: 48 # Lead time threshold for evacuation warnings (hours)
+      evacuation_lead_time_threshold: 96 # Lead time threshold for evacuation warnings (hours)
       response_rates: # Response rates for different warning types
         area_based_warnings: 0.35 # Response rate for area-based warnings (0.0-1.0)
         building_based_warnings: 0.7 # Response rate for building-based warnings with specific measures (0.0-1.0)
