@@ -1,5 +1,7 @@
 # dev
 - Add a CLI option to run yearly mode multiple times (e.g., `geb run-yearly --multi --n-runs 5`) and write each run to its own output folder.
+- Implement general method for setting up an alternative universe.
+- Make it possible to report data from the alternative universe.
 
 # v1.0.0b29
 - Load return-period flood maps from the spinup output folder (output/{spinup_name}/flood_maps/{return_period}.zarr).
