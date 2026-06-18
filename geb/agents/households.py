@@ -287,6 +287,10 @@ class Households(AgentBaseClass):
         # drop buildings which are not flooded
         if drop_not_flooded:
             self.buildings = self.buildings[self.buildings["flooded"]]
+        # also set index to flooded households
+        self.flooded_households = np.where(
+            self.buildings.loc[self.var.building_id_of_household.data]["flooded"]
+        )[0]
 
     def update_building_adaptation_status(self, household_adapting: np.ndarray) -> None:
         """Update the floodproofing status of buildings based on adapting households."""
@@ -2002,3 +2006,12 @@ class Households(AgentBaseClass):
             Total population.
         """
         return self.var.sizes.data.sum()
+
+    @property
+    def adaptation_uptake_in_floodzone(self) -> np.ndarray:
+        """Calculate the adaptation uptake in the flood zone.
+
+        Returns:
+            A numpy array with the adaptation uptake in the flood zone.
+        """
+        return self.var.adapted.data[self.flooded_households]
