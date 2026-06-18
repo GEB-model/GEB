@@ -1054,10 +1054,9 @@ def test_alternate_universe() -> None:
 
         # Run alternate universe for 3 steps with elevated soil moisture
         n_steps_alt = 3
-        requested_n_timesteps = geb.current_timestep + n_steps_alt
         collected_data_elevated_soil_moisture: dict[str, Any] = geb.alternate_universe(
             name="test_alt_elevated_soil_moisture",
-            n_timesteps=requested_n_timesteps,
+            n_timesteps=n_steps_alt,
             do_function=do_function,
             collect_function=collect_function,
         )
@@ -1076,7 +1075,7 @@ def test_alternate_universe() -> None:
 
         collected_data_normal_soil_moisture: None = geb.alternate_universe(
             name="test_alt_normal_soil_moisture",
-            n_timesteps=requested_n_timesteps,
+            n_timesteps=n_steps_alt,
         )
         assert collected_data_normal_soil_moisture is None
 

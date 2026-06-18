@@ -403,13 +403,15 @@ class GEBModel(Module):
         )  # create a temporary folder for the multiverse
         self.store.save(store_location)  # save the current state of the model
 
-        store_config = self.config
+        store_config = copy.deepcopy(self.config)
         store_reporter: Reporter = self.reporter
 
         self.multiverse_name = (
             name  # set the multiverse name to the alternate universe name
         )
-        self.n_timesteps = n_timesteps  # set the number of timesteps to the end of the alternate universe
+        self.n_timesteps = (
+            self.current_timestep + n_timesteps
+        )  # set the number of timesteps to the end of the alternate universe
 
         # make reporter AFTER updating n_timesteps
         self.reporter = Reporter(

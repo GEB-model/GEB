@@ -20,7 +20,7 @@ def multi_level_merge(dict1: dict, dict2: dict) -> dict:
         dict2 (dict): The second dictionary whose values will be merged into dict1.
 
     Returns:
-        dict: The updated dict1 after merging with dict2.
+        dict: The merged dictionary, which is a combination of dict1 and dict2. The original dict1 and dict2 are not modified.
     """
     dict1 = deepcopy(dict1)  # Create a deep copy to avoid modifying the original dict1
     dict2 = deepcopy(dict2)  # Create a deep copy to avoid modifying the original dict2
