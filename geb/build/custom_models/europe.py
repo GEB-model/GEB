@@ -9,6 +9,10 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import xarray as xr
+from rasterio import features
+from shapely.geometry import box, shape as shapely_shape
+from shapely.geometry.base import BaseGeometry
+from shapely.ops import unary_union
 
 from geb.agents.crop_farmers import (
     FIELD_EXPANSION_ADAPTATION,
@@ -191,6 +195,234 @@ def _filter_fields_to_active_subgrid(
         )
 
     return filtered_fields
+
+
+def _active_subgrid_mask_geometry_for_hrl(
+    template: xr.DataArray,
+    active_mask: np.ndarray,
+) -> BaseGeometry:
+    """Convert the active model subgrid mask to a geometry for HRL clipping.
+
+    The returned geometry is the exact active-mask geometry in EPSG:4326. Its
+    bounds are used only as the WEkEO candidate-tile search envelope. The
+    geometry itself is passed to the WEkEO adapter so tiles outside the active
+    domain can be skipped before merging and intersecting tiles can be clipped
+    before merging.
+
+    Args:
+        template: Subgrid template defining transform, shape, and CRS.
+        active_mask: Boolean array where True indicates active model cells.
+
+    Returns:
+        Active-domain geometry in EPSG:4326.
+
+    Raises:
+        ValueError: If the active mask and template shapes differ, if the
+            template CRS is missing, or if the active mask contains no active
+            cells.
+    """
+    if active_mask.shape != template.shape:
+        raise ValueError(
+            "active_mask must have the same shape as template. "
+            f"Got {active_mask.shape} and {template.shape}."
+        )
+
+    if template.rio.crs is None:
+        raise ValueError(
+            "Cannot derive an active-subgrid clip geometry because the template "
+            "has no CRS."
+        )
+
+    mask_values = active_mask.astype(np.uint8)
+    geometries = [
+        shapely_shape(geometry)
+        for geometry, value in features.shapes(
+            mask_values,
+            mask=active_mask,
+            transform=template.rio.transform(),
+        )
+        if int(value) == 1
+    ]
+
+    if not geometries:
+        raise ValueError("Cannot derive HRL clip geometry from an empty active mask.")
+
+    active_geometry = unary_union(geometries)
+    active_geometry = (
+        gpd.GeoSeries([active_geometry], crs=template.rio.crs)
+        .to_crs("EPSG:4326")
+        .iloc[0]
+    )
+
+    if active_geometry.is_empty:
+        raise ValueError("Derived HRL clip geometry is empty.")
+
+    return active_geometry
+
+
+def _filter_fields_to_hrl_clip_geometry(
+    fields: gpd.GeoDataFrame,
+    hrl_clip_geometry: BaseGeometry,
+    *,
+    geometry_crs: str = "EPSG:4326",
+    logger: Any | None = None,
+) -> gpd.GeoDataFrame:
+    """Keep only fields whose geometry intersects the HRL clip geometry.
+
+    This is a cheap vector prefilter before rasterization. It does not clip or
+    modify field geometries; it only removes fields that are fully outside the
+    exact active-mask geometry used to clip the HRL rasters.
+
+    Args:
+        fields: Field-boundary GeoDataFrame.
+        hrl_clip_geometry: Active-mask geometry used for HRL raster clipping.
+        geometry_crs: CRS of ``hrl_clip_geometry``.
+        logger: Optional logger.
+
+    Returns:
+        GeoDataFrame restricted to fields intersecting ``hrl_clip_geometry``.
+
+    Raises:
+        ValueError: If no fields remain after filtering.
+    """
+    fields_for_filter = fields
+    if fields.crs is not None:
+        fields_for_filter = fields.to_crs(geometry_crs)
+
+    keep = fields_for_filter.geometry.intersects(hrl_clip_geometry)
+    filtered_fields = fields.loc[keep.to_numpy()].copy()
+
+    if logger is not None and len(filtered_fields) < len(fields):
+        logger.debug(
+            "Removed %s of %s field boundaries before HRL rasterization because "
+            "they do not intersect the active HRL clip geometry.",
+            len(fields) - len(filtered_fields),
+            len(fields),
+        )
+
+    if filtered_fields.empty:
+        raise ValueError("No field boundaries intersect the active HRL clip geometry.")
+
+    return filtered_fields
+
+
+def _filter_fields_to_raster_footprint(
+    fields: gpd.GeoDataFrame,
+    raster: xr.DataArray,
+    *,
+    logger: Any | None = None,
+) -> gpd.GeoDataFrame:
+    """Keep only fields intersecting the actual raster footprint.
+
+    This is a cheap vector filter used after reading a regional HRL raster. It
+    prevents fields outside the returned raster extent from being passed to
+    ``rasterize_like``. It does not clip or modify field geometries.
+
+    Args:
+        fields: Field-boundary GeoDataFrame.
+        raster: Raster whose footprint should be used as the filter domain.
+        logger: Optional logger.
+
+    Returns:
+        GeoDataFrame restricted to fields intersecting the raster footprint.
+
+    Raises:
+        ValueError: If the raster has no CRS.
+    """
+    if raster.rio.crs is None:
+        raise ValueError("Cannot filter fields to raster footprint without raster CRS.")
+
+    raster_footprint = box(*raster.rio.bounds())
+
+    fields_for_filter = fields
+    if fields.crs is not None:
+        fields_for_filter = fields.to_crs(raster.rio.crs)
+
+    keep = fields_for_filter.geometry.intersects(raster_footprint)
+    filtered_fields = fields.loc[keep.to_numpy()].copy()
+
+    if logger is not None and len(filtered_fields) < len(fields):
+        logger.debug(
+            "Removed %s of %s field(s) because they do not intersect the "
+            "regional HRL raster footprint.",
+            len(fields) - len(filtered_fields),
+            len(fields),
+        )
+
+    return filtered_fields
+
+
+def _align_hrl_rasters_to_common_grid(
+    crop_types: xr.DataArray,
+    secondary_crop: xr.DataArray,
+    *,
+    region_id: int,
+    year: int,
+    logger: Any,
+) -> tuple[xr.DataArray, xr.DataArray]:
+    """Align HRL crop and secondary-crop rasters to their common grid.
+
+    Crop-type and secondary-crop products can occasionally return slightly
+    different clipped extents for the same request bounds. The downstream crop
+    counting requires identical grids, so this function first accepts already
+    matching rasters and otherwise trims both rasters to their shared x/y
+    coordinates.
+
+    Args:
+        crop_types: HRL crop-type raster.
+        secondary_crop: HRL secondary-crop raster.
+        region_id: Region ID used for diagnostics.
+        year: HRL crop year used for diagnostics.
+        logger: Logger used for debug diagnostics.
+
+    Returns:
+        Crop-type and secondary-crop rasters on the same grid.
+
+    Raises:
+        ValueError: If the rasters have no common x/y overlap or cannot be aligned
+            to a matching grid.
+    """
+    try:
+        assert_matching_raster_grid(crop_types, secondary_crop)
+        return crop_types, secondary_crop
+    except AssertionError, ValueError:
+        logger.debug(
+            "Aligning HRL crop and secondary-crop rasters to common grid for "
+            "region %s, year %s. Crop bounds=%s; secondary bounds=%s.",
+            region_id,
+            year,
+            crop_types.rio.bounds(),
+            secondary_crop.rio.bounds(),
+        )
+
+    crop_aligned, secondary_aligned = xr.align(
+        crop_types,
+        secondary_crop,
+        join="inner",
+    )
+
+    if crop_aligned.sizes.get("x", 0) == 0 or crop_aligned.sizes.get("y", 0) == 0:
+        raise ValueError(
+            "HRL crop and secondary-crop rasters have no common overlap after "
+            f"alignment for region {region_id}, year {year}. "
+            f"Crop bounds={crop_types.rio.bounds()}; "
+            f"secondary bounds={secondary_crop.rio.bounds()}."
+        )
+
+    if crop_types.rio.crs is not None:
+        crop_aligned = crop_aligned.rio.write_crs(crop_types.rio.crs)
+    if secondary_crop.rio.crs is not None:
+        secondary_aligned = secondary_aligned.rio.write_crs(secondary_crop.rio.crs)
+
+    crop_nodata = crop_types.rio.nodata
+    secondary_nodata = secondary_crop.rio.nodata
+    if crop_nodata is not None:
+        crop_aligned = crop_aligned.rio.write_nodata(crop_nodata)
+    if secondary_nodata is not None:
+        secondary_aligned = secondary_aligned.rio.write_nodata(secondary_nodata)
+
+    assert_matching_raster_grid(crop_aligned, secondary_aligned)
+    return crop_aligned, secondary_aligned
 
 
 def _assert_compact_farm_ids(
@@ -902,42 +1134,6 @@ def _select_mirca2000_calendar_for_farmer(
     )
 
 
-def _copy_valid_farm_values_by_rows(
-    target: np.ndarray,
-    source: np.ndarray,
-    *,
-    nodata: int = -1,
-    row_chunk_size: int = 512,
-) -> None:
-    """Copy valid farmer IDs from one raster array into another by row chunks.
-
-    The function copies all cells from ``source`` that are not equal to
-    ``nodata`` into ``target``. Rows are processed in chunks so that a temporary
-    full-grid boolean mask is not created. This keeps peak memory lower when
-    region-level farm rasters are burned into a shared model-scale farm raster.
-
-    Args:
-        target: Output raster array that receives valid farmer IDs.
-        source: Input raster array containing farmer IDs and nodata cells.
-        nodata: Value in ``source`` that should not be copied.
-        row_chunk_size: Number of raster rows to process at once.
-
-    Raises:
-        ValueError: If ``target`` and ``source`` do not have the same shape.
-    """
-    if target.shape != source.shape:
-        raise ValueError(
-            "target and source farm rasters must have the same shape. "
-            f"Got {target.shape} and {source.shape}."
-        )
-
-    for row_start in range(0, target.shape[0], row_chunk_size):
-        row_stop = min(row_start + row_chunk_size, target.shape[0])
-        source_chunk = source[row_start:row_stop]
-        valid = source_chunk != nodata
-        target[row_start:row_stop][valid] = source_chunk[valid]
-
-
 def get_day_index(date: date) -> int:
     """Get the day index (0-364) for a given date.
 
@@ -1580,17 +1776,29 @@ class Europe(GEBModel):
         chunk_rows: int,
         hrl_raster_chunks: dict[str, int] | None,
         force_recalculate: bool,
+        active_subgrid_template: xr.DataArray,
+        active_subgrid_mask: np.ndarray,
     ) -> gpd.GeoDataFrame:
         """Create or read field boundaries with dominant HRL crop sequences.
 
         The method first checks whether a reusable field crop-sequence geometry is
-        already available. If not, it reads the HRL crop-type and secondary-crop
-        rasters year by year, keeps them in their native raster grid, and rasterizes
-        the field boundaries once onto that grid. For each year, crop and secondary-crop
-        values are combined in row chunks and reduced to the dominant encoded crop value
-        per field. The resulting field-level crop geometry is filtered to fields with at
-        least one valid crop observation, assigned to model regions, stored as
-        ``geom/fields/field_boundaries_with_crops.geoparquet``, and returned.
+        already available. If not, it derives the exact active-domain geometry from
+        the model subgrid mask and uses its bounds as the broad WEkEO candidate-tile
+        search envelope. Field boundaries are read once within this active-domain
+        envelope, filtered with a cheap vector intersection against the active
+        geometry, and assigned to model regions.
+
+        HRL crop extraction is then processed region by region. For each model
+        region, the method reads and merges only the HRL crop-type and secondary-crop
+        tiles needed for that region's active geometry bounds, rasterizes only that
+        region's fields onto the regional HRL raster, derives dominant crop sequences
+        for those fields, and immediately discards the regional rasters before moving
+        to the next region. This avoids constructing one full active-domain HRL
+        mosaic for every crop product and year.
+
+        The final ``_filter_fields_to_active_subgrid`` check should still be kept
+        later before farm construction to guarantee consistency with the written
+        model subgrid.
 
         Args:
             region_id_column: Name of the column containing model region IDs.
@@ -1600,8 +1808,12 @@ class Europe(GEBModel):
                 dominant crop per field.
             hrl_raster_chunks: Optional xarray/rioxarray chunk sizes used when
                 opening HRL rasters. If ``None``, default spatial chunks are used.
-            force_recalculate: If True, ignore existing cached field crop
-                sequences and recompute them from HRL rasters.
+            force_recalculate: If True, ignore existing cached field crop sequences
+                and recompute them from HRL rasters.
+            active_subgrid_template: Model subgrid template used to derive the
+                exact active-domain geometry.
+            active_subgrid_mask: Boolean array where True indicates active model
+                cells.
 
         Returns:
             Field-boundary GeoDataFrame containing field IDs, geometries, region
@@ -1611,8 +1823,9 @@ class Europe(GEBModel):
         Raises:
             ValueError: If the region table does not contain the required region
                 or country column.
-            ValueError: If no field boundaries are found within the model bounds.
-            ValueError: If the field-index raster cannot be created.
+            ValueError: If no field boundaries are found within the active-domain
+                search bounds.
+            ValueError: If the field-index raster cannot be created for a region.
             ValueError: If no dominant crop sequences can be derived.
             ValueError: If no field contains a valid HRL crop observation.
         """
@@ -1634,17 +1847,61 @@ class Europe(GEBModel):
         if country_iso3_column not in regions_shapes.columns:
             raise ValueError(f"Region database must contain '{country_iso3_column}'.")
 
+        if regions_shapes.crs is None:
+            raise ValueError("Region geometries must have a CRS for HRL preprocessing.")
+
+        hrl_active_geometry = _active_subgrid_mask_geometry_for_hrl(
+            active_subgrid_template,
+            active_subgrid_mask,
+        )
+        hrl_active_bounds = tuple(float(value) for value in hrl_active_geometry.bounds)
+
+        self.logger.debug(
+            "Using exact active-mask geometry for HRL preprocessing. WEkEO "
+            "candidate search bounds=%s; exact active geometry bounds=%s.",
+            hrl_active_bounds,
+            hrl_active_geometry.bounds,
+        )
+
         field_boundaries: gpd.GeoDataFrame = self.data_catalog.fetch(
             "field_boundaries"
-        ).read(self.bounds)
+        ).read(hrl_active_bounds)
         field_boundaries["id"] = field_boundaries["id"].astype(np.int32)
 
         if field_boundaries.empty:
-            raise ValueError("No field boundaries were found within the model bounds.")
+            raise ValueError(
+                "No field boundaries were found within the active-domain search "
+                f"bounds {hrl_active_bounds}."
+            )
 
-        dominant_crop_per_year: list[np.ndarray] = []
-        unique_field_ids: np.ndarray | None = None
-        field_index_grid: np.ndarray | None = None
+        n_fields_before_geometry_filter = len(field_boundaries)
+        field_boundaries = _filter_fields_to_hrl_clip_geometry(
+            field_boundaries,
+            hrl_active_geometry,
+            logger=self.logger,
+        )
+
+        self.logger.debug(
+            "Prepared %s field boundary/boundaries for region-wise HRL crop "
+            "preprocessing from %s field boundary/boundaries inside active-domain "
+            "search bounds %s.",
+            len(field_boundaries),
+            n_fields_before_geometry_filter,
+            hrl_active_bounds,
+        )
+
+        field_boundaries = assign_regions_to_fields(
+            field_boundaries,
+            regions_shapes,
+            region_id_column=region_id_column,
+            country_iso3_column=country_iso3_column,
+            logger=self.logger,
+        )
+
+        regions_shapes_hrl = regions_shapes[
+            [region_id_column, country_iso3_column, "geometry"]
+        ].copy()
+        regions_shapes_hrl = regions_shapes_hrl.to_crs("EPSG:4326")
 
         raster_chunks = (
             _DEFAULT_HRL_RASTER_CHUNKS
@@ -1652,127 +1909,309 @@ class Europe(GEBModel):
             else hrl_raster_chunks
         )
 
-        self.logger.info(
-            "Starting HRL crop sequence extraction for %s years.", len(years)
+        field_boundaries_with_crops_per_region: list[gpd.GeoDataFrame] = []
+
+        self.logger.debug(
+            "Starting region-wise HRL crop sequence extraction for %s years and %s "
+            "model region(s).",
+            len(years),
+            len(regions_shapes_hrl),
         )
 
-        for year_index, year in enumerate(years):
+        for region_index, (_, region) in enumerate(regions_shapes_hrl.iterrows()):
+            region_id = int(region[region_id_column])
+            country_iso3 = region[country_iso3_column]
+
+            fields_region = field_boundaries.loc[
+                field_boundaries[region_id_column] == region_id
+            ].copy()
+
+            if fields_region.empty:
+                del fields_region
+                continue
+
+            region_active_geometry = region.geometry.intersection(hrl_active_geometry)
+            if region_active_geometry.is_empty:
+                self.logger.debug(
+                    "Skipping region %s because it does not intersect the active "
+                    "model geometry.",
+                    region_id,
+                )
+                del fields_region
+                continue
+
+            # Use the active part of the model region as the WEkEO request
+            # envelope. Do not expand this to field-derived bounds: outlier fields
+            # can substantially increase the number of requested HRL tiles.
+            region_bounds = tuple(
+                float(value) for value in region_active_geometry.bounds
+            )
+
             self.logger.info(
-                "Processing HRL crop and secondary-crop rasters for %s.", year
+                "Processing HRL crop sequences for region %s (%s): %s field(s), "
+                "WEkEO bounds=%s.",
+                region_id,
+                country_iso3,
+                len(fields_region),
+                region_bounds,
             )
 
-            crop_types_adapter = self.data_catalog.fetch(
-                f"hrl_crop_types_{year}",
-                bounds=self.bounds,
-                year=year,
-            )
-            crop_types: xr.DataArray = crop_types_adapter.read(
-                bounds=self.bounds,
-                year=year,
-                dst_crs=None,
-                normalize_nodata=False,
-                chunks=raster_chunks,
-            )
+            dominant_crop_per_year: list[np.ndarray] = []
+            unique_field_ids: np.ndarray | None = None
+            field_index_grid: np.ndarray | None = None
 
-            secondary_crop_adapter = self.data_catalog.fetch(
-                f"hrl_secondary_crop_{year}",
-                bounds=self.bounds,
-                year=year,
-            )
-            secondary_crop: xr.DataArray = secondary_crop_adapter.read(
-                bounds=self.bounds,
-                year=year,
-                dst_crs=None,
-                normalize_nodata=False,
-                chunks=raster_chunks,
-            )
+            for year_index, year in enumerate(years):
+                self.logger.info("Processing HRL Crop Types for %s.", year)
 
-            assert_matching_raster_grid(crop_types, secondary_crop)
+                crop_types_adapter = self.data_catalog.fetch(
+                    f"hrl_crop_types_{year}",
+                    bounds=region_bounds,
+                    year=year,
+                )
+                crop_types: xr.DataArray = crop_types_adapter.read(
+                    bounds=region_bounds,
+                    year=year,
+                    dst_crs=None,
+                    normalize_nodata=False,
+                    chunks=raster_chunks,
+                )
 
-            if year_index == 0:
-                # HRL rasters stay in their native CRS to avoid a large reprojection.
-                # Reproject only the vector fields before rasterization.
-                field_boundaries_for_grid = field_boundaries
-                if crop_types.rio.crs is not None and field_boundaries.crs is not None:
-                    field_boundaries_for_grid = field_boundaries.to_crs(
-                        crop_types.rio.crs
+                self.logger.info("Processing HRL Secondary Crops Type for %s.", year)
+
+                secondary_crop_adapter = self.data_catalog.fetch(
+                    f"hrl_secondary_crop_{year}",
+                    bounds=region_bounds,
+                    year=year,
+                )
+                secondary_crop: xr.DataArray = secondary_crop_adapter.read(
+                    bounds=region_bounds,
+                    year=year,
+                    dst_crs=None,
+                    normalize_nodata=False,
+                    chunks=raster_chunks,
+                )
+
+                crop_types, secondary_crop = _align_hrl_rasters_to_common_grid(
+                    crop_types,
+                    secondary_crop,
+                    region_id=region_id,
+                    year=year,
+                    logger=self.logger,
+                )
+
+                if year_index == 0:
+                    # HRL rasters stay in their native CRS to avoid a large
+                    # reprojection. Reproject only the vector fields before
+                    # rasterization. First remove fields that do not intersect the
+                    # actual returned HRL raster footprint. This avoids expanding
+                    # the WEkEO request bounds just to handle region-edge cases.
+                    fields_region_for_hrl = _filter_fields_to_raster_footprint(
+                        fields_region,
+                        crop_types,
+                        logger=self.logger,
                     )
 
-                field_boundaries_grid: xr.DataArray = rasterize_like(
-                    field_boundaries_for_grid,
-                    column="id",
-                    raster=crop_types,
-                    dtype=np.int32,
-                    nodata=-1,
-                    all_touched=False,
-                )
+                    if fields_region_for_hrl.empty:
+                        self.logger.warning(
+                            "Skipping region %s (%s) because none of its %s "
+                            "field(s) intersect the returned HRL raster footprint "
+                            "for year %s. WEkEO bounds=%s; HRL raster bounds=%s.",
+                            region_id,
+                            country_iso3,
+                            len(fields_region),
+                            year,
+                            region_bounds,
+                            crop_types.rio.bounds(),
+                        )
+                        del (
+                            crop_types,
+                            secondary_crop,
+                            crop_types_adapter,
+                            secondary_crop_adapter,
+                            fields_region_for_hrl,
+                        )
+                        gc.collect()
+                        field_index_grid = None
+                        unique_field_ids = None
+                        break
 
-                field_index_grid, unique_field_ids = create_field_index_grid(
-                    field_boundaries_grid,
-                    field_nodata=-1,
+                    fields_region_for_grid = fields_region_for_hrl
+                    if (
+                        crop_types.rio.crs is not None
+                        and fields_region_for_hrl.crs is not None
+                    ):
+                        fields_region_for_grid = fields_region_for_hrl.to_crs(
+                            crop_types.rio.crs
+                        )
+
+                    field_boundaries_grid: xr.DataArray = rasterize_like(
+                        fields_region_for_grid,
+                        column="id",
+                        raster=crop_types,
+                        dtype=np.int32,
+                        nodata=-1,
+                        all_touched=False,
+                    )
+
+                    try:
+                        field_index_grid, unique_field_ids = create_field_index_grid(
+                            field_boundaries_grid,
+                            field_nodata=-1,
+                        )
+                    except ValueError:
+                        self.logger.debug(
+                            "No fields rasterized to the HRL grid for region %s "
+                            "with all_touched=False; retrying with all_touched=True.",
+                            region_id,
+                        )
+                        del field_boundaries_grid
+                        gc.collect()
+
+                        field_boundaries_grid = rasterize_like(
+                            fields_region_for_grid,
+                            column="id",
+                            raster=crop_types,
+                            dtype=np.int32,
+                            nodata=-1,
+                            all_touched=True,
+                        )
+                        try:
+                            field_index_grid, unique_field_ids = (
+                                create_field_index_grid(
+                                    field_boundaries_grid,
+                                    field_nodata=-1,
+                                )
+                            )
+                        except ValueError:
+                            self.logger.warning(
+                                "Skipping region %s (%s) because none of its %s "
+                                "field(s) rasterize to the HRL crop grid for year "
+                                "%s, even with all_touched=True. WEkEO bounds=%s; "
+                                "HRL raster bounds=%s.",
+                                region_id,
+                                country_iso3,
+                                len(fields_region_for_hrl),
+                                year,
+                                region_bounds,
+                                crop_types.rio.bounds(),
+                            )
+                            del (
+                                field_boundaries_grid,
+                                fields_region_for_grid,
+                                fields_region_for_hrl,
+                                crop_types,
+                                secondary_crop,
+                                crop_types_adapter,
+                                secondary_crop_adapter,
+                            )
+                            gc.collect()
+                            field_index_grid = None
+                            unique_field_ids = None
+                            break
+
+                    del (
+                        field_boundaries_grid,
+                        fields_region_for_grid,
+                        fields_region_for_hrl,
+                    )
+                    gc.collect()
+
+                if field_index_grid is None or unique_field_ids is None:
+                    break
+
+                dominant_crop_year = dominant_crop_one_year_chunked(
+                    crop_types=crop_types,
+                    secondary_crop=secondary_crop,
+                    field_index_grid=field_index_grid,
+                    n_fields=unique_field_ids.size,
+                    chunk_rows=chunk_rows,
+                    pair_base=65536,
+                    nodata=-1,
                 )
-                del field_boundaries_grid, field_boundaries_for_grid
+                dominant_crop_per_year.append(dominant_crop_year)
+
+                del (
+                    crop_types,
+                    secondary_crop,
+                    crop_types_adapter,
+                    secondary_crop_adapter,
+                )
                 gc.collect()
 
-            if field_index_grid is None or unique_field_ids is None:
-                raise ValueError("Field index grid could not be created.")
+            if unique_field_ids is None or len(dominant_crop_per_year) == 0:
+                self.logger.warning(
+                    "No dominant crop sequences could be derived for region %s; "
+                    "skipping this region.",
+                    region_id,
+                )
+                del fields_region, field_index_grid, unique_field_ids
+                gc.collect()
+                continue
 
-            dominant_crop_year = dominant_crop_one_year_chunked(
-                crop_types=crop_types,
-                secondary_crop=secondary_crop,
-                field_index_grid=field_index_grid,
-                n_fields=unique_field_ids.size,
-                chunk_rows=chunk_rows,
-                pair_base=65536,
-                nodata=-1,
+            dominant_crop_table = pd.DataFrame(
+                np.column_stack(dominant_crop_per_year).astype(np.int32),
+                index=unique_field_ids,
+                columns=crop_columns,
             )
-            dominant_crop_per_year.append(dominant_crop_year)
-
-            del crop_types, secondary_crop, crop_types_adapter, secondary_crop_adapter
+            del dominant_crop_per_year, field_index_grid, unique_field_ids
             gc.collect()
 
-        if unique_field_ids is None or len(dominant_crop_per_year) == 0:
+            fields_region_with_crops = fields_region.merge(
+                dominant_crop_table,
+                left_on="id",
+                right_index=True,
+                how="left",
+            )
+            del fields_region, dominant_crop_table
+            gc.collect()
+
+            valid_crop_mask = (
+                fields_region_with_crops[crop_columns].notna()
+                & fields_region_with_crops[crop_columns].ne(-1)
+            ).any(axis=1)
+            fields_region_with_crops = fields_region_with_crops.loc[
+                valid_crop_mask
+            ].copy()
+            del valid_crop_mask
+            gc.collect()
+
+            if fields_region_with_crops.empty:
+                self.logger.warning(
+                    "No field boundaries in region %s contain valid HRL crop "
+                    "observations after processing.",
+                    region_id,
+                )
+                del fields_region_with_crops
+                gc.collect()
+                continue
+
+            field_boundaries_with_crops_per_region.append(fields_region_with_crops)
+
+            self.logger.debug(
+                "Finished HRL crop sequence extraction for region %s. Retained %s "
+                "field(s) with valid crop observations.",
+                region_id,
+                len(field_boundaries_with_crops_per_region[-1]),
+            )
+
+            gc.collect()
+
+        del field_boundaries
+        gc.collect()
+
+        if not field_boundaries_with_crops_per_region:
             raise ValueError("No dominant crop sequences could be derived.")
 
-        dominant_crop_table = pd.DataFrame(
-            np.column_stack(dominant_crop_per_year).astype(np.int32),
-            index=unique_field_ids,
-            columns=crop_columns,
+        field_boundaries_with_crops = gpd.GeoDataFrame(
+            pd.concat(field_boundaries_with_crops_per_region, ignore_index=True),
+            geometry="geometry",
+            crs=field_boundaries_with_crops_per_region[0].crs,
         )
-        del dominant_crop_per_year, field_index_grid, unique_field_ids
-        gc.collect()
-
-        field_boundaries_with_crops = field_boundaries.merge(
-            dominant_crop_table,
-            left_on="id",
-            right_index=True,
-            how="left",
-        )
-        del dominant_crop_table
-        gc.collect()
-
-        # Fields without any crop observation cannot inform farm reconstruction.
-        valid_crop_mask = (
-            field_boundaries_with_crops[crop_columns].notna()
-            & field_boundaries_with_crops[crop_columns].ne(-1)
-        ).any(axis=1)
-
-        field_boundaries_with_crops = field_boundaries_with_crops.loc[
-            valid_crop_mask
-        ].copy()
-        del valid_crop_mask, field_boundaries
+        del field_boundaries_with_crops_per_region
         gc.collect()
 
         if field_boundaries_with_crops.empty:
             raise ValueError("No field boundaries contain valid HRL crop observations.")
-
-        field_boundaries_with_crops = assign_regions_to_fields(
-            field_boundaries_with_crops,
-            regions_shapes,
-            region_id_column=region_id_column,
-            country_iso3_column=country_iso3_column,
-            logger=self.logger,
-        )
 
         self.set_geom(
             field_boundaries_with_crops,
@@ -1802,10 +2241,11 @@ class Europe(GEBModel):
         """Precompute and store field boundaries with dominant HRL crop sequences.
 
         This build method materializes the reusable field-level crop table used by
-        farm reconstruction. It separates the expensive HRL raster-processing
-        stage from the farm-growing stage, so repeated farm-reconstruction runs can
-        reuse ``fields/field_boundaries_with_crops`` instead of recalculating
-        dominant crops from the HRL rasters.
+        farm reconstruction. It derives the exact active model geometry from the
+        current subgrid mask, reads candidate field boundaries inside the active
+        geometry bounds, and then extracts HRL crop sequences region by region.
+        The region-wise processing avoids constructing one full active-domain HRL
+        mosaic for every crop product and year.
 
         Args:
             region_id_column: Name of the column containing model region IDs.
@@ -1815,10 +2255,13 @@ class Europe(GEBModel):
                 dominant crop per field.
             hrl_raster_chunks: Optional xarray/rioxarray chunk sizes used when
                 opening HRL rasters. If ``None``, default spatial chunks are used.
-            force_recalculate: If True, ignore existing cached field crop
-                sequences and recompute them from HRL rasters.
-
+            force_recalculate: If True, ignore existing cached field crop sequences
+                and recompute them from HRL rasters.
         """
+        active_subgrid_template: xr.DataArray = self.subgrid["region_ids"].compute()
+        subgrid_mask: xr.DataArray = self.subgrid["mask"].compute()
+        active_subgrid_mask = ~subgrid_mask.values
+
         self._prepare_HRL_field_boundaries_with_crops(
             region_id_column=region_id_column,
             country_iso3_column=country_iso3_column,
@@ -1826,6 +2269,8 @@ class Europe(GEBModel):
             chunk_rows=chunk_rows,
             hrl_raster_chunks=hrl_raster_chunks,
             force_recalculate=force_recalculate,
+            active_subgrid_template=active_subgrid_template,
+            active_subgrid_mask=active_subgrid_mask,
         )
 
     @build_method(
@@ -1862,13 +2307,12 @@ class Europe(GEBModel):
         and scaled to the available cultivated field area, and nearby fields with
         similar crop sequences are grouped into synthetic farms.
 
-        To reduce peak memory, each region is rasterized into the model-scale farm
-        raster immediately after its farms are created. The method keeps only the
-        shared farm raster and farmer table fragments instead of storing all regional
-        farm GeoDataFrames until the end. Final farm IDs are compacted after all
-        regions have been processed. The compacted farmer table is also written with
-        representative HRL crop-sequence columns so later crop-calendar setup can use
-        final farmer IDs directly.
+        To avoid repeated full-grid rasterization, farm geometries are collected
+        while regions are processed and rasterized once after all regional farms have
+        been created. Final farm IDs are compacted after the active model mask has
+        been applied. The compacted farmer table is also written with representative
+        HRL crop-sequence columns so later crop-calendar setup can use final farmer IDs
+        directly.
 
         Args:
             region_id_column: Name of the column containing model region IDs.
@@ -1945,6 +2389,8 @@ class Europe(GEBModel):
             chunk_rows=chunk_rows,
             hrl_raster_chunks=hrl_raster_chunks,
             force_recalculate=force_recalculate_field_crops,
+            active_subgrid_template=region_ids,
+            active_subgrid_mask=active_subgrid_mask,
         )
 
         keep_columns = [
@@ -1979,7 +2425,7 @@ class Europe(GEBModel):
         )
 
         all_farmers: list[pd.DataFrame] = []
-        farm_values = np.full(region_ids.shape, -1, dtype=np.int32)
+        all_assigned_fields: list[gpd.GeoDataFrame] = []
         farmer_id_offset = 0
         n_fields_with_farms = 0
 
@@ -2076,27 +2522,9 @@ class Europe(GEBModel):
                 dtype=np.int32,
             )
 
-            fields_region_for_raster = fields_region_with_farms
-            if region_ids.rio.crs is not None:
-                fields_region_for_raster = fields_region_for_raster.to_crs(
-                    region_ids.rio.crs
-                )
-
-            farms_region = rasterize_like(
-                fields_region_for_raster,
-                column="farmer_id",
-                raster=region_ids,
-                dtype=np.int32,
-                nodata=-1,
-                all_touched=all_touched_farm_raster,
+            all_assigned_fields.append(
+                fields_region_with_farms[["geometry", "farmer_id"]].copy()
             )
-            _copy_valid_farm_values_by_rows(
-                farm_values,
-                farms_region.values,
-                nodata=-1,
-                row_chunk_size=chunk_rows,
-            )
-
             all_farmers.append(farmers_region)
             farmer_id_offset += len(farmers_region)
             n_fields_with_farms += len(fields_region_with_farms)
@@ -2110,14 +2538,12 @@ class Europe(GEBModel):
                 field_sequences,
                 target_farms,
                 fields_region_with_farms,
-                fields_region_for_raster,
-                farms_region,
                 farmers_region,
                 region_farm_sizes,
             )
             gc.collect()
 
-        if not all_farmers:
+        if not all_farmers or not all_assigned_fields:
             raise ValueError("No field-based farmers could be created.")
 
         farmers = pd.concat(all_farmers, ignore_index=True)
@@ -2125,13 +2551,42 @@ class Europe(GEBModel):
         del all_farmers, field_boundaries_with_crops
         gc.collect()
 
+        assigned_fields = gpd.GeoDataFrame(
+            pd.concat(all_assigned_fields, ignore_index=True),
+            geometry="geometry",
+            crs=all_assigned_fields[0].crs,
+        )
+        del all_assigned_fields
+        gc.collect()
+
+        fields_for_raster = assigned_fields
+        if region_ids.rio.crs is not None and assigned_fields.crs is not None:
+            fields_for_raster = assigned_fields.to_crs(region_ids.rio.crs)
+
+        self.logger.info(
+            "Rasterizing %s farm-assigned field polygon(s) to the model subgrid once.",
+            len(fields_for_raster),
+        )
+
+        farms = rasterize_like(
+            fields_for_raster,
+            column="farmer_id",
+            raster=region_ids,
+            dtype=np.int32,
+            nodata=-1,
+            all_touched=all_touched_farm_raster,
+        )
+        del assigned_fields, fields_for_raster
+        gc.collect()
+
         # Mirror the mask that set_subgrid() will apply during writing. Compaction must
         # happen after this mask, otherwise farmer IDs that disappear outside the active
         # catchment create holes after saving.
-        farm_values[~active_subgrid_mask] = -1
+        farms_values = farms.values
+        farms_values[~active_subgrid_mask] = -1
 
         farms, farmers = compact_farm_raster_values(
-            farm_values=farm_values,
+            farm_values=farms_values,
             farmers=farmers,
             template=region_ids,
             farmer_id_column="farmer_id",
@@ -2139,7 +2594,7 @@ class Europe(GEBModel):
             row_chunk_size=chunk_rows,
             logger=self.logger,
         )
-        del farm_values
+        del farms_values
         gc.collect()
 
         _assert_compact_farm_ids(
@@ -2242,53 +2697,80 @@ class Europe(GEBModel):
         mirca_year: int = 2015,
         minimum_area_ratio: float = 0.01,
         replace_crop_calendar_unit_code: dict[int, int] | None = None,
+        multiple_years: bool = False,
+        hrl_years: tuple[int, ...] = (2017, 2018, 2019, 2020, 2021, 2022, 2023),
     ) -> None:
         """Build farmer crop calendars by combining HRL crops with MIRCA2000 calendars.
 
         The final compact farmer table from
         ``setup_create_farms_from_HRL_field_boundaries`` determines which HRL crop
-        sequence each farmer has. The selected HRL year is decoded to a main crop and
-        secondary-crop timing class, and the main HRL crop is mapped to the MIRCA crop
-        class used by the crop-growth parametrization.
+        sequence each farmer has. HRL crop classes are mapped to MIRCA crop classes,
+        because crop-growth parametrization is available for MIRCA crops. MIRCA2000
+        calendars then provide planting dates and growing-season lengths.
 
-        MIRCA2000 calendars provide planting dates and growing-season lengths.
-        MIRCA2000 crop-area fractions constrain which farmers receive irrigation
+        MIRCA-OS crop-area fractions constrain which farmers receive irrigation
         access. Surface-water irrigation is assigned first to farmers with lower HAND;
         groundwater irrigation is then assigned to remaining farmers with lower
         groundwater depth.
 
+        If ``multiple_years`` is False, only ``hrl_year`` is processed and the usual
+        single-year arrays are written:
+
+        - ``agents/farmers/crop_calendar`` with shape ``(farmer, 3, 4)``
+        - ``agents/farmers/crop_calendar_rotation_years`` with shape ``(farmer,)``
+        - ``agents/farmers/adaptations`` with shape ``(farmer, adaptation)``
+
+        If ``multiple_years`` is True, all years in ``hrl_years`` are processed.
+        Crop calendars are stacked by year, while irrigation adaptations are kept as
+        one persistent final array:
+
+        - ``agents/farmers/crop_calendar`` with shape ``(year, farmer, 3, 4)``
+        - ``agents/farmers/crop_calendar_years`` with shape ``(year,)``
+        - ``agents/farmers/crop_calendar_rotation_years`` with shape ``(farmer,)``
+        - ``agents/farmers/adaptations`` with shape ``(farmer, adaptation)``
+
+        In multi-year mode, the first processed year defines the baseline irrigation
+        assignment. Later years can only add irrigation for farmers whose previous
+        processed HRL years all had no valid crop. This avoids irrigation switching
+        due to crop switching, while still recovering farmers that were missing crops
+        in early HRL years.
+
         Args:
-            hrl_year: HRL crop year used for farmer crop assignment.
-            mirca_year: MIRCA reference year used for crop calendars and crop-area
-                fractions.
-            minimum_area_ratio: Reserved for future MIRCA fraction filtering. Kept
-                for interface consistency.
-            replace_crop_calendar_unit_code: Optional mapping to replace MIRCA unit
-                codes when a unit has missing or unsuitable crop calendars.
+            hrl_year: HRL crop year used for farmer crop assignment when
+                ``multiple_years`` is False.
+            mirca_year: MIRCA reference year used for crop calendars and MIRCA-OS
+                crop-area fractions.
+            minimum_area_ratio: Minimum MIRCA-OS crop-area fraction used inside the
+                MIRCA-OS fraction preprocessing.
+            replace_crop_calendar_unit_code: Optional mapping to replace MIRCA2000
+                unit codes when a unit has missing or unsuitable crop calendars.
+            multiple_years: If True, build crop calendars for all years in
+                ``hrl_years`` and accumulate irrigation adaptations only for farmers
+                with missing crop histories in previous years.
+            hrl_years: HRL years processed when ``multiple_years`` is True.
 
         Raises:
             ValueError: If required final farmer crop-table columns are missing.
-            ValueError: If farmers cannot be assigned to MIRCA2000 units.
+            ValueError: If ``multiple_years`` is True and ``hrl_years`` is empty.
+            ValueError: If farmers cannot be assigned to valid MIRCA2000 units.
             ValueError: If no MIRCA2000 calendar can be found for an assigned crop.
         """
         if replace_crop_calendar_unit_code is None:
             replace_crop_calendar_unit_code = {}
+
+        if multiple_years and not hrl_years:
+            raise ValueError("hrl_years must contain at least one year.")
+
+        years_to_process = tuple(hrl_years) if multiple_years else (hrl_year,)
 
         n_farmers = self.array["agents/farmers/region_id"].size
         farmer_region_ids = self.array["agents/farmers/region_id"]
         farms = self.subgrid["agents/farmers/farms"]
 
         farmers_with_crops = self.table[_FARMERS_WITH_CROPS_TABLE]
+        if not isinstance(farmers_with_crops, pd.DataFrame):
+            farmers_with_crops = pd.read_parquet(farmers_with_crops)
 
-        crop_column = f"crop_{hrl_year}"
-
-        farmer_crops = _decode_hrl_crop_combinations_from_farmer_table(
-            farmers_with_crops,
-            crop_column=crop_column,
-            n_farmers=n_farmers,
-            farmer_region_ids=farmer_region_ids,
-            logger=self.logger,
-        )
         farmer_areas_m2 = _farmer_area_array_from_farmer_table(
             farmers_with_crops,
             n_farmers=n_farmers,
@@ -2296,6 +2778,7 @@ class Europe(GEBModel):
 
         farmer_locations = get_farm_locations(farms, method="centroid")
 
+        # MIRCA2000 is used for calendar timing, not for the rainfed/irrigated split.
         MIRCA_unit_grid = self.data_catalog.fetch(MIRCA2000_UNIT_GRID).read()
         assert isinstance(MIRCA_unit_grid, xr.DataArray)
 
@@ -2335,14 +2818,9 @@ class Europe(GEBModel):
                 "All farmers should be assigned to a valid MIRCA2000 unit."
             )
 
-        mirca_cell_grid = get_linear_indices(MIRCA_unit_grid)
-
-        farmer_mirca_cells = sample_from_map(
-            mirca_cell_grid.values,
-            farmer_locations,
-            mirca_cell_grid.rio.transform(recalc=True).to_gdal(),
-        ).astype(np.int32)
-
+        # MIRCA-OS is used for the crop-specific rainfed/irrigated area fractions.
+        # These fractions are static here, so changes in yearly candidate irrigation
+        # assignments come from changing HRL crop assignments, not changing MIRCA-OS.
         rainfed_fraction, irrigated_fraction = self.get_mirca_os_irrigation_fractions(
             year=mirca_year,
             minimum_area_ratio=minimum_area_ratio,
@@ -2410,47 +2888,218 @@ class Europe(GEBModel):
             farmer_locations,
         )
 
-        is_irrigated, adaptations = _assign_irrigation_by_area_targets(
-            farmer_crops=farmer_crops,
-            farmer_areas_m2=farmer_areas_m2,
-            farmer_mirca_os_cells=farmer_mirca_os_cells,
-            farmer_hand_m=farmer_hand_m,
-            farmer_groundwater_depth_m=farmer_groundwater_depth_m,
-            rainfed_fraction=rainfed_fraction,
-            irrigated_fraction=irrigated_fraction,
-            surface_water_fraction_by_cell=surface_water_fraction_by_cell,
-            n_farmers=n_farmers,
-            logger=self.logger,
-        )
+        if multiple_years:
+            years_array = np.asarray(years_to_process, dtype=np.int32)
 
-        crop_calendar_per_farmer = np.full((n_farmers, 3, 4), -1, dtype=np.int32)
-        farmer_crops_by_id = farmer_crops.set_index("farmer_id")
-
-        for farmer_id in range(n_farmers):
-            row = farmer_crops_by_id.loc[farmer_id]
-
-            selected_calendar = _select_mirca2000_calendar_for_farmer(
-                crop_calendar,
-                mirca_unit=int(farmer_mirca_units[farmer_id]),
-                main_crop=int(row["mirca_crop"]),
-                secondary_crop_type=int(row["secondary_crop_type"]),
-                is_irrigated=bool(is_irrigated[farmer_id]),
-                replace_crop_calendar_unit_code=replace_crop_calendar_unit_code,
+            crop_calendar_stack = np.full(
+                (years_array.size, n_farmers, 3, 4),
+                -1,
+                dtype=np.int32,
             )
 
-            crop_calendar_per_farmer[farmer_id] = selected_calendar[:, [0, 2, 3, 4]]
+            # Persistent irrigation is stored only once. Later years may add farmers
+            # only if their earlier HRL years did not contain a valid crop.
+            persistent_adaptations: np.ndarray | None = None
+            farmer_had_valid_crop_before = np.full(n_farmers, False, dtype=bool)
 
-        check_crop_calendar(crop_calendar_per_farmer)
+        for year_index, current_hrl_year in enumerate(years_to_process):
+            self.logger.info(
+                "Setting up HRL-based farmer crop calendars for HRL year %s.",
+                current_hrl_year,
+            )
 
-        self.set_array(
-            crop_calendar_per_farmer,
-            name="agents/farmers/crop_calendar",
-        )
-        self.set_array(
-            np.full(n_farmers, 1, dtype=np.int32),
-            name="agents/farmers/crop_calendar_rotation_years",
-        )
-        self.set_array(adaptations, name="agents/farmers/adaptations")
+            crop_column = f"crop_{current_hrl_year}"
+
+            # Only this part is HRL-year specific. The spatial sampling, MIRCA2000
+            # calendar parsing, and MIRCA-OS fraction loading can be reused.
+            farmer_crops = _decode_hrl_crop_combinations_from_farmer_table(
+                farmers_with_crops,
+                crop_column=crop_column,
+                n_farmers=n_farmers,
+                farmer_region_ids=farmer_region_ids,
+                logger=self.logger,
+            )
+
+            farmer_crops_by_id = farmer_crops.set_index("farmer_id")
+
+            # Track whether the current HRL year provides a valid MIRCA crop. In
+            # multi-year mode, this controls whether later years are allowed to add
+            # irrigation for this farmer.
+            current_valid_crop = np.full(n_farmers, False, dtype=bool)
+            valid_crop_farmer_ids = farmer_crops.loc[
+                farmer_crops["mirca_crop"].to_numpy(dtype=np.int32) != -1,
+                "farmer_id",
+            ].to_numpy(dtype=np.int32)
+            current_valid_crop[valid_crop_farmer_ids] = True
+
+            candidate_is_irrigated, candidate_adaptations = (
+                _assign_irrigation_by_area_targets(
+                    farmer_crops=farmer_crops,
+                    farmer_areas_m2=farmer_areas_m2,
+                    farmer_mirca_os_cells=farmer_mirca_os_cells,
+                    farmer_hand_m=farmer_hand_m,
+                    farmer_groundwater_depth_m=farmer_groundwater_depth_m,
+                    rainfed_fraction=rainfed_fraction,
+                    irrigated_fraction=irrigated_fraction,
+                    surface_water_fraction_by_cell=surface_water_fraction_by_cell,
+                    n_farmers=n_farmers,
+                    logger=self.logger,
+                )
+            )
+
+            if multiple_years:
+                if persistent_adaptations is None:
+                    persistent_adaptations = np.full_like(
+                        candidate_adaptations,
+                        False,
+                        dtype=np.bool_,
+                    )
+
+                candidate_source_irrigated = (
+                    candidate_adaptations[:, SURFACE_IRRIGATION_EQUIPMENT]
+                    | candidate_adaptations[:, WELL_ADAPTATION]
+                )
+                persistent_source_irrigated = (
+                    persistent_adaptations[:, SURFACE_IRRIGATION_EQUIPMENT]
+                    | persistent_adaptations[:, WELL_ADAPTATION]
+                )
+
+                # Baseline year: all candidate irrigated farmers are accepted because
+                # no earlier crop information exists.
+                #
+                # Later years: only farmers whose previous processed HRL years were
+                # all missing can be added. This prevents crop switching from
+                # inflating irrigation access, while still recovering farmers that
+                # were unclassified in early years.
+                eligible_for_later_irrigation = (
+                    ~persistent_source_irrigated & ~farmer_had_valid_crop_before
+                )
+                newly_irrigated = (
+                    candidate_source_irrigated & eligible_for_later_irrigation
+                )
+
+                if newly_irrigated.any():
+                    persistent_adaptations[
+                        newly_irrigated,
+                        SURFACE_IRRIGATION_EQUIPMENT,
+                    ] = candidate_adaptations[
+                        newly_irrigated,
+                        SURFACE_IRRIGATION_EQUIPMENT,
+                    ]
+                    persistent_adaptations[
+                        newly_irrigated,
+                        WELL_ADAPTATION,
+                    ] = candidate_adaptations[
+                        newly_irrigated,
+                        WELL_ADAPTATION,
+                    ]
+
+                persistent_source_irrigated = (
+                    persistent_adaptations[:, SURFACE_IRRIGATION_EQUIPMENT]
+                    | persistent_adaptations[:, WELL_ADAPTATION]
+                )
+
+                candidate_count = int(candidate_source_irrigated.sum())
+                eligible_count = int(eligible_for_later_irrigation.sum())
+                newly_irrigated_count = int(newly_irrigated.sum())
+                persistent_count = int(persistent_source_irrigated.sum())
+
+                self.logger.info(
+                    "HRL year %s irrigation candidates: %s farmers; eligible "
+                    "missing-history farmers: %s; newly added: %s; persistent "
+                    "multi-year irrigation after update: %s farmers.",
+                    current_hrl_year,
+                    candidate_count,
+                    eligible_count,
+                    newly_irrigated_count,
+                    persistent_count,
+                )
+
+                # Calendar selection should use the persistent irrigation state. Once
+                # a farmer has irrigation access, later calendars can use irrigated
+                # variants where available.
+                is_irrigated_for_calendar = persistent_source_irrigated
+            else:
+                is_irrigated_for_calendar = candidate_is_irrigated
+
+            crop_calendar_per_farmer = np.full((n_farmers, 3, 4), -1, dtype=np.int32)
+
+            for farmer_id in range(n_farmers):
+                row = farmer_crops_by_id.loc[farmer_id]
+
+                selected_calendar = _select_mirca2000_calendar_for_farmer(
+                    crop_calendar,
+                    mirca_unit=int(farmer_mirca_units[farmer_id]),
+                    main_crop=int(row["mirca_crop"]),
+                    secondary_crop_type=int(row["secondary_crop_type"]),
+                    is_irrigated=bool(is_irrigated_for_calendar[farmer_id]),
+                    replace_crop_calendar_unit_code=replace_crop_calendar_unit_code,
+                )
+
+                crop_calendar_per_farmer[farmer_id] = selected_calendar[:, [0, 2, 3, 4]]
+
+            check_crop_calendar(crop_calendar_per_farmer)
+
+            if multiple_years:
+                crop_calendar_stack[year_index] = crop_calendar_per_farmer
+
+                # Update after processing the year. This ensures the current year can
+                # still fill farmers whose previous years were all missing, but it
+                # prevents later years from repeatedly adding farmers after a valid
+                # crop has appeared once.
+                farmer_had_valid_crop_before |= current_valid_crop
+            else:
+                self.set_array(
+                    crop_calendar_per_farmer,
+                    name="agents/farmers/crop_calendar",
+                )
+                self.set_array(
+                    np.full(n_farmers, 1, dtype=np.int32),
+                    name="agents/farmers/crop_calendar_rotation_years",
+                )
+                self.set_array(
+                    candidate_adaptations,
+                    name="agents/farmers/adaptations",
+                )
+
+        if multiple_years:
+            if persistent_adaptations is None:
+                raise ValueError(
+                    "No adaptations were created for the selected HRL years."
+                )
+
+            final_irrigated_count = int(
+                (
+                    persistent_adaptations[:, SURFACE_IRRIGATION_EQUIPMENT]
+                    | persistent_adaptations[:, WELL_ADAPTATION]
+                ).sum()
+            )
+
+            self.logger.info(
+                "Final persistent multi-year irrigation count: %s farmers.",
+                final_irrigated_count,
+            )
+
+            self.set_array(
+                years_array,
+                name="agents/farmers/crop_calendar_years",
+            )
+            self.set_array(
+                crop_calendar_stack,
+                name="agents/farmers/crop_calendar",
+            )
+
+            # Rotation length is still one year. The crop calendar itself varies by
+            # year, but the model should not interpret this as a multi-year rotation
+            # cycle unless that is implemented explicitly elsewhere.
+            self.set_array(
+                np.full(n_farmers, 1, dtype=np.int32),
+                name="agents/farmers/crop_calendar_rotation_years",
+            )
+            self.set_array(
+                persistent_adaptations,
+                name="agents/farmers/adaptations",
+            )
 
     def get_mirca_os_irrigation_fractions(
         self,
