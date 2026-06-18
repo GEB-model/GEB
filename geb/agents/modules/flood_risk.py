@@ -607,7 +607,7 @@ class FloodRiskModule:
 
         # merge geometry into buildings dataframe
         buildings = self.households.buildings.merge(
-            building_geometries[["id", "geometry"]],
+            building_geometries["id"],
             on="id",
             how="left",
         )
