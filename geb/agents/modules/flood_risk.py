@@ -666,12 +666,12 @@ class FloodRiskModule:
             household_points["building_id"] = (
                 self.households.var.building_id_of_household
             )  # first assign building id to household points gdf
-            household_points = household_points.merge(
+            household_points: gpd.GeoDataFrame = household_points.merge(
                 buildings[["id", "flood_proofed"]],
                 left_on="building_id",
                 right_on="id",
                 how="left",
-            )  # now merge to get flood proofed status
+            )  # now merge to get flood proofed status  # ty:ignore[invalid-assignment]
 
             buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
 
