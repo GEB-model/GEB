@@ -2015,4 +2015,6 @@ class Households(AgentBaseClass):
         Returns:
             A numpy array with the adaptation uptake in the flood zone.
         """
+        if not hasattr(self, "flooded_households"):
+            self.update_building_attributes()
         return self.var.adapted.data[self.flooded_households]
