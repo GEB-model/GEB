@@ -36,6 +36,11 @@ class FloodRiskModule:
         self.alter_damage_curves_for_flood_proofed_buildings()
         self.load_max_damage_values()
         self.load_flood_maps()
+        self.load_flood_protection_standard()
+
+    def load_flood_protection_standard(self) -> None:
+        """Placeholder for loading flood protection standard. Currently dummy version implemented."""
+        self.flood_protection_standard = 10
 
     def load_flood_maps(self) -> None:
         """Load flood maps for different return periods. This might be quite ineffecient for RAM, but faster then loading them each timestep for now."""
@@ -388,21 +393,21 @@ class FloodRiskModule:
         """
         if (
             not dynamic
-            and hasattr(self, "damages_do_not_adapt")
-            and hasattr(self, "damages_adapt")
+            and hasattr(self, "_damages_do_not_adapt")
+            and hasattr(self, "_damages_adapt")
         ):
             expected_shape = (
                 self.households.return_periods.size,
                 self.households.n,
             )
             if (
-                self.damages_do_not_adapt.shape != expected_shape
-                or self.damages_adapt.shape != expected_shape
+                self._damages_do_not_adapt.shape != expected_shape
+                or self._damages_adapt.shape != expected_shape
             ):
                 raise RuntimeError(
                     "Damages array shape does not match the expected shape based on return periods and number of households. "
                     "If household relocation is modeled, damages must be calculated dynamically. "
-                    f"Expected {expected_shape}, got do_not_adapt={self.damages_do_not_adapt.shape}, adapt={self.damages_adapt.shape}."
+                    f"Expected {expected_shape}, got do_not_adapt={self._damages_do_not_adapt.shape}, adapt={self._damages_adapt.shape}."
                 )
             return self.damages_do_not_adapt, self.damages_adapt
 
@@ -512,9 +517,9 @@ class FloodRiskModule:
                     f"Damages adapt rp{return_period}: {round(damages_adapt[i].sum() / 1e6)} million"
                 )
         if not dynamic:
-            self.damages_do_not_adapt = damages_do_not_adapt
-            self.damages_adapt = damages_adapt
-        return damages_do_not_adapt, damages_adapt
+            self._damages_do_not_adapt = damages_do_not_adapt
+            self._damages_adapt = damages_adapt
+        return self.damages_do_not_adapt, self.damages_adapt
 
     def calculate_ead(
         self,
@@ -854,7 +859,7 @@ class FloodRiskModule:
 
         return total_flood_damages
 
-    def return_period_flood(self, flood_protection_standard: int = 10) -> np.ndarray:
+    def return_period_flood(self) -> np.ndarray:
         """Simulate a flood event based on return periods and determine which households are flooded.
 
         Returns:
@@ -868,7 +873,9 @@ class FloodRiskModule:
         sorted_return_periods = return_periods_arr[sort_idx]
         probabilities = 1.0 / sorted_return_periods
 
-        if p_random >= probabilities.max() or p_random >= 1 / flood_protection_standard:
+        if p_random >= probabilities.max() or p_random > (
+            1 / self.flood_protection_standard
+        ):
             return np.array([], dtype=int)
 
         # find the event corresponding to the random draw
@@ -923,3 +930,18 @@ class FloodRiskModule:
         )[0]
 
         return flooded_household_indices
+
+    def _adjust_damages_for_flood_protection(self, damages: np.ndarray) -> np.ndarray:
+        """Return damages with values below the flood protection standard set to 0."""
+        mask = self.households.return_periods >= self.flood_protection_standard
+        return damages * mask[:, np.newaxis]
+
+    @property
+    def damages_do_not_adapt(self) -> np.ndarray:
+        """Return damages for households that do not adapt."""
+        return self._adjust_damages_for_flood_protection(self._damages_do_not_adapt)
+
+    @property
+    def damages_adapt(self) -> np.ndarray:
+        """Return damages for households that adapt."""
+        return self._adjust_damages_for_flood_protection(self._damages_adapt)
