@@ -1646,10 +1646,10 @@ class Households(AgentBaseClass):
         self.update_risk_perceptions()
 
         # calculate damages for adapting and not adapting households based on building footprints
+        # calculate expected utilities
         damages_do_not_adapt, damages_adapt = (
-            self.flood_risk_module.calculate_building_flood_damages()
+            self.flood_risk_module.calculate_building_flood_damages(dynamic=False)
         )
-
         # calculate expected utilities
         EU_adapt = self.decision_module.calcEU_adapt_flood(
             geom_id="NoID",

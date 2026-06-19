@@ -367,7 +367,10 @@ class FloodRiskModule:
         )
 
     def calculate_building_flood_damages(
-        self, verbose: bool = False, export_building_damages: bool = False
+        self,
+        verbose: bool = False,
+        export_building_damages: bool = False,
+        dynamic: bool = False,
     ) -> tuple[np.ndarray, np.ndarray]:
         """This function calculates the flood damages for the households in the model.
 
@@ -377,9 +380,17 @@ class FloodRiskModule:
         Args:
             verbose: Verbosity flag.
             export_building_damages: Whether to export the building damages to parquet files.
+            dynamic: Whether to calculate damages dynamically based on the current flood maps in the model (as opposed to using flood maps at t=0).
         Returns:
             Tuple[np.ndarray, np.ndarray]: A tuple containing the damage arrays for unprotected and protected buildings.
         """
+        if (
+            not dynamic
+            and hasattr(self, "damages_do_not_adapt")
+            and hasattr(self, "damages_adapt")
+        ):
+            return self.damages_do_not_adapt, self.damages_adapt
+
         damages_do_not_adapt = np.zeros(
             (self.households.return_periods.size, self.households.n), np.float32
         )
@@ -485,6 +496,8 @@ class FloodRiskModule:
                 print(
                     f"Damages adapt rp{return_period}: {round(damages_adapt[i].sum() / 1e6)} million"
                 )
+        setattr(self, "damages_do_not_adapt", damages_do_not_adapt)
+        setattr(self, "damages_adapt", damages_adapt)
         return damages_do_not_adapt, damages_adapt
 
     def calculate_ead(
