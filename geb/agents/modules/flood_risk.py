@@ -383,6 +383,8 @@ class FloodRiskModule:
             dynamic: Whether to calculate damages dynamically based on the current flood maps in the model (as opposed to using flood maps at t=0).
         Returns:
             Tuple[np.ndarray, np.ndarray]: A tuple containing the damage arrays for unprotected and protected buildings.
+        Raises:
+            RuntimeError: If the damage arrays do not match the expected shape based on return periods and number of households.
         """
         if (
             not dynamic
