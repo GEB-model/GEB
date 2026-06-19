@@ -42,6 +42,7 @@ from geb.geb_types import (
     TwoDArrayInt32,
 )
 from geb.hazards.event import Event
+from geb.hazards.floods.workflows.utils import get_end_point
 from geb.hydrology.routing import get_river_width
 from geb.workflows.extreme_value_analysis import ReturnPeriodModel
 from geb.workflows.io import (
@@ -432,6 +433,7 @@ class SFINCSRootModel:
                 outflow_points = self.rivers[self.rivers["is_outflow_boundary"]][
                     "outflow_point_xy"
                 ]
+                assert len(outflow_points) > 0, "No outflow points found for rivers"
                 outflow_points = gpd.GeoDataFrame(
                     geometry=gpd.points_from_xy(
                         outflow_points.apply(lambda xy: xy[0]),
@@ -1574,26 +1576,20 @@ class SFINCSRootModel:
         Returns:
             A GeoDataFrame of rivers that are inflow rivers.
         """
-        non_headwater_rivers: gpd.GeoDataFrame = self.rivers[self.rivers["maxup"] > 0]
-        non_outflow_basins: gpd.GeoDataFrame = non_headwater_rivers[
-            (~non_headwater_rivers["is_downstream_outflow"])
-            & (~non_headwater_rivers["is_further_downstream_outflow"])
+        rivers: gpd.GeoDataFrame = self.rivers
+        non_outflow_rivers: gpd.GeoDataFrame = rivers[
+            (~rivers["is_downstream_outflow"])
+            & (~rivers["is_further_downstream_outflow"])
         ]
-        upstream_branches_in_domain = np.unique(
-            self.rivers["downstream_ID"], return_counts=True
-        )
+        non_outflow_basins: gpd.GeoDataFrame = self.subbasins[
+            self.subbasins.index.isin(non_outflow_rivers.index)
+        ]
+        inflow_rivers: gpd.GeoDataFrame = non_outflow_rivers[
+            (non_outflow_rivers["downstream_ID"].isin(non_outflow_basins.index))
+            & (~non_outflow_rivers.index.isin(non_outflow_basins.index))
+        ]
 
-        rivers_with_inflow = []
-        for idx, row in non_outflow_basins.iterrows():
-            if idx in upstream_branches_in_domain[0] and (
-                upstream_branches_in_domain[1][
-                    np.where(upstream_branches_in_domain[0] == idx)
-                ]
-                < row["maxup"]
-            ):
-                rivers_with_inflow.append(idx)
-
-        return self.rivers[self.rivers.index.isin(rivers_with_inflow)]
+        return inflow_rivers
 
     @property
     def non_inflow_rivers(self) -> gpd.GeoDataFrame:
@@ -1727,6 +1723,8 @@ class SFINCSSimulation:
     Created fro m a SFINCSRootModel instance which already contains the constant parts of the model.
     """
 
+    inflow_was_set: bool
+
     def __init__(
         self,
         event: Event,
@@ -1817,6 +1815,8 @@ class SFINCSSimulation:
         if setup_river_outflow:
             self.set_river_outflow_boundary_condition()
 
+        self.inflow_was_set = False
+
     def print_forcing_volume(self) -> None:
         """Print all forcing volumes for debugging the water balance."""
         msg: str = (
@@ -1890,9 +1890,7 @@ class SFINCSSimulation:
             )
             self.sfincs_model.water_level.write()
 
-    def set_river_inflow(
-        self, nodes: gpd.GeoDataFrame, timeseries: pd.DataFrame
-    ) -> None:
+    def set_river_inflow(self, discharge_by_river: pd.DataFrame) -> None:
         """
         Sets up river inflow boundary conditions for the SFINCS model.
 
@@ -1900,19 +1898,25 @@ class SFINCSSimulation:
         separate from the runoff generated in the model domain.
 
         Args:
-            nodes: GeoDataFrame containing the locations of river inflow points.
-                The index values are converted to negative values to indicate inflow boundaries.
-            timeseries: DataFrame containing discharge time series (in m^3/s) for each node.
-                The columns should correspond to the node indices; these are also converted to negative values.
+            discharge_by_river: A DataFrame containing the discharge timeseries for each inflow river.
+                The columns should match the index of the inflow rivers GeoDataFrame.
         """
-        nodes = nodes.copy()
-        timeseries = timeseries.copy()
+        nodes: gpd.GeoDataFrame = self.root_model.inflow_rivers.copy()
+        nodes["geometry"] = nodes["geometry"].apply(
+            get_end_point
+        )  # most downstream point of the river segment
+
+        timeseries: pd.DataFrame = discharge_by_river[nodes.index]
+
         nodes.index = [-idx for idx in nodes.index]  # SFINCS negative index for inflow
-        timeseries.columns = [-col for col in timeseries.columns]
+        timeseries.columns = [
+            -col for col in timeseries.columns
+        ]  # SFINCS negative index for inflow
         self.set_discharge_forcing_from_nodes(
             nodes=nodes,
             timeseries=timeseries,
         )
+        self.inflow_was_set = True
 
     def set_discharge_forcing_from_nodes(
         self, nodes: gpd.GeoDataFrame, timeseries: pd.DataFrame
@@ -2027,7 +2031,7 @@ class SFINCSSimulation:
         )
 
         # mask out all basins that are not in the model
-        mask: TwoDArrayBool = np.isin(basin_ids, self.root_model.rivers.index)
+        mask: TwoDArrayBool = np.isin(basin_ids, self.root_model.subbasins.index)
         runoff_m = xr.where(mask, runoff_m, 0.0)  # set runoff to 0 outside model basins
         river_ids_no_waterbodies_removed = np.where(
             mask, river_ids_no_waterbodies_removed, -1
@@ -2215,8 +2219,20 @@ class SFINCSSimulation:
         Args:
             gpu: Whether to use GPU acceleration for the simulation. Can be
                 True, False, or 'auto' to automatically detect GPU availability.
+
+        Raises:
+            ValueError: If gpu argument is not one of the accepted values.
+            ValueError: If the model has inflow rivers but inflow boundary conditions have not been
         """
-        assert gpu in [True, False, "auto"], "gpu must be True, False, or 'auto'"
+        if not gpu in [True, False, "auto"]:
+            raise ValueError("gpu must be True, False, or 'auto'")
+
+        if self.root_model.has_inflow:
+            if not self.inflow_was_set:
+                raise ValueError(
+                    "The model has inflow rivers, but inflow boundary conditions have not been set."
+                )
+
         run_sfincs_simulation(
             simulation_root=self.path,
             model_root=self.root_path,

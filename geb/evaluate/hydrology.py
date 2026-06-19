@@ -25,7 +25,7 @@ from geb.evaluate.workflows.hydrology_plot_engine import (
     plot_skill_score_maps as _plot_skill_score_maps,
     plot_skill_scores_vs_upstream_area as _plot_skill_scores_vs_upstream_area,
 )
-from geb.hydrology.routing import read_discharge_per_river
+from geb.hydrology.routing import get_discharge_per_river
 from geb.reporter import WATER_STORAGE_REPORT_CONFIG
 from geb.workflows.visualise import plot_sunburst
 
@@ -1743,7 +1743,7 @@ class Hydrology:
             )
         ].copy()
 
-        discharge: pd.DataFrame = read_discharge_per_river(
+        discharge: pd.DataFrame = get_discharge_per_river(
             folder=discharge_folder,
             rivers=rivers_of_interest,
             all_rivers=all_rivers,

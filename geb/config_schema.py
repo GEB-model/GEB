@@ -69,6 +69,10 @@ class FloodsConfig(BaseModel):
     """Configuration for flood simulation."""
 
     simulate: bool = Field(False, description="Whether to simulate floods.")
+    subbasins: int | list[int] | Literal["all"] = Field(
+        "all",
+        description="Subbasin ID, list of subbasin IDs, or 'all' to simulate all subbasins. Only works for flood events currently.",
+    )
     forcing_method: Literal["headwater_points", "accumulated_runoff"] = Field(
         "accumulated_runoff",
         description="Forcing method: 'headwater_points' or 'accumulated_runoff'.",

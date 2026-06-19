@@ -1,7 +1,7 @@
 """Routing algorithms for river networks."""
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import geopandas as gpd
 import numpy as np
@@ -31,33 +31,73 @@ if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
 
 
-def read_discharge_per_river(
-    folder: Path, rivers: gpd.GeoDataFrame, all_rivers: pd.DataFrame
+def get_discharge_per_river(
+    rivers: gpd.GeoDataFrame,
+    all_rivers: pd.DataFrame,
+    source: Literal["file", "memory"] = "file",
+    folder: Path | None = None,
+    variables_to_report: dict[str, Any] | None = None,
 ) -> pd.DataFrame:
-    """Read the discharge for each river from the output files.
+    """Get the discharge for each river from the output files.
 
     Args:
-        folder: The folder where the discharge files are stored.
         rivers: A GeoDataFrame containing the rivers in the model, with columns "is_downstream_outflow", "is_upstream_of_downstream_basin", and "hydrography_xy".
         all_rivers: A DataFrame containing all rivers in the model, with columns "represented_in_grid", "hydrography_xy", and "downstream_ID".
+        source: The source of the discharge data. Can be "file" or "memory".
+        folder: The folder where the discharge files are stored.
+        variables_to_report: A dictionary containing the variables to report.
 
     Returns:
         A DataFrame with the discharge for each river, with columns "discharge_m3_per_s" and "hydrography_xy".
+
+    Raises:
+        ValueError: If source is "file" and folder is None.
+        ValueError: If source is "memory" and variables_to_report is None.
     """
+    if source == "file" and folder is None:
+        raise ValueError("folder must be provided if source is 'file'")
+    elif source == "memory" and variables_to_report is None:
+        raise ValueError("variables_to_report must be provided if source is 'memory'")
+
+    def create_df_from_report_variable(
+        river_id: int | str, variables_to_report: dict[str, Any]
+    ) -> pd.Series:
+        river_data = variables_to_report[f"river_outflow_hourly_m3_per_s_{river_id}"]
+        return pd.Series(
+            river_data["_data_array"][: river_data["_var_index"]],
+            index=river_data["_time_array"][: river_data["_var_index"]].astype(
+                "datetime64[s]"
+            ),
+        )
+
     discharge_data = {}
     for river_id in rivers.index:
         assert isinstance(river_id, int)
         xys: list[tuple[int, int]] = get_upstream_represented_xys(river_id, all_rivers)
         if len(xys) == 1:
-            discharge_data[river_id] = read_table(
-                folder / f"river_outflow_hourly_m3_per_s_{river_id}.parquet"
-            )[f"river_outflow_hourly_m3_per_s_{river_id}"]
+            if source == "file":
+                assert folder is not None
+                discharge_data[river_id] = read_table(
+                    folder / f"river_outflow_hourly_m3_per_s_{river_id}.parquet"
+                )[f"river_outflow_hourly_m3_per_s_{river_id}"]
+            else:
+                assert variables_to_report is not None
+                discharge_data[river_id] = create_df_from_report_variable(
+                    river_id, variables_to_report
+                )
         else:
             total_discharge_part = None
             for i in range(len(xys)):
-                discharge_part = read_table(
-                    folder / f"river_outflow_hourly_m3_per_s_{river_id}_{i}.parquet"
-                )[f"river_outflow_hourly_m3_per_s_{river_id}_{i}"]
+                if source == "file":
+                    assert folder is not None
+                    discharge_part = read_table(
+                        folder / f"river_outflow_hourly_m3_per_s_{river_id}_{i}.parquet"
+                    )[f"river_outflow_hourly_m3_per_s_{river_id}_{i}"]
+                else:
+                    assert variables_to_report is not None
+                    discharge_part = create_df_from_report_variable(
+                        f"{river_id}_{i}", variables_to_report
+                    )
                 if total_discharge_part is None:
                     total_discharge_part = discharge_part
                 else:
