@@ -882,7 +882,7 @@ def _format_external_model_short_name(model_name: str) -> str:
         return "Google"
     if "glofas" in model_name_lower:
         if "non-calibrated" in model_name_lower or "non_calibrated" in model_name_lower:
-            return "GloFAS non-cal"
+            return "GloFAS non-cal gauges"
         if "all" in model_name_lower:
             return "GloFAS all"
         return "GloFAS"
