@@ -941,8 +941,10 @@ def test_multiverse() -> None:
                 crs=forecast_da.rio.crs,
             )
 
-        mean_discharge_after_forecast: dict[str | int, float] = geb.multiverse(
-            return_mean_discharge=True, forecast_issue_datetime=forecast_issue_date
+        mean_discharge_after_forecast: dict[str | int, float] = (
+            geb.multiverse_forecasts(
+                return_mean_discharge=True, forecast_issue_datetime=forecast_issue_date
+            )
         )
 
         for bucket_name, bucket in geb.store.buckets.items():
@@ -1006,6 +1008,149 @@ def test_multiverse() -> None:
             forecast_folder
             / f"{events[1]['start_time'].strftime('%Y%m%dT%H%M%S')} - {forecast_end_date.replace(hour=0, minute=0, second=0, microsecond=0).strftime('%Y%m%dT%H%M%S')}.zarr"
         )
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_alternate_universe() -> None:
+    """Test the alternate universe functionality."""
+    with WorkingDirectory(working_directory):
+        args = DEFAULT_RUN_ARGS.copy()
+        config = parse_config(CONFIG_DEFAULT)
+        config["general"]["end_time"] = config["general"]["start_time"] + timedelta(
+            days=10
+        )
+        args["config"] = config
+
+        geb: GEBModel = run_model_with_method(
+            method=None, close_after_run=False, **args
+        )
+        geb.run(initialize_only=True)
+
+        # Run for 2 days
+        initial_steps = 2
+        for _ in range(initial_steps):
+            geb.step()
+
+        # Capture state hashes before alternate universe to verify restoration
+        hashes: dict[str, dict[str, int]] = {}
+        for bucket_name, bucket in geb.store.buckets.items():
+            hashes[bucket_name] = {}
+            for var_name, var in vars(bucket).items():
+                if isinstance(var, np.ndarray):
+                    hashes[bucket_name][var_name] = hash(var.tobytes())
+
+        # Define do_function and collect_function for the alternate universe
+        def do_function() -> None:
+            # Modify some state: fully saturate the soil water content in the alternate universe
+            geb.hydrology.HRU.var.water_content_m[:] = (
+                geb.hydrology.HRU.var.water_content_saturated_m
+            )
+
+        def collect_function() -> dict[str, Any]:
+            # Collect some data from the alternate universe
+            return {
+                "mean_discharge": geb.hydrology.routing.grid.var.discharge_m3_s.mean().item()
+            }
+
+        # Run alternate universe for 3 steps with elevated soil moisture
+        n_steps_alt = 3
+        collected_data_elevated_soil_moisture: dict[str, Any] = geb.alternate_universe(
+            name="test_alt_elevated_soil_moisture",
+            n_timesteps=n_steps_alt,
+            do_function=do_function,
+            collect_function=collect_function,
+        )
+
+        assert isinstance(collected_data_elevated_soil_moisture, dict)
+        assert "mean_discharge" in collected_data_elevated_soil_moisture
+
+        # Verify state is restored to what it was BEFORE alternate universe
+        for bucket_name, bucket in geb.store.buckets.items():
+            for var_name, var in vars(bucket).items():
+                if isinstance(var, np.ndarray):
+                    assert hash(var.tobytes()) == hashes[bucket_name][var_name], (
+                        f"Bucket {bucket_name} variable {var_name} was not restored after alternate universe."
+                    )
+        assert geb.current_timestep == initial_steps
+
+        collected_data_normal_soil_moisture: None = geb.alternate_universe(
+            name="test_alt_normal_soil_moisture",
+            n_timesteps=n_steps_alt,
+        )
+        assert collected_data_normal_soil_moisture is None
+
+        # Run yet another alternate universe for 3 steps with normal soil moisture
+        # Verify again that state is restored to what it was BEFORE alternate universe
+        for bucket_name, bucket in geb.store.buckets.items():
+            for var_name, var in vars(bucket).items():
+                if isinstance(var, np.ndarray):
+                    assert hash(var.tobytes()) == hashes[bucket_name][var_name], (
+                        f"Bucket {bucket_name} variable {var_name} was not restored after alternate universe."
+                    )
+        assert geb.current_timestep == initial_steps
+
+        # Run the model in normal mode for 3 steps
+        for _ in range(n_steps_alt):
+            geb.step()
+
+        current_mean_discharge = (
+            geb.hydrology.routing.grid.var.discharge_m3_s.mean().item()
+        )
+        assert (
+            collected_data_elevated_soil_moisture["mean_discharge"]
+            > current_mean_discharge
+        ), (
+            "Mean discharge in alternate universe should be greater than in normal mode after saturating soil."
+        )
+
+        # Run the model in normal mode until the end.
+        geb.step_to_end()
+        geb.reporter.finalize()
+
+        report_folder = geb.reporter.report_folder
+        assert report_folder.exists(), "Report folder does not exist."
+
+        alternative_report_folder_elevated_soil_moisture = (
+            report_folder / "multiverse" / "test_alt_elevated_soil_moisture"
+        )
+        assert alternative_report_folder_elevated_soil_moisture.exists(), (
+            "Alternative universe report folder does not exist."
+        )
+
+        alternative_report_folder_normal_soil_moisture = (
+            report_folder / "multiverse" / "test_alt_normal_soil_moisture"
+        )
+        assert alternative_report_folder_normal_soil_moisture.exists(), (
+            "Alternative universe report folder for normal soil moisture does not exist."
+        )
+
+        normal_run_data = read_table(
+            report_folder
+            / "hydrology.landsurface"
+            / "bare_soil_evaporation_weighted_sum_m.parquet"
+        )
+        alternate_run_data_elevated_soil_moisture = read_table(
+            alternative_report_folder_elevated_soil_moisture
+            / "hydrology.landsurface"
+            / "bare_soil_evaporation_weighted_sum_m.parquet"
+        )
+        alternate_run_data_normal_soil_moisture = read_table(
+            alternative_report_folder_normal_soil_moisture
+            / "hydrology.landsurface"
+            / "bare_soil_evaporation_weighted_sum_m.parquet"
+        )
+        assert len(alternate_run_data_elevated_soil_moisture) == 3
+        assert len(alternate_run_data_normal_soil_moisture) == 3
+        assert len(normal_run_data) == 11  # initial day is also included.
+
+        assert alternate_run_data_normal_soil_moisture.equals(
+            normal_run_data.loc[alternate_run_data_normal_soil_moisture.index]
+        )
+        assert not alternate_run_data_elevated_soil_moisture.equals(
+            normal_run_data.loc[alternate_run_data_elevated_soil_moisture.index]
+        )
+
+        geb.close()
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
