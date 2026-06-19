@@ -885,6 +885,7 @@ def create_validation_df(
     observed_discharge: pd.Series,
     correct_discharge_observations: bool,
     discharge_observations_to_GEB_upstream_area_ratio: float,
+    timezone_utc_offset: float = 0.0,
 ) -> pd.DataFrame:
     """Create a validation dataframe with the discharge observations and the GEB discharge simulation for the selected station.
 
@@ -897,13 +898,20 @@ def create_validation_df(
         correct_discharge_observations: Whether to correct the discharge_observations discharge timeseries for the difference in upstream
             area between the discharge_observations station and the discharge from GEB.
         discharge_observations_to_GEB_upstream_area_ratio: The ratio of the upstream area of the discharge_observations station to the upstream area of the GEB discharge grid cell. This is used to correct
+        timezone_utc_offset: Fixed UTC offset for the GRDC station metadata
+            (hours). For daily or coarser observations, GEB's hourly UTC
+            timestamps are converted to this fixed local offset before
+            aggregation. Sub-daily observations are not shifted because their
+            timestamp convention is not defined by the GRDC daily product.
+            Defaults to 0 (UTC).
 
     Returns:
         DataFrame with the discharge observations and the GEB discharge simulation for the selected station.
 
     Raises:
         FileNotFoundError: If the hydrology routing directory does not exist.
-        ValueError: If NaN values are found in the GEB discharge data after loading.
+        ValueError: If the GEB discharge data contain NaN values or the fixed UTC
+            offset is non-finite or outside the valid range from UTC-12 to UTC+14.
     """
     # Check if the hydrology.routing directory exists
     report_folder: Path = output_folder / "report"
@@ -945,6 +953,11 @@ def create_validation_df(
     assert observed_discharge.index.freq is not None, (  # ty:ignore[unresolved-attribute]
         "Observed discharge index must have a defined frequency."
     )
+    if not np.isfinite(timezone_utc_offset):
+        raise ValueError("Station UTC offset must be finite.")
+    if not -12.0 <= timezone_utc_offset <= 14.0:
+        raise ValueError("Station UTC offset must be between UTC-12 and UTC+14 hours.")
+
     # check if simulated discharge is at least as frequent as observed discharge, and if multiple of observed discharge frequency
     if simulated_discharge.index.freq > observed_discharge.index.freq:  # ty:ignore[unresolved-attribute]
         raise ValueError(
@@ -957,9 +970,24 @@ def create_validation_df(
             "Observed discharge frequency is not a multiple of simulated discharge frequency. Please ensure the observed discharge frequency is a multiple of the simulated discharge frequency."
         )
 
-    # resample simulated discharge to match the frequency of observed discharge if needed
-    simulated_discharge = simulated_discharge.resample(
-        observed_discharge.index.freq  # ty:ignore[unresolved-attribute]
+    observation_frequency = observed_discharge.index.freq  # ty:ignore[unresolved-attribute]
+    observation_timestep: pd.Timedelta = pd.to_timedelta(observation_frequency)
+    should_use_local_calendar: bool = (
+        observation_timestep >= pd.Timedelta(days=1) and timezone_utc_offset != 0.0
+    )
+    simulation_for_aggregation: pd.Series = simulated_discharge.copy()
+    if should_use_local_calendar:
+        # GRDC daily values represent fixed-offset local calendar days. For
+        # UTC+3, adding three hours makes the bin labelled January 1 span
+        # December 31 21:00 UTC through January 1 20:59 UTC.
+        simulation_for_aggregation.index = (
+            simulation_for_aggregation.index + pd.Timedelta(hours=timezone_utc_offset)
+        )
+
+    simulated_discharge = simulation_for_aggregation.resample(
+        observation_frequency,
+        closed="left",
+        label="left",
     ).mean()
 
     # cut both observed and simulated discharge to the same time range
@@ -2123,6 +2151,12 @@ class Hydrology:
                     # errors, so the default benchmark excludes them from summary scores.
                     continue
 
+                timezone_utc_offset: float = float(
+                    snapped_locations.at[station_id, "timezone_utc_offset"]
+                    if "timezone_utc_offset" in snapped_locations.columns
+                    else 0.0
+                )
+
                 try:
                     validation_df: pd.DataFrame = create_validation_df(
                         self.model.output_folder,
@@ -2131,6 +2165,7 @@ class Hydrology:
                         observed_discharge_series,
                         correct_discharge_observations,
                         discharge_observations_to_GEB_upstream_area_ratio,
+                        timezone_utc_offset=timezone_utc_offset,
                     )
                 except FileNotFoundError:
                     self.model.logger.warning(
@@ -2186,6 +2221,7 @@ class Hydrology:
                     "y": discharge_observations_station_coords[1],
                     "discharge_observations_to_GEB_upstream_area_ratio": discharge_observations_to_GEB_upstream_area_ratio,
                     "upstream_area_GEB": geb_upstream_area_m2,
+                    "timezone_utc_offset": timezone_utc_offset,
                     **discharge_metrics._asdict(),
                     **{
                         f"{metric_name}_{frequency_label}": metric_value
@@ -2560,6 +2596,9 @@ class Hydrology:
                     observed_discharge_series.columns = ["Q"]
                 observed_discharge_series.name = "Q"
 
+                timezone_utc_offset: float = float(
+                    station_row.get("timezone_utc_offset", 0.0) or 0.0
+                )
                 try:
                     validation_df: pd.DataFrame = create_validation_df(
                         output_folder=self.model.output_folder,
@@ -2568,6 +2607,7 @@ class Hydrology:
                         observed_discharge=observed_discharge_series,
                         correct_discharge_observations=correct_discharge_observations,
                         discharge_observations_to_GEB_upstream_area_ratio=upstream_area_ratio,
+                        timezone_utc_offset=timezone_utc_offset,
                     )
                     metrics: dict[str, float] = {
                         metric_name: float(station_row[metric_name])
@@ -2764,33 +2804,11 @@ class Hydrology:
 
         if export:
             region_geom: gpd.GeoDataFrame = read_geom(self.model.files["geom"]["mask"])
-            all_rivers: gpd.GeoDataFrame = read_geom(
-                self.model.files["geom"]["routing/rivers"]
-            )
-            connector_columns: tuple[str, str, str] = (
-                "is_downstream_outflow",
-                "is_upstream_of_downstream_basin",
-                "is_further_downstream_outflow",
-            )
-            available_connector_columns: list[str] = [
-                column_name
-                for column_name in connector_columns
-                if column_name in all_rivers.columns
-            ]
-            rivers: gpd.GeoDataFrame = all_rivers.copy()
-            if available_connector_columns:
-                # Artificial basin connectors should not appear as natural rivers.
-                connector_mask: pd.Series = (
-                    all_rivers[available_connector_columns].fillna(False).any(axis=1)
-                )
-                rivers = all_rivers[~connector_mask].copy()
-
             _plot_skill_score_maps(
                 evaluation_gdf=evaluation_gdf,
                 region_geom=region_geom,
                 output_folder=evaluation_paths.plot_folder,
                 logger=self.model.logger,
-                rivers=rivers,
                 difference_gdfs={
                     model_name: plot_inputs.evaluation_df
                     for model_name, plot_inputs in _prepare_pairwise_skill_score_boxplot_inputs(

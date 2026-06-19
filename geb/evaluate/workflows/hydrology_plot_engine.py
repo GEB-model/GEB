@@ -108,9 +108,6 @@ _DISPLAYED_SKILL_SCORE_CONFIGS: tuple[dict[str, object], ...] = (
     },
 )
 
-_MINIMUM_MAP_RIVER_UPSTREAM_AREA_KM2: float = 100.0
-_RIVER_LINEWIDTH_EDGES: tuple[float, ...] = (0.35, 0.60, 0.90, 1.30, 1.80, 2.60)
-
 
 def _plot_skill_score_map_single(
     evaluation_gdf: gpd.GeoDataFrame,
@@ -256,77 +253,6 @@ def _plot_skill_score_map_single(
     plt.close(fig)
 
 
-def _plot_river_background(
-    axis: plt.Axes,
-    rivers: gpd.GeoDataFrame,
-) -> None:
-    """Plot major rivers with logarithmic widths beneath skill-score stations.
-
-    Rivers with less than 100 km² upstream area are omitted to keep the map
-    legible. Line widths increase logarithmically from 0.35 points at 100 km²
-    to 2.5 points at 1,000,000 km².
-
-    Args:
-        axis: Map axes receiving the river background.
-        rivers: River segments in the plot CRS with ``uparea_m2`` values
-            (square meters).
-
-    Raises:
-        ValueError: If ``rivers`` does not contain an ``uparea_m2`` column.
-    """
-    if "uparea_m2" not in rivers.columns:
-        raise ValueError("River geometry must contain an 'uparea_m2' column.")
-
-    minimum_upstream_area_m2: float = _MINIMUM_MAP_RIVER_UPSTREAM_AREA_KM2 * 1_000_000.0
-    major_rivers: gpd.GeoDataFrame = rivers[
-        (rivers["uparea_m2"] >= minimum_upstream_area_m2)
-        & rivers.geometry.notna()
-        & ~rivers.geometry.is_empty
-    ].copy()
-    if major_rivers.empty:
-        return
-
-    upstream_area_km2: pd.Series = major_rivers["uparea_m2"].clip(lower=1e6) / 1e6
-    log_upstream_area_km2: np.ndarray = np.log10(
-        upstream_area_km2.to_numpy(dtype=float)
-    )
-    major_rivers["_plot_linewidth"] = np.clip(
-        0.35 + 2.15 * (log_upstream_area_km2 - 2.0) / 4.0,
-        0.35,
-        2.5,
-    )
-
-    # Draw small rivers first so the major channels remain visible at confluences.
-    for lower_width, upper_width in zip(
-        _RIVER_LINEWIDTH_EDGES[:-1],
-        _RIVER_LINEWIDTH_EDGES[1:],
-        strict=True,
-    ):
-        width_band: gpd.GeoDataFrame = major_rivers[
-            (major_rivers["_plot_linewidth"] >= lower_width)
-            & (major_rivers["_plot_linewidth"] < upper_width)
-        ]
-        if width_band.empty:
-            continue
-
-        band_linewidth: float = (lower_width + upper_width) / 2.0
-        # The dark halo keeps blue rivers readable over both bright and dark tiles.
-        width_band.plot(
-            ax=axis,
-            color="#163A59",
-            linewidth=band_linewidth + 0.7,
-            alpha=0.55,
-            zorder=2.5,
-        )
-        width_band.plot(
-            ax=axis,
-            color="#4A90D9",
-            linewidth=band_linewidth,
-            alpha=0.9,
-            zorder=3,
-        )
-
-
 def _plot_kge_component_maps(
     evaluation_gdf: gpd.GeoDataFrame,
     metric_configs: tuple[
@@ -337,7 +263,6 @@ def _plot_kge_component_maps(
     ],
     output_path: Path,
     region_geom: gpd.GeoDataFrame,
-    rivers: gpd.GeoDataFrame | None = None,
 ) -> None:
     """Plot KGE and its three components in a two-by-two map grid.
 
@@ -350,9 +275,6 @@ def _plot_kge_component_maps(
             KGE, KGE correlation, KGE bias ratio, and KGE variability ratio.
         output_path: Output path stem (no extension); ``.svg`` and ``.png`` are saved.
         region_geom: Basin/region boundary overlaid on each map.
-        rivers: Optional river network with ``uparea_m2`` values (square meters).
-            Rivers are drawn below gauging stations using upstream-area-scaled
-            widths.
 
     Raises:
         KeyError: If a configured metric is absent from ``evaluation_gdf``.
@@ -375,9 +297,6 @@ def _plot_kge_component_maps(
 
     gdf_3857: gpd.GeoDataFrame = evaluation_gdf.to_crs("EPSG:3857")
     region_3857: gpd.GeoDataFrame = region_geom.to_crs("EPSG:3857")
-    rivers_3857: gpd.GeoDataFrame | None = (
-        rivers.to_crs("EPSG:3857") if rivers is not None else None
-    )
 
     fig: plt.Figure
     axes: np.ndarray
@@ -408,9 +327,6 @@ def _plot_kge_component_maps(
             alpha=0.7,
             zorder=2,
         )
-
-        if rivers_3857 is not None:
-            _plot_river_background(axis=ax, rivers=rivers_3857)
 
         valid_mask: pd.Series = gdf_3857[metric_col].notna()
         if valid_mask.any():
@@ -528,7 +444,6 @@ def plot_skill_score_maps(
     output_folder: Path,
     logger: logging.Logger,
     difference_gdfs: dict[str, pd.DataFrame] | None = None,
-    rivers: gpd.GeoDataFrame | None = None,
 ) -> None:
     """Plot per-station skill scores on a satellite basemap, one map per metric.
 
@@ -541,8 +456,6 @@ def plot_skill_score_maps(
         logger: Logger to use for progress messages.
         difference_gdfs: Optional matched GEB-vs-external station tables with
             ``KGE_difference`` values (dimensionless).
-        rivers: Optional river network with ``uparea_m2`` values (square meters)
-            for the combined KGE component map background.
     """
     maps_folder = output_folder / "skill_score_maps"
     maps_folder.mkdir(parents=True, exist_ok=True)
@@ -570,7 +483,6 @@ def plot_skill_score_maps(
             metric_configs=kge_metric_configs,
             output_path=maps_folder / "skill_score_map_kge_components",
             region_geom=region_geom,
-            rivers=rivers,
         )
         logger.info("Saved KGE component skill score map.")
 

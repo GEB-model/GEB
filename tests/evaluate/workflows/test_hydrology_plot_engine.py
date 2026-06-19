@@ -15,7 +15,6 @@ from geb.evaluate.workflows.hydrology_plot_engine import (
     _get_robust_error_metric_ylim,
     _get_skill_score_config,
     _plot_kge_component_maps,
-    _plot_river_background,
     plot_kge_external_model_comparison,
     plot_skill_score_boxplots,
 )
@@ -137,14 +136,6 @@ def test_plot_kge_component_maps_creates_two_by_two_figure(
         geometry=[LineString([(3.5, 50.5), (5.5, 52.5)])],
         crs="EPSG:4326",
     )
-    rivers: gpd.GeoDataFrame = gpd.GeoDataFrame(
-        {"uparea_m2": [100_000_000.0, 1_000_000_000_000.0]},
-        geometry=[
-            LineString([(3.8, 50.8), (4.8, 51.8)]),
-            LineString([(4.2, 50.7), (5.2, 52.0)]),
-        ],
-        crs="EPSG:4326",
-    )
     metric_columns: tuple[str, str, str, str] = (
         "KGE",
         "KGE_correlation",
@@ -175,7 +166,6 @@ def test_plot_kge_component_maps_creates_two_by_two_figure(
         metric_configs=metric_configs,
         output_path=output_path,
         region_geom=region_geom,
-        rivers=rivers,
     )
 
     figure: plt.Figure = plt.gcf()
@@ -190,51 +180,6 @@ def test_plot_kge_component_maps_creates_two_by_two_figure(
     assert output_path.with_suffix(".svg").exists()
     assert output_path.with_suffix(".png").exists()
     original_close(figure)
-
-
-def test_plot_river_background_filters_and_scales_rivers() -> None:
-    """Only major rivers are drawn, with wider lines for larger catchments."""
-    rivers: gpd.GeoDataFrame = gpd.GeoDataFrame(
-        {
-            "uparea_m2": [
-                50_000_000.0,
-                100_000_000.0,
-                1_000_000_000_000.0,
-            ]
-        },
-        geometry=[
-            LineString([(0.0, 0.0), (1.0, 0.0)]),
-            LineString([(0.0, 1.0), (1.0, 1.0)]),
-            LineString([(0.0, 2.0), (1.0, 2.0)]),
-        ],
-        crs="EPSG:3857",
-    )
-    figure, axis = plt.subplots()
-
-    _plot_river_background(axis=axis, rivers=rivers)
-
-    plotted_linewidths: list[float] = [
-        float(linewidth)
-        for collection in axis.collections
-        for linewidth in collection.get_linewidths()
-    ]
-    assert len(axis.collections) == 4
-    assert max(plotted_linewidths) > min(plotted_linewidths)
-    plt.close(figure)
-
-
-def test_plot_river_background_requires_upstream_area() -> None:
-    """River width scaling requires an upstream-area attribute."""
-    rivers: gpd.GeoDataFrame = gpd.GeoDataFrame(
-        geometry=[LineString([(0.0, 0.0), (1.0, 1.0)])],
-        crs="EPSG:3857",
-    )
-    figure, axis = plt.subplots()
-
-    with pytest.raises(ValueError, match="uparea_m2"):
-        _plot_river_background(axis=axis, rivers=rivers)
-
-    plt.close(figure)
 
 
 def test_plot_kge_component_maps_rejects_missing_metric(tmp_path: Path) -> None:
