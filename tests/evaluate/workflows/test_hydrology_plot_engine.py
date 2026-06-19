@@ -54,6 +54,13 @@ def test_get_robust_error_metric_ylim_handles_missing_values() -> None:
     assert _get_robust_error_metric_ylim(metric_values) == (0.0, 1.0)
 
 
+def test_rrmse_map_uses_red_for_higher_errors() -> None:
+    """Higher RRMSE values use the red end of the error-map color scale."""
+    rrmse_config: dict[str, object] = _get_skill_score_config("RRMSE")
+
+    assert rrmse_config["cmap"] == "YlOrRd"
+
+
 def test_violin_density_excludes_values_outside_visible_limits() -> None:
     """Hidden outliers do not stretch the visible violin density."""
     figure, axis = plt.subplots()

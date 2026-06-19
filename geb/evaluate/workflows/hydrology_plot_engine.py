@@ -101,7 +101,7 @@ _DISPLAYED_SKILL_SCORE_CONFIGS: tuple[dict[str, object], ...] = (
         "ylim": None,
         "robust_error_ylim": True,
         "reference": 0.0,
-        "cmap": "YlOrRd_r",
+        "cmap": "YlOrRd",
         "vmin": 0.0,
         "vmax": None,
         "color": "#d62728",
