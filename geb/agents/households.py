@@ -291,7 +291,7 @@ class Households(AgentBaseClass):
         flooded_building_ids = self.buildings.loc[
             self.buildings["flooded"], "id"
         ].to_numpy()
-        self.flooded_households = np.where(
+        self.households_exposed_to_flooding = np.where(
             np.isin(self.var.building_id_of_household.data, flooded_building_ids)
         )[0]
 
@@ -2012,11 +2012,11 @@ class Households(AgentBaseClass):
 
     @property
     def adaptation_uptake_in_floodzone(self) -> np.ndarray:
-        """Calculate the adaptation uptake in the flood zone.
+        """Extract adaptation uptake in the flood zone.
 
         Returns:
             A numpy array with the adaptation uptake in the flood zone.
         """
-        if not hasattr(self, "flooded_households"):
+        if not hasattr(self, "households_exposed_to_flooding"):
             self.update_building_attributes()
-        return self.var.adapted.data[self.flooded_households]
+        return self.var.adapted.data[self.households_exposed_to_flooding]
