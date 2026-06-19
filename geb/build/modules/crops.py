@@ -899,6 +899,15 @@ class Crops(BuildModelBase):
                 )
                 iso3_to_representative_region_id = dict(zip(iso3_codes, unique_regions))
 
+            crop_calendar_array = self.array["agents/farmers/crop_calendar"]
+
+            if crop_calendar_array.ndim == 4:
+                self.logger.info(
+                    "Detected multi-year farmer crop calendars with shape %s. "
+                    "Crop-price validation will use crops from all HRL years.",
+                    crop_calendar_array.shape,
+                )
+
             for _, region in self.geom["regions"].iterrows():
                 region_dict = {}
                 region_id = region["region_id"]
@@ -925,37 +934,53 @@ class Crops(BuildModelBase):
 
                 region_data.index.name = "year"  # Ensure index name is 'year'
 
-                crop_calendars_in_region = self.array["agents/farmers/crop_calendar"][
-                    self.array["agents/farmers/region_id"] == region_id
-                ]
+                farmer_region_mask = self.array["agents/farmers/region_id"] == region_id
+
+                if crop_calendar_array.ndim == 3:
+                    # Single-year setup: (farmer, crop_slot, crop_calendar_variable).
+                    crop_calendars_in_region = crop_calendar_array[farmer_region_mask]
+                elif crop_calendar_array.ndim == 4:
+                    # Multi-year setup: (year, farmer, crop_slot, crop_calendar_variable).
+                    # Region filtering must happen on the farmer axis, not on the year axis.
+                    crop_calendars_in_region = crop_calendar_array[
+                        :, farmer_region_mask
+                    ]
+                else:
+                    raise ValueError(
+                        "agents/farmers/crop_calendar must have shape "
+                        "(farmer, 3, 4) or (year, farmer, 3, 4). "
+                        f"Got {crop_calendar_array.shape}."
+                    )
+
+                # Use all crops that occur in the region. In multi-year mode this means all
+                # crops that occur in any HRL year, so crop prices are available for all stacked
+                # crop calendars.
                 crops_in_region = crop_calendars_in_region[..., 0].ravel()
                 crops_in_region = np.unique(crops_in_region[crops_in_region != -1])
 
                 # Ensuring all crops are present according to the crop_data keys
                 for crop_id, crop_info in crop_data.items():
+                    crop_id_numeric = float(crop_id)
                     crop_name = crop_info["name"]
 
                     if crop_name.endswith("_flood") or crop_name.endswith("_drought"):
                         crop_name = crop_name.rsplit("_", 1)[0]
 
                     if crop_name in region_data.columns:
-                        # raise an error if the crop is in the crop calendar and has NaN values
                         if (
-                            float(crop_id) in crops_in_region
+                            crop_id_numeric in crops_in_region
                             and np.isnan(region_data[crop_name]).any()
                         ):
                             raise ValueError(
                                 f"Crop {crop_name} has NaN values in region {region_id} data."
                             )
                         region_dict[str(crop_id)] = region_data[crop_name].tolist()
-                    # check if crop is in the crop calendar, if is raise an error because it must be
-                    elif crop_id in crops_in_region:
+                    elif crop_id_numeric in crops_in_region:
                         raise ValueError(
-                            f"Crop {crop_name} not found in region {region_id} data, but is in crop calendar."
+                            f"Crop {crop_name} not found in region {region_id} data, "
+                            "but is in crop calendar."
                         )
                     else:
-                        # If data is not available for the crop, but is not in the crop calendar, it
-                        # is no issue, so we can fill with NaNs
                         region_dict[str(crop_id)] = [np.nan] * len(time_index)
                 data_per_region[str(region_id)] = region_dict
 

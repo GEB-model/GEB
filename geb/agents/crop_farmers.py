@@ -204,6 +204,8 @@ class CropFarmersVariables(Bucket):
     risk_perception: DynamicArray
     interest_rate: DynamicArray
     crop_calendar: DynamicArray
+    crop_calendar_years: ArrayInt32
+    crop_calendar_base_array: ArrayInt32
     crop_calendar_rotation_years: DynamicArray
     current_crop_calendar_rotation_year_index: DynamicArray
     adaptations: DynamicArray
@@ -367,6 +369,11 @@ class CropFarmers(AgentBaseClass):
             not self.config["expected_utility"]["crop_switching"]["ruleset"]
             == "no-adaptation"
         )
+        self.preset_crop_switching_active = (
+            not self.config["expected_utility"]["crop_switching"]["preset_switching"]
+            == "no-adaptation"
+        )
+
         self.traditional_insurance_adaptation_active = (
             not self.model.config["agent_settings"]["insurers"][
                 "traditional_insurance"
@@ -631,9 +638,42 @@ class CropFarmers(AgentBaseClass):
             dtype=np.int32,
             fill_value=-1,
         )  # first dimension is the farmers, second is the rotation, third is the crop, planting and growing length
-        self.var.crop_calendar[:] = read_array(
+
+        self.var.crop_calendar_base_array = read_array(
             self.model.files["array"]["agents/farmers/crop_calendar"]
         )
+
+        if self.var.crop_calendar_base_array.ndim == 3:
+            # Single-year setup: crop_calendar has shape (farmer, rotation, calendar).
+            self.var.crop_calendar[:] = self.var.crop_calendar_base_array
+
+        elif self.var.crop_calendar_base_array.ndim == 4:
+            # Multi-year setup: crop_calendar has shape
+            # (year, farmer, rotation, calendar). Initialize the model with the first
+            # available HRL year; yearly updating can later select another year index.
+            crop_calendar_year_index = 0
+
+            if "agents/farmers/crop_calendar_years" in self.model.files["array"]:
+                self.var.crop_calendar_years = read_array(
+                    self.model.files["array"]["agents/farmers/crop_calendar_years"]
+                )
+                self.model.logger.info(
+                    "Detected multi-year crop calendar with shape %s. "
+                    "Initializing crop_calendar with HRL year %s.",
+                    self.var.crop_calendar_base_array.shape,
+                    int(self.var.crop_calendar_years[crop_calendar_year_index]),
+                )
+            else:
+                self.model.logger.info(
+                    "Detected multi-year crop calendar with shape %s. "
+                    "Initializing crop_calendar with first year index.",
+                    self.var.crop_calendar_base_array.shape,
+                )
+
+            self.var.crop_calendar[:] = self.var.crop_calendar_base_array[
+                crop_calendar_year_index
+            ]
+
         # assert self.var.crop_calendar[:, :, 0].max() < len(self.var.crop_ids)
 
         self.var.crop_calendar_rotation_years = DynamicArray(
@@ -4972,6 +5012,24 @@ class CropFarmers(AgentBaseClass):
             )
             print("Nr of base groups", len(np.unique(self.var.farmer_base_class[:])))
 
+            # Potentially set the crop calendar data to the next year if it is multi-year
+            if (
+                self.var.crop_calendar_base_array.ndim == 4
+                and self.preset_crop_switching_active
+            ):
+                crop_calendar_year_indices = np.where(
+                    self.var.crop_calendar_years == self.model.current_time.year
+                )[0]
+
+                if crop_calendar_year_indices.size > 0:
+                    self.var.crop_calendar[:] = self.var.crop_calendar_base_array[
+                        int(crop_calendar_year_indices[0])
+                    ]
+
+                    self.model.logger.info(
+                        "Updated farmer crop calendars to HRL year %s.",
+                        self.model.current_time.year,
+                    )
             if (
                 not self.model.in_spinup
                 and "ruleset" in self.config

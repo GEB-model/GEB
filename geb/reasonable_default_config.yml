@@ -128,6 +128,7 @@ agent_settings:
     expected_utility:
       crop_switching: 
         ruleset: no-adaptation
+        preset_switching: no-adaptation
         loan_duration: 0
         switching_cap: 1 # if 1 there is no cap. < 1 there a cap of maximum switches per year (e.g., 0.10 = 10% of agents can switch each year) 
       adaptation_efficiency:
@@ -155,7 +156,7 @@ agent_settings:
         decision_horizon: 20
         pump_hours: 3.5
         specific_weight_water: 9800 # (kg/m3*m/s2)
-        max_initial_sat_thickness: 50 # m
+        max_initial_sat_thickness: 200 # m
         well_yield: 0.00005 # m3/s
         pump_efficiency: 0.7 # $/KWh
         energy_cost_rate: 0.074
