@@ -496,8 +496,9 @@ class FloodRiskModule:
                 print(
                     f"Damages adapt rp{return_period}: {round(damages_adapt[i].sum() / 1e6)} million"
                 )
-        setattr(self, "damages_do_not_adapt", damages_do_not_adapt)
-        setattr(self, "damages_adapt", damages_adapt)
+        if not dynamic:
+            self.damages_do_not_adapt = damages_do_not_adapt
+            self.damages_adapt = damages_adapt
         return damages_do_not_adapt, damages_adapt
 
     def calculate_ead(
