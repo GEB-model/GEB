@@ -288,8 +288,9 @@ class Households(AgentBaseClass):
         if drop_not_flooded:
             self.buildings = self.buildings[self.buildings["flooded"]]
         # also set index to flooded households
+        flooded_building_ids = self.buildings.loc[self.buildings["flooded"], "id"].to_numpy()
         self.flooded_households = np.where(
-            self.buildings.loc[self.var.building_id_of_household.data]["flooded"]
+            np.isin(self.var.building_id_of_household.data, flooded_building_ids)
         )[0]
 
     def update_building_adaptation_status(self, household_adapting: np.ndarray) -> None:
