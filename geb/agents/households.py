@@ -1323,6 +1323,48 @@ class Households(AgentBaseClass):
         return mapped_comids
 
     @property
+    def adaptation_uptake_in_floodzone(self) -> np.ndarray:
+        """Extract adaptation uptake in the flood zone.
+
+        Returns:
+            A numpy array with the adaptation uptake in the flood zone.
+        """
+        if not hasattr(self, "households_exposed_to_flooding"):
+            self.update_building_attributes()
+        return self.var.adapted.data[self.households_exposed_to_flooding]
+
+    @property
+<<<<<<< HEAD
+    def comid_of_household(self) -> np.ndarray:
+        """Assign COMIDs to households based on their building assignment.
+
+        Notes:
+            Results are cached. Delete ``_cached_mapped_comids`` to force a
+            recalculation (e.g., after relocations that change
+            ``building_id_of_household``).
+
+        Returns:
+            Array of COMIDs corresponding to each household.
+        """
+        # Cache the indexed Series for fast vectorized lookup; avoids rebuilding on each call
+        if not hasattr(self, "_comid_map"):
+            self._comid_map = self.buildings.set_index("id")["COMID"]
+        if hasattr(self, "_cached_mapped_comids"):
+            return self._cached_mapped_comids
+
+        mapped_comids = (
+            pd.Series(self.var.building_id_of_household)
+            .map(self._comid_map)
+            .fillna(-1)
+            .astype(int)
+            .to_numpy()
+        )
+        self._cached_mapped_comids = mapped_comids
+        return mapped_comids
+
+    @property
+=======
+>>>>>>> 9554384b (Lars export adaptation (#878))
     def household_distance_to_river_m(self) -> np.ndarray:
         """Get the distance to the nearest river for each household.
 
