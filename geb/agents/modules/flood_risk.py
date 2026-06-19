@@ -370,7 +370,7 @@ class FloodRiskModule:
         self,
         verbose: bool = False,
         export_building_damages: bool = False,
-        dynamic: bool = False,
+        dynamic: bool = True,
     ) -> tuple[np.ndarray, np.ndarray]:
         """This function calculates the flood damages for the households in the model.
 
