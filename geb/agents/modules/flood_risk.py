@@ -389,6 +389,16 @@ class FloodRiskModule:
             and hasattr(self, "damages_do_not_adapt")
             and hasattr(self, "damages_adapt")
         ):
+            assert self.damages_do_not_adapt.shape == (
+                self.households.return_periods.size,
+                self.households.n,
+            ) and self.damages_adapt.shape == (
+                self.households.return_periods.size,
+                self.households.n,
+            )
+            (
+                "Damages array shape does not match the expected shape based on return periods and number of households. If household relocation is modeled, damages must be calculated dynamically."
+            )
             return self.damages_do_not_adapt, self.damages_adapt
 
         damages_do_not_adapt = np.zeros(
