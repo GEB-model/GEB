@@ -36,6 +36,31 @@ class EarlyWarningModule:
         self.households = households
         self.load_wlranges_and_measures()
 
+    def assign_income_category(
+        self,
+        income_values: DynamicArray,
+    ) -> None:
+        """
+        Assigns income categories to households based on their income values.
+
+        Args:
+            income_values (DynamicArray): Array of income values for each household.
+        """
+        # Convert Income from absolute values to categories (1-5)
+        # Use percentile-based categorization that handles duplicates
+        income_series = pd.Series(np.asarray(income_values))
+
+        percentiles = income_series.rank(method="average", pct=True)
+
+        categories = pd.cut(
+            percentiles,
+            bins=[0, 0.2, 0.4, 0.6, 0.8, 1.0],
+            labels=[1, 2, 3, 4, 5],
+            include_lowest=True,
+        )
+
+        self.households.var.income_category[:] = categories.astype(np.int32).to_numpy()
+
     def load_wlranges_and_measures(self) -> None:
         """
         Loads the water level ranges and appropriate measures, and the implementation times for measures.
@@ -504,7 +529,7 @@ class EarlyWarningModule:
         else:
             return buildings
 
-    def get_weight(self, weights_table: pd.DataFrame, row: pd.Series) -> float:
+    def get_weight(self, household_id: int, weights_table: pd.DataFrame) -> float:
         """
         Get the communication efficiency weight for a household based on its education and income.
 
@@ -515,14 +540,14 @@ class EarlyWarningModule:
         Returns:
             The communication efficiency weight for the household.
         """
-        edu = row["Education"]
-        inc = row["Income_Category"]
+        edu = self.households.var.education_level[household_id]
+        inc = self.households.var.income_category[household_id]
         return weights_table.loc[edu, inc]
 
     def calculate_communication_efficiency_probability(
         self,
         target_households: gpd.GeoDataFrame,
-    ) -> pd.Series:
+    ) -> None:
         """
         Calculate communication efficiency probability based on education level and income.
 
@@ -534,25 +559,7 @@ class EarlyWarningModule:
         Args:
             target_households: GeoDataFrame with household data including education and income.
 
-        Returns:
-            Series with communication efficiency probabilities for each household.
-
-        Raises:
-            KeyError: If required columns are missing from target_households.
         """
-        # 1. Check if required columns exist
-        required_columns = ["Education", "Income"]
-        missing_columns = [
-            col for col in required_columns if col not in target_households.columns
-        ]
-
-        # If required columns are missing, use uniform random probabilities as fallback
-        if missing_columns:
-            raise KeyError(
-                f"Missing required columns in target_households: {missing_columns}. "
-                f"Education and Income data should have been added from self.var arrays."
-            )
-
         # 2. Normalized Weights based on the regression of the WRP survey data
         # (https://documents1.worldbank.org/curated/en/099259309032538041/pdf/IDU-c6f56dc5-a0cb-4375-ac15-a91f1c202b09.pdf )
         # Rows = Education classes, Columns = Income quintiles
@@ -569,28 +576,13 @@ class EarlyWarningModule:
         )
 
         # 3. Compute total weight per agent
-        # Convert Income from absolute values to categories (1-5)
-        # Handle duplicates by using rank-based percentiles instead of qcut
-        income_values = target_households["Income"]
+        # Assign communication efficiency weights to target households based on their education and income categories
+        target_households["comm_weight"] = [
+            self.get_weight(household_id=household_id, weights_table=weights_table)
+            for household_id in target_households.index
+        ]
 
-        # Use percentile-based categorization that handles duplicates
-        income_percentiles = income_values.rank(method="average", pct=True)
-
-        # Map percentiles to categories 1-5
-        income_categories = pd.cut(
-            income_percentiles,
-            bins=[0, 0.2, 0.4, 0.6, 0.8, 1.0],
-            labels=[1, 2, 3, 4, 5],
-            include_lowest=True,
-        )
-        target_households["Income_Category"] = income_categories.astype(int)
-
-        target_households["weight"] = target_households.apply(
-            lambda row: self.get_weight(weights_table=weights_table, row=row), axis=1
-        )
-        weights = target_households["weight"].values
-
-        return weights
+        return target_households["comm_weight"].values
 
     def compute_lead_time(self) -> float:
         """Compute lead time in hours based on forecast start time and current model time.
@@ -730,6 +722,7 @@ class EarlyWarningModule:
                 target_households
             )
             # Normalize weights to ensure they sum to exactly 1.0 (avoid floating point precision errors)
+            # TODO: this needs to be done for all households or only the target households (per postal codes)? Check with Roy
             warning_weights = warning_weights / warning_weights.sum()
             # Use weighted random sampling to select exactly n_to_select households
             chosen_indices = rng.choice(
@@ -849,23 +842,24 @@ class EarlyWarningModule:
         households = self.households.var.households_with_postal_codes.copy()
         # Add education and income data to the households
         # IMPORTANT: We use the index of households to correctly map the data
-        # because household_points.index corresponds to the arrays in self.var
-        if "Education" not in households.columns:
-            households["Education"] = households.index.map(
-                lambda idx: (
-                    self.households.var.education_level.data[idx]
-                    if idx < len(self.households.var.education_level.data)
-                    else np.nan
-                )
-            )
-        if "Income" not in households.columns:
-            households["Income"] = households.index.map(
-                lambda idx: (
-                    self.households.var.income.data[idx]
-                    if idx < len(self.households.var.income.data)
-                    else np.nan
-                )
-            )
+        # because household_points.index corresponds to the arrays in self.var\
+        # TODO: this can be removed as we can check the array directly, right?
+        # if "Education" not in households.columns:
+        #     households["Education"] = households.index.map(
+        #         lambda idx: (
+        #             self.households.var.education_level.data[idx]
+        #             if idx < len(self.households.var.education_level.data)
+        #             else np.nan
+        #         )
+        #     )
+        # if "Income" not in households.columns:
+        #     households["Income"] = households.index.map(
+        #         lambda idx: (
+        #             self.households.var.income.data[idx]
+        #             if idx < len(self.households.var.income.data)
+        #             else np.nan
+        #         )
+        #     )
 
         postal_codes = self.households.postal_codes
         # Maybe load this as a global var (?) instead of loading it each time
@@ -985,7 +979,9 @@ class EarlyWarningModule:
 
             if measures or evacuate:
                 # Filter the affected households based on the postal code
-                affected_households = households[households["postcode"] == postal_code]
+                affected_households = households[
+                    households["postcode"] == postal_code
+                ].copy()
 
                 n_warned_households = self.warning_communication(
                     target_households=affected_households,
@@ -1292,6 +1288,8 @@ class EarlyWarningModule:
             "warning_trigger",
             "actions_taken",
             "action_lead_time",
+            "education_level",
+            "income_category",
         ]
 
         # make sure household points and global variables have the same length
@@ -1302,17 +1300,19 @@ class EarlyWarningModule:
             )
 
         # add columns in the household points geodataframe
-
         for name in [
             "warning_reached",
             "warning_level",
             "response_probability",
             "evacuated",
             "action_lead_time",
+            "education_level",
+            "income_category",
         ]:
             if hasattr(self.households.var, name):
                 household_points[name] = getattr(self.households.var, name)
 
+        # add columns for warning triggers
         warning_triggers = self.households.var.possible_warning_triggers
         for i, _ in enumerate(warning_triggers):
             if warning_triggers[i] == "water_levels":
@@ -1324,6 +1324,7 @@ class EarlyWarningModule:
                     self.households.var.warning_trigger[:, i]
                 )
 
+        # add columns for recommended measures
         possible_measures_to_recommend = self.households.var.possible_measures
         for i, measure in enumerate(possible_measures_to_recommend):
             if measure == "elevate possessions":
@@ -1339,6 +1340,7 @@ class EarlyWarningModule:
                     self.households.var.recommended_measures[:, i]
                 )
 
+        # add columns for actions taken
         possible_actions = self.households.var.possible_measures
         for i, action in enumerate(possible_actions):
             if action == "elevate possessions":

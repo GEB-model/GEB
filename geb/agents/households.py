@@ -472,6 +472,13 @@ class Households(AgentBaseClass):
         # assign income and wealth attributes
         self.assign_household_wealth_and_income()
 
+        # iniate array with income category to compute communication efficiency probability for warnings later
+        self.var.income_category = DynamicArray(
+            np.zeros(self.n, np.float32), max_n=self.max_n
+        )
+
+        self.early_warning_module.assign_income_category(self.var.income)
+
         # initiate array with property values (used as max damage) [dummy data for now, could use Huizinga combined with building footprint to calculate better values]
         self.var.property_value = DynamicArray(
             (self.var.wealth.data * 0.8).astype(np.int64), max_n=self.max_n
