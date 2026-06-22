@@ -399,7 +399,7 @@ class GEBModel(Module):
 
         # set a folder to store the initial state of the alternate universe
         store_location: Path = (
-            self.simulation_root / "multiverse" / name
+            self.simulation_root / "alternate_universe" / name
         )  # create a temporary folder for the multiverse
         self.store.save(store_location)  # save the current state of the model
 
@@ -415,7 +415,7 @@ class GEBModel(Module):
 
         # make reporter AFTER updating n_timesteps
         self.reporter = Reporter(
-            self, self.report_folder / "multiverse" / name, clean=True
+            self, self.report_folder / "alternate_universe" / name, clean=True
         )  # create a new reporter for the alternate universe
 
         if do_function is not None:

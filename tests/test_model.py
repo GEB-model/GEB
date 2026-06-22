@@ -1110,18 +1110,18 @@ def test_alternate_universe() -> None:
         report_folder = geb.reporter.report_folder
         assert report_folder.exists(), "Report folder does not exist."
 
-        alternative_report_folder_elevated_soil_moisture = (
+        alternate_report_folder_elevated_soil_moisture = (
             report_folder / "multiverse" / "test_alt_elevated_soil_moisture"
         )
-        assert alternative_report_folder_elevated_soil_moisture.exists(), (
-            "Alternative universe report folder does not exist."
+        assert alternate_report_folder_elevated_soil_moisture.exists(), (
+            "alternate universe report folder does not exist."
         )
 
-        alternative_report_folder_normal_soil_moisture = (
+        alternate_report_folder_normal_soil_moisture = (
             report_folder / "multiverse" / "test_alt_normal_soil_moisture"
         )
-        assert alternative_report_folder_normal_soil_moisture.exists(), (
-            "Alternative universe report folder for normal soil moisture does not exist."
+        assert alternate_report_folder_normal_soil_moisture.exists(), (
+            "alternate universe report folder for normal soil moisture does not exist."
         )
 
         normal_run_data = read_table(
@@ -1130,12 +1130,12 @@ def test_alternate_universe() -> None:
             / "bare_soil_evaporation_weighted_sum_m.parquet"
         )
         alternate_run_data_elevated_soil_moisture = read_table(
-            alternative_report_folder_elevated_soil_moisture
+            alternate_report_folder_elevated_soil_moisture
             / "hydrology.landsurface"
             / "bare_soil_evaporation_weighted_sum_m.parquet"
         )
         alternate_run_data_normal_soil_moisture = read_table(
-            alternative_report_folder_normal_soil_moisture
+            alternate_report_folder_normal_soil_moisture
             / "hydrology.landsurface"
             / "bare_soil_evaporation_weighted_sum_m.parquet"
         )
