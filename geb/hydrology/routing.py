@@ -808,7 +808,7 @@ class KinematicWave(Router):
                     if (
                         retention_storage_m3[node_retention_id] > np.float32(0.0)
                         and discharge_before_diversion_m3_per_s
-                        <= activation_threshold_m3_per_s
+                        <= activation_threshold_m3_per_s * np.float32(0.5)
                     ):
                         outflow_volume_m3: np.float32 = (
                             np.float32(0.01) * retention_storage_m3[node_retention_id]
@@ -1262,7 +1262,8 @@ class Accuflux(Router):
                 # retention basin storage is updated, as well as retention outflow.
                 if (
                     retention_storage_m3[node_retention_id] > np.float32(0.0)
-                    and Q_before_diversion_m3_per_s <= activation_threshold_m3_per_s
+                    and Q_before_diversion_m3_per_s
+                    <= activation_threshold_m3_per_s * np.float32(0.5)
                 ):
                     outflow_volume: np.float32 = (
                         np.float32(0.01) * retention_storage_m3[node_retention_id]
