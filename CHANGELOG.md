@@ -1,4 +1,7 @@
 # dev
+- Implemented the `early_warning.py` module outside of `households.py`, launching the latest GEB-IbF system, including options for: area and building based warnings; warning communication weighted by socio-economic factor; time-dependent damage reduction.
+- Parameterization of settings in the `model.yml`. Increased overall efficiency and usability of the early warning system.
+- Improved the setup for `critical_infrastructure_warning_strategy`, which now depends on asset type instead of strategy id.
 
 # v1.0.0b28
 - Add setup_flood_observations build method working with WorldFloodsV2

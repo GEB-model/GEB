@@ -97,10 +97,10 @@ agent_settings:
       probability_threshold: 0.6 # Flood probability threshold for issuing warnings (0.0-1.0)  
       area_threshold: 0.1 # Area threshold (percentage of postal code area) for warnings (0.0-1.0)
       building_threshold: 0.1 # Building threshold (percentage of buildings in postal code) for warnings (0.0-1.0)
-      communication_efficiency: 1.0 # Communication efficiency: fraction of households that can be reached (0.0-1.0)
-      weight_by_socioeconomic_factors: true # Whether to consider the social economic factors in the distribution of warnings.
+      communication_efficiency: 0.78 # Communication efficiency: fraction of households that can be reached (0.0-1.0)
+      weight_by_socioeconomic_factors: false # Whether to consider the social economic factors in the distribution of warnings.
       damage_reduction_over_leadtime: false # Whether to consider the reduction of damage over lead time due to more effective warnings. The earlier the action the more damage reduction.
-      evacuation_lead_time_threshold: 96 # Lead time threshold for evacuation warnings (hours)
+      evacuation_lead_time_threshold: 48 # Lead time threshold for evacuation warnings (hours)
       response_rates: # Response rates for different warning types
         area_based_warnings: 0.35 # Response rate for area-based warnings (0.0-1.0)
         building_based_warnings: 0.7 # Response rate for building-based warnings with specific measures (0.0-1.0)
