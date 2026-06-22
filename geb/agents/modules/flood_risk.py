@@ -367,7 +367,7 @@ class FloodRiskModule:
         )
 
     def calculate_building_flood_damages(
-        self, verbose: bool = False, export_building_damages: bool = False
+        self, verbose: bool = True, export_building_damages: bool = False
     ) -> tuple[np.ndarray, np.ndarray]:
         """This function calculates the flood damages for the households in the model.
 
@@ -532,6 +532,18 @@ class FloodRiskModule:
                 )
         return damages_do_not_adapt, damages_adapt
 
+    @staticmethod
+    def reproject_to_utm(hazard:xr.DataArray) -> xr.DataArray:
+        """Reproject the hazard map to a metric (UTM) CRS if it is in a geographic CRS."""
+        if not hazard.rio.crs.is_geographic:
+            return hazard
+        bounds = hazard.rio.bounds()
+        center_lon = (bounds[0] + bounds[2]) / 2
+        center_lat = (bounds[1] + bounds[3]) / 2
+        utm_zone = int((center_lon + 180)/6) + 1
+        utm_epsg = 32600 + utm_zone if center_lat >= 0 else 32700 + utm_zone
+        return hazard.rio.reproject(f"EPSG:{utm_epsg}")
+    
     def calculate_ead(
         self,
         damages_do_not_adapt: np.ndarray,

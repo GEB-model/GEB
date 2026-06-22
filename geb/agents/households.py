@@ -15,6 +15,7 @@ from rasterio.features import rasterize
 from geb.geb_types import ArrayFloat32, TwoDArrayFloat32
 from geb.workflows.io import read_geom
 
+
 from ..store import Bucket, DynamicArray
 from ..workflows.io import read_array, read_table, read_zarr, write_zarr
 from .decision_module import DecisionModule
@@ -593,6 +594,10 @@ class Households(AgentBaseClass):
             np.zeros(self.n, np.float32), max_n=self.max_n
         )
 
+        self.var.w_ead_usd_per_year = DynamicArray(
+            np.zeros(self.n, np.float32), max_n=self.max_n
+        )
+
         # Budget diagnostics
         self.var.budget = np.zeros(self.n, dtype=np.float32)
         self.var.budget_used = np.zeros(self.n, dtype=np.float32)
@@ -773,79 +778,79 @@ class Households(AgentBaseClass):
         )
         self.flood_risk_perceptions.append(df)
 
-    def return_period_windstorm(self) -> np.ndarray:
-        """Simulate a windstorm event based on return periods and determine which households are affected.
+    # def return_period_windstorm(self) -> np.ndarray:
+    #     """Simulate a windstorm event based on return periods and determine which households are affected.
 
-        Returns:
-            Array of indices of affected households.
-        """
-        #draw a single random number
-        p_random = np.random.random()
-        # Work with a locally sorted copy of return periods to ensure correct event selection
-        return_periods_arr = np.asarray(self.windstorm_return_periods, dtype=float)
-        sort_idx = np.argsort(return_periods_arr)  # ascending order
-        sorted_return_periods = return_periods_arr[sort_idx]
-        probabilities = 1.0 / sorted_return_periods
+    #     Returns:
+    #         Array of indices of affected households.
+    #     """
+    #     #draw a single random number
+    #     p_random = np.random.random()
+    #     # Work with a locally sorted copy of return periods to ensure correct event selection
+    #     return_periods_arr = np.asarray(self.windstorm_return_periods, dtype=float)
+    #     sort_idx = np.argsort(return_periods_arr)  # ascending order
+    #     sorted_return_periods = return_periods_arr[sort_idx]
+    #     probabilities = 1.0 / sorted_return_periods
 
-        if p_random >= probabilities.max():
-            return np.array([], dtype=int)
+    #     if p_random >= probabilities.max():
+    #         return np.array([], dtype=int)
         
-        # find the event corresponding to the random draw
-        event_idx = np.searchsorted(probabilities[::-1], p_random)
-        event_idx = len(probabilities) - 1 - event_idx
-        event = sorted_return_periods[event_idx]
-        self.model.logger.info(
-            "Return period windstorm event: %s years (p=%.4f, random draw=%.4f)",
-            event,
-            probabilities[event_idx],
-            p_random,
-        )
+    #     # find the event corresponding to the random draw
+    #     event_idx = np.searchsorted(probabilities[::-1], p_random)
+    #     event_idx = len(probabilities) - 1 - event_idx
+    #     event = sorted_return_periods[event_idx]
+    #     self.model.logger.info(
+    #         "Return period windstorm event: %s years (p=%.4f, random draw=%.4f)",
+    #         event,
+    #         probabilities[event_idx],
+    #         p_random,
+    #     )
 
-        windstorm_map: xr.DataArray = self.windstorm_maps[event]
+    #     windstorm_map: xr.DataArray = self.windstorm_maps[event]
 
-        # cache household coordinates in windstorm_map CRS (Nx2 numpy array)
-        if not hasattr(self, "_household_xy_wind"):
-            import pyproj
+    #     # cache household coordinates in windstorm_map CRS (Nx2 numpy array)
+    #     if not hasattr(self, "_household_xy_wind"):
+    #         import pyproj
 
-            x, y = np.array(self.buildings.x), np.array(self.buildings.y)
-            transformer = pyproj.Transformer.from_crs(
-                "EPSG:4326", windstorm_map.rio.crs, always_xy=True
-            )
-            self._building_xy_wind = np.array(transformer.transform(x, y)).T
+    #         x, y = np.array(self.buildings.x), np.array(self.buildings.y)
+    #         transformer = pyproj.Transformer.from_crs(
+    #             "EPSG:4326", windstorm_map.rio.crs, always_xy=True
+    #         )
+    #         self._building_xy_wind = np.array(transformer.transform(x, y)).T
 
-        # sample windstorm map using clipped coordinates
-        sampled_values = sample_from_map(
-            array=windstorm_map.values,
-            coords=self._building_xy_wind,
-            gt=windstorm_map.rio.transform(recalc=True).to_gdal(),
-            out_of_bounds_value=np.nan,
-        )
+    #     # sample windstorm map using clipped coordinates
+    #     sampled_values = sample_from_map(
+    #         array=windstorm_map.values,
+    #         coords=self._building_xy_wind,
+    #         gt=windstorm_map.rio.transform(recalc=True).to_gdal(),
+    #         out_of_bounds_value=np.nan,
+    #     )
 
-        # Use a wind speed threshold to determine affected households — must match
-        # the wind_threshold_ms used in wind_risk.py for damage prefiltering
-        minimum_wind_speed_ms = float(
-            self.model.config.get("hazards", {})
-            .get("windstorm", {})
-            .get("wind_threshold_ms", 20.0)
-        )
-        windstorm_building_indices = np.where(sampled_values > minimum_wind_speed_ms)[0]
-        #get building IDs of affected buildings
-        windstorm_building_ids = self.buildings.loc[
-            windstorm_building_indices, "id"
-        ].values.astype(int)
+    #     # Use a wind speed threshold to determine affected households — must match
+    #     # the wind_threshold_ms used in wind_risk.py for damage prefiltering
+    #     minimum_wind_speed_ms = float(
+    #         self.model.config.get("hazards", {})
+    #         .get("windstorm", {})
+    #         .get("wind_threshold_ms", 20.0)
+    #     )
+    #     windstorm_building_indices = np.where(sampled_values > minimum_wind_speed_ms)[0]
+    #     #get building IDs of affected buildings
+    #     windstorm_building_ids = self.buildings.loc[
+    #         windstorm_building_indices, "id"
+    #     ].values.astype(int)
 
-        #get indices of households located in affected buildings
-        windstorm_household_indices = np.where(
-            np.isin(self.var.building_id_of_household.data, windstorm_building_ids)
-        )[0]
+    #     #get indices of households located in affected buildings
+    #     windstorm_household_indices = np.where(
+    #         np.isin(self.var.building_id_of_household.data, windstorm_building_ids)
+    #     )[0]
 
-        return windstorm_household_indices
+    #     return windstorm_household_indices
 
     def update_windstorm_risk_perceptions(self) -> None:
         """Update the risk perceptions of households based on the latest flood data."""
         self.var.years_since_last_windstorm.data += 1
 
-        windstorm_household_indices = self.return_period_windstorm()
+        windstorm_household_indices = self.wind_risk_module.return_period_windstorm()
         self.var.years_since_last_windstorm.data[windstorm_household_indices] = 0
 
         self.var.risk_perception_windstorm.data = (
@@ -2190,11 +2195,19 @@ class Households(AgentBaseClass):
         )
         
 
-        if self.var.insurance_scheme == "private":
-            choose_ins = EU_multirisk_insurance > EU_do_nothing
-        else:
-            choose_ins = np.ones(self.n,dtype=bool)
+        # if self.var.insurance_scheme == "private":
+        #     choose_ins = EU_multirisk_insurance > EU_do_nothing
+        # else:
+        #     choose_ins = np.ones(self.n,dtype=bool)
 
+        lecz_mask = self.var.in_lecz.data == 1
+        
+        if self.var.insurance_scheme =="private":
+            choose_ins = (
+                EU_multirisk_insurance > EU_do_nothing
+            ) & lecz_mask
+        else: #CATNAT and reform
+            choose_ins = lecz_mask.copy()
 
         # "benefit" of each choice (used to decide what to drop if over budget)
         # OLD CODE
@@ -2438,9 +2451,13 @@ class Households(AgentBaseClass):
             damages_do_not_adapt, damages_adapt, self.var.adapted.data
         ).astype(np.float32)
 
-        self.var.ead_usd_per_year[:] = self.flood_risk_module.calculate_ead(
-            damages_do_not_adapt, damages_adapt, self.var.adapted.data
-        ).astype(np.float32)
+        # self.var.ead_usd_per_year[:] = self.flood_risk_module.calculate_ead(
+        #     damages_do_not_adapt, damages_adapt, self.var.adapted.data
+        # ).astype(np.float32)
+
+        self.var.w_ead_usd_per_year[:] = self.wind_risk_module.calculate_ead(
+            damages_unprotected_w, damages_adapt_w, self.var.adapted_shutters.data
+        )
 
     def load_wlranges_and_measures(self) -> None:
         """Loads the water level ranges and appropriate measures, and the implementation times for measures."""

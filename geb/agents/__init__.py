@@ -79,6 +79,7 @@ class Agents(Module):
             self.insurers,
         ]
 
+
     @property
     def name(self) -> str:
         """Return the name of the module."""

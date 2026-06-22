@@ -1364,6 +1364,7 @@ class DecisionModule:
         #catnat_surcharge: float = 0.20,
         reinsurance_share: float = 0.5,
         method: str = "household",
+        **kwargs,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Insurance premium calculation including CATNAT scheme.
@@ -1406,7 +1407,11 @@ class DecisionModule:
             else np.zeros(expected_damages_flood.shape[1])
         )
 
-        EAD_total = np.mean(EAD_flood + EAD_wind)
+        lecz_mask = kwargs.get("lecz_mask")
+
+        EAD_households = EAD_flood + EAD_wind
+
+        EAD_total = np.mean(EAD_households[lecz_mask])
 
         premium_total = EAD_total * (1.0 + operating_insurer)
 
