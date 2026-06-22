@@ -1581,15 +1581,14 @@ def prepare_pairwise_skill_score_boxplot_inputs(
         archive_models_only: Whether to exclude non-archive external models,
             such as Utrecht, from the comparison.
         archive_evaluation_metrics_path: Optional GEB metrics file covering the
-            Google/GloFAS archive period. Required when Google Streamflow or
-            GloFAS external scores are present.
+            Google/GloFAS archive period. When omitted, archive models use
+            ``evaluation_metrics_path``. When provided but missing, archive
+            model comparisons are skipped.
 
     Returns:
         Mapping from external model label to pairwise matched plot inputs.
 
     Raises:
-        FileNotFoundError: If Google Streamflow or GloFAS external scores are
-            present but the requested archive-period GEB metrics file is missing.
         ValueError: If the archive-period GEB metrics file exists but contains
             no stations.
     """
@@ -1608,22 +1607,27 @@ def prepare_pairwise_skill_score_boxplot_inputs(
     has_archive_models: bool = any(
         _is_archive_external_model(model_name) for model_name in external_models
     )
-    if has_archive_models:
-        if archive_evaluation_metrics_path is None:
-            raise FileNotFoundError(
-                "Google/GloFAS external scores are present, but no "
-                "archive-period GEB metrics path was provided."
-            )
-        if not archive_evaluation_metrics_path.exists():
-            logger.error(
-                "Google/GloFAS external scores are present, but %s is missing. "
-                "Run `geb evaluate hydrology.evaluate_discharge --start-year 2014 "
-                "--end-year 2021` before plotting external archive comparisons.",
-                archive_evaluation_metrics_path,
-            )
-            raise FileNotFoundError(
-                f"Missing archive-period GEB metrics file: {archive_evaluation_metrics_path}"
-            )
+    if (
+        has_archive_models
+        and archive_evaluation_metrics_path is not None
+        and not archive_evaluation_metrics_path.exists()
+    ):
+        logger.warning(
+            "Google/GloFAS external scores are present, but %s is missing. "
+            "Skipping archive comparisons. Run `geb evaluate "
+            "hydrology.evaluate_discharge --start-year 2014 --end-year 2021` "
+            "to create them.",
+            archive_evaluation_metrics_path,
+        )
+        # External plots are optional, so a missing archive-period run should
+        # not discard plots and metrics already produced by the main evaluation.
+        external_models = {
+            model_name: model_df
+            for model_name, model_df in external_models.items()
+            if not _is_archive_external_model(model_name)
+        }
+        if not external_models:
+            return {}
 
     pairwise_plot_inputs: dict[str, SkillScorePlotInputs] = {}
     evaluation_df_by_path: dict[Path, pd.DataFrame] = {}

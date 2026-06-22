@@ -520,6 +520,76 @@ def test_prepare_pairwise_skill_score_boxplot_inputs_applies_glofas_threshold(
     assert "GEB upstream area >= 500 km2" in glofas_inputs.filter_summary
 
 
+def test_prepare_pairwise_inputs_skip_missing_archive_metrics(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Missing archive metrics skip Google while retaining other comparisons."""
+    evaluation_metrics_path: Path = tmp_path / "evaluation_metrics.xlsx"
+    external_folder: Path = tmp_path / "external"
+    external_folder.mkdir()
+    evaluation_df: pd.DataFrame = pd.DataFrame(
+        {
+            "station_ID": [1001],
+            "station_name": ["utrecht_a"],
+            "upstream_area_GEB": [500_000_000.0],
+            "KGE": [0.8],
+        }
+    )
+    evaluation_df.to_excel(evaluation_metrics_path, index=False)
+    pd.DataFrame(
+        {"KGE": [0.2]},
+        index=pd.Index(["utrecht_a"]),
+    ).to_csv(external_folder / "utrecht_1km.csv")
+    pd.DataFrame(
+        {"KGE": [0.4]},
+        index=pd.Index(["GRDC_1001"]),
+    ).to_csv(external_folder / GOOGLE_STREAMFLOW_CSV_NAME)
+
+    with caplog.at_level(logging.WARNING):
+        pairwise_inputs = prepare_pairwise_skill_score_boxplot_inputs(
+            evaluation_metrics_path=evaluation_metrics_path,
+            external_evaluation_folder=None,
+            configured_external_evaluation_folder=external_folder,
+            model_folder=tmp_path,
+            output_folder=tmp_path,
+            logger=logging.getLogger(__name__),
+            minimum_upstream_area_km2=0.0,
+            auto_fetch_google_streamflow=False,
+            archive_evaluation_metrics_path=tmp_path
+            / "evaluation_metrics_2014_2021.xlsx",
+        )
+
+    assert list(pairwise_inputs) == ["utrecht_1km"]
+    assert "Skipping archive comparisons" in caplog.text
+
+
+def test_prepare_pairwise_inputs_return_empty_when_only_archive_metrics_missing(
+    tmp_path: Path,
+) -> None:
+    """Missing archive metrics yield no pairwise inputs for archive-only data."""
+    external_folder: Path = tmp_path / "external"
+    external_folder.mkdir()
+    pd.DataFrame(
+        {"KGE": [0.4]},
+        index=pd.Index(["GRDC_1001"]),
+    ).to_csv(external_folder / GOOGLE_STREAMFLOW_CSV_NAME)
+
+    pairwise_inputs = prepare_pairwise_skill_score_boxplot_inputs(
+        evaluation_metrics_path=tmp_path / "evaluation_metrics.xlsx",
+        external_evaluation_folder=None,
+        configured_external_evaluation_folder=external_folder,
+        model_folder=tmp_path,
+        output_folder=tmp_path,
+        logger=logging.getLogger(__name__),
+        minimum_upstream_area_km2=0.0,
+        auto_fetch_google_streamflow=False,
+        archive_evaluation_metrics_path=tmp_path / "evaluation_metrics_2014_2021.xlsx",
+    )
+
+    assert pairwise_inputs == {}
+
+
 def test_prepare_skill_score_boxplot_inputs_matches_google_with_snapped_index(
     tmp_path: Path,
 ) -> None:
