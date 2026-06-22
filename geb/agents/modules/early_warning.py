@@ -547,7 +547,7 @@ class EarlyWarningModule:
     def calculate_communication_efficiency_probability(
         self,
         target_households: gpd.GeoDataFrame,
-    ) -> None:
+    ) -> np.ndarray:
         """
         Calculate communication efficiency probability based on education level and income.
 
@@ -559,6 +559,8 @@ class EarlyWarningModule:
         Args:
             target_households: GeoDataFrame with household data including education and income.
 
+        Returns:
+            np.ndarray: Array of communication efficiency probabilities.
         """
         # 2. Normalized Weights based on the regression of the WRP survey data
         # (https://documents1.worldbank.org/curated/en/099259309032538041/pdf/IDU-c6f56dc5-a0cb-4375-ac15-a91f1c202b09.pdf )
@@ -711,34 +713,41 @@ class EarlyWarningModule:
         # Select exactly communication_efficiency fraction of households using socio-economic weights
         n_to_select = int(communication_efficiency * n_target_households)
         if n_to_select == 0:
-            raise ValueError(
-                "Communication efficiency is too low to warn any households. Please increase it or check the target households."
-            )
+            if n_target_households <= 2:
+                return 0
+            else:
+                raise ValueError(
+                    "Communication efficiency is too low to warn any households. Please increase it or check the target households."
+                )
 
         rng = np.random.default_rng(seed=42)  # Fixed seed for reproducibility
         if weight_by_socioeconomic_factors:
+            assert communication_efficiency < 1.0, (
+                "Communication efficiency must be less than 1.0 when weighting by socio-economic factors, otherwise all households in a postal code will be selected."
+            )
             # Calculate individual communication efficiency probabilities based on socio-economic factors
             warning_weights = self.calculate_communication_efficiency_probability(
                 target_households
             )
             # Normalize weights to ensure they sum to exactly 1.0 (avoid floating point precision errors)
-            # TODO: this needs to be done for all households or only the target households (per postal codes)? Check with Roy
+            # TODO: this can be improved to be done for the whole catchment instead of per each postal code, to better capture the differences in communication efficiency between postal codes
             warning_weights = warning_weights / warning_weights.sum()
             # Use weighted random sampling to select exactly n_to_select households
-            chosen_indices = rng.choice(
-                target_households.index,
+            position_indices = rng.choice(
+                n_target_households,
                 size=n_to_select,
                 replace=False,  # Each household can only be selected once for warning
                 p=warning_weights,
             )
+            print("")
         else:
-            chosen_indices = rng.choice(
-                target_households.index,
+            position_indices = rng.choice(
+                n_target_households,
                 size=n_to_select,
                 replace=False,  # Each household can only be selected once for warning
             )
 
-        selected_households = target_households.loc[chosen_indices]
+        selected_households = target_households.iloc[position_indices]
         n_feasible_warnings = len(selected_households)
 
         self.logger.info(
@@ -840,26 +849,6 @@ class EarlyWarningModule:
         # Load households and postal codes
         buildings = self.households.var.buildings.copy()
         households = self.households.var.households_with_postal_codes.copy()
-        # Add education and income data to the households
-        # IMPORTANT: We use the index of households to correctly map the data
-        # because household_points.index corresponds to the arrays in self.var\
-        # TODO: this can be removed as we can check the array directly, right?
-        # if "Education" not in households.columns:
-        #     households["Education"] = households.index.map(
-        #         lambda idx: (
-        #             self.households.var.education_level.data[idx]
-        #             if idx < len(self.households.var.education_level.data)
-        #             else np.nan
-        #         )
-        #     )
-        # if "Income" not in households.columns:
-        #     households["Income"] = households.index.map(
-        #         lambda idx: (
-        #             self.households.var.income.data[idx]
-        #             if idx < len(self.households.var.income.data)
-        #             else np.nan
-        #         )
-        #     )
 
         postal_codes = self.households.postal_codes
         # Maybe load this as a global var (?) instead of loading it each time
