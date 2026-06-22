@@ -535,7 +535,7 @@ class EarlyWarningModule:
 
         Args:
             weights_table: DataFrame with communication efficiency weights indexed by education and income categories.
-            row: Series with the household's education and income information.
+            household_id: The ID of the household for which to retrieve the weight.
 
         Returns:
             The communication efficiency weight for the household.
