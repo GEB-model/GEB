@@ -130,6 +130,7 @@ class Government(AgentBaseClass):
             self.prepare_modified_soil_maps_for_forest()
 
         self.adaptation()
+        self.raise_flood_protection_standards()
         self.set_irrigation_limit()
 
         self.report(locals())
@@ -392,6 +393,32 @@ class Government(AgentBaseClass):
             f"Farmers removed: {len(unique_farmer_indices):,} ({farmers_before:,} → {crop_farmers.n:,})"
         )
 
+    def raise_flood_protection_standards(self) -> None:
+        """Randomly raise flood risk protection for all households."""
+        if not self.config["adaptation"]["flood_protection_standards"]:
+            return  # exits because adaptation is not (enabled) in the config file
+        if not (
+            self.model.current_time.month == 1 and self.model.current_time.day == 1
+        ):
+            return  # exits because it is not the first of January
+
+        if not hasattr(self.agents, "households"):
+            return
+
+        households = self.agents.households
+        return_periods = households.return_periods
+        idx_current_flood_protection_standard = np.where(
+            return_periods == households.flood_risk_module.flood_protection_standard
+        )[0]
+        if np.random.random() < 0.05:
+            # 30% of the time, raise the flood protection standard by one return period
+            new_idx = min(
+                idx_current_flood_protection_standard[0] + 1, len(return_periods) - 1
+            )
+            households.flood_risk_module.flood_protection_standard = return_periods[
+                new_idx
+            ]
+
     def adaptation(self) -> None:
         """Decide whether adaptation is needed and apply appropriate adaptation measures.
 
@@ -454,7 +481,7 @@ class Government(AgentBaseClass):
                 "No adaptation needed, all thresholds are below the defined thresholds"
             )
 
-    def calculate_EAD(self) -> None | float:
+    def calculate_EAD(self, households_only: bool = True) -> None | float:
         """Calculate the expected annual damage (EAD) for the current year.
 
         EAD is computed by integrating total flood damage over the exceedance
@@ -473,6 +500,9 @@ class Government(AgentBaseClass):
             return
 
         households = self.agents.households
+        if households_only:
+            return households.flood_risk_module.calculate_EAD().sum()
+
         if not hasattr(households, "flood_risk_module"):
             return None
         return_periods = households.return_periods
