@@ -9,15 +9,14 @@ from importlib.resources import files
 from pathlib import Path
 from typing import cast
 
+import netCDF4  # noqa: F401  # Needed to solve: https://github.com/pydata/xarray/issues/7259
 import numpy as np
 import numpy.typing as npt
-import pandas as pd
 import rioxarray  # noqa: F401  # needed for rioxarray to register itself as an xarray extension
 import xarray as xr
 from dotenv import load_dotenv
 from llvmlite import binding
 from numba import config, njit, prange, threading_layer
-from pandas.errors import SettingWithCopyWarning
 
 from geb.workflows.io import fetch_and_save
 
@@ -181,10 +180,6 @@ np.seterr(divide="raise", over="raise", under="ignore", invalid="raise")
 
 # force solving of all warnings as errors, to catch potential issues early on
 warnings.simplefilter(action="error", category=FutureWarning)
-
-# specific warning for pandas
-warnings.simplefilter(action="error", category=SettingWithCopyWarning)
-pd.set_option("future.no_silent_downcasting", True)
 
 # we don't want to miss any runtime warnings, as they can indicate potential issues in the code, so we also raise them as errors
 warnings.simplefilter(action="error", category=RuntimeWarning)

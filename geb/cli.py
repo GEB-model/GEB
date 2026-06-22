@@ -292,6 +292,53 @@ def run(**kwargs: Any) -> None:
 
 @cli.command()
 @click_run_options()
+@click.option(
+    "--multi",
+    is_flag=True,
+    default=False,
+    help="Run yearly mode multiple times.",
+)
+@click.option(
+    "--n-runs",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Number of yearly runs. Required when --multi is set.",
+)
+def run_yearly(multi: bool, n_runs: int | None, **kwargs: Any) -> None:
+    """Run model in yearly mode.
+
+    Can be run after model spinup.
+
+    Args:
+        multi: If True, run yearly mode multiple times.
+        n_runs: Number of runs when ``multi`` is True.
+        **kwargs: Keyword arguments to pass to the run_yearly function.
+
+    Raises:
+        click.ClickException: If ``--multi`` is set without ``--n-runs``, or if
+            ``--n-runs`` is provided without ``--multi``.
+    """
+    if multi and n_runs is None:
+        raise click.ClickException("--n-runs is required when --multi is set.")
+
+    if not multi and n_runs is not None:
+        raise click.ClickException("--n-runs can only be used together with --multi.")
+
+    if not multi:
+        run_model_with_method(method="run_yearly", **kwargs)
+        return
+
+    assert n_runs is not None
+    for run_id in range(n_runs):
+        run_model_with_method(
+            method="run_yearly",
+            method_args={"model_name": f"run_{run_id}"},
+            **kwargs,
+        )
+
+
+@cli.command()
+@click_run_options()
 def spinup(**kwargs: Any) -> None:
     """Run model spinup.
 

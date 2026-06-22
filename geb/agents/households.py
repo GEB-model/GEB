@@ -297,6 +297,13 @@ class Households(AgentBaseClass):
         # drop buildings which are not flooded
         if drop_not_flooded:
             self.buildings = self.buildings[self.buildings["flooded"]]
+        # also set index to flooded households
+        flooded_building_ids = self.buildings.loc[
+            self.buildings["flooded"], "id"
+        ].to_numpy()
+        self.households_exposed_to_flooding = np.where(
+            np.isin(self.var.building_id_of_household.data, flooded_building_ids)
+        )[0]
 
     def update_building_adaptation_status(self, household_adapting: np.ndarray) -> None:
         """Update the floodproofing status of buildings based on adapting households."""
@@ -919,10 +926,10 @@ class Households(AgentBaseClass):
         self.update_risk_perceptions()
 
         # calculate damages for adapting and not adapting households based on building footprints
+        # calculate expected utilities
         damages_do_not_adapt, damages_adapt = (
-            self.flood_risk_module.calculate_building_flood_damages()
+            self.flood_risk_module.calculate_building_flood_damages(dynamic=False)
         )
-
         # calculate expected utilities
         EU_adapt = self.decision_module.calcEU_adapt_flood(
             geom_id="NoID",
@@ -1194,3 +1201,14 @@ class Households(AgentBaseClass):
             Total population.
         """
         return self.var.sizes.data.sum()
+
+    @property
+    def adaptation_uptake_in_floodzone(self) -> np.ndarray:
+        """Extract adaptation uptake in the flood zone.
+
+        Returns:
+            A numpy array with the adaptation uptake in the flood zone.
+        """
+        if not hasattr(self, "households_exposed_to_flooding"):
+            self.update_building_attributes()
+        return self.var.adapted.data[self.households_exposed_to_flooding]

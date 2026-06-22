@@ -1,6 +1,7 @@
 """Implements build methods for the land surface submodel, responsible for land surface characteristics and processes."""
 
 import copy
+import warnings
 from pathlib import Path
 
 import geopandas as gpd
@@ -177,7 +178,13 @@ class LandSurface(BuildModelBase):
             )
 
             # buffer coastlines with 0.2 degrees
-            coastlines_with_buffer = coastlines.buffer(0.2, resolution=8)
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    category=UserWarning,
+                )
+                coastlines_with_buffer = coastlines.buffer(0.2, resolution=8)
+
             coastlines_with_buffer = coastlines_with_buffer.union_all()
 
             # merge the buffered coastlines with the potential flood area with buffer
@@ -347,7 +354,7 @@ class LandSurface(BuildModelBase):
         global_countries["geometry"] = global_countries.to_crs(
             "ESRI:54009"
         ).centroid.to_crs(global_countries.crs)
-        global_countries = global_countries.set_index("ISO3")
+        global_countries = global_countries.set_index("ISO3")  # ty:ignore[invalid-assignment]
 
         self.set_geom(global_countries, name="global_countries")
 

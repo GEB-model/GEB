@@ -109,9 +109,12 @@ class FloodsConfig(BaseModel):
         0.0,
         description="Value to fix the shape parameter (xi) of the GPD. Set to 0.0 to force an Exponential (Gumbel) tail, or null to allow it to be fitted.",
     )
-    flood_risk: bool = Field(False, description="Whether to calculate flood risk.")
     events: list[FloodEventConfig] = Field(
         default_factory=list, description="List of flood events."
+    )
+    run_for_validation_events: bool = Field(
+        False,
+        description="Whether to run flood model for validation events (i.e., events with observed flood maps).",
     )
     SFINCS: SFINCSConfig = Field(
         default_factory=SFINCSConfig, description="SFINCS configuration."
