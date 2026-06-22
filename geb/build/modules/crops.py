@@ -4,26 +4,34 @@ import json
 from pathlib import Path
 from typing import Any
 
+import geopandas as gpd
 import numpy as np
 import pandas as pd
 import xarray as xr
+from pyproj import Geod
 
 from geb.agents.crop_farmers import (
     FIELD_EXPANSION_ADAPTATION,
     INDEX_INSURANCE_ADAPTATION,
-    IRRIGATION_EFFICIENCY_ADAPTATION,
-    PERSONAL_INSURANCE_ADAPTATION,
+    IRRIGATION_EFFICIENCY_ADAPTATION_DRIP,
+    IRRIGATION_EFFICIENCY_ADAPTATION_SPRINKLER,
     PR_INSURANCE_ADAPTATION,
     SURFACE_IRRIGATION_EQUIPMENT,
+    TRADITIONAL_INSURANCE_ADAPTATION,
     WELL_ADAPTATION,
 )
 from geb.build.methods import build_method
-from geb.geb_types import ArrayBool, ArrayInt32, ArrayInt64, TwoDArrayInt32
+from geb.build.workflows.crop_calendars import parse_MIRCA_crop_calendar
+from geb.geb_types import ArrayBool, ArrayInt32, ArrayInt64, ArrayUint8, TwoDArrayInt32
 from geb.workflows.io import get_window
 from geb.workflows.raster import (
+    fillna_2d,
     get_linear_indices,
     get_neighbor_cell_ids_for_linear_indices,
     interpolate_na_2d,
+    interpolate_na_along_dim,
+    pad_xy,
+    rasterize_like,
     sample_from_map,
     snap_to_grid,
 )
@@ -31,7 +39,6 @@ from geb.workflows.raster import (
 from ..workflows.conversions import TRADE_REGIONS
 from ..workflows.crop_calendars import (
     donate_and_receive_crop_prices,
-    parse_MIRCA2000_crop_calendar,
 )
 from ..workflows.farmers import get_farm_locations
 from .base import BuildModelBase
@@ -1239,18 +1246,43 @@ class Crops(BuildModelBase):
         raise ValueError("This method is removed. You can remove it entirely.")
 
     def get_crop_area_fractions(
-        self, year: int, resolution: str = "5-arcminute"
-    ) -> tuple[xr.DataArray, xr.DataArray]:
+        self,
+        year: int,
+        MIRCA_unit_grid: xr.DataArray,
+        MIRCA_unit_geom: gpd.GeoDataFrame,
+        farmer_mirca_units: ArrayInt32,
+        reference_crop_map: xr.DataArray,
+        reference_map_buffer: int,
+    ) -> tuple[xr.DataArray, xr.DataArray, xr.DataArray, ArrayInt32]:
         """Compute MIRCA crop area fractions and summarize per region.
 
         Args:
             year: The year for which to compute crop area fractions.
-            resolution: Resolution tag for plotting/output naming.
+            MIRCA_unit_grid: The MIRCA unit grid for spatial reference.
+            MIRCA_unit_geom: The geometry for each MIRCA unit.
+            farmer_mirca_units: An array of MIRCA unit IDs for each farmer.
+            reference_crop_map: A reference crop map to align the MIRCA data with.
+            reference_map_buffer: The buffer (in number of cells) to apply when aligning the MIRCA data with the reference crop map.
 
         Returns:
-            A tuple containing two xarray DataArrays:
+            A tuple of four values:
             - rainfed_crop_fraction: DataArray with dimensions (crop, y, x) representing the fraction of rainfed crop area for each crop.
             - irrigated_crop_fraction: DataArray with dimensions (crop, y, x) representing the fraction of irrigated crop area for each crop.
+            - MIRCA_unit_grid: The updated MIRCA unit grid, with empty units remapped to their donor.
+            - farmer_mirca_units: The (possibly updated) array of MIRCA unit IDs per farmer.
+
+        Notes:
+            If a MIRCA unit used by farmers has no crop data at all (all NaN in both
+            ir and rf maps), the method progressively expands the interpolation mask to
+            include the nearest MIRCA unit by WGS84 great-circle distance that does
+            carry data. Interpolation runs on the expanded mask; only the original
+            (data-less) unit's cells are updated with the result. The ``farmer_mirca_units`` array is mutated in-place: entries that
+            pointed to the empty unit are reassigned to the donor unit so that
+            downstream crop-calendar and crop-assignment steps use valid data.
+
+        Raises:
+            ValueError: If a MIRCA unit used by farmers has no crop data and no
+                neighboring unit with data could be found.
         """
         crops: dict[str, int] = {
             "Wheat": 0,
@@ -1284,42 +1316,41 @@ class Crops(BuildModelBase):
 
         irrigation_types: list[str] = ["ir", "rf"]
 
-        # the datasets have slightly different grids, so we need to snap them to the same grid. We take the first one as reference and snap the others to it
-        reference: None | xr.DataArray = None
-
         crop_maps_per_irrigation_type: dict[str, xr.DataArray] = {}
         for irrigation_type in irrigation_types:
             crop_maps: list[xr.DataArray] = []
             for crop_name, crop_id in crops.items():
                 if crop_name in missing_crops:
-                    assert reference is not None
-                    crop_map = self.full_like(reference, fill_value=0, nodata=np.nan)
+                    # when crop is not available in MIRCA-OS, set to nan
+                    crop_map = self.full_like(
+                        reference_crop_map, fill_value=np.nan, nodata=np.nan
+                    )
                 else:
                     crop_map = self.data_catalog.fetch(
-                        f"mirca_os_cropping_area_{year}_{resolution}_{crop_name}_{irrigation_type}"
+                        f"mirca_os_cropping_area_{year}_5-arcminute_{crop_name}_{irrigation_type}"
                     ).read()
 
                     crop_map = crop_map.isel(
                         get_window(
-                            crop_map.x, crop_map.y, self.bounds, buffer=100
+                            crop_map.x,
+                            crop_map.y,
+                            self.bounds,
+                            buffer=reference_map_buffer,  # use the same buffer as was used for the reference map
+                            raise_on_buffer_out_of_bounds=False,
                         )  # use a very large buffer so that we use don't get edge effects in the interpolation
                     ).compute()
 
-                    # do the snapping unless it is the first dataset, then we take this one as reference for the others
-                    # see above comment for more info
-                    if reference is None:
-                        reference = crop_map.copy()
-                    else:
-                        crop_map = snap_to_grid(crop_map, reference)
-
-                    crop_map = interpolate_na_2d(crop_map)
-                    crop_map = crop_map.fillna(0)
-
-                crop_map = crop_map.isel(
-                    get_window(crop_map.x, crop_map.y, self.bounds, buffer=2)
-                )
-
-                assert not np.isnan(crop_map.values).any()
+                    # some maps are smaller than the reference, so we need to pad them
+                    # with np.nan values, so that they can be combined in one dataset.
+                    crop_map = pad_xy(
+                        crop_map,
+                        reference_crop_map.x[0].item(),
+                        reference_crop_map.y[0].item(),
+                        reference_crop_map.x[-1].item(),
+                        reference_crop_map.y[-1].item(),
+                        constant_values=np.nan,
+                    )
+                    crop_map = snap_to_grid(crop_map, reference_crop_map)
 
                 crop_map = crop_map.assign_coords(crop=crop_id)
 
@@ -1329,23 +1360,239 @@ class Crops(BuildModelBase):
             crop_map: xr.DataArray = xr.concat(crop_maps, dim="crop")
             crop_maps_per_irrigation_type[irrigation_type] = crop_map
 
-        crop_area_irrigated = crop_maps_per_irrigation_type["ir"].sum(dim="crop")
-        crop_area_rainfed = crop_maps_per_irrigation_type["rf"].sum(dim="crop")
+        # MIRCA does not make a distinction between no cropping and missing data.
+        # So we first need to find where specific crops are missing but others are defined,
+        # and set those to 0. Then we can interpolate the remaining missing values so
+        # that we have a complete map of crop fractions.
+
+        # When there is crop data for some crops in a cell, but not for others, we assume that the
+        # nan value should actually be 0.
+        has_crops_data = ~(
+            np.isnan(crop_maps_per_irrigation_type["ir"]).all(dim="crop")  # ty:ignore[no-matching-overload]
+            & np.isnan(crop_maps_per_irrigation_type["rf"]).all(dim="crop")  # ty:ignore[no-matching-overload]
+        )
+        crop_maps_per_irrigation_type["ir"] = xr.where(
+            has_crops_data, crop_maps_per_irrigation_type["ir"].fillna(0), np.nan
+        )
+        crop_maps_per_irrigation_type["rf"] = xr.where(
+            has_crops_data, crop_maps_per_irrigation_type["rf"].fillna(0), np.nan
+        )
+
+        # Then, we look at all cells again, and fill cells with no crops with nan, so that we can interpolate those later on.
+        # There are two cases where we want to do this:
+        # - ocean cells that have all nan data (and thus no crops)
+        # - cells that have crop data but sum to 0. We need some data here, and we want to fill it eventually with data from the closest cell
+        no_crops_data_in_total = (
+            crop_maps_per_irrigation_type["ir"].sum(dim="crop", skipna=True)
+            + crop_maps_per_irrigation_type["rf"].sum(dim="crop", skipna=True)
+            == 0
+        )
+        crop_maps_per_irrigation_type["ir"] = (
+            crop_maps_per_irrigation_type["ir"]
+            .where(~no_crops_data_in_total, np.nan)
+            .transpose("crop", "y", "x")
+        )
+        crop_maps_per_irrigation_type["rf"] = (
+            crop_maps_per_irrigation_type["rf"]
+            .where(~no_crops_data_in_total, np.nan)
+            .transpose("crop", "y", "x")
+        )
+
+        # then finally, all cells without crop data are interpolated using the nearest neighbor cell with crop data.
+        # Now we should have data everywhere.
+        MIRCA_unit_grid: xr.DataArray = (
+            MIRCA_unit_grid.compute()
+        )  # ensure it is loaded in memory for the loop below
+
+        # MIRCA grid should already be aligned with the reference grid
+        assert MIRCA_unit_grid.x.equals(
+            reference_crop_map.x
+        ) and MIRCA_unit_grid.y.equals(reference_crop_map.y), (
+            "MIRCA unit grid must be aligned with the reference crop map."
+        )
+
+        MIRCA_unit_centroid: gpd.GeoSeries = (
+            MIRCA_unit_geom.set_index("unit_code")["geometry"]
+            .to_crs(epsg=4326)
+            .centroid
+        )
+        geod_wgs84 = Geod(ellps="WGS84")
+
+        mask: xr.DataArray = self.full_like(
+            MIRCA_unit_grid, fill_value=False, nodata=False
+        ).astype(bool)
+        for MIRCA_unit in np.unique(farmer_mirca_units):
+            original_MIRCA_unit_mask: xr.DataArray = MIRCA_unit_grid == MIRCA_unit
+            MIRCA_unit_mask: xr.DataArray = original_MIRCA_unit_mask
+
+            # A unit "has data" when at least one non-NaN value exists across all
+            # crops. NaN means no observation at all; 0 means the crop is absent but
+            # the cell was surveyed.
+            has_ir_data: bool = not np.isnan(
+                crop_maps_per_irrigation_type["ir"].values[
+                    :, original_MIRCA_unit_mask.values
+                ]
+            ).all()
+            has_rf_data: bool = not np.isnan(
+                crop_maps_per_irrigation_type["rf"].values[
+                    :, original_MIRCA_unit_mask.values
+                ]
+            ).all()
+
+            if not has_ir_data and not has_rf_data:
+                # No crop data exists for this unit. Progressively expand the
+                # interpolation mask by adding the nearest MIRCA unit
+                # that does have data, until one is found.
+                MIRCA_unit_centroid_point = MIRCA_unit_centroid.loc[MIRCA_unit]
+                distances_m: pd.Series = MIRCA_unit_centroid.apply(
+                    lambda centroid_point: geod_wgs84.inv(
+                        MIRCA_unit_centroid_point.x,
+                        MIRCA_unit_centroid_point.y,
+                        centroid_point.x,
+                        centroid_point.y,
+                    )[2]
+                )
+                sorted_units: list[int] = distances_m.sort_values().index.tolist()
+
+                searched_units: set[int] = {MIRCA_unit}
+                donor_unit: int | None = None
+                for candidate_unit in sorted_units:
+                    if candidate_unit in searched_units:
+                        continue
+                    searched_units.add(candidate_unit)
+
+                    candidate_mask: xr.DataArray = MIRCA_unit_grid == candidate_unit
+                    candidate_has_ir: bool = not np.isnan(
+                        crop_maps_per_irrigation_type["ir"].values[
+                            :, candidate_mask.values
+                        ]
+                    ).all()
+                    candidate_has_rf: bool = not np.isnan(
+                        crop_maps_per_irrigation_type["rf"].values[
+                            :, candidate_mask.values
+                        ]
+                    ).all()
+
+                    if candidate_has_ir or candidate_has_rf:
+                        # Found a donor; widen the mask to borrow its data.
+                        MIRCA_unit_mask = MIRCA_unit_mask | candidate_mask
+                        donor_unit = candidate_unit
+                        break
+
+                if donor_unit is None:
+                    raise ValueError(
+                        f"MIRCA unit {MIRCA_unit} has no crop data and no neighboring "
+                        "unit with data could be found to fill it."
+                    )
+
+                # Interpolate using the expanded mask, then write the filled values
+                # back only into the original (data-less) unit's cells.
+                ir_filled: xr.DataArray = interpolate_na_along_dim(
+                    crop_maps_per_irrigation_type["ir"], mask=MIRCA_unit_mask
+                )
+                rf_filled: xr.DataArray = interpolate_na_along_dim(
+                    crop_maps_per_irrigation_type["rf"], mask=MIRCA_unit_mask
+                )
+                original_selection = original_MIRCA_unit_mask.values
+                crop_maps_per_irrigation_type["ir"].values[:, original_selection] = (
+                    ir_filled.values[:, original_selection]
+                )
+                crop_maps_per_irrigation_type["rf"].values[:, original_selection] = (
+                    rf_filled.values[:, original_selection]
+                )
+
+                # Remap both the farmer array and the raster grid so that the empty
+                # unit is replaced by the donor unit everywhere.
+                farmer_mirca_units[farmer_mirca_units == MIRCA_unit] = donor_unit
+                MIRCA_unit_grid.values[original_MIRCA_unit_mask.values] = donor_unit
+
+                self.logger.info(
+                    f"MIRCA unit {MIRCA_unit} had no crop data; filled from nearest "
+                    f"unit {donor_unit}."
+                )
+
+                # Use only the original unit area for subsequent assertions.
+                MIRCA_unit_mask = original_MIRCA_unit_mask
+            else:
+                crop_maps_per_irrigation_type["ir"] = interpolate_na_along_dim(
+                    crop_maps_per_irrigation_type["ir"], mask=MIRCA_unit_mask
+                )
+                crop_maps_per_irrigation_type["rf"] = interpolate_na_along_dim(
+                    crop_maps_per_irrigation_type["rf"], mask=MIRCA_unit_mask
+                )
+
+            # Ensure that we indeed have data everywhere (no nans, no cells with all zeros)
+            assert not np.isnan(
+                crop_maps_per_irrigation_type["rf"].values[:, MIRCA_unit_mask.values]
+            ).any()
+            assert not np.isnan(
+                crop_maps_per_irrigation_type["ir"].values[:, MIRCA_unit_mask.values]
+            ).any()
+            mask: xr.DataArray = mask | MIRCA_unit_mask
+
+        # outside mask set to nan again, just to be sure that we don't have any data outside the area of interest
+        crop_maps_per_irrigation_type["ir"] = crop_maps_per_irrigation_type["ir"].where(
+            mask, np.nan
+        )
+        crop_maps_per_irrigation_type["rf"] = crop_maps_per_irrigation_type["rf"].where(
+            mask, np.nan
+        )
+
+        crop_area_irrigated = crop_maps_per_irrigation_type["ir"].sum(
+            dim="crop", skipna=False
+        )
+        crop_area_rainfed = crop_maps_per_irrigation_type["rf"].sum(
+            dim="crop", skipna=False
+        )
         total_crop_area = crop_area_irrigated + crop_area_rainfed
 
-        assert (total_crop_area > 0).all(), (
+        assert ((total_crop_area > 0) | ~mask).all(), (
             "Total crop area must be greater than zero to compute fractions."
         )
 
+        # Normalize to get fractions
         rainfed_crop_fraction = (crop_maps_per_irrigation_type["rf"]) / total_crop_area
         irrigated_crop_fraction = crop_maps_per_irrigation_type["ir"] / total_crop_area
 
-        assert np.allclose(
-            (rainfed_crop_fraction + irrigated_crop_fraction).sum(dim="crop"),
-            1.0,
-            atol=1e-5,
+        rainfed_crop_fraction = rainfed_crop_fraction.rio.write_crs(4326)
+        irrigated_crop_fraction = irrigated_crop_fraction.rio.write_crs(4326)
+
+        # reduce map to the area of interest, with a buffer of 2 cells to avoid edge effects
+        rainfed_crop_fraction = rainfed_crop_fraction.isel(
+            get_window(
+                rainfed_crop_fraction.x, rainfed_crop_fraction.y, self.bounds, buffer=2
+            )
         )
-        return rainfed_crop_fraction, irrigated_crop_fraction
+        irrigated_crop_fraction = irrigated_crop_fraction.isel(
+            get_window(
+                irrigated_crop_fraction.x,
+                irrigated_crop_fraction.y,
+                self.bounds,
+                buffer=2,
+            )
+        )
+        mask = mask.isel(get_window(mask.x, mask.y, self.bounds, buffer=2))
+
+        assert (
+            np.isclose(
+                (rainfed_crop_fraction + irrigated_crop_fraction).sum(
+                    dim="crop", skipna=False
+                ),
+                1.0,
+                atol=1e-5,
+            )
+            | ~mask
+        ).all(), "Crop fractions must sum to 1 where there is crop data."
+
+        MIRCA_unit_grid = MIRCA_unit_grid.isel(
+            get_window(MIRCA_unit_grid.x, MIRCA_unit_grid.y, self.bounds, buffer=2)
+        )
+        return (
+            rainfed_crop_fraction,
+            irrigated_crop_fraction,
+            MIRCA_unit_grid,
+            farmer_mirca_units,
+        )
 
     @build_method(depends_on=[], required=False)
     def setup_farmer_crop_calendar_multirun(
@@ -1442,19 +1689,20 @@ class Crops(BuildModelBase):
                 n_farmers,
                 max(
                     [
+                        FIELD_EXPANSION_ADAPTATION,
+                        INDEX_INSURANCE_ADAPTATION,
+                        IRRIGATION_EFFICIENCY_ADAPTATION_DRIP,
+                        IRRIGATION_EFFICIENCY_ADAPTATION_SPRINKLER,
+                        TRADITIONAL_INSURANCE_ADAPTATION,
+                        PR_INSURANCE_ADAPTATION,
                         SURFACE_IRRIGATION_EQUIPMENT,
                         WELL_ADAPTATION,
-                        IRRIGATION_EFFICIENCY_ADAPTATION,
-                        FIELD_EXPANSION_ADAPTATION,
-                        PERSONAL_INSURANCE_ADAPTATION,
-                        INDEX_INSURANCE_ADAPTATION,
-                        PR_INSURANCE_ADAPTATION,
                     ]
                 )
                 + 1,
             ),
-            -1,
-            dtype=np.int32,
+            0,
+            dtype=np.bool_,
         )
 
         for i in range(n_cells):
@@ -1524,7 +1772,7 @@ class Crops(BuildModelBase):
 
                 adaptations[
                     farmer_indices_in_region, irrigation_equipment_per_farmer
-                ] = 1
+                ] = True
 
         self.set_array(adaptations, name="agents/farmers/adaptations")
 
@@ -1533,6 +1781,7 @@ class Crops(BuildModelBase):
         self,
         year: int = 2000,
         reduce_crops: bool = False,
+        unify_variants: bool = False,
         replace_base: bool = False,
         minimum_area_ratio: float = 0.01,
         replace_crop_calendar_unit_code: dict = {},
@@ -1542,6 +1791,7 @@ class Crops(BuildModelBase):
         Args:
             year: Reference year (calendar year).
             reduce_crops: If True, reduce the number of crops per calendar based on area.
+            unify_variants: If True, make different cropping patterns of the same crop into one.
             replace_base: If True, replace base crop definitions with alternatives.
             minimum_area_ratio: Threshold for considering a crop present in a unit.
             replace_crop_calendar_unit_code: Optional mapping to replace MIRCA unit codes.
@@ -1551,113 +1801,106 @@ class Crops(BuildModelBase):
         """
         n_farmers = self.array["agents/farmers/region_id"].size
 
-        MIRCA_unit_grid = (
-            self.data_catalog.fetch("mirca2000_unit_grid").read().astype(np.int32)
-        ).isel(band=0)
-        assert isinstance(MIRCA_unit_grid, xr.DataArray)
-
-        MIRCA_unit_grid = MIRCA_unit_grid.isel(
-            get_window(MIRCA_unit_grid.x, MIRCA_unit_grid.y, self.bounds, buffer=2)
+        # For alignment of various input data, we need a reference. So we just
+        # load one. The crops itself are not used, but just the metadata.
+        reference_crop_map = self.data_catalog.fetch(
+            f"mirca_os_cropping_area_{year}_5-arcminute_Wheat_rf"
+        ).read()
+        reference_map_buffer: int = 100
+        reference_crop_map = reference_crop_map.isel(
+            get_window(
+                reference_crop_map.x,
+                reference_crop_map.y,
+                self.bounds,
+                buffer=reference_map_buffer,
+                raise_on_buffer_out_of_bounds=False,
+            )  # use a very large buffer so that we use don't get edge effects in the interpolation
         )
 
-        crop_calendar: dict[int, list[tuple[float, TwoDArrayInt32]]] = (
-            parse_MIRCA2000_crop_calendar(
-                self.data_catalog,
-                MIRCA_units=np.unique(MIRCA_unit_grid.values).tolist(),
-            )
+        # Load MIRCA-OS data for the given year
+        MIRCA_unit_geom = self.data_catalog.fetch(
+            f"mirca_os_admin_boundaries_{year}"
+        ).read()
+        assert isinstance(MIRCA_unit_geom, gpd.GeoDataFrame)
+
+        # Clip geometries to the reference crop map extent so they remain aligned.
+        MIRCA_unit_geom = MIRCA_unit_geom.cx[
+            reference_crop_map.x.values.min() : reference_crop_map.x.values.max(),
+            reference_crop_map.y.values.min() : reference_crop_map.y.values.max(),
+        ]
+
+        rainfed_source = self.data_catalog.fetch(
+            f"mirca_os_crop_calendar_{year}_rf"
+        ).read()
+        rainfed_source = rainfed_source[
+            rainfed_source["unit_code"].isin(MIRCA_unit_geom["unit_code"])
+        ]
+        irrigated_source = self.data_catalog.fetch(
+            f"mirca_os_crop_calendar_{year}_ir"
+        ).read()
+        irrigated_source = irrigated_source[
+            irrigated_source["unit_code"].isin(MIRCA_unit_geom["unit_code"])
+        ]
+
+        crop_calendar: dict[int, list[tuple[float, TwoDArrayInt32]]] = {}
+
+        MIRCA_units = (MIRCA_unit_geom.unit_code).tolist()
+        crop_calendar = parse_MIRCA_crop_calendar(
+            crop_calendar, rainfed_source, MIRCA_units, is_irrigated=False
+        )
+        crop_calendar = parse_MIRCA_crop_calendar(
+            crop_calendar, irrigated_source, MIRCA_units, is_irrigated=True
         )
 
         def fix_365_in_crop_calendar(
             crop_calendar: dict[int, list[tuple[float, TwoDArrayInt32]]],
         ) -> dict[int, list[tuple[float, TwoDArrayInt32]]]:
-            """Replace any 365 day-of-year values with 364 in the 4th column.
-
-            Scans each (area, arr) pair in every dictionary entry. If a value 365 is
-            found, it asserts that it appears only in column index 3 and then rewrites
-            it to 364. Increments a running count of replacements and raises a
-            ValueError if a 365 is found outside column 3.
-
-            Raises:
-                ValueError: If any 365 is found outside column index 3 (the 4th column).
+            """Replace growth lengths of 365 days with 364 in the crop calendar.
 
             Returns:
-                A dictionary of crop calendars where the 365 length crops are now 364 days.
+                The crop calendar with any 365-day growth lengths clamped to 364.
             """
-            total_replacements = 0
+            for entries in crop_calendar.values():
+                for _, arr in entries:
+                    arr[arr[:, 3] == 365, 3] = 364
 
-            crop_calendar_adjusted = crop_calendar.copy()
-
-            for key, entries in crop_calendar_adjusted.items():
-                for i, (area, arr) in enumerate(entries):
-                    rows, cols = np.where(arr == 365)
-
-                    if rows.size == 0:
-                        continue  # nothing to change in this array
-
-                    # Safety: all 365s must be in column index 3 (4th column)
-                    if not np.all(cols == 3):
-                        raise ValueError(
-                            f"Found 365 outside column 3 for key={key}, index={i}: "
-                            f"indices={list(zip(rows, cols))}"
-                        )
-
-                    # Do the replacement
-                    arr[rows, 3] = 364
-                    entries[i] = (area, arr)
-                    total_replacements += rows.size
-
-            return crop_calendar_adjusted
+            return crop_calendar
 
         # Replace crop growth time of 365 with 364 as 365 leads to many issues
         crop_calendar = fix_365_in_crop_calendar(crop_calendar)
-
-        if any(value in [None, "", [], {}] for value in crop_calendar.values()):
-            missing_mirca_unit = [
-                unit for unit, calendars in crop_calendar.items() if not calendars
-            ]
-            self.logger.warning(
-                f"Missing crop calendar for MIRCA unit(s): {missing_mirca_unit}"
-            )
-
-            for mirca_unit in missing_mirca_unit:
-                # Filter out the current mirca_unit from crop_calendar.keys()
-                valid_keys = [key for key in crop_calendar.keys() if key != mirca_unit]
-
-                # Find the closest MIRCA unit with a crop calendar
-                if valid_keys:  # Ensure there are valid keys to process
-                    closest_mirca_unit = min(
-                        valid_keys, key=lambda x: abs(x - mirca_unit)
-                    )
-                else:
-                    raise ValueError(
-                        f"No valid MIRCA units found to replace missing crop calendar for {mirca_unit}."
-                    )
-
-                # use this closest_mirca_unit to fill the missing crop calendar
-                crop_calendar[mirca_unit] = crop_calendar[closest_mirca_unit]
-                self.logger.info(
-                    f"Filling missing crop calendar for MIRCA unit {mirca_unit} with data from {closest_mirca_unit}."
-                )
-
-        else:
-            self.logger.debug("All keys have valid values.")
 
         farmer_locations = get_farm_locations(
             self.subgrid["agents/farmers/farms"], method="centroid"
         )
 
+        MIRCA_unit_grid = rasterize_like(
+            MIRCA_unit_geom,
+            reference_crop_map,
+            dtype=np.int32,
+            nodata=-1,
+            column="unit_code",
+            name="MIRCA_unit",
+        )
+        MIRCA_unit_grid.values = fillna_2d(MIRCA_unit_grid.values, nodata=-1)
         farmer_mirca_units = sample_from_map(
             MIRCA_unit_grid.values,
             farmer_locations,
             MIRCA_unit_grid.rio.transform(recalc=True).to_gdal(),
         )
 
+        assert not (farmer_mirca_units == -1).any(), (
+            "All farmers should be assigned to a MIRCA unit."
+        )
+
         farmer_crops, is_irrigated = self.assign_crops(
+            reference_crop_map,
+            reference_map_buffer,
             crop_calendar,
             farmer_locations,
             farmer_mirca_units,
             year,
             MIRCA_unit_grid,
+            MIRCA_unit_geom,
             minimum_area_ratio=minimum_area_ratio,
             replace_crop_calendar_unit_code=replace_crop_calendar_unit_code,
         )
@@ -1775,11 +2018,11 @@ class Crops(BuildModelBase):
         OIL_PALM = 13
         RAPESEED = 14
         GROUNDNUTS = 15
-        # PULSES = 16
-        # CITRUS = 17
-        # # DATE_PALM = 18
-        # # GRAPES = 19
-        # COTTON = 20
+        PULSES = 16
+        CITRUS = 17
+        DATE_PALM = 18
+        GRAPES = 19
+        COTTON = 20
         COCOA = 21
         COFFEE = 22
         OTHERS_PERENNIAL = 23
@@ -1844,29 +2087,40 @@ class Crops(BuildModelBase):
             return crop_calendar_per_farmer
 
         def unify_crop_variants(
-            crop_calendar_per_farmer: np.ndarray, target_crop: int
+            crop_calendar_per_farmer: np.ndarray,
+            target_crop: int,
         ) -> np.ndarray:
-            # Create a mask for all entries whose first value == target_crop
-            mask = crop_calendar_per_farmer[..., 0] == target_crop
+            """Replace all full rotation blocks for one crop by the most common block.
 
-            # If the crop does not appear at all, nothing to do
-            if not np.any(mask):
+            Assumes crop_calendar_per_farmer has shape:
+                (n_farmers, n_rotation_slots, 4)
+
+            and that the dominant crop of a block is stored in [0, 0].
+
+            Returns:
+                The updated crop calendar with only one crop rotation type per crop.
+            """
+            # Select full farmer blocks belonging to this dominant crop
+            block_mask = crop_calendar_per_farmer[:, 0, 0] == target_crop
+
+            if not np.any(block_mask):
                 return crop_calendar_per_farmer
 
-            # Extract only the rows/entries that match the target crop
-            crop_entries = crop_calendar_per_farmer[mask]
+            # Full 3D blocks, not individual rows
+            crop_blocks = crop_calendar_per_farmer[block_mask]
 
-            # Among these crop rows, find unique variants and their counts
-            # (axis=0 ensures we treat each row/entry as a unit)
+            # Count unique full-block variants
             unique_variants, variant_counts = np.unique(
-                crop_entries, axis=0, return_counts=True
+                crop_blocks,
+                axis=0,
+                return_counts=True,
             )
 
-            # The most common variant is the unique variant with the highest count
+            # Pick most frequent full rotation block
             most_common_variant = unique_variants[np.argmax(variant_counts)]
 
-            # Replace all the target_crop rows with the most common variant
-            crop_calendar_per_farmer[mask] = most_common_variant
+            # Replace all matching blocks with that dominant full block
+            crop_calendar_per_farmer[block_mask] = most_common_variant
 
             return crop_calendar_per_farmer
 
@@ -1913,12 +2167,46 @@ class Crops(BuildModelBase):
             # Representing farmer irrigated crop area adaptation in a large-scale hydrological model. Hydrology and Earth
             # System Sciences, 28(4), 899–916. https://doi.org/10.5194/hess-28-899-2024
 
-            # Replace fodder with the most common grain crop
+            # Assign fodder grasses the price proxy of the most common local feed cereal.
+            # FAOSTAT Producer Prices do not include a direct fodder-grass price in the
+            # dataset used here. Barley, rye, millet, and sorghum are used as cereal
+            # proxies because their cultivation and harvest dynamics are closer to fodder
+            # grasses than broader crop-price categories.
             most_common_check = [BARLEY, RYE, MILLET, SORGHUM]
             replaced_value = [FODDER_GRASSES]
+
+            # If there are no barley, rye , millet or sorghum, replace with most common other crop
+            crop_ids = crop_calendar_per_farmer[:, :, 0]
+            if not np.isin(crop_ids, most_common_check).any():
+                most_common_check = [
+                    WHEAT,
+                    MAIZE,
+                    RICE,
+                    SOYBEANS,
+                    SUNFLOWER,
+                    POTATOES,
+                    CASSAVA,
+                    SUGAR_CANE,
+                    SUGAR_BEETS,
+                    OIL_PALM,
+                    RAPESEED,
+                    GROUNDNUTS,
+                    PULSES,
+                    CITRUS,
+                    DATE_PALM,
+                    GRAPES,
+                    COTTON,
+                    COCOA,
+                    COFFEE,
+                    OTHERS_PERENNIAL,
+                    OTHERS_ANNUAL,
+                ]
+
             crop_calendar_per_farmer = replace_crop(
                 crop_calendar_per_farmer, most_common_check, replaced_value
             )
+
+            # If fodder persists due to no barley
 
             # Change the grain crops to one
             most_common_check = [BARLEY, RYE, MILLET, SORGHUM]
@@ -1962,6 +2250,15 @@ class Crops(BuildModelBase):
                 crop_calendar_per_farmer, most_common_check, replaced_value
             )
 
+            # Currently removed to keep water balance at larger scale priority
+            # # Replace others_annual by potatoes as it has the most similar hydrological parameters
+            # # Is replaced because others annual is difficult to parametrize (in terms of costs)
+            # most_common_check = [POTATOES]
+            # replaced_value = [OTHERS_ANNUAL]
+            # crop_calendar_per_farmer = replace_crop(
+            #     crop_calendar_per_farmer, most_common_check, replaced_value
+            # )
+
             unique_rows = np.unique(crop_calendar_per_farmer, axis=0)
             values = unique_rows[:, 0, 0]
             unique_values, counts = np.unique(values, return_counts=True)
@@ -1978,12 +2275,13 @@ class Crops(BuildModelBase):
                         == farmer_crop_calender.shape[0]
                     )
 
-            # duplicates = unique_values[counts > 1]
-            # if len(duplicates) > 0:
-            #     for duplicate in duplicates:
-            #         crop_calendar_per_farmer = unify_crop_variants(
-            #             crop_calendar_per_farmer, duplicate
-            #         )
+            if unify_variants:
+                duplicates = unique_values[counts > 1]
+                if len(duplicates) > 0:
+                    for duplicate in duplicates:
+                        crop_calendar_per_farmer = unify_crop_variants(
+                            crop_calendar_per_farmer, duplicate
+                        )
 
         check_crop_calendar(crop_calendar_per_farmer)
 
@@ -2035,29 +2333,44 @@ class Crops(BuildModelBase):
 
     def assign_crops(
         self,
+        reference_crop_map: xr.DataArray,
+        reference_map_buffer: int,
         crop_calendar: dict,
         farmer_locations: np.ndarray,
         farmer_mirca_units: np.ndarray,
         year: int,
         MIRCA_unit_grid: xr.DataArray,
+        MIRCA_unit_geom: gpd.GeoDataFrame,
         minimum_area_ratio: float,
         replace_crop_calendar_unit_code: dict = {},
     ) -> tuple[np.ndarray, np.ndarray]:
         """Assign crops and irrigation status to farmers for a given year.
 
         Args:
+            reference_crop_map: A reference crop map for the given year, used for alignment of grids only.
+            reference_map_buffer: Buffer size in pixels to apply when sampling the reference crop map to avoid edge effects.
             crop_calendar: Mapping from MIRCA unit to list of rotations (fraction, matrix).
             farmer_locations: Array of farmer pixel coordinates (x, y) order.
             farmer_mirca_units: Array mapping farmer index to MIRCA unit id.
             year: Year to select fractions from raster inputs.
             MIRCA_unit_grid: Grid of MIRCA unit ids aligned with fraction rasters.
+            MIRCA_unit_geom: Geometry for each MIRCA unit.
             minimum_area_ratio: Minimum fraction for a crop to be considered when sampling.
             replace_crop_calendar_unit_code: Optional remapping for MIRCA unit ids.
 
         Returns:
             A tuple of (farmer_crops, farmer_irrigated) arrays.
         """
-        rainfed_fraction, irrigated_fraction = self.get_crop_area_fractions(year)
+        rainfed_fraction, irrigated_fraction, MIRCA_unit_grid, farmer_mirca_units = (
+            self.get_crop_area_fractions(
+                year,
+                MIRCA_unit_grid,
+                MIRCA_unit_geom,
+                farmer_mirca_units,
+                reference_crop_map,
+                reference_map_buffer,
+            )
+        )
 
         n_farmers: int = farmer_mirca_units.size
 
@@ -2069,6 +2382,9 @@ class Crops(BuildModelBase):
         # the farmers in the same cell together, which is more efficient than processing them one by one.
         linear_indices = get_linear_indices(rainfed_fraction)
 
+        assert (MIRCA_unit_grid.x.values == rainfed_fraction.x.values).all()
+        assert (MIRCA_unit_grid.y.values == rainfed_fraction.y.values).all()
+
         # Reshape arrays to 2D (n_crops, n_cells) for easier indexing in the loop below
         rainfed_fraction = rainfed_fraction.values.reshape(
             rainfed_fraction.shape[0], -1
@@ -2076,6 +2392,7 @@ class Crops(BuildModelBase):
         irrigated_fraction = irrigated_fraction.values.reshape(
             irrigated_fraction.shape[0], -1
         )
+
         MIRCA_unit_grid: ArrayInt32 = MIRCA_unit_grid.values.ravel()
 
         # Here, we extract the linear index for each farmer based on their location,
@@ -2133,7 +2450,7 @@ class Crops(BuildModelBase):
             available_crops_irrigated = np.unique(available_crops[is_irrigated])
             available_crops_rainfed = np.unique(available_crops[~is_irrigated])
 
-            # Remove crops that are not available for both rainfed and irrigated
+            # Remove crops that are not available for either rainfed or irrigated
             available_crops_mask_rainfed = np.zeros_like(
                 farmer_crop_rainfed_fractions, dtype=bool
             )
@@ -2146,55 +2463,70 @@ class Crops(BuildModelBase):
             available_crops_mask_irrigated[available_crops_irrigated] = True
             farmer_crop_irrigated_fractions[~available_crops_mask_irrigated] = 0
 
-            # Normalize the area fractions
-            farmer_crop_rainfed_fractions = (
-                farmer_crop_rainfed_fractions / farmer_crop_rainfed_fractions.sum()
-            )
-            farmer_crop_irrigated_fractions = (
-                farmer_crop_irrigated_fractions / farmer_crop_irrigated_fractions.sum()
-            )
+            if n_rainfed_farmers > 0:
+                assert not farmer_crop_rainfed_fractions.sum() == 0, (
+                    f"Error: All rainfed crop fractions are zero for cell {linear_index} with MIRCA unit {MIRCA_unit_cell}."
+                )
 
-            # Discard crops with area smaller than minimum_area_ratio
-            farmer_crop_rainfed_fractions[
-                farmer_crop_rainfed_fractions < minimum_area_ratio
-            ] = 0
-            farmer_crop_irrigated_fractions[
-                farmer_crop_irrigated_fractions < minimum_area_ratio
-            ] = 0
+                # Normalize the area fractions
+                farmer_crop_rainfed_fractions = (
+                    farmer_crop_rainfed_fractions / farmer_crop_rainfed_fractions.sum()
+                )
+                # Discard crops with area smaller than minimum_area_ratio
+                farmer_crop_rainfed_fractions[
+                    farmer_crop_rainfed_fractions < minimum_area_ratio
+                ] = 0
 
-            assert not farmer_crop_rainfed_fractions.sum() == 0, (
-                f"Error: All rainfed crop fractions are zero for cell {linear_index} with MIRCA unit {MIRCA_unit_cell}."
-            )
-            assert not farmer_crop_irrigated_fractions.sum() == 0, (
-                f"Error: All irrigated crop fractions are zero for cell {linear_index} with MIRCA unit {MIRCA_unit_cell}."
-            )
+                # Normalize the area fractions again after removing small crops
+                farmer_crop_rainfed_fractions = (
+                    farmer_crop_rainfed_fractions / farmer_crop_rainfed_fractions.sum()
+                )
 
-            # Normalize the area fractions again after removing small crops
-            farmer_crop_rainfed_fractions = (
-                farmer_crop_rainfed_fractions / farmer_crop_rainfed_fractions.sum()
-            )
-            farmer_crop_irrigated_fractions = (
-                farmer_crop_irrigated_fractions / farmer_crop_irrigated_fractions.sum()
-            )
+                # Choose crops for rainfed and irrigated farmers based on the fractions, then combine and shuffle them to assign to farmers in the cell
+                # TODO: Consider farm area here
+                rainfed_crop_choices: ArrayUint8 = np.random.choice(
+                    farmer_crop_rainfed_fractions.size,
+                    size=n_rainfed_farmers,
+                    replace=True,
+                    p=farmer_crop_rainfed_fractions,
+                ).astype(np.uint8)
+            else:
+                rainfed_crop_choices: ArrayUint8 = np.array([], dtype=np.uint8)
 
-            # Choose crops for rainfed and irrigated farmers based on the fractions, then combine and shuffle them to assign to farmers in the cell
-            # TODO: Consider farm area here
-            rainfed_crop_choices = np.random.choice(
-                farmer_crop_rainfed_fractions.size,
-                size=n_rainfed_farmers,
-                replace=True,
-                p=farmer_crop_rainfed_fractions,
-            )
-            irrigated_crop_choices = np.random.choice(
-                farmer_crop_irrigated_fractions.size,
-                size=n_irrigating_farmers,
-                replace=True,
-                p=farmer_crop_irrigated_fractions,
-            )
-            crop_choices = np.concatenate(
+            if n_irrigating_farmers > 0:
+                assert not farmer_crop_irrigated_fractions.sum() == 0, (
+                    f"Error: All irrigated crop fractions are zero for cell {linear_index} with MIRCA unit {MIRCA_unit_cell}."
+                )
+                # Normalize the area fractions
+                farmer_crop_irrigated_fractions = (
+                    farmer_crop_irrigated_fractions
+                    / farmer_crop_irrigated_fractions.sum()
+                )
+
+                # Discard crops with area smaller than minimum_area_ratio
+                farmer_crop_irrigated_fractions[
+                    farmer_crop_irrigated_fractions < minimum_area_ratio
+                ] = 0
+
+                farmer_crop_irrigated_fractions = (
+                    farmer_crop_irrigated_fractions
+                    / farmer_crop_irrigated_fractions.sum()
+                )
+
+                irrigated_crop_choices: ArrayUint8 = np.random.choice(
+                    farmer_crop_irrigated_fractions.size,
+                    size=n_irrigating_farmers,
+                    replace=True,
+                    p=farmer_crop_irrigated_fractions,
+                ).astype(np.uint8)
+
+            else:
+                irrigated_crop_choices: ArrayUint8 = np.array([], dtype=np.uint8)
+
+            crop_choices: ArrayUint8 = np.concatenate(
                 [rainfed_crop_choices, irrigated_crop_choices]
             )
-            is_irrigated_choices = np.concatenate(
+            is_irrigated_choices: ArrayBool = np.concatenate(
                 [
                     np.zeros(n_rainfed_farmers, dtype=bool),
                     np.ones(n_irrigating_farmers, dtype=bool),

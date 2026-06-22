@@ -82,6 +82,10 @@ class GRDC(Adapter):
 
         discharge_observations: xr.Dataset = xr.open_zarr(zarr_path, consolidated=False)
 
+        discharge_observations.station_name.values = [
+            name.title() for name in discharge_observations.station_name.values
+        ]
+
         discharge_observations = discharge_observations.rename(
             {"geo_x": "x", "geo_y": "y"}
         )

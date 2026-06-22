@@ -27,7 +27,6 @@ hazards:
     subgrid: true
     flood_risk: false
     gpu: auto
-    ncpus: auto # can be number or 'auto', use less cpus when running on interactive session
     overwrite: auto
     coastal_only: false
     return_periods:

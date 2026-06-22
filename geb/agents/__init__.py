@@ -14,6 +14,7 @@ from .general import AgentBaseClass
 from .government import Government
 from .households import Households
 from .industry import Industry
+from .insurers import Insurers
 from .livestock_farmers import LiveStockFarmers
 from .market import Market
 from .reservoir_operators import ReservoirOperators
@@ -58,34 +59,25 @@ class Agents(Module):
     ) -> None:
         super().__init__(model)
 
-        enabled = set(enabled_agents) if enabled_agents is not None else None
+        self.households = Households(model, self, 0.1)
+        self.crop_farmers = CropFarmers(model, self, 0.1)
+        self.livestock_farmers = LiveStockFarmers(model, self, 0.1)
+        self.industry = Industry(model, self)
+        self.reservoir_operators = ReservoirOperators(model, self)
+        self.government = Government(model, self)
+        self.market = Market(model, self)
+        self.insurers = Insurers(model, self)
 
-        def on(name: str) -> bool:
-            return enabled is None or name in enabled
-
-        self.agents: list[AgentBaseClass] = []
-
-        if on("crop_farmers"):
-            self.crop_farmers = CropFarmers(model, self, 0.1)
-            self.agents.append(self.crop_farmers)
-        if on("households"):
-            self.households = Households(model, self, 0.1)
-            self.agents.append(self.households)
-        if on("livestock_farmers"):
-            self.livestock_farmers = LiveStockFarmers(model, self, 0.1)
-            self.agents.append(self.livestock_farmers)
-        if on("industry"):
-            self.industry = Industry(model, self)
-            self.agents.append(self.industry)
-        if on("reservoir_operators"):
-            self.reservoir_operators = ReservoirOperators(model, self)
-            self.agents.append(self.reservoir_operators)
-        if on("government"):
-            self.government = Government(model, self)
-            self.agents.append(self.government)
-        if on("market"):
-            self.market = Market(model, self)
-            self.agents.append(self.market)
+        self.agents: list[AgentBaseClass] = [
+            self.crop_farmers,
+            self.households,
+            self.livestock_farmers,
+            self.industry,
+            self.reservoir_operators,
+            self.government,
+            self.market,
+            self.insurers,
+        ]
 
     @property
     def name(self) -> str:

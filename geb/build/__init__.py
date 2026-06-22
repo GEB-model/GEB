@@ -4,15 +4,15 @@ Notes:
 - All prices are in nominal USD (face value) for their respective years. That means that the prices are not adjusted for inflation.
 """
 
-import concurrent.futures
 import inspect
 import logging
 import os
 import time
+from collections.abc import Iterable
 from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Callable, Iterator, Literal
+from typing import Any, Callable, Iterator, Literal, cast
 
 import contextily as ctx
 import geopandas as gpd
@@ -24,12 +24,12 @@ import pandas as pd
 import pyflwdir
 import rasterio.features
 import xarray as xr
-import yaml
 import zarr
 from affine import Affine
 from rasterio.env import defenv
 from scipy.ndimage import binary_dilation
-from shapely.geometry import Point, shape
+from shapely.geometry import Point, box, shape
+from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
 from geb import GEB_PACKAGE_DIR, __version__
@@ -70,6 +70,22 @@ from .modules.hydrography import (
     create_river_raster_from_river_lines,
     extend_rivers_into_pits_and_set_pit_type,
 )
+from .workflows.hydrography import (
+    get_river_graph,
+)
+
+INIT_MULTIPLE_EXCLUDED_OUTLET_ISO3_CODES: frozenset[str] = frozenset(
+    {
+        "DZA",  # Algeria
+        "EGY",  # Egypt
+        "ESH",  # Western Sahara
+        "LBY",  # Libya
+        "MAR",  # Morocco
+        "MLT",  # Malta
+        "SDN",  # Sudan
+        "TUN",  # Tunisia
+    }
+)  # these are areas that are included in the squared BBOX but that should be excluded
 
 # Set environment options for robustness
 GDAL_HTTP_ENV_OPTS = {
@@ -176,49 +192,6 @@ def boolean_mask_to_graph(
                 G.add_edge((y, x), (ny, nx))
 
     return G
-
-
-def get_river_graph(data_catalog: DataCatalog) -> networkx.DiGraph:
-    """Create a directed graph for the river network.
-
-    Args:
-        data_catalog: Data catalog containing the MERIT basins.
-
-    Returns:
-        A directed graph where nodes are COMID values and edges point downstream.
-    """
-    # load river network data
-    river_network = (
-        data_catalog.fetch("merit_basins_rivers")
-        .read(columns=["COMID", "NextDownID"])
-        .set_index("COMID")
-    )
-    assert isinstance(river_network, pd.DataFrame)
-    assert river_network.index.name == "COMID", (
-        "The index of the river network is not the COMID column"
-    )
-
-    # create a directed graph for the river network
-    river_graph: networkx.DiGraph = networkx.DiGraph()
-
-    # add rivers with downstream connection
-    river_network_with_downstream_connection = river_network[
-        river_network["NextDownID"] != 0
-    ]
-
-    river_network_with_downstream_connection = (
-        river_network_with_downstream_connection.itertuples(index=True, name=None)
-    )
-
-    river_graph.add_edges_from(river_network_with_downstream_connection)
-
-    river_network_without_downstream_connection = river_network[
-        river_network["NextDownID"] == 0
-    ]
-
-    river_graph.add_nodes_from(river_network_without_downstream_connection.index)
-
-    return river_graph
 
 
 def get_subbasin_id_from_coordinate(
@@ -410,100 +383,322 @@ def get_subbasin_upstream_areas(
     return upstream_areas
 
 
-def calculate_bbox_efficiency(
-    outlet_ids: list[int],
-    subbasin_to_idx: dict[int, int],
-    coords_array: npt.NDArray[np.float64],
-    upstream_areas: dict[int, float],
-    river_graph: networkx.DiGraph,
-    all_subbasin_coords: dict[int, tuple[float, float]],
-    all_subbasin_areas: dict[int, float] | None = None,
-) -> float:
-    """Calculate the bounding box efficiency of a cluster for ERA5 data download optimization.
-
-    This measures how efficiently the cluster's FULL WATERSHED fills its bounding box rectangle,
-    considering only LAND AREA (not ocean/sea areas between coastal basins).
-
-    Since ERA5 climate data is downloaded using the min/max lat/lon bounds of ALL subbasins
-    (not just outlets), we need to consider the entire upstream watershed extent.
-
-    Efficiency = (Total upstream area of cluster) / (Total land area within bbox)
-
-    This land-only calculation prevents coastal clusters with ocean gaps (e.g., archipelagos,
-    fjords, bays) from being unfairly penalized.
+def _load_merit_catchments(
+    data_catalog: DataCatalog, subbasin_ids: Iterable[int], columns: list[str]
+) -> gpd.GeoDataFrame:
+    """Load selected MERIT Basins catchments from the data catalog.
 
     Args:
-        outlet_ids: List of outlet basin COMID values in the cluster.
-        subbasin_to_idx: Mapping from COMID to row index in coords_array (for outlets only).
-        coords_array: Nx2 array with centroid coordinates [lon, lat] for outlets.
-        upstream_areas: Dictionary mapping COMID to upstream area in km2.
-        river_graph: River graph for finding all upstream subbasins.
-        all_subbasin_coords: Dictionary mapping ALL subbasin COMIDs to (lon, lat) tuples.
-        all_subbasin_areas: Dictionary mapping ALL subbasin COMIDs to their areas in km2.
-            If None, falls back to rectangular bbox area (old behavior).
+        data_catalog: Data catalog containing the MERIT Basins catchments.
+        subbasin_ids: COMID values to load.
+        columns: Additional column names to read.
 
     Returns:
-        Efficiency ratio between 0.0 and 1.0 (higher is better for data download efficiency).
+        GeoDataFrame indexed by COMID.
+
+    Raises:
+        ValueError: If no COMID values are provided or requested COMIDs are missing.
     """
-    # Get ALL subbasins in this cluster (outlets + all upstream)
-    all_cluster_subbasins = set()
-    for outlet_id in outlet_ids:
-        # Get all upstream basins for this outlet
-        upstream = set(networkx.ancestors(river_graph, outlet_id))
-        upstream.add(outlet_id)  # Include the outlet itself
-        all_cluster_subbasins.update(upstream)
+    unique_subbasin_ids: list[int] = sorted(
+        {int(subbasin_id) for subbasin_id in subbasin_ids}
+    )
+    if not unique_subbasin_ids:
+        raise ValueError("At least one subbasin ID is required.")
 
-    # Get coordinates for ALL subbasins in the watershed
-    cluster_lons = []
-    cluster_lats = []
-    for subbasin_id in all_cluster_subbasins:
-        if subbasin_id in all_subbasin_coords:
-            lon, lat = all_subbasin_coords[subbasin_id]
-            cluster_lons.append(lon)
-            cluster_lats.append(lat)
+    requested_columns: list[str] = ["COMID"]
+    for column_name in columns:
+        if column_name != "COMID" and column_name not in requested_columns:
+            requested_columns.append(column_name)
 
-    if len(cluster_lons) == 0:
-        return 1.0  # Edge case: no coordinates found
+    catchments: gpd.GeoDataFrame = gpd.read_parquet(
+        data_catalog.fetch("merit_basins_catchments").path,
+        filters=[("COMID", "in", unique_subbasin_ids)],
+        columns=requested_columns,
+    ).set_index("COMID")
 
-    # Calculate bounding box from ALL subbasin centroids
-    lon_min, lon_max = min(cluster_lons), max(cluster_lons)
-    lat_min, lat_max = min(cluster_lats), max(cluster_lats)
-
-    # Calculate total upstream area of all outlets in cluster
-    cluster_total_area_km2 = sum(upstream_areas.get(oid, 0.0) for oid in outlet_ids)
-
-    # Calculate efficiency based on LAND AREA within bbox (not rectangular area)
-    if all_subbasin_areas is not None:
-        # NEW: Use sum of all subbasin areas within the bbox (land-only)
-        # This excludes ocean/sea areas between coastal basins
-        bbox_land_area_km2 = sum(
-            all_subbasin_areas.get(subbasin_id, 0.0)
-            for subbasin_id in all_cluster_subbasins
+    missing_subbasin_ids: set[int] = set(unique_subbasin_ids) - set(catchments.index)
+    if missing_subbasin_ids:
+        preview_missing_ids: list[int] = sorted(missing_subbasin_ids)[:10]
+        raise ValueError(
+            "MERIT Basins catchments are missing "
+            f"{len(missing_subbasin_ids)} COMID values, including {preview_missing_ids}."
         )
 
-        # Handle edge case: no valid area data
-        if bbox_land_area_km2 < 1.0:
-            return 1.0
+    return catchments
 
-        # Calculate efficiency ratio using land-only area
-        efficiency = min(1.0, cluster_total_area_km2 / bbox_land_area_km2)
+
+def get_init_multiple_region_geometry(
+    geometry_bounds: str, region_shapefile: str | None, working_directory: Path
+) -> gpd.GeoDataFrame:
+    """Create the region geometry used to find init-multiple outlet basins.
+
+    Args:
+        geometry_bounds: Bounding box as ``xmin,ymin,xmax,ymax`` in degrees.
+        region_shapefile: Optional path to a region shapefile.
+        working_directory: Working directory used to resolve relative shapefile paths.
+
+    Returns:
+        Region geometry in EPSG:4326.
+
+    Raises:
+        FileNotFoundError: If the region shapefile does not exist.
+        ValueError: If geometry_bounds format is invalid.
+    """
+    if region_shapefile:
+        region_shapefile_path: Path = Path(region_shapefile).expanduser()
+        if not region_shapefile_path.is_absolute():
+            region_shapefile_path = working_directory / region_shapefile_path
+        if not region_shapefile_path.exists():
+            raise FileNotFoundError(
+                f"Region shapefile not found at: {region_shapefile_path}"
+            )
+        region_geometry: gpd.GeoDataFrame = gpd.read_file(region_shapefile_path)
     else:
-        # FALLBACK: Use rectangular bbox area (old behavior, includes ocean)
-        # This is kept for backward compatibility if area data is not provided
-        lat_span_km = (lat_max - lat_min) * 111.0
-        mean_lat = (lat_min + lat_max) / 2.0
-        lon_span_km = (lon_max - lon_min) * (
-            111.320 * abs(np.cos(np.deg2rad(mean_lat)))
+        bounds: list[float] = [
+            float(value.strip()) for value in geometry_bounds.split(",")
+        ]
+        if len(bounds) != 4:
+            raise ValueError(
+                "Invalid geometry_bounds format. Expected 'xmin,ymin,xmax,ymax'."
+            )
+        region_geometry = gpd.GeoDataFrame(geometry=[box(*bounds)], crs="EPSG:4326")
+
+    if region_geometry.crs != "EPSG:4326":
+        region_geometry = region_geometry.to_crs("EPSG:4326")
+    return region_geometry
+
+
+def remove_init_multiple_excluded_outlets(
+    data_catalog: DataCatalog,
+    clusters: list[list[int]],
+    excluded_iso3_codes: Iterable[str] = INIT_MULTIPLE_EXCLUDED_OUTLET_ISO3_CODES,
+) -> tuple[list[list[int]], list[int]]:
+    """Remove init-multiple outlet COMIDs that intersect excluded countries.
+
+    Args:
+        data_catalog: Data catalog containing MERIT Basins catchments and GADM level 0 countries.
+        clusters: Outlet COMID values grouped by cluster.
+        excluded_iso3_codes: ISO3 country codes whose outlet COMIDs should be removed.
+
+    Returns:
+        Filtered clusters and sorted removed outlet COMID values.
+
+    Raises:
+        ValueError: If no clusters are provided.
+    """
+    if not clusters:
+        raise ValueError("At least one cluster is required.")
+
+    outlet_ids: list[int] = sorted(
+        {int(subbasin_id) for cluster in clusters for subbasin_id in cluster}
+    )
+    excluded_iso3_code_set: set[str] = {
+        str(iso3_code).upper() for iso3_code in excluded_iso3_codes
+    }
+    if not excluded_iso3_code_set:
+        return clusters, []
+
+    countries: gpd.GeoDataFrame = data_catalog.fetch("GADM_level0").read(
+        columns=["GID_0", "geometry"]
+    )
+    excluded_countries: gpd.GeoDataFrame = countries[
+        countries["GID_0"].isin(excluded_iso3_code_set)
+    ]
+    if excluded_countries.empty:
+        return clusters, []
+
+    outlet_catchments: gpd.GeoDataFrame = _load_merit_catchments(
+        data_catalog, outlet_ids, columns=["geometry"]
+    )
+    if excluded_countries.crs != outlet_catchments.crs:
+        excluded_countries = excluded_countries.to_crs(outlet_catchments.crs)
+
+    excluded_geometry: BaseGeometry = excluded_countries.union_all()
+    removed_ids: set[int] = set(
+        int(subbasin_id)
+        for subbasin_id in outlet_catchments.index[
+            outlet_catchments.geometry.intersects(excluded_geometry)
+        ]
+    )
+    if not removed_ids:
+        return clusters, []
+
+    filtered_clusters: list[list[int]] = []
+    for cluster in clusters:
+        filtered_cluster: list[int] = [
+            int(subbasin_id)
+            for subbasin_id in cluster
+            if int(subbasin_id) not in removed_ids
+        ]
+        if filtered_cluster:
+            filtered_clusters.append(filtered_cluster)
+
+    return filtered_clusters, sorted(removed_ids)
+
+
+def _get_upstream_subbasin_ids(
+    river_graph: networkx.DiGraph, outlet_id: int
+) -> set[int]:
+    """Get all subbasins upstream of an outlet, including the outlet.
+
+    Args:
+        river_graph: Directed river graph with edges from upstream to downstream.
+        outlet_id: Outlet COMID value.
+
+    Returns:
+        COMID values for the outlet watershed.
+    """
+    upstream_subbasin_ids: set[int] = set(networkx.ancestors(river_graph, outlet_id))
+    upstream_subbasin_ids.add(int(outlet_id))
+    return upstream_subbasin_ids
+
+
+def _get_cluster_upstream_subbasins(
+    clusters: list[list[int]], river_graph: networkx.DiGraph
+) -> list[list[int]]:
+    """Get full upstream watershed COMIDs for each outlet cluster.
+
+    Args:
+        clusters: Outlet COMID values grouped by cluster.
+        river_graph: Directed river graph with edges from upstream to downstream.
+
+    Returns:
+        Upstream COMID values for each cluster, sorted for reproducible output.
+    """
+    upstream_cache: dict[int, set[int]] = {}
+    cluster_upstream_subbasins: list[list[int]] = []
+
+    for cluster in clusters:
+        watershed_subbasins: set[int] = set()
+        for outlet_id in cluster:
+            if outlet_id not in upstream_cache:
+                upstream_cache[outlet_id] = _get_upstream_subbasin_ids(
+                    river_graph, outlet_id
+                )
+            watershed_subbasins.update(upstream_cache[outlet_id])
+        cluster_upstream_subbasins.append(sorted(watershed_subbasins))
+
+    return cluster_upstream_subbasins
+
+
+def _nearest_outlet_to_cluster(
+    cluster_outlet_ids: list[int],
+    candidate_outlet_ids: set[int],
+    outlet_to_index: dict[int, int],
+    outlet_coordinates: npt.NDArray[np.float64],
+    distance_matrix: npt.NDArray[np.float64] | None,
+) -> tuple[int, float]:
+    """Find the nearest candidate outlet to any outlet in a cluster.
+
+    Args:
+        cluster_outlet_ids: COMID values already in the cluster.
+        candidate_outlet_ids: Candidate COMID values not yet clustered.
+        outlet_to_index: Mapping from outlet COMID to coordinate array row.
+        outlet_coordinates: Coordinate array with longitude and latitude in degrees.
+        distance_matrix: Optional pairwise distance matrix in degrees.
+
+    Returns:
+        The nearest candidate COMID and its distance in degrees.
+
+    Raises:
+        ValueError: If no candidate outlets are provided.
+    """
+    if not candidate_outlet_ids:
+        raise ValueError("At least one candidate outlet is required.")
+
+    cluster_indices: npt.NDArray[np.int64] = np.array(
+        [outlet_to_index[outlet_id] for outlet_id in cluster_outlet_ids],
+        dtype=np.int64,
+    )
+    candidate_ids: list[int] = sorted(candidate_outlet_ids)
+    candidate_indices: npt.NDArray[np.int64] = np.array(
+        [outlet_to_index[outlet_id] for outlet_id in candidate_ids],
+        dtype=np.int64,
+    )
+
+    if distance_matrix is not None:
+        candidate_distances: npt.NDArray[np.float64] = distance_matrix[
+            np.ix_(cluster_indices, candidate_indices)
+        ].min(axis=0)
+    else:
+        cluster_coordinates: npt.NDArray[np.float64] = outlet_coordinates[
+            cluster_indices
+        ]
+        candidate_coordinates: npt.NDArray[np.float64] = outlet_coordinates[
+            candidate_indices
+        ]
+        coordinate_differences: npt.NDArray[np.float64] = (
+            cluster_coordinates[:, np.newaxis, :]
+            - candidate_coordinates[np.newaxis, :, :]
         )
-        bbox_area_km2 = lat_span_km * lon_span_km
+        distances: npt.NDArray[np.float64] = np.sqrt(
+            np.sum(coordinate_differences * coordinate_differences, axis=2)
+        )
+        candidate_distances = distances.min(axis=0)
 
-        # Handle edge case: very small bbox
-        if bbox_area_km2 < 1.0:
+    nearest_position: int = int(candidate_distances.argmin())
+    return candidate_ids[nearest_position], float(candidate_distances[nearest_position])
+
+
+def calculate_bbox_efficiency(
+    outlet_ids: list[int],
+    upstream_areas: dict[int, float],
+    river_graph: networkx.DiGraph,
+    subbasin_centroids: dict[int, tuple[float, float]],
+    subbasin_areas: dict[int, float] | None = None,
+) -> float:
+    """Calculate how compact a cluster watershed is for rectangular downloads.
+
+    Args:
+        outlet_ids: Outlet COMID values in the cluster.
+        upstream_areas: Upstream area by outlet COMID (km2).
+        river_graph: Directed river graph with edges from upstream to downstream.
+        subbasin_centroids: Centroid coordinates by COMID in longitude/latitude degrees.
+        subbasin_areas: Optional subbasin areas by COMID (km2).
+
+    Returns:
+        Efficiency ratio from 0.0 to 1.0.
+    """
+    watershed_subbasins: set[int] = set()
+    for outlet_id in outlet_ids:
+        watershed_subbasins.update(_get_upstream_subbasin_ids(river_graph, outlet_id))
+
+    watershed_coordinates: list[tuple[float, float]] = [
+        subbasin_centroids[subbasin_id]
+        for subbasin_id in watershed_subbasins
+        if subbasin_id in subbasin_centroids
+    ]
+    if not watershed_coordinates:
+        return 1.0
+
+    total_upstream_area_km2: float = sum(
+        upstream_areas.get(outlet_id, 0.0) for outlet_id in outlet_ids
+    )
+
+    if subbasin_areas is not None:
+        watershed_area_km2: float = sum(
+            subbasin_areas.get(subbasin_id, 0.0) for subbasin_id in watershed_subbasins
+        )
+        if watershed_area_km2 < 1.0:
             return 1.0
+        return min(1.0, total_upstream_area_km2 / watershed_area_km2)
 
-        efficiency = min(1.0, cluster_total_area_km2 / bbox_area_km2)
+    longitudes: list[float] = [
+        longitude for longitude, _latitude in watershed_coordinates
+    ]
+    latitudes: list[float] = [
+        latitude for _longitude, latitude in watershed_coordinates
+    ]
+    latitude_span_km: float = (max(latitudes) - min(latitudes)) * 111.0
+    mean_latitude_deg: float = (min(latitudes) + max(latitudes)) / 2.0
+    longitude_span_km: float = (max(longitudes) - min(longitudes)) * (
+        111.320 * abs(np.cos(np.deg2rad(mean_latitude_deg)))
+    )
+    bbox_area_km2: float = latitude_span_km * longitude_span_km
+    if bbox_area_km2 < 1.0:
+        return 1.0
 
-    return efficiency
+    return min(1.0, total_upstream_area_km2 / bbox_area_km2)
 
 
 def cluster_subbasins_following_coastline(
@@ -538,413 +733,278 @@ def cluster_subbasins_following_coastline(
 
     Returns:
         List of clusters, where each cluster is a list of outlet basin COMID values.
+
+    Raises:
+        ValueError: If the outlet list or numeric clustering options are invalid.
     """
-    logger.info(
-        f"Clustering {len(subbasin_ids)} outlet basins by upstream watersheds..."
-    )
+    if not subbasin_ids:
+        raise ValueError("At least one downstream subbasin is required.")
+    if target_area_km2 <= 0:
+        raise ValueError("target_area_km2 must be greater than zero.")
+    if max_distance_km <= 0:
+        raise ValueError("max_distance_km must be greater than zero.")
+    if not 0 <= min_bbox_efficiency <= 1:
+        raise ValueError("min_bbox_efficiency must be between 0 and 1.")
+
+    outlet_ids: list[int] = [int(subbasin_id) for subbasin_id in subbasin_ids]
+    logger.info(f"Clustering {len(outlet_ids)} outlet basins by upstream watersheds...")
     logger.info(f"Target area per cluster: {target_area_km2:,.0f} km²")
     logger.info(f"Maximum cluster growth distance: {max_distance_km:.0f} km")
     logger.info(
-        f"Minimum bounding box efficiency: {min_bbox_efficiency:.1%} (for ERA5 download optimization)"
+        f"Minimum bounding box efficiency: {min_bbox_efficiency:.1%} "
+        "(for ERA5 download optimization)"
     )
 
-    # Load outlet basin geometries
-    subbasins = gpd.read_parquet(
-        data_catalog.fetch("merit_basins_catchments").path,
-        filters=[("COMID", "in", subbasin_ids)],
-    ).set_index("COMID")
+    outlet_catchments: gpd.GeoDataFrame = _load_merit_catchments(
+        data_catalog, outlet_ids, columns=["geometry"]
+    )
+    upstream_areas: dict[int, float] = get_subbasin_upstream_areas(
+        data_catalog, outlet_ids
+    )
 
-    logger.info("Getting upstream areas for all outlet basins...")
-    upstream_areas = get_subbasin_upstream_areas(data_catalog, subbasin_ids)
-
-    # Pre-compute centroids for distance calculations
     logger.info("Computing outlet basin centroids...")
-    coords_array = np.zeros((len(subbasin_ids), 2))
-    subbasin_to_idx = {}
+    outlet_coordinates: npt.NDArray[np.float64] = np.zeros((len(outlet_ids), 2))
+    outlet_to_index: dict[int, int] = {}
+    for outlet_index, outlet_id in enumerate(outlet_ids):
+        outlet_centroid: Point = outlet_catchments.loc[outlet_id].geometry.centroid
+        outlet_coordinates[outlet_index] = [outlet_centroid.x, outlet_centroid.y]
+        outlet_to_index[outlet_id] = outlet_index
 
-    for i, outlet_id in enumerate(subbasin_ids):
-        centroid = subbasins.loc[outlet_id].geometry.centroid
-        coords_array[i] = [centroid.x, centroid.y]
-        subbasin_to_idx[outlet_id] = i
-
-    # Pre-load ALL subbasin coordinates for bbox efficiency calculation
-    # We need this because ERA5 downloads cover the full watershed extent
-    logger.info("Pre-loading ALL subbasin coordinates for bbox efficiency checks...")
-
-    # Get all upstream subbasins for all outlets
-    all_upstream_subbasins = set()
-    for outlet_id in subbasin_ids:
-        upstream = set(networkx.ancestors(river_graph, outlet_id))
-        upstream.add(outlet_id)
-        all_upstream_subbasins.update(upstream)
-
-    logger.info(
-        f"Loading centroids for {len(all_upstream_subbasins)} total subbasins (outlets + upstream)..."
-    )
-
-    # Load all subbasin geometries with area data for land-only bbox efficiency
-    all_subbasins = gpd.read_parquet(
-        data_catalog.fetch("merit_basins_catchments").path,
-        filters=[("COMID", "in", list(all_upstream_subbasins))],
-        columns=[
-            "COMID",
-            "geometry",
-            "unitarea",
-        ],  # Add unitarea for land-only calculation
-    ).set_index("COMID")
-
-    # Create coordinate dictionary and area dictionary for ALL subbasins
-    all_subbasin_coords = {}
-    all_subbasin_areas = {}
-    for subbasin_id in all_upstream_subbasins:
-        if subbasin_id in all_subbasins.index:
-            centroid = all_subbasins.loc[subbasin_id].geometry.centroid
-            all_subbasin_coords[subbasin_id] = (centroid.x, centroid.y)
-            # unitarea is in km2 in MERIT Basins dataset
-            all_subbasin_areas[subbasin_id] = all_subbasins.loc[subbasin_id].unitarea
-
-    logger.info(
-        f"Loaded coordinates and areas for {len(all_subbasin_coords)} subbasins"
-    )
-    logger.info("Using LAND-ONLY area for bbox efficiency (excludes ocean/sea gaps)")
-
-    # Pre-compute distance matrix for fast lookups
-    if len(subbasin_ids) < 1000:
-        logger.info(f"Pre-computing distance matrix for {len(subbasin_ids)} outlets...")
-        diffs = coords_array[:, np.newaxis, :] - coords_array[np.newaxis, :, :]
-        distance_matrix = np.sqrt(np.sum(diffs**2, axis=2))
-    else:
-        logger.info("Computing distances on-demand (large dataset)")
-        distance_matrix = None
-
-    # Maximum distance threshold for cluster growth
-    MAX_DISTANCE_DEGREES = max_distance_km / 111.0  # Convert km to degrees
-
-    logger.info(
-        f"Distance threshold: {MAX_DISTANCE_DEGREES:.2f}° (~{max_distance_km:.0f} km)"
-    )
-    logger.info("Strategy: Add nearest outlet basins (with full upstream watersheds)")
-
-    clusters = []
-    remaining_outlets = set(subbasin_ids)
-    cluster_number = 1
-    start_time = time.time()
-
-    while remaining_outlets:
-        # Progress tracking
-        processed = len(subbasin_ids) - len(remaining_outlets)
-        progress_pct = (processed / len(subbasin_ids)) * 100
-        logger.info(
-            f"\nCluster {cluster_number}: {len(remaining_outlets)} outlets remaining ({progress_pct:.1f}% complete)"
+    all_upstream_subbasins: set[int] = set()
+    for outlet_id in outlet_ids:
+        all_upstream_subbasins.update(
+            _get_upstream_subbasin_ids(river_graph, outlet_id)
         )
 
-        # Select starting outlet for this cluster
-        if cluster_number == 1:
-            # First cluster: start from top-right corner (highest lat, then easternmost lon)
-            outlet_coords = [
-                (oid, coords_array[subbasin_to_idx[oid]]) for oid in remaining_outlets
-            ]
-            outlet_coords.sort(
-                key=lambda x: (-x[1][1], -x[1][0])
-            )  # Sort by -lat, -lon (top-right corner)
-            start_outlet = outlet_coords[0][0]
+    logger.info(
+        f"Loading centroids for {len(all_upstream_subbasins)} total subbasins "
+        "(outlets + upstream)..."
+    )
+    all_catchments: gpd.GeoDataFrame = _load_merit_catchments(
+        data_catalog, all_upstream_subbasins, columns=["geometry", "unitarea"]
+    )
+    all_subbasin_centroids: dict[int, tuple[float, float]] = {}
+    all_subbasin_areas: dict[int, float] = {}
+    for subbasin_id, row in all_catchments.iterrows():
+        subbasin_id_value: Any = subbasin_id
+        subbasin_id_int: int = int(subbasin_id_value)
+        centroid: Point = row.geometry.centroid
+        all_subbasin_centroids[subbasin_id_int] = (
+            float(centroid.x),
+            float(centroid.y),
+        )
+        all_subbasin_areas[subbasin_id_int] = float(row.unitarea)
+
+    if len(outlet_ids) < 1000:
+        coordinate_differences: npt.NDArray[np.float64] = (
+            outlet_coordinates[:, np.newaxis, :] - outlet_coordinates[np.newaxis, :, :]
+        )
+        distance_matrix: npt.NDArray[np.float64] | None = np.sqrt(
+            np.sum(coordinate_differences * coordinate_differences, axis=2)
+        )
+        logger.info(f"Pre-computed distance matrix for {len(outlet_ids)} outlets.")
+    else:
+        distance_matrix = None
+        logger.info("Computing outlet distances on demand.")
+
+    max_distance_degrees: float = max_distance_km / 111.0
+    logger.info(
+        f"Distance threshold: {max_distance_degrees:.2f}° (~{max_distance_km:.0f} km)"
+    )
+
+    clusters: list[list[int]] = []
+    remaining_outlet_ids: set[int] = set(outlet_ids)
+    previous_cluster: list[int] | None = None
+    cluster_number: int = 1
+    start_time_s: float = time.time()
+
+    while remaining_outlet_ids:
+        processed_outlets: int = len(outlet_ids) - len(remaining_outlet_ids)
+        progress_percent: float = (processed_outlets / len(outlet_ids)) * 100
+        logger.info(
+            f"\nCluster {cluster_number}: {len(remaining_outlet_ids)} outlets "
+            f"remaining ({progress_percent:.1f}% complete)"
+        )
+
+        if previous_cluster is None:
+            start_outlet: int = max(
+                remaining_outlet_ids,
+                key=lambda outlet_id: (
+                    outlet_coordinates[outlet_to_index[outlet_id], 1],
+                    outlet_coordinates[outlet_to_index[outlet_id], 0],
+                ),
+            )
             logger.info(f"  Starting outlet: {start_outlet} (top-right corner)")
         else:
-            # Subsequent clusters: find nearest remaining outlet to current cluster
-            # Use vectorized operations for speed
-            cluster_indices = np.array(
-                [subbasin_to_idx[oid] for oid in current_cluster]
+            start_outlet, start_distance_degrees = _nearest_outlet_to_cluster(
+                previous_cluster,
+                remaining_outlet_ids,
+                outlet_to_index,
+                outlet_coordinates,
+                distance_matrix,
             )
-            remaining_list = list(remaining_outlets)
-            remaining_indices = np.array(
-                [subbasin_to_idx[oid] for oid in remaining_list]
-            )
-
-            if distance_matrix is not None:
-                relevant_distances = distance_matrix[
-                    np.ix_(cluster_indices, remaining_indices)
-                ]
-                min_distances = relevant_distances.min(axis=0)
-            else:
-                cluster_coords = coords_array[cluster_indices]
-                remaining_coords = coords_array[remaining_indices]
-                diffs = (
-                    cluster_coords[:, np.newaxis, :]
-                    - remaining_coords[np.newaxis, :, :]
-                )
-                distances = np.sqrt(np.sum(diffs**2, axis=2))
-                min_distances = distances.min(axis=0)
-
-            closest_idx = min_distances.argmin()
-            min_dist = float(min_distances[closest_idx])
-            start_outlet = remaining_list[closest_idx]
-
             logger.info(
-                f"  Starting outlet: {start_outlet} (nearest to previous cluster, dist={min_dist:.3f}°)"
+                f"  Starting outlet: {start_outlet} "
+                f"(nearest to previous cluster, dist={start_distance_degrees:.3f}°)"
             )
 
-        # Initialize cluster with starting outlet
-        current_cluster = [start_outlet]
-        current_area = upstream_areas.get(start_outlet, 0.0)
-        remaining_outlets.remove(start_outlet)
-        logger.info(f"  Initial area: {current_area:,.0f} km²")
+        current_cluster: list[int] = [start_outlet]
+        current_area_km2: float = upstream_areas.get(start_outlet, 0.0)
+        remaining_outlet_ids.remove(start_outlet)
+        logger.info(f"  Initial area: {current_area_km2:,.0f} km²")
 
-        # Grow cluster by adding nearest outlets until target area reached
-        while current_area < target_area_km2 and remaining_outlets:
-            # Check if current cluster already has poor bounding box efficiency
-            current_efficiency = calculate_bbox_efficiency(
+        while current_area_km2 < target_area_km2 and remaining_outlet_ids:
+            current_efficiency: float = calculate_bbox_efficiency(
                 current_cluster,
-                subbasin_to_idx,
-                coords_array,
                 upstream_areas,
                 river_graph,
-                all_subbasin_coords,
+                all_subbasin_centroids,
                 all_subbasin_areas,
             )
-
             if current_efficiency < min_bbox_efficiency:
                 logger.info(
-                    f"  Current cluster bbox efficiency too low ({current_efficiency:.1%} < {min_bbox_efficiency:.1%}), stopping cluster"
+                    "  Current cluster bbox efficiency too low "
+                    f"({current_efficiency:.1%} < {min_bbox_efficiency:.1%}); "
+                    "stopping cluster."
                 )
                 break
 
-            # Find nearest remaining outlet to ANY outlet in current cluster using vectorized ops
-            # Get current cluster indices for distance calculations
-            cluster_indices = np.array(
-                [subbasin_to_idx[oid] for oid in current_cluster]
+            nearest_outlet, nearest_distance_degrees = _nearest_outlet_to_cluster(
+                current_cluster,
+                remaining_outlet_ids,
+                outlet_to_index,
+                outlet_coordinates,
+                distance_matrix,
             )
-
-            # Convert to lists for indexing
-            remaining_list = list(remaining_outlets)
-            remaining_indices = np.array(
-                [subbasin_to_idx[oid] for oid in remaining_list]
-            )
-
-            if distance_matrix is not None:
-                # Use pre-computed distance matrix (much faster!)
-                # Extract relevant submatrix: cluster_outlets × remaining_outlets
-                relevant_distances = distance_matrix[
-                    np.ix_(cluster_indices, remaining_indices)
-                ]
-                # Find minimum distance from ANY cluster outlet to each remaining outlet
-                min_distances_to_remaining = relevant_distances.min(axis=0)
-            else:
-                # On-demand vectorized calculation
-                cluster_coords = coords_array[cluster_indices]
-                remaining_coords = coords_array[remaining_indices]
-
-                # Broadcasting: (n_cluster, 1, 2) - (1, n_remaining, 2) = (n_cluster, n_remaining, 2)
-                diffs = (
-                    cluster_coords[:, np.newaxis, :]
-                    - remaining_coords[np.newaxis, :, :]
-                )
-                distances = np.sqrt(np.sum(diffs**2, axis=2))
-                # Min distance from ANY cluster outlet to each remaining outlet
-                min_distances_to_remaining = distances.min(axis=0)
-
-            # Find the outlet with minimum distance
-            closest_idx = min_distances_to_remaining.argmin()
-            min_dist = float(min_distances_to_remaining[closest_idx])
-            nearest_outlet = remaining_list[closest_idx]
-
-            # Check distance threshold
-            if min_dist > MAX_DISTANCE_DEGREES:
+            if nearest_distance_degrees > max_distance_degrees:
                 logger.info(
-                    f"  Nearest outlet is {min_dist:.3f}° away (>{MAX_DISTANCE_DEGREES:.3f}°), stopping cluster"
+                    f"  Nearest outlet is {nearest_distance_degrees:.3f}° away "
+                    f"(>{max_distance_degrees:.3f}°); stopping cluster."
                 )
                 break
 
-            # Check bounding box efficiency if we add this outlet
-            # This prevents thin/diagonal clusters that waste ERA5 download bandwidth
-            all_outlets_with_candidate = current_cluster + [nearest_outlet]
-            candidate_efficiency = calculate_bbox_efficiency(
-                all_outlets_with_candidate,
-                subbasin_to_idx,
-                coords_array,
+            candidate_cluster: list[int] = current_cluster + [nearest_outlet]
+            candidate_efficiency: float = calculate_bbox_efficiency(
+                candidate_cluster,
                 upstream_areas,
                 river_graph,
-                all_subbasin_coords,
+                all_subbasin_centroids,
                 all_subbasin_areas,
             )
-
             if candidate_efficiency < min_bbox_efficiency:
                 logger.info(
-                    f"  Adding outlet {nearest_outlet} would reduce bbox efficiency to {candidate_efficiency:.1%} (< {min_bbox_efficiency:.1%}), stopping cluster"
+                    f"  Adding outlet {nearest_outlet} would reduce bbox efficiency "
+                    f"to {candidate_efficiency:.1%} (< {min_bbox_efficiency:.1%}); "
+                    "stopping cluster."
                 )
                 break
 
-            # Add the nearest outlet to cluster
-            outlet_area = upstream_areas.get(nearest_outlet, 0.0)
+            outlet_area_km2: float = upstream_areas.get(nearest_outlet, 0.0)
             current_cluster.append(nearest_outlet)
-            current_area += outlet_area
-            remaining_outlets.remove(nearest_outlet)
-
-            # Log progress occasionally
+            current_area_km2 += outlet_area_km2
+            remaining_outlet_ids.remove(nearest_outlet)
             if len(current_cluster) <= 10 or len(current_cluster) % 5 == 0:
                 logger.info(
-                    f"  Added outlet {nearest_outlet} (area: {outlet_area:,.0f} km², dist: {min_dist:.3f}°) - Total: {current_area:,.0f} km² [{len(current_cluster)} outlets]"
+                    f"  Added outlet {nearest_outlet} "
+                    f"(area: {outlet_area_km2:,.0f} km², "
+                    f"dist: {nearest_distance_degrees:.3f}°) - "
+                    f"Total: {current_area_km2:,.0f} km² "
+                    f"[{len(current_cluster)} outlets]"
                 )
 
-        # Cluster complete
         clusters.append(current_cluster)
+        previous_cluster = current_cluster
         logger.info(
-            f"Completed cluster {cluster_number}: {len(current_cluster)} outlets, {current_area:,.0f} km²"
+            f"Completed cluster {cluster_number}: "
+            f"{len(current_cluster)} outlets, {current_area_km2:,.0f} km²"
         )
         cluster_number += 1
 
-    total_time = time.time() - start_time
+    total_time_s: float = time.time() - start_time_s
     logger.info(
-        f"\nClustering complete! Created {len(clusters)} clusters in {total_time:.1f}s ({total_time / 60:.1f} min)"
+        f"\nClustering complete! Created {len(clusters)} clusters "
+        f"in {total_time_s:.1f}s ({total_time_s / 60:.1f} min)"
     )
 
-    # Post-processing configuration
-    MERGE_DISTANCE_KM = 100.0
-    SMALL_CLUSTER_THRESHOLD_PERCENT = 0.10  # 10% of target area
+    logger.info("\nPost-processing clusters...")
+    small_cluster_threshold_km2: float = 0.10 * target_area_km2
+    cluster_areas_km2: list[float] = [
+        float(sum(upstream_areas.get(outlet_id, 0.0) for outlet_id in cluster))
+        for cluster in clusters
+    ]
+    clusters_to_remove: set[int] = set()
+    for cluster_index, cluster_area_km2 in enumerate(cluster_areas_km2):
+        if (
+            len(clusters) <= 1
+            or cluster_index in clusters_to_remove
+            or cluster_area_km2 >= small_cluster_threshold_km2
+        ):
+            continue
 
-    logger.info("\n=== POST-PROCESSING ===")
-    logger.info(f"Merge distance: {MERGE_DISTANCE_KM:.0f} km")
-    logger.info(
-        f"Small cluster threshold: {SMALL_CLUSTER_THRESHOLD_PERCENT:.0%} of target area ({SMALL_CLUSTER_THRESHOLD_PERCENT * target_area_km2:,.0f} km²)"
-    )
-
-    # Post-processing 1: Merge any clusters <10% of target area with nearest neighbor
-    logger.info("\n[1/2] Merging small clusters (<10% of target area)...")
-
-    # Calculate cluster areas
-    cluster_areas = {}
-    small_clusters = []  # Clusters < 10% of target area
-    SMALL_CLUSTER_THRESHOLD_KM2 = SMALL_CLUSTER_THRESHOLD_PERCENT * target_area_km2
-
-    for cluster_idx, cluster in enumerate(clusters):
-        cluster_area = sum(upstream_areas.get(outlet_id, 0.0) for outlet_id in cluster)
-        cluster_areas[cluster_idx] = cluster_area
-
-        if cluster_area < SMALL_CLUSTER_THRESHOLD_KM2:
-            small_clusters.append(cluster_idx)
-
-    logger.info(
-        f"  Found {len(small_clusters)} small clusters (<{SMALL_CLUSTER_THRESHOLD_KM2:,.0f} km²)"
-    )
-
-    if small_clusters:
-        MERGE_DISTANCE_DEGREES = MERGE_DISTANCE_KM / 111.0
-        clusters_to_remove = set()
-
-        for small_idx in small_clusters:
-            # Skip if this cluster was already merged into another cluster
-            if small_idx in clusters_to_remove:
+        nearest_cluster_index: int | None = None
+        nearest_distance_degrees: float = float("inf")
+        for candidate_index, candidate_cluster in enumerate(clusters):
+            if (
+                candidate_index == cluster_index
+                or candidate_index in clusters_to_remove
+            ):
                 continue
-
-            small_cluster = clusters[small_idx]
-            small_area = cluster_areas[small_idx]
-
-            # Get coordinates of small cluster outlets
-            small_indices = np.array([subbasin_to_idx[oid] for oid in small_cluster])
-            small_coords = coords_array[small_indices]
-
-            # Find nearest cluster using minimum distance between ANY subbasins (not centroids!)
-            # This ensures we find truly adjacent clusters even if centroids are far apart
-            min_distance = float("inf")
-            nearest_cluster_idx = None
-
-            for other_idx, other_cluster in enumerate(clusters):
-                if other_idx == small_idx or other_idx in clusters_to_remove:
-                    continue
-
-                other_indices = np.array(
-                    [subbasin_to_idx[oid] for oid in other_cluster]
-                )
-                other_coords = coords_array[other_indices]
-
-                # Calculate minimum distance between ANY outlet in small cluster and ANY outlet in target cluster
-                # Broadcasting: (n_small, 1, 2) - (1, n_other, 2) = (n_small, n_other, 2)
-                diffs = small_coords[:, np.newaxis, :] - other_coords[np.newaxis, :, :]
-                distances = np.sqrt(np.sum(diffs**2, axis=2))
-                min_dist = float(distances.min())  # Closest subbasin pair distance
-
-                if min_dist < min_distance:
-                    min_distance = min_dist
-                    nearest_cluster_idx = other_idx
-
-            # Simple rule: if cluster is <10% of target, ALWAYS merge with nearest neighbor
-            # No checks - small clusters must be merged to avoid inefficient tiny runs
-            if nearest_cluster_idx is not None:
-                target_area = cluster_areas[nearest_cluster_idx]
-                merged_area = target_area + small_area
-
-                # Force merge - log the result
-                logger.info(
-                    f"    Merging small cluster {small_idx} (area: {small_area:,.0f} km², {small_area / target_area_km2:.1%} of target) "
-                    f"into cluster {nearest_cluster_idx} (distance: {min_distance * 111.0:.1f} km, merged area: {merged_area:,.0f} km²)"
-                )
-
-                # Update both the cluster list AND the cluster_areas dictionary
-                clusters[nearest_cluster_idx].extend(small_cluster)
-                cluster_areas[nearest_cluster_idx] = merged_area
-                clusters_to_remove.add(small_idx)
-            else:
-                logger.warning(
-                    f"    WARNING: Cannot find merge target for cluster {small_idx} (area: {small_area:,.0f} km²) - this should never happen!"
-                )
-
-        # Remove merged small clusters
-        if clusters_to_remove:
-            logger.info(
-                f"  Merged and removing {len(clusters_to_remove)} small clusters..."
+            _unused_outlet_id, distance_degrees = _nearest_outlet_to_cluster(
+                clusters[cluster_index],
+                set(candidate_cluster),
+                outlet_to_index,
+                outlet_coordinates,
+                distance_matrix,
             )
-            clusters = [
-                cluster
-                for idx, cluster in enumerate(clusters)
-                if idx not in clusters_to_remove
-            ]
-            logger.info(f"  Cluster count after small cluster merging: {len(clusters)}")
-    else:
-        logger.info("  No small clusters found")
+            if distance_degrees < nearest_distance_degrees:
+                nearest_distance_degrees = distance_degrees
+                nearest_cluster_index = candidate_index
 
-    # Post-processing 2: Assign any remaining unclustered basins
-    logger.info("\n[2/2] Checking for unclustered outlet basins...")
+        if nearest_cluster_index is None:
+            logger.warning(f"Could not merge small cluster {cluster_index}.")
+            continue
 
-    all_clustered_outlets = set()
-    for cluster in clusters:
-        all_clustered_outlets.update(cluster)
-
-    unclustered_outlets = set(subbasin_ids) - all_clustered_outlets
-
-    if unclustered_outlets:
-        logger.info(f"  Found {len(unclustered_outlets)} unclustered outlet basins")
-
-        for unclustered_outlet in unclustered_outlets:
-            unclustered_idx = subbasin_to_idx[unclustered_outlet]
-            unclustered_coords = coords_array[unclustered_idx]
-
-            # Find nearest cluster
-            min_distance = float("inf")
-            nearest_cluster_idx = 0
-
-            for cluster_idx, cluster in enumerate(clusters):
-                cluster_indices = np.array([subbasin_to_idx[oid] for oid in cluster])
-                cluster_coords = coords_array[cluster_indices]
-
-                diffs = cluster_coords - unclustered_coords
-                distances = np.sqrt(np.sum(diffs * diffs, axis=1))
-                min_dist_to_cluster = float(distances.min())
-
-                if min_dist_to_cluster < min_distance:
-                    min_distance = min_dist_to_cluster
-                    nearest_cluster_idx = cluster_idx
-
-            clusters[nearest_cluster_idx].append(unclustered_outlet)
-            logger.info(
-                f"    Assigned outlet {unclustered_outlet} to cluster {nearest_cluster_idx} "
-                f"(distance: {min_distance * 111.0:.1f} km, area: {upstream_areas.get(unclustered_outlet, 0.0):,.0f} km²)"
-            )
-
+        clusters[nearest_cluster_index].extend(clusters[cluster_index])
+        clusters_to_remove.add(cluster_index)
         logger.info(
-            f"  Successfully assigned all {len(unclustered_outlets)} unclustered basins"
+            f"Merged small cluster {cluster_index} "
+            f"({cluster_area_km2:,.0f} km2) into cluster {nearest_cluster_index} "
+            f"at {nearest_distance_degrees * 111.0:.1f} km"
         )
-    else:
-        logger.info("  No unclustered basins found - all outlets assigned")
 
+    if clusters_to_remove:
+        clusters = [
+            cluster
+            for cluster_index, cluster in enumerate(clusters)
+            if cluster_index not in clusters_to_remove
+        ]
+
+    assigned_outlet_ids: set[int] = {
+        outlet_id for cluster in clusters for outlet_id in cluster
+    }
+    missing_outlet_ids: set[int] = set(outlet_ids) - assigned_outlet_ids
+    if not missing_outlet_ids:
+        logger.info("No unclustered outlets found.")
+    elif not clusters:
+        clusters = [[outlet_id] for outlet_id in sorted(missing_outlet_ids)]
+    else:
+        logger.info(f"Assigning {len(missing_outlet_ids)} unclustered outlets.")
+        for outlet_id in sorted(missing_outlet_ids):
+            nearest_cluster_index = min(
+                range(len(clusters)),
+                key=lambda cluster_index: _nearest_outlet_to_cluster(
+                    [outlet_id],
+                    set(clusters[cluster_index]),
+                    outlet_to_index,
+                    outlet_coordinates,
+                    distance_matrix,
+                )[1],
+            )
+            clusters[nearest_cluster_index].append(outlet_id)
+            logger.info(
+                f"Assigned outlet {outlet_id} to cluster {nearest_cluster_index} "
+                f"(area: {upstream_areas.get(outlet_id, 0.0):,.0f} km2)"
+            )
     logger.info(f"\n=== FINAL RESULT: {len(clusters)} clusters ===")
 
     return clusters
@@ -963,52 +1023,47 @@ def save_clusters_to_geoparquet(
         data_catalog: Data catalog containing the MERIT basins.
         output_path: Path where to save the geoparquet file.
         cluster_prefix: Prefix for cluster names.
+
+    Raises:
+        ValueError: If no clusters are provided.
     """
     print(f"Saving clusters to geoparquet: {output_path}")
 
-    # Get all subbasin IDs using list comprehension for better performance
-    all_subbasin_ids = [sid for cluster in clusters for sid in cluster]
+    all_subbasin_ids: list[int] = [
+        int(subbasin_id) for cluster in clusters for subbasin_id in cluster
+    ]
+    if not all_subbasin_ids:
+        raise ValueError("At least one clustered subbasin is required.")
 
-    # Load subbasin geometries and upstream areas in parallel
     print(f"Loading geometries for {len(all_subbasin_ids)} subbasins...")
-    subbasins = gpd.read_parquet(
-        data_catalog.fetch("merit_basins_catchments").path,
-        filters=[("COMID", "in", all_subbasin_ids)],
-        columns=["COMID", "geometry"],  # Only load needed columns
-    ).set_index("COMID")
-
-    # Simplify geometries for faster QGIS rendering
-    print("Simplifying geometries for QGIS performance...")
-    simplify_tolerance = 0.001  # ~111m at equator
-    subbasins["geometry"] = subbasins["geometry"].simplify(
-        simplify_tolerance, preserve_topology=True
+    subbasins: gpd.GeoDataFrame = _load_merit_catchments(
+        data_catalog, all_subbasin_ids, columns=["geometry"]
     )
 
-    # Get upstream areas for display - this is already optimized with filters
     print("Loading upstream areas...")
-    upstream_areas = get_subbasin_upstream_areas(data_catalog, all_subbasin_ids)
+    upstream_areas: dict[int, float] = get_subbasin_upstream_areas(
+        data_catalog, all_subbasin_ids
+    )
 
-    # Pre-calculate cluster areas for better performance
     print("Pre-calculating cluster areas...")
-    cluster_areas = {}
+    cluster_areas: dict[int, float] = {}
     for cluster_idx, cluster_subbasins in enumerate(clusters):
-        cluster_id = f"{cluster_prefix}_{cluster_idx:03d}"
-        cluster_areas[cluster_idx] = sum(
-            upstream_areas.get(sid, 0) for sid in cluster_subbasins
+        cluster_areas[cluster_idx] = float(
+            sum(
+                upstream_areas.get(subbasin_id, 0.0)
+                for subbasin_id in cluster_subbasins
+            )
         )
 
-    # Create cluster assignments using vectorized operations
     print("Creating cluster assignments...")
-    cluster_data = []
+    cluster_data: list[dict[str, Any]] = []
     for cluster_idx, cluster_subbasins in enumerate(clusters):
-        cluster_id = f"{cluster_prefix}_{cluster_idx:03d}"
-        cluster_area_km2 = cluster_areas[cluster_idx]
-
-        # Create all records for this cluster at once
+        cluster_id: str = f"{cluster_prefix}_{cluster_idx:03d}"
+        cluster_area_km2: float = cluster_areas[cluster_idx]
         for subbasin_id in cluster_subbasins:
             cluster_data.append(
                 {
-                    "COMID": subbasin_id,
+                    "COMID": int(subbasin_id),
                     "cluster_id": cluster_id,
                     "cluster_number": cluster_idx,
                     "cluster_area_km2": cluster_area_km2,
@@ -1017,11 +1072,9 @@ def save_clusters_to_geoparquet(
                 }
             )
 
-    # Create GeoDataFrame
     print("Creating GeoDataFrame...")
-    cluster_gdf = gpd.GeoDataFrame(cluster_data, crs=subbasins.crs)
+    cluster_gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(cluster_data, crs=subbasins.crs)
 
-    # Save to geoparquet
     print("Saving to geoparquet...")
     write_geom(cluster_gdf, output_path)
     print(
@@ -1029,167 +1082,179 @@ def save_clusters_to_geoparquet(
     )
 
 
-def create_cluster_visualization_map(
+def _union_geometries(
+    geometries: Iterable[BaseGeometry], chunk_size: int = 5000
+) -> BaseGeometry:
+    """Merge geometries into one exact outline geometry.
+
+    Args:
+        geometries: Polygon or multipolygon geometries to dissolve.
+        chunk_size: Number of geometries per union chunk.
+
+    Returns:
+        Dissolved outline geometry.
+
+    Raises:
+        ValueError: If no geometries are provided.
+    """
+    geometry_list: list[BaseGeometry] = list(geometries)
+    if not geometry_list:
+        raise ValueError("At least one geometry is required to create an outline.")
+
+    if len(geometry_list) <= chunk_size:
+        merged_geometry: BaseGeometry = unary_union(geometry_list)
+    else:
+        chunk_unions: list[BaseGeometry] = [
+            unary_union(geometry_list[start_index : start_index + chunk_size])
+            for start_index in range(0, len(geometry_list), chunk_size)
+        ]
+        merged_geometry = unary_union(chunk_unions)
+
+    if not merged_geometry.is_valid:
+        # Repair only invalid topology; this is not a simplification step.
+        merged_geometry = merged_geometry.buffer(0)
+
+    return merged_geometry
+
+
+def _geometry_area_km2(geometry: BaseGeometry, crs: Any) -> float:
+    """Calculate geometry area in an equal-area projection.
+
+    Args:
+        geometry: Geometry to measure.
+        crs: Coordinate reference system of the geometry.
+
+    Returns:
+        Geometry area (km2).
+    """
+    projected_geometry: gpd.GeoSeries = gpd.GeoSeries([geometry], crs=crs).to_crs(
+        "EPSG:6933"
+    )
+    area_m2: float = float(projected_geometry.area.iloc[0])
+    return area_m2 / 1e6
+
+
+def create_cluster_outline_geodataframe(
     clusters: list[list[int]],
     data_catalog: DataCatalog,
     river_graph: networkx.DiGraph,
-    output_path: str | Path,
     cluster_prefix: str = "cluster",
-    figsize: tuple[int, int] = (20, 16),
-) -> None:
-    """Create a visualization map showing dissolved cluster boundaries with distinct colors.
+) -> gpd.GeoDataFrame:
+    """Create one dissolved basin outline for each outlet cluster.
 
-    This creates a clean map where each cluster is shown as a single merged polygon
-    with distinct colors and labeled numbers for easy identification.
+    Each output geometry is the exact union of all upstream MERIT Basins
+    catchments that drain to the outlets in the cluster. The result may be a
+    Polygon or MultiPolygon, but each cluster is represented by exactly one row.
 
     Args:
-        clusters: List of clusters, where each cluster is a list of downstream COMID values.
-        data_catalog: Data catalog containing the MERIT basins.
-        river_graph: River graph for finding upstream subbasins.
-        output_path: Path where to save the PNG file.
+        clusters: Outlet COMID values grouped by cluster.
+        data_catalog: Data catalog containing the MERIT Basins catchments.
+        river_graph: Directed river graph with edges from upstream to downstream.
         cluster_prefix: Prefix for cluster names.
-        figsize: Figure size in inches (width, height).
+
+    Returns:
+        GeoDataFrame with one exact outline geometry per cluster.
+
+    Raises:
+        ValueError: If no clusters are provided.
+    """
+    if not clusters:
+        raise ValueError("At least one cluster is required.")
+
+    cluster_upstream_subbasins: list[list[int]] = _get_cluster_upstream_subbasins(
+        clusters, river_graph
+    )
+    all_upstream_subbasin_ids: list[int] = sorted(
+        {
+            subbasin_id
+            for upstream_subbasins in cluster_upstream_subbasins
+            for subbasin_id in upstream_subbasins
+        }
+    )
+
+    print(
+        "Loading geometries for "
+        f"{len(all_upstream_subbasin_ids)} unique upstream subbasins..."
+    )
+    catchments: gpd.GeoDataFrame = _load_merit_catchments(
+        data_catalog, all_upstream_subbasin_ids, columns=["geometry"]
+    )
+
+    print(f"Creating exact outlines for {len(clusters)} clusters...")
+    outline_records: list[dict[str, Any]] = []
+    for cluster_index, (outlet_ids, upstream_subbasin_ids) in enumerate(
+        zip(clusters, cluster_upstream_subbasins, strict=True)
+    ):
+        cluster_id: str = f"{cluster_prefix}_{cluster_index:03d}"
+        cluster_geometries: gpd.GeoDataFrame = catchments.loc[upstream_subbasin_ids]
+        outline_geometry: BaseGeometry = _union_geometries(
+            cluster_geometries.geometry.values
+        )
+        total_basin_area_km2: float = _geometry_area_km2(
+            outline_geometry, catchments.crs
+        )
+        outline_records.append(
+            {
+                "cluster_id": cluster_id,
+                "cluster_number": cluster_index,
+                "num_outlet_subbasins": len(outlet_ids),
+                "num_total_subbasins": len(upstream_subbasin_ids),
+                "total_basin_area_km2": total_basin_area_km2,
+                "geometry_type": outline_geometry.geom_type,
+                "geometry": outline_geometry,
+            }
+        )
+        print(
+            f"  {cluster_id}: {len(upstream_subbasin_ids)} subbasins, "
+            f"{total_basin_area_km2:,.0f} km2"
+        )
+
+    return gpd.GeoDataFrame(outline_records, crs=catchments.crs)
+
+
+def create_cluster_visualization_map(
+    cluster_outlines: gpd.GeoDataFrame,
+    output_path: str | Path,
+    figsize: tuple[int, int] = (20, 16),
+) -> None:
+    """Create a visualization map from precomputed cluster outlines.
+
+    Args:
+        cluster_outlines: GeoDataFrame with one outline geometry per cluster.
+        output_path: Path where to save the PNG file.
+        figsize: Figure size in inches.
+
+    Raises:
+        ValueError: If no cluster outlines are provided.
     """
     from matplotlib.patches import Patch
 
+    if cluster_outlines.empty:
+        raise ValueError("At least one cluster outline is required.")
+
     print(f"Creating cluster visualization map: {output_path}")
+    cluster_count: int = len(cluster_outlines)
+    colors = plt.cm.tab20(np.linspace(0, 1, min(cluster_count, 20)))  # type: ignore[attr-defined]  # ty:ignore[unresolved-attribute]
+    if cluster_count > 20:
+        colors = plt.cm.hsv(np.linspace(0, 1, cluster_count))  # type: ignore[attr-defined]  # ty:ignore[unresolved-attribute]
 
-    # Get upstream subbasins for each cluster (with caching for speed)
-    print("Computing upstream subbasins for all clusters (with caching)...")
-
-    # Build a cache of upstream subbasins to avoid redundant networkx.ancestors calls
-    upstream_cache = {}
-
-    def get_all_upstream_cached(node_id: int) -> set[int]:
-        """Get all upstream subbasins with caching.
-
-        Args:
-            node_id: The COMID to get upstream subbasins for.
-
-        Returns:
-            Set of all upstream subbasin COMIDs including the node itself.
-        """
-        if node_id not in upstream_cache:
-            upstream = set(networkx.ancestors(river_graph, node_id))
-            upstream.add(node_id)
-            upstream_cache[node_id] = upstream
-        return upstream_cache[node_id]
-
-    all_cluster_subbasins = []
-    for cluster_idx, downstream_subbasins in enumerate(clusters):
-        cluster_all_subbasins = set()
-        for downstream_subbasin in downstream_subbasins:
-            cluster_all_subbasins.update(get_all_upstream_cached(downstream_subbasin))
-        all_cluster_subbasins.append(list(cluster_all_subbasins))
-
-    total_subbasin_count = sum(len(c) for c in all_cluster_subbasins)
-    print(f"Loading geometries for {total_subbasin_count} unique subbasins...")
-    all_geometries = gpd.read_parquet(
-        data_catalog.fetch("merit_basins_catchments").path,
-        filters=[("COMID", "in", [sid for c in all_cluster_subbasins for sid in c])],
-        columns=["COMID", "geometry"],
-    ).set_index("COMID")
-
-    # simplify geometries before plotting
-    print(
-        "Pre-simplifying geometries for faster dissolving (tolerance: 0.01° ≈ 1km)..."
-    )
-    all_geometries["geometry"] = all_geometries["geometry"].simplify(
-        0.01, preserve_topology=True
-    )
-    print("Geometry complexity reduced significantly")
-
-    # Dissolve clusters sequentially to create merged boundaries for visualization
-    print("Dissolving clusters into merged boundaries...")
-
-    # Use a colormap with very distinct colors
-    colors = plt.cm.tab20(np.linspace(0, 1, min(len(clusters), 20)))  # type: ignore[attr-defined]  # ty:ignore[unresolved-attribute]
-    if len(clusters) > 20:
-        colors = plt.cm.hsv(np.linspace(0, 1, len(clusters)))  # type: ignore[attr-defined]  # ty:ignore[unresolved-attribute]
-
-    # Process clusters sequentially
-    merged_cluster_data = []
-    for cluster_idx, subbasins_to_merge in enumerate(all_cluster_subbasins):
-        cluster_id = f"{cluster_prefix}_{cluster_idx:03d}"
-        color = colors[cluster_idx]
-
-        print(
-            f"  Dissolving cluster {cluster_idx}: {len(subbasins_to_merge)} subbasins"
-        )
-
-        # Get geometries for this cluster
-        cluster_geometries = all_geometries.loc[subbasins_to_merge]
-
-        # Optimized dissolving for large clusters: use chunked unary_union
-        if len(subbasins_to_merge) > 10000:
-            print(f"    Large cluster detected - using chunked dissolving...")
-            # Process in chunks of 5000 geometries
-            chunk_size = 5000
-            geometries = cluster_geometries.geometry.values
-            chunks = [
-                geometries[i : i + chunk_size]
-                for i in range(0, len(geometries), chunk_size)
-            ]
-
-            # First pass: dissolve each chunk
-            print(f"    Dissolving {len(chunks)} chunks...")
-            chunk_unions = []
-            for i, chunk in enumerate(chunks):
-                if (i + 1) % 5 == 0 or (i + 1) == len(chunks):
-                    print(f"      Chunk {i + 1}/{len(chunks)}...")
-                chunk_union = unary_union(chunk)
-                chunk_unions.append(chunk_union)
-
-            # Second pass: dissolve the chunk results
-            print(f"    Merging {len(chunk_unions)} chunk results...")
-            merged_geometry = unary_union(chunk_unions)
-        else:
-            # Small cluster: direct dissolve
-            merged_geometry = unary_union(cluster_geometries.geometry.values)
-
-        # Clean up internal boundaries
-        merged_geometry = merged_geometry.buffer(0)
-
-        # Simplify for cleaner visualization
-        merged_geometry = merged_geometry.simplify(0.01, preserve_topology=True)
-
-        merged_cluster_data.append(
-            {
-                "cluster_id": cluster_id,
-                "cluster_number": cluster_idx,
-                "color": color,
-                "geometry": merged_geometry,
-            }
-        )
-
-    # Create GeoDataFrame with dissolved cluster boundaries
-    cluster_gdf = gpd.GeoDataFrame(merged_cluster_data, crs="EPSG:4326")
-
-    # Convert to Web Mercator for contextily
-    cluster_gdf_mercator = cluster_gdf.to_crs(epsg=3857)
-
-    # Create the plot
+    cluster_outlines_mercator: gpd.GeoDataFrame = cluster_outlines.to_crs(epsg=3857)
     fig, ax = plt.subplots(1, 1, figsize=figsize)
 
-    # Plot each cluster with distinct colors and thick boundaries
     print("Plotting clusters...")
-    for idx, row in cluster_gdf_mercator.iterrows():
-        gpd.GeoSeries([row.geometry], crs=cluster_gdf_mercator.crs).plot(
+    for _row_index, row in cluster_outlines_mercator.iterrows():
+        cluster_number: int = int(row.cluster_number)
+        gpd.GeoSeries([row.geometry], crs=cluster_outlines_mercator.crs).plot(
             ax=ax,
-            color=row.color,
+            color=colors[cluster_number],
             alpha=0.6,
             edgecolor="black",
             linewidth=2.5,
         )
 
-        # Add cluster number labels at centroids
-        if row.geometry.geom_type == "MultiPolygon":
-            centroid = row.geometry.centroid
-        else:
-            centroid = row.geometry.centroid
-
+        centroid: Point = row.geometry.centroid
         ax.annotate(
-            f"{row.cluster_number}",
+            f"{cluster_number}",
             (centroid.x, centroid.y),
             fontsize=20,
             fontweight="bold",
@@ -1205,18 +1270,16 @@ def create_cluster_visualization_map(
             ),
         )
 
-    # Add background map AFTER plotting data (so axis limits are set)
     print("Adding background map...")
     ctx.add_basemap(
         ax,
-        crs=cluster_gdf_mercator.crs,
-        source=ctx.providers.CartoDB.Positron,  # Light, clean background # ty:ignore[unresolved-attribute]
+        crs=cluster_outlines_mercator.crs,
+        source=ctx.providers.CartoDB.Positron,  # ty:ignore[unresolved-attribute]
         alpha=0.5,
         zoom="auto",
     )
-    print("  Added CartoDB Positron background")
     ax.set_title(
-        f"Europe Basin Clusters - {len(clusters)} Clusters",
+        f"Basin Clusters - {cluster_count} Clusters",
         fontsize=22,
         fontweight="bold",
         pad=20,
@@ -1224,18 +1287,17 @@ def create_cluster_visualization_map(
     ax.set_xlabel("Longitude", fontsize=16)
     ax.set_ylabel("Latitude", fontsize=16)
 
-    # Add legend with cluster information
-    legend_elements = [
+    legend_elements: list[Patch] = [
         Patch(
-            facecolor=colors[i],
+            facecolor=colors[cluster_number],
             alpha=0.6,
             edgecolor="black",
             linewidth=2,
-            label=f"Cluster {i}",
+            label=f"Cluster {cluster_number}",
         )
-        for i in range(len(clusters))
+        for cluster_number in range(cluster_count)
     ]
-    legend = ax.legend(
+    ax.legend(
         handles=legend_elements,
         loc="upper left",
         bbox_to_anchor=(1.02, 1),
@@ -1245,21 +1307,15 @@ def create_cluster_visualization_map(
         title_fontsize=14,
     )
 
-    # Remove axes ticks for cleaner look
     ax.set_xticks([])
     ax.set_yticks([])
-
-    # Remove spines
     for spine in ax.spines.values():
         spine.set_visible(False)
 
-    # Tight layout
     plt.tight_layout()
-
-    # Save the figure
     print(f"Saving map to {output_path}...")
     plt.savefig(output_path, dpi=300, bbox_inches="tight", facecolor="white")
-    plt.close()
+    plt.close(fig)
 
     print(f"Saved cluster visualization map to {output_path}")
 
@@ -1268,8 +1324,8 @@ def create_multi_basin_configs(
     clusters: list[list[int]],
     working_directory: Path,
     cluster_prefix: str = "cluster",
-    data_catalog: DataCatalog | None = None,
-    river_graph: networkx.DiGraph | None = None,
+    from_example: str = "geul",
+    cluster_basin_areas_km2: dict[int, float] | None = None,
 ) -> list[Path]:
     """Create separate config files and directories for each cluster of subbasins.
 
@@ -1277,120 +1333,102 @@ def create_multi_basin_configs(
         clusters: List of clusters, where each cluster is a list of COMID values.
         working_directory: Working directory for the models (init_multiple_dir).
         cluster_prefix: Prefix for cluster directory names.
-        data_catalog: Data catalog for calculating basin areas (optional).
-        river_graph: River graph for finding upstream subbasins (optional).
+        from_example: Example model name to inherit build and model settings from.
+        cluster_basin_areas_km2: Optional basin area by cluster number (km2).
 
     Returns:
         List of paths to created cluster directories.
+
+    Raises:
+        FileNotFoundError: If the requested example model files do not exist.
     """
     print(f"Creating configuration files for {len(clusters)} clusters...")
+    working_directory.mkdir(parents=True, exist_ok=True)
+    example_directory: Path = GEB_PACKAGE_DIR / "examples" / from_example
+    example_model_config_path: Path = example_directory / "model.yml"
+    example_build_config_path: Path = example_directory / "build.yml"
+    example_update_config_path: Path = example_directory / "update.yml"
+    if not example_model_config_path.exists():
+        raise FileNotFoundError(
+            f"Example model.yml not found: {example_model_config_path}"
+        )
+    if not example_build_config_path.exists():
+        raise FileNotFoundError(
+            f"Example build.yml not found: {example_build_config_path}"
+        )
+    if not example_update_config_path.exists():
+        raise FileNotFoundError(
+            f"Example update.yml not found: {example_update_config_path}"
+        )
 
-    # Create full build.yml in init_multiple_dir directory
+    top_level_config_path: Path = working_directory / "model.yml"
+    top_level_build_config_path: Path = working_directory / "build.yml"
+    top_level_update_config_path: Path = working_directory / "update.yml"
+
     print("Creating build.yml in main init multiple directory...")
-    build_config_path = working_directory / "build.yml"
-
-    # Write a build.yml that inherits from the geul example, mirroring
-    # how model.yml inherits from reasonable_default_config.yml
-    build_config_content = 'inherits: "{GEB_PACKAGE_DIR}/examples/geul/build.yml"\n'
-    with open(build_config_path, "w") as f:
-        f.write(build_config_content)
+    top_level_build_config_path.write_text(
+        f'inherits: "{{GEB_PACKAGE_DIR}}/examples/{from_example}/build.yml"\n'
+    )
 
     print(f"Created build.yml in {working_directory}")
-
-    # Create model.yml in init_multiple_dir directory and copy the geul example
     print("Creating model.yml in init_multiple_dir directory...")
-    model_config_path = working_directory / "model.yml"
-
-    # Read build config from geul example and automatically copy it
-    geul_config_path = GEB_PACKAGE_DIR / "examples" / "geul" / "model.yml"
-
-    print(f"Reading model configuration from: {geul_config_path}")
-
-    # Copy geul model.yml content directly to init_multiple_dir model.yml
-    with open(geul_config_path, "r") as src, open(model_config_path, "w") as dst:
-        dst.write(src.read())
+    print(f"Reading model configuration from: {example_model_config_path}")
+    top_level_config_path.write_text(example_model_config_path.read_text())
 
     print(f"Created model.yml in {working_directory}")
+    print("Creating update.yml in init_multiple_dir directory...")
+    top_level_update_config_path.write_text(
+        f'inherits: "{{GEB_PACKAGE_DIR}}/examples/{from_example}/update.yml"\n'
+    )
 
-    cluster_directories = []
+    print(f"Created update.yml in {working_directory}")
 
-    # Pre-calculate all basin areas at once if needed
-    basin_areas = {}
-    if data_catalog is not None and river_graph is not None:
-        print("Pre-calculating basin areas for all clusters...")
-        from functools import partial
-
-        # Create a partial function for area calculation
-        calculate_area_fn = partial(
-            calculate_cluster_basin_area,
-            data_catalog=data_catalog,
-            river_graph=river_graph,
-        )
-
-        # Use ThreadPoolExecutor for I/O-bound parquet reading
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=min(8, len(clusters))
-        ) as executor:
-            # Submit all area calculation tasks
-            future_to_cluster = {
-                executor.submit(calculate_area_fn, cluster): i
-                for i, cluster in enumerate(clusters)
-            }
-
-            # Collect results as they complete
-            for future in concurrent.futures.as_completed(future_to_cluster):
-                cluster_idx = future_to_cluster[future]
-                try:
-                    basin_areas[cluster_idx] = future.result()
-                except Exception as exc:
-                    print(f"Cluster {cluster_idx} area calculation failed: {exc}")
-                    basin_areas[cluster_idx] = None
-
-    # Create directories and config files
     print("Creating cluster directories and configuration files...")
-    for i, cluster in enumerate(clusters):
+    cluster_directories: list[Path] = []
+    for cluster_index, cluster in enumerate(clusters):
         print(
-            f"Creating cluster {i + 1}/{len(clusters)}: {cluster_prefix}_{i:03d} ({len(cluster)} subbasins)"
+            f"Creating cluster {cluster_index + 1}/{len(clusters)}: "
+            f"{cluster_prefix}_{cluster_index:03d} ({len(cluster)} subbasins)"
         )
 
-        # Create cluster directory and base subdirectory
-        cluster_dir = working_directory / f"{cluster_prefix}_{i:03d}"
-        base_dir = cluster_dir / "base"
+        cluster_dir: Path = working_directory / f"{cluster_prefix}_{cluster_index:03d}"
+        base_dir: Path = cluster_dir / "base"
         base_dir.mkdir(parents=True, exist_ok=True)
         cluster_directories.append(cluster_dir)
 
-        # Create build.yml with inheritance in base folder (inherit from init_multiple_dir build.yml)
-        build_config_path = base_dir / "build.yml"
+        relative_build_config: str = os.path.relpath(
+            top_level_build_config_path, base_dir
+        )
+        base_build_config_path: Path = base_dir / "build.yml"
+        base_build_config: dict[str, str] = {"inherits": relative_build_config}
+        write_params(base_build_config, base_build_config_path)
 
-        # Create the build configuration dictionary
-        build_config = {"inherits": "../../build.yml"}
+        relative_update_config: str = os.path.relpath(
+            top_level_update_config_path, base_dir
+        )
+        base_update_config_path: Path = base_dir / "update.yml"
+        base_update_config: dict[str, str] = {"inherits": relative_update_config}
+        write_params(base_update_config, base_update_config_path)
 
-        with open(build_config_path, "w") as f:
-            yaml.dump(build_config, f, default_flow_style=False, sort_keys=False)
-
-        # Create model.yml with inheritance and cluster-specific subbasins in base folder
-        model_config_path = base_dir / "model.yml"
-
-        # Convert all cluster values to regular Python integers
-        cluster_ints = [int(subbasin_id) for subbasin_id in cluster]
-
-        # Use pre-calculated basin area
-        total_basin_area_km2 = basin_areas.get(i)
+        relative_model_config: str = os.path.relpath(top_level_config_path, base_dir)
+        base_model_config_path: Path = base_dir / "model.yml"
+        cluster_subbasin_ids: list[int] = [int(subbasin_id) for subbasin_id in cluster]
+        total_basin_area_km2: float | None = (
+            cluster_basin_areas_km2.get(cluster_index)
+            if cluster_basin_areas_km2 is not None
+            else None
+        )
         if total_basin_area_km2 is not None:
             print(f"  Basin area: {total_basin_area_km2:,.0f} km²")
 
-        # Create the configuration dictionary
-        model_config = {
-            "inherits": "../../model.yml",
-            "general": {"region": {"subbasin": cluster_ints}},
+        model_config: dict[str, Any] = {
+            "inherits": relative_model_config,
+            "general": {"region": {"subbasin": cluster_subbasin_ids}},
         }
-
-        # Add basin area if calculated
         if total_basin_area_km2 is not None:
             model_config["basin"] = {"total_area_km2": round(total_basin_area_km2, 2)}
 
-        with open(model_config_path, "w") as f:
-            yaml.dump(model_config, f, default_flow_style=False, sort_keys=False)
+        write_params(model_config, base_model_config_path)
 
         print(
             f"  Created configuration files in {base_dir.relative_to(working_directory)}"
@@ -1403,229 +1441,24 @@ def create_multi_basin_configs(
     return cluster_directories
 
 
-def calculate_cluster_basin_area(
-    cluster: list[int],
-    data_catalog: DataCatalog,
-    river_graph: networkx.DiGraph,
-) -> float:
-    """Calculate the total basin area for a cluster of downstream subbasins.
-
-    Args:
-        cluster: List of downstream COMID values for the cluster.
-        data_catalog: Data catalog containing the MERIT basins.
-        river_graph: River graph for finding upstream subbasins.
-
-    Returns:
-        Total basin area in km².
-    """
-    # Find all upstream subbasins for this cluster using set operations for efficiency
-    cluster_all_subbasins = set()
-    for downstream_subbasin in cluster:
-        upstream_subbasins = set(networkx.ancestors(river_graph, downstream_subbasin))
-        upstream_subbasins.add(downstream_subbasin)
-        cluster_all_subbasins.update(upstream_subbasins)
-
-    subbasins_to_merge = list(cluster_all_subbasins)
-
-    # Load geometries for subbasins - only load geometry and area columns for performance
-    cluster_geometries = gpd.read_parquet(
-        data_catalog.fetch("merit_basins_catchments").path,
-        filters=[("COMID", "in", subbasins_to_merge)],
-        columns=["COMID", "geometry"],  # Only load required columns
-    ).set_index("COMID")
-
-    # Union all geometries efficiently using cascaded union
-    merged_geometry = cluster_geometries.geometry.union_all()
-
-    # Calculate area using equal area projection (EPSG:6933) with optimized GeoSeries creation
-    gdf_temp = gpd.GeoDataFrame([{"geometry": merged_geometry}], crs="EPSG:4326")
-    total_area_m2 = float(gdf_temp.to_crs("EPSG:6933").geometry.area.iloc[0])
-
-    return float(total_area_m2 / 1e6)  # Convert m² to km² and ensure Python float
-
-
 def save_clusters_as_merged_geometries(
-    clusters: list[list[int]],
-    data_catalog: DataCatalog,
-    river_graph: networkx.DiGraph,
+    cluster_outlines: gpd.GeoDataFrame,
     output_path: Path,
-    cluster_prefix: str = "cluster",
-    pre_simplify: bool = True,
-    buffer_distance_km: float = 5.0,
 ) -> None:
-    """Save clusters as merged geometries - one polygon outline per cluster.
-
-    This creates the most compact representation possible: each cluster becomes a single
-    dissolved polygon geometry representing the entire basin area. For clusters with many
-    disconnected pieces (islands, archipelagos), a buffer-dissolve-unbuffer operation is
-    applied to merge nearby polygons into single features for better performance.
+    """Save precomputed cluster outlines to a GeoParquet file.
 
     Args:
-        clusters: List of clusters, where each cluster is a list of downstream COMID values.
-        data_catalog: Data catalog containing the MERIT basins.
-        river_graph: River graph for finding upstream subbasins.
+        cluster_outlines: GeoDataFrame with one outline geometry per cluster.
         output_path: Path where to save the geoparquet file.
-        cluster_prefix: Prefix for cluster names.
-        pre_simplify: If True, simplify geometries before dissolving (much faster). Default: True.
-        buffer_distance_km: Buffer distance in km to merge nearby polygons. Default: 5.0 km.
+
+    Raises:
+        ValueError: If no cluster outlines are provided.
     """
-    print(f"Creating merged cluster geometries: {output_path}")
-    if pre_simplify:
-        print("  Using optimized mode: simplify before dissolve (much faster)")
-    print(f"  Buffer distance for merging polygons: {buffer_distance_km} km")
+    if cluster_outlines.empty:
+        raise ValueError("At least one cluster outline is required.")
 
-    # Pre-compute all upstream subbasins for all clusters using caching
-    print("Pre-computing upstream subbasins for all clusters (with caching)...")
-
-    # Build a cache of upstream subbasins to avoid redundant networkx.ancestors calls
-    upstream_cache = {}
-
-    def get_all_upstream_cached(node_id: int) -> set[int]:
-        """Get all upstream subbasins with caching.
-
-        Args:
-            node_id: The COMID to get upstream subbasins for.
-
-        Returns:
-            Set of all upstream subbasin COMIDs including the node itself.
-        """
-        if node_id not in upstream_cache:
-            upstream = set(networkx.ancestors(river_graph, node_id))
-            upstream.add(node_id)
-            upstream_cache[node_id] = upstream
-        return upstream_cache[node_id]
-
-    all_cluster_subbasins = []
-    for cluster_idx, downstream_subbasins in enumerate(clusters):
-        cluster_all_subbasins = set()
-        for downstream_subbasin in downstream_subbasins:
-            cluster_all_subbasins.update(get_all_upstream_cached(downstream_subbasin))
-        all_cluster_subbasins.append(list(cluster_all_subbasins))
-        print(f"  Cluster {cluster_idx}: {len(cluster_all_subbasins)} subbasins")
-
-    total_subbasin_count = sum(len(c) for c in all_cluster_subbasins)
-    print(
-        f"Loading geometries for {total_subbasin_count} unique subbasins (single batch read)..."
-    )
-    all_geometries = gpd.read_parquet(
-        data_catalog.fetch("merit_basins_catchments").path,
-        filters=[("COMID", "in", [sid for c in all_cluster_subbasins for sid in c])],
-        columns=["COMID", "geometry"],  # Only load what we need
-    ).set_index("COMID")
-
-    # Optimization: Simplify geometries BEFORE dissolving (much faster)
-    if pre_simplify:
-        simplify_tolerance = 0.01  # ~1km at equator
-        print(
-            f"Pre-simplifying {len(all_geometries)} geometries (tolerance: {simplify_tolerance}° ≈ 1km)..."
-        )
-        all_geometries["geometry"] = all_geometries["geometry"].simplify(
-            simplify_tolerance, preserve_topology=True
-        )
-        print(f"  Geometry complexity reduced significantly for faster dissolving")
-
-    # Process each cluster sequentially (optimized with pre-loaded geometries)
-    print(f"Processing {len(clusters)} clusters...")
-    merged_cluster_data = []
-
-    for cluster_idx, (downstream_subbasins, subbasins_to_merge) in enumerate(
-        zip(clusters, all_cluster_subbasins)
-    ):
-        cluster_id = f"{cluster_prefix}_{cluster_idx:03d}"
-        print(
-            f"  Processing cluster {cluster_idx + 1}/{len(clusters)}: {cluster_id} ({len(subbasins_to_merge)} subbasins)"
-        )
-
-        # Extract geometries for this cluster from pre-loaded data
-        cluster_geometries = all_geometries.loc[subbasins_to_merge]
-
-        # Optimized dissolving for large clusters: use chunked unary_union
-        if len(subbasins_to_merge) > 10000:
-            print(f"    Large cluster detected - using chunked dissolving...")
-            # Process in chunks of 5000 geometries
-            chunk_size = 5000
-            geometries = cluster_geometries.geometry.values
-            chunks = [
-                geometries[i : i + chunk_size]
-                for i in range(0, len(geometries), chunk_size)
-            ]
-
-            # First pass: dissolve each chunk
-            print(f"    Dissolving {len(chunks)} chunks...")
-            chunk_unions = []
-            for i, chunk in enumerate(chunks):
-                if (i + 1) % 5 == 0 or (i + 1) == len(chunks):
-                    print(f"      Chunk {i + 1}/{len(chunks)}...")
-                chunk_union = unary_union(chunk)
-                chunk_unions.append(chunk_union)
-
-            # Second pass: dissolve the chunk results
-            print(f"    Merging {len(chunk_unions)} chunk results...")
-            merged_geometry = unary_union(chunk_unions)
-        else:
-            # Small cluster: direct dissolve
-            merged_geometry = unary_union(cluster_geometries.geometry.values)
-
-        # Clean up internal boundaries
-        merged_geometry = merged_geometry.buffer(0)
-
-        # For MultiPolygons with many pieces, use buffer-dissolve-unbuffer to merge nearby islands
-        # This significantly reduces polygon count for coastal clusters with archipelagos
-        if hasattr(merged_geometry, "geoms") and len(merged_geometry.geoms) > 10:
-            print(
-                f"    Cluster has {len(merged_geometry.geoms)} separate polygons - applying buffer merge..."
-            )
-
-            # Convert buffer distance from km to degrees (approximate at mid-latitude)
-            # At 45° latitude: 1° longitude ≈ 78 km, 1° latitude ≈ 111 km
-            # Use conservative estimate: 1° ≈ 100 km
-            buffer_degrees = buffer_distance_km / 100.0
-
-            # Buffer → Dissolve → Negative buffer
-            # This merges polygons within buffer_distance of each other
-            buffered = merged_geometry.buffer(buffer_degrees)
-            dissolved = (
-                unary_union([buffered]) if hasattr(buffered, "__iter__") else buffered
-            )
-            merged_geometry = dissolved.buffer(-buffer_degrees)
-
-            # Count final polygons
-            final_count = (
-                len(merged_geometry.geoms) if hasattr(merged_geometry, "geoms") else 1
-            )
-            print(f"    Reduced to {final_count} polygons after buffer merge")
-
-        # Apply post-dissolve simplification for smoother rendering
-        post_simplify_tolerance = 0.01  # ~1km at equator
-        merged_geometry = merged_geometry.simplify(
-            post_simplify_tolerance, preserve_topology=True
-        )
-
-        # Fast area calculation using equal area projection
-        gdf_temp = gpd.GeoDataFrame([{"geometry": merged_geometry}], crs="EPSG:4326")
-        total_area_m2 = float(gdf_temp.to_crs("EPSG:6933").geometry.area.iloc[0])
-        total_area_km2 = float(total_area_m2 / 1e6)
-
-        merged_cluster_data.append(
-            {
-                "cluster_id": cluster_id,
-                "cluster_number": cluster_idx,
-                "num_total_subbasins": len(subbasins_to_merge),
-                "total_basin_area_km2": total_area_km2,
-                "geometry_type": merged_geometry.geom_type,
-                "geometry": merged_geometry,
-            }
-        )
-
-        print(f"    Complete: {total_area_km2:,.0f} km²")
-
-    # Create GeoDataFrame with merged geometries
-    print("Creating final GeoDataFrame with merged geometries...")
-    merged_gdf = gpd.GeoDataFrame(merged_cluster_data, crs="EPSG:4326")
-
-    # Save to geoparquet
     print(f"Saving to {output_path}...")
-    merged_gdf.to_parquet(output_path)
+    write_geom(cluster_outlines, output_path)
 
 
 def get_coastline_nodes(
@@ -1990,6 +1823,15 @@ class GEBModel(
         self.other = DelayedReader(reader=read_zarr)
         self.files = {}
 
+    def set_version(self, version: str) -> None:
+        """Set the version in the version file.
+
+        Args:
+            version: The version to set in the version file.
+        """
+        self.logger.info(f"Setting version in version file to: {version}")
+        self.version_path.write_text(version)
+
     def set_current_version(self) -> None:
         """Set the current version in the version file."""
         self.logger.info(
@@ -2141,12 +1983,12 @@ class GEBModel(
         self.logger.info("Finding sinks in river network of requested region.")
         if "subbasin" in region:
             if isinstance(region["subbasin"], list):
-                sink_subbasin_ids = region["subbasin"]
+                sink_subbasin_ids: list[int] = region["subbasin"]
             else:
-                sink_subbasin_ids = [region["subbasin"]]
+                sink_subbasin_ids: list[int] = [region["subbasin"]]
         elif "outflow" in region:
             lat, lon = region["outflow"]["lat"], region["outflow"]["lon"]
-            sink_subbasin_ids = [
+            sink_subbasin_ids: list[int] = [
                 get_subbasin_id_from_coordinate(self.data_catalog, lon, lat)
             ]
         elif "geom" in region:
@@ -2155,7 +1997,7 @@ class GEBModel(
             regions = regions[
                 regions[region["geom"]["column"]] == region["geom"]["key"]
             ]
-            sink_subbasin_ids = get_sink_subbasin_id_for_geom(
+            sink_subbasin_ids: list[int] = get_sink_subbasin_id_for_geom(
                 self.data_catalog, regions, river_graph
             )
         else:
@@ -2321,7 +2163,7 @@ class GEBModel(
 
         assert ldd_elevation.shape == ldd.shape == mask.shape
 
-        ldd_elevation = xr.where(
+        ldd_elevation: xr.DataArray = xr.where(
             mask,
             ldd_elevation,
             ldd_elevation.attrs["_FillValue"],
@@ -2780,7 +2622,7 @@ class GEBModel(
             self.logger.info(f"Writing file {fp}")
             self.files["array"][name] = fp
             fp_with_root.parent.mkdir(parents=True, exist_ok=True)
-            write_array(data, fp_with_root)
+            write_array(cast(Any, data), fp_with_root, compression_level=18)
 
         self.array[name] = fp_with_root
 
@@ -3316,9 +3158,7 @@ class GEBModel(
         """
         # then loop over other methods
         # TODO: Allow validate order for custom models
-        methods = build_method.validate_methods(
-            methods, validate_order=validate_order, fix_order_if_broken=True
-        )
+        methods = build_method.validate_methods(methods, validate_order=validate_order)
         self.files = self.read_or_create_file_library()
 
         completed_methods: list[str] = (
@@ -3387,7 +3227,11 @@ class GEBModel(
         build_method.log_statistics()
 
     def build(
-        self, region: dict, methods: dict[str, dict[str, Any]], continue_: bool
+        self,
+        region: dict,
+        methods: dict[str, dict[str, Any]],
+        continue_: bool,
+        check_required_methods: bool = True,
     ) -> None:
         """Build the model with the specified region and methods.
 
@@ -3395,6 +3239,7 @@ class GEBModel(
             region: A dictionary defining the region to build the model for.
             methods: A dictionary with method names as keys and their parameters as values.
             continue_: Continue previous build if it was interrupted or failed.
+            check_required_methods: If True, check if all required methods are present in methods.
 
         Raises:
             ValueError: If "setup_region" is not in methods when building a new model.
@@ -3407,7 +3252,8 @@ class GEBModel(
             )
         methods["setup_region"].update(region=region)
 
-        build_method.check_required_methods(methods.keys())
+        if check_required_methods:
+            build_method.check_required_methods(methods.keys())
 
         # if not continuing, remove existing files path
         if (
@@ -3442,9 +3288,6 @@ class GEBModel(
         """Check if the version in the version file is the same as the current version.
 
         If the version is not current, print a warning with the updates that need to be made to update to the current version.
-
-        Raises:
-            RuntimeError: If the version is not current and updates need to be made.
         """
         # No version file exists, so we create one with the current version
         if not self.version_path.exists():
@@ -3456,26 +3299,12 @@ class GEBModel(
         else:
             self.read()
             # Find and print all updates between the stored version and the current version
-            updates_to_print_to_user: list[str] = get_and_maybe_do_version_updates(
+            get_and_maybe_do_version_updates(
                 version_info,
-                perform_auto_update=True,
                 build_model=self,
                 methods=methods,
+                logger=self.logger,
             )
-            if updates_to_print_to_user:
-                self.logger.warning(
-                    f"Version mismatch: version file contains {version_info}, but current version is {__version__}."
-                )
-                updates_msg = "\n- ".join(updates_to_print_to_user)
-                self.set_current_version()
-                error = f"\n\nIMPORTANT: Make the following changes to update to this version:\n\n- {updates_msg}\n\nTHIS WARNING WILL ONLY BE GIVEN ONCE. If you already did this, you can ignore this.\n"
-                self.logger.error(error)
-                raise RuntimeError(error)
-            else:
-                self.logger.info(
-                    "No specific updates found for this version or auto-updated. Updated version file."
-                )
-                self.set_current_version()
 
     def update(
         self,

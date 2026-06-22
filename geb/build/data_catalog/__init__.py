@@ -5,6 +5,7 @@ from typing import Any
 
 from .aquastat import AQUASTAT
 from .base import Adapter
+from .cmip6 import CMIP6
 from .coast_rp import CoastRP
 from .cwatm_water_demand import CWATMIndustryWaterDemand, CWATMLivestockWaterDemand
 from .deltadtm import DeltaDTM
@@ -15,10 +16,12 @@ from .ecmwf_geopotential import ECMWFGeopotential
 from .esa_worldcover import ESAWorldCover
 from .fabdem import Fabdem as Fabdem
 from .fao import FAOSTAT, GMIA
+from .field_boundaries import FieldBoundaries
 from .flood_damage_model import (
     GeulFloodDamageModel,
     GlobalFloodDamageModel,
 )
+from .fluxnet import Fluxnet
 from .windstorm_damage_model import FranceWindstormDamageModel
 from .forest_restoration import ForestRestorationPotential
 from .gadm import GADM, GADM28
@@ -30,6 +33,7 @@ from .global_preferences_survey import GlobalPreferencesSurvey
 from .globgm import GlobGM, GlobGMDEM
 from .glopop_sg import GLOPOP_SG
 from .grdc import GRDC
+from .grow import GROW
 from .gtsm import GTSM, GTSM_timeseries
 from .hydrolakes import HydroLakes
 from .isimip import ISIMIPCO2
@@ -39,7 +43,9 @@ from .merit_basins import MeritBasinsCatchments, MeritBasinsRivers
 from .merit_hydro import MeritHydroDir, MeritHydroElv
 from .merit_sword import MeritSword
 from .mirca2000 import MIRCA2000
-from .mirca_os import MIRCAOS
+from .mirca_os_admin_boundaries import MIRCAOSAdminBoundaries
+from .mirca_os_crop_calendar import MIRCAOSCropCalendar
+from .mirca_os_harvested_grids import MIRCAOSHarvestedGrids
 from .oecd import OECD
 from .open_building_map import OpenBuildingMap
 from .open_street_map import OpenStreetMap
@@ -48,6 +54,7 @@ from .soilgrids import SoilGridsV1, SoilGridsV2
 from .superwell import GCAMElectricityRates
 from .sword import Sword
 from .undp import HumanDevelopmentIndex
+from .wekeo_copernicus import WEkEOCopernicus
 from .why_map import WhyMap
 from .world_bank import WorldBankData
 
@@ -65,7 +72,7 @@ data_catalog: dict[str, dict[str, Any]] = {
     },
     "era5": {
         "adapter": DestinationEarth(),
-        "url": "https://data.earthdatahub.destine.eu/era5/reanalysis-era5-land-no-antartica-v0.zarr",
+        "url": None,
         "source": {"name": "ERA5", "author": "ECMWF", "license": "CC BY 4.0"},
     },
     "ecmwf_geopotential": {
@@ -214,6 +221,21 @@ data_catalog: dict[str, dict[str, Any]] = {
             "url": "https://www.whymap.org/whymap/EN/Maps_Data/Gwr/gwr_node_en.html",
         },
     },
+    "fluxnet": {
+        "adapter": Fluxnet(
+            folder="fluxnet",
+            local_version=1,
+            filename="fluxnet_stations.geoparquet",
+            cache="global",
+        ),
+        "url": "https://fluxnet.org/fluxnet-data-system/",
+        "source": {
+            "name": "FLUXNET",
+            "author": "FLUXNET Shuttle",
+            "license": "CC-BY-4.0",
+            "url": "https://fluxnet.org/",
+        },
+    },
     "lowder_farm_size_distribution": {
         "adapter": Lowder(
             folder="lowder_farm_size_distribution",
@@ -229,6 +251,46 @@ data_catalog: dict[str, dict[str, Any]] = {
             "license": "CC BY-NC-ND 4.0",
             "url": "https://doi.org/10.1016/j.worlddev.2015.10.041",
         },
+    },
+    "field_boundaries": {
+        "adapter": FieldBoundaries(
+            folder="field_boundaries",
+            local_version=1,
+            filename="field_boundaries.parquet",
+            cache="global",
+        ),
+        "url": "https://zenodo.org/records/14229033/files/field_boundaries.parquet?download=1",
+        "source": {
+            "name": "EU field boundaries",
+            "author": "Matej Batič et al. (2024), Planet Labs",
+            "license": "Commercial",
+            "url": "https://medium.com/sentinel-hub/automatic-field-delineation-new-release-1c2938399f0",
+        },
+    },
+    **{
+        f"hrl_crop_types_{year}": {
+            "adapter": WEkEOCopernicus(
+                folder="hrl_crop_types",
+                local_version=1,
+                filename="tiles",
+                cache="global",
+                dataset_id="EO:EEA:DAT:HRL:CRL",
+                default_query={
+                    "productType": "Crop Types",
+                    "resolution": "10m",
+                    "itemsPerPage": 200,
+                    "startIndex": 0,
+                },
+            ),
+            "url": None,
+            "source": {
+                "name": "HRL crop types",
+                "author": "Copernicus Land Monitoring Service",
+                "license": "CC BY 4.0",
+                "url": "https://land.copernicus.eu/en/products/high-resolution-layer-croplands/crop-types-2023-raster-10-m-europe-yearly",
+            },
+        }
+        for year in ["2017", "2018", "2019", "2020", "2021", "2022", "2023"]
     },
     "gebco": {
         "adapter": GEBCO(
@@ -681,6 +743,21 @@ data_catalog: dict[str, dict[str, Any]] = {
             "url": "https://data-explorer.oecd.org/vis?fs[0]=Topic%2C1%7CSociety%23SOC%23%7CInequality%23SOC_INE%23&pg=0&fc=Topic&bp=true&snb=2&df[ds]=dsDisseminateFinalDMZ&df[id]=DSD_WISE_IDD%40DF_IDD&df[ag]=OECD.WISE.INE&df[vs]=1.0&pd=2010%2C&dq=.A.INC_DISP.MEDIAN%2BMEAN.XDC_HH_EQ._T.METH2012.D_CUR.&to[TIME_PERIOD]=false&vw=ov",
         },
     },
+    "cmip6": {
+        "adapter": CMIP6(
+            folder="cmip6",
+            local_version=1,
+            filename="cmip6_combined_deltas.zarr",
+            cache="local",
+        ),
+        "url": "https://cds.climate.copernicus.eu/datasets/projections-cmip6?tab=download",
+        "source": {
+            "name": "CMIP6",
+            "author": "CMIP6 Modeling Groups",
+            "license": "“Creative Commons Attribution-ShareAlike 4.0 International License (https://creativecommons.org/licenses/).”",
+            "url": "https://cds.climate.copernicus.eu/datasets/projections-cmip6?tab=overview",
+        },
+    },
     "coast_rp": {
         "adapter": CoastRP(
             folder="coast_rp",
@@ -792,7 +869,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             filename="tiles",
             cache="global",
         ),
-        "url": "https://hydro.iis.u-tokyo.ac.jp/~yamadai/MERIT_Hydro/distribute/v1.0",
+        "url": "https://global-hydrodynamics.github.io/MERIT_Hydro/",
         "source": {
             "name": "MERIT Hydro",
             "author": "Yamazaki et al.",
@@ -807,7 +884,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             filename="tiles",
             cache="global",
         ),
-        "url": "https://hydro.iis.u-tokyo.ac.jp/~yamadai/MERIT_Hydro/distribute/v1.0",
+        "url": "https://global-hydrodynamics.github.io/MERIT_Hydro/",
         "source": {
             "name": "MERIT Hydro",
             "author": "Yamazaki et al.",
@@ -863,7 +940,7 @@ data_catalog: dict[str, dict[str, Any]] = {
     },
     "delta_dtm": {
         "adapter": DeltaDTM(
-            folder="delta_dtm",
+            folder="deltadtm",
             local_version=1,
             filename="{}.zip",
             cache="global",
@@ -882,16 +959,16 @@ data_catalog: dict[str, dict[str, Any]] = {
         "adapter": Fabdem(
             folder="fabdem",
             local_version=2,
-            filename="fabdem.zarr",
-            cache="local",
+            filename="placeholder.txt",
+            cache="global",
         ),
-        "url": "https://data.bris.ac.uk/datasets/s5hqmjcdj8yo2ibzi9b4ew3sn",
+        "url": "https://huggingface.co/datasets/links-ads/fabdem-v12/raw/main/stac_catalog/catalog.json",
         "source": {
             "name": "FABDEM",
             "author": "Hawker et al. (2022)",
             "version": "1-2",
             "license": "CC BY-NC-SA 4.0",
-            "url": "https://data.bris.ac.uk/data/dataset/25wfy0f9ukoge2gs7a5mqpq2j7",
+            "url": "https://huggingface.co/datasets/links-ads/fabdem-v12",
             "paper_doi": "10.1088/1748-9326/ac4d4f",
         },
     },
@@ -993,8 +1070,8 @@ data_catalog: dict[str, dict[str, Any]] = {
         "adapter": OpenBuildingMap(
             folder="open_building_map",
             local_version=2,
-            filename="open_building_map.parquet",
-            cache="local",
+            filename="placeholder.txt",
+            cache="global",
         ),
         "url": "https://datapub.gfz.de/download/10.5880.GFZ.LKUT.2025.002-Caweb/2025-002_Oostwegel-et-al_data/",
         "source": {
@@ -1046,12 +1123,28 @@ data_catalog: dict[str, dict[str, Any]] = {
             "url": "https://www.openstreetmap.org/copyright",
         },
     },
+    "grow": {
+        "adapter": GROW(
+            folder="grow",
+            local_version=1,
+            filename="grow_attributes.geoparquet",
+            cache="global",
+        ),
+        "url": "https://zenodo.org/records/15149480/files/data.zip",
+        "source": {
+            "name": "GROW",
+            "author": "Bäthge et al. (2026)",
+            "license": "CC BY-NC-SA 4.0",
+            "url": "https://doi.org/10.5281/zenodo.15149480",
+            "paper_doi": "10.5281/zenodo.15149480",
+        },
+    },
     "glopop-sg": {
         "adapter": GLOPOP_SG(
             folder="glopop_sg",
             local_version=3,  # this is the third version of the dataset on Zenodo
             filename="placeholder",
-            cache="local",
+            cache="global",
         ),
         "url": "https://zenodo.org/records/17076088/files/GLOPOP-SG(update).zip?download=1",
         "source": {
@@ -1100,7 +1193,7 @@ data_catalog: dict[str, dict[str, Any]] = {
     },
     **{
         f"mirca_os_cropping_area_{year}_{resolution}_{crop}_{irrigation}": {
-            "adapter": MIRCAOS(
+            "adapter": MIRCAOSHarvestedGrids(
                 folder="mirca_os",
                 filename=f"Annual Harvested Area Grids/{year}/{resolution}/MIRCA-OS_{crop}_{year}_{irrigation}.tif",
                 local_version=1,
@@ -1142,6 +1235,43 @@ data_catalog: dict[str, dict[str, Any]] = {
             "Pulses",
         ]
         for irrigation in ["ir", "rf"]
+    },
+    **{
+        f"mirca_os_crop_calendar_{year}_{irrigation}": {
+            "adapter": MIRCAOSCropCalendar(
+                folder="mirca_os",
+                filename=f"Crop Calendar/MIRCA-OS_{year}_{irrigation}.csv",
+                local_version=1,
+                cache="global",
+            ),
+            "url": "https://www.hydroshare.org/resource/60a890eb841c460192c03bb590687145/data/contents/Crop%20Calendar",
+            "source": {
+                "name": "MIRCA-OS Crop Calendar",
+                "author": "Kebede et al. (2024)",
+                "license": "CC BY 4.0",
+                "url": "https://doi.org/10.4211/hs.60a890eb841c460192c03bb590687145",
+            },
+        }
+        for year in ["2000", "2005", "2010", "2015"]
+        for irrigation in ["ir", "rf"]
+    },
+    **{
+        f"mirca_os_admin_boundaries_{year}": {
+            "adapter": MIRCAOSAdminBoundaries(
+                folder="mirca_os",
+                filename=f"Admin Boundaries/MIRCAOS_{year}_Admin_v1.shp",
+                local_version=1,
+                cache="global",
+            ),
+            "url": "https://www.hydroshare.org/resource/e4582ca0042148338bb5e0148b749ed6/",
+            "source": {
+                "name": "MIRCA-OS Admin Boundaries",
+                "author": "Kebede et al. (2024)",
+                "license": "CC BY 4.0",
+                "url": "https://www.hydroshare.org/resource/e4582ca0042148338bb5e0148b749ed6/",
+            },
+        }
+        for year in ["2000", "2005", "2010", "2015"]
     },
 }
 

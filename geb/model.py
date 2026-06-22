@@ -4,6 +4,7 @@ import copy
 import datetime
 import logging
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from time import time
 from types import TracebackType
@@ -138,7 +139,9 @@ class GEBModel(Module):
         if Version(version_info) == Version(__version__):
             return
 
-        updates: list[str] = get_and_maybe_do_version_updates(version_info)
+        updates: list[str] = get_and_maybe_do_version_updates(
+            version_info, logger=self.logger
+        )
         if updates:
             error = f"Version mismatch and updating is required: input data version is {version_info}, but current model version is {__version__}. Please run 'geb update-version' to update the model to the current version."
             self.logger.error(error)
@@ -513,9 +516,8 @@ class GEBModel(Module):
             self.forcing: Forcing = Forcing(self)
             self.hydrology.routing.set_router()
             self.hydrology.groundwater.initalize_modflow_model()
-            self.hydrology.landsurface.set_global_variables()
 
-        self.report_folder = self.model.output_folder / "report" / self.model.run_name
+        self.report_folder = self.model.output_folder / "report"
 
         if create_reporter:
             self.reporter = Reporter(
@@ -569,6 +571,7 @@ class GEBModel(Module):
 
         self.logger.info("Model run finished, finalizing report...")
         self.reporter.finalize()
+        self.create_done_file()
 
     def run_yearly(self) -> None:
         """Run the model in yearly mode, where timesteps are yearly rather than daily.
@@ -585,7 +588,12 @@ class GEBModel(Module):
         """
         current_time: datetime.datetime = self.run_start
         end_time: datetime.datetime = self.run_end
-        #self.config["report"] = {}
+        # only report household attributes (for now)
+        self.config["report"] = {
+            key: value
+            for key, value in self.config["report"].items()
+            if key.startswith("agents.households")
+        }
 
         if self.config["hazards"]["floods"]["simulate"] is True:
             raise ValueError(
@@ -630,6 +638,7 @@ class GEBModel(Module):
         self.logger.info("Model run finished, finalizing report...")
 
         self.reporter.finalize()
+        self.create_done_file()
 
     def refresh_agent_attributes(self, agent_type: str = "households") -> None:
         """Initiate the model to update household adaptation attributes to pre-spinup state after an updated build or adding/ renaming of agent variables.
@@ -678,7 +687,10 @@ class GEBModel(Module):
         name = getattr(self.agents, agent_type).name
         self.logger.debug(f"Saving {name}.var")
         bucket = self.store.buckets[f"{name}.var"]
-        bucket.save(path / f"{name}.var")
+        with ThreadPoolExecutor() as executor:
+            futures = bucket.save(path / f"{name}.var", executor)
+            for future in futures:
+                future.result()
 
     def spinup(self, initialize_only: bool = False) -> None:
         """Run the model for the spinup period.
@@ -741,6 +753,7 @@ class GEBModel(Module):
         self.store.save()
 
         self.reporter.finalize()
+        self.create_done_file()
 
     def _store_spinup_time_range(self) -> None:
         """Store the spinup time range in the variable store.
@@ -772,18 +785,17 @@ class GEBModel(Module):
                 f"Run start time does not match the stored time range. Stored: {self.var._run_start}, Configured: {self.run_start}"
             )
 
-    def estimate_return_periods(self) -> None:
+    def estimate_return_periods(self, run_name: str = "spinup") -> None:
         """Estimate flood maps for different return periods."""
         current_time: datetime.datetime = self.run_start
-        self.config["general"]["name"] = "estimate_return_periods"
 
         self._initialize(
             create_reporter=False,
+            in_spinup=run_name == self.model.config["general"]["spinup_name"],
             current_time=current_time,
             n_timesteps=0,
             timestep_length=relativedelta(years=1),
             load_data_from_store=True,
-            # omit="agents",
             simulate_hydrology=True,
             clean_report_folder=False,
         )
@@ -793,7 +805,7 @@ class GEBModel(Module):
         if subbasins["is_coastal"].any():
             generate_storm_surge_hydrographs(self)
 
-        self.hazard_driver.floods.get_return_period_maps()
+        self.hazard_driver.floods.get_return_period_maps(run_name)
 
     def evaluate(self, *args: Any, **kwargs: Any) -> Any:
         """Call the evaluator to evaluate the model results.
@@ -887,7 +899,7 @@ class GEBModel(Module):
         Returns:
             Path to the folder where output files will be saved.
         """
-        return Path(self.config["general"]["output_folder"])
+        return Path(self.config["general"]["output_folder"]) / self.model.run_name
 
     @property
     def input_folder(self) -> Path:
@@ -932,10 +944,12 @@ class GEBModel(Module):
         ):
             Hydrology.finalize(self.hydrology)
 
-            # Close all async forcing readers
+            # Close all forcing readers
             if hasattr(self, "forcing"):
                 for forcing_loader in self.forcing.forcing_loaders.values():
-                    if hasattr(forcing_loader, "reader"):
+                    if hasattr(forcing_loader, "reader") and hasattr(
+                        forcing_loader.reader, "close"
+                    ):
                         forcing_loader.reader.close()
 
     def __enter__(self) -> GEBModel:
@@ -1007,6 +1021,10 @@ class GEBModel(Module):
             raise ValueError(
                 "Run end date cannot be after model build end date. Adjust the time range in your build configuration and rebuild the model or adjust the simulation end time of the model."
             )
+
+    def create_done_file(self) -> None:
+        """Create a file to indicate that the model run or spinup is done."""
+        (self.output_folder / "done.txt").touch()
 
     @property
     def spinup_start(self) -> datetime.datetime:
@@ -1085,6 +1103,9 @@ class GEBModel(Module):
             timestep: current model timestep
         """
         self._current_timestep = timestep
+        self._current_time = (
+            self.simulation_start + self.current_timestep * self.timestep_length
+        )
 
     @property
     def current_time(self) -> datetime.datetime:
@@ -1096,15 +1117,13 @@ class GEBModel(Module):
         Raises:
             AttributeError: If `timestep_length` or `simulation_start` are not initialized.
         """
-        # Defensive check: ensure required attributes are initialized
-        if not hasattr(self, "timestep_length") or not hasattr(
-            self, "simulation_start"
-        ):
+        try:
+            return self._current_time
+        except AttributeError as e:
             raise AttributeError(
-                "Cannot compute current_time: 'timestep_length' and/or 'simulation_start' are not initialized. "
-                "Ensure the model is fully initialized before accessing current_time."
-            )
-        return self.simulation_start + self.current_timestep * self.timestep_length
+                "Error computing current_time: " + str(e) + ". "
+                "This may be due to 'simulation_start' or 'timestep_length' not being properly initialized."
+            ) from e
 
     @property
     def name(self) -> str:

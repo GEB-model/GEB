@@ -234,7 +234,7 @@ class ReturnPeriodModel:
         quantile_start: float = 0.80,
         quantile_end: float = 0.99,
         quantile_step: float = 0.01,
-        min_exceed: int = 30,
+        min_exceed: int = 20,
         nboot: int = 2000,
         random_seed: int = 42,
         fixed_shape: float | None = None,
@@ -300,7 +300,6 @@ class ReturnPeriodModel:
 
         self.series = series
         # Resample to daily maxima to ensure independence of observations (de-clustering)
-        total_days = (self.series.index.max() - self.series.index.min()).days + 1
         self.years_non_nan = (
             (self.n_non_nan * self.series.index.freq) / pd.Timedelta(days=1)  # ty:ignore[unresolved-attribute]
         ) / 365.2425
@@ -325,6 +324,14 @@ class ReturnPeriodModel:
             n_exc = peaks_u.size
 
             if n_exc < min_exceed:
+                # if this is the last candidate (lowest threshold) and we have
+                # still not found a candidate with the minimum exceedances, we raise
+                # an error specifically for that
+                if u == u_candidates[-1]:
+                    raise ValueError(
+                        f"No valid thresholds found with at least {min_exceed} exceedances. "
+                        f"Lowest candidate threshold {u:.2f} has only {n_exc} exceedances."
+                    )
                 continue
 
             # Calculate excesses y.
@@ -523,7 +530,8 @@ class ReturnPeriodModel:
             fontsize=8,
             verticalalignment="bottom",
             horizontalalignment="left",
-            bbox=dict(boxstyle="round", facecolor="white", alpha=0.8, edgecolor=color),
+            bbox=dict(boxstyle="round", facecolor="black", alpha=1.0, edgecolor=color),
+            color="white",
         )
 
         ax.set_xscale("log")

@@ -83,26 +83,39 @@ Most of the data that the build module uses to create the input data for GEB is 
 
 ### Configuration
 
-Some of the data that is obtained from online sources and APIs requires keys. You should take the following steps:
+Some of the data that is obtained from online sources and APIs requires keys or manual downloads. You should take the following steps:
 
-1.  Request access to MERIT Hydro dataset [MERIT Hydro](https://hydro.iis.u-tokyo.ac.jp/~yamadai/MERIT_Hydro/), and create a ".env"-file in the GEB repository with the following content:
+1.  In case MERIT Hydro is not fully downloaded in the global cache, download the MERIT Hydro `dir` and `elv` tiles manually using the [MERIT Hydro instructions](https://global-hydrodynamics.github.io/MERIT_Hydro/). Put the GeoTIFF files in the GEB data root cache.
 
-``` text
-MERIT_USERNAME=<your_username>
-MERIT_PASSWORD=<your_password>
-```
-
-2.  To set up the model with ERA5-Land forcing data using the build-method `setup_forcing_era5`, create an account on [Destination Earth](https://earthdatahub.destine.eu/). Then, create a personal access token and add the content to the ".env"-file in the GEB repository:
+The files must be placed in:
 
 ``` text
-DESTINATION_EARTH_KEY=edh_pat_de<remainder_of_your_personal_access_token>
+$GEB_DATA_ROOT/merit_hydro_dir/v1/dir/
+$GEB_DATA_ROOT/merit_hydro_elv/v1/elv/
 ```
 
-You can find the personal access token [here](https://earthdatahub.destine.eu/account-settings).
+On Snellius, `GEB_DATA_ROOT` is set automatically to the GEB snellius project storage folder unless it is already defined.
+
+During `geb build`, GEB checks which tiles are needed for the model region. If any required tile is missing, GEB stops and prints the exact filenames and target folder.
+
+2.  To set up the model with ERA5-Land forcing data using the build-method `setup_forcing_era5`, create an account on [Destination Earth](https://earthdatahub.destine.eu/). Then, create a [Standard API key](https://earthdatahub.destine.eu/account-settings) and add the content to the ".env"-file in the GEB repository:
+
+``` text
+DESTINATION_EARTH_KEY=edh_key_<remainder_of_your_API_key>
+```
+
+You can manage your Destination Earth API keys [here](https://auth.destine.eu/realms/desp/account/api-keys).
 
 3.  To use forecasts in GEB, unflag the build-method "setup_forecasts" in the build.yml file. This will trigger the downloading and processing of ECMWF ensemble forecasts from the ECMWF archive. To access ECMWF forecasts, request access to the [ECMWF MARS archive](https://confluence.ecmwf.int/display/WEBAPI/Access+MARS). Afterwards, find your [API key](https://api.ecmwf.int/v1/key/) and add the content to the ".env"-file in the GEB repository.
 
 4.  To set up the Global Tide and Surge Model using the build-method `setup_gtsm_station_data` you first need to create an account on [ECMF](https://earthdatahub.destine.eu/]https://accounts.ecmwf.int/auth/realms/ecmwf/protocol/openid-connect/auth?client_id=cds&scope=openid%20email&response_type=code&redirect_uri=https%3A%2F%2Fcds.climate.copernicus.eu%2Fapi%2Fauth%2Fcallback%2Fkeycloak&state=IA76J5TAf7ZAgZ3YBCPSjsC1b4LKiENc3SozoQ5hbWA&code_challenge=LZdj2TMGRZZ4Aei7DFEKlht_kLHs7EInxqL3qax9oIE&code_challenge_method=S256). Afterwards, you will find your CDS API key and further instructions [here](https://cds.climate.copernicus.eu/how-to-api). You should store the API url and key in your home folder as "$HOME/.cdsapirc". For CDS datasets, you need to manually accept the terms and conditions of datasets. Currently, this is only needed for the [future sea level rise dataset](https://cds.climate.copernicus.eu/datasets/sis-water-level-change-timeseries-cmip6?tab=download): 
+
+5.  If using the European farmer set-up, make an account on the [WEkEO Copernicus data adapter](https://wekeo.copernicus.eu/register), create an access token and create or add to a ".env"-file in the GEB repository with the following content:
+
+``` text
+WEKEO_USERNAME=<your_username>
+WEKEO_PASSWORD=<your_password>
+```
 
 ### Building to model
 

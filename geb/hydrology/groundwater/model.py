@@ -58,7 +58,7 @@ from geb.workflows.raster import decompress_with_mask
 if TYPE_CHECKING:
     pass
 
-MODFLOW_VERSION: str = "6.6.3"
+MODFLOW_VERSION: str = "6.7.0"
 
 
 @njit(cache=True)
@@ -123,7 +123,7 @@ def get_groundwater_storage_m(
     Args:
         layer_boundary_elevation: Elevation of the layer boundaries, in m.
         head: The heads of the model grid, in m.
-        specific_yield: The specific yield of the model grid, in m-1.
+        specific_yield: The specific yield of the model grid (-).
         min_remaining_layer_storage_m: The minimum remaining layer storage in m.
             More storage cannot be abstracted with wells.
 
@@ -164,7 +164,7 @@ def distribute_well_abstraction_m3_per_layer(
         well_rate: The well rate, in m3/step. Negative values indicate abstraction.
         layer_boundary_elevation: Elevation of the layer boundaries, in m.
         heads: The heads of the model grid, in m.
-        specific_yield: The specific yield of the model grid, in m-1.
+        specific_yield: The specific yield of the model grid (-).
         area: The area of each cell, in m2.
         min_remaining_layer_storage_m: The minimum remaining layer storage in m.
             More storage cannot be abstracted with wells.
@@ -223,6 +223,12 @@ class ModFlowSimulation:
 
     area: ArrayFloat32
     heads: TwoDArrayFloat64
+    _heads_ptr: ArrayFloat64
+    _potential_well_rate_ptr: ArrayFloat64
+    _actual_well_rate_ptr: ArrayFloat64
+    _drainage_ptr: ArrayFloat64
+    _recharge_ptr: ArrayFloat64
+    _mxit_ptr: npt.NDArray[np.int32]
 
     def __init__(
         self,
@@ -840,6 +846,27 @@ class ModFlowSimulation:
         # so we can use the area of the top layer
         self.area = area[0].astype(np.float32)
 
+        # Cache frequently accessed BMI pointers. MODFLOW updates these arrays
+        # in place, so repeated pointer retrieval is unnecessary.
+        self._heads_ptr = self.mf6.get_value_ptr(
+            self.mf6.get_var_address("X", self.name)
+        )
+        self._potential_well_rate_ptr = self.mf6.get_value_ptr(
+            self.mf6.get_var_address("Q", self.name, "WEL_0")
+        )
+        self._actual_well_rate_ptr = self.mf6.get_value_ptr(
+            self.mf6.get_var_address("SIMVALS", self.name, "WEL_0")
+        )
+        self._drainage_ptr = self.mf6.get_value_ptr(
+            self.mf6.get_var_address("SIMVALS", self.name, "DRN_0")
+        )
+        self._recharge_ptr = self.mf6.get_value_ptr(
+            self.mf6.get_var_address("RECHARGE", self.name, "RCH_0")
+        )
+        self._mxit_ptr = self.mf6.get_value_ptr(
+            self.mf6.get_var_address("MXITER", "SLN_1")
+        )
+
         self.prepare_time_step()
 
         # because modflow rounds heads when they are written to file, we set the modflow heads
@@ -848,24 +875,13 @@ class ModFlowSimulation:
         assert not np.isnan(self.heads).any()
 
     @property
-    def head_tag(self) -> str:
-        """Get the tag (name) for the heads variable in the modflow model.
-
-        Returns:
-            The tag for the heads variable.
-        """
-        return self.mf6.get_var_address("X", self.name)
-
-    @property
     def heads(self) -> TwoDArrayFloat64:
         """Get the heads of the model grid for all layers.
 
         Returns:
             The heads of the model grid, in m.
         """
-        heads = self.mf6.get_value_ptr(self.head_tag).reshape(
-            self.nlay, self.n_active_cells
-        )
+        heads = self._heads_ptr.reshape(self.nlay, self.n_active_cells)
         assert not np.isnan(heads).any()
         return heads
 
@@ -876,7 +892,7 @@ class ModFlowSimulation:
         Args:
             value: The heads to set, in m.
         """
-        self.mf6.get_value_ptr(self.head_tag)[:] = value.ravel()
+        self._heads_ptr[:] = value.ravel()
 
     @property
     def groundwater_depth(self) -> ArrayFloat64:
@@ -942,26 +958,6 @@ class ModFlowSimulation:
         return self.available_groundwater_m * self.area
 
     @property
-    def potential_well_rate_tag(self) -> str:
-        """Get the tag (name) for the potential well rate variable in the modflow model.
-
-        Returns:
-            The tag for the potential well rate variable.
-        """
-        return self.mf6.get_var_address("Q", self.name, "WEL_0")
-
-    @property
-    def actual_well_rate_tag(self) -> str:
-        """Get the tag (name) for the actual simulated well rate variable in the modflow model.
-
-        This rate can be lower than the potential well rate if not enough groundwater is available.
-
-        Returns:
-            The tag for the actual well rate variable.
-        """
-        return self.mf6.get_var_address("SIMVALS", self.name, "WEL_0")
-
-    @property
     def potential_well_rate(self) -> ArrayFloat64:
         """Get the potential well rate, value in m3/step.
 
@@ -971,12 +967,12 @@ class ModFlowSimulation:
         Returns:
             The potential well rate, value in m3/step.
         """
-        return self.mf6.get_value_ptr(self.potential_well_rate_tag)
+        return self._potential_well_rate_ptr
 
     @property
     def actual_well_rate(self) -> ArrayFloat64:
         """Get the actual simulated well rate, value in m3/step."""
-        return self.mf6.get_value_ptr(self.actual_well_rate_tag)
+        return self._actual_well_rate_ptr
 
     @potential_well_rate.setter
     def potential_well_rate(self, well_rate: ArrayFloat64) -> None:
@@ -997,16 +993,7 @@ class ModFlowSimulation:
                 self.min_remaining_layer_storage_m
             ),
         ).ravel()
-        self.mf6.get_value_ptr(self.potential_well_rate_tag)[:] = well_rate_per_layer
-
-    @property
-    def drainage_tag(self) -> str:
-        """Get the tag (name) for the drainage variable in the modflow model.
-
-        Returns:
-            The tag for the drainage variable.
-        """
-        return self.mf6.get_var_address("SIMVALS", self.name, "DRN_0")
+        self._potential_well_rate_ptr[:] = well_rate_per_layer
 
     @property
     def drainage_m3(self) -> npt.NDArray[np.float64]:
@@ -1015,7 +1002,7 @@ class ModFlowSimulation:
         Returns:
             The drainage, value in m3/step.
         """
-        drainage = -self.mf6.get_value_ptr(self.drainage_tag)
+        drainage = -self._drainage_ptr
         assert not np.isnan(drainage).any()
         # TODO: This assert can become more strict when soil depth is considered
         assert (drainage / self.area < self.hydraulic_conductivity_drainage * 100).all()
@@ -1026,17 +1013,8 @@ class ModFlowSimulation:
         return self.drainage_m3 / self.area
 
     @property
-    def recharge_tag(self) -> str:
-        """Get the tag (name) for the recharge variable in the modflow model.
-
-        Returns:
-            The tag for the recharge variable.
-        """
-        return self.mf6.get_var_address("RECHARGE", self.name, "RCH_0")
-
-    @property
     def _recharge_m(self) -> npt.NDArray[np.float64]:
-        recharge = self.mf6.get_value_ptr(self.recharge_tag).copy()
+        recharge = self._recharge_ptr.copy()
         assert not np.isnan(recharge).any()
         return recharge
 
@@ -1048,7 +1026,7 @@ class ModFlowSimulation:
             value: The recharge to set, value in m/step.
         """
         assert not np.isnan(value).any()
-        self.mf6.get_value_ptr(self.recharge_tag)[:] = value
+        self._recharge_ptr[:] = value
 
     @property
     def recharge_m3(self) -> npt.NDArray[np.float64]:
@@ -1066,8 +1044,7 @@ class ModFlowSimulation:
         Returns:
             The maximum number of iterations.
         """
-        mxit_tag = self.mf6.get_var_address("MXITER", "SLN_1")
-        return self.mf6.get_value_ptr(mxit_tag)[0]
+        return int(self._mxit_ptr[0])
 
     def prepare_time_step(self) -> None:
         """Prepare the model for the next time step."""

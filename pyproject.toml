@@ -1,5 +1,5 @@
 [build-system]
-requires = ["uv_build>=0.10.9,<0.11.0"]
+requires = ["uv_build>=0.11.5,<0.12.0"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
@@ -7,7 +7,7 @@ module-root = ""
 
 [project]
 name = "geb"
-version = "1.0.0b20"
+version = "1.0.0b27"
 description = "GEB simulates the environment (e.g., hydrology, floods), the individual people, households and orginizations as well as their interactions at both small and large scale."
 authors = [
     {name = "Jens de Bruijn", email = "jens.de.bruijn@vu.nl"},
@@ -43,7 +43,7 @@ dependencies = [
     "pandas>=2.3.0,<3.0.0", # we get some errors with pandas 3.0. Currently working on solving all warnings on 2.3 to make transition smooth. See: https://pandas.pydata.org/docs/dev/user_guide/migration.html
     "permetrics>=2.0.0",
     "pyarrow>=17.0.0",
-    "pyflwdir>=0.5.9",
+    "pyflwdir>=0.5.11",
     "pyogrio>=0.9.0",
     "pyresample>=1.32.0",
     "pytest",
@@ -60,7 +60,7 @@ dependencies = [
     "xarray-regrid[accel]>=0.4.1",
     "xclim>=0.56.0",
     "xmipy>=1.5.0",
-    "zarr>=3.1.5",
+    "zarr[cast-value-rs]>=3.2.1",
     "ty>=0.0.17",
     "ecmwf-api-client>=1.6.5",
     "ruff>=0.14.0",
@@ -83,17 +83,25 @@ dependencies = [
     "requests>=2.32.5",
     "simplejson>=3.20.2",
     "eccodes==2.44.0",  # pin until https://github.com/ecmwf/eccodes-python/issues/150 is fixed
+    "pystac>=1.14.3",
+    "hda>=2.39",
 ]
 requires-python = ">=3.14.4, <3.15"
 readme = "README.md"
+license = "GPL-3.0-only"
+license-files = ["LICENSE"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering :: Hydrology",
-    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Programming Language :: Python :: 3",
 ]
+
+[project.urls]
+Documentation = "https://docs.geb.sh"
+Repository = "https://github.com/GEB-model/GEB"
+Issues = "https://github.com/GEB-model/GEB/issues"
 
 [tool.uv]
 required-environments = [
@@ -101,6 +109,7 @@ required-environments = [
     "sys_platform == 'win32'",
     "sys_platform == 'darwin'"
 ]
+exclude-newer = "3 days"
 
 [dependency-groups]
 dashboard = [
@@ -207,10 +216,12 @@ combine-as-imports = true
 convention = "google"
 
 [tool.pytest.ini_options]
-norecursedirs = [".venv", "build", "dist", "tmp*"]
+norecursedirs = [".venv", "dist", "tmp*"]
 testpaths = ["tests"]
 addopts = "--ignore=.venv"
 
 [tool.ty.rules]
 unresolved-attribute = "warn"
 
+[tool.ty.src]
+exclude = ["geb/build/custom_models/**"]

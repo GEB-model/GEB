@@ -200,14 +200,15 @@ class MeritBasins(Adapter):
                 del gdf
             del gdfs
 
-            merged = merged.write_crs("EPSG:4326")
+            # MERIT Basins coordinates are distributed in WGS84
+            merged = merged.set_crs("EPSG:4326", allow_override=True)
 
             ascending: bool = True
             merged = merged.sort_values(by="COMID", ascending=ascending)
 
             # Use a temporary file to avoid partial writes in case of errors
             with tempfile.NamedTemporaryFile(
-                dir=self.path.parent, suffix=".parquet", delete=False
+                dir=self.path.parent, suffix=".parquet", delete=True
             ) as tmp_file:
                 tmp_path: Path = Path(tmp_file.name)
                 print(

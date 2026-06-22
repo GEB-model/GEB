@@ -3,6 +3,7 @@
 import os
 from datetime import timedelta
 from pathlib import Path
+from typing import Literal
 
 import geopandas as gpd
 import networkx as nx
@@ -12,12 +13,19 @@ import pandas as pd
 import pyflwdir
 import rasterio.features
 import xarray as xr
+from networkx.classes.digraph import DiGraph
 from pyflwdir import FlwdirRaster
 from scipy.ndimage import value_indices
 from shapely.geometry import LineString, shape
 
 from geb.build.data_catalog import DataCatalog
+from geb.build.data_catalog.gtsm import gtsm_filters
 from geb.build.methods import build_method
+from geb.build.workflows.command_areas import derive_command_areas_from_routing
+from geb.build.workflows.hydrography import (
+    calculate_shreve_stream_order,
+    get_river_graph,
+)
 from geb.build.workflows.river_snapping import snap_point_to_river_network
 from geb.geb_types import (
     ArrayBool,
@@ -226,7 +234,7 @@ def get_rivers_geometry(
     ).set_index("COMID")
     rivers["uparea_m2"] = rivers["uparea"] * 1e6  # convert from km^2 to m^2
     rivers["is_headwater_catchment"] = rivers["maxup"] == 0
-    rivers: gpd.GeoDataFrame = rivers.drop(columns=["uparea"])
+    rivers: gpd.GeoDataFrame = rivers.drop(columns=["uparea"])  # ty:ignore[invalid-assignment]
     rivers.loc[rivers["downstream_ID"] == 0, "downstream_ID"] = -1
 
     # reverse the river lines to have the downstream direction
@@ -428,7 +436,15 @@ def get_SWORD_river_widths(
         """
         if reach_id == -1:  # when no SWORD reach is found
             return np.nan  # return NaN
-        return SWORD.loc[reach_id, "width"]
+        width: np.float64 = SWORD.loc[reach_id, "width"]
+        if width <= 0.0:
+            width = np.float64(np.nan)
+
+        assert pd.isna(width) or width > 0, (
+            f"Invalid river width {width} for SWORD reach ID {reach_id}"
+        )
+
+        return width
 
     SWORD_river_width = np.vectorize(lookup_river_width)(SWORD_reach_IDs)
     return SWORD_river_width
@@ -441,7 +457,10 @@ class Hydrography(BuildModelBase):
         """Initializes the Hydrography class."""
         pass
 
-    @build_method(depends_on=["setup_hydrography", "setup_cell_area"], required=True)
+    @build_method(
+        depends_on=["setup_hydrography", "setup_cell_area", "setup_elevation"],
+        required=True,
+    )
     def setup_geomorphology(self) -> None:
         """Sets up the Manning's coefficient for the model.
 
@@ -457,6 +476,34 @@ class Hydrography(BuildModelBase):
             The resulting Manning's coefficient is then set as the `routing/mannings` attribute of the grid using the
             `set_grid()` method.
         """
+        subgrid_elevation: xr.DataArray = self.subgrid["landsurface/elevation"]
+        slope_high_res: npt.NDArray[np.float64] = pyflwdir.dem.slope(
+            subgrid_elevation.values,
+            nodata=np.nan,
+            latlon=True,
+            transform=subgrid_elevation.rio.transform(recalc=True),
+        )
+
+        surface_area_ratio_high_res = xr.DataArray(
+            np.sqrt(1 + slope_high_res**2),
+            coords=subgrid_elevation.coords,
+            dims=subgrid_elevation.dims,
+        )
+
+        surface_area_ratio: xr.DataArray = surface_area_ratio_high_res.coarsen(
+            x=self.subgrid_factor,
+            y=self.subgrid_factor,
+            boundary="exact",
+            coord_func="mean",
+        ).mean()  # ty:ignore[unresolved-attribute]
+        surface_area_ratio.attrs["_FillValue"] = np.nan
+
+        surface_area_ratio: xr.DataArray = snap_to_grid(
+            surface_area_ratio, self.grid["mask"], relative_tolerance=0.03
+        )
+
+        self.set_grid(surface_area_ratio, name="landsurface/surface_area_ratio")
+
         a: xr.DataArray = (2 * self.grid["cell_area"]) / self.grid[
             "routing/upstream_area_m2"
         ]
@@ -514,9 +561,13 @@ class Hydrography(BuildModelBase):
         )
         subbasin_ids.update(sink_subbasin_ids)
 
-        downstream_subbasins = get_immediate_downstream_subbasins(
+        downstream_subbasins: dict[int, list[int]] = get_immediate_downstream_subbasins(
             river_graph, sink_subbasin_ids
         )
+        # remove downstream subbasins that are also upstream subbasins, because those are already included in the river network
+        downstream_subbasins: dict[int, list[int]] = {
+            k: v for k, v in downstream_subbasins.items() if k not in subbasin_ids
+        }
         subbasin_ids.update(downstream_subbasins)
 
         is_further_downstream_outflow: set[int] = set()
@@ -527,6 +578,12 @@ class Hydrography(BuildModelBase):
             )
         )
 
+        # remove further downstream subbasins that are also upstream subbasins, because those are already included in the river network
+        is_further_downstream_outflow = {
+            subbasin_id
+            for subbasin_id in is_further_downstream_outflow
+            if subbasin_id not in subbasin_ids
+        }
         subbasin_ids.update(is_further_downstream_outflow)
 
         # later we want to include the downstream outflow basins. However, we don't want to include
@@ -657,8 +714,8 @@ class Hydrography(BuildModelBase):
         )
 
         streams_length_low_res = streams_length_high_res.coarsen(
-            x=self.ldd_scale_factor,  # ty:ignore[invalid-argument-type]
-            y=self.ldd_scale_factor,  # ty:ignore[invalid-argument-type]
+            x=self.ldd_scale_factor,
+            y=self.ldd_scale_factor,
             boundary="exact",
             coord_func="mean",
         ).sum()  # ty:ignore[unresolved-attribute]
@@ -766,6 +823,7 @@ class Hydrography(BuildModelBase):
 
         self.logger.info("Retrieving river data")
         rivers: gpd.GeoDataFrame = self.geom["routing/rivers"]
+        rivers["shreve_stream_order"] = calculate_shreve_stream_order(rivers)
 
         self.logger.info("Processing river data")
 
@@ -888,6 +946,23 @@ class Hydrography(BuildModelBase):
         COMID_IDs_raster.data = river_raster_LR
         self.set_grid(COMID_IDs_raster, name="routing/river_ids")
 
+        height_above_nearest_drainage_m = self.full_like(
+            elevation_min, fill_value=np.nan, nodata=np.nan, dtype=np.float32
+        )
+        height_above_nearest_drainage_m.values = flow_raster.hand(
+            COMID_IDs_raster != -1, elevation_min
+        ).astype(np.float32)
+        height_above_nearest_drainage_m.values[
+            height_above_nearest_drainage_m.values == -9999.0
+        ] = np.nan
+        assert not np.isnan(
+            height_above_nearest_drainage_m.values[~self.grid["mask"].values]
+        ).all()
+        self.set_grid(
+            height_above_nearest_drainage_m,
+            name="routing/height_above_nearest_drainage_m",
+        )
+
         basin_ids = self.full_like(
             elevation_min, fill_value=-1, nodata=-1, dtype=np.int32
         )
@@ -916,16 +991,20 @@ class Hydrography(BuildModelBase):
             self.data_catalog, SWORD_reach_IDs
         )
 
-        rivers_with_data = (SWORD_reach_IDs != -1).any(axis=0)
+        valid_SWORD_widths = ~np.isnan(SWORD_river_widths)
+        valid_reach_lengths_m = np.where(valid_SWORD_widths, SWORD_reach_lengths, 0)
+        total_valid_reach_length_m = np.sum(valid_reach_lengths_m, axis=0)
+        rivers_with_data = valid_SWORD_widths.any(axis=0) & (
+            total_valid_reach_length_m > 0
+        )
 
+        rivers["width"] = np.nan
         rivers.loc[rivers_with_data, "width"] = (
-            np.nansum(SWORD_river_widths * SWORD_reach_lengths, axis=0)[
+            np.nansum(SWORD_river_widths * valid_reach_lengths_m, axis=0)[
                 rivers_with_data
             ]
-            / np.sum(SWORD_reach_lengths, axis=0)[rivers_with_data]
+            / total_valid_reach_length_m[rivers_with_data]
         )
-        # ensure that all rivers with a SWORD ID have a width
-        assert (~np.isnan(rivers["width"][rivers_with_data])).all()
 
         self.set_geom(rivers, name="routing/rivers")
 
@@ -933,6 +1012,11 @@ class Hydrography(BuildModelBase):
         river_width_data: npt.NDArray[np.float32] = np.vectorize(
             lambda ID: river_with_mapper.get(ID, np.nan)
         )(COMID_IDs_raster.values).astype(np.float32)
+
+        # check river with is positive where river is present
+        assert ((river_width_data > 0) | np.isnan(river_width_data)).all(), (
+            "River width should be positive or nan"
+        )
 
         river_width: xr.DataArray = self.full_like(
             elevation_min, fill_value=np.nan, nodata=np.nan, dtype=np.float32
@@ -1119,32 +1203,57 @@ class Hydrography(BuildModelBase):
     @build_method(required=True)
     def setup_waterbodies(
         self,
+        mode: Literal["on", "off", "lakes_only", "reservoirs_only"] = "on",
         command_areas: None | str = None,
+        calculate_command_areas: bool = False,
         custom_reservoir_capacity: None | str = None,
     ) -> None:
-        """Sets up the waterbodies for GEB.
+        """Set up waterbodies, reservoirs, and command areas.
+
+        Configure waterbodies and their associated command areas for the model grid.
+        This includes rasterizing lake and reservoir identifiers, optionally
+        assigning command areas from preset data or by deriving them from the river
+        routing network, and updating reservoir storage capacities.
 
         Args:
-            command_areas: The path to the command areas data in the data catalog. If None, command areas are not set up.
-            custom_reservoir_capacity: The path to the custom reservoir capacity data in the data catalog.
-                If None, the default reservoir capacity is used. The data should be a DataFrame with
-                'waterbody_id' as the index and 'volume_total' as the column for the reservoir capacity.
-
-        Notes:
-            This method sets up the waterbodies for GEB. It first retrieves the waterbody data from the
-            specified data catalog and sets it as a geometry in the model. It then rasterizes the waterbody data onto the model
-            grid and the subgrid using the `rasterize` method of the `raster` object. The resulting grids are set as attributes
-            of the model with names of the form 'waterbodies/{grid_name}'.
-
-            The method also retrieves the reservoir command area data from the data catalog and calculates the area of each
-            command area that falls within the model region. The `waterbody_id` key is used to do the matching between these
-            databases. The relative area of each command area within the model region is calculated and set as a column in
-            the waterbody data. The method sets all lakes with a command area to be reservoirs and updates the waterbody data
-            with any custom reservoir capacity data from the data catalog.
+            mode: Whether to enable waterbodies ("on"), disable them ("off"),
+                or include only lakes ("lakes_only") or only reservoirs ("reservoirs_only").
+            command_areas: Identifier of the preset command area data in the
+                data catalog. If None, command areas can be calculated from the
+                routing network instead.
+            calculate_command_areas: Flag or identifier indicating that command areas
+                should be calculated based on the routing network. If false, command
+                areas are not calculated and default to a missing value.
+            custom_reservoir_capacity: Identifier of the custom reservoir capacity
+                data in the data catalog. If None, the default reservoir capacities
+                from the waterbody dataset are used. The table must have
+                ``waterbody_id`` as the index and a ``volume_total`` column defining
+                the reservoir capacity.
 
         Raises:
             ValueError: If the custom_reservoir_capacity file is not a .csv or .xlsx file.
+            ValueError: If command_areas and calculate_command_areas are both provided.
+            ValueError: If mode is not "on", "off", "lakes_only", or "reservoirs_only".
+            ValueError: If command areas are requested but mode is "off" or "lakes_only".
         """
+        if mode not in ["on", "off", "lakes_only", "reservoirs_only"]:
+            raise ValueError(
+                f"Invalid mode: {mode}. Must be 'on', 'off', 'lakes_only', or 'reservoirs_only'."
+            )
+
+        if command_areas is not None and calculate_command_areas:
+            raise ValueError(
+                "Cannot provide both command_areas and calculate_command_areas. Please choose one."
+            )
+
+        if (command_areas is not None or calculate_command_areas) and mode in (
+            "off",
+            "lakes_only",
+        ):
+            raise ValueError(
+                "Command areas cannot be used or calculated when waterbodies are disabled or set to lakes only."
+            )
+
         waterbodies: gpd.GeoDataFrame = self.data_catalog.fetch("hydrolakes").read(
             bbox=self.bounds,
             columns=[
@@ -1156,11 +1265,6 @@ class Hydrography(BuildModelBase):
                 "geometry",
             ],
         )
-        # only select waterbodies that intersect with the region
-        waterbodies: gpd.GeoDataFrame = waterbodies[
-            waterbodies.intersects(self.region.union_all())
-        ]
-
         hydrolakes_to_geb: dict[int, np.int32] = {
             1: np.int32(LAKE),
             2: np.int32(RESERVOIR),
@@ -1172,6 +1276,21 @@ class Hydrography(BuildModelBase):
         )
         assert waterbodies["waterbody_type"].dtype == np.int32
 
+        if (
+            mode == "off"
+        ):  # to keep the dtypes consistent we still load the waterbodies, but we will remove all rows to disable them
+            # remove all rows
+            waterbodies = waterbodies.iloc[0:0]
+        elif mode == "lakes_only":
+            waterbodies = waterbodies[waterbodies["waterbody_type"] == LAKE]
+        elif mode == "reservoirs_only":
+            waterbodies = waterbodies[waterbodies["waterbody_type"] == RESERVOIR]
+
+        # only select waterbodies that intersect with the region
+        waterbodies = waterbodies[waterbodies.intersects(self.region.union_all())]
+
+        waterbodies["volume_flood"] = waterbodies["volume_total"]
+
         waterbody_id: xr.DataArray = rasterize_like(
             gdf=waterbodies,
             column="waterbody_id",
@@ -1181,50 +1300,40 @@ class Hydrography(BuildModelBase):
             all_touched=True,
         )
 
-        sub_waterbody_id: xr.DataArray = rasterize_like(
-            gdf=waterbodies,
-            column="waterbody_id",
-            raster=self.subgrid["mask"],
-            nodata=-1,
-            dtype=np.int32,
-            all_touched=True,
-        )
-
         self.set_grid(waterbody_id, name="waterbodies/waterbody_id")
-        self.set_subgrid(sub_waterbody_id, name="waterbodies/sub_waterbody_id")
 
-        waterbodies["volume_flood"] = waterbodies["volume_total"]
-
-        if command_areas:
-            command_areas: gpd.GeoDataFrame = gpd.read_file(
+        if mode in ("on", "reservoirs_only") and command_areas:
+            command_areas_gdf: gpd.GeoDataFrame = gpd.read_file(
                 command_areas, mask=self.region
             )
-            assert isinstance(command_areas, gpd.GeoDataFrame)
-            command_areas = command_areas[
-                ~command_areas["waterbody_id"].isnull()
+            assert isinstance(command_areas_gdf, gpd.GeoDataFrame)
+            command_areas_gdf = command_areas_gdf[
+                ~command_areas_gdf["waterbody_id"].isnull()
             ].reset_index(drop=True)
-            command_areas["waterbody_id"] = command_areas["waterbody_id"].astype(
-                np.int32
-            )
+            command_areas_gdf["waterbody_id"] = command_areas_gdf[
+                "waterbody_id"
+            ].astype(np.int32)
 
             # Dissolve command areas with same reservoir
-            command_areas = command_areas.dissolve(by="waterbody_id", as_index=False)
+            command_areas_gdf = command_areas_gdf.dissolve(
+                by="waterbody_id", as_index=False
+            )
 
             # Set lakes with command area to reservoirs and reservoirs without command area to lakes
-            ids_with_command: set = set(command_areas["waterbody_id"])
+            ids_with_command: set[int] = set(command_areas_gdf["waterbody_id"])
             waterbodies.loc[
                 waterbodies["waterbody_id"].isin(ids_with_command),
                 "waterbody_type",
             ] = RESERVOIR
 
             # Lastly remove command areas that have no associated water body
-            reservoir_ids: set = set(
+            reservoir_ids: set[int] = set(
                 waterbodies.loc[
                     waterbodies["waterbody_type"] == RESERVOIR, "waterbody_id"
                 ]
             )
-            command_areas_dissolved = command_areas[
-                command_areas["waterbody_id"].isin(reservoir_ids)
+            command_areas_dissolved = command_areas_gdf[
+                command_areas_gdf["waterbody_id"].isin(reservoir_ids)
             ].reset_index(drop=True)
 
             self.set_geom(command_areas_dissolved, name="waterbodies/command_areas")
@@ -1232,51 +1341,76 @@ class Hydrography(BuildModelBase):
             assert command_areas_dissolved["waterbody_id"].isin(reservoir_ids).all()
 
             command_area_raster = rasterize_like(
-                gdf=command_areas,
+                gdf=command_areas_dissolved,
                 column="waterbody_id",
                 raster=self.grid["mask"],
                 nodata=-1,
                 dtype=np.int32,
                 all_touched=True,
             )
-            self.set_grid(command_area_raster, name="waterbodies/command_area")
 
             subcommand_area_raster = rasterize_like(
-                gdf=command_areas,
+                gdf=command_areas_dissolved,
                 column="waterbody_id",
                 raster=self.subgrid["mask"],
                 nodata=-1,
                 dtype=np.int32,
                 all_touched=True,
             )
-            self.set_subgrid(
-                subcommand_area_raster, name="waterbodies/subcommand_areas"
-            )
 
-        else:
-            command_areas: xr.DataArray = self.full_like(
+        elif mode in ("on", "reservoirs_only") and calculate_command_areas:
+            river_graph: DiGraph = get_river_graph(self.data_catalog)
+
+            mapped_reservoirs_grid, mapped_reservoirs_subgrid = (
+                derive_command_areas_from_routing(
+                    waterbodies=waterbodies,
+                    rivers=self.geom["routing/rivers"],
+                    basin_ids=self.grid["routing/basin_ids"],
+                    grid_mask=self.grid["mask"],
+                    subgrid_mask=self.subgrid["mask"],
+                    subgrid_factor=self.subgrid_factor,
+                    river_graph=river_graph,
+                )
+            )
+            command_area_raster = self.full_like(
                 self.grid["mask"],
                 fill_value=-1,
                 nodata=-1,
                 dtype=np.int32,
             )
-            subcommand_areas = self.full_like(
+            command_area_raster.data = mapped_reservoirs_grid
+
+            subcommand_area_raster = self.full_like(
+                self.subgrid["mask"],
+                fill_value=-1,
+                nodata=-1,
+                dtype=np.int32,
+            )
+            subcommand_area_raster.data = mapped_reservoirs_subgrid
+        else:
+            command_area_raster: xr.DataArray = self.full_like(
+                self.grid["mask"],
+                fill_value=-1,
+                nodata=-1,
+                dtype=np.int32,
+            )
+            subcommand_area_raster = self.full_like(
                 self.subgrid["mask"],
                 fill_value=-1,
                 nodata=-1,
                 dtype=np.int32,
             )
 
-            self.set_grid(command_areas, name="waterbodies/command_area")
-            self.set_subgrid(subcommand_areas, name="waterbodies/subcommand_areas")
+        self.set_grid(command_area_raster, name="waterbodies/command_area")
+        self.set_subgrid(subcommand_area_raster, name="waterbodies/subcommand_areas")
 
-        if custom_reservoir_capacity:
+        if mode in ("on", "reservoirs_only") and custom_reservoir_capacity:
             if custom_reservoir_capacity.endswith(".xlsx"):
-                custom_reservoir_capacity: pd.DataFrame = pd.read_excel(
+                custom_reservoir_capacity_df: pd.DataFrame = pd.read_excel(
                     custom_reservoir_capacity
                 )
             elif custom_reservoir_capacity.endswith(".csv"):
-                custom_reservoir_capacity: pd.DataFrame = pd.read_csv(
+                custom_reservoir_capacity_df: pd.DataFrame = pd.read_csv(
                     custom_reservoir_capacity
                 )
             else:
@@ -1284,12 +1418,12 @@ class Hydrography(BuildModelBase):
                     "custom_reservoir_capacity must be a .csv or .xlsx file"
                 )
 
-            custom_reservoir_capacity = custom_reservoir_capacity[
-                custom_reservoir_capacity.index != -1
+            custom_reservoir_capacity_df = custom_reservoir_capacity_df[
+                custom_reservoir_capacity_df.index != -1
             ]
 
             waterbodies.set_index("waterbody_id", inplace=True)
-            waterbodies.update(custom_reservoir_capacity)
+            waterbodies.update(custom_reservoir_capacity_df)
             waterbodies.reset_index(inplace=True)
 
         assert "waterbody_id" in waterbodies.columns, "waterbody_id is required"
@@ -1306,7 +1440,12 @@ class Hydrography(BuildModelBase):
         gtsm_data_region, stations = self.data_catalog.fetch(
             "gtsm_timeseries", variable="total_water_level"
         ).read(bounds=self.bounds, variable="total_water_level")
-        self.set_table(gtsm_data_region, name="gtsm/waterlevels")
+        self.set_other(
+            gtsm_data_region,
+            name="gtsm/waterlevels",
+            filters=gtsm_filters,
+            shards={"stations": 100},
+        )
         self.set_geom(stations, name="gtsm/stations")
         self.logger.info("GTSM station waterlevels and geometries set")
 
@@ -1315,7 +1454,12 @@ class Hydrography(BuildModelBase):
         gtsm_data_region, _ = self.data_catalog.fetch(
             "gtsm_timeseries", variable="storm_surge_residual"
         ).read(bounds=self.bounds, variable="storm_surge_residual")
-        self.set_table(gtsm_data_region, name="gtsm/surge")
+        self.set_other(
+            gtsm_data_region,
+            name="gtsm/surge",
+            filters=gtsm_filters,
+            shards={"stations": 100},
+        )
         self.logger.info("GTSM station surge levels set")
 
     def setup_gtsm_sea_level_rise(self) -> None:
@@ -1391,10 +1535,13 @@ class Hydrography(BuildModelBase):
         # do some check on the extrapolated data
         for station in sea_level_rise_df.columns:
             series = sea_level_rise_df[station]
-            # check that the values are monotonically increasing
-            if not series.is_monotonic_increasing:
+            # check that the values are either monotonically increasing or decreasing
+            # There are some rare places where we see a slight decrease in sea level, for example
+            # in the Arctic, so we allow for both monotonically increasing and decreasing series,
+            # but we want to make sure that they are not fluctuating up and down.
+            if not (series.is_monotonic_increasing or series.is_monotonic_decreasing):
                 raise ValueError(
-                    f"Sea level rise data for station {station} is not monotonically increasing after extrapolation."
+                    f"Sea level rise data for station {station} is neither monotonically increasing nor monotonically decreasing after extrapolation."
                 )
             # check that the values are reasonable (less than 2 meters by 2100)
             if series.iloc[-1] >= 2:
@@ -1535,7 +1682,7 @@ class Hydrography(BuildModelBase):
             # extrapolate missing values by forward and backward filling
             inflow_df_m3_per_s: pd.DataFrame = inflow_df_m3_per_s.ffill().bfill()
 
-        if inflow_df_m3_per_s.isnull().any().any():
+        if inflow_df_m3_per_s.isnull().any():
             raise ValueError(
                 "Inflow hydrograph contains missing values. "
                 "Set interpolate=True to interpolate missing values. "
@@ -1547,16 +1694,22 @@ class Hydrography(BuildModelBase):
 
         self.set_table(inflow_df_m3_per_s, name="routing/inflow_m3_per_s")
 
-    @build_method(required=False, depends_on=["setup_hydrography"])
-    def setup_retention_basins(self, retention_basins: Path) -> None:
+    @build_method(required=True, depends_on=["setup_hydrography"])
+    def setup_retention_basins(self, retention_basins: Path | None = None) -> None:
         """Setup retention basins.
+
+        There can only be a maximum of one retention basin per river pixel. When a retention
+        basin is already occupied, the retention basin being set up will be assigned to the next downstream river
+        pixel that is not occupied by another retention basin.
 
         Args:
             retention_basins: A vector file that can be read by geopandas containing the retention basins,
-                with a point geometry representing the location of the retention basin.
+                with a point geometry representing the location of the retention basin. If none (default),
+                no retention basins will be set up in the model.
 
         Raises:
             ValueError: If a retention basin cannot be snapped to the river network.
+            ValueError: If multiple retention basins snap to the same river pixel, which is not allowed.
 
         Sets:
             routing/retention_basin_ids: A grid with the same dimensions as the model grid, where each pixel that is
@@ -1569,49 +1722,129 @@ class Hydrography(BuildModelBase):
             self.grid["mask"], fill_value=-1, nodata=-1, dtype=np.int32
         ).compute()
 
-        # read the retention basins from the provided file
-        retention_basins = gpd.read_file(retention_basins).to_crs(
-            self.grid["mask"].rio.crs
-        )
-        rivers = self.geom["routing/rivers"]
-
-        retention_basin_data = []
-
-        upstream_area_grid = self.grid["routing/upstream_area_m2"].compute()
-        upstream_area_subgrid = self.other[
-            "drainage/original_d8_upstream_area_m2"
-        ].compute()
-
-        for _, retention_basin in retention_basins.iterrows():
-            centroid = retention_basin.geometry.centroid
-
-            # the centroid of the retention basin may not fall exactly on the river network,
-            # so we snap it to the nearest river pixel using the snap_point_to_river_network function
-            snapped_data = snap_point_to_river_network(
-                point=centroid,
-                rivers=rivers,
-                upstream_area_grid=upstream_area_grid,
-                upstream_area_subgrid=upstream_area_subgrid,
-            )
-            if snapped_data is None:
-                raise ValueError(
-                    f"Could not snap retention basin for basin ID {retention_basin['ID']} to river network. "
+        if retention_basins is None:
+            self.set_grid(retention_basin_ids, name="routing/retention_basin_ids")
+            retention_basin_df = pd.DataFrame(
+                columns=np.array(
+                    [
+                        "ID",
+                        "retention_max_storage_m3",
+                        "controlled_retention",
+                        "retention_activation_threshold_controlled_m3_s",
+                        "retention_activation_threshold_uncontrolled_m3_s",
+                    ]
                 )
-            snapped_grid_pixel_xy = snapped_data["snapped_grid_pixel_xy"]
-
-            # assign the ID of the retention basin to the corresponding pixel in the retention_basin_ids grid
-            retention_basin_ids.values[
-                snapped_grid_pixel_xy[1], snapped_grid_pixel_xy[0]
-            ] = retention_basin["ID"]
-
-            # store the retention basin data in a list to create a table later
-            retention_basin_data.append(
+            ).astype(
                 {
-                    "ID": retention_basin["ID"],
-                    "is_controlled": retention_basin["is_controlled"],
+                    "ID": np.int32,
+                    "retention_max_storage_m3": np.float32,
+                    "controlled_retention": bool,
+                    "retention_activation_threshold_controlled_m3_s": np.float32,
+                    "retention_activation_threshold_uncontrolled_m3_s": np.float32,
                 }
             )
+        else:
+            # read the retention basins from the provided file
+            retention_basins = gpd.read_file(retention_basins).to_crs(
+                self.grid["mask"].rio.crs
+            )
 
-        retention_basin_df = pd.DataFrame(retention_basin_data)
+            # Replace empty or missing values in 'controlled_retention' with "uncontrolled"
+            retention_basins["controlled_retention"] = (
+                retention_basins["controlled_retention"]
+                .fillna("uncontrolled")
+                .replace("", "uncontrolled")
+            )
+
+            rivers = self.geom["routing/rivers"]
+
+            retention_basin_data = []
+
+            upstream_area_grid = self.grid["routing/upstream_area_m2"].compute()
+            upstream_area_subgrid = self.other[
+                "drainage/original_d8_upstream_area_m2"
+            ].compute()
+
+            ldd = self.grid["routing/ldd"]
+            flow_direction_raster = pyflwdir.from_array(
+                ldd.values,
+                ftype="ldd",
+                transform=ldd.rio.transform(recalc=True),
+                latlon=True,
+            )
+            downstream_indices = flow_direction_raster.idxs_ds.reshape(ldd.shape)
+
+            for _, retention_basin in retention_basins.iterrows():
+                centroid = retention_basin.geometry.centroid
+
+                # the centroid of the retention basin may not fall exactly on the river network,
+                # so we snap it to the nearest river pixel using the snap_point_to_river_network function
+                snapped_data = snap_point_to_river_network(
+                    point=centroid,
+                    rivers=rivers,
+                    upstream_area_grid=upstream_area_grid,
+                    upstream_area_subgrid=upstream_area_subgrid,
+                )
+                if snapped_data is None:
+                    raise ValueError(
+                        f"Could not snap retention basin for basin ID {retention_basin['ID']} to river network. "
+                    )
+                snapped_grid_pixel_xy = snapped_data["snapped_grid_pixel_xy"]
+
+                # assign the ID of the retention basin to the corresponding pixel in the retention_basin_ids grid
+                search_steps = 0
+                while (
+                    retention_basin_ids.values[
+                        snapped_grid_pixel_xy[1], snapped_grid_pixel_xy[0]
+                    ]
+                    != -1
+                ):
+                    assigned_retention_basin_id = retention_basin_ids.values[
+                        snapped_grid_pixel_xy[1], snapped_grid_pixel_xy[0]
+                    ]
+                    downstream_index = downstream_indices[
+                        snapped_grid_pixel_xy[1], snapped_grid_pixel_xy[0]
+                    ]
+                    if downstream_index == -1:
+                        raise ValueError(
+                            f"Retention basin ID {retention_basin['ID']} at location {centroid} snaps to a river pixel that is already assigned to retention basin ID {assigned_retention_basin_id}. No unassigned downstream river pixel was found because the downstream index is -1."
+                        )
+
+                    # Follow the downstream river path until we find an unassigned pixel.
+                    downstream_row, downstream_col = np.unravel_index(
+                        downstream_index, retention_basin_ids.shape
+                    )
+                    self.logger.warning(
+                        f"Retention basin ID {retention_basin['ID']} snapped to an occupied river pixel assigned to retention basin ID {assigned_retention_basin_id}; searching downstream at step {search_steps + 1} from ({snapped_grid_pixel_xy[0]}, {snapped_grid_pixel_xy[1]}) to ({downstream_col}, {downstream_row})."
+                    )
+                    snapped_grid_pixel_xy = np.array([downstream_col, downstream_row])
+                    search_steps += 1
+
+                retention_basin_ids.values[
+                    snapped_grid_pixel_xy[1], snapped_grid_pixel_xy[0]
+                ] = retention_basin["ID"]
+
+                # store the retention basin data in a list to create a table later
+                controlled_flag = (
+                    str(retention_basin["controlled_retention"]).lower() == "controlled"
+                )
+                retention_basin_data.append(
+                    {
+                        "ID": retention_basin["ID"],
+                        "retention_max_storage_m3": retention_basin[
+                            "retention_max_storage_m3"
+                        ],
+                        "controlled_retention": controlled_flag,
+                        "retention_activation_threshold_controlled_m3_s": retention_basin[
+                            "retention_activation_threshold_controlled_m3_s"
+                        ],
+                        "retention_activation_threshold_uncontrolled_m3_s": retention_basin[
+                            "retention_activation_threshold_uncontrolled_m3_s"
+                        ],
+                    }
+                )
+
+            retention_basin_df = pd.DataFrame(retention_basin_data)
+
         self.set_table(retention_basin_df, name="routing/retention_basin_data")
         self.set_grid(retention_basin_ids, name="routing/retention_basin_ids")

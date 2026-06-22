@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from geb.hydrology import landsurface as landsurface_file
+from geb.hydrology.landsurface.constants import LAMBDA_ICE, LAMBDA_WATER
 from geb.hydrology.landsurface.landsurface_model import land_surface_model
 from geb.workflows import balance_check
 
@@ -26,12 +26,35 @@ def get_error_cases() -> list[Path]:
 )
 def test_land_surface_model_error_cases(error_case_path: Path, asfloat64: bool) -> None:
     """Test the land surface model with previous error cases."""
-    # Set the global N_SOIL_LAYERS variable required by the numba function
-    landsurface_file.N_SOIL_LAYERS = 6  # ty:ignore[unresolved-attribute]
-
     # Load the error case data
     with np.load(error_case_path) as data:
         inputs = {key: data[key] for key in data.files}
+
+    # Old error-case files were saved in layer-major layout (N_LAYERS, num_cells) or
+    # (N_HOURS, num_cells). The refactored land_surface_model expects cell-major layout
+    # (num_cells, N_LAYERS) / (num_cells, N_HOURS).  Detect the old format by checking
+    # for shape (N, 1) with N > 1 and transpose to (1, N) accordingly.
+    for key, value in inputs.items():
+        if (
+            isinstance(value, np.ndarray)
+            and value.ndim == 2
+            and value.shape[1] == 1
+            and value.shape[0] > 1
+        ):
+            inputs[key] = np.ascontiguousarray(value.T)
+
+    if "thermal_conductivity_saturated_unfrozen_W_per_m_K" not in inputs:
+        porosity = inputs["water_content_saturated_m"] / inputs["soil_layer_height"]
+        solid_factor = inputs["solid_thermal_conductivity_W_per_m_K"] ** (
+            np.float32(1.0) - porosity
+        )
+        inputs["thermal_conductivity_saturated_unfrozen_W_per_m_K"] = solid_factor * (
+            LAMBDA_WATER**porosity
+        )
+        inputs["thermal_conductivity_saturated_frozen_W_per_m_K"] = solid_factor * (
+            LAMBDA_ICE**porosity
+        )
+    inputs.pop("solid_thermal_conductivity_W_per_m_K", None)
 
     # Cast inputs if requested
     if asfloat64:
@@ -103,7 +126,7 @@ def test_land_surface_model_error_cases(error_case_path: Path, asfloat64: bool) 
         name=f"Water balance: {error_case_path.name}",
         how="cellwise",
         influxes=[
-            inputs["pr_kg_per_m2_per_s"].sum(axis=0) * 3.6,
+            inputs["pr_kg_per_m2_per_s"].sum(axis=1) * 3.6,
             inputs["actual_irrigation_consumption_m"],
             inputs["capillar_rise_m"],
         ],
@@ -122,14 +145,14 @@ def test_land_surface_model_error_cases(error_case_path: Path, asfloat64: bool) 
             pre_liquid_water_in_snow_m,
             pre_interception_storage_m,
             pre_topwater_m,
-            pre_water_content_m.sum(axis=0),
+            pre_water_content_m.sum(axis=1),
         ],
         poststorages=[
             post_snow_water_equivalent_m,
             post_liquid_water_in_snow_m,
             post_interception_storage_m,
             post_topwater_m,
-            post_water_content_m.sum(axis=0),
+            post_water_content_m.sum(axis=1),
         ],
         tolerance=1e-5,
         raise_on_error=False,
@@ -151,8 +174,8 @@ def test_land_surface_model_error_cases(error_case_path: Path, asfloat64: bool) 
             out_gw_recharge_h_loss,
             out_transpiration_h_loss,
         ],
-        prestorages=[pre_soil_enthalpy.sum(axis=0)],
-        poststorages=[post_soil_enthalpy.sum(axis=0)],
+        prestorages=[pre_soil_enthalpy.sum(axis=1)],
+        poststorages=[post_soil_enthalpy.sum(axis=1)],
         tolerance=1e3,
         raise_on_error=False,
     )

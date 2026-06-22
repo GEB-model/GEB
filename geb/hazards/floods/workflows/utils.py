@@ -20,7 +20,7 @@ from matplotlib.cm import viridis  # ty: ignore[unresolved-import]
 from shapely import line_locate_point
 from shapely.geometry import GeometryCollection, LineString, Point
 
-from geb.geb_types import ArrayFloat32, ArrayInt64
+from geb.geb_types import ArrayFloat32, ArrayInt64, TwoDArrayBool
 from geb.workflows.io import read_geom
 
 
@@ -389,7 +389,6 @@ def check_docker_running() -> bool | None:
 def run_sfincs_simulation(
     model_root: Path,
     simulation_root: Path,
-    ncpus: int | str = "auto",
     gpu: bool | str = "auto",
 ) -> int:
     """Run SFINCS simulation using either Apptainer or Docker.
@@ -399,7 +398,6 @@ def run_sfincs_simulation(
         simulation_root: Path to the simulation root directory.
             Some paths in the configuration will be made relative to this path.
             The simulation directory must be a subdirectory of the model root directory.
-        ncpus: Number of CPUs to use. Can be an integer or 'auto' to automatically detect the number of CPUs.
         gpu: Whether to use GPU support. Can be True, False, or 'auto'. In auto mode,
             the presence of an NVIDIA GPU is checked using `nvidia-smi`. Defaults to auto.
 
@@ -461,22 +459,7 @@ def run_sfincs_simulation(
         if not version.endswith(".sif"):
             version: str = "docker://" + version
 
-        c = (
-            int(
-                os.getenv("SLURM_CPUS_PER_TASK", None)
-                or os.getenv("SLURM_CPUS_ON_NODE", None)
-                or os.cpu_count()  # returns none if cannot be determined
-                or 1
-            )
-            if ncpus == "auto"
-            else int(ncpus)
-        )
-        ncpus_str = "0" if c == 1 else f"0-{c - 1}"
-
         cmd: list[str] = [
-            "taskset",
-            "-c",
-            ncpus_str,  # get user defined or automatically detected number of CPUs
             "apptainer",
             "run",
             "-B",  ## Bind mount
@@ -515,6 +498,7 @@ def run_sfincs_simulation(
 
 def _get_xy(
     river: pd.Series,
+    is_valid_river: TwoDArrayBool,
     up_to_downstream: bool = True,
 ) -> tuple[int, int]:
     """Get the first valid xy coordinate from a river's hydrography_xy list.
@@ -525,22 +509,30 @@ def _get_xy(
         river: Series containing river information, including 'hydrography_xy'.
             This is a list of (x, y) tuples, representing the location of the river
             in the low-resolution hydrological grid.
+        is_valid_river: 2D boolean array indicating whether each river is valid (i.e., has valid xy coordinates in the grid).
         up_to_downstream: Whether to search from upstream to downstream.
             Defaults to True (starting upstream).
 
     Returns:
         A tuple (x, y) of the first valid coordinate.
+
+    Raises:
+        ValueError: If no valid coordinate is found in is_valid_river for the river.
     """
     xys = river["hydrography_xy"]
-    if up_to_downstream:
-        idx: int = 0
-    else:
-        idx: int = -1
-    return (xys[idx][0], xys[idx][1])
+    iterator = xys if up_to_downstream else reversed(xys)
+    for xy in iterator:
+        x: int = xy[0]
+        y: int = xy[1]
+        if is_valid_river[y, x]:
+            return (x, y)
+    raise ValueError(
+        "No valid xy coordinate found for river. Likely this means that all cells are within a reservoir or lake. We need to solve this case still"
+    )
 
 
 def get_representative_river_points(
-    river_ID: set, rivers: pd.DataFrame
+    river_ID: set, rivers: pd.DataFrame, is_valid_river: TwoDArrayBool
 ) -> list[tuple[int, int]]:
     """Get representative river points for a given river ID.
 
@@ -551,23 +543,16 @@ def get_representative_river_points(
     Args:
         river_ID: The ID of the river for which to find representative points.
         rivers: DataFrame containing river information, including 'represented_in_grid' and 'hydrography_xy'.
+        is_valid_river: 2D boolean array indicating whether each river is valid (i.e., has valid xy coordinates in the grid).
 
     Returns:
         A list of tuples (x, y) representing the coordinates of the representative points.
         If no valid points are found, an empty list is returned.
-
-    Raises:
-        ValueError: If no valid xy coordinates are found for rivers.
     """
     river = rivers.loc[river_ID]
     if river["represented_in_grid"]:
-        xy = _get_xy(river, up_to_downstream=True)
-        if xy is not None:
-            return [xy]
-        else:
-            raise ValueError(
-                f"Error: No valid xy found for river {river_ID} which is represented in the grid."
-            )
+        xy = _get_xy(river, is_valid_river=is_valid_river, up_to_downstream=True)
+        return [xy]
 
     else:
         river_IDs = set([river_ID])
@@ -584,13 +569,8 @@ def get_representative_river_points(
         representitative_rivers = rivers[rivers.index.isin(representitative_rivers)]
         xys = []
         for river_ID, river in representitative_rivers.iterrows():
-            xy = _get_xy(river, up_to_downstream=False)
-            if xy is not None:
-                xys.append(xy)
-            else:
-                raise ValueError(
-                    f"Error: No valid xy found for river {river_ID} which is represented not in the grid. Likely because upstream rivers could not be found."
-                )
+            xy = _get_xy(river, is_valid_river=is_valid_river, up_to_downstream=False)
+            xys.append(xy)
 
         return xys
 
@@ -665,10 +645,9 @@ def get_river_parameters_by_river(
                 i : i + len(points)
             ].mean()
             if np.isnan(river_width_alpha_per_river):
-                print(
-                    f"Warning: River width alpha for river {river_ID} is NaN. Setting to 0."
+                raise ValueError(
+                    f"Warning: River width alpha for river {river_ID} is NaN."
                 )
-                river_width_alpha_per_river = 0.0
             river_parameters.loc[river_ID, "river_width_alpha"] = (
                 river_width_alpha_per_river
             )
