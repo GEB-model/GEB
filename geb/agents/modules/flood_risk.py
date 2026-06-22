@@ -367,7 +367,10 @@ class FloodRiskModule:
         )
 
     def calculate_building_flood_damages(
-        self, verbose: bool = False, export_building_damages: bool = False
+        self,
+        verbose: bool = False,
+        export_building_damages: bool = False,
+        dynamic: bool = True,
     ) -> tuple[np.ndarray, np.ndarray]:
         """This function calculates the flood damages for the households in the model.
 
@@ -377,9 +380,32 @@ class FloodRiskModule:
         Args:
             verbose: Verbosity flag.
             export_building_damages: Whether to export the building damages to parquet files.
+            dynamic: Whether to calculate damages dynamically based on the current flood maps in the model (as opposed to using flood maps at t=0).
         Returns:
             Tuple[np.ndarray, np.ndarray]: A tuple containing the damage arrays for unprotected and protected buildings.
+        Raises:
+            RuntimeError: If the damage arrays do not match the expected shape based on return periods and number of households.
         """
+        if (
+            not dynamic
+            and hasattr(self, "damages_do_not_adapt")
+            and hasattr(self, "damages_adapt")
+        ):
+            expected_shape = (
+                self.households.return_periods.size,
+                self.households.n,
+            )
+            if (
+                self.damages_do_not_adapt.shape != expected_shape
+                or self.damages_adapt.shape != expected_shape
+            ):
+                raise RuntimeError(
+                    "Damages array shape does not match the expected shape based on return periods and number of households. "
+                    "If household relocation is modeled, damages must be calculated dynamically. "
+                    f"Expected {expected_shape}, got do_not_adapt={self.damages_do_not_adapt.shape}, adapt={self.damages_adapt.shape}."
+                )
+            return self.damages_do_not_adapt, self.damages_adapt
+
         damages_do_not_adapt = np.zeros(
             (self.households.return_periods.size, self.households.n), np.float32
         )
@@ -485,6 +511,9 @@ class FloodRiskModule:
                 print(
                     f"Damages adapt rp{return_period}: {round(damages_adapt[i].sum() / 1e6)} million"
                 )
+        if not dynamic:
+            self.damages_do_not_adapt = damages_do_not_adapt
+            self.damages_adapt = damages_adapt
         return damages_do_not_adapt, damages_adapt
 
     def calculate_ead(
