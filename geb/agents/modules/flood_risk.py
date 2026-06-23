@@ -37,10 +37,11 @@ class FloodRiskModule:
         self.load_max_damage_values()
         self.load_flood_maps()
         self.load_flood_protection_standard()
+        self.flood_in_last_year = False
 
     def load_flood_protection_standard(self) -> None:
         """Placeholder for loading flood protection standard. Currently dummy version implemented."""
-        self.flood_protection_standard = 10
+        self.flood_protection_standard = 25
 
     def load_flood_maps(self) -> None:
         """Load flood maps for different return periods. This might be quite ineffecient for RAM, but faster then loading them each timestep for now."""
@@ -435,9 +436,11 @@ class FloodRiskModule:
                     print(
                         f"Damages adapt rp{return_period}: {round(damages_adapt[i].sum() / 1e6)} million"
                     )
-
-            return damages_do_not_adapt, damages_adapt
-
+            # set attributes
+            self._damages_do_not_adapt = damages_do_not_adapt
+            self._damages_adapt = damages_adapt
+            # return early
+            return self.damages_do_not_adapt, self.damages_adapt
         # create a dictionary of multi_curves for the VectorScannerMultiCurves
         multi_curves = {
             "damages_structure": self.households.buildings_structure_curve[
@@ -539,14 +542,18 @@ class FloodRiskModule:
                 print(
                     f"Damages adapt rp{return_period}: {round(damages_adapt[i].sum() / 1e6)} million"
                 )
+        # set attributes
+        self._damages_do_not_adapt = damages_do_not_adapt
+        self._damages_adapt = damages_adapt
 
-        return damages_do_not_adapt, damages_adapt
+        return self.damages_do_not_adapt, self.damages_adapt
 
     def calculate_ead(
         self,
         damages_do_not_adapt: np.ndarray,
         damages_adapt: np.ndarray,
         adapted: np.ndarray,
+        altered_flood_protection_standard: int = None,
     ) -> np.ndarray:
         """Calculate the Expected Annual Damages (EAD) based on the damages for different return periods.
 
@@ -554,11 +561,18 @@ class FloodRiskModule:
             damages_do_not_adapt: A multi-dimensional numpy array containing damages for different return periods and agents.
             damages_adapt: A multi-dimensional numpy array containing adapted damages for different return periods and agents.
             adapted: A boolean numpy array indicating which agents have adapted.
+            altered_flood_protection_standard: An integer indicating the altered flood protection standard.
         Returns:
             A 1D numpy array containing the EAD for each agent.
         """
         # Copy baseline damages
         all_damages = damages_do_not_adapt.copy()
+
+        # set damages to zero for agents that have adapted and have a flood protection standard greater than the altered standard
+        if altered_flood_protection_standard is not None:
+            all_damages[
+                (self.households.return_periods < altered_flood_protection_standard), :
+            ] = 0.0
 
         # Replace adapted households with adapted damages
         adapted_mask = adapted.astype(bool)
@@ -897,6 +911,7 @@ class FloodRiskModule:
         if p_random >= probabilities.max() or p_random > (
             1 / self.flood_protection_standard
         ):
+            self.flood_in_last_year = False
             return np.array([], dtype=int)
 
         # find the event corresponding to the random draw
@@ -949,20 +964,28 @@ class FloodRiskModule:
                 self.households.var.building_id_of_household.data, flooded_building_ids
             )
         )[0]
-
+        self.flood_in_last_year = len(flooded_household_indices) > 0
         return flooded_household_indices
 
-    def _adjust_damages_for_flood_protection(self, damages: np.ndarray) -> np.ndarray:
+    def _adjust_damages_for_flood_protection(
+        self,
+        damages: np.ndarray,
+        flood_protection_standard: float,
+    ) -> np.ndarray:
         """Return damages with values below the flood protection standard set to 0."""
-        mask = self.households.return_periods >= self.flood_protection_standard
+        mask = self.households.return_periods >= flood_protection_standard
         return damages * mask[:, np.newaxis]
 
     @property
     def damages_do_not_adapt(self) -> np.ndarray:
         """Return damages for households that do not adapt."""
-        return self._adjust_damages_for_flood_protection(self._damages_do_not_adapt)
+        return self._adjust_damages_for_flood_protection(
+            self._damages_do_not_adapt, self.flood_protection_standard
+        )
 
     @property
     def damages_adapt(self) -> np.ndarray:
         """Return damages for households that adapt."""
-        return self._adjust_damages_for_flood_protection(self._damages_adapt)
+        return self._adjust_damages_for_flood_protection(
+            self._damages_adapt, self.flood_protection_standard
+        )
