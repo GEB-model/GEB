@@ -131,12 +131,7 @@ class Government(AgentBaseClass):
         ):
             self.prepare_modified_soil_maps_for_forest()
 
-<<<<<<< HEAD
-        self.adaptation()
-        self.raise_flood_protection_standards()
-=======
         self.adaptation(mode="cost_benefit_analysis")
->>>>>>> 244c077a (rudimentary cba of fps)
         self.set_irrigation_limit()
 
         self.report(locals())
@@ -399,37 +394,7 @@ class Government(AgentBaseClass):
             f"Farmers removed: {len(unique_farmer_indices):,} ({farmers_before:,} → {crop_farmers.n:,})"
         )
 
-<<<<<<< HEAD
-    def raise_flood_protection_standards(self) -> None:
-        """Randomly raise flood risk protection for all households."""
-        if not self.config["adaptation"]["flood_protection_standards"]:
-            return  # exits because adaptation is not (enabled) in the config file
-        if not (
-            self.model.current_time.month == 1 and self.model.current_time.day == 1
-        ):
-            return  # exits because it is not the first of January
-
-        if not hasattr(self.agents, "households"):
-            return
-
-        households = self.agents.households
-        return_periods = households.return_periods
-        idx_current_flood_protection_standard = np.where(
-            return_periods == households.flood_risk_module.flood_protection_standard
-        )[0]
-        if np.random.random() < 0.05:
-            # 30% of the time, raise the flood protection standard by one return period
-            new_idx = min(
-                idx_current_flood_protection_standard[0] + 1, len(return_periods) - 1
-            )
-            households.flood_risk_module.flood_protection_standard = return_periods[
-                new_idx
-            ]
-
-    def adaptation(self) -> None:
-=======
     def adaptation(self, mode="cost_benefit_analysis") -> None:
->>>>>>> 244c077a (rudimentary cba of fps)
         """Decide whether adaptation is needed and apply appropriate adaptation measures.
 
         Checks if adaptation is enabled and if it is January 1st, then calculates EAD,
