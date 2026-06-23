@@ -553,39 +553,47 @@ class FloodRiskModule:
         damages_do_not_adapt: np.ndarray,
         damages_adapt: np.ndarray,
         adapted: np.ndarray,
-        altered_flood_protection_standard: int = None,
+        altered_flood_protection_standard: int | None = None,
     ) -> np.ndarray:
-        """Calculate the Expected Annual Damages (EAD) based on the damages for different return periods.
+        """Calculate expected annual damages (EAD) for each household.
+
+        Integrates damages across return periods using trapezoid rule. Handles
+        adapted households differently and can apply an alternative flood protection
+        standard that eliminates damages below a threshold return period.
 
         Args:
-            damages_do_not_adapt: A multi-dimensional numpy array containing damages for different return periods and agents.
-            damages_adapt: A multi-dimensional numpy array containing adapted damages for different return periods and agents.
-            adapted: A boolean numpy array indicating which agents have adapted.
-            altered_flood_protection_standard: An integer indicating the altered flood protection standard.
+            damages_do_not_adapt: Damages by return period (rows) and household (columns) for non-adapted.
+            damages_adapt: Damages by return period (rows) and household (columns) for adapted.
+            adapted: Boolean array indicating which households have adapted.
+            altered_flood_protection_standard: If provided, set damages to 0 for return periods
+                below this threshold (damages protected against by higher standard).
+
         Returns:
-            A 1D numpy array containing the EAD for each agent.
+            1D array of annual expected damages (USD) for each household.
         """
-        # Copy baseline damages
+        # Start with baseline (non-adapted) damages
         all_damages = damages_do_not_adapt.copy()
 
-        # set damages to zero for agents that have adapted and have a flood protection standard greater than the altered standard
+        # Apply higher flood protection standard if provided
         if altered_flood_protection_standard is not None:
-            all_damages[
-                (self.households.return_periods < altered_flood_protection_standard), :
-            ] = 0.0
+            # Zero out damages for return periods protected by the higher standard
+            protected_mask = (
+                self.households.return_periods < altered_flood_protection_standard
+            )
+            all_damages[protected_mask, :] = 0.0
 
-        # Replace adapted households with adapted damages
+        # Use adapted damages for households that have adapted
         adapted_mask = adapted.astype(bool)
         all_damages[:, adapted_mask] = damages_adapt[:, adapted_mask]
-        # Sort probabilities in ascending order for integration
-        probabilities = 1 / self.households.return_periods
+
+        # Integrate damages across return periods (exceedance probability integration)
+        probabilities = 1.0 / self.households.return_periods
         sort_idx = np.argsort(probabilities)
 
-        prob_sorted = probabilities[sort_idx]
-        damages_sorted = all_damages[sort_idx, :]
-
-        # Calculate Expected Annual Damage (EAD)
-        ead_usd_per_year = np.trapezoid(y=damages_sorted, x=prob_sorted, axis=0)
+        # Calculate EAD via trapezoid integration
+        ead_usd_per_year = np.trapezoid(
+            y=all_damages[sort_idx, :], x=probabilities[sort_idx], axis=0
+        )
 
         return ead_usd_per_year
 

@@ -394,7 +394,7 @@ class Government(AgentBaseClass):
             f"Farmers removed: {len(unique_farmer_indices):,} ({farmers_before:,} → {crop_farmers.n:,})"
         )
 
-    def adaptation(self, mode="cost_benefit_analysis") -> None:
+    def adaptation(self, mode: str = "cost_benefit_analysis") -> None:
         """Decide whether adaptation is needed and apply appropriate adaptation measures.
 
         Checks if adaptation is enabled and if it is January 1st, then calculates EAD,
@@ -415,42 +415,7 @@ class Government(AgentBaseClass):
             return  # exits because it is not the first of January
 
         if mode == "cost_benefit_analysis":
-            # get idx of current fps
-            if not self.flood_risk_module.flood_in_last_year:
-                return
-            return_periods = self.agents.households.return_periods
-            flood_protection_standard = self.flood_risk_module.flood_protection_standard
-            idx_flood_protection_standard = np.where(
-                return_periods == flood_protection_standard
-            )[0]
-
-            # increase
-            damages_adapt = self.flood_risk_module.damages_adapt
-            damages_no_adapt = self.flood_risk_module.damages_do_not_adapt
-            adapted = self.agents.households.var.adapted.data
-
-            current_ead = self.flood_risk_module.calculate_ead(
-                damages_adapt, damages_no_adapt, adapted
-            ).sum()
-
-            altered_ead = self.flood_risk_module.calculate_ead(
-                damages_adapt,
-                damages_no_adapt,
-                adapted,
-                return_periods[idx_flood_protection_standard + 1],
-            ).sum()
-
-            damage_reduction = current_ead - altered_ead
-            if damage_reduction > 3e6:
-                print(
-                    f"Adaptation needed, the damage reduction is {damage_reduction:.2f} which is above the threshold of 20 million euros"
-                )
-                self.flood_risk_module.flood_protection_standard = return_periods[
-                    idx_flood_protection_standard + 1
-                ]
-                print(
-                    f"the government adapted the flood protection standard from {flood_protection_standard} to {return_periods[idx_flood_protection_standard + 1]}"
-                )
+            self._cost_benefit_adaptation()
             return
         # calculate the water risk, equity and ecosystem health for the current year (adaptation is enabled and it is january first)
         EAD_value = self.calculate_EAD()  # this is defined by the EAD
@@ -496,6 +461,46 @@ class Government(AgentBaseClass):
         else:
             print(
                 "No adaptation needed, all thresholds are below the defined thresholds"
+            )
+
+    def _cost_benefit_adaptation(self) -> None:
+        """Evaluate flood protection standard upgrade using cost-benefit analysis.
+
+        Compares expected annual damage (EAD) at current and next flood protection
+        standard level. If damage reduction exceeds threshold, upgrades the standard.
+        """
+        if not self.flood_risk_module.flood_in_last_year:
+            return
+
+        return_periods = self.agents.households.return_periods
+        current_fps = self.flood_risk_module.flood_protection_standard
+        idx_fps = np.where(return_periods == current_fps)[0]
+
+        if len(idx_fps) == 0 or idx_fps[0] >= len(return_periods) - 1:
+            return  # Cannot upgrade further
+
+        damages_do_not_adapt = self.flood_risk_module.damages_do_not_adapt
+        damages_adapt = self.flood_risk_module.damages_adapt
+        adapted = self.agents.households.var.adapted.data
+
+        # Calculate EAD at current and higher protection standard
+        current_ead = self.flood_risk_module.calculate_ead(
+            damages_do_not_adapt, damages_adapt, adapted
+        ).sum()
+
+        altered_fps = return_periods[idx_fps[0] + 1]
+        altered_ead = self.flood_risk_module.calculate_ead(
+            damages_do_not_adapt, damages_adapt, adapted, altered_fps
+        ).sum()
+
+        damage_reduction = current_ead - altered_ead
+        threshold = self.config["adaptation"].get("damage_reduction_threshold_usd", 3e6)
+
+        if damage_reduction > threshold:
+            self.flood_risk_module.flood_protection_standard = altered_fps
+            logger.info(
+                f"Cost-benefit adaptation: damage reduction ${damage_reduction:,.0f} > "
+                f"threshold ${threshold:,.0f}. Standard upgraded {current_fps}yr → {altered_fps}yr"
             )
 
     def calculate_EAD(self, households_only: bool = True) -> None | float:
