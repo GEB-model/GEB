@@ -412,22 +412,24 @@ class FloodRiskModule:
                         building_multicurve,
                     )
                 )
-            if export_building_damages:
-                fn_for_export = self.households.model.output_folder / "building_damages"
-                fn_for_export.mkdir(parents=True, exist_ok=True)
-                building_multicurve.to_parquet(
-                    self.households.model.output_folder
-                    / "building_damages"
-                    / f"building_damages_rp{return_period}_{self.households.model.current_time.year}.parquet"
-                )
+                if export_building_damages:
+                    fn_for_export = (
+                        self.households.model.output_folder / "building_damages"
+                    )
+                    fn_for_export.mkdir(parents=True, exist_ok=True)
+                    building_multicurve.to_parquet(
+                        self.households.model.output_folder
+                        / "building_damages"
+                        / f"building_damages_rp{return_period}_{self.households.model.current_time.year}.parquet"
+                    )
 
-            if verbose:
-                print(
-                    f"Damages rp{return_period}: {round(damages_do_not_adapt[i].sum() / 1e6)} million"
-                )
-                print(
-                    f"Damages adapt rp{return_period}: {round(damages_adapt[i].sum() / 1e6)} million"
-                )
+                if verbose:
+                    print(
+                        f"Damages rp{return_period}: {round(damages_do_not_adapt[i].sum() / 1e6)} million"
+                    )
+                    print(
+                        f"Damages adapt rp{return_period}: {round(damages_adapt[i].sum() / 1e6)} million"
+                    )
 
             return damages_do_not_adapt, damages_adapt
 
