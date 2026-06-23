@@ -43,6 +43,8 @@ class Government(AgentBaseClass):
             else {}
         )
         self.ratio_farmers_to_provide_subsidies_per_year = 0.05
+        # for easier access to the flood risk module of the households agent, we store it here as well
+        self.flood_risk_module = self.agents.households.flood_risk_module
 
     @property
     def name(self) -> str:
@@ -129,8 +131,12 @@ class Government(AgentBaseClass):
         ):
             self.prepare_modified_soil_maps_for_forest()
 
+<<<<<<< HEAD
         self.adaptation()
         self.raise_flood_protection_standards()
+=======
+        self.adaptation(mode="cost_benefit_analysis")
+>>>>>>> 244c077a (rudimentary cba of fps)
         self.set_irrigation_limit()
 
         self.report(locals())
@@ -393,6 +399,7 @@ class Government(AgentBaseClass):
             f"Farmers removed: {len(unique_farmer_indices):,} ({farmers_before:,} → {crop_farmers.n:,})"
         )
 
+<<<<<<< HEAD
     def raise_flood_protection_standards(self) -> None:
         """Randomly raise flood risk protection for all households."""
         if not self.config["adaptation"]["flood_protection_standards"]:
@@ -420,11 +427,18 @@ class Government(AgentBaseClass):
             ]
 
     def adaptation(self) -> None:
+=======
+    def adaptation(self, mode="cost_benefit_analysis") -> None:
+>>>>>>> 244c077a (rudimentary cba of fps)
         """Decide whether adaptation is needed and apply appropriate adaptation measures.
 
         Checks if adaptation is enabled and if it is January 1st, then calculates EAD,
         equity, and ecosystem indicators. If any thresholds are crossed, applies the corresponding
         adaptation measures (building floodproofing, subsidies, or reforestation).
+
+        Args:
+            mode: The adaptation mode to use (default is "cost_benefit_analysis").
+
         """
         # something to specify that this should only run when adaptation is turned on in the config file
         # should this step be skipped during spinup?
@@ -435,6 +449,44 @@ class Government(AgentBaseClass):
         ):
             return  # exits because it is not the first of January
 
+        if mode == "cost_benefit_analysis":
+            # get idx of current fps
+            if not self.flood_risk_module.flood_in_last_year:
+                return
+            return_periods = self.agents.households.return_periods
+            flood_protection_standard = self.flood_risk_module.flood_protection_standard
+            idx_flood_protection_standard = np.where(
+                return_periods == flood_protection_standard
+            )[0]
+
+            # increase
+            damages_adapt = self.flood_risk_module.damages_adapt
+            damages_no_adapt = self.flood_risk_module.damages_do_not_adapt
+            adapted = self.agents.households.var.adapted.data
+
+            current_ead = self.flood_risk_module.calculate_ead(
+                damages_adapt, damages_no_adapt, adapted
+            ).sum()
+
+            altered_ead = self.flood_risk_module.calculate_ead(
+                damages_adapt,
+                damages_no_adapt,
+                adapted,
+                return_periods[idx_flood_protection_standard + 1],
+            ).sum()
+
+            damage_reduction = current_ead - altered_ead
+            if damage_reduction > 3e6:
+                print(
+                    f"Adaptation needed, the damage reduction is {damage_reduction:.2f} which is above the threshold of 20 million euros"
+                )
+                self.flood_risk_module.flood_protection_standard = return_periods[
+                    idx_flood_protection_standard + 1
+                ]
+                print(
+                    f"the government adapted the flood protection standard from {flood_protection_standard} to {return_periods[idx_flood_protection_standard + 1]}"
+                )
+            return
         # calculate the water risk, equity and ecosystem health for the current year (adaptation is enabled and it is january first)
         EAD_value = self.calculate_EAD()  # this is defined by the EAD
         equity_indicator_value = (
