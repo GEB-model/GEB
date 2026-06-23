@@ -383,10 +383,7 @@ class FloodRiskModule:
             dynamic: Whether to calculate building damages dynamically based on the current flood maps in the model (as opposed to using flood maps at t=0).
         Returns:
             Tuple[np.ndarray, np.ndarray]: A tuple containing the damage arrays for unprotected and protected buildings.
-        Raises:
-            RuntimeError: If the damage arrays do not match the expected shape based on return periods and number of households.
         """
-
         # create a pandas data array for assigning damage to the agents:
         agent_df = pd.DataFrame(
             {"building_id_of_household": self.households.var.building_id_of_household}
