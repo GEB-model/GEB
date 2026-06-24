@@ -997,3 +997,37 @@ class FloodRiskModule:
         return self._adjust_damages_for_flood_protection(
             self._damages_adapt, self.flood_protection_standard
         )
+
+    @property
+    def dike_heights(self) -> float:
+        """Return the dike height in meters."""
+        if hasattr(self, "_dike_heights"):
+            return self._dike_heights
+
+        dike_heights = {}
+        # load river network
+        river_network = gpd.read_parquet(
+            Path(self.households.model.files["geom"]["routing/rivers"])
+        )
+        for rp in self.households.return_periods:
+            dike_heights[rp] = {}
+            for river in river_network.itertuples():
+                river_geom = river.geometry
+                flood_map: xr.DataArray = self.households.flood_maps[rp]
+
+                # sample every 10 m (or whatever units your CRS uses)
+                distances = np.arange(0, river_geom.length, 0.0008333)
+
+                points = [river_geom.interpolate(d) for d in distances]
+
+                x = [p.x for p in points]
+                y = [p.y for p in points]
+
+                depths = flood_map.interp(
+                    x=("points", x),
+                    y=("points", y),
+                ).values
+                depths[np.isnan(depths)] = 0
+                dike_heights[rp][river[0]] = depths
+        self._dike_heights = dike_heights
+        return dike_heights
