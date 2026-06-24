@@ -77,6 +77,7 @@ agent_settings:
     plant_forest: false  # default false. Enable (true) for forest planting policy for reforestation scenarios
     adaptation:
       enabled: false # default false. Enable (true) for government adaptation policy. 
+      mode: "cba"  # "cba" for cost-benefit analysis, "threshold" for threshold-based adaptation
       EAD_threshold: 1000000  # in euros (currrently arbitrary)
       equity_indicator_threshold: 0.5  # between 0 and 1, where 1 means perfect equality (currrently arbitrary)
       ecosystem_indicator_threshold: 0.5  # between 0 and 1, where 1 means healthy ecosystem (currrently arbitrary)

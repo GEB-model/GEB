@@ -131,7 +131,7 @@ class Government(AgentBaseClass):
         ):
             self.prepare_modified_soil_maps_for_forest()
 
-        self.adaptation(mode="cost_benefit_analysis")
+        self.adaptation()
         self.set_irrigation_limit()
 
         self.report(locals())
@@ -394,7 +394,7 @@ class Government(AgentBaseClass):
             f"Farmers removed: {len(unique_farmer_indices):,} ({farmers_before:,} → {crop_farmers.n:,})"
         )
 
-    def adaptation(self, mode: str = "cost_benefit_analysis") -> None:
+    def adaptation(self) -> None:
         """Decide whether adaptation is needed and apply appropriate adaptation measures.
 
         Checks if adaptation is enabled and if it is January 1st, then calculates EAD,
@@ -414,9 +414,14 @@ class Government(AgentBaseClass):
         ):
             return  # exits because it is not the first of January
 
-        if mode == "cost_benefit_analysis":
+        if self.config["adaptation"]["mode"] == "cba":
             self._cost_benefit_adaptation()
             return
+        elif self.config["adaptation"]["mode"] != "threshold":
+            raise ValueError(
+                f"Invalid adaptation mode: {self.config['adaptation']['mode']}. "
+                "Supported modes are 'cba' and 'threshold'."
+            )
         # calculate the water risk, equity and ecosystem health for the current year (adaptation is enabled and it is january first)
         EAD_value = self.calculate_EAD()  # this is defined by the EAD
         equity_indicator_value = (
