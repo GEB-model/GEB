@@ -1264,15 +1264,15 @@ def test_retention_release_at_low_flow() -> None:
 
     Setup:
     - Initial storage = 1000 m³
-    - release_threshold = 5.0 m³/s (1/2 of activation_threshold=10)
+    - release_threshold = 7.5 m³/s (0.75 of activation_threshold=10)
     - Low river flow = 2.0 m³/s
-    - Room for release = (5.0 - 2.0) = 3.0 m³/s
+    - Room for release = (7.5 - 2.0) = 5.5 m³/s
     - 1% storage release = 10 m³
-    - dt = 1s -> max release speed constraint = 3.0 m³/s * 1s = 3 m³
+    - dt = 1s -> max release speed constraint = 5.5 m³/s * 1s = 5.5 m³
 
     Expected:
-    - Outflow = min(10, 3) = 3 m³
-    - Final storage = 1000 - 3 = 997 m³
+    - Outflow = min(10, 5.5) = 5.5 m³
+    - Final storage = 1000 - 5.5 = 994.5 m³
     """
     dt = 1
     activation_threshold = 10.0
@@ -1293,6 +1293,6 @@ def test_retention_release_at_low_flow() -> None:
         initial_retention_storage_m3=initial_storage,
     )
 
-    assert outflow[0] == pytest.approx(3.0)
-    assert storage_out[0] == pytest.approx(997.0)
+    assert outflow[0] == pytest.approx(5.5)
+    assert storage_out[0] == pytest.approx(994.5)
     assert inflow[0] == pytest.approx(0.0)
