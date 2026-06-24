@@ -468,60 +468,100 @@ class Government(AgentBaseClass):
                 "No adaptation needed, all thresholds are below the defined thresholds"
             )
 
+    def _apply_cumulative_time_discounting(
+        self, value_to_discount: float, discount_rate: float = 0.1, years: int = 35
+    ) -> float:
+        """Return the cumulative time discounted value.
+
+        Args:
+            value_to_discount: The value to be discounted.
+            discount_rate: The discount rate (as a decimal).
+            years: The number of years into the future.
+
+        Returns:
+            The discounted value.
+        """
+        # Calculate time discounted NPVs
+        t_arr = np.arange(1, years, dtype=np.float32)
+        discounts = 1 / (1 + discount_rate) ** t_arr
+        discounted_value = np.sum(discounts) * value_to_discount
+
+        return discounted_value
+
     def _cost_benefit_adaptation(self) -> None:
         """Evaluate flood protection standard upgrade using cost-benefit analysis.
 
         Compares expected annual damage (EAD) at current and next flood protection
         standard level. If damage reduction exceeds threshold, upgrades the standard.
         """
-        if not self.flood_risk_module.flood_in_last_year:
-            return
+        # if not self.flood_risk_module.flood_in_last_year:
+        #     return
 
         return_periods = self.agents.households.return_periods
-        current_fps = self.flood_risk_module.flood_protection_standard
-        idx_fps = np.where(return_periods == current_fps)[0]
-
-        if len(idx_fps) == 0 or idx_fps[0] >= len(return_periods) - 1:
-            return  # Cannot upgrade further
 
         damages_do_not_adapt = self.flood_risk_module.damages_do_not_adapt
         damages_adapt = self.flood_risk_module.damages_adapt
         adapted = self.agents.households.var.adapted.data
 
-        # Calculate EAD at current and higher protection standard
-        current_ead = self.flood_risk_module.calculate_ead(
-            damages_do_not_adapt, damages_adapt, adapted
-        ).sum()
+        # iterate over each subbasin in the model and calculate the EAD for the current and next flood protection standard
+        for subbasin in self.flood_risk_module.dike_heights[10]:
+            current_fps = self.flood_risk_module.flood_protection_standard_subbasins[
+                subbasin
+            ]
+            idx_fps = np.where(return_periods == current_fps)[0]
 
-        altered_fps = return_periods[idx_fps[0] + 1]
-        altered_ead = self.flood_risk_module.calculate_ead(
-            damages_do_not_adapt, damages_adapt, adapted, altered_fps
-        ).sum()
+            if len(idx_fps) == 0 or idx_fps[0] >= len(return_periods) - 1:
+                continue  # Cannot upgrade further
 
-        damage_reduction = current_ead - altered_ead
-        threshold = self.config["adaptation"].get("damage_reduction_threshold_usd", 3e6)
+            altered_fps = return_periods[idx_fps[0] + 1]
 
-        # calculate the cost of raising the dike to the next flood protection standard
-        dike_heights_current_fps = self.flood_risk_module.dike_heights[current_fps]
-        dike_heights_altered_fps = self.flood_risk_module.dike_heights[altered_fps]
+            households = np.where(
+                self.agents.households.comid_of_household == subbasin
+            )[0]
 
-        # get total length and height difference of the dikes that need to be raised
-        total_cost = 0
-        for river in dike_heights_current_fps:
-            height_difference = (
-                dike_heights_altered_fps[river] - dike_heights_current_fps[river]
-            )
+            # Calculate EAD at current and higher protection standard
+            current_ead = self.flood_risk_module.calculate_ead(
+                damages_do_not_adapt[:, households],
+                damages_adapt[:, households],
+                adapted[households],
+            ).sum()
+
+            altered_ead = self.flood_risk_module.calculate_ead(
+                damages_do_not_adapt[:, households],
+                damages_adapt[:, households],
+                adapted[households],
+                altered_fps,
+            ).sum()
+
+            # calculate the cost of raising the dike to the next flood protection standard
+            dike_heights_current_fps = self.flood_risk_module.dike_heights[current_fps][
+                subbasin
+            ]
+            dike_heights_altered_fps = self.flood_risk_module.dike_heights[altered_fps][
+                subbasin
+            ]
+            damage_reduction = current_ead - altered_ead
+
+            # get total length and height difference of the dikes that need to be raised
+            height_difference = dike_heights_altered_fps - dike_heights_current_fps
+            if height_difference.sum() == 0:
+                print(
+                    f"No dike height difference for subbasin {subbasin} between {current_fps}yr and {altered_fps}yr standards. Skipping cost calculation."
+                )
+                continue
             cost_per_meter = self.config["adaptation"].get(
-                "dike_cost_per_meter_usd", 1000
+                "dike_cost_per_meter_usd", 6800
             )
-            total_cost += np.sum(height_difference * 100 * cost_per_meter)
+            total_cost = (
+                np.sum(height_difference * 100 * cost_per_meter) * 2
+            )  # double the cost to account for both sides of the dike
 
-        if damage_reduction > total_cost:
-            self.flood_risk_module.flood_protection_standard = altered_fps
-            logger.info(
-                f"Cost-benefit adaptation: damage reduction ${damage_reduction:,.0f} > "
-                f"threshold ${threshold:,.0f}. Standard upgraded {current_fps}yr → {altered_fps}yr"
-            )
+            if self._apply_cumulative_time_discounting(
+                damage_reduction
+            ) > total_cost + self._apply_cumulative_time_discounting(total_cost * 0.03):
+                self.flood_risk_module.flood_protection_standard_subbasins[subbasin] = (
+                    altered_fps
+                )
 
     def calculate_EAD(self, households_only: bool = True) -> None | float:
         """Calculate the expected annual damage (EAD) for the current year.

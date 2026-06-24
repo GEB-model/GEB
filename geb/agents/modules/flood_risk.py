@@ -41,7 +41,12 @@ class FloodRiskModule:
 
     def load_flood_protection_standard(self) -> None:
         """Placeholder for loading flood protection standard. Currently dummy version implemented."""
-        self.flood_protection_standard = 25
+        self.flood_protection_standard = 10
+        self.flood_protection_standard_subbasins = {}
+        for comid in self.households.buildings["COMID"]:
+            self.flood_protection_standard_subbasins[comid] = (
+                10  # Initial value; replace with actual loading logic as needed.
+            )
 
     def load_flood_maps(self) -> None:
         """Load flood maps for different return periods. This might be quite ineffecient for RAM, but faster then loading them each timestep for now."""
