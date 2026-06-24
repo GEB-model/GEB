@@ -1502,6 +1502,28 @@ class Agents(BuildModelBase):
 
         return buildings
 
+    def assign_subbasins_to_buildings(
+        self, buildings: gpd.GeoDataFrame
+    ) -> gpd.GeoDataFrame:
+        """Assigns sub-basin IDs to buildings based on their spatial location.
+
+        Args:
+            buildings: A GeoDataFrame containing building data within the model domain.
+        Returns:
+            A GeoDataFrame with sub-basin IDs assigned to each building.
+        """
+        subbasins = self.geom["routing/subbasins"].reset_index()
+        buildings_with_subbasin = gpd.sjoin(
+            buildings,
+            subbasins[["COMID", "geometry"]],
+            how="left",
+            predicate="within",
+        ).drop(columns="index_right")
+        buildings_with_subbasin["COMID"] = (
+            buildings_with_subbasin["COMID"].fillna(-1).astype(int)
+        )
+        return buildings_with_subbasin
+
     @build_method(required=True)
     def setup_buildings(self) -> None:
         """Gets buildings per GDL region within the model domain and assigns grid indices from GLOPOP-S grid."""
@@ -1511,6 +1533,7 @@ class Agents(BuildModelBase):
             geom=mask,
         )
         buildings = self.setup_building_reconstruction_costs(buildings)
+        buildings = self.assign_subbasins_to_buildings(buildings)
 
         # reset id column to avoid issues with duplicate ids
         buildings["id"] = np.arange(len(buildings))
