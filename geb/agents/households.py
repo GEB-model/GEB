@@ -144,6 +144,7 @@ class Households(AgentBaseClass):
             "y",
             "COST_STRUCTURAL_USD_SQM",
             "COST_CONTENTS_USD_SQM",
+            "COMID",
         ]
         self.buildings = read_table(
             self.model.files["geom"]["assets/open_building_map"],
@@ -2020,3 +2021,24 @@ class Households(AgentBaseClass):
         if not hasattr(self, "households_exposed_to_flooding"):
             self.update_building_attributes()
         return self.var.adapted.data[self.households_exposed_to_flooding]
+
+    @property
+    def comid_of_household(self) -> tuple[np.ndarray, np.ndarray]:
+        """This function assigns the COMIDs to the corresponding households.
+
+        Returns:
+            np.ndarray: Array of COMIDs corresponding to each household, based on their building assignment.
+        """
+        # create a pandas data array for assigning damage to the agents:
+        agent_df = pd.DataFrame(
+            {"building_id_of_household": self.var.building_id_of_household}
+        )
+
+        merged = agent_df.merge(
+            self.buildings.rename(columns={"id": "building_id_of_household"}),
+            on="building_id_of_household",
+            how="left",
+        ).fillna(0)
+        comid_of_household = merged["COMID"].to_numpy()
+
+        return comid_of_household
