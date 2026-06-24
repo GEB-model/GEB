@@ -687,12 +687,11 @@ class Floods(Module):
                 _shape_config = self.config.get("hydrograph_shape", {})
 
                 spinup_name = self.model.config["general"]["spinup_name"]
+                output_root = self.model.report_folder.parent.parent
                 spinup_folder = (
-                    self.model.report_folder.parent / spinup_name / "hydrology.routing"
+                    output_root / spinup_name / "report" / "hydrology.routing"
                 )
-                run_folder = (
-                    self.model.report_folder.parent / run_name / "hydrology.routing"
-                )
+                run_folder = output_root / run_name / "report" / "hydrology.routing"
                 spinup_available = spinup_folder.exists()
                 run_available = run_folder.exists() and run_name != spinup_name
 
@@ -965,8 +964,9 @@ class Floods(Module):
         all_rivers = self.model.hydrology.routing.rivers
 
         spinup_name = self.model.config["general"]["spinup_name"]
+        output_root = self.model.report_folder.parent.parent
         spinup_discharge = read_discharge_per_river(
-            folder=self.model.report_folder.parent / spinup_name / "hydrology.routing",
+            folder=output_root / spinup_name / "report" / "hydrology.routing",
             rivers=rivers,
             all_rivers=all_rivers,
         )
@@ -981,7 +981,7 @@ class Floods(Module):
                 Please run the model for at least 30 years (10 years of data is discarded)."""
             )
 
-        run_folder = self.model.report_folder.parent / run_name / "hydrology.routing"
+        run_folder = output_root / run_name / "report" / "hydrology.routing"
         if run_folder.exists():
             run_discharge = read_discharge_per_river(
                 folder=run_folder,
