@@ -1,4 +1,5 @@
 # dev
+- Add hydrograph shape methods for floods. Instead of assuming a triangular shape, the shape of the hydrograph can now be derived from historical GEB discharge.
 - Add a CLI option to run yearly mode multiple times (e.g., `geb run-yearly --multi --n-runs 5`) and write each run to its own output folder.
 - Implement general method for setting up an alternative universe.
 - Make it possible to report data from the alternative universe.

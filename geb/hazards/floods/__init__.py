@@ -6,10 +6,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable
 
 import geopandas as gpd
+import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
 import pandas as pd
 import xarray as xr
+from matplotlib.colors import LinearSegmentedColormap
 from shapely.geometry.point import Point
 
 from geb.geb_types import (
@@ -682,13 +684,43 @@ class Floods(Module):
                     discharge_by_river=discharge_by_river,
                     coastal=False,
                 )
+                _shape_config = self.config.get("hydrograph_shape", {})
+
+                spinup_name = self.model.config["general"]["spinup_name"]
+                spinup_folder = (
+                    self.model.report_folder.parent / spinup_name / "hydrology.routing"
+                )
+                run_folder = (
+                    self.model.report_folder.parent / run_name / "hydrology.routing"
+                )
+                spinup_available = spinup_folder.exists()
+                run_available = run_folder.exists() and run_name != spinup_name
+
+                if spinup_available and run_available:
+                    discharge_for_return_periods = (
+                        self.discharge_by_river_spinup_and_run(run_name)
+                    )
+                elif spinup_available:
+                    print(
+                        "Only spinup discharge available; using spinup discharge for return period estimation."
+                    )
+                    discharge_for_return_periods = self.discharge_by_river(spinup_name)
+                else:
+                    print(
+                        f"Only {run_name!r} run discharge available; using run discharge for return period estimation."
+                    )
+                    discharge_for_return_periods = self.discharge_by_river(run_name)
+
                 sfincs_inland_root_model.estimate_discharge_for_return_periods(
-                    discharge_by_river=self.discharge_by_river(run_name),
+                    discharge_by_river=discharge_for_return_periods,
                     return_periods=self.config["return_periods"],
                     p_value_threshold=self.config["p_value_threshold"],
                     selection_strategy=self.config["selection_strategy"],
                     fixed_shape=self.config["fixed_shape"],
                     write_figures=self.config["write_figures"],
+                    hydrograph_shape=_shape_config.get("method", "triangular"),
+                    shape_window_days=_shape_config.get("window_days", 3.5),
+                    shape_tolerance=_shape_config.get("tolerance", 0.1),
                 )
                 sfincs_inland_root_models.append(sfincs_inland_root_model)
 
@@ -793,6 +825,57 @@ class Floods(Module):
                 crs=flood_depth_return_period.rio.crs,
             )
 
+            if sfincs_inland_root_models and self.config["write_figures"]:
+                depth_colors = [
+                    "#87CEFA",
+                    "#00BFFF",
+                    "#1E90FF",
+                    "#0000FF",
+                    "#FFD700",
+                    "#FF8C00",
+                    "#FF0000",
+                    "#8B0000",
+                ]
+                flood_cmap = LinearSegmentedColormap.from_list(
+                    "flood_depth", depth_colors
+                )
+
+                fig, ax = sfincs_inland_root_models[0].sfincs_model.plot_basemap(
+                    fn_out=None,  # ty: ignore[invalid-argument-type]
+                    variable="",
+                    plot_geoms=False,
+                    zoomlevel=12,
+                    figsize=(11, 7),  # ty: ignore[invalid-argument-type]
+                )
+                flood_depth_return_period.plot(  # ty: ignore[missing-argument]
+                    x="x",
+                    y="y",
+                    ax=ax,
+                    vmin=0,
+                    vmax=float(flood_depth_return_period.max().values),
+                    cmap=flood_cmap,
+                    cbar_kwargs={"shrink": 0.6, "anchor": (0, 0)},
+                )
+                # Expand axes to the full catchment extent, not just the first subbasin
+                ax.set_xlim(
+                    float(flood_depth_return_period.x.min()),
+                    float(flood_depth_return_period.x.max()),
+                )
+                ax.set_ylim(
+                    float(flood_depth_return_period.y.min()),
+                    float(flood_depth_return_period.y.max()),
+                )
+                ax.set_title(
+                    f"Maximum Flood Depth — {return_period}-year Return Period"
+                )
+                figures_dir: Path = sfincs_inland_root_models[0]._root
+                fig.savefig(
+                    figures_dir / f"flood_depth_rp{return_period}.png",
+                    dpi=300,
+                    bbox_inches="tight",
+                )
+                plt.close(fig)
+
             # simulation.cleanup()
 
     def save_discharge(self, discharge_m3_s_per_substep: TwoDArrayFloat32) -> None:
@@ -858,6 +941,135 @@ class Floods(Module):
             )
 
         return discharge
+
+    def discharge_by_river_spinup_and_run(self, run_name: str) -> pd.DataFrame:
+        """Open and concatenate spinup and run discharge per river as a DataFrame.
+
+        Reads spinup discharge (discarding the first 10 years as warm-up), then
+        appends run discharge if available. Using the combined series gives
+        GPD-POT more data, which is especially useful for rare return periods.
+
+        Args:
+            run_name: The name of the run to concatenate after the spinup (e.g., "default").
+
+        Returns:
+            A pandas DataFrame containing discharge time series for each river,
+            indexed by timestamp, covering spinup (minus warm-up) and run periods.
+
+        Raises:
+            ValueError: If there is not enough data available for reliable spinup.
+        """
+        rivers: gpd.GeoDataFrame = (
+            self.model.hydrology.routing.get_active_and_downstream_outflow_rivers()
+        )
+        all_rivers = self.model.hydrology.routing.rivers
+
+        spinup_name = self.model.config["general"]["spinup_name"]
+        spinup_discharge = read_discharge_per_river(
+            folder=self.model.report_folder.parent / spinup_name / "hydrology.routing",
+            rivers=rivers,
+            all_rivers=all_rivers,
+        )
+
+        start_time = spinup_discharge.index[0] + pd.DateOffset(years=10)
+        spinup_discharge = spinup_discharge.loc[start_time:]
+        spinup_discharge.index.freq = pd.infer_freq(spinup_discharge.index)
+
+        if (spinup_discharge.index[-1].year - spinup_discharge.index[0].year) < 20:
+            raise ValueError(
+                """Not enough data available for reliable spinup, should be at least 20 years of data left.
+                Please run the model for at least 30 years (10 years of data is discarded)."""
+            )
+
+        run_folder = self.model.report_folder.parent / run_name / "hydrology.routing"
+        if run_folder.exists():
+            run_discharge = read_discharge_per_river(
+                folder=run_folder,
+                rivers=rivers,
+                all_rivers=all_rivers,
+            )
+            discharge = pd.concat([spinup_discharge, run_discharge])
+            discharge.index.freq = pd.infer_freq(discharge.index)
+            spinup_years = (
+                spinup_discharge.index[-1].year - spinup_discharge.index[0].year
+            )
+            run_years = run_discharge.index[-1].year - run_discharge.index[0].year
+            print(
+                f"Using spinup + run discharge for GPD-POT: "
+                f"{spinup_years} spinup years + {run_years} run years."
+            )
+        else:
+            discharge = spinup_discharge
+            spinup_years = (
+                spinup_discharge.index[-1].year - spinup_discharge.index[0].year
+            )
+            print(
+                f"Run discharge not found, using spinup only for GPD-POT: "
+                f"{spinup_years} years."
+            )
+
+        return discharge
+
+    @property
+    def discharge_spinup_and_run_ds(self) -> xr.DataArray:
+        """Open and concatenate spinup and run discharge datasets.
+
+        Reads the spinup hourly discharge (discarding the first 10 years as
+        warm-up), then appends the run discharge if available.  Using the
+        combined series gives GPD-POT more data, which is especially useful
+        for rare return periods.
+
+        Returns:
+            Concatenated discharge DataArray covering spinup (minus warm-up)
+            and run periods.
+
+        Raises:
+            ValueError: If there is not enough data available for reliable spinup.
+        """
+        spinup_da: xr.DataArray = read_zarr(
+            self.model.output_folder
+            / "report"
+            / "spinup"
+            / "hydrology.routing"
+            / "discharge_hourly.zarr"
+        )
+        start_time = pd.to_datetime(spinup_da.time[0].item()) + pd.DateOffset(years=10)
+        spinup_da = spinup_da.sel(time=slice(start_time, spinup_da.time[-1]))
+
+        if (
+            len(spinup_da.time) == 0
+            or len(spinup_da.time.groupby(spinup_da.time.dt.year).groups) < 20
+        ):
+            raise ValueError(
+                """Not enough data available for reliable spinup, should be at least 20 years of data left.
+                Please run the model for at least 30 years (10 years of data is discarded)."""
+            )
+
+        run_zarr_path = (
+            self.model.output_folder
+            / "report"
+            / "default"
+            / "hydrology.routing"
+            / "discharge_hourly.zarr"
+        )
+        if run_zarr_path.exists():
+            run_da: xr.DataArray = read_zarr(run_zarr_path)
+            da: xr.DataArray = xr.concat([spinup_da, run_da], dim="time")
+            da = da.sortby("time")
+            da = da.isel(time=~da.indexes["time"].duplicated())
+            print(
+                f"Using spinup + run discharge for GPD-POT: "
+                f"{len(spinup_da.time.groupby(spinup_da.time.dt.year).groups)} spinup years + "
+                f"{len(run_da.time.groupby(run_da.time.dt.year).groups)} run years."
+            )
+        else:
+            da = spinup_da
+            print(
+                "Run discharge not found, using spinup only for GPD-POT: "
+                f"{len(spinup_da.time.groupby(spinup_da.time.dt.year).groups)} years."
+            )
+
+        return da
 
     @property
     def mannings(self) -> xr.DataArray:
