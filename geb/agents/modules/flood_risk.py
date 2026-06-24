@@ -380,32 +380,16 @@ class FloodRiskModule:
         Args:
             verbose: Verbosity flag.
             export_building_damages: Whether to export the building damages to parquet files.
-            dynamic: Whether to calculate damages dynamically based on the current flood maps in the model (as opposed to using flood maps at t=0).
+            dynamic: Whether to calculate building damages dynamically based on the current flood maps in the model (as opposed to using flood maps at t=0).
         Returns:
             Tuple[np.ndarray, np.ndarray]: A tuple containing the damage arrays for unprotected and protected buildings.
-        Raises:
-            RuntimeError: If the damage arrays do not match the expected shape based on return periods and number of households.
         """
-        if (
-            not dynamic
-            and hasattr(self, "damages_do_not_adapt")
-            and hasattr(self, "damages_adapt")
-        ):
-            expected_shape = (
-                self.households.return_periods.size,
-                self.households.n,
-            )
-            if (
-                self.damages_do_not_adapt.shape != expected_shape
-                or self.damages_adapt.shape != expected_shape
-            ):
-                raise RuntimeError(
-                    "Damages array shape does not match the expected shape based on return periods and number of households. "
-                    "If household relocation is modeled, damages must be calculated dynamically. "
-                    f"Expected {expected_shape}, got do_not_adapt={self.damages_do_not_adapt.shape}, adapt={self.damages_adapt.shape}."
-                )
-            return self.damages_do_not_adapt, self.damages_adapt
+        # create a pandas data array for assigning damage to the agents:
+        agent_df = pd.DataFrame(
+            {"building_id_of_household": self.households.var.building_id_of_household}
+        )
 
+        # initiate the damage arrays for unprotected and protected buildings
         damages_do_not_adapt = np.zeros(
             (self.households.return_periods.size, self.households.n), np.float32
         )
@@ -413,10 +397,57 @@ class FloodRiskModule:
             (self.households.return_periods.size, self.households.n), np.float32
         )
 
-        # create a pandas data array for assigning damage to the agents:
-        agent_df = pd.DataFrame(
-            {"building_id_of_household": self.households.var.building_id_of_household}
-        )
+        # initiate the dictionary containing the damages for each return period for each building
+        # if not dynamic:
+        if not dynamic and not hasattr(self, "_building_damages_all_return_periods"):
+            self._building_damages_all_return_periods = {}
+        elif not dynamic and self._building_damages_all_return_periods:
+            for i, return_period in enumerate(self.households.return_periods):
+                building_multicurve = self._building_damages_all_return_periods[
+                    return_period
+                ]
+                damages_do_not_adapt[i], damages_adapt[i] = (
+                    self.households.assign_damages_to_agents(
+                        agent_df,
+                        building_multicurve,
+                    )
+                )
+                if export_building_damages:
+                    fn_for_export = (
+                        self.households.model.output_folder / "building_damages"
+                    )
+                    fn_for_export.mkdir(parents=True, exist_ok=True)
+                    building_multicurve.to_parquet(
+                        self.households.model.output_folder
+                        / "building_damages"
+                        / f"building_damages_rp{return_period}_{self.households.model.current_time.year}.parquet"
+                    )
+
+                if verbose:
+                    print(
+                        f"Damages rp{return_period}: {round(damages_do_not_adapt[i].sum() / 1e6)} million"
+                    )
+                    print(
+                        f"Damages adapt rp{return_period}: {round(damages_adapt[i].sum() / 1e6)} million"
+                    )
+
+            return damages_do_not_adapt, damages_adapt
+
+        # create a dictionary of multi_curves for the VectorScannerMultiCurves
+        multi_curves = {
+            "damages_structure": self.households.buildings_structure_curve[
+                "building_unprotected"
+            ],
+            "damages_content": self.households.buildings_content_curve[
+                "building_unprotected"
+            ],
+            "damages_structure_flood_proofed": self.households.buildings_structure_curve[
+                "building_flood_proofed"
+            ],
+            "damages_content_flood_proofed": self.households.buildings_content_curve[
+                "building_flood_proofed"
+            ],
+        }
 
         # subset building to those exposed to flooding
         buildings = self.households.buildings[
@@ -446,20 +477,6 @@ class FloodRiskModule:
                 if building_multicurve.crs != flood_crs:
                     building_multicurve = building_multicurve.to_crs(flood_crs)
 
-            multi_curves = {
-                "damages_structure": self.households.buildings_structure_curve[
-                    "building_unprotected"
-                ],
-                "damages_content": self.households.buildings_content_curve[
-                    "building_unprotected"
-                ],
-                "damages_structure_flood_proofed": self.households.buildings_structure_curve[
-                    "building_flood_proofed"
-                ],
-                "damages_content_flood_proofed": self.households.buildings_content_curve[
-                    "building_flood_proofed"
-                ],
-            }
             building_multicurve_renamed: gpd.GeoDataFrame = building_multicurve.rename(
                 columns={
                     "COST_STRUCTURAL_USD_SQM": "maximum_damage_structure",
@@ -485,7 +502,22 @@ class FloodRiskModule:
             building_multicurve = pd.concat(
                 [building_multicurve, damage_buildings], axis=1
             )
+            building_multicurve = building_multicurve[
+                ["id", "damages", "damages_flood_proofed"]
+            ]
 
+            if not dynamic:
+                self._building_damages_all_return_periods[return_period] = (
+                    building_multicurve
+                )
+
+            # merged["damage"] is aligned with agents
+            damages_do_not_adapt[i], damages_adapt[i] = (
+                self.households.assign_damages_to_agents(
+                    agent_df,
+                    building_multicurve,
+                )
+            )
             if export_building_damages:
                 fn_for_export = self.households.model.output_folder / "building_damages"
                 fn_for_export.mkdir(parents=True, exist_ok=True)
@@ -494,16 +526,7 @@ class FloodRiskModule:
                     / "building_damages"
                     / f"building_damages_rp{return_period}_{self.households.model.current_time.year}.parquet"
                 )
-            building_multicurve = building_multicurve[
-                ["id", "damages", "damages_flood_proofed"]
-            ]
-            # merged["damage"] is aligned with agents
-            damages_do_not_adapt[i], damages_adapt[i] = (
-                self.households.assign_damages_to_agents(
-                    agent_df,
-                    building_multicurve,
-                )
-            )
+
             if verbose:
                 print(
                     f"Damages rp{return_period}: {round(damages_do_not_adapt[i].sum() / 1e6)} million"
@@ -511,9 +534,7 @@ class FloodRiskModule:
                 print(
                     f"Damages adapt rp{return_period}: {round(damages_adapt[i].sum() / 1e6)} million"
                 )
-        if not dynamic:
-            self.damages_do_not_adapt = damages_do_not_adapt
-            self.damages_adapt = damages_adapt
+
         return damages_do_not_adapt, damages_adapt
 
     def calculate_ead(
