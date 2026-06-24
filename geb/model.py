@@ -675,7 +675,7 @@ class GEBModel(Module):
         self.config["report"] = {
             key: value
             for key, value in self.config["report"].items()
-            if key.startswith("agents.households")
+            if key.startswith("agents.households") or key == "_config"
         }
 
         self.config["general"]["name"] = model_name
