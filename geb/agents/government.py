@@ -496,7 +496,22 @@ class Government(AgentBaseClass):
         damage_reduction = current_ead - altered_ead
         threshold = self.config["adaptation"].get("damage_reduction_threshold_usd", 3e6)
 
-        if damage_reduction > threshold:
+        # calculate the cost of raising the dike to the next flood protection standard
+        dike_heights_current_fps = self.flood_risk_module.dike_heights[current_fps]
+        dike_heights_altered_fps = self.flood_risk_module.dike_heights[altered_fps]
+
+        # get total length and height difference of the dikes that need to be raised
+        total_cost = 0
+        for river in dike_heights_current_fps:
+            height_difference = (
+                dike_heights_altered_fps[river] - dike_heights_current_fps[river]
+            )
+            cost_per_meter = self.config["adaptation"].get(
+                "dike_cost_per_meter_usd", 1000
+            )
+            total_cost += np.sum(height_difference * 100 * cost_per_meter)
+
+        if damage_reduction > total_cost:
             self.flood_risk_module.flood_protection_standard = altered_fps
             logger.info(
                 f"Cost-benefit adaptation: damage reduction ${damage_reduction:,.0f} > "
