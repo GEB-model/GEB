@@ -1,6 +1,7 @@
 """Build methods for the hydrography for GEB."""
 
 import os
+import warnings
 from datetime import timedelta
 from pathlib import Path
 from typing import Literal
@@ -946,6 +947,23 @@ class Hydrography(BuildModelBase):
         COMID_IDs_raster.data = river_raster_LR
         self.set_grid(COMID_IDs_raster, name="routing/river_ids")
 
+        height_above_nearest_drainage_m = self.full_like(
+            elevation_min, fill_value=np.nan, nodata=np.nan, dtype=np.float32
+        )
+        height_above_nearest_drainage_m.values = flow_raster.hand(
+            COMID_IDs_raster != -1, elevation_min
+        ).astype(np.float32)
+        height_above_nearest_drainage_m.values[
+            height_above_nearest_drainage_m.values == -9999.0
+        ] = np.nan
+        assert not np.isnan(
+            height_above_nearest_drainage_m.values[~self.grid["mask"].values]
+        ).all()
+        self.set_grid(
+            height_above_nearest_drainage_m,
+            name="routing/height_above_nearest_drainage_m",
+        )
+
         basin_ids = self.full_like(
             elevation_min, fill_value=-1, nodata=-1, dtype=np.int32
         )
@@ -1081,8 +1099,19 @@ class Hydrography(BuildModelBase):
             # load the coastline from the data catalog
             coastlines = self.data_catalog.fetch("open_street_map_coastlines").read()
 
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    category=UserWarning,
+                )
+                mask = gpd.GeoDataFrame.from_features(
+                    self.geom["mask"].buffer(0.04).__geo_interface__,
+                    crs=self.geom["mask"].crs,
+                )
+
             # clip the coastline to overlapping with mask
-            coastlines = gpd.overlay(coastlines, self.geom["mask"], how="intersection")
+            coastlines = gpd.overlay(coastlines, mask, how="intersection")
+
             # merge all coastlines into a single linestring
             coastlines = gpd.GeoDataFrame(
                 geometry=[coastlines.union_all()], crs=coastlines.crs
@@ -1095,7 +1124,6 @@ class Hydrography(BuildModelBase):
             if not coastlines.empty:
                 bbox = coastlines.minimum_rotated_rectangle().iloc[0]  # get the Polygon
                 bbox_gdf = gpd.GeoDataFrame(geometry=[bbox], crs=coastlines.crs)
-                import warnings
 
                 with warnings.catch_warnings():
                     warnings.filterwarnings(
@@ -1650,7 +1678,7 @@ class Hydrography(BuildModelBase):
         model_time_step = pd.date_range(
             self.start_date,
             end=self.end_date + timedelta(hours=23),
-            freq="H",
+            freq="h",
             inclusive="both",
         )
 

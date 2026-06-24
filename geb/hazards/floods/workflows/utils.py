@@ -16,11 +16,12 @@ import numpy.typing as npt
 import pandas as pd
 import xarray as xr
 from hydromt_sfincs import SfincsModel, utils
+from hydromt_sfincs.components.config.config_variables import SfincsConfigVariables
 from matplotlib.colors import LinearSegmentedColormap
 from shapely import line_locate_point
 from shapely.geometry import GeometryCollection, LineString, Point
 
-from geb.geb_types import ArrayFloat32, ArrayInt64
+from geb.geb_types import ArrayFloat32, ArrayInt64, TwoDArrayBool
 from geb.workflows.io import read_geom
 
 
@@ -91,29 +92,17 @@ def read_flood_depth(
         str(simulation_root),
         mode="r",
     )
-    model.read_config()
+    model.config.read()
 
-    # For unknown reasons, sometimes reading the results fails the first time
-    # but succeeds the second time. Therefore, we try twice here.
-    try:
-        model.read_results()
-    except OSError:
-        model.read_results()
-
-    # to detect whether SFINCS was run with subgrid, we check if the 'sbgfile' key exists in the config
-    # to be extra safe, we also check if the value is not None or has has length > 0
-    if (
-        "sbgfile" in model.config
-        and model.config["sbgfile"] is not None
-        and len(model.config["sbgfile"]) > 0
-    ):
+    # to detect whether SFINCS was run with subgrid
+    if model.config.data.sbgfile is not None:
         if method == "max":
             # get maximum water surface elevation (with respect to sea level)
-            water_surface_elevation = model.results["zsmax"].max(dim="timemax")
+            water_surface_elevation = model.output.data["zsmax"].max(dim="timemax")
             assert isinstance(water_surface_elevation, xr.DataArray)
         elif method == "final":
             # get water surface elevation at the final time step (with respect to sea level)
-            all_water_surface_elevation: xr.Dataset | xr.DataArray = model.results["zs"]
+            all_water_surface_elevation = model.output.data["zs"]
             assert isinstance(all_water_surface_elevation, xr.DataArray)
             try:
                 water_surface_elevation: xr.DataArray = all_water_surface_elevation.sel(
@@ -150,12 +139,12 @@ def read_flood_depth(
 
     else:
         if method == "max":
-            flood_depth_m: xr.Dataset | xr.DataArray = model.results["hmax"].max(
+            flood_depth_m: xr.Dataset | xr.DataArray = model.output.data["hmax"].max(
                 dim="timemax"
             )
             assert isinstance(flood_depth_m, xr.DataArray)
         elif method == "final":
-            flood_depth_m_all_steps: xr.Dataset | xr.DataArray = model.results["h"]
+            flood_depth_m_all_steps = model.output.data["h"]
             assert isinstance(flood_depth_m_all_steps, xr.DataArray)
             try:
                 flood_depth_m: xr.DataArray = flood_depth_m_all_steps.sel(time=end_time)
@@ -237,7 +226,7 @@ def to_sfincs_datetime(dt: datetime) -> str:
 
 
 def make_relative_paths(
-    config: dict[str, Any],
+    config: SfincsConfigVariables,
     model_root: Path,
     new_root: Path,
 ) -> dict[str, Any]:
@@ -263,16 +252,16 @@ def make_relative_paths(
         raise ValueError("model_root and new_root must have a common path")
     relpath = Path(os.path.relpath(commonpath, new_root))
 
-    config_kwargs = dict()
-    for k, v in config.items():
+    config_kwargs: dict[str, str] = dict()
+    for key, value in config:
         if (
-            isinstance(v, str)
-            and isfile(join(model_root, v))
-            and not isfile((join(new_root, v)))
+            isinstance(value, str)
+            and isfile(join(model_root, value))
+            and not isfile((join(new_root, value)))
         ):
             # Ensure paths are consistent across platforms
-            path = Path(relpath) / Path(v)  # Ensure both are Path objects
-            config_kwargs[k] = (
+            path = Path(relpath) / Path(value)  # Ensure both are Path objects
+            config_kwargs[key] = (
                 path.as_posix()
             )  # Always use POSIX format for Docker compatibility
 
@@ -685,6 +674,7 @@ def run_sfincs_simulation(
 
 def _get_xy(
     river: pd.Series,
+    is_valid_river: TwoDArrayBool,
     up_to_downstream: bool = True,
 ) -> tuple[int, int]:
     """Get the first valid xy coordinate from a river's hydrography_xy list.
@@ -695,22 +685,30 @@ def _get_xy(
         river: Series containing river information, including 'hydrography_xy'.
             This is a list of (x, y) tuples, representing the location of the river
             in the low-resolution hydrological grid.
+        is_valid_river: 2D boolean array indicating whether each river is valid (i.e., has valid xy coordinates in the grid).
         up_to_downstream: Whether to search from upstream to downstream.
             Defaults to True (starting upstream).
 
     Returns:
         A tuple (x, y) of the first valid coordinate.
+
+    Raises:
+        ValueError: If no valid coordinate is found in is_valid_river for the river.
     """
     xys = river["hydrography_xy"]
-    if up_to_downstream:
-        idx: int = 0
-    else:
-        idx: int = -1
-    return (xys[idx][0], xys[idx][1])
+    iterator = xys if up_to_downstream else reversed(xys)
+    for xy in iterator:
+        x: int = xy[0]
+        y: int = xy[1]
+        if is_valid_river[y, x]:
+            return (x, y)
+    raise ValueError(
+        "No valid xy coordinate found for river. Likely this means that all cells are within a reservoir or lake. We need to solve this case still"
+    )
 
 
 def get_representative_river_points(
-    river_ID: set, rivers: pd.DataFrame
+    river_ID: int, rivers: pd.DataFrame, is_valid_river: TwoDArrayBool
 ) -> list[tuple[int, int]]:
     """Get representative river points for a given river ID.
 
@@ -721,48 +719,51 @@ def get_representative_river_points(
     Args:
         river_ID: The ID of the river for which to find representative points.
         rivers: DataFrame containing river information, including 'represented_in_grid' and 'hydrography_xy'.
+        is_valid_river: 2D boolean array indicating whether each river is valid (i.e., has valid xy coordinates in the grid).
 
     Returns:
         A list of tuples (x, y) representing the coordinates of the representative points.
         If no valid points are found, an empty list is returned.
 
     Raises:
-        ValueError: If no valid xy coordinates are found for rivers.
+        ValueError: If no valid xy coordinates are found for the river or its upstream rivers.
     """
-    river = rivers.loc[river_ID]
+    river: pd.Series = rivers.loc[river_ID]
     if river["represented_in_grid"]:
-        xy = _get_xy(river, up_to_downstream=True)
-        if xy is not None:
-            return [xy]
-        else:
-            raise ValueError(
-                f"Error: No valid xy found for river {river_ID} which is represented in the grid."
-            )
+        xys: list[tuple[int, int]] = [
+            _get_xy(river, is_valid_river=is_valid_river, up_to_downstream=True)
+        ]
 
     else:
-        river_IDs = set([river_ID])
-        representitative_rivers = set()
+        river_IDs: set[int] = set([river_ID])
+        representitative_rivers: set[int] = set()
         while river_IDs:
-            river_ID = river_IDs.pop()
-            river = rivers.loc[river_ID]
+            river_ID: int = river_IDs.pop()
+            river: pd.Series = rivers.loc[river_ID]
             if not river["represented_in_grid"]:
-                upstream_rivers = rivers[rivers["downstream_ID"] == river_ID]
+                upstream_rivers: pd.DataFrame = rivers[
+                    rivers["downstream_ID"] == river_ID
+                ]
                 river_IDs.update(upstream_rivers.index)
             else:
                 representitative_rivers.add(river_ID)
 
-        representitative_rivers = rivers[rivers.index.isin(representitative_rivers)]
-        xys = []
-        for river_ID, river in representitative_rivers.iterrows():
-            xy = _get_xy(river, up_to_downstream=False)
-            if xy is not None:
-                xys.append(xy)
-            else:
-                raise ValueError(
-                    f"Error: No valid xy found for river {river_ID} which is represented not in the grid. Likely because upstream rivers could not be found."
-                )
+        representitative_rivers: pd.DataFrame = rivers[
+            rivers.index.isin(representitative_rivers)
+        ]
+        xys: list[tuple[int, int]] = []
+        for _, river in representitative_rivers.iterrows():
+            xy: tuple[int, int] = _get_xy(
+                river, is_valid_river=is_valid_river, up_to_downstream=False
+            )
+            xys.append(xy)
 
-        return xys
+    if len(xys) == 0:
+        raise ValueError(
+            f"No valid xy coordinates found for river {river_ID} or its upstream rivers."
+        )
+
+    return xys
 
 
 def get_river_parameters_by_river(
@@ -835,10 +836,9 @@ def get_river_parameters_by_river(
                 i : i + len(points)
             ].mean()
             if np.isnan(river_width_alpha_per_river):
-                print(
-                    f"Warning: River width alpha for river {river_ID} is NaN. Setting to 0."
+                raise ValueError(
+                    f"Warning: River width alpha for river {river_ID} is NaN."
                 )
-                river_width_alpha_per_river = 0.0
             river_parameters.loc[river_ID, "river_width_alpha"] = (
                 river_width_alpha_per_river
             )

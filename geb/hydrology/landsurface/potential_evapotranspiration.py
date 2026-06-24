@@ -463,6 +463,8 @@ def get_crop_factor_from_lai(
 ) -> np.float32:
     """Calculate crop factor from leaf area index using exponential formula.
 
+    See equation 97: https://www.fao.org/4/x0490e/x0490e0f.htm
+
     Args:
         min_kc: Minimum crop factor.
         max_kc: Maximum crop factor.

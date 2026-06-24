@@ -24,6 +24,13 @@ class Evaluate:
         model: The GEB model instance.
     """
 
+    SUB_EVALUATOR_CLASSES = {
+        "hydrology": Hydrology,
+        "hydrodynamics": Hydrodynamics,
+        "energy": Energy,
+        "meteorological_forecasts": MeteorologicalForecasts,
+    }
+
     def __init__(self, model: GEBModel) -> None:
         """Initialize the Evaluate class."""
         self.model: GEBModel = model
@@ -35,11 +42,7 @@ class Evaluate:
     @property
     def sub_evaluators(self) -> list[str]:
         """Returns a list of available sub-evaluators."""
-        return [
-            attr
-            for attr, _ in self.__dict__.items()
-            if not attr.startswith("_") and attr != "model"
-        ]
+        return list(self.SUB_EVALUATOR_CLASSES.keys())
 
     def run(
         self,
@@ -72,6 +75,9 @@ class Evaluate:
                 f"Method {method} is not implemented in Evaluate class."
             ) from exc
 
+        self.model.in_spinup = False
+        self.run_name = run_name
+
         # Merge run_name into kwargs to pass all evaluation options as keyword arguments.
         all_kwargs = {
             "run_name": run_name,
@@ -84,6 +90,10 @@ class Evaluate:
     @property
     def output_folder_evaluate(self) -> Path:
         """Returns the output folder for evaluation results."""
-        folder: Path = self.model.output_folder / "evaluate"
+        folder: Path = (
+            Path(self.model.config["general"]["output_folder"])
+            / self.run_name
+            / "evaluate"
+        )
         folder.mkdir(parents=True, exist_ok=True)
         return folder

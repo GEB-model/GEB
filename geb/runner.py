@@ -9,6 +9,7 @@ import pstats
 import shutil
 import subprocess
 import sys
+import time
 import zipfile
 from collections.abc import Callable
 from datetime import datetime
@@ -16,19 +17,20 @@ from operator import attrgetter
 from pathlib import Path
 from typing import Any, TextIO, TypeVar, cast
 
-import geopandas as gpd
 import pandas as pd
 import yaml
 from pydantic import BaseModel, ValidationError
-from shapely.geometry import box
 
 from geb import GEB_PACKAGE_DIR
-from geb.build import GEBModel as GEBModelBuild
-from geb.build.__init__ import (
+from geb.build import (
+    GEBModel as GEBModelBuild,
     cluster_subbasins_following_coastline,
+    create_cluster_outline_geodataframe,
     create_cluster_visualization_map,
     create_multi_basin_configs,
     get_all_downstream_subbasins_in_geom,
+    get_init_multiple_region_geometry,
+    remove_init_multiple_excluded_outlets,
     save_clusters_as_merged_geometries,
     save_clusters_to_geoparquet,
 )
@@ -158,29 +160,38 @@ def parse_config(
 def create_logger(name: str) -> logging.Logger:
     """Create logger with console and file handler.
 
+    Notes:
+        hydromt-sfincs uses its own logger. Here, we capture that logger and set it to the same level and handlers as
+        our main logger to ensure we also capture its logs.
+
     Args:
         name: Name of the logger.
     Returns:
         Logger instance.
     """
     logger: logging.Logger = logging.getLogger(name)
+    sfincslogger = logging.getLogger(name="hydromt.hydromt_sfincs")
 
     if logger.handlers:
         return logger
 
-    # set log level to debug
-    logger.setLevel(logging.DEBUG)
-    # create console handler and set level to debug
-    ch: logging.StreamHandler[TextIO] = logging.StreamHandler()
-    ch.setLevel(logging.DEBUG)
-    # create formatter
+    loglevel = logging.DEBUG
     formatter = logging.Formatter(
         "%(asctime)s - %(levelname)s - %(message)s", datefmt="%d-%m %H:%M:%S"
     )
-    # add formatter to ch
-    ch.setFormatter(formatter)
-    # add ch to logger
-    logger.addHandler(ch)
+    formatter.converter = time.localtime
+
+    # set log level to debug
+    logger.setLevel(loglevel)
+    sfincslogger.setLevel(loglevel)
+
+    # create console handler and set level to debug
+    streamhandler: logging.StreamHandler[TextIO] = logging.StreamHandler()
+    streamhandler.setLevel(loglevel)
+    streamhandler.setFormatter(formatter)
+
+    logger.addHandler(streamhandler)
+    sfincslogger.addHandler(streamhandler)
 
     # prevent double logging
     logger.propagate = False
@@ -188,14 +199,14 @@ def create_logger(name: str) -> logging.Logger:
     # add file handler
     folder = Path("logs")
     folder.mkdir(exist_ok=True, parents=True)
-    fp = folder / f"{name}.log"
-    # mode='w' clears the existing file rather than deleting and recreating it.
-    # Deleting it would cause the shell and Python to write to different files,
-    # so error messages would never appear in build.log.
-    fh = logging.FileHandler(fp, mode="w")
-    fh.setLevel(logging.DEBUG)
-    fh.setFormatter(formatter)
-    logger.addHandler(fh)
+
+    filehandler = logging.FileHandler(folder / f"{name}.log", mode="w")
+    filehandler.setLevel(loglevel)
+    filehandler.setFormatter(formatter)
+
+    logger.addHandler(filehandler)
+    sfincslogger.addHandler(filehandler)
+
     return logger
 
 
@@ -1506,199 +1517,170 @@ def clean_fn(
 
 
 def init_multiple_fn(
-    config: str | Path,
-    build_config: str | Path,
-    update_config: str | Path,
     working_directory: str | Path,
     from_example: str,
     geometry_bounds: str,
     target_area_km2: float,
     cluster_prefix: str,
-    init_multiple_dir: str,
+    init_multiple_dir: str | Path,
     region_shapefile: str | None = None,
-    skip_merged_geometries: bool = False,
-    skip_visualization: bool = False,
     min_bbox_efficiency: float = 0.99,
     ocean_outlets_only: bool = False,
-    optimize: bool = OPTIMIZE_DEFAULT,
-    timing: bool = TIMING_DEFAULT,
-    cores: int | None = CORES_DEFAULT,
 ) -> None:
     """Create multiple models from a geometry by clustering downstream subbasins.
 
     Args:
-        config: Path to the base model configuration file.
-        build_config: Path to the base model build configuration file.
-        update_config: Path to the base model update configuration file.
         working_directory: Working directory for the models.
         from_example: Name of the example to use as a base for the models.
         geometry_bounds: Bounding box as "xmin,ymin,xmax,ymax" to select subbasins.
         target_area_km2: Target cumulative upstream area per cluster (default: Danube basin ~817,000 km2).
         cluster_prefix: Prefix for cluster directory names.
         region_shapefile: Optional path to region shape file. Defaults to geometry bounds if not specified.
-        skip_merged_geometries: If True, skip creating dissolved basin polygon file (much faster).
-        skip_visualization: If True, skip creating visualization map (faster).
         min_bbox_efficiency: Minimum bbox efficiency (0-1) for cluster merging. Lower values allow more elongated clusters.
         ocean_outlets_only: If True, only include clusters that flow to the ocean (exclude endorheic basins).
-        init_multiple_dir: Name of the subdirectory in models/ where the large scale model directories will be created (e.g. 'large_scale' or 'large_scale2').
-        optimize: If True, run the init-multiple in optimized mode.
-        timing: If True, run the init-multiple with timing.
-        cores: Number of cores to restrict the init-multiple to.
+        init_multiple_dir: Name under the working-directory ``models`` folder
+            where large scale model directories are created.
 
     Raises:
-        FileNotFoundError: If the example folder does not exist, or if the parent
-            models/ directory does not exist.
-        ValueError: If geometry_bounds format is invalid.
+        FileNotFoundError: If the example folder or working-directory ``models``
+            directory does not exist.
+        ValueError: If geometry_bounds format is invalid, or if
+            init_multiple_dir is not a model set name.
     """
-    _restart_if_needed(optimize=optimize, cores=cores)
-
     logger = create_logger("init_multiple")
 
-    # set paths
-    config: Path = Path(config)
-    build_config: Path = Path(build_config)
-    update_config: Path = Path(update_config)
-    working_directory: Path = Path(working_directory)
-
-    # Initialize data catalog and logger
-    data_catalog_instance = DataCatalog(logger=logger)
-    with WorkingDirectory(working_directory):
-        logger = create_logger("init_multiple")
-
-    # Create the models/init_multiple_dir directory structure.
-    # models_dir is the parent 'models' folder expected at the parent of GEB repository.
-    # init_multiple_dir_path is the target subdirectory to create.
-    models_dir = Path(__file__).parents[2] / "models"
-    if region_shapefile:
-        region_shapefile: Path = Path(region_shapefile)
-    if not models_dir.is_dir():
-        raise FileNotFoundError(
-            f"Models directory not found: {models_dir}\n"
-            "Run 'geb init-multiple' from within the GEB repository root, "
-            f"or ensure a 'models' directory exists at {models_dir}."
+    working_directory_path: Path = Path(working_directory).expanduser().resolve()
+    requested_directory: Path = Path(init_multiple_dir).expanduser()
+    if requested_directory.is_absolute() or requested_directory.parent != Path("."):
+        raise ValueError(
+            "--init-multiple-dir must be a name under the models directory."
         )
-    init_multiple_dir_path: Path = models_dir / init_multiple_dir
-    init_multiple_dir_path.mkdir(parents=True, exist_ok=True)
 
-    # create river
+    models_directory: Path = working_directory_path / "models"
+    if not models_directory.is_dir():
+        raise FileNotFoundError(
+            f"Models directory not found: {models_directory}. "
+            "Create it first, or choose a working directory that contains models/."
+        )
+
+    init_multiple_dir_path: Path = models_directory / requested_directory
+    init_multiple_dir_path.mkdir(exist_ok=True)
+
     logger.info("Starting multiple model initialization")
     logger.info(f"Target area: {target_area_km2:,.0f} km²")
 
-    logger.info("Loading river network...")
-    river_graph = get_river_graph(data_catalog_instance)
-
-    # Create bounding box geometry or read region shapefile
-    if not region_shapefile:
-        logger.info(f"Using geometry bounds: {geometry_bounds}")
-        # Parse geometry bounds and convert to geodataframe
-        bounds = [float(x.strip()) for x in geometry_bounds.split(",")]
-        if len(bounds) != 4:
-            raise ValueError(
-                "Invalid geometry_bounds format. Expected 'xmin,ymin,xmax,ymax'."
-            )
-        xmin, ymin, xmax, ymax = bounds
-
-        bbox_geom = gpd.GeoDataFrame(
-            geometry=[box(xmin, ymin, xmax, ymax)], crs="EPSG:4326"
-        )
-    else:
-        logger.info(f"Using region shapefile: {region_shapefile}")
-        region_shapefile_path: Path = working_directory / region_shapefile
-        if not region_shapefile_path.exists():
-            raise FileNotFoundError(
-                f"Region shapefile not found at: {region_shapefile_path}"
-            )
-        bbox_geom = gpd.read_file(region_shapefile_path)
-
-    # check crs bounding box geometry
-    if bbox_geom.crs != "EPSG:4326":
-        bbox_geom = bbox_geom.to_crs("EPSG:4326")
-
-    downstream_subbasins = get_all_downstream_subbasins_in_geom(
-        data_catalog_instance, bbox_geom, ocean_outlets_only, logger
-    )  # get all downstream subbasins in the bounding box geometry
-
-    if not downstream_subbasins:
-        raise ValueError("No downstream subbasins found in the specified geometry")
-
-    logger.info(f"Found {len(downstream_subbasins)} downstream subbasins")
-
-    logger.info("Clustering subbasins by following coastline...")
-    clusters = cluster_subbasins_following_coastline(
-        data_catalog_instance,
-        downstream_subbasins,
-        target_area_km2=target_area_km2,
-        logger=logger,
-        river_graph=river_graph,
-        min_bbox_efficiency=min_bbox_efficiency,
-    )
-
-    logger.info(f"Created {len(clusters)} clusters")
-
-    # Verify example folder exists
     example_folder: Path = GEB_PACKAGE_DIR / "examples" / from_example
     if not example_folder.exists():
         raise FileNotFoundError(
             f"Example folder {example_folder} does not exist. Did you use the right --from-example option?"
         )
 
-    logger.info(f"Creating cluster configurations using example: {from_example}")
+    data_catalog = DataCatalog(logger=logger)
 
-    # Create cluster configurations
-    cluster_directories = create_multi_basin_configs(
-        clusters=clusters,
-        working_directory=init_multiple_dir_path,
-        cluster_prefix=cluster_prefix,
-        data_catalog=data_catalog_instance,
+    logger.info("Loading river network...")
+    river_graph = get_river_graph(data_catalog)
+
+    logger.info(
+        f"Using region shapefile: {region_shapefile}"
+        if region_shapefile
+        else f"Using geometry bounds: {geometry_bounds}"
+    )
+    region_geometry = get_init_multiple_region_geometry(
+        geometry_bounds, region_shapefile, working_directory_path
+    )
+    outlet_subbasin_ids: list[int] = get_all_downstream_subbasins_in_geom(
+        data_catalog, region_geometry, ocean_outlets_only, logger
+    )
+    if not outlet_subbasin_ids:
+        raise ValueError("No downstream subbasins found in the specified geometry")
+
+    logger.info(f"Found {len(outlet_subbasin_ids)} downstream subbasins")
+
+    logger.info("Clustering subbasins by following coastline...")
+    outlet_clusters: list[list[int]] = cluster_subbasins_following_coastline(
+        data_catalog,
+        outlet_subbasin_ids,
+        target_area_km2=target_area_km2,
+        logger=logger,
         river_graph=river_graph,
+        min_bbox_efficiency=min_bbox_efficiency,
     )
 
-    # save geoparquet and maps to default location
+    logger.info(f"Created {len(outlet_clusters)} clusters")
+
+    # Keep the large-scale Europe setup focused on the intended mainland outlets.
+    logger.info("Postprocessing Malta and North Africa outlets...")
+    outlet_clusters, removed_outlet_ids = remove_init_multiple_excluded_outlets(
+        data_catalog=data_catalog,
+        clusters=outlet_clusters,
+    )
+    if removed_outlet_ids:
+        logger.info(
+            "Removed %s downstream COMID values before writing outputs: %s",
+            len(removed_outlet_ids),
+            removed_outlet_ids,
+        )
+    else:
+        logger.info("No Malta or North Africa outlet COMID values found")
+    if not outlet_clusters:
+        raise ValueError(
+            "No downstream subbasins remain after Malta and North Africa postprocessing"
+        )
+
+    logger.info(f"Creating cluster configurations using example: {from_example}")
+
+    # Build outlines after outlet cleanup so every written output uses the same clusters.
+    logger.info("Creating exact merged basin outlines for all clusters...")
+    cluster_outlines = create_cluster_outline_geodataframe(
+        clusters=outlet_clusters,
+        data_catalog=data_catalog,
+        river_graph=river_graph,
+        cluster_prefix=cluster_prefix,
+    )
+    cluster_basin_areas_km2: dict[int, float] = {
+        int(row.cluster_number): float(row.total_basin_area_km2)
+        for _row_index, row in cluster_outlines.iterrows()
+    }
+
+    # Create cluster configurations
+    create_multi_basin_configs(
+        clusters=outlet_clusters,
+        working_directory=init_multiple_dir_path,
+        cluster_prefix=cluster_prefix,
+        from_example=from_example,
+        cluster_basin_areas_km2=cluster_basin_areas_km2,
+    )
+
     save_geoparquet = init_multiple_dir_path / f"{cluster_prefix}_outlets.geoparquet"
     save_map = init_multiple_dir_path / f"{cluster_prefix}_clusters_map.png"
+    merged_basins_path = (
+        init_multiple_dir_path / f"{cluster_prefix}_complete_basins.geoparquet"
+    )
 
     logger.info(f"Saving outlet basins to geoparquet: {save_geoparquet}")
-    # Save outlet-only clusters to geoparquet (simplified geometries)
     save_clusters_to_geoparquet(
-        clusters=clusters,
-        data_catalog=data_catalog_instance,
+        clusters=outlet_clusters,
+        data_catalog=data_catalog,
         output_path=save_geoparquet,
         cluster_prefix=cluster_prefix,
     )
 
-    # Save complete basins as merged geometries (full upstream basins as single polygons)
-    # This is slow for large datasets, so allow skipping
-    if not skip_merged_geometries:
-        merged_basins_path = (
-            init_multiple_dir_path / f"{cluster_prefix}_complete_basins.geoparquet"
-        )
-        logger.info(
-            f"Saving complete basins as merged geometries: {merged_basins_path}"
-        )
-        save_clusters_as_merged_geometries(
-            clusters=clusters,
-            data_catalog=data_catalog_instance,
-            river_graph=river_graph,
-            output_path=merged_basins_path,
-            cluster_prefix=cluster_prefix,
-            buffer_distance_km=5.0,  # 5km buffer to merge nearby polygons (reduces MultiPolygon complexity)
-        )
-    else:
-        logger.info("Skipping merged geometries (--skip-merged-geometries flag set)")
-
-    # Create visualization map (optional)
-    if not skip_visualization:
-        logger.info(f"Creating visualization map: {save_map}")
-        create_cluster_visualization_map(
-            clusters=clusters,
-            data_catalog=data_catalog_instance,
-            river_graph=river_graph,
-            output_path=save_map,
-            cluster_prefix=cluster_prefix,
-        )
-    else:
-        logger.info("Skipping visualization map (--skip-visualization flag set)")
-
     logger.info(
-        f"Successfully created {len(cluster_directories)} model configurations:"
+        f"Saving complete basin outlines as merged geometries: {merged_basins_path}"
+    )
+    save_clusters_as_merged_geometries(
+        cluster_outlines=cluster_outlines,
+        output_path=merged_basins_path,
+    )
+
+    logger.info(f"Creating visualization map: {save_map}")
+    create_cluster_visualization_map(
+        cluster_outlines=cluster_outlines,
+        output_path=save_map,
+    )
+
+    logger.info(f"Successfully created {len(outlet_clusters)} model configurations:")
+    logger.info(
+        "Reminder: review and edit the generated build.yml and model.yml files "
+        "before running the models if you need settings other than the example defaults."
     )

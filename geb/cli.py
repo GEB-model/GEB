@@ -6,9 +6,8 @@ import inspect
 import json
 import subprocess
 import sys
-from operator import attrgetter
 from pathlib import Path
-from typing import Any, Callable, cast
+from typing import Any, Callable
 
 import click
 
@@ -39,6 +38,7 @@ from geb.runner import (
     update_version_fn,
 )
 from geb.workflows.io import WorkingDirectory
+from geb.workflows.merge import merge_model_outputs
 from geb.workflows.raster import rechunk_zarr_file
 
 IS_WINDOWS = sys.platform == "win32"
@@ -50,14 +50,11 @@ def get_available_evaluation_methods() -> list[str]:
     Returns:
         Sorted list of fully-qualified evaluation method names.
     """
-    evaluator = Evaluate(cast(Any, None))
     available_methods: list[str] = []
 
-    for sub_name in evaluator.sub_evaluators:
-        sub_evaluator = getattr(evaluator, sub_name)
-
+    for sub_name, sub_cls in Evaluate.SUB_EVALUATOR_CLASSES.items():
         # This returns a list of (name, value) tuples for methods only
-        methods = inspect.getmembers(sub_evaluator, predicate=inspect.ismethod)
+        methods = inspect.getmembers(sub_cls, predicate=inspect.isfunction)
 
         for attr_name, _ in methods:
             if not attr_name.startswith("_"):
@@ -291,6 +288,53 @@ def run(**kwargs: Any) -> None:
 
     """
     run_model_with_method(method="run", **kwargs)
+
+
+@cli.command()
+@click_run_options()
+@click.option(
+    "--multi",
+    is_flag=True,
+    default=False,
+    help="Run yearly mode multiple times.",
+)
+@click.option(
+    "--n-runs",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Number of yearly runs. Required when --multi is set.",
+)
+def run_yearly(multi: bool, n_runs: int | None, **kwargs: Any) -> None:
+    """Run model in yearly mode.
+
+    Can be run after model spinup.
+
+    Args:
+        multi: If True, run yearly mode multiple times.
+        n_runs: Number of runs when ``multi`` is True.
+        **kwargs: Keyword arguments to pass to the run_yearly function.
+
+    Raises:
+        click.ClickException: If ``--multi`` is set without ``--n-runs``, or if
+            ``--n-runs`` is provided without ``--multi``.
+    """
+    if multi and n_runs is None:
+        raise click.ClickException("--n-runs is required when --multi is set.")
+
+    if not multi and n_runs is not None:
+        raise click.ClickException("--n-runs can only be used together with --multi.")
+
+    if not multi:
+        run_model_with_method(method="run_yearly", **kwargs)
+        return
+
+    assert n_runs is not None
+    for run_id in range(n_runs):
+        run_model_with_method(
+            method="run_yearly",
+            method_args={"model_name": f"run_{run_id}"},
+            **kwargs,
+        )
 
 
 @cli.command()
@@ -637,11 +681,12 @@ def evaluate(
         # If it's method help, show method docstring
 
         try:
-            evaluator = Evaluate(cast(Any, None))
-            attr = attrgetter(method)(evaluator)
+            sub_name, method_name = method.split(".")
+            sub_cls = Evaluate.SUB_EVALUATOR_CLASSES[sub_name]
+            method_func = getattr(sub_cls, method_name)
             click.echo(f"\nHelp for method '{method}':\n")
-            if attr.__doc__:
-                click.echo(attr.__doc__)
+            if method_func.__doc__:
+                click.echo(method_func.__doc__)
             else:
                 click.echo("No documentation found for this method.")
         except Exception:
@@ -937,19 +982,6 @@ def workflow(
 
 
 @cli.command()
-@click_config
-@click.option(
-    "--build-config",
-    "-b",
-    default=BUILD_DEFAULT,
-    help=f"Path of the model build configuration file. Defaults to '{BUILD_DEFAULT}'.",
-)
-@click.option(
-    "--update-config",
-    "-u",
-    default=UPDATE_DEFAULT,
-    help="Path of the model update configuration file.",
-)
 @click.option(
     "--from-example",
     default="geul",
@@ -979,18 +1011,6 @@ def workflow(
     help="Prefix for cluster directory names. Defaults to 'cluster'.",
 )
 @click.option(
-    "--skip-merged-geometries",
-    is_flag=True,
-    default=False,
-    help="Skip creating merged geometry file (faster, but no dissolved basin polygons).",
-)
-@click.option(
-    "--skip-visualization",
-    is_flag=True,
-    default=False,
-    help="Skip creating visualization map (faster).",
-)
-@click.option(
     "--min-bbox-efficiency",
     default=0.99,
     type=float,
@@ -1005,13 +1025,18 @@ def workflow(
 @click.option(
     "--init-multiple-dir",
     required=True,
-    help="Name of the subdirectory in models/ where the large scale model directories will be created (e.g. 'large_scale' or 'large_scale2').",
+    help="Name under the working-directory models/ folder where the large scale model directories will be created.",
 )
 @working_directory_option
-def init_multiple(*args: Any, **kwargs: Any) -> None:
+def init_multiple(
+    init_multiple_dir: str, working_directory: Path, **kwargs: Any
+) -> None:
     """Initialize a new model for multiple subbasins."""
-    # Initialize the model with the given config and build config
-    init_multiple_fn(*args, **kwargs)
+    init_multiple_fn(
+        init_multiple_dir=init_multiple_dir,
+        working_directory=working_directory,
+        **kwargs,
+    )
 
 
 @cli.command()
@@ -1101,6 +1126,59 @@ def rechunk(
 ) -> None:
     """Rechunk a Zarr file."""
     rechunk_zarr_file(input_path, output_path, how, not no_intermediate)  # type: ignore
+
+
+@tool.command()
+@click.argument(
+    "models_dir",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+)
+@click.option(
+    "--run-name",
+    default="default",
+    show_default=True,
+    help="Name of the model run whose outputs are merged.",
+)
+@click.option(
+    "--cluster-prefix",
+    default="Europe",
+    show_default=True,
+    help="Prefix used for cluster directory names (e.g. 'Europe').",
+)
+@click.option(
+    "--merged-name",
+    default="merged",
+    show_default=True,
+    help="Name for the merged directory inside MODELS_DIR.",
+)
+@click.option(
+    "--overwrite",
+    is_flag=True,
+    default=False,
+    help="Overwrite an existing merged directory.",
+)
+def merge(
+    models_dir: Path,
+    run_name: str,
+    cluster_prefix: str,
+    merged_name: str,
+    overwrite: bool,
+) -> None:
+    """Merge GEB cluster outputs into a single model directory for evaluation.
+
+    Scans MODELS_DIR for cluster subdirectories matching CLUSTER_PREFIX, merges
+    geometry files and discharge observation tables, symlinks report parquets, and
+    writes a model.yml so the result can be passed to ``geb evaluate``.
+    """
+    logger = create_logger("merge")
+    merge_model_outputs(
+        models_dir=models_dir,
+        run_name=run_name,
+        cluster_prefix=cluster_prefix,
+        merged_dir_name=merged_name,
+        overwrite=overwrite,
+        logger=logger,
+    )
 
 
 if __name__ == "__main__":

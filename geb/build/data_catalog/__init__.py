@@ -56,6 +56,7 @@ from .undp import HumanDevelopmentIndex
 from .wekeo_copernicus import WEkEOCopernicus
 from .why_map import WhyMap
 from .world_bank import WorldBankData
+from .worldfloods import WorldFloodsV2
 
 data_catalog: dict[str, dict[str, Any]] = {
     "isimip_co2": {
@@ -71,7 +72,7 @@ data_catalog: dict[str, dict[str, Any]] = {
     },
     "era5": {
         "adapter": DestinationEarth(),
-        "url": "https://data.earthdatahub.destine.eu/era5/reanalysis-era5-land-no-antartica-v0.zarr",
+        "url": None,
         "source": {"name": "ERA5", "author": "ECMWF", "license": "CC BY 4.0"},
     },
     "ecmwf_geopotential": {
@@ -868,7 +869,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             filename="tiles",
             cache="global",
         ),
-        "url": "https://hydro.iis.u-tokyo.ac.jp/~yamadai/MERIT_Hydro/distribute/v1.0",
+        "url": "https://global-hydrodynamics.github.io/MERIT_Hydro/",
         "source": {
             "name": "MERIT Hydro",
             "author": "Yamazaki et al.",
@@ -883,7 +884,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             filename="tiles",
             cache="global",
         ),
-        "url": "https://hydro.iis.u-tokyo.ac.jp/~yamadai/MERIT_Hydro/distribute/v1.0",
+        "url": "https://global-hydrodynamics.github.io/MERIT_Hydro/",
         "source": {
             "name": "MERIT Hydro",
             "author": "Yamazaki et al.",
@@ -1121,6 +1122,22 @@ data_catalog: dict[str, dict[str, Any]] = {
             "license": "CC BY-NC-SA 4.0",
             "url": "https://doi.org/10.5281/zenodo.15149480",
             "paper_doi": "10.5281/zenodo.15149480",
+        },
+    },
+    "worldfloodsv2": {
+        "adapter": WorldFloodsV2(
+            folder="worldfloodsv2",
+            local_version=2,
+            filename="flood_maps.geoparquet",
+            cache="global",
+        ),
+        "url": "isp-uv-es/WorldFloodsv2",
+        "source": {
+            "name": "WorldFloodsV2",
+            "author": "Mateo-Garcia et al. (2023)",
+            "license": "CC BY-NC 4.0",
+            "url": "https://huggingface.co/datasets/isp-uv-es/WorldFloodsv2",
+            "paper_doi": "10.1038/s41598-023-47595-7",
         },
     },
     "glopop-sg": {

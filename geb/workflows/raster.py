@@ -782,7 +782,7 @@ def pad_to_grid_alignment(
         ValueError: If ``grid_size_multiplier`` is not a positive integer.
     """
     if not isinstance(grid_size_multiplier, int) or grid_size_multiplier <= 0:
-        raise ValueError("grid_size_multiplier must be a positive integer")
+        raise ValueError("grid_size_multiplier must be a positive integer >= 1")
 
     array_rio = da.rio
     x_dim: str = array_rio.x_dim
@@ -1626,7 +1626,12 @@ def clip_with_geometry(
     Raises:
         ValueError: If the DataArray does not have x and y coordinates.
         ValueError: If the geometry is not in the same CRS as the DataArray.
+        ValueError: If the DataArray does not have a nodata value defined.
+        ValueError: If the DataArray or GeoDataFrame are not the correct types.
     """
+    if not isinstance(da, xr.DataArray):
+        raise ValueError("da must be a DataArray")
+
     if not isinstance(gdf, gpd.GeoDataFrame):
         raise ValueError("gdf must be a GeoDataFrame")
 

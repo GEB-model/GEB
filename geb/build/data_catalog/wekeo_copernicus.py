@@ -1,7 +1,5 @@
 """Data adapter for obtaining Copernicus data from WEkEO."""
 
-from __future__ import annotations
-
 import os
 import zipfile
 from pathlib import Path
