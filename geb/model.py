@@ -1092,6 +1092,15 @@ class GEBModel(Module):
         (self.output_folder / "done.txt").touch()
 
     @property
+    def is_done(self) -> bool:
+        """Check if the model run or spinup is done.
+
+        Returns:
+            True if the model run or spinup is done, False otherwise.
+        """
+        return (self.output_folder / "done.txt").exists()
+
+    @property
     def spinup_start(self) -> datetime.datetime:
         """Get the start time of the spinup period.
 

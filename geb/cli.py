@@ -22,6 +22,7 @@ from geb.runner import (
     OPTIMIZE_DEFAULT,
     PROFILE_RAM_DEFAULT,
     PROFILE_SPEED_DEFAULT,
+    SKIP_DONE_DEFAULT,
     TIMING_DEFAULT,
     UPDATE_DEFAULT,
     WORKING_DIRECTORY_DEFAULT,
@@ -258,6 +259,12 @@ def click_run_options() -> Any:
         """
 
         @universal_options
+        @click.option(
+            "--skip-done",
+            is_flag=True,
+            default=SKIP_DONE_DEFAULT,
+            help="Only run the method if the model is not already marked as done.",
+        )
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             """Wrapper function for run options.
