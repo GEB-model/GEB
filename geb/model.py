@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from time import time
 from types import TracebackType
-from typing import Any, cast, overload
+from typing import Any, Callable, cast, overload
 
 import geopandas as gpd
 import numpy as np
@@ -75,7 +75,9 @@ class GEBModel(Module):
         Raises:
             ValueError: If the mode is not 'r' or 'w'.
         """
-        self.config: dict[str, Any] = copy.deepcopy(config)  # model configuration
+        self.config: dict[str, Any] = copy.deepcopy(
+            config
+        )  # TODO: Make this a frozendict when Python 3.15 is released.
         self.logger = logger or logging.getLogger(__name__)  # model logger
         self.timing = timing  # whether to log timing of modules
         self.mode = mode  # mode of the model, either 'r' (read) or 'w' (write)
@@ -89,7 +91,7 @@ class GEBModel(Module):
 
         Module.__init__(self, self, create_var=False)  # initialize the Module class
 
-        self._multiverse_name = None  # name of the multiverse, if any
+        self._multiverse_name = None
 
         self.files = copy.deepcopy(
             files
@@ -153,13 +155,22 @@ class GEBModel(Module):
             )
             version_path.write_text(__version__)
 
-    def restore(self, store_location: Path, timestep: int, n_timesteps: int) -> None:
+    def restore(
+        self,
+        store_location: Path,
+        timestep: int,
+        n_timesteps: int,
+        reporter: Reporter,
+        config: dict,
+    ) -> None:
         """Restore the model state to the original state given by the function input.
 
         Args:
             store_location: Location of the store to restore the model state from.
             timestep: timestep to restore the model state to.
             n_timesteps: number of timesteps (i.e., the final timestep) to restore the model state to.
+            reporter: Reporter to use for logging.
+            config: Configuration to restore.
         """
         self.store.load(store_location)
 
@@ -168,22 +179,25 @@ class GEBModel(Module):
 
         self.current_timestep = timestep
         self.n_timesteps = n_timesteps
+        self.config = config
+
+        self.reporter = reporter
 
     @overload
-    def multiverse(
+    def multiverse_forecasts(
         self,
         forecast_issue_datetime: datetime.datetime,
         return_mean_discharge: bool = True,
     ) -> dict[Any, float]: ...
 
     @overload
-    def multiverse(
+    def multiverse_forecasts(
         self,
         forecast_issue_datetime: datetime.datetime,
         return_mean_discharge: bool = False,
     ) -> None: ...
 
-    def multiverse(
+    def multiverse_forecasts(
         self,
         forecast_issue_datetime: datetime.datetime,
         return_mean_discharge: bool = False,
@@ -311,6 +325,8 @@ class GEBModel(Module):
                 store_location=store_location,
                 timestep=store_timestep,
                 n_timesteps=self.n_timesteps,
+                reporter=self.reporter,  # just set the old reporter
+                config=self.config,  # just the old config
             )  # restore the initial state of the multiverse
 
         self.logger.info("Forecast finished, restoring all conditions...")
@@ -321,6 +337,8 @@ class GEBModel(Module):
             store_location=store_location,
             timestep=store_timestep,
             n_timesteps=store_n_timesteps,
+            reporter=self.reporter,  # just set the old reporter
+            config=self.config,  # just the old config
         )  # restore the initial state of the multiverse
 
         self.reporter.is_activated = (
@@ -337,6 +355,93 @@ class GEBModel(Module):
             return mean_discharge  # return the mean discharge for each member
         else:
             return None  # nothing to return
+
+    @overload
+    def alternate_universe(
+        self,
+        name: str,
+        n_timesteps: int,
+        do_function: Callable[[], None] | None = None,
+        collect_function: None = None,
+    ) -> None: ...
+
+    @overload
+    def alternate_universe(
+        self,
+        name: str,
+        n_timesteps: int,
+        do_function: Callable[[], None] | None = None,
+        collect_function: Callable[[], dict[str, Any]] = ...,
+    ) -> dict[str, Any]: ...
+
+    def alternate_universe(
+        self,
+        name: str,
+        n_timesteps: int,
+        do_function: Callable[[], None] | None = None,
+        collect_function: Callable[[], dict[str, Any]] | None = None,
+    ) -> None | dict[str, Any]:
+        """Run the model in an alternate universe mode, where the model state is modified by a user-defined function.
+
+        Args:
+            name: Name of the alternate universe.
+            n_timesteps: Number of timesteps to run the model in the alternate universe.
+            do_function: A user-defined function that modifies the model state in the alternate universe before running the model.
+            collect_function: A user-defined function that collects data from the alternate universe after running the model. If None, no data is collected.
+
+        Returns:
+            If `collect_function` is not None, a dictionary with the data collected from the alternate universe is returned.
+            Otherwise, None is returned.
+        """
+        # copy current state of timestep and time
+        store_timestep: int = copy.copy(self.current_timestep)  # store current timestep
+        store_n_timesteps: int = copy.copy(self.n_timesteps)  # store n_timesteps
+
+        # set a folder to store the initial state of the alternate universe
+        store_location: Path = (
+            self.simulation_root / "alternate_universe" / name
+        )  # create a temporary folder for the multiverse
+        self.store.save(store_location)  # save the current state of the model
+
+        store_config = copy.deepcopy(self.config)
+        store_reporter: Reporter = self.reporter
+
+        self.multiverse_name = (
+            name  # set the multiverse name to the alternate universe name
+        )
+        self.n_timesteps = (
+            self.current_timestep + n_timesteps
+        )  # set the number of timesteps to the end of the alternate universe
+
+        # make reporter AFTER updating n_timesteps
+        self.reporter = Reporter(
+            self, self.report_folder / "alternate_universe" / name, clean=True
+        )  # create a new reporter for the alternate universe
+
+        if do_function is not None:
+            do_function()
+
+        self.step_to_end()  # steps to end of the alternate universe period as defined in self.n_timesteps
+        self.reporter.finalize()  # finalize the reporter for the alternate universe
+
+        if collect_function is not None:
+            return_data: dict[str, Any] = (
+                collect_function()
+            )  # collect data from the alternate universe
+        else:
+            return_data: None = None  # no data to return
+
+        self.restore(
+            store_location=store_location,
+            timestep=store_timestep,
+            n_timesteps=store_n_timesteps,
+            reporter=store_reporter,
+            config=store_config,
+        )  # restore the initial state of the multiverse
+
+        self.multiverse_name: None = None  # reset the multiverse name
+
+        return return_data  # return the data collected from the alternate universe
 
     def step(self) -> None:
         """Forward the model by one timestep.
@@ -394,7 +499,7 @@ class GEBModel(Module):
                         dt, datetime.time(0)
                     )  # Convert date back to datetime for the multiverse method
 
-                    self.multiverse(
+                    self.multiverse_forecasts(
                         forecast_issue_datetime=forecast_datetime,
                         return_mean_discharge=True,
                     )  # run the multiverse for the current timestep
@@ -550,7 +655,7 @@ class GEBModel(Module):
         self.reporter.finalize()
         self.create_done_file()
 
-    def run_yearly(self) -> None:
+    def run_yearly(self, model_name: str = "default") -> None:
         """Run the model in yearly mode, where timesteps are yearly rather than daily.
 
         This depends on a spinup run that was run in daily mode.
@@ -558,7 +663,8 @@ class GEBModel(Module):
         Notes:
             Cannot be run in combination with hydrology simulation.
             This mode is experimential and is not fully tested.
-
+        Args:
+            model_name: Name of the model run. This is used to create a folder for the results of the model run. Defaults to "default".
         Raises:
             ValueError: If the start or end time is not at the beginning or end of a year, respectively.
             ValueError: If flood simulation is enabled in the config, as this is not compatible with yearly mode.
@@ -571,6 +677,8 @@ class GEBModel(Module):
             for key, value in self.config["report"].items()
             if key.startswith("agents.households")
         }
+
+        self.config["general"]["name"] = model_name
 
         if self.config["hazards"]["floods"]["simulate"] is True:
             raise ValueError(

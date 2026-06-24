@@ -1,5 +1,6 @@
 """This module contains the Reporter class, which is used to report data to disk."""
 
+import copy
 import datetime
 import json
 import re
@@ -22,7 +23,12 @@ from zarr.codecs.numcodecs import (
     Shuffle,
 )
 
-from geb.geb_types import ArrayFloat32, ArrayFloat64, ArrayInt64, TwoDArrayInt32
+from geb.geb_types import (
+    ArrayFloat32,
+    ArrayFloat64,
+    ArrayInt64,
+    TwoDArrayInt32,
+)
 from geb.hydrology.routing import get_upstream_represented_xys
 from geb.module import Module
 from geb.store import DynamicArray
@@ -858,11 +864,10 @@ class Reporter:
             ValueError: If the variable type is not recognized.
         """
         self.model = model
-        if "_config" not in self.model.config["report"]:
-            self.config: dict[str, int] = {}
-        else:
-            self.config: dict[str, int] = self.model.config["report"]["_config"].copy()
-            del self.model.config["report"]["_config"]
+        self.config: dict[str, int] = self.model.config["report"]["_config"].copy()
+
+        self.variables_to_report = copy.deepcopy(self.model.config["report"])
+        del self.variables_to_report["_config"]
 
         if self.model.simulate_hydrology:
             self.hydrology = model.hydrology
@@ -872,20 +877,15 @@ class Reporter:
             fast_rmtree(self.report_folder)
         self.report_folder.mkdir(parents=True, exist_ok=True)
 
-        self.variables = {}
-        self.timesteps = []
-
         if (
             self.model.mode == "w"
             and "report" in self.model.config
-            and self.model.config["report"]
+            and self.variables_to_report
         ):
             self.is_activated = True
 
-            report_config: dict[str, Any] = self.model.config["report"]
-
             to_delete: list[str] = []
-            for module_name, module_values in list(report_config.items()):
+            for module_name, module_values in list(self.variables_to_report.items()):
                 if module_name.startswith("_"):
                     if module_name == "_discharge_stations":
                         if module_values is True:
@@ -906,8 +906,8 @@ class Reporter:
                                     "function": f"sample_xy,{xy_grid[0]},{xy_grid[1]}",
                                     "substeps": 24,
                                 }
-                            report_config = multi_level_merge(
-                                report_config,
+                            self.variables_to_report = multi_level_merge(
+                                self.variables_to_report,
                                 {"hydrology.routing": station_reporters},
                             )
                     elif module_name == "_retention_basins":
@@ -934,9 +934,17 @@ class Reporter:
                                     "function": f"sample_xy,{yx[1]},{yx[0]}",
                                     "substeps": 24,
                                 }
+                                retention_basin_reporters[
+                                    f"retention_basin_storage_m3_{basin_ID}"
+                                ] = {
+                                    "varname": "grid.var.retention_basin_storage_m3_per_substep",
+                                    "type": "grid",
+                                    "function": f"sample_xy,{yx[1]},{yx[0]}",
+                                    "substeps": 24,
+                                }
 
-                            report_config = multi_level_merge(
-                                report_config,
+                            self.variables_to_report = multi_level_merge(
+                                self.variables_to_report,
                                 {"hydrology.routing": retention_basin_reporters},
                             )
 
@@ -961,8 +969,8 @@ class Reporter:
                                         "substeps": 24,
                                     },
                                 }
-                                report_config = multi_level_merge(
-                                    report_config,
+                                self.variables_to_report = multi_level_merge(
+                                    self.variables_to_report,
                                     {"hydrology.landsurface": station_reporters},
                                 )
                     elif module_name == "_outflow_points":
@@ -991,36 +999,36 @@ class Reporter:
                                         "function": f"sample_xy,{xy[0]},{xy[1]}",
                                         "substeps": 24,
                                     }
-                            report_config = multi_level_merge(
-                                report_config,
+                            self.variables_to_report = multi_level_merge(
+                                self.variables_to_report,
                                 {"hydrology.routing": outflow_reporters},
                             )
-                            report_config = multi_level_merge(
-                                report_config,
+                            self.variables_to_report = multi_level_merge(
+                                self.variables_to_report,
                                 OUTFLOW_PLOT_CONTEXT_REPORT_CONFIG,
                             )
                     elif module_name == "_water_circle":
                         if module_values is True:
-                            report_config = multi_level_merge(
-                                report_config,
+                            self.variables_to_report = multi_level_merge(
+                                self.variables_to_report,
                                 WATER_CIRCLE_REPORT_CONFIG,
                             )
                     elif module_name == "_water_balance":
                         if module_values is True:
-                            report_config = multi_level_merge(
-                                report_config,
+                            self.variables_to_report = multi_level_merge(
+                                self.variables_to_report,
                                 WATER_BALANCE_REPORT_CONFIG,
                             )
                     elif module_name == "_water_storage":
                         if module_values is True:
-                            report_config = multi_level_merge(
-                                report_config,
+                            self.variables_to_report = multi_level_merge(
+                                self.variables_to_report,
                                 WATER_STORAGE_REPORT_CONFIG,
                             )
                     elif module_name == "_energy_balance":
                         if module_values is True:
-                            report_config = multi_level_merge(
-                                report_config,
+                            self.variables_to_report = multi_level_merge(
+                                self.variables_to_report,
                                 ENERGY_BALANCE_REPORT_CONFIG,
                             )
                     else:
@@ -1031,60 +1039,15 @@ class Reporter:
                     to_delete.append(module_name)
 
             for module_name in to_delete:
-                del self.model.config["report"][module_name]
+                del self.variables_to_report[module_name]
 
-            for module_name, configs in self.model.config["report"].items():
-                self.variables[module_name] = {}
+            for module_name, configs in self.variables_to_report.items():
                 for name, config in configs.items():
                     assert isinstance(config, dict), (
                         f"Configuration for {module_name}.{name} must be a dictionary, but is {type(config)}."
                     )
-                    self.variables[module_name][name] = self.create_variable(
-                        config, module_name, name
-                    )
         else:
             self.is_activated = False
-
-    def create_variable(self, config: dict, module_name: str, name: str) -> None:
-        """This function creates a variable for the reporter.
-
-        For configurations without an aggregation function, a zarr file is created.
-        For configurations with an aggregation function, both the time array and
-        the data array are lazily created on the first write so that runtime-only
-        information (e.g. substep count) is available when sizing the arrays.
-
-        Args:
-            config: The configuration for the variable (mutated in-place to add
-                pre-allocated time array and tracking structures).
-            module_name: The name of the module to which the variable belongs.
-            name: The name of the variable.
-
-        Returns:
-            None in all cases; data is tracked via the config dict.
-
-        Raises:
-            ValueError: If the variable type is not recognized.
-        """
-        if config["type"] == "scalar":
-            assert "function" not in config or config["function"] is None, (
-                "Scalar variables cannot have a function. "
-            )
-            initialize_tracking_arrays = True
-        elif config["type"] in ("grid", "HRU", "agents"):
-            initialize_tracking_arrays = config["function"] is not None
-        else:
-            raise ValueError(
-                f"Type {config['type']} not recognized. Must be 'scalar', 'grid', 'agents' or 'HRU'."
-            )
-
-        if initialize_tracking_arrays:
-            # Time array and data array are created lazily on first write.
-            # For grid/HRU this allows sizing based on runtime substep count.
-            config["_time_array"] = None
-            config["_data_array"] = None
-            config["_var_index"] = 0
-
-        return None
 
     def maybe_report_value(
         self,
@@ -1212,8 +1175,8 @@ class Reporter:
             else:
                 raster = self.hydrology.grid
 
-            time = create_time_array(
-                start=self.model.simulation_start,
+            time: ArrayInt64 = create_time_array(
+                start=self.model.current_time,
                 end=self.model.simulation_end,
                 timestep=self.model.timestep_length,
                 conf=config,
@@ -1385,8 +1348,8 @@ class Reporter:
                 to track zarr store, index, and buffer).
         """
         if config["_index"] == 0:
-            time = create_time_array(
-                start=self.model.simulation_start,
+            time: ArrayInt64 = create_time_array(
+                start=self.model.current_time,
                 end=self.model.simulation_end,
                 timestep=self.model.timestep_length,
                 conf=config,
@@ -1545,17 +1508,17 @@ class Reporter:
             )
 
         # Initialize time and data arrays on the first write.
-        if config["_time_array"] is None:
+        if "_time_array" not in config:
             substeps: int | None = config.get("substeps")
             config["_time_array"] = create_time_array(
-                start=self.model.simulation_start,
+                start=self.model.current_time,
                 end=self.model.simulation_end,
                 timestep=self.model.timestep_length,
                 conf=config,
                 substeps=substeps,
             )
 
-        if config["_data_array"] is None:
+        if "_data_array" not in config:
             n: int = len(config["_time_array"])
             # Use numpy value dtype
             if isinstance(value, np.ndarray):
@@ -1567,6 +1530,7 @@ class Reporter:
                     f"Value for {module_name}.{name} has unsupported type {type(value)}. Must be a numpy array or a scalar of type int, float or bool."
                 )
             config["_data_array"] = np.empty(n, dtype=dtype)
+            config["_var_index"] = 0
 
         if "substeps" in config:
             assert isinstance(value, np.ndarray)
@@ -1616,7 +1580,7 @@ class Reporter:
             ValueError: If the variable type is not recognized.
         """
         # If no data has been collected, we return
-        if self.model.config["report"] is None:
+        if self.variables_to_report is None:
             self.model.logger.info("No report configuration found. No data to report.")
             return
 
@@ -1625,7 +1589,7 @@ class Reporter:
             futures = []
 
             # Flush any remaining buffers
-            for module_name, configs in self.model.config["report"].items():
+            for module_name, configs in self.variables_to_report.items():
                 for name, config in configs.items():
                     if "function" in config and config["function"] is None:
                         if config["type"] == "agents":
@@ -1665,7 +1629,7 @@ class Reporter:
                         )
 
             # Export all scalar and aggregated variables to parquet files
-            for module_name, module_configs in self.model.config["report"].items():
+            for module_name, module_configs in self.variables_to_report.items():
                 for name, config in module_configs.items():
                     if "_time_array" not in config or config["_data_array"] is None:
                         continue
