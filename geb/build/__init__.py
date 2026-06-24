@@ -48,9 +48,7 @@ from geb.workflows.raster import (
     clip_with_grid,
     create_temp_zarr,
     full_like,
-    interpolate_na_along_dim as interpolate_na_along_dim,
     repeat_grid,
-    snap_to_grid as snap_to_grid,
 )
 
 from ..workflows.io import (

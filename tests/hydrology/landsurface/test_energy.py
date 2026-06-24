@@ -2,11 +2,16 @@
 
 import numpy as np
 
-from geb.hydrology.landsurface.constants import LAMBDA_ICE, LAMBDA_WATER
+from geb.hydrology.landsurface.constants import (
+    THERMAL_CONDUCTIVITY_ICE_WATT_PER_MKELVIN,
+    THERMAL_CONDUCTIVITY_WATER_WATT_PER_MKELVIN,
+)
 from geb.hydrology.landsurface.energy import (
     apply_rain_heat_advection,
     calculate_sensible_heat_flux,
     calculate_soil_thermal_conductivity,
+    calculate_thermal_conductivity_dry_soil_johansen_watt_per_meter_kelvin,
+    calculate_thermal_conductivity_saturated_soil_johansen_watt_per_meter_kelvin,
     calculate_thermal_conductivity_solid_fraction_watt_per_meter_kelvin,
     get_heat_capacity_solid_fraction,
     get_temperature_and_frozen_fraction_from_enthalpy_scalar,
@@ -140,33 +145,29 @@ def test_calculate_thermal_conductivity_solid_fraction() -> None:
 
 def test_calculate_soil_thermal_conductivity() -> None:
     """Test the total soil thermal conductivity calculation."""
-    # Input data
     lambda_s = np.float32(2.5)
-    bd = np.float32(1.3)
     sand = np.float32(50.0)
-    # theta = np.array([0.2], dtype=np.float32)
-    temp_hot = np.float32(20.0)
-    temp_cold = np.float32(-10.0)
 
-    # Calculate porosity to get degree of saturation
-    RHO_MINERAL = 2650.0
-    rho_bulk = bd * 1000.0
-    phi = 1.0 - (rho_bulk / RHO_MINERAL)
+    # Porosity and degree of saturation
+    phi_val = np.float32(0.4)
     Sr = np.float32(0.4)
-    phi_val = np.float32(phi)
-    bd_val = bd
+
     lambda_sat_unfrozen = (lambda_s ** (np.float32(1.0) - phi_val)) * (
-        LAMBDA_WATER**phi_val
+        THERMAL_CONDUCTIVITY_WATER_WATT_PER_MKELVIN**phi_val
     )
     lambda_sat_frozen = (lambda_s ** (np.float32(1.0) - phi_val)) * (
-        LAMBDA_ICE**phi_val
+        THERMAL_CONDUCTIVITY_ICE_WATT_PER_MKELVIN**phi_val
     )
+    # Johansen (1975) empirical dry-soil formula
+    thermal_conductivity_dry_soil = (
+        np.float32(0.053) * lambda_s + np.float32(0.0051)
+    ) / (np.float32(1.0) - np.float32(0.947) * phi_val)
 
     # Calculate for unfrozen (frozen_fraction = 0.0)
     lambda_total_hot = calculate_soil_thermal_conductivity(
         thermal_conductivity_saturated_unfrozen=lambda_sat_unfrozen,
         thermal_conductivity_saturated_frozen=lambda_sat_frozen,
-        bulk_density_kg_per_dm3=bd_val,
+        thermal_conductivity_dry_soil_W_per_m_K=thermal_conductivity_dry_soil,
         degree_of_saturation=Sr,
         sand_percentage=sand,
         frozen_fraction=np.float32(0.0),
@@ -176,7 +177,7 @@ def test_calculate_soil_thermal_conductivity() -> None:
     lambda_total_cold = calculate_soil_thermal_conductivity(
         thermal_conductivity_saturated_unfrozen=lambda_sat_unfrozen,
         thermal_conductivity_saturated_frozen=lambda_sat_frozen,
-        bulk_density_kg_per_dm3=bd_val,
+        thermal_conductivity_dry_soil_W_per_m_K=thermal_conductivity_dry_soil,
         degree_of_saturation=Sr,
         sand_percentage=sand,
         frozen_fraction=np.float32(1.0),
@@ -185,9 +186,9 @@ def test_calculate_soil_thermal_conductivity() -> None:
     # Saturated frozen conductivity should be higher than unfrozen because lambda_ice > lambda_water
     assert lambda_total_cold > lambda_total_hot
 
-    # Both should be between lambda_dry (~0.2-0.5) and lambda_sat (~2-4)
-    assert lambda_total_hot > 0.1
-    assert lambda_total_hot < 5.0
+    # Result should be between lambda_dry and lambda_sat
+    assert lambda_total_hot > float(thermal_conductivity_dry_soil)
+    assert lambda_total_hot < float(lambda_sat_unfrozen) * 1.1
 
 
 def test_calculate_sensible_heat_flux() -> None:
@@ -259,3 +260,43 @@ def test_apply_rain_heat_advection_reduces_frozen_fraction() -> None:
     assert initial_frozen_fraction > np.float32(0.0)
     assert updated_frozen_fraction < initial_frozen_fraction
     assert updated_frozen_fraction >= np.float32(0.0)
+
+
+def test_johansen_thermal_conductivity_functions() -> None:
+    """Test dry and saturated thermal conductivity functions from Johansen (1975)."""
+    # 1. Test Dry Conductivity
+    bd = np.array([1.3], dtype=np.float32)
+    expected_dry = (0.135 * 1300.0 + 64.7) / (2700.0 - 0.947 * 1300.0)
+    res_dry = calculate_thermal_conductivity_dry_soil_johansen_watt_per_meter_kelvin(bd)
+    np.testing.assert_allclose(
+        res_dry, np.array([expected_dry], dtype=np.float32), rtol=1e-5
+    )
+
+    # 2. Test Saturated Conductivity
+    lambda_s = np.array([2.5], dtype=np.float32)
+    porosity = np.array([0.4], dtype=np.float32)
+    f_water = np.float32(
+        0.57
+    )  # np.float32(THERMAL_CONDUCTIVITY_WATER_WATT_PER_MKELVIN)
+
+    expected_sat = (2.5**0.6) * (0.57**0.4)
+    res_sat = (
+        calculate_thermal_conductivity_saturated_soil_johansen_watt_per_meter_kelvin(
+            lambda_s, porosity, f_water
+        )
+    )
+    np.testing.assert_allclose(
+        res_sat, np.array([expected_sat], dtype=np.float32), rtol=1e-5
+    )
+
+    # Test with ice
+    f_ice = np.float32(2.2)  # np.float32(THERMAL_CONDUCTIVITY_ICE_WATT_PER_MKELVIN)
+    expected_sat_ice = (2.5**0.6) * (2.2**0.4)
+    res_sat_ice = (
+        calculate_thermal_conductivity_saturated_soil_johansen_watt_per_meter_kelvin(
+            lambda_s, porosity, f_ice
+        )
+    )
+    np.testing.assert_allclose(
+        res_sat_ice, np.array([expected_sat_ice], dtype=np.float32), rtol=1e-5
+    )

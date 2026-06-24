@@ -12,6 +12,9 @@ Notes:
 
 import numpy as np
 
+KELVIN_OFFSET: np.float32 = np.float32(273.15)
+SNOW_EMISSIVITY: np.float32 = np.float32(0.99)  # Emissivity of snow surface
+
 # Densities
 RHO_WATER_KG_PER_M3: np.float32 = np.float32(1000.0)  # kg/m3
 
@@ -30,22 +33,23 @@ VOLUMETRIC_HEAT_CAPACITY_ICE_J_PER_M3_K: np.float32 = (
 )
 
 # Latent heats
-L_FUSION_J_PER_KG: np.float32 = np.float32(3.34e5)
-L_VAPORIZATION_J_PER_KG: np.float32 = np.float32(2.45e6)
-L_SUBLIMATION_J_PER_KG: np.float32 = L_FUSION_J_PER_KG + L_VAPORIZATION_J_PER_KG
+LATENT_HEAT_FUSION_J_PER_KG: np.float32 = np.float32(334000.0)
+LATENT_HEAT_VAPORIZATION_J_PER_KG: np.float32 = np.float32(2.501e6)
+LATENT_HEAT_SUBLIMATION_J_PER_KG: np.float32 = np.float32(2.834e6)
 
 # Radiation
 STEFAN_BOLTZMANN_W_PER_M2_K4: np.float32 = np.float32(5.670374419e-8)
 
 # Thermal Conductivities [W/(m K)]
 # Values from Johansen (1975)
-LAMBDA_WATER: np.float32 = np.float32(0.57)
-LAMBDA_ICE: np.float32 = np.float32(2.2)
-LAMBDA_QUARTZ: np.float32 = np.float32(7.7)
-LAMBDA_OTHER_FINE: np.float32 = np.float32(2.0)
+THERMAL_CONDUCTIVITY_WATER_WATT_PER_MKELVIN: np.float32 = np.float32(0.57)
+THERMAL_CONDUCTIVITY_ICE_WATT_PER_MKELVIN: np.float32 = np.float32(2.2)
+THERMAL_CONDUCTIVITY_QUARTZ_WATT_PER_MKELVIN: np.float32 = np.float32(7.7)
+THERMAL_CONDUCTIVITY_NON_QUARTZ_WATT_PER_MKELVIN: np.float32 = np.float32(2.0)
 
 # Soil properties
 C_MINERAL_VOLUMETRIC_J_PER_M3_K: np.float32 = np.float32(2.13e6)
 RHO_MINERAL_KG_PER_M3: np.float32 = np.float32(2650.0)
 
 N_SOIL_LAYERS: int = 6
+N_SNOW_LAYERS: int = 2

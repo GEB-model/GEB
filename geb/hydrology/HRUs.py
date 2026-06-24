@@ -674,9 +674,10 @@ class HRUVariables(Bucket):
 
     variable_runoff_shape_beta: ArrayFloat32
     interception_storage_m: ArrayFloat32
-    snow_temperature_C: ArrayFloat32
-    liquid_water_in_snow_m: ArrayFloat64
-    snow_water_equivalent_m: ArrayFloat64
+    snow_enthalpy_J_per_m2: TwoDArrayFloat32
+    liquid_water_in_snow_m: TwoDArrayFloat64
+    snow_water_equivalent_m: TwoDArrayFloat64
+    snow_density_kg_per_m3: TwoDArrayFloat32
     topwater_m: ArrayFloat32
     reservoir_command_areas: ArrayInt32
     cell_area: ArrayFloat32
@@ -711,6 +712,7 @@ class HRUVariables(Bucket):
     bulk_density_kg_per_dm3: TwoDArrayFloat32
     thermal_conductivity_saturated_unfrozen_W_per_m_K: TwoDArrayFloat32
     thermal_conductivity_saturated_frozen_W_per_m_K: TwoDArrayFloat32
+    thermal_conductivity_dry_soil_W_per_m_K: TwoDArrayFloat32
     crop_group_number_forest: ArrayFloat32
     crop_group_number_grassland_like: ArrayFloat32
     leaf_area_index_forest: TwoDArrayFloat32

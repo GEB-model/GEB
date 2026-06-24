@@ -6,7 +6,7 @@ from numba import njit
 from geb.workflows.numba_stack_array import stack_empty
 
 from .constants import (
-    L_FUSION_J_PER_KG,
+    LATENT_HEAT_FUSION_J_PER_KG,
     N_SOIL_LAYERS,
     RHO_WATER_KG_PER_M3,
     SPECIFIC_HEAT_CAPACITY_ICE_J_PER_KG_K,
@@ -104,7 +104,7 @@ def distribute_soil_water_ross(
         topwater_frac_m = topwater_m if i == 0 else np.float32(0.0)
         water_depth_frac_m = water_content_m[i] + topwater_frac_m
         latent_heat_frac_J_per_m2 = (
-            water_depth_frac_m * RHO_WATER_KG_PER_M3 * L_FUSION_J_PER_KG
+            water_depth_frac_m * RHO_WATER_KG_PER_M3 * LATENT_HEAT_FUSION_J_PER_KG
         )
         h_frac = soil_enthalpy_J_per_m2[i]
         if h_frac >= np.float32(0.0):
@@ -415,7 +415,7 @@ def distribute_soil_water_ross(
 
         src_water_depth_m = water_content_m[source_idx] + source_topwater_m
         src_latent_heat_J_per_m2 = (
-            src_water_depth_m * RHO_WATER_KG_PER_M3 * L_FUSION_J_PER_KG
+            src_water_depth_m * RHO_WATER_KG_PER_M3 * LATENT_HEAT_FUSION_J_PER_KG
         )
         src_heat_capacity_liquid_J_per_m2_K = (
             solid_heat_capacity_J_per_m2_K[source_idx]
@@ -509,7 +509,7 @@ def distribute_soil_water_ross(
         topwater_layer_m = topwater_m if i == 0 else np.float32(0.0)
         water_depth_m = water_content_m[i] + topwater_layer_m
         latent_heat_areal_J_per_m2 = (
-            water_depth_m * RHO_WATER_KG_PER_M3 * L_FUSION_J_PER_KG
+            water_depth_m * RHO_WATER_KG_PER_M3 * LATENT_HEAT_FUSION_J_PER_KG
         )
         heat_capacity_liquid_J_per_m2_K = (
             solid_heat_capacity_J_per_m2_K[i]
