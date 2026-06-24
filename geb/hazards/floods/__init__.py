@@ -13,14 +13,12 @@ import xarray as xr
 from shapely.geometry.point import Point
 
 from geb.geb_types import (
-    ArrayFloat32,
     TwoDArrayFloat32,
 )
 from geb.hazards.event import Event
 from geb.hazards.floods.workflows.utils import get_start_point
 from geb.hydrology.routing import (
     get_discharge_per_river,
-    get_upstream_represented_xys as get_upstream_represented_xys,
 )
 from geb.module import Module
 from geb.store import Bucket
@@ -192,10 +190,10 @@ class Floods(Module):
             self.hydrology: Hydrology = model.hydrology
             self.longest_flood_event_in_days: int = longest_flood_event_in_days
 
-            self.var.discharge_per_timestep: deque[ArrayFloat32] = deque(
+            self.var.discharge_per_timestep = deque(
                 maxlen=self.longest_flood_event_in_days
             )
-            self.var.runoff_m_per_timestep: deque[ArrayFloat32] = deque(
+            self.var.runoff_m_per_timestep = deque(
                 maxlen=self.longest_flood_event_in_days
             )
 
@@ -438,7 +436,9 @@ class Floods(Module):
                 f"Unknown forcing method {self.config['forcing_method']}. Supported are 'headwater_points' and 'accumulated_runoff'."
             )
 
-        simulation.set_river_inflow(discharge_by_river=discharge_by_river)
+        if simulation.root_model.has_inflow:
+            simulation.set_river_inflow(discharge_by_river=discharge_by_river)
+
         return simulation
 
     def run_single_event(
@@ -502,16 +502,29 @@ class Floods(Module):
             # reset rivers downstream outflow column
             # simulation_rivers["is_downstream_outflow"] = False
             rivers["is_downstream_outflow"] = False
+            rivers["is_further_downstream_outflow"] = False
 
             # set downstream outflow for the downstream subbasins
             for downstream_subbasin_id in downstream_subbasins.index:
-                # simulation_rivers.loc[
-                #     simulation_rivers.index == downstream_subbasin_id,
-                #     "is_downstream_outflow",
-                # ] = True
-                rivers.loc[
-                    rivers.index == downstream_subbasin_id, "is_downstream_outflow"
-                ] = True
+                rivers.loc[downstream_subbasin_id, "is_downstream_outflow"] = True
+
+                further_downstream_river = rivers.loc[
+                    downstream_subbasin_id, "downstream_ID"
+                ]
+                while further_downstream_river != -1:
+                    rivers.loc[
+                        further_downstream_river, "is_further_downstream_outflow"
+                    ] = True
+                    further_downstream_river = rivers.loc[
+                        further_downstream_river, "downstream_ID"
+                    ]
+
+            # remove is_further_downstream_outflow if also is_downstream_outflow
+            rivers.loc[
+                rivers["is_downstream_outflow"]
+                & rivers["is_further_downstream_outflow"],
+                "is_further_downstream_outflow",
+            ] = False
 
             grouped_subbasins = {0: list(included_subbasins.index)}
         else:
@@ -602,10 +615,6 @@ class Floods(Module):
         Raises:
             ValueError: If no hydrograph is found for a node and return period.
         """
-        # close the zarr store
-        if hasattr(self.model, "reporter"):
-            self.model.reporter.variables["discharge_daily"].close()
-
         # load model settings
         coastal_only = self.config["coastal_only"]
 

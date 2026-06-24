@@ -690,11 +690,13 @@ def test_read(geb_model: GEBModel) -> None:
         assert sfincs_model_build.path == sfincs_model_read.path
         assert sfincs_model_build.name == sfincs_model_read.name
         if sfincs_model_build.is_geographic:
-            sfincs_model_build.cell_area == sfincs_model_read.cell_area
+            sfincs_model_build.cell_area_m2 == sfincs_model_read.cell_area_m2
         else:
-            assert isinstance(sfincs_model_read.cell_area, xr.DataArray)
-            assert isinstance(sfincs_model_build.cell_area, xr.DataArray)
-            assert (sfincs_model_build.cell_area == sfincs_model_read.cell_area).all()
+            assert isinstance(sfincs_model_read.cell_area_m2, xr.DataArray)
+            assert isinstance(sfincs_model_build.cell_area_m2, xr.DataArray)
+            assert (
+                sfincs_model_build.cell_area_m2 == sfincs_model_read.cell_area_m2
+            ).all()
         assert sfincs_model_build.path == sfincs_model_read.path
         for col in sfincs_model_build.rivers.columns:
             assert sfincs_model_build.rivers[col].equals(sfincs_model_read.rivers[col])

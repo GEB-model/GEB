@@ -7,7 +7,7 @@ module-root = ""
 
 [project]
 name = "geb"
-version = "1.0.0b29"
+version = "1.0.0b30"
 description = "GEB simulates the environment (e.g., hydrology, floods), the individual people, households and orginizations as well as their interactions at both small and large scale."
 authors = [
     {name = "Jens de Bruijn", email = "jens.de.bruijn@vu.nl"},
@@ -86,6 +86,7 @@ dependencies = [
     "hda>=2.39",
     "huggingface-hub>=1.18.0",
     "aiohttp-retry>=2.9.1",
+    "scikit-image>=0.26.0",
 ]
 requires-python = ">=3.14.4, <3.15"
 readme = "README.md"

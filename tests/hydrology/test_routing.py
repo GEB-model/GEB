@@ -1206,6 +1206,59 @@ def test_retention_uncontrolled_uses_uncontrolled_threshold() -> None:
     np.testing.assert_allclose(retention_inflow[0], expected_diversion_m3, rtol=1e-5)
 
 
+def test_retention_basin_evaporation_logic() -> None:
+    """Test the calculation logic for retention basin evaporation.
+
+    This test verifies the math used in Routing.step for retention basin evaporation,
+    assuming a 3m depth and constant area.
+    """
+    # Setup mock data similar to what's in Routing
+    retention_max_storage_m3 = np.array([300.0, 600.0], dtype=np.float32)
+    retention_basin_ids = np.array([0, 0, 1, -1], dtype=np.int32)
+    reference_evapotranspiration_water_m_hour = np.array(
+        [0.01, 0.02, 0.03, 0.04], dtype=np.float32
+    )
+    retention_basin_storage_m3 = np.array([100.0, 50.0], dtype=np.float32)
+
+    # 1. Calculate area (depth=3m)
+    retention_basin_area = retention_max_storage_m3 / 3.0  # [100.0, 200.0]
+
+    # 2. Aggregate potential ET
+    retention_mask = retention_basin_ids != -1
+    count = np.bincount(
+        retention_basin_ids[retention_mask], minlength=len(retention_basin_area)
+    )
+    # counts: [2, 1]
+
+    et_sum = np.bincount(
+        retention_basin_ids[retention_mask],
+        weights=reference_evapotranspiration_water_m_hour[retention_mask],
+        minlength=len(retention_basin_area),
+    )
+    # et_sum: [0.01 + 0.02, 0.03] = [0.03, 0.03]
+
+    avg_et = et_sum / np.maximum(count, 1)
+    # avg_et: [0.015, 0.03]
+
+    # 3. Calculate potential evaporation volume
+    potential_evaporation_m3 = avg_et * retention_basin_area
+    # potential_evaporation_m3: [0.015 * 100, 0.03 * 200] = [1.5, 6.0]
+
+    # 4. Calculate actual evaporation
+    actual_evaporation_m3 = np.minimum(
+        potential_evaporation_m3, retention_basin_storage_m3
+    )
+    # actual_evaporation_m3: [min(1.5, 100), min(6, 50)] = [1.5, 6.0]
+
+    assert np.allclose(actual_evaporation_m3, np.array([1.5, 6.0], dtype=np.float32))
+
+    # Test storage reduction
+    retention_basin_storage_m3 -= actual_evaporation_m3
+    assert np.allclose(
+        retention_basin_storage_m3, np.array([98.5, 44.0], dtype=np.float32)
+    )
+
+
 def test_retention_release_at_low_flow() -> None:
     """Water is released from the basin back into the river when flow is low.
 

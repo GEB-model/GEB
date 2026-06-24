@@ -23,7 +23,6 @@ import rasterio
 import rasterio.features
 import xarray as xr
 from hydromt_sfincs import SfincsModel
-from hydromt_sfincs.workflows import burn_river_rect
 from pyflwdir import FlwdirRaster
 from pyflwdir.dem import fill_depressions
 from pyproj import CRS
@@ -42,6 +41,7 @@ from geb.geb_types import (
     TwoDArrayInt32,
 )
 from geb.hazards.event import Event
+from geb.hazards.floods.workflows.bathymetry import burn_rivers
 from geb.hazards.floods.workflows.utils import get_end_point
 from geb.hydrology.routing import get_river_width
 from geb.workflows.extreme_value_analysis import ReturnPeriodModel
@@ -244,7 +244,7 @@ class SFINCSRootModel:
             parameters.pop("self")
             hash_file: Path = self.path / "model.hash"
             current_hash: str = create_hash_from_parameters(
-                parameters, code_path=Path(__file__)
+                parameters, code_path=Path(__file__).parent
             )
             if hash_file.exists() and (self.path / "sfincs.inp").exists():
                 previous_hash = read_hash(hash_file)
@@ -303,7 +303,7 @@ class SFINCSRootModel:
 
         # we need this later to exclude these subbasins from the area of interest
         subbasins_of_interest = subbasins[
-            (~subbasins["is_downstream_outflow"].astype(bool))
+            (~subbasins.index.isin(rivers[rivers["is_downstream_outflow"]].index))
         ].index.tolist()
 
         self.subbasins, subbasins_burned = self.burn_and_align_subbasins(
@@ -370,11 +370,14 @@ class SFINCSRootModel:
 
             DEM["elevation"] = clip_with_geometry(
                 DEM["elevation"]["elevation"],
-                self.subbasins,
+                gpd.GeoDataFrame(
+                    [self.subbasins.union_all().buffer(0.1)],
+                    columns=["geometry"],
+                    crs=self.subbasins.crs,
+                ),
                 all_touched=True,
                 drop=True,
             ).to_dataset(name="elevation")
-
             DEMs_in_area_of_interest.append(DEM)
 
         if not DEMs_in_area_of_interest:
@@ -507,21 +510,6 @@ class SFINCSRootModel:
         if not self.active_rivers.empty or (
             custom_rivers_to_burn is not None and not custom_rivers_to_burn.empty
         ):
-            river_representative_points = []
-            for ID in self.active_rivers.index:
-                river_representative_points.append(
-                    get_representative_river_points(
-                        ID, self.rivers, ~np.isnan(river_width_alpha)
-                    )
-                )
-
-            river_parameters: pd.DataFrame = get_river_parameters_by_river(
-                self.active_rivers.index.tolist(),
-                river_representative_points,
-                river_width_alpha=river_width_alpha,
-                river_width_beta=river_width_beta,
-            )
-
             # resample to daily frequency because this is the frequency for the river
             # width and depth estimation formulas.
             discharge_by_river = discharge_by_river.resample("D", label="left").mean()
@@ -537,8 +525,127 @@ class SFINCSRootModel:
                         "Custom rivers to burn must have a 'depth' column when using custom rivers"
                     )
             else:
+                active_rivers = self.active_rivers.copy()
+                # iteratively get all outflow rivers from self.rivers
+                to_search = set(active_rivers.index)
+                rivers_to_burn = to_search.copy()
+                while to_search:
+                    current_river = to_search.pop()
+                    downstream_river = self.rivers.loc[current_river, "downstream_ID"]
+                    if downstream_river == -1:
+                        continue
+                    if downstream_river in rivers_to_burn:
+                        continue
+                    to_search.add(downstream_river)
+                    rivers_to_burn.add(downstream_river)
+                rivers_to_burn = self.rivers.loc[list(rivers_to_burn)].copy()
+
+                # clip rivers to region
+                rivers_to_burn = gpd.clip(
+                    rivers_to_burn,
+                    self.sfincs_model.grid.region.to_crs(
+                        rivers_to_burn.crs
+                    ).union_all(),
+                )
+
+                rivers_to_burn = rivers_to_burn[
+                    rivers_to_burn.index.isin(discharge_by_river.columns)
+                ]
+
+                discharge_by_river = discharge_by_river[
+                    rivers_to_burn[
+                        ~rivers_to_burn["is_further_downstream_outflow"]
+                    ].index
+                ]
+
+                assert (
+                    rivers_to_burn[rivers_to_burn["is_downstream_outflow"]]
+                    .index.isin(discharge_by_river.columns)
+                    .all()
+                ), (
+                    "All downstream outflow rivers must have discharge data for river width estimation"
+                )
+
+                river_representative_points = []
+                for ID in rivers_to_burn[
+                    ~rivers_to_burn["is_further_downstream_outflow"]
+                ].index:
+                    river_representative_points.append(
+                        get_representative_river_points(
+                            ID, self.rivers, ~np.isnan(river_width_alpha)
+                        )
+                    )
+
+                river_parameters: pd.DataFrame = get_river_parameters_by_river(
+                    rivers_to_burn[
+                        ~rivers_to_burn["is_further_downstream_outflow"]
+                    ].index.tolist(),
+                    river_representative_points,
+                    river_width_alpha=river_width_alpha,
+                    river_width_beta=river_width_beta,
+                )
+
+                assert set(discharge_by_river.columns) == set(river_parameters.index)
+
+                river_parameters["n_rivers"] = 1
+                for river_to_burn_index, river_to_burn in rivers_to_burn[
+                    rivers_to_burn["is_downstream_outflow"]
+                ].iterrows():
+                    downstream_ID = river_to_burn["downstream_ID"]
+                    while downstream_ID != -1 and downstream_ID in rivers_to_burn.index:
+                        river_width_alpha = river_parameters.loc[
+                            river_to_burn_index, "river_width_alpha"
+                        ]
+                        river_width_beta = river_parameters.loc[
+                            river_to_burn_index, "river_width_beta"
+                        ]
+                        if downstream_ID in discharge_by_river.columns:
+                            n_rivers = river_parameters.loc[downstream_ID, "n_rivers"]
+                            river_parameters.loc[downstream_ID, "river_width_alpha"] = (
+                                (
+                                    river_parameters.loc[
+                                        downstream_ID, "river_width_alpha"
+                                    ]
+                                )
+                                * n_rivers
+                                + river_width_alpha
+                            ) / (n_rivers + 1)
+                            river_parameters.loc[downstream_ID, "river_width_beta"] = (
+                                (
+                                    river_parameters.loc[
+                                        downstream_ID, "river_width_beta"
+                                    ]
+                                )
+                                * n_rivers
+                                + river_width_beta
+                            ) / (n_rivers + 1)
+
+                            river_parameters.loc[downstream_ID, "n_rivers"] += 1
+                        else:
+                            discharge_by_river[downstream_ID] = discharge_by_river[
+                                river_to_burn_index
+                            ]
+                            river_parameters.loc[downstream_ID, "river_width_alpha"] = (
+                                river_width_alpha
+                            )
+                            river_parameters.loc[downstream_ID, "river_width_beta"] = (
+                                river_width_beta
+                            )
+                            river_parameters.loc[downstream_ID, "n_rivers"] = 1
+
+                        downstream_ID = rivers_to_burn.loc[
+                            downstream_ID, "downstream_ID"
+                        ]
+
+                assert set(rivers_to_burn.index) == set(discharge_by_river.columns), (
+                    "All rivers to burn must have discharge data for river width estimation"
+                )
+                assert set(rivers_to_burn.index) == set(river_parameters.index), (
+                    "All rivers to burn must have river width parameters for river width estimation"
+                )
+
                 rivers_to_burn = self.assign_return_periods(
-                    self.active_rivers.copy(),
+                    rivers_to_burn,
                     discharge_by_river,
                     return_periods=[2],
                     p_value_threshold=p_value_threshold,
@@ -551,9 +658,13 @@ class SFINCSRootModel:
                 river_width_unknown_mask = rivers_to_burn["width"].isnull()
 
                 rivers_to_burn.loc[river_width_unknown_mask, "width"] = get_river_width(
-                    river_parameters["river_width_alpha"][river_width_unknown_mask],
-                    river_parameters["river_width_beta"][river_width_unknown_mask],
-                    rivers_to_burn.loc[river_width_unknown_mask, "Q_2"],
+                    river_parameters.loc[
+                        river_width_unknown_mask, "river_width_alpha"
+                    ].values,
+                    river_parameters.loc[
+                        river_width_unknown_mask, "river_width_beta"
+                    ].values,
+                    rivers_to_burn.loc[river_width_unknown_mask, "Q_2"].values,
                 ).astype(np.float64)
 
                 rivers_to_burn["depth"] = get_river_depth(
@@ -577,11 +688,6 @@ class SFINCSRootModel:
             assert rivers_to_burn["manning"].notnull().all(), (
                 "River Manning's n cannot be null"
             )
-
-            # only burn rivers that are wider than the grid size
-            rivers_to_burn: gpd.GeoDataFrame = rivers_to_burn[
-                rivers_to_burn["width"] > self.estimated_cell_size_m
-            ]
 
             rivers_to_burn.to_parquet(self.path / "rivers_to_burn.geoparquet")
         else:
@@ -639,23 +745,14 @@ class SFINCSRootModel:
                 # retrieve the elevation and mannings grids
                 # burn the rivers into these grids
                 # and write the burned grids back to the model
-                with warnings.catch_warnings():
-                    # This seems to be solved by pandas 3.0.
-                    warnings.filterwarnings(
-                        action="default",
-                        category=FutureWarning,
-                    )
-                    sf.elevation.data["dep"], sf.roughness.data["manning"] = (
-                        burn_river_rect(
-                            da_elv=sf.elevation.data["dep"],
-                            gdf_riv=rivers_to_burn,
-                            da_man=sf.roughness.data["manning"],
-                            rivwth_name="width",
-                            rivdph_name="depth",
-                            manning_name="manning",
-                            segment_length=90.0,
-                        )
-                    )
+                burned_elv, burned_manning, burned_riv = burn_rivers(
+                    da_elevation=sf.elevation.data["dep"],
+                    da_manning=sf.roughness.data["manning"],
+                    rivers=rivers_to_burn,
+                    fill_first=False,
+                )
+                sf.elevation.data["dep"] = burned_elv
+                sf.roughness.data["manning"] = burned_manning
 
         sf.write()
 
@@ -1224,7 +1321,7 @@ class SFINCSRootModel:
         return self.sfincs_model.crs.is_geographic
 
     @property
-    def cell_area(self) -> float | int | xr.DataArray:
+    def cell_area_m2(self) -> xr.DataArray:
         """Returns the area of a single cell in the SFINCS model grid in square meters.
 
         Returns:
@@ -1257,9 +1354,9 @@ class SFINCSRootModel:
             The estimated cell size of the SFINCS model grid in meters.
         """
         if self.is_geographic:
-            assert isinstance(self.cell_area, xr.DataArray)
-            avg_cell_area = self.cell_area.mean().item()
-            estimated_cell_size = np.sqrt(avg_cell_area)
+            assert isinstance(self.cell_area_m2, xr.DataArray)
+            avg_cell_area: float = self.cell_area_m2.mean().item()
+            estimated_cell_size: float = math.sqrt(avg_cell_area)
             return estimated_cell_size
         else:
             return math.sqrt(
