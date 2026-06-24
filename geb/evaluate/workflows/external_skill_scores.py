@@ -45,7 +45,8 @@ GLOFAS_CALIBRATION_METADATA_ARCHIVE_MEMBER: str = (
     f"metadata/{GLOFAS_CALIBRATION_METADATA_CSV_NAME}"
 )
 EXTERNAL_MODEL_MINIMUM_UPSTREAM_AREA_KM2: dict[str, float] = {
-    # Utrecht 1 km evaluation uses stations with upstream area >= 400 km2.
+    # PCR-GLOBWB 1 km files use both project and Utrecht labels.
+    "pcr-globwb": 400.0,
     "utrecht": 400.0,
     # GloFAS uses a 3-arcmin grid; the paper removes small GRDC basins to
     # reduce drainage-network area mismatches at that resolution.
@@ -272,14 +273,18 @@ def _standardize_external_metric_columns(
 
     Returns:
         Skill-score table with Pearson-r source values stored as
-        `KGE_correlation` and no standalone `R` column. Utrecht `R2` is kept
+        `KGE_correlation` and no standalone `R` column. PCR-GLOBWB `R2` is kept
         as-is when NSE is also present; otherwise it is renamed to NSE (legacy
         exports that provided only COD). `R2` derived from `R` is Pearson r².
     """
     standardized_df: pd.DataFrame = skill_score_df.copy()
-    if "utrecht" in model_name.lower() and "R2" in standardized_df.columns:
+    model_name_lower: str = model_name.lower()
+    if (
+        any(label in model_name_lower for label in ("pcr-globwb", "utrecht"))
+        and "R2" in standardized_df.columns
+    ):
         if "NSE" not in standardized_df.columns:
-            # Older Utrecht exports only provide R2 (COD); treat it as NSE.
+            # Older PCR-GLOBWB exports only provide R2 (COD); treat it as NSE.
             standardized_df = standardized_df.rename(columns={"R2": "NSE"})
     if "R" in standardized_df.columns:
         if "KGE_correlation" not in standardized_df.columns:
@@ -962,6 +967,12 @@ def _read_external_csv_models(
     ]
     if csv_paths:
         logger.info("Reading external evaluation data from %s.", folder)
+    else:
+        logger.warning(
+            "No external evaluation CSV files found in %s. Comparisons requiring "
+            "local CSV data, such as PCR-GLOBWB/Utrecht, will be omitted.",
+            folder,
+        )
 
     for csv_path in csv_paths:
         external_evaluation_df: pd.DataFrame = pd.read_csv(csv_path, index_col=0)
@@ -1072,7 +1083,10 @@ def read_external_evaluation_raw(
         model_folder=model_folder,
     )
     if folder is None:
-        logger.info("No external evaluation data folder configured, skipping.")
+        logger.warning(
+            "No external evaluation data folder is configured. External model "
+            "comparisons will be omitted."
+        )
         return {}
 
     if folder.is_file() and folder.suffix == ".tgz":
@@ -1090,8 +1104,10 @@ def read_external_evaluation_raw(
 
     if not folder.exists():
         if not auto_fetch_google_streamflow:
-            logger.info(
-                "No external evaluation data folder found at %s, skipping.", folder
+            logger.warning(
+                "External evaluation data folder not found at %s. External model "
+                "comparisons will be omitted.",
+                folder,
             )
             return {}
         logger.info("Creating external evaluation data folder at %s.", folder)
@@ -1448,7 +1464,7 @@ def prepare_skill_score_boxplot_inputs(
         auto_fetch_google_streamflow: Whether to download Google's original
             metrics archive when no local Google metrics are found.
         archive_models_only: Whether to exclude non-archive external models,
-            such as Utrecht, from the comparison.
+            such as PCR-GLOBWB, from the comparison.
 
     Returns:
         Prepared GEB/external tables and the filter summary for plot annotation.
@@ -1579,7 +1595,7 @@ def prepare_pairwise_skill_score_boxplot_inputs(
         auto_fetch_google_streamflow: Whether to download Google's original
             metrics archive when no local Google metrics are found.
         archive_models_only: Whether to exclude non-archive external models,
-            such as Utrecht, from the comparison.
+            such as PCR-GLOBWB, from the comparison.
         archive_evaluation_metrics_path: Optional GEB metrics file covering the
             Google/GloFAS archive period. When omitted, archive models use
             ``evaluation_metrics_path``. When provided but missing, archive

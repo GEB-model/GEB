@@ -2,7 +2,7 @@
 
 import shutil
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 import geopandas as gpd
 import matplotlib as mpl
@@ -23,8 +23,11 @@ from scores.continuous import (
 from tqdm import tqdm
 
 from geb.evaluate.workflows.dashboard import (
+    DischargeDashboardGeometries,
     build_discharge_dashboard_chart_data,
     create_discharge_folium_map,
+    load_discharge_dashboard_geometries,
+    write_discharge_dashboard_chart_data,
 )
 from geb.evaluate.workflows.external_skill_scores import (
     get_external_model_output_suffix as _get_external_model_output_suffix,
@@ -35,10 +38,16 @@ from geb.evaluate.workflows.external_skill_scores import (
     read_external_evaluation_raw as _read_external_evaluation_raw,
 )
 from geb.evaluate.workflows.hydrology_plot_engine import (
+    OBSERVATIONS_COLOR,
+    SIMULATIONS_DEFAULT_COLOR,
     plot_kge_external_model_comparison as _plot_kge_external_model_comparison,
     plot_skill_score_boxplots as _plot_skill_score_boxplots,
     plot_skill_score_maps as _plot_skill_score_maps,
     plot_skill_scores_vs_upstream_area as _plot_skill_scores_vs_upstream_area,
+    save_discharge_timeseries_plots,
+)
+from geb.evaluate.workflows.hydrology_summary import (
+    create_discharge_skill_score_summary,
 )
 from geb.hydrology.routing import read_discharge_per_river
 from geb.reporter import WATER_STORAGE_REPORT_CONFIG
@@ -54,8 +63,6 @@ from geb.workflows.extreme_value_analysis import (
 from geb.workflows.io import read_geom, read_table
 from geb.workflows.timeseries import regularize_discharge_timeseries
 
-OBSERVATIONS_COLOR = "#E6900A"
-SIMULATIONS_DEFAULT_COLOR = "#278DD9"
 GOOGLE_GLOFAS_EVALUATION_START_YEAR: int = 2014
 GOOGLE_GLOFAS_EVALUATION_END_YEAR: int = 2021
 
@@ -1065,165 +1072,19 @@ def _filter_validation_df_to_years(
     if start_year is None and end_year is None:
         return validation_df
     start_time: pd.Timestamp | None = (
-        pd.Timestamp(year=start_year, month=1, day=1)
+        cast(pd.Timestamp, pd.Timestamp(year=start_year, month=1, day=1))
         if start_year is not None
         else None
     )
     end_time: pd.Timestamp | None = (
-        pd.Timestamp(year=end_year + 1, month=1, day=1) - pd.Timedelta("1ns")
+        cast(
+            pd.Timestamp,
+            pd.Timestamp(year=end_year + 1, month=1, day=1) - pd.Timedelta("1ns"),
+        )
         if end_year is not None
         else None
     )
     return validation_df.loc[start_time:end_time]
-
-
-def _plot_discharge_validation_graphs(
-    model: GEBModel,
-    station_id: Any,
-    validation_df: pd.DataFrame,
-    station_name: str,
-    upstream_area_ratio: float,
-    kge: float,
-    nse: float,
-    r2_value: float,
-    eval_plot_folder: Path,
-    include_yearly_plots: bool,
-    frequency: str,
-) -> None:
-    """Plot station-level full timeseries, and optional yearly timeseries.
-
-    Args:
-        model: The GEB model
-        station_id: Station identifier used in output file names.
-        validation_df: Validation dataframe containing `discharge_observations` and `discharge_simulations` (m3/s).
-        station_name: Human-readable station name.
-        upstream_area_ratio: Ratio between observed and modeled upstream area
-            (dimensionless).
-        kge: Kling-Gupta efficiency (dimensionless).
-        nse: Nash-Sutcliffe efficiency (dimensionless).
-        r2_value: Squared Pearson correlation (dimensionless).
-        eval_plot_folder: Output directory for generated plots.
-        include_yearly_plots: Whether to generate per-year timeseries plots.
-        frequency: Data frequency string for plot titles (e.g., "daily", "hourly").
-
-    """
-    fig, ax = plt.subplots(figsize=(13, 4))
-    ax.plot(
-        validation_df.index,
-        validation_df["discharge_simulations"],
-        label="Simulated",
-        linewidth=0.5,
-        color=SIMULATIONS_DEFAULT_COLOR,
-    )
-    ax.plot(
-        validation_df.index,
-        validation_df["discharge_observations"],
-        label="Observed",
-        linewidth=0.5,
-        color=OBSERVATIONS_COLOR,
-    )
-    ax.set_ylabel("Discharge [m3/s]")
-    ax.set_xlabel("Time")
-    ax.set_ylim(0, None)
-    ax.set_xlim(validation_df.index.min(), validation_df.index.max())
-    ax.legend(loc="upper right", fontsize=10)
-
-    if np.isfinite(r2_value):
-        ax.text(0.02, 0.9, f"$r^2$={r2_value:.2f}", transform=ax.transAxes, fontsize=12)
-        ax.text(0.02, 0.85, f"KGE={kge:.2f}", transform=ax.transAxes, fontsize=12)
-        ax.text(0.02, 0.8, f"NSE={nse:.2f}", transform=ax.transAxes, fontsize=12)
-    else:
-        ax.text(
-            0.02,
-            0.9,
-            "No overlapping values for score metrics",
-            transform=ax.transAxes,
-            fontsize=12,
-        )
-    ax.text(
-        0.02,
-        0.75,
-        f"Mean={validation_df['discharge_simulations'].dropna().mean():.2f}",
-        transform=ax.transAxes,
-        fontsize=12,
-    )
-    ax.text(
-        0.02,
-        0.70,
-        f"upstream area ratio: {upstream_area_ratio:.2f}",
-        transform=ax.transAxes,
-        fontsize=12,
-    )
-    plt.title(f"Discharge vs observations for station {station_name}")
-    timeseries_folder: Path = eval_plot_folder / "timeseries"
-    timeseries_folder.mkdir(parents=True, exist_ok=True)
-    plt.savefig(
-        timeseries_folder / f"timeseries_plot_{station_id}.svg",
-        bbox_inches="tight",
-    )
-    plt.savefig(
-        timeseries_folder / f"timeseries_plot_{station_id}.png",
-        bbox_inches="tight",
-        dpi=72,
-    )
-    plt.show()
-    plt.close()
-
-    if include_yearly_plots:
-        years_to_plot: list[int] = sorted(validation_df.index.year.unique())  # ty:ignore[unresolved-attribute]
-        for year in years_to_plot:
-            one_year_df: pd.DataFrame = validation_df[validation_df.index.year == year]  # ty:ignore[unresolved-attribute]
-            if one_year_df.empty:
-                model.logger.info(f"No data available for year {year}, skipping.")
-                continue
-
-            fig, ax = plt.subplots(figsize=(13, 4))
-            ax.plot(
-                one_year_df.index,
-                one_year_df["discharge_simulations"],
-                label="Simulated",
-                color=SIMULATIONS_DEFAULT_COLOR,
-            )
-            ax.plot(
-                one_year_df.index,
-                one_year_df["discharge_observations"],
-                label="Observed",
-                color=OBSERVATIONS_COLOR,
-            )
-            ax.set_xlim(one_year_df.index[0], one_year_df.index[-1])
-            ax.set_ylabel("Discharge [m3/s]")
-            ax.legend()
-
-            ax.text(
-                0.02, 0.9, f"$r^2$={r2_value:.2f}", transform=ax.transAxes, fontsize=12
-            )
-            ax.text(0.02, 0.85, f"KGE={kge:.2f}", transform=ax.transAxes, fontsize=12)
-            ax.text(0.02, 0.8, f"NSE={nse:.2f}", transform=ax.transAxes, fontsize=12)
-            ax.text(
-                0.02,
-                0.75,
-                f"upstream area ratio: {upstream_area_ratio:.2f}",
-                transform=ax.transAxes,
-                fontsize=12,
-            )
-
-            plt.title(
-                f"GEB discharge vs observations for {year} at station {station_name}"
-            )
-            plt.savefig(
-                timeseries_folder / f"timeseries_plot_{station_id}_{year}.svg",
-                bbox_inches="tight",
-            )
-            plt.show()
-            plt.close()
-
-    _plot_validation_return_periods(
-        validation_df=validation_df,
-        station_id=station_id,
-        station_name=station_name,
-        eval_plot_folder=eval_plot_folder,
-        frequency=frequency,
-    )
 
 
 def _read_evaluation_series_with_date_index(
@@ -1991,6 +1852,7 @@ class Hydrology:
         include_yearly_plots: bool = True,
         correct_discharge_observations: bool = False,
         create_plots: bool = True,
+        include_return_period_plots: bool = False,
         minimum_upstream_area_km2: float | None = None,
         minimum_timeseries_length_years: float | None = None,
         start_year: int | None = None,
@@ -2011,10 +1873,14 @@ class Hydrology:
         Args:
             run_name: Name of the simulation run to evaluate. Must correspond to an
                 existing run directory in the model output folder.
-            include_yearly_plots: Whether to create plots for every year showing the evaluation.
+            include_yearly_plots: Whether to save one discharge PNG per station
+                and calendar year.
             correct_discharge_observations: Whether to correct the discharge observations discharge timeseries for the difference
                 in upstream area between the discharge observations station and the discharge from GEB.
             create_plots: Whether to create evaluation plots. Set to False to only calculate the evaluation metrics and save the results without plotting.
+            include_return_period_plots: Whether to fit extreme-value models and
+                create detailed station return-period plots. Defaults to `False`
+                because these plots are expensive for large station collections.
             minimum_upstream_area_km2: Optional minimum modeled upstream area threshold for station evaluation (km2).
                 If omitted, `hydrology.evaluation.discharge.minimum_upstream_area_km2` is used.
             minimum_timeseries_length_years: Optional minimum paired observation-simulation timeseries length for station evaluation (years).
@@ -2049,6 +1915,10 @@ class Hydrology:
         )
         if create_plots:
             evaluation_paths.plot_folder.mkdir(parents=True, exist_ok=True)
+        dashboard_path: Path = (
+            evaluation_paths.plot_folder
+            / f"discharge_evaluation_map{evaluation_paths.suffix}.html"
+        )
         self.model.logger.info(
             "Evaluating discharge skill scores for %s.",
             evaluation_paths.label,
@@ -2087,8 +1957,6 @@ class Hydrology:
         discharge_observations_daily: pd.DataFrame = read_table(
             self.model.files["table"]["discharge/discharge_observations_daily"]
         )
-        waterbodies = read_geom(self.model.files["geom"]["waterbodies/waterbody_data"])
-
         if not discharge_observations_hourly.empty:
             discharge_observations_hourly = regularize_discharge_timeseries(
                 discharge_observations_hourly
@@ -2111,7 +1979,7 @@ class Hydrology:
             )
 
         evaluation_per_station: list[dict[str, Any]] = []
-        station_dashboard_charts: dict[str, dict[str, Any]] = {}
+        station_dashboard_chart_files: dict[str, str] = {}
 
         self.model.logger.info("Starting discharge evaluation...")
         for frequency_label, discharge_observations_df in zip(
@@ -2189,28 +2057,38 @@ class Hydrology:
                 discharge_metrics = _calculate_discharge_validation_metrics(
                     validation_df
                 )
+                discharge_metric_values: dict[str, float] = discharge_metrics._asdict()
 
                 if create_plots:
-                    _plot_discharge_validation_graphs(
-                        model=self.model,
+                    save_discharge_timeseries_plots(
                         station_id=station_id,
                         validation_df=validation_df,
                         station_name=discharge_observations_station_name,
                         upstream_area_ratio=discharge_observations_to_GEB_upstream_area_ratio,
-                        kge=discharge_metrics.KGE,
-                        nse=discharge_metrics.NSE,
-                        r2_value=discharge_metrics.R2,
-                        eval_plot_folder=evaluation_paths.plot_folder,
+                        metrics=discharge_metric_values,
+                        plot_folder=evaluation_paths.plot_folder,
                         include_yearly_plots=include_yearly_plots,
-                        frequency=frequency_label,
                     )
-                    station_dashboard_charts[str(station_id)] = (
-                        build_discharge_dashboard_chart_data(
+                    if include_return_period_plots:
+                        _plot_validation_return_periods(
                             validation_df=validation_df,
+                            station_id=station_id,
                             station_name=discharge_observations_station_name,
-                            upstream_area_ratio=discharge_observations_to_GEB_upstream_area_ratio,
-                            metrics=discharge_metrics._asdict(),
+                            eval_plot_folder=evaluation_paths.plot_folder,
                             frequency=frequency_label,
+                        )
+                    station_id_text: str = str(station_id)
+                    station_dashboard_chart_files[station_id_text] = (
+                        write_discharge_dashboard_chart_data(
+                            dashboard_path=dashboard_path,
+                            station_id=station_id_text,
+                            chart_data=build_discharge_dashboard_chart_data(
+                                validation_df=validation_df,
+                                station_name=discharge_observations_station_name,
+                                upstream_area_ratio=discharge_observations_to_GEB_upstream_area_ratio,
+                                metrics=discharge_metric_values,
+                                frequency=frequency_label,
+                            ),
                         )
                     )
 
@@ -2222,22 +2100,21 @@ class Hydrology:
                     "discharge_observations_to_GEB_upstream_area_ratio": discharge_observations_to_GEB_upstream_area_ratio,
                     "upstream_area_GEB": geb_upstream_area_m2,
                     "timezone_utc_offset": timezone_utc_offset,
-                    **discharge_metrics._asdict(),
+                    **discharge_metric_values,
                     **{
                         f"{metric_name}_{frequency_label}": metric_value
-                        for metric_name, metric_value in discharge_metrics._asdict().items()
+                        for metric_name, metric_value in discharge_metric_values.items()
                     },
                 }
 
                 # if the frequency is hourly, also calculate the metrics on the daily resampled data
                 if frequency_label == "hourly":
                     # Resample to daily, keeping only days with 24 valid hourly observations.
-                    valid_hourly_counts_per_day = validation_df.resample("D").count()
-                    validation_df_daily = (
-                        validation_df.resample("D")
-                        .mean()[valid_hourly_counts_per_day == 24]
-                        .dropna()
-                    )
+                    daily_resampler: Any = validation_df.resample("D")
+                    valid_hourly_counts_per_day = daily_resampler.count()
+                    validation_df_daily = daily_resampler.mean()[
+                        valid_hourly_counts_per_day == 24
+                    ].dropna()
                     daily_discharge_metrics = _calculate_discharge_validation_metrics(
                         validation_df_daily
                     )
@@ -2276,7 +2153,7 @@ class Hydrology:
                 # attach to the evaluation dataframe
                 evaluation_per_station.append(station_evaluation)
 
-        if len(evaluation_per_station) == 0:
+        if not evaluation_per_station:
             # Create empty evaluation dataframe with proper structure
             # Column names are derived from DischargeMetrics so they stay in sync.
             freq_cols: list[str] = [
@@ -2322,29 +2199,24 @@ class Hydrology:
         # Return median metrics if available
         if not evaluation_df.empty:
             if create_plots:
-                region_geom = read_geom(self.model.files["geom"]["mask"])
-                all_rivers: gpd.GeoDataFrame = read_geom(
-                    self.model.files["geom"]["routing/rivers"]
+                dashboard_geometries: DischargeDashboardGeometries = (
+                    load_discharge_dashboard_geometries(self.model)
                 )
-                rivers: gpd.GeoDataFrame = all_rivers[
-                    ~(
-                        all_rivers["is_downstream_outflow"]
-                        | all_rivers["is_upstream_of_downstream_basin"]
-                        | all_rivers["is_further_downstream_outflow"]
-                    )
-                ].copy()
 
                 create_discharge_folium_map(
                     evaluation_gdf=evaluation_gdf,
-                    output_path=evaluation_paths.plot_folder
-                    / f"discharge_evaluation_map{evaluation_paths.suffix}.html",
-                    region_geom=region_geom,
-                    rivers=rivers,
-                    station_chart_data=station_dashboard_charts,
-                    waterbodies=waterbodies,
+                    output_path=dashboard_path,
+                    region_geom=dashboard_geometries.region,
+                    rivers=dashboard_geometries.rivers,
+                    station_chart_files=station_dashboard_chart_files,
+                    waterbodies=dashboard_geometries.waterbodies,
                 )
 
                 self.model.logger.info("Discharge evaluation dashboard created.")
+                self.model.logger.info(
+                    "Tip: If station charts do not appear, download the dashboard "
+                    "HTML and its charts folder to the same local directory."
+                )
 
                 # GEB standalone plot — all GEB stations.
                 self.plot_skill_score_boxplots(
@@ -2464,45 +2336,37 @@ class Hydrology:
                 "Creating discharge dashboard for %d stations.", n_stations
             )
 
-        self.model.logger.info("Loading waterbodies and region geometry...")
-        waterbodies: gpd.GeoDataFrame = read_geom(
-            self.model.files["geom"]["waterbodies/waterbody_data"]
+        self.model.logger.info("Loading dashboard geometries...")
+        dashboard_geometries: DischargeDashboardGeometries = (
+            load_discharge_dashboard_geometries(self.model)
         )
-        region_geom: gpd.GeoDataFrame = read_geom(self.model.files["geom"]["mask"])
 
-        self.model.logger.info("Loading river geometry...")
-        all_rivers: gpd.GeoDataFrame = read_geom(
-            self.model.files["geom"]["routing/rivers"]
-        )
-        rivers: gpd.GeoDataFrame = all_rivers[
-            ~(
-                all_rivers["is_downstream_outflow"]
-                | all_rivers["is_upstream_of_downstream_basin"]
-                | all_rivers["is_further_downstream_outflow"]
-            )
-        ].copy()
-
+        dashboard_path: Path = self.evaluate_discharge_output_folder / output_path
         self.model.logger.info("Building interactive chart payloads...")
-        station_dashboard_charts: dict[str, dict[str, Any]] = (
+        station_dashboard_chart_files: dict[str, str] = (
             self._build_saved_station_dashboard_charts(
                 evaluation_gdf=evaluation_gdf,
                 run_name=run_name,
                 correct_discharge_observations=correct_discharge_observations,
+                dashboard_path=dashboard_path,
             )
         )
 
         self.model.logger.info("Rendering Folium map HTML...")
-        dashboard_path: Path = self.evaluate_discharge_output_folder / output_path
         create_discharge_folium_map(
             evaluation_gdf=evaluation_gdf,
             output_path=dashboard_path,
-            region_geom=region_geom,
-            rivers=rivers,
-            station_chart_data=station_dashboard_charts,
-            waterbodies=waterbodies,
+            region_geom=dashboard_geometries.region,
+            rivers=dashboard_geometries.rivers,
+            station_chart_files=station_dashboard_chart_files,
+            waterbodies=dashboard_geometries.waterbodies,
         )
         self.model.logger.info(
             "Discharge evaluation dashboard created: %s", dashboard_path
+        )
+        self.model.logger.info(
+            "Tip: If station charts do not appear, download the dashboard HTML "
+            "and its charts folder to the same local directory."
         )
         return {"dashboard": str(dashboard_path)}
 
@@ -2511,18 +2375,19 @@ class Hydrology:
         evaluation_gdf: gpd.GeoDataFrame,
         run_name: str,
         correct_discharge_observations: bool,
-    ) -> dict[str, dict[str, Any]]:
-        """Build interactive dashboard chart data for saved evaluation stations.
+        dashboard_path: Path,
+    ) -> dict[str, str]:
+        """Write interactive chart payloads for saved evaluation stations.
 
         Args:
             evaluation_gdf: Saved per-station discharge evaluation metrics.
             run_name: Name of the simulation run to use for discharge time series.
             correct_discharge_observations: Whether to correct simulated discharge
                 by the observed-to-GEB upstream-area ratio (dimensionless).
+            dashboard_path: Output path of the dashboard HTML file.
 
         Returns:
-            Mapping from station ID to compact chart payloads with discharge values
-            (m3/s).
+            Mapping from station ID to exact chart payload file.
 
         Raises:
             ValueError: If saved metrics are missing required station columns.
@@ -2570,7 +2435,7 @@ class Hydrology:
             total_work,
         )
 
-        station_dashboard_charts: dict[str, dict[str, Any]] = {}
+        station_dashboard_chart_files: dict[str, str] = {}
         skipped: int = 0
         processed: int = 0
         for frequency_label, discharge_observations_df in zip(
@@ -2614,13 +2479,17 @@ class Hydrology:
                         for metric_name in DischargeMetrics._fields
                         if metric_name in station_row.index
                     }
-                    station_dashboard_charts[station_id_text] = (
-                        build_discharge_dashboard_chart_data(
-                            validation_df=validation_df,
-                            station_name=str(station_row["station_name"]),
-                            upstream_area_ratio=upstream_area_ratio,
-                            metrics=metrics,
-                            frequency=frequency_label,
+                    station_dashboard_chart_files[station_id_text] = (
+                        write_discharge_dashboard_chart_data(
+                            dashboard_path=dashboard_path,
+                            station_id=station_id_text,
+                            chart_data=build_discharge_dashboard_chart_data(
+                                validation_df=validation_df,
+                                station_name=str(station_row["station_name"]),
+                                upstream_area_ratio=upstream_area_ratio,
+                                metrics=metrics,
+                                frequency=frequency_label,
+                            ),
                         )
                     )
                 except Exception as exc:
@@ -2643,17 +2512,17 @@ class Hydrology:
 
         self.model.logger.info(
             "Chart data built: %d stations, %d skipped.",
-            len(station_dashboard_charts),
+            len(station_dashboard_chart_files),
             skipped,
         )
-        return station_dashboard_charts
+        return station_dashboard_chart_files
 
     def _read_external_evaluation_raw(
         self, external_evaluation_folder: str | Path | None = None
     ) -> dict[str, pd.DataFrame]:
         """Read external model evaluation CSVs without matching to GEB stations.
 
-        Source-specific filters, such as the Utrecht GRDC station criteria, are
+        Source-specific filters, such as the PCR-GLOBWB GRDC station criteria, are
         applied before the external scores are returned.
 
         Args:
@@ -3058,8 +2927,8 @@ class Hydrology:
     ) -> None:
         """Plot all discharge skill score figures in one call.
 
-        Runs :meth:`plot_skill_score_maps`, :meth:`plot_skill_score_boxplots`,
-        and :meth:`plot_skill_scores_vs_upstream_area` with shared settings.
+        Delegates to the hydrology summary workflow, which coordinates maps,
+        external-model score tables and boxplots, and upstream-area plots.
 
         Args:
             export: Whether to save all figures to disk.
@@ -3080,26 +2949,14 @@ class Hydrology:
                 to plot.
             **kwargs: Ignored (CLI compatibility).
         """
-        self.plot_skill_score_maps(
-            export=export,
-            minimum_upstream_area_km2=minimum_upstream_area_km2,
-            external_evaluation_folder=external_evaluation_folder,
-            start_year=start_year,
-            end_year=end_year,
-        )
-        self.plot_skill_score_boxplots(
+        create_discharge_skill_score_summary(
+            self,
             export=export,
             minimum_upstream_area_km2=minimum_upstream_area_km2,
             external_evaluation_folder=external_evaluation_folder,
             include_geb=include_geb,
             matched_only=matched_only,
             include_external=include_external,
-            start_year=start_year,
-            end_year=end_year,
-        )
-        self.plot_skill_scores_vs_upstream_area(
-            export=export,
-            minimum_upstream_area_km2=minimum_upstream_area_km2,
             start_year=start_year,
             end_year=end_year,
         )

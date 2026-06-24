@@ -1,13 +1,13 @@
 """Functions for creating interactive Folium discharge evaluation maps."""
 
+import hashlib
 import html
 import json
 import math
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 import branca.colormap as cm
-import branca.element
 import folium
 import geopandas as gpd
 import numpy as np
@@ -16,6 +16,10 @@ from folium import MacroElement, TileLayer
 from jinja2 import Template
 
 from geb.workflows.extreme_value_analysis import ReturnPeriodModel
+from geb.workflows.io import read_geom
+
+if TYPE_CHECKING:
+    from geb.model import GEBModel
 
 _ESRI_TOPO_TILES = (
     "https://server.arcgisonline.com/ArcGIS/rest/services/"
@@ -34,6 +38,43 @@ RESERVOIR_WATERBODY_TYPE: int = 2
 _WATERBODY_STYLE: dict[int, dict[str, str]] = {
     RESERVOIR_WATERBODY_TYPE: {"color": "#FF8A65", "label": "Reservoir"},
 }
+
+
+class DischargeDashboardGeometries(NamedTuple):
+    """Geometries required to build a discharge evaluation dashboard."""
+
+    region: gpd.GeoDataFrame
+    rivers: gpd.GeoDataFrame
+    waterbodies: gpd.GeoDataFrame
+
+
+def load_discharge_dashboard_geometries(
+    model: GEBModel,
+) -> DischargeDashboardGeometries:
+    """Load and filter geometries used by the discharge dashboard.
+
+    Args:
+        model: GEB model containing the geometry file registry.
+
+    Returns:
+        Region boundary, dashboard river network, and waterbody geometries.
+    """
+    region_geom: gpd.GeoDataFrame = read_geom(model.files["geom"]["mask"])
+    all_rivers: gpd.GeoDataFrame = read_geom(model.files["geom"]["routing/rivers"])
+    excluded_rivers: pd.Series = (
+        all_rivers["is_downstream_outflow"]
+        | all_rivers["is_upstream_of_downstream_basin"]
+        | all_rivers["is_further_downstream_outflow"]
+    )
+    waterbodies: gpd.GeoDataFrame = read_geom(
+        model.files["geom"]["waterbodies/waterbody_data"]
+    )
+    return DischargeDashboardGeometries(
+        region=region_geom,
+        rivers=all_rivers.loc[~excluded_rivers].copy(),
+        waterbodies=waterbodies,
+    )
+
 
 _METRIC_LAYER_CONFIGS: list[dict] = [
     {
@@ -156,64 +197,13 @@ def _timestamp_to_isoformat(timestamp: Any) -> str:
     return timestamp_value.isoformat()
 
 
-def _pick_timeseries_points(
-    validation_df: pd.DataFrame,
-    maximum_points: int,
-) -> np.ndarray:
-    """Pick representative rows for an interactive discharge chart.
-
-    The selection keeps endpoints plus bucket-level minima and maxima, which
-    preserves flood peaks without sending long time series to the browser.
-
-    Args:
-        validation_df: Observed/simulated discharge dataframe (m3/s).
-        maximum_points: Maximum number of rows to keep (dimensionless).
-
-    Returns:
-        Sorted row indices into ``validation_df`` (dimensionless).
-
-    Raises:
-        ValueError: If ``maximum_points`` is less than 2.
-    """
-    if maximum_points < 2:
-        raise ValueError("maximum_points must be at least 2.")
-
-    row_count: int = len(validation_df)
-    if row_count <= maximum_points:
-        return np.arange(row_count, dtype=int)
-
-    bucket_edges: np.ndarray = np.linspace(
-        0, row_count, max(1, maximum_points // 4) + 1, dtype=int
-    )
-    selected_indices: set[int] = {0, row_count - 1}
-    for bucket_start, bucket_end in zip(bucket_edges[:-1], bucket_edges[1:]):
-        bucket_df: pd.DataFrame = validation_df.iloc[bucket_start:bucket_end]
-        for column_name in ("discharge_observations", "discharge_simulations"):
-            bucket_series: pd.Series = bucket_df[column_name].dropna()
-            if not bucket_series.empty:
-                selected_indices.add(
-                    int(validation_df.index.get_loc(bucket_series.idxmin()))
-                )
-                selected_indices.add(
-                    int(validation_df.index.get_loc(bucket_series.idxmax()))
-                )
-
-    indices: np.ndarray = np.array(sorted(selected_indices), dtype=int)
-    if indices.size <= maximum_points:
-        return indices
-    return indices[np.linspace(0, indices.size - 1, maximum_points, dtype=int)]
-
-
 def _build_timeseries_payload(
     validation_df: pd.DataFrame,
-    maximum_points: int = 250,
 ) -> dict[str, list[str] | list[float | None]]:
     """Build the popup payload for one discharge time-series chart.
 
     Args:
         validation_df: Observed/simulated discharge dataframe (m3/s).
-        maximum_points: Maximum number of timestamps to keep (dimensionless).
-
     Returns:
         Dictionary with ISO timestamps and discharge values (m3/s).
 
@@ -223,21 +213,18 @@ def _build_timeseries_payload(
     if not isinstance(validation_df.index, pd.DatetimeIndex):
         raise ValueError("validation_df must use a DateTimeIndex for dashboard charts.")
 
-    chart_df: pd.DataFrame = validation_df.iloc[
-        _pick_timeseries_points(validation_df, maximum_points)
-    ]
     return {
         "time": [
             _timestamp_to_isoformat(timestamp)
-            for timestamp in pd.DatetimeIndex(chart_df.index)
+            for timestamp in pd.DatetimeIndex(validation_df.index)
         ],
         "observed": [
             _as_finite_float(value)
-            for value in chart_df["discharge_observations"].to_numpy()
+            for value in validation_df["discharge_observations"].to_numpy()
         ],
         "simulated": [
             _as_finite_float(value)
-            for value in chart_df["discharge_simulations"].to_numpy()
+            for value in validation_df["discharge_simulations"].to_numpy()
         ],
     }
 
@@ -329,39 +316,53 @@ def build_discharge_dashboard_chart_data(
     }
 
 
+def write_discharge_dashboard_chart_data(
+    dashboard_path: Path,
+    station_id: str,
+    chart_data: dict[str, Any],
+) -> str:
+    """Write one exact station chart payload for lazy browser loading.
+
+    Args:
+        dashboard_path: Output path of the dashboard HTML file.
+        station_id: Station identifier used to derive a stable asset filename.
+        chart_data: Complete interactive chart payload.
+
+    Returns:
+        POSIX-style payload path relative to the dashboard HTML.
+    """
+    chart_folder: Path = dashboard_path.parent / f"{dashboard_path.stem}_charts"
+    chart_folder.mkdir(parents=True, exist_ok=True)
+    station_hash: str = hashlib.sha256(station_id.encode()).hexdigest()[:16]
+    chart_path: Path = chart_folder / f"{station_hash}.js"
+    chart_path.write_text(
+        "window._gebStationChartPayload="
+        + json.dumps(chart_data, separators=(",", ":"))
+        + ";",
+        encoding="utf-8",
+    )
+    return chart_path.relative_to(dashboard_path.parent).as_posix()
+
+
 def _inject_popup_chart_script(
     m: folium.Map,
-    station_chart_data: dict[str, dict[str, Any]],
-    output_path: Path,
+    station_chart_files: dict[str, str],
 ) -> None:
-    """Write station chart data to a companion JS file and wire up popup rendering.
-
-    Chart payloads are saved to ``<stem>_charts.js`` next to the HTML output
-    and loaded via a synchronous ``<script>`` tag so ``window._stationCharts``
-    is always populated before any popup opens.
+    """Add lazy-rendered interactive station plots to dashboard popups.
 
     Args:
         m: Folium map to inject the macro into.
-        station_chart_data: Mapping of station ID string to interactive chart
-            data with discharge values (m3/s).
-        output_path: Path of the HTML output file; the companion JS is saved
-            alongside it.
+        station_chart_files: Mapping of station IDs to exact chart payload files
+            relative to the dashboard HTML.
+
     """
-    charts_filename = output_path.stem + "_charts.js"
-    charts_js_path = output_path.parent / charts_filename
-    charts_js_path.write_text(
-        "window._stationCharts="
-        + json.dumps(station_chart_data, separators=(",", ":"))
-        + ";"
-    )
-    m.get_root().header.add_child(
-        branca.element.Element(f'<script src="{charts_filename}"></script>')
-    )
+    chart_files_json: str = json.dumps(station_chart_files, separators=(",", ":"))
     _JavascriptMacro(
-        """
+        "window._stationChartFiles=" + chart_files_json + ";\n" + """
 (function(){
   var plotlyUrl = 'https://cdn.plot.ly/plotly-2.35.2.min.js';
   var colors = { observed: '#facc15', simulated: '#38bdf8' };
+  var stationChartCache = {};
   var layoutBase = {
     autosize: true,
     height: 260,
@@ -399,6 +400,32 @@ def _inject_popup_chart_script(
 
   function makeChartDiv(id) {
     return '<div id="' + id + '" class="geb-popup__chart"></div>';
+  }
+
+  function loadStationData(stationId, callback) {
+    if (stationChartCache[stationId]) {
+      callback(stationChartCache[stationId]);
+      return;
+    }
+    var chartFile = window._stationChartFiles[stationId];
+    if (!chartFile) {
+      callback(null);
+      return;
+    }
+    var script = document.createElement('script');
+    script.src = chartFile;
+    script.onload = function() {
+      var data = window._gebStationChartPayload;
+      delete window._gebStationChartPayload;
+      if (data) stationChartCache[stationId] = data;
+      script.remove();
+      callback(data || null);
+    };
+    script.onerror = function() {
+      script.remove();
+      callback(null);
+    };
+    document.head.appendChild(script);
   }
 
   function finiteNumbers(values, minimumValue) {
@@ -457,6 +484,9 @@ def _inject_popup_chart_script(
   function renderCharts(stationId, data) {
     var safeStationId = encodeURIComponent(stationId);
     var common = {responsive: true, displaylogo: false, modeBarButtonsToRemove: ['select2d', 'lasso2d']};
+    // SVG is reliable for daily series; WebGL keeps full-resolution hourly
+    // series responsive without changing the underlying scientific data.
+    var timeseriesTraceType = data.frequency === 'hourly' ? 'scattergl' : 'scatter';
     function trace(name, x, y, kind, mode, hoverTemplate) {
       return {
         x: x,
@@ -464,7 +494,7 @@ def _inject_popup_chart_script(
         name: name,
         type: kind,
         mode: mode,
-        connectgaps: true,
+        connectgaps: false,
         hovertemplate: hoverTemplate,
         line: {color: colors[name.toLowerCase()], width: 1.5},
         marker: {color: colors[name.toLowerCase()], size: 5}
@@ -481,8 +511,8 @@ def _inject_popup_chart_script(
       data.returnPeriods.observed.returnPeriod.concat(data.returnPeriods.simulated.returnPeriod)
     );
     Plotly.newPlot('geb-time-' + safeStationId, [
-      trace('Observed', data.timeseries.time, data.timeseries.observed, 'scatter', 'lines', '%{x|%b %Y}<br>%{y:,.0f} m3/s<extra>Observed</extra>'),
-      trace('Simulated', data.timeseries.time, data.timeseries.simulated, 'scatter', 'lines', '%{x|%b %Y}<br>%{y:,.0f} m3/s<extra>Simulated</extra>')
+      trace('Observed', data.timeseries.time, data.timeseries.observed, timeseriesTraceType, 'lines', '%{x|%b %Y}<br>%{y:,.0f} m3/s<extra>Observed</extra>'),
+      trace('Simulated', data.timeseries.time, data.timeseries.simulated, timeseriesTraceType, 'lines', '%{x|%b %Y}<br>%{y:,.0f} m3/s<extra>Simulated</extra>')
     ], Object.assign({}, layoutBase, {hovermode: 'x unified', xaxis: Object.assign({}, layoutBase.xaxis, {type: 'date', range: timeRange}), yaxis: Object.assign({}, layoutBase.yaxis, {title: 'Discharge (m3/s)'})}), common);
     Plotly.newPlot('geb-return-' + safeStationId, [
       trace('Observed', data.returnPeriods.observed.returnPeriod, data.returnPeriods.observed.discharge, 'scatter', 'lines+markers', '%{x:g}-year<br>%{y:,.0f} m3/s<extra>Observed</extra>'),
@@ -492,8 +522,12 @@ def _inject_popup_chart_script(
 
   function renderStation(el, stationId) {
     if (el.dataset.rendered === 'true') return;
-    var data = window._stationCharts[stationId];
-    if (!data) return;
+    el.dataset.rendered = 'true';
+    loadStationData(stationId, function(data) {
+      if (!data) {
+        el.innerHTML = '<div class="geb-popup__error">No interactive chart data is available.</div>';
+        return;
+      }
     var metrics = data.metrics || {};
     var safeStationId = encodeURIComponent(stationId);
     el.innerHTML = '<div class="geb-popup__title">' + escapeHtml(data.stationName || stationId) + '</div>' +
@@ -505,15 +539,13 @@ def _inject_popup_chart_script(
       metricHtml('RRMSE', metrics.RRMSE) + metricHtml('Area ratio', metrics.upstreamAreaRatio) + '</div>' +
       '<div class="geb-popup__chart-title">Return periods</div>' + makeChartDiv('geb-return-' + safeStationId) +
       '<div class="geb-popup__chart-title">Discharge time series</div>' + makeChartDiv('geb-time-' + safeStationId);
-    el.dataset.rendered = 'true';
     ensurePlotly(function(loaded) {
       if (loaded === false) {
-        el.querySelectorAll('.geb-popup__chart').forEach(function(chart) {
-          chart.innerHTML = '<div class="geb-popup__error">Interactive charts need access to cdn.plot.ly.</div>';
-        });
+        el.innerHTML = '<div class="geb-popup__error">Interactive charts require access to cdn.plot.ly.</div>';
         return;
       }
       renderCharts(stationId, data);
+    });
     });
   }
 
@@ -790,7 +822,7 @@ def create_discharge_folium_map(
     output_path: Path,
     region_geom: gpd.GeoDataFrame,
     rivers: gpd.GeoDataFrame,
-    station_chart_data: dict[str, dict[str, Any]],
+    station_chart_files: dict[str, str],
     waterbodies: gpd.GeoDataFrame | None = None,
     minimum_river_upstream_area_km2: float = 5000.0,
 ) -> folium.Map:
@@ -803,9 +835,6 @@ def create_discharge_folium_map(
     popup is opened. Reservoirs are rendered as dot markers when ``waterbodies``
     is provided; lakes are skipped because they make large dashboards slow.
 
-    Station chart data is saved to a companion ``<stem>_charts.js`` file next
-    to ``output_path`` to keep the HTML file small enough for browser loading.
-
     Args:
         evaluation_gdf: Per-station GeoDataFrame with discharge metric columns,
             ``upstream_area_GEB``,
@@ -817,8 +846,8 @@ def create_discharge_folium_map(
             extent and render the catchment outline.
         rivers: River network GeoDataFrame (geometry only; rivers are rendered
             at uniform width).
-        station_chart_data: Interactive chart data keyed by station ID string.
-            Discharge values are expected in m3/s.
+        station_chart_files: Exact interactive chart payload files keyed by
+            station ID string.
         waterbodies: Optional GeoDataFrame with columns ``waterbody_type``
             (2 = reservoir) and polygon geometries. Centroids are used for dot
             placement.
@@ -905,13 +934,10 @@ def create_discharge_folium_map(
             if "station_name" in row.index and pd.notna(row["station_name"])
             else station_id_str
         )
-
-        # Popup HTML contains only an empty placeholder. The popupopen handler
-        # fills it with interactive charts on demand.
         escaped_station_id: str = html.escape(station_id_str, quote=True)
         popup_html = (
             f"<div class='geb-popup' data-station-id='{escaped_station_id}' "
-            f"style='width:{popup_width}px;'>Loading station charts...</div>"
+            f"style='width:{popup_width}px;'>Loading interactive charts...</div>"
         )
         tooltip = f"{station_id_str}: {station_name}"
 
@@ -962,8 +988,7 @@ def create_discharge_folium_map(
         colormap_upstream.add_to(discharge_map)
         layer_upstream.add_to(discharge_map)
 
-    # Inject station chart data as a single JS global shared by all layers.
-    _inject_popup_chart_script(discharge_map, station_chart_data, output_path)
+    _inject_popup_chart_script(discharge_map, station_chart_files)
     _inject_station_search_script(discharge_map, station_marker_index)
 
     # Waterbodies: render reservoirs only; lakes make the dashboard too heavy.

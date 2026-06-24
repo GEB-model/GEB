@@ -42,7 +42,7 @@ def test_read_external_evaluation_raw_reads_csv_scores(
         {"KGE": [0.6, 0.5]},
         index=pd.Index(["station_a", "station_b"]),
     )
-    utrecht_df.to_csv(tmp_path / "utrecht.csv")
+    utrecht_df.to_csv(tmp_path / "PCR-GLOBWB.csv")
     google_df.to_csv(tmp_path / "google_streamflow.csv")
 
     external_models: dict[str, pd.DataFrame] = read_external_evaluation_raw(
@@ -53,15 +53,37 @@ def test_read_external_evaluation_raw_reads_csv_scores(
         auto_fetch_google_streamflow=False,
     )
 
-    assert external_models["utrecht"].index.to_list() == ["STATION_A", "STATION_B"]
-    assert "R" not in external_models["utrecht"].columns
-    assert external_models["utrecht"].loc["STATION_A", "KGE_correlation"] == 0.9
-    assert external_models["utrecht"].loc["STATION_A", "NSE"] == pytest.approx(0.4)
-    assert external_models["utrecht"].loc["STATION_A", "R2"] == pytest.approx(0.81)
+    assert external_models["PCR-GLOBWB"].index.to_list() == ["STATION_A", "STATION_B"]
+    assert "R" not in external_models["PCR-GLOBWB"].columns
+    assert external_models["PCR-GLOBWB"].loc["STATION_A", "KGE_correlation"] == 0.9
+    assert external_models["PCR-GLOBWB"].loc["STATION_A", "NSE"] == pytest.approx(0.4)
+    assert external_models["PCR-GLOBWB"].loc["STATION_A", "R2"] == pytest.approx(0.81)
     assert external_models[GOOGLE_STREAMFLOW_MODEL_NAME].index.to_list() == [
         "STATION_A",
         "STATION_B",
     ]
+
+
+def test_read_external_evaluation_raw_warns_when_csv_data_are_missing(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Missing local CSV inputs clearly warn that comparisons are omitted."""
+    external_folder: Path = tmp_path / "external"
+    external_folder.mkdir()
+
+    with caplog.at_level(logging.WARNING):
+        external_models = read_external_evaluation_raw(
+            external_evaluation_folder=external_folder,
+            configured_external_evaluation_folder=None,
+            model_folder=tmp_path,
+            logger=logging.getLogger(__name__),
+            auto_fetch_google_streamflow=False,
+        )
+
+    assert external_models == {}
+    assert "No external evaluation CSV files found" in caplog.text
+    assert "PCR-GLOBWB/Utrecht" in caplog.text
 
 
 def test_prepare_skill_score_boxplot_inputs_matches_after_geb_filter(
@@ -109,7 +131,7 @@ def test_prepare_skill_score_boxplot_inputs_matches_after_geb_filter(
 def test_prepare_skill_score_boxplot_inputs_applies_utrecht_paper_threshold(
     tmp_path: Path,
 ) -> None:
-    """Utrecht comparisons apply the configured 400 km2 paper threshold."""
+    """PCR-GLOBWB comparisons apply the configured 400 km2 paper threshold."""
     evaluation_metrics_path: Path = tmp_path / "evaluation_metrics.xlsx"
     external_folder: Path = tmp_path / "external"
     external_folder.mkdir()

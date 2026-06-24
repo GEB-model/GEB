@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Mapping
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import contextily as ctx
 import geopandas as gpd
@@ -16,6 +17,128 @@ import pandas as pd
 from matplotlib.colorbar import Colorbar
 from matplotlib.lines import Line2D
 from scipy.stats import linregress
+
+OBSERVATIONS_COLOR: str = "#E6900A"
+SIMULATIONS_DEFAULT_COLOR: str = "#278DD9"
+
+
+def _create_discharge_timeseries_figure(
+    validation_df: pd.DataFrame,
+    title: str,
+    upstream_area_ratio: float,
+    metrics: Mapping[str, float],
+    include_mean: bool,
+) -> plt.Figure:
+    """Create a discharge comparison figure.
+
+    Args:
+        validation_df: Observed and simulated discharge time series (m3/s).
+        title: Figure title.
+        upstream_area_ratio: Observed-to-modeled upstream-area ratio
+            (dimensionless).
+        metrics: Discharge validation metrics keyed by metric name.
+        include_mean: Whether to show mean simulated discharge (m3/s).
+
+    Returns:
+        Matplotlib figure containing the discharge comparison.
+    """
+    figure, axis = plt.subplots(figsize=(13, 4))
+    for column_name, label, color in (
+        ("discharge_simulations", "Simulated", SIMULATIONS_DEFAULT_COLOR),
+        ("discharge_observations", "Observed", OBSERVATIONS_COLOR),
+    ):
+        axis.plot(
+            validation_df.index,
+            validation_df[column_name],
+            label=label,
+            linewidth=0.5,
+            color=color,
+        )
+    axis.set(
+        title=title,
+        xlabel="Time",
+        ylabel="Discharge [m3/s]",
+        xlim=(validation_df.index.min(), validation_df.index.max()),
+        ylim=(0, None),
+    )
+    axis.legend(loc="upper right", fontsize=10)
+
+    r2_value: float = metrics["R2"]
+    metric_labels: list[str] = (
+        [
+            f"$r^2$={r2_value:.2f}",
+            f"KGE={metrics['KGE']:.2f}",
+            f"NSE={metrics['NSE']:.2f}",
+        ]
+        if np.isfinite(r2_value)
+        else ["No overlapping values for score metrics"]
+    )
+    if include_mean:
+        metric_labels.append(
+            f"Mean={validation_df['discharge_simulations'].mean():.2f}"
+        )
+    metric_labels.append(f"upstream area ratio: {upstream_area_ratio:.2f}")
+    for row, label in enumerate(metric_labels):
+        axis.text(
+            0.02,
+            0.9 - row * 0.05,
+            label,
+            transform=axis.transAxes,
+            fontsize=12,
+        )
+    return figure
+
+
+def save_discharge_timeseries_plots(
+    station_id: Any,
+    validation_df: pd.DataFrame,
+    station_name: str,
+    upstream_area_ratio: float,
+    metrics: Mapping[str, float],
+    plot_folder: Path,
+    include_yearly_plots: bool,
+) -> None:
+    """Save full-period and optional yearly station discharge plots.
+
+    Args:
+        station_id: Station identifier used in output filenames.
+        validation_df: Observed and simulated discharge time series (m3/s).
+        station_name: Human-readable station name.
+        upstream_area_ratio: Observed-to-modeled upstream-area ratio
+            (dimensionless).
+        metrics: Discharge validation metrics keyed by metric name.
+        plot_folder: Evaluation plot output folder.
+        include_yearly_plots: Whether to save one PNG for each calendar year.
+    """
+    timeseries_folder: Path = plot_folder / "timeseries"
+    timeseries_folder.mkdir(parents=True, exist_ok=True)
+    figure: plt.Figure = _create_discharge_timeseries_figure(
+        validation_df=validation_df,
+        title=f"Discharge vs observations for station {station_name}",
+        upstream_area_ratio=upstream_area_ratio,
+        metrics=metrics,
+        include_mean=True,
+    )
+    figure.savefig(timeseries_folder / f"timeseries_plot_{station_id}.png", dpi=72)
+    plt.close(figure)
+
+    if include_yearly_plots:
+        yearly_groups: Any = validation_df.groupby(validation_df.index.year)  # ty:ignore[unresolved-attribute]
+        for year, yearly_df in yearly_groups:
+            year_value: int = int(year)
+            yearly_figure: plt.Figure = _create_discharge_timeseries_figure(
+                validation_df=yearly_df,
+                title=f"GEB discharge vs observations for {year_value} at station {station_name}",
+                upstream_area_ratio=upstream_area_ratio,
+                metrics=metrics,
+                include_mean=False,
+            )
+            yearly_figure.savefig(
+                timeseries_folder / f"timeseries_plot_{station_id}_{year_value}.png",
+                dpi=72,
+            )
+            plt.close(yearly_figure)
+
 
 _DISPLAYED_SKILL_SCORE_CONFIGS: tuple[dict[str, object], ...] = (
     {
@@ -221,7 +344,7 @@ def _plot_skill_score_map_single(
         bar_y + map_height_m * 0.012,
         bar_label,
         color="white",
-        fontsize=8,
+        fontsize=14,
         ha="center",
         va="bottom",
         zorder=5,
@@ -236,7 +359,7 @@ def _plot_skill_score_map_single(
         textcoords="axes fraction",
         ha="center",
         va="bottom",
-        fontsize=10,
+        fontsize=18,
         color="white",
         fontweight="bold",
         arrowprops=dict(arrowstyle="-|>", color="white", lw=1.5),
@@ -408,7 +531,7 @@ def _plot_kge_component_maps(
         bar_y + map_height_m * 0.012,
         bar_label,
         color="white",
-        fontsize=8,
+        fontsize=14,
         ha="center",
         va="bottom",
         zorder=5,
@@ -421,7 +544,7 @@ def _plot_kge_component_maps(
         textcoords="axes fraction",
         ha="center",
         va="bottom",
-        fontsize=10,
+        fontsize=18,
         color="white",
         fontweight="bold",
         arrowprops=dict(arrowstyle="-|>", color="white", lw=1.5),
@@ -860,8 +983,13 @@ def _get_external_model_plot_order(model_name: str) -> tuple[int, str]:
         Sort key with priority and lower-case model label.
     """
     model_name_lower: str = model_name.lower()
-    for priority, model_key in enumerate(("utrecht", "google", "glofas")):
-        if model_key in model_name_lower:
+    model_groups: tuple[tuple[str, ...], ...] = (
+        ("pcr-globwb", "utrecht"),
+        ("google",),
+        ("glofas",),
+    )
+    for priority, model_keys in enumerate(model_groups):
+        if any(model_key in model_name_lower for model_key in model_keys):
             return priority, model_name_lower
     return 99, model_name_lower
 
@@ -876,8 +1004,8 @@ def _format_external_model_short_name(model_name: str) -> str:
         Short display label.
     """
     model_name_lower: str = model_name.lower()
-    if "utrecht" in model_name_lower:
-        return "Utrecht"
+    if "pcr-globwb" in model_name_lower or "utrecht" in model_name_lower:
+        return "PCR-GLOBWB"
     if "google" in model_name_lower:
         return "Google"
     if "glofas" in model_name_lower:
