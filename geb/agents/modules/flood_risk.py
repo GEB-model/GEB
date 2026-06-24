@@ -36,6 +36,17 @@ class FloodRiskModule:
         self.alter_damage_curves_for_flood_proofed_buildings()
         self.load_max_damage_values()
         self.load_flood_maps()
+        self.load_flood_protection_standard()
+        self.flood_in_last_year = False
+
+    def load_flood_protection_standard(self) -> None:
+        """Placeholder for loading flood protection standard. Currently dummy version implemented."""
+        self.flood_protection_standard = 10
+        self.flood_protection_standard_subbasins = {}
+        for comid in self.households.buildings["COMID"]:
+            self.flood_protection_standard_subbasins[comid] = (
+                10  # Initial value; replace with actual loading logic as needed.
+            )
 
     def load_flood_maps(self) -> None:
         """Load flood maps for different return periods. This might be quite ineffecient for RAM, but faster then loading them each timestep for now."""
@@ -430,9 +441,11 @@ class FloodRiskModule:
                     print(
                         f"Damages adapt rp{return_period}: {round(damages_adapt[i].sum() / 1e6)} million"
                     )
-
-            return damages_do_not_adapt, damages_adapt
-
+            # set attributes
+            self._damages_do_not_adapt = damages_do_not_adapt
+            self._damages_adapt = damages_adapt
+            # return early
+            return self.damages_do_not_adapt, self.damages_adapt
         # create a dictionary of multi_curves for the VectorScannerMultiCurves
         multi_curves = {
             "damages_structure": self.households.buildings_structure_curve[
@@ -534,39 +547,58 @@ class FloodRiskModule:
                 print(
                     f"Damages adapt rp{return_period}: {round(damages_adapt[i].sum() / 1e6)} million"
                 )
+        # set attributes
+        self._damages_do_not_adapt = damages_do_not_adapt
+        self._damages_adapt = damages_adapt
 
-        return damages_do_not_adapt, damages_adapt
+        return self.damages_do_not_adapt, self.damages_adapt
 
     def calculate_ead(
         self,
         damages_do_not_adapt: np.ndarray,
         damages_adapt: np.ndarray,
         adapted: np.ndarray,
+        altered_flood_protection_standard: int | None = None,
     ) -> np.ndarray:
-        """Calculate the Expected Annual Damages (EAD) based on the damages for different return periods.
+        """Calculate expected annual damages (EAD) for each household.
+
+        Integrates damages across return periods using trapezoid rule. Handles
+        adapted households differently and can apply an alternative flood protection
+        standard that eliminates damages below a threshold return period.
 
         Args:
-            damages_do_not_adapt: A multi-dimensional numpy array containing damages for different return periods and agents.
-            damages_adapt: A multi-dimensional numpy array containing adapted damages for different return periods and agents.
-            adapted: A boolean numpy array indicating which agents have adapted.
+            damages_do_not_adapt: Damages by return period (rows) and household (columns) for non-adapted.
+            damages_adapt: Damages by return period (rows) and household (columns) for adapted.
+            adapted: Boolean array indicating which households have adapted.
+            altered_flood_protection_standard: If provided, set damages to 0 for return periods
+                below this threshold (damages protected against by higher standard).
+
         Returns:
-            A 1D numpy array containing the EAD for each agent.
+            1D array of annual expected damages (USD) for each household.
         """
-        # Copy baseline damages
+        # Start with baseline (non-adapted) damages
         all_damages = damages_do_not_adapt.copy()
 
-        # Replace adapted households with adapted damages
+        # Apply higher flood protection standard if provided
+        if altered_flood_protection_standard is not None:
+            # Zero out damages for return periods protected by the higher standard
+            protected_mask = (
+                self.households.return_periods < altered_flood_protection_standard
+            )
+            all_damages[protected_mask, :] = 0.0
+
+        # Use adapted damages for households that have adapted
         adapted_mask = adapted.astype(bool)
         all_damages[:, adapted_mask] = damages_adapt[:, adapted_mask]
-        # Sort probabilities in ascending order for integration
-        probabilities = 1 / self.households.return_periods
+
+        # Integrate damages across return periods (exceedance probability integration)
+        probabilities = 1.0 / self.households.return_periods
         sort_idx = np.argsort(probabilities)
 
-        prob_sorted = probabilities[sort_idx]
-        damages_sorted = all_damages[sort_idx, :]
-
-        # Calculate Expected Annual Damage (EAD)
-        ead_usd_per_year = np.trapezoid(y=damages_sorted, x=prob_sorted, axis=0)
+        # Calculate EAD via trapezoid integration
+        ead_usd_per_year = np.trapezoid(
+            y=all_damages[sort_idx, :], x=probabilities[sort_idx], axis=0
+        )
 
         return ead_usd_per_year
 
@@ -875,7 +907,7 @@ class FloodRiskModule:
 
         return total_flood_damages
 
-    def return_period_flood(self, flood_protection_standard: int = 10) -> np.ndarray:
+    def return_period_flood(self) -> np.ndarray:
         """Simulate a flood event based on return periods and determine which households are flooded.
 
         Returns:
@@ -889,7 +921,10 @@ class FloodRiskModule:
         sorted_return_periods = return_periods_arr[sort_idx]
         probabilities = 1.0 / sorted_return_periods
 
-        if p_random >= probabilities.max() or p_random >= 1 / flood_protection_standard:
+        if p_random >= probabilities.max() or p_random > (
+            1 / self.flood_protection_standard
+        ):
+            self.flood_in_last_year = False
             return np.array([], dtype=int)
 
         # find the event corresponding to the random draw
@@ -942,5 +977,62 @@ class FloodRiskModule:
                 self.households.var.building_id_of_household.data, flooded_building_ids
             )
         )[0]
-
+        self.flood_in_last_year = len(flooded_household_indices) > 0
         return flooded_household_indices
+
+    def _adjust_damages_for_flood_protection(
+        self,
+        damages: np.ndarray,
+        flood_protection_standard: float,
+    ) -> np.ndarray:
+        """Return damages with values below the flood protection standard set to 0."""
+        mask = self.households.return_periods >= flood_protection_standard
+        return damages * mask[:, np.newaxis]
+
+    @property
+    def damages_do_not_adapt(self) -> np.ndarray:
+        """Return damages for households that do not adapt."""
+        return self._adjust_damages_for_flood_protection(
+            self._damages_do_not_adapt, self.flood_protection_standard
+        )
+
+    @property
+    def damages_adapt(self) -> np.ndarray:
+        """Return damages for households that adapt."""
+        return self._adjust_damages_for_flood_protection(
+            self._damages_adapt, self.flood_protection_standard
+        )
+
+    @property
+    def dike_heights(self) -> float:
+        """Return the dike height in meters."""
+        if hasattr(self, "_dike_heights"):
+            return self._dike_heights
+
+        dike_heights = {}
+        # load river network
+        river_network = gpd.read_parquet(
+            Path(self.households.model.files["geom"]["routing/rivers"])
+        )
+        for rp in self.households.return_periods:
+            dike_heights[rp] = {}
+            for river in river_network.itertuples():
+                river_geom = river.geometry
+                flood_map: xr.DataArray = self.households.flood_maps[rp]
+
+                # sample every 10 m (or whatever units your CRS uses)
+                distances = np.arange(0, river_geom.length, 0.0008333)
+
+                points = [river_geom.interpolate(d) for d in distances]
+
+                x = [p.x for p in points]
+                y = [p.y for p in points]
+
+                depths = flood_map.interp(
+                    x=("points", x),
+                    y=("points", y),
+                ).values
+                depths[np.isnan(depths)] = 0
+                dike_heights[rp][river[0]] = depths
+        self._dike_heights = dike_heights
+        return dike_heights
