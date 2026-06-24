@@ -94,7 +94,7 @@ class LandSurface(BuildModelBase):
             },
             {
                 "name": "delta_dtm",
-                "zmax": 30,
+                "zmax": 29.999999,
                 "zmin": 0.001,
                 "merge_method": "last",
                 "fill_depressions": False,
