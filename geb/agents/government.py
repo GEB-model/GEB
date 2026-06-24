@@ -404,6 +404,9 @@ class Government(AgentBaseClass):
         Args:
             mode: The adaptation mode to use (default is "cost_benefit_analysis").
 
+        Raises:
+            ValueError: If an invalid adaptation mode is specified in the configuration.
+
         """
         # something to specify that this should only run when adaptation is turned on in the config file
         # should this step be skipped during spinup?
@@ -545,9 +548,6 @@ class Government(AgentBaseClass):
             # get total length and height difference of the dikes that need to be raised
             height_difference = dike_heights_altered_fps - dike_heights_current_fps
             if height_difference.sum() == 0:
-                print(
-                    f"No dike height difference for subbasin {subbasin} between {current_fps}yr and {altered_fps}yr standards. Skipping cost calculation."
-                )
                 continue
             cost_per_meter = self.config["adaptation"].get(
                 "dike_cost_per_meter_usd", 6800
