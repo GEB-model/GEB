@@ -43,6 +43,8 @@ class Government(AgentBaseClass):
             else {}
         )
         self.ratio_farmers_to_provide_subsidies_per_year = 0.05
+        # for easier access to the flood risk module of the households agent, we store it here as well
+        self.flood_risk_module = self.agents.households.flood_risk_module
 
     @property
     def name(self) -> str:
@@ -398,6 +400,10 @@ class Government(AgentBaseClass):
         Checks if adaptation is enabled and if it is January 1st, then calculates EAD,
         equity, and ecosystem indicators. If any thresholds are crossed, applies the corresponding
         adaptation measures (building floodproofing, subsidies, or reforestation).
+
+        Args:
+            mode: The adaptation mode to use (default is "cost_benefit_analysis").
+
         """
         # something to specify that this should only run when adaptation is turned on in the config file
         # should this step be skipped during spinup?
@@ -408,6 +414,14 @@ class Government(AgentBaseClass):
         ):
             return  # exits because it is not the first of January
 
+        if self.config["adaptation"]["mode"] == "cba":
+            self._cost_benefit_adaptation()
+            return
+        elif self.config["adaptation"]["mode"] != "threshold":
+            raise ValueError(
+                f"Invalid adaptation mode: {self.config['adaptation']['mode']}. "
+                "Supported modes are 'cba' and 'threshold'."
+            )
         # calculate the water risk, equity and ecosystem health for the current year (adaptation is enabled and it is january first)
         EAD_value = self.calculate_EAD()  # this is defined by the EAD
         equity_indicator_value = (
@@ -454,7 +468,102 @@ class Government(AgentBaseClass):
                 "No adaptation needed, all thresholds are below the defined thresholds"
             )
 
-    def calculate_EAD(self) -> None | float:
+    def _apply_cumulative_time_discounting(
+        self, value_to_discount: float, discount_rate: float = 0.1, years: int = 35
+    ) -> float:
+        """Return the cumulative time discounted value.
+
+        Args:
+            value_to_discount: The value to be discounted.
+            discount_rate: The discount rate (as a decimal).
+            years: The number of years into the future.
+
+        Returns:
+            The discounted value.
+        """
+        # Calculate time discounted NPVs
+        t_arr = np.arange(1, years, dtype=np.float32)
+        discounts = 1 / (1 + discount_rate) ** t_arr
+        discounted_value = np.sum(discounts) * value_to_discount
+
+        return discounted_value
+
+    def _cost_benefit_adaptation(self) -> None:
+        """Evaluate flood protection standard upgrade using cost-benefit analysis.
+
+        Compares expected annual damage (EAD) at current and next flood protection
+        standard level. If damage reduction exceeds threshold, upgrades the standard.
+        """
+        # if not self.flood_risk_module.flood_in_last_year:
+        #     return
+
+        return_periods = self.agents.households.return_periods
+
+        damages_do_not_adapt = self.flood_risk_module.damages_do_not_adapt
+        damages_adapt = self.flood_risk_module.damages_adapt
+        adapted = self.agents.households.var.adapted.data
+
+        # iterate over each subbasin in the model and calculate the EAD for the current and next flood protection standard
+        for subbasin in self.flood_risk_module.dike_heights[10]:
+            current_fps = self.flood_risk_module.flood_protection_standard_subbasins[
+                subbasin
+            ]
+            idx_fps = np.where(return_periods == current_fps)[0]
+
+            if len(idx_fps) == 0 or idx_fps[0] >= len(return_periods) - 1:
+                continue  # Cannot upgrade further
+
+            altered_fps = return_periods[idx_fps[0] + 1]
+
+            households = np.where(
+                self.agents.households.comid_of_household == subbasin
+            )[0]
+
+            # Calculate EAD at current and higher protection standard
+            current_ead = self.flood_risk_module.calculate_ead(
+                damages_do_not_adapt[:, households],
+                damages_adapt[:, households],
+                adapted[households],
+            ).sum()
+
+            altered_ead = self.flood_risk_module.calculate_ead(
+                damages_do_not_adapt[:, households],
+                damages_adapt[:, households],
+                adapted[households],
+                altered_fps,
+            ).sum()
+
+            # calculate the cost of raising the dike to the next flood protection standard
+            dike_heights_current_fps = self.flood_risk_module.dike_heights[current_fps][
+                subbasin
+            ]
+            dike_heights_altered_fps = self.flood_risk_module.dike_heights[altered_fps][
+                subbasin
+            ]
+            damage_reduction = current_ead - altered_ead
+
+            # get total length and height difference of the dikes that need to be raised
+            height_difference = dike_heights_altered_fps - dike_heights_current_fps
+            if height_difference.sum() == 0:
+                print(
+                    f"No dike height difference for subbasin {subbasin} between {current_fps}yr and {altered_fps}yr standards. Skipping cost calculation."
+                )
+                continue
+            cost_per_meter = self.config["adaptation"].get(
+                "dike_cost_per_meter_usd", 6800
+            )
+            total_cost = (
+                np.sum(height_difference * 100 * cost_per_meter) * 2
+            )  # double the cost to account for both sides of the dike
+
+            if self._apply_cumulative_time_discounting(
+                damage_reduction
+            ) > total_cost + self._apply_cumulative_time_discounting(total_cost * 0.03):
+                self.flood_risk_module.flood_protection_standard_subbasins[subbasin] = (
+                    altered_fps
+                )
+
+    def calculate_EAD(self, households_only: bool = True) -> None | float:
         """Calculate the expected annual damage (EAD) for the current year.
 
         EAD is computed by integrating total flood damage over the exceedance
@@ -473,6 +582,9 @@ class Government(AgentBaseClass):
             return
 
         households = self.agents.households
+        if households_only:
+            return households.flood_risk_module.calculate_EAD().sum()
+
         if not hasattr(households, "flood_risk_module"):
             return None
         return_periods = households.return_periods
