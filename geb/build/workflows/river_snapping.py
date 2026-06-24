@@ -2,6 +2,7 @@
 
 import warnings
 from pathlib import Path
+from typing import NamedTuple
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -14,6 +15,19 @@ import xarray as xr
 from shapely.ops import nearest_points
 
 from geb.workflows.io import get_window
+
+
+class SnappingResults(NamedTuple):
+    """Container for snapping results."""
+
+    closest_point_coords: tuple[float, float]
+    subgrid_pixel_coords: tuple[float, float]
+    snapped_grid_pixel_lonlat: tuple[float, float]
+    snapped_grid_pixel_xy: tuple[int, int]
+    geb_uparea_subgrid: float
+    geb_uparea_grid: float
+    distance_degrees: float
+    closest_river_segment: gpd.GeoDataFrame
 
 
 def plot_snapping(
@@ -171,7 +185,7 @@ def snap_point_to_river_network(
     upstream_area_m2: float | None = None,
     max_uparea_difference_ratio: float = 0.3,
     max_spatial_difference_degrees: float = 0.1,
-) -> dict | None:
+) -> SnappingResults | None:
     """Snap a point to the river network grid.
 
     This function finds the closest river segment (optionally matching upstream area),
@@ -188,16 +202,7 @@ def snap_point_to_river_network(
         max_spatial_difference_degrees: Max allowed spatial distance in degrees.
 
     Returns:
-        Dictionary with snapping results or None if no segment found.
-        The dictionary contains:
-            - closest_point_coords: (lon, lat) on the river line.
-            - subgrid_pixel_coords: (lon, lat) of the corresponding high-res pixel.
-            - snapped_grid_pixel_lonlat: (lon, lat) of the snapped low-res grid cell.
-            - snapped_grid_pixel_xy: (x_idx, y_idx) indices in the low-res grid.
-            - geb_uparea_subgrid: Upstream area from the subgrid (m2).
-            - geb_uparea_grid: Upstream area from the low-res grid (m2).
-            - distance_degrees: Distance from original point to segment (degrees).
-            - closest_river_segment: The selected river segment (GeoDataFrame).
+        SnappingResults or None if no segment found.
     """
     # Calculate distances and sort from closest to furthest
     rivers = rivers.copy()
@@ -256,29 +261,29 @@ def snap_point_to_river_network(
         key=lambda x: shapely.distance(x[0], closest_point_on_riverline),
     )
 
-    return {
-        "closest_point_coords": (
+    return SnappingResults(
+        closest_point_coords=(
             float(closest_point_on_riverline.x),
             float(closest_point_on_riverline.y),
         ),
-        "subgrid_pixel_coords": (
+        subgrid_pixel_coords=(
             river_cell_in_subgrid.x.item(),
             river_cell_in_subgrid.y.item(),
         ),
-        "snapped_grid_pixel_lonlat": (
+        snapped_grid_pixel_lonlat=(
             closest_river_point_and_xy[0].x,
             closest_river_point_and_xy[0].y,
         ),
-        "snapped_grid_pixel_xy": closest_river_point_and_xy[1],
-        "geb_uparea_subgrid": (river_cell_in_subgrid.item()),
-        "geb_uparea_grid": (
+        snapped_grid_pixel_xy=closest_river_point_and_xy[1],
+        geb_uparea_subgrid=(river_cell_in_subgrid.item()),
+        geb_uparea_grid=(
             upstream_area_grid.isel(
                 x=closest_river_point_and_xy[1][0], y=closest_river_point_and_xy[1][1]
             ).item()
         ),
-        "distance_degrees": best_river_segment.iloc[0].station_distance,
-        "closest_river_segment": best_river_segment,
-    }
+        distance_degrees=best_river_segment.iloc[0].station_distance,
+        closest_river_segment=best_river_segment,
+    )
 
 
 def select_river_segment(
