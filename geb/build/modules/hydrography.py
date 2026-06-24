@@ -13,6 +13,7 @@ import numpy.typing as npt
 import pandas as pd
 import pyflwdir
 import rasterio.features
+import shapely
 import xarray as xr
 from networkx.classes.digraph import DiGraph
 from pyflwdir import FlwdirRaster
@@ -27,11 +28,14 @@ from geb.build.workflows.hydrography import (
     calculate_shreve_stream_order,
     get_river_graph,
 )
-from geb.build.workflows.river_snapping import snap_point_to_river_network
+from geb.build.workflows.river_snapping import (
+    SnappingResults,
+    snap_point_to_river_network,
+)
 from geb.geb_types import (
     ArrayBool,
     ArrayFloat32,
-    ArrayInt32,
+    ArrayInt64,
     TwoDArrayFloat64,
     TwoDArrayInt32,
     TwoDArrayInt64,
@@ -835,6 +839,31 @@ class Hydrography(BuildModelBase):
             self.grid["idxs_outflow"].values.ravel()
         ].reshape(self.grid["idxs_outflow"].shape)
 
+        # The outflow detected by the upscale method is not neccesarily the one of the main stream. This may result
+        # in a side branch river, being "inside" the main river. This finally meant that the discharge of the main
+        # river was used for the side branch, which is not correct.
+        # In principle, every river should have no (headwater) or 2 upstream rivers. However, in this situation, a
+        # river would only have 1 upstream river, which is the main river. Therefore, we can detect these situations and correct them.
+        # We do so by detecting situations with only 1 upstream river. If this is the case, we can
+        # overwrite the river raster with the COMID of the main river.
+        for COMID in rivers.sort_values(
+            by="shreve_stream_order",
+            ascending=False,  # Process from downstream to upstream
+        ).index:
+            river_cells = np.where(river_raster_LR.ravel() == COMID)[0]
+            if river_cells.size == 0:
+                continue
+            upstream_area = upstream_area_data.ravel()[river_cells]
+            most_upstream_cell = np.argmin(upstream_area)
+            most_upstream_cell_index = river_cells[most_upstream_cell]
+            upstream_river_cells = (flow_raster.idxs_ds == most_upstream_cell_index) & (
+                river_raster_LR.ravel() != -1
+            )
+            if upstream_river_cells.sum() == 1:
+                river_raster_LR[upstream_river_cells.reshape(river_raster_LR.shape)] = (
+                    COMID
+                )
+
         missing_rivers: set[int] = set(rivers.index) - set(
             np.unique(river_raster_LR[river_raster_LR != -1]).tolist()
         )
@@ -908,8 +937,8 @@ class Hydrography(BuildModelBase):
 
             non_nan_mask: ArrayBool = ~nan_mask
             upstream_area = upstream_area[non_nan_mask]
-            ys: ArrayInt32 = ys[non_nan_mask]
-            xs: ArrayInt32 = xs[non_nan_mask]
+            ys: ArrayInt64 = ys[non_nan_mask]
+            xs: ArrayInt64 = xs[non_nan_mask]
 
             assert not np.isnan(upstream_area).any()
 
@@ -920,8 +949,8 @@ class Hydrography(BuildModelBase):
                 f"River segment {river_ID} has inconsistent raster values"
             )
 
-            ys: npt.NDArray[np.int64] = ys[up_to_downstream_ids]
-            xs: npt.NDArray[np.int64] = xs[up_to_downstream_ids]
+            ys: ArrayInt64 = ys[up_to_downstream_ids]
+            xs: ArrayInt64 = xs[up_to_downstream_ids]
 
             lats: ArrayFloat32 = upstream_area_high_res.y.values[ys]
             lons: ArrayFloat32 = upstream_area_high_res.x.values[xs]
@@ -1735,7 +1764,7 @@ class Hydrography(BuildModelBase):
 
         if retention_basins is None:
             self.set_grid(retention_basin_ids, name="routing/retention_basin_ids")
-            retention_basin_df = pd.DataFrame(
+            retention_basin_gdf = gpd.GeoDataFrame(
                 columns=np.array(
                     [
                         "ID",
@@ -1744,7 +1773,8 @@ class Hydrography(BuildModelBase):
                         "retention_activation_threshold_controlled_m3_s",
                         "retention_activation_threshold_uncontrolled_m3_s",
                     ]
-                )
+                ),
+                geometry=gpd.GeoSeries([], crs="EPSG:4326"),
             ).astype(
                 {
                     "ID": np.int32,
@@ -1754,6 +1784,7 @@ class Hydrography(BuildModelBase):
                     "retention_activation_threshold_uncontrolled_m3_s": np.float32,
                 }
             )
+            self.set_geom(retention_basin_gdf, name="routing/retention_basins")
         else:
             # read the retention basins from the provided file
             retention_basins = gpd.read_file(retention_basins).to_crs(
@@ -1790,7 +1821,7 @@ class Hydrography(BuildModelBase):
 
                 # the centroid of the retention basin may not fall exactly on the river network,
                 # so we snap it to the nearest river pixel using the snap_point_to_river_network function
-                snapped_data = snap_point_to_river_network(
+                snapped_data: SnappingResults | None = snap_point_to_river_network(
                     point=centroid,
                     rivers=rivers,
                     upstream_area_grid=upstream_area_grid,
@@ -1800,7 +1831,7 @@ class Hydrography(BuildModelBase):
                     raise ValueError(
                         f"Could not snap retention basin for basin ID {retention_basin['ID']} to river network. "
                     )
-                snapped_grid_pixel_xy = snapped_data["snapped_grid_pixel_xy"]
+                snapped_grid_pixel_xy = snapped_data.snapped_grid_pixel_xy
 
                 # assign the ID of the retention basin to the corresponding pixel in the retention_basin_ids grid
                 search_steps = 0
@@ -1835,6 +1866,10 @@ class Hydrography(BuildModelBase):
                     snapped_grid_pixel_xy[1], snapped_grid_pixel_xy[0]
                 ] = retention_basin["ID"]
 
+                final_lon = upstream_area_grid.x.values[snapped_grid_pixel_xy[0]].item()
+                final_lat = upstream_area_grid.y.values[snapped_grid_pixel_xy[1]].item()
+                snapped_geom = shapely.geometry.Point(final_lon, final_lat)
+
                 # store the retention basin data in a list to create a table later
                 controlled_flag = (
                     str(retention_basin["controlled_retention"]).lower() == "controlled"
@@ -1852,10 +1887,13 @@ class Hydrography(BuildModelBase):
                         "retention_activation_threshold_uncontrolled_m3_s": retention_basin[
                             "retention_activation_threshold_uncontrolled_m3_s"
                         ],
+                        "geometry": snapped_geom,
                     }
                 )
 
-            retention_basin_df = pd.DataFrame(retention_basin_data)
+            retention_basin_gdf = gpd.GeoDataFrame(
+                retention_basin_data, crs="EPSG:4326"
+            )
 
-        self.set_table(retention_basin_df, name="routing/retention_basin_data")
+        self.set_geom(retention_basin_gdf, name="routing/retention_basins")
         self.set_grid(retention_basin_ids, name="routing/retention_basin_ids")
