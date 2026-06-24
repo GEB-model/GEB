@@ -30,6 +30,8 @@ from geb.workflows.io import read_geom, read_table
 if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
 
+RETENTION_BASIN_RELEASE_THRESHOLD_FACTOR: np.float32 = np.float32(0.75)
+
 
 def get_discharge_per_river(
     rivers: gpd.GeoDataFrame,
@@ -420,7 +422,7 @@ def update_node_kinematic(
     beta: np.float32,
     deltaT: np.float32,
     deltaX: np.float32,
-    epsilon: np.float32 = np.float32(0.0001),
+    epsilon: np.float32 = np.float32(0.00001),
 ) -> tuple[np.float32, np.float32]:
     """Update the discharge for a single node using the kinematic wave equation.
 
@@ -840,7 +842,8 @@ class KinematicWave(Router):
                     # but only if the river flow is below the activation threshold.
                     # retention storage is updated accordingly, as well as retention outflow. Outflow is added to discharge_at_retention_basin (back to river)
                     release_threshold_m3_per_s = (
-                        activation_threshold_m3_per_s * np.float32(0.5)
+                        activation_threshold_m3_per_s
+                        * RETENTION_BASIN_RELEASE_THRESHOLD_FACTOR
                     )
                     if (
                         retention_storage_m3[node_retention_id] > np.float32(0.0)
@@ -1305,8 +1308,9 @@ class Accuflux(Router):
                 # Outflow: 1% of current storage per timestep when basin has storage > 0,
                 # but only if the river flow is below the activation threshold.
                 # retention basin storage is updated, as well as retention outflow.
-                release_threshold_m3_per_s = activation_threshold_m3_per_s * np.float32(
-                    0.5
+                release_threshold_m3_per_s = (
+                    activation_threshold_m3_per_s
+                    * RETENTION_BASIN_RELEASE_THRESHOLD_FACTOR
                 )
                 if (
                     retention_storage_m3[node_retention_id] > np.float32(0.0)
@@ -2039,6 +2043,9 @@ class Routing(Module):
             retention_outflow_m3: ArrayFloat32 = np.zeros_like(
                 self.grid.var.retention_basin_storage_m3, dtype=np.float32
             )
+            retention_evaporation_m3: ArrayFloat32 = np.zeros_like(
+                self.grid.var.retention_basin_storage_m3, dtype=np.float32
+            )
 
         over_abstraction_m3: ArrayFloat32 = self.grid.full_compressed(
             0, dtype=np.float32
@@ -2100,6 +2107,46 @@ class Routing(Module):
             self.hydrology.waterbodies.var.storage -= (
                 actual_evaporation_from_waterbodies_per_hour_m3
             )
+
+            # Calculate potential evaporation for retention basins
+            if not self.retention_basin_data.empty:
+                retention_basin_area = (
+                    self.retention_max_storage_m3
+                    / np.float32(3.0)  # assumed depth of 3 meters
+                ).astype(np.float32)
+                retention_mask = self.retention_basin_ids != -1
+
+                # aggregate potential ET for retention basins
+                potential_evaporation_per_retention_basin_m3 = (
+                    np.bincount(
+                        self.retention_basin_ids[retention_mask],
+                        weights=reference_evapotranspiration_water_m[
+                            hour, retention_mask
+                        ],
+                        minlength=len(retention_basin_area),
+                    )
+                    / np.maximum(
+                        np.bincount(
+                            self.retention_basin_ids[retention_mask],
+                            minlength=len(retention_basin_area),
+                        ),
+                        1,
+                    )
+                    * retention_basin_area
+                )
+
+                actual_evaporation_from_retention_basins_m3 = np.minimum(
+                    potential_evaporation_per_retention_basin_m3,
+                    self.grid.var.retention_basin_storage_m3,
+                ).astype(np.float32)
+
+                self.grid.var.retention_basin_storage_m3 -= (
+                    actual_evaporation_from_retention_basins_m3
+                )
+                if __debug__:
+                    retention_evaporation_m3 += (
+                        actual_evaporation_from_retention_basins_m3
+                    )
 
             outflow_per_waterbody_m3, command_area_release_m3_routing_step = (
                 self.hydrology.waterbodies.substep(
@@ -2285,6 +2332,7 @@ class Routing(Module):
                     outflow_at_pits_m3,
                     evaporation_in_rivers_m3,
                     waterbody_evaporation_m3,
+                    retention_evaporation_m3,
                     command_area_release_m3,
                 ],
                 prestorages=[
@@ -2310,15 +2358,20 @@ class Routing(Module):
             total_outflow_at_pits_m3: np.float64 = outflow_at_pits_m3.astype(
                 np.float64
             ).sum()
+            total_retention_evaporation_m3: np.float64 = (
+                retention_evaporation_m3.astype(np.float64).sum()
+            )
 
             assert total_evaporation_in_rivers_m3 >= 0
             assert total_waterbody_evaporation_m3 >= 0
             assert total_outflow_at_pits_m3 >= 0
+            assert total_retention_evaporation_m3 >= 0
 
             routing_loss: np.float64 = (
                 total_evaporation_in_rivers_m3
                 + total_waterbody_evaporation_m3
                 + total_outflow_at_pits_m3
+                + total_retention_evaporation_m3
             )
 
             assert routing_loss >= 0, "Routing loss cannot be negative"
@@ -2330,6 +2383,7 @@ class Routing(Module):
             total_evaporation_in_rivers_m3: np.float64 = np.float64(np.nan)
             total_waterbody_evaporation_m3: np.float64 = np.float64(np.nan)
             total_outflow_at_pits_m3: np.float64 = np.float64(np.nan)
+            total_retention_evaporation_m3: np.float64 = np.float64(np.nan)
 
         # store daily retention basin flows
         if __debug__:
