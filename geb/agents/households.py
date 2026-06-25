@@ -11,6 +11,7 @@ import osmnx as ox
 import pandas as pd
 import xarray as xr
 from rasterio.features import rasterize
+from shapely import prepare
 
 from geb.geb_types import ArrayFloat32, TwoDArrayFloat32
 from geb.workflows.io import read_geom
@@ -217,6 +218,25 @@ class Households(AgentBaseClass):
         # assign wealth based on income (dummy data, there are ratios available in literature)
         self.var.wealth = DynamicArray(2.5 * self.var.income.data, max_n=self.max_n)
 
+    def mark_flooded_buildings(
+        self, buildings_centroid: gpd.GeoDataFrame, floodplain: gpd.GeoDataFrame
+    ) -> np.ndarray[bool]:
+        """This function checks if the building centroids intersect with the floodplain geometry and returns a boolean array indicating which buildings are flooded.
+
+        Args:
+            buildings_centroid: GeoDataFrame of Building centroids.
+            floodplain: GeoDataFrame containing a single dissolved floodplain geometry.
+
+        Returns:
+            np.ndarray[bool]: True if centroid intersects floodplain.
+        """
+        flood_geom = floodplain.geometry.iloc[0]
+
+        # Prepare geometry for repeated spatial queries
+        prepare(flood_geom)
+
+        return buildings_centroid.geometry.intersects(flood_geom).to_numpy()
+
     def update_building_attributes(self, drop_not_flooded: bool = False) -> None:
         """Update building attributes based on household data.
 
@@ -274,16 +294,10 @@ class Households(AgentBaseClass):
             crs=buildings_centroid.crs,
         )
 
-        # # Create a mask for buildings that overlap with the flood map
-        flooded_buildings = gpd.sjoin(
-            buildings_centroid,
-            flood_map_polygons_union,
-            predicate="intersects",
-            how="left",
+        # Create a mask for buildings that overlap with the flood map and mark them as flooded
+        self.buildings["flooded"] = self.mark_flooded_buildings(
+            buildings_centroid, flood_map_polygons_union
         )
-
-        # Flooded if match exists
-        self.buildings["flooded"] = flooded_buildings["index_right"].notna()
 
         # drop buildings which are not flooded
         if drop_not_flooded:
@@ -2023,22 +2037,19 @@ class Households(AgentBaseClass):
         return self.var.adapted.data[self.households_exposed_to_flooding]
 
     @property
-    def comid_of_household(self) -> tuple[np.ndarray, np.ndarray]:
+    def comid_of_household(self) -> np.ndarray:
         """This function assigns the COMIDs to the corresponding households.
 
         Returns:
             np.ndarray: Array of COMIDs corresponding to each household, based on their building assignment.
         """
-        # create a pandas data array for assigning damage to the agents:
-        agent_df = pd.DataFrame(
-            {"building_id_of_household": self.var.building_id_of_household}
+        # Cache the indexed Series for fast vectorized lookup; avoids rebuilding on each call
+        if not hasattr(self, "_comid_map"):
+            self._comid_map = self.buildings.set_index("id")["COMID"]
+
+        return (
+            pd.Series(self.var.building_id_of_household)
+            .map(self._comid_map)
+            .fillna(0)
+            .to_numpy()
         )
-
-        merged = agent_df.merge(
-            self.buildings.rename(columns={"id": "building_id_of_household"}),
-            on="building_id_of_household",
-            how="left",
-        ).fillna(0)
-        comid_of_household = merged["COMID"].to_numpy()
-
-        return comid_of_household
