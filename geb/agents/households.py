@@ -14,7 +14,7 @@ from rasterio.features import rasterize
 from shapely import prepare
 
 from geb.geb_types import ArrayFloat32, TwoDArrayFloat32
-from geb.workflows.io import read_geom
+from geb.workflows.io import read_geom, sample_from_map
 
 from ..store import Bucket, DynamicArray
 from ..workflows.io import read_array, read_table, read_zarr, write_zarr
@@ -1753,13 +1753,24 @@ class Households(AgentBaseClass):
         Returns:
             Tuple[np.ndarray, np.ndarray]: A tuple containing damage arrays for (unprotected buildings, flood-proofed buildings).
         """
-        merged = agent_df.merge(
-            buildings_with_damages.rename(columns={"id": "building_id_of_household"}),
-            on="building_id_of_household",
-            how="left",
-        ).fillna(0)
-        damages_do_not_adapt = merged["damages"].to_numpy()
-        damages_adapt = merged["damages_flood_proofed"].to_numpy()
+        # Use vectorized map() instead of merge for faster lookup
+        damages_map = buildings_with_damages.set_index("id")["damages"]
+        damages_flood_proofed_map = buildings_with_damages.set_index("id")[
+            "damages_flood_proofed"
+        ]
+
+        damages_do_not_adapt = (
+            pd.Series(agent_df["building_id_of_household"])
+            .map(damages_map)
+            .fillna(0)
+            .to_numpy()
+        )
+        damages_adapt = (
+            pd.Series(agent_df["building_id_of_household"])
+            .map(damages_flood_proofed_map)
+            .fillna(0)
+            .to_numpy()
+        )
 
         return damages_do_not_adapt, damages_adapt
 
