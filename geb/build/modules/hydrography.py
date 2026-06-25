@@ -17,6 +17,7 @@ import shapely
 import xarray as xr
 from networkx.classes.digraph import DiGraph
 from pyflwdir import FlwdirRaster
+from rasterio.enums import MergeAlg
 from scipy.ndimage import value_indices
 from shapely.geometry import LineString, shape
 
@@ -341,21 +342,31 @@ def create_river_raster_from_river_lines(
         ValueError: If both column and index are provided.
 
     """
+    # The rivers touch as the confluence (typically 2 upstream, 1 downstream). Here,
+    # we want to have the upstream area of the downstream river. Because we use the "replace"
+    # merge algorithm, we need to sort the rivers from upstream to downstream,
+    # such that the upstream rivers are rasterized first.
+    rivers_sorted_from_upstream_to_downstream: gpd.GeoDataFrame = rivers.sort_values(
+        by="shreve_stream_order", ascending=True
+    )  # ty:ignore[invalid-assignment]
+
     if column is None and (index is None or index is True):
-        values = rivers.index
+        values = rivers_sorted_from_upstream_to_downstream.index
     elif column is not None:
-        values = rivers[column]
+        values = rivers_sorted_from_upstream_to_downstream[column]
     else:
         raise ValueError(
             "Either column or index must be provided, or both must be None"
         )
+
     river_raster = rasterio.features.rasterize(
-        zip(rivers.geometry, values),
+        zip(rivers_sorted_from_upstream_to_downstream.geometry, values),
         out_shape=target.shape,
         fill=-1,
         dtype=np.int32,
         transform=target.rio.transform(recalc=True),
         all_touched=False,  # because this is a line, Bresenham's line algorithm is used, which is perfect here :-)
+        merge_alg=MergeAlg.replace,
     )
     return river_raster
 
