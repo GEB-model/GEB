@@ -1601,6 +1601,12 @@ class Routing(Module):
         self.retention_max_storage_m3 = self.retention_basin_data[
             "retention_max_storage_m3"
         ].to_numpy(dtype=np.float32)
+        if np.isnan(self.retention_max_storage_m3).any():
+            self.model.logger.warning(
+                "Retention basin data contains NaN values in 'retention_max_storage_m3'. "
+                "These will be treated as 0.0 m3. Please check your input data."
+            )
+        self.retention_max_storage_m3[np.isnan(self.retention_max_storage_m3)] = 0.0
 
         self.controlled_retention = self.retention_basin_data[
             "controlled_retention"
@@ -2117,28 +2123,25 @@ class Routing(Module):
                 retention_mask = self.retention_basin_ids != -1
 
                 # aggregate potential ET for retention basins
-                potential_evaporation_per_retention_basin_m3 = (
-                    np.bincount(
-                        self.retention_basin_ids[retention_mask],
-                        weights=reference_evapotranspiration_water_m[
-                            hour, retention_mask
-                        ],
-                        minlength=len(retention_basin_area),
-                    )
-                    / np.maximum(
-                        np.bincount(
-                            self.retention_basin_ids[retention_mask],
-                            minlength=len(retention_basin_area),
-                        ),
-                        1,
-                    )
-                    * retention_basin_area
+                # Since each basin is exactly one cell, we can map the ET values directly
+                potential_evaporation_per_retention_basin_m3 = np.zeros(
+                    len(retention_basin_area), dtype=np.float32
                 )
+                basin_ids = self.retention_basin_ids[retention_mask]
+                potential_evaporation_per_retention_basin_m3[basin_ids] = (
+                    reference_evapotranspiration_water_m[hour, retention_mask]
+                    * retention_basin_area[basin_ids]
+                )
+
+                assert not np.isnan(potential_evaporation_per_retention_basin_m3).any()
 
                 actual_evaporation_from_retention_basins_m3 = np.minimum(
                     potential_evaporation_per_retention_basin_m3,
                     self.grid.var.retention_basin_storage_m3,
                 ).astype(np.float32)
+
+                assert not np.isnan(potential_evaporation_per_retention_basin_m3).any()
+                assert not np.isnan(actual_evaporation_from_retention_basins_m3).any()
 
                 self.grid.var.retention_basin_storage_m3 -= (
                     actual_evaporation_from_retention_basins_m3
