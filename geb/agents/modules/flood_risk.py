@@ -987,7 +987,7 @@ class FloodRiskModule:
     ) -> np.ndarray:
         """Return damages with values below the flood protection standard set to 0."""
         comid_of_household = self.households.comid_of_household.copy()
-        for comid in np.unique(self.households.comid_of_household):
+        for comid in np.unique(comid_of_household):
             households_in_comid = np.where(comid_of_household == comid)[0]
             damages_households = damages[:, households_in_comid]
             flood_protection_standard = self.flood_protection_standard_subbasins[comid]
@@ -1026,19 +1026,20 @@ class FloodRiskModule:
                 river_geom = river.geometry
                 flood_map: xr.DataArray = self.households.flood_maps[rp]
 
-                # sample every 10 m (or whatever units your CRS uses)
-                distances = np.arange(0, river_geom.length, 0.0008333)
+                # sample every 100 m (or whatever units your CRS uses)
+                distances = np.arange(
+                    0, river_geom.length, 0.0008333
+                )  # 100 m in degrees (approximate, for WGS84)
 
-                points = [river_geom.interpolate(d) for d in distances]
-
-                x = [p.x for p in points]
-                y = [p.y for p in points]
+                # Extract x/y directly without creating intermediate Point objects
+                x = np.array([river_geom.interpolate(d).x for d in distances])
+                y = np.array([river_geom.interpolate(d).y for d in distances])
 
                 depths = flood_map.interp(
                     x=("points", x),
                     y=("points", y),
                 ).values
-                depths[np.isnan(depths)] = 0
+                depths = np.nan_to_num(depths, nan=0.0)
                 dike_heights[rp][river[0]] = depths
         self._dike_heights = dike_heights
         return dike_heights
