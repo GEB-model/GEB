@@ -1,6 +1,7 @@
 """This module contains the FloodRiskModule class, which is responsible for loading and managing flood risk data for the households in the model. It loads building, road, and rail geometries, as well as damage curves and maximum damage values for different asset types. It also loads flood maps for different return periods to be used in flood risk calculations."""
 
 from pathlib import Path
+from shapely.geometry import box
 from typing import TYPE_CHECKING
 
 import geopandas as gpd
@@ -10,7 +11,7 @@ import xarray as xr
 
 from geb.hydrology.landcovers import FOREST
 from geb.workflows.io import read_geom, read_params, read_table, read_zarr
-from geb.workflows.raster import sample_from_map
+from geb.workflows.raster import sample_from_map, coords_to_pixels
 
 from ...workflows.damage_scanner import VectorScanner, VectorScannerMultiCurves
 from ..workflows.helpers import from_landuse_raster_to_polygon
@@ -1020,25 +1021,36 @@ class FloodRiskModule:
         river_network = gpd.read_parquet(
             Path(self.households.model.files["geom"]["routing/rivers"])
         )
-        for rp in self.households.return_periods:
-            dike_heights[rp] = {}
-            for river in river_network.itertuples():
-                river_geom = river.geometry
+        floodmap_template = self.households.flood_maps[
+            self.households.return_periods[0]
+        ]
+        for river in river_network.itertuples():
+            river_geom = river.geometry
+            # check if geom is within bounds of floodmap_template
+            if not box(*floodmap_template.rio.bounds()).contains(river_geom):
+                continue
+            # initialize idx_river_points to False to avoid recalculating for each return period
+            idx_river_points = False
+            # sample every 100 m (or whatever units your CRS uses)
+            distances = np.arange(
+                0, river_geom.length, 0.0008333
+            )  # 100 m in degrees (approximate, for WGS84)
+
+            # Extract x/y directly without creating intermediate Point objects
+            x = np.array([river_geom.interpolate(d).x for d in distances])
+            y = np.array([river_geom.interpolate(d).y for d in distances])
+
+            for rp in self.households.return_periods:
                 flood_map: xr.DataArray = self.households.flood_maps[rp]
-
-                # sample every 100 m (or whatever units your CRS uses)
-                distances = np.arange(
-                    0, river_geom.length, 0.0008333
-                )  # 100 m in degrees (approximate, for WGS84)
-
-                # Extract x/y directly without creating intermediate Point objects
-                x = np.array([river_geom.interpolate(d).x for d in distances])
-                y = np.array([river_geom.interpolate(d).y for d in distances])
-
-                depths = flood_map.interp(
-                    x=("points", x),
-                    y=("points", y),
-                ).values
+                flood_map_array = flood_map.values
+                if rp not in dike_heights:
+                    dike_heights[rp] = {}
+                if not idx_river_points:
+                    idx_river_points = coords_to_pixels(
+                        coords=np.column_stack((x, y)),
+                        gt=flood_map.rio.transform().to_gdal(),
+                    )
+                depths = flood_map_array[(idx_river_points[1], idx_river_points[0])]
                 depths = np.nan_to_num(depths, nan=0.0)
                 dike_heights[rp][river[0]] = depths
         self._dike_heights = dike_heights
