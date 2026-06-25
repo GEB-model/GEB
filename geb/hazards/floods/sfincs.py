@@ -2166,7 +2166,9 @@ class SFINCSSimulation:
         river_cells: TwoDArrayBool = inflow_IDs != -1
         river_ids_mapping: ArrayInt64 = inflow_IDs[river_cells]
 
-        reservoir_cells = (river_ids_no_waterbodies_removed != -1) & (~river_cells)
+        reservoir_cells: TwoDArrayBool = (river_ids_no_waterbodies_removed != -1) & (
+            ~river_cells
+        )
 
         # starting from each river cell, create an upstream basin map for which
         # the discharge will be accumulated
@@ -2205,12 +2207,9 @@ class SFINCSSimulation:
         )
         assert accumulated_generated_discharge_m3_per_s.shape[1] == river_cells.sum()
 
-        # create empty timeseries and nodes
-        timeseries: pd.DataFrame = pd.DataFrame(
-            {
-                "time": generated_discharge_m3_per_s.time,
-            }
-        ).set_index("time")
+        # Initialize an empty dictionary to collect time series columns
+        timeseries: dict[int, np.ndarray] = {}
+
         inflow_IDs_gdf: list[int] = []
         nodes: list[Point] = []
 
@@ -2231,14 +2230,35 @@ class SFINCSSimulation:
             hydrography_upstream_area_m2 = river[
                 "hydrography_upstream_area_m2_no_waterbodies_removed"
             ]
-            upstream_area_low_res = hydrography_upstream_area_m2[inflow_offset]
-            hydrography_high_res_lons_lats = river["hydrography_high_res_lons_lats"]
             hydrography_high_res_upstream_area_m2 = river[
                 "hydrography_high_res_upstream_area_m2"
             ]
-            closest_upstream_area_index = np.argmin(
-                np.abs(hydrography_high_res_upstream_area_m2 - upstream_area_low_res)
-            )
+
+            if hydrography_upstream_area_m2.size > 2:
+                upstream_area_low_res_normalized = (
+                    hydrography_upstream_area_m2[inflow_offset]
+                    - hydrography_upstream_area_m2[0]
+                ) / (hydrography_upstream_area_m2[-1] - hydrography_upstream_area_m2[0])
+                hydrography_high_res_upstream_area_m2_normalized = (
+                    hydrography_high_res_upstream_area_m2
+                    - hydrography_high_res_upstream_area_m2[0]
+                ) / (
+                    hydrography_high_res_upstream_area_m2[-1]
+                    - hydrography_high_res_upstream_area_m2[0]
+                )
+
+                closest_upstream_area_index: np.int64 = np.argmin(
+                    np.abs(
+                        hydrography_high_res_upstream_area_m2_normalized
+                        - upstream_area_low_res_normalized
+                    )
+                )
+            else:
+                # When not represented in the low-res hydrology or just one cell,
+                # we just use the headwater point
+                closest_upstream_area_index: np.int64 = np.int64(0)
+
+            hydrography_high_res_lons_lats = river["hydrography_high_res_lons_lats"]
 
             discharge_m3_per_s = accumulated_generated_discharge_m3_per_s[:, mapped_idx]
 
@@ -2260,7 +2280,7 @@ class SFINCSSimulation:
                 # for the index, we create a unique index based on the river ID. The headwater point
                 # will always have offset INFLOW_MULTIPLICATION_FACTOR - 1 which will not
                 # collide with any other inflow point
-                headwater_idx = (
+                headwater_idx: int = (
                     river_ID * INFLOW_MULTIPLICATION_FACTOR
                     + INFLOW_MULTIPLICATION_FACTOR
                     - 1
@@ -2269,10 +2289,10 @@ class SFINCSSimulation:
 
                 # find the upstream areas of both the low-res downstream point
                 # and the high-res headwater point
-                upstream_area_downstream_point_m2 = (
+                upstream_area_downstream_point_m2: float = (
                     hydrography_high_res_upstream_area_m2[closest_upstream_area_index]
                 )
-                upstream_area_headwater_point_m2 = (
+                upstream_area_headwater_point_m2: float = (
                     hydrography_high_res_upstream_area_m2[0]
                 )
 
@@ -2282,6 +2302,8 @@ class SFINCSSimulation:
                     * upstream_area_headwater_point_m2
                     / upstream_area_downstream_point_m2
                 )
+
+                # Store headwater discharge in dictionary
                 timeseries[headwater_idx] = headwater_discharge_m3_per_s
 
                 # reduce the discharge at the downstream point accordingly
@@ -2294,8 +2316,14 @@ class SFINCSSimulation:
             nodes.append(Point(lon, lat))
             inflow_IDs_gdf.append(inflow_idx)
 
-            # add the timeseries
+            # Store the normal discharge in dictionary instead of df assignment
             timeseries[inflow_idx] = discharge_m3_per_s
+
+        # Build the final DataFrame in a single operation
+        timeseries: pd.DataFrame = pd.DataFrame(
+            timeseries, index=generated_discharge_m3_per_s.time
+        )
+        timeseries.index.name = "time"
 
         # create and sort the final nodes and timeseries
         nodes: gpd.GeoDataFrame = gpd.GeoDataFrame(
