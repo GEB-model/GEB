@@ -14,7 +14,8 @@ from rasterio.features import rasterize
 from shapely import prepare
 
 from geb.geb_types import ArrayFloat32, TwoDArrayFloat32
-from geb.workflows.io import read_geom, sample_from_map
+from geb.workflows.io import read_geom
+from geb.workflows.raster import sample_from_map
 
 from ..store import Bucket, DynamicArray
 from ..workflows.io import read_array, read_table, read_zarr, write_zarr
@@ -218,25 +219,6 @@ class Households(AgentBaseClass):
         # assign wealth based on income (dummy data, there are ratios available in literature)
         self.var.wealth = DynamicArray(2.5 * self.var.income.data, max_n=self.max_n)
 
-    def mark_flooded_buildings(
-        self, buildings_centroid: gpd.GeoDataFrame, floodplain: gpd.GeoDataFrame
-    ) -> np.ndarray[bool]:
-        """This function checks if the building centroids intersect with the floodplain geometry and returns a boolean array indicating which buildings are flooded.
-
-        Args:
-            buildings_centroid: GeoDataFrame of Building centroids.
-            floodplain: GeoDataFrame containing a single dissolved floodplain geometry.
-
-        Returns:
-            np.ndarray[bool]: True if centroid intersects floodplain.
-        """
-        flood_geom = floodplain.geometry.iloc[0]
-
-        # Prepare geometry for repeated spatial queries
-        prepare(flood_geom)
-
-        return buildings_centroid.geometry.intersects(flood_geom).to_numpy()
-
     def update_building_attributes(self, drop_not_flooded: bool = False) -> None:
         """Update building attributes based on household data.
 
@@ -269,35 +251,17 @@ class Households(AgentBaseClass):
         # get highest return period
         highest_return_period = self.return_periods.max()
         flood_map = self.flood_maps[highest_return_period].copy()
+
         # check if building geometry overlaps with flood map
-
-        buildings_centroid = gpd.GeoDataFrame(
-            self.buildings,
-            geometry=gpd.points_from_xy(self.buildings["x"], self.buildings["y"]),
-            crs="EPSG:4326",
-        )
-        buildings_centroid = buildings_centroid.to_crs(
-            flood_map.rio.crs
-        )  # Reproject building centroids to flood map CRS
-
-        # # convert flood map to polygons
-        flood_map = flood_map > 0  # convert to boolean mask
-        flood_map_polygons = from_landuse_raster_to_polygon(
-            flood_map.values,
-            flood_map.rio.transform(recalc=True),
-            flood_map.rio.crs,
-        )
-
-        flood_map_polygons_union: gpd.GeoDataFrame = gpd.GeoDataFrame(
-            [flood_map_polygons.union_all()],
-            columns=["geometry"],
-            crs=buildings_centroid.crs,
+        water_levels_building = sample_from_map(
+            array=flood_map.values,
+            coords=np.array([self.buildings["x"], self.buildings["y"]]).T,
+            gt=flood_map.rio.transform().to_gdal(),
+            out_of_bounds_value=0,
         )
 
         # Create a mask for buildings that overlap with the flood map and mark them as flooded
-        self.buildings["flooded"] = self.mark_flooded_buildings(
-            buildings_centroid, flood_map_polygons_union
-        )
+        self.buildings["flooded"] = water_levels_building > 0
 
         # drop buildings which are not flooded
         if drop_not_flooded:
