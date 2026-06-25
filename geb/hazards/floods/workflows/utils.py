@@ -142,10 +142,6 @@ def read_flood_depth(
             flood_depth_m: xr.Dataset | xr.DataArray = model.output.data["hmax"].max(
                 dim="timemax"
             )
-            fig, ax = plt.subplots()
-            flood_depth_m.plot(ax=ax)
-            ax.set_title("Maximum Water Surface Elevation over all time steps")
-            fig.savefig(model_root / "maximum_water_surface_elevation.png")
             assert isinstance(flood_depth_m, xr.DataArray)
         elif method == "final":
             flood_depth_m_all_steps = model.output.data["h"]
@@ -440,23 +436,12 @@ def run_sfincs_simulation(
     # Automatically set container environment variables if not already set
     if gpu:
         version: str | None = os.getenv(key="SFINCS_CONTAINER_GPU")
-        if version is None:
-            # Auto-set GPU container if not explicitly configured
-            version = "deltares/sfincs-gpu:latest"
-            os.environ["SFINCS_CONTAINER_GPU"] = version
-            print(f"Auto-set SFINCS_CONTAINER_GPU to: {version}")
+        assert version is not None, (
+            "SFINCS_CONTAINER_GPU environment variable is not set"
+        )
     else:
         version: str | None = os.getenv(key="SFINCS_CONTAINER")
-        if version is None:
-            # Auto-set CPU container if not explicitly configured
-            version = "deltares/sfincs-cpu:latest"
-            os.environ["SFINCS_CONTAINER"] = version
-            print(f"Auto-set SFINCS_CONTAINER to: {version}")
-
-    # Verify we have a valid container version
-    assert version is not None and len(version) > 0, (
-        f"Container version not set. Expected SFINCS_CONTAINER{'_GPU' if gpu else ''} environment variable."
-    )
+        assert version is not None, "SFINCS_CONTAINER environment variable is not set"
 
     if platform.system() == "Linux":
         # If not a apptainer image, add docker:// prefix

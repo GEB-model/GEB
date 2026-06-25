@@ -392,7 +392,7 @@ class FloodRiskModule:
                 "building_elevated_possessions_medium"
             ] = self.households.buildings_content_curve["building_unprotected"] * 0.80
 
-            # Late action (<24h lead time): 80% damage (20% reduction) - same as standard
+            # Late action (<24h lead time): 90% damage (10% reduction)
             self.households.buildings_content_curve[
                 "building_elevated_possessions_late"
             ] = self.households.buildings_content_curve["building_unprotected"] * 0.90

@@ -1,6 +1,6 @@
 """This module contains the EarlyWarningModule, which provides early warning capabilities for the agents."""
 
-import json
+import glob
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -8,11 +8,13 @@ from typing import TYPE_CHECKING
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import tqdm
 import xarray as xr
-from pyproj import CRS
 from rasterio.features import geometry_mask, rasterize
+from xarray.core.dataarray import DataArray
+from xarray.core.dataset import Dataset
 
-from geb.workflows.io import read_geom, read_zarr, write_zarr
+from geb.workflows.io import read_geom, read_params, read_zarr, write_geom, write_zarr
 
 from ..workflows.helpers import from_landuse_raster_to_polygon
 
@@ -36,31 +38,6 @@ class EarlyWarningModule:
         self.households = households
         self.load_wlranges_and_measures()
 
-    def assign_income_category(
-        self,
-        income_values: DynamicArray,
-    ) -> None:
-        """
-        Assigns income categories to households based on their income values.
-
-        Args:
-            income_values (DynamicArray): Array of income values for each household.
-        """
-        # Convert Income from absolute values to categories (1-5)
-        # Use percentile-based categorization that handles duplicates
-        income_series = pd.Series(np.asarray(income_values))
-
-        percentiles = income_series.rank(method="average", pct=True)
-
-        categories = pd.cut(
-            percentiles,
-            bins=[0, 0.2, 0.4, 0.6, 0.8, 1.0],
-            labels=[1, 2, 3, 4, 5],
-            include_lowest=True,
-        )
-
-        self.households.var.income_category[:] = categories.astype(np.int32).to_numpy()
-
     def load_wlranges_and_measures(self) -> None:
         """
         Loads the water level ranges and appropriate measures, and the implementation times for measures.
@@ -68,30 +45,31 @@ class EarlyWarningModule:
         Raises:
             ValueError: If the wl_ranges.json structure is invalid.
         """
-        with open(self.model.files["dict"]["measures/implementation_times"], "r") as f:
-            self.households.var.implementation_times = json.load(f)
+        self.households.var.implementation_times = read_params(
+            filepath=self.model.files["dict"]["measures/implementation_times"]
+        )
+        wlranges_and_measures = read_params(
+            filepath=self.model.files["dict"]["measures/wl_ranges"]
+        )
 
-        with open(self.model.files["dict"]["measures/wl_ranges"], "r") as f:
-            wlranges_and_measures = json.load(f)
+        # Check whether the old format is being used
+        first_key = next(iter(wlranges_and_measures))
 
-            # Check whether the old format is being used
-            first_key = next(iter(wlranges_and_measures))
+        if first_key.isdigit():
+            raise ValueError(
+                "Invalid wl_ranges.json structure. Expected:\n"
+                "{\n"
+                '    "residential_buildings": {"1": {...}, "2": {...}},\n'
+                '    "energy_stations": {"1": {...}, "2": {...}}\n'
+                "}"
+            )
 
-            if first_key.isdigit():
-                raise ValueError(
-                    "Invalid wl_ranges.json structure. Expected:\n"
-                    "{\n"
-                    '    "residential_buildings": {"1": {...}, "2": {...}},\n'
-                    '    "energy_stations": {"1": {...}, "2": {...}}\n'
-                    "}"
-                )
-
-            self.households.var.wlranges_and_measures = {
-                asset_type: {
-                    int(range_id): range_info for range_id, range_info in ranges.items()
-                }
-                for asset_type, ranges in wlranges_and_measures.items()
+        self.households.var.wlranges_and_measures = {
+            asset_type: {
+                int(range_id): range_info for range_id, range_info in ranges.items()
             }
+            for asset_type, ranges in wlranges_and_measures.items()
+        }
         self.logger.info(
             "Loaded water level ranges with associated measures and their implementation times for %d asset types.",
             len(self.households.var.wlranges_and_measures),
@@ -118,27 +96,23 @@ class EarlyWarningModule:
         # Load and prepare river mask once (will be applied to all members)
         rivers_path = self.model.files["geom"]["routing/rivers"]
         river_mask_array: np.ndarray | None = None
-        gdf_mercator = None
 
         if rivers_path.exists():
-            print(f"Preparing river mask from {rivers_path}")
-            rivers = gpd.read_parquet(rivers_path)
+            rivers = read_geom(rivers_path)
 
             if "width" not in rivers.columns:
                 raise ValueError("Rivers geometry missing 'width' column")
 
             # Set CRS and buffer in Mercator projection (meters)
-            crs_wgs84 = CRS.from_epsg(4326)
-            crs_mercator = CRS.from_epsg(3857)
-            rivers.set_crs(crs_wgs84, inplace=True)
-            gdf_mercator = rivers.to_crs(crs_mercator)
+            rivers.set_crs(4326, inplace=True)
+            rivers_mercator = rivers.to_crs(3857)
 
             # Separate rivers with width values from those with NaN width
-            rivers_with_width = gdf_mercator[gdf_mercator["width"].notna()].copy()
-            rivers_no_width = gdf_mercator[gdf_mercator["width"].isna()].copy()
+            rivers_with_width = rivers_mercator[rivers_mercator["width"].notna()].copy()
+            rivers_no_width = rivers_mercator[rivers_mercator["width"].isna()].copy()
 
-            print(f"Rivers with width data: {len(rivers_with_width)}")
-            print(
+            self.logger.info(f"Rivers with width data: {len(rivers_with_width)}")
+            self.logger.info(
                 f"Rivers without width data (will mask grid cells only): {len(rivers_no_width)}"
             )
 
@@ -159,18 +133,17 @@ class EarlyWarningModule:
                 all_river_geometries.extend(rivers_no_width.geometry.tolist())
 
             # Create a single GeoDataFrame with all river geometries
-            gdf_mercator = gpd.GeoDataFrame(
-                {"geometry": all_river_geometries}, crs=crs_mercator
+            rivers_mercator_gdf = gpd.GeoDataFrame(
+                {"geometry": all_river_geometries}
+            ).to_crs(3857)
+
+            self.logger.info("Created river buffers in Mercator projection for masking")
+        else:
+            raise FileNotFoundError(
+                f"Rivers file not found at {rivers_path}, river masking cannot be applied."
             )
 
-            print("Created river buffers in Mercator projection for masking")
-        else:
-            print(f"Rivers file not found at {rivers_path} - skipping river masking")
-
         members = []
-        rivers_gdf = None
-
-        # TODO: get the number of members dynamically from the flood maps folder instead of hardcoding 50
 
         # Get the number of members from the flood maps folder
         flood_maps_folder = (
@@ -178,20 +151,17 @@ class EarlyWarningModule:
             / "flood_maps"
             / f"forecast_{date_time.strftime('%Y%m%dT%H%M%S')}"
         )
-        member_folders = [
-            f
-            for f in flood_maps_folder.iterdir()
-            if f.is_dir() and f.name.startswith("member_")
-        ]
-        num_members = len(member_folders)
+        n_ensemble_members = sum(
+            1 for _ in glob.glob(str(flood_maps_folder) + "/member_*")
+        )
+        self.logger.info(
+            f"Loading flood maps for {n_ensemble_members} ensemble members"
+        )
 
-        for member in range(num_members):
-            member_folder = (
-                self.model.output_folder
-                / "flood_maps"
-                / f"forecast_{date_time.strftime('%Y%m%dT%H%M%S')}"
-                / f"member_{member}"
-            )
+        for member in tqdm.tqdm(
+            range(0, n_ensemble_members), desc="Processing ensemble members"
+        ):
+            member_folder = flood_maps_folder / f"member_{member}"
 
             # Dynamically find the zarr file in the member folder
             zarr_files = list(member_folder.glob("*.zarr"))
@@ -207,41 +177,32 @@ class EarlyWarningModule:
             # open flood map for this ensemble member
             flood_map_da = read_zarr(flood_map_path)
 
-            # TODO: check this hardcoded CRS
-            flood_map_da.rio.write_crs("EPSG:4326", inplace=True)
+            # Create river mask on first iteration (reuse for all members)
+            if river_mask_array is None:
+                # Reproject buffered rivers to flood map CRS
+                rivers_mercator_gdf = rivers_mercator_gdf.to_crs(flood_map_da.rio.crs)
 
-            # Apply river mask to this member if available
-            if gdf_mercator is not None:
-                # Create river mask on first iteration (reuse for all members)
-                if river_mask_array is None:
-                    # Reproject buffered rivers to flood map CRS
-                    gdf_buffered = gdf_mercator.to_crs(flood_map_da.rio.crs)
+                # Create mask using geometry_mask
+                # geometry_mask returns True for pixels OUTSIDE geometries (when invert=False)
+                # We want True for pixels INSIDE rivers (to mask them)
+                # So we use invert=True
+                river_mask_array = geometry_mask(
+                    rivers_mercator_gdf.geometry,
+                    out_shape=flood_map_da.rio.shape,
+                    transform=flood_map_da.rio.transform(),
+                    all_touched=True,
+                    invert=True,  # True = inside rivers (to be masked)
+                )
 
-                    # Create mask using geometry_mask
-                    # geometry_mask returns True for pixels OUTSIDE geometries (when invert=False)
-                    # We want True for pixels INSIDE rivers (to mask them)
-                    # So we use invert=True
-                    river_mask_array = geometry_mask(
-                        gdf_buffered.geometry,
-                        out_shape=flood_map_da.rio.shape,
-                        transform=flood_map_da.rio.transform(),
-                        all_touched=True,
-                        invert=True,  # True = inside rivers (to be masked)
-                    )
+                # Store river mask as xarray with proper coordinates so it can be flipped along with data
+                self.river_mask_da = xr.DataArray(
+                    data=river_mask_array,
+                    coords={"y": flood_map_da.y.values, "x": flood_map_da.x.values},
+                    dims=("y", "x"),
+                )
 
-                    # Store river mask as xarray with proper coordinates so it can be flipped along with data
-                    self.river_mask_da = xr.DataArray(
-                        data=river_mask_array,
-                        coords={"y": flood_map_da.y.values, "x": flood_map_da.x.values},
-                        dims=("y", "x"),
-                    )
-
-                    print(
-                        f"River mask created: {np.sum(river_mask_array)} pixels will be masked"
-                    )
-
-                # Apply mask: set river pixels (where river_mask == True) to 0
-                masked_flood_map_da = flood_map_da.where(~self.river_mask_da, 0)
+            # Apply mask: set river pixels (where river_mask == True) to 0
+            masked_flood_map_da = flood_map_da.where(~self.river_mask_da, 0)
 
             members.append(masked_flood_map_da)
 
@@ -275,7 +236,7 @@ class EarlyWarningModule:
         damage_forecast_folder = (
             self.model.output_folder
             / "damage_maps"
-            / f"forecast_{date_time.isoformat().replace(':', '').replace('-', '')}"
+            / f"forecast_{date_time.strftime('%Y%m%dT%H%M%S')}"
         )
         n_ensemble_members = sum(1 for _ in damage_forecast_folder.glob("member_*"))
         print(f"Loading damage maps for {n_ensemble_members} ensemble members.")
@@ -285,9 +246,9 @@ class EarlyWarningModule:
         for member in range(1, n_ensemble_members + 1):
             file_path = (
                 damage_forecast_folder
-                / f"damage_map_buildings_content_{date_time.isoformat().replace(':', '').replace('-', '')}_member{member}.gpkg"
+                / f"damage_map_buildings_content_{date_time.strftime('%Y%m%dT%H%M%S')}_member{member}.gpkg"
             )
-            damage_map = gpd.read_file(file_path)
+            damage_map = read_geom(file_path)
 
             # Add member and building_id columns
             damage_map["member"] = member
@@ -306,7 +267,7 @@ class EarlyWarningModule:
         date_time: datetime,
         strategy: str = "residential_buildings",
         exceedance: bool = False,
-    ) -> xr.DataArray | xr.Dataset:
+    ) -> xr.Dataset:
         """Creates flood probability maps based on the ensemble of flood maps for different warning strategies.
 
         Args:
@@ -376,9 +337,7 @@ class EarlyWarningModule:
                 self.logger.info(
                     "flipping y axis so it can be used for zonal stats later"
                 )
-                probability: Unknown | xr.DataArray = probability.sortby(
-                    "y", ascending=False
-                )
+                probability: xr.DataArray = probability.sortby("y", ascending=False)
 
             # Save probability map as a zarr file
             if exceedance:
@@ -393,9 +352,6 @@ class EarlyWarningModule:
             probability = probability.astype(np.float32)
             probability = probability.rio.write_nodata(np.nan)
             probability = write_zarr(da=probability, path=file_path, crs=crs)
-            # probability_maps.append(
-            #     probability.expand_dims(time=[date_time], range_id=[range_id])
-            # )
             probability_maps.append(probability)
 
         range_ids = [range_id for range_id, _, _ in ranges]
@@ -418,7 +374,7 @@ class EarlyWarningModule:
         damage_prob_maps_folder = (
             self.model.output_folder
             / "damage_prob_maps"
-            / f"forecast_{date_time.isoformat().replace(':', '').replace('-', '')}"
+            / f"forecast_{date_time.strftime('%Y%m%dT%H%M%S')}"
         )
         damage_prob_maps_folder.mkdir(parents=True, exist_ok=True)
 
@@ -482,9 +438,9 @@ class EarlyWarningModule:
 
             output_path = (
                 damage_prob_maps_folder
-                / f"damage_prob_map_range{range_id}_forecast{date_time.isoformat().replace(':', '').replace('-', '')}.geoparquet"
+                / f"damage_prob_map_range{range_id}_forecast{date_time.strftime('%Y%m%dT%H%M%S')}.geoparquet"
             )
-            damage_probability_map.to_parquet(output_path)
+            write_geom(damage_probability_map, output_path)
 
     def identify_flooded_buildings(
         self,
@@ -509,6 +465,8 @@ class EarlyWarningModule:
 
         buildings["flooded"] = False  # Initialize the flooded column
 
+        # TODO: Use the damagescanner exposure option to determine which buildings are flooded based on the flood probability map and a specified probability threshold.
+
         # convert flood map to polygons
         prob_map_polygon = from_landuse_raster_to_polygon(
             prob_map.values,
@@ -529,7 +487,9 @@ class EarlyWarningModule:
         else:
             return buildings
 
-    def get_weight(self, household_id: int, weights_table: pd.DataFrame) -> float:
+    def get_communication_efficiency_weight(
+        self, household_id: int, weights_table: pd.DataFrame
+    ) -> float:
         """
         Get the communication efficiency weight for a household based on its education and income.
 
@@ -560,9 +520,9 @@ class EarlyWarningModule:
             target_households: GeoDataFrame with household data including education and income.
 
         Returns:
-            np.ndarray: Array of communication efficiency probabilities.
+            Array of communication efficiency probabilities.
         """
-        # 2. Normalized Weights based on the regression of the WRP survey data
+        # Normalized Weights based on the regression of the WRP survey data
         # (https://documents1.worldbank.org/curated/en/099259309032538041/pdf/IDU-c6f56dc5-a0cb-4375-ac15-a91f1c202b09.pdf )
         # Rows = Education classes, Columns = Income quintiles
         weights_table = pd.DataFrame(
@@ -577,14 +537,16 @@ class EarlyWarningModule:
             columns=np.array([1, 2, 3, 4, 5]),  # Income quintiles
         )
 
-        # 3. Compute total weight per agent
+        # Compute total weight per agent
         # Assign communication efficiency weights to target households based on their education and income categories
-        target_households["comm_weight"] = [
-            self.get_weight(household_id=household_id, weights_table=weights_table)
+        target_households["communication_weight"] = [
+            self.get_communication_efficiency_weight(
+                household_id=household_id, weights_table=weights_table
+            )
             for household_id in target_households.index
         ]
 
-        return target_households["comm_weight"].values
+        return target_households["communication_weight"].values
 
     def compute_lead_time(self) -> float:
         """Compute lead time in hours based on forecast start time and current model time.
@@ -607,12 +569,12 @@ class EarlyWarningModule:
         Decide which recommendations to include in the warning based on the lead time available.
 
         Args:
-            available_measures (set[str]): Set of possible in-place measures to recommend.
-            evacuate (bool): Whether evacuation is requested.
-            lead_time (float): Lead time available in hours.
+            available_measures : Set of possible in-place measures to recommend.
+            evacuate: Whether evacuation is requested.
+            lead_time: Lead time available in hours.
 
         Returns:
-            chosen (list[str]): List of measures to recommend.
+            chosen: List of measures to recommend.
         """
         # Get implementation times for measures
         implementation_times = self.households.var.implementation_times
@@ -739,7 +701,6 @@ class EarlyWarningModule:
                 replace=False,  # Each household can only be selected once for warning
                 p=warning_weights,
             )
-            print("")
         else:
             position_indices = rng.choice(
                 n_target_households,
@@ -818,7 +779,7 @@ class EarlyWarningModule:
         exceedance: bool = True,
     ) -> None:
         """
-        Implements the water level warning strategy based on flood probability maps BUCKETS PER MEASURE.
+        Implements the water level warning strategy based on flood probability maps as bucket per measure.
 
         Args:
             date_time: The forecast date time for which to implement the warning strategy.
@@ -842,7 +803,7 @@ class EarlyWarningModule:
 
         # Create probability maps
         # TODO: Only create flood probability maps if they do not exist yet
-        probability_maps = self.create_flood_probability_maps(
+        probability_maps: Dataset = self.create_flood_probability_maps(
             strategy="residential_buildings", date_time=date_time, exceedance=exceedance
         )
 
@@ -855,7 +816,7 @@ class EarlyWarningModule:
 
         # Check intersection between flood maps and buildings or postal codes
         for range_id in range_ids:
-            flood_probability_map = probability_maps.sel(range_id=range_id)
+            flood_probability_map: DataArray = probability_maps.sel(range_id=range_id)
             if warning_type == "building_based":
                 hit = self.identify_flooded_buildings(
                     buildings, flood_probability_map, prob_threshold, return_series=True
@@ -896,7 +857,7 @@ class EarlyWarningModule:
 
                         issue_warning = percentage >= area_hit_threshold
                         postal_codes.loc[i, f"hit_r{range_id}"] = issue_warning
-                        postal_codes.loc[postal_code, f"issue_warning_r{range_id}"] = (
+                        postal_codes.loc[i, f"issue_warning_r{range_id}"] = (
                             issue_warning
                         )
 
@@ -1058,7 +1019,7 @@ class EarlyWarningModule:
             # Filter substations that have a flood hit probability > threshold
             critical_hits_CI = assets[assets["probability"] >= prob_threshold]
 
-            postal_codes_with_critical_infrastructure = gpd.read_parquet(
+            postal_codes_with_critical_infrastructure = read_geom(
                 self.model.input_folder
                 / "geom"
                 / "assets"
@@ -1098,22 +1059,19 @@ class EarlyWarningModule:
         warning_log = []
 
         # Issue warnings to the households in the affected postcodes
-        for postcode in affected_postcodes:
-            asset_type = affected_postcodes.loc[
-                affected_postcodes["postcode"] == postcode, "asset_type"
-            ]
-            asset_id = affected_postcodes.loc[
-                affected_postcodes["postcode"] == postcode, "asset_id"
-            ]
+        for _, row in affected_postcodes.iterrows():
+            postcode = row["postcode"]
+            asset_type = row["asset_type"]
+            asset_id = row["asset_id"]
             affected_households = households[households["postcode"] == postcode]
             n_warned_households = self.warning_communication(
                 target_households=affected_households,
-                measures=[],
+                measures=set(),
                 evacuate=True,
                 trigger="critical_infrastructure",
             )
 
-            print(
+            self.logger.info(
                 f"Evacuation warning issued to postal code {postcode} on {date_time.isoformat()} (trigger: {asset_type})"
             )
             warning_log.append(

@@ -14,7 +14,7 @@ from geb.geb_types import ArrayFloat32, TwoDArrayFloat32
 from geb.workflows.io import read_geom
 
 from ..store import Bucket, DynamicArray
-from ..workflows.io import read_array, read_table, read_zarr
+from ..workflows.io import read_array, read_table, read_zarr, write_geom
 from .decision_module import DecisionModule
 from .general import AgentBaseClass
 from .modules.early_warning import EarlyWarningModule
@@ -36,6 +36,7 @@ class HouseholdVariables(Bucket):
     municipal_water_demand_per_capita_m3_baseline: ArrayFloat32
     water_demand_per_household_m3: ArrayFloat32
     income: DynamicArray
+    income_category: DynamicArray
     building_id_of_household: DynamicArray
     wealth: DynamicArray
     property_value: DynamicArray
@@ -325,6 +326,31 @@ class Households(AgentBaseClass):
         # Replace NaNs with False (i.e., buildings not in the adapting households list)
         self.buildings["flood_proofed"] = self.buildings["flood_proofed"].fillna(False)
 
+    def assign_income_category(
+        self,
+        income_values: DynamicArray,
+    ) -> None:
+        """
+        Assigns income categories to households based on their income values.
+
+        Args:
+            income_values (DynamicArray): Array of income values for each household.
+        """
+        # Convert Income from absolute values to categories (1-5)
+        # Use percentile-based categorization that handles duplicates
+        income_series = pd.Series(np.asarray(income_values))
+
+        percentiles = income_series.rank(method="average", pct=True)
+
+        categories = pd.cut(
+            percentiles,
+            bins=[0, 0.2, 0.4, 0.6, 0.8, 1.0],
+            labels=[1, 2, 3, 4, 5],
+            include_lowest=True,
+        )
+
+        self.var.income_category[:] = categories.astype(np.int64).to_numpy()
+
     def assign_household_attributes(self) -> None:
         """Household locations are already sampled from population map in GEBModel.setup_population().
 
@@ -446,7 +472,7 @@ class Households(AgentBaseClass):
         )
         # initiate array for storing the lead time of the households action
         self.var.action_lead_time = DynamicArray(
-            np.zeros(self.n, np.int32), max_n=self.max_n
+            np.zeros(self.n, np.float32), max_n=self.max_n
         )
 
         # initiate array with risk perception [dummy data for now]
@@ -481,10 +507,10 @@ class Households(AgentBaseClass):
 
         # iniate array with income category to compute communication efficiency probability for warnings later
         self.var.income_category = DynamicArray(
-            np.zeros(self.n, np.float32), max_n=self.max_n
+            np.zeros(self.n, np.int64), max_n=self.max_n
         )
 
-        self.early_warning_module.assign_income_category(self.var.income)
+        self.assign_income_category(self.var.income)
 
         # initiate array with property values (used as max damage) [dummy data for now, could use Huizinga combined with building footprint to calculate better values]
         self.var.property_value = DynamicArray(
@@ -560,8 +586,9 @@ class Households(AgentBaseClass):
             columns=["building_geometry", "index_right"], inplace=True
         )
 
-        buildings_with_postal_codes.to_parquet(
-            self.model.output_folder / "buildings_w_postal_codes.geoparquet"
+        write_geom(
+            buildings_with_postal_codes,
+            filepath=self.model.output_folder / "buildings_w_postal_codes.geoparquet",
         )
         # TODO: Understand why it does not work if it is just self.buildings
         self.var.buildings = buildings_with_postal_codes
@@ -732,7 +759,9 @@ class Households(AgentBaseClass):
 
         # Assign critical facilities to postal codes
         assets = read_geom(self.model.files["geom"][f"assets/{asset_type}"])
-        self.assign_CI_to_postal_codes(assets, asset_type, postal_codes)
+        self.assign_critical_infrastructure_to_postal_codes(
+            assets, asset_type, postal_codes
+        )
 
     def get_critical_facilities(self) -> None:
         """Extract critical infrastructure elements (vulnerable and emergency facilities) from OSM using the catchment polygon as boundary."""
@@ -856,7 +885,7 @@ class Households(AgentBaseClass):
 
         return buildings
 
-    def assign_CI_to_postal_codes(
+    def assign_critical_infrastructure_to_postal_codes(
         self, assets: gpd.GeoDataFrame, asset_type: str, postal_codes: gpd.GeoDataFrame
     ) -> None:
         """Assign critical infrastructure assets to postal codes based on spatial proximity. Every postal code gets assigned to the nearest asset.

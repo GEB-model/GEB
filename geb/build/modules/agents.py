@@ -1612,7 +1612,6 @@ class Agents(BuildModelBase):
                 method="nearest",
             )
 
-            buildings_gdl = buildings_gdl.copy()
             buildings_gdl["grid_idx"] = cells.values[0]
             # drop buildings without grid_idx
             buildings_gdl = buildings_gdl[buildings_gdl["grid_idx"] != 0]
@@ -2421,7 +2420,7 @@ class Agents(BuildModelBase):
             source: The source of the OSM data. Options are 'geofabrik' or 'movisda'. Default is 'geofabrik'.
             use_cache: If True, the data will be cached in the preprocessing directory. Default is True.
         """
-        # TODO change id column to asset_id for each asset
+        # TODO change id column to asset_id for each asset to align with future updates in the EWS critical infrastructure functions
         if isinstance(feature_types, str):
             feature_types: list[str] = [feature_types]
 

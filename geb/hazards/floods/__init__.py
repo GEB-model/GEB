@@ -14,7 +14,6 @@ from shapely.geometry.point import Point
 
 from geb.geb_types import (
     ArrayFloat32,
-    TwoDArrayFloat as TwoDArrayFloat,
     TwoDArrayFloat32,
 )
 from geb.hazards.event import Event

@@ -552,8 +552,8 @@ class GEBModel(Module):
                             "critical_infrastructure_warnings"
                         ]:
                             config_asset_type = warning_config["strategies"][
-                                "critical_infrastructure_warnings"
-                            ]["asset_type"]
+                                "asset_type"
+                            ]
 
                             self.agents.households.early_warning_module.critical_infrastructure_warning_strategy(
                                 date_time=self.current_time,
@@ -573,7 +573,6 @@ class GEBModel(Module):
                         self.agents.households.early_warning_module.update_households_geodataframe_w_warning_variables(
                             date_time=self.current_time
                         )
-                        print()
 
         t0 = time()
         self.agents.step()
@@ -895,10 +894,10 @@ class GEBModel(Module):
                 f"Spinup start time does not match the stored time range. Stored: {self.var._spinup_start}, Configured: {self.spinup_start}"
             )
 
-        # if self.var._run_start != self.run_start:
-        #    raise ValueError(
-        #        f"Run start time does not match the stored time range. Stored: {self.var._run_start}, Configured: {self.run_start}"
-        #    )
+        if self.var._run_start != self.run_start:
+            raise ValueError(
+                f"Run start time does not match the stored time range. Stored: {self.var._run_start}, Configured: {self.run_start}"
+            )
 
     def estimate_return_periods(self, run_name: str = "spinup") -> None:
         """Estimate flood maps for different return periods."""
