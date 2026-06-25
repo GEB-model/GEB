@@ -489,10 +489,13 @@ class Floods(Module):
                 subbasins.index.isin(self.config["subbasins"])
             ]
 
-            # get downstream subbasins of the included subbasins
+            # get downstream subbasins of the included subbasins (but not already part of the basins themselves)
             downstream_subbasins: gpd.GeoDataFrame = subbasins[
-                subbasins.index.isin(
-                    rivers.loc[included_subbasins.index]["downstream_ID"]
+                (
+                    subbasins.index.isin(
+                        rivers.loc[included_subbasins.index]["downstream_ID"]
+                    )
+                    & (~subbasins.index.isin(included_subbasins.index))
                 )
             ]
             assert len(downstream_subbasins) >= 1, (
@@ -500,7 +503,6 @@ class Floods(Module):
             )
 
             # reset rivers downstream outflow column
-            # simulation_rivers["is_downstream_outflow"] = False
             rivers["is_downstream_outflow"] = False
             rivers["is_further_downstream_outflow"] = False
 
