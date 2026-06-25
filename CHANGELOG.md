@@ -9,6 +9,8 @@
 - Add option to run and spinup "--skip-done". When turned on, we first check if the model was not already done and if so, don't run.
 - Set default of writing figures for SFINCS to false in reasonable default config. For example, writing the return period figures is about 10 times as slow as the actual calculation. Of course, users can set this to true whenever needed in their own config!
 - Implement custom and improved algorithm for river burning. Currently only works for the non-subgrid mode of SFINCS.
+- Add a `--method-arg KEY=VALUE` option to `geb exec` (e.g., `geb exec estimate_return_periods --method-arg run_name=default`) and fix spinup and run discharge not being concatenated for return period estimation.
+- Add hydrograph shape methods for floods. Instead of assuming a triangular shape, the shape of the hydrograph can now be derived from historical GEB discharge.
 
 # v1.0.0b29
 - Load return-period flood maps from the spinup output folder (output/{spinup_name}/flood_maps/{return_period}.zarr).

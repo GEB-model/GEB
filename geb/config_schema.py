@@ -65,6 +65,23 @@ class FloodEventConfig(BaseModel):
     end_time: datetime = Field(..., description="End time of the event.")
 
 
+class ShapeConfig(BaseModel):
+    """Configuration for the hydrograph shape method used in return-period maps."""
+
+    method: Literal["triangular", "direct", "anchor"] = Field(
+        "triangular",
+        description="Hydrograph shape method: 'triangular' (symmetric), 'direct' (historical shape at target discharge), or 'anchor' (historical shape at Q_2 rescaled to target).",
+    )
+    window_days: float = Field(
+        3.5,
+        description="Days before and after peak to extract when deriving shape from historical events (total window = 2 × window_days).",
+    )
+    tolerance: float = Field(
+        0.1,
+        description="Fractional tolerance around anchor discharge for event selection (e.g. 0.1 = ±10%).",
+    )
+
+
 class FloodsConfig(BaseModel):
     """Configuration for flood simulation."""
 
@@ -115,6 +132,10 @@ class FloodsConfig(BaseModel):
     )
     events: list[FloodEventConfig] = Field(
         default_factory=list, description="List of flood events."
+    )
+    hydrograph_shape: ShapeConfig = Field(
+        default_factory=ShapeConfig,
+        description="Hydrograph shape configuration for return-period maps.",
     )
     run_for_validation_events: bool = Field(
         False,

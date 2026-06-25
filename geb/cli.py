@@ -360,15 +360,35 @@ def spinup(**kwargs: Any) -> None:
 
 @cli.command()
 @click.argument("method", required=True)
+@click.option(
+    "--method-arg",
+    "method_args_raw",
+    multiple=True,
+    metavar="KEY=VALUE",
+    help="Argument to pass to the method, as KEY=VALUE. Can be repeated.",
+)
 @click_run_options()
-def exec(method: str, **kwargs: Any) -> None:
+def exec(method: str, method_args_raw: tuple[str, ...], **kwargs: Any) -> None:
     """Execute a specific method on the model.
 
     Args:
         method: Method to run on the model.
+        method_args_raw: Arguments to pass to the method, as KEY=VALUE strings.
         **kwargs: Keyword arguments to pass to the method.
+
+    Raises:
+        click.ClickException: If a --method-arg value is not in KEY=VALUE format.
     """
-    run_model_with_method(method=method, **kwargs)
+    method_args: dict[str, str] = {}
+    for raw_arg in method_args_raw:
+        if "=" not in raw_arg:
+            raise click.ClickException(
+                f"Invalid --method-arg {raw_arg!r}, expected format KEY=VALUE."
+            )
+        key, value = raw_arg.split("=", 1)
+        method_args[key] = value
+
+    run_model_with_method(method=method, method_args=method_args, **kwargs)
 
 
 def click_build_options(
