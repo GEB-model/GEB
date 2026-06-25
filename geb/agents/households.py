@@ -9,6 +9,7 @@ import numpy as np
 import osmnx as ox
 import pandas as pd
 import xarray as xr
+from shapely import prepare
 
 from geb.geb_types import ArrayFloat32, TwoDArrayFloat32
 from geb.workflows.io import read_geom
@@ -233,6 +234,25 @@ class Households(AgentBaseClass):
 
         # assign wealth based on income (dummy data, there are ratios available in literature)
         self.var.wealth = DynamicArray(2.5 * self.var.income.data, max_n=self.max_n)
+
+    def mark_flooded_buildings(
+        self, buildings_centroid: gpd.GeoDataFrame, floodplain: gpd.GeoDataFrame
+    ) -> np.ndarray[bool]:
+        """This function checks if the building centroids intersect with the floodplain geometry and returns a boolean array indicating which buildings are flooded.
+
+        Args:
+            buildings_centroid: GeoDataFrame of Building centroids.
+            floodplain: GeoDataFrame containing a single dissolved floodplain geometry.
+
+        Returns:
+            np.ndarray[bool]: True if centroid intersects floodplain.
+        """
+        flood_geom = floodplain.geometry.iloc[0]
+
+        # Prepare geometry for repeated spatial queries
+        prepare(flood_geom)
+
+        return buildings_centroid.geometry.intersects(flood_geom).to_numpy()
 
     def update_building_attributes(self, drop_not_flooded: bool = False) -> None:
         """Update building attributes based on household data.
