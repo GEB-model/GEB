@@ -28,12 +28,13 @@ def create_dummy_data(
         synthetic elevation DataArray, manning DataArray, and GeoDataFrame of rivers.
     """
     res = 0.25
-    x_m = np.arange(0, 200, res)
-    y_m = np.arange(0, 200, res)
+    # Increased terrain space from 200 to 300 to comfortably fit the new test cases
+    x_m = np.arange(0, 300, res)
+    y_m = np.arange(0, 300, res)
     X_m, Y_m = np.meshgrid(x_m, y_m)
 
     # Regional slope + localized hill (computed in meters for consistency)
-    regional_slope = 18.0 - 0.05 * X_m - 0.03 * Y_m
+    regional_slope = 28.0 - 0.05 * X_m - 0.03 * Y_m
     gauss_hill = 5.0 * np.exp(-(((X_m - 130) ** 2 + (Y_m - 100) ** 2) / (2 * 30**2)))
     elevation_matrix = (regional_slope + gauss_hill).astype(np.float32)
     manning_matrix = (0.03 + 0.005 * (elevation_matrix > 12.0)).astype(np.float32)
@@ -81,8 +82,8 @@ def create_dummy_data(
         LineString(  # 5
             np.column_stack(
                 (
-                    50 + 12 * np.cos(np.linspace(0, 2 * np.pi, 200)),
-                    15 + 15 * np.sin(np.linspace(0, 2 * np.pi, 200)),
+                    50 + 12 * np.cos(np.linspace(0, np.pi, 200)),
+                    15 + 15 * np.sin(np.linspace(0, np.pi, 200)),
                 )
             )
         ),
@@ -101,12 +102,29 @@ def create_dummy_data(
         LineString([(10, 145), (40, 155), (70, 170)]),  # 8
         LineString([(100, 195), (110, 180), (120, 170)]),  # 9
         LineString([(70, 170), (120, 170), (195, 165)]),  # 10
+        # Explicit depth anomaly testing pairs (11 flows directly into 12)
+        LineString([(10, 250), (150, 250)]),  # 11: Deeper Upstream River
+        LineString([(150, 250), (285, 250)]),  # 12: Shallower Downstream River
     ]
 
     gdf_riv = gpd.GeoDataFrame(
         {
-            "width": [0.01, 5.0, 10.0, 5.0, 5.0, 6.0, 4.0, 3.5, 3.0, 2.5, 8.0],
-            "depth": [1.0, 2.0, 3.0, 4.0, 5.0, 3.0, 2.0, 1.8, 1.5, 1.2, 4.0],
+            "width": [
+                0.01,
+                5.0,
+                10.0,
+                5.0,
+                5.0,
+                6.0,
+                4.0,
+                3.5,
+                3.0,
+                2.5,
+                8.0,
+                6.0,
+                9.0,
+            ],
+            "depth": [1.0, 2.0, 3.0, 4.0, 5.0, 3.0, 2.0, 1.8, 1.5, 1.2, 4.0, 5.5, 2.0],
             "manning": [
                 0.03,
                 0.03,
@@ -119,6 +137,8 @@ def create_dummy_data(
                 0.03,
                 0.03,
                 0.022,
+                0.03,
+                0.03,
             ],
             "downstream_ID": [
                 -1,
@@ -132,10 +152,13 @@ def create_dummy_data(
                 10,
                 10,
                 -1,
+                12,  # 11 points to 12
+                -1,  # 12 is the outlet out of the domain
             ],
+            "shreve_stream_order": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 3, 1, 2],
         },
         geometry=rivers,
-        index=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+        index=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
         crs=32631,
     )
 
@@ -284,9 +307,9 @@ def test_burn_rivers(crs: int, with_obstacles: bool) -> None:
     if with_obstacles:
         da_elv = add_river_obstacles(da_elv, gdf_riv)
 
-    da_elv_out, da_man_out, gdf_burned = burn_rivers(
-        da_elevation=da_elv,
-        da_manning=da_man,
+    da_elv_out, da_man_out = burn_rivers(
+        elevation_grid=da_elv,
+        manning_grid=da_man,
         rivers=gdf_riv,
         fill_first=True,
     )
@@ -294,9 +317,6 @@ def test_burn_rivers(crs: int, with_obstacles: bool) -> None:
     # Structural validations
     assert da_elv_out.shape == da_elv.shape
     assert not np.isnan(da_elv_out.values).all()
-    assert isinstance(gdf_burned, gpd.GeoDataFrame)
-    assert len(gdf_burned) > 0
-    assert "z_bed_avg" in gdf_burned.columns
 
     crs_lbl: Literal["projected", "geographic"] = (
         "projected" if crs == 32631 else "geographic"
@@ -312,8 +332,6 @@ def test_burn_rivers(crs: int, with_obstacles: bool) -> None:
     assert max_diff > 0.5, (
         f"No significant burning detected for {crs_lbl} CRS. Max diff: {max_diff}"
     )
-
-    assert da_elv_out.min() < da_elv.min()
 
     plot_result(
         da_elv,

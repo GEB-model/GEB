@@ -745,9 +745,9 @@ class SFINCSRootModel:
                 # retrieve the elevation and mannings grids
                 # burn the rivers into these grids
                 # and write the burned grids back to the model
-                burned_elv, burned_manning, burned_riv = burn_rivers(
-                    da_elevation=sf.elevation.data["dep"],
-                    da_manning=sf.roughness.data["manning"],
+                burned_elv, burned_manning = burn_rivers(
+                    elevation_grid=sf.elevation.data["dep"],
+                    manning_grid=sf.roughness.data["manning"],
                     rivers=rivers_to_burn,
                     fill_first=False,
                 )
