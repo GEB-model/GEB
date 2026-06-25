@@ -419,6 +419,27 @@ class Government(AgentBaseClass):
 
         if self.config["adaptation"]["mode"] == "cba":
             self._cost_benefit_adaptation()
+            if self.model.current_timestep == self.model.n_timesteps - 1:
+                import geopandas as gpd
+                import pandas as pd
+
+                df = pd.DataFrame(
+                    list(
+                        self.flood_risk_module.flood_protection_standard_subbasins.items()
+                    ),
+                    columns=["COMID", "FPS"],
+                )
+
+                subbasins = gpd.read_parquet(
+                    self.model.files["geom"]["routing/subbasins"]
+                ).reset_index()
+                gdf = subbasins.merge(df, on="COMID", how="left")
+                gdf.to_file(
+                    self.model.output_folder
+                    / "flood_protection_standard_subbasins.geojson",
+                    driver="GeoJSON",
+                )
+
             return
         elif self.config["adaptation"]["mode"] != "threshold":
             raise ValueError(
@@ -508,6 +529,11 @@ class Government(AgentBaseClass):
 
         # iterate over each subbasin in the model and calculate the EAD for the current and next flood protection standard
         for subbasin in self.flood_risk_module.dike_heights[10]:
+            if (
+                subbasin
+                not in self.flood_risk_module.flood_protection_standard_subbasins
+            ):
+                continue  # Skip subbasins without a defined flood protection standard
             current_fps = self.flood_risk_module.flood_protection_standard_subbasins[
                 subbasin
             ]
