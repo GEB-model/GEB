@@ -897,8 +897,6 @@ def test_kinematic_sudden_flood_wave(
         total_volume_in_m3, total_volume_out_m3 + storage_end_m3, rtol=1e-5
     )
 
-    print(Q_new.max(), Q_new.min(), storage_end_m3, total_volume_out_m3)
-
 
 def _make_two_cell_router(
     dt: int,

@@ -75,7 +75,7 @@ def get_discharge_per_river(
     discharge_data = {}
     for river_id in rivers.index:
         assert isinstance(river_id, int)
-        xys: list[tuple[int, int]] = get_river_represenstative_xys(river_id, all_rivers)
+        xys: list[tuple[int, int]] = get_river_representative_xys(river_id, all_rivers)
         if len(xys) == 1:
             if source == "file":
                 assert folder is not None
@@ -112,7 +112,7 @@ def get_discharge_per_river(
     return pd.concat(discharge_data, axis=1)
 
 
-def get_river_represenstative_xys(
+def get_river_representative_xys(
     river_id: int, all_rivers: pd.DataFrame
 ) -> list[tuple[int, int]]:
     """Recursively find the nearest represented upstream rivers.
@@ -131,7 +131,7 @@ def get_river_represenstative_xys(
     upstream_rivers = all_rivers[all_rivers["downstream_ID"] == river_id]
     xys = []
     for idx, _ in upstream_rivers.iterrows():
-        xys.extend(get_river_represenstative_xys(idx, all_rivers))
+        xys.extend(get_river_representative_xys(idx, all_rivers))
     return xys
 
 

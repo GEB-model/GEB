@@ -190,8 +190,8 @@ def create_dummy_data(
         dims=("y", "x"),
         name="elv",
     )
-    da_elv.raster.set_crs(crs)
-    da_elv.raster.set_nodata(np.nan)
+    da_elv = da_elv.rio.write_crs(crs)
+    da_elv = da_elv.rio.set_nodata(np.nan)
 
     da_man = xr.DataArray(
         manning_matrix,
@@ -199,8 +199,8 @@ def create_dummy_data(
         dims=("y", "x"),
         name="manning",
     )
-    da_man.raster.set_crs(crs)
-    da_man.raster.set_nodata(np.nan)
+    da_man = da_man.rio.write_crs(crs)
+    da_man = da_man.rio.set_nodata(np.nan)
 
     return da_elv, da_man, gdf_riv
 

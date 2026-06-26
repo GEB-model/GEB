@@ -29,7 +29,7 @@ from geb.geb_types import (
     ArrayInt64,
     TwoDArrayInt32,
 )
-from geb.hydrology.routing import get_river_represenstative_xys
+from geb.hydrology.routing import get_river_representative_xys
 from geb.module import Module
 from geb.store import DynamicArray
 from geb.workflows.io import fast_rmtree, read_geom, write_table
@@ -984,7 +984,7 @@ class Reporter:
                             for river_ID, river in rivers.iterrows():
                                 assert isinstance(river_ID, int)
                                 xys: list[tuple[int, int]] = (
-                                    get_river_represenstative_xys(river_ID, all_rivers)
+                                    get_river_representative_xys(river_ID, all_rivers)
                                 )
                                 for i, xy in enumerate(xys):
                                     # if there are multiple branches, we append a suffix to the name

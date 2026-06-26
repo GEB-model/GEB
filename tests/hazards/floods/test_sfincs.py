@@ -361,10 +361,6 @@ def test_accumulated_runoff(
 
             if simulation.root_model.has_inflow:
                 inflow_rivers: gpd.GeoDataFrame = simulation.root_model.inflow_rivers
-                inflow_nodes = inflow_rivers.copy()
-                inflow_nodes["geometry"] = inflow_nodes["geometry"].apply(
-                    get_start_point
-                )
                 date_range = pd.date_range(
                     event.start_time,
                     event.end_time,
@@ -375,19 +371,19 @@ def test_accumulated_runoff(
                 discharge_m3_per_s: float = 10
                 timeseries = pd.DataFrame(
                     data=np.full(
-                        (len(date_range), len(inflow_nodes)),
+                        (len(date_range), len(inflow_rivers)),
                         discharge_m3_per_s,
                         dtype=np.float32,
                     ),
-                    columns=inflow_nodes.index,
+                    columns=inflow_rivers.index,
                     index=date_range,
                 )
 
-                simulation.set_river_inflow(inflow_nodes, timeseries)
+                simulation.set_river_inflow(timeseries)
                 discharge_m3 = (
                     (event.end_time - event.start_time).total_seconds()
                     * discharge_m3_per_s
-                    * len(inflow_nodes)
+                    * len(inflow_rivers)
                 )
             else:
                 discharge_m3 = 0.0
@@ -690,7 +686,10 @@ def test_read(geb_model: GEBModel) -> None:
         assert sfincs_model_build.path == sfincs_model_read.path
         assert sfincs_model_build.name == sfincs_model_read.name
         if sfincs_model_build.is_geographic:
-            sfincs_model_build.cell_area_m2 == sfincs_model_read.cell_area_m2
+            xr.testing.assert_equal(
+                sfincs_model_build.cell_area_m2,
+                sfincs_model_read.cell_area_m2,
+            )
         else:
             assert isinstance(sfincs_model_read.cell_area_m2, xr.DataArray)
             assert isinstance(sfincs_model_build.cell_area_m2, xr.DataArray)

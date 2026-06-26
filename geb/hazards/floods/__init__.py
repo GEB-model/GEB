@@ -500,9 +500,6 @@ class Floods(Module):
                     & (~subbasins.index.isin(included_subbasins.index))
                 )
             ]
-            assert len(downstream_subbasins) >= 1, (
-                "At least one downstream subbasin must be included in the simulation."
-            )
 
             # reset rivers downstream outflow column
             rivers["is_downstream_outflow"] = False
@@ -531,11 +528,15 @@ class Floods(Module):
             ] = False
 
             grouped_subbasins = {0: list(included_subbasins.index)}
-        else:
+        elif self.config["subbasins"] == "all":
             river_graph = create_river_graph(simulation_rivers)
             grouped_subbasins = group_subbasins(
                 river_graph=river_graph,
                 max_area_m2=1e20,  # very large to force single group only
+            )
+        else:
+            raise ValueError(
+                f"Invalid config for floods subbasins: {self.config['subbasins']}. Expected 'all' or a list of subbasin ids."
             )
 
         assert len(grouped_subbasins) == 1, "currently only single group supported"
@@ -1020,7 +1021,7 @@ class Floods(Module):
 
         spinup_name = self.model.config["general"]["spinup_name"]
         output_root = self.model.report_folder.parent.parent
-        spinup_discharge = read_discharge_per_river(
+        spinup_discharge = get_discharge_per_river(
             folder=output_root / spinup_name / "report" / "hydrology.routing",
             rivers=rivers,
             all_rivers=all_rivers,
@@ -1038,7 +1039,7 @@ class Floods(Module):
 
         run_folder = output_root / run_name / "report" / "hydrology.routing"
         if run_folder.exists():
-            run_discharge = read_discharge_per_river(
+            run_discharge = get_discharge_per_river(
                 folder=run_folder,
                 rivers=rivers,
                 all_rivers=all_rivers,
