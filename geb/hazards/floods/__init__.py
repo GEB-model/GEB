@@ -352,27 +352,24 @@ class Floods(Module):
             ],
         )
 
-        routing_substeps: int = self.var.discharge_per_timestep[0].shape[0]
         if self.config["forcing_method"] == "headwater_points":
-            forcing_grid = self.hydrology.grid.decompress(
-                np.vstack(
-                    list(self.var.discharge_per_timestep)
-                    + [
-                        self.var.discharge_per_timestep[-1][-1]
-                    ]  # add last timestep again (ensuring stable forcing during last hour)
-                )
-            )
+            forcing_deque: deque[TwoDArrayFloat32] = self.var.discharge_per_timestep
         elif self.config["forcing_method"] == "accumulated_runoff":
-            forcing_grid = self.hydrology.grid.decompress(
-                np.vstack(
-                    list(self.var.runoff_m_per_timestep)
-                    + [self.var.runoff_m_per_timestep[-1][-1]]
-                )  # add last timestep again (ensuring stable forcing during last hour)
-            )
+            forcing_deque = self.var.runoff_m_per_timestep
         else:
             raise ValueError(
                 f"Unknown forcing method {self.config['forcing_method']}. Supported are 'headwater_points' and 'accumulated_runoff'."
             )
+
+        routing_substeps: int = forcing_deque[0].shape[0]
+        forcing_grid = self.hydrology.grid.decompress(
+            np.vstack(
+                list(forcing_deque)
+                + [
+                    forcing_deque[-1][-1]
+                ]  # add last timestep again (ensuring stable forcing during last hour)
+            )
+        )
 
         substep_size: timedelta = self.model.timestep_length / routing_substeps
 
@@ -383,7 +380,7 @@ class Floods(Module):
                 "time": pd.date_range(
                     end=self.model.current_time
                     + self.model.timestep_length,  # end of the current timestep
-                    periods=len(self.var.discharge_per_timestep) * routing_substeps + 1,
+                    periods=len(forcing_deque) * routing_substeps + 1,
                     freq=substep_size,
                 ),
                 "y": self.hydrology.grid.lat,
@@ -894,6 +891,69 @@ class Floods(Module):
         self.var.runoff_m_per_timestep.append(
             overland_runoff_m
         )  # this is a deque, so it will automatically remove the oldest runoff
+
+    def load_runoff_from_disk(
+        self, end_time: datetime, runoff_path: Path | None = None
+    ) -> None:
+        """Fills the runoff deque from a previously saved full-grid runoff zarr file.
+
+        This allows re-running SFINCS for a flood event without re-running the
+        hydrological model, as long as an earlier run reported the full-grid runoff
+        (e.g. via a `hydrology.overland_runoff_m` entry with `type: grid` and
+        `function: null`) for the required period.
+
+        Args:
+            end_time: The last day (inclusive) for which runoff is needed. This
+                should be the day the flood event ends.
+            runoff_path: Path to the saved `overland_runoff_m` zarr file. Defaults
+                to the location the reporter would have used for the current run
+                (`<report_folder>/hydrology/overland_runoff_m.zarr`).
+
+        Raises:
+            FileNotFoundError: If the saved runoff zarr file does not exist.
+            ValueError: If the saved runoff does not cover the full required period.
+        """
+        if runoff_path is None:
+            runoff_path = (
+                self.model.report_folder / "hydrology" / "overland_runoff_m.zarr"
+            )
+        if not Path(runoff_path).exists():
+            raise FileNotFoundError(
+                f"Saved runoff not found at {runoff_path}. Run the model first with "
+                "a report entry such as `report.hydrology.overland_runoff_m` "
+                "(varname: .overland_runoff_m, type: grid, function: null) to "
+                "generate it."
+            )
+
+        maxlen: int | None = self.var.runoff_m_per_timestep.maxlen
+        assert maxlen is not None
+        n_days: int = maxlen
+        start_day: datetime = end_time - timedelta(days=n_days - 1)
+        required_days: pd.DatetimeIndex = pd.date_range(start_day, end_time, freq="D")
+
+        runoff: xr.DataArray = (
+            read_zarr(runoff_path)
+            .transpose("time", "y", "x")
+            .sel(time=slice(start_day, end_time + timedelta(days=1)))
+        )
+
+        available_days: pd.DatetimeIndex = pd.DatetimeIndex(
+            pd.to_datetime(runoff.time.values).normalize().unique()
+        )
+        missing_days: pd.DatetimeIndex = required_days.difference(available_days)
+        if len(missing_days) > 0:
+            raise ValueError(
+                f"Saved runoff at {runoff_path} does not cover the required period "
+                f"{start_day} - {end_time}. Missing day(s): {list(missing_days)}."
+            )
+
+        self.var.runoff_m_per_timestep.clear()
+        for day in required_days:
+            day_data: xr.DataArray = runoff.sel(
+                time=slice(day, day + timedelta(days=1, seconds=-1))
+            )
+            compressed: TwoDArrayFloat32 = self.hydrology.grid.compress(day_data.values)
+            self.var.runoff_m_per_timestep.append(compressed)
 
     def discharge_by_river(self, run_name: str) -> pd.DataFrame:
         """Open the discharge datasets from the model output folder.

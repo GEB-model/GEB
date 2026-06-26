@@ -21,6 +21,7 @@ from geb import GEB_PACKAGE_DIR, __version__
 from geb.agents import Agents
 from geb.build.version_updates import get_and_maybe_do_version_updates
 from geb.hazards.driver import HazardDriver
+from geb.hazards.event import Event
 from geb.hazards.floods.workflows.construct_storm_surge_hydrographs import (
     generate_storm_surge_hydrographs,
 )
@@ -655,6 +656,63 @@ class GEBModel(Module):
         self.reporter.finalize()
         self.create_done_file()
 
+    def run_sfincs_from_saved_runoff(self, event_index: int = 0) -> None:
+        """Runs SFINCS for a single configured flood event using previously saved full-grid runoff.
+
+        This skips re-running the hydrological model entirely. It requires that an
+        earlier `geb run` saved the full-grid runoff to disk via a report entry
+        such as::
+
+            report:
+              hydrology:
+                overland_runoff_m:
+                  varname: .overland_runoff_m
+                  type: grid
+                  function: null
+
+        and that the saved data covers the requested event period (including the
+        lookback buffer used to set up the SFINCS event).
+
+        Args:
+            event_index: Index into `hazards.floods.events` of the event to simulate.
+
+        Raises:
+            FileNotFoundError: If the spinup store does not exist.
+        """
+        if not self.store.path.exists():
+            raise FileNotFoundError(
+                f"The initial conditions folder ({self.store.path.resolve()}) does not exist. Spinup is required before running the model. Please run the spinup first."
+            )
+
+        event_config: dict[str, Any] = self.config["hazards"]["floods"]["events"][
+            event_index
+        ]
+
+        current_time: datetime.datetime = datetime.datetime.combine(
+            event_config["end_time"].date(), datetime.time.min
+        )
+        timestep_length: datetime.timedelta = datetime.timedelta(days=1)
+        # `current_time` is derived from `current_timestep` (set below), not from the
+        # `current_time` argument to `_initialize`, which is otherwise unused.
+        timestep_index: int = (current_time - self.run_start) // timestep_length
+        assert timestep_index >= 0, (
+            f"Event end time {current_time} is before the run start time {self.run_start}."
+        )
+
+        self.check_time_range()
+        self._initialize(
+            create_reporter=False,
+            current_time=current_time,
+            n_timesteps=timestep_index + 1,
+            timestep_length=timestep_length,
+            load_data_from_store=True,
+        )
+        self.current_timestep = timestep_index
+
+        event: Event = self.hazard_driver.flood_events[event_index]
+        self.hazard_driver.floods.load_runoff_from_disk(end_time=current_time)
+        self.hazard_driver.floods.run_single_event(event)
+
     def run_yearly(self, model_name: str = "default") -> None:
         """Run the model in yearly mode, where timesteps are yearly rather than daily.
 
@@ -906,7 +964,9 @@ class GEBModel(Module):
         Returns:
             simulation_root: Path of the simulation root.
         """
-        folder = Path(self.config["general"]["simulation_root"]) / self.run_name
+        folder = (
+            Path(self.config["general"]["simulation_root"]) / self.run_name
+        ).resolve()
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 
@@ -917,7 +977,7 @@ class GEBModel(Module):
         Returns:
             simulation_root: Path of the simulation root.
         """
-        folder = Path(self.config["general"]["simulation_root"]) / "spinup"
+        folder = (Path(self.config["general"]["simulation_root"]) / "spinup").resolve()
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 

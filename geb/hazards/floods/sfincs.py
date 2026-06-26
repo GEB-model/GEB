@@ -2183,6 +2183,11 @@ class SFINCSSimulation:
             runoff_m * cell_area / timestep_size_seconds
         )
 
+        # track the total runoff volume added via this forcing (for water balance debugging)
+        self.total_runoff_volume_m3 += float(
+            (generated_discharge_m3_per_s * timestep_size_seconds).sum()
+        )
+
         # accumulate generated discharge for each river cell
         accumulated_generated_discharge_m3_per_s = np.apply_along_axis(
             func1d=lambda x: np.bincount(subbasins, weights=x),
