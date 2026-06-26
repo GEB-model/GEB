@@ -2012,19 +2012,27 @@ class Households(AgentBaseClass):
         return self.var.adapted.data[self.households_exposed_to_flooding]
 
     @property
-    def comid_of_household(self) -> np.ndarray:
+    def comid_of_household(self, cached: bool = True) -> np.ndarray:
         """This function assigns the COMIDs to the corresponding households.
 
+        Args:
+            cached (bool): If True, use cached COMID mapping if available. Default is True. Should be set to False if the building_id_of_household has changed since the last call to this property.
+            This occurs when household relocations are performed, and the COMID mapping needs to be recalculated.
         Returns:
             np.ndarray: Array of COMIDs corresponding to each household, based on their building assignment.
         """
         # Cache the indexed Series for fast vectorized lookup; avoids rebuilding on each call
         if not hasattr(self, "_comid_map"):
             self._comid_map = self.buildings.set_index("id")["COMID"]
+        if cached and hasattr(self, "_cached_mapped_comids"):
+            return self._cached_mapped_comids
 
-        return (
+        mapped_comids = (
             pd.Series(self.var.building_id_of_household)
             .map(self._comid_map)
             .fillna(0)
             .to_numpy()
         )
+        if cached:
+            self._cached_mapped_comids = mapped_comids
+        return mapped_comids
