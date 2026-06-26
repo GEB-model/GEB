@@ -11,6 +11,7 @@ import math
 import shutil
 import warnings
 from pathlib import Path
+from types import TracebackType
 from typing import Any, Literal
 
 import geopandas as gpd
@@ -87,6 +88,8 @@ SFINCS_WATER_LEVEL_BOUNDARY = 2
 class SFINCSRootModel:
     """Builds and updates SFINCS model files for flood hazard modeling."""
 
+    sfincs_model: SfincsModel | None = None
+
     def __init__(self, root: Path, name: str, logger: logging.Logger) -> None:
         """Initializes the SFINCSRootModel with a GEBModel and event name.
 
@@ -103,6 +106,8 @@ class SFINCSRootModel:
         self._root: Path = root
         self._was_build = None
         self.logger: logging.Logger = logger
+
+        self.sfincs_model = None
 
     @property
     def name(self) -> str:
@@ -1830,6 +1835,24 @@ class SFINCSRootModel:
         """Cleans up the SFINCS model directory."""
         shutil.rmtree(self.path, ignore_errors=True)
 
+    def __enter__(self) -> SFINCSRootModel:
+        """Enters the context of the SFINCS simulation.
+
+        Returns:
+            The SFINCSSimulation instance.
+        """
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Exits the context of the SFINCS simulation."""
+        if self.sfincs_model is not None:
+            self.sfincs_model.close()
+
 
 class MultipleSFINCSSimulations:
     """Manages multiple SFINCS simulations as a single entity."""
@@ -1903,6 +1926,8 @@ class SFINCSSimulation:
     """
 
     inflow_was_set: bool
+    sfincs_model: SfincsModel
+    sfincs_root_model: SFINCSRootModel
 
     def __init__(
         self,
@@ -1936,13 +1961,16 @@ class SFINCSSimulation:
         self.write_figures = write_figures
 
         # Read a new independent instance of the SFINCS model to avoid shared state
-        self.root_model: SFINCSRootModel = SFINCSRootModel(
+        self.sfincs_root_model = SFINCSRootModel(
             root=sfincs_root_model_path, name=sfincs_root_model_name, logger=self.logger
         ).read()
 
         self.cleanup()
 
-        sfincs_model = self.root_model.sfincs_model
+        sfincs_model = self.sfincs_root_model.sfincs_model
+        if sfincs_model is None:
+            raise ValueError("SFINCS model is not initialized in the root model.")
+
         sfincs_model.root.set(self.path, mode="w+")
 
         if event.export_final_intensity:
@@ -1985,7 +2013,7 @@ class SFINCSSimulation:
         )
         sfincs_model.config.write()
 
-        self.sfincs_model: SfincsModel = sfincs_model
+        self.sfincs_model = sfincs_model
 
         # Track total volumes added via forcings (for water balance debugging)
         self.total_runoff_volume_m3: float = 0.0
@@ -2046,8 +2074,8 @@ class SFINCSSimulation:
         We use the pre-calculated outflow elevations from the root model
         to set constant water level boundary conditions at the river outflow points.
         """
-        outflow_points: gpd.GeoDataFrame = self.root_model.rivers[
-            ~self.root_model.rivers["outflow_point_xy"].isna()
+        outflow_points: gpd.GeoDataFrame = self.sfincs_root_model.rivers[
+            ~self.sfincs_root_model.rivers["outflow_point_xy"].isna()
         ].copy()
         if not outflow_points.empty:
             outflow_points["geometry"] = outflow_points["outflow_point_xy"].apply(
@@ -2080,7 +2108,7 @@ class SFINCSSimulation:
             discharge_by_river: A DataFrame containing the discharge timeseries for each inflow river.
                 The columns should match the index of the inflow rivers GeoDataFrame.
         """
-        nodes: gpd.GeoDataFrame = self.root_model.inflow_rivers.copy()
+        nodes: gpd.GeoDataFrame = self.sfincs_root_model.inflow_rivers.copy()
         nodes["geometry"] = nodes["geometry"].apply(
             get_end_point
         )  # most downstream point of the river segment
@@ -2210,7 +2238,7 @@ class SFINCSSimulation:
         )
 
         # mask out all basins that are not in the model
-        mask: TwoDArrayBool = np.isin(basin_ids, self.root_model.subbasins.index)
+        mask: TwoDArrayBool = np.isin(basin_ids, self.sfincs_root_model.subbasins.index)
         runoff_m = xr.where(mask, runoff_m, 0.0)  # set runoff to 0 outside model basins
         river_ids_no_waterbodies_removed = np.where(
             mask, river_ids_no_waterbodies_removed, -1
@@ -2302,7 +2330,7 @@ class SFINCSSimulation:
             river_ID = inflow_idx // INFLOW_MULTIPLICATION_FACTOR
             inflow_offset = inflow_idx % INFLOW_MULTIPLICATION_FACTOR
 
-            river: gpd.GeoSeries = self.root_model.rivers.loc[river_ID]
+            river: gpd.GeoSeries = self.sfincs_root_model.rivers.loc[river_ID]
 
             # confirm we have the correct inflow point
             xy_low_res = river["hydrography_xy_no_waterbodies_removed"][inflow_offset]
@@ -2434,7 +2462,7 @@ class SFINCSSimulation:
         if not gpu in [True, False, "auto"]:
             raise ValueError("gpu must be True, False, or 'auto'")
 
-        if self.root_model.has_inflow:
+        if self.sfincs_root_model.has_inflow:
             if not self.inflow_was_set:
                 raise ValueError(
                     "The model has inflow rivers, but inflow boundary conditions have not been set."
@@ -2461,7 +2489,7 @@ class SFINCSSimulation:
             method="max",
             minimum_flood_depth=minimum_flood_depth,
             end_time=self.event.end_time,
-            mask=self.root_model.area_of_interest,
+            mask=self.sfincs_root_model.area_of_interest,
         )
         return flood_map
 
@@ -2487,7 +2515,9 @@ class SFINCSSimulation:
             method="final",
             minimum_flood_depth=minimum_flood_depth,
             end_time=self.event.end_time,
-            mask=self.root_model.area_of_interest if area_of_interest is None else None,
+            mask=self.sfincs_root_model.area_of_interest
+            if area_of_interest is None
+            else None,
         )
         return flood_map
 
@@ -2533,7 +2563,7 @@ class SFINCSSimulation:
     @property
     def root_path(self) -> Path:
         """Returns the root directory for the SFINCS model files."""
-        return self.root_model.path
+        return self.sfincs_root_model.path
 
     @property
     def path(self) -> Path:
@@ -2570,3 +2600,26 @@ class SFINCSSimulation:
         """
         self.sfincs_model.thin_dams.create(dam_locations, merge=True)
         self.sfincs_model.thin_dams.write()
+
+    def __enter__(self) -> SFINCSSimulation:
+        """Enters the context of the SFINCSSimulation.
+
+        Returns:
+            The SFINCSSimulation instance.
+        """
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Exits the context of the SFINCSSimulation and cleans up resources.
+
+        Args:
+            exc_type: The type of exception raised (if any).
+            exc_value: The value of the exception raised (if any).
+            traceback: The traceback of the exception raised (if any).
+        """
+        self.sfincs_model.close()

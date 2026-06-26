@@ -438,7 +438,7 @@ class Floods(Module):
                 f"Unknown forcing method {self.config['forcing_method']}. Supported are 'headwater_points' and 'accumulated_runoff'."
             )
 
-        if simulation.root_model.has_inflow:
+        if simulation.sfincs_root_model.has_inflow:
             simulation.set_river_inflow(discharge_by_river=discharge_by_river)
 
         return simulation

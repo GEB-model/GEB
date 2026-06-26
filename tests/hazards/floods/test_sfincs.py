@@ -19,7 +19,7 @@ from geb.cli import CONFIG_DEFAULT
 from geb.geb_types import TwoDArrayFloat64, TwoDArrayInt32
 from geb.hazards.event import Event
 from geb.hazards.floods import create_river_graph, group_subbasins
-from geb.hazards.floods.sfincs import SFINCSRootModel, SFINCSSimulation
+from geb.hazards.floods.sfincs import SFINCSRootModel
 from geb.hazards.floods.workflows.utils import get_start_point
 from geb.model import GEBModel
 from geb.runner import parse_config, run_model_with_method
@@ -117,64 +117,62 @@ def build_sfincs(
     Returns:
         A SFINCS model instance with static grids and configuration written.
     """
-    sfincs_model: SFINCSRootModel = SFINCSRootModel(
-        tmp_folder / "SFINCS", name, logger=logger
-    )
-    DEM_config: list[dict[str, str | Path | xr.DataArray | xr.Dataset]] = (
-        geb_model.hazard_driver.floods.DEM_config.copy()
-    )
-    for entry in DEM_config:
-        if "elevation" not in entry:
-            entry["elevation"] = read_zarr(
-                geb_model.model.files["other"][entry["path"]]
-            ).to_dataset(name="elevation")
-
-    sfincs_model.build(
-        subbasins=subbasins,
-        DEMs=DEM_config,
-        rivers=rivers,
-        discharge_by_river=geb_model.hazard_driver.floods.discharge_by_river(
-            run_name="spinup"
-        ),
-        river_width_alpha=geb_model.model.hydrology.grid.decompress(
-            geb_model.hydrology.grid.var.river_width_alpha
-        ),
-        river_width_beta=geb_model.model.hydrology.grid.decompress(
-            geb_model.hydrology.grid.var.river_width_beta
-        ),
-        mannings=geb_model.hazard_driver.floods.mannings,
-        grid_size_multiplier=10,
-        subgrid=subgrid,
-        depth_calculation_method=geb_model.model.config["hydrology"]["routing"][
-            "river_depth"
-        ]["method"],
-        depth_calculation_parameters=geb_model.model.config["hydrology"]["routing"][
-            "river_depth"
-        ]["parameters"]
-        if "parameters"
-        in geb_model.hazard_driver.floods.model.config["hydrology"]["routing"][
-            "river_depth"
-        ]
-        else {},
-        setup_river_outflow_boundary=False,
-        custom_rivers_to_burn=read_geom(
-            geb_model.files["geom"]["routing/custom_rivers"]
+    with SFINCSRootModel(tmp_folder / "SFINCS", name, logger=logger) as sfincs_model:
+        DEM_config: list[dict[str, str | Path | xr.DataArray | xr.Dataset]] = (
+            geb_model.hazard_driver.floods.DEM_config.copy()
         )
-        if "routing/custom_rivers" in geb_model.files["geom"]
-        else None,
-        coastal=coastal,
-        overwrite=True,
-        write_figures=True,
-        **kwargs,
-    )
-    geb_model.close()
+        for entry in DEM_config:
+            if "elevation" not in entry:
+                entry["elevation"] = read_zarr(
+                    geb_model.model.files["other"][entry["path"]]
+                ).to_dataset(name="elevation")
 
-    if subgrid:
-        assert (sfincs_model.path / "sfincs_subgrid.nc").exists()
-    else:
-        assert (sfincs_model.path / "sfincs.dep").exists()
+        sfincs_model.build(
+            subbasins=subbasins,
+            DEMs=DEM_config,
+            rivers=rivers,
+            discharge_by_river=geb_model.hazard_driver.floods.discharge_by_river(
+                run_name="spinup"
+            ),
+            river_width_alpha=geb_model.model.hydrology.grid.decompress(
+                geb_model.hydrology.grid.var.river_width_alpha
+            ),
+            river_width_beta=geb_model.model.hydrology.grid.decompress(
+                geb_model.hydrology.grid.var.river_width_beta
+            ),
+            mannings=geb_model.hazard_driver.floods.mannings,
+            grid_size_multiplier=10,
+            subgrid=subgrid,
+            depth_calculation_method=geb_model.model.config["hydrology"]["routing"][
+                "river_depth"
+            ]["method"],
+            depth_calculation_parameters=geb_model.model.config["hydrology"]["routing"][
+                "river_depth"
+            ]["parameters"]
+            if "parameters"
+            in geb_model.hazard_driver.floods.model.config["hydrology"]["routing"][
+                "river_depth"
+            ]
+            else {},
+            setup_river_outflow_boundary=False,
+            custom_rivers_to_burn=read_geom(
+                geb_model.files["geom"]["routing/custom_rivers"]
+            )
+            if "routing/custom_rivers" in geb_model.files["geom"]
+            else None,
+            coastal=coastal,
+            overwrite=True,
+            write_figures=True,
+            **kwargs,
+        )
+        geb_model.close()
 
-    return sfincs_model
+        if subgrid:
+            assert (sfincs_model.path / "sfincs_subgrid.nc").exists()
+        else:
+            assert (sfincs_model.path / "sfincs.dep").exists()
+
+        return sfincs_model
 
 
 def create_sfincs_models(
@@ -342,51 +340,52 @@ def test_accumulated_runoff(
                 end_time=end_time,
                 create_final_intensity_map=True,
             )
-            simulation: SFINCSSimulation = sfincs_model.create_simulation(
+            with sfincs_model.create_simulation(
                 event=event,
                 spinup_seconds=0,
                 write_figures=True,
                 setup_river_outflow=False,
-            )
-
-            simulation.set_accumulated_runoff_forcing(
-                runoff_m=runoff_m,
-                river_network=geb_model.hydrology.routing.river_network,
-                river_ids=river_ids,
-                river_ids_no_waterbodies_removed=river_ids_no_waterbodies_removed,
-                basin_ids=basin_ids,
-                upstream_area=upstream_area,
-                cell_area=cell_area,
-            )
-
-            if simulation.root_model.has_inflow:
-                inflow_rivers: gpd.GeoDataFrame = simulation.root_model.inflow_rivers
-                date_range = pd.date_range(
-                    event.start_time,
-                    event.end_time,
-                    freq="h",
-                    inclusive="both",
+            ) as simulation:
+                simulation.set_accumulated_runoff_forcing(
+                    runoff_m=runoff_m,
+                    river_network=geb_model.hydrology.routing.river_network,
+                    river_ids=river_ids,
+                    river_ids_no_waterbodies_removed=river_ids_no_waterbodies_removed,
+                    basin_ids=basin_ids,
+                    upstream_area=upstream_area,
+                    cell_area=cell_area,
                 )
 
-                discharge_m3_per_s: float = 10
-                timeseries = pd.DataFrame(
-                    data=np.full(
-                        (len(date_range), len(inflow_rivers)),
-                        discharge_m3_per_s,
-                        dtype=np.float32,
-                    ),
-                    columns=inflow_rivers.index,
-                    index=date_range,
-                )
+                if simulation.sfincs_root_model.has_inflow:
+                    inflow_rivers: gpd.GeoDataFrame = (
+                        simulation.sfincs_root_model.inflow_rivers
+                    )
+                    date_range = pd.date_range(
+                        event.start_time,
+                        event.end_time,
+                        freq="h",
+                        inclusive="both",
+                    )
 
-                simulation.set_river_inflow(timeseries)
-                discharge_m3 = (
-                    (event.end_time - event.start_time).total_seconds()
-                    * discharge_m3_per_s
-                    * len(inflow_rivers)
-                )
-            else:
-                discharge_m3 = 0.0
+                    discharge_m3_per_s: float = 10
+                    timeseries = pd.DataFrame(
+                        data=np.full(
+                            (len(date_range), len(inflow_rivers)),
+                            discharge_m3_per_s,
+                            dtype=np.float32,
+                        ),
+                        columns=inflow_rivers.index,
+                        index=date_range,
+                    )
+
+                    simulation.set_river_inflow(timeseries)
+                    discharge_m3 = (
+                        (event.end_time - event.start_time).total_seconds()
+                        * discharge_m3_per_s
+                        * len(inflow_rivers)
+                    )
+                else:
+                    discharge_m3 = 0.0
 
             assert (simulation.path / "sfincs.dis").exists()
             assert (simulation.path / "sfincs.src").exists()
