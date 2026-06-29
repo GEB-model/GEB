@@ -558,6 +558,13 @@ class SFINCSRootModel:
                     rivers_to_burn.index.isin(discharge_by_river.columns)
                 ]
 
+                # The further downstream rivers are in principle not included in the hydrological simulations.
+                # They only may be if a subset of subbasins is requested for simulation. However, such further
+                # downstream rivers may have significant discharge missing because other inflowing rivers may not
+                # be include in the flood simulation. Therefore, we use the discharge of the upstream rivers
+                # to estimate the burn width and depth rather than the discharge of the river itself.
+                # The next line just removes them. A few steps later they are added back but with the discharge
+                # of the inflowing rivers that are simulated here.
                 discharge_by_river = discharge_by_river[
                     rivers_to_burn[
                         ~rivers_to_burn["is_further_downstream_outflow"]

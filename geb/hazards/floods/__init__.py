@@ -474,11 +474,7 @@ class Floods(Module):
             [simulation_rivers, rivers[rivers["is_downstream_outflow"]]]
         )
 
-        if self.config["subbasins"] != "all":
-            if not isinstance(self.config["subbasins"], list):
-                raise ValueError(
-                    f"Invalid config for floods subbasins: {self.config['subbasins']}. Expected 'all' or a list of subbasin ids."
-                )
+        if isinstance(self.config["subbasins"], list):
             if not all(
                 subbasin_id in subbasins.index
                 for subbasin_id in self.config["subbasins"]
