@@ -49,7 +49,7 @@ def format_date(date_obj: datetime) -> str:
         raise ValueError("Input must be a date or datetime object.")
 
 
-def generate_forecast_steps(forecast_date: datetime) -> str:
+def generate_forecast_steps(forecast_date: datetime, forecast_horizon: int) -> str:
     """Generate ECMWF forecast step string based on the forecast date.
 
     ECMWF does not have a consistent 1h timestep for the entire operational archive. Asking hourly data to the server when it does not exist, will result in an error.
@@ -59,6 +59,7 @@ def generate_forecast_steps(forecast_date: datetime) -> str:
 
     Args:
         forecast_date: The forecast initialization date and time.
+        forecast_horizon: The forecast horizon in hours.
 
     Returns:
         ECMWF MARS step string in the format "0/3/6/9/..." with actual step hours.
@@ -77,11 +78,45 @@ def generate_forecast_steps(forecast_date: datetime) -> str:
         steps.extend(range(0, 145, 3))  # 0, 3, 6, 9, ..., 144 (3-hourly)
         steps.extend(range(150, 241, 6))  # 150, 156, 162, ..., 360 (6-hourly from 144h)
     else:  # From 2016-11-23: hourly from 0-90h, 3-hourly from 90-144h, 6-hourly from 144-360h
-        steps.extend(range(0, 91))  # 0, 1, 2, 3, ..., 90 (hourly)
-        steps.extend(range(93, 145, 3))  # 93, 96, 99, ..., 144 (3-hourly from 90h)
-        steps.extend(range(150, 241, 6))  # 150, 156, 162, ..., 360 (6-hourly from 144h)
+        if forecast_horizon <= 90:
+            steps.extend(
+                range(0, forecast_horizon + 1)
+            )  # hourly steps up to forecast_horizon
+        elif forecast_horizon <= 144:
+            steps.extend(range(0, 91))  # hourly steps from 0-90h
+            steps.extend(
+                range(93, forecast_horizon + 1, 3)
+            )  # 3-hourly steps from 90h to forecast_horizon
+        else:
+            steps.extend(range(0, 91))  # 0, 1, 2, 3, ..., 90 (hourly)
+            steps.extend(range(93, 145, 3))  # 93, 96, 99, ..., 144 (3-hourly from 90h)
+            steps.extend(
+                range(150, 241, 6)
+            )  # 150, 156, 162, ..., 360 (6-hourly from 144h)
 
     return "/".join(str(step) for step in steps)  # return step string for MARS request
+
+
+def make_hdates_for_cycle_date(
+    forecast_cycle_date: pd.Timestamp, n_hindcast_years: int
+) -> str:
+    """Generate a string of hindcast dates for a given forecast cycle date.
+
+    Args:
+        forecast_cycle_date: The forecast cycle date as a pandas Timestamp.
+        n_hindcast_years: The number of hindcast years to request.
+
+    Returns:
+        A string of hindcast dates in the format "YYYY-MM-DD/YYYY-MM-DD/...".
+    """
+    forecast_cycle_date = pd.to_datetime(
+        forecast_cycle_date
+    )  # Ensure input is a Timestamp
+    start_year = forecast_cycle_date.year - n_hindcast_years
+    return "/".join(
+        f"{year}-{forecast_cycle_date.month:02d}-{forecast_cycle_date.day:02d}"
+        for year in range(start_year, forecast_cycle_date.year)
+    )
 
 
 class ECMWFForecasts(Adapter):
@@ -98,11 +133,15 @@ class ECMWFForecasts(Adapter):
         bounds: tuple[float, float, float, float],
         forecast_start: date | datetime,
         forecast_end: date | datetime,
+        hindcast_cycle_start: date | datetime,
+        hindcast_cycle_end: date | datetime,
+        n_hindcast_years: int,
         forecast_model: str,
         forecast_resolution: str,
         forecast_horizon: int,
         forecast_timestep_hours: int,
         n_ensemble_members: int,
+        forecast_product: str,
     ) -> ECMWFForecasts:
         """Download ECMWF forecasts using the ECMWF web API: https://github.com/ecmwf/ecmwf-api-client.
 
@@ -170,14 +209,31 @@ class ECMWFForecasts(Adapter):
             forecast_start, forecast_end, freq="24h"
         )  # Generate list of forecast dates at 24-hour intervals
         earliest_allowed_date = date(2010, 1, 1)  # Set earliest allowed forecast date
-        for forecast_date in forecast_date_list:  # Loop through all forecast dates
-            if (
-                forecast_date.date() < earliest_allowed_date
-            ):  # Check if date is before allowed range
-                raise ValueError(
-                    f"Forecast date {forecast_date.date()} is before 2010-01-01. "
-                    "For historical data before 2010, please use hindcast data instead."
+
+        if forecast_product == "forecast":
+            for forecast_date in forecast_date_list:  # Loop through all forecast dates
+                if (
+                    forecast_date.date() < earliest_allowed_date
+                ):  # Check if date is before allowed range
+                    raise ValueError(
+                        f"Forecast date {forecast_date.date()} is before 2010-01-01. "
+                        "For historical data before 2010, please use hindcast data instead."
+                    )
+        elif forecast_product == "hindcast":
+            # If downloading hindcast data, check if the forecast start date is less then 20 years apart from the forecast cycle date, otherwise there will be no data available
+            assert n_hindcast_years <= 20, (
+                "ECMWF hindcast data is only available for up to 20 years before the forecast cycle date. Please adjust the n_hindcast_years parameter in your build.yml file to be 20 or less."
+            )
+
+            HINDCAST_RUN_DAYS = [1, 5, 9, 13, 17, 21, 25, 29]
+            forecast_date_list = [
+                d
+                for d in pd.date_range(
+                    hindcast_cycle_start, hindcast_cycle_end, freq="D"
                 )
+                if d.day in HINDCAST_RUN_DAYS
+            ]
+
         # Determine which model types to download based on YAML configuration
         if forecast_model == "both_control_and_probabilistic":
             model_types_to_download = ["control_forecast", "probabilistic_forecast"]
@@ -210,7 +266,7 @@ class ECMWFForecasts(Adapter):
                     forecast_timestep_hours == 1
                 ):  # Check if hourly timestep is requested
                     mars_step: str = generate_forecast_steps(
-                        forecast_date
+                        forecast_date, forecast_horizon
                     )  # Generate forecast steps based on date using helper function
                 elif (
                     forecast_timestep_hours >= 6
@@ -221,7 +277,10 @@ class ECMWFForecasts(Adapter):
                         f"Forecast timestep {forecast_timestep_hours} is not supported. Please use 1 or >=6."
                     )
 
-                mars_stream: str = "enfo"  # Ensemble forecast stream
+                if forecast_product == "hindcast":
+                    mars_stream = "enfh"  # Ensemble hindcast stream
+                else:
+                    mars_stream: str = "enfo"  # Ensemble forecast stream
                 mars_time: str = forecast_date.strftime(
                     "%H"
                 )  # Extract hour from forecast date for initialization time
@@ -235,22 +294,44 @@ class ECMWFForecasts(Adapter):
                     bounds_str  # Set bounding box area in North/West/South/East format
                 )
 
-                # retrieve steps from mars
-                mars_request: dict[
-                    str, Any
-                ] = {  # Build MARS request dictionary with all parameters
-                    "class": mars_class,
-                    "date": forecast_date.strftime("%Y-%m-%d"),
-                    "expver": mars_expver,
-                    "levtype": mars_levtype,
-                    "param": mars_param,
-                    "step": mars_step,
-                    "stream": mars_stream,
-                    "time": mars_time,
-                    "type": mars_type,
-                    "grid": mars_grid,
-                    "area": mars_area,
-                }
+                if forecast_product == "forecast":
+                    # retrieve steps from mars
+                    mars_request: dict[
+                        str, Any
+                    ] = {  # Build MARS request dictionary with all parameters
+                        "class": mars_class,
+                        "date": forecast_date.strftime("%Y-%m-%d"),
+                        "expver": mars_expver,
+                        "levtype": mars_levtype,
+                        "param": mars_param,
+                        "step": mars_step,
+                        "stream": mars_stream,
+                        "time": mars_time,
+                        "type": mars_type,
+                        "grid": mars_grid,
+                        "area": mars_area,
+                    }
+                elif forecast_product == "hindcast":
+                    # retrieve steps from mars
+                    mars_request: dict[
+                        str, Any
+                    ] = {  # Build MARS request dictionary with all parameters
+                        "class": mars_class,
+                        "hdate": make_hdates_for_cycle_date(
+                            forecast_cycle_date=forecast_date.strftime("%Y-%m-%d"),
+                            n_hindcast_years=n_hindcast_years,
+                        ),
+                        "date": forecast_date.strftime("%Y-%m-%d"),
+                        "expver": mars_expver,
+                        "levtype": mars_levtype,
+                        "param": mars_param,
+                        "step": mars_step,
+                        "stream": mars_stream,
+                        "time": mars_time,
+                        "type": mars_type,
+                        "grid": mars_grid,
+                        "area": mars_area,
+                    }
 
                 output_filename = format_path(
                     self.path,
