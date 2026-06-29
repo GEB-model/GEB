@@ -378,39 +378,16 @@ class ECMWFForecasts(Adapter):
 
         return self
 
-    def read(
+    def load_and_merge_forecast_files(
         self,
-        bounds: tuple[float, float, float, float],
-        forecast_issue_date: datetime,
         forecast_model: str,
+        forecast_issue_date: pd.Timestamp,
         forecast_resolution: str,
         forecast_horizon: int,
         forecast_timestep_hours: int,
-        reproject_like: xr.DataArray,
     ) -> xr.Dataset:
-        """Process downloaded ECMWF forecast data.
 
-        We process forecasts for each initialization time separately. The forecast file contains all variables needed for GEB.
-
-        Args:
-            bounds: The bounding box in the format (min_lon, min_lat, max_lon,
-                    max_lat).
-            forecast_issue_date: The forecast initialization time.
-            forecast_model: The ECMWF forecast model from build.yml config ("probabilistic_forecast", "control_forecast" or "both_control_and_probabilistic").
-            forecast_resolution: The spatial resolution of the forecast data (degrees).
-            forecast_horizon: The forecast horizon in hours.
-            forecast_timestep_hours: The forecast timestep in hours.
-            reproject_like: An xarray DataArray to use as a template for reprojecting
-                the forecast data.
-
-        Returns:
-            da: processed ECMWF forecast data as an xarray Dataset.
-
-        Raises:
-            ValueError: If forecast initialization dates or time dimensions don't match between control and ensemble.
-        """
-
-        def _load_forecast_file(model_type: str) -> xr.Dataset:
+        def _load_forecast_files(forecast_model: str) -> xr.Dataset:
             """Load a single forecast dataset for the specified model type.
 
             Args:
@@ -425,11 +402,12 @@ class ECMWFForecasts(Adapter):
             filename = format_path(
                 self.path,
                 forecast_date=format_date(forecast_issue_date),
-                forecast_model=model_type,
+                forecast_model=forecast_model,
                 forecast_resolution=forecast_resolution.replace("/", "-"),
                 forecast_horizon=forecast_horizon,
                 forecast_timestep_hours=forecast_timestep_hours,
             )
+            # TODO: adjust to read the path of hindcasts (add forecast product)
 
             if not filename.exists():
                 raise FileNotFoundError(f"Forecast file not found: {filename}")
@@ -492,8 +470,8 @@ class ECMWFForecasts(Adapter):
         # Load forecast datasets based on YAML forecast_model parameter
         if forecast_model == "both_control_and_probabilistic":
             # Load both_control_and_probabilistic control and ensemble forecasts for combination
-            control_ds = _load_forecast_file("control_forecast")
-            ensemble_ds = _load_forecast_file("probabilistic_forecast")
+            control_ds = _load_forecast_files("control_forecast")
+            ensemble_ds = _load_forecast_files("probabilistic_forecast")
             # Validate compatibility before merging
             _validate_forecast_compatibility(control_ds, ensemble_ds)
 
@@ -509,7 +487,7 @@ class ECMWFForecasts(Adapter):
             )
         elif forecast_model in ["control_forecast", "probabilistic_forecast"]:
             # Load single forecast type without combining
-            ds = _load_forecast_file(forecast_model)
+            ds = _load_forecast_files(forecast_model)
 
             # Add member dimension to control forecast if not present for consistency
             if forecast_model == "control_forecast" and "member" not in ds.dims:
@@ -521,6 +499,9 @@ class ECMWFForecasts(Adapter):
                 "Must be 'control_forecast', 'probabilistic_forecast', or 'both_control_and_probabilistic'."
             )
 
+        return ds
+
+    def process_forecasts(self, ds, bounds, reproject_like):
         # ensure all the timesteps are hourly
         if not (
             ds.step.diff("step").astype(np.int64) == 3600 * 1e9
@@ -711,3 +692,82 @@ class ECMWFForecasts(Adapter):
                 )
 
         return ds
+
+    def read_and_process_forecasts(
+        self,
+        bounds: tuple[float, float, float, float],
+        forecast_issue_date: datetime,
+        forecast_model: str,
+        forecast_resolution: str,
+        forecast_horizon: int,
+        forecast_timestep_hours: int,
+        reproject_like: xr.DataArray,
+    ) -> xr.Dataset:
+        """Process downloaded ECMWF forecast data.
+
+        We process forecasts for each initialization time separately. The forecast file contains all variables needed for GEB.
+
+        Args:
+            bounds: The bounding box in the format (min_lon, min_lat, max_lon,
+                    max_lat).
+            forecast_issue_date: The forecast initialization time.
+            forecast_model: The ECMWF forecast model from build.yml config ("probabilistic_forecast", "control_forecast" or "both_control_and_probabilistic").
+            forecast_resolution: The spatial resolution of the forecast data (degrees).
+            forecast_horizon: The forecast horizon in hours.
+            forecast_timestep_hours: The forecast timestep in hours.
+            reproject_like: An xarray DataArray to use as a template for reprojecting
+                the forecast data.
+
+        Returns:
+            da: processed ECMWF forecast data as an xarray Dataset.
+
+        Raises:
+            ValueError: If forecast initialization dates or time dimensions don't match between control and ensemble.
+        """
+        ds = self.load_and_merge_forecast_files(
+            forecast_model=forecast_model,
+            forecast_issue_date=forecast_issue_date,
+            forecast_resolution=forecast_resolution,
+            forecast_horizon=forecast_horizon,
+            forecast_timestep_hours=forecast_timestep_hours,
+        )
+
+        return self.process_forecasts(ds, bounds, reproject_like)
+
+    def read_and_process_hindcasts(
+        self,
+        bounds: tuple[float, float, float, float],
+        forecast_issue_date: datetime,
+        forecast_model: str,
+        forecast_resolution: str,
+        forecast_horizon: int,
+        forecast_timestep_hours: int,
+        reproject_like: xr.DataArray,
+    ) -> dict[str, xr.Dataset]:
+
+        hindcasts = self.load_and_merge_forecast_files(
+            forecast_model=forecast_model,
+            forecast_issue_date=forecast_issue_date,
+            forecast_resolution=forecast_resolution,
+            forecast_horizon=forecast_horizon,
+            forecast_timestep_hours=forecast_timestep_hours,
+        )
+
+        processed_hindcasts = {}
+
+        for hindcast_date in hindcasts.time.values:
+            hindcast_date_str = pd.to_datetime(hindcast_date).strftime(
+                "%Y%m%dT%H%M%S"
+            )  # Format date for filenames
+
+            hindcast = hindcasts.sel(
+                time=hindcast_date
+            )  # Select the hindcast for the specific initialization time
+
+            processed_hindcasts[hindcast_date_str] = self.process_forecasts(
+                ds=hindcast,
+                bounds=bounds,
+                reproject_like=reproject_like,
+            )
+
+        return processed_hindcasts
