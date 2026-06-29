@@ -43,8 +43,6 @@ class Government(AgentBaseClass):
             else {}
         )
         self.ratio_farmers_to_provide_subsidies_per_year = 0.05
-        # for easier access to the flood risk module of the households agent, we store it here as well
-        self.flood_risk_module = self.agents.households.flood_risk_module
 
     @property
     def name(self) -> str:
@@ -418,6 +416,8 @@ class Government(AgentBaseClass):
             return  # exits because it is not the first of January
 
         if self.config["adaptation"]["mode"] == "cba":
+            # for easier access to the flood risk module of the households agent, we store it here as well
+            self.flood_risk_module = self.agents.households.flood_risk_module
             self._cost_benefit_adaptation()
             if self.model.current_timestep == self.model.n_timesteps - 1:
                 import geopandas as gpd
