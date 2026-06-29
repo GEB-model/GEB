@@ -4,6 +4,7 @@ import os
 import warnings
 from datetime import timedelta
 from pathlib import Path
+from types import CodeType
 from typing import Literal
 
 import geopandas as gpd
@@ -1746,7 +1747,12 @@ class Hydrography(BuildModelBase):
         self.set_table(inflow_df_m3_per_s, name="routing/inflow_m3_per_s")
 
     @build_method(required=True, depends_on=["setup_hydrography"])
-    def setup_retention_basins(self, retention_basins: Path | None = None) -> None:
+    def setup_retention_basins(
+        self,
+        retention_basins: Path | None = None,
+        max_storage_m3_to_min_shreve_stream_order_function: str | None = None,
+        create_plots: bool = False,
+    ) -> None:
         """Setup retention basins.
 
         There can only be a maximum of one retention basin per river pixel. When a retention
@@ -1757,6 +1763,10 @@ class Hydrography(BuildModelBase):
             retention_basins: A vector file that can be read by geopandas containing the retention basins,
                 with a point geometry representing the location of the retention basin. If none (default),
                 no retention basins will be set up in the model.
+            max_storage_m3_to_min_shreve_stream_order_function: A string representing a function that takes the maximum storage of a retention basin in m3 and
+                returns the minimum Shreve stream order of the river pixel to which the retention basin can be snapped. If none, all retention basins will be snapped
+                to the nearest river pixel regardless of its Shreve stream order.
+            create_plots: Whether to create plots of the retention basins and their snapped locations on the river network.
 
         Raises:
             ValueError: If a retention basin cannot be snapped to the river network.
@@ -1797,6 +1807,13 @@ class Hydrography(BuildModelBase):
             )
             self.set_geom(retention_basin_gdf, name="routing/retention_basins")
         else:
+            if max_storage_m3_to_min_shreve_stream_order_function is not None:
+                max_storage_m3_to_min_shreve_stream_order_function: CodeType = compile(
+                    max_storage_m3_to_min_shreve_stream_order_function,
+                    "<string>",
+                    "eval",
+                )
+
             # read the retention basins from the provided file
             retention_basins = gpd.read_file(retention_basins).to_crs(
                 self.grid["mask"].rio.crs
@@ -1830,13 +1847,31 @@ class Hydrography(BuildModelBase):
             for _, retention_basin in retention_basins.iterrows():
                 centroid = retention_basin.geometry.centroid
 
+                if np.isnan(retention_basin["retention_max_storage_m3"]):
+                    warnings.warn(
+                        f"Retention basin ID {retention_basin['ID']} has missing retention_max_storage_m3 value. Setting it to 0.0."
+                    )
+                    retention_basin["retention_max_storage_m3"] = 0.0
+
                 # the centroid of the retention basin may not fall exactly on the river network,
                 # so we snap it to the nearest river pixel using the snap_point_to_river_network function
+                if max_storage_m3_to_min_shreve_stream_order_function is not None:
+                    rivers_with_min_shreve_order = rivers[
+                        rivers["shreve_stream_order"]
+                        >= eval(
+                            max_storage_m3_to_min_shreve_stream_order_function,
+                            {"x": retention_basin["retention_max_storage_m3"]},
+                        )
+                    ]
+                else:
+                    rivers_with_min_shreve_order = rivers
+
                 snapped_data: SnappingResults | None = snap_point_to_river_network(
                     point=centroid,
-                    rivers=rivers,
+                    rivers=rivers_with_min_shreve_order,
                     upstream_area_grid=upstream_area_grid,
                     upstream_area_subgrid=upstream_area_subgrid,
+                    max_spatial_difference_degrees=180,
                 )
                 if snapped_data is None:
                     raise ValueError(
@@ -1898,6 +1933,7 @@ class Hydrography(BuildModelBase):
                         "retention_activation_threshold_uncontrolled_m3_s": retention_basin[
                             "retention_activation_threshold_uncontrolled_m3_s"
                         ],
+                        "river_segment_shreve_order": snapped_data.closest_river_segment.shreve_stream_order,
                         "geometry": snapped_geom,
                     }
                 )
@@ -1908,3 +1944,24 @@ class Hydrography(BuildModelBase):
 
         self.set_geom(retention_basin_gdf, name="routing/retention_basins")
         self.set_grid(retention_basin_ids, name="routing/retention_basin_ids")
+
+        if create_plots:
+            import matplotlib.pyplot as plt
+
+            # plot maximum storage volume vs shreve order
+            plt.figure(figsize=(10, 6))
+            plt.scatter(
+                retention_basin_gdf["river_segment_shreve_order"],
+                retention_basin_gdf["retention_max_storage_m3"],
+                alpha=0.7,
+            )
+            plt.xscale("log")
+            plt.yscale("log")
+            plt.xlabel("Shreve Order of River Segment")
+            plt.ylabel("Maximum Storage Volume (m³)")
+            plt.title("Retention Basin Maximum Storage Volume vs Shreve Order")
+            plt.grid(True, which="both", ls="--", lw=0.5)
+            plt.savefig(
+                self.report_dir / "retention_basins_shreve_order_vs_storage.svg"
+            )
+            plt.close()

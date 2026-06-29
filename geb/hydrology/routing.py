@@ -30,8 +30,6 @@ from geb.workflows.io import read_geom, read_table
 if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
 
-RETENTION_BASIN_RELEASE_THRESHOLD_FACTOR: np.float32 = np.float32(0.75)
-
 
 def get_discharge_per_river(
     rivers: gpd.GeoDataFrame,
@@ -263,6 +261,7 @@ class Router:
         river_network: pyflwdir.FlwdirRaster,
         waterbody_id: np.ndarray,
         is_waterbody_outflow: np.ndarray,
+        retention_basin_release_threshold_factor: float = 0.9,
     ) -> None:
         """Initializes the Router class.
 
@@ -272,9 +271,13 @@ class Router:
             waterbody_id: A 1D array with the same shape as the grid, which is the waterbody ID for each cell.
                 -1 indicates no waterbody.
             is_waterbody_outflow: A 1D array with the same shape as the grid, which is True for the outflow cells.
+            retention_basin_release_threshold_factor: Factor to multiply the activation threshold by to get the release threshold.
         """
         assert dt > 0, "dt must be greater than 0"
         self.dt = dt
+        self.retention_basin_release_threshold_factor = np.float32(
+            retention_basin_release_threshold_factor
+        )
 
         # we create a mapper from the 2D ldd to the 1D river network
         # the mapper size is ldd.size + 1, because we need to map the
@@ -507,6 +510,7 @@ class KinematicWave(Router):
         controlled_retention: ArrayBool,
         retention_activation_threshold_controlled_m3_s: ArrayFloat32,
         retention_activation_threshold_uncontrolled_m3_s: ArrayFloat32,
+        retention_basin_release_threshold_factor: float = 0.9,
     ) -> None:
         """Initializes the KinematicWave class.
 
@@ -522,8 +526,15 @@ class KinematicWave(Router):
             controlled_retention: Array of booleans indicating whether each retention basin is controlled or uncontrolled
             retention_activation_threshold_controlled_m3_s: Array of floats containing the activation threshold for controlled retention basins
             retention_activation_threshold_uncontrolled_m3_s: Array of floats containing the activation threshold for uncontrolled retention basins
+            retention_basin_release_threshold_factor: Factor to multiply the activation threshold by to get the release threshold.
         """
-        super().__init__(dt, river_network, waterbody_id, is_waterbody_outflow)
+        super().__init__(
+            dt,
+            river_network,
+            waterbody_id,
+            is_waterbody_outflow,
+            retention_basin_release_threshold_factor,
+        )
 
         self.river_length = river_length.ravel()
 
@@ -670,6 +681,7 @@ class KinematicWave(Router):
         controlled_retention: ArrayBool,
         retention_activation_threshold_controlled_m3_s: ArrayFloat32,
         retention_activation_threshold_uncontrolled_m3_s: ArrayFloat32,
+        retention_basin_release_threshold_factor: np.float32,
     ) -> tuple[
         ArrayFloat32,
         ArrayFloat32,
@@ -703,6 +715,7 @@ class KinematicWave(Router):
             controlled_retention: Array of booleans indicating whether each retention basin is controlled or uncontrolled
             retention_activation_threshold_controlled_m3_s: Array of floats containing the activation threshold for controlled retention basins
             retention_activation_threshold_uncontrolled_m3_s: Array of floats containing the activation threshold for uncontrolled retention basins
+            retention_basin_release_threshold_factor: Factor to multiply the activation threshold by to get the release threshold.
 
         Returns:
             Qnew: New discharge array, which is a 1D array with discharge for each grid cell in the river network.
@@ -773,14 +786,15 @@ class KinematicWave(Router):
                 node_retention_id = retention_node_id[node]
                 # if the node is associated with a retention basin (not -1), we apply the retention logic
                 if node_retention_id != -1:
+                    # Discharge before diversion, to compare against activation thresholds; convert to flow rate (m3/s)
+                    # We use the average flow during the timestep, considering both inflow and existing storage.
+                    discharge_before_diversion_m3_per_s: np.float32 = (
+                        Qin + Qold[node]
+                    ) / 2 + (sideflow_node_m3 / dt)
+
                     # total discharge entering the retention basin river cell during timestep, including sideflow
                     discharge_at_retention_basin_m3_per_timestep: np.float32 = (
                         Qin * dt + sideflow_node_m3
-                    )
-
-                    # Discharge before diversion, to compare against activation thresholds; convert to flow rate (m3/s)
-                    discharge_before_diversion_m3_per_s: np.float32 = (
-                        discharge_at_retention_basin_m3_per_timestep / dt
                     )
 
                     # limit inflow into basins (20% per timestep (hour))
@@ -838,28 +852,37 @@ class KinematicWave(Router):
                             diverted_volume_m3
                         )
 
-                    # the basins also release water once they have started filling up, by 1% of the current storage per timestep,
+                    # the basins also release water once they have started filling up, by 5% of the current storage per timestep,
                     # but only if the river flow is below the activation threshold.
                     # retention storage is updated accordingly, as well as retention outflow. Outflow is added to discharge_at_retention_basin (back to river)
                     release_threshold_m3_per_s = (
                         activation_threshold_m3_per_s
-                        * RETENTION_BASIN_RELEASE_THRESHOLD_FACTOR
+                        * retention_basin_release_threshold_factor
                     )
+
+                    # We use a small hysteresis buffer to avoid rapid fluctuations
+                    # and we consider the total available water in the reach (Qin + Qold)
+                    # to ensure we don't overshoot the threshold.
+                    total_available_flow_m3_per_s = (Qin + Qold[node]) / 2 + (
+                        sideflow_node_m3 / dt
+                    )
+
                     if (
                         retention_storage_m3[node_retention_id] > np.float32(0.0)
-                        and discharge_before_diversion_m3_per_s
-                        <= release_threshold_m3_per_s
+                        and total_available_flow_m3_per_s <= release_threshold_m3_per_s
                     ):
                         outflow_volume_m3: np.float32 = (
-                            np.float32(0.01) * retention_storage_m3[node_retention_id]
+                            np.float32(0.05)
+                            * retention_max_storage_m3[node_retention_id]
                         )
+                        # Ensure we don't exceed the release threshold with the added outflow
                         outflow_volume_m3: np.float32 = min(
-                            (
-                                release_threshold_m3_per_s
-                                - discharge_before_diversion_m3_per_s
-                            )
+                            (release_threshold_m3_per_s - total_available_flow_m3_per_s)
                             * dt,
                             outflow_volume_m3,
+                        )
+                        outflow_volume_m3: np.float32 = max(
+                            np.float32(0.0), outflow_volume_m3
                         )
                         outflow_volume_m3: np.float32 = min(
                             outflow_volume_m3, retention_storage_m3[node_retention_id]
@@ -971,6 +994,7 @@ class KinematicWave(Router):
             controlled_retention=self.controlled_retention,
             retention_activation_threshold_controlled_m3_s=self.retention_activation_threshold_controlled_m3_s,
             retention_activation_threshold_uncontrolled_m3_s=self.retention_activation_threshold_uncontrolled_m3_s,
+            retention_basin_release_threshold_factor=self.retention_basin_release_threshold_factor,
         )
 
         # Because some pits may also be waterbodies (where Q is NaN), we use nansum
@@ -1015,6 +1039,7 @@ class Accuflux(Router):
         controlled_retention: ArrayBool,
         retention_activation_threshold_controlled_m3_s: ArrayFloat32,
         retention_activation_threshold_uncontrolled_m3_s: ArrayFloat32,
+        retention_basin_release_threshold_factor: float = 0.9,
     ) -> None:
         """Initializes the Accuflux class.
 
@@ -1030,8 +1055,15 @@ class Accuflux(Router):
             controlled_retention: Array of booleans indicating whether each retention basin is controlled or uncontrolled
             retention_activation_threshold_controlled_m3_s: Array of floats containing the activation threshold for controlled retention basins
             retention_activation_threshold_uncontrolled_m3_s: Array of floats containing the activation threshold for uncontrolled retention basins
+            retention_basin_release_threshold_factor: Factor to multiply the activation threshold by to get the release threshold.
         """
-        super().__init__(dt, river_network, waterbody_id, is_waterbody_outflow)
+        super().__init__(
+            dt,
+            river_network,
+            waterbody_id,
+            is_waterbody_outflow,
+            retention_basin_release_threshold_factor,
+        )
 
         self.river_length = river_length.ravel()
 
@@ -1144,6 +1176,7 @@ class Accuflux(Router):
         controlled_retention: ArrayBool,
         retention_activation_threshold_controlled_m3_s: ArrayFloat32,
         retention_activation_threshold_uncontrolled_m3_s: ArrayFloat32,
+        retention_basin_release_threshold_factor: np.float32,
     ) -> tuple[
         ArrayFloat32,
         ArrayFloat32,
@@ -1176,6 +1209,7 @@ class Accuflux(Router):
                 If river discharge at the controlled retention node exceeds this threshold, it starts to fill until it reaches the maximum storage.
             retention_activation_threshold_uncontrolled_m3_s: A 1D array with the same shape as the grid, which is the activation threshold for uncontrolled retention nodes in m3/s.
                 The threshold is equivalent to bankful discharge (2-year discharge). If river discharge at the uncontrolled retention node exceeds this threshold, the basin starts to fill until it reaches the maximum storage.
+            retention_basin_release_threshold_factor: Factor to multiply the activation threshold by to get the release threshold.
 
 
         Returns:
@@ -1253,7 +1287,8 @@ class Accuflux(Router):
             # if the node is associated with a retention basin (not -1), we apply the retention logic
             if node_retention_id != -1:
                 # Compute discharge before diversion into ret. basins to check against activation threshold
-                Q_before_diversion_m3_per_s = inflow_volume_m3 / dt
+                # We use the average flow during the timestep, considering both inflow and existing storage.
+                Q_before_diversion_m3_per_s = (inflow_volume_m3 / dt + Qold[node]) / 2
 
                 # define inflow limit of 20% per ts of max capacity per timestep
                 inflow_limit_m3: np.float32 = (
@@ -1305,24 +1340,33 @@ class Accuflux(Router):
                     # Reduce the flow remaining to the river
                     inflow_volume_m3 -= diverted_volume_m3
 
-                # Outflow: 1% of current storage per timestep when basin has storage > 0,
+                # Outflow: 5% of current storage per timestep when basin has storage > 0,
                 # but only if the river flow is below the activation threshold.
                 # retention basin storage is updated, as well as retention outflow.
                 release_threshold_m3_per_s = (
                     activation_threshold_m3_per_s
-                    * RETENTION_BASIN_RELEASE_THRESHOLD_FACTOR
+                    * retention_basin_release_threshold_factor
                 )
+
+                # We use a small hysteresis buffer to avoid rapid fluctuations
+                # and we consider the total available water in the reach (Qin + Qold)
+                # to ensure we don't overshoot the threshold.
+                total_available_flow_m3_per_s = Qold[node]
+
                 if (
                     retention_storage_m3[node_retention_id] > np.float32(0.0)
-                    and Q_before_diversion_m3_per_s <= release_threshold_m3_per_s
+                    and total_available_flow_m3_per_s <= release_threshold_m3_per_s
                 ):
                     outflow_volume: np.float32 = (
-                        np.float32(0.01) * retention_storage_m3[node_retention_id]
+                        np.float32(0.05) * retention_max_storage_m3[node_retention_id]
                     )
+                    # Ensure we don't exceed the release threshold with the added outflow
                     outflow_volume: np.float32 = min(
                         outflow_volume,
-                        (release_threshold_m3_per_s - Q_before_diversion_m3_per_s) * dt,
+                        (release_threshold_m3_per_s - total_available_flow_m3_per_s)
+                        * dt,
                     )
+                    outflow_volume: np.float32 = max(np.float32(0.0), outflow_volume)
                     outflow_volume: np.float32 = min(
                         outflow_volume, retention_storage_m3[node_retention_id]
                     )
@@ -1454,6 +1498,7 @@ class Accuflux(Router):
             controlled_retention=self.controlled_retention,
             retention_activation_threshold_controlled_m3_s=self.retention_activation_threshold_controlled_m3_s,
             retention_activation_threshold_uncontrolled_m3_s=self.retention_activation_threshold_uncontrolled_m3_s,
+            retention_basin_release_threshold_factor=self.retention_basin_release_threshold_factor,
         )
 
         return (
@@ -1739,6 +1784,9 @@ class Routing(Module):
         """
         routing_algorithm: str = self.config["algorithm"]
         is_waterbody_outflow: ArrayBool = self.grid.var.waterbody_outflow_points != -1
+        retention_basin_release_threshold_factor: float = self.config[
+            "retention_basin_release_threshold_factor"
+        ]
         if routing_algorithm == "kinematic_wave":
             self.router = KinematicWave(
                 dt=3600,
@@ -1751,6 +1799,7 @@ class Routing(Module):
                 controlled_retention=self.controlled_retention,
                 retention_activation_threshold_controlled_m3_s=self.retention_activation_threshold_controlled_m3_s,
                 retention_activation_threshold_uncontrolled_m3_s=self.retention_activation_threshold_uncontrolled_m3_s,
+                retention_basin_release_threshold_factor=retention_basin_release_threshold_factor,
             )
         elif routing_algorithm == "accuflux":
             self.router = Accuflux(
@@ -1764,6 +1813,7 @@ class Routing(Module):
                 controlled_retention=self.controlled_retention,
                 retention_activation_threshold_controlled_m3_s=self.retention_activation_threshold_controlled_m3_s,
                 retention_activation_threshold_uncontrolled_m3_s=self.retention_activation_threshold_uncontrolled_m3_s,
+                retention_basin_release_threshold_factor=retention_basin_release_threshold_factor,
             )
         else:
             raise ValueError(

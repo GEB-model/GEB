@@ -1234,9 +1234,9 @@ def create_cluster_visualization_map(
 
     print(f"Creating cluster visualization map: {output_path}")
     cluster_count: int = len(cluster_outlines)
-    colors = plt.cm.tab20(np.linspace(0, 1, min(cluster_count, 20)))  # type: ignore[attr-defined]  # ty:ignore[unresolved-attribute]
+    colors = plt.cm.tab20(np.linspace(0, 1, min(cluster_count, 20)))  # type: ignore[attr-defined]
     if cluster_count > 20:
-        colors = plt.cm.hsv(np.linspace(0, 1, cluster_count))  # type: ignore[attr-defined]  # ty:ignore[unresolved-attribute]
+        colors = plt.cm.hsv(np.linspace(0, 1, cluster_count))  # type: ignore[attr-defined]
 
     cluster_outlines_mercator: gpd.GeoDataFrame = cluster_outlines.to_crs(epsg=3857)
     fig, ax = plt.subplots(1, 1, figsize=figsize)

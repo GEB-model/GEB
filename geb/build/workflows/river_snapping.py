@@ -17,6 +17,16 @@ from shapely.ops import nearest_points
 from geb.workflows.io import get_window
 
 
+class RiverSegment(NamedTuple):
+    """Container for a river segment."""
+
+    geometry: shapely.geometry.LineString
+    hydrography_xy: list[tuple[int, int]]
+    uparea_m2: float
+    station_distance: float
+    shreve_stream_order: int
+
+
 class SnappingResults(NamedTuple):
     """Container for snapping results."""
 
@@ -27,7 +37,7 @@ class SnappingResults(NamedTuple):
     geb_uparea_subgrid: float
     geb_uparea_grid: float
     distance_degrees: float
-    closest_river_segment: gpd.GeoDataFrame
+    closest_river_segment: RiverSegment
 
 
 def plot_snapping(
@@ -37,7 +47,7 @@ def plot_snapping(
     upstream_area: xr.DataArray,
     original_coords: tuple[float, float],
     closest_point_coords: tuple[float, float],
-    closest_river_segment: gpd.GeoDataFrame,
+    closest_river_segment: RiverSegment,
     grid_pixel_xy: tuple[int, int],
     filename_prefix: str = "snapping",
     point_label: str = "Original point",
@@ -157,7 +167,7 @@ def plot_snapping(
         alpha=1,
     )  # ty:ignore[missing-argument]
     rivers.plot(ax=ax, color="blue", linewidth=1)
-    closest_river_segment.plot(
+    gpd.GeoSeries([closest_river_segment.geometry]).plot(
         ax=ax, color="green", linewidth=3, label="Closest river segment"
     )
 
@@ -230,9 +240,7 @@ def snap_point_to_river_network(
     # Then along the selected river segment, we find the closest point on the river line to the original point.
     # The first point returned by nearest_points is the point itself,
     # the second is the closest point on the linestring.
-    _, closest_point_on_riverline = nearest_points(
-        point, best_river_segment.iloc[0].geometry
-    )
+    _, closest_point_on_riverline = nearest_points(point, best_river_segment.geometry)
 
     # Next, we find the corresponding cell in the high-resolution subgrid that is part of the river network.
     river_cell_in_subgrid = upstream_area_subgrid.sel(
@@ -244,7 +252,7 @@ def snap_point_to_river_network(
     # then we find the river cell in the low resolution grid that is closest to the snapped
     # river point, and that is part of the same river segment.
     # hydrography_xy contains the list of (x,y) coordinates in the low-res grid that belong to the river segment.
-    hydrography_xy = best_river_segment.iloc[0]["hydrography_xy"]
+    hydrography_xy = best_river_segment.hydrography_xy
     river_points_and_xy = []
     for xy in hydrography_xy:
         river_points_and_xy.append(
@@ -281,7 +289,7 @@ def snap_point_to_river_network(
                 x=closest_river_point_and_xy[1][0], y=closest_river_point_and_xy[1][1]
             ).item()
         ),
-        distance_degrees=best_river_segment.iloc[0].station_distance,
+        distance_degrees=best_river_segment.station_distance,
         closest_river_segment=best_river_segment,
     )
 
@@ -291,7 +299,7 @@ def select_river_segment(
     max_spatial_difference_degrees: float,
     upstream_area_m2: float | None = None,
     max_uparea_difference_ratio: float = 0.3,
-) -> gpd.GeoDataFrame | None:
+) -> RiverSegment | None:
     """Select the closest river segment that matches optional upstream area criteria.
 
     Args:
@@ -319,4 +327,10 @@ def select_river_segment(
     if closest_river_segment.iloc[0].station_distance > max_spatial_difference_degrees:
         return None
 
-    return closest_river_segment.iloc[0:1]
+    return RiverSegment(
+        geometry=closest_river_segment.iloc[0].geometry,
+        hydrography_xy=closest_river_segment.iloc[0].hydrography_xy,
+        uparea_m2=closest_river_segment.iloc[0].uparea_m2,
+        station_distance=closest_river_segment.iloc[0].station_distance,
+        shreve_stream_order=closest_river_segment.iloc[0].shreve_stream_order,
+    )

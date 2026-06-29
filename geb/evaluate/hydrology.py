@@ -2067,7 +2067,7 @@ class Hydrology:
                 for metric_name in DischargeMetrics._fields
             ]
             evaluation_df = pd.DataFrame(
-                columns=[  # ty:ignore[invalid-argument-type]
+                columns=[
                     "station_name",
                     "x",
                     "y",

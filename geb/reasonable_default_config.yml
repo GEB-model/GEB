@@ -65,6 +65,7 @@ hazards:
 hydrology:
   routing:
     algorithm: kinematic_wave  # accuflux or kinematic_wave
+    retention_basin_release_threshold_factor: 0.9
     river_width:
       parameters:
         default_alpha: 7.2

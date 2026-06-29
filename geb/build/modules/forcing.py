@@ -182,9 +182,7 @@ def plot_forecasts(
     # Timeline plot
     fig, ax_time = plt.subplots(1, 1, figsize=(12, 9))  # Create temporal plot
 
-    colors = plt.cm.viridis(  # ty:ignore[unresolved-attribute]
-        np.linspace(0, 1, n_members)
-    )  # Distinct colors for members
+    colors = plt.cm.viridis(np.linspace(0, 1, n_members))  # Distinct colors for members
 
     spatial_average = (da_plot.mean(dim="idxs")).compute()
 
@@ -240,9 +238,7 @@ def plot_forecasts(
         hspace=0.2, wspace=0.2, bottom=0.05, left=0.05, right=0.85
     )  # Tighter spacing
 
-    custom_cmap = (
-        plt.cm.Blues  # ty:ignore[unresolved-attribute]
-    )  # Use simple Blues colormap
+    custom_cmap = plt.cm.Blues  # Use simple Blues colormap
     da_plot_max_over_time = da_plot.max(dim="time")  # max over time for color scale
     for i, member in enumerate(
         da_plot_max_over_time.member
@@ -446,7 +442,7 @@ def create_gif_climate_data_over_time(
         origin = "upper"
 
     # Generating Animation frames
-    frames = []
+    frames: list[np.ndarray] = []
     times = da_plot["time"].values
 
     for i, t in enumerate(times):
@@ -536,7 +532,7 @@ def create_gif_climate_data_over_time(
         buf.close()
 
     # Saving GIF
-    gif_fp = report_dir / f"{name}_animation.gif"  # File path for GIF
+    gif_fp: Path = report_dir / f"{name}_animation.gif"  # File path for GIF
     imageio.mimsave(gif_fp, frames, fps=5)
 
 
@@ -1122,7 +1118,7 @@ class Forcing(BuildModelBase):
         return cmip6_deltas
 
     def setup_forcing_ERA5(
-        self, create_plots: bool = False, representative_forcing_year: int = None
+        self, create_plots: bool = False, representative_forcing_year: int | None = None
     ) -> None:
         """Sets up the ERA5 forcing data for GEB.
 
@@ -1262,7 +1258,7 @@ class Forcing(BuildModelBase):
         self,
         forcing: str = "ERA5",
         create_plots: bool = False,
-        representative_forcing_year: int = None,
+        representative_forcing_year: int | None = None,
     ) -> None:
         """Sets up the forcing data for GEB.
 
