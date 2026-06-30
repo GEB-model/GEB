@@ -14,7 +14,7 @@ from rasterio.features import geometry_mask, rasterize
 from xarray.core.dataarray import DataArray
 from xarray.core.dataset import Dataset
 
-from geb.workflows.io import read_geom, read_params, read_zarr, write_geom, write_zarr
+from geb.workflows.io import read_geom, read_params, read_zarr, write_zarr
 
 from ..workflows.helpers import from_landuse_raster_to_polygon
 
@@ -158,21 +158,21 @@ class EarlyWarningModule:
             f"Loading flood maps for {n_ensemble_members} ensemble members"
         )
 
+        start_time = self.model.config["hazards"]["floods"]["events"][0][
+            "start_time"
+        ].strftime("%Y%m%dT%H%M%S")
+        end_time = self.model.config["hazards"]["floods"]["events"][0][
+            "end_time"
+        ].strftime("%Y%m%dT%H%M%S")
+
         for member in tqdm.tqdm(
             range(0, n_ensemble_members), desc="Processing ensemble members"
         ):
-            member_folder = flood_maps_folder / f"member_{member}"
-
-            # Dynamically find the zarr file in the member folder
-            zarr_files = list(member_folder.glob("*.zarr"))
-            if not zarr_files:
-                raise FileNotFoundError(f"No zarr files found in {member_folder}")
-            elif len(zarr_files) > 1:
-                raise FileExistsError(
-                    f"Multiple zarr files found in {member_folder}: {[f.name for f in zarr_files]}"
-                )
-
-            flood_map_path = zarr_files[0]
+            flood_map_path = (
+                flood_maps_folder
+                / f"member_{member}"
+                / f"{start_time} - {end_time}_max.zarr"
+            )
 
             # open flood map for this ensemble member
             flood_map_da = read_zarr(flood_map_path)
@@ -223,45 +223,6 @@ class EarlyWarningModule:
 
         return ensemble_flood_maps
 
-    def load_ensemble_damage_maps(self, date_time: datetime) -> pd.DataFrame:
-        """Loads the damage maps for all ensemble members and aggregates them into a single dataframe. Work in standby for now.
-
-        Args:
-            date_time: The forecast date time for which to load the damage maps.
-        Returns:
-            A dataframe containing the aggregated damage maps for all ensemble members.
-        """
-        # Get number of members
-        # open the damage maps folder to see the number of members
-        damage_forecast_folder = (
-            self.model.output_folder
-            / "damage_maps"
-            / f"forecast_{date_time.strftime('%Y%m%dT%H%M%S')}"
-        )
-        n_ensemble_members = sum(1 for _ in damage_forecast_folder.glob("member_*"))
-        print(f"Loading damage maps for {n_ensemble_members} ensemble members.")
-
-        damage_maps = []
-        # Load the damage maps for each ensemble member
-        for member in range(1, n_ensemble_members + 1):
-            file_path = (
-                damage_forecast_folder
-                / f"damage_map_buildings_content_{date_time.strftime('%Y%m%dT%H%M%S')}_member{member}.gpkg"
-            )
-            damage_map = read_geom(file_path)
-
-            # Add member and building_id columns
-            damage_map["member"] = member
-            damage_map["building_id"] = damage_map.index + 1
-
-            # Aggregate all damage maps
-            damage_maps.append(damage_map)
-
-        # Concatenate all damage maps into a single dataframe
-        ensemble_damage_maps = pd.concat(damage_maps)
-
-        return ensemble_damage_maps
-
     def create_flood_probability_maps(
         self,
         date_time: datetime,
@@ -285,7 +246,6 @@ class EarlyWarningModule:
         # Load the ensemble of flood maps for that specific date time
         ensemble_flood_maps = self.load_ensemble_flood_maps(date_time=date_time)
         crs = self.model.config["hazards"]["floods"]["crs"]
-        # TODO: need to think on how to load all the flood maps for each date time, instead of for each strategy/and to create flood prob exceedance maps
 
         if exceedance:
             # Create output folder for exceedance probability maps
@@ -362,85 +322,6 @@ class EarlyWarningModule:
         ).expand_dims(time=[date_time])
 
         return probability_maps
-
-    def create_damage_probability_maps(self, date_time: datetime) -> None:
-        """Creates an object-based (buildings) probability map based on the ensemble of damage maps. Work in standby for now.
-
-        Args:
-            date_time: The forecast date time for which to create the damage probability maps.
-        """
-        crs = self.model.config["hazards"]["floods"]["crs"]
-
-        damage_prob_maps_folder = (
-            self.model.output_folder
-            / "damage_prob_maps"
-            / f"forecast_{date_time.strftime('%Y%m%dT%H%M%S')}"
-        )
-        damage_prob_maps_folder.mkdir(parents=True, exist_ok=True)
-
-        # Damage ranges for the probability map
-        damage_ranges = [
-            (1, 0, 1),
-            (2, 100, 15000),
-            (3, 15000, 30000),
-            (4, 30000, 45000),
-            (5, 45000, 60000),
-            (6, 60000, None),
-        ]
-        # TODO: need to create a json dictionary with the right damage ranges
-
-        # Load the ensemble of damage maps
-        damage_ensemble = self.load_ensemble_damage_maps(date_time)
-
-        # Get buildings geometry from one ensemble member (needed for the merges later)
-        building_geometry = damage_ensemble[damage_ensemble["member"] == 1][
-            ["building_id", "geometry"]
-        ].copy()
-
-        # Total number of ensemble members
-        n_members = damage_ensemble["member"].nunique()
-
-        # Loop over damage ranges and calculate probabilities
-        for range_id, min_d, max_d in damage_ranges:
-            if max_d is not None:
-                condition = damage_ensemble["damages"].between(
-                    min_d, max_d, inclusive="left"
-                )
-            else:
-                condition = damage_ensemble["damages"] >= min_d
-
-            # Count how many times each building falls in the range
-            range_counts = (
-                damage_ensemble[condition]
-                .groupby("building_id")
-                .size()
-                .rename("count")
-                .reset_index()
-            )
-
-            # Include all buildings and calculate the probability for each building in the range
-            range_counts = pd.merge(
-                building_geometry[["building_id"]],
-                range_counts,
-                on="building_id",
-                how="left",
-            )
-            range_counts["count"] = range_counts["count"].fillna(0)
-            range_counts["range_id"] = range_id
-            range_counts["probability"] = range_counts["count"] / n_members
-
-            damage_probability_map = pd.merge(
-                range_counts, building_geometry, on="building_id", how="left"
-            )
-            damage_probability_map = gpd.GeoDataFrame(
-                damage_probability_map, geometry="geometry", crs=crs
-            )
-
-            output_path = (
-                damage_prob_maps_folder
-                / f"damage_prob_map_range{range_id}_forecast{date_time.strftime('%Y%m%dT%H%M%S')}.geoparquet"
-            )
-            write_geom(damage_probability_map, output_path)
 
     def identify_flooded_buildings(
         self,

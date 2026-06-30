@@ -609,33 +609,6 @@ class Households(AgentBaseClass):
 
         # Drop columns that are not needed
         households_with_postal_codes.drop(columns=["index_right"], inplace=True)
-
-        # TODO: Move this to build>agents
-        # Change the location of households to the representative point of the building they are in
-        # This is done to avoid issues with sliver polygons
-        # rep_points_lookup = representative_points[["id", "geometry"]].copy()
-        # rep_points_lookup.to_parquet(
-        #     self.model.output_folder / "rep_points_lookup.geoparquet"
-        # )
-        # rep_points_lookup.rename(columns={"geometry": "rep_geometry"}, inplace=True)
-
-        # households_with_postal_codes["b_id"] = self.var.building_id_of_household
-
-        # # Merge based on the building id to get the representative point geometry for each household
-        # households_with_postal_codes = households_with_postal_codes.merge(
-        #     rep_points_lookup,
-        #     left_on="b_id",
-        #     right_on="id",
-        #     how="left",
-        # )
-
-        # # Replace the geometry of the household with the representative point geometry of the building
-        # households_with_postal_codes["geometry"] = households_with_postal_codes["rep_geometry"]
-        # households_with_postal_codes = households_with_postal_codes.set_geometry("geometry")
-
-        # # Drop columns that are not needed
-        # households_with_postal_codes.drop(columns=["rep_geometry", "b_id"], inplace=True, errors="ignore")
-
         households_with_postal_codes.to_parquet(
             self.model.output_folder / "household_points_w_postal_codes.geoparquet"
         )
