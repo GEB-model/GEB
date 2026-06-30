@@ -2420,6 +2420,7 @@ class Agents(BuildModelBase):
             source: The source of the OSM data. Options are 'geofabrik' or 'movisda'. Default is 'geofabrik'.
             use_cache: If True, the data will be cached in the preprocessing directory. Default is True.
         """
+        # TODO change id column to asset_id for each asset to align with future updates in the EWS critical infrastructure functions
         if isinstance(feature_types, str):
             feature_types: list[str] = [feature_types]
 

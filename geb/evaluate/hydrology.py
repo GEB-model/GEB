@@ -1791,7 +1791,7 @@ class Hydrology:
         )
         ax.set_xlabel("Longitude")
         ax.set_ylabel("Latitude")
-        ax.set_title(f"Mean discharge (m3/s)")
+        ax.set_title("Mean discharge (m3/s)")
 
         plt.savefig(
             self.discharge_output_folder / "mean_discharge_m3_per_s_map.svg",

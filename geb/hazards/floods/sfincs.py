@@ -316,7 +316,7 @@ class SFINCSRootModel:
         del subbasins
 
         resolution: tuple[float, float] = subbasins_burned.rio.resolution()
-        if abs(abs(resolution[0]) - abs(resolution[1])) > 1e-8:
+        if abs(abs(resolution[0]) - abs(resolution[1])) > 1e-7:
             raise ValueError("DEM resolution must be square pixels")
 
         geotransformation = subbasins_burned.rio.transform(recalc=True)
@@ -596,29 +596,31 @@ class SFINCSRootModel:
             self.logger.info(
                 f"Setting up SFINCS subgrid with {grid_size_multiplier} subgrid pixels..."
             )
-            # only burn rivers that are wider than the subgrid pixel size
-            sf.subgrid.create(
-                elevation_list=DEMs,
-                roughness_list=[
-                    {
-                        "manning": mannings.to_dataset(name="manning"),
-                    }
-                ],
-                river_list=[
-                    {
-                        "centerlines": rivers_to_burn.rename(
-                            columns={"width": "rivwth", "depth": "rivdph"}
-                        )
-                    }
-                ]
-                if not rivers_to_burn.empty
-                else [],
-                write_dep_tif=True,
-                write_man_tif=True,
-                nr_subgrid_pixels=grid_size_multiplier,
-                nr_levels=20,
-                nrmax=500,
-            )
+
+            with np.errstate(invalid="ignore"):
+                # only burn rivers that are wider than the subgrid pixel size
+                sf.subgrid.create(
+                    elevation_list=DEMs,
+                    roughness_list=[
+                        {
+                            "manning": mannings.to_dataset(name="manning"),
+                        }
+                    ],
+                    river_list=[
+                        {
+                            "centerlines": rivers_to_burn.rename(
+                                columns={"width": "rivwth", "depth": "rivdph"}
+                            )
+                        }
+                    ]
+                    if not rivers_to_burn.empty
+                    else [],
+                    write_dep_tif=True,
+                    write_man_tif=True,
+                    nr_subgrid_pixels=grid_size_multiplier,
+                    nr_levels=20,
+                    nrmax=500,
+                )
 
         else:
             self.logger.info(

@@ -190,6 +190,7 @@ setup_forcing:
 #   forecast_resolution: 0.1/0.1 # The spatial resolution of the forecast data in degrees.
 #   forecast_horizon: 240 # The forecast horizon in hours.
 #   forecast_timestep_hours: 1 # The time step of the forecast output in hours.
+#   n_ensemble_members: 50 # The number of ensemble members to use for the probabilistic forecast.
 
 setup_SPEI:
   window_months: 12

@@ -151,7 +151,7 @@ class GEBModel(Module):
 
         else:
             self.logger.info(
-                f"Version mismatch but no specific updates found for this version. Updated version file."
+                "Version mismatch but no specific updates found for this version. Updated version file."
             )
             version_path.write_text(__version__)
 
@@ -249,21 +249,20 @@ class GEBModel(Module):
                 Any, float
             ] = {}  # dictionary to store mean discharge for each member
 
-        # load all zarr files for all forecast variables for the given issue date
+        # load all zarr files for forecast data for all supported variables
         forecast_members: list[str] | None = None
         forecast_end_dt: datetime.datetime | None = None
         forecast_data: dict[str, xr.DataArray] = {}
+        self.logger.info(
+            f"Starting to load forecast data for {len(self.forcing.loaders)} loaders"
+        )
         for loader_name, loader in self.forcing.loaders.items():
             if loader.supports_forecast:
-                # open one forecast to see the number of members
-                forecast_data[loader_name] = read_zarr(
-                    self.input_folder
-                    / "other"
-                    / "forecasts"
-                    / self.config["general"]["forecasts"]["provider"]
-                    / f"{loader_name}_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}.zarr"
-                )  # open the forecast data for the variable
-                # these are the forecast members to loop over
+                forecast_file_path = self.files["other"][
+                    f"forecasts/{self.config['general']['forecasts']['provider']}/{self.config['general']['forecasts']['processing']}/{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}/{loader_name}_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}"
+                ]
+                forecast_data[loader_name] = read_zarr(forecast_file_path)
+
                 variable_forecast_members: list[str] = [
                     i.item() for i in forecast_data[loader_name].member.values
                 ]
@@ -304,7 +303,7 @@ class GEBModel(Module):
             self.multiverse_name: str = f"forecast_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}/member_{member}"  # set the multiverse name to the member name
 
             for loader_name, loader in self.forcing.loaders.items():
-                if loader.supports_forecast:
+                if loader.supports_forecast and loader_name in forecast_data:
                     loader.set_forecast(
                         forecast_issue_datetime=forecast_issue_datetime,
                         da=forecast_data[loader_name].sel(member=member),
@@ -346,7 +345,7 @@ class GEBModel(Module):
         )
 
         # after all forecast members have been processed, restore the original forcing data
-        for loader in self.forcing.loaders.values():
+        for loader_name, loader in self.forcing.loaders.items():
             if loader.supports_forecast:
                 loader.unset_forecast()  # unset forecast mode
 
@@ -450,7 +449,7 @@ class GEBModel(Module):
         for the current timestep, using forecast data if available.
 
         Raises:
-            RuntimeError: If forecast file for the current timestep is not found when forecasts are enabled in the config.
+            ValueError: If forecast directories do not have the expected datetime format.
         """
         # only if forecasts is used, and if we are not already in multiverse (avoiding infinite recursion)
         # and if the current date is in the list of forecast days
@@ -460,68 +459,118 @@ class GEBModel(Module):
             is None  # only start multiverse if not already in one
             and self.current_time.date()
         ):
-            forecast_files: list[Path] = list(
-                (
-                    self.input_folder
-                    / "other"
-                    / "forecasts"
-                    / self.config["general"]["forecasts"]["provider"]
-                ).glob("*.zarr")
-            )  # get all forecast files in the input folder
-            forecast_issue_dates: list[
-                datetime.date
-            ] = []  # list to store forecast issue dates
-            for f in forecast_files:
-                datetime_str = f.stem.split("_")[
-                    -1
-                ]  # extract the datetime string from the filename
-                if (
-                    datetime_str.replace("T", "").replace(":", "").isdigit()
-                ):  # Check if datetime string contains only digits, T, and colons (valid format)
-                    dt = datetime.datetime.strptime(
-                        datetime_str, "%Y%m%dT%H%M%S"
-                    )  # convert the string to a datetime object
-                    forecast_issue_dates.append(dt)  # append the date to the list
-                else:
-                    raise RuntimeError(
-                        f"Forecast file {f.name} does not have a valid datetime format. Expected format: 'YYYYMMDDTHHMMSS'."
-                    )
+            # forecast issue dates are extracted from self.files['other'] keys
+            # which are stored as: forecasts/PROVIDER/ENSEMBLE/YYYYMMDDTHHMMSS/...
+            provider: str = self.config["general"]["forecasts"]["provider"]
+            ensemble: str = self.config["general"]["forecasts"]["processing"]
+            forecast_prefix: str = f"forecasts/{provider}/{ensemble}/"
 
-            forecast_issue_dates = list(
-                set(forecast_issue_dates)
-            )  # only keep unique dates
+            other_files: dict[str, Path] = self.files.get("other", {})
 
+            # extract unique forecast issue datetimes from files keys
+            forecast_issue_dates: list[datetime.datetime] = sorted(
+                {
+                    datetime.datetime.strptime(Path(file_key).parts[3], "%Y%m%dT%H%M%S")
+                    for file_key in other_files
+                    if file_key.startswith(forecast_prefix)
+                    and len(Path(file_key).parts) >= 5
+                    and Path(file_key).parts[3].replace("T", "").isdigit()
+                }
+            )
+
+            # Get warning system config settings
+            warning_config = self.model.config["agent_settings"]["households"][
+                "warning_system"
+            ]
+
+            prob_threshold = warning_config["probability_threshold"]
+            area_threshold = warning_config["area_threshold"]
+            building_threshold = warning_config["building_threshold"]
+            warning_type = warning_config["strategies"]["warning_type"]
+            communication_efficiency = warning_config["communication_efficiency"]
+            evacuation_lead_time_threshold = warning_config[
+                "evacuation_lead_time_threshold"
+            ]
+            weight_by_socioeconomic_factors = warning_config[
+                "weight_by_socioeconomic_factors"
+            ]
+            # Determine response rate based on warning type
+            if warning_type == "building_based":
+                responsive_ratio = warning_config["response_rates"][
+                    "building_based_warnings"
+                ]
+
+            elif warning_type == "area_based":
+                responsive_ratio = warning_config["response_rates"][
+                    "area_based_warnings"
+                ]
+            else:
+                raise ValueError(
+                    f"Unknown warning type: {warning_type} selected in config, choose 'building_based' or 'area_based'."
+                )
             for dt in forecast_issue_dates:
                 if (
                     dt == self.current_time
                 ):  # change to include hours (for when we move to hourly)
+                    self.logger.debug(
+                        "Forecast issue datetime matched current model time: %s",
+                        dt.isoformat(),
+                    )
                     forecast_datetime = datetime.datetime.combine(
                         dt, datetime.time(0)
                     )  # Convert date back to datetime for the multiverse method
 
-                    self.multiverse_forecasts(
-                        forecast_issue_datetime=forecast_datetime,
-                        return_mean_discharge=True,
-                    )  # run the multiverse for the current timestep
+                    # self.multiverse_forecasts(
+                    #     forecast_issue_datetime=forecast_datetime,
+                    #     return_mean_discharge=True,
+                    # )  # run the multiverse for the current timestep
 
                     # after the multiverse has run all members for one day, if warning response is enabled, run the warning system
                     if self.config["agent_settings"]["households"]["warning_response"]:
                         self.logger.info(
                             f"Running flood early warning system for date time {self.current_time.isoformat()}..."
                         )
-                        self.agents.households.create_flood_probability_maps(
-                            date_time=self.current_time, strategy=1, exceedance=True
+                        # Run warning strategies based on config settings
+                        # Check whether water level warnings are enabled
+                        # TODO: Think of better names (and hierarchy) for the strategies in the config file
+                        if warning_config["strategies"]["residential_buildings"]:
+                            self.logger.info(
+                                f"Running water level based warning strategy with {warning_type} warnings..."
+                            )
+                            self.agents.households.early_warning_module.water_level_warning_strategy(
+                                date_time=self.current_time,
+                                warning_type=warning_type,
+                                prob_threshold=prob_threshold,
+                                buildings_hit_threshold=building_threshold,
+                                area_hit_threshold=area_threshold,
+                                communication_efficiency=communication_efficiency,
+                                evacuation_lead_time_threshold=evacuation_lead_time_threshold,
+                                weight_by_socioeconomic_factors=weight_by_socioeconomic_factors,
+                                exceedance=False,
+                            )
+                        if warning_config["strategies"][
+                            "critical_infrastructure_warnings"
+                        ]:
+                            config_asset_type = warning_config["strategies"][
+                                "asset_type"
+                            ]
+
+                            self.agents.households.early_warning_module.critical_infrastructure_warning_strategy(
+                                date_time=self.current_time,
+                                config_asset_type=config_asset_type,
+                                prob_threshold=prob_threshold,
+                                exceedance=True,
+                            )
+
+                        # Run household decision-making to convert warnings into actions
+                        self.agents.households.early_warning_module.household_decision_making(
+                            date_time=self.current_time,
+                            warning_type=warning_type,
+                            responsive_ratio=responsive_ratio,
                         )
-                        self.agents.households.water_level_warning_strategy(
-                            date_time=self.current_time
-                        )
-                        self.agents.households.critical_infrastructure_warning_strategy(
-                            date_time=self.current_time
-                        )
-                        self.agents.households.household_decision_making(
-                            date_time=self.current_time
-                        )
-                        self.agents.households.update_households_geodataframe_w_warning_variables(
+
+                        # Update household geodataframe with warning parameters
+                        self.agents.households.early_warning_module.update_households_geodataframe_w_warning_variables(
                             date_time=self.current_time
                         )
 

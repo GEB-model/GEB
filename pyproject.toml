@@ -70,6 +70,7 @@ dependencies = [
     "pytest-benchmark>=5.2.1",
     "imageio>=2.37.2",
     "osmnx>=2.0.6",
+    "joblib>=1.5.2",
     "matplotlib>=3.10.7",
     "seaborn>=0.13.2",
     "cdsapi>=0.7.7",

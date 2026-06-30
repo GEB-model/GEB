@@ -272,6 +272,8 @@ class HazardDriver(Module):
                         )
 
             for event in self.flood_events:
+                event: Event = copy.deepcopy(event)
+
                 assert isinstance(event.start_time, datetime), (
                     f"Start time {event.start_time} must be a datetime object."
                 )
@@ -287,7 +289,7 @@ class HazardDriver(Module):
                 ]
 
                 if self.model.multiverse_name:
-                    event_name: str = self.model.multiverse_name + "/" + event_name
+                    event_name: str = self.model.multiverse_name + "/" + event.name
                     event.name = (
                         event_name  # Update the event name with the multiverse name
                     )
@@ -306,8 +308,6 @@ class HazardDriver(Module):
                     and event.start_time < timestep_end_time
                     and self.model.current_timestep == self.model.n_timesteps - 1
                 ):
-                    event: Event = copy.deepcopy(event)
-
                     # the actual end time is the end of the day of the simulation. Therefore,
                     # its the simulation end time plus one timestep length
                     if (

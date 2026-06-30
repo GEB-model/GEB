@@ -49,8 +49,8 @@ def format_date(date_obj: datetime) -> str:
         raise ValueError("Input must be a date or datetime object.")
 
 
-def generate_forecast_steps(forecast_date: datetime) -> str:
-    """Generate ECMWF forecast step string based on the forecast date.
+def generate_forecast_steps(forecast_date: datetime, forecast_horizon: int) -> str:
+    """Generate ECMWF forecast step string based on the forecast date and horizon.
 
     ECMWF does not have a consistent 1h timestep for the entire operational archive. Asking hourly data to the server when it does not exist, will result in an error.
     Therefore, we need to adjust the requested steps based on the available data, which is different before and after 2016-11-23:
@@ -59,6 +59,7 @@ def generate_forecast_steps(forecast_date: datetime) -> str:
 
     Args:
         forecast_date: The forecast initialization date and time.
+        forecast_horizon: The forecast horizon in hours.
 
     Returns:
         ECMWF MARS step string in the format "0/3/6/9/..." with actual step hours.
@@ -77,9 +78,21 @@ def generate_forecast_steps(forecast_date: datetime) -> str:
         steps.extend(range(0, 145, 3))  # 0, 3, 6, 9, ..., 144 (3-hourly)
         steps.extend(range(150, 241, 6))  # 150, 156, 162, ..., 360 (6-hourly from 144h)
     else:  # From 2016-11-23: hourly from 0-90h, 3-hourly from 90-144h, 6-hourly from 144-360h
-        steps.extend(range(0, 91))  # 0, 1, 2, 3, ..., 90 (hourly)
-        steps.extend(range(93, 145, 3))  # 93, 96, 99, ..., 144 (3-hourly from 90h)
-        steps.extend(range(150, 241, 6))  # 150, 156, 162, ..., 360 (6-hourly from 144h)
+        if forecast_horizon <= 90:
+            steps.extend(
+                range(0, forecast_horizon + 1)
+            )  # hourly steps up to forecast_horizon
+        elif forecast_horizon <= 144:
+            steps.extend(range(0, 91))  # hourly steps from 0-90h
+            steps.extend(
+                range(93, forecast_horizon + 1, 3)
+            )  # 3-hourly steps from 90h to forecast_horizon
+        else:
+            steps.extend(range(0, 91))  # 0, 1, 2, 3, ..., 90 (hourly)
+            steps.extend(range(93, 145, 3))  # 93, 96, 99, ..., 144 (3-hourly from 90h)
+            steps.extend(
+                range(150, 241, 6)
+            )  # 150, 156, 162, ..., 360 (6-hourly from 144h)
 
     return "/".join(str(step) for step in steps)  # return step string for MARS request
 
@@ -210,7 +223,7 @@ class ECMWFForecasts(Adapter):
                     forecast_timestep_hours == 1
                 ):  # Check if hourly timestep is requested
                     mars_step: str = generate_forecast_steps(
-                        forecast_date
+                        forecast_date, forecast_horizon
                     )  # Generate forecast steps based on date using helper function
                 elif (
                     forecast_timestep_hours >= 6

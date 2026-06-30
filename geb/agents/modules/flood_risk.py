@@ -33,11 +33,12 @@ class FloodRiskModule:
         self.model = model
         self.households = households
         self.load_damage_curves()
-        self.alter_damage_curves_for_flood_proofed_buildings()
+        self.alter_damage_curves_based_on_actions()
         self.load_max_damage_values()
-        self.load_flood_maps()
+        if self.model.config["hazards"]["floods"]["flood_risk"]:
+            self.load_return_period_flood_maps()
 
-    def load_flood_maps(self) -> None:
+    def load_return_period_flood_maps(self) -> None:
         """Load flood maps for different return periods. This might be quite ineffecient for RAM, but faster then loading them each timestep for now."""
         self.households.return_periods = np.array(
             self.model.config["hazards"]["floods"]["return_periods"]
@@ -265,8 +266,11 @@ class FloodRiskModule:
                 columns={"damage_ratio": "rail"}
             )
 
-    def alter_damage_curves_for_flood_proofed_buildings(self) -> None:
+    def alter_damage_curves_based_on_actions(self) -> None:
         """Alter the global damage curves for flood-proofed buildings by applying a reduction factor to the unprotected building curves."""
+        damage_reduction_over_leadtime = self.households.model.config["agent_settings"][
+            "households"
+        ]["warning_system"]["damage_reduction_over_leadtime"]
         # insert a row with depth of 1.01m and damage ratio corresponding to the damage ratio at 1m depth modeling dry flood proofing until 1m depth.
         self.households.buildings_structure_curve.loc[1.01] = (
             self.households.buildings_structure_curve.loc[1]
@@ -365,6 +369,33 @@ class FloodRiskModule:
         self.households.buildings_content_curve["building_all_forecast_based"] = (
             self.households.buildings_content_curve["building_unprotected"] * 0.85
         )
+
+        if damage_reduction_over_leadtime:
+            # create timing-based structure curves for elevated possessions - no effect on structure
+            self.households.buildings_structure_curve[
+                "building_elevated_possessions_early"
+            ] = self.households.buildings_structure_curve["building_unprotected"]
+            self.households.buildings_structure_curve[
+                "building_elevated_possessions_medium"
+            ] = self.households.buildings_structure_curve["building_unprotected"]
+            self.households.buildings_structure_curve[
+                "building_elevated_possessions_late"
+            ] = self.households.buildings_structure_curve["building_unprotected"]
+            # create timing-based damage curves for elevated possessions
+            # Early action (>48h lead time): 20% damage (80% reduction)
+            self.households.buildings_content_curve[
+                "building_elevated_possessions_early"
+            ] = self.households.buildings_content_curve["building_unprotected"] * 0.20
+
+            # Medium action (24-48h lead time): 80% damage (20% reduction)
+            self.households.buildings_content_curve[
+                "building_elevated_possessions_medium"
+            ] = self.households.buildings_content_curve["building_unprotected"] * 0.80
+
+            # Late action (<24h lead time): 90% damage (10% reduction)
+            self.households.buildings_content_curve[
+                "building_elevated_possessions_late"
+            ] = self.households.buildings_content_curve["building_unprotected"] * 0.90
 
     def calculate_building_flood_damages(
         self,
@@ -579,10 +610,16 @@ class FloodRiskModule:
         Returns:
             The total flood damages for the event for all assets and land use types.
 
+        Raises:
+            NotImplementedError: If the flood function is not implemented for the global damage model.
+            ValueError: If both warning response and adaptation are enabled in the model configuration, as this may lead to unintended consequences.
         """
-        if self.model.config["hazards"]["floods"]["damage_model"] == "global":
+        if (
+            "damage_model/flood/residential/content/maximum_damage"
+            not in self.model.files["dict"]
+        ):
             raise NotImplementedError(
-                "The flood function is not implemented for the global damage model yet."
+                "The model was probably build with the damage_model set to global. This funcion is not yet implemented for the global damage model. Please rebuild the damage model with the local model (geul) instead."
             )
 
         flood_depth: xr.DataArray = flood_depth.compute()
@@ -626,7 +663,7 @@ class FloodRiskModule:
 
         # merge geometry into buildings dataframe
         buildings = self.households.buildings.merge(
-            building_geometries[["id", "geometry"]],
+            building_geometries["id"],
             on="id",
             how="left",
         )
@@ -642,7 +679,17 @@ class FloodRiskModule:
         household_points: gpd.GeoDataFrame = (
             self.households.var.household_points.copy().to_crs(flood_depth.rio.crs)
         )
-
+        if (
+            (
+                self.households.model.config["agent_settings"]["households"][
+                    "warning_response"
+                ]
+            )
+            & (self.households.config["adapt"])
+        ):
+            raise ValueError(
+                "Warning: Both warning response and adaptation are enabled in the model configuration. This may lead to unintended consequences as both mechanisms currently influence the same protective measure of flood-proofing buildings. Please use either adapt or warning response, but not both."
+            )
         if self.households.model.config["agent_settings"]["households"][
             "warning_response"
         ]:
@@ -662,24 +709,19 @@ class FloodRiskModule:
                 np.asarray(self.households.var.actions_taken)[:, 1] == 1, "sandbags"
             ] = True
 
+            # Add lead_time information for timing-based damage reduction
+            household_points["action_lead_time"] = self.households.var.action_lead_time
+
             # spatial join to get household attributes to buildings
             buildings: gpd.GeoDataFrame = gpd.sjoin_nearest(
                 buildings, household_points, how="left", exclusive=True
             )
-
-            # Assign object types for buildings based on protective measures taken
             buildings["object_type"] = "building_unprotected"  # reset
-            buildings.loc[buildings["elevated_possessions"], "object_type"] = (
-                "building_elevated_possessions"
+            # Assign object types for buildings centroid based on protective measures taken
+            buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
+            buildings_centroid["maximum_damage"] = (
+                self.households.var.max_dam_buildings_content
             )
-            buildings.loc[buildings["sandbags"], "object_type"] = (
-                "building_with_sandbags"
-            )
-            buildings.loc[
-                buildings["elevated_possessions"] & buildings["sandbags"], "object_type"
-            ] = "building_all_forecast_based"
-            # TODO: need to move the update of the actions takens by households to outside the flood function
-
             # Save the buildings with actions taken
             output_path = (
                 self.households.model.output_folder
@@ -688,31 +730,91 @@ class FloodRiskModule:
             )
             # Ensure the action_maps directory exists before writing the file
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            buildings.to_parquet(output_path)
+            damage_reduction_over_leadtime = self.households.model.config[
+                "agent_settings"
+            ]["households"]["warning_system"]["damage_reduction_over_leadtime"]
+            if damage_reduction_over_leadtime:
+                elevated_mask = buildings["elevated_possessions"] == True
+                # Early action: >48 hours lead time
+                early_mask = elevated_mask & (buildings["action_lead_time"] > 48)
+                buildings.loc[early_mask, "object_type"] = (
+                    "building_elevated_possessions_early"
+                )
+                print(f"Early action buildings: {early_mask.sum()}")
 
-            # Assign object types for buildings centroid based on protective measures taken
-            buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
-            buildings_centroid["object_type"] = np.select(
-                [
-                    (
-                        buildings_centroid["elevated_possessions"]
-                        & buildings_centroid["sandbags"]
-                    ),
-                    buildings_centroid["elevated_possessions"],
-                    buildings_centroid["sandbags"],
-                ],
-                [
-                    "building_all_forecast_based",
-                    "building_elevated_possessions",
-                    "building_with_sandbags",
-                ],
-                default="building_unprotected",
-            )
-            buildings_centroid["maximum_damage"] = (
-                self.households.var.max_dam_buildings_content
-            )
+                # Medium action: 24-48 hours lead time
+                medium_mask = (
+                    elevated_mask
+                    & (buildings["action_lead_time"] > 24)
+                    & (buildings["action_lead_time"] <= 48)
+                )
+                buildings.loc[medium_mask, "object_type"] = (
+                    "building_elevated_possessions_medium"
+                )
+                print(f"Medium action buildings: {medium_mask.sum()}")
 
-        if self.households.config["adapt"]:
+                # Late action: <24 hours lead time
+                late_mask = elevated_mask & (buildings["action_lead_time"] <= 24)
+                buildings.loc[late_mask, "object_type"] = (
+                    "building_elevated_possessions_late"
+                )
+                print(f"Late action buildings: {late_mask.sum()}")
+
+                # Summary of object types
+                object_type_counts = buildings["object_type"].value_counts()
+                print("Building object type counts:")
+                for obj_type, count in object_type_counts.items():
+                    print(f"  {obj_type}: {count}")
+                buildings.to_parquet(output_path)
+                # Timing-based object type assignment for buildings_centroid
+                buildings_centroid["object_type"] = np.select(
+                    [
+                        (buildings_centroid["elevated_possessions"])
+                        & (buildings_centroid["action_lead_time"] > 48),
+                        (buildings_centroid["elevated_possessions"])
+                        & (buildings_centroid["action_lead_time"] > 24)
+                        & (buildings_centroid["action_lead_time"] <= 48),
+                        (buildings_centroid["elevated_possessions"])
+                        & (buildings_centroid["action_lead_time"] <= 24),
+                    ],
+                    [
+                        "building_elevated_possessions_early",
+                        "building_elevated_possessions_medium",
+                        "building_elevated_possessions_late",
+                    ],
+                    default="building_unprotected",
+                )
+            else:
+                # Assign object types for buildings based on protective measures taken
+                buildings.loc[buildings["elevated_possessions"], "object_type"] = (
+                    "building_elevated_possessions"
+                )
+                buildings.loc[buildings["sandbags"], "object_type"] = (
+                    "building_with_sandbags"
+                )
+                buildings.loc[
+                    buildings["elevated_possessions"] & buildings["sandbags"],
+                    "object_type",
+                ] = "building_all_forecast_based"
+                buildings.to_parquet(output_path)
+
+                buildings_centroid["object_type"] = np.select(
+                    [
+                        (
+                            buildings_centroid["elevated_possessions"]
+                            & buildings_centroid["sandbags"]
+                        ),
+                        buildings_centroid["elevated_possessions"],
+                        buildings_centroid["sandbags"],
+                    ],
+                    [
+                        "building_all_forecast_based",
+                        "building_elevated_possessions",
+                        "building_with_sandbags",
+                    ],
+                    default="building_unprotected",
+                )
+        elif self.households.config["adapt"]:
             household_points["building_id"] = (
                 self.households.var.building_id_of_household
             )  # first assign building id to household points gdf
