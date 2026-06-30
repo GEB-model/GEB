@@ -520,10 +520,10 @@ class GEBModel(Module):
                         dt, datetime.time(0)
                     )  # Convert date back to datetime for the multiverse method
 
-                    self.multiverse_forecasts(
-                        forecast_issue_datetime=forecast_datetime,
-                        return_mean_discharge=True,
-                    )  # run the multiverse for the current timestep
+                    # self.multiverse_forecasts(
+                    #     forecast_issue_datetime=forecast_datetime,
+                    #     return_mean_discharge=True,
+                    # )  # run the multiverse for the current timestep
 
                     # after the multiverse has run all members for one day, if warning response is enabled, run the warning system
                     if self.config["agent_settings"]["households"]["warning_response"]:

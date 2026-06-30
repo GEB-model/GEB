@@ -103,8 +103,11 @@ class EarlyWarningModule:
                 raise ValueError("Rivers geometry missing 'width' column")
 
             # Set CRS and buffer in Mercator projection (meters)
-            rivers.set_crs(4326, inplace=True)
-            rivers_mercator = rivers.to_crs(3857)
+            if rivers.crs is None:
+                rivers = rivers.set_crs(4326)
+                rivers_mercator = rivers.to_crs(3857)
+            else:
+                rivers_mercator = rivers.to_crs(3857)
 
             # Separate rivers with width values from those with NaN width
             rivers_with_width = rivers_mercator[rivers_mercator["width"].notna()].copy()
@@ -133,8 +136,8 @@ class EarlyWarningModule:
 
             # Create a single GeoDataFrame with all river geometries
             rivers_mercator_gdf = gpd.GeoDataFrame(
-                {"geometry": all_river_geometries}
-            ).to_crs(3857)
+                geometry=all_river_geometries, crs=3857
+            )
 
             self.logger.info("Created river buffers in Mercator projection for masking")
         else:
