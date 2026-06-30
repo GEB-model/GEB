@@ -69,7 +69,7 @@ class SkillScorePlotInputs:
     Args:
         evaluation_df: Filtered GEB skill-score table.
         external_models: Filtered external skill-score tables keyed by model label.
-        filter_summary: Short human-readable summary of applied filters.
+        filter_summary: Short summary of applied filters.
         minimum_upstream_area_km2: Effective GEB upstream-area threshold (km2).
     """
 
@@ -84,7 +84,7 @@ class GoogleMetricsArchiveModel:
     """Description of one model stored inside Google's metrics archive.
 
     Args:
-        model_name: Human-readable plot label.
+        model_name: plot label.
         csv_name: Normalized CSV file name saved in the external data folder.
         metric_root: Folder inside `metrics.tgz` containing per-metric CSV files.
     """
@@ -300,7 +300,7 @@ def _get_external_model_name(csv_path: Path) -> str:
         csv_path: External skill-score CSV path.
 
     Returns:
-        Human-readable model label.
+        Model label.
     """
     archive_model: GoogleMetricsArchiveModel | None = _ARCHIVE_MODEL_BY_CSV_NAME.get(
         csv_path.name
@@ -421,9 +421,9 @@ def _get_archive_metric_series(
 
     Args:
         metric_df: Metric table with stations as rows and lead times as columns.
-        metric_source: Human-readable source path for diagnostics.
+        metric_source: Source path for diagnostics.
         metric_name: Output metric name.
-        model_name: Human-readable model label for diagnostics.
+        model_name: Model label for diagnostics.
 
     Returns:
         Per-station metric values for lead time 0.
@@ -453,7 +453,7 @@ def _read_external_archive_metric_file(
     Args:
         metric_path: Path to a metric CSV file.
         metric_name: Output metric name.
-        model_name: Human-readable model label for diagnostics.
+        model_name: model label for diagnostics.
 
     Returns:
         Per-station metric values for lead time 0.
@@ -657,7 +657,7 @@ def _save_external_archive_model_csv(
     Args:
         metrics_df: Skill-score table read from Google's metrics archive.
         output_path: CSV file path receiving the normalized metrics.
-        model_name: Human-readable model label.
+        model_name: model label.
         logger: Logger used for processing diagnostics.
     """
     metrics_df.to_csv(output_path)
