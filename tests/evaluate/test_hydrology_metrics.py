@@ -7,7 +7,9 @@ import pandas as pd
 import pytest
 
 from geb.evaluate.hydrology import (
+    DEFAULT_EXTERNAL_EVALUATION_FOLDER,
     _calculate_discharge_validation_metrics,
+    _get_effective_external_evaluation_folder,
     create_validation_df,
 )
 
@@ -86,6 +88,29 @@ def test_rrmse_is_normalized_by_observed_standard_deviation() -> None:
 
     expected_rrmse: float = float(metrics.RMSE / observed_discharge_m3_per_s.std())
     assert metrics.RRMSE == pytest.approx(expected_rrmse)
+
+
+def test_external_folder_default_is_only_used_for_external_plots() -> None:
+    """Default external data folder is derived only when comparisons are enabled."""
+    disabled_folder: str | Path | None = _get_effective_external_evaluation_folder(
+        external_evaluation_folder=None,
+        configured_external_evaluation_folder=None,
+        include_external=False,
+    )
+    enabled_folder: str | Path | None = _get_effective_external_evaluation_folder(
+        external_evaluation_folder=None,
+        configured_external_evaluation_folder=None,
+        include_external=True,
+    )
+    custom_folder: str | Path | None = _get_effective_external_evaluation_folder(
+        external_evaluation_folder=Path("custom_external"),
+        configured_external_evaluation_folder=None,
+        include_external=True,
+    )
+
+    assert disabled_folder is None
+    assert enabled_folder == DEFAULT_EXTERNAL_EVALUATION_FOLDER
+    assert custom_folder == Path("custom_external")
 
 
 def _write_hourly_discharge_report(

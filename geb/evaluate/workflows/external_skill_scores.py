@@ -1060,7 +1060,7 @@ def read_external_evaluation_raw(
     configured_external_evaluation_folder: str | Path | None,
     model_folder: Path,
     logger: logging.Logger,
-    auto_fetch_google_streamflow: bool = True,
+    auto_fetch_google_streamflow: bool = False,
 ) -> dict[str, pd.DataFrame]:
     """Read external model skill-score CSVs and optional Google metrics.
 
@@ -1443,7 +1443,7 @@ def prepare_skill_score_boxplot_inputs(
     include_geb: bool,
     matched_only: bool,
     include_external: bool = True,
-    auto_fetch_google_streamflow: bool = True,
+    auto_fetch_google_streamflow: bool = False,
     archive_models_only: bool = False,
 ) -> SkillScorePlotInputs:
     """Prepare GEB and external skill-score tables for boxplot rendering.
@@ -1577,7 +1577,7 @@ def prepare_pairwise_skill_score_boxplot_inputs(
     output_folder: Path,
     logger: logging.Logger,
     minimum_upstream_area_km2: float,
-    auto_fetch_google_streamflow: bool = True,
+    auto_fetch_google_streamflow: bool = False,
     archive_models_only: bool = False,
     archive_evaluation_metrics_path: Path | None = None,
 ) -> dict[str, SkillScorePlotInputs]:

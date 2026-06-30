@@ -3,20 +3,31 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Any, Protocol
 
-if TYPE_CHECKING:
-    from geb.evaluate.hydrology import Hydrology
+
+class DischargeSkillScoreSummaryHydrology(Protocol):
+    """Interface required by the discharge skill-score summary workflow."""
+
+    def plot_skill_score_maps(self, **kwargs: Any) -> None:
+        """Plot discharge skill-score maps."""
+        ...
+
+    def plot_skill_score_boxplots(self, **kwargs: Any) -> None:
+        """Plot discharge skill-score boxplots."""
+        ...
+
+    def plot_skill_scores_vs_upstream_area(self, **kwargs: Any) -> None:
+        """Plot discharge skill scores against upstream area."""
+        ...
 
 
 def create_discharge_skill_score_summary(
-    hydrology: Hydrology,
+    hydrology: DischargeSkillScoreSummaryHydrology,
     *,
     export: bool = True,
     minimum_upstream_area_km2: float | None = None,
     external_evaluation_folder: str | Path | None = None,
-    include_geb: bool = True,
-    matched_only: bool = False,
     include_external: bool = False,
     start_year: int | None = None,
     end_year: int | None = None,
@@ -32,9 +43,7 @@ def create_discharge_skill_score_summary(
         export: Whether to save generated figures.
         minimum_upstream_area_km2: Minimum modeled upstream area included (km2).
         external_evaluation_folder: Optional external skill-score data folder.
-        include_geb: Whether boxplots include GEB scores.
-        matched_only: Whether boxplots use only externally matched stations.
-        include_external: Whether non-matched boxplots include external models.
+        include_external: Whether external comparison plots are included.
         start_year: First calendar year included in the summary.
         end_year: Last calendar year included in the summary.
     """
@@ -47,12 +56,11 @@ def create_discharge_skill_score_summary(
     hydrology.plot_skill_score_maps(
         **shared_options,
         external_evaluation_folder=external_evaluation_folder,
+        include_external=include_external,
     )
     hydrology.plot_skill_score_boxplots(
         **shared_options,
         external_evaluation_folder=external_evaluation_folder,
-        include_geb=include_geb,
-        matched_only=matched_only,
         include_external=include_external,
     )
     hydrology.plot_skill_scores_vs_upstream_area(**shared_options)

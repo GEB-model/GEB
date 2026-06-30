@@ -38,8 +38,6 @@ def test_create_discharge_skill_score_summary_coordinates_outputs() -> None:
         export=False,
         minimum_upstream_area_km2=400.0,
         external_evaluation_folder=external_folder,
-        include_geb=False,
-        matched_only=True,
         include_external=True,
         start_year=2014,
         end_year=2021,
@@ -51,5 +49,7 @@ def test_create_discharge_skill_score_summary_coordinates_outputs() -> None:
         "upstream_area",
     ]
     assert recorder.calls[0][1]["external_evaluation_folder"] == external_folder
-    assert recorder.calls[1][1]["matched_only"] is True
+    assert recorder.calls[0][1]["include_external"] is True
+    assert "matched_only" not in recorder.calls[1][1]
+    assert "include_geb" not in recorder.calls[1][1]
     assert recorder.calls[2][1]["minimum_upstream_area_km2"] == 400.0

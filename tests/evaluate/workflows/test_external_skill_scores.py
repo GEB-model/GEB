@@ -86,6 +86,23 @@ def test_read_external_evaluation_raw_warns_when_csv_data_are_missing(
     assert "PCR-GLOBWB/Utrecht" in caplog.text
 
 
+def test_read_external_evaluation_raw_does_not_create_missing_folder_by_default(
+    tmp_path: Path,
+) -> None:
+    """Missing external folders are not created unless archive fetching is requested."""
+    external_folder: Path = tmp_path / "external"
+
+    external_models: dict[str, pd.DataFrame] = read_external_evaluation_raw(
+        external_evaluation_folder=None,
+        configured_external_evaluation_folder=external_folder,
+        model_folder=tmp_path,
+        logger=logging.getLogger(__name__),
+    )
+
+    assert external_models == {}
+    assert not external_folder.exists()
+
+
 def test_prepare_skill_score_boxplot_inputs_matches_after_geb_filter(
     tmp_path: Path,
 ) -> None:
@@ -381,6 +398,7 @@ def test_read_external_evaluation_raw_fetches_google_metrics(
         configured_external_evaluation_folder=external_folder,
         model_folder=tmp_path,
         logger=logging.getLogger(__name__),
+        auto_fetch_google_streamflow=True,
     )
 
     google_df: pd.DataFrame = external_models[GOOGLE_STREAMFLOW_MODEL_NAME]

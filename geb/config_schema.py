@@ -221,8 +221,8 @@ class DischargeEvaluationConfig(BaseModel):
         description="Minimum paired observation-simulation timeseries length for stations included in discharge evaluation (years).",
     )
     external_evaluation_folder: str | None = Field(
-        "external_evaluation_data/",
-        description="Folder with external discharge evaluation CSV files. Relative paths are resolved from the model folder.",
+        None,
+        description="Optional folder with external discharge evaluation CSV files. Relative paths are resolved from the model folder.",
     )
 
 
