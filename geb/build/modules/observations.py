@@ -452,7 +452,7 @@ class Observations(BuildModelBase):
         )
         self.set_geom(stations, name="observations/meteorological_station_locations")
 
-    @build_method(depends_on=["setup_hydrography"], required=True)
+    @build_method(required=True)
     def setup_groundwater_well_observations(self) -> None:
         """Set up groundwater level observations from the GROW dataset.
 
@@ -473,3 +473,15 @@ class Observations(BuildModelBase):
 
         self.set_table(timeseries, name="observations/groundwater_well_timeseries")
         self.set_geom(wells, name="observations/groundwater_well_locations")
+
+    @build_method(required=True)
+    def setup_flood_observations(self) -> None:
+        """Set up flood observations."""
+        floods, flood_maps = self.data_catalog.fetch("worldfloodsv2").read(
+            region=self.region
+        )
+
+        self.set_geom(floods, name="observations/floods")
+
+        for name, flood_map in flood_maps.items():
+            self.set_other(flood_map, name=f"observations/floods/{name}")

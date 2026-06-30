@@ -92,7 +92,11 @@ def write_table(df: pd.DataFrame, fp: Path) -> None:
                 bool_cols.append(name)
             elif pa.types.is_floating(t):
                 float_cols.append(name)
-            elif pa.types.is_string(t) or pa.types.is_binary(t):
+            elif (
+                pa.types.is_string(t)
+                or pa.types.is_large_string(t)
+                or pa.types.is_binary(t)
+            ):
                 dict_cols.append(name)
             else:
                 raise ValueError(f"Unsupported column type {t} for column {name}")
@@ -620,7 +624,17 @@ def check_attrs(da1: xr.DataArray, da2: xr.DataArray) -> bool:
         ):
             assert np.isnan(da2.attrs["_FillValue"]), f"attribute {key} is not equal"
         else:
-            assert da1.attrs[key] == da2.attrs[key], f"attribute {key} is not equal"
+            value1 = da1.attrs[key]
+            value2 = da2.attrs[key]
+            if isinstance(value1, dict):
+                assert isinstance(value2, dict), f"attribute {key} is not equal"
+                assert value1.keys() == value2.keys(), f"attribute {key} is not equal"
+                for sub_key in value1.keys():
+                    assert value1[sub_key] == value2[sub_key], (
+                        f"attribute {key} is not equal"
+                    )
+            else:
+                assert da1.attrs[key] == da2.attrs[key], f"attribute {key} is not equal"
 
     return True
 
@@ -870,6 +884,7 @@ def write_zarr(
         array_encoding: dict[str, Any] = {
             "chunks": storage_chunks,
             "filters": filters,
+            "fill_value": da.attrs["_FillValue"],
         }
         if pre_compressor is not None:
             array_encoding["compressors"] = (
@@ -893,7 +908,9 @@ def write_zarr(
 
         if "time" in da.coords:
             # apply delta encoding to time coordinates, which are often more compressible with this encoding
-            maximum_difference = np.abs(np.diff(da.coords["time"])).max().item()
+            maximum_difference: int = (
+                np.abs(np.diff(da.coords["time"])).max().astype(np.int64).item()
+            )
             if maximum_difference > np.iinfo("i4").max:
                 dtype_to_encode_time = "i8"
             elif maximum_difference > np.iinfo("i2").max:

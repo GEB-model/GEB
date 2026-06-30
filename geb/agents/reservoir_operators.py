@@ -5,12 +5,10 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import numpy.typing as npt
-import pandas as pd
 
 from geb.geb_types import ArrayBool, ArrayFloat32, ArrayFloat64, ArrayInt32
 from geb.store import DynamicArray
 
-from ..hydrology.waterbodies import RESERVOIR
 from .general import AgentBaseClass
 
 if TYPE_CHECKING:
@@ -25,7 +23,6 @@ RESERVOIR_MEMORY_YEARS: int = 20
 class ReservoirOperatorVariables:
     """Variables for the ReservoirOperators agent."""
 
-    active_reservoirs: pd.DataFrame
     reservoir_M_factor: DynamicArray
     storage_year_start: ArrayFloat64
     alpha: ArrayFloat32
@@ -192,18 +189,6 @@ class ReservoirOperators(AgentBaseClass):
 
     def spinup(self) -> None:
         """Initialize the reservoir operators during spinup."""
-        waterbody_data: pd.DataFrame = (
-            self.model.hydrology.waterbodies.var.waterbody_data[
-                self.model.hydrology.waterbodies.var.waterbody_data["waterbody_type"]
-                == 2
-            ].copy()
-        )
-
-        assert (waterbody_data["volume_total"] > 0).all()
-        self.var.active_reservoirs = waterbody_data[
-            waterbody_data["waterbody_type"] == RESERVOIR
-        ]
-
         # Based on Shin et al. (2019)
         # https://agupubs.onlinelibrary.wiley.com/doi/10.1029/2018WR023025
         self.var.reservoir_M_factor: DynamicArray = DynamicArray(
@@ -224,8 +209,13 @@ class ReservoirOperators(AgentBaseClass):
         )
 
         total_monthly_inflow: ArrayFloat64 = (
-            self.var.active_reservoirs["average_discharge"].values * 30 * 24 * 3600
-        )
+            self.model.hydrology.waterbodies.var.average_discharge_m3_per_s
+            * 30
+            * 24
+            * 3600
+        )[
+            self.model.hydrology.waterbodies.is_reservoir
+        ]  # convert from m3/s to m3/month, assuming 30 days in a month
 
         # Make all reservoirs irrigation reservoirs. This could be changed in the future
         self.var.reservoir_purpose = np.full_like(
@@ -243,15 +233,15 @@ class ReservoirOperators(AgentBaseClass):
             :, np.newaxis
         ]
 
-        self.var.multi_year_monthly_total_irrigation_demand_m3: ArrayFloat32 = (
+        self.var.multi_year_monthly_total_irrigation_demand_m3 = (
             self.var.multi_year_monthly_total_inflow * 0.25
         )
 
-        self.var.multi_year_monthly_usable_command_area_release_m3: ArrayFloat32 = (
+        self.var.multi_year_monthly_usable_command_area_release_m3 = (
             self.var.multi_year_monthly_total_inflow * 0.25
         )
 
-        self.var.hydrological_year_counter: int = (
+        self.var.hydrological_year_counter = (
             0  # Number of hydrological years for each reservoir
         )
 

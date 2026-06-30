@@ -9,6 +9,7 @@ import pstats
 import shutil
 import subprocess
 import sys
+import time
 import zipfile
 from collections.abc import Callable
 from datetime import datetime
@@ -159,29 +160,38 @@ def parse_config(
 def create_logger(name: str) -> logging.Logger:
     """Create logger with console and file handler.
 
+    Notes:
+        hydromt-sfincs uses its own logger. Here, we capture that logger and set it to the same level and handlers as
+        our main logger to ensure we also capture its logs.
+
     Args:
         name: Name of the logger.
     Returns:
         Logger instance.
     """
     logger: logging.Logger = logging.getLogger(name)
+    sfincslogger = logging.getLogger(name="hydromt.hydromt_sfincs")
 
     if logger.handlers:
         return logger
 
-    # set log level to debug
-    logger.setLevel(logging.DEBUG)
-    # create console handler and set level to debug
-    ch: logging.StreamHandler[TextIO] = logging.StreamHandler()
-    ch.setLevel(logging.DEBUG)
-    # create formatter
+    loglevel = logging.DEBUG
     formatter = logging.Formatter(
         "%(asctime)s - %(levelname)s - %(message)s", datefmt="%d-%m %H:%M:%S"
     )
-    # add formatter to ch
-    ch.setFormatter(formatter)
-    # add ch to logger
-    logger.addHandler(ch)
+    formatter.converter = time.localtime
+
+    # set log level to debug
+    logger.setLevel(loglevel)
+    sfincslogger.setLevel(loglevel)
+
+    # create console handler and set level to debug
+    streamhandler: logging.StreamHandler[TextIO] = logging.StreamHandler()
+    streamhandler.setLevel(loglevel)
+    streamhandler.setFormatter(formatter)
+
+    logger.addHandler(streamhandler)
+    sfincslogger.addHandler(streamhandler)
 
     # prevent double logging
     logger.propagate = False
@@ -189,14 +199,14 @@ def create_logger(name: str) -> logging.Logger:
     # add file handler
     folder = Path("logs")
     folder.mkdir(exist_ok=True, parents=True)
-    fp = folder / f"{name}.log"
-    # mode='w' clears the existing file rather than deleting and recreating it.
-    # Deleting it would cause the shell and Python to write to different files,
-    # so error messages would never appear in build.log.
-    fh = logging.FileHandler(fp, mode="w")
-    fh.setLevel(logging.DEBUG)
-    fh.setFormatter(formatter)
-    logger.addHandler(fh)
+
+    filehandler = logging.FileHandler(folder / f"{name}.log", mode="w")
+    filehandler.setLevel(loglevel)
+    filehandler.setFormatter(formatter)
+
+    logger.addHandler(filehandler)
+    sfincslogger.addHandler(filehandler)
+
     return logger
 
 

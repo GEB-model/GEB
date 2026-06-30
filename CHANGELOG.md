@@ -1,4 +1,24 @@
 # dev
+- Add a `--method-arg KEY=VALUE` option to `geb exec` (e.g., `geb exec estimate_return_periods --method-arg run_name=default`) and fix spinup and run discharge not being concatenated for return period estimation.
+- Add hydrograph shape methods for floods. Instead of assuming a triangular shape, the shape of the hydrograph can now be derived from historical GEB discharge.
+- Add a CLI option to run yearly mode multiple times (e.g., `geb run-yearly --multi --n-runs 5`) and write each run to its own output folder.
+- Implement general method for setting up an alternative universe.
+- Make it possible to report data from the alternative universe.
+
+# v1.0.0b29
+- Load return-period flood maps from the spinup output folder (output/{spinup_name}/flood_maps/{return_period}.zarr).
+- Re-organize evaluate hydrodynamics to have all functions outside the method body.
+- Make destination earth API more robust (twice).
+- Use localtime rather that UTC time for logging.
+- Use Event tuple rather than dictionary to track events through model.
+- Refactor evaluation of hydrodynamics. There is now a new "evaluate_flood" that evaluates the flood observations set in the build process. In the future, "evaluate_hydrodynamics" should be removed entirely, but we first need to add the ability to add custom flood maps to the setup_flood_observations build method.
+- Several fixes for hydromt-sfincs 2.0.
+- Update to pandas 3.0. This update has been prepared for a while and tested, but there may be potential issues popping up due to different copy behaviour in pandas 3.0. See [here](https://pandas.pydata.org/docs/whatsnew/v3.0.0.html#consistent-copy-view-behaviour-with-copy-on-write) for more details.
+
+# v1.0.0b28
+- Add setup_flood_observations build method working with WorldFloodsV2
+- Automatically run SFINCS for events that are set up for validation in addition to configured events.
+- Fix: also set nodata in zarr default zarr.json-file for correct displaying in QGIS.
 - Require MERIT Hydro dir/elv tiles to be downloaded manually and report missing tile filenames during build.
 - Update MODFLOW to v6.7 ([#801](https://github.com/GEB-model/GEB/issues/801)).
 - Reorganize output folder so that all output files are saved under the run name ([#852](https://github.com/GEB-model/GEB/issues/852)). This allows us to keep files from different runs nicely separated.
@@ -14,6 +34,8 @@ Important notes:
 - Make model building fully deterministic ([#821](https://github.com/GEB-model/GEB/issues/821)).
 - Implement retry mechanism for 429 web error GLOPOP-SG data adapter. Zenodo rate limited making too many range requests. If we get rate limited now, we now go to sleep for a bit and try again later.
 - Further reduce memory use of reporter by using numpy views for identical time series data.
+- In a recent change, discharges were explicitly set to nan in waterbodies (good). This led to a case where rivers had 0 river width in the hydrodynamic model, which led to raised errors. Now, we fix this by looking further downstream of waterbodies to find a valid discharge for estimating river widths. This is also better, because perviously the default alpha for river width was used.
+- Do not simulate flood events for rivers that are fully in waterbodies. We do so by updating the "represented_in_grid" for water bodies.
 - In a recent change, discharges were explictly set to nan in reservoirs (good). This led to a case where rivers had 0 river width in the hydrodynamic model, which led to raised errors. Now, we fix this by looking further downstream of reservoirs to find a valid discharge for estimating river widths. This is also better, because perviously the default alpha for river width was used.
 - Add `geb tool merge` command to merge outputs from multiple GEB cluster sub-models into a single merged model directory that can be evaluated directly with `geb evaluate`.
 - Add `plot_skill_score_maps()` to plot skill scores per station on a satellite basemap for each metric.

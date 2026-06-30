@@ -6,9 +6,8 @@ import inspect
 import json
 import subprocess
 import sys
-from operator import attrgetter
 from pathlib import Path
-from typing import Any, Callable, cast
+from typing import Any, Callable
 
 import click
 
@@ -51,14 +50,11 @@ def get_available_evaluation_methods() -> list[str]:
     Returns:
         Sorted list of fully-qualified evaluation method names.
     """
-    evaluator = Evaluate(cast(Any, None))
     available_methods: list[str] = []
 
-    for sub_name in evaluator.sub_evaluators:
-        sub_evaluator = getattr(evaluator, sub_name)
-
+    for sub_name, sub_cls in Evaluate.SUB_EVALUATOR_CLASSES.items():
         # This returns a list of (name, value) tuples for methods only
-        methods = inspect.getmembers(sub_evaluator, predicate=inspect.ismethod)
+        methods = inspect.getmembers(sub_cls, predicate=inspect.isfunction)
 
         for attr_name, _ in methods:
             if not attr_name.startswith("_"):
@@ -296,6 +292,53 @@ def run(**kwargs: Any) -> None:
 
 @cli.command()
 @click_run_options()
+@click.option(
+    "--multi",
+    is_flag=True,
+    default=False,
+    help="Run yearly mode multiple times.",
+)
+@click.option(
+    "--n-runs",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Number of yearly runs. Required when --multi is set.",
+)
+def run_yearly(multi: bool, n_runs: int | None, **kwargs: Any) -> None:
+    """Run model in yearly mode.
+
+    Can be run after model spinup.
+
+    Args:
+        multi: If True, run yearly mode multiple times.
+        n_runs: Number of runs when ``multi`` is True.
+        **kwargs: Keyword arguments to pass to the run_yearly function.
+
+    Raises:
+        click.ClickException: If ``--multi`` is set without ``--n-runs``, or if
+            ``--n-runs`` is provided without ``--multi``.
+    """
+    if multi and n_runs is None:
+        raise click.ClickException("--n-runs is required when --multi is set.")
+
+    if not multi and n_runs is not None:
+        raise click.ClickException("--n-runs can only be used together with --multi.")
+
+    if not multi:
+        run_model_with_method(method="run_yearly", **kwargs)
+        return
+
+    assert n_runs is not None
+    for run_id in range(n_runs):
+        run_model_with_method(
+            method="run_yearly",
+            method_args={"model_name": f"run_{run_id}"},
+            **kwargs,
+        )
+
+
+@cli.command()
+@click_run_options()
 def spinup(**kwargs: Any) -> None:
     """Run model spinup.
 
@@ -310,15 +353,35 @@ def spinup(**kwargs: Any) -> None:
 
 @cli.command()
 @click.argument("method", required=True)
+@click.option(
+    "--method-arg",
+    "method_args_raw",
+    multiple=True,
+    metavar="KEY=VALUE",
+    help="Argument to pass to the method, as KEY=VALUE. Can be repeated.",
+)
 @click_run_options()
-def exec(method: str, **kwargs: Any) -> None:
+def exec(method: str, method_args_raw: tuple[str, ...], **kwargs: Any) -> None:
     """Execute a specific method on the model.
 
     Args:
         method: Method to run on the model.
+        method_args_raw: Arguments to pass to the method, as KEY=VALUE strings.
         **kwargs: Keyword arguments to pass to the method.
+
+    Raises:
+        click.ClickException: If a --method-arg value is not in KEY=VALUE format.
     """
-    run_model_with_method(method=method, **kwargs)
+    method_args: dict[str, str] = {}
+    for raw_arg in method_args_raw:
+        if "=" not in raw_arg:
+            raise click.ClickException(
+                f"Invalid --method-arg {raw_arg!r}, expected format KEY=VALUE."
+            )
+        key, value = raw_arg.split("=", 1)
+        method_args[key] = value
+
+    run_model_with_method(method=method, method_args=method_args, **kwargs)
 
 
 def click_build_options(
@@ -638,11 +701,12 @@ def evaluate(
         # If it's method help, show method docstring
 
         try:
-            evaluator = Evaluate(cast(Any, None))
-            attr = attrgetter(method)(evaluator)
+            sub_name, method_name = method.split(".")
+            sub_cls = Evaluate.SUB_EVALUATOR_CLASSES[sub_name]
+            method_func = getattr(sub_cls, method_name)
             click.echo(f"\nHelp for method '{method}':\n")
-            if attr.__doc__:
-                click.echo(attr.__doc__)
+            if method_func.__doc__:
+                click.echo(method_func.__doc__)
             else:
                 click.echo("No documentation found for this method.")
         except Exception:
