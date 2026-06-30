@@ -90,7 +90,6 @@ class EarlyWarningModule:
 
         Raises:
             FileNotFoundError: If no flood maps are found for the specified date time.
-            FileExistsError: If multiple flood maps are found for the specified date time.
             ValueError: If rivers geometry is missing the 'width' column.
         """
         # Load and prepare river mask once (will be applied to all members)
