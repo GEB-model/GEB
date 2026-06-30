@@ -1581,7 +1581,7 @@ class SFINCSRootModel:
         # prepare coastal timeseries and locations
         timeseries = pd.read_csv(
             Path(
-                f"output/hydrographs/gtsm_spring_tide_hydrograph_rp{return_period:04d}.csv"
+                f"output/spinup/hydrographs/gtsm_spring_tide_hydrograph_rp{return_period:04d}.csv"
             ),
             index_col=0,
         )
