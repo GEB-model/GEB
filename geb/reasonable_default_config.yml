@@ -21,7 +21,6 @@ general:
 
 hazards:
   floods:
-    damage_model: global
     simulate: false
     forcing_method: accumulated_runoff  # headwater_points, accumulated_runoff
     minimum_flood_depth: 0.05
@@ -59,7 +58,7 @@ hazards:
     observation_files:
     - 20210712T090000 - 20210720T090000.zarr # list of observations files for all floods, should be formatted start date - end date.zarr
   damage:
-    simulate: true
+    simulate: false
   erosion:
     simulate: false
 

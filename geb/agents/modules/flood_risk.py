@@ -614,9 +614,12 @@ class FloodRiskModule:
             NotImplementedError: If the flood function is not implemented for the global damage model.
             ValueError: If both warning response and adaptation are enabled in the model configuration, as this may lead to unintended consequences.
         """
-        if self.model.config["hazards"]["floods"]["damage_model"] == "global":
+        if (
+            "damage_model/flood/residential/content/maximum_damage"
+            not in self.model.files["dict"]
+        ):
             raise NotImplementedError(
-                "The flood function is not implemented for the global damage model yet."
+                "The model was probably build with the damage_model set to global. This funcion is not yet implemented for the global damage model. Please rebuild the damage model with the local model (geul) instead."
             )
 
         flood_depth: xr.DataArray = flood_depth.compute()
