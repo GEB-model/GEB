@@ -202,6 +202,7 @@ def plot_forecasts(
 
     # Calculate ensemble mean and add to plot
     ensemble_mean = sum(ensemble_data) / len(ensemble_data)  # ensemble mean
+    assert isinstance(ensemble_mean, xr.DataArray), "Ensemble mean is not a DataArray"
     ax_time.plot(
         ensemble_mean.time,
         ensemble_mean,
@@ -393,7 +394,7 @@ def create_gif_climate_data_over_time(
             da_plot = da_plot.cumsum(dim="time")  # convert to accumulated precipitation
             ylabel = "mm"  # set y-axis label
             name += "_accumulated"
-            viridis = cm.get_cmap("viridis")
+            viridis = cm.get_cmap("viridis")  # ty:ignore[unresolved-attribute]
             viridis_colors = viridis(
                 np.linspace(0, 1, 25)
             )  # The more colors, the smoother the gradient but more movement in cbar during animation
@@ -533,7 +534,7 @@ def create_gif_climate_data_over_time(
 
     # Saving GIF
     gif_fp: Path = report_dir / f"{name}_animation.gif"  # File path for GIF
-    imageio.mimsave(gif_fp, frames, fps=5)
+    imageio.mimsave(gif_fp, frames, fps=5)  # ty:ignore[no-matching-overload]
 
 
 def plot_forcing(

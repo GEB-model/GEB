@@ -9,6 +9,7 @@ import pandas as pd
 import pyflwdir
 import pyflwdir.core
 from numba import njit
+from tqdm import tqdm
 
 from geb.geb_types import (
     ArrayBool,
@@ -25,6 +26,7 @@ from geb.geb_types import (
 from geb.module import Module
 from geb.store import Bucket
 from geb.workflows import balance_check
+from geb.workflows.extreme_value_analysis import ReturnPeriodModel
 from geb.workflows.io import read_geom, read_table
 
 if TYPE_CHECKING:
@@ -1558,6 +1560,9 @@ class RoutingVariables(Bucket):
 
     discharge_step_count: int
     sum_of_all_discharge_steps: ArrayFloat64
+    rivers: gpd.GeoDataFrame
+    river_ids: ArrayInt32
+    river_ids_no_waterbodies_removed: ArrayInt32
 
 
 class Routing(Module):
@@ -1606,23 +1611,9 @@ class Routing(Module):
             ldd_uncompressed=ldd_uncompressed, mask=mask
         )
 
-        is_waterbody: TwoDArrayBool = (
-            self.grid.load2d(
-                self.model.files["grid"]["waterbodies/waterbody_id"], compress=False
-            )
-            != -1
-        )
-
-        self.rivers, self.river_ids, self.river_ids_no_waterbodies_removed = (
-            self.load_rivers(
-                grid_linear_mapping=self.grid.linear_mapping,
-                is_waterbody=is_waterbody,
-            )
-        )
         self.basin_ids: TwoDArrayInt32 = self.hydrology.grid.load2d(
             self.model.files["grid"]["routing/basin_ids"], compress=False
         )
-        self.active_rivers = self.get_active_rivers()
 
         self.retention_basin_ids: ArrayInt32 = self.grid.load2d(
             self.model.files["grid"]["routing/retention_basin_ids"],
@@ -1705,17 +1696,22 @@ class Routing(Module):
     def load_rivers(
         self,
         grid_linear_mapping: TwoDArrayInt32,
-        is_waterbody: TwoDArrayBool,
     ) -> tuple[gpd.GeoDataFrame, ArrayInt32, ArrayInt32]:
         """Load the river network geometries.
 
         Args:
             grid_linear_mapping: A 2D array mapping grid cells to linear indices.
-            is_waterbody: A 2D boolean array indicating which cells are waterbodies.
 
         Returns:
             A GeoDataFrame containing the river network geometries, the updated river IDs and the original river IDs before removing waterbodies.
         """
+        is_waterbody: TwoDArrayBool = (
+            self.grid.load2d(
+                self.model.files["grid"]["waterbodies/waterbody_id"], compress=False
+            )
+            != -1
+        )
+
         rivers: gpd.GeoDataFrame = read_geom(self.model.files["geom"]["routing/rivers"])
 
         # set river ID to -1 for waterbody cells
@@ -1832,6 +1828,15 @@ class Routing(Module):
         5. Initialize discharge variables and counters.
 
         """
+        (
+            self.var.rivers,
+            self.var.river_ids,
+            self.var.river_ids_no_waterbodies_removed,
+        ) = self.load_rivers(
+            grid_linear_mapping=self.grid.linear_mapping,
+        )
+        self.var.active_rivers = self.get_active_rivers()
+
         self.grid.var.upstream_area = self.grid.load2d(
             self.model.files["grid"]["routing/upstream_area_m2"]
         )
@@ -2107,20 +2112,19 @@ class Routing(Module):
             0, dtype=np.float32
         )
 
+        # update alpha and beta once per day
+        if self.model.in_spinup:
+            (
+                self.hydrology.grid.var.river_width_alpha,
+                self.hydrology.grid.var.river_width_beta,
+            ) = self.get_river_width_alpha_and_beta(
+                default_alpha=self.config["river_width"]["parameters"]["default_alpha"],
+                beta=self.config["river_width"]["parameters"]["beta"],
+            )
+
         for hour in range(24):
             # increment inflow index for next hour
             self.inflow_idx += 1
-
-            if self.model.in_spinup:
-                (
-                    self.hydrology.grid.var.river_width_alpha,
-                    self.hydrology.grid.var.river_width_beta,
-                ) = self.get_river_width_alpha_and_beta(
-                    default_alpha=self.config["river_width"]["parameters"][
-                        "default_alpha"
-                    ],
-                    beta=self.config["river_width"]["parameters"]["beta"],
-                )
 
             total_runoff_m3: np.ndarray = (
                 total_runoff_m[hour, :] * self.grid.var.cell_area
@@ -2320,7 +2324,7 @@ class Routing(Module):
             )
 
             # after filling the gaps, we should not have any nans in the river cells
-            assert not np.isnan(discharge_m3_s_substep[self.river_ids != -1]).any()
+            assert not np.isnan(discharge_m3_s_substep[self.var.river_ids != -1]).any()
 
             self.grid.var.discharge_m3_s_per_substep[hour, :] = discharge_m3_s_substep
 
@@ -2364,6 +2368,11 @@ class Routing(Module):
         self.grid.var.discharge_m3_s = self.grid.var.discharge_m3_s_per_substep.mean(
             axis=0
         )
+
+        if not self.model.in_spinup and (
+            self.model.current_day_of_year == 1 or self.model.current_timestep == 0
+        ):
+            self.update_return_periods()
 
         if __debug__:
             # TODO: make dependent on routing step length
@@ -2467,7 +2476,7 @@ class Routing(Module):
         Returns:
             A GeoDataFrame containing the outflow rivers.
         """
-        rivers: gpd.GeoDataFrame = self.rivers
+        rivers: gpd.GeoDataFrame = self.var.rivers
         rivers = rivers[~rivers["is_downstream_outflow"]]
 
         # TODO: Remove the if statement in March 2026. The part selection behind the statement
@@ -2485,7 +2494,7 @@ class Routing(Module):
         Returns:
             A GeoDataFrame containing the active rivers.
         """
-        rivers: gpd.GeoDataFrame = self.rivers
+        rivers: gpd.GeoDataFrame = self.var.rivers
         active_rivers = rivers[
             (~rivers["is_downstream_outflow"])
             & (~rivers["is_further_downstream_outflow"])
@@ -2521,8 +2530,70 @@ class Routing(Module):
         Returns:
             A GeoDataFrame containing the active rivers and the downstream outflow rivers.
         """
-        rivers: gpd.GeoDataFrame = self.rivers
+        rivers: gpd.GeoDataFrame = self.var.rivers
         active_and_downstream_outflow_rivers = rivers[
             ~rivers["is_further_downstream_outflow"]
         ]
         return active_and_downstream_outflow_rivers.copy()
+
+    def update_return_periods(self) -> None:
+        """Update the return periods for the routing module.
+
+        Raises:
+            ValueError: If the model is still in the spinup period, return periods cannot be updated.
+        """
+        if self.model.in_spinup:
+            raise ValueError(
+                "Return periods can only be updated after the spinup period is completed."
+            )
+
+        active_rivers: gpd.GeoDataFrame = self.get_active_rivers()
+        discharge_by_river: pd.DataFrame = get_discharge_per_river(
+            rivers=active_rivers,
+            all_rivers=self.var.rivers,
+            source="file",
+            folder=self.model.report_folder.parent.parent
+            / self.model.config["general"]["spinup_name"]
+            / "report"
+            / "hydrology.routing",
+        )
+
+        if self.model.current_timestep > 0:
+            discharge_by_river_run: pd.DataFrame = get_discharge_per_river(
+                rivers=active_rivers,
+                all_rivers=self.var.rivers,
+                source="memory",
+                variables_to_report=self.variables_to_report,
+            )
+
+            discharge_by_river: pd.DataFrame = pd.concat(
+                [discharge_by_river, discharge_by_river_run], axis=0
+            )
+
+        discharge_by_river_daily: pd.DataFrame = discharge_by_river.resample("D").mean()
+
+        discharge_by_river_daily.index.freq = pd.infer_freq(  # ty:ignore[unresolved-attribute]
+            discharge_by_river_daily.index  # ty:ignore[invalid-argument-type]
+        )
+        for idx in tqdm(
+            active_rivers.index,
+            total=len(active_rivers),
+            desc="Return period estimation",
+        ):
+            model = ReturnPeriodModel(
+                series=discharge_by_river_daily[idx],
+                return_periods=[2],
+                min_exceed=30,
+                nboot=2000,
+                fixed_shape=0.0,
+                fixed_scale=None,
+                p_value_threshold=0.05,
+                selection_strategy="first_significant",
+            )
+
+            for return_period, return_water_level in model.rl_table.set_index(
+                "T_years"
+            )["GPD_POT_RL"].items():
+                self.var.rivers.loc[
+                    idx, f"return_period_{return_period}_years_daily_m3_per_s"
+                ] = return_water_level

@@ -86,7 +86,7 @@ class FloodsConfig(BaseModel):
     """Configuration for flood simulation."""
 
     simulate: bool = Field(False, description="Whether to simulate floods.")
-    subbasins: int | list[int] | Literal["all"] = Field(
+    subbasins: list[int] | Literal["all"] | Literal["auto"] = Field(
         "all",
         description="Subbasin ID, list of subbasin IDs, or 'all' to simulate all subbasins. Only works for flood events currently.",
     )

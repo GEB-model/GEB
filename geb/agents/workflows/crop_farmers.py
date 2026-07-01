@@ -1342,7 +1342,7 @@ def crop_profit_difference_total(
     unique_gain = np.zeros((n_groups, n_calendars, n_cols), dtype=np.float32)
     id_to_switch_to = np.full((n_groups, n_calendars), -1, dtype=np.int32)
 
-    for group_id in prange(n_groups):
+    for group_id in prange(n_groups):  # ty:ignore[not-iterable]
         unique_group = unique_crop_groups[group_id]
 
         # membership mask for this group

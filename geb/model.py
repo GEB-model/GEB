@@ -885,6 +885,8 @@ class GEBModel(Module):
     def current_day_of_year(self) -> int:
         """Gets the current day of the year.
 
+        The first of January is 1, the second of January is 2, and so on.
+
         Returns:
             day: current day of the year.
         """

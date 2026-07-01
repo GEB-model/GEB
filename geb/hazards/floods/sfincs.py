@@ -110,6 +110,29 @@ class SFINCSRootModel:
         self.sfincs_model = None
 
     @property
+    def sfincs_model(self) -> SfincsModel:
+        """Gets the SFINCS model instance.
+
+        Returns:
+            The SFINCS model instance if it exists, None otherwise.
+
+        Raises:
+            ValueError: if the SFINCS model has not been built yet.
+        """
+        if self._sfincs_model is None:
+            raise ValueError("SFINCS model has not been built yet.")
+        return self._sfincs_model
+
+    @sfincs_model.setter
+    def sfincs_model(self, value: SfincsModel | None) -> None:
+        """Sets the SFINCS model instance.
+
+        Args:
+            value: The SFINCS model instance to set.
+        """
+        self._sfincs_model = value
+
+    @property
     def name(self) -> str:
         """Gets the name of the SFINCS model.
 

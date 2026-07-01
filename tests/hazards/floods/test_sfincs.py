@@ -282,7 +282,7 @@ def test_accumulated_runoff(
             )
 
         subbasins = read_geom(geb_model.model.files["geom"]["routing/subbasins"])
-        rivers = geb_model.hydrology.routing.rivers
+        rivers = geb_model.hydrology.routing.var.rivers
         sfincs_models = create_sfincs_models(geb_model, subbasins, rivers, split)
 
         runoff_rate_mm_per_hr: float = 1.0  # mm/hr
@@ -313,10 +313,11 @@ def test_accumulated_runoff(
         runoff_m: xr.DataArray = runoff_m.rio.write_crs(4326)
 
         river_ids = geb_model.hydrology.grid.decompress(
-            geb_model.hydrology.routing.river_ids, fillvalue=-1
+            geb_model.hydrology.routing.var.river_ids, fillvalue=-1
         )
         river_ids_no_waterbodies_removed = geb_model.hydrology.grid.decompress(
-            geb_model.hydrology.routing.river_ids_no_waterbodies_removed, fillvalue=-1
+            geb_model.hydrology.routing.var.river_ids_no_waterbodies_removed,
+            fillvalue=-1,
         )
 
         basin_ids: TwoDArrayInt32 = geb_model.hydrology.grid.load2d(
@@ -480,7 +481,7 @@ def test_discharge_from_nodes(geb_model: GEBModel, use_gpu: bool) -> None:
             subgrid=False,
             subbasins=subbasins,
             name=TEST_MODEL_NAME,
-            rivers=geb_model.hydrology.routing.rivers,
+            rivers=geb_model.hydrology.routing.var.rivers,
         )
 
         event = Event(
@@ -541,7 +542,7 @@ def test_setup_thin_dams(geb_model: GEBModel) -> None:
             subgrid=False,
             subbasins=subbasins,
             name=TEST_MODEL_NAME,
-            rivers=geb_model.hydrology.routing.rivers,
+            rivers=geb_model.hydrology.routing.var.rivers,
         )
 
         # create vertical dam, halfway along the x-axis of the region
@@ -674,7 +675,7 @@ def test_read(geb_model: GEBModel) -> None:
             subgrid=False,
             subbasins=subbasins,
             name=TEST_MODEL_NAME,
-            rivers=geb_model.hydrology.routing.rivers,
+            rivers=geb_model.hydrology.routing.var.rivers,
         )
 
         sfincs_model_read: SFINCSRootModel = SFINCSRootModel(
@@ -724,7 +725,7 @@ def test_coastal_waterlevel_forcing(geb_model: GEBModel) -> None:
             subgrid=False,
             subbasins=subbasins,
             name=TEST_MODEL_NAME,
-            rivers=geb_model.hydrology.routing.rivers,
+            rivers=geb_model.hydrology.routing.var.rivers,
             coastal=True,
             coastal_boundary_exclude_mask=None,
             low_elevation_coastal_zone_mask=gpd.GeoDataFrame(

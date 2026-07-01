@@ -203,7 +203,7 @@ def read_flood_depth(
         vmax=float(flood_depth_m.max().values),
         cmap=flood_cmap,
         cbar_kwargs=cbar_kwargs,
-    )
+    )  # ty:ignore[missing-argument]
 
     ax.set_title("Maximum Water Depth over all time steps")
 

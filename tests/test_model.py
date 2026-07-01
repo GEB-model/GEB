@@ -251,7 +251,7 @@ def test_update_with_method(method: str) -> None:
         method: The update method to test (e.g., 'file', 'dict').
     """
     with WorkingDirectory(working_directory):
-        args: dict[str, str | dict | Path | bool] = DEFAULT_BUILD_ARGS.copy()
+        args: dict[str, Any] = DEFAULT_BUILD_ARGS.copy()
         del args["continue_"]
 
         build_config: dict[str, dict] = parse_config(BUILD_DEFAULT)
@@ -300,7 +300,7 @@ def test_spinup() -> None:
         routing = geb.hydrology.routing
         outflow_rivers = geb.hydrology.routing.outflow_rivers
         routing.observed_average_river_width[
-            routing.river_ids == geb.hydrology.routing.outflow_rivers.iloc[0].name
+            routing.var.river_ids == geb.hydrology.routing.outflow_rivers.iloc[0].name
         ] = RIVER_WIDTH_OUTFLOW_RIVER
 
         geb.step_to_end()

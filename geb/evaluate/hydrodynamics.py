@@ -198,12 +198,6 @@ def calculate_performance_metrics(
     Raises:
         ValueError: If visualization_type is unknown.
     """
-    # check if dask array and if so, compute to load into memory
-    if isinstance(simulated.data, xr.core.dataarray.DataArray):
-        simulated = simulated.compute()
-    if isinstance(observation.data, xr.core.dataarray.DataArray):
-        observation = observation.compute()
-
     simulated = simulated.rio.reproject_match(observation)
 
     rivers: gpd.GeoDataFrame = read_geom(
@@ -332,7 +326,7 @@ def calculate_performance_metrics(
             cloud_cmap = mcolors.ListedColormap(["white"])
             cloud_mask.where(cloud_mask == 1).plot(
                 ax=ax, cmap=cloud_cmap, add_colorbar=False, add_labels=False, zorder=1.1
-            )
+            )  # ty:ignore[missing-argument]
 
             # Invalid: grey, half transparent
             invalid_cmap = mcolors.ListedColormap(["grey"])
@@ -519,7 +513,7 @@ def calculate_performance_metrics(
             cloud_cmap = mcolors.ListedColormap(["white"])
             cloud_mask.where(cloud_mask == 1).plot(
                 ax=ax, cmap=cloud_cmap, add_colorbar=False, add_labels=False, zorder=1.1
-            )
+            )  # ty:ignore[missing-argument]
 
             # Invalid: grey, half transparent
             invalid_cmap = mcolors.ListedColormap(["grey"])

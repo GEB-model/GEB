@@ -86,21 +86,3 @@ def get_river_manning(river_segments: gpd.GeoDataFrame) -> npt.NDArray[np.float3
         Array with Manning's n for each river segment.
     """
     return np.full(len(river_segments), 0.02, dtype=np.float32)
-
-
-def do_mask_flood_plains(sf: SfincsModel) -> None:
-    """Create a floodplain mask using pyflwdir and add it to the SfincsModel as a mask."""
-    elevation, d8 = fill_depressions(sf.grid.dep.values)
-
-    flw = pyflwdir.from_array(
-        d8,
-        transform=sf.grid.rio.transform(recalc=True),
-        latlon=False,
-    )
-    floodplains = flw.floodplains(elevation, upa_min=10)
-
-    mask = xr.full_like(sf.grid.dep, 0, dtype=np.uint8).rename("mask")
-    mask.values = floodplains.astype(mask.dtype)
-    sf.set_grid(mask, name="msk")
-    sf.config.update({"mskfile": "sfincs.msk"})
-    sf.config.update({"indexfile": "sfincs.ind"})

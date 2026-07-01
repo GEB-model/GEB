@@ -2,7 +2,7 @@
 
 import shutil
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 import geopandas as gpd
 import matplotlib.colors as mcolors
@@ -509,7 +509,19 @@ def _format_yearly_timeseries_axis(
 
 def _add_dark_legend(
     axis: plt.Axes,
-    loc: str,
+    loc: Literal[
+        "best",
+        "upper right",
+        "upper left",
+        "lower left",
+        "lower right",
+        "right",
+        "center left",
+        "center right",
+        "lower center",
+        "upper center",
+        "center",
+    ],
     ncol: int,
     fontsize: float,
     bbox_to_anchor: tuple[float, float] | None = None,
@@ -619,7 +631,7 @@ def _plot_outflow_discharge_timeseries(
 
     plots_created: int = 0
     for outflow_file in outflow_files:
-        outflow_series: pd.Series = pd.read_parquet(outflow_file).squeeze()
+        outflow_series: pd.Series = pd.read_parquet(outflow_file).iloc[:, 0]
 
         if np.isnan(outflow_series.values).all():
             model.logger.info(
@@ -3076,7 +3088,7 @@ class Hydrology:
         context_colors: dict[str, str] = {
             "potential_evapotranspiration": "white",
         }
-        context_linestyles: dict[str, str] = {
+        context_linestyles: dict[str, Literal["-", "--", "-.", ":"]] = {
             "potential_evapotranspiration": ":",
         }
         context_linewidths: dict[str, float] = {
@@ -3309,7 +3321,7 @@ class Hydrology:
             "potential_evapotranspiration": "white",
             "transpiration": "#54a24b",
         }
-        top_soil_context_linestyles: dict[str, str] = {
+        top_soil_context_linestyles: dict[str, Literal["-", "--", "-.", ":"]] = {
             "precipitation": ":",
             "runoff": "--",
             "snow": "-.",

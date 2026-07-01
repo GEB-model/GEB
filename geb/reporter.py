@@ -977,7 +977,7 @@ class Reporter:
                         if module_values is True:
                             routing = self.model.hydrology.routing
                             rivers = routing.get_active_and_downstream_outflow_rivers()
-                            all_rivers = routing.rivers
+                            all_rivers = routing.var.rivers
 
                             outflow_reporters = {}
 
@@ -1429,7 +1429,7 @@ class Reporter:
         self,
         module_name: str,
         name: str,
-        value: np.ndarray | np.generic,
+        value: np.ndarray | np.generic | float,
         config: dict,
     ) -> None:
         """Exports an array of values to the export folder.

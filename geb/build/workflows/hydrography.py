@@ -28,11 +28,14 @@ def calculate_shreve_stream_order(rivers: pd.DataFrame) -> pd.Series:
     river_graph = networkx.DiGraph()
 
     # Filter out terminals (downstream_ID == -1) and add edges
+    assert rivers.dtype == "int64", (
+        "Expected rivers DataFrame to have int64 dtype for downstream_ID"
+    )
     edges: list[tuple[int, int]] = [
         (idx, row["downstream_ID"])
         for idx, row in rivers.iterrows()
         if row["downstream_ID"] != -1
-    ]
+    ]  # ty:ignore[invalid-assignment]
     river_graph.add_edges_from(edges)
 
     # Add all river IDs as nodes to ensure isolated segments are included

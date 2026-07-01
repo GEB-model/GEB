@@ -865,8 +865,8 @@ class Hydrography(BuildModelBase):
             river_cells = np.where(river_raster_LR.ravel() == COMID)[0]
             if river_cells.size == 0:
                 continue
-            upstream_area = upstream_area_data.ravel()[river_cells]
-            most_upstream_cell = np.argmin(upstream_area)
+            upstream_area_river_cells = upstream_area_data.ravel()[river_cells]
+            most_upstream_cell = np.argmin(upstream_area_river_cells)
             most_upstream_cell_index = river_cells[most_upstream_cell]
             upstream_river_cells = (flow_raster.idxs_ds == most_upstream_cell_index) & (
                 river_raster_LR.ravel() != -1
@@ -1561,7 +1561,7 @@ class Hydrography(BuildModelBase):
         )
 
         # extrapolate to 2100 using nonlinear trend  between 2015-2050 per station
-        last_year = sea_level_rise_df.index.year.max()
+        last_year = sea_level_rise_df.index.year.max()  # ty:ignore[unresolved-attribute]
         future_years = np.arange(last_year + 1, 2101)
         future_dates = pd.to_datetime([f"{year}-01-01" for year in future_years])
         future_data = {}

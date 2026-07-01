@@ -92,7 +92,7 @@ def test_discharge_dashboards_default_to_static_png_popups() -> None:
 def test_create_discharge_dashboard_requires_existing_metrics(tmp_path: Path) -> None:
     """Test that dashboard-only creation requires a previous discharge evaluation."""
     evaluator: SimpleNamespace = SimpleNamespace(output_folder_evaluate=tmp_path)
-    hydrology = Hydrology(model=SimpleNamespace(), evaluator=evaluator)
+    hydrology = Hydrology(model=SimpleNamespace(), evaluator=evaluator)  # ty:ignore[invalid-argument-type]
 
     with pytest.raises(FileNotFoundError, match="evaluate_discharge"):
         hydrology.create_discharge_dashboard()
