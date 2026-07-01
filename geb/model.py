@@ -856,7 +856,7 @@ class GEBModel(Module):
 
         self._initialize(
             create_reporter=False,
-            in_spinup=run_name == self.model.config["general"]["spinup_name"],
+            in_spinup=False,
             current_time=current_time,
             n_timesteps=0,
             timestep_length=relativedelta(years=1),
@@ -864,6 +864,8 @@ class GEBModel(Module):
             simulate_hydrology=True,
             clean_report_folder=False,
         )
+
+        self.hydrology.routing.update_return_periods()
 
         # ugly switch to determine whether model has coastal basins
         subbasins = read_geom(self.model.files["geom"]["routing/subbasins"])

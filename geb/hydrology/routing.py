@@ -1289,8 +1289,8 @@ class Accuflux(Router):
             # if the node is associated with a retention basin (not -1), we apply the retention logic
             if node_retention_id != -1:
                 # Compute discharge before diversion into ret. basins to check against activation threshold
-                # We use the average flow during the timestep, considering both inflow and existing storage.
-                Q_before_diversion_m3_per_s = (inflow_volume_m3 / dt + Qold[node]) / 2
+                # We use the total flow passing through the node during the timestep.
+                Q_before_diversion_m3_per_s = inflow_volume_m3 / dt + Qold[node]
 
                 # define inflow limit of 20% per ts of max capacity per timestep
                 inflow_limit_m3: np.float32 = (
@@ -1353,7 +1353,7 @@ class Accuflux(Router):
                 # We use a small hysteresis buffer to avoid rapid fluctuations
                 # and we consider the total available water in the reach (Qin + Qold)
                 # to ensure we don't overshoot the threshold.
-                total_available_flow_m3_per_s = Qold[node]
+                total_available_flow_m3_per_s = inflow_volume_m3 / dt + Qold[node]
 
                 if (
                     retention_storage_m3[node_retention_id] > np.float32(0.0)
@@ -1575,7 +1575,6 @@ class Routing(Module):
 
     var: RoutingVariables
     inflow: dict[tuple[int, int], ArrayFloat32]
-    active_rivers: gpd.GeoDataFrame
 
     def __init__(self, model: GEBModel, hydrology: Hydrology) -> None:
         """Initialize the Routing module.
@@ -2570,7 +2569,9 @@ class Routing(Module):
                 [discharge_by_river, discharge_by_river_run], axis=0
             )
 
-        discharge_by_river_daily: pd.DataFrame = discharge_by_river.resample("D").mean()
+        discharge_by_river_daily: pd.DataFrame = discharge_by_river.resample(
+            "D", label="left"
+        ).mean()
 
         discharge_by_river_daily.index.freq = pd.infer_freq(  # ty:ignore[unresolved-attribute]
             discharge_by_river_daily.index  # ty:ignore[invalid-argument-type]

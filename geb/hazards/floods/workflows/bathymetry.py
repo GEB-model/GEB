@@ -60,7 +60,13 @@ def _validate_inputs(
         )
     if rivers.empty:
         raise ValueError("Input 'rivers' GeoDataFrame is empty.")
-    for col in ["width", "depth", "downstream_ID", "manning", "shreve_stream_order"]:
+    for col in [
+        "width",
+        "depth",
+        "downstream_ID",
+        "manning",
+        "topological_stream_order",
+    ]:
         if col not in rivers.columns:
             raise ValueError(f"Required column '{col}' not found in GeoDataFrame.")
     if elevation_grid.rio.crs is None:
@@ -448,8 +454,10 @@ def burn_rivers(
     """
     _validate_inputs(elevation_grid, manning_grid, rivers)
 
-    # Sort rivers by Shreve stream order to ensure headwaters are processed before outlets.
-    rivers: gpd.GeoDataFrame = rivers.sort_values("shreve_stream_order", ascending=True)  # ty:ignore[invalid-assignment]
+    # Sort rivers by topological stream order to ensure headwaters are processed before outlets.
+    rivers: gpd.GeoDataFrame = rivers.sort_values(
+        "topological_stream_order", ascending=True
+    )  # ty:ignore[invalid-assignment]
 
     out_elevation = (
         fill_depressions(elevation_grid.copy()) if fill_first else elevation_grid.copy()

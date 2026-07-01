@@ -903,6 +903,7 @@ def _make_two_cell_router(
     activation_threshold_m3_per_s: float,
     max_storage_m3: float,
     controlled: bool,
+    release_threshold_factor: float = 0.9,
 ) -> tuple[Accuflux, np.ndarray]:
     """Build a minimal two-cell Accuflux router with a single retention basin.
 
@@ -914,6 +915,7 @@ def _make_two_cell_router(
         activation_threshold_m3_per_s: Activation threshold for the basin (m³/s).
         max_storage_m3: Maximum storage of the retention basin (m³).
         controlled: Whether the basin is controlled (True) or uncontrolled (False).
+        release_threshold_factor: Factor to multiply activation threshold to get release threshold.
 
     Returns:
         A tuple of (router, mask) where mask is the boolean 2×1 grid array.
@@ -950,6 +952,7 @@ def _make_two_cell_router(
         controlled_retention=controlled_retention,
         retention_activation_threshold_controlled_m3_s=threshold_controlled,
         retention_activation_threshold_uncontrolled_m3_s=threshold_uncontrolled,
+        retention_basin_release_threshold_factor=release_threshold_factor,
     )
     return router, mask
 
@@ -1282,6 +1285,7 @@ def test_retention_release_at_low_flow() -> None:
         activation_threshold_m3_per_s=activation_threshold,
         max_storage_m3=2000.0,
         controlled=True,
+        release_threshold_factor=0.75,
     )
 
     storage_out, inflow, outflow = _run_retention_step(

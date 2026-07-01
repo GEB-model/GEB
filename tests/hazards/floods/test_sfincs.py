@@ -62,6 +62,7 @@ def geb_model() -> GEBModel:
             config=config, method=None, close_after_run=False
         )
         model.run(initialize_only=True)
+        model.hydrology.routing.update_return_periods()
     return model
 
 
@@ -82,7 +83,7 @@ def create_discharge_timeseries(
     Returns:
         A tuple with the nodes and the timeseries.
     """
-    nodes: gpd.GeoDataFrame = geb_model.hydrology.routing.active_rivers.copy()
+    nodes: gpd.GeoDataFrame = geb_model.hydrology.routing.get_active_rivers().copy()
     nodes["geometry"] = nodes["geometry"].apply(get_start_point)
     nodes.index = list(np.arange(1, len(nodes) + 1))
     timeseries: pd.DataFrame = pd.DataFrame(
@@ -131,9 +132,6 @@ def build_sfincs(
             subbasins=subbasins,
             DEMs=DEM_config,
             rivers=rivers,
-            discharge_by_river=geb_model.hazard_driver.floods.discharge_by_river(
-                run_name="spinup"
-            ),
             river_width_alpha=geb_model.model.hydrology.grid.decompress(
                 geb_model.hydrology.grid.var.river_width_alpha
             ),
@@ -195,7 +193,9 @@ def create_sfincs_models(
         A list of SFINCSRootModel instances.
     """
     if split:
-        river_graph = create_river_graph(geb_model.hydrology.routing.active_rivers)
+        river_graph = create_river_graph(
+            geb_model.hydrology.routing.get_active_rivers()
+        )
 
         # 2e8 nicely splits the test area into 2 parts. If changing the test area, this value
         # may need to be adjusted.
@@ -223,7 +223,7 @@ def create_sfincs_models(
                 subgrid=subgrid,
                 subbasins=subbasins_group,
                 name=f"test_group_{group_id}",
-                rivers=rivers[rivers.index.isin(group)],
+                rivers=rivers,
             )
             sfincs_models.append(sfincs_model)
 
@@ -283,7 +283,9 @@ def test_accumulated_runoff(
 
         subbasins = read_geom(geb_model.model.files["geom"]["routing/subbasins"])
         rivers = geb_model.hydrology.routing.var.rivers
-        sfincs_models = create_sfincs_models(geb_model, subbasins, rivers, split)
+        sfincs_models: list[SFINCSRootModel] = create_sfincs_models(
+            geb_model, subbasins, rivers, split
+        )
 
         runoff_rate_mm_per_hr: float = 1.0  # mm/hr
         runoff_rate_m_per_hr: float = runoff_rate_mm_per_hr / 1000.0

@@ -198,7 +198,6 @@ class SFINCSRootModel:
         DEMs: list[dict[str, str | Path | xr.DataArray | xr.Dataset]],
         subbasins: gpd.GeoDataFrame,
         rivers: gpd.GeoDataFrame,
-        discharge_by_river: pd.DataFrame,
         river_width_alpha: npt.NDArray[np.float32],
         river_width_beta: npt.NDArray[np.float32],
         mannings: xr.DataArray,
@@ -226,7 +225,6 @@ class SFINCSRootModel:
             DEMs: List of DEM datasets to use for the model. Should be a list of dictionaries with 'path' and 'name' keys.
             subbasins: A GeoDataFrame defining the subbasins of interest.
             rivers: A GeoDataFrame containing river segments.
-            discharge_by_river: A pandas DataFrame containing discharge values for the rivers in m^3/s.
             river_width_alpha: An numpy array of river width alpha parameters. Used for calculating river width.
             river_width_beta: An numpy array of river width beta parameters. Used for calculating river width
             mannings: A xarray DataArray of Manning's n values for the rivers.
@@ -541,8 +539,6 @@ class SFINCSRootModel:
         ):
             # resample to daily frequency because this is the frequency for the river
             # width and depth estimation formulas.
-            discharge_by_river = discharge_by_river.resample("D", label="left").mean()
-
             if custom_rivers_to_burn is not None:
                 rivers_to_burn = custom_rivers_to_burn.to_crs(sf.crs)
                 if "width" not in rivers_to_burn.columns:
@@ -577,35 +573,28 @@ class SFINCSRootModel:
                     ).union_all(),
                 )
 
-                rivers_to_burn = rivers_to_burn[
-                    rivers_to_burn.index.isin(discharge_by_river.columns)
-                ]
-
-                # The further downstream rivers are in principle not included in the hydrological simulations.
+                # The downstream rivers are in principle not included in the hydrological simulations.
                 # They only may be if a subset of subbasins is requested for simulation. However, such further
                 # downstream rivers may have significant discharge missing because other inflowing rivers may not
                 # be include in the flood simulation. Therefore, we use the discharge of the upstream rivers
                 # to estimate the burn width and depth rather than the discharge of the river itself.
                 # The next line just removes them. A few steps later they are added back but with the discharge
                 # of the inflowing rivers that are simulated here.
-                discharge_by_river = discharge_by_river[
-                    rivers_to_burn[
-                        ~rivers_to_burn["is_further_downstream_outflow"]
-                    ].index
-                ]
 
-                assert (
-                    rivers_to_burn[rivers_to_burn["is_downstream_outflow"]]
-                    .index.isin(discharge_by_river.columns)
-                    .all()
-                ), (
-                    "All downstream outflow rivers must have discharge data for river width estimation"
+                # first sort by shreve stream order, forcing the upstream rivers to be processed first,
+                # so that the downstream rivers can use the average of the upstream rivers to
+                # estimate their width and depth.
+                rivers_to_burn = rivers_to_burn.sort_values(
+                    by="topological_stream_order", ascending=True
                 )
 
-                river_representative_points = []
-                for ID in rivers_to_burn[
-                    ~rivers_to_burn["is_further_downstream_outflow"]
-                ].index:
+                rivers_to_burn_with_data = rivers_to_burn[
+                    (~rivers_to_burn["is_further_downstream_outflow"])
+                    & (~rivers_to_burn["is_downstream_outflow"])
+                ]
+
+                river_representative_points: list[list[tuple[int, int]]] = []
+                for ID in rivers_to_burn_with_data.index:
                     river_representative_points.append(
                         get_representative_river_points(
                             ID, self.rivers, ~np.isnan(river_width_alpha)
@@ -613,82 +602,48 @@ class SFINCSRootModel:
                     )
 
                 river_parameters: pd.DataFrame = get_river_parameters_by_river(
-                    rivers_to_burn[
-                        ~rivers_to_burn["is_further_downstream_outflow"]
-                    ].index.tolist(),
+                    rivers_to_burn_with_data.index.tolist(),
                     river_representative_points,
                     river_width_alpha=river_width_alpha,
                     river_width_beta=river_width_beta,
                 )
 
-                assert set(discharge_by_river.columns) == set(river_parameters.index)
-
-                river_parameters["n_rivers"] = 1
                 for river_to_burn_index, river_to_burn in rivers_to_burn[
                     rivers_to_burn["is_downstream_outflow"]
+                    | rivers_to_burn["is_further_downstream_outflow"]
                 ].iterrows():
-                    downstream_ID = river_to_burn["downstream_ID"]
-                    while downstream_ID != -1 and downstream_ID in rivers_to_burn.index:
-                        river_width_alpha = river_parameters.loc[
-                            river_to_burn_index, "river_width_alpha"
-                        ]
-                        river_width_beta = river_parameters.loc[
-                            river_to_burn_index, "river_width_beta"
-                        ]
-                        if downstream_ID in discharge_by_river.columns:
-                            n_rivers = river_parameters.loc[downstream_ID, "n_rivers"]
-                            river_parameters.loc[downstream_ID, "river_width_alpha"] = (
-                                (
-                                    river_parameters.loc[
-                                        downstream_ID, "river_width_alpha"
-                                    ]
-                                )
-                                * n_rivers
-                                + river_width_alpha
-                            ) / (n_rivers + 1)
-                            river_parameters.loc[downstream_ID, "river_width_beta"] = (
-                                (
-                                    river_parameters.loc[
-                                        downstream_ID, "river_width_beta"
-                                    ]
-                                )
-                                * n_rivers
-                                + river_width_beta
-                            ) / (n_rivers + 1)
+                    upstream_rivers = rivers_to_burn[
+                        rivers_to_burn["downstream_ID"] == river_to_burn_index
+                    ]
+                    assert len(upstream_rivers) > 0, (
+                        "Downstream rivers must have at least one upstream river to estimate width and depth"
+                    )
+                    river_parameters_upstream_rivers = river_parameters.loc[
+                        upstream_rivers.index
+                    ]
+                    river_parameters.loc[river_to_burn_index, "river_width_alpha"] = (
+                        river_parameters_upstream_rivers["river_width_alpha"].sum()
+                    )
+                    river_parameters.loc[river_to_burn_index, "river_width_beta"] = (
+                        river_parameters_upstream_rivers["river_width_beta"].mean()
+                    )
 
-                            river_parameters.loc[downstream_ID, "n_rivers"] += 1
-                        else:
-                            discharge_by_river[downstream_ID] = discharge_by_river[
-                                river_to_burn_index
-                            ]
-                            river_parameters.loc[downstream_ID, "river_width_alpha"] = (
-                                river_width_alpha
-                            )
-                            river_parameters.loc[downstream_ID, "river_width_beta"] = (
-                                river_width_beta
-                            )
-                            river_parameters.loc[downstream_ID, "n_rivers"] = 1
+                    rivers_to_burn.loc[
+                        river_to_burn_index, "return_period_2_years_daily_m3_per_s"
+                    ] = rivers_to_burn.loc[
+                        upstream_rivers.index, "return_period_2_years_daily_m3_per_s"
+                    ].mean()
 
-                        downstream_ID = rivers_to_burn.loc[
-                            downstream_ID, "downstream_ID"
-                        ]
-
-                assert set(rivers_to_burn.index) == set(discharge_by_river.columns), (
-                    "All rivers to burn must have discharge data for river width estimation"
+                assert (
+                    rivers_to_burn["return_period_2_years_daily_m3_per_s"]
+                    .notnull()
+                    .all()
+                ), (
+                    "All rivers to burn must have a return period 2 years daily discharge value for river width estimation"
                 )
+
                 assert set(rivers_to_burn.index) == set(river_parameters.index), (
                     "All rivers to burn must have river width parameters for river width estimation"
-                )
-
-                rivers_to_burn = self.assign_return_periods(
-                    rivers_to_burn,
-                    discharge_by_river,
-                    return_periods=[2],
-                    p_value_threshold=p_value_threshold,
-                    fixed_shape=fixed_shape,
-                    selection_strategy=selection_strategy,
-                    write_figures=write_figures,
-                    output_directory=self.figures_path / "bankfull_estimation",
                 )
 
                 river_width_unknown_mask = rivers_to_burn["width"].isnull()
@@ -700,14 +655,16 @@ class SFINCSRootModel:
                     river_parameters.loc[
                         river_width_unknown_mask, "river_width_beta"
                     ].values,
-                    rivers_to_burn.loc[river_width_unknown_mask, "Q_2"].values,
+                    rivers_to_burn.loc[
+                        river_width_unknown_mask, "return_period_2_years_daily_m3_per_s"
+                    ].values,
                 ).astype(np.float64)
 
                 rivers_to_burn["depth"] = get_river_depth(
-                    rivers_to_burn,
+                    river_segments=rivers_to_burn,
                     method=depth_calculation_method,
                     parameters=depth_calculation_parameters,
-                    bankfull_column="Q_2",
+                    bankfull_column="return_period_2_years_daily_m3_per_s",
                 )
 
             rivers_to_burn["manning"] = get_river_manning(rivers_to_burn)
@@ -800,10 +757,11 @@ class SFINCSRootModel:
             crs=self.mask.rio.crs,
         )
 
-        fig, _ = sf.plot_basemap(
-            fn_out=str((self.figures_path / "basemap.png").resolve()),
-        )
-        plt.close(fig)
+        if write_figures:
+            fig, _ = sf.plot_basemap(
+                fn_out=str((self.figures_path / "basemap.png").resolve()),
+            )
+            plt.close(fig)
 
         self.is_build_from_scratch = True
 

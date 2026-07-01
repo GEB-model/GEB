@@ -27,7 +27,7 @@ from geb.build.data_catalog.gtsm import gtsm_filters
 from geb.build.methods import build_method
 from geb.build.workflows.command_areas import derive_command_areas_from_routing
 from geb.build.workflows.hydrography import (
-    calculate_shreve_stream_order,
+    add_stream_orders,
     get_river_graph,
 )
 from geb.build.workflows.river_snapping import (
@@ -840,7 +840,7 @@ class Hydrography(BuildModelBase):
 
         self.logger.info("Retrieving river data")
         rivers: gpd.GeoDataFrame = self.geom["routing/rivers"]
-        rivers["shreve_stream_order"] = calculate_shreve_stream_order(rivers)
+        rivers = add_stream_orders(rivers)
 
         self.logger.info("Processing river data")
 

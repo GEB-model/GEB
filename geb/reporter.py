@@ -976,7 +976,7 @@ class Reporter:
                     elif module_name == "_outflow_points":
                         if module_values is True:
                             routing = self.model.hydrology.routing
-                            rivers = routing.get_active_and_downstream_outflow_rivers()
+                            rivers = routing.get_active_rivers()
                             all_rivers = routing.var.rivers
 
                             outflow_reporters = {}
