@@ -3,10 +3,6 @@
 import geopandas as gpd
 import numpy as np
 import numpy.typing as npt
-import pyflwdir
-import xarray as xr
-from hydromt_sfincs import SfincsModel
-from pyflwdir.dem import fill_depressions
 
 
 def get_river_depth(
