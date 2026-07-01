@@ -128,7 +128,7 @@ def plot_sunburst(
             width=seg["width"],
             bottom=inner_radius + seg["level"] * level_width,
             color=seg["color"],
-            edgecolor="white",
+            edgecolor="0.9",
             linewidth=0.5,
             align="center",
         )

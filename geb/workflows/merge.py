@@ -68,7 +68,7 @@ def merge_model_outputs(
         for scenario_dir in sorted(cluster_dir.iterdir()):
             if not scenario_dir.is_dir():
                 continue
-            if (scenario_dir / "output" / "report" / run_name).is_dir():
+            if (scenario_dir / "output" / run_name / "report").is_dir():
                 cluster_scenario_dirs[cluster_dir.name] = scenario_dir
                 break
 
@@ -84,13 +84,13 @@ def merge_model_outputs(
     # Report files stay in the original clusters; links avoid copying large outputs.
     symlink_count = 0
     for scenario_dir in cluster_scenario_dirs.values():
-        cluster_report_dir = scenario_dir / "output" / "report" / run_name
+        cluster_report_dir = scenario_dir / "output" / run_name / "report"
         for report_file in sorted(cluster_report_dir.rglob("*.parquet")):
             merged_report_file = (
                 merged_model_dir
                 / "output"
-                / "report"
                 / run_name
+                / "report"
                 / report_file.relative_to(cluster_report_dir)
             )
             merged_report_file.parent.mkdir(parents=True, exist_ok=True)
