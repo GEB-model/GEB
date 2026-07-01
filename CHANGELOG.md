@@ -1,4 +1,8 @@
 # dev
+- Added optional external discharge skill-score comparisons for Google Streamflow, GloFAS, and PCR-GLOBWB/Utrecht.
+- Expanded discharge metrics with original/modified KGE, KGE components, NSE, Pearson r², RMSE, and RRMSE.
+- Added skill-score maps, boxplots, external KGE comparisons, upstream-area diagnostics, and dashboard summaries.
+- Improved the interactive discharge evaluation dashboard, and remove the option for static dashboards. 
 - Add a `--method-arg KEY=VALUE` option to `geb exec` (e.g., `geb exec estimate_return_periods --method-arg run_name=default`) and fix spinup and run discharge not being concatenated for return period estimation.
 - Add hydrograph shape methods for floods. Instead of assuming a triangular shape, the shape of the hydrograph can now be derived from historical GEB discharge.
 - Add a CLI option to run yearly mode multiple times (e.g., `geb run-yearly --multi --n-runs 5`) and write each run to its own output folder.
@@ -483,6 +487,4 @@ To support this version:
 To support this version:
 
 - Re-run `setup_forcing` and `setup_spei`
-
-
 

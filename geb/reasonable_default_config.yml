@@ -74,7 +74,7 @@ hydrology:
     discharge:
       minimum_upstream_area_km2: 0  # minimum modeled upstream area for discharge evaluation stations (km2)
       minimum_timeseries_length_years: 10  # minimum paired observation-simulation timeseries length for discharge evaluation stations (years)
-      external_evaluation_folder: ../../external_evaluation_data/  # folder with external discharge evaluation CSV files, relative to the model folder
+      external_evaluation_folder: null  # optional folder with external discharge evaluation CSV files, relative to the model folder
 
 agent_settings:
   government:

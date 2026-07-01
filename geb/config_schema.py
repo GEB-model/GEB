@@ -216,13 +216,13 @@ class DischargeEvaluationConfig(BaseModel):
         description="Minimum modeled upstream area for stations included in discharge evaluation (km2).",
     )
     minimum_timeseries_length_years: float = Field(
-        5.0,
+        10.0,
         ge=0.0,
         description="Minimum paired observation-simulation timeseries length for stations included in discharge evaluation (years).",
     )
     external_evaluation_folder: str | None = Field(
-        "external_evaluation_data/",
-        description="Folder with external discharge evaluation CSV files. Relative paths are resolved from the model folder.",
+        None,
+        description="Optional folder with external discharge evaluation CSV files. Relative paths are resolved from the model folder.",
     )
 
 
