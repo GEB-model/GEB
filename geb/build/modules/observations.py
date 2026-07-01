@@ -244,6 +244,17 @@ class Observations(BuildModelBase):
             obs_metadata.geometry.within(region_mask.geometry.union_all())
         ]
 
+        # GRDC provides a fixed UTC offset relative to the national capital.
+        # Custom stations are absent from this metadata and therefore default to UTC.
+        timezone_utc_offsets: pd.Series = discharge_observations.timezone.to_pandas()
+        obs_metadata = obs_metadata.copy()
+        obs_metadata["timezone_utc_offset"] = (
+            obs_metadata["discharge_observations_station_ID"]
+            .map(timezone_utc_offsets)
+            .fillna(0.0)
+            .astype(float)
+        )
+
         if obs_metadata.empty:
             # No stations found - create empty files
             self.logger.warning(
@@ -264,6 +275,7 @@ class Observations(BuildModelBase):
                 "GEB_upstream_area_from_grid",
                 "discharge_observations_to_GEB_upstream_area_ratio",
                 "snapping_distance_degrees",
+                "timezone_utc_offset",
             ]
             discharge_snapping_df = pd.DataFrame(columns=np.array(empty_cols))
             discharge_snapping_df.to_excel(
@@ -350,6 +362,7 @@ class Observations(BuildModelBase):
                         else np.nan
                     ),
                     "snapping_distance_degrees": snap_results.distance_degrees,
+                    "timezone_utc_offset": float(station_row["timezone_utc_offset"]),
                 }
             )
 

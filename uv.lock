@@ -1512,7 +1512,6 @@ dependencies = [
     { name = "openpyxl" },
     { name = "osmnx" },
     { name = "pandas" },
-    { name = "permetrics" },
     { name = "pyarrow" },
     { name = "pyflwdir" },
     { name = "pyogrio" },
@@ -1530,6 +1529,7 @@ dependencies = [
     { name = "s3fs" },
     { name = "scikit-image" },
     { name = "scipy" },
+    { name = "scores" },
     { name = "seaborn" },
     { name = "setuptools" },
     { name = "simplejson" },
@@ -1616,7 +1616,6 @@ requires-dist = [
     { name = "opt-einsum", marker = "extra == 'fairstream'", specifier = ">=3.3.0" },
     { name = "osmnx", specifier = ">=2.0.6" },
     { name = "pandas", specifier = ">=3.0.0" },
-    { name = "permetrics", specifier = ">=2.0.0" },
     { name = "pgmpy", marker = "extra == 'fairstream'", specifier = "==0.1.26" },
     { name = "pyarrow", specifier = ">=17.0.0" },
     { name = "pybind11", marker = "extra == 'plantfate'", specifier = ">=2.13.6" },
@@ -1636,6 +1635,7 @@ requires-dist = [
     { name = "s3fs", specifier = ">=2023.6.0" },
     { name = "scikit-image", specifier = ">=0.26.0" },
     { name = "scipy", specifier = ">=1.16" },
+    { name = "scores", specifier = ">=2.5.0" },
     { name = "seaborn", specifier = ">=0.13.2" },
     { name = "seaborn", marker = "extra == 'display'", specifier = ">=0.13.2" },
     { name = "setuptools", specifier = ">=75.8.0" },
@@ -4001,19 +4001,6 @@ wheels = [
 ]
 
 [[package]]
-name = "permetrics"
-version = "2.0.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "numpy" },
-    { name = "scipy" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/c3/2d/3e572d9a08bb79023a56bea7575edba8abbafad73509437c1ffebceabd8f/permetrics-2.0.0.tar.gz", hash = "sha256:c7d79d654fa54aa31b293b10bfd22c34c50cd80f0d05b7ca38e295c99b10d53e", size = 56903, upload-time = "2024-02-24T07:58:00.563Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/26/03/113d55caacf415f9fb29ed3af940592a54b725b62d1f4c3d5297ddf14c10/permetrics-2.0.0-py3-none-any.whl", hash = "sha256:2b7252fff81e2e2dec67ca7db3826f4d6ec65072cfa76b8e41bc534ab53f331e", size = 52621, upload-time = "2024-02-24T07:57:57.948Z" },
-]
-
-[[package]]
 name = "pexpect"
 version = "4.9.0"
 source = { registry = "https://pypi.org/simple" }
@@ -5251,6 +5238,21 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/f7/86/5185061a1fcc41d18c5dc2463969b3a3964b31d9ac67b2fb05d4c7ff7670/scipy-1.18.0-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:9aac6192fac56bf2ca534389d24623f07b39ff83317d58287285e7fbd622ff76", size = 37472480, upload-time = "2026-06-19T15:01:35.136Z" },
     { url = "https://files.pythonhosted.org/packages/31/8e/f04c68e39919a010d34f2ee1367fd705b0a25a02f609d755f0bfbc0a15fc/scipy-1.18.0-cp314-cp314t-win_amd64.whl", hash = "sha256:e40baea28ae7f5475c779741e2d90b1247c78531207b49c7030e698ff81cee3f", size = 37365390, upload-time = "2026-06-19T15:01:38.091Z" },
     { url = "https://files.pythonhosted.org/packages/d5/19/969dc072906c84dd0a3b05dcf57ea750936087d7873549e408b35cfc3f97/scipy-1.18.0-cp314-cp314t-win_arm64.whl", hash = "sha256:368e0a705903c466aa5f08eefb39e6b1b6b2d659e7352a31fd9e2438365be0f8", size = 25279661, upload-time = "2026-06-19T15:01:40.817Z" },
+]
+
+[[package]]
+name = "scores"
+version = "2.5.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "bottleneck" },
+    { name = "pandas" },
+    { name = "scipy" },
+    { name = "xarray" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e6/ac/6f221a71e6001d2624ec83ca558f51160d3babf82add29fcb9a50a2b2a6b/scores-2.5.0.tar.gz", hash = "sha256:db9ab8f287803635625f5cbe23db2a5f07b6245d11fea5c1702f6c18aeee075a", size = 163041, upload-time = "2026-02-14T05:49:29.537Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d7/50/98674f479b61055d34a8c425a797c040b4dd52a7b392d7baaada2d22b1bd/scores-2.5.0-py3-none-any.whl", hash = "sha256:090258dfce0fee640563e9c6f3cf55dcb96e46ac2cc8931f4f0d6722faad2cdb", size = 182275, upload-time = "2026-02-14T05:49:31.454Z" },
 ]
 
 [[package]]

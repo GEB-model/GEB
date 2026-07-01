@@ -1178,6 +1178,8 @@ def rechunk(
 @click.argument(
     "models_dir",
     type=click.Path(exists=True, file_okay=False, path_type=Path),
+    required=False,
+    default=Path(WORKING_DIRECTORY_DEFAULT),
 )
 @click.option(
     "--run-name",
@@ -1212,9 +1214,10 @@ def merge(
 ) -> None:
     """Merge GEB cluster outputs into a single model directory for evaluation.
 
-    Scans MODELS_DIR for cluster subdirectories matching CLUSTER_PREFIX, merges
-    geometry files and discharge observation tables, symlinks report parquets, and
-    writes a model.yml so the result can be passed to ``geb evaluate``.
+    Scans MODELS_DIR, or the current working directory when omitted, for cluster
+    subdirectories matching CLUSTER_PREFIX, merges geometry files and discharge
+    observation tables, symlinks report parquets, and writes a model.yml so the
+    result can be passed to ``geb evaluate``.
     """
     logger = create_logger("merge")
     merge_model_outputs(

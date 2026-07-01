@@ -455,13 +455,13 @@ def test_run() -> None:
         for label in [
             "KGE_hourly",
             "NSE_hourly",
-            "R_hourly",
+            "KGE_correlation_hourly",
             "KGE_daily",
             "NSE_daily",
-            "R_daily",
+            "KGE_correlation_daily",
             "KGE",
             "NSE",
-            "R",
+            "KGE_correlation",
         ]:
             assert label in result
             assert result[label] is not None

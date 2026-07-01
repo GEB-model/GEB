@@ -1,5 +1,11 @@
 # dev
 - Implement evaporation for retention basins using a constant area based on maximum storage and a depth of 3 meters.
+- Added optional external discharge skill-score comparisons for Google Streamflow, GloFAS, and PCR-GLOBWB/Utrecht.
+- Expanded discharge metrics with original/modified KGE, KGE components, NSE, Pearson r², RMSE, and RRMSE.
+- Added skill-score maps, boxplots, external KGE comparisons, upstream-area diagnostics, and dashboard summaries.
+- Improved the interactive discharge evaluation dashboard, and remove the option for static dashboards. 
+- Add a `--method-arg KEY=VALUE` option to `geb exec` (e.g., `geb exec estimate_return_periods --method-arg run_name=default`) and fix spinup and run discharge not being concatenated for return period estimation.
+- Add hydrograph shape methods for floods. Instead of assuming a triangular shape, the shape of the hydrograph can now be derived from historical GEB discharge.
 - Add a CLI option to run yearly mode multiple times (e.g., `geb run-yearly --multi --n-runs 5`) and write each run to its own output folder.
 - Add new option (and implement) that you can only simulate floods in a subset of the basins in the larger region.
 - Implement general method for setting up an alternative universe.
@@ -490,6 +496,4 @@ To support this version:
 To support this version:
 
 - Re-run `setup_forcing` and `setup_spei`
-
-
 
