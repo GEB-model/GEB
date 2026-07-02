@@ -15,11 +15,12 @@ import xarray as xr
 from matplotlib import colormaps as mcolormaps
 from matplotlib.collections import LineCollection
 from matplotlib.lines import Line2D
-from scores.continuous import (
-    kge as calculate_kge,
-    nse as calculate_nse,
-    rmse as calculate_rmse,
-)
+
+# from scores.continuous import (
+#     kge as calculate_kge,
+#     nse as calculate_nse,
+#     rmse as calculate_rmse,
+# )
 from tqdm import tqdm
 
 from geb.evaluate.workflows.dashboard import (
@@ -1964,7 +1965,7 @@ class Hydrology:
         )
         ax.set_xlabel("Longitude")
         ax.set_ylabel("Latitude")
-        ax.set_title(f"Mean discharge (m3/s)")
+        ax.set_title("Mean discharge (m3/s)")
 
         plt.savefig(
             self.discharge_output_folder / "mean_discharge_m3_per_s_map.svg",

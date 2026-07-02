@@ -901,7 +901,7 @@ class Reporter:
                                 station_reporters[
                                     f"discharge_hourly_m3_per_s_{station_ID}"
                                 ] = {
-                                    "varname": f"grid.var.discharge_m3_s_per_substep",
+                                    "varname": "grid.var.discharge_m3_s_per_substep",
                                     "type": "grid",
                                     "function": f"sample_xy,{xy_grid[0]},{xy_grid[1]}",
                                     "substeps": 24,
@@ -963,7 +963,7 @@ class Reporter:
                             ) in meteorological_station_locations.iterrows():
                                 station_reporters: dict[str, dict[str, str | int]] = {
                                     f"evapotranspiration_m_per_hour{station_ID}": {
-                                        "varname": f".evapotranspiration_m",
+                                        "varname": ".evapotranspiration_m",
                                         "type": "HRU",
                                         "function": f"sample_lonlat,{station_info['geometry'].x},{station_info['geometry'].y}",
                                         "substeps": 24,
