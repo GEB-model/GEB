@@ -11,7 +11,6 @@ from typing import Any, Iterable
 import cdsapi
 import geopandas as gpd
 import numpy as np
-import pandas as pd
 import tqdm
 import xarray as xr
 from zarr.abc.codec import ArrayArrayCodec
@@ -380,7 +379,7 @@ class GTSM_timeseries(Adapter):
 
     def read(
         self, bounds: tuple[float, float, float, float], variable: str
-    ) -> tuple[pd.DataFrame, gpd.GeoDataFrame]:
+    ) -> tuple[xr.DataArray, gpd.GeoDataFrame]:
         """Read GTSM data from the downloaded files.
 
         Args:
@@ -413,12 +412,12 @@ class GTSM_timeseries(Adapter):
                 f"{variable_station_locations_file}. Fetch this variable before reading it."
             )
 
-        station_locations = read_geom(
+        station_locations: gpd.GeoDataFrame = read_geom(
             variable_station_locations_file, bbox=model_bounds
         )
 
         if station_locations.empty:
-            return pd.DataFrame(), station_locations
+            return xr.DataArray(), station_locations
 
         variable_dir: Path = self._variable_dir(variable)
         zarr_paths: list[Path] = [

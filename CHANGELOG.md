@@ -1,4 +1,5 @@
 # dev
+- Implement evaporation for retention basins using a constant area based on maximum storage and a depth of 3 meters.
 - Added optional external discharge skill-score comparisons for Google Streamflow, GloFAS, and PCR-GLOBWB/Utrecht.
 - Expanded discharge metrics with original/modified KGE, KGE components, NSE, Pearson r², RMSE, and RRMSE.
 - Added skill-score maps, boxplots, external KGE comparisons, upstream-area diagnostics, and dashboard summaries.
@@ -6,8 +7,16 @@
 - Add a `--method-arg KEY=VALUE` option to `geb exec` (e.g., `geb exec estimate_return_periods --method-arg run_name=default`) and fix spinup and run discharge not being concatenated for return period estimation.
 - Add hydrograph shape methods for floods. Instead of assuming a triangular shape, the shape of the hydrograph can now be derived from historical GEB discharge.
 - Add a CLI option to run yearly mode multiple times (e.g., `geb run-yearly --multi --n-runs 5`) and write each run to its own output folder.
+- Add new option (and implement) that you can only simulate floods in a subset of the basins in the larger region.
 - Implement general method for setting up an alternative universe.
 - Make it possible to report data from the alternative universe.
+- Fix bug for coastal regions where due to "holes" in deltadtm for lakes and reservoirs while fabdem was not used because it was only used above 30 meters. Solved by instead always using fabdem by default and overwriting with deltadtm where available.
+- Remove redundant iteration from kinematic routing.
+- Add option to run and spinup "--skip-done". When turned on, we first check if the model was not already done and if so, don't run.
+- Set default of writing figures for SFINCS to false in reasonable default config. For example, writing the return period figures is about 10 times as slow as the actual calculation. Of course, users can set this to true whenever needed in their own config!
+- Implement custom and improved algorithm for river burning. Currently only works for the non-subgrid mode of SFINCS.
+- Add a `--method-arg KEY=VALUE` option to `geb exec` (e.g., `geb exec estimate_return_periods --method-arg run_name=default`) and fix spinup and run discharge not being concatenated for return period estimation.
+- Add hydrograph shape methods for floods. Instead of assuming a triangular shape, the shape of the hydrograph can now be derived from historical GEB discharge.
 
 # v1.0.0b29
 - Load return-period flood maps from the spinup output folder (output/{spinup_name}/flood_maps/{return_period}.zarr).

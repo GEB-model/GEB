@@ -71,6 +71,7 @@ from .modules.hydrography import (
     extend_rivers_into_pits_and_set_pit_type,
 )
 from .workflows.hydrography import (
+    add_stream_orders,
     get_river_graph,
 )
 
@@ -1234,9 +1235,9 @@ def create_cluster_visualization_map(
 
     print(f"Creating cluster visualization map: {output_path}")
     cluster_count: int = len(cluster_outlines)
-    colors = plt.cm.tab20(np.linspace(0, 1, min(cluster_count, 20)))  # type: ignore[attr-defined]  # ty:ignore[unresolved-attribute]
+    colors = plt.cm.tab20(np.linspace(0, 1, min(cluster_count, 20)))  # type: ignore[attr-defined]
     if cluster_count > 20:
-        colors = plt.cm.hsv(np.linspace(0, 1, cluster_count))  # type: ignore[attr-defined]  # ty:ignore[unresolved-attribute]
+        colors = plt.cm.hsv(np.linspace(0, 1, cluster_count))  # type: ignore[attr-defined]
 
     cluster_outlines_mercator: gpd.GeoDataFrame = cluster_outlines.to_crs(epsg=3857)
     fig, ax = plt.subplots(1, 1, figsize=figsize)
@@ -2224,11 +2225,23 @@ class GEBModel(
                 "merit_basins_rivers",
             )
             .read(
-                columns=["COMID", "lengthkm", "uparea", "maxup", "geometry"],
+                columns=[
+                    "COMID",
+                    "lengthkm",
+                    "uparea",
+                    "maxup",
+                    "geometry",
+                    "NextDownID",
+                ],
                 bbox=ldd.rio.bounds(),
             )
             .set_index("COMID")
+        ).rename(
+            columns={
+                "NextDownID": "downstream_ID",
+            }
         )
+
         assert isinstance(rivers, gpd.GeoDataFrame), (
             "Expected rivers to be a GeoDataFrame."
         )
@@ -2239,6 +2252,7 @@ class GEBModel(
             ),
             axis=1,
         )
+        rivers = add_stream_orders(rivers)
 
         river_raster_outflow_type = create_river_raster_from_river_lines(
             rivers, ldd, column="outflow_type"

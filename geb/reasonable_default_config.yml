@@ -21,6 +21,7 @@ general:
 hazards:
   floods:
     simulate: false
+    subbasins: auto  # Default: "auto". Can also be "all" to simulate all basins, or a list of subbasin ids, e.g. - 23011134 \n - 23011135
     forcing_method: accumulated_runoff  # headwater_points, accumulated_runoff
     minimum_flood_depth: 0.05
     flood_map_output_interval_seconds: null  # interval in seconds to output flood maps. null means no output.
@@ -28,7 +29,7 @@ hazards:
     subgrid: false
     overwrite: auto  # whether to overwrite existing flood model. True, False, "auto". If "auto", it will check if the model input parameters have changed.
     coastal_only: false  # if true, only simulate floods in coastal areas, defined as areas with elevation below 10m. This can significantly reduce computation time for large domains with small coastal areas.
-    write_figures: true  # whether to generate and save diagnostic figures
+    write_figures: false  # whether to generate and save diagnostic figures
     return_periods:
       - 2
       - 5
@@ -64,6 +65,7 @@ hazards:
 hydrology:
   routing:
     algorithm: kinematic_wave  # accuflux or kinematic_wave
+    retention_basin_release_threshold_factor: 0.9
     river_width:
       parameters:
         default_alpha: 7.2

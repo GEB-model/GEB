@@ -150,21 +150,6 @@ class WEkEOCopernicus(Adapter):
         """
         return self._year_dir(year) / self._tile_tif_name(tile_id)
 
-    def _problem_tile_name(self, tile_id: str) -> str | None:
-        """Return the known problematic tile name contained in a tile ID.
-
-        Args:
-            tile_id: WEkEO tile identifier.
-
-        Returns:
-            Matching problematic tile name, or None if the tile is not known to be
-            problematic.
-        """
-        for tile_name in _KNOWN_WEKEO_PROBLEM_TILES:
-            if tile_name in tile_id:
-                return tile_name
-        return None
-
     def _build_query(
         self,
         bounds: tuple[float, float, float, float],
@@ -423,7 +408,7 @@ class WEkEOCopernicus(Adapter):
         """
         das: list[xr.DataArray] = [
             rxr.open_rasterio(path, chunks={}) for path in tile_paths
-        ]
+        ]  # ty:ignore[invalid-assignment]
         das = [da.sel(band=1) for da in das]
         da = xr.combine_by_coords(
             das,

@@ -2,7 +2,7 @@
 
 import shutil
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast
 
 import geopandas as gpd
 import matplotlib as mpl
@@ -49,7 +49,7 @@ from geb.evaluate.workflows.hydrology_plot_engine import (
 from geb.evaluate.workflows.hydrology_summary import (
     create_discharge_skill_score_summary,
 )
-from geb.hydrology.routing import read_discharge_per_river
+from geb.hydrology.routing import get_discharge_per_river
 from geb.reporter import WATER_STORAGE_REPORT_CONFIG
 from geb.workflows.visualise import plot_sunburst
 
@@ -622,7 +622,19 @@ def _format_yearly_timeseries_axis(
 
 def _add_dark_legend(
     axis: plt.Axes,
-    loc: str,
+    loc: Literal[
+        "best",
+        "upper right",
+        "upper left",
+        "lower left",
+        "lower right",
+        "right",
+        "center left",
+        "center right",
+        "lower center",
+        "upper center",
+        "center",
+    ],
     ncol: int,
     fontsize: float,
     bbox_to_anchor: tuple[float, float] | None = None,
@@ -731,7 +743,7 @@ def _plot_outflow_discharge_timeseries(
 
     plots_created: int = 0
     for outflow_file in outflow_files:
-        outflow_series: pd.Series = pd.read_parquet(outflow_file).squeeze()
+        outflow_series: pd.Series = pd.read_parquet(outflow_file).iloc[:, 0]
 
         if np.isnan(outflow_series.values).all():
             model.logger.info(
@@ -1820,6 +1832,61 @@ class Hydrology:
         """Initialize the Hydrology evaluation module."""
         self.model = model
         self.evaluator = evaluator
+
+    def get_discharge_per_river(
+        self, run_name: str
+    ) -> tuple[gpd.GeoDataFrame, pd.DataFrame]:
+        """Get the discharge per river from the report directory.
+
+        Args:
+            run_name: Name of the simulation run to evaluate. Must correspond to an existing
+                run directory in the model output folder.
+
+        Raises:
+            FileNotFoundError: If the discharge file for the specified run does not exist
+                in the report directory.
+
+        Returns:
+            A GeoDataFrame containing the river geometries and a DataFrame containing the discharge data for each river.
+        """
+        # check if discharge files exists
+        discharge_folder: Path = (
+            self.evaluator.output_folder_evaluate.parent
+            / "report"
+            / "hydrology.routing"
+        )
+        if not discharge_folder.exists():
+            raise FileNotFoundError(
+                f"Discharge files for run '{run_name}' does not exist in the report directory. Did you run the model?"
+            )
+
+        # load rivers
+        all_rivers: gpd.GeoDataFrame = read_geom(
+            self.model.files["geom"]["routing/rivers"]
+        )
+        rivers_of_interest: gpd.GeoDataFrame = all_rivers[
+            ~(
+                all_rivers["is_downstream_outflow"]
+                | all_rivers["is_upstream_of_downstream_basin"]
+                | all_rivers["is_further_downstream_outflow"]
+            )
+        ].copy()
+
+        # In merged multi-cluster runs some rivers may not have output files, mostly caused by the outflow reporter to be false in the model.yml. Filter out those rivers here.
+        rivers_of_interest = rivers_of_interest[
+            rivers_of_interest.index.map(
+                lambda rid: (
+                    discharge_folder / f"river_outflow_hourly_m3_per_s_{rid}.parquet"
+                ).exists()
+            )
+        ].copy()
+
+        discharge: pd.DataFrame = get_discharge_per_river(
+            folder=discharge_folder,
+            rivers=rivers_of_interest,
+            all_rivers=all_rivers,
+        )
+        return rivers_of_interest, discharge
 
     def plot_discharge(
         self,
@@ -3378,7 +3445,7 @@ class Hydrology:
         context_colors: dict[str, str] = {
             "potential_evapotranspiration": "#555555",
         }
-        context_linestyles: dict[str, str] = {
+        context_linestyles: dict[str, Literal["-", "--", "-.", ":"]] = {
             "potential_evapotranspiration": ":",
         }
         context_linewidths: dict[str, float] = {
@@ -3609,7 +3676,7 @@ class Hydrology:
             "potential_evapotranspiration": "#555555",
             "transpiration": "#54a24b",
         }
-        top_soil_context_linestyles: dict[str, str] = {
+        top_soil_context_linestyles: dict[str, Literal["-", "--", "-.", ":"]] = {
             "precipitation": ":",
             "runoff": "--",
             "snow": "-.",

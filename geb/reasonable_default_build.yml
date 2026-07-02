@@ -22,6 +22,7 @@ setup_cell_area:
 setup_hydrography:
 
 setup_retention_basins:
+  max_storage_m3_to_min_shreve_stream_order_function: "(x**0.5) / 100"
 
 setup_elevation:
 

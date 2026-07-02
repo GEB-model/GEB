@@ -90,13 +90,13 @@ class LandSurface(BuildModelBase):
             {
                 "name": "fabdem",
                 "zmin": 0.001,
-                "coastal_zmin": 30.0,
                 "fill_depressions": False,
             },
             {
                 "name": "delta_dtm",
-                "zmax": 30,
+                "zmax": 29.999999,
                 "zmin": 0.001,
+                "merge_method": "last",
                 "fill_depressions": False,
                 "coastal_only": True,
             },
@@ -155,12 +155,6 @@ class LandSurface(BuildModelBase):
                 raise ValueError(
                     "DeltaDTM DEM must be provided when coastal DEMs are used."
                 )
-
-            for DEM in DEMs:
-                if "coastal_zmin" in DEM:
-                    DEM["zmin"] = DEM["coastal_zmin"]
-                if "coastal_zmax" in DEM:
-                    DEM["zmax"] = DEM["coastal_zmax"]
 
             coastlines = self.geom["coastal/coastlines"]
 

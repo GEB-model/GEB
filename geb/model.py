@@ -856,7 +856,7 @@ class GEBModel(Module):
 
         self._initialize(
             create_reporter=False,
-            in_spinup=run_name == self.model.config["general"]["spinup_name"],
+            in_spinup=False,
             current_time=current_time,
             n_timesteps=0,
             timestep_length=relativedelta(years=1),
@@ -864,6 +864,8 @@ class GEBModel(Module):
             simulate_hydrology=True,
             clean_report_folder=False,
         )
+
+        self.hydrology.routing.update_return_periods()
 
         # ugly switch to determine whether model has coastal basins
         subbasins = read_geom(self.model.files["geom"]["routing/subbasins"])
@@ -884,6 +886,8 @@ class GEBModel(Module):
     @property
     def current_day_of_year(self) -> int:
         """Gets the current day of the year.
+
+        The first of January is 1, the second of January is 2, and so on.
 
         Returns:
             day: current day of the year.
@@ -1090,6 +1094,15 @@ class GEBModel(Module):
     def create_done_file(self) -> None:
         """Create a file to indicate that the model run or spinup is done."""
         (self.output_folder / "done.txt").touch()
+
+    @property
+    def is_done(self) -> bool:
+        """Check if the model run or spinup is done.
+
+        Returns:
+            True if the model run or spinup is done, False otherwise.
+        """
+        return (self.output_folder / "done.txt").exists()
 
     @property
     def spinup_start(self) -> datetime.datetime:
