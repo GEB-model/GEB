@@ -92,10 +92,10 @@ agent_settings:
   households:
     adapt: false # If True households adapt their houses based on random floods, like DYNAMO-M
     adapt_to_actual_floods: false # If True households adapt their houses based on actual floods experienced
-    warning_response: true
     water_demand:
       method: default
     adjust_demand_factor: 1  # multiplier to adjust water demand up or down. 1 = no adjustment, 0.5 = half demand, 2 = double demand
+    warning_response: false # If True households respond to warnings and take measures to reduce damage
     warning_system:
       probability_threshold: 0.6 # Flood probability threshold for issuing warnings (0.0-1.0)  
       area_threshold: 0.1 # Area threshold (percentage of postal code area) for warnings (0.0-1.0)
@@ -107,12 +107,15 @@ agent_settings:
       response_rates: # Response rates for different warning types
         area_based_warnings: 0.35 # Response rate for area-based warnings (0.0-1.0)
         building_based_warnings: 0.7 # Response rate for building-based warnings with specific measures (0.0-1.0)
-      strategies: # Warning strategy settings
-        residential_buildings: true # Enable water level based warnings with measures for residential buildings
-        warning_type: "building_based" # Type of warnings: "area_based" for basic flood warnings or "building_based" for impact-based warnings
-        critical_infrastructure_warnings: false  # Enable critical infrastructure based evacuation warnings  
-        asset_type: 
-          - 'energy_substations'
+      warning_target: # Warning targets (e.g., residential_buildings, critical_infrastructure)
+        residential_buildings: 
+          enabled: false # Enable water level based warnings with measures for residential buildings
+          warning_type: "building_based" # Type of warnings: "area_based" for basic flood warnings or "building_based" for impact-based warnings
+        critical_infrastructure: 
+          enabled: false  # Enable water level based warnings for critical infrastructure  
+          get_critical_facilities: false # If True, critical facilities (vulnerable and emergency) are extracted from OSM using the catchment polygon as boundary
+          asset_type: 
+            - 'energy_substations'
 
     expected_utility:
       flood_risk_calculations:
