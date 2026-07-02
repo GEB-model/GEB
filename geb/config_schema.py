@@ -86,6 +86,10 @@ class FloodsConfig(BaseModel):
     """Configuration for flood simulation."""
 
     simulate: bool = Field(False, description="Whether to simulate floods.")
+    subbasins: list[int] | Literal["all"] | Literal["auto"] = Field(
+        "all",
+        description="Subbasin ID, list of subbasin IDs, or 'all' to simulate all subbasins. Only works for flood events currently.",
+    )
     forcing_method: Literal["headwater_points", "accumulated_runoff"] = Field(
         "accumulated_runoff",
         description="Forcing method: 'headwater_points' or 'accumulated_runoff'.",
@@ -198,6 +202,10 @@ class RoutingConfig(BaseModel):
     algorithm: Literal["accuflux", "kinematic_wave"] = Field(
         "kinematic_wave",
         description="Routing algorithm: 'accuflux' or 'kinematic_wave'.",
+    )
+    retention_basin_release_threshold_factor: float = Field(
+        0.9,
+        description="Factor to multiply the activation threshold by to get the release threshold.",
     )
     river_width: RiverWidthConfig = Field(
         default_factory=RiverWidthConfig, description="River width configuration."

@@ -281,7 +281,7 @@ class Insurers(AgentBaseClass):
         self,
         insured_farmers_mask: DynamicArray,
         masked_income: npt.NDArray[np.floating],
-        historic_window_years: np.int8 = 7,
+        historic_window_years: int = 7,
     ) -> npt.NDArray[np.floating]:
         """Compute historical traditional-insurance payouts and update state.
 

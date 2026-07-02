@@ -51,6 +51,7 @@ BUILD_DEFAULT: Path = Path("build.yml")
 PROFILE_SPEED_DEFAULT: bool = False
 PROFILE_RAM_DEFAULT: bool = False
 CORES_DEFAULT: int | None = None
+SKIP_DONE_DEFAULT: bool = False
 
 DATA_CATALOG_DEFAULT: Path = GEB_PACKAGE_DIR / "data_catalog.yml"
 DATA_PROVIDER_DEFAULT: str = os.environ.get("GEB_DATA_PROVIDER", "default")
@@ -257,6 +258,7 @@ def run_model_with_method(
     cores: int | None = CORES_DEFAULT,
     method_args: dict = {},
     close_after_run: bool = True,
+    skip_done: bool = SKIP_DONE_DEFAULT,
 ) -> Any:
     """Run model with a specific method.
 
@@ -271,6 +273,7 @@ def run_model_with_method(
         cores: Number of cores to restrict the model to using taskset. If None, all cores are used.
         method_args: Optional arguments to pass to the method.
         close_after_run: If True, close the model after running the method. Defaults to True.
+        skip_done: If True, only run the method if the model is not already marked as done.
 
     Returns:
         The result of the method run or the GEBModel instance if no method was run.
@@ -302,7 +305,18 @@ def run_model_with_method(
 
         result = geb
         if method is not None:
-            result = getattr(geb, method)(**method_args)
+            # This is a bit of hack to allow the model to know if it is in spinup mode or not,
+            # so that we can detect if it is done. To avoid side effects
+            # we immediately delete the attribute after the method is called.
+            geb.in_spinup = method == "spinup"
+            is_done: bool = geb.is_done
+            del geb.in_spinup
+            if not (skip_done and is_done):
+                result = getattr(geb, method)(**method_args)
+            else:
+                logger.info(
+                    f"Skipping run because the model is already marked as done."
+                )
 
         t2 = datetime.now()
 

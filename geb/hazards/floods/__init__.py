@@ -1,9 +1,10 @@
 """Class to setup, run, and post-process the SFINCS hydrodynamic model."""
 
 from collections import deque
+from copy import deepcopy
 from datetime import timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterable
+from typing import TYPE_CHECKING, Any, Iterable, Literal
 
 import geopandas as gpd
 import matplotlib.pyplot as plt
@@ -15,14 +16,12 @@ from matplotlib.colors import LinearSegmentedColormap
 from shapely.geometry.point import Point
 
 from geb.geb_types import (
-    ArrayFloat32,
     TwoDArrayFloat32,
 )
 from geb.hazards.event import Event
 from geb.hazards.floods.workflows.utils import get_start_point
 from geb.hydrology.routing import (
-    get_upstream_represented_xys as get_upstream_represented_xys,
-    read_discharge_per_river,
+    get_discharge_per_river,
 )
 from geb.module import Module
 from geb.store import Bucket
@@ -194,10 +193,10 @@ class Floods(Module):
             self.hydrology: Hydrology = model.hydrology
             self.longest_flood_event_in_days: int = longest_flood_event_in_days
 
-            self.var.discharge_per_timestep: deque[ArrayFloat32] = deque(
+            self.var.discharge_per_timestep = deque(
                 maxlen=self.longest_flood_event_in_days
             )
-            self.var.runoff_m_per_timestep: deque[ArrayFloat32] = deque(
+            self.var.runoff_m_per_timestep = deque(
                 maxlen=self.longest_flood_event_in_days
             )
 
@@ -249,8 +248,7 @@ class Floods(Module):
     def build(
         self,
         name: str,
-        rivers: gpd.GeoDataFrame,
-        discharge_by_river: pd.DataFrame,
+        all_rivers: gpd.GeoDataFrame,
         subbasins: gpd.GeoDataFrame,
         coastal: bool = False,
         low_elevation_coastal_zone_mask: gpd.GeoDataFrame | None = None,
@@ -265,9 +263,9 @@ class Floods(Module):
 
         Args:
             name: Name of the SFINCS model (used for the model root directory).
-            subbasins: The subbasins to build the SFINCS model for. If None, the entire model subbasins is used.
-            rivers: The rivers to include in the SFINCS model.
-            discharge_by_river: DataFrame containing discharge data for each river.
+            subbasins: The subbasins to build the SFINCS model for. The model domain is defined based on the subbasins.
+            all_rivers: All rivers in the area. In contrast to the subbasins, these rivers are not used to define the model domain,
+                but are only used to get the river geometries and attributes for the rivers that are included in the model domain based on the subbasins variable.
             coastal: Whether to only include coastal areas in the model.
             low_elevation_coastal_zone_mask: A GeoDataFrame defining the low elevation coastal zone to set as active cells.
             coastal_boundary_exclude_mask: GeoDataFrame defining the areas to exclude from the coastal model boundary cells.
@@ -283,8 +281,7 @@ class Floods(Module):
         sfincs_model.build(
             subbasins=subbasins,
             DEMs=self.DEM_config,
-            rivers=rivers,
-            discharge_by_river=discharge_by_river,
+            rivers=all_rivers,
             river_width_alpha=self.model.hydrology.grid.decompress(
                 self.model.hydrology.grid.var.river_width_alpha
             ),
@@ -326,6 +323,7 @@ class Floods(Module):
         sfincs_model: SFINCSRootModel,
         event: Event,
         active_basins: Iterable[int],
+        discharge_by_river: pd.DataFrame,
     ) -> SFINCSSimulation:
         """Sets the forcing for a SFINCS simulation.
 
@@ -336,7 +334,7 @@ class Floods(Module):
             sfincs_model: The SFINCSRootModel instance to create the simulation from.
             event: An Event object containing the flood event details, including 'start_time' and 'end_time'.
             active_basins: An iterator of the active basin IDs to include in the forcing.
-
+            discharge_by_river: A DataFrame containing the discharge data for each river.
         Returns:
             The created SFINCSSimulation instance with the forcing set.
 
@@ -419,10 +417,10 @@ class Floods(Module):
                 runoff_m=forcing_grid,
                 river_network=self.model.hydrology.routing.river_network,
                 river_ids=self.model.hydrology.grid.decompress(
-                    self.model.hydrology.routing.river_ids, fillvalue=-1
+                    self.model.hydrology.routing.var.river_ids, fillvalue=-1
                 ),
                 river_ids_no_waterbodies_removed=self.model.hydrology.grid.decompress(
-                    self.model.hydrology.routing.river_ids_no_waterbodies_removed,
+                    self.model.hydrology.routing.var.river_ids_no_waterbodies_removed,
                     fillvalue=-1,
                 ),
                 basin_ids=basin_ids,
@@ -437,6 +435,9 @@ class Floods(Module):
             raise ValueError(
                 f"Unknown forcing method {self.config['forcing_method']}. Supported are 'headwater_points' and 'accumulated_runoff'."
             )
+
+        if simulation.sfincs_root_model.has_inflow:
+            simulation.set_river_inflow(discharge_by_river=discharge_by_river)
 
         return simulation
 
@@ -463,19 +464,104 @@ class Floods(Module):
         )
 
         # first select only active rivers
-        simulation_rivers: gpd.GeoDataFrame = self.model.hydrology.routing.active_rivers
+        active_rivers: gpd.GeoDataFrame = (
+            self.model.hydrology.routing.get_active_rivers()
+        )
 
         # but also include downstream outflows
-        rivers: gpd.GeoDataFrame = self.model.hydrology.routing.rivers
+        rivers: gpd.GeoDataFrame = self.model.hydrology.routing.var.rivers.copy()
         simulation_rivers: gpd.GeoDataFrame = pd.concat(
-            [simulation_rivers, rivers[rivers["is_downstream_outflow"]]]
+            [active_rivers, rivers[rivers["is_downstream_outflow"]]]
         )
+        discharge_by_river_run = self.discharge_by_river()
 
-        river_graph = create_river_graph(simulation_rivers)
-        grouped_subbasins = group_subbasins(
-            river_graph=river_graph,
-            max_area_m2=1e20,  # very large to force single group only
+        subbasins_of_interest: Literal["all"] | Literal["auto"] | list[int] = deepcopy(
+            self.config["subbasins"]
         )
+        if isinstance(subbasins_of_interest, list) or subbasins_of_interest == "auto":
+            if isinstance(subbasins_of_interest, list) and not all(
+                subbasin_id in subbasins.index for subbasin_id in subbasins_of_interest
+            ):
+                raise ValueError(
+                    f"Invalid subbasin IDs in config: {self.config['subbasins']}. Not all IDs available in config."
+                )
+            if subbasins_of_interest == "auto":
+                max_discharge_per_river_during_event = discharge_by_river_run.loc[
+                    event.start_time : event.end_time
+                ].max()
+
+                # find all basins where the discharge exceeds bankfull discharge during the event
+                subbasins_where_bankful_is_exceeded = (
+                    max_discharge_per_river_during_event.loc[active_rivers.index]
+                    > active_rivers["return_period_2_years_daily_m3_per_s"]
+                )
+
+                # select those basins and their downstream basins for simulation
+                river_graph = create_river_graph(simulation_rivers)
+                subbasins_of_interest: set[int] = {
+                    node_or_desc
+                    for node in subbasins_where_bankful_is_exceeded[
+                        subbasins_where_bankful_is_exceeded
+                    ].index
+                    for node_or_desc in (node, *nx.descendants(river_graph, node))
+                }
+            else:
+                subbasins_of_interest: set[int] = set(subbasins_of_interest)
+
+            # get the subbasins that are included in the simulation (i.e., those that are part of the subbasins of interest)
+            included_subbasins: gpd.GeoDataFrame = subbasins[
+                subbasins.index.isin(subbasins_of_interest)
+            ]
+
+            # get downstream subbasins of the included subbasins (but not already part of the basins themselves)
+            downstream_subbasins: gpd.GeoDataFrame = subbasins[
+                (
+                    subbasins.index.isin(
+                        rivers.loc[included_subbasins.index]["downstream_ID"]
+                    )
+                    & (~subbasins.index.isin(included_subbasins.index))
+                )
+            ]
+
+            # reset rivers downstream outflow column
+            # these values are set correctly for the normal case, but when we select
+            # only part of the subbasins only the required ones must be selected
+            rivers["is_downstream_outflow"] = False
+            rivers["is_further_downstream_outflow"] = False
+
+            # set downstream outflow for the downstream subbasins
+            for downstream_subbasin_id in downstream_subbasins.index:
+                rivers.loc[downstream_subbasin_id, "is_downstream_outflow"] = True
+
+                further_downstream_river = rivers.loc[
+                    downstream_subbasin_id, "downstream_ID"
+                ]
+                while further_downstream_river != -1:
+                    rivers.loc[
+                        further_downstream_river, "is_further_downstream_outflow"
+                    ] = True
+                    further_downstream_river = rivers.loc[
+                        further_downstream_river, "downstream_ID"
+                    ]
+
+            # remove is_further_downstream_outflow if also is_downstream_outflow
+            rivers.loc[
+                rivers["is_downstream_outflow"]
+                & rivers["is_further_downstream_outflow"],
+                "is_further_downstream_outflow",
+            ] = False
+
+            grouped_subbasins = {0: list(included_subbasins.index)}
+        elif subbasins_of_interest == "all":
+            river_graph = create_river_graph(simulation_rivers)
+            grouped_subbasins = group_subbasins(
+                river_graph=river_graph,
+                max_area_m2=1e20,  # very large to force single group only
+            )
+        else:
+            raise ValueError(
+                f"Invalid config for floods subbasins: {self.config['subbasins']}. Expected 'all' or a list of subbasin ids."
+            )
 
         assert len(grouped_subbasins) == 1, "currently only single group supported"
         for group_id, group in grouped_subbasins.items():
@@ -486,40 +572,66 @@ class Floods(Module):
             )
             subbasins_group = subbasins[subbasins.index.isin(group)]
 
-            discharge_by_river = self.discharge_by_river(
-                self.model.config["general"]["spinup_name"]
-            )
+            if not subbasins_group.empty:
+                sfincs_root_model: SFINCSRootModel = self.build(
+                    f"group_{group_id}",
+                    all_rivers=rivers,
+                    subbasins=subbasins_group,
+                )  # build or read the model
+                sfincs_simulation: SFINCSSimulation = (
+                    self.set_forcing(  # set the forcing
+                        sfincs_root_model,
+                        event,
+                        active_basins=group,
+                        discharge_by_river=discharge_by_river_run,
+                    )
+                )
+                self.model.logger.info(
+                    f"Running SFINCS for {self.model.current_time}..."
+                )  # log the start of the simulation
 
-            sfincs_root_model = self.build(
-                f"group_{group_id}",
-                rivers=rivers,
-                discharge_by_river=discharge_by_river,
-                subbasins=subbasins_group,
-            )  # build or read the model
-            sfincs_simulation = self.set_forcing(  # set the forcing
-                sfincs_root_model, event, active_basins=group
-            )
-            self.model.logger.info(
-                f"Running SFINCS for {self.model.current_time}..."
-            )  # log the start of the simulation
+                sfincs_simulation.run(
+                    gpu=self.config.get("SFINCS", {}).get("gpu", "auto"),
+                )  # run the simulation
 
-            sfincs_simulation.run(
-                gpu=self.config.get("SFINCS", {}).get("gpu", "auto"),
-            )  # run the simulation
+                if event.export_max_intensity and event.export_final_intensity:
+                    raise ValueError(
+                        "Only one of 'export_max_intensity' or 'export_final_intensity' can be True."
+                    )
+                if event.export_max_intensity:
+                    flood_depth: xr.DataArray = sfincs_simulation.read_max_flood_depth(
+                        self.config["minimum_flood_depth"]
+                    )  # read the flood depth results
+                elif event.export_final_intensity:
+                    flood_depth: xr.DataArray = (
+                        sfincs_simulation.read_final_flood_depth(
+                            self.config["minimum_flood_depth"]
+                        )
+                    )  # read the flood depth results
+                else:
+                    raise ValueError(
+                        "Either 'export_max_intensity' or 'export_final_intensity' must be True."
+                    )
+            else:
+                self.model.logger.warning(
+                    "No subbasins exceeded bankfull thresholds. Creating dummy empty flood map."
+                )
+                dummy_sfincs_model = SFINCSRootModel(
+                    self.simulation_root, "dummy", logger=self.model.logger
+                )
+                dummy_mask = dummy_sfincs_model.create_mask(
+                    self.DEM_config,
+                    subbasins[~subbasins["is_downstream_outflow"]],
+                    self.config["grid_size_multiplier"],
+                )
 
-        if event.export_max_intensity and event.export_final_intensity:
-            raise ValueError(
-                "Only one of 'export_max_intensity' or 'export_final_intensity' can be True."
-            )
+                flood_depth = dummy_mask.astype(np.float32)
+                flood_depth[:] = 0
+                flood_depth.attrs["_FillValue"] = np.nan
+
         if event.export_max_intensity:
-            flood_depth: xr.DataArray = sfincs_simulation.read_max_flood_depth(
-                self.config["minimum_flood_depth"]
-            )  # read the flood depth results
             postfix = "_max"
         elif event.export_final_intensity:
-            flood_depth: xr.DataArray = sfincs_simulation.read_final_flood_depth(
-                self.config["minimum_flood_depth"]
-            )  # read the flood depth results
             postfix = "_final"
         else:
             raise ValueError(
@@ -527,9 +639,7 @@ class Floods(Module):
             )
 
         filename: Path = (
-            self.model.output_folder
-            / "flood_maps"
-            / (sfincs_simulation.name + postfix + ".zarr")
+            self.model.output_folder / "flood_maps" / (event.name + postfix + ".zarr")
         )
 
         flood_depth: xr.DataArray = write_zarr(
@@ -557,10 +667,6 @@ class Floods(Module):
         Raises:
             ValueError: If no hydrograph is found for a node and return period.
         """
-        # close the zarr store
-        if hasattr(self.model, "reporter"):
-            self.model.reporter.variables["discharge_daily"].close()
-
         # load model settings
         coastal_only = self.config["coastal_only"]
 
@@ -568,10 +674,7 @@ class Floods(Module):
         subbasins = read_geom(self.model.files["geom"]["routing/subbasins"])
         coastal = subbasins["is_coastal"].any()
 
-        rivers = self.model.hydrology.routing.rivers
-        discharge_by_river = self.discharge_by_river(
-            self.model.config["general"]["spinup_name"]
-        )
+        rivers = self.model.hydrology.routing.var.rivers
         # if coastal load files
         if coastal:
             # Load mask of lower elevation coastal zones to activate cells for the different sfincs model regions
@@ -640,8 +743,7 @@ class Floods(Module):
                 name=model_name,
                 subbasins=coastal_subbasins,
                 coastal=True,
-                rivers=rivers[rivers.intersects(coastal_subbasins.union_all())],
-                discharge_by_river=discharge_by_river,
+                all_rivers=rivers[rivers.intersects(coastal_subbasins.union_all())],
                 coastal_boundary_exclude_mask=coastal_boundary_exclude_mask,
                 low_elevation_coastal_zone_mask=low_elevation_coastal_zone_mask,
                 initial_water_level=initial_water_level,
@@ -661,7 +763,7 @@ class Floods(Module):
         # Subset subbasins to only subbasins that are either represented in the grid,
         # or have upstream rivers that are.
         riverine_active_subbasin: gpd.GeoDataFrame = subbasins[
-            subbasins.index.isin(self.model.hydrology.routing.active_rivers.index)
+            subbasins.index.isin(self.model.hydrology.routing.get_active_rivers().index)
         ]
 
         for subbasin_id, subbasin in riverine_active_subbasin.iterrows():
@@ -680,8 +782,7 @@ class Floods(Module):
                 sfincs_inland_root_model = self.build(
                     name=f"inland_subbasin_{subbasin_id}",
                     subbasins=region_subbasins,
-                    rivers=region_rivers,
-                    discharge_by_river=discharge_by_river,
+                    all_rivers=region_rivers,
                     coastal=False,
                 )
                 _shape_config = self.config.get("hydrograph_shape", {})
@@ -739,26 +840,41 @@ class Floods(Module):
                 simulations.append(sfincs_coastal_simulation)
 
             for sfincs_inland_root_model in sfincs_inland_root_models:
-                inflow_nodes = sfincs_inland_root_model.active_rivers[
-                    ~sfincs_inland_root_model.active_rivers["is_downstream_outflow"]
-                ]
+                inflow_nodes = sfincs_inland_root_model.active_rivers
                 inflow_nodes["geometry"] = inflow_nodes["geometry"].apply(
                     get_start_point
                 )
 
                 # Build list of hydrograph DataFrames using the original node indices as column names
-                Q: list[pd.DataFrame] = []
-                for node_idx in inflow_nodes.index:
-                    hydro = inflow_nodes.at[node_idx, f"hydrograph_{return_period}"]
+                Q: list[pd.Series] = []
+                for node_idx, row in inflow_nodes[
+                    ~inflow_nodes["is_downstream_outflow"]
+                ].iterrows():
+                    hydro = row[f"hydrograph_{return_period}"]
                     if hydro is None:
                         raise ValueError(
                             f"No hydrograph found for node {node_idx} and return period {return_period}."
                         )
                     # hydro is expected to be dict-like {iso_timestamp: Q} — convert to DataFrame with column named node_idx
-                    df = pd.DataFrame.from_dict(
-                        hydro, orient="index", columns=np.array([node_idx])
+                    Q.append(pd.Series(hydro, name=node_idx))
+
+                for node_idx in inflow_nodes[
+                    inflow_nodes["is_downstream_outflow"]
+                ].index:
+                    upstream_rivers = rivers[
+                        (rivers["downstream_ID"] == node_idx)
+                        & (~rivers.index.isin(inflow_nodes.index))
+                    ]
+
+                    Q.append(
+                        pd.Series(
+                            discharge_for_return_periods[upstream_rivers.index]
+                            .mean(axis=0)
+                            .sum(axis=0),
+                            index=Q[0].index,
+                            name=node_idx,
+                        )
                     )
-                    Q.append(df)
 
                 # Concatenate the per-node series into a single DataFrame; index -> timestamps
                 Q: pd.DataFrame = pd.concat(Q, axis=1)
@@ -782,6 +898,7 @@ class Floods(Module):
                     nodes=inflow_nodes.to_crs(sfincs_inland_root_model.crs),
                     timeseries=Q,
                 )
+                sfincs_inland_simulation.inflow_was_set = True
 
                 simulations.append(sfincs_inland_simulation)
 
@@ -895,49 +1012,44 @@ class Floods(Module):
             overland_runoff_m
         )  # this is a deque, so it will automatically remove the oldest runoff
 
-    def discharge_by_river(self, run_name: str) -> pd.DataFrame:
+    def discharge_by_river(self, run_name: str | None = None) -> pd.DataFrame:
         """Open the discharge datasets from the model output folder.
 
         Args:
             run_name: The name of the run to use for estimating discharge (e.g., "spinup").
+                If None (default), the current run is used.
 
         Returns:
             A pandas DataFrame containing the discharge time series for each river, indexed by timestamp.
-
-        Raises:
-            ValueError: If there is not enough data available for reliable spinup.
         """
-        rivers: gpd.GeoDataFrame = (
-            self.model.hydrology.routing.get_active_and_downstream_outflow_rivers()
-        )
-        all_rivers = self.model.hydrology.routing.rivers
-
-        discharge = read_discharge_per_river(
-            folder=self.model.report_folder.parent.parent
-            / run_name
-            / "report"
-            / "hydrology.routing",
-            rivers=rivers,
-            all_rivers=all_rivers,
-        )
+        rivers: gpd.GeoDataFrame = self.model.hydrology.routing.get_active_rivers()
+        all_rivers = self.model.hydrology.routing.var.rivers
 
         # if spinup is requested, at least discard the first 10 years of data.
         if run_name == self.model.config["general"]["spinup_name"]:
+            assert run_name is not None
+            discharge = get_discharge_per_river(
+                folder=self.model.report_folder.parent.parent
+                / run_name
+                / "report"
+                / "hydrology.routing",
+                rivers=rivers,
+                all_rivers=all_rivers,
+            )
             start_time = discharge.index[0] + pd.DateOffset(years=10)
         else:
+            discharge = get_discharge_per_river(
+                rivers=rivers,
+                all_rivers=all_rivers,
+                source="memory",
+                variables_to_report=self.hydrology.routing.variables_to_report,
+            )
             start_time = discharge.index[0]
 
         discharge = discharge.loc[start_time:]
 
         # set the frequency of the index
         discharge.index.freq = pd.infer_freq(discharge.index)
-
-        # make sure there is at least 20 years of data
-        if (discharge.index[-1].year - discharge.index[0].year) < 20:
-            raise ValueError(
-                f"""Not enough data available for reliable {run_name}, should be at least 20 years of data left.
-                Please run the model for at least 30 years (10 years of data is discarded)."""
-            )
 
         return discharge
 
@@ -961,11 +1073,11 @@ class Floods(Module):
         rivers: gpd.GeoDataFrame = (
             self.model.hydrology.routing.get_active_and_downstream_outflow_rivers()
         )
-        all_rivers = self.model.hydrology.routing.rivers
+        all_rivers = self.model.hydrology.routing.var.rivers
 
         spinup_name = self.model.config["general"]["spinup_name"]
         output_root = self.model.report_folder.parent.parent
-        spinup_discharge = read_discharge_per_river(
+        spinup_discharge = get_discharge_per_river(
             folder=output_root / spinup_name / "report" / "hydrology.routing",
             rivers=rivers,
             all_rivers=all_rivers,
@@ -983,7 +1095,7 @@ class Floods(Module):
 
         run_folder = output_root / run_name / "report" / "hydrology.routing"
         if run_folder.exists():
-            run_discharge = read_discharge_per_river(
+            run_discharge = get_discharge_per_river(
                 folder=run_folder,
                 rivers=rivers,
                 all_rivers=all_rivers,

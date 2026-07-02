@@ -74,6 +74,7 @@ class HouseholdVariables(Bucket):
     water_demand_per_household_year: int
     water_demand_per_household_m3_gridded: ArrayFloat32
     households_with_postal_codes: gpd.GeoDataFrame
+    ead_usd_per_year: DynamicArray
 
 
 class Households(AgentBaseClass):

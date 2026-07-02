@@ -191,7 +191,7 @@ class ReservoirOperators(AgentBaseClass):
         """Initialize the reservoir operators during spinup."""
         # Based on Shin et al. (2019)
         # https://agupubs.onlinelibrary.wiley.com/doi/10.1029/2018WR023025
-        self.var.reservoir_M_factor: DynamicArray = DynamicArray(
+        self.var.reservoir_M_factor = DynamicArray(
             np.full_like(
                 self.storage,
                 self.config["reservoir_M_factor"],

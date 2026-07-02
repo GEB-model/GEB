@@ -29,7 +29,7 @@ from geb.geb_types import (
     ArrayInt64,
     TwoDArrayInt32,
 )
-from geb.hydrology.routing import get_upstream_represented_xys
+from geb.hydrology.routing import get_river_representative_xys
 from geb.module import Module
 from geb.store import DynamicArray
 from geb.workflows.io import fast_rmtree, read_geom, write_table
@@ -976,17 +976,15 @@ class Reporter:
                     elif module_name == "_outflow_points":
                         if module_values is True:
                             routing = self.model.hydrology.routing
-                            outflow_rivers = (
-                                routing.get_active_and_downstream_outflow_rivers()
-                            )
-                            all_rivers = routing.rivers
+                            rivers = routing.get_active_rivers()
+                            all_rivers = routing.var.rivers
 
                             outflow_reporters = {}
 
-                            for river_ID, river in outflow_rivers.iterrows():
+                            for river_ID, river in rivers.iterrows():
                                 assert isinstance(river_ID, int)
                                 xys: list[tuple[int, int]] = (
-                                    get_upstream_represented_xys(river_ID, all_rivers)
+                                    get_river_representative_xys(river_ID, all_rivers)
                                 )
                                 for i, xy in enumerate(xys):
                                     # if there are multiple branches, we append a suffix to the name
@@ -1431,7 +1429,7 @@ class Reporter:
         self,
         module_name: str,
         name: str,
-        value: np.ndarray | np.generic,
+        value: np.ndarray | np.generic | float,
         config: dict,
     ) -> None:
         """Exports an array of values to the export folder.

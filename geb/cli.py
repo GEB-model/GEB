@@ -22,6 +22,7 @@ from geb.runner import (
     OPTIMIZE_DEFAULT,
     PROFILE_RAM_DEFAULT,
     PROFILE_SPEED_DEFAULT,
+    SKIP_DONE_DEFAULT,
     TIMING_DEFAULT,
     UPDATE_DEFAULT,
     WORKING_DIRECTORY_DEFAULT,
@@ -258,6 +259,12 @@ def click_run_options() -> Any:
         """
 
         @universal_options
+        @click.option(
+            "--skip-done",
+            is_flag=True,
+            default=SKIP_DONE_DEFAULT,
+            help="Only run the method if the model is not already marked as done.",
+        )
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             """Wrapper function for run options.
@@ -493,7 +500,14 @@ def init(*args: Any, **kwargs: Any) -> None:
 @universal_options
 @click.pass_context
 def set(
-    ctx: click.Context, config: Path, working_directory: Path, **kwargs: Any
+    ctx: click.Context,
+    config: Path,
+    working_directory: Path,
+    profile_speed: bool,
+    profile_ram: bool,
+    optimize: bool,
+    timing: bool,
+    cores: int | None,
 ) -> None:
     """Set model configuration values.
 
@@ -507,8 +521,11 @@ def set(
         ctx: Click context containing extra arguments.
         config: Path to the model configuration file.
         working_directory: Working directory for the model.
-        **kwargs: Universal options.
-
+        profile_speed: Whether to profile speed.
+        profile_ram: Whether to profile RAM.
+        optimize: Whether to optimize.
+        timing: Whether to record timing information.
+        cores: Number of CPU cores to use.
     """
     # Parse extra arguments as key=value pairs
     params = {}
@@ -560,7 +577,16 @@ def set(
                 err=True,
             )
 
-    set_fn(config=config, working_directory=working_directory, **params)
+    set_fn(
+        config=config,
+        working_directory=working_directory,
+        profile_speed=profile_speed,
+        profile_ram=profile_ram,
+        optimize=optimize,
+        timing=timing,
+        cores=cores,
+        **params,
+    )
 
 
 @cli.command()

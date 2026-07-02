@@ -50,7 +50,7 @@ class CMIP6(Adapter):
 
     def construct_request(
         self,
-        years: list[int],
+        years: list[str],
         bounds: tuple[float, float, float, float],
         variable: str,
         experiment: str = "historical",
@@ -213,7 +213,7 @@ class CMIP6(Adapter):
         combined = xr.Dataset()
         for variable, delta in deltas.items():
             combined[variable + "_delta"] = delta
-        combined["time"] = combined.indexes["time"].to_datetimeindex()
+        combined["time"] = combined.indexes["time"].to_datetimeindex()  # ty:ignore[unresolved-attribute]
         combined = combined.rename({"lon": "x", "lat": "y"}).to_array()
         # assert that there are no NaN values in the combined deltas, which would indicate a problem with the delta calculation
         if combined.isnull().any().compute().item():

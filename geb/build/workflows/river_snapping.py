@@ -2,6 +2,7 @@
 
 import warnings
 from pathlib import Path
+from typing import NamedTuple
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -16,6 +17,29 @@ from shapely.ops import nearest_points
 from geb.workflows.io import get_window
 
 
+class RiverSegment(NamedTuple):
+    """Container for a river segment."""
+
+    geometry: shapely.geometry.LineString
+    hydrography_xy: list[tuple[int, int]]
+    uparea_m2: float
+    station_distance: float
+    shreve_stream_order: int
+
+
+class SnappingResults(NamedTuple):
+    """Container for snapping results."""
+
+    closest_point_coords: tuple[float, float]
+    subgrid_pixel_coords: tuple[float, float]
+    snapped_grid_pixel_lonlat: tuple[float, float]
+    snapped_grid_pixel_xy: tuple[int, int]
+    geb_uparea_subgrid: float
+    geb_uparea_grid: float
+    distance_degrees: float
+    closest_river_segment: RiverSegment
+
+
 def plot_snapping(
     point_id: int | str,
     output_folder: Path,
@@ -23,7 +47,7 @@ def plot_snapping(
     upstream_area: xr.DataArray,
     original_coords: tuple[float, float],
     closest_point_coords: tuple[float, float],
-    closest_river_segment: gpd.GeoDataFrame,
+    closest_river_segment: RiverSegment,
     grid_pixel_xy: tuple[int, int],
     filename_prefix: str = "snapping",
     point_label: str = "Original point",
@@ -143,7 +167,7 @@ def plot_snapping(
         alpha=1,
     )  # ty:ignore[missing-argument]
     rivers.plot(ax=ax, color="blue", linewidth=1)
-    closest_river_segment.plot(
+    gpd.GeoSeries([closest_river_segment.geometry]).plot(
         ax=ax, color="green", linewidth=3, label="Closest river segment"
     )
 
@@ -171,7 +195,7 @@ def snap_point_to_river_network(
     upstream_area_m2: float | None = None,
     max_uparea_difference_ratio: float = 0.3,
     max_spatial_difference_degrees: float = 0.1,
-) -> dict | None:
+) -> SnappingResults | None:
     """Snap a point to the river network grid.
 
     This function finds the closest river segment (optionally matching upstream area),
@@ -188,16 +212,7 @@ def snap_point_to_river_network(
         max_spatial_difference_degrees: Max allowed spatial distance in degrees.
 
     Returns:
-        Dictionary with snapping results or None if no segment found.
-        The dictionary contains:
-            - closest_point_coords: (lon, lat) on the river line.
-            - subgrid_pixel_coords: (lon, lat) of the corresponding high-res pixel.
-            - snapped_grid_pixel_lonlat: (lon, lat) of the snapped low-res grid cell.
-            - snapped_grid_pixel_xy: (x_idx, y_idx) indices in the low-res grid.
-            - geb_uparea_subgrid: Upstream area from the subgrid (m2).
-            - geb_uparea_grid: Upstream area from the low-res grid (m2).
-            - distance_degrees: Distance from original point to segment (degrees).
-            - closest_river_segment: The selected river segment (GeoDataFrame).
+        SnappingResults or None if no segment found.
     """
     # Calculate distances and sort from closest to furthest
     rivers = rivers.copy()
@@ -225,9 +240,7 @@ def snap_point_to_river_network(
     # Then along the selected river segment, we find the closest point on the river line to the original point.
     # The first point returned by nearest_points is the point itself,
     # the second is the closest point on the linestring.
-    _, closest_point_on_riverline = nearest_points(
-        point, best_river_segment.iloc[0].geometry
-    )
+    _, closest_point_on_riverline = nearest_points(point, best_river_segment.geometry)
 
     # Next, we find the corresponding cell in the high-resolution subgrid that is part of the river network.
     river_cell_in_subgrid = upstream_area_subgrid.sel(
@@ -239,7 +252,7 @@ def snap_point_to_river_network(
     # then we find the river cell in the low resolution grid that is closest to the snapped
     # river point, and that is part of the same river segment.
     # hydrography_xy contains the list of (x,y) coordinates in the low-res grid that belong to the river segment.
-    hydrography_xy = best_river_segment.iloc[0]["hydrography_xy"]
+    hydrography_xy = best_river_segment.hydrography_xy
     river_points_and_xy = []
     for xy in hydrography_xy:
         river_points_and_xy.append(
@@ -256,29 +269,29 @@ def snap_point_to_river_network(
         key=lambda x: shapely.distance(x[0], closest_point_on_riverline),
     )
 
-    return {
-        "closest_point_coords": (
+    return SnappingResults(
+        closest_point_coords=(
             float(closest_point_on_riverline.x),
             float(closest_point_on_riverline.y),
         ),
-        "subgrid_pixel_coords": (
+        subgrid_pixel_coords=(
             river_cell_in_subgrid.x.item(),
             river_cell_in_subgrid.y.item(),
         ),
-        "snapped_grid_pixel_lonlat": (
+        snapped_grid_pixel_lonlat=(
             closest_river_point_and_xy[0].x,
             closest_river_point_and_xy[0].y,
         ),
-        "snapped_grid_pixel_xy": closest_river_point_and_xy[1],
-        "geb_uparea_subgrid": (river_cell_in_subgrid.item()),
-        "geb_uparea_grid": (
+        snapped_grid_pixel_xy=closest_river_point_and_xy[1],
+        geb_uparea_subgrid=(river_cell_in_subgrid.item()),
+        geb_uparea_grid=(
             upstream_area_grid.isel(
                 x=closest_river_point_and_xy[1][0], y=closest_river_point_and_xy[1][1]
             ).item()
         ),
-        "distance_degrees": best_river_segment.iloc[0].station_distance,
-        "closest_river_segment": best_river_segment,
-    }
+        distance_degrees=best_river_segment.station_distance,
+        closest_river_segment=best_river_segment,
+    )
 
 
 def select_river_segment(
@@ -286,7 +299,7 @@ def select_river_segment(
     max_spatial_difference_degrees: float,
     upstream_area_m2: float | None = None,
     max_uparea_difference_ratio: float = 0.3,
-) -> gpd.GeoDataFrame | None:
+) -> RiverSegment | None:
     """Select the closest river segment that matches optional upstream area criteria.
 
     Args:
@@ -314,4 +327,10 @@ def select_river_segment(
     if closest_river_segment.iloc[0].station_distance > max_spatial_difference_degrees:
         return None
 
-    return closest_river_segment.iloc[0:1]
+    return RiverSegment(
+        geometry=closest_river_segment.iloc[0].geometry,
+        hydrography_xy=closest_river_segment.iloc[0].hydrography_xy,
+        uparea_m2=closest_river_segment.iloc[0].uparea_m2,
+        station_distance=closest_river_segment.iloc[0].station_distance,
+        shreve_stream_order=closest_river_segment.iloc[0].shreve_stream_order,
+    )

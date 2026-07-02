@@ -270,7 +270,7 @@ class CropFarmersVariables(Bucket):
     farmer_yield_probability_relation: DynamicArray
     irr_eff_sprinkler: float
     return_fraction_sprinkler: float
-    mean_irrigation_efficiency: float
+    mean_irrigation_efficiency: np.floating
     irrigation_efficiency_group: DynamicArray
     adjusted_annual_loan_cost: DynamicArray
     adjusted_yearly_income: DynamicArray
@@ -2751,8 +2751,8 @@ class CropFarmers(AgentBaseClass):
 
     def save_yearly_income(
         self,
-        income: np.ndarray,
-        potential_income: np.ndarray,
+        income: DynamicArray,
+        potential_income: DynamicArray,
     ) -> None:
         """Saves the latest profit and potential profit values for harvesting farmers to determine yearly profits, considering inflation and field size.
 
@@ -2774,7 +2774,7 @@ class CropFarmers(AgentBaseClass):
         self,
         yearly_yield_ratio: DynamicArray,
         yearly_SPEI_probability: DynamicArray,
-        unique_group_differentiator: npt.NDArray[np.bool_] = None,
+        unique_group_differentiator: npt.NDArray[np.bool_] | None = None,
         drop_k: int = 2,
     ) -> npt.NDArray[np.floating]:
         """Fit grouped exponential yield-SPEI model and return per-farmer parameters.
@@ -4404,7 +4404,7 @@ class CropFarmers(AgentBaseClass):
 
     def create_unique_groups(
         self,
-        *additional_diffentiators: npt.NDArray[np.integer],
+        *additional_diffentiators: DynamicArray,
     ) -> tuple[npt.NDArray[np.int_], int]:
         """Create per-agent group indices from base classes and optional differentiators.
 

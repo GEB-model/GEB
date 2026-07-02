@@ -1,7 +1,6 @@
 """Module implementing hydrodynamics evaluation functions for the GEB model."""
 
 import json
-from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -17,6 +16,7 @@ import xarray as xr
 from matplotlib.colors import LightSource
 from matplotlib.lines import Line2D
 from rasterio.features import geometry_mask
+from rioxarray.exceptions import NoDataInBounds
 
 from geb.workflows.io import read_geom, read_zarr
 
@@ -81,8 +81,11 @@ def calculate_false_alarm_ratio(
 
     false_alarm = np.sum(((simulations == 1) & (observations == 0)).values)
     hit = np.sum(((simulations == 1) & (observations == 1)).values)
-    false_alarm_ratio = false_alarm / (false_alarm + hit)
-    return float(false_alarm_ratio)
+    if false_alarm + hit == 0:
+        return 0.0  # Avoid division by zero; if no hits or false alarms, FAR is defined as 0
+    else:
+        false_alarm_ratio = false_alarm / (false_alarm + hit)
+        return float(false_alarm_ratio)
 
 
 def calculate_hit_rate(simulations: xr.DataArray, observations: xr.DataArray) -> float:
@@ -191,7 +194,6 @@ def calculate_performance_metrics(
             - false_alarm_ratio_pct: Percentage of falsely predicted flooded areas.
             - csi_pct: Percentage of accurately predicted flood areas (CSI).
             - flooded_area_km2: Total flooded area in square kilometers.
-        or None if an error occurs.
 
     Raises:
         ValueError: If visualization_type is unknown.
@@ -233,12 +235,23 @@ def calculate_performance_metrics(
     observation: xr.DataArray = observation.where(~river_mask).fillna(0)
 
     # Clip out region from observations
-    observation = observation.rio.clip(
-        subbasins.geometry.values, subbasins.crs
-    ).compute()
-    simulated: xr.DataArray = simulated.rio.clip(
-        subbasins.geometry.values, subbasins.crs
-    ).compute()
+    try:
+        observation = observation.rio.clip(
+            subbasins.geometry.values, subbasins.crs
+        ).compute()
+    except NoDataInBounds:
+        print(
+            f"No observation data found within the subbasin bounds for event {name}. Skipping this event."
+        )
+        return None
+    try:
+        simulated: xr.DataArray = simulated.rio.clip(
+            subbasins.geometry.values, subbasins.crs
+        ).compute()
+    except NoDataInBounds:
+        print(
+            f"No simulated data found within the subbasin bounds for event {name}. Skipping this event."
+        )
 
     # Create masks for remapping and plotting
     # 'encoding': {'invalid': -2, 'cloud': -1, 'land': 0, 'flood': 2, 'permanent_water': 1}
@@ -272,7 +285,7 @@ def calculate_performance_metrics(
     )
     csi_pct: float = calculate_critical_success_index(simulated, observation) * 100
 
-    flooded_pixels = float((simulated == 1).sum().item())
+    flooded_pixels = float((simulated == 1).sum())
 
     # Calculate resolution in meters from coordinate spacing
     x_res = float(np.abs(simulated.x[1] - simulated.x[0]))
@@ -314,7 +327,7 @@ def calculate_performance_metrics(
             cloud_cmap = mcolors.ListedColormap(["white"])
             cloud_mask.where(cloud_mask == 1).plot(
                 ax=ax, cmap=cloud_cmap, add_colorbar=False, add_labels=False, zorder=1.1
-            )
+            )  # ty:ignore[missing-argument]
 
             # Invalid: grey, half transparent
             invalid_cmap = mcolors.ListedColormap(["grey"])
@@ -501,7 +514,7 @@ def calculate_performance_metrics(
             cloud_cmap = mcolors.ListedColormap(["white"])
             cloud_mask.where(cloud_mask == 1).plot(
                 ax=ax, cmap=cloud_cmap, add_colorbar=False, add_labels=False, zorder=1.1
-            )
+            )  # ty:ignore[missing-argument]
 
             # Invalid: grey, half transparent
             invalid_cmap = mcolors.ListedColormap(["grey"])
@@ -819,7 +832,7 @@ class Hydrodynamics:
 
     def evaluate_flood(
         self, run_name: str = "default", *args: Any, **kwargs: Any
-    ) -> None:
+    ) -> dict[str, float]:
         """Evaluate flood model performance against validation events.
 
         This method loads modelled flood maps and corresponding observations for
@@ -832,6 +845,12 @@ class Hydrodynamics:
             run_name: Name of the simulation run to evaluate.
             *args: Additional positional arguments (ignored).
             **kwargs: Additional keyword arguments (ignored).
+
+        Returns:
+            Dictionary containing mean performance metrics across all validation events:
+                - CSI_mean: Mean critical success index across events.
+                - FAR_mean: Mean false alarm ratio across events.
+                - HR_mean: Mean hit rate across events.
 
         Raises:
             FileNotFoundError: If the flood map folder or observation file does not exist.
@@ -853,50 +872,72 @@ class Hydrodynamics:
         validation_events_file = self.model.files["geom"]["observations/floods"]
         validation_events = read_geom(validation_events_file)
 
-        for _, event_row in validation_events.iterrows():
-            date: pd.Timestamp = event_row["observation_date"]
-            start_time = date.to_pydatetime().replace(
-                minute=0, second=0, microsecond=0
-            ) - timedelta(days=5)
-            end_time = date
-
-            event_name = event_row["name"]
-            print(f"Evaluating validation event: {event_name}")
-
-            # Create event-specific folder
-            event_folder = eval_flood_folders / event_name
-            event_folder.mkdir(parents=True, exist_ok=True)
-
-            # Find observation file from model files (setup via setup_flood_observations)
-            obs_file = self.model.files["other"][
-                f"observations/flood_maps/{event_name}"
-            ]
-
-            if not obs_file.exists():
-                raise FileNotFoundError(
-                    f"Observation file for event {event_name} not found at {obs_file}. Please check the path in the config file and ensure setup_flood_observations was run correctly."
-                )
-
-            flood_map_path = flood_maps_folder / f"{event_name}_final.zarr"
-
-            if not flood_map_path.exists():
-                raise FileNotFoundError(
-                    f"Flood map for event {event_name} not found at {flood_map_path}. Please check the path in the config file and ensure the simulation was run correctly."
-                )
-
-            calculate_performance_metrics(
-                observation=read_zarr(obs_file),
-                simulated=read_zarr(flood_map_path),
-                output_folder=event_folder,
-                run_name=run_name,
-                minimum_flood_depth=self.config["floods"]["minimum_flood_depth"],
-                elevation_data=read_zarr(self.model.files["other"]["DEM/fabdem"]),
-                visualization_type="OSM",
-                name=flood_map_path.stem,
+        if validation_events.empty:
+            self.model.logger.warning(
+                "No validation events found in the observation file. Skipping evaluation."
             )
-            print(f"Successfully evaluated: {flood_map_path.name}")
+            return {
+                "CSI_mean": np.nan,
+                "FAR_mean": np.nan,
+                "HR_mean": np.nan,
+            }
+        else:
+            performance_metrics_list: list[dict[str, float | int]] = []
+            for _, event_row in validation_events.iterrows():
+                event_name = event_row["name"]
+                self.model.logger.info(f"Evaluating event: {event_name}")
 
-        print("Finished evaluating validation flood events.")
+                # Create event-specific folder
+                event_folder = eval_flood_folders / event_name
+                event_folder.mkdir(parents=True, exist_ok=True)
+
+                # Find observation file from model files (setup via setup_flood_observations)
+                obs_file = self.model.files["other"][
+                    f"observations/floods/{event_name}"
+                ]
+
+                if not obs_file.exists():
+                    raise FileNotFoundError(
+                        f"Observation file for event {event_name} not found at {obs_file}. Please check the path in the config file and ensure setup_flood_observations was run correctly."
+                    )
+
+                flood_map_path = flood_maps_folder / f"{event_name}_final.zarr"
+
+                if not flood_map_path.exists():
+                    raise FileNotFoundError(
+                        f"Flood map for event {event_name} not found at {flood_map_path}. Please check the path in the config file and ensure the simulation was run correctly."
+                    )
+
+                performance = calculate_performance_metrics(
+                    observation=read_zarr(obs_file),
+                    simulated=read_zarr(flood_map_path),
+                    output_folder=event_folder,
+                    run_name=run_name,
+                    minimum_flood_depth=self.config["floods"]["minimum_flood_depth"],
+                    elevation_data=read_zarr(self.model.files["other"]["DEM/fabdem"]),
+                    visualization_type="OSM",
+                    name=flood_map_path.stem,
+                )
+                if performance is None:
+                    self.model.logger.warning(
+                        f"Performance metrics calculation failed for event {event_name}. Skipping."
+                    )
+                    continue
+
+                self.model.logger.info(f"Successfully evaluated: {flood_map_path.name}")
+                performance_metrics_list.append(performance)
+
+            overall_performance_df = pd.DataFrame(performance_metrics_list)
+            overall_performance_df.to_csv(
+                eval_flood_folders / "overall_performance_metrics.csv", index=False
+            )
+            self.model.logger.info("Finished evaluating validation flood events.")
+
+            return {
+                "CSI_mean": overall_performance_df["csi_pct"].mean(),
+                "FAR_mean": overall_performance_df["false_alarm_ratio_pct"].mean(),
+                "HR_mean": overall_performance_df["hit_rate_pct"].mean(),
+            }
 
     def evaluate_hydrodynamics(
         self, run_name: str = "default", *args: Any, **kwargs: Any
@@ -928,7 +969,7 @@ class Hydrodynamics:
         # Calculate performance metrics for every event in config file
         for event in self.config["floods"]["events"]:
             event_name = f"{event['start_time'].strftime('%Y%m%dT%H%M%S')} - {event['end_time'].strftime('%Y%m%dT%H%M%S')}"
-            print(f"event: {event_name}")
+            self.model.logger.info(f"event: {event_name}")
 
             # Create event-specific folder
             if self.model.config["general"]["forecasts"]["use"]:
@@ -988,12 +1029,12 @@ class Hydrodynamics:
                 if parsed_event_name == event_name:
                     flood_map_files.append(flood_map_path)
 
-            print(
+            self.model.logger.info(
                 f"Found {len(flood_map_files)} flood map files for event {event_name}"
             )
 
             if len(flood_map_files) == 1:
-                print(
+                self.model.logger.info(
                     "Only one flood map found, assuming no forecasts were included in the simulation."
                 )
                 flood_map_name = f"{event['start_time'].strftime('%Y%m%dT%H%M%S')} - {event['end_time'].strftime('%Y%m%dT%H%M%S')}.zarr"
