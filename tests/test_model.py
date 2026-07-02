@@ -784,7 +784,6 @@ def test_run_yearly() -> None:
         config["hazards"]["floods"]["simulate"] = True  # enable flood simulation
 
         args["config"] = config
-        args["config"]["report"] = {}
 
         with pytest.raises(
             ValueError,
