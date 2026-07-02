@@ -69,6 +69,7 @@ dependencies = [
     "pytest-benchmark>=5.2.1",
     "imageio>=2.37.2",
     "osmnx>=2.0.6",
+    "joblib>=1.5.2",
     "matplotlib>=3.10.7",
     "seaborn>=0.13.2",
     "cdsapi>=0.7.7",
@@ -83,7 +84,6 @@ dependencies = [
     "eccodes==2.44.0",  # pin until https://github.com/ecmwf/eccodes-python/issues/150 is fixed
     "pystac>=1.14.3",
     "hda>=2.39",
-    "scores>=2.5.0",
     "huggingface-hub>=1.18.0",
     "aiohttp-retry>=2.9.1",
     "scikit-image>=0.26.0",
