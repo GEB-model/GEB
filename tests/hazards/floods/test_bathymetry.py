@@ -155,7 +155,7 @@ def create_dummy_data(
                 12,  # 11 points to 12
                 -1,  # 12 is the outlet out of the domain
             ],
-            "shreve_stream_order": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 3, 1, 2],
+            "topological_stream_order": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 3, 1, 2],
         },
         geometry=rivers,
         index=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
