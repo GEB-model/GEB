@@ -76,6 +76,10 @@ class WEkEODownloadError(RuntimeError):
     """Raised when WEkEO/HDA could not download one or more requested tiles."""
 
 
+class WEkEONoCoverageError(FileNotFoundError):
+    """Raised when WEkEO returns no tile coverage for a requested area."""
+
+
 class WEkEOCopernicus(Adapter):
     """Downloader for WEkEO Copernicus tiles.
 
@@ -326,7 +330,7 @@ class WEkEOCopernicus(Adapter):
                 - a lookup mapping tile identifier to downloadable WEkEO result object.
 
         Raises:
-            FileNotFoundError: If the query returns no results, or if no returned
+            WEkEONoCoverageError: If the query returns no results, or if no returned
                 result IDs match the configured product code.
         """
         query = self._build_query(
@@ -340,7 +344,7 @@ class WEkEOCopernicus(Adapter):
         matches = client.search(query)
 
         if len(matches.results) == 0:
-            raise FileNotFoundError(
+            raise WEkEONoCoverageError(
                 f"No WEkEO results found for year={year}, bounds={bounds}."
             )
 
@@ -373,7 +377,7 @@ class WEkEOCopernicus(Adapter):
                 if self.product_code is None
                 else f" matching product_code={self.product_code!r}"
             )
-            raise FileNotFoundError(
+            raise WEkEONoCoverageError(
                 f"WEkEO returned results for query={query}, but no result IDs"
                 f"{product_code_message} were found. Skipped result IDs: "
                 f"{skipped_tile_ids}."

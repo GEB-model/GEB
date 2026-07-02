@@ -24,7 +24,9 @@ from geb.agents.crop_farmers import (
     TRADITIONAL_INSURANCE_ADAPTATION,
     WELL_ADAPTATION,
 )
+from geb.build.data_catalog.wekeo_copernicus import WEkEONoCoverageError
 from geb.build.methods import build_method
+from geb.build.workflows.crop_calendars import MIRCA_OS_CROP_CLASS_MAP
 from geb.build.workflows.farmers import (
     assert_matching_raster_grid,
     assign_regions_to_fields,
@@ -88,6 +90,53 @@ HRL_SECONDARY_CROP_SHORT_WINTER = 3
 HRL_SECONDARY_CROP_LONG_WINTER = 4
 
 MIRCA2000_UNIT_GRID = "mirca2000_unit_grid"
+
+_HRL_CROPLANDS_EEA38_ISO3 = frozenset(
+    {
+        # EU27
+        "AUT",
+        "BEL",
+        "BGR",
+        "HRV",
+        "CYP",
+        "CZE",
+        "DNK",
+        "EST",
+        "FIN",
+        "FRA",
+        "DEU",
+        "GRC",
+        "HUN",
+        "IRL",
+        "ITA",
+        "LVA",
+        "LTU",
+        "LUX",
+        "MLT",
+        "NLD",
+        "POL",
+        "PRT",
+        "ROU",
+        "SVK",
+        "SVN",
+        "ESP",
+        "SWE",
+        # non-EU EEA/Eionet member countries
+        "ISL",
+        "LIE",
+        "NOR",
+        "CHE",
+        "TUR",
+        # cooperating Western Balkan countries
+        "ALB",
+        "BIH",
+        "MNE",
+        "MKD",
+        "SRB",
+        # Kosovo code
+        "XKX",
+    }
+)
 
 
 def _default_size_class_boundaries() -> dict[str, tuple[int | float, int | float]]:
@@ -829,6 +878,75 @@ def check_crop_calendar(crop_calendar_per_farmer: np.ndarray) -> None:
                 np.unique(farmer_crop_calender[:, [1, 3]], axis=0).shape[0]
                 == farmer_crop_calender.shape[0]
             )
+
+
+# Manual replacement of certain crops
+def replace_crop(
+    crop_calendar_per_farmer: np.ndarray,
+    crop_values: np.ndarray | list[int],
+    replaced_crop_values: np.ndarray | list[int],
+) -> np.ndarray:
+    """Replace selected crops with the most common calendar of candidate crops.
+
+    The function first determines which crop value from `crop_values` occurs most
+    often in the first crop-calendar column. It then finds the most common full
+    crop-calendar pattern among farmers growing that crop. Finally, every farmer
+    growing one of the `replaced_crop_values` is assigned that replacement
+    calendar.
+
+    This is useful for removing unsupported or unwanted crop classes while
+    preserving a realistic cropping calendar from crops that are actually present
+    in the model domain.
+
+    Args:
+        crop_calendar_per_farmer: Crop-calendar array with shape
+            ``(n_farmers, n_rotations_or_seasons, n_variables)``. The crop class
+            is expected in ``crop_calendar_per_farmer[:, :, 0]``. Missing crop
+            entries are expected to use ``-1``.
+        crop_values: Candidate crop class values from which the replacement crop
+            calendar may be selected.
+        replaced_crop_values: Crop class values that should be replaced.
+
+    Returns:
+        The updated crop-calendar array. If none of the candidate crops are
+        present, the input array is returned unchanged.
+    """
+    # Find the most common crop value among the given crop_values
+    crop_instances = crop_calendar_per_farmer[:, :, 0][
+        np.isin(crop_calendar_per_farmer[:, :, 0], crop_values)
+    ]
+
+    # if none of the crops are present, no need to replace anything
+    if crop_instances.size == 0:
+        return crop_calendar_per_farmer
+
+    crops, crop_counts = np.unique(crop_instances, return_counts=True)
+    most_common_crop = crops[np.argmax(crop_counts)]
+
+    # Determine if there are multiple cropping versions of this crop and assign it to the most common
+    new_crop_types = crop_calendar_per_farmer[
+        (crop_calendar_per_farmer[:, :, 0] == most_common_crop).any(axis=1),
+        :,
+        :,
+    ]
+    unique_rows, counts = np.unique(new_crop_types, axis=0, return_counts=True)
+    max_index = np.argmax(counts)
+    crop_replacement = unique_rows[max_index]
+
+    crop_replacement_only_crops = crop_replacement[crop_replacement[:, -1] != -1]
+    if crop_replacement_only_crops.shape[0] > 1:
+        assert (
+            np.unique(crop_replacement_only_crops[:, [1, 3]], axis=0).shape[0]
+            == crop_replacement_only_crops.shape[0]
+        )
+
+    for replaced_crop in replaced_crop_values:
+        # Check where to be replaced crop is
+        crop_mask = (crop_calendar_per_farmer[:, :, 0] == replaced_crop).any(axis=1)
+        # Replace the crop
+        crop_calendar_per_farmer[crop_mask] = crop_replacement
+
+    return crop_calendar_per_farmer
 
 
 def _fill_missing_mirca2000_crop_calendars(
@@ -1828,6 +1946,8 @@ class Europe(GEBModel):
             ValueError: If the field-index raster cannot be created for a region.
             ValueError: If no dominant crop sequences can be derived.
             ValueError: If no field contains a valid HRL crop observation.
+            WEkEONoCoverageError: If the query returns no results, or if no returned
+                result IDs match the configured product code.
         """
         crop_columns = [f"crop_{year}" for year in years]
 
@@ -1963,33 +2083,72 @@ class Europe(GEBModel):
             for year_index, year in enumerate(years):
                 self.logger.info("Processing HRL Crop Types for %s.", year)
 
-                crop_types_adapter = self.data_catalog.fetch(
-                    f"hrl_crop_types_{year}",
-                    bounds=region_bounds,
-                    year=year,
-                )
-                crop_types: xr.DataArray = crop_types_adapter.read(
-                    bounds=region_bounds,
-                    year=year,
-                    dst_crs=None,
-                    normalize_nodata=False,
-                    chunks=raster_chunks,
-                )
+                country_iso3_upper = str(country_iso3).upper()
+                crop_types_adapter = None
+                secondary_crop_adapter = None
+                crop_types = None
+                secondary_crop = None
 
-                self.logger.info("Processing HRL Secondary Crops Type for %s.", year)
+                try:
+                    crop_types_adapter = self.data_catalog.fetch(
+                        f"hrl_crop_types_{year}",
+                        bounds=region_bounds,
+                        year=year,
+                    )
+                    crop_types: xr.DataArray = crop_types_adapter.read(
+                        bounds=region_bounds,
+                        year=year,
+                        dst_crs=None,
+                        normalize_nodata=False,
+                        chunks=raster_chunks,
+                    )
 
-                secondary_crop_adapter = self.data_catalog.fetch(
-                    f"hrl_secondary_crop_{year}",
-                    bounds=region_bounds,
-                    year=year,
-                )
-                secondary_crop: xr.DataArray = secondary_crop_adapter.read(
-                    bounds=region_bounds,
-                    year=year,
-                    dst_crs=None,
-                    normalize_nodata=False,
-                    chunks=raster_chunks,
-                )
+                    self.logger.info(
+                        "Processing HRL Secondary Crops Type for %s.", year
+                    )
+
+                    secondary_crop_adapter = self.data_catalog.fetch(
+                        f"hrl_secondary_crop_{year}",
+                        bounds=region_bounds,
+                        year=year,
+                    )
+                    secondary_crop: xr.DataArray = secondary_crop_adapter.read(
+                        bounds=region_bounds,
+                        year=year,
+                        dst_crs=None,
+                        normalize_nodata=False,
+                        chunks=raster_chunks,
+                    )
+
+                except WEkEONoCoverageError as error:
+                    if country_iso3_upper in _HRL_CROPLANDS_EEA38_ISO3:
+                        raise
+
+                    self.logger.warning(
+                        "Skipping region %s (%s) because WEkEO returned no HRL Croplands "
+                        "tiles for year %s and this country is not part of the HRL Croplands "
+                        "EEA38 coverage. This is expected for basin-border regions in countries "
+                        "such as Ukraine or Moldova, but please check whether this is expected "
+                        "for this setup. WEkEO bounds=%s. Original error: %s",
+                        region_id,
+                        country_iso3,
+                        year,
+                        region_bounds,
+                        error,
+                    )
+
+                    del (
+                        crop_types_adapter,
+                        secondary_crop_adapter,
+                        crop_types,
+                        secondary_crop,
+                    )
+                    gc.collect()
+
+                    dominant_crop_per_year = []
+                    field_index_grid = None
+                    unique_field_ids = None
+                    break
 
                 crop_types, secondary_crop = _align_hrl_rasters_to_common_grid(
                     crop_types,
@@ -2689,7 +2848,7 @@ class Europe(GEBModel):
         )
 
     @build_method(
-        depends_on=["setup_create_farms_from_HRL_field_boundaries"], required=True
+        depends_on=["setup_create_farms_from_HRL_field_boundaries"], required=False
     )
     def setup_farmer_crop_calendar_from_HRL(
         self,
@@ -2699,6 +2858,7 @@ class Europe(GEBModel):
         replace_crop_calendar_unit_code: dict[int, int] | None = None,
         multiple_years: bool = False,
         hrl_years: tuple[int, ...] = (2017, 2018, 2019, 2020, 2021, 2022, 2023),
+        reduce_crops: bool = False,
     ) -> None:
         """Build farmer crop calendars by combining HRL crops with MIRCA2000 calendars.
 
@@ -2748,6 +2908,7 @@ class Europe(GEBModel):
                 ``hrl_years`` and accumulate irrigation adaptations only for farmers
                 with missing crop histories in previous years.
             hrl_years: HRL years processed when ``multiple_years`` is True.
+            reduce_crops: Replace rice by a different crop in region 4.
 
         Raises:
             ValueError: If required final farmer crop-table columns are missing.
@@ -3037,6 +3198,24 @@ class Europe(GEBModel):
                 )
 
                 crop_calendar_per_farmer[farmer_id] = selected_calendar[:, [0, 2, 3, 4]]
+
+            check_crop_calendar(crop_calendar_per_farmer)
+
+            # For region 4 there are a few instances of rice cultivation but no prices
+            if reduce_crops:
+                replaced_value = [MIRCA_OS_CROP_CLASS_MAP["Rice"]]
+
+                most_common_check = [
+                    crop_value
+                    for crop_value in MIRCA_OS_CROP_CLASS_MAP.values()
+                    if crop_value not in replaced_value
+                ]
+
+                crop_calendar_per_farmer = replace_crop(
+                    crop_calendar_per_farmer,
+                    most_common_check,
+                    replaced_value,
+                )
 
             check_crop_calendar(crop_calendar_per_farmer)
 
