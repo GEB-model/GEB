@@ -5170,7 +5170,7 @@ class CropFarmers(AgentBaseClass):
             )
             # These variables can be used to create the different meta groups
             # i.e. farmers with similar precipitation or irrigation get grouped together
-            k = 1
+            k = 3
             pr_sum = np.sum(self.var.cumulative_pr_mm, axis=1)
             edges_pr = np.nanpercentile(
                 pr_sum, np.linspace(100 / k, 100 - 100 / k, k - 1)
