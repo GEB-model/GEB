@@ -243,6 +243,7 @@ def calculate_performance_metrics(
         print(
             f"No observation data found within the subbasin bounds for event {name}. Skipping this event."
         )
+        return None
     try:
         simulated: xr.DataArray = simulated.rio.clip(
             subbasins.geometry.values, subbasins.crs
@@ -903,8 +904,6 @@ class Hydrodynamics:
                 flood_map_path = flood_maps_folder / f"{event_name}_final.zarr"
 
                 if not flood_map_path.exists():
-                    print("REMOVE THIS AFTER TESTING")
-                    continue
                     raise FileNotFoundError(
                         f"Flood map for event {event_name} not found at {flood_map_path}. Please check the path in the config file and ensure the simulation was run correctly."
                     )

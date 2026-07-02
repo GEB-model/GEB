@@ -1838,7 +1838,7 @@ class SFINCSRootModel:
         traceback: TracebackType | None,
     ) -> None:
         """Exits the context of the SFINCS simulation."""
-        if self.sfincs_model is not None:
+        if self._sfincs_model is not None:
             self.sfincs_model.close()
 
 

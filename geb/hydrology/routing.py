@@ -1563,6 +1563,7 @@ class RoutingVariables(Bucket):
     rivers: gpd.GeoDataFrame
     river_ids: ArrayInt32
     river_ids_no_waterbodies_removed: ArrayInt32
+    active_rivers: gpd.GeoDataFrame
 
 
 class Routing(Module):
