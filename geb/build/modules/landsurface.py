@@ -285,19 +285,9 @@ class LandSurface(BuildModelBase):
             if "band" in DEM_raster.dims:
                 DEM_raster: xr.DataArray = DEM_raster.isel(band=0)
 
-            # Set correct CRS for potential_flood_area_with_buffer if a custom DEM is used, so that the clipping works correctly
-            if not custom_dem:
-                potential_flood_area_with_buffer_gdf = gpd.GeoDataFrame(
-                    geometry=[potential_flood_area_with_buffer], crs=4326
-                )
-            else:
-                potential_flood_area_with_buffer_gdf = gpd.GeoDataFrame(
-                    geometry=[potential_flood_area_with_buffer], crs=4326
-                )
-                potential_flood_area_with_buffer_gdf = (
-                    potential_flood_area_with_buffer_gdf.to_crs(crs_value)
-                )
-                DEM_raster = DEM_raster.rio.write_crs(crs_value)
+            potential_flood_area_with_buffer_gdf = gpd.GeoDataFrame(
+                geometry=[potential_flood_area_with_buffer], crs=4326
+            )
 
             DEM_raster = convert_nodata(
                 DEM_raster.astype(np.float32, keep_attrs=True), np.nan
@@ -305,7 +295,7 @@ class LandSurface(BuildModelBase):
 
             DEM_raster = clip_with_geometry(
                 DEM_raster,
-                potential_flood_area_with_buffer_gdf,
+                potential_flood_area_with_buffer_gdf.to_crs(DEM_raster.rio.crs),
                 all_touched=True,
                 drop=True,
             )
