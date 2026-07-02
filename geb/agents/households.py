@@ -85,6 +85,7 @@ class Households(AgentBaseClass):
     buildings: pd.DataFrame
     roads: gpd.GeoDataFrame
     rail: gpd.GeoDataFrame
+    postal_codes: gpd.GeoDataFrame
     buildings_structure_curve: pd.DataFrame
     buildings_content_curve: pd.DataFrame
     flood_maps: dict[int, xr.DataArray]
@@ -125,21 +126,23 @@ class Households(AgentBaseClass):
             else {}
         )
         self.decision_module = DecisionModule()
-        self.load_objects()
-        self.flood_risk_module = FloodRiskModule(model=self.model, households=self)
-        if self.config["adapt"]:
-            self.flood_risk_perceptions = []  # Store the flood risk perceptions in here
-            self.flood_risk_perceptions_statistics = []  # Store some statistics on flood risk perceptions here
-
-        if self.model.config["agent_settings"]["households"]["warning_response"]:
-            self.early_warning_module = EarlyWarningModule(
-                model=self.model, households=self
-            )
-            # TODO: move warning_system config out of households in the yml file
-            if self.model.config["agent_settings"]["households"]["warning_system"][
-                "strategies"
-            ]["critical_infrastructure_warnings"]:
-                self.load_critical_infrastructure()
+        if (
+            self.config["adapt"]
+            or self.model.config["agent_settings"]["households"]["warning_response"]
+        ):
+            self.load_objects()
+            self.flood_risk_module = FloodRiskModule(model=self.model, households=self)
+            if self.config["adapt"]:
+                self.flood_risk_perceptions = []  # Store the flood risk perceptions in here
+                self.flood_risk_perceptions_statistics = []  # Store some statistics on flood risk perceptions here
+            if self.model.config["agent_settings"]["households"]["warning_response"]:
+                self.early_warning_module = EarlyWarningModule(
+                    model=self.model, households=self
+                )
+                if self.model.config["agent_settings"]["households"]["warning_system"][
+                    "warning_target"
+                ]["critical_infrastructure"]["enabled"]:
+                    self.load_critical_infrastructure()
 
         if self.model.in_spinup:
             self.spinup()
@@ -590,6 +593,7 @@ class Households(AgentBaseClass):
             buildings_with_postal_codes,
             filepath=self.model.output_folder / "buildings_w_postal_codes.geoparquet",
         )
+
         # TODO: Understand why it does not work if it is just self.buildings
         self.var.buildings = buildings_with_postal_codes
 
@@ -720,21 +724,25 @@ class Households(AgentBaseClass):
 
         NOTE: This function is currently disabled due to missing infrastructure data.
         """
-        asset_type = self.model.config["agent_settings"]["households"][
+        asset_types = self.model.config["agent_settings"]["households"][
             "warning_system"
-        ]["strategies"]["asset_type"]
+        ]["warning_target"]["critical_infrastructure"]["asset_type"]
         # Load postal codes
         postal_codes = self.postal_codes.copy()
 
         # Get critical facilities (vulnerable and emergency) and update buildings with relevant attributes
         # TODO move loading of critical facilities to build phase and save it as a file, instead of loading it from OSM every time in the spinup
-        self.get_critical_facilities()
+        if self.model.config["agent_settings"]["households"]["warning_system"][
+            "warning_target"
+        ]["critical_infrastructure"]["get_critical_facilities"]:
+            self.get_critical_facilities()
 
         # Assign critical facilities to postal codes
-        assets = read_geom(self.model.files["geom"][f"assets/{asset_type}"])
-        self.assign_critical_infrastructure_to_postal_codes(
-            assets, asset_type, postal_codes
-        )
+        for asset_type in asset_types:
+            assets = read_geom(self.model.files["geom"][f"assets/{asset_type}"])
+            self.assign_critical_infrastructure_to_postal_codes(
+                assets, asset_type, postal_codes
+            )
 
     def get_critical_facilities(self) -> None:
         """Extract critical infrastructure elements (vulnerable and emergency facilities) from OSM using the catchment polygon as boundary."""
@@ -784,6 +792,8 @@ class Households(AgentBaseClass):
         # Reproject the facilities to the wanted CRS and save them
         all_critical_facilities.insert(0, "id", all_critical_facilities.index + 1)
         all_critical_facilities.to_crs(wanted_crs, inplace=True)
+
+        # TODO: change this to write_geom
         save_path = (
             self.model.input_folder
             / "geom"

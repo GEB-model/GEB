@@ -486,7 +486,9 @@ class GEBModel(Module):
             prob_threshold = warning_config["probability_threshold"]
             area_threshold = warning_config["area_threshold"]
             building_threshold = warning_config["building_threshold"]
-            warning_type = warning_config["strategies"]["warning_type"]
+            warning_type = warning_config["warning_target"]["residential_buildings"][
+                "warning_type"
+            ]
             communication_efficiency = warning_config["communication_efficiency"]
             evacuation_lead_time_threshold = warning_config[
                 "evacuation_lead_time_threshold"
@@ -533,7 +535,9 @@ class GEBModel(Module):
                         # Run warning strategies based on config settings
                         # Check whether water level warnings are enabled
                         # TODO: Think of better names (and hierarchy) for the strategies in the config file
-                        if warning_config["strategies"]["residential_buildings"]:
+                        if warning_config["warning_target"]["residential_buildings"][
+                            "enabled"
+                        ]:
                             self.logger.info(
                                 f"Running water level based warning strategy with {warning_type} warnings..."
                             )
@@ -548,16 +552,16 @@ class GEBModel(Module):
                                 weight_by_socioeconomic_factors=weight_by_socioeconomic_factors,
                                 exceedance=False,
                             )
-                        if warning_config["strategies"][
-                            "critical_infrastructure_warnings"
+                        if warning_config["warning_target"]["critical_infrastructure"][
+                            "enabled"
                         ]:
-                            config_asset_type = warning_config["strategies"][
-                                "asset_type"
-                            ]
+                            asset_types = warning_config["warning_target"][
+                                "critical_infrastructure"
+                            ]["asset_type"]
 
                             self.agents.households.early_warning_module.critical_infrastructure_warning_strategy(
                                 date_time=self.current_time,
-                                config_asset_type=config_asset_type,
+                                asset_types=asset_types,
                                 prob_threshold=prob_threshold,
                                 exceedance=True,
                             )

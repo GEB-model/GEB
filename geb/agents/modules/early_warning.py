@@ -14,7 +14,7 @@ from rasterio.features import geometry_mask, rasterize
 from xarray.core.dataarray import DataArray
 from xarray.core.dataset import Dataset
 
-from geb.workflows.io import read_geom, read_params, read_zarr, write_zarr
+from geb.workflows.io import read_geom, read_params, read_table, read_zarr, write_zarr
 
 from ..workflows.helpers import from_landuse_raster_to_polygon
 
@@ -124,9 +124,6 @@ class EarlyWarningModule:
                     rivers_with_width["width"] / 2
                 )
 
-            # For rivers without width: keep original line geometry (will mask intersected grid cells)
-            # No buffering needed - geometry_mask will handle line intersection with grid cells
-
             # Combine both geometries for final masking
             all_river_geometries = []
             if len(rivers_with_width) > 0:
@@ -228,14 +225,16 @@ class EarlyWarningModule:
     def create_flood_probability_maps(
         self,
         date_time: datetime,
-        strategy: str = "residential_buildings",
+        warning_target: str = "residential_buildings",
         exceedance: bool = False,
+        asset_type: str | None = None,
     ) -> xr.Dataset:
-        """Creates flood probability maps based on the ensemble of flood maps for different warning strategies.
+        """Creates flood probability maps based on the ensemble of flood maps for different warning modes.
 
         Args:
             date_time: The forecast date time for which to create the probability maps.
-            strategy: The warning strategy to use (e.g., 'residential_buildings', 'energy_stations').
+            warning_target: The warning target to use (e.g., 'residential_buildings', 'critical_infrastructure').
+            asset_type: List of asset types to consider for critical infrastructure warnings (e.g., ['energy_substations']).
             exceedance: Whether to calculate flood exceedance probability maps (instead of regular probability maps).
 
         Returns:
@@ -263,16 +262,24 @@ class EarlyWarningModule:
                 / "flood_prob_maps"
                 / f"forecast_{date_time.isoformat().replace(':', '').replace('-', '')}"
             )
-        if strategy not in self.households.var.wlranges_and_measures:
-            raise ValueError(
-                f"Unknown strategy '{strategy}'. "
-                f"Available strategies: {list(self.households.var.wlranges_and_measures.keys())}"
-            )
+        if warning_target not in self.households.var.wlranges_and_measures:
+            if warning_target == "critical_infrastructure":
+                warning_target = asset_type
+                if asset_type not in self.households.var.wlranges_and_measures:
+                    raise ValueError(
+                        f"Unknown asset type '{asset_type}' for critical infrastructure warning."
+                        f"Available asset types: {list(self.households.var.wlranges_and_measures.keys())}"
+                    )
+            else:
+                raise ValueError(
+                    f"Unknown warning target '{warning_target}'. "
+                    f"Available warning targets are residential_buildings and critical_infrastructure."
+                )
 
         ranges = []
 
         for range_id, range_info in self.households.var.wlranges_and_measures[
-            strategy
+            warning_target
         ].items():
             if exceedance:
                 ranges.append((range_id, range_info["min"], None))
@@ -284,7 +291,7 @@ class EarlyWarningModule:
         for range_id, wl_min, wl_max in ranges:
             daily_ensemble = ensemble_flood_maps
             self.logger.info(
-                f"Creating probability map for date {date_time}, strategy {strategy}, range_id {range_id} (wl_min={wl_min}, wl_max={wl_max})"
+                f"Creating probability map for date {date_time}, asset type {warning_target}, range_id {range_id} (wl_min={wl_min}, wl_max={wl_max})"
             )
             if wl_max is not None:
                 condition = (daily_ensemble >= wl_min) & (daily_ensemble <= wl_max)
@@ -304,10 +311,10 @@ class EarlyWarningModule:
             # Save probability map as a zarr file
             if exceedance:
                 file_name = (
-                    f"prob_exceedance_map_range{range_id}_strategy_{strategy}.zarr"
+                    f"prob_exceedance_map_range{range_id}_target_{warning_target}.zarr"
                 )
             else:
-                file_name = f"prob_map_range{range_id}_strategy_{strategy}.zarr"
+                file_name = f"prob_map_range{range_id}_target_{warning_target}.zarr"
             file_path = prob_folder / file_name
             file_path.mkdir(parents=True, exist_ok=True)
 
@@ -347,8 +354,6 @@ class EarlyWarningModule:
         prob_map = prob_map >= prob_threshold  # convert to boolean mask
 
         buildings["flooded"] = False  # Initialize the flooded column
-
-        # TODO: Use the damagescanner exposure option to determine which buildings are flooded based on the flood probability map and a specified probability threshold.
 
         # convert flood map to polygons
         prob_map_polygon = from_landuse_raster_to_polygon(
@@ -405,19 +410,8 @@ class EarlyWarningModule:
         Returns:
             Array of communication efficiency probabilities.
         """
-        # Normalized Weights based on the regression of the WRP survey data
-        # (https://documents1.worldbank.org/curated/en/099259309032538041/pdf/IDU-c6f56dc5-a0cb-4375-ac15-a91f1c202b09.pdf )
-        # Rows = Education classes, Columns = Income quintiles
-        weights_table = pd.DataFrame(
-            data=[
-                [0.0336, 0.0349, 0.0366, 0.0380, 0.0396],
-                [0.0336, 0.0349, 0.0366, 0.0380, 0.0396],
-                [0.0366, 0.0380, 0.0396, 0.0413, 0.0430],
-                [0.0400, 0.0413, 0.0430, 0.0450, 0.0467],
-                [0.0407, 0.0423, 0.0439, 0.0456, 0.0477],
-            ],
-            index=np.array([1, 2, 3, 4, 5]),  # Education classes
-            columns=np.array([1, 2, 3, 4, 5]),  # Income quintiles
+        weights_table = read_table(
+            self.model.files["table"]["warning_system/warning_communication_weights"]
         )
 
         # Compute total weight per agent
@@ -687,7 +681,9 @@ class EarlyWarningModule:
         # Create probability maps
         # TODO: Only create flood probability maps if they do not exist yet
         probability_maps: Dataset = self.create_flood_probability_maps(
-            strategy="residential_buildings", date_time=date_time, exceedance=exceedance
+            warning_target="residential_buildings",
+            date_time=date_time,
+            exceedance=exceedance,
         )
 
         # Load households and postal codes
@@ -695,7 +691,23 @@ class EarlyWarningModule:
         households = self.households.var.households_with_postal_codes.copy()
 
         postal_codes = self.households.postal_codes
-        # Maybe load this as a global var (?) instead of loading it each time
+
+        if warning_type == "area_based":
+            reference_map = probability_maps.sel(range_id=range_ids[0])
+
+            if postal_codes.crs != reference_map.rio.crs:
+                postal_codes = postal_codes.to_crs(reference_map.rio.crs)
+
+            pc_mask = rasterize(
+                ((geom, i) for i, geom in enumerate(postal_codes.geometry)),
+                out_shape=(
+                    reference_map.rio.height,
+                    reference_map.rio.width,
+                ),
+                transform=reference_map.rio.transform(),
+                all_touched=True,
+                fill=-1,
+            )
 
         # Check intersection between flood maps and buildings or postal codes
         for range_id in range_ids:
@@ -709,18 +721,6 @@ class EarlyWarningModule:
             elif warning_type == "area_based":
                 if postal_codes.crs != flood_probability_map.rio.crs:
                     postal_codes = postal_codes.to_crs(flood_probability_map.rio.crs)
-
-                # Rasterize postal codes to the same grid as the probability map
-                pc_mask = rasterize(
-                    ((geom, i) for i, geom in enumerate(postal_codes.geometry)),
-                    out_shape=(
-                        flood_probability_map.rio.height,
-                        flood_probability_map.rio.width,
-                    ),
-                    transform=flood_probability_map.rio.transform(),
-                    all_touched=True,
-                    fill=-1,
-                )
 
                 # Iterate through each postal code and check how many pixels exceed the threshold
                 for i, pc_row in postal_codes.iterrows():
@@ -848,7 +848,7 @@ class EarlyWarningModule:
     def critical_infrastructure_warning_strategy(
         self,
         date_time: datetime,
-        config_asset_type: str,
+        asset_types: list[str],
         prob_threshold: float,
         exceedance: bool = False,
     ) -> None:
@@ -867,40 +867,37 @@ class EarlyWarningModule:
         # Get the household points, needed to issue warnings
         households = self.households.var.households_with_postal_codes.copy()
         affected_postcodes = []
-        for asset_type in config_asset_type:
+        for asset_type in asset_types:
             self.logger.info(
                 f"Running critical infrastructure based warning strategy for asset type {asset_type}..."
             )
             # Load substations and critical facilities
-            assets = read_geom(self.model.files["geom"][f"assets/{asset_type}"])
-            if assets.empty:
+            asset = read_geom(self.model.files["geom"][f"assets/{asset_type}"])
+            if asset.empty:
                 raise ValueError(
                     f"No assets found for type {asset_type}. Please check the input/files.yml whether the reference of the asset is similar to the one defined in the config."
                 )
 
             # Create flood probability maps associated to the critical hit of energy substations
             # Need to give the number (id) of strategy as argument
-            probability_maps = self.create_flood_probability_maps(
-                strategy=asset_type, date_time=date_time, exceedance=exceedance
+            flood_probability_map = self.create_flood_probability_maps(
+                warning_target="critical_infrastructure",
+                asset_type=asset_type,
+                date_time=date_time,
+                exceedance=exceedance,
             )
-            flood_probability_map: xr.DataArray = probability_maps[
-                list(probability_maps.data_vars)[0]
-            ]
 
-            # Ensure prob_map is 2D by squeezing out any singleton dimensions
-            prob_array = flood_probability_map.values
-            while prob_array.ndim > 2:
-                prob_array = prob_array.squeeze()
+            flood_probability_map = flood_probability_map.squeeze(drop=True)
 
             # Sample the probability map at the substations locations
-            x = xr.DataArray(assets.geometry.x.values, dims="z")
-            y = xr.DataArray(assets.geometry.y.values, dims="z")
-            assets["probability"] = flood_probability_map.sel(
+            x = xr.DataArray(asset.geometry.x.values, dims="asset")
+            y = xr.DataArray(asset.geometry.y.values, dims="asset")
+            asset["probability"] = flood_probability_map.sel(
                 x=x, y=y, method="nearest"
             ).values
 
             # Filter substations that have a flood hit probability > threshold
-            critical_hits_CI = assets[assets["probability"] >= prob_threshold]
+            critical_hits_CI = asset[asset["probability"] >= prob_threshold]
 
             postal_codes_with_critical_infrastructure = read_geom(
                 self.model.input_folder
@@ -914,10 +911,12 @@ class EarlyWarningModule:
                 self.logger.info(
                     f"Critical hits for {asset_type}: {len(critical_hits_CI)}"
                 )
+
+                # TODO: check if fid applies for all types of CI assets. For now, we assume fid is the unique identifier for all types of critical infrastructure assets.
                 # Get the postcodes that will be indirect affected by the critical infrastructure assets
                 affected_assets = postal_codes_with_critical_infrastructure[
                     postal_codes_with_critical_infrastructure["asset_id"].isin(
-                        critical_hits_CI["asset_id"]
+                        critical_hits_CI["fid"]
                     )
                 ]
                 affected_assets["asset_type"] = asset_type
