@@ -36,6 +36,7 @@ class FloodRiskModule:
         self.load_damage_curves()
         self.alter_damage_curves_based_on_actions()
         self.load_max_damage_values()
+<<<<<<< HEAD
         if (
             self.model.config["hazards"]["floods"]["flood_risk"]
             or self.model.config["agent_settings"]["households"]["adapt"]
@@ -118,6 +119,11 @@ class FloodRiskModule:
         else:
             raise ValueError(f"Invalid flood protection standard mode: {mode}")
 
+=======
+        if self.model.config["hazards"]["floods"]["flood_risk"]:
+            self.load_return_period_flood_maps()
+
+>>>>>>> a0b65a00 (Early Warning Module (#882))
     def load_return_period_flood_maps(self) -> None:
         """Load flood maps for different return periods. This might be quite ineffecient for RAM, but faster then loading them each timestep for now."""
         self.households.return_periods = np.array(

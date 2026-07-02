@@ -226,6 +226,7 @@ class LandSurface(BuildModelBase):
 
         DEM_raster: xr.DataArray
         for DEM in DEMs:
+            custom_dem = False
             # FABDEM is already handled above, so we just use it from there
             if DEM["name"] == "fabdem":
                 DEM_raster: xr.DataArray = fabdem
@@ -241,6 +242,7 @@ class LandSurface(BuildModelBase):
                         DEM_raster <= DEM["zmax"], DEM["zmax"]
                     )
             else:
+                custom_dem = True
                 # custom DEMs must have a path
                 if "path" not in DEM:
                     raise ValueError(
@@ -281,6 +283,13 @@ class LandSurface(BuildModelBase):
             if "band" in DEM_raster.dims:
                 DEM_raster: xr.DataArray = DEM_raster.isel(band=0)
 
+<<<<<<< HEAD
+=======
+            potential_flood_area_with_buffer_gdf = gpd.GeoDataFrame(
+                geometry=[potential_flood_area_with_buffer], crs=4326
+            )
+
+>>>>>>> a0b65a00 (Early Warning Module (#882))
             DEM_raster = convert_nodata(
                 DEM_raster.astype(np.float32, keep_attrs=True), np.nan
             )

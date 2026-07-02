@@ -196,8 +196,14 @@ setup_forcing:
 #   forecast_provider: ECMWF # The forecast data provider. Currently only ``"ECMWF"`` is supported.
 #   forecast_model: both_control_and_probabilistic # The forecast model to use. Options are "probabilistic_forecast", "control_forecast" or "both_control_and_probabilistic"
 #   forecast_resolution: 0.1/0.1 # The spatial resolution of the forecast data in degrees.
+<<<<<<< HEAD
 #   forecast_horizon: 120 # The forecast horizon in hours.
 #   forecast_timestep_hours: 6 # The time step of the forecast output in hours.
+=======
+#   forecast_horizon: 240 # The forecast horizon in hours.
+#   forecast_timestep_hours: 1 # The time step of the forecast output in hours.
+#   n_ensemble_members: 50 # The number of ensemble members to use for the probabilistic forecast.
+>>>>>>> a0b65a00 (Early Warning Module (#882))
 
 setup_SPEI:
   window_months: 12
