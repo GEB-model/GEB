@@ -280,6 +280,12 @@ class WaterDemand(Module):
             gross_irrigation_demand_m3_per_field_limit_adjusted_groundwater,
         ) = self.model.agents.crop_farmers.get_gross_irrigation_demand_m3(root_depth_m)
 
+        gross_irrigation_demand_m3_per_farmer = (
+            self.model.agents.crop_farmers.field_to_farmer(
+                gross_irrigation_demand_m3_per_field
+            )
+        )
+
         gross_irrigation_demand_m3_per_farmer_reservoir: npt.NDArray[np.float32] = (
             self.model.agents.crop_farmers.field_to_farmer(
                 gross_irrigation_demand_m3_per_field_limit_adjusted_reservoir
