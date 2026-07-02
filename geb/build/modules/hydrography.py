@@ -4,6 +4,7 @@ import os
 import warnings
 from datetime import timedelta
 from pathlib import Path
+from types import CodeType
 from typing import Literal
 
 import geopandas as gpd
@@ -13,9 +14,11 @@ import numpy.typing as npt
 import pandas as pd
 import pyflwdir
 import rasterio.features
+import shapely
 import xarray as xr
 from networkx.classes.digraph import DiGraph
 from pyflwdir import FlwdirRaster
+from rasterio.enums import MergeAlg
 from scipy.ndimage import value_indices
 from shapely.geometry import LineString, shape
 
@@ -24,14 +27,17 @@ from geb.build.data_catalog.gtsm import gtsm_filters
 from geb.build.methods import build_method
 from geb.build.workflows.command_areas import derive_command_areas_from_routing
 from geb.build.workflows.hydrography import (
-    calculate_shreve_stream_order,
+    add_stream_orders,
     get_river_graph,
 )
-from geb.build.workflows.river_snapping import snap_point_to_river_network
+from geb.build.workflows.river_snapping import (
+    SnappingResults,
+    snap_point_to_river_network,
+)
 from geb.geb_types import (
     ArrayBool,
     ArrayFloat32,
-    ArrayInt32,
+    ArrayInt64,
     TwoDArrayFloat64,
     TwoDArrayInt32,
     TwoDArrayInt64,
@@ -337,21 +343,31 @@ def create_river_raster_from_river_lines(
         ValueError: If both column and index are provided.
 
     """
+    # The rivers touch as the confluence (typically 2 upstream, 1 downstream). Here,
+    # we want to have the upstream area of the downstream river. Because we use the "replace"
+    # merge algorithm, we need to sort the rivers from upstream to downstream,
+    # such that the upstream rivers are rasterized first.
+    rivers_sorted_from_upstream_to_downstream: gpd.GeoDataFrame = rivers.sort_values(
+        by="shreve_stream_order", ascending=True
+    )  # ty:ignore[invalid-assignment]
+
     if column is None and (index is None or index is True):
-        values = rivers.index
+        values = rivers_sorted_from_upstream_to_downstream.index
     elif column is not None:
-        values = rivers[column]
+        values = rivers_sorted_from_upstream_to_downstream[column]
     else:
         raise ValueError(
             "Either column or index must be provided, or both must be None"
         )
+
     river_raster = rasterio.features.rasterize(
-        zip(rivers.geometry, values),
+        zip(rivers_sorted_from_upstream_to_downstream.geometry, values),
         out_shape=target.shape,
         fill=-1,
         dtype=np.int32,
         transform=target.rio.transform(recalc=True),
         all_touched=False,  # because this is a line, Bresenham's line algorithm is used, which is perfect here :-)
+        merge_alg=MergeAlg.replace,
     )
     return river_raster
 
@@ -824,7 +840,7 @@ class Hydrography(BuildModelBase):
 
         self.logger.info("Retrieving river data")
         rivers: gpd.GeoDataFrame = self.geom["routing/rivers"]
-        rivers["shreve_stream_order"] = calculate_shreve_stream_order(rivers)
+        rivers = add_stream_orders(rivers)
 
         self.logger.info("Processing river data")
 
@@ -834,6 +850,31 @@ class Hydrography(BuildModelBase):
         river_raster_LR: npt.NDArray[np.int32] = river_raster_HD.ravel()[
             self.grid["idxs_outflow"].values.ravel()
         ].reshape(self.grid["idxs_outflow"].shape)
+
+        # The outflow detected by the upscale method is not neccesarily the one of the main stream. This may result
+        # in a side branch river, being "inside" the main river. This finally meant that the discharge of the main
+        # river was used for the side branch, which is not correct.
+        # In principle, every river should have no (headwater) or 2 upstream rivers. However, in this situation, a
+        # river would only have 1 upstream river, which is the main river. Therefore, we can detect these situations and correct them.
+        # We do so by detecting situations with only 1 upstream river. If this is the case, we can
+        # overwrite the river raster with the COMID of the main river.
+        for COMID in rivers.sort_values(
+            by="shreve_stream_order",
+            ascending=False,  # Process from downstream to upstream
+        ).index:
+            river_cells = np.where(river_raster_LR.ravel() == COMID)[0]
+            if river_cells.size == 0:
+                continue
+            upstream_area_river_cells = upstream_area_data.ravel()[river_cells]
+            most_upstream_cell = np.argmin(upstream_area_river_cells)
+            most_upstream_cell_index = river_cells[most_upstream_cell]
+            upstream_river_cells = (flow_raster.idxs_ds == most_upstream_cell_index) & (
+                river_raster_LR.ravel() != -1
+            )
+            if upstream_river_cells.sum() == 1:
+                river_raster_LR[upstream_river_cells.reshape(river_raster_LR.shape)] = (
+                    COMID
+                )
 
         missing_rivers: set[int] = set(rivers.index) - set(
             np.unique(river_raster_LR[river_raster_LR != -1]).tolist()
@@ -908,8 +949,8 @@ class Hydrography(BuildModelBase):
 
             non_nan_mask: ArrayBool = ~nan_mask
             upstream_area = upstream_area[non_nan_mask]
-            ys: ArrayInt32 = ys[non_nan_mask]
-            xs: ArrayInt32 = xs[non_nan_mask]
+            ys: ArrayInt64 = ys[non_nan_mask]
+            xs: ArrayInt64 = xs[non_nan_mask]
 
             assert not np.isnan(upstream_area).any()
 
@@ -920,8 +961,8 @@ class Hydrography(BuildModelBase):
                 f"River segment {river_ID} has inconsistent raster values"
             )
 
-            ys: npt.NDArray[np.int64] = ys[up_to_downstream_ids]
-            xs: npt.NDArray[np.int64] = xs[up_to_downstream_ids]
+            ys: ArrayInt64 = ys[up_to_downstream_ids]
+            xs: ArrayInt64 = xs[up_to_downstream_ids]
 
             lats: ArrayFloat32 = upstream_area_high_res.y.values[ys]
             lons: ArrayFloat32 = upstream_area_high_res.x.values[xs]
@@ -1520,7 +1561,7 @@ class Hydrography(BuildModelBase):
         )
 
         # extrapolate to 2100 using nonlinear trend  between 2015-2050 per station
-        last_year = sea_level_rise_df.index.year.max()
+        last_year = sea_level_rise_df.index.year.max()  # ty:ignore[unresolved-attribute]
         future_years = np.arange(last_year + 1, 2101)
         future_dates = pd.to_datetime([f"{year}-01-01" for year in future_years])
         future_data = {}
@@ -1706,7 +1747,12 @@ class Hydrography(BuildModelBase):
         self.set_table(inflow_df_m3_per_s, name="routing/inflow_m3_per_s")
 
     @build_method(required=True, depends_on=["setup_hydrography"])
-    def setup_retention_basins(self, retention_basins: Path | None = None) -> None:
+    def setup_retention_basins(
+        self,
+        retention_basins: Path | None = None,
+        max_storage_m3_to_min_shreve_stream_order_function: str | None = None,
+        create_plots: bool = False,
+    ) -> None:
         """Setup retention basins.
 
         There can only be a maximum of one retention basin per river pixel. When a retention
@@ -1717,6 +1763,10 @@ class Hydrography(BuildModelBase):
             retention_basins: A vector file that can be read by geopandas containing the retention basins,
                 with a point geometry representing the location of the retention basin. If none (default),
                 no retention basins will be set up in the model.
+            max_storage_m3_to_min_shreve_stream_order_function: A string representing a function that takes the maximum storage of a retention basin in m3 and
+                returns the minimum Shreve stream order of the river pixel to which the retention basin can be snapped. If none, all retention basins will be snapped
+                to the nearest river pixel regardless of its Shreve stream order.
+            create_plots: Whether to create plots of the retention basins and their snapped locations on the river network.
 
         Raises:
             ValueError: If a retention basin cannot be snapped to the river network.
@@ -1735,7 +1785,7 @@ class Hydrography(BuildModelBase):
 
         if retention_basins is None:
             self.set_grid(retention_basin_ids, name="routing/retention_basin_ids")
-            retention_basin_df = pd.DataFrame(
+            retention_basin_gdf = gpd.GeoDataFrame(
                 columns=np.array(
                     [
                         "ID",
@@ -1744,7 +1794,8 @@ class Hydrography(BuildModelBase):
                         "retention_activation_threshold_controlled_m3_s",
                         "retention_activation_threshold_uncontrolled_m3_s",
                     ]
-                )
+                ),
+                geometry=gpd.GeoSeries([], crs="EPSG:4326"),
             ).astype(
                 {
                     "ID": np.int32,
@@ -1754,7 +1805,15 @@ class Hydrography(BuildModelBase):
                     "retention_activation_threshold_uncontrolled_m3_s": np.float32,
                 }
             )
+            self.set_geom(retention_basin_gdf, name="routing/retention_basins")
         else:
+            if max_storage_m3_to_min_shreve_stream_order_function is not None:
+                max_storage_m3_to_min_shreve_stream_order_function: CodeType = compile(
+                    max_storage_m3_to_min_shreve_stream_order_function,
+                    "<string>",
+                    "eval",
+                )
+
             # read the retention basins from the provided file
             retention_basins = gpd.read_file(retention_basins).to_crs(
                 self.grid["mask"].rio.crs
@@ -1788,19 +1847,37 @@ class Hydrography(BuildModelBase):
             for _, retention_basin in retention_basins.iterrows():
                 centroid = retention_basin.geometry.centroid
 
+                if np.isnan(retention_basin["retention_max_storage_m3"]):
+                    warnings.warn(
+                        f"Retention basin ID {retention_basin['ID']} has missing retention_max_storage_m3 value. Setting it to 0.0."
+                    )
+                    retention_basin["retention_max_storage_m3"] = 0.0
+
                 # the centroid of the retention basin may not fall exactly on the river network,
                 # so we snap it to the nearest river pixel using the snap_point_to_river_network function
-                snapped_data = snap_point_to_river_network(
+                if max_storage_m3_to_min_shreve_stream_order_function is not None:
+                    rivers_with_min_shreve_order = rivers[
+                        rivers["shreve_stream_order"]
+                        >= eval(
+                            max_storage_m3_to_min_shreve_stream_order_function,
+                            {"x": retention_basin["retention_max_storage_m3"]},
+                        )
+                    ]
+                else:
+                    rivers_with_min_shreve_order = rivers
+
+                snapped_data: SnappingResults | None = snap_point_to_river_network(
                     point=centroid,
-                    rivers=rivers,
+                    rivers=rivers_with_min_shreve_order,
                     upstream_area_grid=upstream_area_grid,
                     upstream_area_subgrid=upstream_area_subgrid,
+                    max_spatial_difference_degrees=180,
                 )
                 if snapped_data is None:
                     raise ValueError(
                         f"Could not snap retention basin for basin ID {retention_basin['ID']} to river network. "
                     )
-                snapped_grid_pixel_xy = snapped_data["snapped_grid_pixel_xy"]
+                snapped_grid_pixel_xy = snapped_data.snapped_grid_pixel_xy
 
                 # assign the ID of the retention basin to the corresponding pixel in the retention_basin_ids grid
                 search_steps = 0
@@ -1835,6 +1912,10 @@ class Hydrography(BuildModelBase):
                     snapped_grid_pixel_xy[1], snapped_grid_pixel_xy[0]
                 ] = retention_basin["ID"]
 
+                final_lon = upstream_area_grid.x.values[snapped_grid_pixel_xy[0]].item()
+                final_lat = upstream_area_grid.y.values[snapped_grid_pixel_xy[1]].item()
+                snapped_geom = shapely.geometry.Point(final_lon, final_lat)
+
                 # store the retention basin data in a list to create a table later
                 controlled_flag = (
                     str(retention_basin["controlled_retention"]).lower() == "controlled"
@@ -1852,10 +1933,35 @@ class Hydrography(BuildModelBase):
                         "retention_activation_threshold_uncontrolled_m3_s": retention_basin[
                             "retention_activation_threshold_uncontrolled_m3_s"
                         ],
+                        "river_segment_shreve_order": snapped_data.closest_river_segment.shreve_stream_order,
+                        "geometry": snapped_geom,
                     }
                 )
 
-            retention_basin_df = pd.DataFrame(retention_basin_data)
+            retention_basin_gdf = gpd.GeoDataFrame(
+                retention_basin_data, crs="EPSG:4326"
+            )
 
-        self.set_table(retention_basin_df, name="routing/retention_basin_data")
+        self.set_geom(retention_basin_gdf, name="routing/retention_basins")
         self.set_grid(retention_basin_ids, name="routing/retention_basin_ids")
+
+        if create_plots:
+            import matplotlib.pyplot as plt
+
+            # plot maximum storage volume vs shreve order
+            plt.figure(figsize=(10, 6))
+            plt.scatter(
+                retention_basin_gdf["river_segment_shreve_order"],
+                retention_basin_gdf["retention_max_storage_m3"],
+                alpha=0.7,
+            )
+            plt.xscale("log")
+            plt.yscale("log")
+            plt.xlabel("Shreve Order of River Segment")
+            plt.ylabel("Maximum Storage Volume (m³)")
+            plt.title("Retention Basin Maximum Storage Volume vs Shreve Order")
+            plt.grid(True, which="both", ls="--", lw=0.5)
+            plt.savefig(
+                self.report_dir / "retention_basins_shreve_order_vs_storage.svg"
+            )
+            plt.close()

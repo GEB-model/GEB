@@ -16,6 +16,11 @@ full version (requires large context window): https://docs.geb.sh/llms-full.txt
 - Monetary units: All monetary amounts are nominal USD for the stated year; indicate the year when appropriate.
 - When a new config options is added, a default configuration must be added to `geb/reasonable_default_config.yml`.
 - When a new config is added, or removed, ensure that the config schema `geb/config_schema.py` is updated accordingly.
+- Do not use .raster accessor from hydromt; use .rio accessor from rioxarray instead.
+- When a new feature is added or a bug is fixed, the changelog in `CHANGELOG.md` must be updated accordingly.
+- When adding a new feature that requires user documentation, the relevant documentation files must be updated accordingly.
+- When adding or removing authors, ensure that pyproject.toml and docs/about/developers.md are synchronized.
+- When a user needs to make new updates to input files to support the new version, the necessary updates must be added to `geb/build/version_updates.py`, and the version of the package must be raised to trigger the warning for users with old versions of the input data.
 
 ## How Copilot should generate or modify code
 
@@ -41,14 +46,14 @@ Notes:
     Important notes about the function's behavior, assumptions, or edge cases.
 
 Args:
-	param_name: Description of param_name (meters). Explain units here.
-	other_param: Description. State any valid ranges.
+    param_name: Description of param_name (meters). Explain units here.
+    other_param: Description. State any valid ranges.
 
 Returns:
-	Description of the return value (m).
+    Description of the return value (m).
 
 Raises:
-	ValueError: If input is invalid.
+    ValueError: If input is invalid.
 
 """
 

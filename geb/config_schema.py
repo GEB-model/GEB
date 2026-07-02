@@ -86,6 +86,10 @@ class FloodsConfig(BaseModel):
     """Configuration for flood simulation."""
 
     simulate: bool = Field(False, description="Whether to simulate floods.")
+    subbasins: list[int] | Literal["all"] | Literal["auto"] = Field(
+        "all",
+        description="Subbasin ID, list of subbasin IDs, or 'all' to simulate all subbasins. Only works for flood events currently.",
+    )
     forcing_method: Literal["headwater_points", "accumulated_runoff"] = Field(
         "accumulated_runoff",
         description="Forcing method: 'headwater_points' or 'accumulated_runoff'.",
@@ -199,6 +203,10 @@ class RoutingConfig(BaseModel):
         "kinematic_wave",
         description="Routing algorithm: 'accuflux' or 'kinematic_wave'.",
     )
+    retention_basin_release_threshold_factor: float = Field(
+        0.9,
+        description="Factor to multiply the activation threshold by to get the release threshold.",
+    )
     river_width: RiverWidthConfig = Field(
         default_factory=RiverWidthConfig, description="River width configuration."
     )
@@ -216,13 +224,13 @@ class DischargeEvaluationConfig(BaseModel):
         description="Minimum modeled upstream area for stations included in discharge evaluation (km2).",
     )
     minimum_timeseries_length_years: float = Field(
-        5.0,
+        10.0,
         ge=0.0,
         description="Minimum paired observation-simulation timeseries length for stations included in discharge evaluation (years).",
     )
     external_evaluation_folder: str | None = Field(
-        "external_evaluation_data/",
-        description="Folder with external discharge evaluation CSV files. Relative paths are resolved from the model folder.",
+        None,
+        description="Optional folder with external discharge evaluation CSV files. Relative paths are resolved from the model folder.",
     )
 
 

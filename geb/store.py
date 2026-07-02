@@ -50,6 +50,7 @@ class DynamicArray:
     """
 
     __slots__: list = ["_data", "_n", "_extra_dims_names"]
+    _data: npt.NDArray[Any]
 
     def __init__(
         self,
@@ -444,7 +445,13 @@ class DynamicArray:
 
     def __getitem__(
         self,
-        key: int | slice | NDArray[np.integer] | NDArray[np.bool_] | list,
+        key: int
+        | slice
+        | NDArray[np.integer]
+        | NDArray[np.bool_]
+        | list
+        | tuple
+        | DynamicArray,
     ) -> DynamicArray | NDArray[Any]:
         """
         Retrieve item(s) or a sliced DynamicArray.
@@ -1033,7 +1040,7 @@ class DynamicArray:
             path: Path-like object (without suffix) where the .dynamicarray.zarr file will be written.
         """
         write_array(
-            self._data,
+            self._data,  # ty:ignore[invalid-argument-type]
             path.with_suffix(".dynamicarray.zarr"),
             attributes={
                 "n": self._n,

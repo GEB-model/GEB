@@ -76,6 +76,7 @@ class HouseholdVariables(Bucket):
     households_with_postal_codes: gpd.GeoDataFrame
     education_level: DynamicArray
     income: DynamicArray
+    ead_usd_per_year: DynamicArray
 
 
 class Households(AgentBaseClass):
