@@ -1575,11 +1575,7 @@ class Agents(BuildModelBase):
 
     @build_method(required=False)
     def setup_warning_communication_weights(self) -> None:
-        """Sets up the weights for warning communication based on socioeconomic factors.
-
-        Args:
-            weights: A table containing the weights for each combination of income and education level.
-        """
+        """Sets up the weights for warning communication based on socioeconomic factors."""
         # Normalized Weights based on the regression of the WRP survey data
         # (https://documents1.worldbank.org/curated/en/099259309032538041/pdf/IDU-c6f56dc5-a0cb-4375-ac15-a91f1c202b09.pdf )
         # Rows = Education classes, Columns = Income quintiles

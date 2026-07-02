@@ -857,7 +857,7 @@ class EarlyWarningModule:
 
         Args:
             date_time: The forecast date time for which to implement the warning strategy.
-            config_asset_type: The type of critical infrastructure for which to issue warnings.
+            asset_types: The type of critical infrastructure for which to issue warnings.
             prob_threshold: The probability threshold for issuing warnings.
             exceedance: Whether to consider exceedance probabilities.
 
