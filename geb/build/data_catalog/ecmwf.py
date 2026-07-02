@@ -163,11 +163,15 @@ class ECMWFForecasts(Adapter):
             bounds: The bounding box in the format (min_lon, min_lat, max_lon, max_lat).
             forecast_start: The forecast initialization time (date or datetime).
             forecast_end: The forecast end time (date or datetime).
+            hindcast_cycle_start: The start date of the cycle you want to get the hindcasts for.
+            hindcast_cycle_end: The end date of the cycle you want to get the hindcasts for.
+            n_hindcast_years: The number of years of hindcast data to download before the forecast cycle date. Maximum is 20 years.
             forecast_model: The ECMWF forecast model to use ("probabilistic_forecast", "control_forecast" or "both_control_and_probabilistic").
             forecast_resolution: The spatial resolution of the forecast data (degrees).
             forecast_horizon: The forecast horizon in hours.
             forecast_timestep_hours: The forecast timestep in hours.
             n_ensemble_members: The number of ensemble members to download.
+            forecast_product: The type of forecast product to download ("forecast" or "hindcast").
 
         Returns:
             The ECMWFForecasts instance.
@@ -386,12 +390,27 @@ class ECMWFForecasts(Adapter):
         forecast_horizon: int,
         forecast_timestep_hours: int,
     ) -> xr.Dataset:
+        """Load and merge ECMWF forecast files based on the specified model type.
+
+        Args:
+            forecast_model: Either 'control_forecast', 'probabilistic_forecast', or 'both_control_and_probabilistic'.
+            forecast_issue_date: The forecast initialization date and time.
+            forecast_resolution: The spatial resolution of the forecast data (degrees).
+            forecast_horizon: The forecast horizon in hours.
+            forecast_timestep_hours: The temporal resolution of the forecast data in hours.
+
+        Returns:
+            Merged forecast dataset.
+
+        Raises:
+            ValueError: If the forecast model is not supported.
+        """
 
         def _load_forecast_files(forecast_model: str) -> xr.Dataset:
             """Load a single forecast dataset for the specified model type.
 
             Args:
-                model_type: Either 'control_forecast' or 'probabilistic_forecast'.
+                forecast_model: Either 'control_forecast' or 'probabilistic_forecast'.
 
             Returns:
                 Loaded and renamed forecast dataset.
@@ -501,7 +520,22 @@ class ECMWFForecasts(Adapter):
 
         return ds
 
-    def process_forecasts(self, ds, bounds, reproject_like):
+    def process_forecasts(
+        self,
+        ds: xr.Dataset,
+        bounds: tuple[float, float, float, float],
+        reproject_like: xr.DataArray,
+    ) -> xr.Dataset:
+        """Process ECMWF forecast dataset.
+
+        Args:
+            ds: The xarray Dataset containing the forecast data.
+            bounds: The bounding box in the format (min_lon, min_lat, max_lon, max_lat).
+            reproject_like: An xarray DataArray to use as a template for reprojecting
+                the forecast data.
+        Returns:
+            Processed forecast dataset.
+        """
         # ensure all the timesteps are hourly
         if not (
             ds.step.diff("step").astype(np.int64) == 3600 * 1e9
@@ -720,9 +754,6 @@ class ECMWFForecasts(Adapter):
 
         Returns:
             da: processed ECMWF forecast data as an xarray Dataset.
-
-        Raises:
-            ValueError: If forecast initialization dates or time dimensions don't match between control and ensemble.
         """
         ds = self.load_and_merge_forecast_files(
             forecast_model=forecast_model,
@@ -744,7 +775,25 @@ class ECMWFForecasts(Adapter):
         forecast_timestep_hours: int,
         reproject_like: xr.DataArray,
     ) -> dict[str, xr.Dataset]:
+        """Process downloaded ECMWF hindcast data.
 
+        We process hindcasts for each initialization time separately. The hindcast file contains all variables needed for GEB.
+
+        Args:
+            bounds: The bounding box in the format (min_lon, min_lat, max_lon,
+                    max_lat).
+            forecast_issue_date: The forecast initialization time.
+            forecast_model: The ECMWF forecast model from build.yml config ("probabilistic_forecast", "control_forecast" or "both_control_and_probabilistic").
+            forecast_resolution: The spatial resolution of the hindcast data (degrees).
+            forecast_horizon: The forecast horizon in hours.
+            forecast_timestep_hours: The forecast timestep in hours.
+            reproject_like: An xarray DataArray to use as a template for reprojecting
+                the hindcast data.
+
+        Returns:
+            processed_hindcasts: A dictionary containing the processed hindcast data
+                for each initialization time.
+        """
         hindcasts = self.load_and_merge_forecast_files(
             forecast_model=forecast_model,
             forecast_issue_date=forecast_issue_date,
