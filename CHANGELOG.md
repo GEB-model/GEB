@@ -1,4 +1,6 @@
 # dev
+
+# v1.0.0b30
 - Implement evaporation for retention basins using a constant area based on maximum storage and a depth of 3 meters.
 - Added optional external discharge skill-score comparisons for Google Streamflow, GloFAS, and PCR-GLOBWB/Utrecht.
 - Expanded discharge metrics with original/modified KGE, KGE components, NSE, Pearson r², RMSE, and RRMSE.
@@ -17,6 +19,8 @@
 - Implement custom and improved algorithm for river burning. Currently only works for the non-subgrid mode of SFINCS.
 - Add a `--method-arg KEY=VALUE` option to `geb exec` (e.g., `geb exec estimate_return_periods --method-arg run_name=default`) and fix spinup and run discharge not being concatenated for return period estimation.
 - Add hydrograph shape methods for floods. Instead of assuming a triangular shape, the shape of the hydrograph can now be derived from historical GEB discharge.
+- Make a new option for subbasin selection for flood simulations (new default): 'auto'. This automatically selects only subbasins that have their bankful discharge exceeded and only simulates flood events for those subbasins.
+- For return period maps, we simulate subbasins one by one. Each simulation includes the downstream subbasin as well. This downstream subbasin also has inflow from other rivers. In this update the downstream subbasins also receive water from sidestreams (all-year mean).
 
 # v1.0.0b29
 - Load return-period flood maps from the spinup output folder (output/{spinup_name}/flood_maps/{return_period}.zarr).
