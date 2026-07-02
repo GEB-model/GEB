@@ -1,5 +1,6 @@
 # dev
 - Implemented the `early_warning.py` module outside of `households.py`, launching the latest GEB-IbF system, including options for: area and building based warnings; warning communication weighted by socio-economic factor; time-dependent damage reduction.
+- Users need to run `setup_warning_communication_weights` to enable the warning communication efficiency based on socioeconomic factors.
 - Parameterization of settings in the `model.yml`. Increased overall efficiency and usability of the early warning system.
 - Improved the setup for `critical_infrastructure_warning_strategy`, which now depends on asset type instead of strategy id.
 - Add a `--method-arg KEY=VALUE` option to `geb exec` (e.g., `geb exec estimate_return_periods --method-arg run_name=default`) and fix spinup and run discharge not being concatenated for return period estimation.
