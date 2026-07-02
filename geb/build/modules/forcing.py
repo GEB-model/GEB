@@ -1752,7 +1752,7 @@ class Forcing(BuildModelBase):
                 for d in pd.date_range(
                     hindcast_cycle_start, hindcast_cycle_end, freq="24h"
                 )
-                if d.day in HINDCAST_RUN_DAYS
+                if d.day in HINDCAST_RUN_DAYS and not (d.month == 2 and d.day > 28)
             ]
         else:
             base_folder = "forecasts"
