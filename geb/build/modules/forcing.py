@@ -1763,7 +1763,7 @@ class Forcing(BuildModelBase):
                 freq="24h",  # Daily frequency (24-hour intervals)
             )
 
-        self.logger.info(f"Processing {forecast_model} ECMWF forecasts...")
+        self.logger.info(f"Requesting {forecast_model} ECMWF {forecast_product}s...")
 
         ECMWF_forecasts_store = self.data_catalog.fetch(
             "ecmwf_forecasts",

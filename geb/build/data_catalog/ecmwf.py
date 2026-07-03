@@ -250,11 +250,11 @@ class ECMWFForecasts(Adapter):
             )
 
         for model_type in model_types_to_download:
-            print(f"Processing {model_type} downloads...")
+            self.logger.info(f"Processing {model_type} downloads...")
             for (
                 forecast_date
             ) in forecast_date_list:  # Loop through each forecast date to download
-                print(
+                self.logger.info(
                     f"Downloading {model_type} for {forecast_date}"
                 )  # Print the current forecast date being processed
 
@@ -347,7 +347,7 @@ class ECMWFForecasts(Adapter):
                 )
 
                 if output_filename.exists():
-                    print(
+                    self.logger.info(
                         f"Forecast file {output_filename} already exists, skipping download."
                     )
                     continue  # Skip download if file already exists
@@ -361,7 +361,7 @@ class ECMWFForecasts(Adapter):
                         f"1/to/{n_ensemble_members}"  # Add ensemble member numbers to request
                     )
 
-                print(
+                self.logger.info(
                     f"Requesting data from ECMWF MARS server.. {mars_request}"
                 )  # Log the MARS request parameters
 
