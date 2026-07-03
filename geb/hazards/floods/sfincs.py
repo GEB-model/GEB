@@ -1154,17 +1154,21 @@ class SFINCSRootModel:
             assert self.sfincs_model.grid_type == "regular"
             self.mask.values[outflow_mask] = SFINCS_WATER_LEVEL_BOUNDARY
 
-    def get_flood_plain(self, maximum_hand: float = 10.0) -> gpd.GeoDataFrame:
+    def get_flood_plain(
+        self, maximum_height_above_nearest_drainage_m: float = 10.0
+    ) -> gpd.GeoDataFrame:
         """Returns the flood plain grid of the SFINCS model.
 
         Uses a two-stage approach:
         1. Calculate the Height Above Nearest Drainage (HAND) using the elevation
-           grid and the river network and classify all cells with HAND less than
-              maximum_hand as flood plain.
+            grid and the river network and classify all cells with HAND less than
+            maximum_height_above_nearest_drainage_m as flood plain. Picking a larger value leads to a larger flood
+            plain and heavier simulation. Picking a lower value risks de-selecting some cells that
+            may be flooded, but makes the flood simulations more efficient.
         2. Adds a buffer of minimum distance around rivers.
 
         Args:
-            maximum_hand: The maximum Height Above Nearest Drainage (HAND) value to consider as flood plain, in meters.
+            maximum_height_above_nearest_drainage_m: The maximum Height Above Nearest Drainage (HAND) value to consider as flood plain, in meters.
 
         Returns:
             The flood plain as a GeoDataFrame.
@@ -1234,7 +1238,9 @@ class SFINCSRootModel:
 
         # The flood plain is then finally only the areas that are below a maximum hand.
         # i.e., no floods on top of hills
-        flood_plain: xr.DataArray = height_above_nearest_drainage <= maximum_hand
+        flood_plain: xr.DataArray = (
+            height_above_nearest_drainage <= maximum_height_above_nearest_drainage_m
+        )
 
         # Convert flood plain raster to vector
         flood_plain_geom = list(
