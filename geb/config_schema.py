@@ -65,10 +65,31 @@ class FloodEventConfig(BaseModel):
     end_time: datetime = Field(..., description="End time of the event.")
 
 
+class ShapeConfig(BaseModel):
+    """Configuration for the hydrograph shape method used in return-period maps."""
+
+    method: Literal["triangular", "direct", "anchor"] = Field(
+        "triangular",
+        description="Hydrograph shape method: 'triangular' (symmetric), 'direct' (historical shape at target discharge), or 'anchor' (historical shape at Q_2 rescaled to target).",
+    )
+    window_days: float = Field(
+        3.5,
+        description="Days before and after peak to extract when deriving shape from historical events (total window = 2 × window_days).",
+    )
+    tolerance: float = Field(
+        0.1,
+        description="Fractional tolerance around anchor discharge for event selection (e.g. 0.1 = ±10%).",
+    )
+
+
 class FloodsConfig(BaseModel):
     """Configuration for flood simulation."""
 
     simulate: bool = Field(False, description="Whether to simulate floods.")
+    subbasins: list[int] | Literal["all"] | Literal["auto"] = Field(
+        "all",
+        description="Subbasin ID, list of subbasin IDs, or 'all' to simulate all subbasins. Only works for flood events currently.",
+    )
     forcing_method: Literal["headwater_points", "accumulated_runoff"] = Field(
         "accumulated_runoff",
         description="Forcing method: 'headwater_points' or 'accumulated_runoff'.",
@@ -109,9 +130,16 @@ class FloodsConfig(BaseModel):
         0.0,
         description="Value to fix the shape parameter (xi) of the GPD. Set to 0.0 to force an Exponential (Gumbel) tail, or null to allow it to be fitted.",
     )
-    flood_risk: bool = Field(False, description="Whether to calculate flood risk.")
     events: list[FloodEventConfig] = Field(
         default_factory=list, description="List of flood events."
+    )
+    hydrograph_shape: ShapeConfig = Field(
+        default_factory=ShapeConfig,
+        description="Hydrograph shape configuration for return-period maps.",
+    )
+    run_for_validation_events: bool = Field(
+        False,
+        description="Whether to run flood model for validation events (i.e., events with observed flood maps).",
     )
     SFINCS: SFINCSConfig = Field(
         default_factory=SFINCSConfig, description="SFINCS configuration."
@@ -175,6 +203,10 @@ class RoutingConfig(BaseModel):
         "kinematic_wave",
         description="Routing algorithm: 'accuflux' or 'kinematic_wave'.",
     )
+    retention_basin_release_threshold_factor: float = Field(
+        0.9,
+        description="Factor to multiply the activation threshold by to get the release threshold.",
+    )
     river_width: RiverWidthConfig = Field(
         default_factory=RiverWidthConfig, description="River width configuration."
     )
@@ -192,13 +224,13 @@ class DischargeEvaluationConfig(BaseModel):
         description="Minimum modeled upstream area for stations included in discharge evaluation (km2).",
     )
     minimum_timeseries_length_years: float = Field(
-        5.0,
+        10.0,
         ge=0.0,
         description="Minimum paired observation-simulation timeseries length for stations included in discharge evaluation (years).",
     )
     external_evaluation_folder: str | None = Field(
-        "external_evaluation_data/",
-        description="Folder with external discharge evaluation CSV files. Relative paths are resolved from the model folder.",
+        None,
+        description="Optional folder with external discharge evaluation CSV files. Relative paths are resolved from the model folder.",
     )
 
 

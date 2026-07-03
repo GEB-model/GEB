@@ -174,103 +174,106 @@ def parse_MIRCA_crop_calendar(
 
             for row in crop_rows.itertuples(index=False):
                 area: float = float(row.Growing_area)
-                if area <= 0:
-                    continue
-
-                start_month: int = int(row.Planting_Month)
-                end_month: int = int(row.Maturity_Month)
-                if not (1 <= start_month <= 12) or not (1 <= end_month <= 12):
-                    raise ValueError(
-                        "MIRCA-OS planting and maturity months must be in [1, 12]."
-                    )
-
-                start_day_index = get_day_index(date(2000, start_month, 1))
-                end_day_index = get_day_index(
-                    date(2000, end_month, calendar.monthrange(2000, end_month)[1])
-                )
-                growth_length = get_growing_season_length(
-                    start_day_index, end_day_index
-                )
-
-                crop_rotations.append((start_day_index, growth_length, area))
-
-            if not crop_rotations:
-                continue
-
-            crop_rotations = sorted(crop_rotations, key=lambda x: x[2])
-            if len(crop_rotations) > 2:
-                # Three or more distinct named variants exist for the same crop
-                # class in this unit (e.g. Wheat1, Wheat2, Wheat3). Only two
-                # rotation windows can be represented per farmer group, so we
-                # keep the two largest-area seasons and discard the rest.
-                crop_rotations = crop_rotations[-2:]
-                warnings.warn(
-                    "More than 2 distinct crop rotations found for the same crop "
-                    "class in one MIRCA unit; discarding the rotation(s) with the "
-                    "lowest area."
-                )
-
-            if len(crop_rotations) == 1:
-                start_day_index, growth_length, area = crop_rotations[0]
-                crop_rotation: tuple[float, TwoDArrayInt32] = (
-                    area,
-                    _build_crop_rotation_array(
-                        crop_class=int(crop_class),
-                        is_irrigated=is_irrigated,
-                        crop_rotations=[(start_day_index, growth_length)],
-                    ),
-                )
-                parsed_calendar[unit_code].append(crop_rotation)
-
-            elif len(crop_rotations) == 2:
-                s0, l0, _ = crop_rotations[0]
-                s1, l1, _ = crop_rotations[1]
-                # If the growing seasons overlap (including same start day) the two
-                # rotations cannot be practiced by the same farmer, so we split them
-                # into separate entries. Overlap is tested on the circular 365-day
-                # calendar: season [s, s+l) wraps around the year end when s+l > 365.
-                seasons_overlap = ((s1 - s0) % 365) < l0 or ((s0 - s1) % 365) < l1
-                if seasons_overlap:
-                    for start_day_index, growth_length, area in crop_rotations:
-                        crop_rotation_entry: tuple[float, TwoDArrayInt32] = (
-                            area,
-                            _build_crop_rotation_array(
-                                crop_class=int(crop_class),
-                                is_irrigated=is_irrigated,
-                                crop_rotations=[(start_day_index, growth_length)],
-                            ),
+                if area > 0.0:
+                    start_month: int = int(row.Planting_Month)
+                    end_month: int = int(row.Maturity_Month)
+                    if not (1 <= start_month <= 12) or not (1 <= end_month <= 12):
+                        raise ValueError(
+                            "MIRCA-OS planting and maturity months must be in [1, 12]."
                         )
-                        parsed_calendar[unit_code].append(crop_rotation_entry)
+
+                    start_day_index = get_day_index(date(2000, start_month, 1))
+                    end_day_index = get_day_index(
+                        date(2000, end_month, calendar.monthrange(2000, end_month)[1])
+                    )
+                    growth_length = get_growing_season_length(
+                        start_day_index, end_day_index
+                    )
+
+                    crop_rotations.append((start_day_index, growth_length, area))
+
+            if crop_rotations:
+                crop_rotations = sorted(crop_rotations, key=lambda x: x[2])
+                if len(crop_rotations) > 2:
+                    # Three or more distinct named variants exist for the same crop
+                    # class in this unit (e.g. Wheat1, Wheat2, Wheat3). Only two
+                    # rotation windows can be represented per farmer group, so we
+                    # keep the two largest-area seasons and discard the rest.
+                    crop_rotations: list[tuple[int, int, int | float]] = crop_rotations[
+                        -2:
+                    ]
+                    warnings.warn(
+                        "More than 2 distinct crop rotations found for the same crop "
+                        "class in one MIRCA unit; discarding the rotation(s) with the "
+                        "lowest area."
+                    )
+
+                if len(crop_rotations) == 1:
+                    start_day_index, growth_length, area = crop_rotations[0]
+                    crop_rotation: tuple[float, TwoDArrayInt32] = (
+                        area,
+                        _build_crop_rotation_array(
+                            crop_class=int(crop_class),
+                            is_irrigated=is_irrigated,
+                            crop_rotations=[(start_day_index, growth_length)],
+                        ),
+                    )
+                    parsed_calendar[unit_code].append(crop_rotation)
+
+                elif len(crop_rotations) == 2:
+                    s0, l0, _ = crop_rotations[0]
+                    s1, l1, _ = crop_rotations[1]
+                    # If the growing seasons overlap (including same start day) the two
+                    # rotations cannot be practiced by the same farmer, so we split them
+                    # into separate entries. Overlap is tested on the circular 365-day
+                    # calendar: season [s, s+l) wraps around the year end when s+l > 365.
+                    seasons_overlap = ((s1 - s0) % 365) < l0 or ((s0 - s1) % 365) < l1
+                    if seasons_overlap:
+                        for start_day_index, growth_length, area in crop_rotations:
+                            crop_rotation_entry: tuple[float, TwoDArrayInt32] = (
+                                area,
+                                _build_crop_rotation_array(
+                                    crop_class=int(crop_class),
+                                    is_irrigated=is_irrigated,
+                                    crop_rotations=[(start_day_index, growth_length)],
+                                ),
+                            )
+                            parsed_calendar[unit_code].append(crop_rotation_entry)
+                    else:
+                        area = crop_rotations[1][2] - crop_rotations[0][2]
+                        if area > 0:
+                            crop_rotation_entry = (
+                                crop_rotations[1][2] - crop_rotations[0][2],
+                                _build_crop_rotation_array(
+                                    crop_class=int(crop_class),
+                                    is_irrigated=is_irrigated,
+                                    crop_rotations=[
+                                        (crop_rotations[1][0], crop_rotations[1][1])
+                                    ],
+                                ),
+                            )
+                            parsed_calendar[unit_code].append(crop_rotation_entry)
+
+                            crop_rotation_entry = (
+                                crop_rotations[0][2],
+                                _build_crop_rotation_array(
+                                    crop_class=int(crop_class),
+                                    is_irrigated=is_irrigated,
+                                    crop_rotations=[
+                                        (crop_rotations[0][0], crop_rotations[0][1]),
+                                        (crop_rotations[1][0], crop_rotations[1][1]),
+                                    ],
+                                ),
+                            )
+
+                            parsed_calendar[unit_code].append(crop_rotation_entry)
+                            assert (
+                                crop_rotation_entry[1][0][2]
+                                != crop_rotation_entry[1][1][2]
+                            )
+
                 else:
-                    crop_rotation_entry = (
-                        crop_rotations[1][2] - crop_rotations[0][2],
-                        _build_crop_rotation_array(
-                            crop_class=int(crop_class),
-                            is_irrigated=is_irrigated,
-                            crop_rotations=[
-                                (crop_rotations[1][0], crop_rotations[1][1])
-                            ],
-                        ),
-                    )
-                    parsed_calendar[unit_code].append(crop_rotation_entry)
-
-                    crop_rotation_entry = (
-                        crop_rotations[0][2],
-                        _build_crop_rotation_array(
-                            crop_class=int(crop_class),
-                            is_irrigated=is_irrigated,
-                            crop_rotations=[
-                                (crop_rotations[0][0], crop_rotations[0][1]),
-                                (crop_rotations[1][0], crop_rotations[1][1]),
-                            ],
-                        ),
-                    )
-
-                    parsed_calendar[unit_code].append(crop_rotation_entry)
-                    assert crop_rotation_entry[1][0][2] != crop_rotation_entry[1][1][2]
-
-            else:
-                raise NotImplementedError
+                    raise NotImplementedError
 
     return parsed_calendar
 

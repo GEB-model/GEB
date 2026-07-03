@@ -1,6 +1,7 @@
 """Implements build methods for the land surface submodel, responsible for land surface characteristics and processes."""
 
 import copy
+import warnings
 from pathlib import Path
 
 import geopandas as gpd
@@ -89,13 +90,13 @@ class LandSurface(BuildModelBase):
             {
                 "name": "fabdem",
                 "zmin": 0.001,
-                "coastal_zmin": 30.0,
                 "fill_depressions": False,
             },
             {
                 "name": "delta_dtm",
-                "zmax": 30,
+                "zmax": 29.999999,
                 "zmin": 0.001,
+                "merge_method": "last",
                 "fill_depressions": False,
                 "coastal_only": True,
             },
@@ -155,12 +156,6 @@ class LandSurface(BuildModelBase):
                     "DeltaDTM DEM must be provided when coastal DEMs are used."
                 )
 
-            for DEM in DEMs:
-                if "coastal_zmin" in DEM:
-                    DEM["zmin"] = DEM["coastal_zmin"]
-                if "coastal_zmax" in DEM:
-                    DEM["zmax"] = DEM["coastal_zmax"]
-
             coastlines = self.geom["coastal/coastlines"]
 
             # coastlines is a very complex geometry that can cause issues with clipping and masking operations
@@ -177,7 +172,13 @@ class LandSurface(BuildModelBase):
             )
 
             # buffer coastlines with 0.2 degrees
-            coastlines_with_buffer = coastlines.buffer(0.2, resolution=8)
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    category=UserWarning,
+                )
+                coastlines_with_buffer = coastlines.buffer(0.2, resolution=8)
+
             coastlines_with_buffer = coastlines_with_buffer.union_all()
 
             # merge the buffered coastlines with the potential flood area with buffer
@@ -221,6 +222,7 @@ class LandSurface(BuildModelBase):
 
         DEM_raster: xr.DataArray
         for DEM in DEMs:
+            custom_dem = False
             # FABDEM is already handled above, so we just use it from there
             if DEM["name"] == "fabdem":
                 DEM_raster: xr.DataArray = fabdem
@@ -235,8 +237,8 @@ class LandSurface(BuildModelBase):
                     DEM_raster = DEM_raster.where(
                         DEM_raster <= DEM["zmax"], DEM["zmax"]
                     )
-
             else:
+                custom_dem = True
                 # custom DEMs must have a path
                 if "path" not in DEM:
                     raise ValueError(
@@ -277,15 +279,19 @@ class LandSurface(BuildModelBase):
             if "band" in DEM_raster.dims:
                 DEM_raster: xr.DataArray = DEM_raster.isel(band=0)
 
-            DEM_raster = clip_with_geometry(
-                DEM_raster,
-                gpd.GeoDataFrame(geometry=[potential_flood_area_with_buffer], crs=4326),
-                all_touched=True,
-                drop=True,
+            potential_flood_area_with_buffer_gdf = gpd.GeoDataFrame(
+                geometry=[potential_flood_area_with_buffer], crs=4326
             )
 
             DEM_raster = convert_nodata(
                 DEM_raster.astype(np.float32, keep_attrs=True), np.nan
+            )
+
+            DEM_raster = clip_with_geometry(
+                DEM_raster,
+                potential_flood_area_with_buffer_gdf.to_crs(DEM_raster.rio.crs),
+                all_touched=True,
+                drop=True,
             )
 
             if DEM.get("fill_depressions", False):
@@ -333,7 +339,7 @@ class LandSurface(BuildModelBase):
         global_countries["geometry"] = global_countries.to_crs(
             "ESRI:54009"
         ).centroid.to_crs(global_countries.crs)
-        global_countries = global_countries.set_index("ISO3")
+        global_countries = global_countries.set_index("ISO3")  # ty:ignore[invalid-assignment]
 
         self.set_geom(global_countries, name="global_countries")
 

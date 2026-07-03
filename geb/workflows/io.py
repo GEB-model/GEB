@@ -92,7 +92,11 @@ def write_table(df: pd.DataFrame, fp: Path) -> None:
                 bool_cols.append(name)
             elif pa.types.is_floating(t):
                 float_cols.append(name)
-            elif pa.types.is_string(t) or pa.types.is_binary(t):
+            elif (
+                pa.types.is_string(t)
+                or pa.types.is_large_string(t)
+                or pa.types.is_binary(t)
+            ):
                 dict_cols.append(name)
             else:
                 raise ValueError(f"Unsupported column type {t} for column {name}")
@@ -261,7 +265,7 @@ def read_grid(
 
 def read_grid(
     filepath: Path,
-    ndim: Literal[2, 3],
+    ndim: Literal[2, 3] = 2,
     load: bool = True,
     return_transform_and_crs: bool = False,
 ) -> (
@@ -315,10 +319,10 @@ def read_grid(
         transform: Affine = Affine(
             a=x_diff,
             b=0,
-            c=x[0] - x_diff / 2,  # ty:ignore[invalid-argument-type]
+            c=x[0] - x_diff / 2,  # ty:ignore[invalid-argument-type, unsupported-operator]
             d=0,
             e=y_diff,
-            f=y[0] - y_diff / 2,  # ty:ignore[invalid-argument-type]
+            f=y[0] - y_diff / 2,  # ty:ignore[invalid-argument-type, unsupported-operator]
         )
         crs = data_array.attrs["_CRS"]
         assert isinstance(crs, dict)
@@ -904,7 +908,9 @@ def write_zarr(
 
         if "time" in da.coords:
             # apply delta encoding to time coordinates, which are often more compressible with this encoding
-            maximum_difference = np.abs(np.diff(da.coords["time"])).max().item()
+            maximum_difference: int = (
+                np.abs(np.diff(da.coords["time"])).max().astype(np.int64).item()
+            )
             if maximum_difference > np.iinfo("i4").max:
                 dtype_to_encode_time = "i8"
             elif maximum_difference > np.iinfo("i2").max:

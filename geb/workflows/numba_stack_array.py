@@ -37,11 +37,11 @@ def _stack_empty_alloc(
     size = 1
     if isinstance(shape, types.scalars.IntegerLiteral):
         size = shape.literal_value
-        sig = types.CPointer(dtype.dtype)(types.int64, dtype)
+        sig = types.CPointer(dtype.dtype)(types.int64, dtype)  # ty:ignore[unresolved-attribute]
     elif isinstance(shape, (types.containers.Tuple, types.containers.UniTuple)):
         for i in range(len(shape)):
             size *= shape[i].literal_value
-        sig = types.CPointer(dtype.dtype)(typeof(shape).instance_type, dtype)
+        sig = types.CPointer(dtype.dtype)(typeof(shape).instance_type, dtype)  # ty:ignore[unresolved-attribute]
     else:
         raise errors.TypingError(
             "shape must be an IntegerLiteral or a tuple of IntegerLiterals"

@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from time import time
 from types import TracebackType
-from typing import Any, cast, overload
+from typing import Any, Callable, cast, overload
 
 import geopandas as gpd
 import numpy as np
@@ -75,7 +75,9 @@ class GEBModel(Module):
         Raises:
             ValueError: If the mode is not 'r' or 'w'.
         """
-        self.config: dict[str, Any] = copy.deepcopy(config)  # model configuration
+        self.config: dict[str, Any] = copy.deepcopy(
+            config
+        )  # TODO: Make this a frozendict when Python 3.15 is released.
         self.logger = logger or logging.getLogger(__name__)  # model logger
         self.timing = timing  # whether to log timing of modules
         self.mode = mode  # mode of the model, either 'r' (read) or 'w' (write)
@@ -89,7 +91,7 @@ class GEBModel(Module):
 
         Module.__init__(self, self, create_var=False)  # initialize the Module class
 
-        self._multiverse_name = None  # name of the multiverse, if any
+        self._multiverse_name = None
 
         self.files = copy.deepcopy(
             files
@@ -149,17 +151,26 @@ class GEBModel(Module):
 
         else:
             self.logger.info(
-                f"Version mismatch but no specific updates found for this version. Updated version file."
+                "Version mismatch but no specific updates found for this version. Updated version file."
             )
             version_path.write_text(__version__)
 
-    def restore(self, store_location: Path, timestep: int, n_timesteps: int) -> None:
+    def restore(
+        self,
+        store_location: Path,
+        timestep: int,
+        n_timesteps: int,
+        reporter: Reporter,
+        config: dict,
+    ) -> None:
         """Restore the model state to the original state given by the function input.
 
         Args:
             store_location: Location of the store to restore the model state from.
             timestep: timestep to restore the model state to.
             n_timesteps: number of timesteps (i.e., the final timestep) to restore the model state to.
+            reporter: Reporter to use for logging.
+            config: Configuration to restore.
         """
         self.store.load(store_location)
 
@@ -168,22 +179,25 @@ class GEBModel(Module):
 
         self.current_timestep = timestep
         self.n_timesteps = n_timesteps
+        self.config = config
+
+        self.reporter = reporter
 
     @overload
-    def multiverse(
+    def multiverse_forecasts(
         self,
         forecast_issue_datetime: datetime.datetime,
         return_mean_discharge: bool = True,
     ) -> dict[Any, float]: ...
 
     @overload
-    def multiverse(
+    def multiverse_forecasts(
         self,
         forecast_issue_datetime: datetime.datetime,
         return_mean_discharge: bool = False,
     ) -> None: ...
 
-    def multiverse(
+    def multiverse_forecasts(
         self,
         forecast_issue_datetime: datetime.datetime,
         return_mean_discharge: bool = False,
@@ -235,21 +249,20 @@ class GEBModel(Module):
                 Any, float
             ] = {}  # dictionary to store mean discharge for each member
 
-        # load all zarr files for all forecast variables for the given issue date
+        # load all zarr files for forecast data for all supported variables
         forecast_members: list[str] | None = None
         forecast_end_dt: datetime.datetime | None = None
         forecast_data: dict[str, xr.DataArray] = {}
+        self.logger.info(
+            f"Starting to load forecast data for {len(self.forcing.loaders)} loaders"
+        )
         for loader_name, loader in self.forcing.loaders.items():
             if loader.supports_forecast:
-                # open one forecast to see the number of members
-                forecast_data[loader_name] = read_zarr(
-                    self.input_folder
-                    / "other"
-                    / "forecasts"
-                    / self.config["general"]["forecasts"]["provider"]
-                    / f"{loader_name}_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}.zarr"
-                )  # open the forecast data for the variable
-                # these are the forecast members to loop over
+                forecast_file_path = self.files["other"][
+                    f"forecasts/{self.config['general']['forecasts']['provider']}/{self.config['general']['forecasts']['processing']}/{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}/{loader_name}_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}"
+                ]
+                forecast_data[loader_name] = read_zarr(forecast_file_path)
+
                 variable_forecast_members: list[str] = [
                     i.item() for i in forecast_data[loader_name].member.values
                 ]
@@ -290,7 +303,7 @@ class GEBModel(Module):
             self.multiverse_name: str = f"forecast_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}/member_{member}"  # set the multiverse name to the member name
 
             for loader_name, loader in self.forcing.loaders.items():
-                if loader.supports_forecast:
+                if loader.supports_forecast and loader_name in forecast_data:
                     loader.set_forecast(
                         forecast_issue_datetime=forecast_issue_datetime,
                         da=forecast_data[loader_name].sel(member=member),
@@ -311,6 +324,8 @@ class GEBModel(Module):
                 store_location=store_location,
                 timestep=store_timestep,
                 n_timesteps=self.n_timesteps,
+                reporter=self.reporter,  # just set the old reporter
+                config=self.config,  # just the old config
             )  # restore the initial state of the multiverse
 
         self.logger.info("Forecast finished, restoring all conditions...")
@@ -321,6 +336,8 @@ class GEBModel(Module):
             store_location=store_location,
             timestep=store_timestep,
             n_timesteps=store_n_timesteps,
+            reporter=self.reporter,  # just set the old reporter
+            config=self.config,  # just the old config
         )  # restore the initial state of the multiverse
 
         self.reporter.is_activated = (
@@ -328,7 +345,7 @@ class GEBModel(Module):
         )
 
         # after all forecast members have been processed, restore the original forcing data
-        for loader in self.forcing.loaders.values():
+        for loader_name, loader in self.forcing.loaders.items():
             if loader.supports_forecast:
                 loader.unset_forecast()  # unset forecast mode
 
@@ -338,6 +355,93 @@ class GEBModel(Module):
         else:
             return None  # nothing to return
 
+    @overload
+    def alternate_universe(
+        self,
+        name: str,
+        n_timesteps: int,
+        do_function: Callable[[], None] | None = None,
+        collect_function: None = None,
+    ) -> None: ...
+
+    @overload
+    def alternate_universe(
+        self,
+        name: str,
+        n_timesteps: int,
+        do_function: Callable[[], None] | None = None,
+        collect_function: Callable[[], dict[str, Any]] = ...,
+    ) -> dict[str, Any]: ...
+
+    def alternate_universe(
+        self,
+        name: str,
+        n_timesteps: int,
+        do_function: Callable[[], None] | None = None,
+        collect_function: Callable[[], dict[str, Any]] | None = None,
+    ) -> None | dict[str, Any]:
+        """Run the model in an alternate universe mode, where the model state is modified by a user-defined function.
+
+        Args:
+            name: Name of the alternate universe.
+            n_timesteps: Number of timesteps to run the model in the alternate universe.
+            do_function: A user-defined function that modifies the model state in the alternate universe before running the model.
+            collect_function: A user-defined function that collects data from the alternate universe after running the model. If None, no data is collected.
+
+        Returns:
+            If `collect_function` is not None, a dictionary with the data collected from the alternate universe is returned.
+            Otherwise, None is returned.
+        """
+        # copy current state of timestep and time
+        store_timestep: int = copy.copy(self.current_timestep)  # store current timestep
+        store_n_timesteps: int = copy.copy(self.n_timesteps)  # store n_timesteps
+
+        # set a folder to store the initial state of the alternate universe
+        store_location: Path = (
+            self.simulation_root / "alternate_universe" / name
+        )  # create a temporary folder for the multiverse
+        self.store.save(store_location)  # save the current state of the model
+
+        store_config = copy.deepcopy(self.config)
+        store_reporter: Reporter = self.reporter
+
+        self.multiverse_name = (
+            name  # set the multiverse name to the alternate universe name
+        )
+        self.n_timesteps = (
+            self.current_timestep + n_timesteps
+        )  # set the number of timesteps to the end of the alternate universe
+
+        # make reporter AFTER updating n_timesteps
+        self.reporter = Reporter(
+            self, self.report_folder / "alternate_universe" / name, clean=True
+        )  # create a new reporter for the alternate universe
+
+        if do_function is not None:
+            do_function()
+
+        self.step_to_end()  # steps to end of the alternate universe period as defined in self.n_timesteps
+        self.reporter.finalize()  # finalize the reporter for the alternate universe
+
+        if collect_function is not None:
+            return_data: dict[str, Any] = (
+                collect_function()
+            )  # collect data from the alternate universe
+        else:
+            return_data: None = None  # no data to return
+
+        self.restore(
+            store_location=store_location,
+            timestep=store_timestep,
+            n_timesteps=store_n_timesteps,
+            reporter=store_reporter,
+            config=store_config,
+        )  # restore the initial state of the multiverse
+
+        self.multiverse_name: None = None  # reset the multiverse name
+
+        return return_data  # return the data collected from the alternate universe
+
     def step(self) -> None:
         """Forward the model by one timestep.
 
@@ -345,7 +449,7 @@ class GEBModel(Module):
         for the current timestep, using forecast data if available.
 
         Raises:
-            RuntimeError: If forecast file for the current timestep is not found when forecasts are enabled in the config.
+            ValueError: If forecast directories do not have the expected datetime format.
         """
         # only if forecasts is used, and if we are not already in multiverse (avoiding infinite recursion)
         # and if the current date is in the list of forecast days
@@ -355,68 +459,122 @@ class GEBModel(Module):
             is None  # only start multiverse if not already in one
             and self.current_time.date()
         ):
-            forecast_files: list[Path] = list(
-                (
-                    self.input_folder
-                    / "other"
-                    / "forecasts"
-                    / self.config["general"]["forecasts"]["provider"]
-                ).glob("*.zarr")
-            )  # get all forecast files in the input folder
-            forecast_issue_dates: list[
-                datetime.date
-            ] = []  # list to store forecast issue dates
-            for f in forecast_files:
-                datetime_str = f.stem.split("_")[
-                    -1
-                ]  # extract the datetime string from the filename
-                if (
-                    datetime_str.replace("T", "").replace(":", "").isdigit()
-                ):  # Check if datetime string contains only digits, T, and colons (valid format)
-                    dt = datetime.datetime.strptime(
-                        datetime_str, "%Y%m%dT%H%M%S"
-                    )  # convert the string to a datetime object
-                    forecast_issue_dates.append(dt)  # append the date to the list
-                else:
-                    raise RuntimeError(
-                        f"Forecast file {f.name} does not have a valid datetime format. Expected format: 'YYYYMMDDTHHMMSS'."
-                    )
+            # forecast issue dates are extracted from self.files['other'] keys
+            # which are stored as: forecasts/PROVIDER/ENSEMBLE/YYYYMMDDTHHMMSS/...
+            provider: str = self.config["general"]["forecasts"]["provider"]
+            ensemble: str = self.config["general"]["forecasts"]["processing"]
+            forecast_prefix: str = f"forecasts/{provider}/{ensemble}/"
 
-            forecast_issue_dates = list(
-                set(forecast_issue_dates)
-            )  # only keep unique dates
+            other_files: dict[str, Path] = self.files.get("other", {})
 
+            # extract unique forecast issue datetimes from files keys
+            forecast_issue_dates: list[datetime.datetime] = sorted(
+                {
+                    datetime.datetime.strptime(Path(file_key).parts[3], "%Y%m%dT%H%M%S")
+                    for file_key in other_files
+                    if file_key.startswith(forecast_prefix)
+                    and len(Path(file_key).parts) >= 5
+                    and Path(file_key).parts[3].replace("T", "").isdigit()
+                }
+            )
+
+            # Get warning system config settings
+            warning_config = self.model.config["agent_settings"]["households"][
+                "warning_system"
+            ]
+
+            prob_threshold = warning_config["probability_threshold"]
+            area_threshold = warning_config["area_threshold"]
+            building_threshold = warning_config["building_threshold"]
+            warning_type = warning_config["warning_target"]["residential_buildings"][
+                "warning_type"
+            ]
+            communication_efficiency = warning_config["communication_efficiency"]
+            evacuation_lead_time_threshold = warning_config[
+                "evacuation_lead_time_threshold"
+            ]
+            weight_by_socioeconomic_factors = warning_config[
+                "weight_by_socioeconomic_factors"
+            ]
+            # Determine response rate based on warning type
+            if warning_type == "building_based":
+                responsive_ratio = warning_config["response_rates"][
+                    "building_based_warnings"
+                ]
+
+            elif warning_type == "area_based":
+                responsive_ratio = warning_config["response_rates"][
+                    "area_based_warnings"
+                ]
+            else:
+                raise ValueError(
+                    f"Unknown warning type: {warning_type} selected in config, choose 'building_based' or 'area_based'."
+                )
             for dt in forecast_issue_dates:
                 if (
                     dt == self.current_time
                 ):  # change to include hours (for when we move to hourly)
+                    self.logger.debug(
+                        "Forecast issue datetime matched current model time: %s",
+                        dt.isoformat(),
+                    )
                     forecast_datetime = datetime.datetime.combine(
                         dt, datetime.time(0)
                     )  # Convert date back to datetime for the multiverse method
 
-                    self.multiverse(
-                        forecast_issue_datetime=forecast_datetime,
-                        return_mean_discharge=True,
-                    )  # run the multiverse for the current timestep
+                    # self.multiverse_forecasts(
+                    #     forecast_issue_datetime=forecast_datetime,
+                    #     return_mean_discharge=True,
+                    # )  # run the multiverse for the current timestep
 
                     # after the multiverse has run all members for one day, if warning response is enabled, run the warning system
                     if self.config["agent_settings"]["households"]["warning_response"]:
                         self.logger.info(
                             f"Running flood early warning system for date time {self.current_time.isoformat()}..."
                         )
-                        self.agents.households.create_flood_probability_maps(
-                            date_time=self.current_time, strategy=1, exceedance=True
+                        # Run warning strategies based on config settings
+                        # Check whether water level warnings are enabled
+                        # TODO: Think of better names (and hierarchy) for the strategies in the config file
+                        if warning_config["warning_target"]["residential_buildings"][
+                            "enabled"
+                        ]:
+                            self.logger.info(
+                                f"Running water level based warning strategy with {warning_type} warnings..."
+                            )
+                            self.agents.households.early_warning_module.water_level_warning_strategy(
+                                date_time=self.current_time,
+                                warning_type=warning_type,
+                                prob_threshold=prob_threshold,
+                                buildings_hit_threshold=building_threshold,
+                                area_hit_threshold=area_threshold,
+                                communication_efficiency=communication_efficiency,
+                                evacuation_lead_time_threshold=evacuation_lead_time_threshold,
+                                weight_by_socioeconomic_factors=weight_by_socioeconomic_factors,
+                                exceedance=False,
+                            )
+                        if warning_config["warning_target"]["critical_infrastructure"][
+                            "enabled"
+                        ]:
+                            asset_types = warning_config["warning_target"][
+                                "critical_infrastructure"
+                            ]["asset_type"]
+
+                            self.agents.households.early_warning_module.critical_infrastructure_warning_strategy(
+                                date_time=self.current_time,
+                                asset_types=asset_types,
+                                prob_threshold=prob_threshold,
+                                exceedance=True,
+                            )
+
+                        # Run household decision-making to convert warnings into actions
+                        self.agents.households.early_warning_module.household_decision_making(
+                            date_time=self.current_time,
+                            warning_type=warning_type,
+                            responsive_ratio=responsive_ratio,
                         )
-                        self.agents.households.water_level_warning_strategy(
-                            date_time=self.current_time
-                        )
-                        self.agents.households.critical_infrastructure_warning_strategy(
-                            date_time=self.current_time
-                        )
-                        self.agents.households.household_decision_making(
-                            date_time=self.current_time
-                        )
-                        self.agents.households.update_households_geodataframe_w_warning_variables(
+
+                        # Update household geodataframe with warning parameters
+                        self.agents.households.early_warning_module.update_households_geodataframe_w_warning_variables(
                             date_time=self.current_time
                         )
 
@@ -550,7 +708,7 @@ class GEBModel(Module):
         self.reporter.finalize()
         self.create_done_file()
 
-    def run_yearly(self) -> None:
+    def run_yearly(self, model_name: str = "default") -> None:
         """Run the model in yearly mode, where timesteps are yearly rather than daily.
 
         This depends on a spinup run that was run in daily mode.
@@ -558,7 +716,8 @@ class GEBModel(Module):
         Notes:
             Cannot be run in combination with hydrology simulation.
             This mode is experimential and is not fully tested.
-
+        Args:
+            model_name: Name of the model run. This is used to create a folder for the results of the model run. Defaults to "default".
         Raises:
             ValueError: If the start or end time is not at the beginning or end of a year, respectively.
             ValueError: If flood simulation is enabled in the config, as this is not compatible with yearly mode.
@@ -569,8 +728,10 @@ class GEBModel(Module):
         self.config["report"] = {
             key: value
             for key, value in self.config["report"].items()
-            if key.startswith("agents.households")
+            if key.startswith("agents.households") or key == "_config"
         }
+
+        self.config["general"]["name"] = model_name
 
         if self.config["hazards"]["floods"]["simulate"] is True:
             raise ValueError(
@@ -748,7 +909,7 @@ class GEBModel(Module):
 
         self._initialize(
             create_reporter=False,
-            in_spinup=run_name == self.model.config["general"]["spinup_name"],
+            in_spinup=False,
             current_time=current_time,
             n_timesteps=0,
             timestep_length=relativedelta(years=1),
@@ -756,6 +917,8 @@ class GEBModel(Module):
             simulate_hydrology=True,
             clean_report_folder=False,
         )
+
+        self.hydrology.routing.update_return_periods()
 
         # ugly switch to determine whether model has coastal basins
         subbasins = read_geom(self.model.files["geom"]["routing/subbasins"])
@@ -776,6 +939,8 @@ class GEBModel(Module):
     @property
     def current_day_of_year(self) -> int:
         """Gets the current day of the year.
+
+        The first of January is 1, the second of January is 2, and so on.
 
         Returns:
             day: current day of the year.
@@ -982,6 +1147,15 @@ class GEBModel(Module):
     def create_done_file(self) -> None:
         """Create a file to indicate that the model run or spinup is done."""
         (self.output_folder / "done.txt").touch()
+
+    @property
+    def is_done(self) -> bool:
+        """Check if the model run or spinup is done.
+
+        Returns:
+            True if the model run or spinup is done, False otherwise.
+        """
+        return (self.output_folder / "done.txt").exists()
 
     @property
     def spinup_start(self) -> datetime.datetime:

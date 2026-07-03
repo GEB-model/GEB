@@ -22,6 +22,7 @@ from geb.runner import (
     OPTIMIZE_DEFAULT,
     PROFILE_RAM_DEFAULT,
     PROFILE_SPEED_DEFAULT,
+    SKIP_DONE_DEFAULT,
     TIMING_DEFAULT,
     UPDATE_DEFAULT,
     WORKING_DIRECTORY_DEFAULT,
@@ -258,6 +259,12 @@ def click_run_options() -> Any:
         """
 
         @universal_options
+        @click.option(
+            "--skip-done",
+            is_flag=True,
+            default=SKIP_DONE_DEFAULT,
+            help="Only run the method if the model is not already marked as done.",
+        )
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             """Wrapper function for run options.
@@ -292,6 +299,53 @@ def run(**kwargs: Any) -> None:
 
 @cli.command()
 @click_run_options()
+@click.option(
+    "--multi",
+    is_flag=True,
+    default=False,
+    help="Run yearly mode multiple times.",
+)
+@click.option(
+    "--n-runs",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Number of yearly runs. Required when --multi is set.",
+)
+def run_yearly(multi: bool, n_runs: int | None, **kwargs: Any) -> None:
+    """Run model in yearly mode.
+
+    Can be run after model spinup.
+
+    Args:
+        multi: If True, run yearly mode multiple times.
+        n_runs: Number of runs when ``multi`` is True.
+        **kwargs: Keyword arguments to pass to the run_yearly function.
+
+    Raises:
+        click.ClickException: If ``--multi`` is set without ``--n-runs``, or if
+            ``--n-runs`` is provided without ``--multi``.
+    """
+    if multi and n_runs is None:
+        raise click.ClickException("--n-runs is required when --multi is set.")
+
+    if not multi and n_runs is not None:
+        raise click.ClickException("--n-runs can only be used together with --multi.")
+
+    if not multi:
+        run_model_with_method(method="run_yearly", **kwargs)
+        return
+
+    assert n_runs is not None
+    for run_id in range(n_runs):
+        run_model_with_method(
+            method="run_yearly",
+            method_args={"model_name": f"run_{run_id}"},
+            **kwargs,
+        )
+
+
+@cli.command()
+@click_run_options()
 def spinup(**kwargs: Any) -> None:
     """Run model spinup.
 
@@ -306,15 +360,35 @@ def spinup(**kwargs: Any) -> None:
 
 @cli.command()
 @click.argument("method", required=True)
+@click.option(
+    "--method-arg",
+    "method_args_raw",
+    multiple=True,
+    metavar="KEY=VALUE",
+    help="Argument to pass to the method, as KEY=VALUE. Can be repeated.",
+)
 @click_run_options()
-def exec(method: str, **kwargs: Any) -> None:
+def exec(method: str, method_args_raw: tuple[str, ...], **kwargs: Any) -> None:
     """Execute a specific method on the model.
 
     Args:
         method: Method to run on the model.
+        method_args_raw: Arguments to pass to the method, as KEY=VALUE strings.
         **kwargs: Keyword arguments to pass to the method.
+
+    Raises:
+        click.ClickException: If a --method-arg value is not in KEY=VALUE format.
     """
-    run_model_with_method(method=method, **kwargs)
+    method_args: dict[str, str] = {}
+    for raw_arg in method_args_raw:
+        if "=" not in raw_arg:
+            raise click.ClickException(
+                f"Invalid --method-arg {raw_arg!r}, expected format KEY=VALUE."
+            )
+        key, value = raw_arg.split("=", 1)
+        method_args[key] = value
+
+    run_model_with_method(method=method, method_args=method_args, **kwargs)
 
 
 def click_build_options(
@@ -426,7 +500,14 @@ def init(*args: Any, **kwargs: Any) -> None:
 @universal_options
 @click.pass_context
 def set(
-    ctx: click.Context, config: Path, working_directory: Path, **kwargs: Any
+    ctx: click.Context,
+    config: Path,
+    working_directory: Path,
+    profile_speed: bool,
+    profile_ram: bool,
+    optimize: bool,
+    timing: bool,
+    cores: int | None,
 ) -> None:
     """Set model configuration values.
 
@@ -440,8 +521,11 @@ def set(
         ctx: Click context containing extra arguments.
         config: Path to the model configuration file.
         working_directory: Working directory for the model.
-        **kwargs: Universal options.
-
+        profile_speed: Whether to profile speed.
+        profile_ram: Whether to profile RAM.
+        optimize: Whether to optimize.
+        timing: Whether to record timing information.
+        cores: Number of CPU cores to use.
     """
     # Parse extra arguments as key=value pairs
     params = {}
@@ -493,7 +577,16 @@ def set(
                 err=True,
             )
 
-    set_fn(config=config, working_directory=working_directory, **params)
+    set_fn(
+        config=config,
+        working_directory=working_directory,
+        profile_speed=profile_speed,
+        profile_ram=profile_ram,
+        optimize=optimize,
+        timing=timing,
+        cores=cores,
+        **params,
+    )
 
 
 @cli.command()
@@ -1085,6 +1178,8 @@ def rechunk(
 @click.argument(
     "models_dir",
     type=click.Path(exists=True, file_okay=False, path_type=Path),
+    required=False,
+    default=Path(WORKING_DIRECTORY_DEFAULT),
 )
 @click.option(
     "--run-name",
@@ -1119,9 +1214,10 @@ def merge(
 ) -> None:
     """Merge GEB cluster outputs into a single model directory for evaluation.
 
-    Scans MODELS_DIR for cluster subdirectories matching CLUSTER_PREFIX, merges
-    geometry files and discharge observation tables, symlinks report parquets, and
-    writes a model.yml so the result can be passed to ``geb evaluate``.
+    Scans MODELS_DIR, or the current working directory when omitted, for cluster
+    subdirectories matching CLUSTER_PREFIX, merges geometry files and discharge
+    observation tables, symlinks report parquets, and writes a model.yml so the
+    result can be passed to ``geb evaluate``.
     """
     logger = create_logger("merge")
     merge_model_outputs(
