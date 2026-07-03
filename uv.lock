@@ -1186,7 +1186,7 @@ name = "eccodeslib"
 version = "2.47.3.21"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "eckitlib" },
+    { name = "eckitlib", marker = "sys_platform != 'win32'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c8/c8/c01eb1ea558099fc34412740a1a856cf74f08cdb86c999c102652f3e0cb0/eccodeslib-2.47.3.21-cp314-cp314-macosx_13_0_arm64.whl", hash = "sha256:12b1ada1078a40a28b12e4c0b906eee4599f640e205e5172a6ac80243d2cd4c7", size = 9028130, upload-time = "2026-06-25T14:35:15.853Z" },
@@ -1502,7 +1502,6 @@ dependencies = [
     { name = "huggingface-hub" },
     { name = "hydromt-sfincs" },
     { name = "imageio" },
-    { name = "ipykernel" },
     { name = "joblib" },
     { name = "matplotlib" },
     { name = "mcp" },
@@ -1531,7 +1530,6 @@ dependencies = [
     { name = "s3fs" },
     { name = "scikit-image" },
     { name = "scipy" },
-    { name = "scores" },
     { name = "seaborn" },
     { name = "setuptools" },
     { name = "simplejson" },
@@ -1606,7 +1604,6 @@ requires-dist = [
     { name = "huggingface-hub", specifier = ">=1.18.0" },
     { name = "hydromt-sfincs", specifier = "==2.0.0rc3" },
     { name = "imageio", specifier = ">=2.37.2" },
-    { name = "ipykernel", specifier = ">=7.1.0" },
     { name = "joblib", specifier = ">=1.5.2" },
     { name = "jupyter", marker = "extra == 'display'", specifier = ">=1.1.1" },
     { name = "matplotlib", specifier = ">=3.10.7" },
@@ -1639,7 +1636,6 @@ requires-dist = [
     { name = "s3fs", specifier = ">=2023.6.0" },
     { name = "scikit-image", specifier = ">=0.26.0" },
     { name = "scipy", specifier = ">=1.16" },
-    { name = "scores", specifier = ">=2.5.0" },
     { name = "seaborn", specifier = ">=0.13.2" },
     { name = "seaborn", marker = "extra == 'display'", specifier = ">=0.13.2" },
     { name = "setuptools", specifier = ">=75.8.0" },
@@ -2807,7 +2803,7 @@ name = "linkify-it-py"
 version = "2.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "uc-micro-py" },
+    { name = "uc-micro-py", marker = "sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/2e/c9/06ea13676ef354f0af6169587ae292d3e2406e212876a413bf9eece4eb23/linkify_it_py-2.1.0.tar.gz", hash = "sha256:43360231720999c10e9328dc3691160e27a718e280673d444c38d7d3aaa3b98b", size = 29158, upload-time = "2026-03-01T07:48:47.683Z" }
 wheels = [
@@ -2918,7 +2914,7 @@ wheels = [
 
 [package.optional-dependencies]
 linkify = [
-    { name = "linkify-it-py" },
+    { name = "linkify-it-py", marker = "sys_platform != 'win32'" },
 ]
 
 [[package]]
@@ -3085,9 +3081,9 @@ name = "memray"
 version = "1.19.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "jinja2" },
-    { name = "rich" },
-    { name = "textual" },
+    { name = "jinja2", marker = "sys_platform != 'win32'" },
+    { name = "rich", marker = "sys_platform != 'win32'" },
+    { name = "textual", marker = "sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/96/04/5b886a36df947599e0f37cd46e6e44e565299815f044e2303ab2ae9f8870/memray-1.19.3.tar.gz", hash = "sha256:4e0fb29ff0a50c0ec9dc84294d8f2c83419feba561a37628b304c2ae4fe73d03", size = 2417089, upload-time = "2026-04-08T18:49:32.409Z" }
 wheels = [
@@ -5245,21 +5241,6 @@ wheels = [
 ]
 
 [[package]]
-name = "scores"
-version = "2.5.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "bottleneck" },
-    { name = "pandas" },
-    { name = "scipy" },
-    { name = "xarray" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/e6/ac/6f221a71e6001d2624ec83ca558f51160d3babf82add29fcb9a50a2b2a6b/scores-2.5.0.tar.gz", hash = "sha256:db9ab8f287803635625f5cbe23db2a5f07b6245d11fea5c1702f6c18aeee075a", size = 163041, upload-time = "2026-02-14T05:49:29.537Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d7/50/98674f479b61055d34a8c425a797c040b4dd52a7b392d7baaada2d22b1bd/scores-2.5.0-py3-none-any.whl", hash = "sha256:090258dfce0fee640563e9c6f3cf55dcb96e46ac2cc8931f4f0d6722faad2cdb", size = 182275, upload-time = "2026-02-14T05:49:31.454Z" },
-]
-
-[[package]]
 name = "seaborn"
 version = "0.13.2"
 source = { registry = "https://pypi.org/simple" }
@@ -5760,12 +5741,12 @@ name = "textual"
 version = "8.2.7"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "markdown-it-py", extra = ["linkify"] },
-    { name = "mdit-py-plugins" },
-    { name = "platformdirs" },
-    { name = "pygments" },
-    { name = "rich" },
-    { name = "typing-extensions" },
+    { name = "markdown-it-py", extra = ["linkify"], marker = "sys_platform != 'win32'" },
+    { name = "mdit-py-plugins", marker = "sys_platform != 'win32'" },
+    { name = "platformdirs", marker = "sys_platform != 'win32'" },
+    { name = "pygments", marker = "sys_platform != 'win32'" },
+    { name = "rich", marker = "sys_platform != 'win32'" },
+    { name = "typing-extensions", marker = "sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/9b/7a/c519db0aba5024f86e71e9631810bfdd6866ed2c8695bd7fa34b90e7ef59/textual-8.2.7.tar.gz", hash = "sha256:658f568ff81e30ed43890c3e07520390e5cf1b4763822006e060656b0a88f105", size = 1859249, upload-time = "2026-05-19T10:52:49.531Z" }
 wheels = [
@@ -6082,8 +6063,8 @@ name = "uvicorn"
 version = "0.49.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "click" },
-    { name = "h11" },
+    { name = "click", marker = "sys_platform != 'emscripten'" },
+    { name = "h11", marker = "sys_platform != 'emscripten'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/c4/1f/fa18009dea8469069cca78a4e877a008ab78f08b064bfc9ab891579077ff/uvicorn-0.49.0.tar.gz", hash = "sha256:ebf4271aa580d9de97f93192d4595176df6e91f9aae919ca73e4fc07df1e66a3", size = 91284, upload-time = "2026-06-03T22:01:30.448Z" }
 wheels = [
