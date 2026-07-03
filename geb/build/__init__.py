@@ -89,9 +89,9 @@ INIT_MULTIPLE_EXCLUDED_OUTLET_ISO3_CODES: frozenset[str] = frozenset(
 )  # these are areas that are included in the squared BBOX but that should be excluded
 
 # Set environment options for robustness
-GDAL_HTTP_ENV_OPTS = {
-    "GDAL_HTTP_MAX_RETRY": "10",  # Number of retry attempts
-    "GDAL_HTTP_RETRY_DELAY": "2",  # Delay (seconds) between retries
+GDAL_HTTP_ENV_OPTS: dict[str, str | int] = {
+    "GDAL_HTTP_MAX_RETRY": "288",  # Number of retry attempts
+    "GDAL_HTTP_RETRY_DELAY": "300",  # Delay (seconds) between retries
     "GDAL_HTTP_TIMEOUT": "30",  # Timeout in seconds
     "GDAL_CACHEMAX": 1 * 1024**3,  # 1 GB cache size
     "GDAL_MAX_BAND_COUNT": "200000",  # Increase max band count
