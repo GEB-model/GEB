@@ -77,6 +77,8 @@ class HouseholdVariables(Bucket):
     education_level: DynamicArray
     income: DynamicArray
     ead_usd_per_year: DynamicArray
+    action_lead_time: DynamicArray
+    buildings: gpd.GeoDataFrame
 
 
 class Households(AgentBaseClass):

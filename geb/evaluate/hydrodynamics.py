@@ -327,7 +327,7 @@ def calculate_performance_metrics(
             cloud_cmap = mcolors.ListedColormap(["white"])
             cloud_mask.where(cloud_mask == 1).plot(
                 ax=ax, cmap=cloud_cmap, add_colorbar=False, add_labels=False, zorder=1.1
-            )  # ty:ignore[missing-argument]
+            )
 
             # Invalid: grey, half transparent
             invalid_cmap = mcolors.ListedColormap(["grey"])
@@ -514,7 +514,7 @@ def calculate_performance_metrics(
             cloud_cmap = mcolors.ListedColormap(["white"])
             cloud_mask.where(cloud_mask == 1).plot(
                 ax=ax, cmap=cloud_cmap, add_colorbar=False, add_labels=False, zorder=1.1
-            )  # ty:ignore[missing-argument]
+            )
 
             # Invalid: grey, half transparent
             invalid_cmap = mcolors.ListedColormap(["grey"])
