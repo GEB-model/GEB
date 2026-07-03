@@ -744,7 +744,6 @@ class SFINCSRootModel:
                     elevation_grid=sf.elevation.data["dep"],
                     manning_grid=sf.roughness.data["manning"],
                     rivers=rivers_to_burn,
-                    fill_first=False,
                 )
                 sf.elevation.data["dep"] = burned_elv
                 sf.roughness.data["manning"] = burned_manning
@@ -1155,7 +1154,7 @@ class SFINCSRootModel:
             assert self.sfincs_model.grid_type == "regular"
             self.mask.values[outflow_mask] = SFINCS_WATER_LEVEL_BOUNDARY
 
-    def get_flood_plain(self, maximum_hand: float = 30.0) -> gpd.GeoDataFrame:
+    def get_flood_plain(self, maximum_hand: float = 10.0) -> gpd.GeoDataFrame:
         """Returns the flood plain grid of the SFINCS model.
 
         Uses a two-stage approach:
@@ -1170,7 +1169,7 @@ class SFINCSRootModel:
         Returns:
             The flood plain as a GeoDataFrame.
         """
-        subbasin_raster = rasterize_like(
+        subbasins_raster: xr.DataArray = rasterize_like(
             gdf=self.subbasins,
             raster=self.elevation,
             dtype=np.uint8,
@@ -1191,15 +1190,7 @@ class SFINCSRootModel:
         ).astype(bool)
         drainage_cells.attrs["_FillValue"] = None
 
-        # obtain the elevation grid. Some cells on the outside of the subbasins
-        # drain to a location outside the subbasins. In the HAND calculation,
-        # these cells are given a very low HAND, and thus would also be part of
-        # the floodplain. To avoid this, we set the cells outside the subbasins
-        # to a very low elevation, so that cells that drain outside the subbasins
-        # get an extremly high HAND value, and thus will not be part of the
-        # flood plain.
         elevation = self.elevation.values.copy()
-        elevation[~subbasin_raster.values] = -10_000
 
         # Fill depressions to ensure proper flow direction calculation
         elevation, d8 = fill_depressions(elevation, nodata=np.nan)
@@ -1210,10 +1201,20 @@ class SFINCSRootModel:
         )
 
         # also add all cells with large upstream from the DEM to the drainage cells
+        # but only if those cells are within the subbasin raster
         upstream_area: TwoDArrayFloat64 = flow_raster.upstream_area(unit="m2")
+        upstream_area[subbasins_raster.values == 0] = 0
         drainage_cells: xr.DataArray = drainage_cells | (
             upstream_area > 25_000_000
         )  # 25 km²
+
+        # select areas that drain to the active rivers. We need
+        # this layer to filter the HAND to select only HAND values that are draining to
+        # the rivers of interest
+        drains_to_active_rivers = xr.full_like(self.elevation, fill_value=0, dtype=bool)
+        drains_to_active_rivers.values = (
+            flow_raster.basins(idxs=np.where(drainage_cells.values.ravel() == 1)) > 0
+        )
 
         height_above_nearest_drainage = xr.full_like(
             self.elevation, np.nan, dtype=np.float32
@@ -1222,19 +1223,20 @@ class SFINCSRootModel:
             drain=drainage_cells.values, elevtn=elevation
         )
         height_above_nearest_drainage = xr.where(
-            height_above_nearest_drainage != -9999.0,
+            height_above_nearest_drainage != -9999.0,  # -9999 is the NaN value for HAND
             height_above_nearest_drainage,
             np.nan,
         )
+        # Remove any HAND values for areas that do not drain to the subbasins of interest
         height_above_nearest_drainage = xr.where(
-            subbasin_raster,
-            height_above_nearest_drainage,
-            np.nan,
+            drains_to_active_rivers, height_above_nearest_drainage, np.nan
         )
 
+        # The flood plain is then finally only the areas that are below a maximum hand.
+        # i.e., no floods on top of hills
         flood_plain: xr.DataArray = height_above_nearest_drainage <= maximum_hand
 
-        # convert flood plain raster to vector
+        # Convert flood plain raster to vector
         flood_plain_geom = list(
             rasterio.features.shapes(
                 flood_plain.astype(np.uint8),
