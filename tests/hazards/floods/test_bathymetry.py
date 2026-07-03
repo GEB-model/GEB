@@ -311,7 +311,6 @@ def test_burn_rivers(crs: int, with_obstacles: bool) -> None:
         elevation_grid=da_elv,
         manning_grid=da_man,
         rivers=gdf_riv,
-        fill_first=True,
     )
 
     # Structural validations
