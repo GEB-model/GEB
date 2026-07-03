@@ -46,7 +46,7 @@
 - Migrate to new Destination Earth API ([#846](https://github.com/GEB-model/GEB/issues/844)).
 - Interactive charts option for discharge plots on evaluation dashboard. 
 - Simplification and optimalization of geb init-multiple functionality, solving https://github.com/GEB-model/GEB/issues/629
-- Improve flood plain delination when flood plains are very flat. Now flood plains outside the subbasins of interest are included when they are hydrologically connected.
+- Improve flood plain delineation when flood plains are very flat. Now flood plains outside the subbasins of interest are included when they are hydrologically connected.
 
 Important notes:
 - In this version, the output folder is re-organized. For a specific run name (e.g., default or spinup) all files (i.e., reported data, evaluation data, flood maps etc.) are saved in the folder output/run_name.

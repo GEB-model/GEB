@@ -1164,7 +1164,7 @@ class SFINCSRootModel:
         2. Adds a buffer of minimum distance around rivers.
 
         Args:
-            maximum_hand: The maximum Height Above Nearest Drainage (HAND) value to consider as flood plain, in meters. Default is 30.0 m.
+            maximum_hand: The maximum Height Above Nearest Drainage (HAND) value to consider as flood plain, in meters.
 
         Returns:
             The flood plain as a GeoDataFrame.
@@ -1213,7 +1213,7 @@ class SFINCSRootModel:
         # the rivers of interest
         drains_to_active_rivers = xr.full_like(self.elevation, fill_value=0, dtype=bool)
         drains_to_active_rivers.values = (
-            flow_raster.basins(idxs=np.where(drainage_cells.values.ravel() == 1)) > 0
+            flow_raster.basins(idxs=np.where(drainage_cells.values.ravel() == 1)[0]) > 0
         )
 
         height_above_nearest_drainage = xr.full_like(
