@@ -8,37 +8,6 @@ import xarray as xr
 from rasterio.features import rasterize
 from scipy.spatial import cKDTree  # ty: ignore[unresolved-import]
 from shapely.ops import transform as shapely_transform
-from skimage.morphology import reconstruction
-
-
-def fill_depressions(elevation_grid: xr.DataArray) -> xr.DataArray:
-    """Fills topological sinks in a DEM using morphological reconstruction.
-
-    Args:
-        elevation_grid: Elevation grid with CRS and transform (meters).
-
-    Returns:
-        Elevation grid with depressions filled (meters).
-    """
-    dem_arr = elevation_grid.values.copy()
-    nan_mask = np.isnan(dem_arr)
-    # If there are NaNs, we temporarily fill them with a very high value
-    # so the reconstruction algorithm treats them as peaks rather than sinks.
-    if nan_mask.any():
-        dem_arr[nan_mask] = np.nanmax(dem_arr) + 10.0
-
-    seed = np.full(dem_arr.shape, np.nanmax(dem_arr) + 10.0)
-    seed[0, :] = dem_arr[0, :]
-    seed[-1, :] = dem_arr[-1, :]
-    seed[:, 0] = dem_arr[:, 0]
-    seed[:, -1] = dem_arr[:, -1]
-
-    filled_arr = reconstruction(seed, dem_arr, method="erosion")
-    # Restore the original NaNs after filling the sinks.
-    if nan_mask.any():
-        filled_arr[nan_mask] = np.nan
-
-    return elevation_grid.copy(data=filled_arr)
 
 
 def _validate_inputs(
@@ -433,7 +402,6 @@ def burn_rivers(
     elevation_grid: xr.DataArray,
     manning_grid: xr.DataArray,
     rivers: gpd.GeoDataFrame,
-    fill_first: bool = True,
 ) -> tuple[xr.DataArray, xr.DataArray]:
     """Burns river networks into a Digital Elevation Model (DEM).
 
@@ -445,7 +413,6 @@ def burn_rivers(
         elevation_grid: Elevation DataArray with CRS and transform (meters).
         manning_grid: Manning's n DataArray with CRS and transform (s/m^(1/3)).
         rivers: GeoDataFrame containing river geometries and attributes.
-        fill_first: If True, fills depressions in the DEM before burning rivers.
 
     Returns:
         Tuple containing:
@@ -459,9 +426,7 @@ def burn_rivers(
         "topological_stream_order", ascending=True
     )  # ty:ignore[invalid-assignment]
 
-    out_elevation = (
-        fill_depressions(elevation_grid.copy()) if fill_first else elevation_grid.copy()
-    )
+    out_elevation = elevation_grid.copy()
     transform = out_elevation.rio.transform()
     shape = out_elevation.shape
     is_geo = out_elevation.rio.crs.is_geographic
