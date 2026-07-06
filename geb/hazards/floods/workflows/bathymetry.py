@@ -164,7 +164,7 @@ def _initialize_network_and_nodes(
     dem_grid = (
         elevation_grid.values[0] if elevation_grid.ndim == 3 else elevation_grid.values
     )
-    for node in node_registry.values():
+    for river_id, node in node_registry.items():
         c = int(np.floor((node["x"] - transform[2]) / transform[0]))
         r = int(np.floor((node["y"] - transform[5]) / transform[4]))
 
@@ -187,9 +187,11 @@ def _initialize_network_and_nodes(
         # The river bed is then carved down by the nominal depth.
         node["z_bed"] = node["z_surf"] - node["max_depth"]
 
-        if node["z_surf"] < -3:
+        # check if the water surface is below sea level for non-sink nodes
+        # sink nodes may be below sea level because they may end in a lake or ocean
+        if node["z_surf"] < -3 and not river_id.startswith("sink_"):
             raise ValueError(
-                f"Water surface at node ({node['x']:.5f}, {node['y']:.5f}) is well below sea level."
+                f"Water surface at node ({node['x']:.5f}, {node['y']:.5f}) is well below sea level {node['z_surf']:.2f}."
             )
 
     return river_network, node_registry
