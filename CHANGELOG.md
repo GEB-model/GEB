@@ -3,6 +3,7 @@
 - Users need to run `setup_warning_communication_weights` to enable the warning communication efficiency based on socioeconomic factors.
 - Parameterization of settings in the `model.yml`. Increased overall efficiency and usability of the early warning system.
 - Improved the setup for `critical_infrastructure_warning_strategy`, which now depends on asset type instead of strategy id.
+- Added the option to download and process hindcasts using the MARS API. For that, `setup_forecasts` have additional arguments: forecast_product, hindcast_cycle_start, hindcast_cycle_end and n_hindcast_years.
 
 # v1.0.0b30
 - Implement evaporation for retention basins using a constant area based on maximum storage and a depth of 3 meters.
