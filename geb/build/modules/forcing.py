@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 from functools import partial
 from io import BytesIO
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -1567,18 +1567,18 @@ class Forcing(BuildModelBase):
     @build_method(depends_on=["set_ssp", "set_time_range"], required=False)
     def setup_forecasts(
         self,
-        forecast_product: str,
         forecast_start: date | datetime,
         forecast_end: date | datetime,
-        hindcast_cycle_start: date | datetime,
-        hindcast_cycle_end: date | datetime,
-        n_hindcast_years: int,
         forecast_provider: str,
         forecast_model: str,
-        forecast_resolution: float,
+        forecast_resolution: str,
         forecast_horizon: int,
         forecast_timestep_hours: int,
         n_ensemble_members: int,
+        forecast_product: Literal["forecast", "hindcast"] = "forecast",
+        hindcast_cycle_start: date | datetime | None = None,
+        hindcast_cycle_end: date | datetime | None = None,
+        n_hindcast_years: int | None = None,
         create_plots: bool = False,
     ) -> None:
         """Sets up forecast data for the model based on configuration.
@@ -1591,7 +1591,7 @@ class Forcing(BuildModelBase):
             hindcast_cycle_end: The end time for hindcast data (date or datetime).
             n_hindcast_years: The number of years of hindcast data to download.
             forecast_provider: The forecast data provider to use (default: "ECMWF").
-            forecast_model: The ECMWF forecast model to use (probabilistic_forecast or control_forecast).
+            forecast_model: The ECMWF forecast model to use (probabilistic_forecast, control_forecast or both_control_and_probabilistic).
             forecast_resolution: The spatial resolution of the forecast data (degrees).
             forecast_horizon: The forecast horizon in hours.
             forecast_timestep_hours: The forecast timestep in hours.
@@ -1602,33 +1602,33 @@ class Forcing(BuildModelBase):
             forecast_provider == "ECMWF"
         ):  # Check if ECMWF is the selected forecast provider
             self.setup_forecasts_ECMWF(  # Call ECMWF-specific setup method
-                forecast_product,  # Pass forecast product type
-                forecast_start,  # Pass forecast start date
-                forecast_end,  # Pass forecast end date
-                hindcast_cycle_start,  # Pass hindcast start date
-                hindcast_cycle_end,  # Pass hindcast end date
-                n_hindcast_years,  # Pass number of hindcast years
-                forecast_model,  # Pass forecast model type
-                forecast_resolution,  # Pass spatial resolution
-                forecast_horizon,  # Pass forecast horizon in hours
-                forecast_timestep_hours,  # Pass timestep interval
-                n_ensemble_members,  # Pass number of ensemble members,
+                forecast_product=forecast_product,  # Pass forecast product type
+                forecast_start=forecast_start,  # Pass forecast start date
+                forecast_end=forecast_end,  # Pass forecast end date
+                hindcast_cycle_start=hindcast_cycle_start,  # Pass hindcast start date
+                hindcast_cycle_end=hindcast_cycle_end,  # Pass hindcast end date
+                n_hindcast_years=n_hindcast_years,  # Pass number of hindcast years
+                forecast_model=forecast_model,  # Pass forecast model type
+                forecast_resolution=forecast_resolution,  # Pass spatial resolution
+                forecast_horizon=forecast_horizon,  # Pass forecast horizon in hours
+                forecast_timestep_hours=forecast_timestep_hours,  # Pass timestep interval
+                n_ensemble_members=n_ensemble_members,  # Pass number of ensemble members,
                 create_plots=create_plots,
             )
 
     def setup_forecasts_ECMWF(
         self,
-        forecast_product: str,
         forecast_start: date | datetime,
         forecast_end: date | datetime,
-        hindcast_cycle_start: date | datetime,
-        hindcast_cycle_end: date | datetime,
-        n_hindcast_years: int,
         forecast_model: str,
-        forecast_resolution: float,
+        forecast_resolution: str,
         forecast_horizon: int,
         forecast_timestep_hours: int,
         n_ensemble_members: int = 50,
+        forecast_product: Literal["forecast", "hindcast"] = "forecast",
+        hindcast_cycle_start: date | datetime | None = None,
+        hindcast_cycle_end: date | datetime | None = None,
+        n_hindcast_years: int | None = None,
         create_plots: bool = False,
     ) -> None:
         """Sets up the folder structure for ECMWF forecast data.
@@ -1640,7 +1640,7 @@ class Forcing(BuildModelBase):
             hindcast_cycle_start: The start time for hindcast data (date or datetime).
             hindcast_cycle_end: The end time for hindcast data (date or datetime).
             n_hindcast_years: The number of years of hindcast data to download.
-            forecast_model: The ECMWF forecast model to use (probabilistic_forecast or control_forecast).
+            forecast_model: The ECMWF forecast model to use (probabilistic_forecast, control_forecast or both_control_and_probabilistic).
             forecast_resolution: The spatial resolution of the forecast data (degrees).
             forecast_horizon: The forecast horizon in hours.
             forecast_timestep_hours: The forecast timestep in hours.
@@ -1651,7 +1651,7 @@ class Forcing(BuildModelBase):
             ValueError: If an invalid forecast product type is provided or if the number of hindcast years exceeds the available data range for ECMWF hindcasts.
         """
 
-        def _get_model_folder(forecast_model: str) -> str:
+        def _get_forecast_model_folder(forecast_model: str) -> str:
             return (
                 "merged_control_ensemble"
                 if forecast_model == "both_control_and_probabilistic"
@@ -1661,7 +1661,7 @@ class Forcing(BuildModelBase):
         def _make_base_name(
             base_folder: str, forecast_product: str, forecast_model: str, date_str: str
         ) -> str:
-            return f"{base_folder}/ECMWF/{_get_model_folder(forecast_model)}/{date_str}"
+            return f"{base_folder}/ECMWF/{_get_forecast_model_folder(forecast_model)}/{date_str}"
 
         def _save_ecmwf_forcing(
             forecast_ds: xr.Dataset,
@@ -1738,9 +1738,10 @@ class Forcing(BuildModelBase):
             )
 
         if forecast_product == "hindcast":
-            assert n_hindcast_years <= 20, (
-                f"ECMWF hindcast data is only available for up to 20 years before the forecast cycle date. Please adjust the n_hindcast_years parameter in build.yml (currently {n_hindcast_years})."
-            )
+            if n_hindcast_years > 20:
+                raise ValueError(
+                    f"ECMWF hindcast data is only available for up to 20 years before the forecast cycle date. Please adjust the n_hindcast_years parameter in build.yml (currently {n_hindcast_years})."
+                )
             base_folder = "hindcasts"
 
             HINDCAST_RUN_DAYS = [1, 5, 9, 13, 17, 21, 25, 29]

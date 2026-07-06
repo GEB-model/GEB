@@ -3,7 +3,7 @@
 import os
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import ecmwfapi
 import numpy as np
@@ -97,7 +97,7 @@ def generate_forecast_steps(forecast_date: datetime, forecast_horizon: int) -> s
     return "/".join(str(step) for step in steps)  # return step string for MARS request
 
 
-def make_hdates_for_cycle_date(
+def make_hindcast_dates_for_cycle_date(
     forecast_cycle_date: pd.Timestamp, n_hindcast_years: int
 ) -> str:
     """Generate a string of hindcast dates for a given forecast cycle date.
@@ -141,7 +141,7 @@ class ECMWFForecasts(Adapter):
         forecast_horizon: int,
         forecast_timestep_hours: int,
         n_ensemble_members: int,
-        forecast_product: str,
+        forecast_product: Literal["forecast", "hindcast"],
     ) -> ECMWFForecasts:
         """Download ECMWF forecasts using the ECMWF web API: https://github.com/ecmwf/ecmwf-api-client.
 
@@ -225,9 +225,10 @@ class ECMWFForecasts(Adapter):
                     )
         elif forecast_product == "hindcast":
             # If downloading hindcast data, check if the forecast start date is less then 20 years apart from the forecast cycle date, otherwise there will be no data available
-            assert n_hindcast_years <= 20, (
-                "ECMWF hindcast data is only available for up to 20 years before the forecast cycle date. Please adjust the n_hindcast_years parameter in your build.yml file to be 20 or less."
-            )
+            if n_hindcast_years > 20:
+                raise ValueError(
+                    "ECMWF hindcast data is only available for up to 20 years before the forecast cycle date. Please adjust the n_hindcast_years parameter in your build.yml file to be 20 or less."
+                )
 
             HINDCAST_RUN_DAYS = [1, 5, 9, 13, 17, 21, 25, 29]
             forecast_date_list = [
@@ -235,8 +236,13 @@ class ECMWFForecasts(Adapter):
                 for d in pd.date_range(
                     hindcast_cycle_start, hindcast_cycle_end, freq="D"
                 )
-                if d.day in HINDCAST_RUN_DAYS
+                if d.day in HINDCAST_RUN_DAYS and not (d.month == 2 and d.day > 28)
             ]
+        else:
+            raise ValueError(
+                f"Unsupported forecast_product: '{forecast_product}'. "
+                "Must be 'forecast' or 'hindcast'."
+            )
 
         # Determine which model types to download based on YAML configuration
         if forecast_model == "both_control_and_probabilistic":
@@ -339,6 +345,7 @@ class ECMWFForecasts(Adapter):
 
                 output_filename = format_path(
                     self.path,
+                    forecast_product=forecast_product,
                     forecast_date=format_date(forecast_date),
                     forecast_model=model_type,
                     forecast_resolution=forecast_resolution.replace("/", "-"),
@@ -389,6 +396,7 @@ class ECMWFForecasts(Adapter):
         forecast_resolution: str,
         forecast_horizon: int,
         forecast_timestep_hours: int,
+        forecast_product: Literal["forecast", "hindcast"] = "forecast",
     ) -> xr.Dataset:
         """Load and merge ECMWF forecast files based on the specified model type.
 
@@ -398,6 +406,7 @@ class ECMWFForecasts(Adapter):
             forecast_resolution: The spatial resolution of the forecast data (degrees).
             forecast_horizon: The forecast horizon in hours.
             forecast_timestep_hours: The temporal resolution of the forecast data in hours.
+            forecast_product: The forecast product type (e.g., "hindcast" or "forecast").
 
         Returns:
             Merged forecast dataset.
@@ -420,13 +429,13 @@ class ECMWFForecasts(Adapter):
             """
             filename = format_path(
                 self.path,
+                forecast_product=forecast_product,
                 forecast_date=format_date(forecast_issue_date),
                 forecast_model=forecast_model,
                 forecast_resolution=forecast_resolution.replace("/", "-"),
                 forecast_horizon=forecast_horizon,
                 forecast_timestep_hours=forecast_timestep_hours,
             )
-            # TODO: adjust to read the path of hindcasts (add forecast product)
 
             if not filename.exists():
                 raise FileNotFoundError(f"Forecast file not found: {filename}")
@@ -761,6 +770,7 @@ class ECMWFForecasts(Adapter):
             forecast_resolution=forecast_resolution,
             forecast_horizon=forecast_horizon,
             forecast_timestep_hours=forecast_timestep_hours,
+            forecast_product="forecast",
         )
 
         return self.process_forecasts(ds, bounds, reproject_like)
@@ -800,6 +810,7 @@ class ECMWFForecasts(Adapter):
             forecast_resolution=forecast_resolution,
             forecast_horizon=forecast_horizon,
             forecast_timestep_hours=forecast_timestep_hours,
+            forecast_product="hindcast",
         )
 
         processed_hindcasts = {}
