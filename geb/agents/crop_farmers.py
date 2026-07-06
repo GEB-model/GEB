@@ -205,6 +205,7 @@ class CropFarmersVariables(Bucket):
     interest_rate: DynamicArray
     crop_calendar: DynamicArray
     crop_calendar_years: ArrayInt32
+    crop_calendar_active_year_index: DynamicArray
     crop_calendar_base_array: ArrayInt32
     crop_calendar_rotation_years: DynamicArray
     current_crop_calendar_rotation_year_index: DynamicArray
@@ -643,6 +644,17 @@ class CropFarmers(AgentBaseClass):
             self.model.files["array"]["agents/farmers/crop_calendar"]
         )
 
+        # Tracks which HRL crop-calendar year each farmer is currently using.
+        # For a single-year setup this remains 0. For a multi-year setup it indexes
+        # self.var.crop_calendar_base_array[year_index].
+        self.var.crop_calendar_active_year_index = DynamicArray(
+            n=self.var.n,
+            max_n=self.var.max_n,
+            dtype=np.int32,
+            fill_value=0,
+        )
+        self.var.crop_calendar_active_year_index[:] = 0
+
         if self.var.crop_calendar_base_array.ndim == 3:
             # Single-year setup: crop_calendar has shape (farmer, rotation, calendar).
             self.var.crop_calendar[:] = self.var.crop_calendar_base_array
@@ -650,13 +662,23 @@ class CropFarmers(AgentBaseClass):
         elif self.var.crop_calendar_base_array.ndim == 4:
             # Multi-year setup: crop_calendar has shape
             # (year, farmer, rotation, calendar). Initialize the model with the first
-            # available HRL year; yearly updating can later select another year index.
+            # available HRL year. Updating to later HRL years is done after the last
+            # harvest of the active crop-calendar year.
             crop_calendar_year_index = 0
 
             if "agents/farmers/crop_calendar_years" in self.model.files["array"]:
                 self.var.crop_calendar_years = read_array(
                     self.model.files["array"]["agents/farmers/crop_calendar_years"]
                 )
+
+                assert (
+                    self.var.crop_calendar_years.size
+                    == self.var.crop_calendar_base_array.shape[0]
+                ), (
+                    "crop_calendar_years must have one entry per year in "
+                    "crop_calendar_base_array."
+                )
+
                 self.model.logger.info(
                     "Detected multi-year crop calendar with shape %s. "
                     "Initializing crop_calendar with HRL year %s.",
@@ -664,15 +686,22 @@ class CropFarmers(AgentBaseClass):
                     int(self.var.crop_calendar_years[crop_calendar_year_index]),
                 )
             else:
-                self.model.logger.info(
-                    "Detected multi-year crop calendar with shape %s. "
-                    "Initializing crop_calendar with first year index.",
-                    self.var.crop_calendar_base_array.shape,
+                raise ValueError(
+                    "Multi-year crop calendars require "
+                    "'agents/farmers/crop_calendar_years' for after-harvest updating."
                 )
 
             self.var.crop_calendar[:] = self.var.crop_calendar_base_array[
                 crop_calendar_year_index
             ]
+            self.var.crop_calendar_active_year_index[:] = crop_calendar_year_index
+
+        else:
+            raise ValueError(
+                "crop_calendar_base_array must have either 3 dimensions "
+                "(farmer, rotation, calendar) or 4 dimensions "
+                "(year, farmer, rotation, calendar)."
+            )
 
         # assert self.var.crop_calendar[:, :, 0].max() < len(self.var.crop_ids)
 
@@ -1504,7 +1533,7 @@ class CropFarmers(AgentBaseClass):
         )
 
     @property
-    def water_price(self) -> np.ndarray:
+    def water_price_current(self) -> np.ndarray:
         """Yearly water price per region (USD/m³).
 
         Taken from observed water markets data.
@@ -2126,8 +2155,11 @@ class CropFarmers(AgentBaseClass):
             crop_harvest_age_days=self.HRU.var.crop_harvest_age_days,
         )
 
+        harvesting_farmers = np.empty(0, dtype=np.int64)
+
         self.var.actual_yield_per_farmer.fill(np.nan)
         self.var.harvested_crop.fill(-1)
+
         # If there are fields to be harvested, compute yield ratio and various related metrics
         if np.count_nonzero(harvest):
             # Get yield ratio for the harvested crops
@@ -2151,7 +2183,7 @@ class CropFarmers(AgentBaseClass):
             )
             harvesting_farmers = np.unique(harvesting_farmer_fields)
 
-            number_of_harvesting_fields = np.count_nonzero(harvested_crops)
+            number_of_harvesting_fields = harvested_crops.size
             self.model.logger.debug(
                 f"Harvesting {number_of_harvesting_fields} fields with crops: "
                 f"{np.unique(harvested_crops[harvested_crops >= 0])}"
@@ -2161,7 +2193,6 @@ class CropFarmers(AgentBaseClass):
             crop_prices = self.agents.market.crop_prices
 
             # Determine the region ids of harvesting farmers, as crop prices differ per region
-
             region_id_per_field = self.var.region_id[self.HRU.var.land_owners]
             region_id_per_field[self.HRU.var.land_owners == -1] = -1
             region_id_per_harvested_field = region_id_per_field[harvest]
@@ -2220,25 +2251,26 @@ class CropFarmers(AgentBaseClass):
                 minlength=self.var.n,
             )
 
-            # Convert the yield_ratio per field to the average yield ratio per farmer
-            # yield_ratio_per_farmer = income_farmer / potential_income_farmer
-
             # Get the crop age
             crop_age = self.HRU.var.crop_age_days_map[harvest]
             current_crop_age = (
                 np.bincount(
-                    harvesting_farmer_fields, weights=crop_age, minlength=self.var.n
+                    harvesting_farmer_fields,
+                    weights=crop_age,
+                    minlength=self.var.n,
                 )[harvesting_farmers]
-                / np.bincount(harvesting_farmer_fields, minlength=self.var.n)[
-                    harvesting_farmers
-                ]
+                / np.bincount(
+                    harvesting_farmer_fields,
+                    minlength=self.var.n,
+                )[harvesting_farmers]
             )
 
             harvesting_farmers_mask = np.zeros(self.var.n, dtype=bool)
             harvesting_farmers_mask[harvesting_farmers] = True
 
             self.save_yearly_income(
-                self.var.seasonal_income_farmer, potential_income_farmer
+                self.var.seasonal_income_farmer,
+                potential_income_farmer,
             )
             self.save_harvest_spei(harvesting_farmers)
             self.save_harvest_precipitation(harvesting_farmers, current_crop_age)
@@ -2246,7 +2278,8 @@ class CropFarmers(AgentBaseClass):
             if not self.model.in_spinup:
                 self.drought_risk_perception(harvesting_farmers, current_crop_age)
 
-            ## After updating the drought risk perception, set the previous month for the next timestep as the current for this timestep.
+            # After updating the drought risk perception, set the previous month
+            # for the next timestep as the current for this timestep.
             # TODO: This seems a bit like a quirky solution, perhaps there is a better way to do this.
             self.var.previous_month = self.model.current_time.month
 
@@ -2265,28 +2298,399 @@ class CropFarmers(AgentBaseClass):
         # For unharvested growing crops, increase their age by 1
         self.HRU.var.crop_age_days_map[(~harvest) & (self.HRU.var.crop_map >= 0)] += 1
 
+        # After harvested fields have been cleared, advance crop calendars only for
+        # farmers that completed the final harvest of their active crop-calendar year.
+        # This helper also advances valid all--1 fallow years and checks for scheduled
+        # crop years where no harvest was recorded.
+        if not self.model.in_spinup:
+            self._advance_crop_calendar_after_last_harvest(harvesting_farmers)
+
         assert (
             self.HRU.var.crop_age_days_map <= self.HRU.var.crop_harvest_age_days
         ).all()
+
+    def _farmers_with_active_crops(self) -> np.ndarray:
+        """Return which farmers currently have at least one crop growing.
+
+        This helper inspects the HRU-level crop map and converts it to a
+        farmer-level boolean mask. A farmer is marked as active when at least one
+        HRU owned by that farmer has a valid crop code, i.e. when
+        ``self.HRU.var.crop_map >= 0`` for one or more of the farmer's HRUs.
+
+        The method is intended to be called after harvested fields have been reset
+        in :meth:`harvest`. In that position, a farmer that harvested today is only
+        marked as active if another crop is still growing on one of their fields.
+        This is used to avoid advancing a farmer's crop calendar after an
+        intermediate harvest when a later crop in the same calendar year is still
+        present.
+
+        Returns:
+            A one-dimensional boolean array with shape ``(self.var.n,)``. Values
+            are ``True`` for farmers with at least one currently growing crop and
+            ``False`` otherwise.
+        """
+        has_active_crop = np.zeros(self.var.n, dtype=bool)
+
+        active_crop_cells = (self.HRU.var.crop_map >= 0) & (
+            self.HRU.var.land_owners >= 0
+        )
+
+        active_crop_farmers = self.HRU.var.land_owners[active_crop_cells]
+
+        if active_crop_farmers.size:
+            has_active_crop[np.unique(active_crop_farmers)] = True
+
+        return has_active_crop
+
+    def _days_since_active_crop_calendar_start(
+        self,
+        farmers: np.ndarray,
+    ) -> np.ndarray:
+        """Return days since the start of each farmer's active HRL calendar year.
+
+        Multi-year HRL crop calendars are stored with an explicit year dimension,
+        where ``self.var.crop_calendar_active_year_index`` tracks which HRL year is
+        currently active for each farmer. This helper converts those active year
+        indices to actual calendar years using ``self.var.crop_calendar_years`` and
+        returns the number of days between January 1 of that active HRL year and
+        the current model date.
+
+        The returned value can exceed 365 or 366. This is intentional: a crop
+        calendar may contain crops planted late in the active HRL year and harvested
+        in the following simulation year. For example, a crop planted on day 305
+        with a growing duration of 241 days has an expected harvest offset of
+        roughly 546 days relative to January 1 of the active HRL year.
+
+        Args:
+            farmers: One-dimensional array of farmer indices for which the elapsed
+                number of days should be calculated.
+
+        Returns:
+            A one-dimensional ``np.int32`` array with the same length as
+            ``farmers``. Each value gives the number of days between January 1 of
+            the farmer's active HRL crop-calendar year and the current model date.
+        """
+        current_date = datetime(
+            self.model.current_time.year,
+            self.model.current_time.month,
+            self.model.current_time.day,
+        )
+
+        active_year_indices = np.asarray(
+            self.var.crop_calendar_active_year_index[farmers],
+            dtype=np.int64,
+        )
+
+        active_years = np.asarray(
+            self.var.crop_calendar_years[active_year_indices],
+            dtype=np.int64,
+        )
+
+        days_since_start = np.empty(farmers.size, dtype=np.int32)
+
+        for i, active_year in enumerate(active_years):
+            active_calendar_start = datetime(int(active_year), 1, 1)
+            days_since_start[i] = (current_date - active_calendar_start).days
+
+        return days_since_start
+
+    def _advance_crop_calendar_after_last_harvest(
+        self,
+        harvesting_farmers: np.ndarray,
+    ) -> None:
+        """Advance crop calendars after harvest and check missing harvest cases.
+
+        This updates multi-year HRL crop calendars at the farmer level. Farmers are
+        advanced after their final scheduled harvest, rather than globally at the
+        end of the calendar year.
+
+        The method also handles all--1 fallow crop-calendar years. Those farmers do
+        not harvest and therefore never appear in ``harvesting_farmers``, so they
+        are checked separately once per month.
+
+        Missing harvests are checked for farmers whose active crop-calendar year
+        should be complete. Valid cases are:
+
+        - all entries in the active crop calendar are -1, meaning no crop was
+        scheduled/planted;
+        - potential income is positive and actual income is zero, meaning a failed
+        harvest;
+        - potential income is positive and actual income is positive, meaning a
+        successful harvest.
+
+        A suspicious case is a scheduled crop year where the final expected harvest
+        date has passed, no crop is still growing, and no potential harvest was
+        recorded.
+
+        Raises:
+            RuntimeError: If there should be harvest data but there isn't any.
+        """
+        if (
+            self.var.crop_calendar_base_array.ndim != 4
+            or not self.preset_crop_switching_active
+        ):
+            return
+
+        def get_calendar_status(
+            farmers: np.ndarray,
+        ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+            """Return fallow status, scheduled-crop status, and final harvest offset."""
+            farmers = np.asarray(farmers, dtype=np.int64)
+            crop_calendar = np.asarray(self.var.crop_calendar[farmers])
+
+            current_rotation_year_index = np.asarray(
+                self.var.current_crop_calendar_rotation_year_index[farmers],
+                dtype=np.int32,
+            )
+
+            is_fallow_calendar = (crop_calendar == -1).all(axis=(1, 2))
+
+            valid_calendar_slots = (
+                (crop_calendar[:, :, 0] >= 0)
+                & (crop_calendar[:, :, 1] >= 0)
+                & (crop_calendar[:, :, 2] > 0)
+                & (crop_calendar[:, :, 3] == current_rotation_year_index[:, np.newaxis])
+            )
+
+            has_scheduled_crop = valid_calendar_slots.any(axis=1)
+
+            expected_harvest_offsets = crop_calendar[:, :, 1] + crop_calendar[:, :, 2]
+
+            last_expected_harvest_offset = np.where(
+                valid_calendar_slots,
+                expected_harvest_offsets,
+                -1,
+            ).max(axis=1)
+
+            return (
+                is_fallow_calendar,
+                has_scheduled_crop,
+                last_expected_harvest_offset,
+            )
+
+        def advance_farmers(farmers_to_advance: np.ndarray, reason: str) -> None:
+            """Advance crop-rotation year and HRL crop-calendar year for farmers."""
+            farmers_to_advance = np.asarray(farmers_to_advance, dtype=np.int64)
+
+            if farmers_to_advance.size == 0:
+                return
+
+            rotation_years = np.asarray(
+                self.var.crop_calendar_rotation_years[farmers_to_advance],
+                dtype=np.int32,
+            )
+
+            assert (rotation_years > 0).all(), (
+                "crop_calendar_rotation_years must be positive for all farmers."
+            )
+
+            self.var.current_crop_calendar_rotation_year_index[farmers_to_advance] = (
+                self.var.current_crop_calendar_rotation_year_index[farmers_to_advance]
+                + 1
+            ) % rotation_years
+
+            current_active_year_index = np.asarray(
+                self.var.crop_calendar_active_year_index[farmers_to_advance],
+                dtype=np.int32,
+            )
+            next_active_year_index = current_active_year_index + 1
+
+            has_next_hrl_year = (
+                next_active_year_index < self.var.crop_calendar_base_array.shape[0]
+            )
+
+            farmers_to_update = farmers_to_advance[has_next_hrl_year]
+            next_active_year_index = next_active_year_index[has_next_hrl_year]
+
+            if farmers_to_update.size == 0:
+                self.model.logger.debug(
+                    "Advanced crop-rotation year for %s farmer(s), but no next HRL "
+                    "crop-calendar year was available. Reason: %s.",
+                    farmers_to_advance.size,
+                    reason,
+                )
+                return
+
+            self.var.crop_calendar[farmers_to_update] = (
+                self.var.crop_calendar_base_array[
+                    next_active_year_index,
+                    farmers_to_update,
+                    :,
+                    :,
+                ]
+            )
+
+            self.var.crop_calendar_active_year_index[farmers_to_update] = (
+                next_active_year_index
+            )
+
+            updated_hrl_years = self.var.crop_calendar_years[next_active_year_index]
+
+            self.model.logger.info(
+                "Updated crop calendars for %s farmer(s) to HRL year range %s-%s. "
+                "Reason: %s.",
+                farmers_to_update.size,
+                int(updated_hrl_years.min()),
+                int(updated_hrl_years.max()),
+                reason,
+            )
+
+        harvest_day_tolerance = 1
+        has_active_crop = self._farmers_with_active_crops()
+
+        # 1. Normal case: farmers harvested today and may have completed their
+        # active crop-calendar year.
+        harvesting_farmers = np.asarray(harvesting_farmers, dtype=np.int64)
+
+        if harvesting_farmers.size:
+            (
+                _,
+                has_scheduled_crop,
+                last_expected_harvest_offset,
+            ) = get_calendar_status(harvesting_farmers)
+
+            days_since_calendar_start = self._days_since_active_crop_calendar_start(
+                harvesting_farmers
+            )
+
+            completed_after_harvest = (
+                has_scheduled_crop
+                & (
+                    days_since_calendar_start
+                    >= last_expected_harvest_offset - harvest_day_tolerance
+                )
+                & (~has_active_crop[harvesting_farmers])
+            )
+
+            advance_farmers(
+                harvesting_farmers[completed_after_harvest],
+                reason="final scheduled harvest completed",
+            )
+
+        # 2. Fallow years and missing-harvest diagnostics.
+        # These farmers may never appear in harvesting_farmers, so check monthly
+        # rather than only after harvest.
+        if self.model.current_time.day != 1:
+            return
+
+        farmers = np.arange(self.var.n, dtype=np.int64)
+
+        (
+            is_fallow_calendar,
+            has_scheduled_crop,
+            last_expected_harvest_offset,
+        ) = get_calendar_status(farmers)
+
+        days_since_calendar_start = self._days_since_active_crop_calendar_start(farmers)
+
+        active_year_indices = np.asarray(
+            self.var.crop_calendar_active_year_index[farmers],
+            dtype=np.int64,
+        )
+        active_years = np.asarray(
+            self.var.crop_calendar_years[active_year_indices],
+            dtype=np.int64,
+        )
+
+        is_leap_year = (active_years % 4 == 0) & (
+            (active_years % 100 != 0) | (active_years % 400 == 0)
+        )
+        days_in_active_year = 365 + is_leap_year.astype(np.int32)
+
+        # Valid all--1 fallow year: no crop was scheduled, so no harvest is expected.
+        completed_fallow_year = (
+            is_fallow_calendar
+            & (days_since_calendar_start >= days_in_active_year)
+            & (~has_active_crop)
+        )
+
+        advance_farmers(
+            farmers[completed_fallow_year],
+            reason="all--1 fallow crop-calendar year completed",
+        )
+
+        # Scheduled crop year should be complete if the final expected harvest date
+        # has passed and there is no crop still growing.
+        scheduled_year_should_be_complete = (
+            (~is_fallow_calendar)
+            & has_scheduled_crop
+            & (
+                days_since_calendar_start
+                >= last_expected_harvest_offset - harvest_day_tolerance
+            )
+            & (~has_active_crop)
+        )
+
+        latest_potential_income = np.asarray(self.var.yearly_potential_income[:, 0])
+        latest_actual_income = np.asarray(self.var.yearly_income[:, 0])
+
+        # A harvest is considered recorded when potential income is positive.
+        # This includes both successful harvests and failed harvests:
+        # - successful harvest: potential > 0 and actual > 0
+        # - failed harvest: potential > 0 and actual == 0
+        harvest_recorded = latest_potential_income > 0
+
+        suspicious_missing_harvest = scheduled_year_should_be_complete & (
+            ~harvest_recorded
+        )
+
+        if np.any(suspicious_missing_harvest):
+            suspicious_farmers = farmers[suspicious_missing_harvest]
+            sample_farmers = suspicious_farmers[:20]
+
+            sample_active_year_indices = self.var.crop_calendar_active_year_index[
+                sample_farmers
+            ]
+            sample_active_years = self.var.crop_calendar_years[
+                sample_active_year_indices
+            ]
+
+            # raise RuntimeError
+            print(
+                "Detected farmers with missing harvests that are not explained by "
+                "an all--1 fallow crop-calendar year or by crop failure. This may "
+                "indicate a crop switching, planting, or crop-calendar advancement "
+                "bug. "
+                f"Number of affected farmers: {suspicious_farmers.size}. "
+                f"Sample farmer IDs: {sample_farmers.tolist()}. "
+                f"Sample active HRL years: {sample_active_years.tolist()}."
+            )
 
     def drought_risk_perception(
         self,
         harvesting_farmers: np.ndarray,
         current_crop_age: np.ndarray,
     ) -> None:
-        """Update drought risk perception for harvesting farmers.
+        """Update drought risk perception for farmers that harvest on this timestep.
 
-        Computes farmers' risk perception from the difference between their latest
-        profits and potential profits, adjusted for inflation and recent history.
-        Farmers that experience a drought event have their drought timer reset.
+        Risk perception is updated from the difference between actual and potential
+        harvest income, corrected for inflation and compared with recent historical
+        losses. Farmers are interpreted as having experienced a drought event when
+        their latest harvest loss exceeds their recent historical loss by more than
+        ``self.var.moving_average_threshold``.
 
-        Hard trigger:
-            If latest actual profits are < 15% of potential profits, risk perception is
-            always triggered (i.e., drought event is forced).
+        Years without a valid harvest are treated as missing observations. This is
+        important for farmers that leave land fallow as a valid strategy: a fallow
+        year has zero potential income and should not be interpreted as either zero
+        drought loss or total crop failure. Such years are excluded from the
+        historical loss average using ``np.nanmean``.
+
+        A hard trigger is also applied: if the latest actual income is less than
+        ``MIN_PROFIT_FRACTION_TRIGGER`` of potential income, the farmer is treated
+        as having experienced a drought event regardless of the historical moving
+        average comparison.
+
+        Only harvesting farmers can trigger drought-event updates or microcredit in
+        this function. The drought timer and risk perception values themselves are
+        still advanced for all farmers, because risk perception decays with elapsed
+        time.
 
         Args:
-            harvesting_farmers: Indices of farmers currently harvesting.
-            current_crop_age: Current crop age for each farmer.
+            harvesting_farmers: One-dimensional array with the indices of farmers
+                that harvested at least one field on the current timestep.
+            current_crop_age: One-dimensional array with the mean age of the
+                harvested crop for each farmer in ``harvesting_farmers``. The order
+                must match ``harvesting_farmers``.
 
         Todo:
             Perhaps move the constants to the model.yml.
@@ -2295,21 +2699,27 @@ class CropFarmers(AgentBaseClass):
         HISTORICAL_PERIOD = min(5, self.var.yearly_potential_income.shape[1])  # years
         MIN_PROFIT_FRACTION_TRIGGER = 0.15  # hard trigger: actual < 15% of potential
 
-        # Convert the harvesting farmers index array to a boolean array of full length
+        harvesting_farmers = np.asarray(harvesting_farmers, dtype=np.int64)
+
+        # Convert the harvesting farmers index array to a boolean array of full length.
         harvesting_farmers_long = np.zeros(self.var.n, dtype=bool)
         harvesting_farmers_long[harvesting_farmers] = True
 
-        # Update the drought timer based on the months passed since the previous check
+        # Update the drought timer based on the months passed since the previous check.
         months_passed = (self.model.current_time.month - self.var.previous_month) % 12
         self.var.drought_timer += months_passed / 12
 
-        # Create an empty drought loss np.ndarray
-        drought_loss_historical = np.zeros(
-            (self.var.n, HISTORICAL_PERIOD), dtype=np.float32
+        # Create an empty drought-loss array. NaN means no valid harvest/loss
+        # observation for that farmer-year.
+        drought_loss_historical = np.full(
+            (self.var.n, HISTORICAL_PERIOD),
+            np.nan,
+            dtype=np.float32,
         )
 
-        # Calculate the cumulative inflation from the start year to the current year for each farmer
-        # the base year is not important here as we are only interested in the relative change
+        # Calculate the cumulative inflation from the start year to the current year
+        # for harvesting farmers. The base year is not important here because only
+        # relative changes are used.
         cumulative_inflation_since_base_year = np.cumprod(
             np.stack(
                 [
@@ -2328,7 +2738,9 @@ class CropFarmers(AgentBaseClass):
             axis=1,
         )
 
-        # Compute the percentage loss between potential and actual profits for harvesting farmers
+        # Compute the percentage loss between potential and actual profits for
+        # harvesting farmers. Fallow/no-harvest years have zero potential income and
+        # are therefore left as NaN.
         potential_profits_inflation_corrected = (
             self.var.yearly_potential_income[
                 harvesting_farmers_long, :HISTORICAL_PERIOD
@@ -2340,38 +2752,74 @@ class CropFarmers(AgentBaseClass):
             / cumulative_inflation_since_base_year
         )
 
-        drought_loss_historical[harvesting_farmers_long] = (
-            (potential_profits_inflation_corrected - actual_profits_inflation_corrected)
-            / potential_profits_inflation_corrected
-        ) * 100
+        valid_profit_year = potential_profits_inflation_corrected > 0
 
-        # Calculate the current and past average loss percentages
-        drought_loss_latest = drought_loss_historical[:, 0]
-        drought_loss_past = np.mean(drought_loss_historical[:, 1:], axis=1)
-
-        # Identify farmers who experienced a drought event based on loss comparison with historical losses
-        drought_loss_current = drought_loss_latest - drought_loss_past
-
-        assert not np.isnan(drought_loss_current).any()
-
-        # Hard trigger: latest actual profits < 15% of potential profits
-        hard_trigger = (
-            drought_loss_latest >= (1.0 - MIN_PROFIT_FRACTION_TRIGGER) * 100.0
+        drought_loss_subset = np.full_like(
+            potential_profits_inflation_corrected,
+            np.nan,
+            dtype=np.float32,
         )
 
-        experienced_drought_event = (
-            drought_loss_current >= self.var.moving_average_threshold
-        ) | hard_trigger
+        np.divide(
+            potential_profits_inflation_corrected - actual_profits_inflation_corrected,
+            potential_profits_inflation_corrected,
+            out=drought_loss_subset,
+            where=valid_profit_year,
+        )
 
-        # Reset the drought timer for farmers who have harvested and experienced a drought event
-        self.var.drought_timer[
-            np.logical_and(harvesting_farmers_long, experienced_drought_event)
-        ] = 0
+        drought_loss_historical[harvesting_farmers_long] = drought_loss_subset * 100
 
-        # Update the risk perception of all farmers
-        with np.errstate(
-            under="ignore"
-        ):  # underflow is expected for large drought_timer values, but does not cause issues for the model
+        # Latest loss is the current harvest-year loss.
+        drought_loss_latest = drought_loss_historical[:, 0]
+
+        # Historical loss excludes the latest year. Fallow years are ignored.
+        if HISTORICAL_PERIOD > 1:
+            with np.errstate(invalid="ignore", divide="ignore"):
+                drought_loss_past = np.nanmean(drought_loss_historical[:, 1:], axis=1)
+        else:
+            drought_loss_past = np.full(self.var.n, np.nan, dtype=np.float32)
+
+        # If a farmer has no valid past harvest observations, use the latest loss as
+        # the baseline. This prevents the moving-average trigger from firing only
+        # because historical data are missing. The hard trigger can still fire.
+        missing_past_baseline = np.isnan(drought_loss_past)
+        drought_loss_past[missing_past_baseline] = drought_loss_latest[
+            missing_past_baseline
+        ]
+
+        # Farmers with invalid latest losses are excluded from drought-event
+        # detection. This should be rare for harvesting farmers, but protects
+        # against zero-potential or malformed crop-price/yield inputs.
+        valid_latest_loss = ~np.isnan(drought_loss_latest)
+
+        drought_loss_current = np.zeros(self.var.n, dtype=np.float32)
+        drought_loss_current[valid_latest_loss] = (
+            drought_loss_latest[valid_latest_loss]
+            - drought_loss_past[valid_latest_loss]
+        )
+
+        # Hard trigger: latest actual profits < 15% of potential profits.
+        hard_trigger = (
+            harvesting_farmers_long
+            & valid_latest_loss
+            & (drought_loss_latest >= (1.0 - MIN_PROFIT_FRACTION_TRIGGER) * 100.0)
+        )
+
+        moving_average_trigger = (
+            harvesting_farmers_long
+            & valid_latest_loss
+            & (drought_loss_current >= self.var.moving_average_threshold)
+        )
+
+        experienced_drought_event = moving_average_trigger | hard_trigger
+
+        # Reset the drought timer only for farmers who harvested and experienced a
+        # drought event.
+        self.var.drought_timer[experienced_drought_event] = 0
+
+        # Update the risk perception of all farmers. Underflow is expected for large
+        # drought_timer values and does not cause issues for the model.
+        with np.errstate(under="ignore"):
             self.var.risk_perception = (
                 self.var.risk_perc_max
                 * (1.6 ** (self.var.risk_decr * self.var.drought_timer))
@@ -2385,15 +2833,13 @@ class CropFarmers(AgentBaseClass):
             np.std(self.var.risk_perception),
         )
 
-        # Determine which farmers need emergency microcredit to keep farming
-        # (Optional but consistent: apply the same hard trigger to microcredit eligibility)
-        loaning_farmers = (
-            drought_loss_current >= self.var.moving_average_threshold
-        ) | hard_trigger
+        # Determine which harvesting farmers need emergency microcredit to keep
+        # farming. This is restricted to harvesting farmers through the trigger masks
+        # above.
+        loaning_farmers = experienced_drought_event
 
-        # Determine their microcredit
-        if self.microcredit_adaptation_active:
-            # print(np.count_nonzero(loaning_farmers), "farmers are getting microcredit")
+        # Determine their microcredit.
+        if self.microcredit_adaptation_active and np.any(loaning_farmers):
             self.microcredit(
                 loaning_farmers,
                 drought_loss_current,
@@ -5012,24 +5458,6 @@ class CropFarmers(AgentBaseClass):
             )
             print("Nr of base groups", len(np.unique(self.var.farmer_base_class[:])))
 
-            # Potentially set the crop calendar data to the next year if it is multi-year
-            if (
-                self.var.crop_calendar_base_array.ndim == 4
-                and self.preset_crop_switching_active
-            ):
-                crop_calendar_year_indices = np.where(
-                    self.var.crop_calendar_years == self.model.current_time.year
-                )[0]
-
-                if crop_calendar_year_indices.size > 0:
-                    self.var.crop_calendar[:] = self.var.crop_calendar_base_array[
-                        int(crop_calendar_year_indices[0])
-                    ]
-
-                    self.model.logger.info(
-                        "Updated farmer crop calendars to HRL year %s.",
-                        self.model.current_time.year,
-                    )
             if (
                 not self.model.in_spinup
                 and "ruleset" in self.config

@@ -1588,14 +1588,28 @@ def _crop_sequence_similarity_numba(
     sequence_i: np.ndarray,
     sequence_j: np.ndarray,
     missing_value: int,
+    min_valid_overlap: int,
 ) -> float:
     """Calculate crop-sequence similarity in Numba-compatible form.
 
+    Missing years are excluded from the raw match fraction. The resulting
+    similarity is then multiplied by the fraction of all years that were
+    comparable, so sparse crop sequences cannot receive artificially high
+    scores based on only one or a few comparable observations.
+
+    Args:
+        sequence_i: Crop sequence for the first field or representative farm.
+        sequence_j: Crop sequence for the second field or unique farm sequence.
+        missing_value: Value used to indicate missing crop observations.
+        min_valid_overlap: Minimum number of comparable non-missing years
+            required for a positive crop-sequence similarity score.
+
     Returns:
-        Fraction of comparable years in which both sequences have the same crop
-        value. Returns 0.0 if the sequences have no comparable non-missing years.
+        Coverage-penalized fraction of comparable years in which both sequences
+        have the same crop value. Returns 0.0 if the sequences have too few
+        comparable non-missing years.
     """
-    valid_count = 0
+    comparable_count = 0
     match_count = 0
 
     for year_index in range(sequence_i.size):
@@ -1605,14 +1619,17 @@ def _crop_sequence_similarity_numba(
         if crop_i == missing_value or crop_j == missing_value:
             continue
 
-        valid_count += 1
+        comparable_count += 1
         if crop_i == crop_j:
             match_count += 1
 
-    if valid_count == 0:
+    if comparable_count < min_valid_overlap:
         return 0.0
 
-    return match_count / valid_count
+    raw_similarity = match_count / comparable_count
+    coverage = comparable_count / sequence_i.size
+
+    return raw_similarity * coverage
 
 
 @njit(cache=True)
@@ -1679,8 +1696,28 @@ def _find_best_candidate_numba(
     switch_timing_weight: float,
     target_overshoot_tolerance: float,
     missing_value: int,
+    min_valid_overlap: int,
 ) -> tuple[int, float, float]:
     """Select the best candidate field from a frontier using compiled scoring.
+
+    Args:
+        candidate_indices: Candidate field indices.
+        candidate_distances: Candidate distances to the growing farm in metres.
+        field_areas_m2: Field areas in square metres.
+        field_sequences: Field crop-sequence array with shape
+            ``(n_fields, n_years)``.
+        farm_crop_sequence: Current representative crop sequence of the growing
+            farm.
+        current_area_m2: Current growing-farm area in square metres.
+        target_area_m2: Target farm area in square metres.
+        max_distance_m: Maximum neighbor distance in metres.
+        distance_weight: Weight for spatial proximity in candidate scoring.
+        crop_sequence_weight: Weight for crop-sequence similarity.
+        switch_timing_weight: Weight for crop-switch timing similarity.
+        target_overshoot_tolerance: Maximum allowed target-area overshoot.
+        missing_value: Value used to indicate missing crop observations.
+        min_valid_overlap: Minimum number of comparable non-missing years
+            required for positive crop-sequence similarity.
 
     Returns:
         Tuple containing the selected candidate field index, its weighted
@@ -1706,6 +1743,7 @@ def _find_best_candidate_numba(
             farm_crop_sequence,
             field_sequences[candidate_index],
             missing_value,
+            min_valid_overlap,
         )
         switch_score = _switch_timing_similarity_numba(
             farm_crop_sequence,
@@ -1735,86 +1773,157 @@ def _find_best_candidate_numba(
 
 
 @njit(cache=True)
+def _valid_crop_count_numba(
+    sequence: np.ndarray,
+    missing_value: int,
+) -> int:
+    """Count valid non-missing crop observations in a sequence.
+
+    Args:
+        sequence: Crop sequence to inspect.
+        missing_value: Value used to indicate missing crop observations.
+
+    Returns:
+        Number of years with valid non-missing crop observations.
+    """
+    valid_count = 0
+
+    for year_index in range(sequence.size):
+        if sequence[year_index] != missing_value:
+            valid_count += 1
+
+    return valid_count
+
+
+@njit(cache=True)
+def _sequence_is_lexicographically_smaller_numba(
+    candidate_sequence: np.ndarray,
+    best_sequence: np.ndarray,
+) -> bool:
+    """Compare two crop sequences for deterministic tie-breaking.
+
+    Args:
+        candidate_sequence: Candidate sequence being evaluated.
+        best_sequence: Current best sequence.
+
+    Returns:
+        True if ``candidate_sequence`` is lexicographically smaller than
+        ``best_sequence``; otherwise False.
+    """
+    for year_index in range(candidate_sequence.size):
+        if candidate_sequence[year_index] < best_sequence[year_index]:
+            return True
+        if candidate_sequence[year_index] > best_sequence[year_index]:
+            return False
+
+    return False
+
+
+@njit(cache=True)
 def _select_representative_sequence_index_numba(
     unique_sequences: np.ndarray,
     sequence_counts: np.ndarray,
+    sequence_areas_m2: np.ndarray,
     missing_value: int,
+    min_valid_overlap: int,
 ) -> int:
-    """Select the representative sequence from unique farm sequences.
+    """Select an observed representative sequence from unique farm sequences.
+
+    The selected sequence is always one of the original observed field sequences.
+    It is chosen as an area-weighted medoid based on coverage-penalized crop
+    sequence similarity. This prevents missing-heavy sequences from becoming
+    representative only because they share one or a few comparable crop years
+    with many other fields.
+
+    Args:
+        unique_sequences: Unique crop sequences already present in the farm.
+        sequence_counts: Number of fields with each unique crop sequence.
+        sequence_areas_m2: Total represented field area for each unique sequence.
+        missing_value: Value used to indicate missing crop observations.
+        min_valid_overlap: Minimum number of comparable non-missing years
+            required for positive crop-sequence similarity.
 
     Returns:
         Index of the selected representative sequence in ``unique_sequences``.
-        The selected sequence is the most frequent sequence; ties are resolved by
-        highest weighted mean similarity to all farm sequences, then by fewest
-        missing values, and finally by lexicographic order.
+        Ties are resolved by more valid crop years, larger represented area,
+        higher field count, and finally lexicographic order.
     """
     best_index = -1
+    best_score = -np.inf
+    best_valid_count = -1
+    best_area_m2 = -1.0
     best_count = -1
-    best_mean_similarity = -np.inf
-    best_missing_count = 0
-    total_count = 0
 
-    for sequence_index in range(sequence_counts.size):
-        total_count += int(sequence_counts[sequence_index])
+    total_area_m2 = 0.0
+    for sequence_index in range(sequence_areas_m2.size):
+        total_area_m2 += sequence_areas_m2[sequence_index]
 
-    for candidate_index in range(sequence_counts.size):
-        candidate_count = int(sequence_counts[candidate_index])
+    if total_area_m2 <= 0.0:
+        return 0
 
-        if candidate_count < best_count:
-            continue
-
-        candidate_missing_count = 0
-        for year_index in range(unique_sequences.shape[1]):
-            if unique_sequences[candidate_index, year_index] == missing_value:
-                candidate_missing_count += 1
-
+    for candidate_index in range(unique_sequences.shape[0]):
         weighted_similarity = 0.0
+
         for sequence_index in range(unique_sequences.shape[0]):
             similarity = _crop_sequence_similarity_numba(
                 unique_sequences[candidate_index],
                 unique_sequences[sequence_index],
                 missing_value,
+                min_valid_overlap,
             )
-            weighted_similarity += similarity * sequence_counts[sequence_index]
-        weighted_similarity /= total_count
+            weighted_similarity += similarity * sequence_areas_m2[sequence_index]
+
+        candidate_score = weighted_similarity / total_area_m2
+        candidate_valid_count = _valid_crop_count_numba(
+            unique_sequences[candidate_index],
+            missing_value,
+        )
+        candidate_area_m2 = sequence_areas_m2[candidate_index]
+        candidate_count = int(sequence_counts[candidate_index])
+
+        if candidate_score > best_score:
+            best_index = candidate_index
+            best_score = candidate_score
+            best_valid_count = candidate_valid_count
+            best_area_m2 = candidate_area_m2
+            best_count = candidate_count
+            continue
+
+        if candidate_score < best_score:
+            continue
+
+        if candidate_valid_count > best_valid_count:
+            best_index = candidate_index
+            best_valid_count = candidate_valid_count
+            best_area_m2 = candidate_area_m2
+            best_count = candidate_count
+            continue
+
+        if candidate_valid_count < best_valid_count:
+            continue
+
+        if candidate_area_m2 > best_area_m2:
+            best_index = candidate_index
+            best_area_m2 = candidate_area_m2
+            best_count = candidate_count
+            continue
+
+        if candidate_area_m2 < best_area_m2:
+            continue
 
         if candidate_count > best_count:
             best_index = candidate_index
             best_count = candidate_count
-            best_mean_similarity = weighted_similarity
-            best_missing_count = candidate_missing_count
             continue
 
-        if weighted_similarity > best_mean_similarity:
+        if candidate_count < best_count:
+            continue
+
+        if best_index < 0 or _sequence_is_lexicographically_smaller_numba(
+            unique_sequences[candidate_index],
+            unique_sequences[best_index],
+        ):
             best_index = candidate_index
-            best_mean_similarity = weighted_similarity
-            best_missing_count = candidate_missing_count
-            continue
-
-        if weighted_similarity < best_mean_similarity:
-            continue
-
-        if candidate_missing_count < best_missing_count:
-            best_index = candidate_index
-            best_missing_count = candidate_missing_count
-            continue
-
-        if candidate_missing_count > best_missing_count:
-            continue
-
-        if best_index < 0:
-            best_index = candidate_index
-            continue
-
-        # Final deterministic tie-breaker: lexicographically smallest sequence.
-        for year_index in range(unique_sequences.shape[1]):
-            candidate_value = unique_sequences[candidate_index, year_index]
-            best_value = unique_sequences[best_index, year_index]
-            if candidate_value < best_value:
-                best_index = candidate_index
-                break
-            if candidate_value > best_value:
-                break
 
     return best_index
 
@@ -1822,26 +1931,33 @@ def _select_representative_sequence_index_numba(
 def _update_farm_crop_sequence_incremental(
     unique_sequences: np.ndarray,
     sequence_counts: np.ndarray,
+    sequence_areas_m2: np.ndarray,
     new_sequence: np.ndarray,
+    new_area_m2: float,
     *,
     missing_value: int = -1,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Update the farm representative sequence from compact sequence counts.
+    min_valid_overlap: int = 2,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Update the farm representative sequence from compact sequence statistics.
 
-    The function keeps only unique crop sequences and their counts for the
-    growing farm. This preserves the original update-after-each-field behaviour,
-    but avoids repeatedly stacking all field sequences and running ``np.unique``
-    over the full farm field list.
+    The function keeps only unique crop sequences, their counts, and their
+    represented field area for the growing farm. This preserves the original
+    update-after-each-field behaviour and keeps the selected representative
+    sequence restricted to an actually observed field rotation.
 
     Args:
         unique_sequences: Unique crop sequences already present in the farm.
         sequence_counts: Number of fields with each unique crop sequence.
+        sequence_areas_m2: Total represented field area for each unique sequence.
         new_sequence: Crop sequence of the newly added field.
+        new_area_m2: Area of the newly added field in square metres.
         missing_value: Value used to indicate missing crop observations.
+        min_valid_overlap: Minimum number of comparable non-missing years
+            required for positive crop-sequence similarity.
 
     Returns:
         Tuple containing the updated unique sequences, updated sequence counts,
-        and the selected representative crop sequence.
+        updated sequence areas, and the selected representative crop sequence.
     """
     matching_index = -1
     for sequence_index in range(unique_sequences.shape[0]):
@@ -1851,6 +1967,7 @@ def _update_farm_crop_sequence_incremental(
 
     if matching_index >= 0:
         sequence_counts[matching_index] += 1
+        sequence_areas_m2[matching_index] += float(new_area_m2)
     else:
         unique_sequences = np.vstack(
             [
@@ -1859,15 +1976,23 @@ def _update_farm_crop_sequence_incremental(
             ]
         )
         sequence_counts = np.append(sequence_counts, np.int32(1))
+        sequence_areas_m2 = np.append(sequence_areas_m2, float(new_area_m2))
 
     representative_index = _select_representative_sequence_index_numba(
         unique_sequences,
         sequence_counts,
+        sequence_areas_m2,
         missing_value,
+        min_valid_overlap,
     )
     representative_sequence = unique_sequences[representative_index].copy()
 
-    return unique_sequences, sequence_counts, representative_sequence
+    return (
+        unique_sequences,
+        sequence_counts,
+        sequence_areas_m2,
+        representative_sequence,
+    )
 
 
 def _candidate_frontier_to_arrays(
@@ -1927,6 +2052,7 @@ def grow_farms_from_prepared_fields(
     crop_sequence_weight: float = 0.35,
     switch_timing_weight: float = 0.20,
     target_overshoot_tolerance: float = 1.25,
+    min_valid_crop_sequence_overlap: int = 2,
 ) -> tuple[gpd.GeoDataFrame, pd.DataFrame]:
     """Grow farms from prepared field arrays using optimized frontier scoring.
 
@@ -1960,6 +2086,8 @@ def grow_farms_from_prepared_fields(
         crop_sequence_weight: Weight for crop-sequence similarity.
         switch_timing_weight: Weight for crop-switch timing similarity.
         target_overshoot_tolerance: Maximum allowed target-area overshoot.
+        min_valid_crop_sequence_overlap: Minimum number of comparable non-missing
+            years required for positive crop-sequence similarity.
 
     Returns:
         Tuple containing the field GeoDataFrame with assigned ``farmer_id`` and a
@@ -2015,6 +2143,7 @@ def grow_farms_from_prepared_fields(
     farmer_crop_sequences: list[np.ndarray] = []
     farmer_unique_sequences: list[np.ndarray] = []
     farmer_unique_sequence_counts: list[np.ndarray] = []
+    farmer_unique_sequence_areas_m2: list[np.ndarray] = []
 
     for target_farm in target_farms:
         if n_unassigned == 0:
@@ -2041,6 +2170,10 @@ def grow_farms_from_prepared_fields(
 
         unique_farm_sequences = field_sequences[[seed_field]].copy()
         unique_farm_sequence_counts = np.ones(1, dtype=np.int32)
+        unique_farm_sequence_areas_m2 = np.array(
+            [field_areas_m2[seed_field]],
+            dtype=np.float64,
+        )
         farm_crop_sequence = field_sequences[seed_field].copy()
 
         candidate_distances: dict[int, float] = {}
@@ -2078,6 +2211,7 @@ def grow_farms_from_prepared_fields(
                 switch_timing_weight,
                 target_overshoot_tolerance,
                 -1,
+                min_valid_crop_sequence_overlap,
             )
 
             if best_candidate < 0:
@@ -2094,12 +2228,16 @@ def grow_farms_from_prepared_fields(
             (
                 unique_farm_sequences,
                 unique_farm_sequence_counts,
+                unique_farm_sequence_areas_m2,
                 farm_crop_sequence,
             ) = _update_farm_crop_sequence_incremental(
                 unique_farm_sequences,
                 unique_farm_sequence_counts,
+                unique_farm_sequence_areas_m2,
                 field_sequences[best_candidate],
+                field_areas_m2[best_candidate],
                 missing_value=-1,
+                min_valid_overlap=min_valid_crop_sequence_overlap,
             )
 
             _add_neighbors_to_candidate_frontier(
@@ -2118,6 +2256,7 @@ def grow_farms_from_prepared_fields(
         farmer_crop_sequences.append(farm_crop_sequence.copy())
         farmer_unique_sequences.append(unique_farm_sequences.copy())
         farmer_unique_sequence_counts.append(unique_farm_sequence_counts.copy())
+        farmer_unique_sequence_areas_m2.append(unique_farm_sequence_areas_m2.copy())
 
     # Attach leftover fields to the nearest assigned neighbor, or create a
     # singleton farm if no assigned neighbor exists.
@@ -2151,6 +2290,9 @@ def grow_farms_from_prepared_fields(
             farmer_crop_sequences.append(field_sequences[field_index].copy())
             farmer_unique_sequences.append(field_sequences[[field_index]].copy())
             farmer_unique_sequence_counts.append(np.ones(1, dtype=np.int32))
+            farmer_unique_sequence_areas_m2.append(
+                np.array([field_areas_m2[field_index]], dtype=np.float64)
+            )
             created_fallback_farm = True
 
         assigned_farmer_ids[field_index] = best_farmer_id
@@ -2164,12 +2306,16 @@ def grow_farms_from_prepared_fields(
             (
                 farmer_unique_sequences[best_farmer_id],
                 farmer_unique_sequence_counts[best_farmer_id],
+                farmer_unique_sequence_areas_m2[best_farmer_id],
                 farmer_crop_sequences[best_farmer_id],
             ) = _update_farm_crop_sequence_incremental(
                 farmer_unique_sequences[best_farmer_id],
                 farmer_unique_sequence_counts[best_farmer_id],
+                farmer_unique_sequence_areas_m2[best_farmer_id],
                 field_sequences[field_index],
+                field_areas_m2[field_index],
                 missing_value=-1,
+                min_valid_overlap=min_valid_crop_sequence_overlap,
             )
 
     projected_fields = projected_fields.copy()

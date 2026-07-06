@@ -2446,13 +2446,14 @@ class Europe(GEBModel):
         random_seed: int = 42,
         chunk_rows: int = 512,
         hrl_raster_chunks: dict[str, int] | None = None,
-        force_recalculate_field_crops: bool = False,
+        force_recalculate: bool = False,
         max_distance_m: float = 500.0,
         max_neighbors: int = 32,
         distance_weight: float = 0.45,
         crop_sequence_weight: float = 0.35,
         switch_timing_weight: float = 0.20,
         target_overshoot_tolerance: float = 1.25,
+        min_valid_crop_sequence_overlap: int = 3,
         minimum_fields_per_farm: float = 1.0,
         all_touched_farm_raster: bool = False,
     ) -> None:
@@ -2488,7 +2489,7 @@ class Europe(GEBModel):
                 and row-wise raster-copy operations.
             hrl_raster_chunks: Optional xarray/rioxarray chunk sizes used when
                 opening HRL rasters during crop-sequence preprocessing.
-            force_recalculate_field_crops: If True, recalculate the cached field-level
+            force_recalculate: If True, recalculate the cached field-level
                 crop table from HRL rasters before farm construction.
             max_distance_m: Maximum distance in metres for candidate neighboring
                 fields during farm growing.
@@ -2502,6 +2503,9 @@ class Europe(GEBModel):
                 the farm-growing candidate score.
             target_overshoot_tolerance: Maximum allowed target-area overshoot when
                 adding a candidate field to a growing farm.
+            min_valid_crop_sequence_overlap: Minimum number of comparable non-missing
+                years required for positive crop-sequence similarity during farm
+                growing and representative-sequence selection.
             minimum_fields_per_farm: Minimum expected number of fields per farm used
                 when scaling Lowder farm counts to the available field area.
             all_touched_farm_raster: Whether to burn all model-grid cells touched by a
@@ -2547,7 +2551,7 @@ class Europe(GEBModel):
             years=years,
             chunk_rows=chunk_rows,
             hrl_raster_chunks=hrl_raster_chunks,
-            force_recalculate=force_recalculate_field_crops,
+            force_recalculate=force_recalculate,
             active_subgrid_template=region_ids,
             active_subgrid_mask=active_subgrid_mask,
         )
@@ -2665,6 +2669,7 @@ class Europe(GEBModel):
                 crop_sequence_weight=crop_sequence_weight,
                 switch_timing_weight=switch_timing_weight,
                 target_overshoot_tolerance=target_overshoot_tolerance,
+                min_valid_crop_sequence_overlap=min_valid_crop_sequence_overlap,
             )
 
             fields_region_with_farms["farmer_id"] = (
