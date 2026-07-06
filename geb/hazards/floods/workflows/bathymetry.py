@@ -304,7 +304,9 @@ def _interpolate_longitudinal_profiles(
         # Explicitly set the exact node boundary condition at the mouth.
         profile_z_bed_m[-1] = node_end["z_bed"]
 
-        if (profile_z_bed_m + depth_array < -3).any():
+        if (profile_z_bed_m + depth_array < -3).any() and not river[
+            "end_key"
+        ].startswith("sink_"):
             raise ValueError(
                 f"The profile for river {river['idx']} generated elevations below sea level."
             )
