@@ -50,7 +50,7 @@ def format_date(date_obj: datetime) -> str:
 
 
 def generate_forecast_steps(forecast_date: datetime, forecast_horizon: int) -> str:
-    """Generate ECMWF forecast step string based on the forecast date.
+    """Generate ECMWF forecast step string based on the forecast date and horizon.
 
     ECMWF does not have a consistent 1h timestep for the entire operational archive. Asking hourly data to the server when it does not exist, will result in an error.
     Therefore, we need to adjust the requested steps based on the available data, which is different before and after 2016-11-23:

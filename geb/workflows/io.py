@@ -265,7 +265,7 @@ def read_grid(
 
 def read_grid(
     filepath: Path,
-    ndim: Literal[2, 3],
+    ndim: Literal[2, 3] = 2,
     load: bool = True,
     return_transform_and_crs: bool = False,
 ) -> (
@@ -319,10 +319,10 @@ def read_grid(
         transform: Affine = Affine(
             a=x_diff,
             b=0,
-            c=x[0] - x_diff / 2,  # ty:ignore[invalid-argument-type]
+            c=x[0] - x_diff / 2,  # ty:ignore[invalid-argument-type, unsupported-operator]
             d=0,
             e=y_diff,
-            f=y[0] - y_diff / 2,  # ty:ignore[invalid-argument-type]
+            f=y[0] - y_diff / 2,  # ty:ignore[invalid-argument-type, unsupported-operator]
         )
         crs = data_array.attrs["_CRS"]
         assert isinstance(crs, dict)

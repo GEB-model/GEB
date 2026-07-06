@@ -10,6 +10,7 @@ from tqdm import tqdm
 
 from geb.build.methods import build_method
 from geb.build.workflows.river_snapping import (
+    SnappingResults,
     plot_snapping,
     snap_point_to_river_network,
 )
@@ -243,6 +244,17 @@ class Observations(BuildModelBase):
             obs_metadata.geometry.within(region_mask.geometry.union_all())
         ]
 
+        # GRDC provides a fixed UTC offset relative to the national capital.
+        # Custom stations are absent from this metadata and therefore default to UTC.
+        timezone_utc_offsets: pd.Series = discharge_observations.timezone.to_pandas()
+        obs_metadata = obs_metadata.copy()
+        obs_metadata["timezone_utc_offset"] = (
+            obs_metadata["discharge_observations_station_ID"]
+            .map(timezone_utc_offsets)
+            .fillna(0.0)
+            .astype(float)
+        )
+
         if obs_metadata.empty:
             # No stations found - create empty files
             self.logger.warning(
@@ -263,6 +275,7 @@ class Observations(BuildModelBase):
                 "GEB_upstream_area_from_grid",
                 "discharge_observations_to_GEB_upstream_area_ratio",
                 "snapping_distance_degrees",
+                "timezone_utc_offset",
             ]
             discharge_snapping_df = pd.DataFrame(columns=np.array(empty_cols))
             discharge_snapping_df.to_excel(
@@ -307,7 +320,7 @@ class Observations(BuildModelBase):
             ]
 
             # Snap station to river network
-            snap_results = snap_point_to_river_network(
+            snap_results: SnappingResults | None = snap_point_to_river_network(
                 point=shapely.geometry.Point(station_coords),
                 rivers=rivers,
                 upstream_area_grid=upstream_area_grid,
@@ -324,9 +337,9 @@ class Observations(BuildModelBase):
                 continue
 
             # Extract results
-            closest_point_coords = snap_results["closest_point_coords"]
-            grid_pixel_coords = snap_results["snapped_grid_pixel_lonlat"]
-            closest_river_segment = snap_results["closest_river_segment"]
+            closest_point_coords = snap_results.closest_point_coords
+            grid_pixel_coords = snap_results.snapped_grid_pixel_lonlat
+            closest_river_segment = snap_results.closest_river_segment
 
             discharge_snapping_results.append(
                 {
@@ -336,21 +349,20 @@ class Observations(BuildModelBase):
                     "discharge_observations_upstream_area_m2": discharge_observations_uparea_m2,
                     "discharge_observations_station_coords": station_coords,
                     "closest_point_coords": closest_point_coords,
-                    "subgrid_pixel_coords": snap_results["subgrid_pixel_coords"],
+                    "subgrid_pixel_coords": snap_results.subgrid_pixel_coords,
                     "snapped_grid_pixel_lonlat": grid_pixel_coords,
-                    "snapped_grid_pixel_xy": snap_results["snapped_grid_pixel_xy"],
-                    "GEB_upstream_area_from_subgrid": snap_results[
-                        "geb_uparea_subgrid"
-                    ],
-                    "GEB_upstream_area_from_grid": snap_results["geb_uparea_grid"],
+                    "snapped_grid_pixel_xy": snap_results.snapped_grid_pixel_xy,
+                    "GEB_upstream_area_from_subgrid": snap_results.geb_uparea_subgrid,
+                    "GEB_upstream_area_from_grid": snap_results.geb_uparea_grid,
                     "discharge_observations_to_GEB_upstream_area_ratio": (
-                        snap_results["geb_uparea_subgrid"]
+                        snap_results.geb_uparea_subgrid
                         / discharge_observations_uparea_m2
-                        if snap_results["geb_uparea_subgrid"] is not None
+                        if snap_results.geb_uparea_subgrid is not None
                         and not np.isnan(discharge_observations_uparea_m2)
                         else np.nan
                     ),
-                    "snapping_distance_degrees": snap_results["distance_degrees"],
+                    "snapping_distance_degrees": snap_results.distance_degrees,
+                    "timezone_utc_offset": float(station_row["timezone_utc_offset"]),
                 }
             )
 
@@ -363,7 +375,7 @@ class Observations(BuildModelBase):
                     original_coords=station_coords,
                     closest_point_coords=closest_point_coords,
                     closest_river_segment=closest_river_segment,
-                    grid_pixel_xy=snap_results["snapped_grid_pixel_xy"],
+                    grid_pixel_xy=snap_results.snapped_grid_pixel_xy,
                     filename_prefix="discharge_snapping",
                     point_label="Original gauge",
                     title=f"Upstream area grid and gauge snapping for {station_id}",

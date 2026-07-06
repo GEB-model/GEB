@@ -90,13 +90,13 @@ class LandSurface(BuildModelBase):
             {
                 "name": "fabdem",
                 "zmin": 0.001,
-                "coastal_zmin": 30.0,
                 "fill_depressions": False,
             },
             {
                 "name": "delta_dtm",
-                "zmax": 30,
+                "zmax": 29.999999,
                 "zmin": 0.001,
+                "merge_method": "last",
                 "fill_depressions": False,
                 "coastal_only": True,
             },
@@ -156,12 +156,6 @@ class LandSurface(BuildModelBase):
                     "DeltaDTM DEM must be provided when coastal DEMs are used."
                 )
 
-            for DEM in DEMs:
-                if "coastal_zmin" in DEM:
-                    DEM["zmin"] = DEM["coastal_zmin"]
-                if "coastal_zmax" in DEM:
-                    DEM["zmax"] = DEM["coastal_zmax"]
-
             coastlines = self.geom["coastal/coastlines"]
 
             # coastlines is a very complex geometry that can cause issues with clipping and masking operations
@@ -213,6 +207,10 @@ class LandSurface(BuildModelBase):
             "fabdem",
         ).read(mask=potential_flood_area_with_buffer)
 
+        potential_flood_area_with_buffer_gdf = gpd.GeoDataFrame(
+            geometry=[potential_flood_area_with_buffer], crs=4326
+        )
+
         target: xr.DataArray = self.subgrid["mask"].chunk({"x": 5000, "y": 5000})
         assert target.rio.crs is not None, "target grid must have a crs"
 
@@ -242,7 +240,6 @@ class LandSurface(BuildModelBase):
                     DEM_raster = DEM_raster.where(
                         DEM_raster <= DEM["zmax"], DEM["zmax"]
                     )
-
             else:
                 # custom DEMs must have a path
                 if "path" not in DEM:
@@ -284,15 +281,15 @@ class LandSurface(BuildModelBase):
             if "band" in DEM_raster.dims:
                 DEM_raster: xr.DataArray = DEM_raster.isel(band=0)
 
-            DEM_raster = clip_with_geometry(
-                DEM_raster,
-                gpd.GeoDataFrame(geometry=[potential_flood_area_with_buffer], crs=4326),
-                all_touched=True,
-                drop=True,
-            )
-
             DEM_raster = convert_nodata(
                 DEM_raster.astype(np.float32, keep_attrs=True), np.nan
+            )
+
+            DEM_raster = clip_with_geometry(
+                DEM_raster,
+                potential_flood_area_with_buffer_gdf.to_crs(DEM_raster.rio.crs),
+                all_touched=True,
+                drop=True,
             )
 
             if DEM.get("fill_depressions", False):
