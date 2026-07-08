@@ -527,7 +527,14 @@ class Floods(Module):
                     flood_depth=flood_depth
                 )
 
-    def get_return_period_maps(self, run_name: str, split_coastal: bool = True) -> None:
+    @property
+    def split_coastal_default(self) -> bool:
+        """Return the configured default for splitting coastal and inland flood maps."""
+        return bool(self.config.get("split_coastal", True))
+
+    def get_return_period_maps(
+        self, run_name: str, split_coastal: bool | None = None
+    ) -> None:
         """Generates flood maps for specified return periods using the SFINCS model.
 
         Args:
@@ -536,6 +543,9 @@ class Floods(Module):
         Raises:
             ValueError: If no hydrograph is found for a node and return period.
         """
+        if split_coastal is None:
+            split_coastal = self.split_coastal_default
+
         # close the zarr store
         if hasattr(self.model, "reporter"):
             self.model.reporter.variables["discharge_daily"].close()

@@ -5,9 +5,16 @@ import matplotlib.pyplot as plt
 import networkx as nx
 import pytest
 
-from geb.hazards.floods import group_subbasins
+from geb.hazards.floods import Floods, group_subbasins
 
 from ..testconfig import output_folder
+
+
+def test_floods_config_controls_split_coastal_default() -> None:
+    flood_module = object.__new__(Floods)
+    flood_module.config = {"split_coastal": False}
+
+    assert flood_module.split_coastal_default is False
 
 
 @pytest.fixture

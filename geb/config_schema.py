@@ -20,7 +20,6 @@ class RegionConfig(BaseModel):
         None, description="Subbasin ID or list of subbasin IDs."
     )
 
-
 class GeneralConfig(BaseModel):
     """General model configuration."""
 
@@ -89,6 +88,10 @@ class FloodsConfig(BaseModel):
     )
     coastal_only: bool = Field(
         False, description="Whether to simulate coastal floods only."
+    )
+    split_coastal: bool = Field(
+        True,
+        description="Whether to split return-period flood maps into coastal and inland components.",
     )
     write_figures: bool = Field(
         True, description="Whether to generate and save diagnostic figures."
