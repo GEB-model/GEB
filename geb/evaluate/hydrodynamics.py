@@ -4,8 +4,6 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-import cartopy.crs as ccrs
-import cartopy.io.img_tiles as cimgt
 import contextily as ctx
 import geopandas as gpd
 import matplotlib.animation as manimation
@@ -19,6 +17,7 @@ import xarray as xr
 from hydromt_sfincs import SfincsModel
 from matplotlib.colors import BoundaryNorm, LightSource, ListedColormap
 from matplotlib.lines import Line2D
+from pyproj import Transformer
 from rasterio.features import geometry_mask
 from rioxarray.exceptions import NoDataInBounds
 
@@ -838,6 +837,7 @@ def create_flood_animation(
     background: str = "sat",
     zoom: int = 12,
     fmt: str | None = None,
+    vmax: float | None = None,
 ) -> Path | None:
     """Create a flood depth animation from a single SFINCS simulation output.
 
@@ -859,6 +859,10 @@ def create_flood_animation(
         zoom: Zoom level of the background map tiles.
         fmt: Output format, "mp4" or "gif". If None, MP4 is used when ffmpeg is
             available and GIF otherwise.
+        vmax: Upper limit of the color scale in m. If None, the 98th percentile
+            of the wet-cell depths is used, so that a few deep (river channel)
+            cells do not compress the rest of the flood into the lightest color
+            bin; deeper cells saturate into the darkest bin.
 
     Returns:
         Path to the created animation, or None if the simulation has no
@@ -916,10 +920,18 @@ def create_flood_animation(
     frames: np.ndarray = water_depth_m.isel(time=frame_indices).values
     frame_times = water_depth_m.time.values[frame_indices]
 
+    # scale the colorbar to the bulk of the wet cells rather than the absolute
+    # maximum, which is typically reached only inside the river channel
+    if vmax is None:
+        vmax = float(np.nanquantile(frames, 0.98))
+        if vmax <= minimum_flood_depth:
+            vmax = max_depth_m
+
     # discrete flood depth colormap (color scheme shared with the flood map plots)
     cmap = ListedColormap(FLOOD_DEPTH_COLORS)
-    bounds = np.linspace(minimum_flood_depth, max_depth_m, cmap.N + 1)
+    bounds = np.linspace(minimum_flood_depth, vmax, cmap.N + 1)
     norm = BoundaryNorm(bounds, cmap.N)
+    colorbar_extend = "max" if max_depth_m > vmax else "neither"
 
     # 2D cell-center coordinates: xc/yc for rotated grids, else regular x/y
     if "xc" in water_depth_m.coords and "yc" in water_depth_m.coords:
@@ -929,26 +941,36 @@ def create_flood_animation(
         x_2d, y_2d = np.meshgrid(water_depth_m["x"].values, water_depth_m["y"].values)
 
     crs = water_depth_m.raster.crs
-    data_transform = (
-        ccrs.PlateCarree() if crs.is_geographic else ccrs.epsg(crs.to_epsg())
-    )
 
     fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot()
+    ax.set_aspect("equal")
     mesh_kwargs: dict[str, Any] = {}
     if background != "none":
-        tiler = (
-            cimgt.GoogleTiles(style="satellite") if background == "sat" else cimgt.OSM()
+        # fetch the background tiles once as a static image (in Web Mercator)
+        # instead of a cartopy tile layer, which would be re-rendered for
+        # every frame of the animation
+        transformer = Transformer.from_crs(crs, "EPSG:3857", always_xy=True)
+        x_2d, y_2d = transformer.transform(x_2d, y_2d)
+        tile_source = (
+            ctx.providers.Esri.WorldImagery  # ty:ignore[unresolved-attribute]
+            if background == "sat"
+            else ctx.providers.OpenStreetMap.Mapnik  # ty:ignore[unresolved-attribute]
         )
-        ax = fig.add_subplot(projection=tiler.crs)
-        ax.set_extent(
-            [x_2d.min(), x_2d.max(), y_2d.min(), y_2d.max()], crs=data_transform
+        tiles, tiles_extent = ctx.bounds2img(
+            x_2d.min(),
+            y_2d.min(),
+            x_2d.max(),
+            y_2d.max(),
+            zoom=zoom,
+            source=tile_source,
         )
-        ax.add_image(tiler, zoom)
-        mesh_kwargs["transform"] = data_transform
+        ax.imshow(tiles, extent=tiles_extent, zorder=0)
+        ax.set_xlim(x_2d.min(), x_2d.max())
+        ax.set_ylim(y_2d.min(), y_2d.max())
         mesh_kwargs["alpha"] = 0.8
-    else:
-        ax = fig.add_subplot()
-        ax.set_aspect("equal")
+    ax.set_xticks([])
+    ax.set_yticks([])
 
     mesh = ax.pcolormesh(
         x_2d,
@@ -957,9 +979,12 @@ def create_flood_animation(
         cmap=cmap,
         norm=norm,
         shading="auto",
+        zorder=1,
         **mesh_kwargs,
     )
-    colorbar = fig.colorbar(mesh, ax=ax, shrink=0.6, format="%.2f")
+    colorbar = fig.colorbar(
+        mesh, ax=ax, shrink=0.6, format="%.2f", extend=colorbar_extend
+    )
     colorbar.set_label("Water depth (m)")
     title = ax.set_title("")
 
@@ -1033,6 +1058,7 @@ class Hydrodynamics:
         background: str = "sat",
         zoom: int = 12,
         fmt: str | None = None,
+        vmax: float | None = None,
         *args: Any,
         **kwargs: Any,
     ) -> list[Path]:
@@ -1057,6 +1083,10 @@ class Hydrodynamics:
             zoom: Zoom level of the background map tiles.
             fmt: Output format, "mp4" or "gif". If None, MP4 is used when
                 ffmpeg is available and GIF otherwise.
+            vmax: Upper limit of the color scale in m. If None, the 98th
+                percentile of the wet-cell depths is used; deeper (river
+                channel) cells saturate into the darkest bin. Set explicitly
+                to compare animations of different runs on the same scale.
             *args: Additional positional arguments (ignored).
             **kwargs: Additional keyword arguments (ignored).
 
@@ -1109,6 +1139,7 @@ class Hydrodynamics:
                     background=background,
                     zoom=zoom,
                     fmt=fmt,
+                    vmax=vmax,
                 )
                 if animation_path is not None:
                     self.model.logger.info(f"Saved {animation_path}")
