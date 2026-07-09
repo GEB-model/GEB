@@ -1089,17 +1089,35 @@ class FloodRiskModule:
     def _adjust_damages_for_flood_protection(
         self,
         damages: np.ndarray,
-        flood_protection_standard: float,
+        flood_protection_standard: float,  # can probably remove this argument
     ) -> np.ndarray:
-        """Return damages with values below the flood protection standard set to 0."""
-        comid_of_household = self.households.comid_of_household.copy()
-        for comid in np.unique(comid_of_household):
-            households_in_comid = np.where(comid_of_household == comid)[0]
-            damages_households = damages[:, households_in_comid]
-            flood_protection_standard = self.flood_protection_standard_subbasins[comid]
-            mask = self.households.return_periods >= flood_protection_standard
-            damages[:, households_in_comid] = damages_households * mask[:, np.newaxis]
+        comids = self.households.comid_of_household
+
+        household_thresholds = np.fromiter(
+            (self.flood_protection_standard_subbasins[c] for c in comids),
+            dtype=float,
+            count=comids.size,
+        )
+
+        mask = self.households.return_periods[:, None] >= household_thresholds[None, :]
+        damages *= mask
+
         return damages
+
+    # def _adjust_damages_for_flood_protection(
+    #     self,
+    #     damages: np.ndarray,
+    #     flood_protection_standard: float,
+    # ) -> np.ndarray:
+    #     """Return damages with values below the flood protection standard set to 0."""
+    #     comid_of_household = self.households.comid_of_household.copy()
+    #     for comid in np.unique(comid_of_household):
+    #         households_in_comid = np.where(comid_of_household == comid)[0]
+    #         damages_households = damages[:, households_in_comid]
+    #         flood_protection_standard = self.flood_protection_standard_subbasins[comid]
+    #         mask = self.households.return_periods >= flood_protection_standard
+    #         damages[:, households_in_comid] = damages_households * mask[:, np.newaxis]
+    #     return damages
 
     @property
     def damages_do_not_adapt(self) -> np.ndarray:
