@@ -9,7 +9,6 @@ import numpy as np
 import osmnx as ox
 import pandas as pd
 import xarray as xr
-from shapely import prepare
 
 from geb.geb_types import ArrayFloat32, TwoDArrayFloat32
 from geb.workflows.io import read_geom
@@ -21,7 +20,6 @@ from .decision_module import DecisionModule
 from .general import AgentBaseClass
 from .modules.early_warning import EarlyWarningModule
 from .modules.flood_risk import FloodRiskModule
-from .workflows.helpers import from_landuse_raster_to_polygon
 
 if TYPE_CHECKING:
     from geb.agents import Agents

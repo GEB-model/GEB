@@ -1,17 +1,17 @@
 """This module contains the FloodRiskModule class, which is responsible for loading and managing flood risk data for the households in the model. It loads building, road, and rail geometries, as well as damage curves and maximum damage values for different asset types. It also loads flood maps for different return periods to be used in flood risk calculations."""
 
 from pathlib import Path
-from shapely.geometry import box
 from typing import TYPE_CHECKING
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 import xarray as xr
+from shapely.geometry import box
 
 from geb.hydrology.landcovers import FOREST
 from geb.workflows.io import read_geom, read_params, read_table, read_zarr
-from geb.workflows.raster import sample_from_map, coords_to_pixels
+from geb.workflows.raster import coords_to_pixels, sample_from_map
 
 from ...workflows.damage_scanner import VectorScanner, VectorScannerMultiCurves
 from ..workflows.helpers import from_landuse_raster_to_polygon
