@@ -501,10 +501,7 @@ class Government(AgentBaseClass):
         Returns:
             The discounted value.
         """
-        # Calculate time discounted NPVs
-        t_arr = np.arange(1, years, dtype=np.float32)
-        discounts = 1 / (1 + discount_rate) ** t_arr
-        discounted_value = np.sum(discounts) * value_to_discount
+        t_arr = np.arange(1, years + 1, dtype=np.float32)
 
         return discounted_value
 
