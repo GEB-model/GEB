@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 from functools import partial
 from io import BytesIO
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -182,9 +182,7 @@ def plot_forecasts(
     # Timeline plot
     fig, ax_time = plt.subplots(1, 1, figsize=(12, 9))  # Create temporal plot
 
-    colors = plt.cm.viridis(  # ty:ignore[unresolved-attribute]
-        np.linspace(0, 1, n_members)
-    )  # Distinct colors for members
+    colors = plt.cm.viridis(np.linspace(0, 1, n_members))  # Distinct colors for members
 
     spatial_average = (da_plot.mean(dim="idxs")).compute()
 
@@ -204,6 +202,7 @@ def plot_forecasts(
 
     # Calculate ensemble mean and add to plot
     ensemble_mean = sum(ensemble_data) / len(ensemble_data)  # ensemble mean
+    assert isinstance(ensemble_mean, xr.DataArray), "Ensemble mean is not a DataArray"
     ax_time.plot(
         ensemble_mean.time,
         ensemble_mean,
@@ -240,9 +239,7 @@ def plot_forecasts(
         hspace=0.2, wspace=0.2, bottom=0.05, left=0.05, right=0.85
     )  # Tighter spacing
 
-    custom_cmap = (
-        plt.cm.Blues  # ty:ignore[unresolved-attribute]
-    )  # Use simple Blues colormap
+    custom_cmap = plt.cm.Blues  # Use simple Blues colormap
     da_plot_max_over_time = da_plot.max(dim="time")  # max over time for color scale
     for i, member in enumerate(
         da_plot_max_over_time.member
@@ -397,7 +394,7 @@ def create_gif_climate_data_over_time(
             da_plot = da_plot.cumsum(dim="time")  # convert to accumulated precipitation
             ylabel = "mm"  # set y-axis label
             name += "_accumulated"
-            viridis = cm.get_cmap("viridis")
+            viridis = cm.get_cmap("viridis")  # ty:ignore[unresolved-attribute]
             viridis_colors = viridis(
                 np.linspace(0, 1, 25)
             )  # The more colors, the smoother the gradient but more movement in cbar during animation
@@ -446,7 +443,7 @@ def create_gif_climate_data_over_time(
         origin = "upper"
 
     # Generating Animation frames
-    frames = []
+    frames: list[np.ndarray] = []
     times = da_plot["time"].values
 
     for i, t in enumerate(times):
@@ -536,8 +533,8 @@ def create_gif_climate_data_over_time(
         buf.close()
 
     # Saving GIF
-    gif_fp = report_dir / f"{name}_animation.gif"  # File path for GIF
-    imageio.mimsave(gif_fp, frames, fps=5)
+    gif_fp: Path = report_dir / f"{name}_animation.gif"  # File path for GIF
+    imageio.mimsave(gif_fp, frames, fps=5)  # ty:ignore[no-matching-overload]
 
 
 def plot_forcing(
@@ -714,7 +711,7 @@ class Forcing(BuildModelBase):
             self.set_other(mask, name=f"{name}_mask")
 
         da = da.clip(min_value, max_value)
-        da = da.transpose("idxs", "time")
+        da = da.transpose("idxs", "time", ...)
 
         scaling_factor, in_dtype, out_dtype = calculate_scaling(
             da, min_value, max_value, offset=offset, precision=precision
@@ -1122,7 +1119,7 @@ class Forcing(BuildModelBase):
         return cmip6_deltas
 
     def setup_forcing_ERA5(
-        self, create_plots: bool = False, representative_forcing_year: int = None
+        self, create_plots: bool = False, representative_forcing_year: int | None = None
     ) -> None:
         """Sets up the ERA5 forcing data for GEB.
 
@@ -1262,7 +1259,7 @@ class Forcing(BuildModelBase):
         self,
         forcing: str = "ERA5",
         create_plots: bool = False,
-        representative_forcing_year: int = None,
+        representative_forcing_year: int | None = None,
     ) -> None:
         """Sets up the forcing data for GEB.
 
@@ -1574,19 +1571,27 @@ class Forcing(BuildModelBase):
         forecast_end: date | datetime,
         forecast_provider: str,
         forecast_model: str,
-        forecast_resolution: float,
+        forecast_resolution: str,
         forecast_horizon: int,
         forecast_timestep_hours: int,
         n_ensemble_members: int,
+        forecast_product: Literal["forecast", "hindcast"] = "forecast",
+        hindcast_cycle_start: date | datetime | None = None,
+        hindcast_cycle_end: date | datetime | None = None,
+        n_hindcast_years: int | None = None,
         create_plots: bool = False,
     ) -> None:
         """Sets up forecast data for the model based on configuration.
 
         Args:
+            forecast_product: The forecast product type (e.g., "hindcast" or "forecast").
             forecast_start: The forecast initialization time (date or datetime).
             forecast_end: The forecast end time (date or datetime).
+            hindcast_cycle_start: The start time for hindcast data (date or datetime).
+            hindcast_cycle_end: The end time for hindcast data (date or datetime).
+            n_hindcast_years: The number of years of hindcast data to download.
             forecast_provider: The forecast data provider to use (default: "ECMWF").
-            forecast_model: The ECMWF forecast model to use (probabilistic_forecast or control_forecast).
+            forecast_model: The ECMWF forecast model to use (probabilistic_forecast, control_forecast or both_control_and_probabilistic).
             forecast_resolution: The spatial resolution of the forecast data (degrees).
             forecast_horizon: The forecast horizon in hours.
             forecast_timestep_hours: The forecast timestep in hours.
@@ -1597,13 +1602,17 @@ class Forcing(BuildModelBase):
             forecast_provider == "ECMWF"
         ):  # Check if ECMWF is the selected forecast provider
             self.setup_forecasts_ECMWF(  # Call ECMWF-specific setup method
-                forecast_start,  # Pass forecast start date
-                forecast_end,  # Pass forecast end date
-                forecast_model,  # Pass forecast model type
-                forecast_resolution,  # Pass spatial resolution
-                forecast_horizon,  # Pass forecast horizon in hours
-                forecast_timestep_hours,  # Pass timestep interval
-                n_ensemble_members,  # Pass number of ensemble members
+                forecast_product=forecast_product,  # Pass forecast product type
+                forecast_start=forecast_start,  # Pass forecast start date
+                forecast_end=forecast_end,  # Pass forecast end date
+                hindcast_cycle_start=hindcast_cycle_start,  # Pass hindcast start date
+                hindcast_cycle_end=hindcast_cycle_end,  # Pass hindcast end date
+                n_hindcast_years=n_hindcast_years,  # Pass number of hindcast years
+                forecast_model=forecast_model,  # Pass forecast model type
+                forecast_resolution=forecast_resolution,  # Pass spatial resolution
+                forecast_horizon=forecast_horizon,  # Pass forecast horizon in hours
+                forecast_timestep_hours=forecast_timestep_hours,  # Pass timestep interval
+                n_ensemble_members=n_ensemble_members,  # Pass number of ensemble members,
                 create_plots=create_plots,
             )
 
@@ -1612,24 +1621,106 @@ class Forcing(BuildModelBase):
         forecast_start: date | datetime,
         forecast_end: date | datetime,
         forecast_model: str,
-        forecast_resolution: float,
+        forecast_resolution: str,
         forecast_horizon: int,
         forecast_timestep_hours: int,
         n_ensemble_members: int = 50,
+        forecast_product: Literal["forecast", "hindcast"] = "forecast",
+        hindcast_cycle_start: date | datetime | None = None,
+        hindcast_cycle_end: date | datetime | None = None,
+        n_hindcast_years: int | None = None,
         create_plots: bool = False,
     ) -> None:
         """Sets up the folder structure for ECMWF forecast data.
 
         Args:
+            forecast_product: The forecast product type (e.g., "hindcast" or "forecast").
             forecast_start: The forecast initialization time (date or datetime).
             forecast_end: The forecast end time (date or datetime).
-            forecast_model: The ECMWF forecast model to use (probabilistic_forecast or control_forecast).
+            hindcast_cycle_start: The start time for hindcast data (date or datetime).
+            hindcast_cycle_end: The end time for hindcast data (date or datetime).
+            n_hindcast_years: The number of years of hindcast data to download.
+            forecast_model: The ECMWF forecast model to use (probabilistic_forecast, control_forecast or both_control_and_probabilistic).
             forecast_resolution: The spatial resolution of the forecast data (degrees).
             forecast_horizon: The forecast horizon in hours.
             forecast_timestep_hours: The forecast timestep in hours.
             n_ensemble_members: The number of ensemble members to download (default: 50).
             create_plots: If True, create plots for the forecast data.
+
+        Raises:
+            ValueError: If an invalid forecast product type is provided or if the number of hindcast years exceeds the available data range for ECMWF hindcasts.
         """
+
+        def _get_forecast_model_folder(forecast_model: str) -> str:
+            return (
+                "merged_control_ensemble"
+                if forecast_model == "both_control_and_probabilistic"
+                else forecast_model
+            )
+
+        def _make_base_name(
+            base_folder: str, forecast_product: str, forecast_model: str, date_str: str
+        ) -> str:
+            return f"{base_folder}/ECMWF/{_get_forecast_model_folder(forecast_model)}/{date_str}"
+
+        def _save_ecmwf_forcing(
+            forecast_ds: xr.Dataset,
+            base_name: str,
+            date_str: str,
+            create_plots: bool,
+        ) -> None:
+            pr = forecast_ds["tp"].rename("precipitation")
+            pr = pr.where(pr >= 0, 0)
+            self.set_pr_kg_per_m2_per_s(
+                pr,
+                name=f"{base_name}/pr_kg_per_m2_per_s_{date_str}",
+                create_plots=create_plots,
+            )
+
+            self.set_tas_2m_K(
+                forecast_ds["t2m"].rename("tas"),
+                name=f"{base_name}/tas_2m_K_{date_str}",
+                create_plots=create_plots,
+            )
+
+            self.set_dewpoint_tas_2m_K(
+                forecast_ds["d2m"].rename("dew_point_tas"),
+                name=f"{base_name}/dewpoint_tas_2m_K_{date_str}",
+                create_plots=create_plots,
+            )
+
+            self.set_rsds_W_per_m2(
+                forecast_ds["ssrd"].rename("rsds"),
+                name=f"{base_name}/rsds_W_per_m2_{date_str}",
+                create_plots=create_plots,
+            )
+
+            self.set_rlds_W_per_m2(
+                forecast_ds["strd"].rename("rlds"),
+                name=f"{base_name}/rlds_W_per_m2_{date_str}",
+                create_plots=create_plots,
+            )
+
+            self.set_ps_pascal(
+                forecast_ds["sp"].rename("ps"),
+                name=f"{base_name}/ps_pascal_{date_str}",
+                create_plots=create_plots,
+            )
+
+            self.set_wind_10m_m_per_s(
+                forecast_ds["u10"].rename("u10"),
+                direction="u",
+                name=f"{base_name}/wind_u10m_m_per_s_{date_str}",
+                create_plots=create_plots,
+            )
+
+            self.set_wind_10m_m_per_s(
+                forecast_ds["v10"].rename("v10"),
+                direction="v",
+                name=f"{base_name}/wind_v10m_m_per_s_{date_str}",
+                create_plots=create_plots,
+            )
+
         MARS_codes: dict[str, float] = {  # Complete set of weather variables
             "tp": 228.128,  # total precipitation
             "t2m": 167.128,  # 2 metre temperature
@@ -1641,13 +1732,36 @@ class Forcing(BuildModelBase):
             "v10": 166.128,  # 10 metre v-component of wind
         }
 
-        forecast_issue_dates = pd.date_range(  # Create pandas date range
-            start=forecast_start,  # Start from forecast start date
-            end=forecast_end,  # End at forecast end date
-            freq="24h",  # Daily frequency (24-hour intervals)
-        )
+        if forecast_product not in ["forecast", "hindcast"]:
+            raise ValueError(
+                "forecast_product must be either 'forecast' or 'hindcast'."
+            )
 
-        self.logger.info(f"Processing {forecast_model} ECMWF forecasts...")
+        if forecast_product == "hindcast":
+            if n_hindcast_years > 20:
+                raise ValueError(
+                    f"ECMWF hindcast data is only available for up to 20 years before the forecast cycle date. Please adjust the n_hindcast_years parameter in build.yml (currently {n_hindcast_years})."
+                )
+            base_folder = "hindcasts"
+
+            HINDCAST_RUN_DAYS = [1, 5, 9, 13, 17, 21, 25, 29]
+            hindcast_cycle_dates = [
+                d
+                for d in pd.date_range(
+                    hindcast_cycle_start, hindcast_cycle_end, freq="24h"
+                )
+                if d.day in HINDCAST_RUN_DAYS and not (d.month == 2 and d.day > 28)
+            ]
+        else:
+            base_folder = "forecasts"
+
+            forecast_issue_dates = pd.date_range(  # Create pandas date range
+                start=forecast_start,  # Start from forecast start date
+                end=forecast_end,  # End at forecast end date
+                freq="24h",  # Daily frequency (24-hour intervals)
+            )
+
+        self.logger.info(f"Requesting {forecast_model} ECMWF {forecast_product}s...")
 
         ECMWF_forecasts_store = self.data_catalog.fetch(
             "ecmwf_forecasts",
@@ -1655,6 +1769,10 @@ class Forcing(BuildModelBase):
             bounds=self.bounds,
             forecast_start=forecast_start,
             forecast_end=forecast_end,
+            forecast_product=forecast_product,
+            hindcast_cycle_start=hindcast_cycle_start,
+            hindcast_cycle_end=hindcast_cycle_end,
+            n_hindcast_years=n_hindcast_years,
             forecast_model=forecast_model,  # Use current model type
             forecast_resolution=forecast_resolution,
             forecast_horizon=forecast_horizon,  # Forecast horizon in hours
@@ -1662,105 +1780,78 @@ class Forcing(BuildModelBase):
             n_ensemble_members=n_ensemble_members,  # Number of ensemble members
         )
 
-        for (
-            forecast_issue_date
-        ) in forecast_issue_dates:  # # Process each forecast issue date separately
+        if forecast_product == "hindcast":
+            forecast_issue_dates = (
+                hindcast_cycle_dates  # Use hindcast cycle dates for hindcast product
+            )
+
+        for forecast_issue_date in (
+            forecast_issue_dates
+        ):  # # Process each forecast issue date/hindcast cycle date separately
             forecast_issue_date_str = forecast_issue_date.strftime(
                 "%Y%m%dT%H%M%S"
             )  # Format date for filenames
-
-            self.logger.info(f"Processing forecast issued at {forecast_issue_date}...")
-
-            ECMWF_forecast = ECMWF_forecasts_store.read(
-                bounds=self.bounds,
-                forecast_issue_date=forecast_issue_date,
-                forecast_model=forecast_model,
-                forecast_resolution=forecast_resolution,
-                forecast_horizon=forecast_horizon,
-                forecast_timestep_hours=forecast_timestep_hours,
-                reproject_like=self.other["climate/pr_kg_per_m2_per_s_mask"],
-            )  # Reproject to grid of other climate data
-
-            if "member" in ECMWF_forecast.dims:
-                ECMWF_forecast = ECMWF_forecast.chunk({"member": 1})
-
-            # Create name based on forecast_model for consistent file structure
-            if forecast_model == "both_control_and_probabilistic":
-                base_name = (
-                    f"forecasts/ECMWF/merged_control_ensemble/{forecast_issue_date_str}"
-                )
-            else:
-                base_name = (
-                    f"forecasts/ECMWF/{forecast_model}/{forecast_issue_date_str}"
+            if forecast_product == "forecast":
+                self.logger.info(
+                    f"Processing ECMWF {forecast_product} issued at {forecast_issue_date}..."
                 )
 
-            # Extract and process hourly precipitation data
-            pr = ECMWF_forecast["tp"].rename(
-                "precipitation"
-            )  # Get total precipitation variable
-            pr = pr.where(
-                pr >= 0, 0
-            )  # Handle negative values (caused by floating-point precision issues) by setting them to zero
-            self.set_pr_kg_per_m2_per_s(
-                pr,
-                name=f"{base_name}/pr_kg_per_m2_per_s_{forecast_issue_date_str}",  # Use date-specific filename
-                create_plots=create_plots,
-            )
+                ECMWF_forecast = ECMWF_forecasts_store.read_and_process_forecasts(
+                    bounds=self.bounds,
+                    forecast_issue_date=forecast_issue_date,
+                    forecast_model=forecast_model,
+                    forecast_resolution=forecast_resolution,
+                    forecast_horizon=forecast_horizon,
+                    forecast_timestep_hours=forecast_timestep_hours,
+                    reproject_like=self.other["climate/pr_kg_per_m2_per_s_mask"],
+                )  # Reproject to grid of other climate data'
 
-            tas = ECMWF_forecast["t2m"].rename("tas")  # Extract 2-meter temperature
-            self.set_tas_2m_K(
-                tas,
-                name=f"{base_name}/tas_2m_K_{forecast_issue_date_str}",
-                create_plots=create_plots,
-            )
+                if "member" in ECMWF_forecast.dims:
+                    ECMWF_forecast = ECMWF_forecast.chunk({"member": 1})
 
-            dew_point_tas = ECMWF_forecast["d2m"].rename(
-                "dew_point_tas"
-            )  # Extract dewpoint temperature
-            self.set_dewpoint_tas_2m_K(
-                dew_point_tas,
-                name=f"{base_name}/dewpoint_tas_2m_K_{forecast_issue_date_str}",
-                create_plots=create_plots,
-            )
+                base_name = _make_base_name(
+                    base_folder=base_folder,
+                    forecast_product=forecast_product,
+                    forecast_model=forecast_model,
+                    date_str=forecast_issue_date_str,
+                )
 
-            rsds = ECMWF_forecast["ssrd"].rename("rsds")  # Extract shortwave radiation
-            self.set_rsds_W_per_m2(
-                rsds,
-                name=f"{base_name}/rsds_W_per_m2_{forecast_issue_date_str}",
-                create_plots=create_plots,
-            )
+                _save_ecmwf_forcing(
+                    forecast_ds=ECMWF_forecast,
+                    base_name=base_name,
+                    date_str=forecast_issue_date_str,
+                    create_plots=create_plots,
+                )
 
-            # Process surface longwave (thermal) radiation downwards
-            rlds = ECMWF_forecast["strd"].rename("rlds")  # Extract longwave radiation
-            self.set_rlds_W_per_m2(
-                rlds,
-                name=f"{base_name}/rlds_W_per_m2_{forecast_issue_date_str}",
-                create_plots=create_plots,
-            )
+            elif forecast_product == "hindcast":
+                self.logger.info(
+                    f"Processing ECMWF {forecast_product} for cycle date {forecast_issue_date}..."
+                )
 
-            pressure = ECMWF_forecast["sp"].rename("ps")  # Extract surface pressure
-            self.set_ps_pascal(
-                pressure,
-                name=f"{base_name}/ps_pascal_{forecast_issue_date_str}",
-                create_plots=create_plots,
-            )
+                ECMWF_hindcast = ECMWF_forecasts_store.read_and_process_hindcasts(
+                    bounds=self.bounds,
+                    forecast_issue_date=forecast_issue_date,
+                    forecast_model=forecast_model,
+                    forecast_resolution=forecast_resolution,
+                    forecast_horizon=forecast_horizon,
+                    forecast_timestep_hours=forecast_timestep_hours,
+                    reproject_like=self.other["climate/pr_kg_per_m2_per_s_mask"],
+                )  # Reproject to grid of other climate data
 
-            u_wind = ECMWF_forecast["u10"].rename(
-                "u10"
-            )  # Extract u-component of wind at 10m
-            self.set_wind_10m_m_per_s(
-                u_wind,
-                direction="u",
-                name=f"{base_name}/wind_u10m_m_per_s_{forecast_issue_date_str}",
-                create_plots=create_plots,
-            )
+                for hindcast_date, hindcast_ds in ECMWF_hindcast.items():
+                    self.logger.info(
+                        f"Processing ECMWF hindcast date {hindcast_date}..."
+                    )
+                    base_name = _make_base_name(
+                        base_folder=base_folder,
+                        forecast_product=forecast_product,
+                        forecast_model=forecast_model,
+                        date_str=hindcast_date,
+                    )
 
-            v_wind = ECMWF_forecast["v10"].rename(
-                "v10"
-            )  # Extract v-component of wind at 10m
-            self.set_wind_10m_m_per_s(
-                v_wind,
-                direction="v",
-                name=f"{base_name}/wind_v10m_m_per_s_{forecast_issue_date_str}",
-                create_plots=create_plots,
-            )
+                    _save_ecmwf_forcing(
+                        forecast_ds=hindcast_ds,
+                        base_name=base_name,
+                        date_str=hindcast_date,
+                        create_plots=create_plots,
+                    )

@@ -31,8 +31,8 @@ def test_premium_traditional_insurance() -> None:
     insurers.traditional_loading_rate = 1.0
 
     crop_farmers = insurers.agents.crop_farmers
-    crop_farmers.field_size_per_farmer = np.array([10.0, 10.0], dtype=np.float32)
-    crop_farmers.well_irrigated = np.array([0, 0], dtype=np.int32)
+    crop_farmers.field_size_per_farmer = np.array([10.0, 10.0], dtype=np.float32)  # ty:ignore[invalid-assignment]
+    crop_farmers.well_irrigated = np.array([0, 0], dtype=np.int32)  # ty:ignore[invalid-assignment]
 
     def create_unique_groups(
         values: np.ndarray,
@@ -47,7 +47,7 @@ def test_premium_traditional_insurance() -> None:
         """
         return np.array([0, 0], dtype=np.int32), 1
 
-    crop_farmers.create_unique_groups = create_unique_groups
+    crop_farmers.create_unique_groups = create_unique_groups  # ty:ignore[invalid-assignment]
 
     potential_insured_loss = np.array(
         [
@@ -79,7 +79,7 @@ def test_premium_traditional_insurance() -> None:
 def test_insured_payouts_traditional() -> None:
     """Test the insured_payouts_traditional function."""
     insurers = make_insurers_stub()
-    insurers.var.insured_yearly_income = np.zeros((2, 3), dtype=np.float32)
+    insurers.var.insured_yearly_income = np.zeros((2, 3), dtype=np.float32)  # ty:ignore[invalid-assignment]
 
     masked_income = np.array(
         [
@@ -91,7 +91,7 @@ def test_insured_payouts_traditional() -> None:
     insured_farmers_mask = np.array([True, False])
 
     result = insurers.insured_payouts_traditional(
-        insured_farmers_mask,
+        DynamicArray(insured_farmers_mask),
         masked_income,
     )
 
@@ -111,9 +111,9 @@ def test_insured_payouts_traditional() -> None:
 def test_insured_payouts_index() -> None:
     """Test the insured_payouts_index function."""
     insurers = make_insurers_stub()
-    insurers.var.insured_yearly_income = np.zeros((2, 2), dtype=np.float32)
+    insurers.var.insured_yearly_income = np.zeros((2, 2), dtype=np.float32)  # ty:ignore[invalid-assignment]
 
-    insurers.agents.crop_farmers.var.yearly_SPEI = types.SimpleNamespace(
+    insurers.agents.crop_farmers.var.yearly_SPEI = types.SimpleNamespace(  # ty:ignore[invalid-assignment]
         data=np.array(
             [
                 [-0.5, -1.5],
@@ -133,7 +133,7 @@ def test_insured_payouts_index() -> None:
         strike,
         exit,
         rate,
-        insured_farmers_mask,
+        DynamicArray(insured_farmers_mask),
         INDEX_INSURANCE_ADAPTATION,
         valid_years,
     )
@@ -165,8 +165,8 @@ def test_insured_yields() -> None:
         captured["probability"] = yearly_spei_probability.copy()
         return insured_yearly_yield_ratio + yearly_spei_probability
 
-    insurers.agents.crop_farmers.calculate_yield_spei_relation_group_lin = fake_relation
-    insurers.agents.crop_farmers.var.yearly_SPEI_probability = types.SimpleNamespace(
+    insurers.agents.crop_farmers.calculate_yield_spei_relation_group_lin = fake_relation  # ty:ignore[invalid-assignment]
+    insurers.agents.crop_farmers.var.yearly_SPEI_probability = types.SimpleNamespace(  # ty:ignore[invalid-assignment]
         data=np.array(
             [
                 [0.1, 0.2],
@@ -293,7 +293,7 @@ def test_insurance_premiums_traditional_dispatch() -> None:
     insurers.index_insurance_adaptation_active = False
     insurers.pr_insurance_adaptation_active = False
 
-    insurers.var.insured_yearly_income = np.zeros((2, 2), dtype=np.float32)
+    insurers.var.insured_yearly_income = np.zeros((2, 2), dtype=np.float32)  # ty:ignore[invalid-assignment]
 
     insurers.agents.crop_farmers.var.n = 2
     insurers.agents.crop_farmers.var.yearly_income = DynamicArray(
@@ -335,7 +335,7 @@ def test_insurance_premiums_traditional_dispatch() -> None:
         np.zeros((2, 2), dtype=np.float32)
     )
 
-    insurers.potential_insured_loss = lambda: np.ones((2, 2), dtype=np.float32)
+    insurers.potential_insured_loss = lambda: np.ones((2, 2), dtype=np.float32)  # ty:ignore[invalid-assignment]
 
     expected_premium = np.array([1.0, 2.0], dtype=np.float32)
     expected_relation = np.array(
@@ -361,7 +361,7 @@ def test_insurance_premiums_traditional_dispatch() -> None:
         """
         return expected_premium, expected_relation
 
-    insurers.traditional_insurance = fake_traditional_insurance
+    insurers.traditional_insurance = fake_traditional_insurance  # ty:ignore[invalid-assignment]
 
     premium, relation = insurers.insurance_premiums()
 
@@ -378,7 +378,7 @@ def test_insurance_premiums_index_dispatch() -> None:
     insurers.index_insurance_adaptation_active = True
     insurers.pr_insurance_adaptation_active = False
 
-    insurers.var.insured_yearly_income = np.zeros((2, 2), dtype=np.float32)
+    insurers.var.insured_yearly_income = np.zeros((2, 2), dtype=np.float32)  # ty:ignore[invalid-assignment]
 
     insurers.agents.crop_farmers.var.n = 2
 
@@ -422,7 +422,7 @@ def test_insurance_premiums_index_dispatch() -> None:
         np.zeros((2, 2), dtype=np.float32)
     )
 
-    insurers.potential_insured_loss = lambda: np.ones((2, 2), dtype=np.float32)
+    insurers.potential_insured_loss = lambda: np.ones((2, 2), dtype=np.float32)  # ty:ignore[invalid-assignment]
 
     expected_premium = np.array([3.0, 4.0], dtype=np.float32)
     expected_relation = np.array(
@@ -448,7 +448,7 @@ def test_insurance_premiums_index_dispatch() -> None:
         """
         return expected_premium, expected_relation
 
-    insurers.index_insurance = fake_index_insurance
+    insurers.index_insurance = fake_index_insurance  # ty:ignore[invalid-assignment]
 
     premium, relation = insurers.insurance_premiums()
 
@@ -465,7 +465,7 @@ def test_insurance_premiums_pr_dispatch() -> None:
     insurers.index_insurance_adaptation_active = False
     insurers.pr_insurance_adaptation_active = True
 
-    insurers.var.insured_yearly_income = np.zeros((2, 2), dtype=np.float32)
+    insurers.var.insured_yearly_income = np.zeros((2, 2), dtype=np.float32)  # ty:ignore[invalid-assignment]
 
     insurers.agents.crop_farmers.var.n = 2
     insurers.agents.crop_farmers.var.yearly_income = DynamicArray(
@@ -507,7 +507,7 @@ def test_insurance_premiums_pr_dispatch() -> None:
         np.zeros((2, 2), dtype=np.float32)
     )
 
-    insurers.potential_insured_loss = lambda: np.ones((2, 2), dtype=np.float32)
+    insurers.potential_insured_loss = lambda: np.ones((2, 2), dtype=np.float32)  # ty:ignore[invalid-assignment]
 
     expected_premium = np.array([5.0, 6.0], dtype=np.float32)
     expected_relation = np.array(
@@ -533,7 +533,7 @@ def test_insurance_premiums_pr_dispatch() -> None:
         """
         return expected_premium, expected_relation
 
-    insurers.pr_insurance = fake_pr_insurance
+    insurers.pr_insurance = fake_pr_insurance  # ty:ignore[invalid-assignment]
 
     premium, relation = insurers.insurance_premiums()
 

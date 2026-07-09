@@ -22,6 +22,7 @@ setup_cell_area:
 setup_hydrography:
 
 setup_retention_basins:
+  max_storage_m3_to_min_shreve_stream_order_function: "(x**0.5) / 100"
 
 setup_elevation:
 
@@ -58,6 +59,8 @@ setup_subnational_income_distribution:
 setup_buildings:
 
 setup_household_characteristics:
+
+# setup_warning_communication_weights:
 
 setup_water_demand:
 
@@ -183,13 +186,18 @@ setup_forcing:
   forcing: ERA5
 
 # setup_forecasts:
-#   forecast_start: 2021-07-11 00:00:00 # Start date for forecast data downloads. Format: ``YYYY-MM-DD``
-#   forecast_end: 2021-07-12 00:00:00 # End date for forecast data downloads. Format: ``YYYY-MM-DD``
+#   forecast_product: hindcast # The type of forecast product to download. Options are "hindcast" or "forecast".
+#   n_ensemble_members: 10 # Number of ensemble members to use for the forecasts. Maximum is 50 for forecasts and 10 for hindcasts.
+#   forecast_start: 2020-01-01 00:00:00 # Start date for forecast data downloads. Format: ``YYYY-MM-DD``
+#   forecast_end: 2024-12-31 00:00:00 # End date for forecast data downloads. Format: ``YYYY-MM-DD``
+#   hindcast_cycle_start: 2025-01-01 00:00:00 # Used only for hindcasts. The start date of the cycle you want to get the hindcasts for. Format: ``YYYY-MM-DD``
+#   hindcast_cycle_end: 2025-12-31 00:00:00 # Used only for hindcasts. The end date of the cycle you want to get the hindcasts for. Format: ``YYYY-MM-DD``
+#   n_hindcast_years: 20 # Used only for hindcasts. The number of years of hindcast data to download before the forecast cycle date. Maximum is 20 years. For example, if the forecast cycle date = 2025-01-01 and hindcast_years = 20, hindcast data will be downloaded starting from 2005-01-01.
 #   forecast_provider: ECMWF # The forecast data provider. Currently only ``"ECMWF"`` is supported.
-#   forecast_model: probabilistic_forecast # The forecast model to use. Options are "probabilistic_forecast" or "control_forecast".
+#   forecast_model: both_control_and_probabilistic # The forecast model to use. Options are "probabilistic_forecast", "control_forecast" or "both_control_and_probabilistic"
 #   forecast_resolution: 0.1/0.1 # The spatial resolution of the forecast data in degrees.
-#   forecast_horizon: 240 # The forecast horizon in hours.
-#   forecast_timestep_hours: 1 # The time step of the forecast output in hours.
+#   forecast_horizon: 120 # The forecast horizon in hours.
+#   forecast_timestep_hours: 6 # The time step of the forecast output in hours.
 
 setup_SPEI:
   window_months: 12

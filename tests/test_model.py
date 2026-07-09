@@ -251,7 +251,7 @@ def test_update_with_method(method: str) -> None:
         method: The update method to test (e.g., 'file', 'dict').
     """
     with WorkingDirectory(working_directory):
-        args: dict[str, str | dict | Path | bool] = DEFAULT_BUILD_ARGS.copy()
+        args: dict[str, Any] = DEFAULT_BUILD_ARGS.copy()
         del args["continue_"]
 
         build_config: dict[str, dict] = parse_config(BUILD_DEFAULT)
@@ -300,7 +300,7 @@ def test_spinup() -> None:
         routing = geb.hydrology.routing
         outflow_rivers = geb.hydrology.routing.outflow_rivers
         routing.observed_average_river_width[
-            routing.river_ids == geb.hydrology.routing.outflow_rivers.iloc[0].name
+            routing.var.river_ids == geb.hydrology.routing.outflow_rivers.iloc[0].name
         ] = RIVER_WIDTH_OUTFLOW_RIVER
 
         geb.step_to_end()
@@ -455,13 +455,13 @@ def test_run() -> None:
         for label in [
             "KGE_hourly",
             "NSE_hourly",
-            "R_hourly",
+            "KGE_correlation_hourly",
             "KGE_daily",
             "NSE_daily",
-            "R_daily",
+            "KGE_correlation_daily",
             "KGE",
             "NSE",
-            "R",
+            "KGE_correlation",
         ]:
             assert label in result
             assert result[label] is not None
@@ -634,7 +634,7 @@ def test_setup_inflow() -> None:
         data_folder: Path = Path("data")
         data_folder.mkdir(parents=True, exist_ok=True)
 
-        rivers: gpd.GeoDataFrame = model.hydrology.routing.active_rivers.copy()
+        rivers: gpd.GeoDataFrame = model.hydrology.routing.get_active_rivers().copy()
 
         start_time = model.spinup_start
         end_time = model.run_end + model.timestep_length
@@ -720,7 +720,7 @@ def test_setup_retention_basins() -> None:
         data_folder: Path = Path("data")
         data_folder.mkdir(parents=True, exist_ok=True)
 
-        rivers: gpd.GeoDataFrame = model.hydrology.routing.active_rivers.copy()
+        rivers: gpd.GeoDataFrame = model.hydrology.routing.get_active_rivers().copy()
 
         start_time = model.spinup_start
         end_time = model.run_end + model.timestep_length
@@ -784,7 +784,6 @@ def test_run_yearly() -> None:
         config["hazards"]["floods"]["simulate"] = True  # enable flood simulation
 
         args["config"] = config
-        args["config"]["report"] = {}
 
         with pytest.raises(
             ValueError,
@@ -805,7 +804,10 @@ def test_estimate_return_periods() -> None:
     extreme events and flood frequencies.
     """
     with WorkingDirectory(working_directory):
-        run_model_with_method(method="estimate_return_periods", **DEFAULT_RUN_ARGS)
+        run_args = DEFAULT_RUN_ARGS.copy()
+        run_args["config"] = parse_config(CONFIG_DEFAULT)
+        run_args["config"]["hazards"]["floods"]["write_figures"] = True
+        run_model_with_method(method="estimate_return_periods", **run_args)
 
     if os.getenv("GEB_TEST_GPU", "no") == "yes":
         flood_maps_CPU: Path = working_directory / "output" / "flood_maps" / "1000.zarr"

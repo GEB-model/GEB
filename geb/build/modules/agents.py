@@ -1596,6 +1596,27 @@ class Agents(BuildModelBase):
                 name=f"damage_model/flood/{damage_class}/structure/curve",
             )
 
+    @build_method(required=False)
+    def setup_warning_communication_weights(self) -> None:
+        """Sets up the weights for warning communication based on socioeconomic factors."""
+        # Normalized Weights based on the regression of the WRP survey data
+        # (https://documents1.worldbank.org/curated/en/099259309032538041/pdf/IDU-c6f56dc5-a0cb-4375-ac15-a91f1c202b09.pdf )
+        # Rows = Education classes, Columns = Income quintiles
+        weights_table = pd.DataFrame(
+            data=[
+                [0.0336, 0.0349, 0.0366, 0.0380, 0.0396],
+                [0.0336, 0.0349, 0.0366, 0.0380, 0.0396],
+                [0.0366, 0.0380, 0.0396, 0.0413, 0.0430],
+                [0.0400, 0.0413, 0.0430, 0.0450, 0.0467],
+                [0.0407, 0.0423, 0.0439, 0.0456, 0.0477],
+            ],
+            index=np.array([1, 2, 3, 4, 5]),  # Education classes
+            columns=np.array([1, 2, 3, 4, 5]),  # Income quintiles
+        )
+        self.set_table(
+            weights_table, name="warning_system/warning_communication_weights"
+        )
+
     def assign_buildings_to_grid_cells(
         self, GDL_regions: gpd.GeoDataFrame
     ) -> dict[str, gpd.GeoDataFrame]:
@@ -2443,6 +2464,7 @@ class Agents(BuildModelBase):
             source: The source of the OSM data. Options are 'geofabrik' or 'movisda'. Default is 'geofabrik'.
             use_cache: If True, the data will be cached in the preprocessing directory. Default is True.
         """
+        # TODO change id column to asset_id for each asset to align with future updates in the EWS critical infrastructure functions
         if isinstance(feature_types, str):
             feature_types: list[str] = [feature_types]
 
