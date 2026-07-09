@@ -1089,8 +1089,14 @@ class FloodRiskModule:
     def _adjust_damages_for_flood_protection(
         self,
         damages: np.ndarray,
-        flood_protection_standard: float,  # can probably remove this argument
     ) -> np.ndarray:
+        """Return damages with values below the flood protection standard set to 0.
+
+        Args:
+            damages: 2D array of damages by return period (rows) and household (columns).
+        Returns:
+            2D array of damages with values below the flood protection standard set to 0.
+        """
         comids = self.households.comid_of_household
 
         household_thresholds = np.fromiter(
