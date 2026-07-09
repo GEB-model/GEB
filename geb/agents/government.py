@@ -501,8 +501,10 @@ class Government(AgentBaseClass):
         Returns:
             The discounted value.
         """
+        # Calculate time discounted NPVs
         t_arr = np.arange(1, years + 1, dtype=np.float32)
-
+        discounts = 1 / (1 + discount_rate) ** t_arr
+        discounted_value = np.sum(discounts) * value_to_discount
         return discounted_value
 
     def _cost_benefit_adaptation(self) -> None:
@@ -582,7 +584,7 @@ class Government(AgentBaseClass):
                     altered_fps
                 )
 
-    def calculate_EAD(self, households_only: bool = True) -> None | float:
+    def calculate_EAD(self) -> None | float:
         """Calculate the expected annual damage (EAD) for the current year.
 
         EAD is computed by integrating total flood damage over the exceedance
@@ -601,9 +603,6 @@ class Government(AgentBaseClass):
             return
 
         households = self.agents.households
-        if households_only:
-            return households.flood_risk_module.calculate_EAD().sum()
-
         if not hasattr(households, "flood_risk_module"):
             return None
         return_periods = households.return_periods
