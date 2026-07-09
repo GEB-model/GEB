@@ -523,7 +523,8 @@ class Government(AgentBaseClass):
         adapted = self.agents.households.var.adapted.data
 
         # iterate over each subbasin in the model and calculate the EAD for the current and next flood protection standard
-        for subbasin in self.flood_risk_module.dike_heights[10]:
+        dike_heights = self.flood_risk_module.dike_heights()
+        for subbasin in dike_heights[10]:  # get return period of 10 years
             if (
                 subbasin
                 not in self.flood_risk_module.flood_protection_standard_subbasins
@@ -558,12 +559,8 @@ class Government(AgentBaseClass):
             ).sum()
 
             # calculate the cost of raising the dike to the next flood protection standard
-            dike_heights_current_fps = self.flood_risk_module.dike_heights[current_fps][
-                subbasin
-            ]
-            dike_heights_altered_fps = self.flood_risk_module.dike_heights[altered_fps][
-                subbasin
-            ]
+            dike_heights_current_fps = dike_heights[current_fps][subbasin]
+            dike_heights_altered_fps = dike_heights[altered_fps][subbasin]
             damage_reduction = current_ead - altered_ead
 
             # get total length and height difference of the dikes that need to be raised
