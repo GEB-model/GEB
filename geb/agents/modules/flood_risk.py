@@ -1124,6 +1124,14 @@ class FloodRiskModule:
         return self._adjust_damages_for_flood_protection(self._damages_adapt)
 
     def dike_heights(self) -> dict[int, dict[int, np.ndarray]]:
+        """Calculate dike heights for each river and return period.
+
+        This is done by sampling the flood maps along the river geometries and extracting the flood depths at those points.
+        These dike heights are then stored in a dictionary for later use by the government agent to determine the required dike height for each river and return period.
+
+        Returns:
+            dict[int, dict[int, np.ndarray]]: A nested dictionary where the first key is the return period, the second key is the river ID, and the value is an array of dike heights (flood depths) along the river.
+        """
         if hasattr(self, "_dike_heights"):
             return self._dike_heights
 
