@@ -7,6 +7,7 @@ import os
 import shutil
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import geopandas as gpd
@@ -794,6 +795,49 @@ def test_run_yearly() -> None:
         config["hazards"]["floods"]["simulate"] = False  # disable flood simulation
 
         run_model_with_method(method="run_yearly", **args)
+
+
+def test_estimate_return_periods_accepts_return_periods_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure estimate_return_periods can use an explicit return-period override."""
+    model = GEBModel.__new__(GEBModel)
+    model.config = {
+        "general": {
+            "spinup_name": "spinup",
+            "start_time": date(2000, 1, 1),
+        }
+    }
+    model.model = SimpleNamespace(
+        config={"general": {"spinup_name": "spinup"}},
+        files={"geom": {"routing/subbasins": "dummy"}},
+    )
+    model._initialize = lambda *args, **kwargs: None
+    model.hazard_driver = SimpleNamespace(
+        floods=SimpleNamespace(get_return_period_maps=lambda *a, **k: None)
+    )
+
+    captured: dict[str, Any] = {}
+
+    def fake_get_return_period_maps(
+        run_name: str, return_periods: list[int] | None = None
+    ) -> None:
+        captured["run_name"] = run_name
+        captured["return_periods"] = return_periods
+
+    monkeypatch.setattr(
+        "geb.model.read_geom", lambda _: gpd.GeoDataFrame({"is_coastal": [False]})
+    )
+    monkeypatch.setattr(
+        "geb.model.generate_storm_surge_hydrographs",
+        lambda *_args, **_kwargs: None,
+    )
+    model.hazard_driver.floods.get_return_period_maps = fake_get_return_period_maps
+
+    model.estimate_return_periods(return_periods=[2, 50])
+
+    assert captured["run_name"] == "spinup"
+    assert captured["return_periods"] == [2, 50]
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")

@@ -1,5 +1,6 @@
 """Command line interface for GEB."""
 
+import ast
 import datetime
 import functools
 import inspect
@@ -242,6 +243,52 @@ def universal_options(func: Callable[..., Any]) -> Callable[..., Any]:
     return wrapper
 
 
+def _parse_extra_arg_value(key: str, value: Any) -> Any:
+    """Parse extra CLI values into appropriate Python types.
+
+    Args:
+        key: The CLI argument name.
+        value: The raw value supplied from the command line.
+
+    Returns:
+        Parsed value, using list parsing for return_periods.
+    """
+    if key == "return_periods" and isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return []
+        if stripped.startswith("[") or stripped.startswith("("):
+            try:
+                parsed_value = ast.literal_eval(stripped)
+                if isinstance(parsed_value, list):
+                    return [int(item) for item in parsed_value]
+            except (ValueError, SyntaxError):
+                pass
+        if "," in stripped:
+            return [int(item.strip()) for item in stripped.split(",") if item.strip()]
+        if any(char.isspace() for char in stripped):
+            return [int(item) for item in stripped.split() if item]
+        try:
+            return [int(stripped)]
+        except ValueError:
+            pass
+
+    if isinstance(value, str):
+        if value.lower() == "true":
+            return True
+        if value.lower() == "false":
+            return False
+        try:
+            return int(value)
+        except ValueError:
+            try:
+                return float(value)
+            except ValueError:
+                return value
+
+    return value
+
+
 def click_run_options() -> Any:
     """Decorator to add run options to a click command.
 
@@ -308,17 +355,53 @@ def spinup(**kwargs: Any) -> None:
     run_model_with_method(method="spinup", **kwargs)
 
 
-@cli.command()
+@cli.command(context_settings=dict(ignore_unknown_options=True, allow_extra_args=True))
 @click.argument("method", required=True)
 @click_run_options()
-def exec(method: str, **kwargs: Any) -> None:
+@click.pass_context
+def exec(ctx: click.Context, method: str, **kwargs: Any) -> None:
     """Execute a specific method on the model.
 
     Args:
+        ctx: Click context containing extra arguments.
         method: Method to run on the model.
-        **kwargs: Keyword arguments to pass to the method.
+        **kwargs: Universal arguments for the runner.
     """
-    run_model_with_method(method=method, **kwargs)
+    extra_args = {}
+    i = 0
+    while i < len(ctx.args):
+        arg = ctx.args[i]
+        if arg.startswith("--"):
+            if "=" in arg:
+                parts = arg[2:].split("=", 1)
+                key = parts[0]
+                value = parts[1]
+                i += 1
+            else:
+                key = arg[2:]
+                if i + 1 < len(ctx.args) and not ctx.args[i + 1].startswith("--"):
+                    value = ctx.args[i + 1]
+                    i += 2
+                else:
+                    value = "true"
+                    i += 1
+        else:
+            click.echo(
+                f"Warning: Ignoring invalid argument '{arg}'. Expected format: --key value or --key=value",
+                err=True,
+            )
+            i += 1
+            continue
+
+        if key:
+            key = key.replace("-", "_")
+            extra_args[key] = _parse_extra_arg_value(key, value)
+
+    run_model_with_method(
+        method=method,
+        method_args=extra_args,
+        **kwargs,
+    )
 
 
 def click_build_options(
@@ -686,25 +769,8 @@ def evaluate(
             continue
 
         if key:
-            # Try to convert value to appropriate type
-            if value.lower() == "true":
-                value = True
-            elif value.lower() == "false":
-                value = False
-            else:
-                try:
-                    # Try int first
-                    value = int(value)
-                except ValueError:
-                    try:
-                        # Try float
-                        value = float(value)
-                    except ValueError:
-                        # Keep as string
-                        pass
-
             key = key.replace("-", "_")
-            extra_args[key] = value
+            extra_args[key] = _parse_extra_arg_value(key, value)
 
     if profile_ram and IS_WINDOWS:
         raise click.ClickException(

@@ -533,7 +533,10 @@ class Floods(Module):
         return bool(self.config.get("split_coastal", True))
 
     def get_return_period_maps(
-        self, run_name: str, split_coastal: bool | None = None
+        self,
+        run_name: str,
+        split_coastal: bool | None = None,
+        return_periods: list[int] | None = None,
     ) -> None:
         """Generates flood maps for specified return periods using the SFINCS model.
 
@@ -545,6 +548,9 @@ class Floods(Module):
         """
         if split_coastal is None:
             split_coastal = self.split_coastal_default
+
+        if return_periods is None:
+            return_periods = list(self.config["return_periods"])
 
         # close the zarr store
         if hasattr(self.model, "reporter"):
@@ -675,7 +681,7 @@ class Floods(Module):
                 )
                 sfincs_inland_root_model.estimate_discharge_for_return_periods(
                     discharge_by_river=self.discharge_by_river(run_name),
-                    return_periods=self.config["return_periods"],
+                    return_periods=return_periods,
                     p_value_threshold=self.config["p_value_threshold"],
                     selection_strategy=self.config["selection_strategy"],
                     fixed_shape=self.config["fixed_shape"],
@@ -683,7 +689,7 @@ class Floods(Module):
                 )
                 sfincs_inland_root_models.append(sfincs_inland_root_model)
 
-        for return_period in self.config["return_periods"]:
+        for return_period in return_periods:
             simulations: list[SFINCSSimulation] = []
 
             if coastal:
