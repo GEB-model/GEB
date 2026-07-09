@@ -36,7 +36,10 @@ class FloodRiskModule:
         self.load_damage_curves()
         self.alter_damage_curves_based_on_actions()
         self.load_max_damage_values()
-        if self.model.config["hazards"]["floods"]["flood_risk"]:
+        if (
+            self.model.config["hazards"]["floods"]["flood_risk"]
+            or self.model.config["agent_settings"]["households"]["adapt"]
+        ):
             self.load_return_period_flood_maps()
         self.load_flood_protection_standard()
         self.flood_in_last_year = False
