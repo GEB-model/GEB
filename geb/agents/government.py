@@ -399,12 +399,8 @@ class Government(AgentBaseClass):
         equity, and ecosystem indicators. If any thresholds are crossed, applies the corresponding
         adaptation measures (building floodproofing, subsidies, or reforestation).
 
-        Args:
-            mode: The adaptation mode to use (default is "cost_benefit_analysis").
-
         Raises:
             ValueError: If an invalid adaptation mode is specified in the configuration.
-
         """
         # something to specify that this should only run when adaptation is turned on in the config file
         # should this step be skipped during spinup?
