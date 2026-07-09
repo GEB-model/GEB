@@ -1111,9 +1111,7 @@ class FloodRiskModule:
         )
 
         mask = self.households.return_periods[:, None] >= household_thresholds[None, :]
-        damages *= mask
-
-        return damages
+        return damages * mask
 
     @property
     def damages_do_not_adapt(self) -> np.ndarray:
