@@ -1123,9 +1123,7 @@ class FloodRiskModule:
         """Return damages for households that adapt."""
         return self._adjust_damages_for_flood_protection(self._damages_adapt)
 
-    @property
-    def dike_heights(self) -> float:
-        """Return the dike height in meters."""
+    def dike_heights(self) -> dict[int, dict[int, np.ndarray]]:
         if hasattr(self, "_dike_heights"):
             return self._dike_heights
 
