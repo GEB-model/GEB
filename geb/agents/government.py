@@ -524,7 +524,9 @@ class Government(AgentBaseClass):
 
         # iterate over each subbasin in the model and calculate the EAD for the current and next flood protection standard
         dike_heights = self.flood_risk_module.dike_heights()
-        for subbasin in dike_heights[10]:  # get return period of 10 years
+        for subbasin in dike_heights[
+            self.flood_risk_module.default_flood_protection_standard
+        ]:  # get return period of 10 years
             if (
                 subbasin
                 not in self.flood_risk_module.flood_protection_standard_subbasins
