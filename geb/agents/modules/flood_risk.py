@@ -44,12 +44,23 @@ class FloodRiskModule:
         self.load_flood_protection_standard()
         self.flood_in_last_year = False
 
-    def load_flood_protection_standard(self) -> None:
-        """Placeholder for loading flood protection standard. Currently dummy version implemented."""
+    def load_flood_protection_standard(
+        self, default_flood_protection_standard: int = 10
+    ) -> None:
+        """Placeholder for loading flood protection standard. Currently dummy version implemented.
+
+        Raises:
+            ValueError: If the default flood protection standard is not in the list of return periods.
+        """
         self.flood_protection_standard_subbasins = {}
+        self.default_flood_protection_standard = default_flood_protection_standard
+        if default_flood_protection_standard not in self.households.return_periods:
+            raise ValueError(
+                f"Default flood protection standard {default_flood_protection_standard} is not in the list of return periods {self.households.return_periods}."
+            )
         for comid in self.households.buildings["COMID"]:
             self.flood_protection_standard_subbasins[comid] = (
-                10  # Initial value; replace with actual loading logic as needed.
+                default_flood_protection_standard  # Initial value; replace with actual loading logic as needed.
             )
 
     def load_return_period_flood_maps(self) -> None:
@@ -1044,13 +1055,11 @@ class FloodRiskModule:
     def _adjust_damages_for_flood_protection(
         self,
         damages: np.ndarray,
-        default_flood_protection_standard: int = 10,
     ) -> np.ndarray:
         """Return damages with values below the flood protection standard set to 0.
 
         Args:
             damages: 2D array of damages by return period (rows) and household (columns).
-            default_flood_protection_standard: The default flood protection standard to use if a household's COMID is not found in the flood protection standards dictionary.
         Returns:
             2D array of damages with values below the flood protection standard set to 0.
         """
@@ -1059,7 +1068,7 @@ class FloodRiskModule:
         household_thresholds = np.fromiter(
             (
                 self.flood_protection_standard_subbasins.get(
-                    int(c), default_flood_protection_standard
+                    int(c), self.default_flood_protection_standard
                 )
                 for c in comids
             ),
