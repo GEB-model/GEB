@@ -46,7 +46,6 @@ class FloodRiskModule:
 
     def load_flood_protection_standard(self) -> None:
         """Placeholder for loading flood protection standard. Currently dummy version implemented."""
-        self.flood_protection_standard = 10
         self.flood_protection_standard_subbasins = {}
         for comid in self.households.buildings["COMID"]:
             self.flood_protection_standard_subbasins[comid] = (
@@ -1020,70 +1019,26 @@ class FloodRiskModule:
             Array of indices of flooded households.
         """
         # draw a single random number
-        p_random = np.random.random()
-        # Work with a locally sorted copy of return periods to ensure correct event selection
-        return_periods_arr = np.asarray(self.households.return_periods, dtype=float)
-        sort_idx = np.argsort(return_periods_arr)  # ascending order
-        sorted_return_periods = return_periods_arr[sort_idx]
-        probabilities = 1.0 / sorted_return_periods
+        u = np.random.random()
+        return_period = 1 / u
+        affected_subbasins = [
+            subbasin
+            for subbasin, protection in self.flood_protection_standard_subbasins.items()
+            if protection < return_period
+        ]
 
-        if p_random >= probabilities.max() or p_random > (
-            1 / self.flood_protection_standard
-        ):
+        if len(affected_subbasins) == 0:
             self.flood_in_last_year = False
             return np.array([], dtype=int)
 
-        # find the event corresponding to the random draw
-        event_idx = np.searchsorted(probabilities[::-1], p_random)
-        event_idx = len(probabilities) - 1 - event_idx
-        event = sorted_return_periods[event_idx]
-        self.model.logger.info(
-            "Return period flood event: %s years (p=%.4f, random draw=%.4f)",
-            event,
-            probabilities[event_idx],
-            p_random,
-        )
+        # get the indices of households in the affected subbasins
+        mask = np.isin(self.households.comid_of_household, affected_subbasins)
+        flooded_household_indices = np.nonzero(mask)[0]
 
-        # get the flood map for this event
-        flood_map: xr.DataArray = self.households.flood_maps[event]
-
-        # cache household coordinates in flood_map CRS (Nx2 numpy array)
-        if not hasattr(self, "_household_xy"):
-            import pyproj
-
-            x, y = (
-                np.array(self.households.buildings.x),
-                np.array(self.households.buildings.y),
-            )
-            transformer = pyproj.Transformer.from_crs(
-                "EPSG:4326", flood_map.rio.crs, always_xy=True
-            )
-            self._building_xy = np.array(transformer.transform(x, y)).T
-
-        # sample flood map using clipped coordinates
-        sampled_values = sample_from_map(
-            array=flood_map.values,
-            coords=self._building_xy,
-            gt=flood_map.rio.transform(recalc=True).to_gdal(),
-            out_of_bounds_value=np.nan,
-        )
-        # Use the same minimum flood depth threshold (0.05 m) as elsewhere in the model
-        minimum_flood_depth_m = 0.05
-        # np.where will return indices of flooded households relative to the original household array
-        flooded_building_indices = np.where(sampled_values > minimum_flood_depth_m)[0]
-
-        # get building IDs of flooded buildings
-        flooded_building_ids = self.households.buildings.loc[
-            flooded_building_indices, "id"
-        ].values.astype(int)
-
-        # get indices of households located in flooded buildings
-        flooded_household_indices = np.where(
-            np.isin(
-                self.households.var.building_id_of_household.data, flooded_building_ids
-            )
-        )[0]
         self.flood_in_last_year = len(flooded_household_indices) > 0
+        print(
+            f"Flood event with return period {return_period:.2f} years affected {len(flooded_household_indices)} households."
+        )
         return flooded_household_indices
 
     def _adjust_damages_for_flood_protection(
@@ -1100,12 +1055,7 @@ class FloodRiskModule:
         comids = self.households.comid_of_household
 
         household_thresholds = np.fromiter(
-            (
-                self.flood_protection_standard_subbasins.get(
-                    int(c), self.flood_protection_standard
-                )
-                for c in comids
-            ),
+            (self.flood_protection_standard_subbasins.get(int(c), 10) for c in comids),
             dtype=float,
             count=comids.size,
         )
