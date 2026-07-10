@@ -569,12 +569,10 @@ class Government(AgentBaseClass):
             height_difference = dike_heights_altered_fps - dike_heights_current_fps
             if height_difference.sum() == 0:
                 continue
-            cost_per_meter = self.config["adaptation"].get(
-                "dike_cost_per_meter_usd", 6800
-            )
+            cost_per_meter = self.config["adaptation"]["dike_cost_per_meter_usd"]
             total_cost = (
                 np.sum(height_difference * 100 * cost_per_meter) * 2
-            )  # double the cost to account for both sides of the dike
+            )  # segments are roughly 100 meters long, double the cost to account for both sides of the dike
 
             if self._apply_cumulative_time_discounting(
                 damage_reduction
