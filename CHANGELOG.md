@@ -4,7 +4,7 @@
 - Parameterization of settings in the `model.yml`. Increased overall efficiency and usability of the early warning system.
 - Improved the setup for `critical_infrastructure_warning_strategy`, which now depends on asset type instead of strategy id.
 - Added the option to download and process hindcasts using the MARS API. For that, `setup_forecasts` has additional arguments: forecast_product, hindcast_cycle_start, hindcast_cycle_end and n_hindcast_years.
-- Add a cost benefit analysis by governments for raising flood protection standards based on damage reductions for household agents. This method is enabled through setting the government adaptaten mode to cba in the model config.
+- Added a cost-benefit analysis for governments to raise flood protection standards based on household damage reductions. Enable this by setting `agent_settings.government.adaptation.mode: cba` in the model config.
 
 # v1.0.0b30
 - Implement evaporation for retention basins using a constant area based on maximum storage and a depth of 3 meters.
