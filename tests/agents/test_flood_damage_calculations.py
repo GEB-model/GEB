@@ -34,6 +34,9 @@ class DummyFloodRiskModule(FloodRiskModule):
         """Initialize the dummy flood risk module with test data."""
         self.households = DummyHouseholdAgents()
         self.flood_protection_standard_subbasins = {1: 10, 2: 200, 3: 60}
+        self.default_flood_protection_standard = (
+            10  # Default flood protection standard for testing
+        )
 
 
 def test_adjust_damages_for_flood_protection() -> None:
