@@ -1044,18 +1044,25 @@ class FloodRiskModule:
     def _adjust_damages_for_flood_protection(
         self,
         damages: np.ndarray,
+        default_flood_protection_standard: int = 10,
     ) -> np.ndarray:
         """Return damages with values below the flood protection standard set to 0.
 
         Args:
             damages: 2D array of damages by return period (rows) and household (columns).
+            default_flood_protection_standard: The default flood protection standard to use if a household's COMID is not found in the flood protection standards dictionary.
         Returns:
             2D array of damages with values below the flood protection standard set to 0.
         """
         comids = self.households.comid_of_household
 
         household_thresholds = np.fromiter(
-            (self.flood_protection_standard_subbasins.get(int(c), 10) for c in comids),
+            (
+                self.flood_protection_standard_subbasins.get(
+                    int(c), default_flood_protection_standard
+                )
+                for c in comids
+            ),
             dtype=float,
             count=comids.size,
         )
