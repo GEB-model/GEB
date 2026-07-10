@@ -613,6 +613,10 @@ class FloodRiskModule:
         # Start with baseline (non-adapted) damages
         all_damages = damages_do_not_adapt.copy()
 
+        # Use adapted damages for households that have adapted
+        adapted_mask = adapted.astype(bool)
+        all_damages[:, adapted_mask] = damages_adapt[:, adapted_mask]
+
         # Apply higher flood protection standard if provided
         if altered_flood_protection_standard is not None:
             # Zero out damages for return periods protected by the higher standard
@@ -620,10 +624,6 @@ class FloodRiskModule:
                 self.households.return_periods < altered_flood_protection_standard
             )
             all_damages[protected_mask, :] = 0.0
-
-        # Use adapted damages for households that have adapted
-        adapted_mask = adapted.astype(bool)
-        all_damages[:, adapted_mask] = damages_adapt[:, adapted_mask]
 
         # Integrate damages across return periods (exceedance probability integration)
         probabilities = 1.0 / self.households.return_periods
