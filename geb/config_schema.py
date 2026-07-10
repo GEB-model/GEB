@@ -290,6 +290,10 @@ class GovernmentAdaptationConfig(BaseModel):
         0.1,
         description="Fraction of households selected for adaptation action.",
     )
+    dike_cost_per_meter_usd: float = Field(
+        6800.0,
+        description="Unit cost for raising a dike by 1 meter over 1 meter length (USD/m).",
+    )
 
 
 class GovernmentConfig(BaseModel):
