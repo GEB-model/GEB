@@ -19,7 +19,7 @@ import rioxarray as rxr
 import xarray as xr
 from hda import Client, Configuration
 from rioxarray import merge
-from rioxarray.exceptions import NoDataInBounds
+from rioxarray.exceptions import NoDataInBounds, OneDimensionalRaster
 from shapely.geometry import box
 from shapely.geometry.base import BaseGeometry
 
@@ -979,10 +979,29 @@ class WEkEOCopernicus(Adapter):
                         miny=min_y,
                         maxx=max_x,
                         maxy=max_y,
+                        allow_one_dimensional_raster=True,
                     )
                 except NoDataInBounds:
                     skipped_paths.append(path.name)
                     continue
+                except OneDimensionalRaster:
+                    skipped_paths.append(path.name)
+                    self.logger.debug(
+                        "Skipped WEkEO tile %s because clipping to bounds %s "
+                        "produced a one-dimensional raster.",
+                        path.name,
+                        clip_bounds,
+                    )
+                    continue
+
+                if da.sizes.get("x", 0) == 1 or da.sizes.get("y", 0) == 1:
+                    self.logger.debug(
+                        "WEkEO tile %s clipped to a one-dimensional edge raster "
+                        "with shape=%s for bounds %s.",
+                        path.name,
+                        da.shape,
+                        clip_bounds,
+                    )
 
             das.append(da)
 
@@ -1255,6 +1274,7 @@ class WEkEOCopernicus(Adapter):
                 miny=min_y,
                 maxx=max_x,
                 maxy=max_y,
+                allow_one_dimensional_raster=True,
             )
         except NoDataInBounds as error:
             data_bounds = da.rio.bounds() if "da" in locals() else None
