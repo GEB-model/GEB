@@ -740,6 +740,26 @@ class HRUVariables(Bucket):
     wetting_front_moisture_deficit: ArrayFloat32
     green_ampt_active_layer_idx: ArrayInt32
     hillslope_length_m: ArrayFloat32
+    # reporting variables
+    profile_soil_depth_m_agents: ArrayFloat32
+    topsoil_organic_carbon_percentage_agents: ArrayFloat32
+    profile_organic_carbon_percentage_agents: ArrayFloat32
+    topsoil_bulk_density_kg_per_dm3_agents: ArrayFloat32
+    profile_bulk_density_kg_per_dm3_agents: ArrayFloat32
+    topsoil_clay_percentage_agents: ArrayFloat32
+    profile_clay_percentage_agents: ArrayFloat32
+    topsoil_silt_percentage_agents: ArrayFloat32
+    profile_silt_percentage_agents: ArrayFloat32
+    topsoil_sand_percentage_agents: ArrayFloat32
+    profile_sand_percentage_agents: ArrayFloat32
+    topsoil_available_water_capacity_m_agents: ArrayFloat32
+    profile_available_water_capacity_m_agents: ArrayFloat32
+    topsoil_saturated_water_capacity_m_agents: ArrayFloat32
+    profile_saturated_water_capacity_m_agents: ArrayFloat32
+    topsoil_residual_water_capacity_m_agents: ArrayFloat32
+    profile_residual_water_capacity_m_agents: ArrayFloat32
+    topsoil_drainable_water_capacity_m_agents: ArrayFloat32
+    profile_drainable_water_capacity_m_agents: ArrayFloat32
 
 
 class HRUs(BaseVariables):

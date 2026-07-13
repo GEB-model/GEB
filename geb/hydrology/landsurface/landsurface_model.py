@@ -112,6 +112,78 @@ def map_date_to_dekad(dt: datetime) -> int:
     return dekadal_index
 
 
+def agent_mean(
+    values: ArrayFloat32,
+    land_owner_ids: ArrayInt32,
+    owned_land: ArrayBool,
+    owned_hru_count: ArrayFloat32,
+) -> ArrayFloat32:
+    """Aggregate HRU values to agent means.
+
+    Args:
+        values: HRU-level values to aggregate.
+        land_owner_ids: Agent IDs for owned HRUs only.
+        owned_land: Boolean mask selecting HRUs owned by agents.
+        owned_hru_count: Number of owned HRUs per agent.
+
+    Returns:
+        Agent-level mean values.
+    """
+    values_agent_sum: ArrayFloat32 = np.bincount(
+        land_owner_ids,
+        weights=values[owned_land],
+    ).astype(np.float32)
+
+    return np.divide(
+        values_agent_sum,
+        owned_hru_count,
+        out=np.full_like(values_agent_sum, np.nan, dtype=np.float32),
+        where=owned_hru_count > 0,
+    )
+
+
+def layer_weighted_mean(
+    values: TwoDArrayFloat32,
+    weights: TwoDArrayFloat32,
+    layer_slice: slice,
+) -> ArrayFloat32:
+    """Calculate layer-thickness-weighted HRU means over selected soil layers.
+
+    Args:
+        values: Layer-HRU values with shape (layers, HRUs).
+        weights: Layer-HRU layer thicknesses with shape (layers, HRUs).
+        layer_slice: Soil layers to include.
+
+    Returns:
+        HRU-level weighted mean over the selected soil layers.
+    """
+    selected_values = values[layer_slice, :]
+    selected_weights = weights[layer_slice, :]
+
+    return np.divide(
+        np.sum(selected_values * selected_weights, axis=0),
+        np.sum(selected_weights, axis=0),
+        out=np.full(values.shape[1], np.nan, dtype=np.float32),
+        where=np.sum(selected_weights, axis=0) > 0,
+    ).astype(np.float32)
+
+
+def layer_sum(
+    values: TwoDArrayFloat32,
+    layer_slice: slice,
+) -> ArrayFloat32:
+    """Sum layer-HRU values over selected soil layers.
+
+    Args:
+        values: Layer-HRU values with shape (layers, HRUs).
+        layer_slice: Soil layers to include.
+
+    Returns:
+        HRU-level sum over the selected soil layers.
+    """
+    return np.sum(values[layer_slice, :], axis=0).astype(np.float32)
+
+
 @njit(parallel=True, cache=True, fastmath=True)
 def land_surface_model(
     unix_time_seconds: np.int64,
@@ -1358,6 +1430,14 @@ class LandSurface(Module):
         # Default follows AQUACROP recommendation, see reference manual for AquaCrop v7.1 – Chapter 3
         self.var.minimum_effective_root_depth_m = np.float32(0.25)
 
+        # Set
+        cell_area = self.HRU.var.cell_area
+        self.var.owned_land = self.HRU.var.land_owners != -1
+        self.var.land_owner_ids = self.HRU.var.land_owners[self.var.owned_land]
+        self.var.owned_hru_count = np.bincount(self.var.land_owner_ids).astype(
+            np.float32
+        )
+
         self.setup_soil_properties()
 
     def setup_soil_properties(self) -> None:
@@ -1608,6 +1688,201 @@ class LandSurface(Module):
         self.HRU.var.crop_group_number_grassland_like = self.hydrology.to_HRU(
             data=crop_group_number_grassland_like
         )
+
+        # Export static variables
+        # Static agent-level soil variables for ML/reporting.
+        if (
+            "profile_soil_depth_m_agents"
+            in self.model.config["report"]["hydrology.landsurface"]
+        ):
+            topsoil_layers = slice(0, 3)
+            profile_layers = slice(0, N_SOIL_LAYERS)
+            soil_layer_height_m = self.HRU.var.soil_layer_height_m
+
+            available_water_capacity_m: TwoDArrayFloat32 = (
+                self.HRU.var.water_content_field_capacity_m
+                - self.HRU.var.water_content_wilting_point_m
+            )
+            drainable_water_capacity_m: TwoDArrayFloat32 = (
+                self.HRU.var.water_content_saturated_m
+                - self.HRU.var.water_content_field_capacity_m
+            )
+
+            self.HRU.var.profile_soil_depth_m_agents = agent_mean(
+                layer_sum(soil_layer_height_m, profile_layers),
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+
+            self.HRU.var.topsoil_organic_carbon_percentage_agents = agent_mean(
+                layer_weighted_mean(
+                    organic_carbon_percentage,
+                    soil_layer_height_m,
+                    topsoil_layers,
+                ),
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+            self.HRU.var.profile_organic_carbon_percentage_agents = agent_mean(
+                layer_weighted_mean(
+                    organic_carbon_percentage,
+                    soil_layer_height_m,
+                    profile_layers,
+                ),
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+
+            self.HRU.var.topsoil_bulk_density_kg_per_dm3_agents = agent_mean(
+                layer_weighted_mean(
+                    self.HRU.var.bulk_density_kg_per_dm3,
+                    soil_layer_height_m,
+                    topsoil_layers,
+                ),
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+            self.HRU.var.profile_bulk_density_kg_per_dm3_agents = agent_mean(
+                layer_weighted_mean(
+                    self.HRU.var.bulk_density_kg_per_dm3,
+                    soil_layer_height_m,
+                    profile_layers,
+                ),
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+
+            self.HRU.var.topsoil_clay_percentage_agents = agent_mean(
+                layer_weighted_mean(
+                    self.HRU.var.clay_percentage,
+                    soil_layer_height_m,
+                    topsoil_layers,
+                ),
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+            self.HRU.var.profile_clay_percentage_agents = agent_mean(
+                layer_weighted_mean(
+                    self.HRU.var.clay_percentage,
+                    soil_layer_height_m,
+                    profile_layers,
+                ),
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+
+            self.HRU.var.topsoil_silt_percentage_agents = agent_mean(
+                layer_weighted_mean(
+                    self.HRU.var.silt_percentage,
+                    soil_layer_height_m,
+                    topsoil_layers,
+                ),
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+            self.HRU.var.profile_silt_percentage_agents = agent_mean(
+                layer_weighted_mean(
+                    self.HRU.var.silt_percentage,
+                    soil_layer_height_m,
+                    profile_layers,
+                ),
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+
+            self.HRU.var.topsoil_sand_percentage_agents = agent_mean(
+                layer_weighted_mean(
+                    self.HRU.var.sand_percentage,
+                    soil_layer_height_m,
+                    topsoil_layers,
+                ),
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+            self.HRU.var.profile_sand_percentage_agents = agent_mean(
+                layer_weighted_mean(
+                    self.HRU.var.sand_percentage,
+                    soil_layer_height_m,
+                    profile_layers,
+                ),
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+
+            self.HRU.var.topsoil_available_water_capacity_m_agents = agent_mean(
+                layer_sum(available_water_capacity_m, topsoil_layers),
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+            self.HRU.var.profile_available_water_capacity_m_agents = agent_mean(
+                layer_sum(available_water_capacity_m, profile_layers),
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+
+            self.HRU.var.topsoil_saturated_water_capacity_m_agents = agent_mean(
+                layer_sum(
+                    self.HRU.var.water_content_saturated_m,
+                    topsoil_layers,
+                ),
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+            self.HRU.var.profile_saturated_water_capacity_m_agents = agent_mean(
+                layer_sum(
+                    self.HRU.var.water_content_saturated_m,
+                    profile_layers,
+                ),
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+
+            self.HRU.var.topsoil_residual_water_capacity_m_agents = agent_mean(
+                layer_sum(
+                    self.HRU.var.water_content_residual_m,
+                    topsoil_layers,
+                ),
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+            self.HRU.var.profile_residual_water_capacity_m_agents = agent_mean(
+                layer_sum(
+                    self.HRU.var.water_content_residual_m,
+                    profile_layers,
+                ),
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+
+            self.HRU.var.topsoil_drainable_water_capacity_m_agents = agent_mean(
+                layer_sum(drainable_water_capacity_m, topsoil_layers),
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+            self.HRU.var.profile_drainable_water_capacity_m_agents = agent_mean(
+                layer_sum(drainable_water_capacity_m, profile_layers),
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
 
     def step(
         self,
@@ -2088,6 +2363,310 @@ class LandSurface(Module):
         timer.finish_split("Finalization")
 
         local_variables_to_report = self.local_variables_to_report
+
+        # Export daily agent variables
+        topsoil_layers = slice(0, 3)
+        profile_layers = slice(0, N_SOIL_LAYERS)
+        soil_layer_height_m = self.HRU.var.soil_layer_height_m
+
+        if (
+            "soil_temperature_layer_0_C_agents" in local_variables_to_report
+            or "topsoil_temperature_C_agents" in local_variables_to_report
+            or "profile_soil_temperature_C_agents" in local_variables_to_report
+        ):
+            soil_temperature_C: TwoDArrayFloat32 = np.full_like(
+                self.HRU.var.soil_enthalpy_J_per_m2,
+                np.float32(np.nan),
+                dtype=np.float32,
+            )
+            soil_temperature_C[0, :] = get_temperature_from_enthalpy(
+                enthalpy_J_per_m2=self.HRU.var.soil_enthalpy_J_per_m2[0, :],
+                solid_heat_capacity_J_per_m2_K=self.HRU.var.solid_heat_capacity_J_per_m2_K[
+                    0, :
+                ],
+                water_content_m=self.HRU.var.water_content_m[0, :],
+                topwater_m=self.HRU.var.topwater_m,
+            )
+            soil_temperature_C[1:, :] = get_temperature_from_enthalpy(
+                enthalpy_J_per_m2=self.HRU.var.soil_enthalpy_J_per_m2[1:, :],
+                solid_heat_capacity_J_per_m2_K=self.HRU.var.solid_heat_capacity_J_per_m2_K[
+                    1:, :
+                ],
+                water_content_m=self.HRU.var.water_content_m[1:, :],
+            )
+
+        if "soil_temperature_layer_0_C_agents" in local_variables_to_report:
+            soil_temperature_layer_0_C_agents: ArrayFloat32 = agent_mean(
+                soil_temperature_C[0, :],
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+
+        if "topsoil_temperature_C_agents" in local_variables_to_report:
+            topsoil_temperature_C_agents: ArrayFloat32 = agent_mean(
+                layer_weighted_mean(
+                    soil_temperature_C,
+                    soil_layer_height_m,
+                    topsoil_layers,
+                ),
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+
+        if "profile_soil_temperature_C_agents" in local_variables_to_report:
+            profile_soil_temperature_C_agents: ArrayFloat32 = agent_mean(
+                layer_weighted_mean(
+                    soil_temperature_C,
+                    soil_layer_height_m,
+                    profile_layers,
+                ),
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+
+        if "top_soil_frozen_fraction_agents" in local_variables_to_report:
+            top_soil_frozen_fraction_agents: ArrayFloat32 = agent_mean(
+                get_frozen_fraction_from_enthalpy(
+                    enthalpy_J_per_m2=self.HRU.var.soil_enthalpy_J_per_m2[0, :],
+                    solid_heat_capacity_J_per_m2_K=self.HRU.var.solid_heat_capacity_J_per_m2_K[
+                        0, :
+                    ],
+                    water_content_m=self.HRU.var.water_content_m[0, :],
+                    topwater_m=self.HRU.var.topwater_m,
+                ),
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+
+        if "deep_soil_temperature_C_agents" in local_variables_to_report:
+            deep_soil_temperature_C_agents: ArrayFloat32 = agent_mean(
+                self.HRU.var.deep_soil_temperature_C,
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+
+        if "runoff_m_agents" in local_variables_to_report:
+            runoff_m_daily: ArrayFloat32 = runoff_m.sum(axis=1)
+            runoff_m_agents: ArrayFloat32 = agent_mean(
+                runoff_m_daily,
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+
+        if "actual_evapotranspiration_m_agents" in local_variables_to_report:
+            actual_evapotranspiration_m_agents: ArrayFloat32 = agent_mean(
+                actual_evapotranspiration_m,
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+
+        if "potential_evapotranspiration_m_agents" in local_variables_to_report:
+            potential_evapotranspiration_m_agents: ArrayFloat32 = agent_mean(
+                potential_evapotranspiration_m,
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+
+        if "transpiration_m_agents" in local_variables_to_report:
+            transpiration_m_agents: ArrayFloat32 = agent_mean(
+                transpiration_m,
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+
+        if "crop_factor_agents" in local_variables_to_report:
+            crop_factor_agents: ArrayFloat32 = agent_mean(
+                crop_factor.astype(np.float32),
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+
+        if "root_depth_m_agents" in local_variables_to_report:
+            root_depth_m_agents: ArrayFloat32 = agent_mean(
+                root_depth_m.astype(np.float32),
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+
+        if "crop_sub_stage_agents" in local_variables_to_report:
+            crop_sub_stage_agents: ArrayFloat32 = agent_mean(
+                crop_sub_stage.astype(np.float32),
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+
+        if "interception_capacity_m_agents" in local_variables_to_report:
+            interception_capacity_m_agents: ArrayFloat32 = agent_mean(
+                interception_capacity_m.astype(np.float32),
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+
+        if "leaf_area_index_agents" in local_variables_to_report:
+            leaf_area_index_agents: ArrayFloat32 = agent_mean(
+                leaf_area_index.astype(np.float32),
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+
+        if "reference_evapotranspiration_grass_m_agents" in local_variables_to_report:
+            reference_evapotranspiration_grass_m_agents: ArrayFloat32 = agent_mean(
+                reference_evapotranspiration_grass_m,
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+
+        if "actual_irrigation_consumption_m_agents" in local_variables_to_report:
+            actual_irrigation_consumption_m_agents: ArrayFloat32 = agent_mean(
+                actual_irrigation_consumption_m,
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+
+        if (
+            "topsoil_relative_available_water_agents" in local_variables_to_report
+            or "profile_relative_available_water_agents" in local_variables_to_report
+        ):
+            relative_available_water: TwoDArrayFloat32 = np.divide(
+                self.HRU.var.water_content_m
+                - self.HRU.var.water_content_wilting_point_m,
+                self.HRU.var.water_content_field_capacity_m
+                - self.HRU.var.water_content_wilting_point_m,
+                out=np.full_like(
+                    self.HRU.var.water_content_m,
+                    np.float32(np.nan),
+                    dtype=np.float32,
+                ),
+                where=(
+                    self.HRU.var.water_content_field_capacity_m
+                    > self.HRU.var.water_content_wilting_point_m
+                ),
+            ).astype(np.float32)
+
+        if "topsoil_relative_available_water_agents" in local_variables_to_report:
+            topsoil_relative_available_water_agents: ArrayFloat32 = agent_mean(
+                layer_weighted_mean(
+                    relative_available_water,
+                    soil_layer_height_m,
+                    topsoil_layers,
+                ),
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+
+        if "profile_relative_available_water_agents" in local_variables_to_report:
+            profile_relative_available_water_agents: ArrayFloat32 = agent_mean(
+                layer_weighted_mean(
+                    relative_available_water,
+                    soil_layer_height_m,
+                    profile_layers,
+                ),
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+        # Climatic variables
+        if "precipitation_m_daily_agents" in local_variables_to_report:
+            precipitation_m_daily: ArrayFloat32 = pr_kg_per_m2_per_s.sum(
+                axis=1
+            ) * np.float32(3.6)
+            precipitation_m_daily_agents: ArrayFloat32 = agent_mean(
+                precipitation_m_daily,
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+
+        if "tas_2m_C_daily_mean_agents" in local_variables_to_report:
+            tas_2m_C_daily_mean: ArrayFloat32 = tas_2m_K.mean(axis=1).astype(
+                np.float32
+            ) - np.float32(273.15)
+            tas_2m_C_daily_mean_agents: ArrayFloat32 = agent_mean(
+                tas_2m_C_daily_mean,
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+
+        if "tas_2m_C_daily_min_agents" in local_variables_to_report:
+            tas_2m_C_daily_min: ArrayFloat32 = tas_2m_K.min(axis=1).astype(
+                np.float32
+            ) - np.float32(273.15)
+            tas_2m_C_daily_min_agents: ArrayFloat32 = agent_mean(
+                tas_2m_C_daily_min,
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+
+        if "tas_2m_C_daily_max_agents" in local_variables_to_report:
+            tas_2m_C_daily_max: ArrayFloat32 = tas_2m_K.max(axis=1).astype(
+                np.float32
+            ) - np.float32(273.15)
+            tas_2m_C_daily_max_agents: ArrayFloat32 = agent_mean(
+                tas_2m_C_daily_max,
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+
+        if "dewpoint_tas_2m_C_agents" in local_variables_to_report:
+            dewpoint_tas_2m_C_daily_mean: ArrayFloat32 = (
+                self.HRU.dewpoint_tas_2m_K.mean(axis=1).astype(np.float32)
+                - np.float32(273.15)
+            )
+            dewpoint_tas_2m_C_agents: ArrayFloat32 = agent_mean(
+                dewpoint_tas_2m_C_daily_mean,
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+
+        if "wind_speed_10m_m_per_s_agents" in local_variables_to_report:
+            wind_speed_10m_m_per_s_daily_mean: ArrayFloat32 = (
+                np.sqrt(self.HRU.wind_u10m_m_per_s**2 + self.HRU.wind_v10m_m_per_s**2)
+                .mean(axis=1)
+                .astype(np.float32)
+            )
+            wind_speed_10m_m_per_s_agents: ArrayFloat32 = agent_mean(
+                wind_speed_10m_m_per_s_daily_mean,
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+
+        if (
+            "downward_shortwave_radiation_MJ_m2_daily_agents"
+            in local_variables_to_report
+        ):
+            downward_shortwave_radiation_MJ_m2_daily: ArrayFloat32 = (
+                self.HRU.rsds_W_per_m2.sum(axis=1) * np.float32(0.0036)
+            )
+            downward_shortwave_radiation_MJ_m2_daily_agents: ArrayFloat32 = agent_mean(
+                downward_shortwave_radiation_MJ_m2_daily,
+                self.var.land_owner_ids,
+                self.var.owned_land,
+                self.var.owned_hru_count,
+            )
+
+        # HRU variables
         if "top_soil_frozen_fraction" in local_variables_to_report:
             top_soil_frozen_fraction: ArrayFloat32 = get_frozen_fraction_from_enthalpy(
                 enthalpy_J_per_m2=self.HRU.var.soil_enthalpy_J_per_m2[0, :],
