@@ -528,19 +528,21 @@ class Agents(BuildModelBase):
         """Sets up the economic data for GEB.
 
         Notes:
-            This method sets up the lending rates and inflation rates data for GEB. It first retrieves the
-            lending rates and inflation rates data from the World Bank dataset using the `get_geodataframe` method of the
-            `data_catalog` object. It then creates dictionaries to store the data for each region, with the years as the time
-            dimension and the lending rates or inflation rates as the data dimension.
+            This method sets up interest rates, inflation rates, price ratios, and local-currency conversion data for GEB.
+            It retrieves the data from the configured data catalog and creates dictionaries for each model region,
+            with years as the time dimension.
 
-            The lending rates and inflation rates data are converted from percentage to rate by dividing by 100 and adding 1.
-            The data is then stored in the dictionaries with the region ID as the key.
+            Inflation and interest rates are converted from percentages to annual rate factors by dividing by 100
+            and adding 1. Missing country-year values are filled using a donor country. Inflation rate factors are
+            subsequently expressed relative to the corresponding United States inflation rate factor, while interest
+            rates remain country-specific.
 
-            The resulting lending rates and inflation rates data are set as forcing data in the model with names of the form
-            'socioeconomics/lending_rates' and 'socioeconomics/inflation_rates', respectively.
+            The resulting datasets are stored under the `socioeconomics` parameter group.
         """
         inflation_rates = self.data_catalog.fetch("wb_inflation_rate").read()
         inflation_rates_country_index = inflation_rates.set_index("Country Code")
+        interest_rates = self.data_catalog.fetch("world_bank_interest_rate").read()
+        interest_rates_country_index = interest_rates.set_index("Country Code")
         price_ratio = self.data_catalog.fetch("world_bank_price_ratio").read()
         LCU_per_USD = self.data_catalog.fetch("world_bank_LCU_per_USD").read()
 
@@ -598,21 +600,22 @@ class Agents(BuildModelBase):
         years_lcu: list[str] = extract_years(lcu_filtered)
         lcu_dict: dict[str, Any] = {"time": years_lcu, "data": {}}  # LCU per USD
 
-        # Assume lending_rates and inflation_rates are available
-        # years_lending_rates = extract_years(lending_rates)
         years_inflation_rates = extract_years(inflation_rates)
-
-        # lending_rates_dict = {"time": years_lending_rates, "data": {}}
+        years_interest_rates = extract_years(interest_rates)
 
         inflation_rates_dict: dict[str, Any] = {
             "time": years_inflation_rates,
             "data": {},
         }
+        interest_rates_dict: dict[str, Any] = {
+            "time": years_interest_rates,
+            "data": {},
+        }
 
         # Create a helper to process rates and assert single row data
-        def retrieve_inflation_rates(
+        def retrieve_rates(
             df: pd.DataFrame,
-            inflation_rate_columns: list[str],
+            rate_columns: list[str],
             ISO3: str,
             convert_percent_to_ratio: bool = False,
         ) -> list[float]:
@@ -620,23 +623,21 @@ class Agents(BuildModelBase):
 
             Args:
                 df: The input DataFrame containing rate data.
-                inflation_rate_columns: A list of columns corresponding to years.
+                rate_columns: A list of columns corresponding to years.
                 ISO3: The ISO3 country code to filter the data.
                 convert_percent_to_ratio: Whether to convert percentage rates to ratios.
 
             Returns:
                 A list of processed rates for the specified country code.
             """
-            filtered_data = df.loc[df["Country Code"] == ISO3, inflation_rate_columns]
+            filtered_data = df.loc[df["Country Code"] == ISO3, rate_columns]
             if len(filtered_data) == 0:
-                return list(
-                    np.full(len(inflation_rate_columns), np.nan, dtype=np.float32)
-                )
+                return list(np.full(len(rate_columns), np.nan, dtype=np.float32))
             if convert_percent_to_ratio:
                 return (filtered_data.iloc[0] / 100 + 1).tolist()
             return filtered_data.iloc[0].tolist()
 
-        USA_inflation_rates = retrieve_inflation_rates(
+        USA_inflation_rates = retrieve_rates(
             inflation_rates,
             years_inflation_rates,
             "USA",
@@ -647,7 +648,7 @@ class Agents(BuildModelBase):
             region_id = str(region["region_id"])
             ISO3 = region["ISO3"]
 
-            local_inflation_rates = retrieve_inflation_rates(
+            local_inflation_rates = retrieve_rates(
                 inflation_rates,
                 years_inflation_rates,
                 ISO3,
@@ -679,16 +680,16 @@ class Agents(BuildModelBase):
                 self.logger.info(
                     f"Missing inflation rates for {ISO3}, using donor country {donor_country}"
                 )
-                donor_country_inflation_rates = retrieve_inflation_rates(
+                donor_country_inflation_rates = retrieve_rates(
                     inflation_rates,
                     years_inflation_rates,
                     donor_country,
                     convert_percent_to_ratio=True,
                 )
 
-                # Replace NaN values in local_inflation_rates with values from similar_country_average_inflation
-                for idx, value in zip(nan_indices, donor_country_inflation_rates):
-                    local_inflation_rates[idx] = value
+                # Fill each missing year with the donor value for that same year.
+                for idx in nan_indices:
+                    local_inflation_rates[idx] = donor_country_inflation_rates[idx]
 
             assert not np.isnan(local_inflation_rates).any(), (
                 f"Missing inflation rates for {region['ISO3']}"
@@ -697,7 +698,164 @@ class Agents(BuildModelBase):
                 np.array(local_inflation_rates) / np.array(USA_inflation_rates)
             ).tolist()
 
-            price_ratio_dict["data"][region_id] = retrieve_inflation_rates(
+            local_interest_rates = retrieve_rates(
+                interest_rates,
+                years_interest_rates,
+                ISO3,
+                convert_percent_to_ratio=True,
+            )
+
+            if np.isnan(local_interest_rates).any():
+                nan_indices = np.where(np.isnan(local_interest_rates))[0]
+                nan_years = [years_interest_rates[i] for i in nan_indices]
+
+                # Keep countries that contain data for at least one of the
+                # missing years. A partially complete donor can therefore fill
+                # the years it has available, while remaining gaps are handled
+                # during the common interpolation/backfill stage below.
+                countries_with_data = (
+                    interest_rates_country_index[nan_years]
+                    .dropna(axis=0, how="all")
+                    .index.unique()
+                    .tolist()
+                )
+
+                if countries_with_data:
+                    donor_countries = setup_donor_countries(
+                        self.data_catalog,
+                        self.geom["global_countries"],
+                        countries_with_data,
+                        alternative_countries=self.geom["regions"]["ISO3"]
+                        .unique()
+                        .tolist(),
+                    )
+                    donor_country = donor_countries[ISO3]
+
+                    self.logger.info(
+                        f"Missing interest rates for {ISO3}, using donor country "
+                        f"{donor_country}"
+                    )
+                    donor_country_interest_rates = retrieve_rates(
+                        interest_rates,
+                        years_interest_rates,
+                        donor_country,
+                        convert_percent_to_ratio=True,
+                    )
+
+                    # Fill each missing year with the donor value for that same year.
+                    for idx in nan_indices:
+                        donor_value = donor_country_interest_rates[idx]
+                        if not np.isnan(donor_value):
+                            local_interest_rates[idx] = donor_value
+                else:
+                    available_indices = np.where(~np.isnan(local_interest_rates))[0]
+
+                    if available_indices.size:
+                        interest_rate_years = np.asarray(
+                            years_interest_rates, dtype=np.int32
+                        )
+                        available_years = interest_rate_years[available_indices]
+                        first_available_year = int(available_years.min())
+                        last_available_year = int(available_years.max())
+                        processing_start_year = min(
+                            self.start_date.year - 10,
+                            int(interest_rate_years.min()),
+                        )
+                        processing_end_year = max(
+                            self.end_date.year,
+                            int(interest_rate_years.max()),
+                        )
+
+                        if processing_start_year < first_available_year:
+                            backfill_message = (
+                                f"Years {processing_start_year} through "
+                                f"{first_available_year - 1} will be backfilled "
+                                f"using the {first_available_year} value."
+                            )
+                        else:
+                            backfill_message = (
+                                "No years before the first available observation "
+                                "require backfilling."
+                            )
+
+                        if last_available_year < processing_end_year:
+                            forward_fill_message = (
+                                f"Years {last_available_year + 1} through "
+                                f"{processing_end_year} will use the "
+                                f"{last_available_year} value through the default "
+                                f"forward behavior of linear interpolation."
+                            )
+                        else:
+                            forward_fill_message = (
+                                "No years after the last available observation "
+                                "require filling."
+                            )
+
+                        self.logger.warning(
+                            f"No donor countries have interest-rate data for the "
+                            f"missing years of {ISO3}; donor-country filling will "
+                            f"not be used. During post-processing, missing values "
+                            f"between available observations from "
+                            f"{first_available_year} through "
+                            f"{last_available_year} will be linearly interpolated. "
+                            f"{backfill_message} {forward_fill_message} The final "
+                            f"interest-rate series will therefore cover "
+                            f"{processing_start_year} through "
+                            f"{processing_end_year}."
+                        )
+                    else:
+                        self.logger.warning(
+                            f"No interest-rate observations are available for "
+                            f"{ISO3}, and no donor countries have data for its "
+                            f"missing years. Donor-country filling will not be "
+                            f"used, and interpolation or backfilling cannot create "
+                            f"interest rates without at least one observed value. "
+                            f"Interest rates will therefore remain unavailable "
+                            f"for this region."
+                        )
+
+                remaining_missing_indices = np.where(np.isnan(local_interest_rates))[0]
+                if remaining_missing_indices.size and countries_with_data:
+                    available_indices = np.where(~np.isnan(local_interest_rates))[0]
+                    if available_indices.size:
+                        interest_rate_years = np.asarray(
+                            years_interest_rates, dtype=np.int32
+                        )
+                        available_years = interest_rate_years[available_indices]
+                        first_available_year = int(available_years.min())
+                        last_available_year = int(available_years.max())
+                        processing_start_year = min(
+                            self.start_date.year - 10,
+                            int(interest_rate_years.min()),
+                        )
+                        processing_end_year = max(
+                            self.end_date.year,
+                            int(interest_rate_years.max()),
+                        )
+                        self.logger.warning(
+                            f"Interest rates for {ISO3} still contain missing "
+                            f"values after donor-country filling. During "
+                            f"post-processing, internal gaps between "
+                            f"{first_available_year} and {last_available_year} "
+                            f"will be linearly interpolated, earlier years will "
+                            f"use the {first_available_year} value, and later "
+                            f"years will use the {last_available_year} value. "
+                            f"The final series will cover "
+                            f"{processing_start_year} through "
+                            f"{processing_end_year}."
+                        )
+                    else:
+                        self.logger.warning(
+                            f"Interest rates for {ISO3} remain entirely missing "
+                            f"after donor-country filling and cannot be "
+                            f"interpolated or backfilled."
+                        )
+
+            # Interest rates are country-specific borrowing costs and are therefore
+            # not normalized against the United States series.
+            interest_rates_dict["data"][region_id] = local_interest_rates
+
+            price_ratio_dict["data"][region_id] = retrieve_rates(
                 price_ratio_filtered, years_price_ratio, region["ISO3"]
             )
 
@@ -721,7 +879,7 @@ class Agents(BuildModelBase):
                     .tolist(),
                 )
                 donor_country = donor_countries[ISO3]
-                price_ratio_dict["data"][region_id] = retrieve_inflation_rates(
+                price_ratio_dict["data"][region_id] = retrieve_rates(
                     price_ratio_filtered,
                     years_price_ratio,
                     donor_country,
@@ -731,7 +889,7 @@ class Agents(BuildModelBase):
                     f"Missing price ratio data for {ISO3}, using donor country {donor_country}"
                 )
 
-            lcu_dict["data"][region_id] = retrieve_inflation_rates(
+            lcu_dict["data"][region_id] = retrieve_rates(
                 lcu_filtered, years_lcu, region["ISO3"]
             )
 
@@ -753,7 +911,7 @@ class Agents(BuildModelBase):
                     .tolist(),
                 )
                 donor_country = donor_countries[ISO3]
-                lcu_dict["data"][region_id] = retrieve_inflation_rates(
+                lcu_dict["data"][region_id] = retrieve_rates(
                     lcu_filtered,
                     years_lcu,
                     donor_country,
@@ -765,6 +923,7 @@ class Agents(BuildModelBase):
 
         for d in (
             inflation_rates_dict,
+            interest_rates_dict,
             price_ratio_dict,
             lcu_dict,
         ):
@@ -772,7 +931,7 @@ class Agents(BuildModelBase):
             df = pd.DataFrame(d["data"], index=d["time"])
             df.index = df.index.astype(int)
 
-            # re-index the inflation rates to ensure that at least all years from
+            # Reindex the dataset to ensure that at least all years from
             # model start to end are present. In addition, we add 10 years
             # to the beginning, since this is used in some of the model spinup.
             df = df.reindex(
@@ -783,29 +942,16 @@ class Agents(BuildModelBase):
                     )
                 )
             )
-            # interpolate missing values in inflation rates. For extrapolation
-            # linear interpolation uses the first and last value
+            # Interpolate internal missing values and use the nearest available
+            # value for years outside the observed range.
             for column in df.columns:
                 df[column] = df[column].interpolate(method="linear").bfill()
 
             d["time"] = df.index.astype(str).tolist()
             d["data"] = df.to_dict(orient="list")
 
-        # lending_rates.index = lending_rates.index.astype(int)
-        # extend lending rates to future
-        # mean_lending_rate_since_reference_year = lending_rates.loc[
-        #     reference_start_year:
-        # ].mean(axis=0)
-        # lending_rates = lending_rates.reindex(
-        #     range(lending_rates.index.min(), project_future_until_year + 1)
-        # ).fillna(mean_lending_rate_since_reference_year)
-
-        # # convert back to dictionary
-        # lending_rates_dict["time"] = lending_rates.index.astype(str).tolist()
-        # lending_rates_dict["data"] = lending_rates.to_dict(orient="list")
-
         self.set_params(inflation_rates_dict, name="socioeconomics/inflation_rates")
-        # self.set_params(lending_rates_dict, name="socioeconomics/lending_rates")
+        self.set_params(interest_rates_dict, name="socioeconomics/interest_rates")
         self.set_params(price_ratio_dict, name="socioeconomics/price_ratio")
         self.set_params(lcu_dict, name="socioeconomics/LCU_per_USD")
 

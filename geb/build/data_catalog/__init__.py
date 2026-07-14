@@ -709,6 +709,20 @@ data_catalog: dict[str, dict[str, Any]] = {
             "license": "CC BY 4.0",
         },
     },
+    "world_bank_interest_rate": {
+        "adapter": WorldBankData(
+            folder="world_bank_interest_rate",
+            local_version=1,
+            filename="wb_interest_rate.csv",
+            cache="global",
+        ),
+        "url": "https://api.worldbank.org/v2/en/indicator/FR.INR.RINR?downloadformat=csv",
+        "source": {
+            "name": "World Bank Real Interest Data",
+            "author": "The World Bank",
+            "license": "CC BY 4.0",
+        },
+    },
     "world_bank_price_ratio": {
         "adapter": WorldBankData(
             folder="world_bank_price_ratio",
