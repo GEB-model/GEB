@@ -2302,8 +2302,7 @@ class CropFarmers(AgentBaseClass):
         # farmers that completed the final harvest of their active crop-calendar year.
         # This helper also advances valid all--1 fallow years and checks for scheduled
         # crop years where no harvest was recorded.
-        if not self.model.in_spinup:
-            self._advance_crop_calendar_after_last_harvest(harvesting_farmers)
+        self._advance_crop_calendar_after_last_harvest(harvesting_farmers)
 
         assert (
             self.HRU.var.crop_age_days_map <= self.HRU.var.crop_harvest_age_days
@@ -2421,9 +2420,6 @@ class CropFarmers(AgentBaseClass):
         A suspicious case is a scheduled crop year where the final expected harvest
         date has passed, no crop is still growing, and no potential harvest was
         recorded.
-
-        Raises:
-            RuntimeError: If there should be harvest data but there isn't any.
         """
         if (
             self.var.crop_calendar_base_array.ndim != 4
