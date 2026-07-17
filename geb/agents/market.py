@@ -169,6 +169,8 @@ class Market(AgentBaseClass):
                     "Setting these values to 1.."
                 )
                 prod[zero_mask] = 1
+                total_farmer_income_crops = total_farmer_income[crop]
+                total_farmer_income_crops[zero_mask] = 1
             # Defining the independent variables (add a constant term for the intercept)
             X = sm.add_constant(np.log(prod))
 
