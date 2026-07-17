@@ -252,22 +252,26 @@ def read_external_evaluation_raw(
     model_folder: Path,
     logger: logging.Logger,
 ) -> dict[str, pd.DataFrame]:
-    """Read fixed local Utrecht and Google daily-discharge skill-score files.
+    """Read fixed local Utrecht, Google, and GloFAS skill-score files.
 
     Args:
-        model_folder: Model folder containing ``external_evaluation_data``.
+        model_folder: Merged-model input folder. The external data directory is
+            located two levels above it in the main model folder.
         logger: Logger used for diagnostics.
 
     Returns:
         External skill-score tables keyed by model label.
     """
-    folder: Path = model_folder / EXTERNAL_EVALUATION_FOLDER_NAME
-    if not folder.exists():
-        logger.warning("External evaluation data folder not found at %s.", folder)
-        return {}
+    folder: Path = (
+        model_folder.resolve().parent.parent / EXTERNAL_EVALUATION_FOLDER_NAME
+    )
     if not folder.is_dir():
-        logger.warning("External evaluation path is not a folder: %s.", folder)
+        logger.info(
+            "No optional external evaluation folder found at %s; showing GEB only.",
+            folder,
+        )
         return {}
+    logger.info("Reading external evaluation data from %s.", folder.resolve())
 
     external_models: dict[str, pd.DataFrame] = {}
     utrecht_path: Path = folder / UTRECHT_EVALUATION_FILE_NAME
@@ -290,6 +294,16 @@ def read_external_evaluation_raw(
         return external_models
 
     for model_name, model_df in external_models.items():
+        duplicate_count: int = int(model_df.index.duplicated(keep="first").sum())
+        if duplicate_count:
+            logger.info(
+                "External model '%s': keeping the first row for %d duplicate "
+                "station keys.",
+                model_name,
+                duplicate_count,
+            )
+            model_df = model_df[~model_df.index.duplicated(keep="first")].copy()
+            external_models[model_name] = model_df
         logger.info(
             "Loaded external model '%s' metrics for %d stations.",
             model_name,
@@ -322,7 +336,6 @@ def prepare_external_evaluation(
         matched_df: pd.DataFrame = all_stations_df[
             all_stations_df.index.isin(station_keys_upper)
         ].copy()
-        matched_df = matched_df[~matched_df.index.duplicated(keep="first")].copy()
         matched_df = _drop_rows_with_missing_plotted_scores(matched_df)
         logger.info(
             "External model '%s': %d/%d external stations matched.",

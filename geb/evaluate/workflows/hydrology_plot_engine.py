@@ -289,12 +289,18 @@ def _plot_skill_score_map_single(
     )
 
     # Valid stations coloured by metric value; NaN stations shown as grey crosses
-    valid_mask: pd.Series = gdf_3857[metric_col].notna()
+    numeric_metric_values: pd.Series = pd.to_numeric(
+        gdf_3857[metric_col], errors="coerce"
+    )
+    valid_mask: pd.Series = pd.Series(
+        np.isfinite(numeric_metric_values.to_numpy(dtype=float)),
+        index=gdf_3857.index,
+    )
     if valid_mask.any():
         ax.scatter(
             gdf_3857.loc[valid_mask, "geometry"].x,
             gdf_3857.loc[valid_mask, "geometry"].y,
-            c=gdf_3857.loc[valid_mask, metric_col],
+            c=numeric_metric_values.loc[valid_mask],
             cmap=cmap_name,
             norm=norm,
             s=12,
@@ -365,29 +371,13 @@ def _plot_skill_score_map_single(
         zorder=5,
     )
 
-    # North arrow
-    ax.annotate(
-        "N",
-        xy=(0.96, 0.12),
-        xytext=(0.96, 0.06),
-        xycoords="axes fraction",
-        textcoords="axes fraction",
-        ha="center",
-        va="bottom",
-        fontsize=18,
-        color="white",
-        fontweight="bold",
-        arrowprops=dict(arrowstyle="-|>", color="white", lw=1.5),
-    )
-
     ax.set_title(metric_title, fontsize=13, fontweight="bold", pad=10)
     ax.tick_params(labelbottom=False, labelleft=False, bottom=False, left=False)
     for spine in ax.spines.values():
         spine.set_edgecolor("0.3")
 
-    plt.tight_layout()
     for ext in ("svg", "png"):
-        plt.savefig(f"{output_path}.{ext}", bbox_inches="tight", dpi=200)
+        fig.savefig(f"{output_path}.{ext}", bbox_inches="tight", dpi=200)
     plt.close(fig)
 
 
@@ -551,20 +541,6 @@ def _plot_kge_component_maps(
         va="bottom",
         zorder=5,
     )
-    lower_right_axis.annotate(
-        "N",
-        xy=(0.96, 0.12),
-        xytext=(0.96, 0.06),
-        xycoords="axes fraction",
-        textcoords="axes fraction",
-        ha="center",
-        va="bottom",
-        fontsize=18,
-        color="white",
-        fontweight="bold",
-        arrowprops=dict(arrowstyle="-|>", color="white", lw=1.5),
-    )
-
     fig.suptitle(
         "KGE and its components",
         fontsize=14,
@@ -630,7 +606,10 @@ def plot_skill_score_maps(
             logger.info("Metric '%s' not in evaluation data, skipping.", col)
             continue
 
-        valid_values: np.ndarray = evaluation_gdf[col].dropna().to_numpy(dtype=float)
+        metric_values: np.ndarray = pd.to_numeric(
+            evaluation_gdf[col], errors="coerce"
+        ).to_numpy(dtype=float)
+        valid_values: np.ndarray = metric_values[np.isfinite(metric_values)]
         if valid_values.size == 0:
             logger.info("No valid values for metric '%s', skipping.", col)
             continue
@@ -693,9 +672,10 @@ def plot_skill_score_maps(
             geometry="geometry",
             crs=getattr(difference_df, "crs", None),
         )
-        valid_values: np.ndarray = (
-            difference_gdf["KGE_difference"].dropna().to_numpy(dtype=float)
-        )
+        difference_values: np.ndarray = pd.to_numeric(
+            difference_gdf["KGE_difference"], errors="coerce"
+        ).to_numpy(dtype=float)
+        valid_values: np.ndarray = difference_values[np.isfinite(difference_values)]
         if valid_values.size == 0:
             continue
         visible_limit: float = max(float(np.nanpercentile(abs(valid_values), 95)), 0.05)
