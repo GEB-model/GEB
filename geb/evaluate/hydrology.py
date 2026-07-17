@@ -27,7 +27,7 @@ from geb.evaluate.workflows.external_skill_scores import (
     get_external_model_output_suffix as _get_external_model_output_suffix,
     get_geb_station_keys as _get_geb_station_keys,
     prepare_external_evaluation as _prepare_external_evaluation,
-    prepare_pairwise_skill_score_boxplot_inputs as _prepare_pairwise_skill_score_boxplot_inputs,
+    prepare_pairwise_skill_score_inputs as _prepare_pairwise_skill_score_inputs,
     prepare_skill_score_boxplot_inputs as _prepare_skill_score_boxplot_inputs,
     read_external_evaluation_raw as _read_external_evaluation_raw,
 )
@@ -39,9 +39,6 @@ from geb.evaluate.workflows.hydrology_plot_engine import (
     plot_skill_score_maps as _plot_skill_score_maps,
     plot_skill_scores_vs_upstream_area as _plot_skill_scores_vs_upstream_area,
     save_discharge_timeseries_plots,
-)
-from geb.evaluate.workflows.hydrology_summary import (
-    create_discharge_skill_score_summary,
 )
 from geb.hydrology.routing import get_discharge_per_river
 from geb.reporter import WATER_STORAGE_REPORT_CONFIG
@@ -56,8 +53,6 @@ from geb.workflows.extreme_value_analysis import (
 )
 from geb.workflows.io import read_geom, read_table
 from geb.workflows.timeseries import regularize_discharge_timeseries
-
-DEFAULT_EXTERNAL_EVALUATION_FOLDER: str = "external_evaluation_data/"
 
 # Configure global style for all plots in this module
 mpl.rcParams["figure.facecolor"] = "white"
@@ -96,6 +91,18 @@ class DischargeEvaluationPaths(NamedTuple):
     plot_folder: Path
     xlsx: Path
     geoparquet: Path
+
+
+def _add_daily_discharge_metric_columns(evaluation_df: pd.DataFrame) -> None:
+    """Add unsuffixed plotting columns from available daily metrics.
+
+    Args:
+        evaluation_df: Discharge evaluation table modified in place.
+    """
+    for metric_name in DischargeMetrics._fields:
+        daily_column: str = f"{metric_name}_daily"
+        if daily_column in evaluation_df.columns:
+            evaluation_df[metric_name] = evaluation_df[daily_column]
 
 
 def _calculate_discharge_validation_metrics(
@@ -2333,12 +2340,7 @@ class Hydrology:
                 )
 
                 dashboard_evaluation_gdf: gpd.GeoDataFrame = evaluation_gdf.copy()
-                for metric_name in DischargeMetrics._fields:
-                    daily_metric_column: str = f"{metric_name}_daily"
-                    if daily_metric_column in dashboard_evaluation_gdf.columns:
-                        dashboard_evaluation_gdf[metric_name] = (
-                            dashboard_evaluation_gdf[daily_metric_column]
-                        )
+                _add_daily_discharge_metric_columns(dashboard_evaluation_gdf)
                 create_discharge_folium_map(
                     evaluation_gdf=dashboard_evaluation_gdf,
                     output_path=dashboard_path,
@@ -2450,12 +2452,7 @@ class Hydrology:
             )
 
         dashboard_evaluation_gdf: gpd.GeoDataFrame = evaluation_gdf.copy()
-        for metric_name in DischargeMetrics._fields:
-            daily_metric_column: str = f"{metric_name}_daily"
-            if daily_metric_column in dashboard_evaluation_gdf.columns:
-                dashboard_evaluation_gdf[metric_name] = dashboard_evaluation_gdf[
-                    daily_metric_column
-                ]
+        _add_daily_discharge_metric_columns(dashboard_evaluation_gdf)
 
         self.model.logger.info("Loading dashboard geometries...")
         dashboard_geometries: DischargeDashboardGeometries = (
@@ -2642,47 +2639,29 @@ class Hydrology:
 
     def _read_external_evaluation_raw(
         self,
-        external_evaluation_folder: str | Path | None = None,
     ) -> dict[str, pd.DataFrame]:
-        """Read external model evaluation CSVs without matching to GEB stations.
+        """Read fixed external evaluation files without matching stations.
 
-        Source-specific filters, such as the PCR-GLOBWB GRDC station criteria, are
-        applied before the external scores are returned.
-
-        Args:
-            external_evaluation_folder: Directory with one CSV per external model.
-                Defaults to the configured folder, resolved from the model folder
-                when relative.
+        Files are read from ``external_evaluation_data/`` in the models-root
+        directory.
 
         Returns:
             Mapping from model label to prepared external DataFrame (index =
             station name, columns = metrics and optional metadata).
         """
-        selected_folder: str | Path | None = external_evaluation_folder
-        if selected_folder is None:
-            selected_folder = self.model.config["hydrology"]["evaluation"][
-                "discharge"
-            ].get("external_evaluation_folder")
-        if selected_folder is None:
-            selected_folder = DEFAULT_EXTERNAL_EVALUATION_FOLDER
-        external_models: dict[str, pd.DataFrame] = _read_external_evaluation_raw(
-            external_evaluation_folder=selected_folder,
+        return _read_external_evaluation_raw(
             model_folder=self.model.input_folder.parent,
             logger=self.model.logger,
         )
-        return external_models
 
     def prepare_external_evaluation(
         self,
-        external_evaluation_folder: str | Path | None = None,
         **kwargs: Any,
     ) -> dict[str, pd.DataFrame]:
-        """Filter external model evaluation CSVs to stations present in this model.
+        """Filter fixed external score files to stations present in this model.
 
-        Reads each ``.csv`` in ``external_evaluation_folder`` (one file per
-        external model), keeps only rows whose station name matches GEB stations,
-        saves filtered results as ``external_evaluation_filtered_<name>.xlsx``,
-        and returns them.
+        Reads ``external_evaluation_data/`` in the models-root directory, keeps
+        stations matching GEB, and saves one filtered workbook per model.
 
         Notes:
             Station names are matched case-insensitively. Falls back to
@@ -2690,17 +2669,12 @@ class Hydrology:
             ``evaluation_metrics.xlsx`` does not yet exist.
 
         Args:
-            external_evaluation_folder: Directory with one CSV per external model
-                (station names as index, metrics as columns). Defaults to
-                ``external_evaluation_data/`` in the models-root directory.
             **kwargs: Ignored (CLI compatibility).
 
         Returns:
             Mapping from model label to matched-stations DataFrame.
         """
-        external_models: dict[str, pd.DataFrame] = self._read_external_evaluation_raw(
-            external_evaluation_folder
-        )
+        external_models: dict[str, pd.DataFrame] = self._read_external_evaluation_raw()
         if not external_models:
             self.model.logger.info("No external evaluation data found, skipping.")
             return {}
@@ -2724,7 +2698,6 @@ class Hydrology:
         self,
         export: bool = True,
         minimum_upstream_area_km2: float | None = None,
-        external_evaluation_folder: str | Path | None = None,
         start_year: int | None = None,
         end_year: int | None = None,
         **kwargs: Any,
@@ -2739,8 +2712,6 @@ class Hydrology:
             export: Whether to save the figures to disk.
             minimum_upstream_area_km2: Optional minimum modeled upstream area threshold for plotted stations (km2).
                 If omitted, `hydrology.evaluation.discharge.minimum_upstream_area_km2` is used.
-            external_evaluation_folder: Optional folder containing external
-                model skill-score CSV files.
             start_year: Optional first calendar year of the evaluation metrics
                 file to plot.
             end_year: Optional last calendar year of the evaluation metrics file
@@ -2751,10 +2722,6 @@ class Hydrology:
             minimum_upstream_area_km2 = self.model.config["hydrology"]["evaluation"][
                 "discharge"
             ]["minimum_upstream_area_km2"]
-        if external_evaluation_folder is None:
-            external_evaluation_folder = self.model.config["hydrology"]["evaluation"][
-                "discharge"
-            ].get("external_evaluation_folder")
         evaluation_paths: DischargeEvaluationPaths = _get_discharge_evaluation_paths(
             output_folder=self.evaluate_discharge_output_folder,
             start_year=start_year,
@@ -2805,37 +2772,30 @@ class Hydrology:
         if export:
             region_geom: gpd.GeoDataFrame = read_geom(self.model.files["geom"]["mask"])
             plot_evaluation_gdf: gpd.GeoDataFrame = evaluation_gdf.copy()
-            for metric_name in DischargeMetrics._fields:
-                daily_metric_column: str = f"{metric_name}_daily"
-                if daily_metric_column in plot_evaluation_gdf.columns:
-                    plot_evaluation_gdf[metric_name] = plot_evaluation_gdf[
-                        daily_metric_column
-                    ]
+            _add_daily_discharge_metric_columns(plot_evaluation_gdf)
+            pairwise_plot_inputs = _prepare_pairwise_skill_score_inputs(
+                evaluation_df=plot_evaluation_gdf,
+                external_models=self._read_external_evaluation_raw(),
+                output_folder=evaluation_paths.plot_folder,
+                logger=self.model.logger,
+                minimum_upstream_area_km2=minimum_upstream_area_km2,
+            )
+            difference_gdfs: dict[str, pd.DataFrame] = {
+                model_name: inputs.evaluation_df
+                for model_name, inputs in pairwise_plot_inputs.items()
+            }
             _plot_skill_score_maps(
                 evaluation_gdf=plot_evaluation_gdf,
                 region_geom=region_geom,
                 output_folder=evaluation_paths.plot_folder,
                 logger=self.model.logger,
-                difference_gdfs=(
-                    {
-                        model_name: plot_inputs.evaluation_df
-                        for model_name, plot_inputs in _prepare_pairwise_skill_score_boxplot_inputs(
-                            evaluation_metrics_path=evaluation_paths.xlsx,
-                            external_evaluation_folder=external_evaluation_folder,
-                            model_folder=self.model.input_folder.parent,
-                            output_folder=evaluation_paths.plot_folder,
-                            logger=self.model.logger,
-                            minimum_upstream_area_km2=minimum_upstream_area_km2,
-                        ).items()
-                    }
-                ),
+                difference_gdfs=difference_gdfs,
             )
 
     def plot_skill_score_boxplots(
         self,
         export: bool = True,
         minimum_upstream_area_km2: float | None = None,
-        external_evaluation_folder: str | Path | None = None,
         start_year: int | None = None,
         end_year: int | None = None,
         **kwargs: Any,
@@ -2850,26 +2810,16 @@ class Hydrology:
             export: Save the figure to disk.
             minimum_upstream_area_km2: Optional minimum modeled upstream area threshold for plotted GEB stations (km2).
                 If omitted, `hydrology.evaluation.discharge.minimum_upstream_area_km2` is used.
-            external_evaluation_folder: Optional folder containing external
-                model skill-score CSV files.
             start_year: Optional first calendar year of the evaluation metrics
                 file to plot.
             end_year: Optional last calendar year of the evaluation metrics file
                 to plot.
-            **kwargs: Ignored CLI compatibility options. Supports
-                `minimum_upstream_areakm2` as a backwards-compatible alias for
-                `minimum_upstream_area_km2`.
+            **kwargs: Ignored CLI compatibility options.
         """
-        if minimum_upstream_area_km2 is None:
-            minimum_upstream_area_km2 = kwargs.pop("minimum_upstream_areakm2", None)
         if minimum_upstream_area_km2 is None:
             minimum_upstream_area_km2 = self.model.config["hydrology"]["evaluation"][
                 "discharge"
             ]["minimum_upstream_area_km2"]
-        if external_evaluation_folder is None:
-            external_evaluation_folder = self.model.config["hydrology"]["evaluation"][
-                "discharge"
-            ].get("external_evaluation_folder")
         evaluation_paths: DischargeEvaluationPaths = _get_discharge_evaluation_paths(
             output_folder=self.evaluate_discharge_output_folder,
             start_year=start_year,
@@ -2882,7 +2832,6 @@ class Hydrology:
         plot_inputs = _prepare_skill_score_boxplot_inputs(
             evaluation_metrics_path=evaluation_paths.xlsx,
             snapped_locations_path=snapped_locations_path,
-            external_evaluation_folder=external_evaluation_folder,
             model_folder=self.model.input_folder.parent,
             output_folder=evaluation_paths.plot_folder,
             logger=self.model.logger,
@@ -2907,10 +2856,9 @@ class Hydrology:
             station_count=len(plot_inputs.evaluation_df),
         )
 
-        pairwise_plot_inputs = _prepare_pairwise_skill_score_boxplot_inputs(
-            evaluation_metrics_path=evaluation_paths.xlsx,
-            external_evaluation_folder=external_evaluation_folder,
-            model_folder=self.model.input_folder.parent,
+        pairwise_plot_inputs = _prepare_pairwise_skill_score_inputs(
+            evaluation_df=plot_inputs.evaluation_df,
+            external_models=plot_inputs.external_models,
             output_folder=evaluation_paths.plot_folder,
             logger=self.model.logger,
             minimum_upstream_area_km2=minimum_upstream_area_km2,
@@ -3014,10 +2962,7 @@ class Hydrology:
             return
 
         if export:
-            for metric_name in DischargeMetrics._fields:
-                daily_metric_column: str = f"{metric_name}_daily"
-                if daily_metric_column in evaluation_df.columns:
-                    evaluation_df[metric_name] = evaluation_df[daily_metric_column]
+            _add_daily_discharge_metric_columns(evaluation_df)
             _plot_skill_scores_vs_upstream_area(
                 evaluation_df=evaluation_df,
                 output_folder=evaluation_paths.plot_folder,
@@ -3028,15 +2973,14 @@ class Hydrology:
         self,
         export: bool = True,
         minimum_upstream_area_km2: float | None = None,
-        external_evaluation_folder: str | Path | None = None,
         start_year: int | None = None,
         end_year: int | None = None,
         **kwargs: Any,
     ) -> None:
         """Plot all discharge skill score figures in one call.
 
-        Delegates to the hydrology summary workflow, which coordinates maps,
-        external-model score tables and boxplots, and upstream-area plots.
+        Creates maps, external-model comparisons, boxplots, and upstream-area
+        plots in sequence.
 
         Args:
             export: Whether to save all figures to disk.
@@ -3044,22 +2988,21 @@ class Hydrology:
                 threshold applied to every plot (km2). If omitted,
                 ``hydrology.evaluation.discharge.minimum_upstream_area_km2``
                 from the model config is used.
-            external_evaluation_folder: Optional folder containing external
-                model skill-score CSV files.
             start_year: Optional first calendar year of the evaluation metrics
                 file to plot.
             end_year: Optional last calendar year of the evaluation metrics file
                 to plot.
             **kwargs: Ignored (CLI compatibility).
         """
-        create_discharge_skill_score_summary(
-            self,
-            export=export,
-            minimum_upstream_area_km2=minimum_upstream_area_km2,
-            external_evaluation_folder=external_evaluation_folder,
-            start_year=start_year,
-            end_year=end_year,
-        )
+        shared_options: dict[str, Any] = {
+            "export": export,
+            "minimum_upstream_area_km2": minimum_upstream_area_km2,
+            "start_year": start_year,
+            "end_year": end_year,
+        }
+        self.plot_skill_score_maps(**shared_options)
+        self.plot_skill_score_boxplots(**shared_options)
+        self.plot_skill_scores_vs_upstream_area(**shared_options)
 
     def plot_water_circle(
         self,

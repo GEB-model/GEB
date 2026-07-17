@@ -95,9 +95,8 @@ Use the observed mean flow as a simple benchmark for discharge evaluation:
 ### External skill-score comparisons
 
 External daily-discharge comparisons are optional and use local files only. Put
-either or both of the following fixed filenames in the configured
-`hydrology.evaluation.discharge.external_evaluation_folder` (by default,
-`external_evaluation_data/` beside the model folder):
+either or both of the following fixed filenames in `external_evaluation_data/`
+inside the model folder:
 
 - `Utrecht_1KM_daily_discharge.csv`, downloaded from [Zenodo record 6390219](https://zenodo.org/records/6390219).
 - `google_streamflow_metrics.tgz`, downloaded as `metrics.tgz` from [Zenodo record 10397664](https://zenodo.org/records/10397664) and renamed. GEB reads both Google Streamflow and GloFAS scores from this archive.

@@ -28,6 +28,7 @@ EXTERNAL_MODEL_MINIMUM_UPSTREAM_AREA_KM2: dict[str, float] = {
 }
 
 # Download manually from https://zenodo.org/records/6390219.
+EXTERNAL_EVALUATION_FOLDER_NAME: str = "external_evaluation_data"
 UTRECHT_EVALUATION_FILE_NAME: str = "Utrecht_1KM_daily_discharge.csv"
 # Download metrics.tgz manually from https://zenodo.org/records/10397664 and
 # save it under this fixed name in the external evaluation folder.
@@ -62,13 +63,11 @@ class SkillScorePlotInputs:
     Args:
         evaluation_df: Filtered GEB skill-score table.
         external_models: External skill-score tables keyed by model label.
-        filter_summary: Short summary of station filters.
         minimum_upstream_area_km2: Effective GEB upstream-area threshold (km2).
     """
 
     evaluation_df: pd.DataFrame
     external_models: dict[str, pd.DataFrame]
-    filter_summary: str
     minimum_upstream_area_km2: float | None = None
 
 
@@ -176,39 +175,6 @@ def _external_minimum_area_km2(model_name: str) -> float | None:
     return None
 
 
-def _filter_summary(
-    minimum_upstream_area_km2: float,
-    external_models: dict[str, pd.DataFrame],
-    matched_only: bool,
-) -> str:
-    """Create a short annotation describing station filters.
-
-    Args:
-        minimum_upstream_area_km2: GEB upstream-area threshold (km2).
-        external_models: External tables keyed by model label.
-        matched_only: Whether plots use only matched GEB-external stations.
-
-    Returns:
-        Multi-line filter summary.
-    """
-    lines: list[str] = []
-    if minimum_upstream_area_km2 > 0.0:
-        lines.append(f"GEB upstream area >= {minimum_upstream_area_km2:g} km2")
-
-    external_limits: list[str] = []
-    for model_name in external_models:
-        minimum_area_km2: float | None = _external_minimum_area_km2(model_name)
-        if minimum_area_km2 is not None:
-            external_limits.append(
-                f"{model_name}: upstream area >= {minimum_area_km2:g} km2"
-            )
-    if external_limits:
-        lines.append("; ".join(external_limits))
-    if matched_only and external_models:
-        lines.append("matched stations only")
-    return "\n".join(lines)
-
-
 def _read_model_metrics_from_archive(
     archive: tarfile.TarFile,
     archive_path: Path,
@@ -283,26 +249,19 @@ def _read_external_evaluation_archive(
 
 
 def read_external_evaluation_raw(
-    external_evaluation_folder: str | Path | None,
     model_folder: Path,
     logger: logging.Logger,
 ) -> dict[str, pd.DataFrame]:
     """Read fixed local Utrecht and Google daily-discharge skill-score files.
 
     Args:
-        external_evaluation_folder: Folder containing the two supported files.
-        model_folder: Model folder used to resolve relative paths.
+        model_folder: Model folder containing ``external_evaluation_data``.
         logger: Logger used for diagnostics.
 
     Returns:
         External skill-score tables keyed by model label.
     """
-    if external_evaluation_folder is None:
-        return {}
-
-    folder: Path = Path(external_evaluation_folder)
-    if not folder.is_absolute():
-        folder = model_folder / folder
+    folder: Path = model_folder / EXTERNAL_EVALUATION_FOLDER_NAME
     if not folder.exists():
         logger.warning("External evaluation data folder not found at %s.", folder)
         return {}
@@ -357,6 +316,7 @@ def prepare_external_evaluation(
         Non-empty matched external tables keyed by model label.
     """
     matched_external_models: dict[str, pd.DataFrame] = {}
+    output_folder.mkdir(parents=True, exist_ok=True)
     station_keys_upper: set[str] = {station_key.upper() for station_key in station_keys}
     for model_name, all_stations_df in external_models.items():
         matched_df: pd.DataFrame = all_stations_df[
@@ -472,7 +432,6 @@ def get_geb_station_keys(
 def prepare_skill_score_boxplot_inputs(
     evaluation_metrics_path: Path,
     snapped_locations_path: Path,
-    external_evaluation_folder: str | Path | None,
     model_folder: Path,
     output_folder: Path,
     logger: logging.Logger,
@@ -483,8 +442,7 @@ def prepare_skill_score_boxplot_inputs(
     Args:
         evaluation_metrics_path: Path to `evaluation_metrics.xlsx`.
         snapped_locations_path: Path to discharge snapped-locations geometry.
-        external_evaluation_folder: Optional folder with external evaluation files.
-        model_folder: Model folder used to resolve relative external paths.
+        model_folder: Model folder containing external evaluation files.
         output_folder: Folder where matched external tables are saved.
         logger: Logger used for diagnostics.
         minimum_upstream_area_km2: Minimum modeled upstream-area threshold (km2).
@@ -498,7 +456,6 @@ def prepare_skill_score_boxplot_inputs(
         logger=logger,
     )
     external_models: dict[str, pd.DataFrame] = read_external_evaluation_raw(
-        external_evaluation_folder=external_evaluation_folder,
         model_folder=model_folder,
         logger=logger,
     )
@@ -521,29 +478,22 @@ def prepare_skill_score_boxplot_inputs(
     return SkillScorePlotInputs(
         evaluation_df=evaluation_df,
         external_models=external_models,
-        filter_summary=_filter_summary(
-            minimum_upstream_area_km2=minimum_upstream_area_km2,
-            external_models=external_models,
-            matched_only=False,
-        ),
         minimum_upstream_area_km2=minimum_upstream_area_km2,
     )
 
 
-def prepare_pairwise_skill_score_boxplot_inputs(
-    evaluation_metrics_path: Path,
-    external_evaluation_folder: str | Path | None,
-    model_folder: Path,
+def prepare_pairwise_skill_score_inputs(
+    evaluation_df: pd.DataFrame,
+    external_models: dict[str, pd.DataFrame],
     output_folder: Path,
     logger: logging.Logger,
     minimum_upstream_area_km2: float,
 ) -> dict[str, SkillScorePlotInputs]:
-    """Prepare one matched GEB-vs-external input table per external model.
+    """Prepare matched GEB-vs-external scores for each external model.
 
     Args:
-        evaluation_metrics_path: Path to `evaluation_metrics.xlsx`.
-        external_evaluation_folder: Optional folder with external evaluation files.
-        model_folder: Model folder used to resolve relative external paths.
+        evaluation_df: Loaded and upstream-area-filtered GEB metrics.
+        external_models: Loaded external metrics keyed by model name.
         output_folder: Folder where matched external tables are saved.
         logger: Logger used for diagnostics.
         minimum_upstream_area_km2: Minimum modeled upstream-area threshold (km2).
@@ -551,16 +501,6 @@ def prepare_pairwise_skill_score_boxplot_inputs(
     Returns:
         Plot inputs keyed by external model label.
     """
-    evaluation_df: pd.DataFrame = load_geb_skill_score_metrics(
-        evaluation_metrics_path=evaluation_metrics_path,
-        minimum_upstream_area_km2=minimum_upstream_area_km2,
-        logger=logger,
-    )
-    external_models: dict[str, pd.DataFrame] = read_external_evaluation_raw(
-        external_evaluation_folder=external_evaluation_folder,
-        model_folder=model_folder,
-        logger=logger,
-    )
     pairwise_inputs: dict[str, SkillScorePlotInputs] = {}
     if evaluation_df.empty or not external_models:
         return pairwise_inputs
@@ -626,11 +566,6 @@ def prepare_pairwise_skill_score_boxplot_inputs(
                 columns=["station_name_key", "station_id_key"], errors="ignore"
             ),
             external_models={model_name: matched_external_df},
-            filter_summary=_filter_summary(
-                minimum_upstream_area_km2=model_minimum_area_km2,
-                external_models={model_name: matched_external_df},
-                matched_only=True,
-            ),
             minimum_upstream_area_km2=model_minimum_area_km2,
         )
     return pairwise_inputs

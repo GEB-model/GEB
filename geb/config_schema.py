@@ -228,10 +228,6 @@ class DischargeEvaluationConfig(BaseModel):
         ge=0.0,
         description="Minimum paired observation-simulation timeseries length for stations included in discharge evaluation (years).",
     )
-    external_evaluation_folder: str | None = Field(
-        None,
-        description="Optional folder with fixed-name Utrecht and Google/GloFAS external discharge evaluation files. Relative paths are resolved from the model folder.",
-    )
 
 
 class HydrologyEvaluationConfig(BaseModel):
