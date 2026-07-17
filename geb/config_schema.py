@@ -230,7 +230,7 @@ class DischargeEvaluationConfig(BaseModel):
     )
     external_evaluation_folder: str | None = Field(
         None,
-        description="Optional folder with external discharge evaluation CSV files. Relative paths are resolved from the model folder.",
+        description="Optional folder with fixed-name Utrecht and Google/GloFAS external discharge evaluation files. Relative paths are resolved from the model folder.",
     )
 
 

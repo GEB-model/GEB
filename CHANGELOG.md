@@ -1,4 +1,5 @@
 # dev
+- Replaced the external `scores` package dependency in discharge evaluation with in-project metric formulas for KGE, modified KGE, NSE, RMSE, and RRMSE.
 - Implemented the `early_warning.py` module outside of `households.py`, launching the latest GEB-IbF system, including options for: area and building based warnings; warning communication weighted by socio-economic factor; time-dependent damage reduction.
 - Users need to run `setup_warning_communication_weights` to enable the warning communication efficiency based on socioeconomic factors.
 - Parameterization of settings in the `model.yml`. Increased overall efficiency and usability of the early warning system.
@@ -506,4 +507,3 @@ To support this version:
 To support this version:
 
 - Re-run `setup_forcing` and `setup_spei`
-

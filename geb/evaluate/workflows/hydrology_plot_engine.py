@@ -16,8 +16,25 @@ from matplotlib.colorbar import Colorbar
 from matplotlib.lines import Line2D
 from scipy.stats import linregress
 
+from geb.evaluate.workflows.external_skill_scores import (
+    GLOFAS_MODEL_NAME,
+    GOOGLE_MODEL_NAME,
+    UTRECHT_MODEL_NAME,
+)
+
 OBSERVATIONS_COLOR: str = "#E6900A"
 SIMULATIONS_DEFAULT_COLOR: str = "#278DD9"
+
+EXTERNAL_MODEL_PLOT_ORDER: dict[str, int] = {
+    UTRECHT_MODEL_NAME: 0,
+    GOOGLE_MODEL_NAME: 1,
+    GLOFAS_MODEL_NAME: 2,
+}
+EXTERNAL_MODEL_DISPLAY_NAMES: dict[str, str] = {
+    UTRECHT_MODEL_NAME: "PCR-GLOBWB",
+    GOOGLE_MODEL_NAME: "Google",
+    GLOFAS_MODEL_NAME: "GloFAS",
+}
 
 
 def _create_discharge_timeseries_figure(
@@ -868,18 +885,15 @@ def _annotate_metric_medians(
         compact: Whether the labels are drawn in a smaller component axis.
     """
     base_label_y: float = -0.11
-    for label_index, ((_, metric_values), x_position) in enumerate(
-        zip(
-            models_with_data,
-            x_positions,
-            strict=True,
-        )
+    for (_, metric_values), x_position in zip(
+        models_with_data,
+        x_positions,
+        strict=True,
     ):
-        label_y: float = base_label_y
         label_fontsize: float = 5.5 if compact else 7.0
         axis.text(
             float(x_position),
-            label_y,
+            base_label_y,
             f"med={float(np.median(metric_values)):.2f}",
             transform=axis.get_xaxis_transform(),
             ha="center",
@@ -980,16 +994,7 @@ def _get_external_model_plot_order(model_name: str) -> tuple[int, str]:
     Returns:
         Sort key with priority and lower-case model label.
     """
-    model_name_lower: str = model_name.lower()
-    model_groups: tuple[tuple[str, ...], ...] = (
-        ("pcr-globwb", "utrecht"),
-        ("google",),
-        ("glofas",),
-    )
-    for priority, model_keys in enumerate(model_groups):
-        if any(model_key in model_name_lower for model_key in model_keys):
-            return priority, model_name_lower
-    return 99, model_name_lower
+    return EXTERNAL_MODEL_PLOT_ORDER.get(model_name, 99), model_name.lower()
 
 
 def _format_external_model_short_name(model_name: str) -> str:
@@ -1001,18 +1006,7 @@ def _format_external_model_short_name(model_name: str) -> str:
     Returns:
         Short display label.
     """
-    model_name_lower: str = model_name.lower()
-    if "pcr-globwb" in model_name_lower or "utrecht" in model_name_lower:
-        return "PCR-GLOBWB"
-    if "google" in model_name_lower:
-        return "Google"
-    if "glofas" in model_name_lower:
-        if "non-calibrated" in model_name_lower or "non_calibrated" in model_name_lower:
-            return "GloFAS non-cal gauges"
-        if "all" in model_name_lower:
-            return "GloFAS all"
-        return "GloFAS"
-    return model_name
+    return EXTERNAL_MODEL_DISPLAY_NAMES.get(model_name, model_name)
 
 
 def plot_skill_score_boxplots(

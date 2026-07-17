@@ -92,6 +92,18 @@ Use the observed mean flow as a simple benchmark for discharge evaluation:
 - KGE > -0.41: The simulation improves upon the observed mean-flow benchmark.
 - R describes correlation between simulated and observed flow, but is not itself a mean-flow benchmark score.
 
+### External skill-score comparisons
+
+External daily-discharge comparisons are optional and use local files only. Put
+either or both of the following fixed filenames in the configured
+`hydrology.evaluation.discharge.external_evaluation_folder` (by default,
+`external_evaluation_data/` beside the model folder):
+
+- `Utrecht_1KM_daily_discharge.csv`, downloaded from [Zenodo record 6390219](https://zenodo.org/records/6390219).
+- `google_streamflow_metrics.tgz`, downloaded as `metrics.tgz` from [Zenodo record 10397664](https://zenodo.org/records/10397664) and renamed. GEB reads both Google Streamflow and GloFAS scores from this archive.
+
+GEB reads these local files directly and does not download external evaluation data automatically. Other filenames in this folder are ignored.
+
 ## Water balance
 
 The water balance evaluation analyzes inflows, outflows, and storage changes across the model domain to verify water conservation and understand hydrological processes.
