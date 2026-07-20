@@ -619,3 +619,148 @@ class Government(AgentBaseClass):
             # apply reforestation --> to do: but maybe a percentage of the suitable areas instead of all suitable areas
             # the threshold for the reforestation amount can be set in the config file under forest_reforestation_potential_threshold, set to 0.9 to convert only the top 10% suitable areas in the model.yml
             self.prepare_modified_soil_maps_for_forest()
+
+    
+    def provide_subsidies(self) -> None:
+        """Provide subsidies to households based on the configuration.
+
+        Configuration (model.yml):
+            agent_settings.government.subsidies:
+                enabled (bool, default: True):
+                    Whether to apply subsidies at all.
+                frequency (str, default: "yearly"):
+                    When to apply subsidies. Allowed values:
+                    - "yearly": only on Jan 1.
+                    - "always": every timestep.
+                apply_to (str, default: "all"):
+                    Which households are eligible. Allowed values:
+                    - "all": all households.
+                    - "random_share": random subset of households.
+                share (float, default: 1.0):
+                    Only used when apply_to == "random_share".
+                    Fraction in [0, 1] of households to select.
+                seed (int, default: 42):
+                    RNG seed used when apply_to == "random_share".
+                dryproofing_subsidy_value (float, default: 0.0):
+                    Absolute subsidy amount for dry-proofing (currency units).
+                wetproofing_subsidy_value (float, default: 0.0):
+                    Absolute subsidy amount for wet-proofing (currency units).
+
+        Raises:
+            ValueError: If subsidies.frequency is not "yearly" or "always".
+            ValueError: If subsidies.apply_to is not "all" or "random_share".
+        """
+        # Skip subsidies during spinup
+        if self.model.in_spinup:
+            return None
+
+        # Skip if config is missing or disabled (for all timesteps)
+        if "subsidies" not in self.config or not self.config["subsidies"].get(
+            "enabled", True
+        ):
+
+            return None
+        
+        # Get subsidies configuration and frequency
+        subsidies_config = self.config["subsidies"]
+        frequency = subsidies_config.get("frequency", "yearly")
+
+        if frequency == "yearly":
+            print("Providing yearly subsidies to households.")
+            if not (
+                self.model.current_time.day == 1 and self.model.current_time.month == 1
+            ):  # provide subsidies on the first day of the year
+                return None
+
+        elif frequency != "always":
+            raise ValueError(
+                "subsidies.frequency must be 'yearly', 'always' or 'after_flood'"
+            )
+
+        selected_households = subsidies_config.get("selected_households", "all")
+        n_households = self.agents.households.n
+        if selected_households == "all":
+            print("Providing subsidies to all households.")
+            eligible_mask = np.ones(n_households, dtype=bool)
+        elif selected_households == "random_share":
+            print("Providing subsidies to a random share of households.")
+            share = float(subsidies_config.get("share", 1.0))
+            share = min(max(share, 0.0), 1.0)
+            rng = np.random.default_rng(subsidies_config.get("seed", 42))
+            eligible_mask = rng.random(n_households) < share
+        else:
+            raise ValueError(
+                "subsidies.selected_households must be 'all' or 'random_share'"
+            )
+
+        dry_value = float(subsidies_config.get("dryproofing_subsidy_value", 0.0))
+        wet_value = float(subsidies_config.get("wetproofing_subsidy_value", 0.0))
+
+        # Apply subsidies to the eligble households
+        self.agents.households.apply_subsidy(
+            dryproofing_subsidy_value=dry_value,
+            wetproofing_subsidy_value=wet_value,
+            household_mask=eligible_mask,
+        )
+
+    def provide_risk_communication(self) -> None:
+        """Communicate risk to households based on the configuration.
+
+        Raises:
+            ValueError: If risk_communication.frequency is not "yearly", "always".
+            ValueError: If risk_communication.selected_households is not "all" or "random_share".
+        """
+        # Skip risk communication during spinup
+        if self.model.in_spinup:
+            return None
+
+        # Skip if config is missing or disabled (for all timesteps)
+        if "risk_communication" not in self.config or not self.config[
+            "risk_communication"
+        ].get("enabled", True):
+
+            return None
+
+        # Get configuration for risk communication
+        risk_communication_config = self.config["risk_communication"]
+        frequency = risk_communication_config.get("frequency", "yearly")
+        if frequency == "yearly":
+            print("Providing yearly risk communication to households.")
+            if not (
+                self.model.current_time.day == 1 and self.model.current_time.month == 1
+            ):  # provide risk communication on the first day of the year
+                return None
+
+      
+        elif frequency != "always":
+            raise ValueError(
+                "risk_communication.frequency must be 'yearly', 'after_flood', or 'always'"
+            )
+
+        selected_households = risk_communication_config.get(
+            "selected_households", "all"
+        )
+        n_households = self.agents.households.n
+        if selected_households == "all":
+            print("Providing risk communication to all households.")
+            eligible_mask = np.ones(n_households, dtype=bool)
+        elif selected_households == "random_share":
+            print("Providing risk communication to a random share of households.")
+            share = float(risk_communication_config.get("share", 1.0))
+            share = min(max(share, 0.0), 1.0)
+            rng = np.random.default_rng(risk_communication_config.get("seed", 42))
+            eligible_mask = rng.random(n_households) < share
+        else:
+            raise ValueError(
+                "risk_communication.selected_households must be 'all' or 'random_share'"
+            )
+        percentage_increase_risk_perception = float(
+            risk_communication_config.get("percentage_increase_risk_perception", 0.0)
+        )
+        # Queue the communication on households so it is applied after households recompute
+        # their base risk perceptions (otherwise update_risk_perceptions overwrites it).
+        self.agents.households._pending_risk_communication = {
+            "percentage_increase": percentage_increase_risk_perception,
+            "household_mask": eligible_mask,
+            "absolute": False,
+        }
