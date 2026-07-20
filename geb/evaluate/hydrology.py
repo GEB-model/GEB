@@ -1,5 +1,6 @@
 """Module implementing hydrology evaluation functions for the GEB model."""
 
+import re
 import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast
@@ -24,7 +25,6 @@ from geb.evaluate.workflows.dashboard import (
     write_discharge_dashboard_chart_data,
 )
 from geb.evaluate.workflows.external_skill_scores import (
-    get_external_model_output_suffix as _get_external_model_output_suffix,
     get_geb_station_keys as _get_geb_station_keys,
     prepare_external_evaluation as _prepare_external_evaluation,
     prepare_pairwise_skill_score_inputs as _prepare_pairwise_skill_score_inputs,
@@ -52,7 +52,6 @@ from geb.workflows.extreme_value_analysis import (
     ReturnPeriodModel,
 )
 from geb.workflows.io import read_geom, read_table
-from geb.workflows.timeseries import regularize_discharge_timeseries
 
 # Configure global style for all plots in this module
 mpl.rcParams["figure.facecolor"] = "white"
@@ -61,6 +60,11 @@ mpl.rcParams["axes.edgecolor"] = "0.15"
 mpl.rcParams["axes.labelcolor"] = "black"
 mpl.rcParams["xtick.color"] = "black"
 mpl.rcParams["ytick.color"] = "black"
+
+DISCHARGE_OBSERVATION_FREQUENCIES: dict[str, str] = {
+    "hourly": "h",
+    "daily": "D",
+}
 mpl.rcParams["text.color"] = "black"
 mpl.rcParams["figure.edgecolor"] = "black"
 mpl.rcParams["grid.color"] = "0.8"
@@ -2089,20 +2093,14 @@ class Hydrology:
                 )
 
         # load input data files
-        discharge_observations_hourly: pd.DataFrame = read_table(
-            self.model.files["table"]["discharge/discharge_observations_hourly"]
-        )
-        discharge_observations_daily: pd.DataFrame = read_table(
-            self.model.files["table"]["discharge/discharge_observations_daily"]
-        )
-        if not discharge_observations_hourly.empty:
-            discharge_observations_hourly = regularize_discharge_timeseries(
-                discharge_observations_hourly
+        discharge_observations: dict[str, pd.DataFrame] = {
+            frequency: read_table(
+                self.model.files["table"][
+                    f"discharge/discharge_observations_{frequency}"
+                ]
             )
-        if not discharge_observations_daily.empty:
-            discharge_observations_daily = regularize_discharge_timeseries(
-                discharge_observations_daily
-            )
+            for frequency in DISCHARGE_OBSERVATION_FREQUENCIES
+        }
 
         snapped_locations = read_geom(
             self.model.files["geom"]["discharge/discharge_snapped_locations"]
@@ -2120,16 +2118,15 @@ class Hydrology:
         station_dashboard_chart_files: dict[str, str] = {}
 
         self.model.logger.info("Starting discharge evaluation...")
-        for frequency_label, discharge_observations_df in zip(
-            ["hourly", "daily"],
-            [
-                discharge_observations_hourly,
-                discharge_observations_daily,
-            ],
-            strict=True,
-        ):
+        for (
+            frequency_label,
+            discharge_observations_df,
+        ) in discharge_observations.items():
             if discharge_observations_df.empty:
                 continue
+            discharge_observations_df = discharge_observations_df.asfreq(
+                DISCHARGE_OBSERVATION_FREQUENCIES[frequency_label]
+            )
             for station_id in tqdm(discharge_observations_df.columns):
                 # create a discharge timeseries dataframe
                 observed_discharge_series = discharge_observations_df[station_id]
@@ -2138,27 +2135,24 @@ class Hydrology:
                 observed_discharge_series.name = "Q"
 
                 # extract the properties from the snapping dataframe
-                discharge_observations_station_name = snapped_locations.loc[
-                    station_id
-                ].discharge_observations_station_name
-                discharge_observations_station_coords = snapped_locations.loc[
-                    station_id
-                ].discharge_observations_station_coords
-                discharge_observations_to_GEB_upstream_area_ratio = (
-                    snapped_locations.loc[
-                        station_id
-                    ].discharge_observations_to_GEB_upstream_area_ratio
+                station: pd.Series = snapped_locations.loc[station_id]
+                discharge_observations_station_name: str = (
+                    station.discharge_observations_station_name
                 )
-                geb_upstream_area_m2: float = float(
-                    snapped_locations.at[station_id, "GEB_upstream_area_from_grid"]
+                discharge_observations_station_coords: tuple[float, float] = (
+                    station.discharge_observations_station_coords
                 )
+                discharge_observations_to_GEB_upstream_area_ratio: float = float(
+                    station.discharge_observations_to_GEB_upstream_area_ratio
+                )
+                geb_upstream_area_m2: float = float(station.GEB_upstream_area_from_grid)
                 if geb_upstream_area_m2 < minimum_upstream_area_km2 * 1_000_000.0:
                     # Smaller catchments tend to be dominated by local timing and snapping
                     # errors, so the default benchmark excludes them from summary scores.
                     continue
 
                 timezone_utc_offset: float = float(
-                    snapped_locations.at[station_id, "timezone_utc_offset"]
+                    station.timezone_utc_offset
                     if "timezone_utc_offset" in snapped_locations.columns
                     else 0.0
                 )
@@ -2521,20 +2515,19 @@ class Hydrology:
                 + ", ".join(sorted(missing_columns))
             )
 
-        discharge_observations_hourly: pd.DataFrame = read_table(
-            self.model.files["table"]["discharge/discharge_observations_hourly"]
-        )
-        discharge_observations_daily: pd.DataFrame = read_table(
-            self.model.files["table"]["discharge/discharge_observations_daily"]
-        )
-        if not discharge_observations_hourly.empty:
-            discharge_observations_hourly = regularize_discharge_timeseries(
-                discharge_observations_hourly
+        discharge_observations: dict[str, pd.DataFrame] = {
+            frequency: read_table(
+                self.model.files["table"][
+                    f"discharge/discharge_observations_{frequency}"
+                ]
             )
-        if not discharge_observations_daily.empty:
-            discharge_observations_daily = regularize_discharge_timeseries(
-                discharge_observations_daily
-            )
+            for frequency in DISCHARGE_OBSERVATION_FREQUENCIES
+        }
+        for frequency, observations_df in discharge_observations.items():
+            if not observations_df.empty:
+                discharge_observations[frequency] = observations_df.asfreq(
+                    DISCHARGE_OBSERVATION_FREQUENCIES[frequency]
+                )
 
         evaluation_by_station_id: dict[str, pd.Series] = {
             str(station_id): station_row
@@ -2544,7 +2537,7 @@ class Hydrology:
         # Count total work up front for progress reporting.
         total_work: int = sum(
             sum(1 for sid in df.columns if str(sid) in evaluation_by_station_id)
-            for df in [discharge_observations_hourly, discharge_observations_daily]
+            for df in discharge_observations.values()
             if not df.empty
         )
         self.model.logger.info(
@@ -2556,11 +2549,10 @@ class Hydrology:
         station_dashboard_chart_files: dict[str, str] = {}
         skipped: int = 0
         processed: int = 0
-        for frequency_label, discharge_observations_df in zip(
-            ["hourly", "daily"],
-            [discharge_observations_hourly, discharge_observations_daily],
-            strict=True,
-        ):
+        for (
+            frequency_label,
+            discharge_observations_df,
+        ) in discharge_observations.items():
             if discharge_observations_df.empty:
                 continue
             for station_id in discharge_observations_df.columns:
@@ -2637,23 +2629,6 @@ class Hydrology:
         )
         return station_dashboard_chart_files
 
-    def _read_external_evaluation_raw(
-        self,
-    ) -> dict[str, pd.DataFrame]:
-        """Read fixed external evaluation files without matching stations.
-
-        Files are read from ``external_evaluation_data/`` in the models-root
-        directory.
-
-        Returns:
-            Mapping from model label to prepared external DataFrame (index =
-            station name, columns = metrics and optional metadata).
-        """
-        return _read_external_evaluation_raw(
-            model_folder=self.model.input_folder.parent,
-            logger=self.model.logger,
-        )
-
     def prepare_external_evaluation(
         self,
         **kwargs: Any,
@@ -2674,7 +2649,10 @@ class Hydrology:
         Returns:
             Mapping from model label to matched-stations DataFrame.
         """
-        external_models: dict[str, pd.DataFrame] = self._read_external_evaluation_raw()
+        external_models: dict[str, pd.DataFrame] = _read_external_evaluation_raw(
+            model_folder=self.model.input_folder.parent,
+            logger=self.model.logger,
+        )
         if not external_models:
             self.model.logger.info("No external evaluation data found, skipping.")
             return {}
@@ -2775,7 +2753,10 @@ class Hydrology:
             _add_daily_discharge_metric_columns(plot_evaluation_gdf)
             pairwise_plot_inputs = _prepare_pairwise_skill_score_inputs(
                 evaluation_df=plot_evaluation_gdf,
-                external_models=self._read_external_evaluation_raw(),
+                external_models=_read_external_evaluation_raw(
+                    model_folder=self.model.input_folder.parent,
+                    logger=self.model.logger,
+                ),
                 output_folder=evaluation_paths.plot_folder,
                 logger=self.model.logger,
                 minimum_upstream_area_km2=minimum_upstream_area_km2,
@@ -2802,9 +2783,8 @@ class Hydrology:
     ) -> None:
         """Create skill score violin+boxplot graphs for each evaluation metric.
 
-        Produces GEB violin/box plots across gauging stations. If an external
-        evaluation folder is configured or passed, external-model scores are
-        added and pairwise matched-station comparison plots are created.
+        Produces a GEB-only violin/box plot across gauging stations and one
+        pairwise matched-station comparison plot per external model.
 
         Args:
             export: Save the figure to disk.
@@ -2846,7 +2826,7 @@ class Hydrology:
 
         _plot_skill_score_boxplots(
             evaluation_df=plot_inputs.evaluation_df,
-            external_models=plot_inputs.external_models,
+            external_models={},
             output_folder=evaluation_paths.plot_folder,
             logger=self.model.logger,
             export=export,
@@ -2867,6 +2847,9 @@ class Hydrology:
             str, tuple[np.ndarray, np.ndarray, int, float | None]
         ] = {}
         for model_name, matched_plot_inputs in pairwise_plot_inputs.items():
+            model_name_suffix: str = re.sub(
+                r"[^a-z0-9]+", "_", model_name.lower()
+            ).strip("_")
             _plot_skill_score_boxplots(
                 evaluation_df=matched_plot_inputs.evaluation_df,
                 external_models=matched_plot_inputs.external_models,
@@ -2875,7 +2858,7 @@ class Hydrology:
                 export=export,
                 include_geb=True,
                 matched_only=True,
-                output_name_suffix=_get_external_model_output_suffix(model_name),
+                output_name_suffix=f"_matched_{model_name_suffix}",
                 minimum_upstream_area_km2=matched_plot_inputs.minimum_upstream_area_km2,
                 station_count=len(matched_plot_inputs.evaluation_df),
             )
@@ -2886,12 +2869,20 @@ class Hydrology:
                 "KGE" in matched_plot_inputs.evaluation_df.columns
                 and "KGE" in external_model_df.columns
             ):
-                kge_comparison_values[model_name] = (
-                    matched_plot_inputs.evaluation_df["KGE"].to_numpy(dtype=float),
-                    external_model_df["KGE"].to_numpy(dtype=float),
-                    len(matched_plot_inputs.evaluation_df),
-                    matched_plot_inputs.minimum_upstream_area_km2,
-                )
+                geb_kge: np.ndarray = pd.to_numeric(
+                    matched_plot_inputs.evaluation_df["KGE"], errors="coerce"
+                ).to_numpy(dtype=float)
+                external_kge: np.ndarray = pd.to_numeric(
+                    external_model_df["KGE"], errors="coerce"
+                ).to_numpy(dtype=float)
+                valid_kge: np.ndarray = np.isfinite(geb_kge) & np.isfinite(external_kge)
+                if valid_kge.any():
+                    kge_comparison_values[model_name] = (
+                        geb_kge[valid_kge],
+                        external_kge[valid_kge],
+                        int(valid_kge.sum()),
+                        matched_plot_inputs.minimum_upstream_area_km2,
+                    )
 
         _plot_kge_external_model_comparison(
             model_kge_values=kge_comparison_values,
