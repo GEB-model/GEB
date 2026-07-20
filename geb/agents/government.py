@@ -622,7 +622,6 @@ class Government(AgentBaseClass):
             # the threshold for the reforestation amount can be set in the config file under forest_reforestation_potential_threshold, set to 0.9 to convert only the top 10% suitable areas in the model.yml
             self.prepare_modified_soil_maps_for_forest()
 
-    
     def provide_subsidies(self) -> None:
         """Provide subsidies to households based on the configuration.
 
@@ -660,9 +659,8 @@ class Government(AgentBaseClass):
         if "subsidies" not in self.config or not self.config["subsidies"].get(
             "enabled", True
         ):
-
             return None
-        
+
         # Get subsidies configuration and frequency
         subsidies_config = self.config["subsidies"]
         frequency = subsidies_config.get("frequency", "yearly")
@@ -720,7 +718,6 @@ class Government(AgentBaseClass):
         if "risk_communication" not in self.config or not self.config[
             "risk_communication"
         ].get("enabled", True):
-
             return None
 
         # Get configuration for risk communication
@@ -733,7 +730,6 @@ class Government(AgentBaseClass):
             ):  # provide risk communication on the first day of the year
                 return None
 
-      
         elif frequency != "always":
             raise ValueError(
                 "risk_communication.frequency must be 'yearly', 'after_flood', or 'always'"
