@@ -52,6 +52,7 @@ class HouseholdVariables(Bucket):
     household_building_area: DynamicArray
     household_building_circumference: DynamicArray
     household_points: gpd.GeoDataFrame
+    household_points_full_information: gpd.GeoDataFrame
     implementation_times: Any
     income: DynamicArray
     income_distribution: np.ndarray
@@ -233,6 +234,7 @@ class Households(AgentBaseClass):
         # assign household disposable income based on income percentile households
         income = read_array(self.model.files["array"]["agents/households/disp_income"])
         self.var.income = DynamicArray(income, max_n=self.max_n)
+        # self.var.income = self.var.income * 1.25
 
         # assign wealth based on income  (based on DYNAMO-M data of France)
         perc = np.array([0, 20, 40, 60, 80, 100])
@@ -248,6 +250,11 @@ class Households(AgentBaseClass):
         self.var.wealth = DynamicArray(
             self.var.income.data * wealth_ratio, max_n=self.max_n
         )
+        print(self.var.income.data.max())
+        print(self.var.income.data.min())
+        print(self.var.wealth.data.max())
+        print(self.var.wealth.data.min())
+
 
     def update_building_attributes(self, drop_not_flooded: bool = False) -> None:
         """Update building attributes based on household data.
@@ -681,6 +688,15 @@ class Households(AgentBaseClass):
             np.full(self.n, 0, np.int32), max_n=self.max_n
         )
 
+        household_points_full_information = self.var.household_points.copy()
+        household_points_full_information["wealth"] = self.var.wealth.data
+        household_points_full_information["income"] = self.var.income.data
+        household_points_full_information.to_file(
+            self.model.output_folder / "household_points_full_information.gpkg",
+            driver="GPKG",
+        )
+
+    
         print(
             f"Household attributes assigned for {self.n} households with {self.population} people."
         )
@@ -858,6 +874,21 @@ class Households(AgentBaseClass):
             * 1.6 ** (self.var.risk_decr * self.var.years_since_last_flood.data)
             + self.var.risk_perc_min
         )
+        # Allow queued risk communication from other agents (e.g. government)
+        if (
+            hasattr(self, "_pending_risk_communication")
+            and self._pending_risk_communication is not None
+        ):
+            pending = self._pending_risk_communication
+            try:
+                self.apply_risk_communication(
+                    percentage_increase=pending.get("percentage_increase", 0.0),
+                    household_mask=pending.get("household_mask", None),
+                    absolute=pending.get("absolute", False),
+                )
+            finally:
+                # clear pending communication after applying
+                self._pending_risk_communication = None
 
         stats = {
             "time": self.model.current_time,
@@ -928,25 +959,30 @@ class Households(AgentBaseClass):
             subsidized_total_wet * annualization_factor
         )
 
+
+
         # Restore base annual costs for ineligible households
-        if (~household_mask).any():
-            self.var.annual_adaptation_costs_dryproofing.data[~household_mask] = (
-                base_total_dry[~household_mask] * annualization_factor
-            )
-            self.var.annual_adaptation_costs_wetproofing.data[~household_mask] = (
-                base_total_wet[~household_mask] * annualization_factor
-            )
+        # if (~household_mask).any():
+        #     self.var.annual_adaptation_costs_dryproofing.data[~household_mask] = (
+        #         base_total_dry[~household_mask] * annualization_factor
+        #     )
+        #     self.var.annual_adaptation_costs_wetproofing.data[~household_mask] = (
+        #         base_total_wet[~household_mask] * annualization_factor
+        #     )
 
     def apply_risk_communication(
         self,
         percentage_increase: float,
         household_mask: np.ndarray | None = None,
+        absolute: bool = False,
     ) -> None:
-        """Increase risk perception by a percentage for eligible households.
+        """Adjust risk perception for eligible households.
 
         Args:
-            percentage_increase: Percentage increase (e.g., 20 for +20%).
+            percentage_increase: If `absolute` is False this is a percentage (e.g., 20 for +20%).
+                                 If `absolute` is True this is an absolute increment (e.g., 1 for +1).
             household_mask: Boolean mask of eligible households. If None, all are eligible.
+            absolute: When True apply an absolute increment instead of a percent multiplier.
 
         Raises:
             ValueError: If length of household_mask does not match number of households.
@@ -957,18 +993,20 @@ class Households(AgentBaseClass):
         if household_mask.shape[0] != n_households:
             raise ValueError("household_mask length must match number of households")
 
-        percentage_increase = max(
-            0.0, float(percentage_increase / 100)
-        )  # Percentage can't be smaller than 0
-        print(f"Risk perception increases to 1.0 + {percentage_increase}")
         rp = self.var.risk_perception.data
-        rp[household_mask] = rp[household_mask] * (1.0 + percentage_increase)
+
+        if absolute:
+            # treat percentage_increase as an absolute increment
+            increment = float(percentage_increase)
+            rp[household_mask] = rp[household_mask] + increment
+        else:
+            # treat percentage_increase as percent (e.g., 20 -> +20%)
+            pct = max(0.0, float(percentage_increase / 100.0))
+            rp[household_mask] = rp[household_mask] * (1.0 + pct)
 
         # Cap at max
         rp[household_mask] = np.minimum(rp[household_mask], self.var.risk_perc_max)
-        self.var.risk_perception.data[:] = (
-            rp  # Assign updated risk perception back to original file
-        )
+        self.var.risk_perception.data[:] = rp
 
     def load_ensemble_flood_maps(self, date_time: datetime) -> xr.DataArray:
         """Loads the flood maps for all ensemble members for a specific forecast date time.
@@ -2003,6 +2041,9 @@ class Households(AgentBaseClass):
             damages_adapt_wetproofing,
         ) = self.flood_risk_module.calculate_building_flood_damages()
 
+        print(damages_do_not_adapt.max())
+        print(damages_do_not_adapt.min())
+
         # calculate expected utilities
         EU_adapt_dryproofing = self.decision_module.calcEU_adapt_flood(
             geom_id="NoID",
@@ -3036,15 +3077,81 @@ class Households(AgentBaseClass):
                     for e in self.flood_events
                 )
 
-                # Households adapt on first day of the year or 2 weeks after flood happened
+                if is_flood_triggered:
+                    self.update_risk_perceptions()
+
+                # Households adapt on first day of the year
                 if (
                     self.model.current_time.month == 1
                     and self.model.current_time.day == 1
-                ) or is_flood_triggered:
+                ):
                     if "flooded" not in self.buildings.columns:
                         self.update_building_attributes()
                     print(f"Thinking about adapting at {current_time}...")
                     self.decide_household_strategy()
+
+                    # --- Compute Expected Annual Damage (EAD) for households using current adaptations ---
+                    print(
+                        "Calculating household EAD based on current adaptation types..."
+                    )
+                    (
+                        damages_do_not_adapt,
+                        damages_adapt,
+                        damages_adapt_dryproofing,
+                        damages_adapt_wetproofing,
+                    ) = self.flood_risk_module.calculate_building_flood_damages(
+                        verbose=False, export_building_damages=False
+                    )
+
+                    # probabilities per return period (annual exceedance probability)
+                    rp = np.asarray(self.return_periods, dtype=np.float32)
+
+                    # Exclude return period == 2 from EAD calculation
+                    rp_mask = rp != 2
+                    rp_masked = rp[rp_mask]
+                    if rp_masked.size == 0:
+                        # nothing to integrate
+                        ead_per_household = np.zeros(self.n, dtype=np.float32)
+                    else:
+                        probs = 1.0 / rp_masked
+
+                        # select damages according to current adaptation type per household
+                        adapt_type = np.asarray(self.var.adaptation_type.data).astype(
+                            int
+                        )
+                        n_rp, n_households = damages_do_not_adapt.shape
+
+                        damages_selected = np.zeros_like(damages_do_not_adapt)
+                        mask0 = adapt_type == 0
+                        mask1 = adapt_type == 1
+                        mask2 = adapt_type == 2
+
+                        if mask0.any():
+                            damages_selected[:, mask0] = damages_do_not_adapt[:, mask0]
+                        if mask1.any():
+                            damages_selected[:, mask1] = damages_adapt_dryproofing[
+                                :, mask1
+                            ]
+                        if mask2.any():
+                            damages_selected[:, mask2] = damages_adapt_wetproofing[
+                                :, mask2
+                            ]
+
+                        # restrict damages to masked return periods and integrate over probs
+                        damages_masked = damages_selected[rp_mask, :]
+
+                        # EAD per household: integrate damage over annual exceedance probability
+                        # sort by probability (x) to ensure correct integration order
+                        sort_idx = np.argsort(probs)
+                        probs_sorted = probs[sort_idx]
+                        damages_sorted = damages_masked[sort_idx, :]
+                        ead_per_household = np.trapezoid(
+                            damages_sorted, x=probs_sorted, axis=0
+                        )
+
+                    # aggregate EAD
+                    total_ead = float(ead_per_household.sum())
+                    print(f"Total household EAD: €{total_ead:,.0f}")
 
             else:  # Household don't respond to actual floods, but make decision on the first day of the year. Decisions are based on random floods
                 if (
@@ -3063,42 +3170,53 @@ class Households(AgentBaseClass):
 
             if self.model.current_time == end_time:
                 print("end of sim reached")
-                df_all: pd.DataFrame = pd.concat(
-                    self.flood_risk_perceptions, ignore_index=True
-                )
 
-                gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
-                    df_all,
-                    geometry=gpd.points_from_xy(df_all.x, df_all.y),
-                    crs=self.var.household_points.crs,
-                )
+                # df_all: pd.DataFrame = pd.concat(
+                #     self.flood_risk_perceptions, ignore_index=True
+                # )
 
-                out_path: Path = (
-                    Path(self.model.output_folder) / "risk_perceptions_new.gpkg"
-                )
-                print(f"saved risk perception here: {out_path}")
-                gdf.to_file(out_path, layer="perceptions", driver="GPKG")
+                # gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
+                #     df_all,
+                #     geometry=gpd.points_from_xy(df_all.x, df_all.y),
+                #     crs=self.var.household_points.crs,
+                # )
 
-                df_stats: pd.DataFrame = pd.DataFrame(
-                    self.flood_risk_perceptions_statistics
-                )
-                out_path: Path = (
-                    Path(self.model.output_folder) / "risk_perception_stats_new.csv"
-                )
-                df_stats.to_csv(out_path, index=False)
-                print(f"Saved risk perception statistics to {out_path}")
+                # out_path: Path = (
+                #     Path(self.model.output_folder)
+                #     / "risk_perceptions_risk_com_100.gpkg"
+                # )
+                # print(f"saved risk perception here: {out_path}")
+                # gdf.to_file(out_path, layer="perceptions", driver="GPKG")
 
-                df_adaptation = pd.concat(self.adaptation_decisions, ignore_index=True)
+                # # df_stats: pd.DataFrame = pd.DataFrame(
+                # #     self.flood_risk_perceptions_statistics
+                # # )
+                # # out_path: Path = (
+                # #     Path(self.model.output_folder) / "risk_perception_stats_new.csv"
+                # # )
+                # # df_stats.to_csv(out_path, index=False)
+                # # print(f"Saved risk perception statistics to {out_path}")
 
-                # Save to CSV
-                out_path = (
-                    Path(self.model.output_folder) / "adaptation_decisions_new.csv"
-                )
-                df_adaptation.to_csv(out_path, index=False)
+                # df_adaptation = pd.concat(self.adaptation_decisions, ignore_index=True)
+                # gdf_adaptation = gpd.GeoDataFrame(
+                #     df_adaptation,
+                #     geometry=gpd.points_from_xy(df_adaptation.x, df_adaptation.y),
+                #     crs=self.var.household_points.crs,
+                # )
 
-                print(f"Saved adaptation decisions to {out_path}")
+                # out_path = (
+                #     Path(self.model.output_folder)
+                #     / "adaptation_decisions_risk_com_100.gpkg"
+                # )
+                # gdf_adaptation.to_file(
+                #     out_path,
+                #     layer="adaptation_decisions",
+                #     driver="GPKG",
+                # )
 
-        self.report(locals())
+                #print(f"Saved adaptation decisions to {out_path}")
+
+            self.report(locals())
 
     @property
     def n(self) -> int:

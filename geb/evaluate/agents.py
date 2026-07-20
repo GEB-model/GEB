@@ -161,6 +161,8 @@ class Agents:
             / "adaptation_type.zarr"
         )
 
+        print(adaptation)
+
         # Convert from dask array to DataFrame by aggregating per timestep
         times = adaptation.coords["time"].values
         values = adaptation.values  # This loads dask array

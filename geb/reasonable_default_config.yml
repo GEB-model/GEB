@@ -51,7 +51,7 @@ hazards:
     observation_files:
     - 20210712T090000 - 20210720T090000.zarr # list of observations files for all floods, should be formatted start date - end date.zarr
   damage:
-    simulate: false
+    simulate: true
   erosion:
     simulate: false
 

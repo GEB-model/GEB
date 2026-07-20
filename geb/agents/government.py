@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
+import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -131,6 +132,7 @@ class Government(AgentBaseClass):
                     When to apply subsidies. Allowed values:
                     - "yearly": only on Jan 1.
                     - "always": every timestep.
+                    - "after_flood": only year after a flood event.
                 apply_to (str, default: "all"):
                     Which households are eligible. Allowed values:
                     - "all": all households.
@@ -171,8 +173,35 @@ class Government(AgentBaseClass):
                 self.model.current_time.day == 1 and self.model.current_time.month == 1
             ):  # provide subsidies on the first day of the year
                 return None
+        elif frequency == "after_flood":
+            print("Providing subsidies only in the year after a flood event.")
+            if not (
+                (
+                    self.model.current_time.year == 2004
+                    and self.model.current_time.day == 1
+                    and self.model.current_time.month == 1
+                )
+                or (
+                    self.model.current_time.year == 2011
+                    and self.model.current_time.day == 1
+                    and self.model.current_time.month == 1
+                )
+                or (
+                    self.model.current_time.year == 2019
+                    and self.model.current_time.day == 1
+                    and self.model.current_time.month == 1
+                )
+                or (
+                    self.model.current_time.year == 2022
+                    and self.model.current_time.day == 1
+                    and self.model.current_time.month == 1
+                )
+            ):
+                return None
         elif frequency != "always":
-            raise ValueError("subsidies.frequency must be 'yearly' or 'always'")
+            raise ValueError(
+                "subsidies.frequency must be 'yearly', 'always' or 'after_flood'"
+            )
 
         selected_households = subsidies_config.get("selected_households", "all")
         n_households = self.agents.households.n
@@ -204,7 +233,7 @@ class Government(AgentBaseClass):
         """Communicate risk to households based on the configuration.
 
         Raises:
-            ValueError: If risk_communication.frequency is not "yearly" or "always".
+            ValueError: If risk_communication.frequency is not "yearly", "after_flood", "always".
             ValueError: If risk_communication.selected_households is not "all" or "random_share".
         """
         # Skip risk communication during spinup
@@ -229,9 +258,35 @@ class Government(AgentBaseClass):
                 self.model.current_time.day == 1 and self.model.current_time.month == 1
             ):  # provide risk communication on the first day of the year
                 return None
+
+        elif frequency == "after_flood":
+            print("Providing risk communication only 3 years after a flood event.")
+            if not (
+                (
+                    self.model.current_time.year == 2006
+                    and self.model.current_time.day == 1
+                    and self.model.current_time.month == 1
+                )
+                or (
+                    self.model.current_time.year == 2013
+                    and self.model.current_time.day == 1
+                    and self.model.current_time.month == 1
+                )
+                or (
+                    self.model.current_time.year == 2021
+                    and self.model.current_time.day == 1
+                    and self.model.current_time.month == 1
+                )
+                or (
+                    self.model.current_time.year == 2024
+                    and self.model.current_time.day == 1
+                    and self.model.current_time.month == 1
+                )
+            ):
+                return None
         elif frequency != "always":
             raise ValueError(
-                "risk_communication.frequency must be 'yearly' or 'always'"
+                "risk_communication.frequency must be 'yearly', 'after_flood', or 'always'"
             )
 
         selected_households = risk_communication_config.get(
@@ -254,10 +309,424 @@ class Government(AgentBaseClass):
         percentage_increase_risk_perception = float(
             risk_communication_config.get("percentage_increase_risk_perception", 0.0)
         )
-        self.agents.households.apply_risk_communication(
-            percentage_increase=percentage_increase_risk_perception,
-            household_mask=eligible_mask,
-        )
+        # Queue the communication on households so it is applied after households recompute
+        # their base risk perceptions (otherwise update_risk_perceptions overwrites it).
+        self.agents.households._pending_risk_communication = {
+            "percentage_increase": percentage_increase_risk_perception,
+            "household_mask": eligible_mask,
+            "absolute": False,
+        }
+
+    def provide_subsidies_to_vulnerable_households(
+        self,
+        subsidy_pot: float = 1_000_000.0,
+        subsidy_per_household: float = 5_000.0,
+        overhead_cost_per_household: float = 800.0,
+        conversion_rate: float = 0.05,
+        random_seed: int | None = 42,
+    ) -> None:
+        """Neighborhood-loop subsidy allocator.
+
+        Parameters
+        ---------
+        subsidy_pot
+            Total budget in euros.
+        subsidy_per_household
+            Fixed subsidy per participating household (euros).
+        overhead_cost_per_household
+            Additional administrative cost per participating household (euros).
+        conversion_rate
+            Fraction of households per neighborhood to select (e.g. 0.05 = 5%).
+        random_seed
+            Seed for reproducible random selection.
+
+        Returns:
+        -------
+        pd.DataFrame
+            Allocation log with columns: `buurtcode`, `MCDA`, `n_households`,
+            `n_selected`, `cost`, `remaining_pot`.
+
+        Raises:
+            RuntimeError: If household_points do not contain 'buurtcode' and the
+                attempted spatial join to assign neighborhood codes fails.
+        """
+        # Skip subsidies during spinup
+        if self.model.in_spinup:
+            return None
+
+        # Skip if config is missing or disabled (for all timesteps)
+        if "subsidies_to_vulnerable_households" not in self.config or not self.config[
+            "subsidies_to_vulnerable_households"
+        ].get("enabled", True):
+            if self.model.current_timestep == 0:
+                print(
+                    "Warning: subsidies to vulnerable households are disabled or not configured for government agent. No subsidies will be provided"
+                )
+            return None
+
+        if (
+            self.model.current_time.year == 2024
+            and self.model.current_time.month == 1
+            and self.model.current_time.day == 1
+        ):
+            print(
+                "Debug: Starting subsidy allocation to vulnerable households with the following parameters:"
+            )
+            print(f"  subsidy_pot: {subsidy_pot}")
+            print(f"  subsidy_per_household: {subsidy_per_household}")
+            print(f"  overhead_cost_per_household: {overhead_cost_per_household}")
+            print(f"  conversion_rate: {conversion_rate}")
+            print(f"  random_seed: {random_seed}")
+
+            rng = np.random.default_rng(random_seed)
+
+            # Load MCDA and mask, keep only intersecting features
+            mcda = gpd.read_file(
+                "/net/sys/pscst201/BETA-IVM-HPC@ada-nodes/vbl220/paper2/MCDA_limburg.gpkg"
+            )
+            mask = gpd.read_parquet(
+                "/net/sys/pscst201/BETA-IVM-HPC@ada-nodes/vbl220/paper2/models/geul/input/geom/mask.geoparquet"
+            )
+
+            # Reproject mask to MCDA CRS if needed
+            if mask.crs != mcda.crs:
+                mask = mask.to_crs(mcda.crs)
+
+            # Spatial intersection: keep MCDA features that intersect the mask
+            mcda_in_mask = gpd.sjoin(mcda, mask, how="inner", predicate="intersects")
+
+            # Keep required columns and sort descending by MCDA
+            keep_cols = [
+                c
+                for c in ("MCDA", "buurtcode", "buurtnaam", "gemeentenaam", "geometry")
+                if c in mcda_in_mask.columns
+            ]
+            mcda_neigh = mcda_in_mask[keep_cols].copy()
+            mcda_neigh = mcda_neigh.sort_values("MCDA", ascending=False).reset_index(
+                drop=True
+            )
+
+            # Prepare household points (assumes households.var.household_points exists)
+            hp = self.agents.households.var.household_points.copy()
+            if hp.crs != mcda_neigh.crs:
+                hp = hp.to_crs(mcda_neigh.crs)
+
+            # Ensure `buurtcode` exists on household points (assumes earlier spatial join)
+            if "buurtcode" not in hp.columns:
+                # attempt a spatial join to assign buurtcode to household points
+                try:
+                    hp = gpd.sjoin(
+                        hp,
+                        mcda_neigh[["buurtcode", "geometry"]],
+                        how="left",
+                        predicate="within",
+                    )
+                    hp = hp.drop(
+                        columns=[c for c in ("index_right",) if c in hp.columns]
+                    )
+                except Exception:
+                    raise RuntimeError(
+                        "household_points do not contain 'buurtcode' and spatial join failed"
+                    )
+
+            # Iterate neighborhoods in order, select 5% randomly, apply subsidy until pot exhausted
+            allocations = []
+
+            # Map household GeoDataFrame index to integer household index used by `Households` arrays
+            # This dummy assumes hp.index aligns with households ordering or contains a 'household_id' column
+            if "household_id" in hp.columns:
+                hp_index_to_household = hp["household_id"].astype(int).values
+            else:
+                # best-effort: assume sequential alignment
+                hp_index_to_household = np.arange(len(hp), dtype=int)
+
+            all_eligible_households = np.zeros(self.agents.households.n, dtype=bool)
+
+            for _, neigh in mcda_neigh.iterrows():
+                if subsidy_pot <= 0:
+                    break
+
+                buurt = neigh.get("buurtcode")
+                buurtnaam = neigh.get("buurtnaam")
+                gemeentenaam = neigh.get("gemeentenaam")
+                mcda_score = neigh.get("MCDA")
+
+                # households in this neighborhood (local indices into hp)
+                idxs = hp.index[hp["buurtcode"] == buurt].to_numpy()
+                n_house = len(idxs)
+                if n_house == 0:
+                    continue
+
+                k = max(1, int(np.ceil(n_house * conversion_rate)))
+                chosen_local = rng.choice(idxs, size=min(k, n_house), replace=False)
+
+                # map chosen_local indices to model household ids (requires stable mapping)
+                chosen_household_ids = hp_index_to_household[chosen_local.astype(int)]
+
+                # compute newly selected (not already subsidized and not already adapted)
+                # exclude households that already took an adaptation measure
+                adapted_households = (
+                    self.agents.households.var.adaptation_type.data != 0
+                )
+                newly_selected = np.setdiff1d(
+                    chosen_household_ids,
+                    np.nonzero(all_eligible_households | adapted_households)[0],
+                    assume_unique=False,
+                )
+                n_new = len(newly_selected)
+                if n_new == 0:
+                    continue
+
+                incremental_cost = n_new * (
+                    subsidy_per_household + overhead_cost_per_household
+                )
+                if incremental_cost > subsidy_pot:
+                    affordable = int(
+                        subsidy_pot
+                        // (subsidy_per_household + overhead_cost_per_household)
+                    )
+                    if affordable <= 0:
+                        break
+                    # pick a random subset of the newly_selected to fit budget
+                    newly_selected = rng.choice(
+                        newly_selected, size=affordable, replace=False
+                    )
+                    n_new = len(newly_selected)
+                    incremental_cost = n_new * (
+                        subsidy_per_household + overhead_cost_per_household
+                    )
+
+                # update cumulative mask
+                all_eligible_households[newly_selected.astype(int)] = True
+
+                # Automatically force adaptation to dryproofing (1) for newly selected households
+                hh = self.agents.households
+                idxs = newly_selected.astype(int)
+                hh.var.adaptation_type.data[idxs] = 1
+                hh.var.adapted.data[idxs] = 1
+                # set time adapted to 1 for newly adapted households
+                hh.var.time_adapted.data[idxs] = 1
+                # update buildings' adaptation status based on household choices
+                try:
+                    hh.update_building_adaptation_status(hh.var.adaptation_type.data)
+                except Exception:
+                    pass
+
+                subsidy_pot -= float(incremental_cost)
+
+                allocations.append(
+                    {
+                        "buurtcode": buurt,
+                        "buurtnaam": buurtnaam,
+                        "gemeentenaam": gemeentenaam,
+                        "MCDA": mcda_score,
+                        "n_households": n_house,
+                        "n_selected": int(n_new),
+                        "cost": float(incremental_cost),
+                        "remaining_pot": float(subsidy_pot),
+                    }
+                )
+
+                print(allocations[-1])  # log each allocation step
+
+    def provide_ontzorgen_to_vulnerable_households(
+        self,
+        subsidy_pot: float = 1_000_000.0,
+        total_costs_per_household: float = 8200.0,
+        conversion_rate: float = 0.3,
+        random_seed: Optional[int] = 42,
+    ) -> None:
+        """Neighborhood-loop allocator for the ontzorgen scenario.
+
+        Parameters
+        ---------
+        subsidy_pot
+            Total budget in euros.
+        total_costs_per_household
+            Total costs per participating household, including subsidy and administrative costs (euros).
+        conversion_rate
+            Fraction of households per neighborhood to select (e.g. 0.05 = 5%).
+        random_seed
+            Seed for reproducible random selection.
+
+        Returns:
+        -------
+        pd.DataFrame
+            Allocation log with columns: `buurtcode`, `MCDA`, `n_households`,
+            `n_selected`, `cost`, `remaining_pot`.
+
+        Raises:
+            RuntimeError: If household_points do not contain 'buurtcode' and the
+                attempted spatial join to assign neighborhood codes fails.
+        """
+        # Skip subsidies during spinup
+        if self.model.in_spinup:
+            return None
+
+        # Skip if config is missing or disabled (for all timesteps)
+        if "ontzorgen_to_vulnerable_households" not in self.config or not self.config[
+            "ontzorgen_to_vulnerable_households"
+        ].get("enabled", True):
+            if self.model.current_timestep == 0:
+                print(
+                    "Warning: ontzorgen to vulnerable households are disabled or not configured for government agent. No subsidies will be provided"
+                )
+            return None
+
+        if (
+            self.model.current_time.year == 2024
+            and self.model.current_time.month == 1
+            and self.model.current_time.day == 1
+        ):
+            print(
+                "Debug: Starting subsidy allocation to vulnerable households with the following parameters:"
+            )
+            print(f"  subsidy_pot: {subsidy_pot}")
+            print(f"  total_costs_per_household: {total_costs_per_household}")
+            print(f"  conversion_rate: {conversion_rate}")
+            print(f"  random_seed: {random_seed}")
+
+            rng = np.random.default_rng(random_seed)
+
+            # Load MCDA and mask, keep only intersecting features
+            mcda = gpd.read_file(
+                "/net/sys/pscst201/BETA-IVM-HPC@ada-nodes/vbl220/paper2/MCDA_limburg.gpkg"
+            )
+            mask = gpd.read_parquet(
+                "/net/sys/pscst201/BETA-IVM-HPC@ada-nodes/vbl220/paper2/models/geul/input/geom/mask.geoparquet"
+            )
+
+            # Reproject mask to MCDA CRS if needed
+            if mask.crs != mcda.crs:
+                mask = mask.to_crs(mcda.crs)
+
+            # Spatial intersection: keep MCDA features that intersect the mask
+            mcda_in_mask = gpd.sjoin(mcda, mask, how="inner", predicate="intersects")
+
+            # Keep required columns and sort descending by MCDA
+            keep_cols = [
+                c
+                for c in ("MCDA", "buurtcode", "buurtnaam", "gemeentenaam", "geometry")
+                if c in mcda_in_mask.columns
+            ]
+            mcda_neigh = mcda_in_mask[keep_cols].copy()
+            mcda_neigh = mcda_neigh.sort_values("MCDA", ascending=False).reset_index(
+                drop=True
+            )
+
+            # Prepare household points (assumes households.var.household_points exists)
+            hp = self.agents.households.var.household_points.copy()
+            if hp.crs != mcda_neigh.crs:
+                hp = hp.to_crs(mcda_neigh.crs)
+
+            # Ensure `buurtcode` exists on household points (assumes earlier spatial join)
+            if "buurtcode" not in hp.columns:
+                # attempt a spatial join to assign buurtcode to household points
+                try:
+                    hp = gpd.sjoin(
+                        hp,
+                        mcda_neigh[["buurtcode", "geometry"]],
+                        how="left",
+                        predicate="within",
+                    )
+                    hp = hp.drop(
+                        columns=[c for c in ("index_right",) if c in hp.columns]
+                    )
+                except Exception:
+                    raise RuntimeError(
+                        "household_points do not contain 'buurtcode' and spatial join failed"
+                    )
+
+            # Iterate neighborhoods in order, select 5% randomly, apply subsidy until pot exhausted
+            allocations = []
+
+            # Map household GeoDataFrame index to integer household index used by `Households` arrays
+            # This dummy assumes hp.index aligns with households ordering or contains a 'household_id' column
+            if "household_id" in hp.columns:
+                hp_index_to_household = hp["household_id"].astype(int).values
+            else:
+                # best-effort: assume sequential alignment
+                hp_index_to_household = np.arange(len(hp), dtype=int)
+
+            all_eligible_households = np.zeros(self.agents.households.n, dtype=bool)
+
+            for _, neigh in mcda_neigh.iterrows():
+                if subsidy_pot <= 0:
+                    break
+
+                buurt = neigh.get("buurtcode")
+                buurtnaam = neigh.get("buurtnaam")
+                gemeentenaam = neigh.get("gemeentenaam")
+                mcda_score = neigh.get("MCDA")
+
+                # households in this neighborhood (local indices into hp)
+                idxs = hp.index[hp["buurtcode"] == buurt].to_numpy()
+                n_house = len(idxs)
+                if n_house == 0:
+                    continue
+
+                k = max(1, int(np.ceil(n_house * conversion_rate)))
+                chosen_local = rng.choice(idxs, size=min(k, n_house), replace=False)
+
+                # map chosen_local indices to model household ids (requires stable mapping)
+                chosen_household_ids = hp_index_to_household[chosen_local.astype(int)]
+
+                # compute newly selected (not already subsidized and not already adapted)
+                # exclude households that already took an adaptation measure
+                adapted_households = (
+                    self.agents.households.var.adaptation_type.data != 0
+                )
+                newly_selected = np.setdiff1d(
+                    chosen_household_ids,
+                    np.nonzero(all_eligible_households | adapted_households)[0],
+                    assume_unique=False,
+                )
+                n_new = len(newly_selected)
+                if n_new == 0:
+                    continue
+
+                incremental_cost = n_new * (total_costs_per_household)
+                if incremental_cost > subsidy_pot:
+                    affordable = int(subsidy_pot // total_costs_per_household)
+                    if affordable <= 0:
+                        break
+                    # pick a random subset of the newly_selected to fit budget
+                    newly_selected = rng.choice(
+                        newly_selected, size=affordable, replace=False
+                    )
+                    n_new = len(newly_selected)
+                    incremental_cost = n_new * total_costs_per_household
+
+                # update cumulative mask
+                all_eligible_households[newly_selected.astype(int)] = True
+
+                # Automatically force adaptation to dryproofing (1) for newly selected households
+                hh = self.agents.households
+                idxs = newly_selected.astype(int)
+                hh.var.adaptation_type.data[idxs] = 1
+                hh.var.adapted.data[idxs] = 1
+                hh.var.time_adapted.data[idxs] = 1
+                try:
+                    hh.update_building_adaptation_status(hh.var.adaptation_type.data)
+                except Exception:
+                    pass
+
+                subsidy_pot -= float(incremental_cost)
+
+                allocations.append(
+                    {
+                        "buurtcode": buurt,
+                        "buurtnaam": buurtnaam,
+                        "gemeentenaam": gemeentenaam,
+                        "MCDA": mcda_score,
+                        "n_households": n_house,
+                        "n_selected": int(n_new),
+                        "cost": float(incremental_cost),
+                        "remaining_pot": float(subsidy_pot),
+                    }
+                )
+
+                print(allocations[-1])  # log each allocation step
 
     def step(self) -> None:
         """This function is run each timestep."""
@@ -267,6 +736,8 @@ class Government(AgentBaseClass):
         self.set_irrigation_limit()
         self.provide_subsidies()
         self.provide_risk_communication()
+        self.provide_subsidies_to_vulnerable_households()
+        self.provide_ontzorgen_to_vulnerable_households()
 
         self.report(locals())
 

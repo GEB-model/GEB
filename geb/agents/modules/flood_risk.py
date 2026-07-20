@@ -603,13 +603,19 @@ class FloodRiskModule:
             how="left",
         )
 
+        buildings = buildings.rename(columns={"geometry_x": "geometry"})
+
         # convert to GeoDataFrame
         buildings = gpd.GeoDataFrame(
             buildings, geometry="geometry", crs=building_geometries.crs
         )
+        buildings = buildings.drop(columns=["x", "y", "geometry_y"])
 
         # reproject
         buildings = buildings.to_crs(flood_depth.rio.crs)
+        print(buildings.crs)
+        print(buildings.columns)
+        print(buildings.geometry)
 
         household_points: gpd.GeoDataFrame = (
             self.households.var.household_points.copy().to_crs(flood_depth.rio.crs)
@@ -701,17 +707,11 @@ class FloodRiskModule:
                 self.households.var.max_dam_buildings_content
             )
 
-            buildings["object_type"] = np.where(
-                buildings["flood_proofed"],
-                "building_flood_proofed",
-                "building_unprotected",
-            )
+            buildings_centroid["object_type"] = buildings_centroid["flood_proofed"]
 
-            buildings_centroid["object_type"] = np.where(
-                buildings_centroid["flood_proofed"],
-                "building_protected",
-                "building_unprotected",
-            )
+            buildings["object_type"] = buildings[
+                "flood_proofed"
+            ]  # object_type is equal to the flood proofed status (building_unprotected, building_dryproofed, building_wetproofed)
 
         else:
             household_points["protect_building"] = False
@@ -752,32 +752,32 @@ class FloodRiskModule:
         gdf_content["damage"] = damages_buildings_content
         category_name: str = "buildings_content"
         filename: str = f"damage_map_{category_name}.gpkg"
-        gdf_content.to_file(damage_folder / filename, driver="GPKG")
+        # gdf_content.to_file(damage_folder / filename, driver="GPKG")
 
-        print(f"damages to building content are: {total_damages_content}")
+        print(f"damages to building content are: €{total_damages_content:,.0f}")
 
+        print(buildings.columns)
+        print(self.households.buildings_content_curve)
         # Compute damages for buildings structure
         damages_buildings_structure: pd.Series = VectorScanner(
-            features=buildings.rename(
-                columns={"maximum_damage_m2": "maximum_damage_structure"}
-            ),  # ty:ignore[invalid-argument-type]
+            features=buildings.rename(columns={"maximum_damage_m2": "maximum_damage"}),  # ty:ignore[invalid-argument-type]
             hazard=flood_depth,
             vulnerability_curves=self.households.buildings_structure_curve,
         )
 
         total_damage_structure = damages_buildings_structure.sum()
 
-        print(f"damages to building structure are: {total_damage_structure}")
+        print(f"damages to building structure are: €{total_damage_structure:,.0f}")
 
         # save it to a gpkg file
         gdf_structure = buildings.copy()
         gdf_structure["damage"] = damages_buildings_structure
         category_name: str = "buildings_structure"
         filename: str = f"damage_map_{category_name}.gpkg"
-        gdf_structure.to_file(damage_folder / filename, driver="GPKG")
+        # gdf_structure.to_file(damage_folder / filename, driver="GPKG")
 
         print(
-            f"Total damages to buildings are: {total_damages_content + total_damage_structure}"
+            f"Total damages to buildings are: €{total_damages_content + total_damage_structure:,.0f}"
         )
 
         agriculture = from_landuse_raster_to_polygon(
@@ -796,7 +796,7 @@ class FloodRiskModule:
             vulnerability_curves=self.households.var.agriculture_curve,
         )
         total_damages_agriculture = damages_agriculture.sum()
-        print(f"damages to agriculture are: {total_damages_agriculture}")
+        print(f"damages to agriculture are: €{total_damages_agriculture:,.0f}")
 
         # Load landuse and make turn into polygons
         forest = from_landuse_raster_to_polygon(
@@ -817,7 +817,7 @@ class FloodRiskModule:
             vulnerability_curves=self.households.var.forest_curve,
         )
         total_damages_forest = damages_forest.sum()
-        print(f"damages to forest are: {total_damages_forest}")
+        print(f"damages to forest are: €{total_damages_forest:,.0f}")
 
         roads = self.households.roads.to_crs(flood_depth.rio.crs)
         damages_roads = VectorScanner(
@@ -826,7 +826,7 @@ class FloodRiskModule:
             vulnerability_curves=self.households.var.road_curves,
         )
         total_damages_roads = damages_roads.sum()
-        print(f"damages to roads are: {total_damages_roads} ")
+        print(f"damages to roads are: €{total_damages_roads:,.0f}")
 
         rail = self.households.rail.to_crs(flood_depth.rio.crs)
         damages_rail = VectorScanner(
@@ -835,7 +835,7 @@ class FloodRiskModule:
             vulnerability_curves=self.households.var.rail_curve,
         )
         total_damages_rail = damages_rail.sum()
-        print(f"damages to rail are: {total_damages_rail}")
+        print(f"damages to rail are: €{total_damages_rail:,.0f}")
 
         total_flood_damages = (
             total_damage_structure
@@ -845,6 +845,6 @@ class FloodRiskModule:
             + total_damages_forest
             + total_damages_agriculture
         )
-        print(f"the total flood damages are: {total_flood_damages}")
+        print(f"the total flood damages are: €{total_flood_damages:,.0f}")
 
         return total_flood_damages
