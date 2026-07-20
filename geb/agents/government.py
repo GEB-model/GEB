@@ -131,6 +131,8 @@ class Government(AgentBaseClass):
 
         self.adaptation()
         self.set_irrigation_limit()
+        self.provide_subsidies()
+        self.provide_risk_communication()
 
         self.report(locals())
 
