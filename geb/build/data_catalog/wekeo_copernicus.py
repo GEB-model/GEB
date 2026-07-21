@@ -832,13 +832,6 @@ class WEkEOCopernicus(Adapter):
                 f"missing WEkEO tile(s) for year {year}.\n{details}"
             )
 
-        self.logger.debug(
-            "Finished downloading %s WEkEO tile(s) for year %s into %s.",
-            len(statuses),
-            year,
-            year_dir,
-        )
-
     def unpack_and_merge_tiles(
         self,
         tile_ids: list[str],
@@ -878,11 +871,6 @@ class WEkEOCopernicus(Adapter):
             chunks=chunks,
             clip_bounds=clip_bounds,
             normalize_nodata=normalize_nodata,
-        )
-        self.logger.debug(
-            "Finished preparing WEkEO raster for year %s from %s tile(s). ",
-            year,
-            len(tile_ids),
         )
         return da
 
@@ -1186,15 +1174,6 @@ class WEkEOCopernicus(Adapter):
         self.year = year
 
         cache_status = self._inspect_tile_cache(tile_ids=tile_ids, year=year)
-        self.logger.debug(
-            "WEkEO cache preflight for year %s: %s required tile(s), "
-            "%s cached TIFF(s), %s cached ZIP(s), %s missing tile(s).",
-            year,
-            cache_status.total_tiles,
-            len(cache_status.cached_tif_tile_ids),
-            len(cache_status.cached_zip_tile_ids),
-            cache_status.missing_tiles,
-        )
 
         if not cache_status.is_complete:
             self.download_tiles(
