@@ -415,6 +415,7 @@ class Government(AgentBaseClass):
             # for easier access to the flood risk module of the households agent, we store it here as well
             self.flood_risk_module = self.agents.households.flood_risk_module
             self._cost_benefit_adaptation()
+            return
 
         elif self.config["adaptation"]["mode"] != "threshold":
             raise ValueError(
