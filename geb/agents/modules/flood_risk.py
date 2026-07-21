@@ -1116,7 +1116,7 @@ class FloodRiskModule:
                 continue
             # initialize idx_river_points to False to avoid recalculating for each return period
             idx_river_points = False
-            # sample every 100 m (or whatever units your CRS uses)
+            # sample every 100 m (TODO: build dike lines in model build with 100 m spacing. For now use interpolation to get points along the river geometry)
             distances = np.arange(
                 0, river_geom.length, 0.0008333
             )  # 100 m in degrees (approximate, for WGS84)
