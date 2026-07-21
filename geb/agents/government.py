@@ -415,28 +415,7 @@ class Government(AgentBaseClass):
             # for easier access to the flood risk module of the households agent, we store it here as well
             self.flood_risk_module = self.agents.households.flood_risk_module
             self._cost_benefit_adaptation()
-            if self.model.current_timestep == self.model.n_timesteps - 1:
-                import geopandas as gpd
-                import pandas as pd
 
-                df = pd.DataFrame(
-                    list(
-                        self.flood_risk_module.flood_protection_standard_subbasins.items()
-                    ),
-                    columns=["COMID", "FPS"],
-                )
-
-                subbasins = gpd.read_parquet(
-                    self.model.files["geom"]["routing/subbasins"]
-                ).reset_index()
-                gdf = subbasins.merge(df, on="COMID", how="left")
-                gdf.to_file(
-                    self.model.output_folder
-                    / "flood_protection_standard_subbasins.geojson",
-                    driver="GeoJSON",
-                )
-
-            return
         elif self.config["adaptation"]["mode"] != "threshold":
             raise ValueError(
                 f"Invalid adaptation mode: {self.config['adaptation']['mode']}. "
