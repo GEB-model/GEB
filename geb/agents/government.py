@@ -553,9 +553,16 @@ class Government(AgentBaseClass):
                 np.sum(height_difference * 100 * cost_per_meter) * 2
             )  # segments are roughly 100 meters long, double the cost to account for both sides of the dike
 
+            # assume maintenance cost of €0.08 million per km of dike length
+            maintenance_cost_per_year = (
+                0.08e6 * height_difference.size * 0.1
+            )  # maintenance cost per year in euros
+
             if self._apply_cumulative_time_discounting(
                 damage_reduction
-            ) > total_cost + self._apply_cumulative_time_discounting(total_cost * 0.03):
+            ) > total_cost + self._apply_cumulative_time_discounting(
+                maintenance_cost_per_year
+            ):
                 self.flood_risk_module.flood_protection_standard_subbasins[subbasin] = (
                     altered_fps
                 )
