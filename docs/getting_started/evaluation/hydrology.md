@@ -9,6 +9,7 @@ The hydrology evaluation module provides comprehensive tools to assess model per
 | Method | Purpose | Output |
 | --- | --- | --- |
 | `evaluate_discharge` | Compare simulated vs observed discharge at gauging stations | Performance metrics (KGE, NSE, R), timeseries plots, interactive maps |
+| `plot_discharge_characteristics` | Relate discharge skill scores to catchment characteristics | Six-panel scientific figures and enriched station table |
 | `plot_discharge` | Visualize spatial patterns of mean discharge | Spatial maps showing discharge distribution |
 | `skill_score_graphs` | Summarize performance across all stations in the model domain | Boxplots of KGE, NSE, R distributions |
 | `water_circle` | Visualize water balance as flow diagram | Interactive Sankey diagram of water fluxes |

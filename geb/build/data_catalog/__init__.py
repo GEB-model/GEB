@@ -32,6 +32,7 @@ from .global_preferences_survey import GlobalPreferencesSurvey
 from .globgm import GlobGM, GlobGMDEM
 from .glopop_sg import GLOPOP_SG
 from .grdc import GRDC
+from .grdc_caravan import GRDCCaravan
 from .grow import GROW
 from .gtsm import GTSM, GTSM_timeseries
 from .hydrolakes import HydroLakes
@@ -418,6 +419,23 @@ data_catalog: dict[str, dict[str, Any]] = {
             "name": "Global Runoff Data Centre",
             "author": "Global Runoff Data Centre",
             "license": "https://grdc.bafg.de/downloads/policy_guidelines.pdf",
+        },
+    },
+    "GRDC_Caravan": {
+        "adapter": GRDCCaravan(
+            folder="grdc/caravan",
+            local_version=1,
+            filename="attributes_v0.6.parquet",
+            cache="global",
+        ),
+        "url": "https://zenodo.org/records/15349031/files/GRDC_Caravan_extension_nc.zip?download=1",
+        "source": {
+            "name": "GRDC-Caravan catchment attributes",
+            "author": "Färber et al. (2025)",
+            "version": "0.6",
+            "license": "CC BY 4.0",
+            "url": "https://doi.org/10.5281/zenodo.15349031",
+            "paper_doi": "10.5194/essd-17-4613-2025",
         },
     },
     "global_irrigation_area_groundwater": {

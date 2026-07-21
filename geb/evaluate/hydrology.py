@@ -1,5 +1,6 @@
 """Module implementing hydrology evaluation functions for the GEB model."""
 
+import logging
 import re
 import shutil
 from pathlib import Path
@@ -17,7 +18,12 @@ from matplotlib.collections import LineCollection
 from matplotlib.lines import Line2D
 from tqdm import tqdm
 
-from geb.evaluate.workflows import external_skill_scores, hydrology_plot_engine
+from geb.build.data_catalog import DataCatalog
+from geb.evaluate.workflows import (
+    discharge_characteristics,
+    external_skill_scores,
+    hydrology_plot_engine,
+)
 from geb.evaluate.workflows.dashboard import (
     DischargeDashboardGeometries,
     build_discharge_dashboard_chart_data,
@@ -1042,6 +1048,56 @@ def _get_discharge_evaluation_paths(
         xlsx=output_folder / f"evaluation_metrics{suffix}.xlsx",
         geoparquet=output_folder / f"evaluation_metrics{suffix}.geoparquet",
     )
+
+
+def _plot_paired_external_discharge_characteristics(
+    evaluation_df: pd.DataFrame,
+    external_models: dict[str, pd.DataFrame],
+    output_folder: Path,
+    logger: logging.Logger,
+    minimum_upstream_area_km2: float,
+    output_name_suffix: str,
+    export: bool,
+) -> None:
+    """Plot paired GEB-versus-external characteristic figures.
+
+    Args:
+        evaluation_df: Enriched GEB evaluation metrics.
+        external_models: External skill-score tables keyed by model label.
+        output_folder: Folder receiving matched tables and figures.
+        logger: Logger used for diagnostics.
+        minimum_upstream_area_km2: Minimum modeled upstream area (km2).
+        output_name_suffix: Optional evaluation-period suffix for filenames.
+        export: Whether to save figures.
+    """
+    matched_scores_by_model: dict[str, external_skill_scores.MatchedSkillScores] = (
+        external_skill_scores.match_external_skill_scores(
+            evaluation_df=evaluation_df,
+            external_models=external_models,
+            output_folder=output_folder,
+            logger=logger,
+            minimum_upstream_area_km2=minimum_upstream_area_km2,
+        )
+    )
+    for model_name, matched_scores in matched_scores_by_model.items():
+        model_slug: str = re.sub(r"[^a-z0-9]+", "_", model_name.lower()).strip("_")
+        for metric_column in discharge_characteristics.METRIC_STYLES:
+            external_column: str = metric_column.removesuffix("_daily")
+            if external_column not in matched_scores.external.columns:
+                continue
+            figure: plt.Figure = (
+                discharge_characteristics.plot_paired_skill_by_characteristics(
+                    evaluation_df=matched_scores.geb,
+                    external_metric_df=matched_scores.external,
+                    metric_column=metric_column,
+                    external_model_name=model_name,
+                    output_folder=output_folder,
+                    logger=logger,
+                    output_name_suffix=f"{output_name_suffix}_{model_slug}",
+                    export=export,
+                )
+            )
+            plt.close(figure)
 
 
 # Water-balance and storage data
@@ -2745,6 +2801,155 @@ class Hydrology:
                 output_folder=evaluation_paths.plot_folder,
                 logger=self.model.logger,
             )
+
+    def plot_discharge_characteristics(
+        self,
+        export: bool = True,
+        minimum_upstream_area_km2: float | None = None,
+        start_year: int | None = None,
+        end_year: int | None = None,
+        **kwargs: Any,
+    ) -> None:
+        """Analyse daily KGE, NSE, and RRMSE by catchment characteristics.
+
+        GRDC-Caravan attributes are fetched lazily from Zenodo and cached in the
+        global GEB data catalog. The original discharge metrics remain unchanged;
+        all explanation outputs are written to a dedicated subfolder.
+
+        Args:
+            export: Whether to save the characteristic figures.
+            minimum_upstream_area_km2: Minimum modeled upstream area (km2). If
+                omitted, the discharge-evaluation configuration value is used.
+            start_year: Optional first calendar year of the evaluation metrics.
+            end_year: Optional final calendar year of the evaluation metrics.
+            **kwargs: Ignored CLI compatibility options.
+
+        Notes:
+            If the discharge evaluation or matched GRDC-Caravan stations are
+            unavailable, the method logs a warning and returns without plotting.
+        """
+        if minimum_upstream_area_km2 is None:
+            minimum_upstream_area_km2 = self.model.config["hydrology"]["evaluation"][
+                "discharge"
+            ]["minimum_upstream_area_km2"]
+        evaluation_paths: DischargeEvaluationPaths = _get_discharge_evaluation_paths(
+            output_folder=self.evaluate_discharge_output_folder,
+            start_year=start_year,
+            end_year=end_year,
+        )
+        if evaluation_paths.geoparquet.exists():
+            evaluation_gdf: gpd.GeoDataFrame = gpd.read_parquet(
+                evaluation_paths.geoparquet
+            )
+        elif evaluation_paths.xlsx.exists():
+            evaluation_df: pd.DataFrame = pd.read_excel(evaluation_paths.xlsx)
+            evaluation_gdf = gpd.GeoDataFrame(
+                evaluation_df,
+                geometry=gpd.points_from_xy(evaluation_df["x"], evaluation_df["y"]),
+                crs="EPSG:4326",
+            )
+        else:
+            self.model.logger.warning(
+                "No %s or %s found. Run evaluate_discharge first.",
+                evaluation_paths.xlsx.name,
+                evaluation_paths.geoparquet.name,
+            )
+            return
+
+        data_catalog: DataCatalog = DataCatalog(logger=self.model.logger)
+        attribute_df: pd.DataFrame = data_catalog.fetch("GRDC_Caravan").read()
+        enriched_df: pd.DataFrame = (
+            discharge_characteristics.enrich_discharge_evaluation(
+                evaluation_df=evaluation_gdf,
+                attribute_df=attribute_df,
+            )
+        )
+        enriched_gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
+            enriched_df,
+            geometry="geometry",
+            crs=evaluation_gdf.crs,
+        )
+        explanation_folder: Path = (
+            evaluation_paths.plot_folder / "skill_score_explanations"
+        )
+        explanation_folder.mkdir(parents=True, exist_ok=True)
+
+        enriched_path: Path = explanation_folder / (
+            f"evaluation_metrics_with_grdc_caravan{evaluation_paths.suffix}.geoparquet"
+        )
+        enriched_gdf.to_parquet(enriched_path, index=False)
+        self.model.logger.info(
+            "Matched %d/%d evaluated stations to GRDC-Caravan attributes.",
+            int(enriched_gdf["grdc_caravan_matched"].sum()),
+            len(enriched_gdf),
+        )
+
+        plot_gdf: gpd.GeoDataFrame = enriched_gdf[
+            enriched_gdf["upstream_area_GEB"] >= minimum_upstream_area_km2 * 1_000_000.0
+        ].copy()
+        if plot_gdf.empty:
+            self.model.logger.warning(
+                "No discharge evaluation stations remain after upstream-area "
+                "filtering. Skipping discharge characteristic plots."
+            )
+            return
+        if not plot_gdf["grdc_caravan_matched"].any():
+            self.model.logger.warning(
+                "No discharge evaluation stations match GRDC-Caravan after "
+                "upstream-area filtering. Skipping discharge characteristic plots."
+            )
+            return
+
+        association_df: pd.DataFrame = (
+            discharge_characteristics.calculate_characteristic_associations(plot_gdf)
+        )
+        association_path: Path = explanation_folder / (
+            f"discharge_characteristic_associations{evaluation_paths.suffix}.csv"
+        )
+        association_df.to_csv(association_path, index=False)
+        self.model.logger.info(
+            "Saved discharge characteristic associations to %s.", association_path
+        )
+
+        for metric_column in discharge_characteristics.METRIC_STYLES:
+            figure: plt.Figure = (
+                discharge_characteristics.plot_skill_by_characteristics(
+                    evaluation_df=plot_gdf,
+                    metric_column=metric_column,
+                    output_folder=explanation_folder,
+                    logger=self.model.logger,
+                    output_name_suffix=evaluation_paths.suffix,
+                    export=export,
+                )
+            )
+            plt.close(figure)
+        screening_figure: plt.Figure = (
+            discharge_characteristics.plot_characteristic_screening(
+                evaluation_df=plot_gdf,
+                association_df=association_df,
+                output_folder=explanation_folder,
+                logger=self.model.logger,
+                output_name_suffix=evaluation_paths.suffix,
+                export=export,
+            )
+        )
+        plt.close(screening_figure)
+
+        external_models: dict[str, pd.DataFrame] = (
+            external_skill_scores.load_external_skill_scores(
+                input_folder=self.model.input_folder,
+                logger=self.model.logger,
+            )
+        )
+        _plot_paired_external_discharge_characteristics(
+            evaluation_df=plot_gdf,
+            external_models=external_models,
+            output_folder=explanation_folder,
+            logger=self.model.logger,
+            minimum_upstream_area_km2=minimum_upstream_area_km2,
+            output_name_suffix=evaluation_paths.suffix,
+            export=export,
+        )
 
     def plot_discharge_skill_scores(
         self,

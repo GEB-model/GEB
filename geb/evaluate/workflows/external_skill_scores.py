@@ -64,7 +64,7 @@ class MatchedSkillScores:
     minimum_upstream_area_km2: float
 
 
-def _format_grdc_station_key(station_id: object) -> str | None:
+def format_grdc_station_key(station_id: object) -> str | None:
     """Format one station ID as a GRDC-style key.
 
     Args:
@@ -106,7 +106,7 @@ def _add_match_keys(table: pd.DataFrame) -> pd.DataFrame:
         keyed_table["station_name_key"] = ""
     if "station_ID" in keyed_table.columns:
         keyed_table["station_id_key"] = (
-            keyed_table["station_ID"].map(_format_grdc_station_key).fillna("")
+            keyed_table["station_ID"].map(format_grdc_station_key).fillna("")
         )
     else:
         keyed_table["station_id_key"] = ""
@@ -313,7 +313,7 @@ def load_geb_station_keys(
     station_keys.update(
         station_key
         for station_key in snapped_locations.index.to_series().map(
-            _format_grdc_station_key
+            format_grdc_station_key
         )
         if station_key is not None
     )
