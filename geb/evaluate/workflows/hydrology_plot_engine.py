@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 from matplotlib.colorbar import Colorbar
 from matplotlib.lines import Line2D
+from matplotlib.ticker import MaxNLocator
 from scipy.stats import linregress
 
 from geb.evaluate.workflows.external_skill_scores import (
@@ -25,12 +26,12 @@ from geb.evaluate.workflows.external_skill_scores import (
 OBSERVATIONS_COLOR: str = "#E6900A"
 SIMULATIONS_DEFAULT_COLOR: str = "#278DD9"
 
-EXTERNAL_MODEL_PLOT_ORDER: dict[str, int] = {
+_EXTERNAL_MODEL_PLOT_ORDER: dict[str, int] = {
     UTRECHT_MODEL_NAME: 0,
     GOOGLE_MODEL_NAME: 1,
     GLOFAS_MODEL_NAME: 2,
 }
-EXTERNAL_MODEL_DISPLAY_NAMES: dict[str, str] = {
+_EXTERNAL_MODEL_DISPLAY_NAMES: dict[str, str] = {
     UTRECHT_MODEL_NAME: "PCR-GLOBWB",
     GOOGLE_MODEL_NAME: "Google",
     GLOFAS_MODEL_NAME: "GloFAS",
@@ -354,12 +355,7 @@ def _plot_skill_score_map_single(
 
 def _plot_kge_component_maps(
     evaluation_gdf: gpd.GeoDataFrame,
-    metric_configs: tuple[
-        dict[str, object],
-        dict[str, object],
-        dict[str, object],
-        dict[str, object],
-    ],
+    metric_configs: tuple[dict[str, object], ...],
     output_path: Path,
     region_geom: gpd.GeoDataFrame,
 ) -> None:
@@ -545,23 +541,16 @@ def plot_skill_score_maps(
     maps_folder = output_folder / "skill_score_maps"
     maps_folder.mkdir(parents=True, exist_ok=True)
 
-    kge_metric_columns: tuple[str, str, str, str] = (
+    kge_metric_columns: tuple[str, ...] = (
         "KGE",
         "KGE_correlation",
         "KGE_bias_ratio",
         "KGE_variability_ratio",
     )
     if all(column_name in evaluation_gdf.columns for column_name in kge_metric_columns):
-        kge_metric_configs: tuple[
-            dict[str, object],
-            dict[str, object],
-            dict[str, object],
-            dict[str, object],
-        ] = (
-            _SKILL_SCORE_CONFIG_BY_COLUMN[kge_metric_columns[0]],
-            _SKILL_SCORE_CONFIG_BY_COLUMN[kge_metric_columns[1]],
-            _SKILL_SCORE_CONFIG_BY_COLUMN[kge_metric_columns[2]],
-            _SKILL_SCORE_CONFIG_BY_COLUMN[kge_metric_columns[3]],
+        kge_metric_configs: tuple[dict[str, object], ...] = tuple(
+            _SKILL_SCORE_CONFIG_BY_COLUMN[column_name]
+            for column_name in kge_metric_columns
         )
         _plot_kge_component_maps(
             evaluation_gdf=evaluation_gdf,
@@ -766,10 +755,7 @@ def plot_skill_score_boxplots(
         )
         return
     if not include_geb and not external_models:
-        logger.warning(
-            "include_geb=False but no external model data found. "
-            "Run prepare_external_evaluation first."
-        )
+        logger.warning("include_geb=False but no external model data were provided.")
         return
 
     metric_order: tuple[str, ...] = (
@@ -797,20 +783,14 @@ def plot_skill_score_boxplots(
     logger.info("Creating evaluation metrics skill score plots...")
 
     fig = plt.figure(
-        figsize=(8.2, 5.4) if single_model else (13.0, 6.5),
+        figsize=(8.2, 8.2) if single_model else (13.0, 6.5),
         constrained_layout=False,
     )
     outer_grid = fig.add_gridspec(
         nrows=2,
         ncols=1,
         height_ratios=[1.0, 1.0],
-        hspace=0.80,
-    )
-    kge_grid = outer_grid[0, 0].subgridspec(
-        nrows=1,
-        ncols=4,
-        wspace=0.20,
-        width_ratios=[2.4 if single_model else 4.0, 1, 1, 1],
+        hspace=0.38 if single_model else 0.80,
     )
     other_metric_grid = outer_grid[1, 0].subgridspec(
         nrows=1,
@@ -818,14 +798,47 @@ def plot_skill_score_boxplots(
         wspace=0.28,
     )
     axes_by_metric: dict[str, plt.Axes] = {
-        "KGE": fig.add_subplot(kge_grid[0, 0]),
-        "KGE_correlation": fig.add_subplot(kge_grid[0, 1]),
-        "KGE_bias_ratio": fig.add_subplot(kge_grid[0, 2]),
-        "KGE_variability_ratio": fig.add_subplot(kge_grid[0, 3]),
         "NSE": fig.add_subplot(other_metric_grid[0, 0]),
         "R2": fig.add_subplot(other_metric_grid[0, 1]),
         "RRMSE": fig.add_subplot(other_metric_grid[0, 2]),
     }
+    if single_model:
+        # A smaller, centered group visually identifies these as KGE components.
+        kge_grid = outer_grid[0, 0].subgridspec(
+            nrows=1,
+            ncols=2,
+            width_ratios=[1.35, 1.0],
+            wspace=0.20,
+        )
+        component_grid = kge_grid[0, 1].subgridspec(
+            nrows=3,
+            ncols=3,
+            height_ratios=[0.11, 0.78, 0.11],
+            wspace=0.32,
+        )
+        axes_by_metric.update(
+            {
+                "KGE": fig.add_subplot(kge_grid[0, 0]),
+                "KGE_correlation": fig.add_subplot(component_grid[1, 0]),
+                "KGE_bias_ratio": fig.add_subplot(component_grid[1, 1]),
+                "KGE_variability_ratio": fig.add_subplot(component_grid[1, 2]),
+            }
+        )
+    else:
+        kge_grid = outer_grid[0, 0].subgridspec(
+            nrows=1,
+            ncols=4,
+            width_ratios=[4.0, 1.0, 1.0, 1.0],
+            wspace=0.20,
+        )
+        axes_by_metric.update(
+            {
+                "KGE": fig.add_subplot(kge_grid[0, 0]),
+                "KGE_correlation": fig.add_subplot(kge_grid[0, 1]),
+                "KGE_bias_ratio": fig.add_subplot(kge_grid[0, 2]),
+                "KGE_variability_ratio": fig.add_subplot(kge_grid[0, 3]),
+            }
+        )
     displayed_station_count: int | None = (
         station_count if station_count is not None else len(evaluation_df)
     )
@@ -848,6 +861,11 @@ def plot_skill_score_boxplots(
         y=0.97,
     )
 
+    component_titles: dict[str, str] = {
+        "KGE_correlation": "Correlation\nr",
+        "KGE_bias_ratio": "Bias ratio\nβ",
+        "KGE_variability_ratio": "Variability\nratio α",
+    }
     for metric_col in metric_order:
         config: dict[str, object] = _SKILL_SCORE_CONFIG_BY_COLUMN[metric_col]
         axis = axes_by_metric[str(config["col"])]
@@ -876,13 +894,15 @@ def plot_skill_score_boxplots(
                 if include_geb and metric_col in evaluation_df.columns
                 else np.array([], dtype=float)
             )
-            external_metric_values = {
-                model_name: values
-                for model_name, model_df in external_models.items()
-                if metric_col in model_df.columns
-                for values in (model_df[metric_col].dropna().to_numpy(dtype=float),)
-                if values.size > 0
-            }
+            external_metric_values = {}
+            for model_name, model_df in external_models.items():
+                if metric_col not in model_df.columns:
+                    continue
+                metric_values: np.ndarray = (
+                    model_df[metric_col].dropna().to_numpy(dtype=float)
+                )
+                if metric_values.size > 0:
+                    external_metric_values[model_name] = metric_values
 
         if geb_metric_values.size == 0 and not external_metric_values:
             axis.set_visible(False)
@@ -915,6 +935,16 @@ def plot_skill_score_boxplots(
             )
             y_limits = (0.0, max(visible_upper_limit * 1.1, 1.0))
 
+        lower_axis_ticks: np.ndarray | None = None
+        if metric_col == "RRMSE":
+            rrmse_ticks: np.ndarray = np.asarray(
+                MaxNLocator(nbins=4).tick_values(*y_limits), dtype=float
+            )
+            lower_axis_ticks = rrmse_ticks
+            y_limits = (float(rrmse_ticks[0]), float(rrmse_ticks[-1]))
+        elif metric_col in ("NSE", "R2"):
+            lower_axis_ticks = np.linspace(y_limits[0], y_limits[1], 5)
+
         for (model_name, metric_values), x_position in zip(
             models_with_data, x_positions, strict=True
         ):
@@ -944,19 +974,7 @@ def plot_skill_score_boxplots(
                 clip_on=False,
             )
 
-        if is_component_axis:
-            title_str: str = str(config["label"])
-            last_space_paren: int = title_str.rfind(" (")
-            if last_space_paren != -1:
-                axis_title: str = (
-                    title_str[:last_space_paren]
-                    + "\n"
-                    + title_str[last_space_paren + 1 :]
-                )
-            else:
-                axis_title = title_str
-        else:
-            axis_title = str(config["label"])
+        axis_title: str = component_titles.get(metric_col, str(config["label"]))
         axis.set_title(
             axis_title,
             fontsize=8 if is_component_axis else 9,
@@ -964,6 +982,9 @@ def plot_skill_score_boxplots(
             pad=8,
         )
         axis.set_ylim(*y_limits)
+        if lower_axis_ticks is not None:
+            # Equal relative tick positions align the three lower grid patterns.
+            axis.set_yticks(lower_axis_ticks)
         axis.set_xticks([])
         axis.tick_params(
             axis="y",
@@ -996,8 +1017,8 @@ def plot_skill_score_boxplots(
     fig.subplots_adjust(
         left=0.07 if single_model else 0.055,
         right=0.985,
-        top=0.82 if single_model else 0.88,
-        bottom=0.10 if single_model else 0.14,
+        top=0.89 if single_model else 0.88,
+        bottom=0.07 if single_model else 0.14,
     )
 
     if export:
@@ -1024,7 +1045,11 @@ def plot_skill_score_boxplots(
                 boxplots_folder
                 / f"evaluation_skill_scores{suffix}{context_suffix}.{extension}"
             )
-            plt.savefig(output_path, bbox_inches="tight", dpi=150)
+            fig.savefig(
+                output_path,
+                bbox_inches=None if single_model else "tight",
+                dpi=150,
+            )
             logger.info("Skill score plot saved to: %s", output_path)
 
     plt.show()
@@ -1054,7 +1079,7 @@ def plot_kge_external_model_comparison(
     ] = sorted(
         model_kge_values.items(),
         key=lambda item: (
-            EXTERNAL_MODEL_PLOT_ORDER.get(item[0], 99),
+            _EXTERNAL_MODEL_PLOT_ORDER.get(item[0], 99),
             item[0].lower(),
         ),
     )
@@ -1130,7 +1155,7 @@ def plot_kge_external_model_comparison(
         )
         x_tick_positions.append(group_position)
         x_tick_labels.append(
-            f"{EXTERNAL_MODEL_DISPLAY_NAMES.get(model_name, model_name)}"
+            f"{_EXTERNAL_MODEL_DISPLAY_NAMES.get(model_name, model_name)}"
             f"\nn={station_count}{threshold_label}"
         )
 

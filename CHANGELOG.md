@@ -1,6 +1,8 @@
 # dev
 - Replaced the external `scores` package dependency in discharge evaluation with in-project metric formulas for KGE, modified KGE, NSE, RMSE, and RRMSE.
 - Simplified external discharge comparisons to fixed local Utrecht and Google/GloFAS files in `external_evaluation_data/`, with no online fetching or folder configuration option.
+- Simplified hydrology evaluation and external-score matching so loading, station alignment, filtering, and plotting follow one explicit workflow.
+- Clarified discharge skill-score boxplots by grouping the smaller KGE component panels and aligning the lower metric grids.
 - Fixed discharge skill-score map export and pairwise matching of duplicate Utrecht station keys.
 - Implemented the `early_warning.py` module outside of `households.py`, launching the latest GEB-IbF system, including options for: area and building based warnings; warning communication weighted by socio-economic factor; time-dependent damage reduction.
 - Users need to run `setup_warning_communication_weights` to enable the warning communication efficiency based on socioeconomic factors.

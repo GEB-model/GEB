@@ -17,6 +17,7 @@ from matplotlib.collections import LineCollection
 from matplotlib.lines import Line2D
 from tqdm import tqdm
 
+from geb.evaluate.workflows import external_skill_scores, hydrology_plot_engine
 from geb.evaluate.workflows.dashboard import (
     DischargeDashboardGeometries,
     build_discharge_dashboard_chart_data,
@@ -24,23 +25,11 @@ from geb.evaluate.workflows.dashboard import (
     load_discharge_dashboard_geometries,
     write_discharge_dashboard_chart_data,
 )
-from geb.evaluate.workflows.external_skill_scores import (
-    get_geb_station_keys as _get_geb_station_keys,
-    prepare_external_evaluation as _prepare_external_evaluation,
-    prepare_pairwise_skill_score_inputs as _prepare_pairwise_skill_score_inputs,
-    prepare_skill_score_boxplot_inputs as _prepare_skill_score_boxplot_inputs,
-    read_external_evaluation_raw as _read_external_evaluation_raw,
-)
 from geb.evaluate.workflows.hydrology_plot_engine import (
     OBSERVATIONS_COLOR,
     SIMULATIONS_DEFAULT_COLOR,
-    plot_kge_external_model_comparison as _plot_kge_external_model_comparison,
-    plot_skill_score_boxplots as _plot_skill_score_boxplots,
-    plot_skill_score_maps as _plot_skill_score_maps,
-    plot_skill_scores_vs_upstream_area as _plot_skill_scores_vs_upstream_area,
-    save_discharge_timeseries_plots,
 )
-from geb.hydrology.routing import get_discharge_per_river
+from geb.hydrology import routing as hydrology_routing
 from geb.reporter import WATER_STORAGE_REPORT_CONFIG
 from geb.workflows.visualise import plot_sunburst
 
@@ -53,6 +42,11 @@ from geb.workflows.extreme_value_analysis import (
 )
 from geb.workflows.io import read_geom, read_table
 
+DISCHARGE_OBSERVATION_FREQUENCIES: dict[str, str] = {
+    "hourly": "h",
+    "daily": "D",
+}
+
 # Configure global style for all plots in this module
 mpl.rcParams["figure.facecolor"] = "white"
 mpl.rcParams["axes.facecolor"] = "white"
@@ -60,11 +54,6 @@ mpl.rcParams["axes.edgecolor"] = "0.15"
 mpl.rcParams["axes.labelcolor"] = "black"
 mpl.rcParams["xtick.color"] = "black"
 mpl.rcParams["ytick.color"] = "black"
-
-DISCHARGE_OBSERVATION_FREQUENCIES: dict[str, str] = {
-    "hourly": "h",
-    "daily": "D",
-}
 mpl.rcParams["text.color"] = "black"
 mpl.rcParams["figure.edgecolor"] = "black"
 mpl.rcParams["grid.color"] = "0.8"
@@ -95,6 +84,9 @@ class DischargeEvaluationPaths(NamedTuple):
     plot_folder: Path
     xlsx: Path
     geoparquet: Path
+
+
+# Discharge metrics
 
 
 def _add_daily_discharge_metric_columns(evaluation_df: pd.DataFrame) -> None:
@@ -240,6 +232,9 @@ def _calculate_discharge_validation_metrics(
         RMSE=rmse,
         RRMSE=rrmse,
     )
+
+
+# Discharge and outflow plots
 
 
 def _plot_validation_return_periods(
@@ -408,85 +403,6 @@ def _plot_outflow_return_period(
     plt.close()
 
 
-def _format_outflow_volume_caption(
-    outflow_series_m3_per_s: pd.Series,
-    year: int,
-    total_area_m2: float,
-) -> str:
-    """Format the total annual outflow volume caption for one yearly subplot.
-
-    Args:
-        outflow_series_m3_per_s: Discharge series for one outlet (m3/s).
-        year: Calendar year represented by the subplot.
-        total_area_m2: Total basin area used for the depth conversion (m2).
-
-    Returns:
-        Caption text containing the annual total outflow volume (m3) and depth (mm).
-    """
-    time_index: pd.DatetimeIndex = pd.DatetimeIndex(outflow_series_m3_per_s.index)
-    timestep_seconds: float = float(
-        pd.Timedelta(
-            pd.tseries.frequencies.to_offset(str(time_index.inferred_freq))
-        ).total_seconds()
-    )
-    yearly_mask: np.ndarray = pd.Series(time_index).dt.year.to_numpy(dtype=int) == year
-    total_outflow_m3: float = float(
-        outflow_series_m3_per_s.loc[yearly_mask].sum() * timestep_seconds
-    )
-    total_outflow_mm: float = total_outflow_m3 * 1000.0 / total_area_m2
-    return (
-        f"total river outflow at point: {total_outflow_m3:,.0f} m3 "
-        f"({total_outflow_mm:.2f} mm basin-equivalent)"
-    )
-
-
-def _align_context_series_to_outflow_index(
-    context_series: pd.Series,
-    target_index: pd.DatetimeIndex,
-) -> pd.Series:
-    """Align a lower-frequency context series to outflow timestamps.
-
-    Args:
-        context_series: Context series to align.
-        target_index: Target outflow timestamps.
-
-    Returns:
-        Context series reindexed to `target_index`.
-    """
-    aligned_series: pd.Series = context_series.reindex(target_index, method="ffill")
-    aligned_series = aligned_series.bfill()
-    aligned_series.name = context_series.name
-    return aligned_series
-
-
-def _bucket_outflow_context_percent(
-    context_percent: np.ndarray,
-    bucket_count: int,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Quantize outflow context values into a fixed number of buckets.
-
-    Args:
-        context_percent: Context values expressed in percent.
-        bucket_count: Number of discrete color buckets.
-
-    Returns:
-        Tuple containing:
-            - Bucket index per value.
-            - Bucket-center percent per value.
-    """
-    clipped_context_percent = np.clip(context_percent, 0.0, 100.0)
-    bucket_edges_percent = np.linspace(0.0, 100.0, bucket_count + 1)
-    bucket_indices = np.digitize(
-        clipped_context_percent,
-        bucket_edges_percent[1:-1],
-        right=False,
-    )
-    bucket_centers_percent = (
-        bucket_edges_percent[:-1] + bucket_edges_percent[1:]
-    ) / 2.0
-    return bucket_indices, bucket_centers_percent[bucket_indices]
-
-
 def _plot_outflow_line_with_context(
     axis: plt.Axes,
     time_index: pd.DatetimeIndex,
@@ -527,14 +443,21 @@ def _plot_outflow_line_with_context(
     segment_context_percent = (
         frozen_values_percent[:-1] + frozen_values_percent[1:]
     ) / 2.0
-    bucket_indices, bucket_centers_percent = _bucket_outflow_context_percent(
-        segment_context_percent,
-        bucket_count=bucket_count,
+    # A small number of color buckets prevents thousands of tiny line segments.
+    clipped_context_percent: np.ndarray = np.clip(segment_context_percent, 0.0, 100.0)
+    bucket_edges_percent: np.ndarray = np.linspace(0.0, 100.0, bucket_count + 1)
+    bucket_indices: np.ndarray = np.digitize(
+        clipped_context_percent,
+        bucket_edges_percent[1:-1],
+        right=False,
     )
+    bucket_centers_percent: np.ndarray = (
+        bucket_edges_percent[:-1] + bucket_edges_percent[1:]
+    ) / 2.0
+    context_bucket_values_percent: np.ndarray = bucket_centers_percent[bucket_indices]
     discrete_cmap = mcolors.ListedColormap(
         frozen_fraction_cmap(np.linspace(0.0, 1.0, bucket_count))
     )
-    bucket_edges_percent = np.linspace(0.0, 100.0, bucket_count + 1)
     discrete_norm = mcolors.BoundaryNorm(bucket_edges_percent, discrete_cmap.N)
 
     line_segments: list[np.ndarray[Any, Any]] = []
@@ -543,10 +466,12 @@ def _plot_outflow_line_with_context(
     for segment_idx in range(1, len(bucket_indices)):
         if bucket_indices[segment_idx] != bucket_indices[run_start_idx]:
             line_segments.append(line_points[run_start_idx : segment_idx + 1])
-            merged_bucket_values_percent.append(bucket_centers_percent[run_start_idx])
+            merged_bucket_values_percent.append(
+                context_bucket_values_percent[run_start_idx]
+            )
             run_start_idx = segment_idx
     line_segments.append(line_points[run_start_idx:])
-    merged_bucket_values_percent.append(bucket_centers_percent[run_start_idx])
+    merged_bucket_values_percent.append(context_bucket_values_percent[run_start_idx])
 
     line_collection = LineCollection(
         line_segments,
@@ -563,34 +488,6 @@ def _plot_outflow_line_with_context(
     return line_collection
 
 
-def _style_dark_timeseries_axis(axis: plt.Axes) -> None:
-    """Apply the shared styling used for hydrology timeseries plots.
-
-    Args:
-        axis: Axis to style.
-    """
-    # Styling is handled via global mpl.rcParams
-    pass
-
-
-def _style_outflow_axis(axis: plt.Axes) -> None:
-    """Apply the dark outflow-plot styling used for frozen-soil context plots.
-
-    Args:
-        axis: Axis to style.
-    """
-    _style_dark_timeseries_axis(axis)
-
-
-def _style_water_balance_axis(axis: plt.Axes) -> None:
-    """Apply the dark styling used for water-balance line plots.
-
-    Args:
-        axis: Axis to style.
-    """
-    _style_dark_timeseries_axis(axis)
-
-
 def _format_full_timeseries_axis(
     axis: plt.Axes,
     time_index: pd.DatetimeIndex,
@@ -598,7 +495,7 @@ def _format_full_timeseries_axis(
     y_label: str,
     draw_zero_line: bool = False,
 ) -> None:
-    """Format a full-run timeseries axis with consistent dark-theme behavior.
+    """Apply shared formatting to a full-run time-series axis.
 
     Args:
         axis: Axis to format.
@@ -628,7 +525,7 @@ def _format_yearly_timeseries_axis(
     y_label: str,
     draw_zero_line: bool = False,
 ) -> None:
-    """Format a single-year timeseries axis with consistent dark-theme behavior.
+    """Apply shared formatting to a single-year time-series axis.
 
     Args:
         axis: Axis to format.
@@ -650,7 +547,7 @@ def _format_yearly_timeseries_axis(
     axis.grid(True, alpha=0.5, color="0.8")
 
 
-def _add_dark_legend(
+def _add_timeseries_legend(
     axis: plt.Axes,
     loc: Literal[
         "best",
@@ -787,14 +684,15 @@ def _plot_outflow_discharge_timeseries(
         )
         aligned_frozen_fraction_percent: pd.Series | None = None
         if frozen_fraction_series is not None:
-            aligned_frozen_fraction_percent = _align_context_series_to_outflow_index(
-                frozen_fraction_series,
-                pd.DatetimeIndex(outflow_series.index),
+            # Repeat the latest daily context value across the hourly outflow data.
+            aligned_frozen_fraction_percent = frozen_fraction_series.reindex(
+                pd.DatetimeIndex(outflow_series.index), method="ffill"
             )
-            aligned_frozen_fraction_percent = aligned_frozen_fraction_percent * 100.0
+            aligned_frozen_fraction_percent = (
+                aligned_frozen_fraction_percent.bfill() * 100.0
+            )
 
         fig, ax = plt.subplots(figsize=(7, 4))
-        _style_outflow_axis(ax)
         if aligned_frozen_fraction_percent is not None:
             _plot_outflow_line_with_context(
                 axis=ax,
@@ -833,6 +731,11 @@ def _plot_outflow_discharge_timeseries(
         plt.close(fig)
 
         outflow_time_index: pd.DatetimeIndex = pd.DatetimeIndex(outflow_series.index)
+        timestep_seconds: float = float(
+            pd.Timedelta(
+                pd.tseries.frequencies.to_offset(str(outflow_time_index.inferred_freq))
+            ).total_seconds()
+        )
         outflow_year_values: np.ndarray = pd.Series(
             outflow_time_index
         ).dt.year.to_numpy(dtype=int)
@@ -847,7 +750,6 @@ def _plot_outflow_discharge_timeseries(
             yearly_axes = [yearly_axes]
 
         for axis, year in zip(yearly_axes, outflow_years, strict=True):
-            _style_outflow_axis(axis)
             yearly_mask: np.ndarray = outflow_year_values == year
             yearly_outflow_series: pd.Series = outflow_series.loc[yearly_mask]
             yearly_frozen_fraction_percent: pd.Series | None = None
@@ -885,10 +787,15 @@ def _plot_outflow_discharge_timeseries(
                 pd.Timestamp(year=year, month=1, day=1),
                 pd.Timestamp(year=year, month=12, day=31, hour=23),
             )
+            total_outflow_m3: float = float(
+                yearly_outflow_series.sum() * timestep_seconds
+            )
+            total_outflow_mm: float = total_outflow_m3 * 1000.0 / total_area_m2
             axis.text(
                 0.01,
                 -0.22,
-                _format_outflow_volume_caption(outflow_series, year, total_area_m2),
+                f"total river outflow at point: {total_outflow_m3:,.0f} m3 "
+                f"({total_outflow_mm:.2f} mm basin-equivalent)",
                 transform=axis.transAxes,
                 fontsize=7,
                 va="top",
@@ -928,6 +835,9 @@ def _plot_outflow_discharge_timeseries(
     return plots_created
 
 
+# Discharge time-series alignment
+
+
 def _get_fixed_frequency_timedelta(
     frequency: Any,
     frequency_name: str,
@@ -948,9 +858,7 @@ def _get_fixed_frequency_timedelta(
     try:
         fixed_timestep: pd.Timedelta = cast(pd.Timedelta, pd.Timedelta(frequency))
         return fixed_timestep
-    except TypeError:
-        pass
-    except ValueError:
+    except TypeError, ValueError:
         pass
 
     try:
@@ -964,24 +872,22 @@ def _get_fixed_frequency_timedelta(
 
 def create_validation_df(
     output_folder: Path,
-    run_name: str,
     station_id: str | int,
     observed_discharge: pd.Series,
-    correct_discharge_observations: bool,
-    discharge_observations_to_GEB_upstream_area_ratio: float,
+    apply_upstream_area_correction: bool,
+    upstream_area_ratio: float,
     timezone_utc_offset: float = 0.0,
 ) -> pd.DataFrame:
-    """Create a validation dataframe with the discharge observations and the GEB discharge simulation for the selected station.
+    """Align observed and simulated discharge for one gauging station.
 
     Args:
         output_folder: Path to the model output folder.
-        run_name: Name of the simulation run to evaluate. Must correspond to an existing run directory
-            in the model output folder.
         station_id: Station identifier to create the validation dataframe for.
-        observed_discharge: Series with the discharge observations for the selected station.
-        correct_discharge_observations: Whether to correct the discharge_observations discharge timeseries for the difference in upstream
-            area between the discharge_observations station and the discharge from GEB.
-        discharge_observations_to_GEB_upstream_area_ratio: The ratio of the upstream area of the discharge_observations station to the upstream area of the GEB discharge grid cell. This is used to correct
+        observed_discharge: Observed station discharge (m3/s).
+        apply_upstream_area_correction: Whether to scale simulated discharge to
+            the observed station's upstream area.
+        upstream_area_ratio: Observed upstream area divided by the modeled
+            upstream area (dimensionless).
         timezone_utc_offset: Fixed UTC offset for the GRDC station metadata
             (hours). For daily or coarser observations, GEB's hourly UTC
             timestamps are converted to this fixed local offset before
@@ -990,27 +896,24 @@ def create_validation_df(
             Defaults to 0 (UTC).
 
     Returns:
-        DataFrame with the discharge observations and the GEB discharge simulation for the selected station.
+        Aligned observed and simulated discharge (m3/s).
 
     Raises:
         FileNotFoundError: If the hydrology routing directory does not exist.
         ValueError: If the GEB discharge data contain NaN values or the fixed UTC
             offset is non-finite or outside the valid range from UTC-12 to UTC+14.
     """
-    # Check if the hydrology.routing directory exists
     report_folder: Path = output_folder / "report"
-    routing_dir = report_folder / "hydrology.routing"
+    routing_dir: Path = report_folder / "hydrology.routing"
     if not routing_dir.exists():
         raise FileNotFoundError(
             f"Hydrology routing directory does not exist: {routing_dir}"
         )
 
-    # Construct the path to the individual station discharge file
-    station_file_name = f"discharge_hourly_m3_per_s_{station_id}.parquet"
-    station_file_path = routing_dir / station_file_name
+    station_file_name: str = f"discharge_hourly_m3_per_s_{station_id}.parquet"
+    station_file_path: Path = routing_dir / station_file_name
 
-    # Load the individual station discharge timeseries
-    simulated_discharge = pd.read_parquet(station_file_path)[
+    simulated_discharge: pd.Series = pd.read_parquet(station_file_path)[
         f"discharge_hourly_m3_per_s_{station_id}"
     ]
 
@@ -1019,31 +922,33 @@ def create_validation_df(
             f"NaN values found in GEB discharge data for station {station_id}. Please check the station file {station_file_path}."
         )
 
-    simulated_discharge = simulated_discharge.asfreq(
-        pd.infer_freq(simulated_discharge.index)
-    )
+    simulated_index: pd.Index = simulated_discharge.index
+    if not isinstance(simulated_index, pd.DatetimeIndex):
+        raise ValueError("Simulated discharge must have a DateTimeIndex.")
+    simulated_frequency: str | None = pd.infer_freq(simulated_index)
+    if simulated_frequency is None:
+        raise ValueError("Simulated discharge must have a regular frequency.")
+    simulated_discharge = simulated_discharge.asfreq(simulated_frequency)
 
-    if correct_discharge_observations:
-        """Correct observed discharge by upstream-area ratio when requested."""
-        simulated_discharge = (
-            simulated_discharge * discharge_observations_to_GEB_upstream_area_ratio
-        )
+    if apply_upstream_area_correction:
+        simulated_discharge = simulated_discharge * upstream_area_ratio
 
-    if not observed_discharge.index.is_monotonic_increasing:
+    observed_index: pd.Index = observed_discharge.index
+    if not isinstance(observed_index, pd.DatetimeIndex):
+        raise ValueError("Observed discharge must have a DateTimeIndex.")
+    if not observed_index.is_monotonic_increasing:
         raise ValueError(
             "Observed discharge index must be a regular time series with a monotonic increasing DateTimeIndex."
         )
 
-    assert observed_discharge.index.freq is not None, (  # ty:ignore[unresolved-attribute]
-        "Observed discharge index must have a defined frequency."
-    )
+    if observed_index.freq is None:
+        raise ValueError("Observed discharge index must have a defined frequency.")
     if not np.isfinite(timezone_utc_offset):
         raise ValueError("Station UTC offset must be finite.")
     if not -12.0 <= timezone_utc_offset <= 14.0:
         raise ValueError("Station UTC offset must be between UTC-12 and UTC+14 hours.")
 
-    simulated_frequency = simulated_discharge.index.freq
-    observed_frequency = observed_discharge.index.freq  # ty:ignore[unresolved-attribute]
+    observed_frequency = observed_index.freq
     simulated_timestep: pd.Timedelta = _get_fixed_frequency_timedelta(
         simulated_frequency,
         "Simulated discharge",
@@ -1139,39 +1044,7 @@ def _get_discharge_evaluation_paths(
     )
 
 
-def _filter_validation_df_to_years(
-    validation_df: pd.DataFrame,
-    start_year: int | None,
-    end_year: int | None,
-) -> pd.DataFrame:
-    """Filter a validation dataframe to an inclusive calendar-year period.
-
-    Args:
-        validation_df: Validation dataframe indexed by time.
-        start_year: First calendar year included in the evaluation, or `None`
-            for the first available year.
-        end_year: Last calendar year included in the evaluation, or `None` for
-            the last available year.
-
-    Returns:
-        Validation dataframe restricted to the requested calendar years.
-    """
-    if start_year is None and end_year is None:
-        return validation_df
-    start_time: pd.Timestamp | None = (
-        cast(pd.Timestamp, pd.Timestamp(year=start_year, month=1, day=1))
-        if start_year is not None
-        else None
-    )
-    end_time: pd.Timestamp | None = (
-        cast(
-            pd.Timestamp,
-            pd.Timestamp(year=end_year + 1, month=1, day=1) - pd.Timedelta("1ns"),
-        )
-        if end_year is not None
-        else None
-    )
-    return validation_df.loc[start_time:end_time]
+# Water-balance and storage data
 
 
 def _read_evaluation_series_with_date_index(
@@ -1218,25 +1091,6 @@ def _load_named_evaluation_series(
         )
         for series_name, (module_name, reported_name) in series_specs.items()
     }
-
-
-def _load_evaluation_dataframe(
-    folder: Path,
-    series_specs: dict[str, tuple[str, str]],
-) -> pd.DataFrame:
-    """Load a collection of evaluation series into one time-indexed dataframe.
-
-    Args:
-        folder: Path to the report folder for one model run.
-        series_specs: Mapping from dataframe column names to `(module, reported_name)`
-            tuples describing where each CSV series lives.
-
-    Returns:
-        Dataframe with one column per requested series.
-    """
-    return pd.DataFrame(
-        _load_named_evaluation_series(folder, series_specs)
-    ).sort_index()
 
 
 def _flatten_water_balance_hierarchy(
@@ -1772,63 +1626,7 @@ def _load_contextual_top_soil_water_balance_series(
     )
 
 
-def _load_water_storage_dataframe(folder: Path) -> pd.DataFrame:
-    """Load reported water storage component time series for one run.
-
-    Args:
-        folder: Path to the report folder for one model run.
-
-    Returns:
-        Dataframe with one column per reported water storage component (m).
-
-    Raises:
-        ValueError: If no water storage reporter outputs are available. This
-            usually means `report._water_storage` was disabled during the run.
-    """
-    module_name: str = "hydrology.landsurface"
-    reported_storage_names: list[str] = list(
-        WATER_STORAGE_REPORT_CONFIG[module_name].keys()
-    )
-    storage_specs: dict[str, tuple[str, str]] = {
-        reported_name.removeprefix("_").removesuffix("_m"): (
-            module_name,
-            reported_name,
-        )
-        for reported_name in reported_storage_names
-    }
-
-    try:
-        return _load_evaluation_dataframe(folder, storage_specs)
-    except FileNotFoundError as exc:
-        raise ValueError(
-            "Water storage outputs are missing. Enable report._water_storage during the run and rerun before calling hydrology.plot_water_storage."
-        ) from exc
-
-
-def _format_water_storage_component_label(column_name: str) -> str:
-    """Format a water storage column name for plot legends.
-
-    Args:
-        column_name: Raw dataframe column name.
-
-    Returns:
-        Human-readable legend label.
-    """
-    return column_name.replace("_", " ")
-
-
-def _get_top_soil_water_balance_label(column_name: str) -> str:
-    """Format top-soil water balance labels for plot legends.
-
-    Args:
-        column_name: Raw dataframe column name.
-
-    Returns:
-        Human-readable legend label with an explicit storage-change description.
-    """
-    if column_name == "storage_change":
-        return "storage change (from top-soil storage)"
-    return _format_water_balance_component_label(column_name)
+# Public evaluation methods
 
 
 class Hydrology:
@@ -1855,7 +1653,6 @@ class Hydrology:
         Returns:
             A GeoDataFrame containing the river geometries and a DataFrame containing the discharge data for each river.
         """
-        # check if discharge files exists
         discharge_folder: Path = (
             self.evaluator.output_folder_evaluate.parent
             / "report"
@@ -1866,7 +1663,6 @@ class Hydrology:
                 f"Discharge files for run '{run_name}' does not exist in the report directory. Did you run the model?"
             )
 
-        # load rivers
         all_rivers: gpd.GeoDataFrame = read_geom(
             self.model.files["geom"]["routing/rivers"]
         )
@@ -1878,16 +1674,16 @@ class Hydrology:
             )
         ].copy()
 
-        # In merged multi-cluster runs some rivers may not have output files, mostly caused by the outflow reporter to be false in the model.yml. Filter out those rivers here.
-        rivers_of_interest = rivers_of_interest[
-            rivers_of_interest.index.map(
-                lambda rid: (
-                    discharge_folder / f"river_outflow_hourly_m3_per_s_{rid}.parquet"
-                ).exists()
-            )
-        ].copy()
+        # Merged runs can omit files when outflow reporting was disabled for a cluster.
+        has_discharge_output: list[bool] = [
+            (
+                discharge_folder / f"river_outflow_hourly_m3_per_s_{river_id}.parquet"
+            ).exists()
+            for river_id in rivers_of_interest.index
+        ]
+        rivers_of_interest = rivers_of_interest[has_discharge_output].copy()
 
-        discharge: pd.DataFrame = get_discharge_per_river(
+        discharge: pd.DataFrame = hydrology_routing.get_discharge_per_river(
             folder=discharge_folder,
             rivers=rivers_of_interest,
             all_rivers=all_rivers,
@@ -1917,47 +1713,12 @@ class Hydrology:
                 run directory in the model output folder.
             *args: Additional positional arguments (ignored).
             **kwargs: Additional keyword arguments (ignored).
-
-        Raises:
-            FileNotFoundError: If the hydrology routing report folder is missing.
         """
         if self.discharge_output_folder.exists():
             shutil.rmtree(self.discharge_output_folder)
         self.discharge_output_folder.mkdir(parents=True, exist_ok=True)
 
-        discharge_folder: Path = (
-            self.evaluator.output_folder_evaluate.parent
-            / "report"
-            / "hydrology.routing"
-        )
-        if not discharge_folder.exists():
-            raise FileNotFoundError(
-                f"Discharge files for run '{run_name}' does not exist in the report directory. Did you run the model?"
-            )
-
-        all_rivers: gpd.GeoDataFrame = read_geom(
-            self.model.files["geom"]["routing/rivers"]
-        )
-        rivers_of_interest: gpd.GeoDataFrame = all_rivers[
-            ~(
-                all_rivers["is_downstream_outflow"]
-                | all_rivers["is_upstream_of_downstream_basin"]
-                | all_rivers["is_further_downstream_outflow"]
-            )
-        ].copy()
-        rivers_of_interest = rivers_of_interest[
-            rivers_of_interest.index.map(
-                lambda river_id: (
-                    discharge_folder
-                    / f"river_outflow_hourly_m3_per_s_{river_id}.parquet"
-                ).exists()
-            )
-        ].copy()
-        discharge: pd.DataFrame = get_discharge_per_river(
-            folder=discharge_folder,
-            rivers=rivers_of_interest,
-            all_rivers=all_rivers,
-        )
+        rivers_of_interest, discharge = self.get_discharge_per_river(run_name)
         for river_id in discharge.columns:
             rivers_of_interest.loc[river_id, "discharge_m3_per_s"] = discharge[
                 river_id
@@ -2045,11 +1806,10 @@ class Hydrology:
             FileNotFoundError: If the run folder does not exist in the report directory.
             ValueError: If a non-existing frequency label is encountered in the discharge observations data.
         """
-        output_folder = self.evaluate_discharge_output_folder
-        output_folder.mkdir(parents=True, exist_ok=True)
-        if clean_output:
+        output_folder: Path = self.evaluate_discharge_output_folder
+        if clean_output and output_folder.exists():
             shutil.rmtree(output_folder)
-            output_folder.mkdir(parents=True, exist_ok=True)
+        output_folder.mkdir(parents=True, exist_ok=True)
         evaluation_paths: DischargeEvaluationPaths = _get_discharge_evaluation_paths(
             output_folder=output_folder,
             start_year=start_year,
@@ -2092,7 +1852,6 @@ class Hydrology:
                     minimum_timeseries_length_years,
                 )
 
-        # load input data files
         discharge_observations: dict[str, pd.DataFrame] = {
             frequency: read_table(
                 self.model.files["table"][
@@ -2128,21 +1887,17 @@ class Hydrology:
                 DISCHARGE_OBSERVATION_FREQUENCIES[frequency_label]
             )
             for station_id in tqdm(discharge_observations_df.columns):
-                # create a discharge timeseries dataframe
                 observed_discharge_series = discharge_observations_df[station_id]
                 if isinstance(observed_discharge_series, pd.DataFrame):
                     observed_discharge_series.columns = ["Q"]
                 observed_discharge_series.name = "Q"
 
-                # extract the properties from the snapping dataframe
                 station: pd.Series = snapped_locations.loc[station_id]
-                discharge_observations_station_name: str = (
-                    station.discharge_observations_station_name
-                )
-                discharge_observations_station_coords: tuple[float, float] = (
+                station_name: str = station.discharge_observations_station_name
+                station_coordinates: tuple[float, float] = (
                     station.discharge_observations_station_coords
                 )
-                discharge_observations_to_GEB_upstream_area_ratio: float = float(
+                upstream_area_ratio: float = float(
                     station.discharge_observations_to_GEB_upstream_area_ratio
                 )
                 geb_upstream_area_m2: float = float(station.GEB_upstream_area_from_grid)
@@ -2160,11 +1915,10 @@ class Hydrology:
                 try:
                     validation_df: pd.DataFrame = create_validation_df(
                         self.model.output_folder,
-                        run_name,
                         station_id,
                         observed_discharge_series,
                         correct_discharge_observations,
-                        discharge_observations_to_GEB_upstream_area_ratio,
+                        upstream_area_ratio,
                         timezone_utc_offset=timezone_utc_offset,
                     )
                 except FileNotFoundError:
@@ -2172,11 +1926,26 @@ class Hydrology:
                         "Skipping station %s: no simulation output found.", station_id
                     )
                     continue
-                validation_df = _filter_validation_df_to_years(
-                    validation_df=validation_df,
-                    start_year=start_year,
-                    end_year=end_year,
-                )
+                if start_year is not None or end_year is not None:
+                    # Keep complete calendar years and include the final instant.
+                    period_start: pd.Timestamp | None = (
+                        cast(
+                            pd.Timestamp,
+                            pd.Timestamp(year=start_year, month=1, day=1),
+                        )
+                        if start_year is not None
+                        else None
+                    )
+                    period_end: pd.Timestamp | None = (
+                        cast(
+                            pd.Timestamp,
+                            pd.Timestamp(year=end_year + 1, month=1, day=1)
+                            - pd.Timedelta("1ns"),
+                        )
+                        if end_year is not None
+                        else None
+                    )
+                    validation_df = validation_df.loc[period_start:period_end]
 
                 minimum_valid_steps = (
                     minimum_timeseries_length_years
@@ -2192,11 +1961,11 @@ class Hydrology:
                 discharge_metric_values: dict[str, float] = discharge_metrics._asdict()
 
                 if create_plots:
-                    save_discharge_timeseries_plots(
+                    hydrology_plot_engine.save_discharge_timeseries_plots(
                         station_id=station_id,
                         validation_df=validation_df,
-                        station_name=discharge_observations_station_name,
-                        upstream_area_ratio=discharge_observations_to_GEB_upstream_area_ratio,
+                        station_name=station_name,
+                        upstream_area_ratio=upstream_area_ratio,
                         metrics=discharge_metric_values,
                         plot_folder=evaluation_paths.plot_folder,
                         include_yearly_plots=include_yearly_plots,
@@ -2205,7 +1974,7 @@ class Hydrology:
                         _plot_validation_return_periods(
                             validation_df=validation_df,
                             station_id=station_id,
-                            station_name=discharge_observations_station_name,
+                            station_name=station_name,
                             eval_plot_folder=evaluation_paths.plot_folder,
                             frequency=frequency_label,
                         )
@@ -2216,8 +1985,8 @@ class Hydrology:
                             station_id=station_id_text,
                             chart_data=build_discharge_dashboard_chart_data(
                                 validation_df=validation_df,
-                                station_name=discharge_observations_station_name,
-                                upstream_area_ratio=discharge_observations_to_GEB_upstream_area_ratio,
+                                station_name=station_name,
+                                upstream_area_ratio=upstream_area_ratio,
                                 metrics=discharge_metric_values,
                                 frequency=frequency_label,
                             ),
@@ -2226,10 +1995,10 @@ class Hydrology:
 
                 station_evaluation: dict[str, Any] = {
                     "station_ID": station_id,
-                    "station_name": discharge_observations_station_name,
-                    "x": discharge_observations_station_coords[0],
-                    "y": discharge_observations_station_coords[1],
-                    "discharge_observations_to_GEB_upstream_area_ratio": discharge_observations_to_GEB_upstream_area_ratio,
+                    "station_name": station_name,
+                    "x": station_coordinates[0],
+                    "y": station_coordinates[1],
+                    "discharge_observations_to_GEB_upstream_area_ratio": upstream_area_ratio,
                     "upstream_area_GEB": geb_upstream_area_m2,
                     "timezone_utc_offset": timezone_utc_offset,
                     **{
@@ -2238,9 +2007,8 @@ class Hydrology:
                     },
                 }
 
-                # if the frequency is hourly, also calculate the metrics on the daily resampled data
                 if frequency_label == "hourly":
-                    # Resample to daily, keeping only days with 24 valid hourly observations.
+                    # Incomplete days must not influence daily benchmark scores.
                     daily_resampler: Any = validation_df.resample("D")
                     valid_hourly_counts_per_day = daily_resampler.count()
                     validation_df_daily = daily_resampler.mean()[
@@ -2269,7 +2037,6 @@ class Hydrology:
                         f"Unexpected frequency label '{frequency_label}' in evaluation loop."
                     )
 
-                # Monthly metrics
                 validation_df_monthly = validation_df.resample("ME").mean().dropna()
                 monthly_discharge_metrics = _calculate_discharge_validation_metrics(
                     validation_df_monthly
@@ -2281,12 +2048,10 @@ class Hydrology:
                     }
                 )
 
-                # attach to the evaluation dataframe
                 evaluation_per_station.append(station_evaluation)
 
         if not evaluation_per_station:
-            # Create empty evaluation dataframe with proper structure
-            # Column names are derived from DischargeMetrics so they stay in sync.
+            # Derive columns from DischargeMetrics so empty outputs stay compatible.
             freq_cols: list[str] = [
                 f"{metric_name}_{frequency}"
                 for frequency in ("monthly", "daily", "hourly")
@@ -2311,7 +2076,6 @@ class Hydrology:
             index=True,
         )
 
-        # Save evaluation metrics as as excel and parquet file
         evaluation_gdf = gpd.GeoDataFrame(
             evaluation_df,
             geometry=gpd.points_from_xy(evaluation_df.x, evaluation_df.y),
@@ -2326,7 +2090,6 @@ class Hydrology:
             evaluation_paths.geoparquet,
         )
 
-        # Return median metrics if available
         if not evaluation_df.empty:
             if create_plots:
                 dashboard_geometries: DischargeDashboardGeometries = (
@@ -2350,7 +2113,6 @@ class Hydrology:
                     "HTML and its charts folder to the same local directory."
                 )
 
-                # GEB standalone plot — all GEB stations.
                 self.plot_skill_score_boxplots(
                     export=True,
                     start_year=start_year,
@@ -2577,11 +2339,10 @@ class Hydrology:
                 try:
                     validation_df: pd.DataFrame = create_validation_df(
                         output_folder=self.model.output_folder,
-                        run_name=run_name,
                         station_id=station_id,
                         observed_discharge=observed_discharge_series,
-                        correct_discharge_observations=correct_discharge_observations,
-                        discharge_observations_to_GEB_upstream_area_ratio=upstream_area_ratio,
+                        apply_upstream_area_correction=correct_discharge_observations,
+                        upstream_area_ratio=upstream_area_ratio,
                         timezone_utc_offset=timezone_utc_offset,
                     )
                     metrics: dict[str, float] = {
@@ -2633,10 +2394,11 @@ class Hydrology:
         self,
         **kwargs: Any,
     ) -> dict[str, pd.DataFrame]:
-        """Filter fixed external score files to stations present in this model.
+        """Export external scores for all stations present in this model.
 
-        Reads ``external_evaluation_data/`` in the models-root directory, keeps
-        stations matching GEB, and saves one filtered workbook per model.
+        This is a standalone export command. Skill-score plots perform their
+        own pairwise matching because they also apply model-specific upstream
+        area thresholds.
 
         Notes:
             Station names are matched case-insensitively. Falls back to
@@ -2649,23 +2411,27 @@ class Hydrology:
         Returns:
             Mapping from model label to matched-stations DataFrame.
         """
-        external_models: dict[str, pd.DataFrame] = _read_external_evaluation_raw(
-            model_folder=self.model.input_folder.parent,
-            logger=self.model.logger,
+        external_models: dict[str, pd.DataFrame] = (
+            external_skill_scores.load_external_skill_scores(
+                input_folder=self.model.input_folder,
+                logger=self.model.logger,
+            )
         )
         if not external_models:
             self.model.logger.info("No external evaluation data found, skipping.")
             return {}
 
-        geb_xlsx = self.evaluate_discharge_output_folder / "evaluation_metrics.xlsx"
-        station_keys: set[str] = _get_geb_station_keys(
-            evaluation_metrics_path=geb_xlsx,
+        evaluation_metrics_path: Path = (
+            self.evaluate_discharge_output_folder / "evaluation_metrics.xlsx"
+        )
+        station_keys: set[str] = external_skill_scores.load_geb_station_keys(
+            evaluation_metrics_path=evaluation_metrics_path,
             snapped_locations_path=self.model.files["geom"][
                 "discharge/discharge_snapped_locations"
             ],
         )
 
-        return _prepare_external_evaluation(
+        return external_skill_scores.filter_external_skill_scores(
             external_models=external_models,
             station_keys=station_keys,
             output_folder=self.evaluate_discharge_output_folder,
@@ -2751,10 +2517,12 @@ class Hydrology:
             region_geom: gpd.GeoDataFrame = read_geom(self.model.files["geom"]["mask"])
             plot_evaluation_gdf: gpd.GeoDataFrame = evaluation_gdf.copy()
             _add_daily_discharge_metric_columns(plot_evaluation_gdf)
-            pairwise_plot_inputs = _prepare_pairwise_skill_score_inputs(
+            matched_scores_by_model: dict[
+                str, external_skill_scores.MatchedSkillScores
+            ] = external_skill_scores.match_external_skill_scores(
                 evaluation_df=plot_evaluation_gdf,
-                external_models=_read_external_evaluation_raw(
-                    model_folder=self.model.input_folder.parent,
+                external_models=external_skill_scores.load_external_skill_scores(
+                    input_folder=self.model.input_folder,
                     logger=self.model.logger,
                 ),
                 output_folder=evaluation_paths.plot_folder,
@@ -2762,10 +2530,10 @@ class Hydrology:
                 minimum_upstream_area_km2=minimum_upstream_area_km2,
             )
             difference_gdfs: dict[str, pd.DataFrame] = {
-                model_name: inputs.evaluation_df
-                for model_name, inputs in pairwise_plot_inputs.items()
+                model_name: matched_scores.geb
+                for model_name, matched_scores in matched_scores_by_model.items()
             }
-            _plot_skill_score_maps(
+            hydrology_plot_engine.plot_skill_score_maps(
                 evaluation_gdf=plot_evaluation_gdf,
                 region_geom=region_geom,
                 output_folder=evaluation_paths.plot_folder,
@@ -2806,74 +2574,92 @@ class Hydrology:
             end_year=end_year,
         )
         evaluation_paths.plot_folder.mkdir(parents=True, exist_ok=True)
-        snapped_locations_path: Path = self.model.files["geom"][
-            "discharge/discharge_snapped_locations"
-        ]
-        plot_inputs = _prepare_skill_score_boxplot_inputs(
-            evaluation_metrics_path=evaluation_paths.xlsx,
-            snapped_locations_path=snapped_locations_path,
-            model_folder=self.model.input_folder.parent,
-            output_folder=evaluation_paths.plot_folder,
-            logger=self.model.logger,
-            minimum_upstream_area_km2=minimum_upstream_area_km2,
+        evaluation_df: pd.DataFrame = (
+            pd.read_excel(evaluation_paths.xlsx)
+            if evaluation_paths.xlsx.exists()
+            else pd.DataFrame()
         )
-
-        if plot_inputs.evaluation_df.empty:
+        if evaluation_df.empty:
             self.model.logger.info(
                 "No discharge stations found for evaluation. Skipping skill score graphs."
             )
             return
 
-        _plot_skill_score_boxplots(
-            evaluation_df=plot_inputs.evaluation_df,
+        _add_daily_discharge_metric_columns(evaluation_df)
+        station_count_before_filter: int = len(evaluation_df)
+        evaluation_df = evaluation_df[
+            evaluation_df["upstream_area_GEB"]
+            >= minimum_upstream_area_km2 * 1_000_000.0
+        ].copy()
+        self.model.logger.info(
+            "Upstream-area plot filter retained %d/%d GEB stations at %.1f km2 or larger.",
+            len(evaluation_df),
+            station_count_before_filter,
+            minimum_upstream_area_km2,
+        )
+        if evaluation_df.empty:
+            self.model.logger.info(
+                "No discharge stations remain after upstream-area filtering. "
+                "Skipping skill score graphs."
+            )
+            return
+
+        external_models: dict[str, pd.DataFrame] = (
+            external_skill_scores.load_external_skill_scores(
+                input_folder=self.model.input_folder,
+                logger=self.model.logger,
+            )
+        )
+
+        hydrology_plot_engine.plot_skill_score_boxplots(
+            evaluation_df=evaluation_df,
             external_models={},
             output_folder=evaluation_paths.plot_folder,
             logger=self.model.logger,
             export=export,
             include_geb=True,
             matched_only=False,
-            minimum_upstream_area_km2=plot_inputs.minimum_upstream_area_km2,
-            station_count=len(plot_inputs.evaluation_df),
+            minimum_upstream_area_km2=minimum_upstream_area_km2,
+            station_count=len(evaluation_df),
         )
 
-        pairwise_plot_inputs = _prepare_pairwise_skill_score_inputs(
-            evaluation_df=plot_inputs.evaluation_df,
-            external_models=plot_inputs.external_models,
-            output_folder=evaluation_paths.plot_folder,
-            logger=self.model.logger,
-            minimum_upstream_area_km2=minimum_upstream_area_km2,
+        matched_scores_by_model: dict[str, external_skill_scores.MatchedSkillScores] = (
+            external_skill_scores.match_external_skill_scores(
+                evaluation_df=evaluation_df,
+                external_models=external_models,
+                output_folder=evaluation_paths.plot_folder,
+                logger=self.model.logger,
+                minimum_upstream_area_km2=minimum_upstream_area_km2,
+            )
         )
         kge_comparison_values: dict[
             str, tuple[np.ndarray, np.ndarray, int, float | None]
         ] = {}
-        for model_name, matched_plot_inputs in pairwise_plot_inputs.items():
+        for model_name, matched_scores in matched_scores_by_model.items():
             model_name_suffix: str = re.sub(
                 r"[^a-z0-9]+", "_", model_name.lower()
             ).strip("_")
-            _plot_skill_score_boxplots(
-                evaluation_df=matched_plot_inputs.evaluation_df,
-                external_models=matched_plot_inputs.external_models,
+            hydrology_plot_engine.plot_skill_score_boxplots(
+                evaluation_df=matched_scores.geb,
+                external_models={model_name: matched_scores.external},
                 output_folder=evaluation_paths.plot_folder,
                 logger=self.model.logger,
                 export=export,
                 include_geb=True,
                 matched_only=True,
                 output_name_suffix=f"_matched_{model_name_suffix}",
-                minimum_upstream_area_km2=matched_plot_inputs.minimum_upstream_area_km2,
-                station_count=len(matched_plot_inputs.evaluation_df),
-            )
-            external_model_df: pd.DataFrame = next(
-                iter(matched_plot_inputs.external_models.values())
+                minimum_upstream_area_km2=matched_scores.minimum_upstream_area_km2,
+                station_count=len(matched_scores.geb),
             )
             if (
-                "KGE" in matched_plot_inputs.evaluation_df.columns
-                and "KGE" in external_model_df.columns
+                "KGE" in matched_scores.geb.columns
+                and "KGE" in matched_scores.external.columns
             ):
                 geb_kge: np.ndarray = pd.to_numeric(
-                    matched_plot_inputs.evaluation_df["KGE"], errors="coerce"
+                    matched_scores.geb["KGE"], errors="coerce"
                 ).to_numpy(dtype=float)
                 external_kge: np.ndarray = pd.to_numeric(
-                    external_model_df["KGE"], errors="coerce"
+                    matched_scores.external["KGE"], errors="coerce"
                 ).to_numpy(dtype=float)
                 valid_kge: np.ndarray = np.isfinite(geb_kge) & np.isfinite(external_kge)
                 if valid_kge.any():
@@ -2881,10 +2667,10 @@ class Hydrology:
                         geb_kge[valid_kge],
                         external_kge[valid_kge],
                         int(valid_kge.sum()),
-                        matched_plot_inputs.minimum_upstream_area_km2,
+                        matched_scores.minimum_upstream_area_km2,
                     )
 
-        _plot_kge_external_model_comparison(
+        hydrology_plot_engine.plot_kge_external_model_comparison(
             model_kge_values=kge_comparison_values,
             output_folder=evaluation_paths.plot_folder,
             logger=self.model.logger,
@@ -2954,7 +2740,7 @@ class Hydrology:
 
         if export:
             _add_daily_discharge_metric_columns(evaluation_df)
-            _plot_skill_scores_vs_upstream_area(
+            hydrology_plot_engine.plot_skill_scores_vs_upstream_area(
                 evaluation_df=evaluation_df,
                 output_folder=evaluation_paths.plot_folder,
                 logger=self.model.logger,
@@ -2985,15 +2771,24 @@ class Hydrology:
                 to plot.
             **kwargs: Ignored (CLI compatibility).
         """
-        shared_options: dict[str, Any] = {
-            "export": export,
-            "minimum_upstream_area_km2": minimum_upstream_area_km2,
-            "start_year": start_year,
-            "end_year": end_year,
-        }
-        self.plot_skill_score_maps(**shared_options)
-        self.plot_skill_score_boxplots(**shared_options)
-        self.plot_skill_scores_vs_upstream_area(**shared_options)
+        self.plot_skill_score_maps(
+            export=export,
+            minimum_upstream_area_km2=minimum_upstream_area_km2,
+            start_year=start_year,
+            end_year=end_year,
+        )
+        self.plot_skill_score_boxplots(
+            export=export,
+            minimum_upstream_area_km2=minimum_upstream_area_km2,
+            start_year=start_year,
+            end_year=end_year,
+        )
+        self.plot_skill_scores_vs_upstream_area(
+            export=export,
+            minimum_upstream_area_km2=minimum_upstream_area_km2,
+            start_year=start_year,
+            end_year=end_year,
+        )
 
     def plot_water_circle(
         self,
@@ -3370,7 +3165,6 @@ class Hydrology:
             for series_name, series in context_series.items()
         }
         full_figure, full_axis = plt.subplots(figsize=(15, 14))
-        _style_water_balance_axis(full_axis)
         for column_name in component_columns:
             full_axis.plot(
                 signed_water_balance_df_mm_per_timestep.index,
@@ -3397,7 +3191,7 @@ class Hydrology:
             f"mm/{timestep_label}",
             draw_zero_line=True,
         )
-        _add_dark_legend(
+        _add_timeseries_legend(
             full_axis,
             loc="upper center",
             bbox_to_anchor=(0.5, -0.18),
@@ -3418,7 +3212,6 @@ class Hydrology:
             yearly_axes = [yearly_axes]
 
         for axis, year in zip(yearly_axes, years, strict=True):
-            _style_water_balance_axis(axis)
             year_mask: np.ndarray = year_values == year
             yearly_df_mm_per_timestep: pd.DataFrame = (
                 signed_water_balance_df_mm_per_timestep.loc[year_mask]
@@ -3550,7 +3343,11 @@ class Hydrology:
         if "storage_change" in top_soil_component_colors:
             top_soil_component_colors["storage_change"] = "black"
         top_soil_component_labels: dict[str, str] = {
-            column_name: _get_top_soil_water_balance_label(column_name)
+            column_name: (
+                "storage change (from top-soil storage)"
+                if column_name == "storage_change"
+                else _format_water_balance_component_label(column_name)
+            )
             for column_name in top_soil_component_columns
         }
         top_soil_yearly_context_totals_mm: pd.DataFrame = pd.DataFrame(
@@ -3626,7 +3423,6 @@ class Hydrology:
             for series_name, series in top_soil_context_series.items()
         }
         top_soil_full_figure, top_soil_full_axis = plt.subplots(figsize=(15, 13.0))
-        _style_water_balance_axis(top_soil_full_axis)
         for column_name in top_soil_component_columns:
             top_soil_full_axis.plot(
                 signed_top_soil_water_balance_df_mm_per_timestep.index,
@@ -3656,7 +3452,7 @@ class Hydrology:
             f"mm/{top_soil_timestep_label}",
             draw_zero_line=True,
         )
-        _add_dark_legend(
+        _add_timeseries_legend(
             top_soil_full_axis,
             loc="upper right",
             ncol=min(
@@ -3685,7 +3481,6 @@ class Hydrology:
         for axis_index, (axis, year) in enumerate(
             zip(top_soil_yearly_axes, top_soil_years, strict=True)
         ):
-            _style_water_balance_axis(axis)
             year_mask: np.ndarray = top_soil_year_values == year
             yearly_df_mm: pd.DataFrame = (
                 signed_top_soil_water_balance_df_mm_per_timestep.loc[year_mask]
@@ -3739,7 +3534,7 @@ class Hydrology:
                 )
 
             if axis_index == 0:
-                _add_dark_legend(
+                _add_timeseries_legend(
                     axis,
                     loc="upper right",
                     ncol=min(
@@ -3800,7 +3595,23 @@ class Hydrology:
             ValueError: If the water storage dataframe does not contain any rows.
         """
         folder: Path = self.model.output_folder / "report"
-        water_storage_df_m: pd.DataFrame = _load_water_storage_dataframe(folder)
+        storage_module: str = "hydrology.landsurface"
+        storage_specs: dict[str, tuple[str, str]] = {
+            reported_name.removeprefix("_").removesuffix("_m"): (
+                storage_module,
+                reported_name,
+            )
+            for reported_name in WATER_STORAGE_REPORT_CONFIG[storage_module]
+        }
+        try:
+            water_storage_df_m: pd.DataFrame = pd.DataFrame(
+                _load_named_evaluation_series(folder, storage_specs)
+            ).sort_index()
+        except FileNotFoundError as error:
+            raise ValueError(
+                "Water storage outputs are missing. Enable report._water_storage "
+                "during the run before plotting water storage."
+            ) from error
 
         if water_storage_df_m.empty:
             raise ValueError("No water storage data available for plotting.")
@@ -3813,13 +3624,12 @@ class Hydrology:
             for color_index, column_name in enumerate(component_columns)
         }
         component_labels: dict[str, str] = {
-            column_name: _format_water_storage_component_label(column_name)
+            column_name: column_name.replace("_", " ")
             for column_name in component_columns
         }
 
         time_index: pd.DatetimeIndex = pd.DatetimeIndex(water_storage_df_m.index)
         full_figure, full_axis = plt.subplots(figsize=(14, 6.5))
-        _style_water_balance_axis(full_axis)
         for column_name in component_columns:
             full_axis.plot(
                 water_storage_df_m.index,
@@ -3835,7 +3645,7 @@ class Hydrology:
             f"Water Storage Over Time - {run_name}",
             "m",
         )
-        _add_dark_legend(
+        _add_timeseries_legend(
             full_axis,
             loc="upper right",
             ncol=min(2, len(component_columns)),
@@ -3855,7 +3665,6 @@ class Hydrology:
             yearly_axes = [yearly_axes]
 
         for axis_index, (axis, year) in enumerate(zip(yearly_axes, years, strict=True)):
-            _style_water_balance_axis(axis)
             year_mask: np.ndarray = year_values == year
             yearly_df_m: pd.DataFrame = water_storage_df_m.loc[year_mask]
             for column_name in component_columns:
@@ -3875,7 +3684,7 @@ class Hydrology:
             )
 
             if axis_index == 0:
-                _add_dark_legend(
+                _add_timeseries_legend(
                     axis,
                     loc="upper right",
                     ncol=min(2, len(component_columns)),
