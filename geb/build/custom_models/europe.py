@@ -2,15 +2,18 @@
 
 import calendar
 import gc
+from dataclasses import dataclass
 from datetime import date
-from typing import Any, Literal
+from typing import Any
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 import xarray as xr
 from rasterio import features
-from shapely.geometry import box, shape as shapely_shape
+from rasterio.enums import Resampling
+from rasterio.warp import transform_bounds
+from shapely.geometry import shape as shapely_shape
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
@@ -29,15 +32,17 @@ from geb.build.methods import build_method
 from geb.build.workflows.crop_calendars import MIRCA_OS_CROP_CLASS_MAP
 from geb.build.workflows.farmers import (
     assert_matching_raster_grid,
-    assign_regions_to_fields,
-    compact_farm_raster_values,
-    create_field_index_grid,
+    assign_farmer_sequences_to_area_targets,
+    combine_crop_and_secondary_values,
     create_lowder_target_farm_areas,
-    dominant_crop_one_year_chunked,
     farm_size_distribution_fit_by_size_class,
     get_farm_locations,
-    grow_farms_from_prepared_fields,
-    prepare_projected_field_arrays,
+    grow_farms_from_exact_crop_sequences,
+    grow_farms_from_raster_cells,
+    raster_cell_area_m2,
+    relax_lowder_targets_for_sequence_fit,
+    round_crop_states_to_area_targets,
+    select_cultivated_cells_by_area,
 )
 from geb.geb_types import TwoDArrayInt32
 from geb.workflows.io import get_window
@@ -54,10 +59,70 @@ from .. import GEBModel
 from ..data_catalog import DataCatalog
 from ..workflows.conversions import setup_donor_countries
 
-_FIELD_BOUNDARIES_WITH_CROPS_GEOM = "fields/field_boundaries_with_crops"
-_LEGACY_FIELD_BOUNDARIES_WITH_CROP_GEOM = "fields/field_boundaries_with_crop"
 _FARMERS_WITH_CROPS_TABLE = "agents/farmers/farmers_with_crops"
 _DEFAULT_HRL_RASTER_CHUNKS = {"x": 4096, "y": 4096}
+_HRL_FALLOW_CROP_CODE = -1
+_HRL_MISSING_CROP_CODE = -2
+_HRL_NO_CROPLAND_CODE = 0
+_HRL_OUTSIDE_AREA_CODE = 65535
+
+
+@dataclass(frozen=True, slots=True)
+class _LowderSequenceSettings:
+    """Settings for the current Lowder sequence-balanced workflow.
+
+    Attributes:
+        distance_weight: Farm-growth weight for spatial compactness.
+        crop_sequence_weight: Farm-growth weight for complete-sequence similarity.
+        switch_timing_weight: Farm-growth weight for crop-switch timing.
+        min_valid_crop_sequence_overlap: Minimum comparable years for sequence
+            similarity.
+        jump_candidate_sample: Candidate cells sampled for a disconnected parcel.
+        max_jump_distance_m: Preferred maximum parcel-jump distance.
+        crop_area_alignment_weight: Weight assigned to regional crop-area fit.
+        max_local_sequences: Maximum local sequence candidates per farmer.
+        max_regional_sequences: Maximum regional fallback candidates per farmer.
+        regional_sequence_pool_size: Common regional sequences considered for
+            fallback construction.
+        local_search_passes: Reassignment passes using local sequences only.
+        regional_search_passes: Reassignment passes with regional fallbacks.
+        local_fit_threshold_pct: Fit threshold for skipping regional fallbacks.
+        fallow_penalty: Preference penalty for fallow-heavy sequences.
+        extra_farm_fraction: Maximum Lowder target-count relaxation.
+    """
+
+    distance_weight: float
+    crop_sequence_weight: float
+    switch_timing_weight: float
+    min_valid_crop_sequence_overlap: int
+    jump_candidate_sample: int
+    max_jump_distance_m: float
+    crop_area_alignment_weight: float
+    max_local_sequences: int
+    max_regional_sequences: int
+    regional_sequence_pool_size: int
+    local_search_passes: int
+    regional_search_passes: int
+    local_fit_threshold_pct: float
+    fallow_penalty: float
+    extra_farm_fraction: float
+
+
+@dataclass(frozen=True, slots=True)
+class _ExactSequenceSettings:
+    """Settings for hard exact-sequence grouping.
+
+    Attributes:
+        jump_candidate_sample: Same-sequence cells sampled for a new parcel.
+        distance_scale_m: Distance scale used to prefer nearby parcels.
+        temporal_persistence_weight: Persistence preference used during annual
+            crop-area rounding.
+    """
+
+    jump_candidate_sample: int
+    distance_scale_m: float
+    temporal_persistence_weight: float
+
 
 HRL_TO_MIRCA_OS_CROP_CLASS_MAP: dict[int, int | None] = {
     1110: 0,  # Wheat
@@ -165,87 +230,6 @@ def _default_size_class_boundaries() -> dict[str, tuple[int | float, int | float
     }
 
 
-def _filter_fields_to_active_subgrid(
-    fields: gpd.GeoDataFrame,
-    *,
-    template: xr.DataArray,
-    active_mask: np.ndarray,
-    field_id_column: str = "id",
-    nodata: int = -1,
-    all_touched: bool = False,
-    logger: Any | None = None,
-) -> gpd.GeoDataFrame:
-    """Keep only fields represented inside the active model subgrid.
-
-    ``set_subgrid`` masks values outside ``subgrid["mask"]`` before writing. If
-    farms are compacted before that mask is applied, some farmer IDs can disappear
-    during writing. This function prevents that by filtering out fields that do
-    not rasterize to any active model cell.
-
-    Args:
-        fields: Field-boundary GeoDataFrame.
-        template: Subgrid template used for the final farm raster.
-        active_mask: Boolean array where True indicates active model cells.
-        field_id_column: Unique field-ID column used for rasterization.
-        nodata: Nodata value used during rasterization.
-        all_touched: Whether all cells touched by a field polygon are considered.
-        logger: Optional logger.
-
-    Returns:
-        Field-boundary GeoDataFrame restricted to fields represented in active
-        model cells.
-
-    Raises:
-        ValueError: If ``field_id_column`` is missing.
-        ValueError: If ``active_mask`` and ``template`` have different shapes.
-        ValueError: If no fields remain after filtering.
-    """
-    if field_id_column not in fields.columns:
-        raise ValueError(f"fields must contain column {field_id_column!r}.")
-
-    if active_mask.shape != template.shape:
-        raise ValueError(
-            "active_mask must have the same shape as template. "
-            f"Got {active_mask.shape} and {template.shape}."
-        )
-
-    fields_for_raster = fields
-    if template.rio.crs is not None and fields.crs is not None:
-        fields_for_raster = fields.to_crs(template.rio.crs)
-
-    field_id_grid = rasterize_like(
-        fields_for_raster,
-        column=field_id_column,
-        raster=template,
-        dtype=np.int32,
-        nodata=nodata,
-        all_touched=all_touched,
-    )
-
-    represented_field_ids = np.unique(
-        field_id_grid.values[(field_id_grid.values != nodata) & active_mask]
-    ).astype(np.int32)
-
-    filtered_fields = fields.loc[
-        fields[field_id_column].isin(represented_field_ids)
-    ].copy()
-
-    if logger is not None and len(filtered_fields) < len(fields):
-        logger.info(
-            "Removed %s of %s fields because they are not represented inside "
-            "the active model subgrid.",
-            len(fields) - len(filtered_fields),
-            len(fields),
-        )
-
-    if filtered_fields.empty:
-        raise ValueError(
-            "No fields remain after filtering to the active model subgrid."
-        )
-
-    return filtered_fields
-
-
 def _active_subgrid_mask_geometry_for_hrl(
     template: xr.DataArray,
     active_mask: np.ndarray,
@@ -307,98 +291,6 @@ def _active_subgrid_mask_geometry_for_hrl(
         raise ValueError("Derived HRL clip geometry is empty.")
 
     return active_geometry
-
-
-def _filter_fields_to_hrl_clip_geometry(
-    fields: gpd.GeoDataFrame,
-    hrl_clip_geometry: BaseGeometry,
-    *,
-    geometry_crs: str = "EPSG:4326",
-    logger: Any | None = None,
-) -> gpd.GeoDataFrame:
-    """Keep only fields whose geometry intersects the HRL clip geometry.
-
-    This is a cheap vector prefilter before rasterization. It does not clip or
-    modify field geometries; it only removes fields that are fully outside the
-    exact active-mask geometry used to clip the HRL rasters.
-
-    Args:
-        fields: Field-boundary GeoDataFrame.
-        hrl_clip_geometry: Active-mask geometry used for HRL raster clipping.
-        geometry_crs: CRS of ``hrl_clip_geometry``.
-        logger: Optional logger.
-
-    Returns:
-        GeoDataFrame restricted to fields intersecting ``hrl_clip_geometry``.
-
-    Raises:
-        ValueError: If no fields remain after filtering.
-    """
-    fields_for_filter = fields
-    if fields.crs is not None:
-        fields_for_filter = fields.to_crs(geometry_crs)
-
-    keep = fields_for_filter.geometry.intersects(hrl_clip_geometry)
-    filtered_fields = fields.loc[keep.to_numpy()].copy()
-
-    if logger is not None and len(filtered_fields) < len(fields):
-        logger.debug(
-            "Removed %s of %s field boundaries before HRL rasterization because "
-            "they do not intersect the active HRL clip geometry.",
-            len(fields) - len(filtered_fields),
-            len(fields),
-        )
-
-    if filtered_fields.empty:
-        raise ValueError("No field boundaries intersect the active HRL clip geometry.")
-
-    return filtered_fields
-
-
-def _filter_fields_to_raster_footprint(
-    fields: gpd.GeoDataFrame,
-    raster: xr.DataArray,
-    *,
-    logger: Any | None = None,
-) -> gpd.GeoDataFrame:
-    """Keep only fields intersecting the actual raster footprint.
-
-    This is a cheap vector filter used after reading a regional HRL raster. It
-    prevents fields outside the returned raster extent from being passed to
-    ``rasterize_like``. It does not clip or modify field geometries.
-
-    Args:
-        fields: Field-boundary GeoDataFrame.
-        raster: Raster whose footprint should be used as the filter domain.
-        logger: Optional logger.
-
-    Returns:
-        GeoDataFrame restricted to fields intersecting the raster footprint.
-
-    Raises:
-        ValueError: If the raster has no CRS.
-    """
-    if raster.rio.crs is None:
-        raise ValueError("Cannot filter fields to raster footprint without raster CRS.")
-
-    raster_footprint = box(*raster.rio.bounds())
-
-    fields_for_filter = fields
-    if fields.crs is not None:
-        fields_for_filter = fields.to_crs(raster.rio.crs)
-
-    keep = fields_for_filter.geometry.intersects(raster_footprint)
-    filtered_fields = fields.loc[keep.to_numpy()].copy()
-
-    if logger is not None and len(filtered_fields) < len(fields):
-        logger.debug(
-            "Removed %s of %s field(s) because they do not intersect the "
-            "regional HRL raster footprint.",
-            len(fields) - len(filtered_fields),
-            len(fields),
-        )
-
-    return filtered_fields
 
 
 def _align_hrl_rasters_to_common_grid(
@@ -525,7 +417,7 @@ def _assert_compact_farm_ids(
 def decode_crop_type_with_secondary_crop(
     combined_crop_type: np.ndarray,
     *,
-    invalid_crop_values: tuple[int, ...] = (-1, 0, 65535),
+    invalid_crop_values: tuple[int, ...] = (-2, -1, 0, 65535),
 ) -> tuple[np.ndarray, np.ndarray]:
     """Decode combined HRL crop-secondary codes.
 
@@ -574,56 +466,6 @@ def map_hrl_crop_to_mirca_crop(
     return mapped
 
 
-def _field_area_m2(fields: gpd.GeoDataFrame) -> np.ndarray:
-    """Calculate field areas in square metres using an equal-area projection.
-
-    Args:
-        fields: Field-boundary GeoDataFrame.
-
-    Returns:
-        One-dimensional array with field areas in square metres.
-
-    Raises:
-        ValueError: If the field GeoDataFrame has no CRS.
-    """
-    if fields.crs is None:
-        raise ValueError("Field boundaries must have a CRS to calculate areas.")
-
-    return fields.to_crs("EPSG:3035").geometry.area.to_numpy(dtype=np.float64)
-
-
-def _sample_farm_ids_for_fields(
-    fields: gpd.GeoDataFrame,
-    farms: xr.DataArray,
-) -> np.ndarray:
-    """Sample compact farmer IDs at field representative points.
-
-    Args:
-        fields: Field-boundary GeoDataFrame.
-        farms: Final compact farm raster where non-farm cells are ``-1``.
-
-    Returns:
-        One-dimensional array with sampled compact farmer IDs per field.
-    """
-    fields_for_sampling = fields
-    if farms.rio.crs is not None and fields.crs is not None:
-        fields_for_sampling = fields.to_crs(farms.rio.crs)
-
-    representative_points = fields_for_sampling.geometry.representative_point()
-    field_locations = np.column_stack(
-        [
-            representative_points.x.to_numpy(dtype=np.float64),
-            representative_points.y.to_numpy(dtype=np.float64),
-        ]
-    )
-
-    return sample_from_map(
-        farms.values,
-        field_locations,
-        farms.rio.transform(recalc=True).to_gdal(),
-    ).astype(np.int32)
-
-
 def _decode_hrl_crop_combinations_from_farmer_table(
     farmers_with_crops: pd.DataFrame,
     *,
@@ -634,8 +476,8 @@ def _decode_hrl_crop_combinations_from_farmer_table(
 ) -> pd.DataFrame:
     """Decode final farmer-level HRL crop codes to MIRCA crop combinations.
 
-    The input table is the compact farmer table written by
-    ``setup_create_farms_from_HRL_field_boundaries``. Its ``farmer_id`` values
+    The input table is the compact farmer table written by one of the
+    HRL raster farm-construction workflows. Its ``farmer_id`` values
     already correspond to the final compact ``agents/farmers/farms`` raster and
     all other farmer arrays. Therefore, no field geometry or farm-raster sampling
     is needed here.
@@ -868,16 +710,63 @@ def _fix_365_in_crop_calendar(
 
 
 def check_crop_calendar(crop_calendar_per_farmer: np.ndarray) -> None:
-    """Validate that no overlapping crops exist per farmer calendar."""
-    # this part asserts that the crop calendar is correctly set up
-    # particularly that no two crops are planted at the same time
-    for farmer_crop_calender in crop_calendar_per_farmer:
-        farmer_crop_calender = farmer_crop_calender[farmer_crop_calender[:, -1] != -1]
-        if farmer_crop_calender.shape[0] > 1:
-            assert (
-                np.unique(farmer_crop_calender[:, [1, 3]], axis=0).shape[0]
-                == farmer_crop_calender.shape[0]
+    """Validate that active crop-calendar rows have unique timing combinations.
+
+    The crop-calendar array is validated without iterating over farmers in Python.
+    Two active rows for the same farmer are invalid when both their planting-day
+    and growth-length values are equal.
+
+    Args:
+        crop_calendar_per_farmer: Crop-calendar array with shape
+            ``(n_farmers, n_calendar_rows, n_variables)``. The active-row marker
+            is expected in the final column, while planting day and growth length
+            are expected in columns 1 and 3.
+
+    Raises:
+        ValueError: If the input does not have the expected three-dimensional
+            structure or contains fewer than four calendar variables.
+        AssertionError: If duplicate active timing combinations are found for one
+            or more farmers.
+    """
+    crop_calendar_per_farmer = np.asarray(crop_calendar_per_farmer)
+
+    if crop_calendar_per_farmer.ndim != 3:
+        raise ValueError(
+            "crop_calendar_per_farmer must be a three-dimensional array. "
+            f"Got shape {crop_calendar_per_farmer.shape}."
+        )
+
+    if crop_calendar_per_farmer.shape[2] < 4:
+        raise ValueError(
+            "crop_calendar_per_farmer must contain at least four variables per "
+            f"calendar row. Got shape {crop_calendar_per_farmer.shape}."
+        )
+
+    active = crop_calendar_per_farmer[:, :, -1] != -1
+    planting_day = crop_calendar_per_farmer[:, :, 1]
+    growth_length = crop_calendar_per_farmer[:, :, 3]
+
+    invalid = np.zeros(crop_calendar_per_farmer.shape[0], dtype=bool)
+    n_calendar_rows = crop_calendar_per_farmer.shape[1]
+
+    # The number of calendar rows is very small (currently three), so looping over
+    # row pairs is cheap while all farmer comparisons remain vectorized.
+    for first_row in range(n_calendar_rows - 1):
+        for second_row in range(first_row + 1, n_calendar_rows):
+            invalid |= (
+                active[:, first_row]
+                & active[:, second_row]
+                & (planting_day[:, first_row] == planting_day[:, second_row])
+                & (growth_length[:, first_row] == growth_length[:, second_row])
             )
+
+    if invalid.any():
+        invalid_farmer_ids = np.flatnonzero(invalid)
+        raise AssertionError(
+            "Duplicate active crop-calendar timing combinations found for "
+            f"{invalid_farmer_ids.size} farmer(s). Examples: "
+            f"{invalid_farmer_ids[:10].tolist()}."
+        )
 
 
 # Manual replacement of certain crops
@@ -923,7 +812,7 @@ def replace_crop(
     crops, crop_counts = np.unique(crop_instances, return_counts=True)
     most_common_crop = crops[np.argmax(crop_counts)]
 
-    # Determine if there are multiple cropping versions of this crop and assign it to the most common
+    # If multiple calendars represent this crop, retain the most common one.
     new_crop_types = crop_calendar_per_farmer[
         (crop_calendar_per_farmer[:, :, 0] == most_common_crop).any(axis=1),
         :,
@@ -1132,6 +1021,11 @@ def _select_mirca2000_calendar_for_farmer(
         raise ValueError(f"No crop calendar found for MIRCA2000 unit {lookup_unit}.")
 
     def _contains_main_crop(entry: tuple[float, np.ndarray]) -> bool:
+        """Check whether a calendar entry contains the requested main crop.
+
+        Returns:
+            ``True`` when an active calendar row contains the requested crop.
+        """
         _, calendar = entry
         active_rows = _calendar_active_rows(calendar)
 
@@ -1141,6 +1035,11 @@ def _select_mirca2000_calendar_for_farmer(
         return main_crop in active_rows[:, 0]
 
     def _has_irrigation_status(entry: tuple[float, np.ndarray]) -> bool:
+        """Check whether a calendar entry has the requested irrigation status.
+
+        Returns:
+            ``True`` when the first active crop row matches ``is_irrigated``.
+        """
         _, calendar = entry
         active_rows = _calendar_active_rows(calendar)
 
@@ -1152,6 +1051,15 @@ def _select_mirca2000_calendar_for_farmer(
     def _select_best_candidate(
         candidates: list[tuple[float, np.ndarray]],
     ) -> np.ndarray | None:
+        """Select the largest-area calendar from a candidate list.
+
+        Args:
+            candidates: Calendar candidates paired with their represented areas.
+
+        Returns:
+            The selected calendar as an integer array, or ``None`` when no candidates
+            are available.
+        """
         if not candidates:
             return None
 
@@ -1160,6 +1068,14 @@ def _select_mirca2000_calendar_for_farmer(
     def _select_from_candidates(
         candidates: list[tuple[float, np.ndarray]],
     ) -> np.ndarray | None:
+        """Select the best calendar while respecting secondary-crop timing.
+
+        Args:
+            candidates: Calendar candidates paired with their represented areas.
+
+        Returns:
+            The best compatible calendar, or ``None`` when no candidate can be used.
+        """
         exact_candidates = [
             entry
             for entry in candidates
@@ -1249,6 +1165,145 @@ def _select_mirca2000_calendar_for_farmer(
         f"No MIRCA2000 calendar found for unit={lookup_unit}, crop={main_crop}, "
         f"secondary_type={secondary_crop_type}, is_irrigated={is_irrigated}, "
         "including cross-unit fallbacks."
+    )
+
+
+def _select_mirca2000_calendars_for_farmers(
+    crop_calendar: dict[int, list[tuple[float, TwoDArrayInt32]]],
+    *,
+    farmer_mirca_units: np.ndarray,
+    farmer_main_crops: np.ndarray,
+    farmer_secondary_crop_types: np.ndarray,
+    farmer_is_irrigated: np.ndarray,
+    replace_crop_calendar_unit_code: dict[int, int],
+    selection_cache: dict[tuple[int, int, int, bool], np.ndarray],
+) -> tuple[np.ndarray, int, int]:
+    """Select MIRCA2000 calendars once per unique farmer-state combination.
+
+    Farmers sharing the same MIRCA unit, main crop, secondary-crop timing class,
+    and irrigation state always receive the same MIRCA2000 calendar. This helper
+    therefore resolves each unique combination once and broadcasts the selected
+    calendar back to all farmers. The supplied cache is reused across HRL years.
+
+    Args:
+        crop_calendar: Parsed MIRCA2000 crop-calendar dictionary.
+        farmer_mirca_units: MIRCA2000 unit per compact farmer ID.
+        farmer_main_crops: HRL-derived MIRCA main crop per compact farmer ID.
+        farmer_secondary_crop_types: HRL secondary-crop timing class per compact
+            farmer ID.
+        farmer_is_irrigated: Irrigation state used for calendar selection per
+            compact farmer ID.
+        replace_crop_calendar_unit_code: Optional MIRCA unit replacement mapping.
+        selection_cache: Mutable cache shared across processed HRL years. Keys are
+            ``(lookup_unit, main_crop, secondary_crop_type, is_irrigated)`` and
+            values are selected calendars with shape ``(3, 4)``.
+
+    Returns:
+        Tuple containing the farmer-aligned calendar array, the number of unique
+        combinations in the current year, and the number of new cache entries.
+
+    Raises:
+        ValueError: If the farmer arrays are not one-dimensional and equally sized,
+            or if a selected calendar has an unexpected shape.
+    """
+    farmer_mirca_units = np.asarray(farmer_mirca_units, dtype=np.int32)
+    farmer_main_crops = np.asarray(farmer_main_crops, dtype=np.int32)
+    farmer_secondary_crop_types = np.asarray(
+        farmer_secondary_crop_types,
+        dtype=np.int32,
+    )
+    farmer_is_irrigated = np.asarray(farmer_is_irrigated, dtype=bool)
+
+    arrays = (
+        farmer_mirca_units,
+        farmer_main_crops,
+        farmer_secondary_crop_types,
+        farmer_is_irrigated,
+    )
+    if any(array.ndim != 1 for array in arrays):
+        raise ValueError(
+            "All farmer calendar-selection arrays must be one-dimensional."
+        )
+
+    n_farmers = farmer_mirca_units.size
+    if any(array.size != n_farmers for array in arrays[1:]):
+        raise ValueError(
+            "All farmer calendar-selection arrays must have equal length. "
+            f"Got {[array.size for array in arrays]}."
+        )
+
+    lookup_units = farmer_mirca_units.copy()
+    if replace_crop_calendar_unit_code:
+        original_units = farmer_mirca_units
+        for source_unit, target_unit in replace_crop_calendar_unit_code.items():
+            lookup_units[original_units == int(source_unit)] = int(target_unit)
+
+    key_matrix = np.column_stack(
+        (
+            lookup_units,
+            farmer_main_crops,
+            farmer_secondary_crop_types,
+            farmer_is_irrigated.astype(np.int32),
+        )
+    ).astype(np.int32, copy=False)
+
+    # Missing crops always map to the same empty calendar, independent of location
+    # or irrigation state. Canonicalizing this key avoids many redundant entries.
+    missing_crop = farmer_main_crops == -1
+    key_matrix[missing_crop, 0] = -1
+    key_matrix[missing_crop, 2] = 0
+    key_matrix[missing_crop, 3] = 0
+
+    unique_keys, inverse = np.unique(key_matrix, axis=0, return_inverse=True)
+    unique_calendars = np.full(
+        (unique_keys.shape[0], 3, 4),
+        -1,
+        dtype=np.int32,
+    )
+
+    n_cache_misses = 0
+    for key_index, key_values in enumerate(unique_keys):
+        lookup_unit, main_crop, secondary_crop_type, is_irrigated_int = (
+            int(value) for value in key_values
+        )
+        cache_key = (
+            lookup_unit,
+            main_crop,
+            secondary_crop_type,
+            bool(is_irrigated_int),
+        )
+
+        selected_calendar = selection_cache.get(cache_key)
+        if selected_calendar is None:
+            full_calendar = _select_mirca2000_calendar_for_farmer(
+                crop_calendar,
+                mirca_unit=lookup_unit,
+                main_crop=main_crop,
+                secondary_crop_type=secondary_crop_type,
+                is_irrigated=bool(is_irrigated_int),
+                # lookup_unit is already normalized above; passing an empty mapping
+                # prevents a target unit from being remapped a second time.
+                replace_crop_calendar_unit_code={},
+            )
+            selected_calendar = np.asarray(
+                full_calendar[:, [0, 2, 3, 4]],
+                dtype=np.int32,
+            )
+            if selected_calendar.shape != (3, 4):
+                raise ValueError(
+                    "Selected MIRCA2000 calendar must have shape (3, 4) after "
+                    f"column selection. Got {selected_calendar.shape}."
+                )
+            selected_calendar = np.ascontiguousarray(selected_calendar)
+            selection_cache[cache_key] = selected_calendar
+            n_cache_misses += 1
+
+        unique_calendars[key_index] = selected_calendar
+
+    return (
+        unique_calendars[inverse],
+        int(unique_keys.shape[0]),
+        n_cache_misses,
     )
 
 
@@ -1411,7 +1466,16 @@ def _assign_irrigation_by_area_targets(
     n_cells = rainfed_values.shape[1]
 
     def get_crop_irrigated_fraction(cell_id: int, crop_id: int) -> float:
-        """Return the MIRCA-OS irrigated fraction for one cell-crop pair."""
+        """Return the MIRCA-OS irrigated fraction for one cell-crop pair.
+
+        Args:
+            cell_id: Flattened MIRCA-OS grid-cell index.
+            crop_id: Zero-based MIRCA crop-class index.
+
+        Returns:
+            Irrigated fraction in the inclusive range 0 to 1. Invalid indices and
+            cells without represented crop area return 0.
+        """
         if cell_id < 0 or cell_id >= n_cells:
             return 0.0
 
@@ -1612,16 +1676,24 @@ def parse_MIRCA_file(
     MIRCA_units: list[int],
     is_irrigated: bool,
 ) -> dict[int, list[tuple[float, TwoDArrayInt32]]]:
-    """Parse a MIRCA2000 crop calendar file.
+    """Parse one MIRCA2000 crop-calendar file.
+
+    The parser converts monthly planting and harvest information to day indices,
+    retains at most two positive-area rotations per crop, and appends the resulting
+    calendar matrices to the supplied dictionary.
 
     Args:
-        parsed_calendar: The dictionary to store the parsed calendar in.
-        crop_calendar_lines: Lines from the MIRCA2000 crop calendar file.
-        MIRCA_units: The list of MIRCA unit codes to parse.
-        is_irrigated: Whether the calendar is for irrigated crops.
+        parsed_calendar: Dictionary receiving parsed calendars by MIRCA unit.
+        crop_calendar_lines: Raw lines from a MIRCA2000 calendar file.
+        MIRCA_units: MIRCA unit codes that should be retained.
+        is_irrigated: Whether the source file represents irrigated calendars.
 
     Returns:
-        The updated parsed_calendar dictionary.
+        The input dictionary with parsed calendars appended.
+
+    Raises:
+        NotImplementedError: If a positive-area crop entry contains neither one nor
+            two supported rotations after filtering.
     """
     lines: list[str] = [line.strip() for line in crop_calendar_lines if line.strip()]
     lines = lines[4:]
@@ -1665,7 +1737,8 @@ def parse_MIRCA_file(
             import warnings
 
             warnings.warn(
-                "More than 2 crop rotations found, discarding the one with the lowest area. This should be fixed later."
+                "More than two crop rotations found; discarding the rotation "
+                "with the lowest represented area."
             )
         if len(crop_rotations) == 1:
             start_day_index, growth_length, area = crop_rotations[0]
@@ -1689,7 +1762,7 @@ def parse_MIRCA_file(
         elif len(crop_rotations) == 2:
             # if crop rotations start on the same day, they cannot be implemented
             # by the same farmer, so we split them
-            # TODO: Ensure that this only happens when the crop rotations cannot overlap.
+            # TODO: Verify that this branch is limited to non-overlapping rotations.
             if crop_rotations[0][0] == crop_rotations[1][0]:
                 for crop_rotation in crop_rotations:
                     start_day_index, growth_length, area = crop_rotation
@@ -1805,6 +1878,784 @@ def parse_MIRCA2000_crop_calendar(
     return mirca2000_data
 
 
+def _native_hrl_crop_category_areas_m2(
+    crop_types: xr.DataArray,
+    secondary_crop: xr.DataArray,
+    clip_geometry: BaseGeometry,
+    *,
+    geometry_crs: str = "EPSG:4326",
+    chunk_rows: int = 4096,
+) -> dict[int, float]:
+    """Calculate native HRL area by combined crop category inside a geometry.
+
+    The source raster is scanned in row chunks before modal reprojection to the
+    model grid. Minority crop categories inside a coarse model cell therefore
+    remain represented without loading the complete regional HRL raster into one
+    in-memory NumPy array.
+
+    Args:
+        crop_types: Native HRL Crop Types raster.
+        secondary_crop: Native HRL Secondary Crops raster on the same grid.
+        clip_geometry: Active regional geometry used to restrict source pixels.
+        geometry_crs: CRS of ``clip_geometry``.
+        chunk_rows: Number of native HRL rows processed at once.
+
+    Returns:
+        Mapping from combined primary-plus-secondary HRL crop code to cultivated
+        area in square metres.
+
+    Raises:
+        ValueError: If source grids are inconsistent, lack a CRS, or are not 2D.
+    """
+    assert_matching_raster_grid(crop_types, secondary_crop)
+    if crop_types.rio.crs is None:
+        raise ValueError("Native HRL crop rasters must have a CRS.")
+    if crop_types.ndim != 2 or secondary_crop.ndim != 2:
+        raise ValueError("Native HRL crop rasters must be two-dimensional.")
+    if chunk_rows < 1:
+        raise ValueError("chunk_rows must be at least 1.")
+
+    source_geometry = (
+        gpd.GeoSeries([clip_geometry], crs=geometry_crs)
+        .to_crs(crop_types.rio.crs)
+        .iloc[0]
+    )
+    source_crs = crop_types.rio.crs
+    projected_cell_area_m2: float | None = None
+    if source_crs.is_projected:
+        source_transform = crop_types.rio.transform(recalc=True)
+        projected_cell_area_m2 = abs(
+            float(source_transform.a) * float(source_transform.e)
+        )
+
+    totals: dict[int, float] = {}
+    n_rows = crop_types.sizes["y"]
+    for y_start in range(0, n_rows, chunk_rows):
+        y_stop = min(y_start + chunk_rows, n_rows)
+        crop_chunk_da = crop_types.isel(y=slice(y_start, y_stop))
+        secondary_chunk_da = secondary_crop.isel(y=slice(y_start, y_stop))
+        crop_values = crop_chunk_da.values
+        secondary_values = secondary_chunk_da.values
+        if np.issubdtype(crop_values.dtype, np.floating):
+            crop_values = np.nan_to_num(crop_values, nan=_HRL_OUTSIDE_AREA_CODE)
+        if np.issubdtype(secondary_values.dtype, np.floating):
+            secondary_values = np.nan_to_num(
+                secondary_values, nan=_HRL_OUTSIDE_AREA_CODE
+            )
+
+        crop_values = np.asarray(crop_values, dtype=np.int32)
+        secondary_values = np.asarray(secondary_values, dtype=np.int32)
+        valid_crop = (crop_values > _HRL_NO_CROPLAND_CODE) & (
+            crop_values != _HRL_OUTSIDE_AREA_CODE
+        )
+        combined_values = combine_crop_and_secondary_values(
+            crop_values,
+            secondary_values,
+        )
+        inside_geometry = features.geometry_mask(
+            [source_geometry.__geo_interface__],
+            out_shape=crop_values.shape,
+            transform=crop_chunk_da.rio.transform(recalc=True),
+            invert=True,
+            all_touched=False,
+        )
+        valid = valid_crop & inside_geometry
+        if not valid.any():
+            continue
+
+        crop_codes, inverse = np.unique(
+            combined_values[valid],
+            return_inverse=True,
+        )
+        if projected_cell_area_m2 is not None:
+            crop_areas_m2 = (
+                np.bincount(inverse).astype(np.float64) * projected_cell_area_m2
+            )
+        else:
+            chunk_cell_area_m2 = raster_cell_area_m2(crop_chunk_da)
+            crop_areas_m2 = np.bincount(
+                inverse,
+                weights=chunk_cell_area_m2[valid],
+            )
+
+        for crop_code, crop_area_m2 in zip(
+            crop_codes,
+            crop_areas_m2,
+            strict=True,
+        ):
+            crop_code_int = int(crop_code)
+            if crop_code_int < 0 or crop_area_m2 <= 0.0:
+                continue
+            totals[crop_code_int] = totals.get(crop_code_int, 0.0) + float(crop_area_m2)
+
+    return totals
+
+
+def _crop_area_fit_scores(diagnostics: pd.DataFrame) -> dict[str, float]:
+    """Calculate bounded crop-area alignment scores.
+
+    The area score compares absolute category areas, the share score compares only
+    composition, and the total-area score compares summed cultivated area. Negative
+    crop codes are excluded from all three calculations.
+
+    Args:
+        diagnostics: Crop-area diagnostic table containing source and assigned area
+            per crop code.
+
+    Returns:
+        Dictionary containing source and assigned totals, their percentage
+        difference, and bounded total-area, crop-share, and crop-area fit scores.
+    """
+    if diagnostics.empty:
+        return {
+            "source_area_m2": 0.0,
+            "assigned_area_m2": 0.0,
+            "total_area_difference_pct": np.nan,
+            "total_area_fit_score": np.nan,
+            "crop_share_fit_score": np.nan,
+            "crop_area_fit_score": np.nan,
+        }
+
+    positive = diagnostics["crop_code"].to_numpy(dtype=np.int32) > 0
+    source = diagnostics.loc[positive, "source_area_m2"].to_numpy(
+        dtype=np.float64, copy=True
+    )
+    assigned = diagnostics.loc[positive, "assigned_area_m2"].to_numpy(
+        dtype=np.float64, copy=True
+    )
+
+    source_total = float(source.sum())
+    assigned_total = float(assigned.sum())
+    total_denominator = source_total + assigned_total
+    maximum_total = max(source_total, assigned_total)
+
+    total_area_difference_pct = (
+        (assigned_total - source_total) / source_total * 100.0
+        if source_total > 0.0
+        else np.nan
+    )
+    total_area_fit_score = (
+        min(source_total, assigned_total) / maximum_total * 100.0
+        if maximum_total > 0.0
+        else np.nan
+    )
+
+    absolute_category_error = float(np.abs(assigned - source).sum())
+    crop_area_fit_score = (
+        (1.0 - absolute_category_error / total_denominator) * 100.0
+        if total_denominator > 0.0
+        else np.nan
+    )
+
+    if source_total > 0.0 and assigned_total > 0.0:
+        source_share = source / source_total
+        assigned_share = assigned / assigned_total
+        crop_share_fit_score = (
+            1.0 - 0.5 * float(np.abs(source_share - assigned_share).sum())
+        ) * 100.0
+    else:
+        crop_share_fit_score = np.nan
+
+    return {
+        "source_area_m2": source_total,
+        "assigned_area_m2": assigned_total,
+        "total_area_difference_pct": total_area_difference_pct,
+        "total_area_fit_score": float(np.clip(total_area_fit_score, 0.0, 100.0))
+        if np.isfinite(total_area_fit_score)
+        else np.nan,
+        "crop_share_fit_score": float(np.clip(crop_share_fit_score, 0.0, 100.0))
+        if np.isfinite(crop_share_fit_score)
+        else np.nan,
+        "crop_area_fit_score": float(np.clip(crop_area_fit_score, 0.0, 100.0))
+        if np.isfinite(crop_area_fit_score)
+        else np.nan,
+    }
+
+
+def _multi_year_crop_area_comparison(
+    diagnostics: pd.DataFrame,
+    *,
+    aggregate_to_main_crop: bool = False,
+) -> tuple[pd.DataFrame, dict[str, float | int]]:
+    """Compare raw and final crop areas over every year-crop combination.
+
+    The comparison is symmetric: each year-crop pair is evaluated against the
+    larger of its raw HRL area and final farmer-assigned area. This means that
+    both missing final area and spurious final area reduce the score. The
+    area-weighted score gives larger year-crop pairs more influence, while the
+    balanced score gives every represented year-crop pair equal influence.
+
+    Args:
+        diagnostics: Per-region crop-area diagnostics containing ``year``,
+            ``crop_code``, ``source_area_m2``, and ``assigned_area_m2``.
+        aggregate_to_main_crop: Whether combined primary-plus-secondary HRL crop
+            codes should first be collapsed to their main crop classes.
+
+    Returns:
+        Tuple containing a per-year, per-crop comparison table and a dictionary
+        with multi-year area-weighted and balanced summary scores.
+
+    Raises:
+        ValueError: If one or more required diagnostic columns are absent.
+    """
+    required_columns = {
+        "year",
+        "crop_code",
+        "source_area_m2",
+        "assigned_area_m2",
+    }
+    missing_columns = required_columns - set(diagnostics.columns)
+    if missing_columns:
+        raise ValueError(
+            "Crop-area diagnostics are missing required column(s): "
+            f"{sorted(missing_columns)}"
+        )
+
+    table = diagnostics.loc[
+        diagnostics["crop_code"].to_numpy(dtype=np.int32) > 0,
+        ["year", "crop_code", "source_area_m2", "assigned_area_m2"],
+    ].copy()
+
+    if aggregate_to_main_crop and not table.empty:
+        table["crop_code"] = (
+            table["crop_code"].to_numpy(dtype=np.int32) // 10 * 10
+        ).astype(np.int32)
+
+    table = (
+        table.groupby(["year", "crop_code"], as_index=False)[
+            ["source_area_m2", "assigned_area_m2"]
+        ]
+        .sum()
+        .sort_values(["year", "crop_code"])
+        .reset_index(drop=True)
+    )
+    table = table.loc[
+        (table["source_area_m2"] > 0.0) | (table["assigned_area_m2"] > 0.0)
+    ].reset_index(drop=True)
+
+    if table.empty:
+        return table, {
+            "n_year_crop_pairs": 0,
+            "raw_area_m2": 0.0,
+            "final_area_m2": 0.0,
+            "net_difference_pct": np.nan,
+            "area_weighted_fit_pct": np.nan,
+            "balanced_fit_pct": np.nan,
+            "area_weighted_error_pct": np.nan,
+            "balanced_error_pct": np.nan,
+        }
+
+    raw_area = table["source_area_m2"].to_numpy(dtype=np.float64)
+    final_area = table["assigned_area_m2"].to_numpy(dtype=np.float64)
+    comparison_area = np.maximum(raw_area, final_area)
+    overlapping_area = np.minimum(raw_area, final_area)
+    absolute_error = np.abs(final_area - raw_area)
+
+    # A pair receives 100 when raw and final areas are equal, and 0 when area
+    # occurs on only one side. Using max(raw, final) keeps the metric bounded and
+    # also penalizes crop categories introduced only in the final assignment.
+    pair_fit_pct = (
+        np.divide(
+            overlapping_area,
+            comparison_area,
+            out=np.zeros_like(overlapping_area),
+            where=comparison_area > 0.0,
+        )
+        * 100.0
+    )
+    pair_error_pct = 100.0 - pair_fit_pct
+    total_comparison_area = float(comparison_area.sum())
+
+    table["main_crop"] = (
+        table["crop_code"].to_numpy(dtype=np.int32) // 10 * 10
+    ).astype(np.int32)
+    table["secondary_crop"] = np.where(
+        aggregate_to_main_crop,
+        0,
+        table["crop_code"].to_numpy(dtype=np.int32) % 10,
+    ).astype(np.int32)
+    table["difference_m2"] = final_area - raw_area
+    table["difference_pct_raw"] = (
+        np.divide(
+            final_area - raw_area,
+            raw_area,
+            out=np.full(raw_area.size, np.nan, dtype=np.float64),
+            where=raw_area > 0.0,
+        )
+        * 100.0
+    )
+    table["pair_fit_pct"] = pair_fit_pct
+    table["area_weight_pct"] = (
+        np.divide(
+            comparison_area,
+            total_comparison_area,
+            out=np.zeros_like(comparison_area),
+            where=total_comparison_area > 0.0,
+        )
+        * 100.0
+    )
+
+    raw_total = float(raw_area.sum())
+    final_total = float(final_area.sum())
+    area_weighted_fit_pct = (
+        float(overlapping_area.sum()) / total_comparison_area * 100.0
+        if total_comparison_area > 0.0
+        else np.nan
+    )
+    area_weighted_error_pct = (
+        float(absolute_error.sum()) / total_comparison_area * 100.0
+        if total_comparison_area > 0.0
+        else np.nan
+    )
+
+    summary: dict[str, float | int] = {
+        "n_year_crop_pairs": int(len(table)),
+        "raw_area_m2": raw_total,
+        "final_area_m2": final_total,
+        "net_difference_pct": (
+            (final_total - raw_total) / raw_total * 100.0 if raw_total > 0.0 else np.nan
+        ),
+        "area_weighted_fit_pct": area_weighted_fit_pct,
+        "balanced_fit_pct": float(pair_fit_pct.mean()),
+        "area_weighted_error_pct": area_weighted_error_pct,
+        "balanced_error_pct": float(pair_error_pct.mean()),
+    }
+    return table, summary
+
+
+def _format_multi_year_crop_area_comparison(comparison: pd.DataFrame) -> str:
+    """Format all raw-versus-final year-crop area comparisons for logging.
+
+    Args:
+        comparison: Table returned by ``_multi_year_crop_area_comparison``.
+
+    Returns:
+        Human-readable table with one row per represented year-crop pair.
+    """
+    if comparison.empty:
+        return "no positive year-crop area pairs"
+
+    table = comparison.copy()
+    table["raw_km2"] = table["source_area_m2"] / 1_000_000.0
+    table["final_km2"] = table["assigned_area_m2"] / 1_000_000.0
+    table["difference_km2"] = table["difference_m2"] / 1_000_000.0
+    return (
+        table[
+            [
+                "year",
+                "crop_code",
+                "main_crop",
+                "secondary_crop",
+                "raw_km2",
+                "final_km2",
+                "difference_km2",
+                "difference_pct_raw",
+                "pair_fit_pct",
+                "area_weight_pct",
+            ]
+        ]
+        .round(
+            {
+                "raw_km2": 3,
+                "final_km2": 3,
+                "difference_km2": 3,
+                "difference_pct_raw": 1,
+                "pair_fit_pct": 1,
+                "area_weight_pct": 2,
+            }
+        )
+        .to_string(index=False)
+    )
+
+
+def _format_hrl_crop_area_alignment(
+    diagnostics: pd.DataFrame,
+    *,
+    top_n: int,
+) -> str:
+    """Format the largest HRL-versus-agent crop-area differences for logging.
+
+    Args:
+        diagnostics: Crop-area diagnostic table for one region and year.
+        top_n: Maximum number of crop categories to include.
+
+    Returns:
+        Human-readable table ordered by the largest represented category area, or a
+        short message when no positive crop categories are available.
+    """
+    if diagnostics.empty:
+        return "no crop categories"
+
+    table = diagnostics.copy()
+    table = table.loc[
+        (table["source_area_m2"] > 0.0) | (table["assigned_area_m2"] > 0.0)
+    ].copy()
+    if table.empty:
+        return "no positive crop area"
+
+    table["main_crop"] = np.where(
+        table["crop_code"] > 0,
+        (table["crop_code"] // 10) * 10,
+        -1,
+    )
+    table["secondary_crop"] = np.where(
+        table["crop_code"] > 0,
+        table["crop_code"] % 10,
+        0,
+    )
+    table["source_km2"] = table["source_area_m2"] / 1_000_000.0
+    table["agent_km2"] = table["assigned_area_m2"] / 1_000_000.0
+    table["difference_km2"] = (
+        table["assigned_area_m2"] - table["source_area_m2"]
+    ) / 1_000_000.0
+    source_values = table["source_area_m2"].to_numpy(dtype=np.float64)
+    assigned_values = table["assigned_area_m2"].to_numpy(dtype=np.float64)
+    table["difference_pct"] = (
+        np.divide(
+            assigned_values - source_values,
+            source_values,
+            out=np.full(len(table), np.nan, dtype=np.float64),
+            where=source_values > 0.0,
+        )
+        * 100.0
+    )
+    table["share_difference_pp"] = (
+        table["assigned_share"] - table["source_share"]
+    ) * 100.0
+    table["ranking_area"] = np.maximum(
+        table["source_area_m2"],
+        table["assigned_area_m2"],
+    )
+    table = table.sort_values(
+        ["ranking_area", "crop_code"],
+        ascending=[False, True],
+    ).head(max(top_n, 1))
+    return (
+        table[
+            [
+                "crop_code",
+                "main_crop",
+                "secondary_crop",
+                "source_km2",
+                "agent_km2",
+                "difference_km2",
+                "difference_pct",
+                "share_difference_pp",
+            ]
+        ]
+        .round(
+            {
+                "source_km2": 3,
+                "agent_km2": 3,
+                "difference_km2": 3,
+                "difference_pct": 1,
+                "share_difference_pp": 2,
+            }
+        )
+        .to_string(index=False)
+    )
+
+
+def _crop_area_targets_from_model_grid(
+    crop_values: np.ndarray,
+    cultivated_mask: np.ndarray,
+    cell_area_m2: np.ndarray,
+) -> dict[int, float]:
+    """Aggregate positive crop areas on the selected model grid.
+
+    Args:
+        crop_values: Combined crop code per model cell.
+        cultivated_mask: Boolean mask selecting cells in the static farm domain.
+        cell_area_m2: Full area of each model cell in square metres.
+
+    Returns:
+        Mapping from positive crop code to represented full-cell area in square
+        metres.
+
+    Raises:
+        ValueError: If the crop, mask, and cell-area arrays do not have identical
+            shapes.
+    """
+    crop_values = np.asarray(crop_values, dtype=np.int32)
+    cultivated_mask = np.asarray(cultivated_mask, dtype=bool)
+    cell_area_m2 = np.asarray(cell_area_m2, dtype=np.float64)
+    if not (crop_values.shape == cultivated_mask.shape == cell_area_m2.shape):
+        raise ValueError("crop_values, cultivated_mask, and cell_area_m2 must align.")
+    valid = cultivated_mask & (crop_values > 0)
+    if not valid.any():
+        return {}
+    crop_codes, inverse = np.unique(crop_values[valid], return_inverse=True)
+    crop_areas = np.bincount(inverse, weights=cell_area_m2[valid])
+    return {
+        int(code): float(area)
+        for code, area in zip(crop_codes, crop_areas, strict=True)
+    }
+
+
+def _crop_area_diagnostics_from_assignments(
+    assigned_crop_codes: np.ndarray,
+    farmer_areas_m2: np.ndarray,
+    source_crop_areas_m2: dict[int, float],
+) -> pd.DataFrame:
+    """Compare existing farmer crop assignments with source area targets.
+
+    Args:
+        assigned_crop_codes: One assigned combined crop code per farmer.
+        farmer_areas_m2: Area of each farmer in square metres.
+        source_crop_areas_m2: Source area target by combined crop code.
+
+    Returns:
+        DataFrame containing source area, assigned area, differences, and area shares
+        for the union of source and assigned crop codes.
+
+    Raises:
+        ValueError: If crop assignments and farmer areas are not aligned.
+    """
+    assigned_crop_codes = np.asarray(assigned_crop_codes, dtype=np.int32)
+    farmer_areas_m2 = np.asarray(farmer_areas_m2, dtype=np.float64)
+    if assigned_crop_codes.shape != farmer_areas_m2.shape:
+        raise ValueError("assigned_crop_codes and farmer_areas_m2 must align.")
+
+    assigned_codes, inverse = np.unique(assigned_crop_codes, return_inverse=True)
+    assigned_areas = np.bincount(inverse, weights=farmer_areas_m2)
+    assigned_lookup = {
+        int(code): float(area)
+        for code, area in zip(assigned_codes, assigned_areas, strict=True)
+    }
+    crop_codes = sorted(set(source_crop_areas_m2) | set(assigned_lookup))
+    source = np.asarray(
+        [source_crop_areas_m2.get(code, 0.0) for code in crop_codes],
+        dtype=np.float64,
+    )
+    assigned = np.asarray(
+        [assigned_lookup.get(code, 0.0) for code in crop_codes],
+        dtype=np.float64,
+    )
+    positive_codes = np.asarray(crop_codes, dtype=np.int32) > 0
+    source_total = float(source[positive_codes].sum())
+    assigned_total = float(assigned[positive_codes].sum())
+    table = pd.DataFrame(
+        {
+            "crop_code": np.asarray(crop_codes, dtype=np.int32),
+            "source_area_m2": source,
+            "adjusted_target_area_m2": source,
+            "assigned_area_m2": assigned,
+        }
+    )
+    table["difference_from_source_m2"] = assigned - source
+    table["difference_from_adjusted_target_m2"] = assigned - source
+    table["source_share"] = np.divide(
+        source,
+        source_total,
+        out=np.zeros_like(source),
+        where=source_total > 0.0,
+    )
+    table["assigned_share"] = np.divide(
+        assigned,
+        assigned_total,
+        out=np.zeros_like(assigned),
+        where=assigned_total > 0.0,
+    )
+    table["positive_target_scale"] = 1.0
+    return table
+
+
+def _aggregate_crop_alignment_to_main_categories(
+    diagnostics: pd.DataFrame,
+) -> pd.DataFrame:
+    """Aggregate combined HRL crop diagnostics to main crop classes.
+
+    Args:
+        diagnostics: Diagnostic table using combined primary-secondary crop codes.
+
+    Returns:
+        Diagnostic table with secondary-crop suffixes collapsed into their main HRL
+        crop categories and all area and share fields recomputed.
+    """
+    if diagnostics.empty:
+        return diagnostics.copy()
+    table = diagnostics.copy()
+    table["crop_code"] = np.where(
+        table["crop_code"].to_numpy(dtype=np.int32) > 0,
+        (table["crop_code"].to_numpy(dtype=np.int32) // 10) * 10,
+        -1,
+    ).astype(np.int32)
+    table = table.groupby("crop_code", as_index=False)[
+        [
+            "source_area_m2",
+            "adjusted_target_area_m2",
+            "assigned_area_m2",
+        ]
+    ].sum()
+    table["difference_from_source_m2"] = (
+        table["assigned_area_m2"] - table["source_area_m2"]
+    )
+    table["difference_from_adjusted_target_m2"] = (
+        table["assigned_area_m2"] - table["adjusted_target_area_m2"]
+    )
+    positive = table["crop_code"] > 0
+    source_total = float(table.loc[positive, "source_area_m2"].sum())
+    assigned_total = float(table.loc[positive, "assigned_area_m2"].sum())
+    table["source_share"] = (
+        table["source_area_m2"].to_numpy(dtype=np.float64) / source_total
+        if source_total > 0.0
+        else np.zeros(len(table), dtype=np.float64)
+    )
+    table["assigned_share"] = (
+        table["assigned_area_m2"].to_numpy(dtype=np.float64) / assigned_total
+        if assigned_total > 0.0
+        else np.zeros(len(table), dtype=np.float64)
+    )
+    table["positive_target_scale"] = np.divide(
+        table["adjusted_target_area_m2"].to_numpy(dtype=np.float64),
+        table["source_area_m2"].to_numpy(dtype=np.float64),
+        out=np.ones(len(table), dtype=np.float64),
+        where=table["source_area_m2"].to_numpy(dtype=np.float64) > 0.0,
+    )
+    return table
+
+
+def _reproject_HRL_year_to_subgrid(
+    crop_types: xr.DataArray,
+    secondary_crop: xr.DataArray,
+    template: xr.DataArray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Aggregate one native-resolution HRL year to the final model subgrid.
+
+    Native Crop Types states remain distinct during reprojection:
+
+    - positive HRL crop codes are active crops;
+    - ``0`` is native no-cropland;
+    - ``65535`` is outside the HRL product area.
+
+    Active combined primary-plus-secondary codes are aggregated with modal
+    resampling. Active-crop fraction and HRL coverage fraction are aggregated
+    separately with average resampling. A destination cell without an active
+    modal crop is returned as native no-cropland (``0``) when it has source
+    coverage and as ``_HRL_MISSING_CROP_CODE`` when it has no HRL coverage.
+    Conversion of no-cropland to model fallow (``-1``) is deliberately deferred
+    until the complete multi-year agricultural union is known.
+
+    Args:
+        crop_types: Native HRL Crop Types raster.
+        secondary_crop: Native HRL Secondary Crops raster on the same grid.
+        template: Final model-grid template for the selected region window.
+
+    Returns:
+        Tuple containing modal combined crop state, active-crop fraction, and
+        HRL coverage fraction on the model-grid template.
+
+    Raises:
+        ValueError: If the source rasters are not aligned or the template has no
+            CRS.
+    """
+    assert_matching_raster_grid(crop_types, secondary_crop)
+    if template.rio.crs is None:
+        raise ValueError("The regional subgrid template must have a CRS.")
+
+    crop_values = crop_types.values
+    secondary_values = secondary_crop.values
+    if np.issubdtype(crop_values.dtype, np.floating):
+        crop_values = np.nan_to_num(
+            crop_values,
+            nan=_HRL_OUTSIDE_AREA_CODE,
+        )
+    if np.issubdtype(secondary_values.dtype, np.floating):
+        secondary_values = np.nan_to_num(
+            secondary_values,
+            nan=_HRL_OUTSIDE_AREA_CODE,
+        )
+
+    crop_values = np.ascontiguousarray(crop_values.astype(np.int32, copy=False))
+    secondary_values = np.ascontiguousarray(
+        secondary_values.astype(np.int32, copy=False)
+    )
+    has_hrl_coverage = crop_values != _HRL_OUTSIDE_AREA_CODE
+    active_crop = (crop_values > _HRL_NO_CROPLAND_CODE) & has_hrl_coverage
+
+    combined_values = combine_crop_and_secondary_values(
+        crop_values,
+        secondary_values,
+    )
+    # Non-active native states are excluded from modal crop resampling. Their
+    # distinction is reconstructed from the independently reprojected HRL
+    # coverage fraction below.
+    combined_values[~active_crop] = _HRL_MISSING_CROP_CODE
+
+    combined = crop_types.copy(data=combined_values)
+    combined.attrs = {}
+    combined = combined.rio.write_crs(crop_types.rio.crs)
+    combined = combined.rio.write_nodata(_HRL_MISSING_CROP_CODE)
+    combined_subgrid = combined.rio.reproject_match(
+        template,
+        resampling=Resampling.mode,
+        nodata=_HRL_MISSING_CROP_CODE,
+    )
+    combined_subgrid_values = combined_subgrid.values
+    if np.issubdtype(combined_subgrid_values.dtype, np.floating):
+        combined_subgrid_values = np.nan_to_num(
+            combined_subgrid_values,
+            nan=_HRL_MISSING_CROP_CODE,
+        )
+    combined_subgrid_values = combined_subgrid_values.astype(np.int32, copy=False)
+
+    cultivated = crop_types.copy(data=active_crop.astype(np.float32))
+    cultivated.attrs = {}
+    cultivated = cultivated.rio.write_crs(crop_types.rio.crs)
+    cultivated = cultivated.rio.write_nodata(None)
+    cultivated_fraction = cultivated.rio.reproject_match(
+        template,
+        resampling=Resampling.average,
+        nodata=0.0,
+    )
+    cultivated_fraction_values = np.nan_to_num(
+        cultivated_fraction.values,
+        nan=0.0,
+        posinf=0.0,
+        neginf=0.0,
+    ).astype(np.float32, copy=False)
+    cultivated_fraction_values = np.clip(
+        cultivated_fraction_values,
+        0.0,
+        1.0,
+    )
+
+    coverage = crop_types.copy(data=has_hrl_coverage.astype(np.float32))
+    coverage.attrs = {}
+    coverage = coverage.rio.write_crs(crop_types.rio.crs)
+    coverage = coverage.rio.write_nodata(None)
+    coverage_fraction = coverage.rio.reproject_match(
+        template,
+        resampling=Resampling.average,
+        nodata=0.0,
+    )
+    coverage_fraction_values = np.nan_to_num(
+        coverage_fraction.values,
+        nan=0.0,
+        posinf=0.0,
+        neginf=0.0,
+    ).astype(np.float32, copy=False)
+    coverage_fraction_values = np.clip(
+        coverage_fraction_values,
+        0.0,
+        1.0,
+    )
+
+    # A destination cell with source coverage but no active modal crop retains
+    # the native no-cropland state. Only cells with no source coverage remain
+    # missing/outside.
+    no_active_modal = combined_subgrid_values == _HRL_MISSING_CROP_CODE
+    combined_subgrid_values[no_active_modal & (coverage_fraction_values > 0.0)] = (
+        _HRL_NO_CROPLAND_CODE
+    )
+
+    return (
+        combined_subgrid_values,
+        cultivated_fraction_values,
+        coverage_fraction_values,
+    )
+
+
 class Europe(GEBModel):
     """Build methods for agents in GEB, including Europe-specific logic."""
 
@@ -1820,334 +2671,505 @@ class Europe(GEBModel):
         """
         super().__init__(*args, **kwargs)
 
-    def _get_cached_field_boundaries_with_crops(
+    @build_method(
+        depends_on=["setup_regions_and_land_use"],
+        required=False,
+    )
+    def setup_create_farms_from_HRL_exact_sequences(
         self,
-        crop_columns: list[str],
-        *,
-        region_id_column: str,
-        country_iso3_column: str,
-    ) -> gpd.GeoDataFrame | None:
-        """Return a cached field crop-sequence geometry if a valid one exists.
+        region_id_column: str = "region_id",
+        country_iso3_column: str = "ISO3",
+        size_class_boundaries: dict[str, tuple[int | float, int | float]] | None = None,
+        years: tuple[int, ...] = (2017, 2018, 2019, 2020, 2021, 2022, 2023),
+        random_seed: int = 42,
+        hrl_raster_chunks: dict[str, int] | None = None,
+        subgrid_chunk_size: int = 256,
+        minimum_cells_per_farm: float = 1.0,
+        exact_sequence_jump_candidate_sample: int = 1_024,
+        exact_sequence_distance_scale_m: float = 10_000.0,
+        rounding_temporal_persistence_weight: float = 0.15,
+        crop_area_diagnostics_top_n: int = 0,
+        crop_area_fit_warning_threshold_pct: float = 80.0,
+    ) -> None:
+        """Create farms whose cells share one exact observed crop sequence.
 
-        The current GeoParquet cache key is checked first, followed by the legacy
-        singular cache key. A cached geometry is only reused if it contains the field
-        ID, geometry, region ID, country ISO3 code, and all requested crop columns.
+        Native fractional crop areas are first rounded to full model cells by
+        year and crop category. The union of those rounded cells forms the static
+        agricultural domain. A complete multi-year sequence is then a hard
+        grouping constraint: a farmer can contain disconnected parcels, but all
+        its cells must carry exactly the same observed sequence. Lowder remains a
+        soft prior for the number and size of farms.
 
         Args:
-            crop_columns: Crop-sequence columns required for the requested years.
-            region_id_column: Name of the column containing model region IDs.
-            country_iso3_column: Name of the column containing ISO3 country codes.
+            region_id_column: Column containing compact model-region IDs.
+            country_iso3_column: Column containing country ISO3 codes.
+            size_class_boundaries: Optional Lowder class boundaries in square
+                metres. Default boundaries are used when omitted.
+            years: Ordered HRL years included in each complete sequence.
+            random_seed: Base seed for target sizes and raster farm growth.
+            hrl_raster_chunks: Native HRL read chunks. Defaults to the module
+                chunk configuration.
+            subgrid_chunk_size: Destination-tile width and height in model cells.
+            minimum_cells_per_farm: Minimum Lowder target size in model cells.
+            exact_sequence_jump_candidate_sample: Same-sequence cells sampled
+                when a connected parcel is exhausted.
+            exact_sequence_distance_scale_m: Distance scale used to prefer nearby
+                disconnected parcels carrying the same sequence.
+            rounding_temporal_persistence_weight: Preference for retaining the
+                same active cells between consecutive years during rounding.
+            crop_area_diagnostics_top_n: Number of largest crop-area errors logged
+                per region and year; zero disables the detailed listing.
+            crop_area_fit_warning_threshold_pct: Combined-crop fit below which a
+                completed region is logged as a warning.
 
-        Returns:
-            Cached field-boundary GeoDataFrame with crop-sequence columns, or
-            ``None`` if no valid cached geometry is available.
         """
-        for geom_name in (
-            _FIELD_BOUNDARIES_WITH_CROPS_GEOM,
-            _LEGACY_FIELD_BOUNDARIES_WITH_CROP_GEOM,
-        ):
-            try:
-                field_boundaries_with_crops = self.geom[geom_name]
-            except AttributeError, KeyError:
-                continue
-
-            if not isinstance(field_boundaries_with_crops, gpd.GeoDataFrame):
-                field_boundaries_with_crops = gpd.GeoDataFrame(
-                    field_boundaries_with_crops,
-                    geometry="geometry",
-                )
-
-            missing_columns = [
-                column
-                for column in [
-                    "id",
-                    "geometry",
-                    region_id_column,
-                    country_iso3_column,
-                    *crop_columns,
-                ]
-                if column not in field_boundaries_with_crops.columns
-            ]
-            if missing_columns:
-                self.logger.warning(
-                    "Ignoring cached %s because it misses required column(s): %s.",
-                    geom_name,
-                    missing_columns,
-                )
-                continue
-
-            self.logger.info(
-                "Using cached field crop-sequence geometry %s with %s fields.",
-                geom_name,
-                len(field_boundaries_with_crops),
-            )
-            return field_boundaries_with_crops
-
-        return None
-
-    def _prepare_HRL_field_boundaries_with_crops(
-        self,
-        *,
-        region_id_column: str,
-        country_iso3_column: str,
-        years: tuple[int, ...],
-        chunk_rows: int,
-        hrl_raster_chunks: dict[str, int] | None,
-        force_recalculate: bool,
-        active_subgrid_template: xr.DataArray,
-        active_subgrid_mask: np.ndarray,
-    ) -> gpd.GeoDataFrame:
-        """Create or read field boundaries with dominant HRL crop sequences.
-
-        The method first checks whether a reusable field crop-sequence geometry is
-        already available. If not, it derives the exact active-domain geometry from
-        the model subgrid mask and uses its bounds as the broad WEkEO candidate-tile
-        search envelope. Field boundaries are read once within this active-domain
-        envelope, filtered with a cheap vector intersection against the active
-        geometry, and assigned to model regions.
-
-        HRL crop extraction is then processed region by region. For each model
-        region, the method reads and merges only the HRL crop-type and secondary-crop
-        tiles needed for that region's active geometry bounds, rasterizes only that
-        region's fields onto the regional HRL raster, derives dominant crop sequences
-        for those fields, and immediately discards the regional rasters before moving
-        to the next region. This avoids constructing one full active-domain HRL
-        mosaic for every crop product and year.
-
-        The final ``_filter_fields_to_active_subgrid`` check should still be kept
-        later before farm construction to guarantee consistency with the written
-        model subgrid.
-
-        Args:
-            region_id_column: Name of the column containing model region IDs.
-            country_iso3_column: Name of the column containing ISO3 country codes.
-            years: HRL crop years used to construct the field crop sequences.
-            chunk_rows: Number of raster rows processed at once when deriving the
-                dominant crop per field.
-            hrl_raster_chunks: Optional xarray/rioxarray chunk sizes used when
-                opening HRL rasters. If ``None``, default spatial chunks are used.
-            force_recalculate: If True, ignore existing cached field crop sequences
-                and recompute them from HRL rasters.
-            active_subgrid_template: Model subgrid template used to derive the
-                exact active-domain geometry.
-            active_subgrid_mask: Boolean array where True indicates active model
-                cells.
-
-        Returns:
-            Field-boundary GeoDataFrame containing field IDs, geometries, region
-            IDs, ISO3 country codes, and one dominant crop column per requested
-            year.
-
-        Raises:
-            ValueError: If the region table does not contain the required region
-                or country column.
-            ValueError: If no field boundaries are found within the active-domain
-                search bounds.
-            ValueError: If the field-index raster cannot be created for a region.
-            ValueError: If no dominant crop sequences can be derived.
-            ValueError: If no field contains a valid HRL crop observation.
-            WEkEONoCoverageError: If the query returns no results, or if no returned
-                result IDs match the configured product code.
-        """
-        crop_columns = [f"crop_{year}" for year in years]
-
-        if not force_recalculate:
-            cached = self._get_cached_field_boundaries_with_crops(
-                crop_columns,
-                region_id_column=region_id_column,
-                country_iso3_column=country_iso3_column,
-            )
-            if cached is not None:
-                return cached
-
-        regions_shapes: gpd.GeoDataFrame = self.geom["regions"]
-        if region_id_column not in regions_shapes.columns:
-            raise ValueError(f"Region database must contain '{region_id_column}'.")
-
-        if country_iso3_column not in regions_shapes.columns:
-            raise ValueError(f"Region database must contain '{country_iso3_column}'.")
-
-        if regions_shapes.crs is None:
-            raise ValueError("Region geometries must have a CRS for HRL preprocessing.")
-
-        hrl_active_geometry = _active_subgrid_mask_geometry_for_hrl(
-            active_subgrid_template,
-            active_subgrid_mask,
-        )
-        hrl_active_bounds = tuple(float(value) for value in hrl_active_geometry.bounds)
-
-        self.logger.debug(
-            "Using exact active-mask geometry for HRL preprocessing. WEkEO "
-            "candidate search bounds=%s; exact active geometry bounds=%s.",
-            hrl_active_bounds,
-            hrl_active_geometry.bounds,
-        )
-
-        field_boundaries: gpd.GeoDataFrame = self.data_catalog.fetch(
-            "field_boundaries"
-        ).read(hrl_active_bounds)
-        field_boundaries["id"] = field_boundaries["id"].astype(np.int32)
-
-        if field_boundaries.empty:
-            raise ValueError(
-                "No field boundaries were found within the active-domain search "
-                f"bounds {hrl_active_bounds}."
-            )
-
-        n_fields_before_geometry_filter = len(field_boundaries)
-        field_boundaries = _filter_fields_to_hrl_clip_geometry(
-            field_boundaries,
-            hrl_active_geometry,
-            logger=self.logger,
-        )
-
-        self.logger.debug(
-            "Prepared %s field boundary/boundaries for region-wise HRL crop "
-            "preprocessing from %s field boundary/boundaries inside active-domain "
-            "search bounds %s.",
-            len(field_boundaries),
-            n_fields_before_geometry_filter,
-            hrl_active_bounds,
-        )
-
-        field_boundaries = assign_regions_to_fields(
-            field_boundaries,
-            regions_shapes,
+        self._setup_create_farms_from_HRL(
             region_id_column=region_id_column,
             country_iso3_column=country_iso3_column,
-            logger=self.logger,
+            size_class_boundaries=size_class_boundaries,
+            years=years,
+            random_seed=random_seed,
+            hrl_raster_chunks=hrl_raster_chunks,
+            subgrid_chunk_size=subgrid_chunk_size,
+            minimum_cells_per_farm=minimum_cells_per_farm,
+            workflow_settings=_ExactSequenceSettings(
+                jump_candidate_sample=exact_sequence_jump_candidate_sample,
+                distance_scale_m=exact_sequence_distance_scale_m,
+                temporal_persistence_weight=rounding_temporal_persistence_weight,
+            ),
+            crop_area_diagnostics_top_n=crop_area_diagnostics_top_n,
+            crop_area_fit_warning_threshold_pct=crop_area_fit_warning_threshold_pct,
         )
 
+    @build_method(
+        depends_on=["setup_regions_and_land_use"],
+        required=False,
+    )
+    def setup_create_farms_from_HRL_lowder(
+        self,
+        region_id_column: str = "region_id",
+        country_iso3_column: str = "ISO3",
+        size_class_boundaries: dict[str, tuple[int | float, int | float]] | None = None,
+        years: tuple[int, ...] = (2017, 2018, 2019, 2020, 2021, 2022, 2023),
+        random_seed: int = 42,
+        hrl_raster_chunks: dict[str, int] | None = None,
+        subgrid_chunk_size: int = 256,
+        distance_weight: float = 0.45,
+        crop_sequence_weight: float = 0.40,
+        switch_timing_weight: float = 0.15,
+        min_valid_crop_sequence_overlap: int = 2,
+        minimum_cells_per_farm: float = 1.0,
+        jump_candidate_sample: int = 256,
+        max_jump_distance_m: float = 2_000.0,
+        crop_area_alignment_weight: float = 0.80,
+        max_crop_candidates_per_farmer: int = 4,
+        max_regional_sequence_candidates_per_farmer: int = 4,
+        regional_sequence_pool_size: int = 512,
+        crop_area_local_search_passes: int = 2,
+        crop_area_regional_search_passes: int = 2,
+        local_sequence_fit_threshold_pct: float = 99.0,
+        fallow_sequence_penalty: float = 0.35,
+        lowder_extra_farm_fraction: float = 0.10,
+        crop_area_diagnostics_top_n: int = 0,
+        crop_area_fit_warning_threshold_pct: float = 80.0,
+    ) -> None:
+        """Create Lowder-guided farms and assign complete observed sequences.
+
+        Farm geometry preserves the selected static agricultural area exactly.
+        Lowder determines the initial number and relative sizes of farms, after
+        which a limited fraction of large targets may be split to improve the
+        granularity of the multi-year crop-area optimization.
+
+        Each farmer starts with the complete local sequence occupying the largest
+        area in that farm. The optimizer first considers other locally observed
+        sequences and introduces similar, common regional sequences only when the
+        local-only solution remains below the requested crop-area fit. Annual crop
+        labels are never optimized independently, so the final sequence is always
+        an original complete HRL sequence.
+
+        Args:
+            region_id_column: Column containing compact model-region IDs.
+            country_iso3_column: Column containing country ISO3 codes.
+            size_class_boundaries: Optional Lowder class boundaries in square
+                metres. Default boundaries are used when omitted.
+            years: Ordered HRL years included in each complete sequence.
+            random_seed: Base seed for target sizes and raster farm growth.
+            hrl_raster_chunks: Native HRL read chunks. Defaults to the module
+                chunk configuration.
+            subgrid_chunk_size: Destination-tile width and height in model cells.
+            distance_weight: Farm-growth weight for spatial compactness.
+            crop_sequence_weight: Farm-growth weight for full-sequence similarity.
+            switch_timing_weight: Farm-growth weight for crop-switch timing.
+            min_valid_crop_sequence_overlap: Minimum comparable years required for
+                positive sequence similarity.
+            minimum_cells_per_farm: Minimum Lowder target size in model cells.
+            jump_candidate_sample: Candidate cells sampled when farm growth must
+                start another disconnected parcel.
+            max_jump_distance_m: Preferred maximum parcel-jump distance.
+            crop_area_alignment_weight: Sequence-optimization weight assigned to
+                matching regional year-by-crop target areas.
+            max_crop_candidates_per_farmer: Maximum locally observed sequences
+                retained for each farmer.
+            max_regional_sequence_candidates_per_farmer: Maximum regional fallback
+                sequences added for each farmer.
+            regional_sequence_pool_size: Number of common regional sequences
+                considered when constructing fallback candidates.
+            crop_area_local_search_passes: Reassignment passes using local
+                sequences only.
+            crop_area_regional_search_passes: Reassignment passes after regional
+                fallback sequences become available.
+            local_sequence_fit_threshold_pct: Minimum local-only fit before the
+                regional fallback stage is skipped.
+            fallow_sequence_penalty: Preference penalty applied to fallow-heavy
+                fallback sequences.
+            lowder_extra_farm_fraction: Maximum proportional increase in target
+                farm count obtained by splitting large Lowder targets.
+            crop_area_diagnostics_top_n: Number of largest crop-area errors logged
+                per region and year; zero disables the detailed listing.
+            crop_area_fit_warning_threshold_pct: Combined-crop fit below which a
+                completed region is logged as a warning.
+
+        """
+        self._setup_create_farms_from_HRL(
+            region_id_column=region_id_column,
+            country_iso3_column=country_iso3_column,
+            size_class_boundaries=size_class_boundaries,
+            years=years,
+            random_seed=random_seed,
+            hrl_raster_chunks=hrl_raster_chunks,
+            subgrid_chunk_size=subgrid_chunk_size,
+            minimum_cells_per_farm=minimum_cells_per_farm,
+            workflow_settings=_LowderSequenceSettings(
+                distance_weight=distance_weight,
+                crop_sequence_weight=crop_sequence_weight,
+                switch_timing_weight=switch_timing_weight,
+                min_valid_crop_sequence_overlap=min_valid_crop_sequence_overlap,
+                jump_candidate_sample=jump_candidate_sample,
+                max_jump_distance_m=max_jump_distance_m,
+                crop_area_alignment_weight=crop_area_alignment_weight,
+                max_local_sequences=max_crop_candidates_per_farmer,
+                max_regional_sequences=max_regional_sequence_candidates_per_farmer,
+                regional_sequence_pool_size=regional_sequence_pool_size,
+                local_search_passes=crop_area_local_search_passes,
+                regional_search_passes=crop_area_regional_search_passes,
+                local_fit_threshold_pct=local_sequence_fit_threshold_pct,
+                fallow_penalty=fallow_sequence_penalty,
+                extra_farm_fraction=lowder_extra_farm_fraction,
+            ),
+            crop_area_diagnostics_top_n=crop_area_diagnostics_top_n,
+            crop_area_fit_warning_threshold_pct=crop_area_fit_warning_threshold_pct,
+        )
+
+    def _setup_create_farms_from_HRL(
+        self,
+        region_id_column: str,
+        country_iso3_column: str,
+        size_class_boundaries: dict[str, tuple[int | float, int | float]] | None,
+        years: tuple[int, ...],
+        random_seed: int,
+        hrl_raster_chunks: dict[str, int] | None,
+        subgrid_chunk_size: int,
+        minimum_cells_per_farm: float,
+        workflow_settings: _LowderSequenceSettings | _ExactSequenceSettings,
+        crop_area_diagnostics_top_n: int,
+        crop_area_fit_warning_threshold_pct: float,
+    ) -> None:
+        """Run the shared HRL loading and one of the two supported workflows.
+
+        The shared stages load native HRL crop areas, reproject annual crops in
+        destination-grid tiles, construct Lowder target sizes, register outputs,
+        and produce diagnostics. ``workflow_settings`` selects either the current
+        Lowder sequence-balanced method or hard exact-sequence grouping; no legacy
+        annual crop-assignment or alternative mask/reprojection modes remain.
+
+        Args:
+            region_id_column: Column containing compact model-region IDs.
+            country_iso3_column: Column containing country ISO3 codes.
+            size_class_boundaries: Optional Lowder class boundaries in square
+                metres.
+            years: Ordered HRL years represented by the crop sequence.
+            random_seed: Base random seed used throughout regional processing.
+            hrl_raster_chunks: Native HRL read chunks.
+            subgrid_chunk_size: Destination-tile width and height in model cells.
+            minimum_cells_per_farm: Minimum target size in model cells.
+            workflow_settings: Settings for the Lowder sequence-balanced or exact-
+                sequence workflow.
+            crop_area_diagnostics_top_n: Number of detailed crop errors to log.
+            crop_area_fit_warning_threshold_pct: Regional fit warning threshold.
+
+        Raises:
+            RuntimeError: If a hard farm, crop-sequence, area, or land-use
+                invariant is violated.
+            ValueError: If inputs are invalid or no HRL farmer agents are created.
+        """
+        if not years:
+            raise ValueError("years must contain at least one HRL year.")
+        if len(set(years)) != len(years):
+            raise ValueError("years must not contain duplicates.")
+        if subgrid_chunk_size < 1:
+            raise ValueError("subgrid_chunk_size must be at least 1.")
+        if minimum_cells_per_farm <= 0.0:
+            raise ValueError("minimum_cells_per_farm must be positive.")
+        if crop_area_diagnostics_top_n < 0:
+            raise ValueError("crop_area_diagnostics_top_n cannot be negative.")
+        if not 0.0 <= crop_area_fit_warning_threshold_pct <= 100.0:
+            raise ValueError(
+                "crop_area_fit_warning_threshold_pct must be between 0 and 100."
+            )
+
+        exact_sequence_settings = (
+            workflow_settings
+            if isinstance(workflow_settings, _ExactSequenceSettings)
+            else None
+        )
+        lowder_sequence_settings = (
+            workflow_settings
+            if isinstance(workflow_settings, _LowderSequenceSettings)
+            else None
+        )
+        is_exact_sequence = exact_sequence_settings is not None
+
+        if is_exact_sequence:
+            assert exact_sequence_settings is not None
+            if exact_sequence_settings.jump_candidate_sample < 1:
+                raise ValueError(
+                    "exact_sequence_jump_candidate_sample must be at least 1."
+                )
+            if exact_sequence_settings.distance_scale_m <= 0.0:
+                raise ValueError("exact_sequence_distance_scale_m must be positive.")
+            if not 0.0 <= exact_sequence_settings.temporal_persistence_weight <= 1.0:
+                raise ValueError(
+                    "rounding_temporal_persistence_weight must be between 0 and 1."
+                )
+            workflow_name = "exact_sequence"
+        else:
+            assert lowder_sequence_settings is not None
+            score_weight_sum = (
+                lowder_sequence_settings.distance_weight
+                + lowder_sequence_settings.crop_sequence_weight
+                + lowder_sequence_settings.switch_timing_weight
+            )
+            if score_weight_sum <= 0.0:
+                raise ValueError(
+                    "Farm-growth score weights must sum to a positive value."
+                )
+            if lowder_sequence_settings.min_valid_crop_sequence_overlap < 1:
+                raise ValueError("min_valid_crop_sequence_overlap must be at least 1.")
+            if lowder_sequence_settings.jump_candidate_sample < 1:
+                raise ValueError("jump_candidate_sample must be at least 1.")
+            if lowder_sequence_settings.max_jump_distance_m < 0.0:
+                raise ValueError("max_jump_distance_m cannot be negative.")
+            if not 0.0 <= lowder_sequence_settings.crop_area_alignment_weight <= 1.0:
+                raise ValueError("crop_area_alignment_weight must be between 0 and 1.")
+            if lowder_sequence_settings.max_local_sequences < 1:
+                raise ValueError("max_crop_candidates_per_farmer must be at least 1.")
+            if lowder_sequence_settings.max_regional_sequences < 1:
+                raise ValueError(
+                    "max_regional_sequence_candidates_per_farmer must be at least 1."
+                )
+            if lowder_sequence_settings.regional_sequence_pool_size < 1:
+                raise ValueError("regional_sequence_pool_size must be at least 1.")
+            if lowder_sequence_settings.local_search_passes < 0:
+                raise ValueError("crop_area_local_search_passes cannot be negative.")
+            if lowder_sequence_settings.regional_search_passes < 0:
+                raise ValueError("crop_area_regional_search_passes cannot be negative.")
+            if not 0.0 <= lowder_sequence_settings.local_fit_threshold_pct <= 100.0:
+                raise ValueError(
+                    "local_sequence_fit_threshold_pct must be between 0 and 100."
+                )
+            if not 0.0 <= lowder_sequence_settings.fallow_penalty <= 1.0:
+                raise ValueError("fallow_sequence_penalty must be between 0 and 1.")
+            if not 0.0 <= lowder_sequence_settings.extra_farm_fraction <= 1.0:
+                raise ValueError("lowder_extra_farm_fraction must be between 0 and 1.")
+            workflow_name = "lowder_sequence_balanced"
+
+        # Bind workflow-specific values once so the regional loop can focus on
+        # the shared data flow rather than repeatedly unpacking configuration.
+        if is_exact_sequence:
+            assert exact_sequence_settings is not None
+            exact_sequence_jump_candidate_sample = (
+                exact_sequence_settings.jump_candidate_sample
+            )
+            exact_sequence_distance_scale_m = exact_sequence_settings.distance_scale_m
+            exact_sequence_rounding_temporal_persistence_weight = (
+                exact_sequence_settings.temporal_persistence_weight
+            )
+        else:
+            assert lowder_sequence_settings is not None
+            distance_weight = lowder_sequence_settings.distance_weight
+            crop_sequence_weight = lowder_sequence_settings.crop_sequence_weight
+            switch_timing_weight = lowder_sequence_settings.switch_timing_weight
+            min_valid_crop_sequence_overlap = (
+                lowder_sequence_settings.min_valid_crop_sequence_overlap
+            )
+            jump_candidate_sample = lowder_sequence_settings.jump_candidate_sample
+            max_jump_distance_m = lowder_sequence_settings.max_jump_distance_m
+            crop_area_alignment_weight = (
+                lowder_sequence_settings.crop_area_alignment_weight
+            )
+            max_crop_candidates_per_farmer = (
+                lowder_sequence_settings.max_local_sequences
+            )
+            max_regional_sequence_candidates_per_farmer = (
+                lowder_sequence_settings.max_regional_sequences
+            )
+            regional_sequence_pool_size = (
+                lowder_sequence_settings.regional_sequence_pool_size
+            )
+            crop_area_local_search_passes = lowder_sequence_settings.local_search_passes
+            crop_area_regional_search_passes = (
+                lowder_sequence_settings.regional_search_passes
+            )
+            local_sequence_fit_threshold_pct = (
+                lowder_sequence_settings.local_fit_threshold_pct
+            )
+            fallow_sequence_penalty = lowder_sequence_settings.fallow_penalty
+            lowder_extra_farm_fraction = lowder_sequence_settings.extra_farm_fraction
+
+        if size_class_boundaries is None:
+            size_class_boundaries = _default_size_class_boundaries()
+
+        regions_shapes: gpd.GeoDataFrame = self.geom["regions"]
+        for required_column in (region_id_column, country_iso3_column):
+            if required_column not in regions_shapes.columns:
+                raise ValueError(f"Region database must contain {required_column!r}.")
+        if regions_shapes.crs is None:
+            raise ValueError("Region geometries must have a CRS.")
+
+        crop_columns = [f"crop_{year}" for year in years]
+        region_ids: xr.DataArray = self.subgrid["region_ids"].compute()
+        subgrid_mask: xr.DataArray = self.subgrid["mask"].compute()
+        active_subgrid_mask = ~subgrid_mask.values
+        region_id_values = region_ids.values.astype(np.int32, copy=False)
+        cell_area_m2 = raster_cell_area_m2(region_ids)
+
+        hrl_active_geometry = _active_subgrid_mask_geometry_for_hrl(
+            region_ids,
+            active_subgrid_mask,
+        )
         regions_shapes_hrl = regions_shapes[
             [region_id_column, country_iso3_column, "geometry"]
-        ].copy()
-        regions_shapes_hrl = regions_shapes_hrl.to_crs("EPSG:4326")
-
+        ].to_crs("EPSG:4326")
         raster_chunks = (
             _DEFAULT_HRL_RASTER_CHUNKS
             if hrl_raster_chunks is None
             else hrl_raster_chunks
         )
 
-        field_boundaries_with_crops_per_region: list[gpd.GeoDataFrame] = []
+        farm_sizes_per_region = self.data_catalog.fetch(
+            "lowder_farm_size_distribution"
+        ).read()
+        farm_countries_list = list(farm_sizes_per_region["ISO3"].unique())
+        farm_size_donor_country = setup_donor_countries(
+            self.data_catalog,
+            self.geom["global_countries"],
+            farm_countries_list,
+            alternative_countries=regions_shapes[country_iso3_column].unique().tolist(),
+        )
 
-        self.logger.debug(
-            "Starting region-wise HRL crop sequence extraction for %s years and %s "
-            "model region(s).",
-            len(years),
+        farms_values = np.full(region_ids.shape, -1, dtype=np.int32)
+        all_farmers: list[pd.DataFrame] = []
+        region_diagnostics: list[dict[str, float | int | str]] = []
+        all_crop_area_diagnostics: list[pd.DataFrame] = []
+        total_native_hrl_area_by_year_m2 = {year: 0.0 for year in years}
+        total_subgrid_hrl_area_by_year_m2 = {year: 0.0 for year in years}
+        total_selected_fractional_area_by_year_m2 = {year: 0.0 for year in years}
+        total_selected_modal_area_by_year_m2 = {year: 0.0 for year in years}
+        total_selected_fallow_area_by_year_m2 = {year: 0.0 for year in years}
+        total_selected_missing_area_by_year_m2 = {year: 0.0 for year in years}
+        active_farmer_crops_by_year = {year: 0 for year in years}
+        fallow_farmers_by_year = {year: 0 for year in years}
+        missing_farmers_by_year = {year: 0 for year in years}
+        farmer_id_offset = 0
+
+        static_selection_name = (
+            "exact_sequence_union" if is_exact_sequence else "multiyear_coverage"
+        )
+        self.logger.info(
+            "Starting HRL-only raster farm construction for %s model regions "
+            "(reprojection=tiled; static selection=%s; workflow=%s).",
             len(regions_shapes_hrl),
+            static_selection_name,
+            workflow_name,
         )
 
         for region_index, (_, region) in enumerate(regions_shapes_hrl.iterrows()):
             region_id = int(region[region_id_column])
-            country_iso3 = region[country_iso3_column]
-
-            fields_region = field_boundaries.loc[
-                field_boundaries[region_id_column] == region_id
-            ].copy()
-
-            if fields_region.empty:
-                del fields_region
+            original_iso3 = str(region[country_iso3_column])
+            region_mask_full = active_subgrid_mask & (region_id_values == region_id)
+            if not region_mask_full.any():
                 continue
+
+            row_indices, col_indices = np.where(region_mask_full)
+            y_slice = slice(int(row_indices.min()), int(row_indices.max()) + 1)
+            x_slice = slice(int(col_indices.min()), int(col_indices.max()) + 1)
+            region_template = region_ids.isel(y=y_slice, x=x_slice)
+            region_mask = region_mask_full[y_slice, x_slice]
+            region_cell_area_m2 = cell_area_m2[y_slice, x_slice]
 
             region_active_geometry = region.geometry.intersection(hrl_active_geometry)
             if region_active_geometry.is_empty:
-                self.logger.debug(
-                    "Skipping region %s because it does not intersect the active "
-                    "model geometry.",
-                    region_id,
-                )
-                del fields_region
                 continue
-
-            # Use the active part of the model region as the WEkEO request
-            # envelope. Do not expand this to field-derived bounds: outlier fields
-            # can substantially increase the number of requested HRL tiles.
             region_bounds = tuple(
                 float(value) for value in region_active_geometry.bounds
             )
 
             self.logger.info(
-                "Processing HRL crop sequences for region %s (%s): %s field(s), "
-                "WEkEO bounds=%s.",
+                "Reading HRL crop stack for region %s (%s), bounds=%s.",
                 region_id,
-                country_iso3,
-                len(fields_region),
+                original_iso3,
                 region_bounds,
             )
 
-            dominant_crop_per_year: list[np.ndarray] = []
-            unique_field_ids: np.ndarray | None = None
-            field_index_grid: np.ndarray | None = None
+            combined_crop_per_year: list[np.ndarray] = []
+            cultivated_fraction_per_year: list[np.ndarray] = []
+            hrl_coverage_fraction_per_year: list[np.ndarray] = []
+            native_crop_areas_per_year: list[dict[int, float]] = []
+            region_has_hrl_coverage = True
+            incomplete_field_cell_count = 0
 
-            for year_index, year in enumerate(years):
-                self.logger.info("Processing HRL Crop Types for %s.", year)
-
-                country_iso3_upper = str(country_iso3).upper()
-                crop_types_adapter = None
-                secondary_crop_adapter = None
+            for year in years:
                 crop_types = None
                 secondary_crop = None
-
+                crop_types_adapter = None
+                secondary_crop_adapter = None
                 try:
                     crop_types_adapter = self.data_catalog.fetch(
                         f"hrl_crop_types_{year}",
                         bounds=region_bounds,
                         year=year,
                     )
-                    crop_types: xr.DataArray = crop_types_adapter.read(
+                    crop_types = crop_types_adapter.read(
                         bounds=region_bounds,
                         year=year,
                         dst_crs=None,
                         normalize_nodata=False,
                         chunks=raster_chunks,
                     )
-
-                    self.logger.info(
-                        "Processing HRL Secondary Crops Type for %s.", year
-                    )
-
                     secondary_crop_adapter = self.data_catalog.fetch(
                         f"hrl_secondary_crop_{year}",
                         bounds=region_bounds,
                         year=year,
                     )
-                    secondary_crop: xr.DataArray = secondary_crop_adapter.read(
+                    secondary_crop = secondary_crop_adapter.read(
                         bounds=region_bounds,
                         year=year,
                         dst_crs=None,
                         normalize_nodata=False,
                         chunks=raster_chunks,
                     )
-
                 except WEkEONoCoverageError as error:
-                    if country_iso3_upper in _HRL_CROPLANDS_EEA38_ISO3:
+                    if original_iso3.upper() in _HRL_CROPLANDS_EEA38_ISO3:
                         raise
-
                     self.logger.warning(
-                        "Skipping region %s (%s) because WEkEO returned no HRL Croplands "
-                        "tiles for year %s and this country is not part of the HRL Croplands "
-                        "EEA38 coverage. This is expected for basin-border regions in countries "
-                        "such as Ukraine or Moldova, but please check whether this is expected "
-                        "for this setup. WEkEO bounds=%s. Original error: %s",
+                        "Skipping region %s (%s): no HRL Croplands coverage for "
+                        "year %s. Original error: %s",
                         region_id,
-                        country_iso3,
+                        original_iso3,
                         year,
-                        region_bounds,
                         error,
                     )
-
-                    del (
-                        crop_types_adapter,
-                        secondary_crop_adapter,
-                        crop_types,
-                        secondary_crop,
-                    )
-                    gc.collect()
-
-                    dominant_crop_per_year = []
-                    field_index_grid = None
-                    unique_field_ids = None
+                    region_has_hrl_coverage = False
                     break
 
                 crop_types, secondary_crop = _align_hrl_rasters_to_common_grid(
@@ -2157,609 +3179,1072 @@ class Europe(GEBModel):
                     year=year,
                     logger=self.logger,
                 )
-
-                if year_index == 0:
-                    # HRL rasters stay in their native CRS to avoid a large
-                    # reprojection. Reproject only the vector fields before
-                    # rasterization. First remove fields that do not intersect the
-                    # actual returned HRL raster footprint. This avoids expanding
-                    # the WEkEO request bounds just to handle region-edge cases.
-                    fields_region_for_hrl = _filter_fields_to_raster_footprint(
-                        fields_region,
+                native_crop_areas_per_year.append(
+                    _native_hrl_crop_category_areas_m2(
                         crop_types,
-                        logger=self.logger,
+                        secondary_crop,
+                        region_active_geometry,
+                        chunk_rows=max(int(raster_chunks.get("y", 4096)), 1),
                     )
-
-                    if fields_region_for_hrl.empty:
-                        self.logger.warning(
-                            "Skipping region %s (%s) because none of its %s "
-                            "field(s) intersect the returned HRL raster footprint "
-                            "for year %s. WEkEO bounds=%s; HRL raster bounds=%s.",
-                            region_id,
-                            country_iso3,
-                            len(fields_region),
-                            year,
-                            region_bounds,
-                            crop_types.rio.bounds(),
-                        )
-                        del (
-                            crop_types,
-                            secondary_crop,
-                            crop_types_adapter,
-                            secondary_crop_adapter,
-                            fields_region_for_hrl,
-                        )
-                        gc.collect()
-                        field_index_grid = None
-                        unique_field_ids = None
-                        break
-
-                    fields_region_for_grid = fields_region_for_hrl
-                    if (
-                        crop_types.rio.crs is not None
-                        and fields_region_for_hrl.crs is not None
-                    ):
-                        fields_region_for_grid = fields_region_for_hrl.to_crs(
-                            crop_types.rio.crs
-                        )
-
-                    field_boundaries_grid: xr.DataArray = rasterize_like(
-                        fields_region_for_grid,
-                        column="id",
-                        raster=crop_types,
-                        dtype=np.int32,
-                        nodata=-1,
-                        all_touched=False,
-                    )
-
-                    try:
-                        field_index_grid, unique_field_ids = create_field_index_grid(
-                            field_boundaries_grid,
-                            field_nodata=-1,
-                        )
-                    except ValueError:
-                        self.logger.debug(
-                            "No fields rasterized to the HRL grid for region %s "
-                            "with all_touched=False; retrying with all_touched=True.",
-                            region_id,
-                        )
-                        del field_boundaries_grid
-                        gc.collect()
-
-                        field_boundaries_grid = rasterize_like(
-                            fields_region_for_grid,
-                            column="id",
-                            raster=crop_types,
-                            dtype=np.int32,
-                            nodata=-1,
-                            all_touched=True,
-                        )
-                        try:
-                            field_index_grid, unique_field_ids = (
-                                create_field_index_grid(
-                                    field_boundaries_grid,
-                                    field_nodata=-1,
-                                )
-                            )
-                        except ValueError:
-                            self.logger.warning(
-                                "Skipping region %s (%s) because none of its %s "
-                                "field(s) rasterize to the HRL crop grid for year "
-                                "%s, even with all_touched=True. WEkEO bounds=%s; "
-                                "HRL raster bounds=%s.",
-                                region_id,
-                                country_iso3,
-                                len(fields_region_for_hrl),
-                                year,
-                                region_bounds,
-                                crop_types.rio.bounds(),
-                            )
-                            del (
-                                field_boundaries_grid,
-                                fields_region_for_grid,
-                                fields_region_for_hrl,
-                                crop_types,
-                                secondary_crop,
-                                crop_types_adapter,
-                                secondary_crop_adapter,
-                            )
-                            gc.collect()
-                            field_index_grid = None
-                            unique_field_ids = None
-                            break
-
-                    del (
-                        field_boundaries_grid,
-                        fields_region_for_grid,
-                        fields_region_for_hrl,
-                    )
-                    gc.collect()
-
-                if field_index_grid is None or unique_field_ids is None:
-                    break
-
-                dominant_crop_year = dominant_crop_one_year_chunked(
-                    crop_types=crop_types,
-                    secondary_crop=secondary_crop,
-                    field_index_grid=field_index_grid,
-                    n_fields=unique_field_ids.size,
-                    chunk_rows=chunk_rows,
-                    pair_base=65536,
-                    nodata=-1,
                 )
-                dominant_crop_per_year.append(dominant_crop_year)
+
+                combined_year = np.full(
+                    region_template.shape,
+                    _HRL_MISSING_CROP_CODE,
+                    dtype=np.int32,
+                )
+                cultivated_fraction_year = np.zeros(
+                    region_template.shape,
+                    dtype=np.float32,
+                )
+                coverage_fraction_year = np.zeros(
+                    region_template.shape,
+                    dtype=np.float32,
+                )
+                source_bounds = crop_types.rio.bounds()
+                source_resolution = crop_types.rio.resolution()
+                source_buffer_x = abs(float(source_resolution[0])) * 2.0
+                source_buffer_y = abs(float(source_resolution[1])) * 2.0
+
+                for tile_y_start in range(
+                    0,
+                    region_template.sizes["y"],
+                    subgrid_chunk_size,
+                ):
+                    tile_y_stop = min(
+                        tile_y_start + subgrid_chunk_size,
+                        region_template.sizes["y"],
+                    )
+                    for tile_x_start in range(
+                        0,
+                        region_template.sizes["x"],
+                        subgrid_chunk_size,
+                    ):
+                        tile_x_stop = min(
+                            tile_x_start + subgrid_chunk_size,
+                            region_template.sizes["x"],
+                        )
+                        tile_y_slice = slice(tile_y_start, tile_y_stop)
+                        tile_x_slice = slice(tile_x_start, tile_x_stop)
+                        tile_region_mask = region_mask[
+                            tile_y_slice,
+                            tile_x_slice,
+                        ]
+                        if not tile_region_mask.any():
+                            continue
+
+                        tile_template = region_template.isel(
+                            y=tile_y_slice,
+                            x=tile_x_slice,
+                        )
+                        tile_bounds = transform_bounds(
+                            tile_template.rio.crs,
+                            crop_types.rio.crs,
+                            *tile_template.rio.bounds(),
+                            densify_pts=21,
+                        )
+                        clip_min_x = max(
+                            tile_bounds[0] - source_buffer_x,
+                            source_bounds[0],
+                        )
+                        clip_min_y = max(
+                            tile_bounds[1] - source_buffer_y,
+                            source_bounds[1],
+                        )
+                        clip_max_x = min(
+                            tile_bounds[2] + source_buffer_x,
+                            source_bounds[2],
+                        )
+                        clip_max_y = min(
+                            tile_bounds[3] + source_buffer_y,
+                            source_bounds[3],
+                        )
+                        if clip_min_x >= clip_max_x or clip_min_y >= clip_max_y:
+                            continue
+
+                        crop_types_tile = crop_types.rio.clip_box(
+                            minx=clip_min_x,
+                            miny=clip_min_y,
+                            maxx=clip_max_x,
+                            maxy=clip_max_y,
+                            allow_one_dimensional_raster=True,
+                        )
+                        secondary_crop_tile = secondary_crop.rio.clip_box(
+                            minx=clip_min_x,
+                            miny=clip_min_y,
+                            maxx=clip_max_x,
+                            maxy=clip_max_y,
+                            allow_one_dimensional_raster=True,
+                        )
+                        crop_types_tile, secondary_crop_tile = (
+                            _align_hrl_rasters_to_common_grid(
+                                crop_types_tile,
+                                secondary_crop_tile,
+                                region_id=region_id,
+                                year=year,
+                                logger=self.logger,
+                            )
+                        )
+                        (
+                            tile_combined,
+                            tile_fraction,
+                            tile_coverage_fraction,
+                        ) = _reproject_HRL_year_to_subgrid(
+                            crop_types_tile,
+                            secondary_crop_tile,
+                            tile_template,
+                        )
+                        tile_combined[~tile_region_mask] = _HRL_MISSING_CROP_CODE
+                        tile_fraction[~tile_region_mask] = 0.0
+                        tile_coverage_fraction[~tile_region_mask] = 0.0
+                        combined_year[
+                            tile_y_slice,
+                            tile_x_slice,
+                        ] = tile_combined
+                        cultivated_fraction_year[
+                            tile_y_slice,
+                            tile_x_slice,
+                        ] = tile_fraction
+                        coverage_fraction_year[
+                            tile_y_slice,
+                            tile_x_slice,
+                        ] = tile_coverage_fraction
+
+                        del (
+                            crop_types_tile,
+                            secondary_crop_tile,
+                            tile_combined,
+                            tile_fraction,
+                            tile_coverage_fraction,
+                        )
+
+                combined_crop_per_year.append(combined_year)
+                cultivated_fraction_per_year.append(cultivated_fraction_year)
+                hrl_coverage_fraction_per_year.append(coverage_fraction_year)
 
                 del (
                     crop_types,
                     secondary_crop,
                     crop_types_adapter,
                     secondary_crop_adapter,
+                    combined_year,
+                    cultivated_fraction_year,
+                    coverage_fraction_year,
                 )
-                gc.collect()
 
-            if unique_field_ids is None or len(dominant_crop_per_year) == 0:
+            if not region_has_hrl_coverage:
+                continue
+            if (
+                len(combined_crop_per_year) != len(years)
+                or len(cultivated_fraction_per_year) != len(years)
+                or len(hrl_coverage_fraction_per_year) != len(years)
+                or len(native_crop_areas_per_year) != len(years)
+            ):
+                raise ValueError(f"Incomplete HRL crop stack for region {region_id}.")
+
+            crop_stack = np.stack(combined_crop_per_year).astype(
+                np.int32,
+                copy=False,
+            )
+            fraction_stack = np.stack(cultivated_fraction_per_year).astype(
+                np.float32,
+                copy=False,
+            )
+            coverage_fraction_stack = np.stack(hrl_coverage_fraction_per_year).astype(
+                np.float32,
+                copy=False,
+            )
+            del (
+                combined_crop_per_year,
+                cultivated_fraction_per_year,
+                hrl_coverage_fraction_per_year,
+            )
+
+            native_hrl_area_by_year_m2 = np.asarray(
+                [
+                    float(sum(category_areas.values()))
+                    for category_areas in native_crop_areas_per_year
+                ],
+                dtype=np.float64,
+            )
+            subgrid_hrl_area_by_year_m2 = np.asarray(
+                [
+                    float(
+                        np.sum(
+                            fraction_stack[year_index][region_mask]
+                            * region_cell_area_m2[region_mask]
+                        )
+                    )
+                    for year_index in range(len(years))
+                ],
+                dtype=np.float64,
+            )
+
+            binary_rounding_diagnostics = pd.DataFrame()
+            binary_rounding_wape_pct = np.nan
+
+            if is_exact_sequence:
+                # Exact-sequence farms require a complete crop state for every
+                # selected cell and year. Category-aware rounding defines that
+                # hard domain before any farm targets are grown.
+                (
+                    crop_stack,
+                    eligible_mask,
+                    binary_rounding_diagnostics,
+                    incomplete_field_cell_count,
+                ) = round_crop_states_to_area_targets(
+                    modal_crop_stack=crop_stack,
+                    cultivated_fraction_stack=fraction_stack,
+                    coverage_fraction_stack=coverage_fraction_stack,
+                    cell_area_m2=region_cell_area_m2,
+                    region_mask=region_mask,
+                    target_crop_areas_per_year=native_crop_areas_per_year,
+                    fallow_code=_HRL_FALLOW_CROP_CODE,
+                    missing_code=_HRL_MISSING_CROP_CODE,
+                    temporal_persistence_weight=(
+                        exact_sequence_rounding_temporal_persistence_weight
+                    ),
+                )
+                if incomplete_field_cell_count > 0:
+                    self.logger.warning(
+                        "Region %s excludes %s potential crop cells because at "
+                        "least one requested year lacks HRL coverage.",
+                        region_id,
+                        incomplete_field_cell_count,
+                    )
+                if not binary_rounding_diagnostics.empty:
+                    rounding_target_total_m2 = float(
+                        binary_rounding_diagnostics["target_area_m2"].sum()
+                    )
+                    binary_rounding_wape_pct = (
+                        float(binary_rounding_diagnostics["difference_m2"].abs().sum())
+                        / rounding_target_total_m2
+                        * 100.0
+                        if rounding_target_total_m2 > 0.0
+                        else np.nan
+                    )
+                    capacity_shortfall = binary_rounding_diagnostics.loc[
+                        binary_rounding_diagnostics["target_area_m2"]
+                        > binary_rounding_diagnostics["candidate_area_m2"] + 1e-6
+                    ]
+                    if not capacity_shortfall.empty:
+                        self.logger.warning(
+                            "Region %s has %s year-category targets whose native "
+                            "area exceeds the full-cell area where that category "
+                            "is modal. Their combined unavoidable shortfall is "
+                            "%.3f km².",
+                            region_id,
+                            len(capacity_shortfall),
+                            float(
+                                (
+                                    capacity_shortfall["target_area_m2"]
+                                    - capacity_shortfall["candidate_area_m2"]
+                                ).sum()
+                            )
+                            / 1_000_000.0,
+                        )
+
+                selection_score = eligible_mask.astype(np.float64)
+                base_static_target_area_m2 = float(
+                    region_cell_area_m2[eligible_mask].sum()
+                )
+                selection_target_area_m2 = base_static_target_area_m2
+                cultivated_mask = eligible_mask.copy()
+            else:
+                # The current Lowder workflow uses the most recent requested year
+                # as its baseline, but never allows the static farm map to be
+                # smaller than the largest native annual cultivated area.
+                reference_index = years.index(max(years))
+                reference_fraction = fraction_stack[reference_index].astype(
+                    np.float64,
+                    copy=False,
+                )
+                base_static_target_area_m2 = float(
+                    np.sum(
+                        reference_fraction[region_mask]
+                        * region_cell_area_m2[region_mask]
+                    )
+                )
+                selection_target_area_m2 = max(
+                    base_static_target_area_m2,
+                    float(native_hrl_area_by_year_m2.max(initial=0.0)),
+                )
+
+                # Only cells with at least one observed crop can support a valid
+                # complete regional sequence. Repeated annual crop occurrence is
+                # the primary ranking criterion; mean HRL fraction breaks ties.
+                union_valid_crop = np.any(crop_stack > 0, axis=0)
+                eligible_mask = region_mask & union_valid_crop
+                valid_frequency = np.mean(crop_stack > 0, axis=0)
+                mean_fraction = fraction_stack.mean(axis=0, dtype=np.float64)
+                selection_score = 0.80 * valid_frequency + 0.20 * mean_fraction
+
+                if not eligible_mask.any():
+                    self.logger.warning(
+                        "Skipping region %s because it has no model cells with an "
+                        "observed HRL crop in any requested year.",
+                        region_id,
+                    )
+                    continue
+
+                available_static_capacity_m2 = float(
+                    region_cell_area_m2[eligible_mask].sum()
+                )
+                if selection_target_area_m2 > available_static_capacity_m2:
+                    self.logger.warning(
+                        "Region %s has only %.3f km² of cells with at least one "
+                        "valid modal crop, below the requested static capacity "
+                        "%.3f km². Using the available modal-crop capacity.",
+                        region_id,
+                        available_static_capacity_m2 / 1_000_000.0,
+                        selection_target_area_m2 / 1_000_000.0,
+                    )
+                    selection_target_area_m2 = available_static_capacity_m2
+
+                cultivated_mask = select_cultivated_cells_by_area(
+                    selection_score,
+                    eligible_mask,
+                    region_cell_area_m2,
+                    target_area_m2=selection_target_area_m2,
+                )
+
+            if not eligible_mask.any():
                 self.logger.warning(
-                    "No dominant crop sequences could be derived for region %s; "
-                    "skipping this region.",
+                    "Skipping region %s because no valid HRL agricultural cells "
+                    "remain after workflow-specific selection.",
                     region_id,
                 )
-                del fields_region, field_index_grid, unique_field_ids
-                gc.collect()
                 continue
 
-            dominant_crop_table = pd.DataFrame(
-                np.column_stack(dominant_crop_per_year).astype(np.int32),
-                index=unique_field_ids,
-                columns=crop_columns,
+            # Convert native HRL no-cropland (0) to model fallow (-1) only
+            # inside the final multi-year agricultural domain. Native outside/
+            # missing values remain -2 and can therefore never be confused with
+            # fallow. Values outside the farm domain are also marked missing.
+            selected_3d = cultivated_mask[None, :, :]
+            crop_stack[selected_3d & (crop_stack == _HRL_NO_CROPLAND_CODE)] = (
+                _HRL_FALLOW_CROP_CODE
             )
-            del dominant_crop_per_year, field_index_grid, unique_field_ids
-            gc.collect()
+            crop_stack[:, ~cultivated_mask] = _HRL_MISSING_CROP_CODE
 
-            fields_region_with_crops = fields_region.merge(
-                dominant_crop_table,
-                left_on="id",
-                right_index=True,
-                how="left",
-            )
-            del fields_region, dominant_crop_table
-            gc.collect()
-
-            valid_crop_mask = (
-                fields_region_with_crops[crop_columns].notna()
-                & fields_region_with_crops[crop_columns].ne(-1)
-            ).any(axis=1)
-            fields_region_with_crops = fields_region_with_crops.loc[
-                valid_crop_mask
-            ].copy()
-            del valid_crop_mask
-            gc.collect()
-
-            if fields_region_with_crops.empty:
-                self.logger.warning(
-                    "No field boundaries in region %s contain valid HRL crop "
-                    "observations after processing.",
-                    region_id,
+            selected_missing = selected_3d & (crop_stack == _HRL_MISSING_CROP_CODE)
+            if is_exact_sequence and selected_missing.any():
+                raise RuntimeError(
+                    "Exact-sequence farm domain contains HRL outside/missing "
+                    f"states in region {region_id}; these cells must be excluded "
+                    "rather than interpreted as fallow."
                 )
-                del fields_region_with_crops
-                gc.collect()
-                continue
 
-            field_boundaries_with_crops_per_region.append(fields_region_with_crops)
-
-            self.logger.debug(
-                "Finished HRL crop sequence extraction for region %s. Retained %s "
-                "field(s) with valid crop observations.",
-                region_id,
-                len(field_boundaries_with_crops_per_region[-1]),
+            selected_area_m2 = float(region_cell_area_m2[cultivated_mask].sum())
+            selected_fractional_area_by_year_m2 = np.asarray(
+                [
+                    float(
+                        np.sum(
+                            fraction_stack[year_index][cultivated_mask]
+                            * region_cell_area_m2[cultivated_mask]
+                        )
+                    )
+                    for year_index in range(len(years))
+                ],
+                dtype=np.float64,
             )
-
-            gc.collect()
-
-        del field_boundaries
-        gc.collect()
-
-        if not field_boundaries_with_crops_per_region:
-            raise ValueError("No dominant crop sequences could be derived.")
-
-        field_boundaries_with_crops = gpd.GeoDataFrame(
-            pd.concat(field_boundaries_with_crops_per_region, ignore_index=True),
-            geometry="geometry",
-            crs=field_boundaries_with_crops_per_region[0].crs,
-        )
-        del field_boundaries_with_crops_per_region
-        gc.collect()
-
-        if field_boundaries_with_crops.empty:
-            raise ValueError("No field boundaries contain valid HRL crop observations.")
-
-        self.set_geom(
-            field_boundaries_with_crops,
-            _FIELD_BOUNDARIES_WITH_CROPS_GEOM,
-        )
-        self.logger.info(
-            "Stored field crop-sequence geometry %s with %s fields.",
-            _FIELD_BOUNDARIES_WITH_CROPS_GEOM,
-            len(field_boundaries_with_crops),
-        )
-
-        return field_boundaries_with_crops
-
-    @build_method(
-        depends_on=["setup_regions_and_land_use"],
-        required=False,
-    )
-    def setup_prepare_HRL_field_boundaries_with_crops(
-        self,
-        region_id_column: str = "region_id",
-        country_iso3_column: str = "ISO3",
-        years: tuple[int, ...] = (2017, 2018, 2019, 2020, 2021, 2022, 2023),
-        chunk_rows: int = 512,
-        hrl_raster_chunks: dict[str, int] | None = None,
-        force_recalculate: bool = False,
-    ) -> None:
-        """Precompute and store field boundaries with dominant HRL crop sequences.
-
-        This build method materializes the reusable field-level crop table used by
-        farm reconstruction. It derives the exact active model geometry from the
-        current subgrid mask, reads candidate field boundaries inside the active
-        geometry bounds, and then extracts HRL crop sequences region by region.
-        The region-wise processing avoids constructing one full active-domain HRL
-        mosaic for every crop product and year.
-
-        Args:
-            region_id_column: Name of the column containing model region IDs.
-            country_iso3_column: Name of the column containing ISO3 country codes.
-            years: HRL crop years used to construct the field crop sequences.
-            chunk_rows: Number of raster rows processed at once when deriving the
-                dominant crop per field.
-            hrl_raster_chunks: Optional xarray/rioxarray chunk sizes used when
-                opening HRL rasters. If ``None``, default spatial chunks are used.
-            force_recalculate: If True, ignore existing cached field crop sequences
-                and recompute them from HRL rasters.
-        """
-        active_subgrid_template: xr.DataArray = self.subgrid["region_ids"].compute()
-        subgrid_mask: xr.DataArray = self.subgrid["mask"].compute()
-        active_subgrid_mask = ~subgrid_mask.values
-
-        self._prepare_HRL_field_boundaries_with_crops(
-            region_id_column=region_id_column,
-            country_iso3_column=country_iso3_column,
-            years=years,
-            chunk_rows=chunk_rows,
-            hrl_raster_chunks=hrl_raster_chunks,
-            force_recalculate=force_recalculate,
-            active_subgrid_template=active_subgrid_template,
-            active_subgrid_mask=active_subgrid_mask,
-        )
-
-    @build_method(
-        depends_on=["setup_regions_and_land_use"],
-        required=False,
-    )
-    def setup_create_farms_from_HRL_field_boundaries(
-        self,
-        region_id_column: str = "region_id",
-        country_iso3_column: str = "ISO3",
-        data_source: Literal["lowder"] = "lowder",
-        size_class_boundaries: dict[str, tuple[int | float, int | float]] | None = None,
-        years: tuple[int, ...] = (2017, 2018, 2019, 2020, 2021, 2022, 2023),
-        random_seed: int = 42,
-        chunk_rows: int = 512,
-        hrl_raster_chunks: dict[str, int] | None = None,
-        force_recalculate: bool = False,
-        max_distance_m: float = 500.0,
-        max_neighbors: int = 32,
-        distance_weight: float = 0.45,
-        crop_sequence_weight: float = 0.35,
-        switch_timing_weight: float = 0.20,
-        target_overshoot_tolerance: float = 1.25,
-        min_valid_crop_sequence_overlap: int = 3,
-        minimum_fields_per_farm: float = 1.0,
-        all_touched_farm_raster: bool = False,
-    ) -> None:
-        """Set up farmer agents from HRL crop sequences and field boundaries.
-
-        The method reconstructs synthetic farms from observed HRL field boundaries
-        and cached field-level crop sequences. The HRL preprocessing stage is stored
-        in ``fields/field_boundaries_with_crops`` and is reused unless
-        ``force_recalculate_field_crops`` is True. For each model region, fields are
-        projected to a local metric CRS, Lowder-derived farm-size targets are sampled
-        and scaled to the available cultivated field area, and nearby fields with
-        similar crop sequences are grouped into synthetic farms.
-
-        To avoid repeated full-grid rasterization, farm geometries are collected
-        while regions are processed and rasterized once after all regional farms have
-        been created. Final farm IDs are compacted after the active model mask has
-        been applied. The compacted farmer table is also written with representative
-        HRL crop-sequence columns so later crop-calendar setup can use final farmer IDs
-        directly.
-
-        Args:
-            region_id_column: Name of the column containing model region IDs.
-            country_iso3_column: Name of the column containing ISO3 country codes.
-            data_source: Farm-size data source. Currently only ``"lowder"`` is
-                supported.
-            size_class_boundaries: Optional farm-size class boundaries in square
-                metres. If ``None``, default Lowder-style boundaries are used.
-            years: HRL crop years used to construct or validate crop-sequence
-                columns.
-            random_seed: Base random seed used when sampling regional target farm
-                areas.
-            chunk_rows: Number of raster rows processed at once in HRL preprocessing
-                and row-wise raster-copy operations.
-            hrl_raster_chunks: Optional xarray/rioxarray chunk sizes used when
-                opening HRL rasters during crop-sequence preprocessing.
-            force_recalculate: If True, recalculate the cached field-level
-                crop table from HRL rasters before farm construction.
-            max_distance_m: Maximum distance in metres for candidate neighboring
-                fields during farm growing.
-            max_neighbors: Maximum number of neighboring fields stored per field in
-                the neighbor graph.
-            distance_weight: Weight assigned to spatial proximity in the farm-growing
-                candidate score.
-            crop_sequence_weight: Weight assigned to crop-sequence similarity in the
-                farm-growing candidate score.
-            switch_timing_weight: Weight assigned to crop-switch timing similarity in
-                the farm-growing candidate score.
-            target_overshoot_tolerance: Maximum allowed target-area overshoot when
-                adding a candidate field to a growing farm.
-            min_valid_crop_sequence_overlap: Minimum number of comparable non-missing
-                years required for positive crop-sequence similarity during farm
-                growing and representative-sequence selection.
-            minimum_fields_per_farm: Minimum expected number of fields per farm used
-                when scaling Lowder farm counts to the available field area.
-            all_touched_farm_raster: Whether to burn all model-grid cells touched by a
-                field polygon when rasterizing final farmer IDs.
-
-        Raises:
-            ValueError: If ``data_source`` is not ``"lowder"``.
-            ValueError: If the region table does not contain the required region or
-                country column.
-            ValueError: If field crop sequences cannot be prepared or no valid HRL
-                crop observations are available.
-            ValueError: If no field-based farmers can be created.
-            ValueError: If the compact farm raster IDs are inconsistent with the
-                compact farmer table.
-        """
-        if data_source != "lowder":
-            raise ValueError(
-                "Only the Lowder farm-size dataset is currently supported."
+            selected_modal_area_by_year_m2 = np.asarray(
+                [
+                    float(
+                        region_cell_area_m2[
+                            cultivated_mask & (crop_stack[year_index] > 0)
+                        ].sum()
+                    )
+                    for year_index in range(len(years))
+                ],
+                dtype=np.float64,
             )
+            selected_fallow_area_by_year_m2 = np.asarray(
+                [
+                    float(
+                        region_cell_area_m2[
+                            cultivated_mask
+                            & (crop_stack[year_index] == _HRL_FALLOW_CROP_CODE)
+                        ].sum()
+                    )
+                    for year_index in range(len(years))
+                ],
+                dtype=np.float64,
+            )
+            selected_missing_area_by_year_m2 = np.asarray(
+                [
+                    float(
+                        region_cell_area_m2[
+                            cultivated_mask
+                            & (crop_stack[year_index] == _HRL_MISSING_CROP_CODE)
+                        ].sum()
+                    )
+                    for year_index in range(len(years))
+                ],
+                dtype=np.float64,
+            )
+            represented_area_by_year_m2 = (
+                selected_modal_area_by_year_m2
+                + selected_fallow_area_by_year_m2
+                + selected_missing_area_by_year_m2
+            )
+            if not np.allclose(
+                represented_area_by_year_m2,
+                selected_area_m2,
+                rtol=0.0,
+                atol=1e-4,
+            ):
+                raise RuntimeError(
+                    "Active crop, fallow, and missing areas do not exhaust the "
+                    f"static agricultural domain in region {region_id}."
+                )
 
-        if size_class_boundaries is None:
-            size_class_boundaries = _default_size_class_boundaries()
+            if is_exact_sequence:
+                active_sequences = crop_stack[:, cultivated_mask]
+                if np.any(
+                    np.all(
+                        active_sequences == _HRL_FALLOW_CROP_CODE,
+                        axis=0,
+                    )
+                ):
+                    raise RuntimeError(
+                        "Exact-sequence field union contains a cell that is "
+                        "fallow in every requested year."
+                    )
+                if np.any(active_sequences == _HRL_MISSING_CROP_CODE):
+                    raise RuntimeError(
+                        "Exact-sequence field union contains an outside/missing "
+                        "HRL state."
+                    )
 
-        regions_shapes: gpd.GeoDataFrame = self.geom["regions"]
-        if region_id_column not in regions_shapes.columns:
-            raise ValueError(f"Region database must contain '{region_id_column}'.")
-
-        if country_iso3_column not in regions_shapes.columns:
-            raise ValueError(f"Region database must contain '{country_iso3_column}'.")
-
-        crop_columns = [f"crop_{year}" for year in years]
-        region_ids: xr.DataArray = self.subgrid["region_ids"].compute()
-
-        # GEB masks grid values outside the active catchment during set_subgrid().
-        # Apply the same domain restriction before farm construction so farms are only
-        # grown from fields that can actually survive on the written subgrid.
-        subgrid_mask: xr.DataArray = self.subgrid["mask"].compute()
-        active_subgrid_mask = ~subgrid_mask.values
-
-        field_boundaries_with_crops = self._prepare_HRL_field_boundaries_with_crops(
-            region_id_column=region_id_column,
-            country_iso3_column=country_iso3_column,
-            years=years,
-            chunk_rows=chunk_rows,
-            hrl_raster_chunks=hrl_raster_chunks,
-            force_recalculate=force_recalculate,
-            active_subgrid_template=region_ids,
-            active_subgrid_mask=active_subgrid_mask,
-        )
-
-        keep_columns = [
-            "id",
-            "geometry",
-            region_id_column,
-            country_iso3_column,
-            *crop_columns,
-        ]
-        field_boundaries_with_crops = field_boundaries_with_crops[keep_columns].copy()
-
-        field_boundaries_with_crops = _filter_fields_to_active_subgrid(
-            field_boundaries_with_crops,
-            template=region_ids,
-            active_mask=active_subgrid_mask,
-            field_id_column="id",
-            nodata=-1,
-            all_touched=all_touched_farm_raster,
-            logger=self.logger,
-        )
-
-        farm_sizes_per_region = self.data_catalog.fetch(
-            "lowder_farm_size_distribution"
-        ).read()
-
-        farm_countries_list = list(farm_sizes_per_region["ISO3"].unique())
-        farm_size_donor_country = setup_donor_countries(
-            self.data_catalog,
-            self.geom["global_countries"],
-            farm_countries_list,
-            alternative_countries=regions_shapes[country_iso3_column].unique().tolist(),
-        )
-
-        all_farmers: list[pd.DataFrame] = []
-        all_assigned_fields: list[gpd.GeoDataFrame] = []
-        farmer_id_offset = 0
-        n_fields_with_farms = 0
-
-        self.logger.info("Starting field-based farm construction for model regions.")
-
-        for region_index, (_, region) in enumerate(regions_shapes.iterrows()):
-            region_id = int(region[region_id_column])
-            original_iso3 = region[country_iso3_column]
-            iso3 = original_iso3
-
-            self.logger.info("Setting up fields for region %s in %s.", region_id, iso3)
-
-            fields_region = field_boundaries_with_crops.loc[
-                field_boundaries_with_crops[region_id_column] == region_id
-            ].copy()
-
-            if fields_region.empty:
-                del fields_region
-                continue
-
-            if iso3 in farm_size_donor_country:
-                iso3 = farm_size_donor_country[iso3]
+            iso3 = farm_size_donor_country.get(original_iso3, original_iso3)
+            if iso3 != original_iso3:
                 self.logger.info(
                     "Missing farm sizes for %s; using donor country %s.",
                     original_iso3,
                     iso3,
                 )
-
             region_farm_sizes = farm_sizes_per_region.loc[
                 farm_sizes_per_region["ISO3"] == iso3
             ].drop(["Country", "Census Year", "Total"], axis=1)
-
             if len(region_farm_sizes) != 2:
-                self.logger.warning(
-                    "Skipping region %s because no complete Lowder farm-size data "
-                    "are available for %s.",
-                    region_id,
-                    iso3,
+                raise ValueError(
+                    f"No complete Lowder farm-size data are available for region "
+                    f"{region_id} ({original_iso3}; source {iso3})."
                 )
-                del fields_region, region_farm_sizes
-                continue
-
-            (
-                projected_fields,
-                original_crs,
-                field_areas_m2,
-                centroid_x,
-                centroid_y,
-                field_sequences,
-            ) = prepare_projected_field_arrays(
-                fields_region,
-                crop_columns,
-            )
 
             target_farms = create_lowder_target_farm_areas(
                 region_farm_sizes=region_farm_sizes,
                 size_class_boundaries=size_class_boundaries,
-                cultivated_field_area_m2=float(field_areas_m2.sum()),
+                cultivated_area_m2=selected_area_m2,
                 iso3=iso3,
                 logger=self.logger,
                 random_seed=random_seed + region_index,
-                minimum_fields_per_farm=minimum_fields_per_farm,
-                mean_field_area_m2=float(field_areas_m2.mean()),
+                minimum_cells_per_farm=minimum_cells_per_farm,
+                mean_cell_area_m2=float(region_cell_area_m2[cultivated_mask].mean()),
             )
+            lowder_target_farm_count = len(target_farms)
+            if not is_exact_sequence and lowder_extra_farm_fraction > 0.0:
+                target_farms = relax_lowder_targets_for_sequence_fit(
+                    target_farms,
+                    extra_farm_fraction=lowder_extra_farm_fraction,
+                    n_available_cells=int(np.count_nonzero(cultivated_mask)),
+                    mean_cell_area_m2=float(
+                        region_cell_area_m2[cultivated_mask].mean()
+                    ),
+                    minimum_cells_per_farm=minimum_cells_per_farm,
+                )
+            sequence_fit_target_farm_count = len(target_farms)
 
-            fields_region_with_farms, farmers_region = grow_farms_from_prepared_fields(
-                projected_fields=projected_fields,
-                original_crs=original_crs,
-                field_areas_m2=field_areas_m2,
-                centroid_x=centroid_x,
-                centroid_y=centroid_y,
-                field_sequences=field_sequences,
-                target_farms=target_farms,
-                crop_columns=crop_columns,
-                max_distance_m=max_distance_m,
-                max_neighbors=max_neighbors,
-                distance_weight=distance_weight,
-                crop_sequence_weight=crop_sequence_weight,
-                switch_timing_weight=switch_timing_weight,
-                target_overshoot_tolerance=target_overshoot_tolerance,
-                min_valid_crop_sequence_overlap=min_valid_crop_sequence_overlap,
-            )
+            if is_exact_sequence:
+                local_farms, farmers_region = grow_farms_from_exact_crop_sequences(
+                    cultivated_mask=cultivated_mask,
+                    crop_sequences=crop_stack,
+                    cell_area_m2=region_cell_area_m2,
+                    target_farms=target_farms,
+                    crop_columns=crop_columns,
+                    random_seed=random_seed + 10_000 + region_index,
+                    jump_candidate_sample=exact_sequence_jump_candidate_sample,
+                    jump_distance_scale_m=exact_sequence_distance_scale_m,
+                )
+            else:
+                local_farms, farmers_region = grow_farms_from_raster_cells(
+                    cultivated_mask=cultivated_mask,
+                    crop_sequences=crop_stack,
+                    cell_area_m2=region_cell_area_m2,
+                    target_farms=target_farms,
+                    random_seed=random_seed + 10_000 + region_index,
+                    distance_weight=distance_weight,
+                    crop_sequence_weight=crop_sequence_weight,
+                    switch_timing_weight=switch_timing_weight,
+                    min_valid_crop_sequence_overlap=min_valid_crop_sequence_overlap,
+                    jump_candidate_sample=jump_candidate_sample,
+                    max_jump_distance_m=max_jump_distance_m,
+                )
 
-            fields_region_with_farms["farmer_id"] = (
-                fields_region_with_farms["farmer_id"].astype(np.int32)
-                + farmer_id_offset
-            )
+            farmer_areas_local_m2 = farmers_region["area_m2"].to_numpy(dtype=np.float64)
+            sequence_alignment = pd.DataFrame()
+
+            if is_exact_sequence:
+                # Every exact-sequence farmer is necessarily assigned its locally
+                # observed complete sequence. Use the same quality schema as the
+                # Lowder-prioritized workflow for downstream sampling.
+                farmers_region["crop_sequence_quality_flag"] = np.full(
+                    len(farmers_region),
+                    2,
+                    dtype=np.int8,
+                )
+                farmers_region["crop_sequence_is_original"] = True
+                farmers_region["crop_sequence_is_local"] = True
+                farmers_region["crop_sequence_is_local_dominant"] = True
+                farmers_region["crop_sequence_local_support_fraction"] = np.ones(
+                    len(farmers_region),
+                    dtype=np.float32,
+                )
+                farmers_region["crop_sequence_fallow_fraction"] = np.mean(
+                    farmers_region[crop_columns].to_numpy(dtype=np.int32)
+                    == _HRL_FALLOW_CROP_CODE,
+                    axis=1,
+                    dtype=np.float64,
+                ).astype(np.float32)
+            else:
+                (
+                    assigned_sequences,
+                    sequence_quality,
+                    sequence_alignment,
+                ) = assign_farmer_sequences_to_area_targets(
+                    farm_values=local_farms,
+                    crop_sequences=crop_stack,
+                    cell_area_m2=region_cell_area_m2,
+                    farmer_areas_m2=farmer_areas_local_m2,
+                    target_crop_areas_per_year=native_crop_areas_per_year,
+                    fallow_code=_HRL_FALLOW_CROP_CODE,
+                    missing_code=_HRL_MISSING_CROP_CODE,
+                    alignment_weight=crop_area_alignment_weight,
+                    max_local_sequences=max_crop_candidates_per_farmer,
+                    max_regional_sequences=(
+                        max_regional_sequence_candidates_per_farmer
+                    ),
+                    regional_sequence_pool_size=regional_sequence_pool_size,
+                    local_search_passes=crop_area_local_search_passes,
+                    regional_search_passes=crop_area_regional_search_passes,
+                    local_fit_threshold_pct=local_sequence_fit_threshold_pct,
+                    fallow_penalty=fallow_sequence_penalty,
+                )
+                farmers_region.loc[:, crop_columns] = assigned_sequences
+                for quality_column in sequence_quality.columns:
+                    farmers_region[quality_column] = sequence_quality[
+                        quality_column
+                    ].to_numpy()
+            crop_alignment_summary_by_year: list[dict[str, float | int]] = []
+            for year_index, (year, crop_column) in enumerate(
+                zip(years, crop_columns, strict=True)
+            ):
+                selected_grid_fit_score = np.nan
+                assigned_fallow_area_m2 = np.nan
+                assigned_missing_area_m2 = np.nan
+                if is_exact_sequence:
+                    assigned_crop_codes = farmers_region[crop_column].to_numpy(
+                        dtype=np.int32
+                    )
+                    assigned_fallow_area_m2 = float(
+                        farmer_areas_local_m2[
+                            assigned_crop_codes == _HRL_FALLOW_CROP_CODE
+                        ].sum()
+                    )
+                    assigned_missing_area_m2 = float(
+                        farmer_areas_local_m2[
+                            assigned_crop_codes == _HRL_MISSING_CROP_CODE
+                        ].sum()
+                    )
+                    if assigned_missing_area_m2 > 1e-3:
+                        raise RuntimeError(
+                            "Exact-sequence grouping assigned outside/missing "
+                            f"HRL states in region {region_id}, year {year}."
+                        )
+                    if not np.isclose(
+                        assigned_fallow_area_m2,
+                        selected_fallow_area_by_year_m2[year_index],
+                        rtol=1e-12,
+                        atol=1e-3,
+                    ):
+                        raise RuntimeError(
+                            "Exact-sequence grouping did not conserve fallow "
+                            f"area for region {region_id}, year {year}."
+                        )
+                    crop_alignment = _crop_area_diagnostics_from_assignments(
+                        assigned_crop_codes,
+                        farmer_areas_local_m2,
+                        native_crop_areas_per_year[year_index],
+                    )
+                    selected_grid_targets = _crop_area_targets_from_model_grid(
+                        crop_stack[year_index],
+                        cultivated_mask,
+                        region_cell_area_m2,
+                    )
+                    selected_grid_alignment = _crop_area_diagnostics_from_assignments(
+                        assigned_crop_codes,
+                        farmer_areas_local_m2,
+                        selected_grid_targets,
+                    )
+                    selected_grid_fit_score = _crop_area_fit_scores(
+                        selected_grid_alignment
+                    )["crop_area_fit_score"]
+                    if selected_grid_fit_score < 100.0 - 1e-9:
+                        raise RuntimeError(
+                            "Exact-sequence grouping did not conserve selected-grid "
+                            f"crop area for region {region_id}, year {year}."
+                        )
+                else:
+                    assigned_crop_codes = farmers_region[crop_column].to_numpy(
+                        dtype=np.int32
+                    )
+                    assigned_fallow_area_m2 = float(
+                        farmer_areas_local_m2[
+                            assigned_crop_codes == _HRL_FALLOW_CROP_CODE
+                        ].sum()
+                    )
+                    assigned_missing_area_m2 = float(
+                        farmer_areas_local_m2[
+                            assigned_crop_codes == _HRL_MISSING_CROP_CODE
+                        ].sum()
+                    )
+                    if assigned_missing_area_m2 > 1e-3:
+                        raise RuntimeError(
+                            "Sequence-balanced assignment produced a missing "
+                            f"farmer crop in region {region_id}, year {year}."
+                        )
+                    crop_alignment = (
+                        sequence_alignment.loc[
+                            sequence_alignment["year_index"] == year_index
+                        ]
+                        .drop(columns="year_index")
+                        .reset_index(drop=True)
+                    )
+                crop_alignment[region_id_column] = region_id
+                crop_alignment[country_iso3_column] = original_iso3
+                crop_alignment["year"] = int(year)
+                all_crop_area_diagnostics.append(crop_alignment.copy())
+
+                combined_fit = _crop_area_fit_scores(crop_alignment)
+                main_crop_alignment = _aggregate_crop_alignment_to_main_categories(
+                    crop_alignment
+                )
+                main_fit = _crop_area_fit_scores(main_crop_alignment)
+                positive_target_scale = float(
+                    crop_alignment["positive_target_scale"].iloc[0]
+                )
+
+                crop_alignment_summary_by_year.append(
+                    {
+                        "year": int(year),
+                        "source_crop_area_m2": combined_fit["source_area_m2"],
+                        "fractional_subgrid_area_m2": float(
+                            subgrid_hrl_area_by_year_m2[year_index]
+                        ),
+                        "selected_fractional_area_m2": float(
+                            selected_fractional_area_by_year_m2[year_index]
+                        ),
+                        "selected_modal_area_m2": float(
+                            selected_modal_area_by_year_m2[year_index]
+                        ),
+                        "assigned_crop_area_m2": combined_fit["assigned_area_m2"],
+                        "assigned_fallow_area_m2": assigned_fallow_area_m2,
+                        "assigned_missing_area_m2": assigned_missing_area_m2,
+                        "agricultural_union_area_m2": selected_area_m2,
+                        "fallow_share_pct": (
+                            assigned_fallow_area_m2 / selected_area_m2 * 100.0
+                            if selected_area_m2 > 0.0
+                            and np.isfinite(assigned_fallow_area_m2)
+                            else np.nan
+                        ),
+                        "missing_share_pct": (
+                            assigned_missing_area_m2 / selected_area_m2 * 100.0
+                            if selected_area_m2 > 0.0
+                            and np.isfinite(assigned_missing_area_m2)
+                            else np.nan
+                        ),
+                        "total_area_difference_pct": combined_fit[
+                            "total_area_difference_pct"
+                        ],
+                        "total_area_fit_score": combined_fit["total_area_fit_score"],
+                        "combined_crop_area_fit_score": combined_fit[
+                            "crop_area_fit_score"
+                        ],
+                        "combined_crop_share_fit_score": combined_fit[
+                            "crop_share_fit_score"
+                        ],
+                        "main_crop_area_fit_score": main_fit["crop_area_fit_score"],
+                        "main_crop_share_fit_score": main_fit["crop_share_fit_score"],
+                        "positive_target_scale": positive_target_scale,
+                        "selected_grid_crop_fit_score": selected_grid_fit_score,
+                    }
+                )
+
+                # Per-year regional details are intentionally kept at DEBUG
+                # level. INFO output is emitted as compact comparison tables after
+                # all regions have been processed.
+                if crop_area_diagnostics_top_n > 0:
+                    self.logger.debug(
+                        "Region %s detailed HRL crop-area categories for %s "
+                        "(top %s):\n%s",
+                        region_id,
+                        year,
+                        crop_area_diagnostics_top_n,
+                        _format_hrl_crop_area_alignment(
+                            crop_alignment,
+                            top_n=crop_area_diagnostics_top_n,
+                        ),
+                    )
+
+            local_valid = local_farms >= 0
+            local_farms[local_valid] += farmer_id_offset
+            farms_region_window = farms_values[y_slice, x_slice]
+            farms_region_window[local_valid] = local_farms[local_valid]
 
             farmers_region["farmer_id"] = (
-                farmers_region["farmer_id"].astype(np.int32) + farmer_id_offset
+                farmers_region["farmer_id"].to_numpy(dtype=np.int32) + farmer_id_offset
             )
             farmers_region[region_id_column] = np.full(
                 len(farmers_region),
                 region_id,
                 dtype=np.int32,
             )
-
-            all_assigned_fields.append(
-                fields_region_with_farms[["geometry", "farmer_id"]].copy()
-            )
             all_farmers.append(farmers_region)
-            farmer_id_offset += len(farmers_region)
-            n_fields_with_farms += len(fields_region_with_farms)
 
+            for year, native_area_m2, subgrid_area_m2 in zip(
+                years,
+                native_hrl_area_by_year_m2,
+                subgrid_hrl_area_by_year_m2,
+                strict=True,
+            ):
+                total_native_hrl_area_by_year_m2[year] += float(native_area_m2)
+                total_subgrid_hrl_area_by_year_m2[year] += float(subgrid_area_m2)
+            for year, selected_fractional_m2, selected_modal_m2 in zip(
+                years,
+                selected_fractional_area_by_year_m2,
+                selected_modal_area_by_year_m2,
+                strict=True,
+            ):
+                total_selected_fractional_area_by_year_m2[year] += float(
+                    selected_fractional_m2
+                )
+                total_selected_modal_area_by_year_m2[year] += float(selected_modal_m2)
+            for year, selected_fallow_m2 in zip(
+                years,
+                selected_fallow_area_by_year_m2,
+                strict=True,
+            ):
+                total_selected_fallow_area_by_year_m2[year] += float(selected_fallow_m2)
+            for year, selected_missing_m2 in zip(
+                years,
+                selected_missing_area_by_year_m2,
+                strict=True,
+            ):
+                total_selected_missing_area_by_year_m2[year] += float(
+                    selected_missing_m2
+                )
+
+            target_areas_m2 = farmers_region["target_area_m2"].to_numpy(
+                dtype=np.float64
+            )
+            actual_areas_m2 = farmers_region["area_m2"].to_numpy(dtype=np.float64)
+            area_errors_m2 = actual_areas_m2 - target_areas_m2
+            relative_area_errors = np.divide(
+                np.abs(area_errors_m2),
+                target_areas_m2,
+                out=np.zeros_like(area_errors_m2),
+                where=target_areas_m2 > 0,
+            )
+
+            n_parcels = farmers_region["n_fields"].to_numpy(dtype=np.int32)
+            n_multi_parcel_farms = int(np.count_nonzero(n_parcels > 1))
+            multi_parcel_share = n_multi_parcel_farms / len(farmers_region)
+
+            active_crop_counts: list[int] = []
+            fallow_counts: list[int] = []
+            missing_counts: list[int] = []
+            unique_crop_counts: list[int] = []
+            for year, crop_column in zip(years, crop_columns, strict=True):
+                crop_values = farmers_region[crop_column].to_numpy(dtype=np.int32)
+                active_crops = crop_values > 0
+                fallow = crop_values == _HRL_FALLOW_CROP_CODE
+                missing = crop_values == _HRL_MISSING_CROP_CODE
+                active_count = int(np.count_nonzero(active_crops))
+                fallow_count = int(np.count_nonzero(fallow))
+                missing_count = int(np.count_nonzero(missing))
+                active_crop_counts.append(active_count)
+                fallow_counts.append(fallow_count)
+                missing_counts.append(missing_count)
+                unique_crop_counts.append(
+                    int(np.unique(crop_values[active_crops]).size)
+                    if active_count > 0
+                    else 0
+                )
+                active_farmer_crops_by_year[year] += active_count
+                fallow_farmers_by_year[year] += fallow_count
+                missing_farmers_by_year[year] += missing_count
+
+            area_difference_m2 = selected_area_m2 - selection_target_area_m2
+            area_difference_pct = (
+                area_difference_m2 / selection_target_area_m2 * 100.0
+                if selection_target_area_m2 > 0
+                else np.nan
+            )
+            eligible_cell_count = int(np.count_nonzero(eligible_mask))
+            selected_cell_count = int(np.count_nonzero(cultivated_mask))
+            mean_active_crop_coverage_pct = (
+                float(np.mean(active_crop_counts)) / len(farmers_region) * 100.0
+            )
+            mean_fallow_share_pct = (
+                float(np.mean(fallow_counts)) / len(farmers_region) * 100.0
+            )
+            mean_missing_share_pct = (
+                float(np.mean(missing_counts)) / len(farmers_region) * 100.0
+            )
+
+            selected_sequences = crop_stack[:, cultivated_mask].T
+            complete_original_mask = ~np.any(
+                selected_sequences == _HRL_MISSING_CROP_CODE,
+                axis=1,
+            ) & np.any(selected_sequences > 0, axis=1)
+            complete_original_sequences = np.unique(
+                selected_sequences[complete_original_mask],
+                axis=0,
+            )
+            n_exact_sequences = int(complete_original_sequences.shape[0])
+            extra_sequence_farms = max(
+                len(farmers_region) - lowder_target_farm_count,
+                0,
+            )
+
+            quality_flags = farmers_region["crop_sequence_quality_flag"].to_numpy(
+                dtype=np.int8
+            )
+            local_dominant_sequence_pct = float(np.mean(quality_flags == 2) * 100.0)
+            local_sequence_pct = float(np.mean(quality_flags >= 1) * 100.0)
+            regional_fallback_sequence_pct = float(np.mean(quality_flags == 0) * 100.0)
+
+            if is_exact_sequence:
+                sequence_homogeneity_pct = 100.0
+                novel_sequence_count = 0
+            else:
+                # The assignment function returns only integer IDs into the
+                # complete regional original-sequence catalog and validates those
+                # IDs before returning. No additional large Python set is needed.
+                novel_sequence_count = 0
+                sequence_homogeneity_pct = np.nan
+            region_diagnostics.append(
+                {
+                    region_id_column: region_id,
+                    country_iso3_column: original_iso3,
+                    "lowder_source_iso3": iso3,
+                    "base_static_target_km2": (
+                        base_static_target_area_m2 / 1_000_000.0
+                    ),
+                    "required_capacity_km2": (
+                        native_hrl_area_by_year_m2.max(initial=0.0) / 1_000_000.0
+                    ),
+                    "selection_target_km2": (selection_target_area_m2 / 1_000_000.0),
+                    "model_area_km2": selected_area_m2 / 1_000_000.0,
+                    "area_difference_pct": area_difference_pct,
+                    "eligible_cells": eligible_cell_count,
+                    "cultivated_cells": selected_cell_count,
+                    "n_farmers": int(len(farmers_region)),
+                    "lowder_target_farms": int(lowder_target_farm_count),
+                    "sequence_fit_target_farms": int(sequence_fit_target_farm_count),
+                    "n_exact_sequences": n_exact_sequences,
+                    "extra_sequence_farms": int(extra_sequence_farms),
+                    "sequence_homogeneity_pct": sequence_homogeneity_pct,
+                    "novel_sequence_count": novel_sequence_count,
+                    "local_dominant_sequence_pct": (local_dominant_sequence_pct),
+                    "local_sequence_pct": local_sequence_pct,
+                    "regional_fallback_sequence_pct": (regional_fallback_sequence_pct),
+                    "excluded_incomplete_hrl_cells": (incomplete_field_cell_count),
+                    "binary_rounding_wape_pct": binary_rounding_wape_pct,
+                    "median_farm_area_ha": float(np.median(actual_areas_m2) / 10_000.0),
+                    "mean_farm_area_ha": float(actual_areas_m2.mean() / 10_000.0),
+                    "mean_target_error_pct": float(relative_area_errors.mean() * 100.0),
+                    "total_parcels": int(n_parcels.sum()),
+                    "multi_parcel_farms_pct": multi_parcel_share * 100.0,
+                    "mean_active_crop_coverage_pct": (mean_active_crop_coverage_pct),
+                    "mean_fallow_farmers_pct": mean_fallow_share_pct,
+                    "mean_missing_farmers_pct": mean_missing_share_pct,
+                    "mean_fallow_area_pct": float(
+                        np.mean(
+                            [
+                                summary["fallow_share_pct"]
+                                for summary in crop_alignment_summary_by_year
+                            ]
+                        )
+                    ),
+                    "mean_missing_area_pct": float(
+                        np.nanmean(
+                            [
+                                summary["missing_share_pct"]
+                                for summary in crop_alignment_summary_by_year
+                            ]
+                        )
+                    ),
+                    "mean_selected_fraction_retention_pct": float(
+                        np.mean(
+                            np.divide(
+                                selected_fractional_area_by_year_m2,
+                                subgrid_hrl_area_by_year_m2,
+                                out=np.full(len(years), np.nan),
+                                where=subgrid_hrl_area_by_year_m2 > 0.0,
+                            )
+                        )
+                        * 100.0
+                    ),
+                    "mean_agent_area_retention_pct": float(
+                        np.mean(
+                            [
+                                summary["assigned_crop_area_m2"]
+                                / summary["source_crop_area_m2"]
+                                if summary["source_crop_area_m2"] > 0.0
+                                else np.nan
+                                for summary in crop_alignment_summary_by_year
+                            ]
+                        )
+                        * 100.0
+                    ),
+                    "maximum_absolute_agent_area_difference_pct": float(
+                        np.max(
+                            [
+                                abs(summary["total_area_difference_pct"])
+                                for summary in crop_alignment_summary_by_year
+                            ]
+                        )
+                    ),
+                    "mean_combined_crop_fit_score": float(
+                        np.mean(
+                            [
+                                summary["combined_crop_area_fit_score"]
+                                for summary in crop_alignment_summary_by_year
+                            ]
+                        )
+                    ),
+                    "minimum_combined_crop_fit_score": float(
+                        np.min(
+                            [
+                                summary["combined_crop_area_fit_score"]
+                                for summary in crop_alignment_summary_by_year
+                            ]
+                        )
+                    ),
+                    "mean_main_crop_fit_score": float(
+                        np.mean(
+                            [
+                                summary["main_crop_area_fit_score"]
+                                for summary in crop_alignment_summary_by_year
+                            ]
+                        )
+                    ),
+                    "mean_crop_share_fit_score": float(
+                        np.mean(
+                            [
+                                summary["combined_crop_share_fit_score"]
+                                for summary in crop_alignment_summary_by_year
+                            ]
+                        )
+                    ),
+                }
+            )
+
+            mean_combined_fit = float(
+                np.mean(
+                    [
+                        summary["combined_crop_area_fit_score"]
+                        for summary in crop_alignment_summary_by_year
+                    ]
+                )
+            )
+            mean_agent_retention = float(
+                np.mean(
+                    [
+                        summary["assigned_crop_area_m2"]
+                        / summary["source_crop_area_m2"]
+                        if summary["source_crop_area_m2"] > 0.0
+                        else np.nan
+                        for summary in crop_alignment_summary_by_year
+                    ]
+                )
+                * 100.0
+            )
+            log_method = (
+                self.logger.warning
+                if mean_combined_fit < crop_area_fit_warning_threshold_pct
+                else self.logger.info
+            )
+            if is_exact_sequence:
+                log_method(
+                    "Completed exact-sequence region %s (%s): %.2f km² static "
+                    "area; %s agents from %s rounded sequences (%s Lowder "
+                    "targets); mean annual active/native area %.1f%%; mean "
+                    "combined crop fit %.1f/100.",
+                    region_id,
+                    original_iso3,
+                    selected_area_m2 / 1_000_000.0,
+                    len(farmers_region),
+                    n_exact_sequences,
+                    lowder_target_farm_count,
+                    mean_agent_retention,
+                    mean_combined_fit,
+                )
+            else:
+                log_method(
+                    "Completed Lowder-prioritized region %s (%s): %.2f km² "
+                    "static area; %s farms from %s Lowder targets; mean annual "
+                    "active/native area %.1f%%; mean combined crop fit %.1f/100.",
+                    region_id,
+                    original_iso3,
+                    selected_area_m2 / 1_000_000.0,
+                    len(farmers_region),
+                    lowder_target_farm_count,
+                    mean_agent_retention,
+                    mean_combined_fit,
+                )
+
+            farmer_id_offset += len(farmers_region)
             del (
-                fields_region,
-                projected_fields,
-                field_areas_m2,
-                centroid_x,
-                centroid_y,
-                field_sequences,
-                target_farms,
-                fields_region_with_farms,
-                farmers_region,
+                crop_stack,
+                fraction_stack,
+                coverage_fraction_stack,
+                native_crop_areas_per_year,
+                native_hrl_area_by_year_m2,
+                subgrid_hrl_area_by_year_m2,
+                selected_fractional_area_by_year_m2,
+                selected_modal_area_by_year_m2,
+                selected_fallow_area_by_year_m2,
+                selected_missing_area_by_year_m2,
+                selection_score,
+                eligible_mask,
+                cultivated_mask,
                 region_farm_sizes,
+                target_farms,
+                local_farms,
+                farmers_region,
+                crop_alignment_summary_by_year,
+                binary_rounding_diagnostics,
             )
             gc.collect()
 
-        if not all_farmers or not all_assigned_fields:
-            raise ValueError("No field-based farmers could be created.")
+        if not all_farmers:
+            raise ValueError("No HRL-only farmer agents could be created.")
 
         farmers = pd.concat(all_farmers, ignore_index=True)
         farmers = farmers.sort_values("farmer_id").reset_index(drop=True)
-        del all_farmers, field_boundaries_with_crops
-        gc.collect()
-
-        assigned_fields = gpd.GeoDataFrame(
-            pd.concat(all_assigned_fields, ignore_index=True),
-            geometry="geometry",
-            crs=all_assigned_fields[0].crs,
-        )
-        del all_assigned_fields
-        gc.collect()
-
-        fields_for_raster = assigned_fields
-        if region_ids.rio.crs is not None and assigned_fields.crs is not None:
-            fields_for_raster = assigned_fields.to_crs(region_ids.rio.crs)
-
-        self.logger.info(
-            "Rasterizing %s farm-assigned field polygon(s) to the model subgrid once.",
-            len(fields_for_raster),
-        )
-
-        farms = rasterize_like(
-            fields_for_raster,
-            column="farmer_id",
-            raster=region_ids,
-            dtype=np.int32,
-            nodata=-1,
-            all_touched=all_touched_farm_raster,
-        )
-        del assigned_fields, fields_for_raster
-        gc.collect()
-
-        # Mirror the mask that set_subgrid() will apply during writing. Compaction must
-        # happen after this mask, otherwise farmer IDs that disappear outside the active
-        # catchment create holes after saving.
-        farms_values = farms.values
         farms_values[~active_subgrid_mask] = -1
-
-        farms, farmers = compact_farm_raster_values(
-            farm_values=farms_values,
-            farmers=farmers,
-            template=region_ids,
-            farmer_id_column="farmer_id",
-            nodata=-1,
-            row_chunk_size=chunk_rows,
-            logger=self.logger,
+        farms = xr.DataArray(
+            farms_values,
+            coords=region_ids.coords,
+            dims=region_ids.dims,
+            attrs=region_ids.attrs,
+            name="agents/farmers/farms",
         )
-        del farms_values
-        gc.collect()
+        if region_ids.rio.crs is not None:
+            farms = farms.rio.write_crs(region_ids.rio.crs)
+        farms.attrs["_FillValue"] = -1
 
         _assert_compact_farm_ids(
             farms,
@@ -2768,10 +4253,362 @@ class Europe(GEBModel):
             nodata=-1,
         )
 
-        self.set_table(
-            farmers,
-            name=_FARMERS_WITH_CROPS_TABLE,
+        self.set_table(farmers, name=_FARMERS_WITH_CROPS_TABLE)
+
+        regional_diagnostics = pd.DataFrame(region_diagnostics)
+        regional_summary_columns = [
+            region_id_column,
+            country_iso3_column,
+            "lowder_source_iso3",
+            "model_area_km2",
+            "n_farmers",
+            "lowder_target_farms",
+            "sequence_fit_target_farms",
+            "n_exact_sequences",
+            "extra_sequence_farms",
+            "local_dominant_sequence_pct",
+            "local_sequence_pct",
+            "regional_fallback_sequence_pct",
+            "novel_sequence_count",
+            "excluded_incomplete_hrl_cells",
+            "binary_rounding_wape_pct",
+            "median_farm_area_ha",
+            "multi_parcel_farms_pct",
+            "mean_fallow_area_pct",
+            "mean_missing_area_pct",
+            "mean_selected_fraction_retention_pct",
+            "mean_agent_area_retention_pct",
+            "maximum_absolute_agent_area_difference_pct",
+            "mean_combined_crop_fit_score",
+            "mean_main_crop_fit_score",
+        ]
+        regional_summary = regional_diagnostics[regional_summary_columns].rename(
+            columns={
+                "lowder_source_iso3": "Lowder",
+                "model_area_km2": "static_km2",
+                "n_farmers": "agents",
+                "lowder_target_farms": "Lowder_n",
+                "sequence_fit_target_farms": "sequence_target_n",
+                "n_exact_sequences": "sequences",
+                "extra_sequence_farms": "extra_n",
+                "local_dominant_sequence_pct": "local_dominant_pct",
+                "local_sequence_pct": "local_total_pct",
+                "regional_fallback_sequence_pct": "regional_fallback_pct",
+                "novel_sequence_count": "novel_sequences",
+                "excluded_incomplete_hrl_cells": "incomplete_cells",
+                "binary_rounding_wape_pct": "rounding_WAPE_pct",
+                "median_farm_area_ha": "median_ha",
+                "multi_parcel_farms_pct": "multi_parcel_pct",
+                "mean_fallow_area_pct": "fallow_area_pct",
+                "mean_missing_area_pct": "missing_area_pct",
+                "mean_selected_fraction_retention_pct": "fraction_in_union_pct",
+                "mean_agent_area_retention_pct": "agent_native_pct",
+                "maximum_absolute_agent_area_difference_pct": "worst_area_diff_pct",
+                "mean_combined_crop_fit_score": "combined_fit",
+                "mean_main_crop_fit_score": "main_fit",
+            }
         )
+        self.logger.info(
+            "HRL-only regional comparison summary:\n%s",
+            regional_summary.round(
+                {
+                    "static_km2": 2,
+                    "rounding_WAPE_pct": 2,
+                    "median_ha": 2,
+                    "multi_parcel_pct": 1,
+                    "fallow_area_pct": 1,
+                    "missing_area_pct": 2,
+                    "fraction_in_union_pct": 1,
+                    "agent_native_pct": 1,
+                    "worst_area_diff_pct": 1,
+                    "combined_fit": 1,
+                    "main_fit": 1,
+                }
+            ).to_string(index=False),
+        )
+
+        total_selection_target_m2 = float(
+            regional_diagnostics["selection_target_km2"].sum() * 1_000_000.0
+        )
+        total_selected_area_m2 = float(
+            regional_diagnostics["model_area_km2"].sum() * 1_000_000.0
+        )
+        total_area_difference_pct = (
+            (total_selected_area_m2 - total_selection_target_m2)
+            / total_selection_target_m2
+            * 100.0
+            if total_selection_target_m2 > 0
+            else np.nan
+        )
+        all_farm_areas_ha = farmers["area_m2"].to_numpy(dtype=np.float64) / 10_000.0
+        all_parcel_counts = farmers["n_fields"].to_numpy(dtype=np.int32)
+        self.logger.info(
+            "HRL-only overall static-farm diagnostics: %s regions; selected "
+            "target %.2f km²; selected model area %.2f km²; difference %+.2f%%; "
+            "%s farmers; farm area [min/median/mean/p90/max]="
+            "[%.2f/%.2f/%.2f/%.2f/%.2f] ha; %s parcels; %.1f%% "
+            "multi-parcel farms.",
+            len(regional_diagnostics),
+            total_selection_target_m2 / 1_000_000.0,
+            total_selected_area_m2 / 1_000_000.0,
+            total_area_difference_pct,
+            len(farmers),
+            all_farm_areas_ha.min(),
+            np.median(all_farm_areas_ha),
+            all_farm_areas_ha.mean(),
+            np.percentile(all_farm_areas_ha, 90),
+            all_farm_areas_ha.max(),
+            int(all_parcel_counts.sum()),
+            np.count_nonzero(all_parcel_counts > 1) / len(farmers) * 100.0,
+        )
+
+        crop_area_diagnostics = pd.concat(
+            all_crop_area_diagnostics,
+            ignore_index=True,
+        )
+        (
+            multi_year_crop_comparison,
+            multi_year_crop_summary,
+        ) = _multi_year_crop_area_comparison(crop_area_diagnostics)
+        (
+            _,
+            multi_year_main_crop_summary,
+        ) = _multi_year_crop_area_comparison(
+            crop_area_diagnostics,
+            aggregate_to_main_crop=True,
+        )
+        overall_annual_rows: list[dict[str, float | int]] = []
+        low_fit_years: list[int] = []
+        for year in years:
+            overall_year = (
+                crop_area_diagnostics.loc[crop_area_diagnostics["year"] == year]
+                .groupby("crop_code", as_index=False)[
+                    [
+                        "source_area_m2",
+                        "adjusted_target_area_m2",
+                        "assigned_area_m2",
+                    ]
+                ]
+                .sum()
+            )
+            overall_year["difference_from_source_m2"] = (
+                overall_year["assigned_area_m2"] - overall_year["source_area_m2"]
+            )
+            overall_year["difference_from_adjusted_target_m2"] = (
+                overall_year["assigned_area_m2"]
+                - overall_year["adjusted_target_area_m2"]
+            )
+            positive = overall_year["crop_code"] > 0
+            source_total_m2 = float(overall_year.loc[positive, "source_area_m2"].sum())
+            assigned_total_m2 = float(
+                overall_year.loc[positive, "assigned_area_m2"].sum()
+            )
+            overall_year["source_share"] = (
+                overall_year["source_area_m2"].to_numpy(dtype=np.float64)
+                / source_total_m2
+                if source_total_m2 > 0.0
+                else np.zeros(len(overall_year), dtype=np.float64)
+            )
+            overall_year["assigned_share"] = (
+                overall_year["assigned_area_m2"].to_numpy(dtype=np.float64)
+                / assigned_total_m2
+                if assigned_total_m2 > 0.0
+                else np.zeros(len(overall_year), dtype=np.float64)
+            )
+            overall_adjusted_targets = overall_year["adjusted_target_area_m2"].to_numpy(
+                dtype=np.float64
+            )
+            overall_source_areas = overall_year["source_area_m2"].to_numpy(
+                dtype=np.float64
+            )
+            overall_year["positive_target_scale"] = np.divide(
+                overall_adjusted_targets,
+                overall_source_areas,
+                out=np.ones(len(overall_year), dtype=np.float64),
+                where=overall_source_areas > 0.0,
+            )
+
+            combined_fit = _crop_area_fit_scores(overall_year)
+            overall_main_year = _aggregate_crop_alignment_to_main_categories(
+                overall_year
+            )
+            main_fit = _crop_area_fit_scores(overall_main_year)
+            subgrid_total_m2 = total_subgrid_hrl_area_by_year_m2[year]
+            native_to_subgrid_pct = (
+                (subgrid_total_m2 - combined_fit["source_area_m2"])
+                / combined_fit["source_area_m2"]
+                * 100.0
+                if combined_fit["source_area_m2"] > 0.0
+                else np.nan
+            )
+            if (
+                combined_fit["crop_area_fit_score"]
+                < crop_area_fit_warning_threshold_pct
+            ):
+                low_fit_years.append(int(year))
+
+            selected_fractional_total_m2 = total_selected_fractional_area_by_year_m2[
+                year
+            ]
+            selected_modal_total_m2 = total_selected_modal_area_by_year_m2[year]
+            selected_fallow_total_m2 = total_selected_fallow_area_by_year_m2[year]
+            selected_missing_total_m2 = total_selected_missing_area_by_year_m2[year]
+            agricultural_union_total_m2 = (
+                selected_modal_total_m2
+                + selected_fallow_total_m2
+                + selected_missing_total_m2
+            )
+            selected_fraction_retention_pct = (
+                selected_fractional_total_m2 / subgrid_total_m2 * 100.0
+                if subgrid_total_m2 > 0.0
+                else np.nan
+            )
+            modal_conversion_pct = (
+                (selected_modal_total_m2 - selected_fractional_total_m2)
+                / selected_fractional_total_m2
+                * 100.0
+                if selected_fractional_total_m2 > 0.0
+                else np.nan
+            )
+            overall_annual_rows.append(
+                {
+                    "year": int(year),
+                    "native_active_km2": (combined_fit["source_area_m2"] / 1_000_000.0),
+                    "subgrid_active_km2": subgrid_total_m2 / 1_000_000.0,
+                    "fraction_in_union_km2": (
+                        selected_fractional_total_m2 / 1_000_000.0
+                    ),
+                    "agent_active_km2": (
+                        combined_fit["assigned_area_m2"] / 1_000_000.0
+                    ),
+                    "fallow_km2": selected_fallow_total_m2 / 1_000_000.0,
+                    "missing_km2": selected_missing_total_m2 / 1_000_000.0,
+                    "agricultural_union_km2": (
+                        agricultural_union_total_m2 / 1_000_000.0
+                    ),
+                    "native_subgrid_diff_pct": native_to_subgrid_pct,
+                    "fraction_in_union_pct": selected_fraction_retention_pct,
+                    "binary_vs_fraction_pct": modal_conversion_pct,
+                    "active_native_diff_pct": combined_fit["total_area_difference_pct"],
+                    "combined_fit": combined_fit["crop_area_fit_score"],
+                    "main_fit": main_fit["crop_area_fit_score"],
+                    "share_fit": combined_fit["crop_share_fit_score"],
+                    "active_agents_pct": (
+                        active_farmer_crops_by_year[year] / len(farmers) * 100.0
+                    ),
+                    "fallow_agents_pct": (
+                        fallow_farmers_by_year[year] / len(farmers) * 100.0
+                    ),
+                    "missing_agents_pct": (
+                        missing_farmers_by_year[year] / len(farmers) * 100.0
+                    ),
+                }
+            )
+            if crop_area_diagnostics_top_n > 0:
+                self.logger.debug(
+                    "Overall detailed HRL crop-area categories for %s (top %s):\n%s",
+                    year,
+                    crop_area_diagnostics_top_n,
+                    _format_hrl_crop_area_alignment(
+                        overall_year,
+                        top_n=crop_area_diagnostics_top_n,
+                    ),
+                )
+
+        overall_annual_summary = pd.DataFrame(overall_annual_rows)
+        self.logger.info(
+            "HRL-only annual active-crop, fallow, and crop-fit summary:\n%s",
+            overall_annual_summary.round(
+                {
+                    "native_active_km2": 2,
+                    "subgrid_active_km2": 2,
+                    "fraction_in_union_km2": 2,
+                    "agent_active_km2": 2,
+                    "fallow_km2": 2,
+                    "missing_km2": 2,
+                    "agricultural_union_km2": 2,
+                    "native_subgrid_diff_pct": 2,
+                    "fraction_in_union_pct": 1,
+                    "binary_vs_fraction_pct": 1,
+                    "active_native_diff_pct": 1,
+                    "combined_fit": 1,
+                    "main_fit": 1,
+                    "share_fit": 1,
+                    "active_agents_pct": 1,
+                    "fallow_agents_pct": 1,
+                    "missing_agents_pct": 2,
+                }
+            ).to_string(index=False),
+        )
+        multi_year_fit_summary = pd.DataFrame(
+            [
+                {
+                    "crop_level": "combined",
+                    "year_crop_pairs": multi_year_crop_summary["n_year_crop_pairs"],
+                    "raw_km2": multi_year_crop_summary["raw_area_m2"] / 1_000_000.0,
+                    "final_km2": multi_year_crop_summary["final_area_m2"] / 1_000_000.0,
+                    "net_diff_pct": multi_year_crop_summary["net_difference_pct"],
+                    "area_weighted_fit": multi_year_crop_summary[
+                        "area_weighted_fit_pct"
+                    ],
+                    "balanced_fit": multi_year_crop_summary["balanced_fit_pct"],
+                    "area_weighted_error": multi_year_crop_summary[
+                        "area_weighted_error_pct"
+                    ],
+                    "balanced_error": multi_year_crop_summary["balanced_error_pct"],
+                },
+                {
+                    "crop_level": "main",
+                    "year_crop_pairs": multi_year_main_crop_summary[
+                        "n_year_crop_pairs"
+                    ],
+                    "raw_km2": multi_year_main_crop_summary["raw_area_m2"]
+                    / 1_000_000.0,
+                    "final_km2": multi_year_main_crop_summary["final_area_m2"]
+                    / 1_000_000.0,
+                    "net_diff_pct": multi_year_main_crop_summary["net_difference_pct"],
+                    "area_weighted_fit": multi_year_main_crop_summary[
+                        "area_weighted_fit_pct"
+                    ],
+                    "balanced_fit": multi_year_main_crop_summary["balanced_fit_pct"],
+                    "area_weighted_error": multi_year_main_crop_summary[
+                        "area_weighted_error_pct"
+                    ],
+                    "balanced_error": multi_year_main_crop_summary[
+                        "balanced_error_pct"
+                    ],
+                },
+            ]
+        )
+        self.logger.info(
+            "HRL-only multi-year raw-versus-final crop-area fit across all "
+            "year-crop pairs. Area-weighted metrics use max(raw, final) as "
+            "the pair weight; balanced metrics give every pair equal weight:\n%s",
+            multi_year_fit_summary.round(
+                {
+                    "raw_km2": 2,
+                    "final_km2": 2,
+                    "net_diff_pct": 2,
+                    "area_weighted_fit": 1,
+                    "balanced_fit": 1,
+                    "area_weighted_error": 1,
+                    "balanced_error": 1,
+                }
+            ).to_string(index=False),
+        )
+        self.logger.info(
+            "HRL-only raw-versus-final crop-area comparison by year and "
+            "combined crop. pair_fit_pct is min(raw, final) / max(raw, final); "
+            "area_weight_pct is the pair's share of the total comparison area:\n%s",
+            _format_multi_year_crop_area_comparison(multi_year_crop_comparison),
+        )
+
+        if low_fit_years:
+            self.logger.warning(
+                "Combined crop-area fit is below %.1f/100 for years %s.",
+                crop_area_fit_warning_threshold_pct,
+                low_fit_years,
+            )
 
         farm_size_fit = farm_size_distribution_fit_by_size_class(
             farmers=farmers,
@@ -2784,9 +4621,8 @@ class Europe(GEBModel):
             area_column="area_m2",
             logger=self.logger,
         )
-
         self.logger.info(
-            "Farm-size distribution fit by size class:\n%s",
+            "HRL-only farm-size distribution fit by size class:\n%s",
             farm_size_fit.round(
                 {
                     "expected_n_farms_lowder": 1,
@@ -2797,11 +4633,10 @@ class Europe(GEBModel):
                 }
             ).to_string(index=False),
         )
-
         self.logger.info(
-            "Created %s field-based farmer agents from %s field polygons.",
+            "Created %s HRL-only farmer agents on %s cultivated model cells.",
             len(farmers),
-            n_fields_with_farms,
+            int(np.count_nonzero(farms_values >= 0)),
         )
 
         self.set_subgrid(farms, name="agents/farmers/farms")
@@ -2810,51 +4645,255 @@ class Europe(GEBModel):
             name="agents/farmers/region_id",
         )
 
-        cultivated_land_subgrid = xr.where(
-            farms != -1,
-            True,
-            False,
-            keep_attrs=False,
+        # Build the cultivated-land and land-use outputs positionally. Using
+        # ``xr.where`` here can silently depend on coordinate-label alignment
+        # between the newly created farm raster and the existing land-use
+        # raster. HRU creation, however, combines these arrays strictly by
+        # array position. Validate the grids and update the values directly so
+        # every non-negative farm cell is guaranteed to have land-use class 1.
+        farm_mask_values = farms_values >= 0
+        if np.any(farm_mask_values & ~active_subgrid_mask):
+            n_outside = int(np.count_nonzero(farm_mask_values & ~active_subgrid_mask))
+            raise RuntimeError(
+                f"The generated farm raster contains {n_outside} farm cells "
+                "outside the active subgrid mask."
+            )
+
+        existing_land_use: xr.DataArray = self.subgrid[
+            "landsurface/land_use_classes"
+        ].compute()
+        if existing_land_use.ndim != 2:
+            raise ValueError(
+                "landsurface/land_use_classes must be a two-dimensional raster."
+            )
+        if existing_land_use.shape != farms.shape:
+            raise ValueError(
+                "Farm and land-use rasters must have identical shapes before "
+                "HRU creation. Got farms="
+                f"{farms.shape} and land_use_classes={existing_land_use.shape}."
+            )
+
+        existing_land_use_values = np.asarray(existing_land_use.values)
+
+        # Land-use class -1 is the nodata value outside the active hydrological
+        # domain. ``create_HRUs_numba`` skips coarse-grid cells where the model
+        # mask is true, so those subgrid values are not required to be one of
+        # the active HRU classes. Validate only subgrid cells belonging to the
+        # active domain. Inside that domain, every value must be one of the
+        # classes accepted by the HRU constructor.
+        valid_hru_land_use = np.isin(existing_land_use_values, [0, 1, 4, 5])
+        invalid_active_nonfarm_land_use = (
+            active_subgrid_mask & ~farm_mask_values & ~valid_hru_land_use
+        )
+        if np.any(invalid_active_nonfarm_land_use):
+            invalid_values, invalid_counts = np.unique(
+                existing_land_use_values[invalid_active_nonfarm_land_use],
+                return_counts=True,
+            )
+            invalid_summary = ", ".join(
+                f"{int(value)}={int(count)}"
+                for value, count in zip(
+                    invalid_values,
+                    invalid_counts,
+                    strict=True,
+                )
+            )
+            invalid_rows, invalid_cols = np.where(invalid_active_nonfarm_land_use)
+            sample_count = min(10, invalid_rows.size)
+            samples = [
+                (
+                    int(invalid_rows[index]),
+                    int(invalid_cols[index]),
+                    int(
+                        existing_land_use_values[
+                            invalid_rows[index], invalid_cols[index]
+                        ]
+                    ),
+                )
+                for index in range(sample_count)
+            ]
+            raise ValueError(
+                "The existing land-use raster contains values outside the HRU "
+                "classes {0, 1, 4, 5} on non-farm cells inside the active "
+                "subgrid domain. "
+                f"Invalid values and counts: [{invalid_summary}]. Sample "
+                f"(row, col, land_use): {samples}."
+            )
+
+        inactive_land_use_values = existing_land_use_values[~active_subgrid_mask]
+        n_inactive_nodata = int(np.count_nonzero(inactive_land_use_values == -1))
+        n_inactive_other = int(inactive_land_use_values.size - n_inactive_nodata)
+        self.logger.info(
+            "Existing land-use validation: all %s active non-farm subgrid "
+            "cells use HRU classes {0, 1, 4, 5}; farm cells will be forced to "
+            "class 1. Outside the active domain, %s cells use nodata -1 and "
+            "%s cells retain another value.",
+            int(np.count_nonzero(active_subgrid_mask & ~farm_mask_values)),
+            n_inactive_nodata,
+            n_inactive_other,
         )
 
+        farm_land_use_before, farm_land_use_before_counts = np.unique(
+            existing_land_use_values[farm_mask_values],
+            return_counts=True,
+        )
+        before_summary = ", ".join(
+            f"{int(value)}={int(count)}"
+            for value, count in zip(
+                farm_land_use_before,
+                farm_land_use_before_counts,
+                strict=True,
+            )
+        )
+
+        land_use_values = existing_land_use_values.astype(np.int8, copy=True)
+        land_use_values[farm_mask_values] = np.int8(1)
+        cultivated_land_values = farm_mask_values.astype(bool, copy=True)
+
+        farm_land_use_mismatch = farm_mask_values & (land_use_values != 1)
+        nonfarm_marked_cultivated = (~farm_mask_values) & cultivated_land_values
+        if np.any(farm_land_use_mismatch) or np.any(nonfarm_marked_cultivated):
+            raise RuntimeError(
+                "Internal farm/land-use consistency check failed before writing: "
+                f"{int(np.count_nonzero(farm_land_use_mismatch))} farm cells "
+                "do not have land-use class 1 and "
+                f"{int(np.count_nonzero(nonfarm_marked_cultivated))} non-farm "
+                "cells are marked as cultivated."
+            )
+
+        cultivated_land_subgrid = xr.DataArray(
+            cultivated_land_values,
+            coords=farms.coords,
+            dims=farms.dims,
+            name="landsurface/cultivated_land",
+        )
+        land_use_classes_subgrid = xr.DataArray(
+            land_use_values,
+            coords=farms.coords,
+            dims=farms.dims,
+            attrs=existing_land_use.attrs.copy(),
+            name="landsurface/land_use_classes",
+        )
         if farms.rio.crs is not None:
             cultivated_land_subgrid = cultivated_land_subgrid.rio.write_crs(
                 farms.rio.crs
             )
-
-        cultivated_land_subgrid.attrs["_FillValue"] = None
-
-        land_use_classes_subgrid: xr.DataArray = self.subgrid[
-            "landsurface/land_use_classes"
-        ]
-
-        land_use_classes_subgrid = xr.where(
-            cultivated_land_subgrid,
-            np.int8(1),
-            land_use_classes_subgrid,
-            keep_attrs=True,
-        ).astype(np.int8)
-
-        if land_use_classes_subgrid.rio.crs is None and farms.rio.crs is not None:
             land_use_classes_subgrid = land_use_classes_subgrid.rio.write_crs(
                 farms.rio.crs
             )
-
+        cultivated_land_subgrid.attrs["_FillValue"] = None
         land_use_classes_subgrid.attrs["_FillValue"] = -1
+
+        n_farm_cells = int(np.count_nonzero(farm_mask_values))
+        n_changed_to_cropland = int(
+            np.count_nonzero(farm_mask_values & (existing_land_use_values != 1))
+        )
+        self.logger.info(
+            "Farm/land-use consistency before writing: %s farm cells; "
+            "existing classes on those cells [%s]; %s cells changed to "
+            "land-use class 1; final mismatch count 0.",
+            n_farm_cells,
+            before_summary or "none",
+            n_changed_to_cropland,
+        )
 
         self.set_subgrid(
             land_use_classes_subgrid,
             name="landsurface/land_use_classes",
         )
-
         self.set_subgrid(
             cultivated_land_subgrid,
             name="landsurface/cultivated_land",
         )
 
-    @build_method(
-        depends_on=["setup_create_farms_from_HRL_field_boundaries"], required=False
-    )
+        # Validate the arrays registered in the builder as well. This catches a
+        # stale or misaligned in-memory subgrid before the model is written and
+        # later fails inside the Numba HRU constructor with an uninformative
+        # assertion.
+        registered_farms = np.asarray(self.subgrid["agents/farmers/farms"].values)
+        registered_land_use = np.asarray(
+            self.subgrid["landsurface/land_use_classes"].values
+        )
+        if registered_farms.shape != registered_land_use.shape:
+            raise RuntimeError(
+                "Registered farm and land-use rasters have different shapes: "
+                f"{registered_farms.shape} versus {registered_land_use.shape}."
+            )
+        registered_farm_mask = registered_farms >= 0
+        registered_mismatch = registered_farm_mask & (registered_land_use != 1)
+        registered_invalid_active_nonfarm = (
+            active_subgrid_mask
+            & ~registered_farm_mask
+            & ~np.isin(registered_land_use, [0, 1, 4, 5])
+        )
+        if np.any(registered_invalid_active_nonfarm):
+            invalid_values, invalid_counts = np.unique(
+                registered_land_use[registered_invalid_active_nonfarm],
+                return_counts=True,
+            )
+            invalid_summary = ", ".join(
+                f"{int(value)}={int(count)}"
+                for value, count in zip(
+                    invalid_values,
+                    invalid_counts,
+                    strict=True,
+                )
+            )
+            invalid_rows, invalid_cols = np.where(registered_invalid_active_nonfarm)
+            sample_count = min(10, invalid_rows.size)
+            samples = [
+                (
+                    int(invalid_rows[index]),
+                    int(invalid_cols[index]),
+                    int(registered_land_use[invalid_rows[index], invalid_cols[index]]),
+                )
+                for index in range(sample_count)
+            ]
+            raise RuntimeError(
+                "Registered land-use output contains unsupported values on "
+                "active non-farm cells. Invalid values and counts: "
+                f"[{invalid_summary}]. Sample (row, col, land_use): {samples}."
+            )
+        if np.any(registered_mismatch):
+            mismatch_rows, mismatch_cols = np.where(registered_mismatch)
+            sample_count = min(10, mismatch_rows.size)
+            samples = [
+                (
+                    int(mismatch_rows[index]),
+                    int(mismatch_cols[index]),
+                    int(registered_farms[mismatch_rows[index], mismatch_cols[index]]),
+                    int(
+                        registered_land_use[mismatch_rows[index], mismatch_cols[index]]
+                    ),
+                )
+                for index in range(sample_count)
+            ]
+            mismatch_classes, mismatch_counts = np.unique(
+                registered_land_use[registered_mismatch],
+                return_counts=True,
+            )
+            mismatch_summary = ", ".join(
+                f"{int(value)}={int(count)}"
+                for value, count in zip(
+                    mismatch_classes,
+                    mismatch_counts,
+                    strict=True,
+                )
+            )
+            raise RuntimeError(
+                "Farm/land-use consistency failed after registering outputs: "
+                f"{int(np.count_nonzero(registered_mismatch))} farm cells do "
+                "not have land-use class 1. Mismatching classes: "
+                f"[{mismatch_summary}]. Sample (row, col, farm_id, land_use): "
+                f"{samples}."
+            )
+        self.logger.info(
+            "Farm/land-use consistency after registering outputs: all %s farm "
+            "cells have land-use class 1.",
+            int(np.count_nonzero(registered_farm_mask)),
+        )
+
+    @build_method(depends_on=["setup_regions_and_land_use"], required=False)
     def setup_farmer_crop_calendar_from_HRL(
         self,
         hrl_year: int = 2017,
@@ -2868,8 +4907,9 @@ class Europe(GEBModel):
         """Build farmer crop calendars by combining HRL crops with MIRCA2000 calendars.
 
         The final compact farmer table from
-        ``setup_create_farms_from_HRL_field_boundaries`` determines which HRL crop
-        sequence each farmer has. HRL crop classes are mapped to MIRCA crop classes,
+        one of the two HRL raster farm-construction methods determines which
+        HRL crop sequence assigned to each farmer. HRL crop classes are mapped
+        to MIRCA crop classes,
         because crop-growth parametrization is available for MIRCA crops. MIRCA2000
         calendars then provide planting dates and growing-season lengths.
 
@@ -2991,6 +5031,7 @@ class Europe(GEBModel):
             year=mirca_year,
             minimum_area_ratio=minimum_area_ratio,
             replace_crop_calendar_unit_code=replace_crop_calendar_unit_code,
+            farmer_locations=farmer_locations,
         )
 
         mirca_os_template = rainfed_fraction.isel(crop=0, drop=True)
@@ -3054,6 +5095,14 @@ class Europe(GEBModel):
             farmer_locations,
         )
 
+        # Calendar selections depend only on MIRCA unit, crop combination, and
+        # irrigation state. Reuse resolved combinations across all HRL years.
+        calendar_selection_cache: dict[
+            tuple[int, int, int, bool],
+            np.ndarray,
+        ] = {}
+        expected_farmer_ids = np.arange(n_farmers, dtype=np.int32)
+
         if multiple_years:
             years_array = np.asarray(years_to_process, dtype=np.int32)
 
@@ -3086,17 +5135,22 @@ class Europe(GEBModel):
                 logger=self.logger,
             )
 
-            farmer_crops_by_id = farmer_crops.set_index("farmer_id")
+            farmer_ids = farmer_crops["farmer_id"].to_numpy(dtype=np.int32)
+            if not np.array_equal(farmer_ids, expected_farmer_ids):
+                raise ValueError(
+                    "Decoded farmer crops must contain exactly one row per compact "
+                    "farmer ID in ascending order."
+                )
+
+            farmer_main_crops = farmer_crops["mirca_crop"].to_numpy(dtype=np.int32)
+            farmer_secondary_crop_types = farmer_crops["secondary_crop_type"].to_numpy(
+                dtype=np.int32
+            )
 
             # Track whether the current HRL year provides a valid MIRCA crop. In
             # multi-year mode, this controls whether later years are allowed to add
             # irrigation for this farmer.
-            current_valid_crop = np.full(n_farmers, False, dtype=bool)
-            valid_crop_farmer_ids = farmer_crops.loc[
-                farmer_crops["mirca_crop"].to_numpy(dtype=np.int32) != -1,
-                "farmer_id",
-            ].to_numpy(dtype=np.int32)
-            current_valid_crop[valid_crop_farmer_ids] = True
+            current_valid_crop = farmer_main_crops != -1
 
             candidate_is_irrigated, candidate_adaptations = (
                 _assign_irrigation_by_area_targets(
@@ -3188,21 +5242,27 @@ class Europe(GEBModel):
             else:
                 is_irrigated_for_calendar = candidate_is_irrigated
 
-            crop_calendar_per_farmer = np.full((n_farmers, 3, 4), -1, dtype=np.int32)
+            (
+                crop_calendar_per_farmer,
+                n_unique_calendar_keys,
+                n_new_calendar_cache_entries,
+            ) = _select_mirca2000_calendars_for_farmers(
+                crop_calendar,
+                farmer_mirca_units=farmer_mirca_units,
+                farmer_main_crops=farmer_main_crops,
+                farmer_secondary_crop_types=farmer_secondary_crop_types,
+                farmer_is_irrigated=is_irrigated_for_calendar,
+                replace_crop_calendar_unit_code=replace_crop_calendar_unit_code,
+                selection_cache=calendar_selection_cache,
+            )
 
-            for farmer_id in range(n_farmers):
-                row = farmer_crops_by_id.loc[farmer_id]
-
-                selected_calendar = _select_mirca2000_calendar_for_farmer(
-                    crop_calendar,
-                    mirca_unit=int(farmer_mirca_units[farmer_id]),
-                    main_crop=int(row["mirca_crop"]),
-                    secondary_crop_type=int(row["secondary_crop_type"]),
-                    is_irrigated=bool(is_irrigated_for_calendar[farmer_id]),
-                    replace_crop_calendar_unit_code=replace_crop_calendar_unit_code,
-                )
-
-                crop_calendar_per_farmer[farmer_id] = selected_calendar[:, [0, 2, 3, 4]]
+            self.logger.info(
+                "HRL year %s crop calendars resolved from %s unique farmer-state "
+                "combination(s); %s new selection(s) added to the cross-year cache.",
+                current_hrl_year,
+                n_unique_calendar_keys,
+                n_new_calendar_cache_entries,
+            )
 
             check_crop_calendar(crop_calendar_per_farmer)
 
@@ -3222,7 +5282,9 @@ class Europe(GEBModel):
                     replaced_value,
                 )
 
-            check_crop_calendar(crop_calendar_per_farmer)
+                # The replacement changes calendars, so validate once more only in
+                # this branch. Without replacement, the first validation is sufficient.
+                check_crop_calendar(crop_calendar_per_farmer)
 
             if multiple_years:
                 crop_calendar_stack[year_index] = crop_calendar_per_farmer
@@ -3290,18 +5352,30 @@ class Europe(GEBModel):
         *,
         year: int,
         minimum_area_ratio: float = 0.01,
-        replace_crop_calendar_unit_code: dict = {},
-    ) -> xr.DataArray:
-        """Derive MIRCA-OS crop-area fraction stack for rainfed or irrigated crops.
+        replace_crop_calendar_unit_code: dict[int, int] | None = None,
+        farmer_locations: np.ndarray | None = None,
+    ) -> tuple[xr.DataArray, xr.DataArray]:
+        """Derive MIRCA-OS rainfed and irrigated crop-area fractions.
 
         Args:
             year: MIRCA reference year.
-            minimum_area_ratio: Minimum fraction for a crop to be considered when sampling.
-            replace_crop_calendar_unit_code: Optional remapping for MIRCA unit ids.
+            minimum_area_ratio: Minimum crop-area fraction retained during sampling.
+            replace_crop_calendar_unit_code: Optional MIRCA-unit replacement mapping.
+            farmer_locations: Optional farmer centroid coordinates with shape
+                ``(n_farmers, 2)``. Locations are derived from the farm raster when
+                omitted.
 
         Returns:
-            DataArray with dimensions ``crop``, ``y``, and ``x``.
+            Tuple containing rainfed and irrigated crop-area fraction arrays with
+            dimensions ``crop``, ``y``, and ``x``.
+
+        Raises:
+            ValueError: If provided farmer locations are not aligned with the number of
+                farmers.
         """
+        if replace_crop_calendar_unit_code is None:
+            replace_crop_calendar_unit_code = {}
+
         n_farmers = self.array["agents/farmers/region_id"].size
 
         # For alignment of various input data, we need a reference. So we just
@@ -3317,7 +5391,8 @@ class Europe(GEBModel):
                 self.bounds,
                 buffer=reference_map_buffer,
                 raise_on_buffer_out_of_bounds=False,
-            )  # use a very large buffer so that we use don't get edge effects in the interpolation
+            )
+            # A large buffer prevents interpolation artefacts near the model edge.
         )
 
         # Load MIRCA-OS data for the given year
@@ -3332,11 +5407,18 @@ class Europe(GEBModel):
             reference_crop_map.y.values.min() : reference_crop_map.y.values.max(),
         ]
 
-        MIRCA_units = (MIRCA_unit_geom.unit_code).tolist()
-
-        farmer_locations = get_farm_locations(
-            self.subgrid["agents/farmers/farms"], method="centroid"
-        )
+        if farmer_locations is None:
+            farmer_locations = get_farm_locations(
+                self.subgrid["agents/farmers/farms"],
+                method="centroid",
+            )
+        else:
+            farmer_locations = np.asarray(farmer_locations)
+            if farmer_locations.shape != (n_farmers, 2):
+                raise ValueError(
+                    "farmer_locations must have shape (n_farmers, 2). "
+                    f"Got {farmer_locations.shape} for {n_farmers} farmers."
+                )
 
         MIRCA_unit_grid = rasterize_like(
             MIRCA_unit_geom,
