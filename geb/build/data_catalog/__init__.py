@@ -62,7 +62,10 @@ from .worldfloods import WorldFloodsV2
 data_catalog: dict[str, dict[str, Any]] = {
     "alphaearth": {
         "adapter": AlphaEarth(
-            cache_dir=("/gpfs/work5/0/prjs2035/GEB/datacatalog/alphaearth/index_cache"),
+            folder="alphaearth",
+            local_version=1,
+            filename="tiles",
+            cache="global",
             max_parallel_downloads=2,
         ),
         "url": None,

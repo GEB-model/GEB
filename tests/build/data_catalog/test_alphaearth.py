@@ -20,6 +20,64 @@ from geb.build.data_catalog.alphaearth import (
 )
 
 
+def test_alphaearth_read_defaults_to_catalog_download_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Use ``Adapter.root / annual`` when ``download_dir`` is omitted."""
+    monkeypatch.setenv("GEB_DATA_ROOT", str(tmp_path))
+
+    adapter = AlphaEarth(
+        folder="alphaearth",
+        local_version=1,
+        filename="tiles",
+        cache="global",
+        max_parallel_downloads=1,
+    )
+
+    synthetic_index = gpd.GeoDataFrame(
+        {
+            "year": [2024],
+            "utm_zone": ["31N"],
+            "path": ["2024/31N/example.tif"],
+            "wgs84_west": [4.0],
+            "wgs84_south": [52.0],
+            "wgs84_east": [5.0],
+            "wgs84_north": [53.0],
+        },
+        geometry=[box(4.0, 52.0, 5.0, 53.0)],
+        crs=4326,
+    )
+
+    fake_index_path = tmp_path / INDEX_FILENAME
+    fake_index_path.write_bytes(b"synthetic-index")
+
+    async def fake_ensure_index(refresh: bool = False) -> Path:
+        del refresh
+        return fake_index_path
+
+    monkeypatch.setattr(adapter, "_ensure_index", fake_ensure_index)
+    monkeypatch.setattr(
+        alphaearth_module.gpd,
+        "read_parquet",
+        lambda path: synthetic_index.copy(),
+    )
+
+    selected = adapter.read(
+        years=[2024],
+        bounds=(4.5, 52.4, 4.6, 52.5),
+        dry_run=True,
+        max_files=1,
+    )
+
+    expected_root = Path(adapter.root) / "annual"
+    expected_path = expected_root / "2024" / "31N" / "example.tif"
+
+    assert adapter.index_path == Path(adapter.root) / "index" / INDEX_FILENAME
+    assert adapter.download_root == expected_root
+    assert Path(selected.iloc[0]["local_path"]) == expected_path
+
+
 def make_index() -> gpd.GeoDataFrame:
     """Create a small synthetic AlphaEarth index in WGS84."""
     return gpd.GeoDataFrame(
