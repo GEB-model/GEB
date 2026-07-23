@@ -916,6 +916,8 @@ def create_flood_animation(
         return None
 
     # select the animated frames and load them into memory
+    if step < 1:
+        raise ValueError(f"step must be >= 1, got {step}.")
     frame_indices = np.arange(0, water_depth_m.time.size, step)
     frames: np.ndarray = water_depth_m.isel(time=frame_indices).values
     frame_times = water_depth_m.time.values[frame_indices]
