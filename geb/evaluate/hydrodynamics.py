@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import contextily as ctx
 import geopandas as gpd
+import matplotlib.animation as manimation
 import matplotlib.colors as mcolors
 import matplotlib.lines as mlines
 import matplotlib.patches as mpatches
@@ -13,11 +14,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import xarray as xr
-from matplotlib.colors import LightSource
+from hydromt_sfincs import SfincsModel
+from matplotlib.colors import BoundaryNorm, LightSource, ListedColormap
 from matplotlib.lines import Line2D
+from pyproj import Transformer
 from rasterio.features import geometry_mask
 from rioxarray.exceptions import NoDataInBounds
 
+from geb.hazards.floods.workflows.utils import FLOOD_DEPTH_COLORS
 from geb.workflows.io import read_geom, read_zarr
 
 if TYPE_CHECKING:
@@ -822,6 +826,222 @@ def find_exact_observation_file(event_name: str, files: list[Path]) -> Path | No
     return None
 
 
+def create_flood_animation(
+    simulation_dir: Path,
+    output_path_stem: Path,
+    minimum_flood_depth: float,
+    logger: Any,
+    step: int = 1,
+    fps: int = 5,
+    dpi: int = 100,
+    background: str = "sat",
+    zoom: int = 12,
+    fmt: str | None = None,
+    vmax: float | None = None,
+) -> Path | None:
+    """Create a flood depth animation from a single SFINCS simulation output.
+
+    Reads the per-time-step water depth (``h``) from ``sfincs_map.nc`` in the
+    simulation directory and renders it as a video (MP4 if ffmpeg is available,
+    otherwise an animated GIF), optionally on top of a satellite or OSM
+    background map.
+
+    Args:
+        simulation_dir: SFINCS simulation directory containing ``sfincs_map.nc``.
+        output_path_stem: Output file path without extension; the extension is
+            derived from the selected format.
+        minimum_flood_depth: Water depths below this value (in m) are masked.
+        logger: Logger for progress and warning messages.
+        step: Animate every nth time step.
+        fps: Frames per second of the video.
+        dpi: Resolution of the video frames.
+        background: Background map: "sat" (satellite), "osm", or "none".
+        zoom: Zoom level of the background map tiles.
+        fmt: Output format, "mp4" or "gif". If None, MP4 is used when ffmpeg is
+            available and GIF otherwise.
+        vmax: Upper limit of the color scale in m. If None, the 98th percentile
+            of the wet-cell depths is used, so that a few deep (river channel)
+            cells do not compress the rest of the flood into the lightest color
+            bin; deeper cells saturate into the darkest bin.
+
+    Returns:
+        Path to the created animation, or None if the simulation has no
+        per-time-step water depth output or no flooding above the threshold.
+
+    Raises:
+        RuntimeError: If fmt is "mp4" but no ffmpeg is available.
+        ValueError: If fmt or background has an unknown value.
+    """
+    if fmt not in (None, "mp4", "gif"):
+        raise ValueError(f"Unknown format: {fmt}. Use 'mp4' or 'gif'.")
+    if background not in ("sat", "osm", "none"):
+        raise ValueError(
+            f"Unknown background: {background}. Use 'sat', 'osm' or 'none'."
+        )
+
+    sfincs_model = SfincsModel(str(simulation_dir), mode="r")
+    sfincs_model.read()
+    results = sfincs_model.output.data
+
+    if "h" in results:
+        water_depth_m = results["h"]
+        assert isinstance(water_depth_m, xr.DataArray)
+    elif "zs" in results and "zb" in results:
+        water_surface_m, bed_elevation_m = results["zs"], results["zb"]
+        assert isinstance(water_surface_m, xr.DataArray)
+        assert isinstance(bed_elevation_m, xr.DataArray)
+        water_depth_m = water_surface_m - bed_elevation_m
+    else:
+        logger.warning(
+            f"No per-time-step water depth (h or zs/zb) found in {simulation_dir / 'sfincs_map.nc'}. "
+            "Set hazards.floods.flood_map_output_interval_seconds in the model config "
+            "(e.g. 3600 for hourly maps) and re-run the model to store intermediate flood maps."
+        )
+        return None
+
+    water_depth_m = water_depth_m.where(water_depth_m > minimum_flood_depth)
+    if water_depth_m.time.size <= 1:
+        logger.warning(
+            f"Only {water_depth_m.time.size} time step(s) found in {simulation_dir / 'sfincs_map.nc'}; "
+            "cannot animate. Set hazards.floods.flood_map_output_interval_seconds in the "
+            "model config (e.g. 3600 for hourly maps) and re-run the model."
+        )
+        return None
+
+    max_depth_m = float(water_depth_m.max().values)
+    if not np.isfinite(max_depth_m):
+        logger.warning(
+            f"No flooding above {minimum_flood_depth} m in {simulation_dir.name}, skipping animation."
+        )
+        return None
+
+    # select the animated frames and load them into memory
+    if step < 1:
+        raise ValueError(f"step must be >= 1, got {step}.")
+    frame_indices = np.arange(0, water_depth_m.time.size, step)
+    frames: np.ndarray = water_depth_m.isel(time=frame_indices).values
+    frame_times = water_depth_m.time.values[frame_indices]
+
+    # scale the colorbar to the bulk of the wet cells rather than the absolute
+    # maximum, which is typically reached only inside the river channel
+    if vmax is None:
+        vmax = float(np.nanquantile(frames, 0.98))
+        if vmax <= minimum_flood_depth:
+            vmax = max_depth_m
+
+    # discrete flood depth colormap (color scheme shared with the flood map plots)
+    cmap = ListedColormap(FLOOD_DEPTH_COLORS)
+    bounds = np.linspace(minimum_flood_depth, vmax, cmap.N + 1)
+    norm = BoundaryNorm(bounds, cmap.N)
+    colorbar_extend = "max" if max_depth_m > vmax else "neither"
+
+    # 2D cell-center coordinates: xc/yc for rotated grids, else regular x/y
+    if "xc" in water_depth_m.coords and "yc" in water_depth_m.coords:
+        x_2d = water_depth_m["xc"].values
+        y_2d = water_depth_m["yc"].values
+    else:
+        x_2d, y_2d = np.meshgrid(water_depth_m["x"].values, water_depth_m["y"].values)
+
+    crs = water_depth_m.rio.crs
+
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot()
+    ax.set_aspect("equal")
+    mesh_kwargs: dict[str, Any] = {}
+    if background != "none":
+        # fetch the background tiles once as a static image (in Web Mercator)
+        # instead of a cartopy tile layer, which would be re-rendered for
+        # every frame of the animation
+        transformer = Transformer.from_crs(crs, "EPSG:3857", always_xy=True)
+        x_2d, y_2d = transformer.transform(x_2d, y_2d)
+        tile_source = (
+            ctx.providers.Esri.WorldImagery  # ty:ignore[unresolved-attribute]
+            if background == "sat"
+            else ctx.providers.OpenStreetMap.Mapnik  # ty:ignore[unresolved-attribute]
+        )
+        tiles, tiles_extent = ctx.bounds2img(
+            x_2d.min(),
+            y_2d.min(),
+            x_2d.max(),
+            y_2d.max(),
+            zoom=zoom,
+            source=tile_source,
+        )
+        ax.imshow(tiles, extent=tiles_extent, zorder=0)
+        ax.set_xlim(x_2d.min(), x_2d.max())
+        ax.set_ylim(y_2d.min(), y_2d.max())
+        mesh_kwargs["alpha"] = 0.8
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    mesh = ax.pcolormesh(
+        x_2d,
+        y_2d,
+        np.ma.masked_invalid(frames[0]),
+        cmap=cmap,
+        norm=norm,
+        shading="auto",
+        zorder=1,
+        **mesh_kwargs,
+    )
+    colorbar = fig.colorbar(
+        mesh, ax=ax, shrink=0.6, format="%.2f", extend=colorbar_extend
+    )
+    colorbar.set_label("Water depth (m)")
+    title = ax.set_title("")
+
+    def update_frame(frame_index: int) -> list:
+        mesh.set_array(np.ma.masked_invalid(frames[frame_index]).ravel())
+        timestamp = np.datetime_as_string(frame_times[frame_index], unit="s")
+        title.set_text(f"Water depth: {timestamp}")
+        return [mesh, title]
+
+    animation = manimation.FuncAnimation(
+        fig, update_frame, frames=len(frames), blit=False
+    )
+
+    # use the ffmpeg bundled with imageio-ffmpeg, so MP4 export works without
+    # a system-wide ffmpeg installation
+    try:
+        import imageio_ffmpeg
+
+        plt.rcParams["animation.ffmpeg_path"] = imageio_ffmpeg.get_ffmpeg_exe()
+    except ImportError:
+        pass
+
+    ffmpeg_available: bool = manimation.writers.is_available("ffmpeg")
+    if fmt is None:
+        fmt = "mp4" if ffmpeg_available else "gif"
+    if fmt == "mp4":
+        if not ffmpeg_available:
+            raise RuntimeError(
+                "MP4 export requires ffmpeg, which was not found. "
+                "Install imageio-ffmpeg or use fmt='gif'."
+            )
+        # crop to even pixel dimensions, required by the yuv420p pixel format
+        writer = manimation.FFMpegWriter(
+            fps=fps,
+            extra_args=[
+                "-vf",
+                "crop=trunc(iw/2)*2:trunc(ih/2)*2",
+                "-pix_fmt",
+                "yuv420p",
+            ],
+        )
+    else:
+        writer = manimation.PillowWriter(fps=fps)
+
+    output_path = output_path_stem.with_suffix(f".{fmt}")
+    logger.info(
+        f"Rendering {len(frames)} frames "
+        f"({np.datetime_as_string(frame_times[0], unit='s')} - "
+        f"{np.datetime_as_string(frame_times[-1], unit='s')}) to {output_path}"
+    )
+    animation.save(output_path, writer=writer, dpi=dpi)
+    plt.close(fig)
+    return output_path
+
+
 class Hydrodynamics:
     """Implements several functions to evaluate the hydrodynamics module of GEB."""
 
@@ -829,6 +1049,112 @@ class Hydrodynamics:
         """Initialize the Hydrodynamics evaluation module."""
         self.model = model
         self.evaluator = evaluator
+
+    def animate_flood(
+        self,
+        run_name: str = "default",
+        event: str | None = None,
+        step: int = 1,
+        fps: int = 5,
+        dpi: int = 100,
+        background: str = "sat",
+        zoom: int = 12,
+        fmt: str | None = None,
+        vmax: float | None = None,
+        *args: Any,
+        **kwargs: Any,
+    ) -> list[Path]:
+        """Create videos of the flood depth over time from SFINCS simulation outputs.
+
+        One animation is created per SFINCS model and event found in the
+        simulation root of the run. The videos are written to
+        `output/<run_name>/evaluate/hydrodynamics/<event>/`.
+
+        By default GEB does not store intermediate flood maps. Set
+        `hazards.floods.flood_map_output_interval_seconds` in the model config
+        (e.g. 3600 for hourly maps) and re-run the model first.
+
+        Args:
+            run_name: Name of the simulation run to animate.
+            event: Only animate simulations whose event name contains this
+                string. If None, all events are animated.
+            step: Animate every nth time step.
+            fps: Frames per second of the video.
+            dpi: Resolution of the video frames.
+            background: Background map: "sat" (satellite), "osm", or "none".
+            zoom: Zoom level of the background map tiles.
+            fmt: Output format, "mp4" or "gif". If None, MP4 is used when
+                ffmpeg is available and GIF otherwise.
+            vmax: Upper limit of the color scale in m. If None, the 98th
+                percentile of the wet-cell depths is used; deeper (river
+                channel) cells saturate into the darkest bin. Set explicitly
+                to compare animations of different runs on the same scale.
+            *args: Additional positional arguments (ignored).
+            **kwargs: Additional keyword arguments (ignored).
+
+        Returns:
+            List of paths to the created animations.
+
+        Raises:
+            FileNotFoundError: If no SFINCS simulations are found for the run.
+        """
+        minimum_flood_depth: float = self.model.config["hazards"]["floods"][
+            "minimum_flood_depth"
+        ]
+
+        sfincs_root = (
+            Path(self.model.config["general"]["simulation_root"]) / run_name / "SFINCS"
+        )
+        if not sfincs_root.exists():
+            raise FileNotFoundError(
+                f"SFINCS simulation folder {sfincs_root} does not exist. "
+                "Did you run the hydrodynamic model?"
+            )
+
+        animations_root = Path(self.evaluator.output_folder_evaluate) / "hydrodynamics"
+
+        created_animations: list[Path] = []
+        for model_dir in sorted(sfincs_root.iterdir()):
+            simulations_folder = model_dir / "simulations"
+            if not simulations_folder.is_dir():
+                continue
+            for simulation_dir in sorted(simulations_folder.iterdir()):
+                if not (simulation_dir / "sfincs_map.nc").exists():
+                    continue
+                if event is not None and event not in simulation_dir.name:
+                    continue
+
+                event_folder = animations_root / simulation_dir.name
+                event_folder.mkdir(parents=True, exist_ok=True)
+
+                self.model.logger.info(
+                    f"Creating flood animation for {model_dir.name} / {simulation_dir.name}"
+                )
+                animation_path = create_flood_animation(
+                    simulation_dir=simulation_dir,
+                    output_path_stem=event_folder / f"flood_animation_{model_dir.name}",
+                    minimum_flood_depth=minimum_flood_depth,
+                    logger=self.model.logger,
+                    step=step,
+                    fps=fps,
+                    dpi=dpi,
+                    background=background,
+                    zoom=zoom,
+                    fmt=fmt,
+                    vmax=vmax,
+                )
+                if animation_path is not None:
+                    self.model.logger.info(f"Saved {animation_path}")
+                    created_animations.append(animation_path)
+
+        if not created_animations:
+            raise FileNotFoundError(
+                f"No SFINCS simulations with per-time-step output found in {sfincs_root}"
+                + (f" for event filter '{event}'" if event is not None else "")
+                + ". Set hazards.floods.flood_map_output_interval_seconds in the model "
+                "config (e.g. 3600 for hourly maps) and re-run the model."
+            )
+        return created_animations
 
     def evaluate_flood(
         self, run_name: str = "default", *args: Any, **kwargs: Any
