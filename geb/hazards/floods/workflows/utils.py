@@ -24,6 +24,19 @@ from shapely.geometry import GeometryCollection, LineString, Point
 from geb.geb_types import ArrayFloat32, ArrayInt64, TwoDArrayBool
 from geb.workflows.io import read_geom
 
+# Flood depth color scheme (shallow light blue -> deep dark red), also used for
+# the flood animation in `geb evaluate hydrodynamics.animate_flood`.
+FLOOD_DEPTH_COLORS: list[str] = [
+    "#87CEFA",
+    "#00BFFF",
+    "#1E90FF",
+    "#0000FF",
+    "#FFD700",
+    "#FF8C00",
+    "#FF0000",
+    "#8B0000",
+]
+
 
 def export_rivers(
     model_root: Path, rivers: gpd.GeoDataFrame, postfix: str = ""
@@ -179,19 +192,7 @@ def read_flood_depth(
         figsize=(11, 7),  # ty: ignore[invalid-argument-type]
     )
 
-    flood_cmap = LinearSegmentedColormap.from_list(
-        "flood_depth",
-        [
-            "#87CEFA",
-            "#00BFFF",
-            "#1E90FF",
-            "#0000FF",
-            "#FFD700",
-            "#FF8C00",
-            "#FF0000",
-            "#8B0000",
-        ],
-    )
+    flood_cmap = LinearSegmentedColormap.from_list("flood_depth", FLOOD_DEPTH_COLORS)
 
     # Plot flood depth with colorbar
     cbar_kwargs: dict[str, float | tuple[int, int]] = {"shrink": 0.6, "anchor": (0, 0)}
