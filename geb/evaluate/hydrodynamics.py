@@ -940,7 +940,7 @@ def create_flood_animation(
     else:
         x_2d, y_2d = np.meshgrid(water_depth_m["x"].values, water_depth_m["y"].values)
 
-    crs = water_depth_m.raster.crs
+    crs = water_depth_m.rio.crs
 
     fig = plt.figure(figsize=(10, 8))
     ax = fig.add_subplot()
