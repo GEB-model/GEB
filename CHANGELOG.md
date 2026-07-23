@@ -4,7 +4,7 @@
 - Parameterization of settings in the `model.yml`. Increased overall efficiency and usability of the early warning system.
 - Improved the setup for `critical_infrastructure_warning_strategy`, which now depends on asset type instead of strategy id.
 - Added the option to download and process hindcasts using the MARS API. For that, `setup_forecasts` has additional arguments: forecast_product, hindcast_cycle_start, hindcast_cycle_end and n_hindcast_years.
-- Added option to animate flood from sfincs in geb evaluate, to run first set `hazards.floods.flood_map_output_interval_seconds` to per hour, by default sfincs floods only output max over all time steps, once sfincs output has per hour time step or use desired time step, to use this do: geb evaluate hydrodynamics.animate_flood --run-name (add --help for all options)
+- Added `geb evaluate hydrodynamics.animate_flood` to render 2D flood-depth animations from SFINCS outputs. To enable per-timestep maps, set `hazards.floods.flood_map_output_interval_seconds` (e.g., `3600` for hourly) and rerun the model; then run `geb evaluate hydrodynamics.animate_flood --run-name default` (see `--help` for options).
 
 # v1.0.0b30
 - Implement evaporation for retention basins using a constant area based on maximum storage and a depth of 3 meters.
