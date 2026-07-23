@@ -1,0 +1,511 @@
+"""Data adapter for downloading AlphaEarth annual satellite embeddings."""
+
+from __future__ import annotations
+
+import asyncio
+import os
+from collections.abc import Sequence
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlparse
+
+import aiohttp
+import geopandas as gpd
+import numpy as np
+from aiohttp_retry import ExponentialRetry, RetryClient
+from shapely.geometry import box
+
+from .base import Adapter
+
+
+DEFAULT_BASE_URL = (
+    "https://storage.googleapis.com/alphaearth_foundations/"
+    "satellite_embedding/v1/annual"
+)
+INDEX_FILENAME = "aef_index.parquet"
+AVAILABLE_YEARS = tuple(range(2017, 2026))
+NODATA_VALUE = -128
+DOWNLOAD_CHUNK_SIZE_BYTES = 8 * 1024 * 1024
+
+
+class AlphaEarth(Adapter):
+    """Adapter for selecting and downloading AlphaEarth embedding COGs.
+
+    The adapter downloads the official GeoParquet index, selects the COGs that
+    intersect a WGS84 bounding box, and downloads the selected files while
+    preserving their year/UTM directory structure.
+
+    Notes:
+        The downloaded COGs contain 64 signed-int8 bands. Values must be
+        de-quantized before analysis with :meth:`dequantize`.
+    """
+
+    def __init__(
+        self,
+        *args: Any,
+        cache_dir: str | Path | None = None,
+        max_parallel_downloads: int = 2,
+        **kwargs: Any,
+    ) -> None:
+        """Initialize the AlphaEarth adapter.
+
+        Args:
+            *args: Positional arguments passed to the base adapter.
+            cache_dir: Directory used to cache the AlphaEarth spatial index.
+                Defaults to ``$ALPHAEARTH_CACHE_DIR`` or
+                ``~/.cache/alphaearth``.
+            max_parallel_downloads: Maximum number of concurrent COG downloads.
+                A small default is used because individual files are large.
+            **kwargs: Keyword arguments passed to the base adapter.
+
+        Raises:
+            ValueError: If ``max_parallel_downloads`` is smaller than one.
+        """
+        super().__init__(*args, **kwargs)
+
+        if max_parallel_downloads < 1:
+            raise ValueError("max_parallel_downloads must be at least 1.")
+
+        default_cache_dir = Path(
+            os.getenv(
+                "ALPHAEARTH_CACHE_DIR",
+                Path.home() / ".cache" / "alphaearth",
+            )
+        )
+
+        self.cache_dir = Path(cache_dir) if cache_dir is not None else default_cache_dir
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+        self.max_parallel_downloads = max_parallel_downloads
+        self.url = DEFAULT_BASE_URL
+        self.index_url = f"{self.url}/{INDEX_FILENAME}"
+        self._path_column: str | None = None
+
+    def fetch(self, url: str | None) -> AlphaEarth:
+        """Set the AlphaEarth annual-data base URL.
+
+        Args:
+            url: Optional alternative base URL. ``None`` selects the official
+                Google Cloud Storage HTTPS endpoint.
+
+        Returns:
+            The current adapter instance.
+        """
+        self.url = (url or DEFAULT_BASE_URL).rstrip("/")
+        self.index_url = f"{self.url}/{INDEX_FILENAME}"
+        return self
+
+    @property
+    def index_path(self) -> Path:
+        """Return the local path of the cached GeoParquet index."""
+        return self.cache_dir / INDEX_FILENAME
+
+    @staticmethod
+    def dequantize(values: np.ndarray) -> np.ndarray:
+        """Convert raw AlphaEarth int8 values to float32 embeddings.
+
+        Args:
+            values: Raw AlphaEarth values. The expected band-first or
+                sample-by-band shape is preserved.
+
+        Returns:
+            De-quantized float32 values in the range [-1, 1], with raw nodata
+            values converted to ``NaN``.
+        """
+        raw = np.asarray(values)
+        nodata = raw == NODATA_VALUE
+        raw_float = raw.astype(np.float32)
+        result = ((raw_float / 127.5) ** 2) * np.sign(raw_float)
+        result[nodata] = np.nan
+        return result
+
+    async def _download_file(
+        self,
+        client: RetryClient,
+        remote_url: str,
+        destination: Path,
+        overwrite: bool,
+        semaphore: asyncio.Semaphore,
+    ) -> Path:
+        """Download one remote file atomically."""
+        destination.parent.mkdir(parents=True, exist_ok=True)
+
+        if destination.exists() and destination.stat().st_size > 0 and not overwrite:
+            print(f"Using cached AlphaEarth file: {destination}")
+            return destination
+
+        temporary_path = destination.with_suffix(destination.suffix + ".part")
+        temporary_path.unlink(missing_ok=True)
+
+        async with semaphore:
+            print(f"Downloading {remote_url}")
+            async with client.get(remote_url, raise_for_status=True) as response:
+                with temporary_path.open("wb") as file:
+                    async for chunk in response.content.iter_chunked(
+                        DOWNLOAD_CHUNK_SIZE_BYTES
+                    ):
+                        file.write(chunk)
+
+        temporary_path.replace(destination)
+        print(f"Saved AlphaEarth file: {destination}")
+        return destination
+
+    async def _ensure_index(self, refresh: bool = False) -> Path:
+        """Download the official AlphaEarth index when it is not cached."""
+        if (
+            self.index_path.exists()
+            and self.index_path.stat().st_size > 0
+            and not refresh
+        ):
+            return self.index_path
+
+        retry_options = ExponentialRetry(
+            attempts=8,
+            start_timeout=5,
+            max_timeout=120,
+            factor=2,
+            retry_all_server_errors=True,
+        )
+        timeout = aiohttp.ClientTimeout(
+            total=None,
+            sock_connect=60,
+            sock_read=600,
+        )
+
+        async with RetryClient(
+            retry_options=retry_options,
+            timeout=timeout,
+        ) as client:
+            semaphore = asyncio.Semaphore(1)
+            return await self._download_file(
+                client=client,
+                remote_url=self.index_url,
+                destination=self.index_path,
+                overwrite=refresh,
+                semaphore=semaphore,
+            )
+
+    def _detect_path_column(self, index: gpd.GeoDataFrame) -> str:
+        """Identify the index column that contains the COG path."""
+        if self._path_column is not None:
+            return self._path_column
+
+        preferred_columns = (
+            "path",
+            "gcs_path",
+            "gcs_url",
+            "url",
+            "uri",
+            "href",
+            "filename",
+            "file",
+        )
+
+        for column in preferred_columns:
+            if column in index.columns:
+                self._path_column = column
+                return column
+
+        # Future index versions may rename the path field. Detect a string
+        # column containing TIFF-like paths rather than hard-failing immediately.
+        for column in index.columns:
+            if column == index.geometry.name:
+                continue
+
+            values = index[column].dropna().head(50)
+            if values.empty:
+                continue
+
+            if any(str(value).lower().endswith((".tif", ".tiff")) for value in values):
+                self._path_column = column
+                return column
+
+        raise KeyError(
+            "Could not identify the COG path column in the AlphaEarth index. "
+            f"Available columns: {list(index.columns)}"
+        )
+
+    def _to_https_url(
+        self,
+        path_value: str,
+        year: int,
+        utm_zone: str,
+    ) -> str:
+        """Convert an index path value to a downloadable HTTPS URL."""
+        value = path_value.strip()
+
+        if value.startswith("https://") or value.startswith("http://"):
+            return value
+
+        if value.startswith("gs://"):
+            parsed = urlparse(value)
+            return f"https://storage.googleapis.com/{parsed.netloc}/{parsed.path.lstrip('/')}"
+
+        relative = value.lstrip("/")
+
+        if relative.startswith("alphaearth_foundations/"):
+            return f"https://storage.googleapis.com/{relative}"
+
+        if relative.startswith("satellite_embedding/"):
+            return f"https://storage.googleapis.com/alphaearth_foundations/{relative}"
+
+        if relative.startswith(f"{year}/"):
+            return f"{self.url}/{relative}"
+
+        if "/" in relative:
+            return f"{self.url}/{relative}"
+
+        return f"{self.url}/{year}/{utm_zone}/{relative}"
+
+    @staticmethod
+    def _normalize_years(years: int | Sequence[int]) -> tuple[int, ...]:
+        """Normalize and validate requested years."""
+        requested = (years,) if isinstance(years, int) else tuple(years)
+
+        if not requested:
+            raise ValueError("At least one AlphaEarth year must be requested.")
+
+        invalid = sorted(set(requested).difference(AVAILABLE_YEARS))
+        if invalid:
+            raise ValueError(
+                f"Unsupported AlphaEarth year(s): {invalid}. "
+                f"Available years are {AVAILABLE_YEARS[0]}-{AVAILABLE_YEARS[-1]}."
+            )
+
+        return tuple(sorted(set(int(year) for year in requested)))
+
+    @staticmethod
+    def _validate_bounds(
+        bounds: tuple[float, float, float, float],
+    ) -> tuple[float, float, float, float]:
+        """Validate a WGS84 bounding box."""
+        if len(bounds) != 4:
+            raise ValueError("bounds must be (min_lon, min_lat, max_lon, max_lat).")
+
+        min_lon, min_lat, max_lon, max_lat = map(float, bounds)
+
+        if min_lon >= max_lon or min_lat >= max_lat:
+            raise ValueError("bounds must have increasing longitude and latitude.")
+
+        if not (-180 <= min_lon <= 180 and -180 <= max_lon <= 180):
+            raise ValueError("Longitude bounds must be between -180 and 180.")
+
+        if not (-90 <= min_lat <= 90 and -90 <= max_lat <= 90):
+            raise ValueError("Latitude bounds must be between -90 and 90.")
+
+        return min_lon, min_lat, max_lon, max_lat
+
+    def select_files(
+        self,
+        index: gpd.GeoDataFrame,
+        years: int | Sequence[int],
+        bounds: tuple[float, float, float, float],
+        buffer_degrees: float = 0.0,
+    ) -> gpd.GeoDataFrame:
+        """Select index rows intersecting requested years and WGS84 bounds.
+
+        Args:
+            index: AlphaEarth GeoParquet index.
+            years: One year or a sequence of years.
+            bounds: WGS84 bounds as ``(min_lon, min_lat, max_lon, max_lat)``.
+            buffer_degrees: Optional buffer added around the bounds.
+
+        Returns:
+            Selected index rows with an added ``remote_url`` column.
+        """
+        requested_years = self._normalize_years(years)
+        min_lon, min_lat, max_lon, max_lat = self._validate_bounds(bounds)
+
+        if buffer_degrees < 0:
+            raise ValueError("buffer_degrees cannot be negative.")
+
+        query_geometry = box(
+            min_lon - buffer_degrees,
+            min_lat - buffer_degrees,
+            max_lon + buffer_degrees,
+            max_lat + buffer_degrees,
+        )
+
+        if index.crs is None:
+            index = index.set_crs(4326)
+        elif index.crs.to_epsg() != 4326:
+            index = index.to_crs(4326)
+
+        selected = index.loc[index["year"].isin(requested_years)].copy()
+
+        # Apply inexpensive bounding-box columns before exact geometry tests.
+        bbox_columns = {
+            "wgs84_west",
+            "wgs84_south",
+            "wgs84_east",
+            "wgs84_north",
+        }
+        if bbox_columns.issubset(selected.columns):
+            selected = selected.loc[
+                (selected["wgs84_east"] >= query_geometry.bounds[0])
+                & (selected["wgs84_west"] <= query_geometry.bounds[2])
+                & (selected["wgs84_north"] >= query_geometry.bounds[1])
+                & (selected["wgs84_south"] <= query_geometry.bounds[3])
+            ].copy()
+
+        selected = selected.loc[selected.geometry.intersects(query_geometry)].copy()
+
+        if selected.empty:
+            raise FileNotFoundError(
+                "No AlphaEarth COGs intersect the requested years and bounds."
+            )
+
+        path_column = self._detect_path_column(selected)
+        selected["remote_url"] = selected.apply(
+            lambda row: self._to_https_url(
+                path_value=str(row[path_column]),
+                year=int(row["year"]),
+                utm_zone=str(row["utm_zone"]),
+            ),
+            axis=1,
+        )
+
+        return selected.sort_values(
+            ["year", "utm_zone", "remote_url"],
+            ignore_index=True,
+        )
+
+    async def read_async(
+        self,
+        years: int | Sequence[int],
+        bounds: tuple[float, float, float, float],
+        download_dir: str | Path,
+        *,
+        buffer_degrees: float = 0.0,
+        dry_run: bool = False,
+        overwrite: bool = False,
+        refresh_index: bool = False,
+        max_files: int | None = 50,
+    ) -> gpd.GeoDataFrame:
+        """Select and optionally download AlphaEarth COGs.
+
+        Args:
+            years: One year or multiple years in the 2017-2025 range.
+            bounds: WGS84 bounds as ``(min_lon, min_lat, max_lon, max_lat)``.
+            download_dir: Root directory for downloaded COGs.
+            buffer_degrees: Optional WGS84 buffer around the requested bounds.
+            dry_run: If ``True``, select files and return planned local paths
+                without downloading the COGs.
+            overwrite: Redownload existing files when ``True``.
+            refresh_index: Redownload the spatial index when ``True``.
+            max_files: Safety limit for one call. Set to ``None`` to disable.
+
+        Returns:
+            A GeoDataFrame containing the selected COG metadata, ``remote_url``,
+            and planned or downloaded ``local_path`` values.
+        """
+        index_path = await self._ensure_index(refresh=refresh_index)
+        index = gpd.read_parquet(index_path)
+        selected = self.select_files(
+            index=index,
+            years=years,
+            bounds=bounds,
+            buffer_degrees=buffer_degrees,
+        )
+
+        if not dry_run and max_files is not None and len(selected) > max_files:
+            raise RuntimeError(
+                f"Selection contains {len(selected)} COGs, exceeding max_files={max_files}. "
+                "Run with dry_run=True to inspect the selection, narrow the bounds, "
+                "or explicitly increase max_files."
+            )
+
+        root = Path(download_dir)
+        selected["local_path"] = selected.apply(
+            lambda row: str(
+                root
+                / str(int(row["year"]))
+                / str(row["utm_zone"])
+                / Path(urlparse(str(row["remote_url"])).path).name
+            ),
+            axis=1,
+        )
+
+        print(
+            f"Selected {len(selected)} AlphaEarth COG(s) for "
+            f"year(s) {sorted(selected['year'].unique().tolist())}."
+        )
+
+        if dry_run:
+            return selected
+
+        retry_options = ExponentialRetry(
+            attempts=8,
+            start_timeout=5,
+            max_timeout=120,
+            factor=2,
+            retry_all_server_errors=True,
+        )
+        timeout = aiohttp.ClientTimeout(
+            total=None,
+            sock_connect=60,
+            sock_read=1800,
+        )
+        semaphore = asyncio.Semaphore(self.max_parallel_downloads)
+
+        async with RetryClient(
+            retry_options=retry_options,
+            timeout=timeout,
+        ) as client:
+            tasks = [
+                self._download_file(
+                    client=client,
+                    remote_url=str(row.remote_url),
+                    destination=Path(row.local_path),
+                    overwrite=overwrite,
+                    semaphore=semaphore,
+                )
+                for row in selected.itertuples(index=False)
+            ]
+            await asyncio.gather(*tasks)
+
+        return selected
+
+    def read(
+        self,
+        years: int | Sequence[int],
+        bounds: tuple[float, float, float, float],
+        download_dir: str | Path,
+        *,
+        buffer_degrees: float = 0.0,
+        dry_run: bool = False,
+        overwrite: bool = False,
+        refresh_index: bool = False,
+        max_files: int | None = 50,
+    ) -> gpd.GeoDataFrame:
+        """Synchronously select and optionally download AlphaEarth COGs.
+
+        See :meth:`read_async` for argument documentation.
+
+        Returns:
+            A GeoDataFrame describing selected and downloaded COGs.
+
+        Raises:
+            RuntimeError: If called from an already running asyncio event loop.
+                In that case use ``await adapter.read_async(...)``.
+        """
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(
+                self.read_async(
+                    years=years,
+                    bounds=bounds,
+                    download_dir=download_dir,
+                    buffer_degrees=buffer_degrees,
+                    dry_run=dry_run,
+                    overwrite=overwrite,
+                    refresh_index=refresh_index,
+                    max_files=max_files,
+                )
+            )
+
+        raise RuntimeError(
+            "AlphaEarth.read() cannot run inside an active asyncio event loop. "
+            "Use 'await adapter.read_async(...)' instead."
+        )

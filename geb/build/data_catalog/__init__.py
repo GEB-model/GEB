@@ -3,6 +3,7 @@
 import logging
 from typing import Any
 
+from .alphaearth import AlphaEarth
 from .aquastat import AQUASTAT
 from .base import Adapter
 from .cmip6 import CMIP6
@@ -59,6 +60,22 @@ from .world_bank import WorldBankData
 from .worldfloods import WorldFloodsV2
 
 data_catalog: dict[str, dict[str, Any]] = {
+    "alphaearth": {
+        "adapter": AlphaEarth(
+            cache_dir=("/gpfs/work5/0/prjs2035/GEB/datacatalog/alphaearth/index_cache"),
+            max_parallel_downloads=2,
+        ),
+        "url": None,
+        "source": {
+            "name": "AlphaEarth Foundations Satellite Embedding",
+            "author": "Google and Google DeepMind",
+            "license": "CC BY 4.0",
+            "attribution": (
+                "The AlphaEarth Foundations Satellite Embedding "
+                "dataset is produced by Google and Google DeepMind."
+            ),
+        },
+    },
     "isimip_co2": {
         "adapter": ISIMIPCO2(),
         "url": "https://files.isimip.org",
