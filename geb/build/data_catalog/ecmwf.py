@@ -529,50 +529,252 @@ class ECMWFForecasts(Adapter):
 
         return ds
 
-    def create_rainfall_statistics_table()
-        return_periods = np.array([0.5, 1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000])
-        duration= np.array([1/6, 1/2, 1, 2, 4, 8, 12, 24, 48, 96, 192]) # in hours
-        rainfall_values = np.array([
-            # 10 min, 30 min, 1 h, 2 h, 4 h, 8 h, 12 h, 24 h, 2 d, 4 d, 8 d
-            [8.1, 10.4, 12.6, 15.3, 18.6, 22.2, 24.6, 30.4, 38.6, 50.4, 68.3],       # T = 0.5 years
-            [10.2, 13.5, 16.2, 19.5, 23.4, 27.7, 30.5, 36.8, 46.0, 59.3, 79.4],      # T = 1 year
-            [12.2, 16.6, 20.0, 24.0, 28.4, 33.4, 36.5, 43.8, 54.0, 68.6, 90.5],      # T = 2 years
-            [15.1, 21.2, 25.8, 30.7, 35.9, 41.7, 45.2, 54.2, 65.5, 81.4, 105.1],     # T = 5 years
-            [17.5, 25.3, 31.0, 36.8, 42.8, 49.1, 52.9, 63.0, 74.9, 91.6, 116.1],     # T = 10 years
-            [20.3, 30.2, 37.2, 44.2, 51.1, 58.0, 61.9, 72.6, 85.0, 102.1, 127.0],    # T = 20 years
-            [21.3, 32.0, 39.5, 46.9, 54.1, 61.2, 65.2, 75.9, 88.5, 105.6, 130.5],    # T = 25 years
-            [24.7, 38.2, 47.7, 56.5, 64.8, 72.5, 76.6, 86.9, 99.5, 116.6, 141.5],    # T = 50 years
-            [28.7, 45.8, 57.7, 68.4, 78.0, 86.2, 90.2, 98.9, 111.4, 128.1, 152.3],   # T = 100 years
-            [33.4, 55.0, 70.0, 81.3, 88.7, 95.0, 98.1, 112.1, 124.2, 140.0, 163.2],  # T = 200 years
-            [35.0, 58.4, 74.5, 86.5, 93.9, 100.0, 102.9, 116.7, 128.5, 143.9, 166.7],# T = 250 years
-            [40.8, 70.4, 90.7, 105.0, 112.2, 117.5, 119.6, 131.7, 142.5, 156.4, 177.5], # T = 500 years
-            [47.6, 84.9, 110.6, 127.6, 134.4, 138.3, 139.2, 148.2, 157.5, 169.4, 188.3], # T = 1000 years
-        ])
+    def create_rainfall_statistics_table():
+        return_periods = np.array(
+            [0.5, 1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000]
+        )
+        duration = np.array([1 / 6, 1 / 2, 1, 2, 4, 8, 12, 24, 48, 96, 192])  # in hours
+        rainfall_values = np.array(
+            [
+                # 10 min, 30 min, 1 h, 2 h, 4 h, 8 h, 12 h, 24 h, 2 d, 4 d, 8 d
+                [
+                    8.1,
+                    10.4,
+                    12.6,
+                    15.3,
+                    18.6,
+                    22.2,
+                    24.6,
+                    30.4,
+                    38.6,
+                    50.4,
+                    68.3,
+                ],  # T = 0.5 years
+                [
+                    10.2,
+                    13.5,
+                    16.2,
+                    19.5,
+                    23.4,
+                    27.7,
+                    30.5,
+                    36.8,
+                    46.0,
+                    59.3,
+                    79.4,
+                ],  # T = 1 year
+                [
+                    12.2,
+                    16.6,
+                    20.0,
+                    24.0,
+                    28.4,
+                    33.4,
+                    36.5,
+                    43.8,
+                    54.0,
+                    68.6,
+                    90.5,
+                ],  # T = 2 years
+                [
+                    15.1,
+                    21.2,
+                    25.8,
+                    30.7,
+                    35.9,
+                    41.7,
+                    45.2,
+                    54.2,
+                    65.5,
+                    81.4,
+                    105.1,
+                ],  # T = 5 years
+                [
+                    17.5,
+                    25.3,
+                    31.0,
+                    36.8,
+                    42.8,
+                    49.1,
+                    52.9,
+                    63.0,
+                    74.9,
+                    91.6,
+                    116.1,
+                ],  # T = 10 years
+                [
+                    20.3,
+                    30.2,
+                    37.2,
+                    44.2,
+                    51.1,
+                    58.0,
+                    61.9,
+                    72.6,
+                    85.0,
+                    102.1,
+                    127.0,
+                ],  # T = 20 years
+                [
+                    21.3,
+                    32.0,
+                    39.5,
+                    46.9,
+                    54.1,
+                    61.2,
+                    65.2,
+                    75.9,
+                    88.5,
+                    105.6,
+                    130.5,
+                ],  # T = 25 years
+                [
+                    24.7,
+                    38.2,
+                    47.7,
+                    56.5,
+                    64.8,
+                    72.5,
+                    76.6,
+                    86.9,
+                    99.5,
+                    116.6,
+                    141.5,
+                ],  # T = 50 years
+                [
+                    28.7,
+                    45.8,
+                    57.7,
+                    68.4,
+                    78.0,
+                    86.2,
+                    90.2,
+                    98.9,
+                    111.4,
+                    128.1,
+                    152.3,
+                ],  # T = 100 years
+                [
+                    33.4,
+                    55.0,
+                    70.0,
+                    81.3,
+                    88.7,
+                    95.0,
+                    98.1,
+                    112.1,
+                    124.2,
+                    140.0,
+                    163.2,
+                ],  # T = 200 years
+                [
+                    35.0,
+                    58.4,
+                    74.5,
+                    86.5,
+                    93.9,
+                    100.0,
+                    102.9,
+                    116.7,
+                    128.5,
+                    143.9,
+                    166.7,
+                ],  # T = 250 years
+                [
+                    40.8,
+                    70.4,
+                    90.7,
+                    105.0,
+                    112.2,
+                    117.5,
+                    119.6,
+                    131.7,
+                    142.5,
+                    156.4,
+                    177.5,
+                ],  # T = 500 years
+                [
+                    47.6,
+                    84.9,
+                    110.6,
+                    127.6,
+                    134.4,
+                    138.3,
+                    139.2,
+                    148.2,
+                    157.5,
+                    169.4,
+                    188.3,
+                ],  # T = 1000 years
+            ]
+        )
 
-        rainfall_statistics = xr.DataArray(data=rainfall_values, dims=["return_period", "duration"], coords={"return_period": return_periods, "duration": duration}, name="rainfall_statistics")
+        rainfall_statistics = xr.DataArray(
+            data=rainfall_values,
+            dims=["return_period", "duration"],
+            coords={"return_period": return_periods, "duration": duration},
+            name="rainfall_statistics",
+        )
 
-        rainfall_statistics.attrs["description"] = "Rainfall statistics for different return periods and durations based on STOWA depth-duration curves"
+        rainfall_statistics.attrs["description"] = (
+            "Rainfall statistics for different return periods and durations based on STOWA depth-duration curves"
+        )
         rainfall_statistics.attrs["units"] = "mm"
 
-        statistical_rainfall_6h= rainfall_statistics.interp(duration=6)  # Interpolate to get rainfall values for 6-hour duration across all return periods
-        rainfall_statistics = xr.concat([rainfall_statistics, statistical_rainfall_6h], dim="duration")
+        statistical_rainfall_6h = rainfall_statistics.interp(
+            duration=6
+        )  # Interpolate to get rainfall values for 6-hour duration across all return periods
+        rainfall_statistics = xr.concat(
+            [rainfall_statistics, statistical_rainfall_6h], dim="duration"
+        )
         rainfall_statistics = rainfall_statistics.sortby("duration")
 
-        rainfall_distribution_abs = np.zeros((len(return_periods), 6), dtype=float)  # Initialize an array to hold rainfall distribution values
+        rainfall_distribution_abs = np.zeros(
+            (len(return_periods), 6), dtype=float
+        )  # Initialize an array to hold rainfall distribution values
 
-        rainfall_distribution_abs[:, 3] = rainfall_statistics.sel(duration=1).values  # 1-hour rainfall
-        rainfall_distribution_abs[:, 2] = rainfall_statistics.sel(duration=2).values - rainfall_statistics.sel(duration=1).values  # 2-hour rainfall minus 1-hour rainfall
-        rainfall_distribution_abs[:, 1] = (rainfall_statistics.sel(duration=4).values - (rainfall_distribution_abs[:, 3] + rainfall_distribution_abs[:, 2]))/2  # 4-hour rainfall minus 2-hour rainfall
+        rainfall_distribution_abs[:, 3] = rainfall_statistics.sel(
+            duration=1
+        ).values  # 1-hour rainfall
+        rainfall_distribution_abs[:, 2] = (
+            rainfall_statistics.sel(duration=2).values
+            - rainfall_statistics.sel(duration=1).values
+        )  # 2-hour rainfall minus 1-hour rainfall
+        rainfall_distribution_abs[:, 1] = (
+            rainfall_statistics.sel(duration=4).values
+            - (rainfall_distribution_abs[:, 3] + rainfall_distribution_abs[:, 2])
+        ) / 2  # 4-hour rainfall minus 2-hour rainfall
         rainfall_distribution_abs[:, 4] = rainfall_distribution_abs[:, 1]
-        rainfall_distribution_abs[:, 0] = (rainfall_statistics.sel(duration=6).values - (rainfall_distribution_abs[:, 3] + rainfall_distribution_abs[:, 2] + rainfall_distribution_abs[:, 1] + rainfall_distribution_abs[:, 4]))/2  # 6-hour rainfall minus sum of previous
+        rainfall_distribution_abs[:, 0] = (
+            rainfall_statistics.sel(duration=6).values
+            - (
+                rainfall_distribution_abs[:, 3]
+                + rainfall_distribution_abs[:, 2]
+                + rainfall_distribution_abs[:, 1]
+                + rainfall_distribution_abs[:, 4]
+            )
+        ) / 2  # 6-hour rainfall minus sum of previous
         rainfall_distribution_abs[:, 5] = rainfall_distribution_abs[:, 0]
 
-        rainfall_distribution_percentage = (rainfall_distribution_abs / rainfall_statistics.sel(duration=6).values[:, np.newaxis])  # Convert absolute values to percentages based on 6-hour rainfall
-        rainfall_distribution_percentage[0, :] = 1/6  # For the 0.5-year return period, distribute the rainfall evenly across all timesteps
+        rainfall_distribution_percentage = (
+            rainfall_distribution_abs
+            / rainfall_statistics.sel(duration=6).values[:, np.newaxis]
+        )  # Convert absolute values to percentages based on 6-hour rainfall
+        rainfall_distribution_percentage[0, :] = (
+            1 / 6
+        )  # For the 0.5-year return period, distribute the rainfall evenly across all timesteps
         rainfall_distribution_percentage = rainfall_distribution_percentage.round(3)
 
-        rainfall_distribution_timestep= np.array([1, 2, 3, 4, 5, 6]) # in hours
-        rainfall_distribution_percentage = xr.DataArray(data=rainfall_distribution_percentage, dims=["return_period", "distribution_timestep"], coords={"return_period": return_periods, "distribution_timestep": rainfall_distribution_timestep}, name="rainfall_distribution_percentage")
+        rainfall_distribution_timestep = np.array([1, 2, 3, 4, 5, 6])  # in hours
+        rainfall_distribution_percentage = xr.DataArray(
+            data=rainfall_distribution_percentage,
+            dims=["return_period", "distribution_timestep"],
+            coords={
+                "return_period": return_periods,
+                "distribution_timestep": rainfall_distribution_timestep,
+            },
+            name="rainfall_distribution_percentage",
+        )
 
         return rainfall_statistics, rainfall_distribution_percentage
 
@@ -592,13 +794,14 @@ class ECMWFForecasts(Adapter):
         Returns:
             Processed forecast dataset.
         """
-
         ds["tp"] = ds["tp"] * 1000  # Convert precipitation from meters to millimeters
         ds["tp"] = ds["tp"].diff(
             dim="step", n=1, label="upper"
         )  # De-accumulate precipitation by taking differences between consecutive time steps
 
-        rainfall_statistics, rainfall_distribution_percentage = self.create_rainfall_statistics_table()  # Create rainfall statistics and distribution tables
+        rainfall_statistics, rainfall_distribution_percentage = (
+            self.create_rainfall_statistics_table()
+        )  # Create rainfall statistics and distribution tables
 
         rainfall_6h_statistics = rainfall_statistics.sel(duration=6)
 
@@ -614,26 +817,25 @@ class ECMWFForecasts(Adapter):
 
             # Pick the rainfall distribution (%) corresponding to the closest return period
             selected_distribution = rainfall_distribution_percentage.sel(
-            return_period=closest_return_period
+                return_period=closest_return_period
             )
 
             # Distribuir o total de chuva de 6 h entre as seis horas
-            hourly_rainfall_forecast = (
-                rainfall_6h_forecast
-                * selected_distribution
-            )
-            
+            hourly_rainfall_forecast = rainfall_6h_forecast * selected_distribution
+
             # Create the new hourly step values by subtracting 6 hours from the original step and adding the hour offset
             new_steps = (
                 step
                 - np.timedelta64(6, "h")
-                + hourly_rainfall_forecast["distribution_timestep"].values * np.timedelta64(1, "h")
+                + hourly_rainfall_forecast["distribution_timestep"].values
+                * np.timedelta64(1, "h")
             )
 
             # Change the "hour" dimension to a hourly step dimension called "step"
             hourly_rainfall_forecast = (
-                hourly_rainfall_forecast
-                .assign_coords(step=("distribution_timestep", new_steps))
+                hourly_rainfall_forecast.assign_coords(
+                    step=("distribution_timestep", new_steps)
+                )
                 .swap_dims({"distribution_timestep": "step"})
                 .drop_vars("distribution_timestep")
             )
@@ -645,21 +847,18 @@ class ECMWFForecasts(Adapter):
             dim="step",
         ).sortby("step")
 
-        ds = ds.resample(step="1h").interpolate(
-                "linear"
-            )  # Resample to hourly timesteps using linear interpolation (will replace interpolated rainfall later with the hourly rainfall distribution calculated above)
+        ds = ds.resample(
+            step="1h"
+        ).interpolate(
+            "linear"
+        )  # Resample to hourly timesteps using linear interpolation (will replace interpolated rainfall later with the hourly rainfall distribution calculated above)
 
-        ds = ds.assign_coords(
-            valid_time=(
-                ds["time"]
-                + ds["step"]
-            )
-        )
+        ds = ds.assign_coords(valid_time=(ds["time"] + ds["step"]))
 
         # forecast_dataset["tp"] = hourly_rainfall_forecasts  # Replace the interpolated rainfall with the hourly rainfall distribution calculated above
-        ds["tp"].loc[
-            {"step": hourly_rainfall_forecasts.step}
-        ] = hourly_rainfall_forecasts
+        ds["tp"].loc[{"step": hourly_rainfall_forecasts.step}] = (
+            hourly_rainfall_forecasts
+        )
         ds["tp"] = ds["tp"] / 3600  # Convert precipitation from mm/hr to mm/s
 
         if (
