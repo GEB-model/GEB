@@ -85,9 +85,9 @@ class ShapeConfig(BaseModel):
 class FloodProtectionStandardConfig(BaseModel):
     """Configuration for flood protection standard settings."""
 
-    mode: Literal["auto", "manual", "none"] = Field(
+    mode: Literal["auto", "manual"] = Field(
         "manual",
-        description="Flood protection standard mode: 'auto' (derive from data), 'manual' (use configured value), or 'none' (disable flood protection standard).",
+        description="Flood protection standard mode: 'auto' (derive from data) or 'manual' (use configured value)",
     )
     manual_value: int | None = Field(
         10,
