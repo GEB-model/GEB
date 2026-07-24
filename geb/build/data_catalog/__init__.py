@@ -365,7 +365,7 @@ data_catalog: dict[str, dict[str, Any]] = {
         "source": {
             "name": "FLOPROS",
             "author": "Scussolini et al. (2016)",
-            "license": "Example License",
+            "license": "CC Attribution 3.0 License",
             "paper_doi": "doi:10.5194/nhess-16-1049-2016",
         },
     },
