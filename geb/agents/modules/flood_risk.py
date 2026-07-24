@@ -44,24 +44,36 @@ class FloodRiskModule:
         self.load_flood_protection_standard()
         self.flood_in_last_year = False
 
-    def load_flood_protection_standard(
-        self, default_flood_protection_standard: int = 10
-    ) -> None:
-        """Placeholder for loading flood protection standard. Currently dummy version implemented.
-
-        Raises:
-            ValueError: If the default flood protection standard is not in the list of return periods.
-        """
+    def load_flood_protection_standard(self) -> None:
+        """Placeholder for loading flood protection standard. Currently dummy version implemented."""
         self.flood_protection_standard_subbasins = {}
-        self.default_flood_protection_standard = default_flood_protection_standard
-        if default_flood_protection_standard not in self.households.return_periods:
-            raise ValueError(
-                f"Default flood protection standard {default_flood_protection_standard} is not in the list of return periods {self.households.return_periods}."
-            )
-        for comid in self.households.buildings["COMID"]:
-            self.flood_protection_standard_subbasins[comid] = (
-                default_flood_protection_standard  # Initial value; replace with actual loading logic as needed.
-            )
+        flood_protection_standards = pd.read_parquet(
+            self.model.files["table"][
+                "flood_protection_standards/flood_protection_standards"
+            ]
+        )
+
+        for comid in np.unique(self.households.buildings["COMID"]):
+            if comid not in flood_protection_standards.index:
+                flood_protection_standard = flood_protection_standards[
+                    "MerL_Riv"
+                ].mode()[0]
+                self.model.logger.warning(
+                    f"COMID {comid} not found in flood protection standards table. Using mode flood protection standard {flood_protection_standard}."
+                )
+
+            else:
+                flood_protection_standard = flood_protection_standards.loc[
+                    comid, "MerL_Riv"
+                ]
+            # truncate to closest return period if not in return periods
+            if flood_protection_standard not in self.households.return_periods:
+                closest_return_period = min(
+                    self.households.return_periods,
+                    key=lambda x: abs(x - flood_protection_standard),
+                )
+                flood_protection_standard = closest_return_period
+            self.flood_protection_standard_subbasins[comid] = flood_protection_standard
 
     def load_return_period_flood_maps(self) -> None:
         """Load flood maps for different return periods. This might be quite ineffecient for RAM, but faster then loading them each timestep for now."""
@@ -1066,12 +1078,7 @@ class FloodRiskModule:
         comids = self.households.comid_of_household
 
         household_thresholds = np.fromiter(
-            (
-                self.flood_protection_standard_subbasins.get(
-                    int(c), self.default_flood_protection_standard
-                )
-                for c in comids
-            ),
+            (self.flood_protection_standard_subbasins.get(int(c), -1) for c in comids),
             dtype=float,
             count=comids.size,
         )

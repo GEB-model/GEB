@@ -505,7 +505,7 @@ class Government(AgentBaseClass):
         # iterate over each subbasin in the model and calculate the EAD for the current and next flood protection standard
         dike_heights = self.flood_risk_module.dike_heights()
         for subbasin in dike_heights[
-            self.flood_risk_module.default_flood_protection_standard
+            next(iter(dike_heights))
         ]:  # get return period of 10 years
             if (
                 subbasin
@@ -549,14 +549,19 @@ class Government(AgentBaseClass):
             height_difference = dike_heights_altered_fps - dike_heights_current_fps
             if height_difference.sum() == 0:
                 continue
-            cost_per_meter = self.config["adaptation"]["dike_cost_per_meter_usd"]
+            cost_per_meter = self.config["adaptation"][
+                "dike_elevation_cost_per_meter_usd"
+            ]
+            maintenance_cost_per_km_dike = self.config["adaptation"][
+                "dike_maintenance_cost_per_year_usd"
+            ]
             total_cost = (
                 np.sum(height_difference * 100 * cost_per_meter) * 2
             )  # segments are roughly 100 meters long, double the cost to account for both sides of the dike
 
             # assume maintenance cost of €0.08 million per km of dike length
             maintenance_cost_per_year = (
-                0.08e6 * height_difference.size * 0.1
+                maintenance_cost_per_km_dike * height_difference.size * 0.1
             )  # maintenance cost per year in euros
 
             if self._apply_cumulative_time_discounting(
@@ -566,6 +571,12 @@ class Government(AgentBaseClass):
             ):
                 self.flood_risk_module.flood_protection_standard_subbasins[subbasin] = (
                     altered_fps
+                )
+                self.model.logger.info(
+                    "Upgraded flood protection standard for subbasin %s from %d to %d",
+                    subbasin,
+                    current_fps,
+                    altered_fps,
                 )
 
     def calculate_EAD(self) -> None | float:
