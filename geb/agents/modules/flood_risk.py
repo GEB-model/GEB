@@ -44,24 +44,79 @@ class FloodRiskModule:
         self.load_flood_protection_standard()
         self.flood_in_last_year = False
 
-    def load_flood_protection_standard(
-        self, default_flood_protection_standard: int = 10
-    ) -> None:
-        """Placeholder for loading flood protection standard. Currently dummy version implemented.
+    def load_flood_protection_standard(self) -> None:
+        """Load flood protection standards for each subbasin.
 
         Raises:
-            ValueError: If the default flood protection standard is not in the list of return periods.
+            ValueError: If the flood protection standard mode is not 'manual' or 'auto'.
         """
+        mode = self.model.config["hazards"]["floods"]["flood_protection_standard"][
+            "mode"
+        ]
         self.flood_protection_standard_subbasins = {}
-        self.default_flood_protection_standard = default_flood_protection_standard
-        if default_flood_protection_standard not in self.households.return_periods:
-            raise ValueError(
-                f"Default flood protection standard {default_flood_protection_standard} is not in the list of return periods {self.households.return_periods}."
+        if mode == "manual":
+            manual_value = self.model.config["hazards"]["floods"][
+                "flood_protection_standard"
+            ]["manual_value"]
+            if manual_value is None:
+                raise ValueError(
+                    "Flood protection standard mode is 'manual' but 'manual_value' is null."
+                )
+
+            supported_return_periods = self.model.config["hazards"]["floods"][
+                "return_periods"
+            ]
+            if manual_value not in supported_return_periods:
+                raise ValueError(
+                    f"Manual flood protection standard {manual_value} is not in hazards.floods.return_periods {supported_return_periods}."
+                )
+            self.model.logger.info(
+                f"Flood protection standard set to {manual_value} years for all subbasins."
             )
-        for comid in self.households.buildings["COMID"]:
-            self.flood_protection_standard_subbasins[comid] = (
-                default_flood_protection_standard  # Initial value; replace with actual loading logic as needed.
+
+            for comid in np.unique(self.households.buildings["COMID"]):
+                self.flood_protection_standard_subbasins[comid] = manual_value
+            return
+        elif mode == "auto":
+            self.model.logger.info(
+                "Flood protection standard set to 'auto'. Flood protection standards will be automatically determined."
             )
+            flood_protection_standards = pd.read_parquet(
+                self.model.files["table"][
+                    "flood_protection_standards/flood_protection_standards"
+                ]
+            )
+
+            for comid in np.unique(self.households.buildings["COMID"]):
+                if comid not in flood_protection_standards.index:
+                    flood_protection_standard = flood_protection_standards[
+                        "flood_protection_standard"
+                    ].mode()[0]
+                    self.model.logger.warning(
+                        f"COMID {comid} not found in flood protection standards table. Using mode flood protection standard {flood_protection_standard}."
+                    )
+
+                else:
+                    flood_protection_standard = flood_protection_standards.loc[
+                        comid, "flood_protection_standard"
+                    ]
+                if flood_protection_standard == 0:
+                    self.model.logger.warning(
+                        f"COMID {comid} has a flood protection standard of 0. Value might be missing from flood protection standards table."
+                    )
+                    flood_protection_standard = 2
+                # truncate to closest return period if not in return periods
+                if flood_protection_standard not in self.households.return_periods:
+                    closest_return_period = min(
+                        self.households.return_periods,
+                        key=lambda x: abs(x - flood_protection_standard),
+                    )
+                    flood_protection_standard = closest_return_period
+                self.flood_protection_standard_subbasins[comid] = (
+                    flood_protection_standard
+                )
+        else:
+            raise ValueError(f"Invalid flood protection standard mode: {mode}")
 
     def load_return_period_flood_maps(self) -> None:
         """Load flood maps for different return periods. This might be quite ineffecient for RAM, but faster then loading them each timestep for now."""
@@ -1066,12 +1121,7 @@ class FloodRiskModule:
         comids = self.households.comid_of_household
 
         household_thresholds = np.fromiter(
-            (
-                self.flood_protection_standard_subbasins.get(
-                    int(c), self.default_flood_protection_standard
-                )
-                for c in comids
-            ),
+            (self.flood_protection_standard_subbasins.get(int(c), -1) for c in comids),
             dtype=float,
             count=comids.size,
         )

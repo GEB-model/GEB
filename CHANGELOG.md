@@ -13,6 +13,7 @@
 - Added `geb evaluate hydrodynamics.animate_flood` to render 2D flood-depth animations from SFINCS outputs. To enable per-timestep maps, set `hazards.floods.flood_map_output_interval_seconds` (e.g., `3600` for hourly) and rerun the model; then run `geb evaluate hydrodynamics.animate_flood --run-name default` (see `--help` for options).
 - Added a cost-benefit analysis for governments to raise flood protection standards based on household damage reductions. Enable this by setting `agent_settings.government.adaptation.mode: cba` in the model config.
 - Added `geb evaluate hydrodynamics.animate_flood` to render 2D flood-depth animations from SFINCS outputs. To enable per-timestep maps, set `hazards.floods.flood_map_output_interval_seconds` (e.g., `3600` for hourly) and rerun the model; then run `geb evaluate hydrodynamics.animate_flood --run-name default` (see `--help` for options).
+- Added `setup_flood_protection_standards` build method to process FLOPROS flood protection standards. Subsequently these flood protection standards are used to initialize the flood protection standards for each subbasin in the model domain.
 
 # v1.0.0b30
 - Implement evaporation for retention basins using a constant area based on maximum storage and a depth of 3 meters.
