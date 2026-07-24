@@ -1021,6 +1021,78 @@ class Households(AgentBaseClass):
 
         return damages_do_not_adapt, damages_adapt
 
+    def update_households_geodataframe_w_warning_variables(
+        self, date_time: datetime
+    ) -> None:
+        """This function merges the global variables related to warnings to the households geodataframe for visualization purposes.
+
+        Args:
+            date_time: The forecast date time for which to update the households geodataframe.
+        """
+        household_points: gpd.GeoDataFrame = (
+            self.var.households_with_postal_codes.copy()
+        )
+
+        action_maps_folder: Path = self.model.output_folder / "action_maps"
+        action_maps_folder.mkdir(parents=True, exist_ok=True)
+
+        global_vars = [
+            "warning_reached",
+            "warning_level",
+            "response_probability",
+            "evacuated",
+            "recommended_measures",
+            "warning_trigger",
+            "actions_taken",
+        ]
+
+        # make sure household points and global variables have the same length
+        for global_var in global_vars:
+            global_array = getattr(self.var, global_var)
+            assert len(household_points) == global_array.shape[0], (
+                f"The size of household points and {global_var} do not match"
+            )
+
+        # add columns in the household points geodataframe
+        for name in [
+            "warning_reached",
+            "warning_level",
+            "response_probability",
+            "evacuated",
+        ]:
+            household_points[name] = getattr(self.var, name)
+
+        warning_triggers = self.var.possible_warning_triggers
+        for i, _ in enumerate(warning_triggers):
+            if warning_triggers[i] == "water_levels":
+                household_points["trig_w_levels"] = self.var.warning_trigger[:, i]
+            if warning_triggers[i] == "critical_infrastructure":
+                household_points["trig_crit_infra"] = self.var.warning_trigger[:, i]
+
+        possible_measures_to_recommend = self.var.possible_measures
+        for i, measure in enumerate(possible_measures_to_recommend):
+            if measure == "sandbags":
+                household_points["recom_sandbags"] = self.var.recommended_measures[:, i]
+            if measure == "elevate possessions":
+                household_points["recom_elev_possessions"] = (
+                    self.var.recommended_measures[:, i]
+                )
+            if measure == "evacuate":
+                household_points["recom_evacuate"] = self.var.recommended_measures[:, i]
+
+        possible_actions = self.var.possible_measures
+        for i, action in enumerate(possible_actions):
+            if action == "sandbags":
+                household_points["sandbags"] = self.var.actions_taken[:, i]
+            if action == "elevate possessions":
+                household_points["elevated_possessions"] = self.var.actions_taken[:, i]
+
+        household_points.to_parquet(
+            self.model.output_folder
+            / "action_maps"
+            / f"households_with_warning_parameters_{date_time.isoformat().replace(':', '').replace('-', '')}.geoparquet"
+        )
+
     def water_demand(
         self,
         household_demand_to_grid_fn: Callable[

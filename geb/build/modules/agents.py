@@ -1606,6 +1606,29 @@ class Agents(BuildModelBase):
         buildings = buildings.to_crs(buildings_crs)
 
         return buildings
+=======
+    def assign_subbasins_to_buildings(
+        self, buildings: gpd.GeoDataFrame
+    ) -> gpd.GeoDataFrame:
+        """Assigns sub-basin IDs to buildings based on their spatial location.
+
+        Args:
+            buildings: A GeoDataFrame containing building data within the model domain.
+        Returns:
+            A GeoDataFrame with sub-basin IDs assigned to each building.
+        """
+        subbasins = self.geom["routing/subbasins"].reset_index()
+        buildings_with_subbasin = gpd.sjoin(
+            buildings,
+            subbasins[["COMID", "geometry"]],
+            how="left",
+            predicate="within",
+        ).drop(columns="index_right")
+        buildings_with_subbasin["COMID"] = (
+            buildings_with_subbasin["COMID"].fillna(-1).astype(int)
+        )
+        return buildings_with_subbasin
+>>>>>>> 41c77efa (Lars dynamic fps (#905))
 
     @build_method(required=True)
     def setup_buildings(self) -> None:
@@ -1618,6 +1641,9 @@ class Agents(BuildModelBase):
         buildings = self.setup_building_reconstruction_costs(buildings)
         buildings = self.assign_subbasins_to_buildings(buildings)
         buildings = self.calculate_distance_parameters(buildings)
+=======
+        buildings = self.assign_subbasins_to_buildings(buildings)
+>>>>>>> 41c77efa (Lars dynamic fps (#905))
 
         # reset id column to avoid issues with duplicate ids
         buildings["id"] = np.arange(len(buildings))
