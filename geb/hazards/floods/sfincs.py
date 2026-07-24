@@ -1661,6 +1661,7 @@ class SFINCSRootModel:
         It reads the coastal hydrograph timeseries and locations from pre-defined files, and sets the coastal water level forcing for the simulation.
 
         Args:
+            output_folder: The folder containing the coastal hydrograph timeseries and locations.
             return_period: The return period for which to create the coastal simulation.
             locations: A GeoDataFrame containing the locations of GTSM forcing stations.
             offset: The offset to apply to the coastal water level forcing based on mean sea level topography.
