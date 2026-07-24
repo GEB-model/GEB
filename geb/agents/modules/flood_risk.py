@@ -100,6 +100,11 @@ class FloodRiskModule:
                     flood_protection_standard = flood_protection_standards.loc[
                         comid, "flood_protection_standard"
                     ]
+                if flood_protection_standard == 0:
+                    self.model.logger.warning(
+                        f"COMID {comid} has a flood protection standard of 0. Value might be missing from flood protection standards table."
+                    )
+                    flood_protection_standard = 2
                 # truncate to closest return period if not in return periods
                 if flood_protection_standard not in self.households.return_periods:
                     closest_return_period = min(
