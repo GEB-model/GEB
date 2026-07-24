@@ -2456,20 +2456,25 @@ class Agents(BuildModelBase):
 
         Writes a parquet table mapping COMID -> flood protection standard (years).
         """
-        FLOPROS = self.data_catalog.fetch("flopros").read()
+        flopros_gdf = self.data_catalog.fetch("flopros").read()
+
         # do a spatial join to get the FPS for each river subbasin
         river_subbasins = self.geom["routing/subbasins"]
-        river_subbasins_with_FPS = gpd.sjoin(
-            river_subbasins, FLOPROS, how="left", predicate="intersects"
+
+        river_subbasins_with_fps = gpd.sjoin(
+            river_subbasins, flopros_gdf, how="left", predicate="intersects"
+        ).reset_index()
+        # Create a table of COMID -> FPS (aggregate if a subbasin intersects multiple FLOPROS features)
+        comid_to_fps = (
+            river_subbasins_with_fps[["COMID", "flood_protection_standard"]]
+            .groupby("COMID", as_index=True)["flood_protection_standard"]
+            .max()
+            .to_frame()
         )
-        # now create a tabel of COMID to FPS
-        COMID_to_FPS = river_subbasins_with_FPS.reset_index()[
-            ["COMID", "flood_protection_standard"]
-        ].set_index("COMID")
 
         # write to table
         self.set_table(
-            COMID_to_FPS, name="flood_protection_standards/flood_protection_standards"
+            comid_to_fps, name="flood_protection_standards/flood_protection_standards"
         )
 
     @build_method(depends_on=[], required=True)
