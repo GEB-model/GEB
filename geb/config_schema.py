@@ -82,6 +82,19 @@ class ShapeConfig(BaseModel):
     )
 
 
+class FloodProtectionStandardConfig(BaseModel):
+    """Configuration for flood protection standard settings."""
+
+    mode: Literal["auto", "manual", "none"] = Field(
+        "manual",
+        description="Flood protection standard mode: 'auto' (derive from data), 'manual' (use configured value), or 'none' (disable flood protection standard).",
+    )
+    manual_value: int | None = Field(
+        10,
+        description="Flood protection standard return period used when mode is 'manual' (years).",
+    )
+
+
 class FloodsConfig(BaseModel):
     """Configuration for flood simulation."""
 
@@ -117,6 +130,10 @@ class FloodsConfig(BaseModel):
     return_periods: list[int] = Field(
         [2, 5, 10, 25, 50, 100, 250, 500, 1000],
         description="Return periods for flood maps.",
+    )
+    flood_protection_standard: FloodProtectionStandardConfig = Field(
+        default_factory=FloodProtectionStandardConfig,
+        description="Flood protection standard settings.",
     )
     p_value_threshold: float = Field(
         0.05,
@@ -290,9 +307,13 @@ class GovernmentAdaptationConfig(BaseModel):
         0.1,
         description="Fraction of households selected for adaptation action.",
     )
-    dike_cost_per_meter_usd: float = Field(
+    dike_elevation_cost_per_meter_usd: float = Field(
         6800.0,
         description="Unit cost for raising a dike by 1 meter over 1 meter length (USD/m).",
+    )
+    dike_maintenance_cost_per_year_usd: float = Field(
+        80.0,
+        description="Annual maintenance cost for a dike segment of 1 meter length (USD/year).",
     )
 
 
