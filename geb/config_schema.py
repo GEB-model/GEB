@@ -89,7 +89,7 @@ class FloodProtectionStandardConfig(BaseModel):
         "manual",
         description="Flood protection standard mode: 'auto' (derive from data) or 'manual' (use configured value)",
     )
-    manual_value: int | None = Field(
+    manual_value: int = Field(
         10,
         description="Flood protection standard return period used when mode is 'manual' (years).",
     )
