@@ -2461,6 +2461,10 @@ class Agents(BuildModelBase):
         # do a spatial join to get the FPS for each river subbasin
         river_subbasins = self.geom["routing/subbasins"]
 
+        # check if the CRS of the FLOPROS data matches the CRS of the river subbasins, and reproject if necessary
+        if flopros_gdf.crs != river_subbasins.crs:
+            flopros_gdf = flopros_gdf.to_crs(river_subbasins.crs)
+
         river_subbasins_with_fps = gpd.sjoin(
             river_subbasins, flopros_gdf, how="left", predicate="intersects"
         ).reset_index()
