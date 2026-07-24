@@ -16,6 +16,7 @@ general:
   simulate_forest: false
   forecasts:
     use: false
+    long_term_analysis: false
     provider: ECMWF
     processing: merged_control_ensemble  # options: merged_control_ensemble, control_forecast, probabilistic_forecast
 
@@ -52,6 +53,7 @@ hazards:
       gpu: auto  # True, False, "auto". If "auto", it will check if a GPU is available using nvidia-smi.
     detect_floods_from_discharge: false # If True, floods are detected based on discharge thresholds at a specific location.
     discharge_threshold: 30  # discharge threshold in m3/s for flood detection
+    probability_threshold_discharge: 0.5  # probability threshold for flood detection based on discharge
     threshold_location: 
     - lon
     - lat  # [lon, lat] of the location where the discharge threshold is applied.

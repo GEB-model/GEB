@@ -89,7 +89,6 @@ class HazardDriver(Module):
         self.next_detection_time: datetime | None = (
             None  # Variable to keep track of when a flood has happened
         )
-        self.discharge_log: list = []
 
     def spinup(self) -> None:
         """Spinup method for the hazard driver.
@@ -145,64 +144,92 @@ class HazardDriver(Module):
                             "Flood has recently happened, no detection"
                         )  # Within 10 days of the first flood, no second flood can happen
                     else:
-                        discharge_grid: ThreeDArrayFloat32 = (
-                            self.model.hydrology.grid.decompress(
-                                np.vstack(list(self.floods.var.discharge_per_timestep))
+                        if (
+                            self.model.multiverse_name is None
+                            or self.model.multiverse_mode == "discharge_detection"
+                        ):
+                            discharge_grid: ThreeDArrayFloat32 = (
+                                self.model.hydrology.grid.decompress(
+                                    np.vstack(
+                                        list(self.floods.var.discharge_per_timestep)
+                                    )
+                                )
                             )
-                        )
 
-                        discharge_grid_current_timestep: TwoDArrayFloat32 = (
-                            discharge_grid[-1]
-                        )  # Extract discharge from last timestep
+                            discharge_grid_current_timestep: TwoDArrayFloat32 = (
+                                discharge_grid[-1]
+                            )  # Extract discharge from last timestep
 
-                        # Convert discharge grid to an xarray DataArray
-                        discharge_grid: xr.DataArray = xr.DataArray(
-                            data=discharge_grid_current_timestep,
-                            coords={
-                                "y": self.model.hydrology.grid.lat,
-                                "x": self.model.hydrology.grid.lon,
-                            },
-                            dims=["y", "x"],
-                            name="forcing",
-                        )
+                            # Convert discharge grid to an xarray DataArray
+                            discharge_grid: xr.DataArray = xr.DataArray(
+                                data=discharge_grid_current_timestep,
+                                coords={
+                                    "y": self.model.hydrology.grid.lat,
+                                    "x": self.model.hydrology.grid.lon,
+                                },
+                                dims=["y", "x"],
+                                name="forcing",
+                            )
 
-                        discharge_grid: xr.DataArray = discharge_grid.rio.write_crs(
-                            self.model.crs
-                        )
+                            discharge_grid: xr.DataArray = discharge_grid.rio.write_crs(
+                                self.model.crs
+                            )
 
-                        # Get location of the threshold from config file
-                        threshold_location: tuple[float, float] = self.model.config[
-                            "hazards"
-                        ]["floods"]["threshold_location"]
-                        x, y = threshold_location
+                            # Get location of the threshold from config file
+                            threshold_location: tuple[float, float] = self.model.config[
+                                "hazards"
+                            ]["floods"]["threshold_location"]
+                            x, y = threshold_location
 
-                        # Extract discharge from the previously extracted location
-                        discharge_location: xr.DataArray = discharge_grid.sel(
-                            x=x, y=y, method="nearest"
-                        ).compute()
+                            # Extract discharge from the previously extracted location
+                            discharge_location: xr.DataArray = discharge_grid.sel(
+                                x=x, y=y, method="nearest"
+                            ).compute()
 
-                        self.discharge_log.append(
-                            {
-                                "time": self.model.current_time,
-                                "discharge": float(discharge_location.values),
-                            }
-                        )
+                            if self.model.multiverse_name is None:
+                                self.model.discharge_log.append(
+                                    {
+                                        "time": self.model.current_time,
+                                        "discharge": float(discharge_location.values),
+                                    }
+                                )
+                            else:
+                                if self.model.multiverse_mode == "discharge_detection":
+                                    self.model.discharge_log.append(
+                                        {
+                                            "forecast_issue_date": self.model.forecast_issue_datetime,
+                                            "time": self.model.current_time,
+                                            "discharge": float(
+                                                discharge_location.values
+                                            ),
+                                            "member": self.model.forecast_member,
+                                        }
+                                    )
+                                    return
+                                    # do not run SFINCS if we are in a multiverse, as we first need to check the probability of discharge being above the threshold
 
                         # Load in discharge_threshold after which there is a flood from the config file
                         threshold: int = self.model.config["hazards"]["floods"][
                             "discharge_threshold"
                         ]
 
-                        # Check if discharge > threshold
-                        if discharge_location > threshold:
-                            print(
-                                f"Flood detected at {self.model.current_time}, discharge = {discharge_location:.2f} m3/s"
-                            )
+                        if self.model.multiverse_mode == "flood_simulation":
+                            time_of_flood_detected = self.model.forecast_issue_datetime
 
-                            start_time = self.model.current_time - timedelta(
+                        elif (
+                            self.model.multiverse_name is None
+                            and discharge_location > threshold
+                        ):
+                            time_of_flood_detected = self.model.current_time
+
+                        else:
+                            time_of_flood_detected = None
+
+                        if time_of_flood_detected is not None:
+                            start_time = time_of_flood_detected - timedelta(
                                 days=5
                             )  # Here we assume a flood duration of 10 days
-                            end_time = self.model.current_time + timedelta(days=5)
+                            end_time = time_of_flood_detected + timedelta(days=5)
 
                             new_event_mem = {
                                 "start_time": start_time,
@@ -265,69 +292,74 @@ class HazardDriver(Module):
                     )
 
                     if self.model.current_time == end_time:
-                        df_all: pd.DataFrame = pd.DataFrame(self.discharge_log)
+                        df_all: pd.DataFrame = pd.DataFrame(self.model.discharge_log)
                         df_all.to_csv(
                             Path(self.model.output_folder) / "discharge_timeseries.csv",
                             index=False,
                         )
 
-            for event in self.flood_events:
-                event: Event = copy.deepcopy(event)
+            if (
+                self.model.multiverse_name is None
+                or self.model.multiverse_mode == "flood_simulation"
+            ):
+                for event in self.flood_events:
+                    event: Event = copy.deepcopy(event)
 
-                assert isinstance(event.start_time, datetime), (
-                    f"Start time {event.start_time} must be a datetime object."
-                )
-                assert isinstance(event.end_time, datetime), (
-                    f"End time {event.end_time} must be a datetime object."
-                )
-                assert event.end_time >= event.start_time, (
-                    f"End time {event.end_time} must be greater than or equal to start time {event.start_time}."
-                )
-
-                routing_substeps: int = self.floods.var.discharge_per_timestep[0].shape[
-                    0
-                ]
-
-                if self.model.multiverse_name:
-                    event_name: str = self.model.multiverse_name + "/" + event.name
-                    event.name = (
-                        event_name  # Update the event name with the multiverse name
+                    assert isinstance(event.start_time, datetime), (
+                        f"Start time {event.start_time} must be a datetime object."
+                    )
+                    assert isinstance(event.end_time, datetime), (
+                        f"End time {event.end_time} must be a datetime object."
+                    )
+                    assert event.end_time >= event.start_time, (
+                        f"End time {event.end_time} must be greater than or equal to start time {event.start_time}."
                     )
 
-                # since we are at the end of the timestep, we need to check if the current time plus the timestep length is greater than or equal to the start time of the event
-                timestep_end_time: datetime = (
-                    self.model.current_time
-                    + self.model.timestep_length
-                    - self.model.timestep_length / routing_substeps
-                )
-                if (
-                    timestep_end_time >= event.end_time
-                    and event.end_time + self.model.timestep_length > timestep_end_time
-                ) or (
-                    event.end_time > self.model.simulation_end
-                    and event.start_time < timestep_end_time
-                    and self.model.current_timestep == self.model.n_timesteps - 1
-                ):
-                    # the actual end time is the end of the day of the simulation. Therefore,
-                    # its the simulation end time plus one timestep length
+                    routing_substeps: int = self.floods.var.discharge_per_timestep[
+                        0
+                    ].shape[0]
+
+                    if self.model.multiverse_name:
+                        event_name: str = self.model.multiverse_name + "/" + event.name
+                        event.name = (
+                            event_name  # Update the event name with the multiverse name
+                        )
+
+                    # since we are at the end of the timestep, we need to check if the current time plus the timestep length is greater than or equal to the start time of the event
+                    timestep_end_time: datetime = (
+                        self.model.current_time
+                        + self.model.timestep_length
+                        - self.model.timestep_length / routing_substeps
+                    )
                     if (
-                        event.end_time
-                        > self.model.simulation_end + self.model.timestep_length
+                        timestep_end_time >= event.end_time
+                        and event.end_time + self.model.timestep_length
+                        > timestep_end_time
+                    ) or (
+                        event.end_time > self.model.simulation_end
+                        and event.start_time < timestep_end_time
+                        and self.model.current_timestep == self.model.n_timesteps - 1
                     ):
+                        # the actual end time is the end of the day of the simulation. Therefore,
+                        # its the simulation end time plus one timestep length
+                        if (
+                            event.end_time
+                            > self.model.simulation_end + self.model.timestep_length
+                        ):
+                            print(
+                                f"Warning: Flood event {event} ends after the model end time {self.model.simulation_end}. Simulating only part of flood event."
+                            )
+                            event.end_time = (
+                                self.model.simulation_end + self.model.timestep_length
+                            )
+                            assert event.end_time > event.start_time
+
+                        if self.model.in_spinup:
+                            msg = f"Flood event {event} cannot be simulated during spinup. Please adjust the flood event times or the spinup time in the configuration."
+                            self.model.logger.error(msg)
+                            raise ValueError(msg)
+
                         print(
-                            f"Warning: Flood event {event} ends after the model end time {self.model.simulation_end}. Simulating only part of flood event."
+                            f"Running floods for event from {event.start_time} to {event.end_time}"
                         )
-                        event.end_time = (
-                            self.model.simulation_end + self.model.timestep_length
-                        )
-                        assert event.end_time > event.start_time
-
-                    if self.model.in_spinup:
-                        msg = f"Flood event {event} cannot be simulated during spinup. Please adjust the flood event times or the spinup time in the configuration."
-                        self.model.logger.error(msg)
-                        raise ValueError(msg)
-
-                    print(
-                        f"Running floods for event from {event.start_time} to {event.end_time}"
-                    )
-                    self.floods.run_single_event(event)
+                        self.floods.run_single_event(event)

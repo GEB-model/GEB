@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from time import time
 from types import TracebackType
-from typing import Any, Callable, cast, overload
+from typing import Any, Callable, Literal, cast, overload
 
 import geopandas as gpd
 import numpy as np
@@ -106,6 +106,8 @@ class GEBModel(Module):
 
         self.plantFATE = []  # Empty list to hold plantFATE models. If forests are not used, this will be empty
 
+        self.discharge_log: list = []  # Empty list to hold discharge logs for each timestep. This will be used for flood detection and warning system
+
     def verify_build_complete(self) -> None:
         """Verify that the build completed.
 
@@ -197,6 +199,7 @@ class GEBModel(Module):
         return_mean_discharge: bool = False,
     ) -> None: ...
 
+    # TODO: understand what is overload and why repeat multiverse_forecasts?
     def multiverse_forecasts(
         self,
         forecast_issue_datetime: datetime.datetime,
@@ -355,6 +358,225 @@ class GEBModel(Module):
         else:
             return None  # nothing to return
 
+    def run_forecasts_long_term_analysis(
+        self, forecast_issue_datetime: datetime.datetime
+    ) -> None:
+
+        self.multiverse_hindcasts(
+            multiverse_mode="discharge_detection",
+            forecast_issue_datetime=forecast_issue_datetime,
+        )
+
+        # Once the is back to the original timeline, check the probability the discharge is above the threshold
+        forecast_log = pd.DataFrame(self.discharge_log)
+
+        # Load in discharge_threshold after which there is a flood from the config file
+        discharge_threshold: int = self.model.config["hazards"]["floods"][
+            "discharge_threshold"
+        ]
+
+        # Get the forecast_log for the current forecast_issue_datetime
+        current_forecast = forecast_log[
+            forecast_log["forecast_issue_date"] == forecast_issue_datetime.date()
+        ]
+
+        if not current_forecast.empty:
+            member_max = current_forecast.groupby("member")["discharge"].max()
+
+            probability = (member_max > discharge_threshold).mean()
+
+        # Load in the probability threshold for flood detection based on discharge from the config file
+        probability_threshold_discharge: float = self.config["hazards"]["floods"][
+            "probability_threshold_discharge"
+        ]
+
+        if probability > probability_threshold_discharge:
+            self.logger.info(
+                f"Discharge is forecasted to be higher than threshold at {forecast_issue_datetime} with probability {probability:.2f}. Running SFINCS for ensemble flood simulation..."
+            )
+            # Run SFINCS for the forecast members that exceed the probability threshold
+            self.multiverse_hindcasts(
+                multiverse_mode="flood_simulation",
+                forecast_issue_datetime=forecast_issue_datetime,
+            )
+
+    def multiverse_hindcasts(
+        self,
+        multiverse_mode: Literal["discharge_detection", "flood_simulation"],
+        forecast_issue_datetime: datetime.datetime,
+        return_mean_discharge: bool = False,
+    ) -> None | dict[Any, float]:
+        """Run the model in a multiverse mode, where different forecast members are used to run the model.
+
+        This function first saves the current state of the model to a temporary location.
+        Then, for each forecast member, it sets the precipitation forcing to the forecast data,
+        runs the model to the end of the forecast period, and optionally calculates the mean discharge.
+        After all forecast members have been processed, the model state is restored to the original state
+        before the function was called.
+
+        The file where the forecast data is stored should have the following format:
+        `data/forecasts/YYYYMMDDTHHMMSS.zarr`, where `YYYYMMDDTHHMMSS` is the datetime of the forecast.
+        The forecast data should be a zarr file with a `member` dimension, where each member is a different forecast.
+
+        All other dimensions should be the same as the original forcing data. Units are also expected to be the same.
+
+        Args:
+            forecast_issue_datetime: Datetime that the forecast was issued.
+            return_mean_discharge: Whether to return the mean discharge for each forecast member. This is
+                mostly useful for testing purposes.
+
+        Returns:
+            If `return_mean_discharge` is True, a dictionary with the mean discharge for each forecast member is returned.
+            Otherwise, None is returned.
+
+        Raises:
+            ValueError: If forecast members or datetimes do not match between variables.
+
+        """
+        # copy current state of timestep and time
+        store_timestep: int = copy.copy(self.current_timestep)  # store current timestep
+        store_n_timesteps: int = copy.copy(self.n_timesteps)  # store n_timesteps
+
+        self.forecast_issue_datetime = (
+            forecast_issue_datetime  # store the forecast issue datetime
+        )
+        self.multiverse_mode = multiverse_mode  # store the multiverse mode
+
+        # set a folder to store the initial state of the multiverse
+        store_location: Path = (
+            self.simulation_root / "multiverse" / "forecast_initial_state"
+        )  # create a temporary folder for the multiverse
+        self.store.save(store_location)  # save the current state of the model
+
+        original_is_activated: bool = (
+            self.reporter.is_activated
+        )  # store original reporter state
+        self.reporter.is_activated = False  # disable reporting during multiverse runs
+        # TODO: is there a way to use this instead to store the discharge?
+
+        if return_mean_discharge:
+            mean_discharge: dict[
+                Any, float
+            ] = {}  # dictionary to store mean discharge for each member
+
+        # load all zarr files for forecast data for all supported variables
+        forecast_members: list[str] | None = None
+        forecast_end_dt: datetime.datetime | None = None
+        forecast_data: dict[str, xr.DataArray] = {}
+        self.logger.info(
+            f"Starting to load forecast data for {len(self.forcing.loaders)} loaders"
+        )
+
+        # TODO: adjust the file path to hindcasts
+        for loader_name, loader in self.forcing.loaders.items():
+            if loader.supports_forecast:
+                forecast_file_path = self.files["other"][
+                    f"forecasts/{self.config['general']['forecasts']['provider']}/{self.config['general']['forecasts']['processing']}/{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}/{loader_name}_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}"
+                ]
+                forecast_data[loader_name] = read_zarr(forecast_file_path)
+
+                variable_forecast_members: list[str] = [
+                    i.item() for i in forecast_data[loader_name].member.values
+                ]
+                variable_forecast_end_dt = (
+                    forecast_data[loader_name].time.values[-1]
+                ).item()  # get the end datetime of the forecast
+                if forecast_members is None:
+                    forecast_members: list[str] = variable_forecast_members
+                    forecast_end_dt = variable_forecast_end_dt
+                else:
+                    if forecast_members != variable_forecast_members:
+                        raise ValueError(
+                            "Forecast members do not match between variables."
+                        )
+                    if forecast_end_dt != variable_forecast_end_dt:
+                        raise ValueError(
+                            "Forecast end datetimes do not match between variables."
+                        )
+
+        assert len(forecast_data) > 0, (
+            "No forecast data found for any variable. Please check the forecast files."
+        )  # ensure that forecast data was found
+        assert forecast_members is not None, (
+            "Forecast members could not be determined. Please check the forecast files."
+        )  # ensure that forecast members were found
+        assert forecast_end_dt is not None, (
+            "Forecast end datetime could not be determined. Please check the forecast files."
+        )  # ensure that forecast end datetime was found
+
+        forecast_end_dt = pd.to_datetime(forecast_end_dt).to_pydatetime()
+        forecast_end_day = forecast_end_dt.date()
+
+        self.n_timesteps = (
+            forecast_end_day - self.simulation_start.date()
+        ).days  # set the number of timesteps to the end of the forecast
+
+        for member in forecast_members:  # loop over all forecast members
+            self.multiverse_name: str = f"forecast_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}/member_{member}"  # set the multiverse name to the member name
+            self.forecast_member = member  # set the member name to the current member
+
+            for loader_name, loader in self.forcing.loaders.items():
+                if loader.supports_forecast and loader_name in forecast_data:
+                    loader.set_forecast(
+                        forecast_issue_datetime=forecast_issue_datetime,
+                        da=forecast_data[loader_name].sel(member=member),
+                    )
+
+            self.logger.info(f"Running forecast member {member}")
+
+            # make reporter AFTER updating n_timesteps
+            self.reporter = Reporter(
+                self,
+                self.report_folder / "multiverse_hindcasts" / self.multiverse_name,
+                clean=True,
+            )  # create a new reporter for the alternate universe
+
+            self.step_to_end()  # steps to end of forecast period as defined in self.n_timesteps
+
+            # TODO: maybe here store the discharge info required for running SFINCS for each member, so that it is not recomputed after the prob check?
+            if return_mean_discharge:
+                mean_discharge[member] = (
+                    self.hydrology.routing.grid.var.discharge_m3_s.mean()
+                ).item()  # calculate the mean discharge for the member
+
+            # restore the model to the state before the forecast for the next member
+            # so the n_timesteps is restored to the number of timesteps at
+            # the end of the forecast period
+            self.restore(
+                store_location=store_location,
+                timestep=store_timestep,
+                n_timesteps=self.n_timesteps,
+                reporter=self.reporter,  # just set the old reporter
+                config=self.config,  # just the old config
+            )  # restore the initial state of the multiverse
+
+        self.logger.info("Forecast finished, restoring all conditions...")
+        # TODO: why is this needed?
+        # after ALL forecast members have been processed, restore the model to the state before the multiverse
+        # so the n_timesteps is restored to the number of the full model run
+        self.restore(
+            store_location=store_location,
+            timestep=store_timestep,
+            n_timesteps=store_n_timesteps,
+            reporter=self.reporter,  # just set the old reporter
+            config=self.config,  # just the old config
+        )  # restore the initial state of the multiverse
+
+        self.reporter.is_activated = (
+            original_is_activated  # restore original reporter state
+        )
+
+        # after all forecast members have been processed, restore the original forcing data
+        for loader_name, loader in self.forcing.loaders.items():
+            if loader.supports_forecast:
+                loader.unset_forecast()  # unset forecast mode
+
+        self.multiverse_name: None = None  # reset the multiverse name
+        if return_mean_discharge:
+            return mean_discharge  # return the mean discharge for each member
+        else:
+            return None  # nothing to return
+
     @overload
     def alternate_universe(
         self,
@@ -464,6 +686,7 @@ class GEBModel(Module):
             provider: str = self.config["general"]["forecasts"]["provider"]
             ensemble: str = self.config["general"]["forecasts"]["processing"]
             forecast_prefix: str = f"forecasts/{provider}/{ensemble}/"
+            # TODO: change it to include forecast_product here as well according to how it is set in forcing/ecmwf.py
 
             other_files: dict[str, Path] = self.files.get("other", {})
 
@@ -478,42 +701,43 @@ class GEBModel(Module):
                 }
             )
 
-            # Get warning system config settings
-            warning_config = self.model.config["agent_settings"]["households"][
-                "warning_system"
-            ]
-
-            prob_threshold = warning_config["probability_threshold"]
-            area_threshold = warning_config["area_threshold"]
-            building_threshold = warning_config["building_threshold"]
-            warning_type = warning_config["warning_target"]["residential_buildings"][
-                "warning_type"
-            ]
-            communication_efficiency = warning_config["communication_efficiency"]
-            evacuation_lead_time_threshold = warning_config[
-                "evacuation_lead_time_threshold"
-            ]
-            weight_by_socioeconomic_factors = warning_config[
-                "weight_by_socioeconomic_factors"
-            ]
-            # Determine response rate based on warning type
-            if warning_type == "building_based":
-                responsive_ratio = warning_config["response_rates"][
-                    "building_based_warnings"
+            if self.config["agent_settings"]["households"]["warning_response"]:
+                # Get warning system config settings
+                warning_config = self.model.config["agent_settings"]["households"][
+                    "warning_system"
                 ]
 
-            elif warning_type == "area_based":
-                responsive_ratio = warning_config["response_rates"][
-                    "area_based_warnings"
+                prob_threshold = warning_config["probability_threshold"]
+                area_threshold = warning_config["area_threshold"]
+                building_threshold = warning_config["building_threshold"]
+                warning_type = warning_config["warning_target"][
+                    "residential_buildings"
+                ]["warning_type"]
+                communication_efficiency = warning_config["communication_efficiency"]
+                evacuation_lead_time_threshold = warning_config[
+                    "evacuation_lead_time_threshold"
                 ]
-            else:
-                raise ValueError(
-                    f"Unknown warning type: {warning_type} selected in config, choose 'building_based' or 'area_based'."
-                )
+                weight_by_socioeconomic_factors = warning_config[
+                    "weight_by_socioeconomic_factors"
+                ]
+                # Determine response rate based on warning type
+                if warning_type == "building_based":
+                    responsive_ratio = warning_config["response_rates"][
+                        "building_based_warnings"
+                    ]
+
+                elif warning_type == "area_based":
+                    responsive_ratio = warning_config["response_rates"][
+                        "area_based_warnings"
+                    ]
+                else:
+                    raise ValueError(
+                        f"Unknown warning type: {warning_type} selected in config, choose 'building_based' or 'area_based'."
+                    )
+
+            # TODO: do this check but for hindcasts
             for dt in forecast_issue_dates:
-                if (
-                    dt == self.current_time
-                ):  # change to include hours (for when we move to hourly)
+                if dt == self.current_time:  # change to include hours
                     self.logger.debug(
                         "Forecast issue datetime matched current model time: %s",
                         dt.isoformat(),
@@ -522,11 +746,18 @@ class GEBModel(Module):
                         dt, datetime.time(0)
                     )  # Convert date back to datetime for the multiverse method
 
-                    # self.multiverse_forecasts(
-                    #     forecast_issue_datetime=forecast_datetime,
-                    #     return_mean_discharge=True,
-                    # )  # run the multiverse for the current timestep
+                    if self.config["general"]["forecasts"]["long_term_analysis"]:
+                        self.logger.info(
+                            f"Running long-term forecast analysis for date time {self.current_time.isoformat()}..."
+                        )
+                        self.run_forecasts_long_term_analysis(forecast_datetime)
+                    else:
+                        self.multiverse_forecasts(
+                            forecast_issue_datetime=forecast_datetime,
+                            return_mean_discharge=True,
+                        )  # run the multiverse for the current timestep
 
+                    # TODO: add a flag to only run this part if the model identifies a flood based on the discharge hazard and probability thresholdand runs SFINCS
                     # after the multiverse has run all members for one day, if warning response is enabled, run the warning system
                     if self.config["agent_settings"]["households"]["warning_response"]:
                         self.logger.info(
