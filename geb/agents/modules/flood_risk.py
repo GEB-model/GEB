@@ -58,7 +58,18 @@ class FloodRiskModule:
             manual_value = self.model.config["hazards"]["floods"][
                 "flood_protection_standard"
             ]["manual_value"]
+            if manual_value is None:
+                raise ValueError(
+                    "Flood protection standard mode is 'manual' but 'manual_value' is null."
+                )
 
+            supported_return_periods = self.model.config["hazards"]["floods"][
+                "return_periods"
+            ]
+            if manual_value not in supported_return_periods:
+                raise ValueError(
+                    f"Manual flood protection standard {manual_value} is not in hazards.floods.return_periods {supported_return_periods}."
+                )
             self.model.logger.info(
                 f"Flood protection standard set to {manual_value} years for all subbasins."
             )
