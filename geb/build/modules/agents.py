@@ -2452,7 +2452,10 @@ class Agents(BuildModelBase):
 
     @build_method(depends_on=["setup_hydrography"], required=True)
     def setup_flood_protection_standards(self) -> None:
-        """Sets up flood protection standards for agents based on the FLOPROS dataset."""
+        """Set up flood protection standards for river subbasins using FLOPROS.
+
+        Writes a parquet table mapping COMID -> flood protection standard (years).
+        """
         FLOPROS = self.data_catalog.fetch("flopros").read()
         # do a spatial join to get the FPS for each river subbasin
         river_subbasins = self.geom["routing/subbasins"]
