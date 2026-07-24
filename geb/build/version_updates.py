@@ -17,6 +17,7 @@ VERSION_UPDATES: dict[str, list[str]] = {
         "[update-method;setup_retention_basins]",
         "[update-method;setup_elevation]",
         "[update-method;setup_hydrography]",
+        "[update-method;setup_flood_protection_standards]",
     ],
     "1.0.0b29": [
         "[update-method;setup_flood_observations]",

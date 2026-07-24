@@ -220,3 +220,5 @@ setup_groundwater_well_observations:
 setup_meteorological_stations_observations:
 
 setup_flood_observations:
+
+setup_flood_protection_standards:
