@@ -2450,6 +2450,37 @@ class Agents(BuildModelBase):
         interest_rate = np.full(n_farmers, interest_rate, dtype=np.float32)
         self.set_array(interest_rate, name="agents/farmers/interest_rate")
 
+    @build_method(depends_on=["setup_hydrography"], required=True)
+    def setup_flood_protection_standards(self) -> None:
+        """Set up flood protection standards for river subbasins using FLOPROS.
+
+        Writes a parquet table mapping COMID -> flood protection standard (years).
+        """
+        flopros_gdf = self.data_catalog.fetch("flopros").read()
+
+        # do a spatial join to get the FPS for each river subbasin
+        river_subbasins = self.geom["routing/subbasins"]
+
+        # check if the CRS of the FLOPROS data matches the CRS of the river subbasins, and reproject if necessary
+        if flopros_gdf.crs != river_subbasins.crs:
+            flopros_gdf = flopros_gdf.to_crs(river_subbasins.crs)
+
+        river_subbasins_with_fps = gpd.sjoin(
+            river_subbasins, flopros_gdf, how="left", predicate="intersects"
+        ).reset_index()
+        # Create a table of COMID -> FPS (aggregate if a subbasin intersects multiple FLOPROS features)
+        comid_to_fps = (
+            river_subbasins_with_fps[["COMID", "flood_protection_standard"]]
+            .groupby("COMID", as_index=True)["flood_protection_standard"]
+            .max()
+            .to_frame()
+        )
+
+        # write to table
+        self.set_table(
+            comid_to_fps, name="flood_protection_standards/flood_protection_standards"
+        )
+
     @build_method(depends_on=[], required=True)
     def setup_assets(
         self,

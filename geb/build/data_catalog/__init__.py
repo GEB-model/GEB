@@ -21,6 +21,7 @@ from .flood_damage_model import (
     GeulFloodDamageModel,
     GlobalFloodDamageModel,
 )
+from .flopros import FLOPROS as FLOPROS
 from .fluxnet import Fluxnet
 from .forest_restoration import ForestRestorationPotential
 from .gadm import GADM, GADM28
@@ -350,6 +351,22 @@ data_catalog: dict[str, dict[str, Any]] = {
             "author": "GADM",
             "version": "2.8",
             "license": "https://gadm.org/license.html",
+        },
+    },
+    "flopros": {
+        "adapter": FLOPROS(
+            column="MerL_Riv",
+            folder="flopros",
+            local_version=1,
+            filename="flopros.parquet",
+            cache="global",
+        ),
+        "url": "https://nhess.copernicus.org/articles/16/1049/2016/nhess-16-1049-2016-supplement.zip",
+        "source": {
+            "name": "FLOPROS",
+            "author": "Scussolini et al. (2016)",
+            "license": "CC Attribution 3.0 License",
+            "paper_doi": "doi:10.5194/nhess-16-1049-2016",
         },
     },
     "mirca2000_unit_grid": {
