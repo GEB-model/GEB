@@ -45,35 +45,62 @@ class FloodRiskModule:
         self.flood_in_last_year = False
 
     def load_flood_protection_standard(self) -> None:
-        """Load flood protection standards for each subbasin."""
+        """Load flood protection standards for each subbasin.
+
+        Raises:
+            ValueError: If the flood protection standard mode is not 'manual' or 'auto'.
+        """
+        mode = self.model.config["hazards"]["floods"]["flood_protection_standard"][
+            "mode"
+        ]
         self.flood_protection_standard_subbasins = {}
-        flood_protection_standards = pd.read_parquet(
-            self.model.files["table"][
-                "flood_protection_standards/flood_protection_standards"
-            ]
-        )
+        if mode == "manual":
+            manual_value = self.model.config["hazards"]["floods"][
+                "flood_protection_standard"
+            ]["manual_value"]
 
-        for comid in np.unique(self.households.buildings["COMID"]):
-            if comid not in flood_protection_standards.index:
-                flood_protection_standard = flood_protection_standards[
-                    "flood_protection_standard"
-                ].mode()[0]
-                self.model.logger.warning(
-                    f"COMID {comid} not found in flood protection standards table. Using mode flood protection standard {flood_protection_standard}."
-                )
+            self.model.logger.info(
+                f"Flood protection standard set to {manual_value} years for all subbasins."
+            )
 
-            else:
-                flood_protection_standard = flood_protection_standards.loc[
-                    comid, "flood_protection_standard"
+            for comid in np.unique(self.households.buildings["COMID"]):
+                self.flood_protection_standard_subbasins[comid] = manual_value
+            return
+        elif mode == "auto":
+            self.model.logger.info(
+                "Flood protection standard set to 'auto'. Flood protection standards will be automatically determined."
+            )
+            flood_protection_standards = pd.read_parquet(
+                self.model.files["table"][
+                    "flood_protection_standards/flood_protection_standards"
                 ]
-            # truncate to closest return period if not in return periods
-            if flood_protection_standard not in self.households.return_periods:
-                closest_return_period = min(
-                    self.households.return_periods,
-                    key=lambda x: abs(x - flood_protection_standard),
+            )
+
+            for comid in np.unique(self.households.buildings["COMID"]):
+                if comid not in flood_protection_standards.index:
+                    flood_protection_standard = flood_protection_standards[
+                        "flood_protection_standard"
+                    ].mode()[0]
+                    self.model.logger.warning(
+                        f"COMID {comid} not found in flood protection standards table. Using mode flood protection standard {flood_protection_standard}."
+                    )
+
+                else:
+                    flood_protection_standard = flood_protection_standards.loc[
+                        comid, "flood_protection_standard"
+                    ]
+                # truncate to closest return period if not in return periods
+                if flood_protection_standard not in self.households.return_periods:
+                    closest_return_period = min(
+                        self.households.return_periods,
+                        key=lambda x: abs(x - flood_protection_standard),
+                    )
+                    flood_protection_standard = closest_return_period
+                self.flood_protection_standard_subbasins[comid] = (
+                    flood_protection_standard
                 )
-                flood_protection_standard = closest_return_period
-            self.flood_protection_standard_subbasins[comid] = flood_protection_standard
+        else:
+            raise ValueError(f"Invalid flood protection standard mode: {mode}")
 
     def load_return_period_flood_maps(self) -> None:
         """Load flood maps for different return periods. This might be quite ineffecient for RAM, but faster then loading them each timestep for now."""
