@@ -56,7 +56,7 @@ class FloodRiskModule:
         for comid in np.unique(self.households.buildings["COMID"]):
             if comid not in flood_protection_standards.index:
                 flood_protection_standard = flood_protection_standards[
-                    "MerL_Riv"
+                    "flood_protection_standard"
                 ].mode()[0]
                 self.model.logger.warning(
                     f"COMID {comid} not found in flood protection standards table. Using mode flood protection standard {flood_protection_standard}."
@@ -64,7 +64,7 @@ class FloodRiskModule:
 
             else:
                 flood_protection_standard = flood_protection_standards.loc[
-                    comid, "MerL_Riv"
+                    comid, "flood_protection_standard"
                 ]
             # truncate to closest return period if not in return periods
             if flood_protection_standard not in self.households.return_periods:

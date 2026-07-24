@@ -355,6 +355,7 @@ data_catalog: dict[str, dict[str, Any]] = {
     },
     "flopros": {
         "adapter": FLOPROS(
+            column="MerL_Riv",
             folder="flopros",
             local_version=1,
             filename="flopros.parquet",

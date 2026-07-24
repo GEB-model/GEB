@@ -2461,7 +2461,7 @@ class Agents(BuildModelBase):
         )
         # now create a tabel of COMID to FPS
         COMID_to_FPS = river_subbasins_with_FPS.reset_index()[
-            ["COMID", "MerL_Riv"]
+            ["COMID", "flood_protection_standard"]
         ].set_index("COMID")
 
         # write to table
