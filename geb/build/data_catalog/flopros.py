@@ -21,6 +21,7 @@ class FLOPROS(Adapter):
 
     def __init__(self, column: str, *args: Any, **kwargs: Any) -> None:
         """Initialize the FLOPROS adapter.
+
         Args:
             column: The column name to extract from the FLOPROS shapefile. Choose from:
                 "DL_Min_Riv": minimum value of river flood protection standard in the Design layer;
