@@ -42,7 +42,7 @@ hazards:
       - 500
       - 1000
     flood_protection_standard:
-      mode: 'manual' # "auto" (default), "manual", or "none". If "manual", the value must be set in the config file. If "none", no flood protection standard is applied.
+      mode: 'auto' # "auto" (default), "manual", or "none". If "manual", the value must be set in the config file. If "none", no flood protection standard is applied.
       manual_value: 10 # if "manual" is selected, this value is used as the flood protection standard in years.
     hydrograph_shape:
       method: triangular  # triangular (default), direct, or anchor
