@@ -1648,6 +1648,7 @@ class SFINCSRootModel:
 
     def create_coastal_return_period_simulation(
         self,
+        output_folder: Path,
         return_period: int,
         locations: gpd.GeoDataFrame,
         offset: xr.DataArray,
@@ -1672,9 +1673,8 @@ class SFINCSRootModel:
         """
         # prepare coastal timeseries and locations
         timeseries = pd.read_csv(
-            Path(
-                f"output/spinup/hydrographs/gtsm_spring_tide_hydrograph_rp{return_period:04d}.csv"
-            ),
+            output_folder
+            / f"hydrographs/gtsm_spring_tide_hydrograph_rp{return_period:04d}.csv",
             index_col=0,
         )
 
