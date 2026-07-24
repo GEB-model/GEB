@@ -45,7 +45,7 @@ class FloodRiskModule:
         self.flood_in_last_year = False
 
     def load_flood_protection_standard(self) -> None:
-        """Placeholder for loading flood protection standard. Currently dummy version implemented."""
+        """Load flood protection standards for each subbasin."""
         self.flood_protection_standard_subbasins = {}
         flood_protection_standards = pd.read_parquet(
             self.model.files["table"][
