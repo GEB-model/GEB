@@ -306,12 +306,17 @@ def run(**kwargs: Any) -> None:
     help="Run yearly mode multiple times.",
 )
 @click.option(
+    "--prefix",
+    default="",
+    help="Prefix for the output files.",
+)
+@click.option(
     "--n-runs",
     type=click.IntRange(min=1),
     default=None,
     help="Number of yearly runs. Required when --multi is set.",
 )
-def run_yearly(multi: bool, n_runs: int | None, **kwargs: Any) -> None:
+def run_yearly(multi: bool, n_runs: int | None, prefix: str, **kwargs: Any) -> None:
     """Run model in yearly mode.
 
     Can be run after model spinup.
@@ -319,6 +324,7 @@ def run_yearly(multi: bool, n_runs: int | None, **kwargs: Any) -> None:
     Args:
         multi: If True, run yearly mode multiple times.
         n_runs: Number of runs when ``multi`` is True.
+        prefix: Prefix for the output files.
         **kwargs: Keyword arguments to pass to the run_yearly function.
 
     Raises:
@@ -339,7 +345,7 @@ def run_yearly(multi: bool, n_runs: int | None, **kwargs: Any) -> None:
     for run_id in range(n_runs):
         run_model_with_method(
             method="run_yearly",
-            method_args={"model_name": f"run_{run_id}"},
+            method_args={"model_name": f"{prefix}run_{run_id}"},
             **kwargs,
         )
 

@@ -12,6 +12,7 @@ import xarray as xr
 
 from geb.geb_types import ArrayFloat32, TwoDArrayFloat32
 from geb.workflows.io import read_geom
+from geb.workflows.raster import sample_from_map
 
 from ..store import Bucket, DynamicArray
 from ..workflows.io import read_array, read_table, read_zarr, write_geom
@@ -19,7 +20,6 @@ from .decision_module import DecisionModule
 from .general import AgentBaseClass
 from .modules.early_warning import EarlyWarningModule
 from .modules.flood_risk import FloodRiskModule
-from .workflows.helpers import from_landuse_raster_to_polygon
 
 if TYPE_CHECKING:
     from geb.agents import Agents
@@ -164,6 +164,7 @@ class Households(AgentBaseClass):
             "y",
             "COST_STRUCTURAL_USD_SQM",
             "COST_CONTENTS_USD_SQM",
+            "COMID",
         ]
         self.buildings = read_geom(self.model.files["geom"]["assets/open_building_map"])
 
@@ -265,41 +266,17 @@ class Households(AgentBaseClass):
         # get highest return period
         highest_return_period = self.return_periods.max()
         flood_map = self.flood_maps[highest_return_period].copy()
+
         # check if building geometry overlaps with flood map
-
-        buildings_centroid = gpd.GeoDataFrame(
-            self.buildings,
-            geometry=gpd.points_from_xy(self.buildings["x"], self.buildings["y"]),
-            crs="EPSG:4326",
-        )
-        buildings_centroid = buildings_centroid.to_crs(
-            flood_map.rio.crs
-        )  # Reproject building centroids to flood map CRS
-
-        # # convert flood map to polygons
-        flood_map = flood_map > 0  # convert to boolean mask
-        flood_map_polygons = from_landuse_raster_to_polygon(
-            flood_map.values,
-            flood_map.rio.transform(recalc=True),
-            flood_map.rio.crs,
+        water_levels_building = sample_from_map(
+            array=flood_map.values,
+            coords=np.array([self.buildings["x"], self.buildings["y"]]).T,
+            gt=flood_map.rio.transform().to_gdal(),
+            out_of_bounds_value=0,
         )
 
-        flood_map_polygons_union: gpd.GeoDataFrame = gpd.GeoDataFrame(
-            [flood_map_polygons.union_all()],
-            columns=["geometry"],
-            crs=buildings_centroid.crs,
-        )
-
-        # # Create a mask for buildings that overlap with the flood map
-        flooded_buildings = gpd.sjoin(
-            buildings_centroid,
-            flood_map_polygons_union,
-            predicate="intersects",
-            how="left",
-        )
-
-        # Flooded if match exists
-        self.buildings["flooded"] = flooded_buildings["index_right"].notna()
+        # Create a mask for buildings that overlap with the flood map and mark them as flooded
+        self.buildings["flooded"] = water_levels_building > 0
 
         # drop buildings which are not flooded
         if drop_not_flooded:
@@ -1017,15 +994,98 @@ class Households(AgentBaseClass):
         Returns:
             Tuple[np.ndarray, np.ndarray]: A tuple containing damage arrays for (unprotected buildings, flood-proofed buildings).
         """
-        merged = agent_df.merge(
-            buildings_with_damages.rename(columns={"id": "building_id_of_household"}),
-            on="building_id_of_household",
-            how="left",
-        ).fillna(0)
-        damages_do_not_adapt = merged["damages"].to_numpy()
-        damages_adapt = merged["damages_flood_proofed"].to_numpy()
+        # Use vectorized map() instead of merge for faster lookup
+        damages_map = buildings_with_damages.set_index("id")["damages"]
+        damages_flood_proofed_map = buildings_with_damages.set_index("id")[
+            "damages_flood_proofed"
+        ]
+
+        damages_do_not_adapt = (
+            pd.Series(agent_df["building_id_of_household"])
+            .map(damages_map)
+            .fillna(0)
+            .to_numpy()
+        )
+        damages_adapt = (
+            pd.Series(agent_df["building_id_of_household"])
+            .map(damages_flood_proofed_map)
+            .fillna(0)
+            .to_numpy()
+        )
 
         return damages_do_not_adapt, damages_adapt
+
+    def update_households_geodataframe_w_warning_variables(
+        self, date_time: datetime
+    ) -> None:
+        """This function merges the global variables related to warnings to the households geodataframe for visualization purposes.
+
+        Args:
+            date_time: The forecast date time for which to update the households geodataframe.
+        """
+        household_points: gpd.GeoDataFrame = (
+            self.var.households_with_postal_codes.copy()
+        )
+
+        action_maps_folder: Path = self.model.output_folder / "action_maps"
+        action_maps_folder.mkdir(parents=True, exist_ok=True)
+
+        global_vars = [
+            "warning_reached",
+            "warning_level",
+            "response_probability",
+            "evacuated",
+            "recommended_measures",
+            "warning_trigger",
+            "actions_taken",
+        ]
+
+        # make sure household points and global variables have the same length
+        for global_var in global_vars:
+            global_array = getattr(self.var, global_var)
+            assert len(household_points) == global_array.shape[0], (
+                f"The size of household points and {global_var} do not match"
+            )
+
+        # add columns in the household points geodataframe
+        for name in [
+            "warning_reached",
+            "warning_level",
+            "response_probability",
+            "evacuated",
+        ]:
+            household_points[name] = getattr(self.var, name)
+
+        warning_triggers = self.var.possible_warning_triggers
+        for i, _ in enumerate(warning_triggers):
+            if warning_triggers[i] == "water_levels":
+                household_points["trig_w_levels"] = self.var.warning_trigger[:, i]
+            if warning_triggers[i] == "critical_infrastructure":
+                household_points["trig_crit_infra"] = self.var.warning_trigger[:, i]
+
+        possible_measures_to_recommend = self.var.possible_measures
+        for i, measure in enumerate(possible_measures_to_recommend):
+            if measure == "sandbags":
+                household_points["recom_sandbags"] = self.var.recommended_measures[:, i]
+            if measure == "elevate possessions":
+                household_points["recom_elev_possessions"] = (
+                    self.var.recommended_measures[:, i]
+                )
+            if measure == "evacuate":
+                household_points["recom_evacuate"] = self.var.recommended_measures[:, i]
+
+        possible_actions = self.var.possible_measures
+        for i, action in enumerate(possible_actions):
+            if action == "sandbags":
+                household_points["sandbags"] = self.var.actions_taken[:, i]
+            if action == "elevate possessions":
+                household_points["elevated_possessions"] = self.var.actions_taken[:, i]
+
+        household_points.to_parquet(
+            self.model.output_folder
+            / "action_maps"
+            / f"households_with_warning_parameters_{date_time.isoformat().replace(':', '').replace('-', '')}.geoparquet"
+        )
 
     def water_demand(
         self,
@@ -1227,3 +1287,31 @@ class Households(AgentBaseClass):
         if not hasattr(self, "households_exposed_to_flooding"):
             self.update_building_attributes()
         return self.var.adapted.data[self.households_exposed_to_flooding]
+
+    @property
+    def comid_of_household(self) -> np.ndarray:
+        """Assign COMIDs to households based on their building assignment.
+
+        Notes:
+            Results are cached. Delete ``_cached_mapped_comids`` to force a
+            recalculation (e.g., after relocations that change
+            ``building_id_of_household``).
+
+        Returns:
+            Array of COMIDs corresponding to each household.
+        """
+        # Cache the indexed Series for fast vectorized lookup; avoids rebuilding on each call
+        if not hasattr(self, "_comid_map"):
+            self._comid_map = self.buildings.set_index("id")["COMID"]
+        if hasattr(self, "_cached_mapped_comids"):
+            return self._cached_mapped_comids
+
+        mapped_comids = (
+            pd.Series(self.var.building_id_of_household)
+            .map(self._comid_map)
+            .fillna(-1)
+            .astype(int)
+            .to_numpy()
+        )
+        self._cached_mapped_comids = mapped_comids
+        return mapped_comids

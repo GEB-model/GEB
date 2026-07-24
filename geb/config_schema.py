@@ -267,6 +267,51 @@ class MarketConfig(BaseModel):
     )
 
 
+class GovernmentAdaptationConfig(BaseModel):
+    """Configuration for government-led adaptation policy."""
+
+    enabled: bool = Field(
+        False, description="Whether to enable government adaptation policy."
+    )
+    mode: Literal["cba", "threshold"] = Field(
+        "cba",
+        description="Adaptation policy mode: 'cba' (cost-benefit analysis) or 'threshold'.",
+    )
+    EAD_threshold: float = Field(
+        1000000.0,
+        description="Expected annual damage threshold that can trigger adaptation action.",
+    )
+    equity_indicator_threshold: float = Field(
+        0.5,
+        description="Equity indicator threshold between 0 and 1.",
+    )
+    ecosystem_indicator_threshold: float = Field(
+        0.5,
+        description="Ecosystem indicator threshold between 0 and 1.",
+    )
+    adaptation_fraction: float = Field(
+        0.1,
+        description="Fraction of households selected for adaptation action.",
+    )
+    dike_cost_per_meter_usd: float = Field(
+        6800.0,
+        description="Unit cost for raising a dike by 1 meter over 1 meter length (USD/m).",
+    )
+
+
+class GovernmentConfig(BaseModel):
+    """Configuration for government agent."""
+
+    plant_forest: bool = Field(
+        False,
+        description="Whether to enable forest-planting policy for reforestation scenarios.",
+    )
+    adaptation: GovernmentAdaptationConfig = Field(
+        default_factory=GovernmentAdaptationConfig,
+        description="Government adaptation policy configuration.",
+    )
+
+
 class RiskPerceptionConfig(BaseModel):
     """Configuration for risk perception."""
 
@@ -559,6 +604,10 @@ class SensitivityAnalysisConfig(BaseModel):
 
 class AgentSettingsConfig(BaseModel):
     """Configuration for agents."""
+
+    government: GovernmentConfig = Field(
+        default_factory=GovernmentConfig, description="Government agent configuration."
+    )
 
     market: MarketConfig = Field(
         default_factory=MarketConfig, description="Market agent configuration."

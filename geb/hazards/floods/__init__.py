@@ -830,6 +830,7 @@ class Floods(Module):
             if coastal:
                 sfincs_coastal_simulation: SFINCSSimulation = (
                     sfincs_coastal_root_model.create_coastal_return_period_simulation(
+                        self.model.output_folder,
                         return_period,
                         coastal_forcing_locations,
                         offset=coastal_offset,
