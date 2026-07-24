@@ -2450,6 +2450,25 @@ class Agents(BuildModelBase):
         interest_rate = np.full(n_farmers, interest_rate, dtype=np.float32)
         self.set_array(interest_rate, name="agents/farmers/interest_rate")
 
+    @build_method(depends_on=["setup_hydrography"], required=True)
+    def setup_flood_protection_standards(self) -> None:
+        """Sets up flood protection standards for agents based on the FLOPROS dataset."""
+        FLOPROS = self.data_catalog.fetch("flopros").read()
+        # do a spatial join to get the FPS for each river subbasin
+        river_subbasins = self.geom["routing/subbasins"]
+        river_subbasins_with_FPS = gpd.sjoin(
+            river_subbasins, FLOPROS, how="left", predicate="intersects"
+        )
+        # now create a tabel of COMID to FPS
+        COMID_to_FPS = river_subbasins_with_FPS.reset_index()[
+            ["COMID", "MerL_Riv"]
+        ].set_index("COMID")
+
+        # write to table
+        self.set_table(
+            COMID_to_FPS, name="flood_protection_standards/flood_protection_standards"
+        )
+
     @build_method(depends_on=[], required=True)
     def setup_assets(
         self,
