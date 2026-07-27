@@ -524,8 +524,6 @@ class DecisionModule:
         wealth: np.ndarray,
         income: np.ndarray,
         expendature_cap: float,
-        amenity_value: np.ndarray,
-        amenity_weight: float | int,
         household_distance_to_coastline_m: np.ndarray,
         household_distance_to_river_m: np.ndarray,
         risk_perception: np.ndarray,
@@ -646,8 +644,8 @@ class DecisionModule:
         n_agents: int,
         wealth: np.ndarray,
         income: np.ndarray,
-        amenity_value: np.ndarray,
-        amenity_weight: np.ndarray | float,
+        household_distance_to_coastline_m: np.ndarray,
+        household_distance_to_river_m: np.ndarray,
         risk_perception: np.ndarray,
         expected_damages: np.ndarray,
         adapted: np.ndarray,
@@ -663,7 +661,10 @@ class DecisionModule:
             EU_do_nothing_array: array containing the time discounted subjective utility of doing nothing for each agent.
         """
         # weigh amenities
-        amenity_value = amenity_value * amenity_weight
+        amenity_value = self.calculate_riverine_amenity(household_distance_to_river_m)
+        amenity_value += self.calculate_coastal_amenity(
+            household_distance_to_coastline_m
+        )
 
         # Ensure p floods is in increasing order
         indices = np.argsort(p_floods)
@@ -733,3 +734,34 @@ class DecisionModule:
         EU_do_nothing_array[np.where(adapted == 1)] = -np.inf
 
         return EU_do_nothing_array
+
+    def calcEU_relocate(
+        self,
+        geom_id: int | str,
+        n_agents: int,
+        wealth: np.ndarray,
+        income: np.ndarray,
+        amenity_value: np.ndarray,
+        amenity_weight: float | int,
+        migration_costs: np.ndarray,
+        T: np.ndarray | int | float,
+        r: float,
+        sigma: float,
+        **kwargs: dict,
+    ):
+        """This function calculates the time discounted subjective utility of relocating for each agent.
+
+        Args:
+            geom_id: ID of the current admin unit
+            n_agents: number of agents present in the current floodplain
+            wealth: array containing the wealth of each agent
+            income: array containing the income of each agent
+            amenity_value: array containing the amenity value of each agent
+            amenity_weight: weight of the amenity value in the utility calculation
+            T: array containing the decision horizon of each agent
+            r: time discounting factor for each agent
+            sigma: risk aversion setting for each agent
+        Returns:
+            EU_relocate: array containing the time discounted subjective utility of relocating for each agent.
+        """
+        EU_relocate = np.full(n_agents, -np.inf, dtype=np.float32)
