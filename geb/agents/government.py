@@ -516,7 +516,7 @@ class Government(AgentBaseClass):
 
     def _cost_benefit_adaptation(
         self,
-        indirect_damages: np.float32 = 1.6,
+        indirect_damages: float = 1.6,
         model_removal_flood_protection_standards: bool = False,
     ) -> None:
         """Evaluate flood protection standard upgrade using cost-benefit analysis.
