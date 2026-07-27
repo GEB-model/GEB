@@ -125,6 +125,7 @@ class Government(AgentBaseClass):
         subbasins = read_geom(self.model.files["geom"]["routing/subbasins"])[
             ["geometry"]
         ]
+        subbasins["COMID"] = subbasins.index
 
         standards = pd.Series(
             self.flood_protection_standard_subbasins,
