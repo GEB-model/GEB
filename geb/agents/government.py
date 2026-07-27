@@ -797,7 +797,7 @@ class Government(AgentBaseClass):
             self.prepare_modified_soil_maps_for_forest()
 
     @property
-    def flood_protection_standard_subbasins(self) -> dict:
+    def flood_protection_standard_subbasins(self) -> dict[int, int]:
         """Get the flood protection standard for each subbasin.
 
         Returns:
