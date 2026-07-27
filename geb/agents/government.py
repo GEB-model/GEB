@@ -1,6 +1,7 @@
 """This module contains the Government agent class for GEB."""
 
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -119,6 +120,24 @@ class Government(AgentBaseClass):
                 < irrigation_limit["min"]
             ] = irrigation_limit["min"]
 
+    def export_flood_protection_standards(self) -> None:
+        """Export flood protection standards to a geoparquet file."""
+        subbasins = read_geom(self.model.files["geom"]["routing/subbasins"])[
+            ["geometry"]
+        ]
+
+        standards = pd.Series(
+            self.flood_protection_standard_subbasins,
+            name="flood_protection_standard",
+        )
+
+        # Align on COMID index
+        subbasins["flood_protection_standard"] = standards.reindex(subbasins.index)
+
+        # export to geoparquet
+        output_path = self.model.output_folder / "flood_protection_standards.parquet"
+        subbasins.to_parquet(output_path, index=False)
+
     def step(self) -> None:
         """This function is run each timestep."""
         adaptation_enabled = self.config["adaptation"]["enabled"]
@@ -133,6 +152,13 @@ class Government(AgentBaseClass):
         self.set_irrigation_limit()
 
         self.report(locals())
+
+        end_time: datetime = datetime.combine(
+            self.model.config["general"]["end_time"], datetime.min.time()
+        )
+
+        if self.model.current_time.year == end_time.year - 1:
+            self.export_flood_protection_standards()
 
     def prepare_modified_soil_maps_for_forest(self) -> None:
         """Plant forest: update soil properties in memory and remove displaced farmers.
@@ -487,11 +513,18 @@ class Government(AgentBaseClass):
         discounted_value = np.sum(discounts) * value_to_discount
         return discounted_value
 
-    def _cost_benefit_adaptation(self) -> None:
+    def _cost_benefit_adaptation(
+        self,
+        indirect_damages: np.float32 = 1.6,
+        model_removal_flood_protection_standards: bool = False,
+    ) -> None:
         """Evaluate flood protection standard upgrade using cost-benefit analysis.
 
         Compares expected annual damage (EAD) at current and next flood protection
         standard level. If damage reduction exceeds threshold, upgrades the standard.
+        Args:
+            indirect_damages: Multiplier for indirect damages (default: 1.6).
+            model_removal_flood_protection_standards: Whether to consider model removal of flood protection standards (default: False).
         """
         # if not self.flood_risk_module.flood_in_last_year:
         #     return
@@ -521,7 +554,6 @@ class Government(AgentBaseClass):
                 continue  # Cannot upgrade further
 
             altered_fps = return_periods[idx_fps[0] + 1]
-
             households = np.where(
                 self.agents.households.comid_of_household == subbasin
             )[0]
@@ -544,6 +576,8 @@ class Government(AgentBaseClass):
             dike_heights_current_fps = dike_heights[current_fps][subbasin]
             dike_heights_altered_fps = dike_heights[altered_fps][subbasin]
             damage_reduction = current_ead - altered_ead
+            # account for indirect damages
+            damage_reduction *= indirect_damages
 
             # get total length and height difference of the dikes that need to be raised
             height_difference = dike_heights_altered_fps - dike_heights_current_fps
@@ -563,14 +597,31 @@ class Government(AgentBaseClass):
                 maintenance_cost_per_km_dike * height_difference.size * 100 * 2
             )  # maintenance cost per year in euros; segments are roughly 100 meters long, double the cost to account for both sides of the dike
 
+            if model_removal_flood_protection_standards:
+                ead_no_flood_protection_standard = self.flood_risk_module.calculate_ead(
+                    damages_do_not_adapt[:, households],
+                    damages_adapt[:, households],
+                    adapted[households],
+                    0,  # set flood protection standard to 0 to calculate EAD without any flood protection
+                ).sum()
+                # also calculate the damage reduction of current fps compared to no fps
+                damage_reduction_no_fps = ead_no_flood_protection_standard - current_ead
+                damage_reduction_no_fps *= indirect_damages
+
+                if maintenance_cost_per_year > damage_reduction_no_fps:
+                    self.model.logger.info(
+                        "Maintenance cost per year for subbasin %s exceeds damage reduction of current flood protection standard. Removing flood protection.",
+                        subbasin,
+                    )
+                    self.flood_protection_standard_subbasins[subbasin] = 0
+                    continue
+
             if self._apply_cumulative_time_discounting(
                 damage_reduction
             ) > total_cost + self._apply_cumulative_time_discounting(
                 maintenance_cost_per_year
             ):
-                self.flood_risk_module.flood_protection_standard_subbasins[subbasin] = (
-                    altered_fps
-                )
+                self.flood_protection_standard_subbasins[subbasin] = altered_fps
                 self.model.logger.info(
                     "Upgraded flood protection standard for subbasin %s from %d to %d",
                     subbasin,
@@ -743,3 +794,12 @@ class Government(AgentBaseClass):
             # apply reforestation --> to do: but maybe a percentage of the suitable areas instead of all suitable areas
             # the threshold for the reforestation amount can be set in the config file under forest_reforestation_potential_threshold, set to 0.9 to convert only the top 10% suitable areas in the model.yml
             self.prepare_modified_soil_maps_for_forest()
+
+    @property
+    def flood_protection_standard_subbasins(self) -> dict:
+        """Get the flood protection standard for each subbasin.
+
+        Returns:
+            A dictionary mapping subbasin IDs to their flood protection standards.
+        """
+        return self.flood_risk_module.flood_protection_standard_subbasins
