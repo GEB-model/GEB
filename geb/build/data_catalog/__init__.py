@@ -38,6 +38,7 @@ from .gtsm import GTSM, GTSM_timeseries
 from .hydrolakes import HydroLakes
 from .isimip import ISIMIPCO2
 from .lisflood import LISFLOOD
+from .local_hrl_croplands import LocalHRLCroplands
 from .lowder import Lowder
 from .merit_basins import MeritBasinsCatchments, MeritBasinsRivers
 from .merit_hydro import MeritHydroDir, MeritHydroElv
@@ -338,6 +339,52 @@ data_catalog: dict[str, dict[str, Any]] = {
             },
         }
         for year in ["2017", "2018", "2019", "2020", "2021", "2022", "2023"]
+    },
+    **{
+        f"hrl_crop_types_{year}": {
+            "adapter": LocalHRLCroplands(
+                folder="hrl_crop_types",
+                local_version=1,
+                filename="tiles",
+                cache="global",
+                product_code="CTY",
+            ),
+            "url": None,
+            "source": {
+                "name": "AlphaEarth-derived HRL-compatible crop types",
+                "author": "GEB AlphaEarth crop-classification workflow",
+                "license": "CC BY 4.0",
+                "attribution": (
+                    "Derived from Copernicus HRL Croplands labels and the "
+                    "AlphaEarth Foundations Satellite Embedding dataset produced "
+                    "by Google and Google DeepMind."
+                ),
+            },
+        }
+        for year in [str(year) for year in range(2024, 2031)]
+    },
+    **{
+        f"hrl_secondary_crop_{year}": {
+            "adapter": LocalHRLCroplands(
+                folder="hrl_secondary_crop",
+                local_version=1,
+                filename="tiles",
+                cache="global",
+                product_code="CPSCT",
+            ),
+            "url": None,
+            "source": {
+                "name": "AlphaEarth-derived HRL-compatible secondary crops",
+                "author": "GEB AlphaEarth crop-classification workflow",
+                "license": "CC BY 4.0",
+                "attribution": (
+                    "Derived from Copernicus HRL Croplands labels and the "
+                    "AlphaEarth Foundations Satellite Embedding dataset produced "
+                    "by Google and Google DeepMind."
+                ),
+            },
+        }
+        for year in [str(year) for year in range(2024, 2031)]
     },
     "gebco": {
         "adapter": GEBCO(

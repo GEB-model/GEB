@@ -2,17 +2,22 @@
 
 import calendar
 import gc
+import shutil
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import pyflwdir
+import rasterio
 import xarray as xr
 from rasterio import features
 from rasterio.enums import Resampling
 from rasterio.warp import transform_bounds
+from shapely.geometry import box
 from shapely.geometry import shape as shapely_shape
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
@@ -31,17 +36,37 @@ from geb.build.data_catalog.wekeo_copernicus import WEkEONoCoverageError
 from geb.build.methods import build_method
 from geb.build.workflows.crop_calendars import MIRCA_OS_CROP_CLASS_MAP
 from geb.build.workflows.farmers import (
+    HRL_CPSCT_CLASS_CODES,
+    HRL_CTY_CLASS_CODES,
+    alphaearth_crop_feature_importance,
+    apply_alphaearth_cty_mmu_sieve,
+    apply_alphaearth_permanent_crop_temporal_consistency,
     assert_matching_raster_grid,
     assign_farmer_sequences_to_area_targets,
     combine_crop_and_secondary_values,
+    create_alphaearth_crop_training_samples,
     create_lowder_target_farm_areas,
+    enforce_cpsct_annual_cropland_mask,
+    evaluate_alphaearth_crop_models,
+    evaluate_alphaearth_crop_predictions,
+    format_alphaearth_accuracy_report,
     farm_size_distribution_fit_by_size_class,
+    fit_alphaearth_crop_models,
     get_farm_locations,
     grow_farms_from_exact_crop_sequences,
     grow_farms_from_raster_cells,
+    build_hrl_prediction_tile_name,
+    find_hrl_tile_path,
+    hrl_tile_code_from_name,
+    load_alphaearth_crop_training_samples,
+    predict_alphaearth_crop_tile_to_hrl_geotiffs,
     raster_cell_area_m2,
     relax_lowder_targets_for_sequence_fit,
+    remove_alphaearth_downloads,
     round_crop_states_to_area_targets,
+    save_alphaearth_crop_models,
+    sample_alphaearth_crop_prediction_tiles,
+    select_alphaearth_cogs_for_geometry,
     select_cultivated_cells_by_area,
 )
 from geb.geb_types import TwoDArrayInt32
@@ -2670,6 +2695,1666 @@ class Europe(GEBModel):
             **kwargs: Keyword arguments forwarded to ``GEBModel``.
         """
         super().__init__(*args, **kwargs)
+
+    @build_method(
+        depends_on=["setup_regions_and_land_use"],
+        required=False,
+    )
+    def setup_alphaearth_crop_classification(
+        self,
+        region_id_column: str = "region_id",
+        country_iso3_column: str = "ISO3",
+        hrl_years: tuple[int, ...] = (2017, 2018, 2019, 2020, 2021, 2022, 2023),
+        prediction_years: tuple[int, ...] = (2024, 2025),
+        template_year: int | None = None,
+        validation_year: int | None = 2022,
+        test_year: int | None = 2023,
+        samples_per_cty_class_per_region_year: int = 1000,
+        samples_per_cpsct_class_per_region_year: int = 1000,
+        sample_stride_pixels: int = 5,
+        rare_class_sample_stride_pixels: int | None = 1,
+        rare_class_threshold_candidates: int = 50_000,
+        rare_class_sample_multiplier: float = 3.0,
+        training_label_edge_buffer_pixels: int = 2,
+        sample_chunk_rows: int = 512,
+        prediction_chunk_size: int = 512,
+        include_coordinates: bool = False,
+        include_topography: bool = True,
+        apply_historical_cropland_mask: bool = True,
+        cropland_mask_years: tuple[int, ...] | None = None,
+        historical_cropland_mask_dilation_pixels: int = 0,
+        smooth_cty_probabilities: bool = True,
+        smooth_cpsct_probabilities: bool = True,
+        unclassified_probability_threshold: float = 0.25,
+        write_cty_confidence: bool = True,
+        cty_confidence_output_root: str | None = None,
+        apply_permanent_crop_temporal_consistency: bool = True,
+        apply_cty_mmu_sieve: bool = True,
+        cty_mmu_minimum_pixels: int = 25,
+        cty_mmu_connectivity: int = 4,
+        cty_mmu_padding_pixels: int = 25,
+        cty_mmu_maximum_iterations: int = 3,
+        model_type: str = "random_forest",
+        n_estimators: int = 500,
+        max_depth: int | None = None,
+        min_samples_leaf: int = 2,
+        max_features: float | int | str | None = 1.0,
+        sample_weight_mode: str = "class_region_year_balanced",
+        n_jobs: int = -1,
+        random_seed: int = 42,
+        hrl_raster_chunks: dict[str, int] | None = None,
+        max_alphaearth_files_for_sampling: int | None = None,
+        max_alphaearth_files_for_prediction: int | None = None,
+        alphaearth_max_parallel_downloads: int | None = None,
+        cleanup_alphaearth_downloads: bool = False,
+        store_training_samples: bool = True,
+        reuse_training_samples: bool = False,
+        training_samples_table_name: str = (
+            "machine_learning/crop_classification/samples"
+        ),
+        training_samples_path: str | None = None,
+        evaluate_postprocessed_accuracy: bool = False,
+        postprocessed_evaluation_output_root: str | None = None,
+        cleanup_postprocessed_evaluation_outputs: bool = True,
+        max_alphaearth_files_for_postprocessed_evaluation: int | None = None,
+        model_output_path: str | None = None,
+        overwrite_prediction_files: bool = True,
+    ) -> None:
+        """Train annual AlphaEarth crop classifiers for the active study area.
+
+        This is a conventional annual remote-sensing classification workflow. For
+        every observed year, HRL CTY and CPSCT labels from year ``t`` are paired
+        only with AlphaEarth embeddings from year ``t``. No previous crop map,
+        previous embedding year, crop rotation, or farmer state is used.
+
+        AlphaEarth downloads are organized at study-area level rather than at
+        region level. First, all COGs required for every configured HRL year and
+        the full active model bounds are downloaded once. Regional sampling then
+        reuses that shared local selection. After all regions and years have been
+        sampled, the downloaded training COGs are optionally removed in one cleanup
+        pass. The prediction year is handled similarly: it is downloaded once for
+        the full active model bounds and reused by every HRL output tile.
+
+        Samples are still generated region by region to bound memory use, but all
+        regional samples are pooled into one CTY model and one CPSCT model for the
+        complete active study area. Temporal validation and testing are performed
+        by holding out complete HRL years. The final models are then retrained on
+        all configured HRL years and applied independently to every year in
+        ``prediction_years``.
+
+        Validation and blind-test results are logged as Product-by-Reference
+        confusion matrices with Overall Accuracy, Producer's Accuracy, User's
+        Accuracy, omission and commission errors, F-score, balanced accuracy, and
+        Cohen's kappa. CTY is reported at native class level, crop-group level,
+        and HRL aggregation level 1.
+
+        Prediction is performed on the exact native HRL 100-km tile grids supplied
+        by ``template_year``. The resulting files use the original HRL filenames
+        with the target year substituted and are written directly to the existing
+        catalog locations::
+
+            $GEB_DATA_ROOT/hrl_crop_types/v1/<prediction_year>/
+            $GEB_DATA_ROOT/hrl_secondary_crop/v1/<prediction_year>/
+
+        By default, both 2024 and 2025 are classified from their corresponding
+        annual AlphaEarth embeddings. The same final model is applied separately
+        to each year; no recursive or previous-year crop type is used as a model
+        feature.
+
+        The optional HRL-style post-classification chain uses only data already
+        available in the setup: elevation and slope are appended to all 64
+        AlphaEarth embedding dimensions; the union of observed HRL cropland years
+        acts as a BVL-like crop-extent mask; per-class probabilities are smoothed
+        with a 3x3 Gaussian kernel; low-confidence crop predictions become HRL
+        classes 3100/3200; stable permanent crops receive conservative temporal
+        corrections; and CTY is cleaned with a padded multi-pass 0.25 ha sieve.
+        A CTY confidence layer is written alongside the generated crop maps.
+
+        Args:
+            region_id_column: Column containing compact model-region IDs.
+            country_iso3_column: Column containing country ISO3 codes.
+            hrl_years: Independent annual HRL/AlphaEarth observations used for
+                sampling, temporal evaluation, and final model fitting.
+            prediction_years: Ordered AlphaEarth years to classify. Defaults to
+                2024 and 2025. Each year is predicted independently.
+            template_year: Existing HRL year used only for tile names, profiles,
+                transforms, and dimensions. Defaults to the final ``hrl_years`` year.
+            validation_year: Optional complete observation year held out for model
+                selection diagnostics.
+            test_year: Optional complete observation year held out as a blind test.
+            samples_per_cty_class_per_region_year: Maximum CTY samples retained per
+                class, model region, and year.
+            samples_per_cpsct_class_per_region_year: Maximum CPSCT samples retained
+                per class, model region, and year.
+            sample_stride_pixels: Standard sampling-lattice spacing in native
+                10 m pixels.
+            rare_class_sample_stride_pixels: Denser lattice spacing used for classes
+                with fewer than ``rare_class_threshold_candidates`` eligible
+                candidates. Set to None to disable adaptive rare-class sampling.
+            rare_class_threshold_candidates: Candidate-count threshold below which a
+                class uses the rare-class lattice and enlarged sample reservoir.
+            rare_class_sample_multiplier: Multiplier applied to the per-class sample
+                cap for rare classes.
+            training_label_edge_buffer_pixels: Number of native pixels removed from
+                every CTY/CPSCT class boundary before selecting samples. Prediction
+                still covers every valid AlphaEarth pixel.
+            sample_chunk_rows: Native HRL rows scanned in each sampling chunk.
+            prediction_chunk_size: Width and height of each prediction window.
+            include_coordinates: Include longitude/latitude predictors.
+            include_topography: Include model-subgrid elevation and terrain gradient
+                alongside all 64 AlphaEarth dimensions.
+            apply_historical_cropland_mask: Restrict crop predictions to the union
+                of observed HRL cropland extents.
+            cropland_mask_years: Observed years used for the maximum cropland
+                extent; defaults to all ``hrl_years``.
+            historical_cropland_mask_dilation_pixels: Optional native-pixel
+                dilation of the historical cropland union.
+            smooth_cty_probabilities: Apply a nodata-aware 3x3 Gaussian filter to
+                CTY class probabilities before reclassification.
+            smooth_cpsct_probabilities: Apply the same spatial probability
+                smoothing to CPSCT.
+            unclassified_probability_threshold: CTY maximum-probability threshold
+                below which annual/permanent crops become 3100/3200.
+            write_cty_confidence: Write a uint8 0-100 CTY confidence product.
+            cty_confidence_output_root: Optional confidence catalog root; when
+                omitted, a sibling ``hrl_crop_types_confidence/v1`` root is used.
+            apply_permanent_crop_temporal_consistency: Apply conservative
+                historical permanent-crop consistency rules to generated years.
+            apply_cty_mmu_sieve: Apply padded multi-pass CTY sieving.
+            cty_mmu_minimum_pixels: MMU threshold; 25 pixels equals 0.25 ha.
+            cty_mmu_connectivity: Four- or eight-neighbour sieve connectivity.
+            cty_mmu_padding_pixels: Neighbour-tile padding used during sieving.
+            cty_mmu_maximum_iterations: Maximum sieve passes.
+            model_type: ``"random_forest"`` or ``"hist_gradient_boosting"``.
+            n_estimators: Number of trees or boosting iterations.
+            max_depth: Optional estimator tree-depth limit.
+            min_samples_leaf: Minimum observations per terminal leaf.
+            max_features: Number or fraction of predictors considered at every Random
+                Forest split. ``1.0`` evaluates all 64 AlphaEarth embedding features
+                simultaneously, plus coordinates when enabled.
+            sample_weight_mode: ``"class_region_year_balanced"`` gives equal total
+                influence to every represented class while balancing its region-year
+                groups. ``"none"`` uses Random Forest balanced-subsample weights.
+            n_jobs: Parallel jobs used by Random Forest.
+            random_seed: Reproducible sampling and estimator seed.
+            hrl_raster_chunks: Native HRL read chunks. Defaults to the Europe module
+                chunk configuration.
+            max_alphaearth_files_for_sampling: Optional safety limit for the total
+                number of AlphaEarth COGs downloaded across all ``hrl_years`` and
+                the full active model bounds.
+            max_alphaearth_files_for_prediction: Optional safety limit for the total
+                number of COGs downloaded across all ``prediction_years`` and the
+                full active model bounds.
+            alphaearth_max_parallel_downloads: Optional runtime override for the
+                adapter's number of simultaneous COG downloads. When omitted, the
+                value configured in the data catalog is retained.
+            cleanup_alphaearth_downloads: Delete study-area AlphaEarth COGs after
+                all sampling passes and, separately, after all prediction tiles.
+                False keeps the cache for repeated testing and debugging.
+            store_training_samples: Store newly generated pooled annual samples in
+                GEB. Reused samples from the default table are not rewritten.
+            reuse_training_samples: Load a previously written sample table and skip
+                all HRL/AlphaEarth training-sample downloads and extraction.
+            training_samples_table_name: Key in ``self.table`` used when reusing
+                samples without an explicit path.
+            training_samples_path: Optional explicit Parquet path. When supplied, it
+                takes precedence over ``training_samples_table_name``.
+            evaluate_postprocessed_accuracy: Generate leakage-safe full-tile
+                validation/test predictions, apply the complete enabled HRL-style
+                post-processing chain, sample the final maps at the held-out sample
+                locations, and report final-map accuracy alongside raw rolling-origin
+                accuracy.
+            postprocessed_evaluation_output_root: Optional directory for temporary
+                held-out-year CTY/CPSCT/confidence rasters. The observed HRL folders
+                are never overwritten.
+            cleanup_postprocessed_evaluation_outputs: Remove temporary held-out-year
+                rasters after their accuracy statistics have been sampled.
+            max_alphaearth_files_for_postprocessed_evaluation: Optional safety limit
+                for AlphaEarth COGs selected across held-out evaluation years.
+            model_output_path: Optional joblib path for the final fitted model bundle.
+            overwrite_prediction_files: Replace existing generated HRL tiles.
+
+        Raises:
+            ValueError: If years, regions, samples, templates, or model settings are
+                invalid.
+        """
+        hrl_years = tuple(int(year) for year in hrl_years)
+        if len(hrl_years) < 3:
+            raise ValueError("At least three HRL observation years are required.")
+        if tuple(sorted(set(hrl_years))) != hrl_years:
+            raise ValueError("hrl_years must be unique and strictly increasing.")
+        template_year = hrl_years[-1] if template_year is None else int(template_year)
+        if template_year not in hrl_years:
+            raise ValueError("template_year must be included in hrl_years.")
+        prediction_years = tuple(int(year) for year in prediction_years)
+        if not prediction_years:
+            raise ValueError("prediction_years must contain at least one year.")
+        if tuple(sorted(set(prediction_years))) != prediction_years:
+            raise ValueError("prediction_years must be unique and strictly increasing.")
+        overlapping_prediction_years = set(prediction_years).intersection(hrl_years)
+        if overlapping_prediction_years:
+            raise ValueError(
+                "prediction_years must not overlap the observed HRL years. "
+                f"Overlap: {sorted(overlapping_prediction_years)}."
+            )
+        cropland_mask_years = (
+            hrl_years
+            if cropland_mask_years is None
+            else tuple(int(year) for year in cropland_mask_years)
+        )
+        if not cropland_mask_years:
+            raise ValueError("cropland_mask_years must contain at least one year.")
+        if tuple(sorted(set(cropland_mask_years))) != cropland_mask_years:
+            raise ValueError(
+                "cropland_mask_years must be unique and strictly increasing."
+            )
+        unknown_cropland_mask_years = set(cropland_mask_years) - set(hrl_years)
+        if unknown_cropland_mask_years:
+            raise ValueError(
+                "cropland_mask_years must be selected from hrl_years. "
+                f"Unknown years: {sorted(unknown_cropland_mask_years)}."
+            )
+        for split_year, split_name in (
+            (validation_year, "validation_year"),
+            (test_year, "test_year"),
+        ):
+            if split_year is not None and int(split_year) not in hrl_years:
+                raise ValueError(f"{split_name} must be one of {hrl_years}.")
+        if validation_year is not None and validation_year == test_year:
+            raise ValueError("validation_year and test_year must differ.")
+        if sample_chunk_rows < 1:
+            raise ValueError("sample_chunk_rows must be at least one.")
+        if sample_stride_pixels < 1:
+            raise ValueError("sample_stride_pixels must be at least one.")
+        if (
+            rare_class_sample_stride_pixels is not None
+            and rare_class_sample_stride_pixels < 1
+        ):
+            raise ValueError("rare_class_sample_stride_pixels must be at least one.")
+        if rare_class_threshold_candidates < 1:
+            raise ValueError("rare_class_threshold_candidates must be at least one.")
+        if rare_class_sample_multiplier < 1.0:
+            raise ValueError("rare_class_sample_multiplier must be at least 1.0.")
+        if training_label_edge_buffer_pixels < 0:
+            raise ValueError("training_label_edge_buffer_pixels cannot be negative.")
+        if historical_cropland_mask_dilation_pixels < 0:
+            raise ValueError(
+                "historical_cropland_mask_dilation_pixels cannot be negative."
+            )
+        if not 0.0 <= unclassified_probability_threshold <= 1.0:
+            raise ValueError(
+                "unclassified_probability_threshold must lie between zero and one."
+            )
+        if cty_mmu_minimum_pixels < 1:
+            raise ValueError("cty_mmu_minimum_pixels must be at least one.")
+        if cty_mmu_connectivity not in {4, 8}:
+            raise ValueError("cty_mmu_connectivity must be 4 or 8.")
+        if cty_mmu_padding_pixels < 0:
+            raise ValueError("cty_mmu_padding_pixels cannot be negative.")
+        if cty_mmu_maximum_iterations < 1:
+            raise ValueError("cty_mmu_maximum_iterations must be at least one.")
+        if sample_weight_mode not in {"none", "class_region_year_balanced"}:
+            raise ValueError(
+                "sample_weight_mode must be 'none' or 'class_region_year_balanced'."
+            )
+        if prediction_chunk_size < 16:
+            raise ValueError("prediction_chunk_size must be at least 16.")
+        if (
+            alphaearth_max_parallel_downloads is not None
+            and alphaearth_max_parallel_downloads < 1
+        ):
+            raise ValueError("alphaearth_max_parallel_downloads must be at least 1.")
+        if not str(training_samples_table_name).strip():
+            raise ValueError("training_samples_table_name cannot be empty.")
+        if (
+            evaluate_postprocessed_accuracy
+            and validation_year is None
+            and test_year is None
+        ):
+            raise ValueError(
+                "evaluate_postprocessed_accuracy=True requires validation_year and/or "
+                "test_year."
+            )
+
+        regions_shapes: gpd.GeoDataFrame = self.geom["regions"]
+        for required_column in (region_id_column, country_iso3_column):
+            if required_column not in regions_shapes.columns:
+                raise ValueError(f"Region database must contain {required_column!r}.")
+        if regions_shapes.crs is None:
+            raise ValueError("Region geometries must have a CRS.")
+
+        region_ids: xr.DataArray = self.subgrid["region_ids"].compute()
+        subgrid_mask: xr.DataArray = self.subgrid["mask"].compute()
+        active_subgrid_mask = ~subgrid_mask.values
+        region_id_values = region_ids.values.astype(np.int32, copy=False)
+        active_geometry = _active_subgrid_mask_geometry_for_hrl(
+            region_ids,
+            active_subgrid_mask,
+        )
+
+        subgrid_elevation: xr.DataArray | None = None
+        subgrid_slope: xr.DataArray | None = None
+        if include_topography:
+            subgrid_elevation = self.subgrid["landsurface/elevation"].compute()
+            if subgrid_elevation.rio.crs is None:
+                raise ValueError(
+                    "Subgrid elevation must have a CRS when topography is enabled."
+                )
+            slope_values = pyflwdir.dem.slope(
+                subgrid_elevation.values,
+                nodata=np.nan,
+                latlon=True,
+                transform=subgrid_elevation.rio.transform(recalc=True),
+            )
+            subgrid_slope = subgrid_elevation.copy(
+                data=np.asarray(slope_values, dtype=np.float32)
+            )
+            subgrid_slope.name = "slope_gradient"
+            self.logger.info(
+                "Including elevation and slope with all 64 AlphaEarth embedding "
+                "dimensions in training and prediction."
+            )
+
+        study_bounds = tuple(float(value) for value in active_geometry.bounds)
+        regions_wgs84 = regions_shapes[
+            [region_id_column, country_iso3_column, "geometry"]
+        ].to_crs("EPSG:4326")
+        raster_chunks = (
+            _DEFAULT_HRL_RASTER_CHUNKS
+            if hrl_raster_chunks is None
+            else hrl_raster_chunks
+        )
+        alphaearth_adapter = self.data_catalog.fetch("alphaearth")
+        if alphaearth_max_parallel_downloads is not None:
+            alphaearth_adapter.max_parallel_downloads = int(
+                alphaearth_max_parallel_downloads
+            )
+        self.logger.info(
+            "Using %s simultaneous AlphaEarth download(s).",
+            alphaearth_adapter.max_parallel_downloads,
+        )
+
+        template_cty_tile_ids: set[str] = set()
+        template_cpsct_tile_ids: set[str] = set()
+
+        def read_hrl_year(
+            *,
+            year: int,
+            region_bounds: tuple[float, float, float, float],
+            region_id: int,
+        ) -> tuple[xr.DataArray, xr.DataArray]:
+            """Read and align one annual CTY/CPSCT observation."""
+            crop_types_adapter = self.data_catalog.fetch(
+                f"hrl_crop_types_{year}",
+                bounds=region_bounds,
+                year=year,
+            )
+            crop_types = crop_types_adapter.read(
+                bounds=region_bounds,
+                year=year,
+                dst_crs=None,
+                normalize_nodata=False,
+                chunks=raster_chunks,
+            )
+            secondary_adapter = self.data_catalog.fetch(
+                f"hrl_secondary_crop_{year}",
+                bounds=region_bounds,
+                year=year,
+            )
+            secondary_crop = secondary_adapter.read(
+                bounds=region_bounds,
+                year=year,
+                dst_crs=None,
+                normalize_nodata=False,
+                chunks=raster_chunks,
+            )
+
+            if year == template_year:
+                template_cty_tile_ids.update(
+                    str(tile_id)
+                    for tile_id in getattr(crop_types_adapter, "tile_ids", ())
+                )
+                template_cpsct_tile_ids.update(
+                    str(tile_id)
+                    for tile_id in getattr(secondary_adapter, "tile_ids", ())
+                )
+
+            return _align_hrl_rasters_to_common_grid(
+                crop_types,
+                secondary_crop,
+                region_id=region_id,
+                year=year,
+                logger=self.logger,
+            )
+
+        reused_default_table = False
+        if reuse_training_samples:
+            if training_samples_path is not None:
+                sample_source: pd.DataFrame | str | Path = Path(
+                    training_samples_path
+                ).expanduser()
+                source_description = str(sample_source)
+            else:
+                if training_samples_table_name not in self.table:
+                    raise ValueError(
+                        "reuse_training_samples=True, but no stored sample table "
+                        f"was found under self.table[{training_samples_table_name!r}]. "
+                        "Run once with store_training_samples=True or provide "
+                        "training_samples_path."
+                    )
+                sample_source = self.table[training_samples_table_name]
+                source_description = f"self.table[{training_samples_table_name!r}]"
+                reused_default_table = True
+
+            samples = load_alphaearth_crop_training_samples(
+                sample_source,
+                hrl_years=hrl_years,
+                include_coordinates=include_coordinates,
+                include_topography=include_topography,
+                active_region_ids=np.unique(region_id_values[active_subgrid_mask]),
+            )
+            self.logger.info(
+                "Reusing %s stored annual AlphaEarth-HRL samples from %s. "
+                "Skipping all training COG downloads and regional sampling.",
+                len(samples),
+                source_description,
+            )
+
+            # Sampling normally populates template tile IDs as each region reads
+            # template_year. Prediction still needs those IDs, so collect them
+            # directly from the template adapters when sampling is skipped.
+            cty_template_fetch = self.data_catalog.fetch(
+                f"hrl_crop_types_{template_year}",
+                bounds=study_bounds,
+                year=template_year,
+            )
+            cpsct_template_fetch = self.data_catalog.fetch(
+                f"hrl_secondary_crop_{template_year}",
+                bounds=study_bounds,
+                year=template_year,
+            )
+            template_cty_tile_ids.update(
+                str(tile_id) for tile_id in getattr(cty_template_fetch, "tile_ids", ())
+            )
+            template_cpsct_tile_ids.update(
+                str(tile_id)
+                for tile_id in getattr(cpsct_template_fetch, "tile_ids", ())
+            )
+        else:
+            sample_tables: list[pd.DataFrame] = []
+            selected_training_cogs: gpd.GeoDataFrame | None = None
+            try:
+                self.logger.info(
+                    "Downloading all AlphaEarth training COGs for years %s and full "
+                    "study-area bounds %s before regional sampling.",
+                    hrl_years,
+                    study_bounds,
+                )
+                selected_training_cogs = alphaearth_adapter.read(
+                    years=hrl_years,
+                    bounds=study_bounds,
+                    dry_run=False,
+                    max_files=max_alphaearth_files_for_sampling,
+                )
+                if selected_training_cogs.empty:
+                    raise ValueError(
+                        "No AlphaEarth training COGs were selected for the active "
+                        "study-area bounds."
+                    )
+
+                self.logger.info(
+                    "Creating independent annual AlphaEarth-HRL samples for %s "
+                    "study-area regions and years %s using %s shared downloaded COGs.",
+                    len(regions_wgs84),
+                    hrl_years,
+                    len(selected_training_cogs),
+                )
+
+                for region_index, (_, region) in enumerate(regions_wgs84.iterrows()):
+                    region_id = int(region[region_id_column])
+                    country_iso3 = str(region[country_iso3_column])
+                    region_mask_full = active_subgrid_mask & (
+                        region_id_values == region_id
+                    )
+                    if not region_mask_full.any():
+                        continue
+                    region_geometry = region.geometry.intersection(active_geometry)
+                    if region_geometry.is_empty:
+                        continue
+                    region_bounds = tuple(
+                        float(value) for value in region_geometry.bounds
+                    )
+
+                    for year in hrl_years:
+                        try:
+                            crop_types, secondary_crop = read_hrl_year(
+                                year=year,
+                                region_bounds=region_bounds,
+                                region_id=region_id,
+                            )
+                            region_year_cogs = select_alphaearth_cogs_for_geometry(
+                                selected_training_cogs,
+                                year=year,
+                                clip_geometry=region_geometry,
+                            )
+                            if region_year_cogs.empty:
+                                raise ValueError(
+                                    f"No downloaded AlphaEarth COGs intersect region "
+                                    f"{region_id}, year {year}."
+                                )
+
+                            region_year_samples = (
+                                create_alphaearth_crop_training_samples(
+                                    crop_types,
+                                    secondary_crop,
+                                    region_year_cogs,
+                                    region_geometry,
+                                    year=year,
+                                    region_id=region_id,
+                                    country_iso3=country_iso3,
+                                    samples_per_cty_class=(
+                                        samples_per_cty_class_per_region_year
+                                    ),
+                                    samples_per_cpsct_class=(
+                                        samples_per_cpsct_class_per_region_year
+                                    ),
+                                    sample_stride_pixels=sample_stride_pixels,
+                                    rare_class_sample_stride_pixels=(
+                                        rare_class_sample_stride_pixels
+                                    ),
+                                    rare_class_threshold_candidates=(
+                                        rare_class_threshold_candidates
+                                    ),
+                                    rare_class_sample_multiplier=(
+                                        rare_class_sample_multiplier
+                                    ),
+                                    training_label_edge_buffer_pixels=(
+                                        training_label_edge_buffer_pixels
+                                    ),
+                                    sample_chunk_rows=sample_chunk_rows,
+                                    include_coordinates=include_coordinates,
+                                    include_topography=include_topography,
+                                    elevation=subgrid_elevation,
+                                    slope=subgrid_slope,
+                                    random_seed=(
+                                        random_seed + region_index * 10_000 + year
+                                    ),
+                                )
+                            )
+                            sample_tables.append(region_year_samples)
+                            self.logger.info(
+                                "Created %s annual AlphaEarth-HRL samples for "
+                                "region %s (%s), year %s from %s cached COG(s).",
+                                len(region_year_samples),
+                                region_id,
+                                country_iso3,
+                                year,
+                                len(region_year_cogs),
+                            )
+                        except WEkEONoCoverageError as error:
+                            if country_iso3.upper() in _HRL_CROPLANDS_EEA38_ISO3:
+                                raise
+                            self.logger.warning(
+                                "Skipping region %s (%s), year %s: no HRL coverage. %s",
+                                region_id,
+                                country_iso3,
+                                year,
+                                error,
+                            )
+                        finally:
+                            gc.collect()
+            finally:
+                if cleanup_alphaearth_downloads and selected_training_cogs is not None:
+                    removed = remove_alphaearth_downloads(
+                        selected_training_cogs,
+                        logger=self.logger,
+                    )
+                    self.logger.info(
+                        "Removed %s AlphaEarth training COGs after all regional "
+                        "sampling passes completed.",
+                        removed,
+                    )
+                elif selected_training_cogs is not None:
+                    self.logger.info(
+                        "Retaining %s AlphaEarth training COGs in the local cache "
+                        "for reuse because cleanup_alphaearth_downloads=False.",
+                        len(selected_training_cogs),
+                    )
+
+            if not sample_tables:
+                raise ValueError("No annual AlphaEarth-HRL samples were created.")
+            samples = pd.concat(sample_tables, ignore_index=True)
+        if evaluate_postprocessed_accuracy and not (
+            {"source_x", "source_y"}.issubset(samples.columns)
+            or {"longitude", "latitude"}.issubset(samples.columns)
+        ):
+            raise ValueError(
+                "Post-processed accuracy evaluation requires stored sample "
+                "coordinates. Recreate samples with the current workflow or reuse "
+                "a table containing source_x/source_y or longitude/latitude."
+            )
+
+        samples["split"] = "train"
+        if validation_year is not None:
+            samples.loc[samples["year"] == validation_year, "split"] = "validation"
+        if test_year is not None:
+            samples.loc[samples["year"] == test_year, "split"] = "test"
+        training_samples = samples.loc[samples["split"] == "train"].copy()
+        if training_samples.empty:
+            raise ValueError(
+                "The configured temporal split leaves no training samples."
+            )
+
+        if store_training_samples and not reused_default_table:
+            self.set_table(
+                samples,
+                name=training_samples_table_name,
+            )
+        elif store_training_samples and reused_default_table:
+            self.logger.info(
+                "Reused stored sample table %s without rewriting it.",
+                training_samples_table_name,
+            )
+
+        evaluation_models = fit_alphaearth_crop_models(
+            training_samples,
+            include_coordinates=include_coordinates,
+            include_topography=include_topography,
+            model_type=model_type,
+            random_seed=random_seed,
+            n_estimators=n_estimators,
+            max_depth=max_depth,
+            min_samples_leaf=min_samples_leaf,
+            max_features=max_features,
+            sample_weight_mode=sample_weight_mode,
+            n_jobs=n_jobs,
+        )
+        metric_tables: list[pd.DataFrame] = []
+        confusion_tables: list[pd.DataFrame] = []
+        for split_name in ("validation", "test"):
+            split_samples = samples.loc[samples["split"] == split_name]
+            if split_samples.empty:
+                continue
+            metrics, confusion = evaluate_alphaearth_crop_models(
+                evaluation_models,
+                split_samples,
+                split_name=split_name,
+            )
+            metric_tables.append(metrics)
+            confusion_tables.append(confusion)
+
+        if metric_tables:
+            metrics = pd.concat(metric_tables, ignore_index=True)
+            self.set_table(
+                metrics,
+                name="machine_learning/crop_classification/metrics",
+            )
+            accuracy_report = format_alphaearth_accuracy_report(
+                metrics,
+                pd.concat(confusion_tables, ignore_index=True),
+            )
+            self.logger.info(
+                "Annual AlphaEarth crop-classification accuracy assessment:\n%s",
+                accuracy_report,
+            )
+        if confusion_tables:
+            self.set_table(
+                pd.concat(confusion_tables, ignore_index=True),
+                name="machine_learning/crop_classification/confusion_matrix",
+            )
+
+        final_models = fit_alphaearth_crop_models(
+            samples,
+            include_coordinates=include_coordinates,
+            include_topography=include_topography,
+            model_type=model_type,
+            random_seed=random_seed,
+            n_estimators=n_estimators,
+            max_depth=max_depth,
+            min_samples_leaf=min_samples_leaf,
+            max_features=max_features,
+            sample_weight_mode=sample_weight_mode,
+            n_jobs=n_jobs,
+        )
+        feature_importance = alphaearth_crop_feature_importance(final_models)
+        if not feature_importance.empty:
+            self.set_table(
+                feature_importance,
+                name="machine_learning/crop_classification/feature_importance",
+            )
+        if model_output_path is not None:
+            saved_model_path = save_alphaearth_crop_models(
+                final_models,
+                model_output_path,
+            )
+            self.logger.info(
+                "Saved final AlphaEarth crop models to %s.", saved_model_path
+            )
+
+        if not template_cty_tile_ids or not template_cpsct_tile_ids:
+            raise ValueError(
+                f"No {template_year} HRL CTY/CPSCT template tile IDs were collected."
+            )
+
+        cty_template_adapter = self.data_catalog.catalog[
+            f"hrl_crop_types_{template_year}"
+        ]["adapter"]
+        cpsct_template_adapter = self.data_catalog.catalog[
+            f"hrl_secondary_crop_{template_year}"
+        ]["adapter"]
+
+        cty_templates_by_code = {
+            hrl_tile_code_from_name(tile_id): find_hrl_tile_path(
+                cty_template_adapter.root,
+                year=template_year,
+                tile_id=tile_id,
+            )
+            for tile_id in template_cty_tile_ids
+        }
+        cpsct_templates_by_code = {
+            hrl_tile_code_from_name(tile_id): find_hrl_tile_path(
+                cpsct_template_adapter.root,
+                year=template_year,
+                tile_id=tile_id,
+            )
+            for tile_id in template_cpsct_tile_ids
+        }
+        missing_cpsct_templates = set(cty_templates_by_code) - set(
+            cpsct_templates_by_code
+        )
+        if missing_cpsct_templates:
+            raise ValueError(
+                "Missing CPSCT templates for HRL tile codes: "
+                f"{sorted(missing_cpsct_templates)}"
+            )
+
+        historical_cty_paths_by_code: dict[str, tuple[Path, ...]] = {}
+        for tile_code, template_path in cty_templates_by_code.items():
+            historical_paths: list[Path] = []
+            for historical_year in hrl_years:
+                historical_name = build_hrl_prediction_tile_name(
+                    template_path.name,
+                    product_code="CTY",
+                    prediction_year=historical_year,
+                )
+                historical_paths.append(
+                    find_hrl_tile_path(
+                        cty_template_adapter.root,
+                        year=historical_year,
+                        tile_id=Path(historical_name).stem,
+                    )
+                )
+            historical_cty_paths_by_code[tile_code] = tuple(historical_paths)
+
+        if cty_confidence_output_root is None:
+            cty_root = Path(cty_template_adapter.root)
+            if cty_root.name.lower().startswith("v"):
+                confidence_root = (
+                    cty_root.parent.parent / "hrl_crop_types_confidence" / cty_root.name
+                )
+            else:
+                confidence_root = cty_root.parent / "hrl_crop_types_confidence"
+        else:
+            confidence_root = Path(cty_confidence_output_root)
+
+        if evaluate_postprocessed_accuracy:
+            evaluation_year_to_split = {
+                int(year): split_name
+                for year, split_name in (
+                    (validation_year, "validation"),
+                    (test_year, "test"),
+                )
+                if year is not None
+            }
+            evaluation_years = tuple(sorted(evaluation_year_to_split))
+            if postprocessed_evaluation_output_root is None:
+                evaluation_root = (
+                    Path(cty_template_adapter.root).parent.parent
+                    / "alphaearth_postprocessed_evaluation"
+                    / Path(cty_template_adapter.root).name
+                )
+            else:
+                evaluation_root = Path(postprocessed_evaluation_output_root)
+            evaluation_root.mkdir(parents=True, exist_ok=True)
+
+            with rasterio.open(next(iter(cty_templates_by_code.values()))) as source:
+                sample_coordinates_crs = source.crs
+
+            postprocessed_metric_tables: list[pd.DataFrame] = []
+            postprocessed_confusion_tables: list[pd.DataFrame] = []
+            postprocessed_change_rows: list[dict[str, int | str]] = []
+            selected_evaluation_cogs: gpd.GeoDataFrame | None = None
+            try:
+                self.logger.info(
+                    "Downloading/reusing AlphaEarth COGs for leakage-safe "
+                    "post-processed evaluation years %s.",
+                    evaluation_years,
+                )
+                selected_evaluation_cogs = alphaearth_adapter.read(
+                    years=list(evaluation_years),
+                    bounds=study_bounds,
+                    dry_run=False,
+                    max_files=max_alphaearth_files_for_postprocessed_evaluation,
+                )
+                if selected_evaluation_cogs.empty:
+                    raise ValueError(
+                        "No AlphaEarth coverage selected for post-processed "
+                        f"evaluation years {evaluation_years}."
+                    )
+
+                for evaluation_year in evaluation_years:
+                    split_name = evaluation_year_to_split[evaluation_year]
+                    prior_years = tuple(
+                        year for year in hrl_years if year < evaluation_year
+                    )
+                    if not prior_years:
+                        raise ValueError(
+                            f"No observation years precede {evaluation_year}."
+                        )
+                    rolling_training_samples = samples.loc[
+                        samples["year"].isin(prior_years)
+                    ].copy()
+                    held_out_samples = samples.loc[
+                        samples["year"] == evaluation_year
+                    ].copy()
+                    if held_out_samples.empty:
+                        raise ValueError(
+                            f"No held-out samples are available for {evaluation_year}."
+                        )
+
+                    rolling_models = fit_alphaearth_crop_models(
+                        rolling_training_samples,
+                        include_coordinates=include_coordinates,
+                        include_topography=include_topography,
+                        model_type=model_type,
+                        random_seed=random_seed,
+                        n_estimators=n_estimators,
+                        max_depth=max_depth,
+                        min_samples_leaf=min_samples_leaf,
+                        max_features=max_features,
+                        sample_weight_mode=sample_weight_mode,
+                        n_jobs=n_jobs,
+                    )
+                    raw_features = held_out_samples.loc[
+                        :, rolling_models.feature_names
+                    ].to_numpy(dtype=np.float32)
+                    raw_cty = np.asarray(
+                        rolling_models.cty_model.predict(raw_features),
+                        dtype=np.int32,
+                    )
+                    raw_cpsct = np.zeros(len(held_out_samples), dtype=np.int32)
+                    observed_cropland = (
+                        held_out_samples["cty_label"].to_numpy(dtype=np.int32) > 0
+                    )
+                    if observed_cropland.any():
+                        raw_cpsct[observed_cropland] = np.asarray(
+                            rolling_models.cpsct_model.predict(
+                                raw_features[observed_cropland]
+                            ),
+                            dtype=np.int32,
+                        )
+                    raw_metrics, raw_confusion = evaluate_alphaearth_crop_predictions(
+                        held_out_samples,
+                        raw_cty,
+                        raw_cpsct,
+                        split_name=split_name,
+                    )
+                    raw_metrics.insert(0, "assessment_stage", "raw_rolling_origin")
+                    raw_confusion.insert(
+                        0,
+                        "assessment_stage",
+                        "raw_rolling_origin",
+                    )
+                    raw_metrics["evaluation_year"] = evaluation_year
+                    raw_confusion["evaluation_year"] = evaluation_year
+                    raw_metrics["training_years"] = ",".join(
+                        str(year) for year in prior_years
+                    )
+                    raw_confusion["training_years"] = ",".join(
+                        str(year) for year in prior_years
+                    )
+                    postprocessed_metric_tables.append(raw_metrics)
+                    postprocessed_confusion_tables.append(raw_confusion)
+
+                    split_root = evaluation_root / split_name / str(evaluation_year)
+                    cty_directory = split_root / "cty"
+                    cpsct_directory = split_root / "cpsct"
+                    confidence_directory = split_root / "ctycl"
+                    cty_directory.mkdir(parents=True, exist_ok=True)
+                    cpsct_directory.mkdir(parents=True, exist_ok=True)
+                    if write_cty_confidence:
+                        confidence_directory.mkdir(parents=True, exist_ok=True)
+
+                    evaluation_cty_paths: dict[str, Path] = {}
+                    evaluation_cpsct_paths: dict[str, Path] = {}
+                    evaluation_confidence_paths: dict[str, Path] = {}
+                    for tile_code in sorted(cty_templates_by_code):
+                        cty_template_path = cty_templates_by_code[tile_code]
+                        cpsct_template_path = cpsct_templates_by_code[tile_code]
+                        with rasterio.open(cty_template_path) as template_source:
+                            tile_bounds_wgs84 = transform_bounds(
+                                template_source.crs,
+                                "EPSG:4326",
+                                *template_source.bounds,
+                                densify_pts=21,
+                            )
+                        prediction_geometry = box(*tile_bounds_wgs84).intersection(
+                            active_geometry
+                        )
+                        if prediction_geometry.is_empty:
+                            continue
+
+                        tile_cogs = select_alphaearth_cogs_for_geometry(
+                            selected_evaluation_cogs,
+                            year=evaluation_year,
+                            clip_geometry=prediction_geometry,
+                        )
+                        if tile_cogs.empty:
+                            raise ValueError(
+                                "No AlphaEarth COGs intersect evaluation tile "
+                                f"{tile_code}, year {evaluation_year}."
+                            )
+
+                        cty_path = cty_directory / build_hrl_prediction_tile_name(
+                            cty_template_path.name,
+                            product_code="CTY",
+                            prediction_year=evaluation_year,
+                        )
+                        cpsct_path = cpsct_directory / build_hrl_prediction_tile_name(
+                            cpsct_template_path.name,
+                            product_code="CPSCT",
+                            prediction_year=evaluation_year,
+                        )
+                        confidence_path = (
+                            confidence_directory
+                            / build_hrl_prediction_tile_name(
+                                cty_template_path.name,
+                                product_code="CTYCL",
+                                prediction_year=evaluation_year,
+                            )
+                            if write_cty_confidence
+                            else None
+                        )
+                        prior_mask_years = tuple(
+                            year
+                            for year in cropland_mask_years
+                            if year < evaluation_year
+                        )
+                        historical_mask_paths = tuple(
+                            historical_cty_paths_by_code[tile_code][
+                                hrl_years.index(year)
+                            ]
+                            for year in prior_mask_years
+                        )
+                        if apply_historical_cropland_mask and not historical_mask_paths:
+                            raise ValueError(
+                                "Historical cropland masking requires at least one "
+                                f"year before {evaluation_year}."
+                            )
+
+                        predict_alphaearth_crop_tile_to_hrl_geotiffs(
+                            rolling_models,
+                            cty_template_path,
+                            cpsct_template_path,
+                            tile_cogs,
+                            prediction_geometry,
+                            cty_path,
+                            cpsct_path,
+                            chunk_size=prediction_chunk_size,
+                            overwrite=True,
+                            elevation=subgrid_elevation,
+                            slope=subgrid_slope,
+                            historical_cty_paths=historical_mask_paths,
+                            apply_historical_cropland_mask=(
+                                apply_historical_cropland_mask
+                            ),
+                            historical_cropland_mask_dilation_pixels=(
+                                historical_cropland_mask_dilation_pixels
+                            ),
+                            smooth_cty_probabilities=smooth_cty_probabilities,
+                            smooth_cpsct_probabilities=smooth_cpsct_probabilities,
+                            unclassified_probability_threshold=(
+                                unclassified_probability_threshold
+                            ),
+                            cty_confidence_output_path=confidence_path,
+                        )
+                        evaluation_cty_paths[tile_code] = cty_path
+                        evaluation_cpsct_paths[tile_code] = cpsct_path
+                        if confidence_path is not None:
+                            evaluation_confidence_paths[tile_code] = confidence_path
+
+                    if apply_permanent_crop_temporal_consistency:
+                        for tile_code, cty_path in evaluation_cty_paths.items():
+                            temporal_history = tuple(
+                                historical_cty_paths_by_code[tile_code][
+                                    hrl_years.index(year)
+                                ]
+                                for year in prior_years
+                            )
+                            temporal_stats = apply_alphaearth_permanent_crop_temporal_consistency(
+                                temporal_history,
+                                {evaluation_year: cty_path},
+                                predicted_confidence_paths=(
+                                    {
+                                        evaluation_year: evaluation_confidence_paths[
+                                            tile_code
+                                        ]
+                                    }
+                                    if tile_code in evaluation_confidence_paths
+                                    else None
+                                ),
+                                chunk_size=max(prediction_chunk_size, 512),
+                            )
+                            postprocessed_change_rows.append(
+                                {
+                                    "split": split_name,
+                                    "evaluation_year": evaluation_year,
+                                    "stage": "permanent_crop_temporal_consistency",
+                                    "tile": tile_code,
+                                    **temporal_stats,
+                                }
+                            )
+
+                    if apply_cty_mmu_sieve:
+                        ordered_tile_codes = sorted(evaluation_cty_paths)
+                        sieve_results = apply_alphaearth_cty_mmu_sieve(
+                            [
+                                evaluation_cty_paths[tile_code]
+                                for tile_code in ordered_tile_codes
+                            ],
+                            confidence_paths=(
+                                [
+                                    evaluation_confidence_paths[tile_code]
+                                    for tile_code in ordered_tile_codes
+                                ]
+                                if write_cty_confidence
+                                else None
+                            ),
+                            minimum_mapping_unit_pixels=cty_mmu_minimum_pixels,
+                            connectivity=cty_mmu_connectivity,
+                            padding_pixels=cty_mmu_padding_pixels,
+                            maximum_iterations=cty_mmu_maximum_iterations,
+                        )
+                        if not sieve_results.empty:
+                            for row in sieve_results.to_dict(orient="records"):
+                                postprocessed_change_rows.append(
+                                    {
+                                        "split": split_name,
+                                        "evaluation_year": evaluation_year,
+                                        "stage": "cty_mmu_sieve",
+                                        **row,
+                                    }
+                                )
+
+                    for tile_code, cty_path in evaluation_cty_paths.items():
+                        changed = enforce_cpsct_annual_cropland_mask(
+                            cty_path,
+                            evaluation_cpsct_paths[tile_code],
+                        )
+                        postprocessed_change_rows.append(
+                            {
+                                "split": split_name,
+                                "evaluation_year": evaluation_year,
+                                "stage": "cpsct_annual_cropland_mask",
+                                "tile": tile_code,
+                                "changed_pixels": changed,
+                            }
+                        )
+
+                    final_cty, final_cpsct = sample_alphaearth_crop_prediction_tiles(
+                        held_out_samples,
+                        evaluation_cty_paths,
+                        evaluation_cpsct_paths,
+                        sample_coordinates_crs=sample_coordinates_crs,
+                    )
+                    final_metrics, final_confusion = (
+                        evaluate_alphaearth_crop_predictions(
+                            held_out_samples,
+                            final_cty,
+                            final_cpsct,
+                            split_name=split_name,
+                        )
+                    )
+                    final_metrics.insert(
+                        0,
+                        "assessment_stage",
+                        "final_postprocessed",
+                    )
+                    final_confusion.insert(
+                        0,
+                        "assessment_stage",
+                        "final_postprocessed",
+                    )
+                    final_metrics["evaluation_year"] = evaluation_year
+                    final_confusion["evaluation_year"] = evaluation_year
+                    final_metrics["training_years"] = ",".join(
+                        str(year) for year in prior_years
+                    )
+                    final_confusion["training_years"] = ",".join(
+                        str(year) for year in prior_years
+                    )
+                    postprocessed_metric_tables.append(final_metrics)
+                    postprocessed_confusion_tables.append(final_confusion)
+
+                    valid_final_cty = np.isin(final_cty, HRL_CTY_CLASS_CODES)
+                    valid_final_cpsct = np.isin(
+                        final_cpsct,
+                        HRL_CPSCT_CLASS_CODES,
+                    )
+                    postprocessed_change_rows.extend(
+                        [
+                            {
+                                "split": split_name,
+                                "evaluation_year": evaluation_year,
+                                "stage": "sample_level_comparison",
+                                "target": "CTY",
+                                "samples": len(held_out_samples),
+                                "valid_final_predictions": int(valid_final_cty.sum()),
+                                "changed_predictions": int(
+                                    (valid_final_cty & (raw_cty != final_cty)).sum()
+                                ),
+                            },
+                            {
+                                "split": split_name,
+                                "evaluation_year": evaluation_year,
+                                "stage": "sample_level_comparison",
+                                "target": "CPSCT",
+                                "samples": int(observed_cropland.sum()),
+                                "valid_final_predictions": int(
+                                    (observed_cropland & valid_final_cpsct).sum()
+                                ),
+                                "changed_predictions": int(
+                                    (
+                                        observed_cropland
+                                        & valid_final_cpsct
+                                        & (raw_cpsct != final_cpsct)
+                                    ).sum()
+                                ),
+                            },
+                        ]
+                    )
+                    self.logger.info(
+                        "Completed leakage-safe %s final-map evaluation for %s "
+                        "using training years %s.",
+                        split_name,
+                        evaluation_year,
+                        prior_years,
+                    )
+                    if cleanup_postprocessed_evaluation_outputs:
+                        shutil.rmtree(split_root, ignore_errors=True)
+                    gc.collect()
+            finally:
+                if (
+                    cleanup_alphaearth_downloads
+                    and selected_evaluation_cogs is not None
+                ):
+                    removed = remove_alphaearth_downloads(
+                        selected_evaluation_cogs,
+                        logger=self.logger,
+                    )
+                    self.logger.info(
+                        "Removed %s AlphaEarth COGs after post-processed "
+                        "validation/test evaluation.",
+                        removed,
+                    )
+
+            if postprocessed_metric_tables:
+                postprocessed_metrics = pd.concat(
+                    postprocessed_metric_tables,
+                    ignore_index=True,
+                )
+                postprocessed_confusion = pd.concat(
+                    postprocessed_confusion_tables,
+                    ignore_index=True,
+                )
+                self.set_table(
+                    postprocessed_metrics,
+                    name=(
+                        "machine_learning/crop_classification/"
+                        "postprocessed_accuracy_metrics"
+                    ),
+                )
+                self.set_table(
+                    postprocessed_confusion,
+                    name=(
+                        "machine_learning/crop_classification/"
+                        "postprocessed_accuracy_confusion_matrix"
+                    ),
+                )
+                summary_metrics = postprocessed_metrics.loc[
+                    postprocessed_metrics["metric_scope"] == "summary"
+                ].copy()
+                comparison_keys = ["split", "evaluation_year", "target"]
+                raw_summary = summary_metrics.loc[
+                    summary_metrics["assessment_stage"] == "raw_rolling_origin"
+                ].set_index(comparison_keys)
+                final_summary = summary_metrics.loc[
+                    summary_metrics["assessment_stage"] == "final_postprocessed"
+                ].set_index(comparison_keys)
+                common_index = raw_summary.index.intersection(final_summary.index)
+                if len(common_index):
+                    comparison = pd.DataFrame(index=common_index).reset_index()
+                    for metric_name in (
+                        "accuracy",
+                        "balanced_accuracy",
+                        "f_score",
+                        "kappa",
+                        "reference_support",
+                        "excluded_predictions",
+                    ):
+                        comparison[f"raw_{metric_name}"] = raw_summary.loc[
+                            common_index, metric_name
+                        ].to_numpy()
+                        comparison[f"final_{metric_name}"] = final_summary.loc[
+                            common_index, metric_name
+                        ].to_numpy()
+                        if metric_name in {
+                            "accuracy",
+                            "balanced_accuracy",
+                            "f_score",
+                            "kappa",
+                        }:
+                            comparison[f"delta_{metric_name}"] = (
+                                comparison[f"final_{metric_name}"]
+                                - comparison[f"raw_{metric_name}"]
+                            )
+                    self.set_table(
+                        comparison,
+                        name=(
+                            "machine_learning/crop_classification/"
+                            "postprocessed_accuracy_comparison"
+                        ),
+                    )
+                report_sections = []
+                for stage, title in (
+                    ("raw_rolling_origin", "RAW ROLLING-ORIGIN ACCURACY"),
+                    ("final_postprocessed", "FINAL POST-PROCESSED MAP ACCURACY"),
+                ):
+                    stage_metrics = postprocessed_metrics.loc[
+                        postprocessed_metrics["assessment_stage"] == stage
+                    ]
+                    stage_confusion = postprocessed_confusion.loc[
+                        postprocessed_confusion["assessment_stage"] == stage
+                    ]
+                    if not stage_metrics.empty:
+                        report_sections.extend(
+                            [
+                                title,
+                                format_alphaearth_accuracy_report(
+                                    stage_metrics,
+                                    stage_confusion,
+                                ),
+                            ]
+                        )
+                self.logger.info(
+                    "Leakage-safe AlphaEarth final-map accuracy assessment:\n%s",
+                    "\n\n".join(report_sections),
+                )
+            if postprocessed_change_rows:
+                self.set_table(
+                    pd.DataFrame(postprocessed_change_rows),
+                    name=(
+                        "machine_learning/crop_classification/"
+                        "postprocessed_accuracy_changes"
+                    ),
+                )
+
+        generated_cty_tile_ids: dict[int, list[str]] = {
+            year: [] for year in prediction_years
+        }
+        generated_cpsct_tile_ids: dict[int, list[str]] = {
+            year: [] for year in prediction_years
+        }
+        generated_cty_paths: dict[int, dict[str, Path]] = {
+            year: {} for year in prediction_years
+        }
+        generated_cpsct_paths: dict[int, dict[str, Path]] = {
+            year: {} for year in prediction_years
+        }
+        generated_confidence_paths: dict[int, dict[str, Path]] = {
+            year: {} for year in prediction_years
+        }
+        prediction_tasks: list[
+            tuple[int, str, Path, Path, Path, Path, Path | None, BaseGeometry]
+        ] = []
+
+        for prediction_year in prediction_years:
+            cty_output_directory = Path(cty_template_adapter.root) / str(
+                prediction_year
+            )
+            cpsct_output_directory = Path(cpsct_template_adapter.root) / str(
+                prediction_year
+            )
+            confidence_output_directory = confidence_root / str(prediction_year)
+            cty_output_directory.mkdir(parents=True, exist_ok=True)
+            cpsct_output_directory.mkdir(parents=True, exist_ok=True)
+            if write_cty_confidence:
+                confidence_output_directory.mkdir(parents=True, exist_ok=True)
+
+            for tile_code in sorted(cty_templates_by_code):
+                cty_template_path = cty_templates_by_code[tile_code]
+                cpsct_template_path = cpsct_templates_by_code[tile_code]
+                cty_output_name = build_hrl_prediction_tile_name(
+                    cty_template_path.name,
+                    product_code="CTY",
+                    prediction_year=prediction_year,
+                )
+                cpsct_output_name = build_hrl_prediction_tile_name(
+                    cpsct_template_path.name,
+                    product_code="CPSCT",
+                    prediction_year=prediction_year,
+                )
+                confidence_output_name = build_hrl_prediction_tile_name(
+                    cty_template_path.name,
+                    product_code="CTYCL",
+                    prediction_year=prediction_year,
+                )
+                cty_output_path = cty_output_directory / cty_output_name
+                cpsct_output_path = cpsct_output_directory / cpsct_output_name
+                confidence_output_path = (
+                    confidence_output_directory / confidence_output_name
+                    if write_cty_confidence
+                    else None
+                )
+
+                required_outputs_exist = (
+                    cty_output_path.exists()
+                    and cpsct_output_path.exists()
+                    and (
+                        confidence_output_path is None
+                        or confidence_output_path.exists()
+                    )
+                )
+                if not overwrite_prediction_files and required_outputs_exist:
+                    self.logger.info(
+                        "Using existing generated HRL tiles for %s, year %s.",
+                        tile_code,
+                        prediction_year,
+                    )
+                    generated_cty_tile_ids[prediction_year].append(cty_output_path.stem)
+                    generated_cpsct_tile_ids[prediction_year].append(
+                        cpsct_output_path.stem
+                    )
+                    generated_cty_paths[prediction_year][tile_code] = cty_output_path
+                    generated_cpsct_paths[prediction_year][tile_code] = (
+                        cpsct_output_path
+                    )
+                    if confidence_output_path is not None:
+                        generated_confidence_paths[prediction_year][tile_code] = (
+                            confidence_output_path
+                        )
+                    continue
+
+                with rasterio.open(cty_template_path) as template_source:
+                    tile_bounds_wgs84 = transform_bounds(
+                        template_source.crs,
+                        "EPSG:4326",
+                        *template_source.bounds,
+                        densify_pts=21,
+                    )
+                tile_geometry = box(*tile_bounds_wgs84)
+                prediction_geometry = tile_geometry.intersection(active_geometry)
+                if prediction_geometry.is_empty:
+                    continue
+
+                prediction_tasks.append(
+                    (
+                        prediction_year,
+                        tile_code,
+                        cty_template_path,
+                        cpsct_template_path,
+                        cty_output_path,
+                        cpsct_output_path,
+                        confidence_output_path,
+                        prediction_geometry,
+                    )
+                )
+
+        selected_prediction_cogs: gpd.GeoDataFrame | None = None
+        if prediction_tasks:
+            task_prediction_years = tuple(
+                sorted({task[0] for task in prediction_tasks})
+            )
+            try:
+                self.logger.info(
+                    "Downloading all AlphaEarth prediction COGs for years %s and "
+                    "full study-area bounds %s before classifying %s HRL "
+                    "year-tile task(s).",
+                    task_prediction_years,
+                    study_bounds,
+                    len(prediction_tasks),
+                )
+                selected_prediction_cogs = alphaearth_adapter.read(
+                    years=list(task_prediction_years),
+                    bounds=study_bounds,
+                    dry_run=False,
+                    max_files=max_alphaearth_files_for_prediction,
+                )
+                if selected_prediction_cogs.empty:
+                    raise ValueError(
+                        "No AlphaEarth coverage selected for prediction years "
+                        f"{prediction_years}."
+                    )
+
+                cropland_year_positions = [
+                    hrl_years.index(year) for year in cropland_mask_years
+                ]
+                for (
+                    prediction_year,
+                    tile_code,
+                    cty_template_path,
+                    cpsct_template_path,
+                    cty_output_path,
+                    cpsct_output_path,
+                    confidence_output_path,
+                    prediction_geometry,
+                ) in prediction_tasks:
+                    tile_alphaearth_cogs = select_alphaearth_cogs_for_geometry(
+                        selected_prediction_cogs,
+                        year=prediction_year,
+                        clip_geometry=prediction_geometry,
+                    )
+                    if tile_alphaearth_cogs.empty:
+                        raise ValueError(
+                            f"No downloaded AlphaEarth COGs intersect HRL tile "
+                            f"{tile_code}, year {prediction_year}."
+                        )
+
+                    historical_mask_paths = tuple(
+                        historical_cty_paths_by_code[tile_code][position]
+                        for position in cropland_year_positions
+                    )
+                    predict_alphaearth_crop_tile_to_hrl_geotiffs(
+                        final_models,
+                        cty_template_path,
+                        cpsct_template_path,
+                        tile_alphaearth_cogs,
+                        prediction_geometry,
+                        cty_output_path,
+                        cpsct_output_path,
+                        chunk_size=prediction_chunk_size,
+                        overwrite=overwrite_prediction_files,
+                        elevation=subgrid_elevation,
+                        slope=subgrid_slope,
+                        historical_cty_paths=historical_mask_paths,
+                        apply_historical_cropland_mask=(apply_historical_cropland_mask),
+                        historical_cropland_mask_dilation_pixels=(
+                            historical_cropland_mask_dilation_pixels
+                        ),
+                        smooth_cty_probabilities=smooth_cty_probabilities,
+                        smooth_cpsct_probabilities=smooth_cpsct_probabilities,
+                        unclassified_probability_threshold=(
+                            unclassified_probability_threshold
+                        ),
+                        cty_confidence_output_path=confidence_output_path,
+                    )
+                    generated_cty_tile_ids[prediction_year].append(cty_output_path.stem)
+                    generated_cpsct_tile_ids[prediction_year].append(
+                        cpsct_output_path.stem
+                    )
+                    generated_cty_paths[prediction_year][tile_code] = cty_output_path
+                    generated_cpsct_paths[prediction_year][tile_code] = (
+                        cpsct_output_path
+                    )
+                    if confidence_output_path is not None:
+                        generated_confidence_paths[prediction_year][tile_code] = (
+                            confidence_output_path
+                        )
+                    self.logger.info(
+                        "Wrote smoothed, historically masked HRL-compatible "
+                        "predictions for tile %s, year %s from %s cached COG(s).",
+                        tile_code,
+                        prediction_year,
+                        len(tile_alphaearth_cogs),
+                    )
+                    gc.collect()
+            finally:
+                if (
+                    cleanup_alphaearth_downloads
+                    and selected_prediction_cogs is not None
+                ):
+                    removed = remove_alphaearth_downloads(
+                        selected_prediction_cogs,
+                        logger=self.logger,
+                    )
+                    self.logger.info(
+                        "Removed %s AlphaEarth prediction COGs after all years "
+                        "and HRL prediction tiles completed.",
+                        removed,
+                    )
+                elif selected_prediction_cogs is not None:
+                    self.logger.info(
+                        "Retaining %s AlphaEarth prediction COGs in the local "
+                        "cache for reuse because "
+                        "cleanup_alphaearth_downloads=False.",
+                        len(selected_prediction_cogs),
+                    )
+
+        postprocessing_rows: list[dict[str, int | str]] = []
+        available_tile_codes = sorted(
+            set.intersection(
+                *[set(generated_cty_paths[year]) for year in prediction_years]
+            )
+            if prediction_years
+            else set()
+        )
+        if apply_permanent_crop_temporal_consistency:
+            for tile_code in available_tile_codes:
+                temporal_stats = apply_alphaearth_permanent_crop_temporal_consistency(
+                    historical_cty_paths_by_code[tile_code],
+                    {
+                        year: generated_cty_paths[year][tile_code]
+                        for year in prediction_years
+                    },
+                    predicted_confidence_paths=(
+                        {
+                            year: generated_confidence_paths[year][tile_code]
+                            for year in prediction_years
+                            if tile_code in generated_confidence_paths[year]
+                        }
+                        if write_cty_confidence
+                        else None
+                    ),
+                    chunk_size=max(prediction_chunk_size, 512),
+                )
+                postprocessing_rows.append(
+                    {
+                        "stage": "permanent_crop_temporal_consistency",
+                        "year": -1,
+                        "tile": tile_code,
+                        **temporal_stats,
+                    }
+                )
+                self.logger.info(
+                    "Applied permanent-crop temporal consistency to %s: %s.",
+                    tile_code,
+                    temporal_stats,
+                )
+
+        if apply_cty_mmu_sieve:
+            for prediction_year in prediction_years:
+                year_tile_codes = sorted(generated_cty_paths[prediction_year])
+                cty_year_paths = [
+                    generated_cty_paths[prediction_year][tile_code]
+                    for tile_code in year_tile_codes
+                ]
+                confidence_year_paths = (
+                    [
+                        generated_confidence_paths[prediction_year][tile_code]
+                        for tile_code in year_tile_codes
+                        if tile_code in generated_confidence_paths[prediction_year]
+                    ]
+                    if write_cty_confidence
+                    else None
+                )
+                sieve_results = apply_alphaearth_cty_mmu_sieve(
+                    cty_year_paths,
+                    confidence_paths=confidence_year_paths,
+                    minimum_mapping_unit_pixels=cty_mmu_minimum_pixels,
+                    connectivity=cty_mmu_connectivity,
+                    padding_pixels=cty_mmu_padding_pixels,
+                    maximum_iterations=cty_mmu_maximum_iterations,
+                )
+                if not sieve_results.empty:
+                    sieve_results.insert(0, "year", prediction_year)
+                    sieve_results.insert(0, "stage", "cty_mmu_sieve")
+                    postprocessing_rows.extend(sieve_results.to_dict(orient="records"))
+                    self.logger.info(
+                        "Applied %s-pixel CTY MMU sieve to %s tile(s) for %s; "
+                        "%s pixels changed.",
+                        cty_mmu_minimum_pixels,
+                        len(sieve_results),
+                        prediction_year,
+                        int(sieve_results["changed_pixels"].sum()),
+                    )
+
+        for prediction_year in prediction_years:
+            for tile_code, cty_path in generated_cty_paths[prediction_year].items():
+                cpsct_path = generated_cpsct_paths[prediction_year][tile_code]
+                changed = enforce_cpsct_annual_cropland_mask(
+                    cty_path,
+                    cpsct_path,
+                )
+                postprocessing_rows.append(
+                    {
+                        "stage": "cpsct_annual_cropland_mask",
+                        "year": prediction_year,
+                        "tile": tile_code,
+                        "changed_pixels": changed,
+                    }
+                )
+
+        if postprocessing_rows:
+            self.set_table(
+                pd.DataFrame(postprocessing_rows),
+                name="machine_learning/crop_classification/postprocessing",
+            )
+
+        for prediction_year in prediction_years:
+            year_cty_ids = generated_cty_tile_ids[prediction_year]
+            year_cpsct_ids = generated_cpsct_tile_ids[prediction_year]
+            if not year_cty_ids or not year_cpsct_ids:
+                raise ValueError(
+                    "No HRL-compatible CTY/CPSCT tiles were generated for "
+                    f"{prediction_year}."
+                )
+
+            for catalog_name, tile_ids in (
+                (f"hrl_crop_types_{prediction_year}", year_cty_ids),
+                (f"hrl_secondary_crop_{prediction_year}", year_cpsct_ids),
+            ):
+                if catalog_name in self.data_catalog.catalog:
+                    self.data_catalog.catalog[catalog_name][
+                        "adapter"
+                    ].tile_ids = tile_ids
+
+            self.logger.info(
+                "Finished annual AlphaEarth classification for %s. Generated %s "
+                "CTY and %s CPSCT tiles in the standard HRL catalog folders.",
+                prediction_year,
+                len(year_cty_ids),
+                len(year_cpsct_ids),
+            )
 
     @build_method(
         depends_on=["setup_regions_and_land_use"],

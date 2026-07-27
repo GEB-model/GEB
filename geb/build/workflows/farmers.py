@@ -4,15 +4,25 @@ from __future__ import annotations
 
 import logging
 import math
+import re
+from contextlib import ExitStack
 from dataclasses import dataclass
-from typing import Any
+from pathlib import Path
+from typing import Any, Sequence
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 import xarray as xr
+import rasterio
+import rasterio.enums
+import rasterio.features
+import rasterio.vrt
+import rasterio.windows
+from rasterio.merge import merge as rasterio_merge
 from numba import njit
-from pyproj import CRS
+from pyproj import CRS, Transformer
+from shapely.geometry.base import BaseGeometry
 
 from geb.geb_types import ArrayInt32, TwoDArrayBool, TwoDArrayInt32
 from geb.workflows.raster import pixels_to_coords
@@ -21,6 +31,28 @@ _HRL_FALLOW_CROP_CODE = -1
 _HRL_MISSING_CROP_CODE = -2
 _HRL_NO_CROPLAND_CODE = 0
 _HRL_OUTSIDE_AREA_CODE = 65535
+
+_HRL_CTY_CONFIDENCE_NO_CROPLAND = 253
+_HRL_CTY_CONFIDENCE_OUTSIDE_AREA = 255
+
+HRL_ANNUAL_CTY_CLASS_CODES = (
+    1110,
+    1120,
+    1130,
+    1140,
+    1150,
+    1210,
+    1220,
+    1310,
+    1320,
+    1410,
+    1420,
+    1430,
+    1440,
+    3100,
+)
+HRL_PERMANENT_CTY_CLASS_CODES = (2100, 2200, 2310, 2320, 3200)
+HRL_EXACT_PERMANENT_CTY_CLASS_CODES = (2100, 2200, 2310, 2320)
 
 # Quality flags written to the final farmer table by the multi-year sequence
 # assignment. Larger values indicate stronger local observational support.
@@ -3983,3 +4015,3558 @@ def farm_size_distribution_fit_by_size_class(
     result["actual_share"] = result["actual_n_farms"] / result["actual_n_farms"].sum()
 
     return result
+
+
+# =============================================================================
+# AlphaEarth + HRL annual remote-sensing classification helpers
+# =============================================================================
+
+ALPHAEARTH_NODATA_VALUE = -128
+ALPHAEARTH_EMBEDDING_BANDS = tuple(f"A{band:02d}" for band in range(64))
+HRL_CTY_CLASS_CODES = (
+    0,
+    1110,
+    1120,
+    1130,
+    1140,
+    1150,
+    1210,
+    1220,
+    1310,
+    1320,
+    1410,
+    1420,
+    1430,
+    1440,
+    2100,
+    2200,
+    2310,
+    2320,
+    3100,
+    3200,
+)
+HRL_CPSCT_CLASS_CODES = (0, 1, 2, 3, 4)
+
+# Crop-group aggregation used by the official HRL Croplands verification.
+# The codes correspond to Table 8-3 of the Product User Manual.
+HRL_CTY_CROP_GROUP_CLASS_CODES = (0, 11, 12, 13, 14, 20, 30)
+HRL_CTY_CROP_GROUP_MAP = {
+    0: 0,
+    1110: 11,
+    1120: 11,
+    1130: 11,
+    1140: 11,
+    1150: 11,
+    1210: 12,
+    1220: 12,
+    1310: 13,
+    1320: 13,
+    1410: 14,
+    1420: 14,
+    1430: 14,
+    1440: 14,
+    2100: 20,
+    2200: 20,
+    2310: 20,
+    2320: 20,
+    3100: 30,
+    3200: 30,
+}
+HRL_CTY_CROP_GROUP_NAMES = {
+    0: "No cropland",
+    11: "Cereals",
+    12: "Dry pulses & vegetables",
+    13: "Root/tuber crops",
+    14: "Non-permanent industrial crops",
+    20: "Permanent crops",
+    30: "Unclassified crop",
+}
+HRL_CTY_AGGREGATION_LEVEL_1_CLASS_CODES = (
+    11,
+    1130,
+    1140,
+    12,
+    1320,
+    1410,
+    1420,
+    1430,
+    1440,
+    20,
+)
+HRL_CTY_AGGREGATION_LEVEL_1_MAP = {
+    1110: 11,
+    1120: 11,
+    1150: 11,
+    1130: 1130,
+    1140: 1140,
+    1210: 12,
+    1220: 12,
+    1310: 12,
+    1320: 1320,
+    1410: 1410,
+    1420: 1420,
+    1430: 1430,
+    1440: 1440,
+    2100: 20,
+    2200: 20,
+    2310: 20,
+    2320: 20,
+}
+HRL_CTY_AGGREGATION_LEVEL_1_NAMES = {
+    11: "Other cereals",
+    1130: "Maize",
+    1140: "Rice",
+    12: "Dry pulses, fresh vegetables & potatoes",
+    1320: "Sugar beet",
+    1410: "Sunflower",
+    1420: "Soybeans",
+    1430: "Rapeseed",
+    1440: "Flax, cotton and hemp",
+    20: "Permanent crops",
+}
+HRL_CPSCT_CLASS_NAMES = {
+    0: "No secondary crop",
+    1: "Short summer crop",
+    2: "Long summer crop",
+    3: "Short winter crop",
+    4: "Long winter crop",
+}
+
+_HRL_TILE_NAME_PATTERN = re.compile(
+    r"^CLMS_HRLVLCC_(?P<product>CTY|CTYCL|CPSCT)_S(?P<year>\d{4})_"
+    r"R10m_(?P<tile>[EW]\d+[NS]\d+)_03035_(?P<version>V\d+_R\d+)$"
+)
+
+
+@dataclass(slots=True)
+class AlphaEarthCropModelBundle:
+    """Trained CTY and CPSCT models sharing one annual predictor schema.
+
+    Attributes:
+        cty_model: Classifier predicting the HRL Crop Types class.
+        cpsct_model: Classifier predicting HRL Secondary Crops Type on cropland.
+        feature_names: Ordered predictor names expected by both classifiers.
+        model_type: Name of the estimator family used during fitting.
+        cty_classes: Ordered CTY class codes represented by the workflow.
+        cpsct_classes: Ordered CPSCT class codes represented by the workflow.
+    """
+
+    cty_model: Any
+    cpsct_model: Any
+    feature_names: tuple[str, ...]
+    model_type: str
+    cty_classes: tuple[int, ...] = HRL_CTY_CLASS_CODES
+    cpsct_classes: tuple[int, ...] = HRL_CPSCT_CLASS_CODES
+
+
+def alphaearth_crop_feature_names(
+    *,
+    include_coordinates: bool = False,
+    include_topography: bool = False,
+) -> tuple[str, ...]:
+    """Return the annual AlphaEarth predictor schema.
+
+    All 64 AlphaEarth embedding dimensions are always retained. Optional
+    longitude/latitude and elevation/slope predictors are appended without
+    replacing or aggregating any embedding axis.
+
+    Args:
+        include_coordinates: Include longitude and latitude predictors.
+        include_topography: Include elevation and local terrain-gradient predictors.
+
+    Returns:
+        Ordered annual feature names.
+    """
+    names: list[str] = [f"alphaearth_{band}" for band in ALPHAEARTH_EMBEDDING_BANDS]
+    if include_coordinates:
+        names.extend(("longitude", "latitude"))
+    if include_topography:
+        names.extend(("elevation_m", "slope_gradient"))
+    return tuple(names)
+
+
+def dequantize_alphaearth_embeddings(values: np.ndarray) -> np.ndarray:
+    """Convert raw AlphaEarth int8 embeddings to float32 values.
+
+    Args:
+        values: Raw AlphaEarth values. The input shape is preserved.
+
+    Returns:
+        Dequantized float32 values with raw ``-128`` converted to ``NaN``.
+    """
+    raw = np.asarray(values)
+    nodata = raw == ALPHAEARTH_NODATA_VALUE
+    raw_float = raw.astype(np.float32)
+    result = ((raw_float / 127.5) ** 2) * np.sign(raw_float)
+    result[nodata] = np.nan
+    return result
+
+
+def _update_priority_reservoir(
+    reservoir: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray]],
+    *,
+    class_code: int,
+    rows: np.ndarray,
+    cols: np.ndarray,
+    priorities: np.ndarray,
+    maximum_samples: int,
+) -> None:
+    """Retain a reproducible bounded sample reservoir for one class."""
+    if rows.size == 0 or maximum_samples <= 0:
+        return
+
+    previous = reservoir.get(class_code)
+    if previous is not None:
+        rows = np.concatenate((previous[0], rows))
+        cols = np.concatenate((previous[1], cols))
+        priorities = np.concatenate((previous[2], priorities))
+
+    if priorities.size > maximum_samples:
+        keep = np.argpartition(priorities, maximum_samples - 1)[:maximum_samples]
+        rows = rows[keep]
+        cols = cols[keep]
+        priorities = priorities[keep]
+
+    reservoir[class_code] = (
+        rows.astype(np.int64, copy=False),
+        cols.astype(np.int64, copy=False),
+        priorities.astype(np.float64, copy=False),
+    )
+
+
+def _stable_class_interior_mask(
+    values: np.ndarray,
+    edge_buffer_pixels: int,
+) -> np.ndarray:
+    """Return pixels whose square neighbourhood has one unchanged class label.
+
+    Pixels within ``edge_buffer_pixels`` of a raster edge or any different class
+    are excluded. The helper is deliberately NumPy-only so it does not introduce
+    a SciPy dependency into the build workflow.
+    """
+    values = np.asarray(values)
+    if values.ndim != 2:
+        raise ValueError("values must be a two-dimensional class raster.")
+    if edge_buffer_pixels < 0:
+        raise ValueError("edge_buffer_pixels cannot be negative.")
+    if edge_buffer_pixels == 0:
+        return np.ones(values.shape, dtype=bool)
+
+    radius = int(edge_buffer_pixels)
+    padded = np.pad(
+        values,
+        ((radius, radius), (radius, radius)),
+        mode="constant",
+        constant_values=np.iinfo(np.int32).min,
+    )
+    stable = np.ones(values.shape, dtype=bool)
+    height, width = values.shape
+    for row_offset in range(-radius, radius + 1):
+        for col_offset in range(-radius, radius + 1):
+            neighbour = padded[
+                radius + row_offset : radius + row_offset + height,
+                radius + col_offset : radius + col_offset + width,
+            ]
+            stable &= neighbour == values
+    return stable
+
+
+def _lattice_positions(
+    *,
+    stride: int,
+    row_offset: int,
+    col_offset: int,
+    y_start: int,
+    chunk_height: int,
+    n_cols: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return local row and global column positions for one sampling lattice."""
+    local_row_start = (row_offset - y_start) % stride
+    return (
+        np.arange(local_row_start, chunk_height, stride, dtype=np.int64),
+        np.arange(col_offset, n_cols, stride, dtype=np.int64),
+    )
+
+
+def balanced_hrl_sample_locations(
+    crop_types: xr.DataArray,
+    secondary_crop: xr.DataArray,
+    clip_geometry: BaseGeometry,
+    *,
+    geometry_crs: str = "EPSG:4326",
+    samples_per_cty_class: int = 500,
+    samples_per_cpsct_class: int = 500,
+    sample_stride_pixels: int = 5,
+    rare_class_sample_stride_pixels: int | None = 1,
+    rare_class_threshold_candidates: int = 50_000,
+    rare_class_sample_multiplier: float = 3.0,
+    training_label_edge_buffer_pixels: int = 0,
+    chunk_rows: int = 512,
+    random_seed: int = 42,
+) -> pd.DataFrame:
+    """Select edge-filtered, adaptive, class-balanced HRL sample locations.
+
+    Common classes use the standard spatially thinned lattice. Classes with fewer
+    than ``rare_class_threshold_candidates`` eligible observations on the denser
+    rare-class lattice use that lattice instead and receive an enlarged bounded
+    reservoir. CTY and CPSCT pixels close to class boundaries can be excluded to
+    reduce mixed-pixel and label-registration noise.
+    """
+    assert_matching_raster_grid(crop_types, secondary_crop)
+    if crop_types.rio.crs is None:
+        raise ValueError("HRL crop rasters must have a CRS.")
+    if samples_per_cty_class < 1 or samples_per_cpsct_class < 1:
+        raise ValueError("Samples per class must be at least one.")
+    if sample_stride_pixels < 1:
+        raise ValueError("sample_stride_pixels must be at least one.")
+    if (
+        rare_class_sample_stride_pixels is not None
+        and rare_class_sample_stride_pixels < 1
+    ):
+        raise ValueError("rare_class_sample_stride_pixels must be at least one.")
+    if rare_class_threshold_candidates < 1:
+        raise ValueError("rare_class_threshold_candidates must be at least one.")
+    if rare_class_sample_multiplier < 1.0:
+        raise ValueError("rare_class_sample_multiplier must be at least 1.0.")
+    if training_label_edge_buffer_pixels < 0:
+        raise ValueError("training_label_edge_buffer_pixels cannot be negative.")
+    if chunk_rows < 1:
+        raise ValueError("chunk_rows must be at least one.")
+
+    rare_stride = (
+        sample_stride_pixels
+        if rare_class_sample_stride_pixels is None
+        else int(rare_class_sample_stride_pixels)
+    )
+    geometry_in_raster_crs = (
+        gpd.GeoSeries([clip_geometry], crs=geometry_crs)
+        .to_crs(crop_types.rio.crs)
+        .iloc[0]
+    )
+    if geometry_in_raster_crs.is_empty:
+        raise ValueError("The HRL sampling geometry is empty after reprojection.")
+
+    rng = np.random.default_rng(random_seed)
+    standard_offsets = (
+        int(rng.integers(0, sample_stride_pixels)),
+        int(rng.integers(0, sample_stride_pixels)),
+    )
+    rare_offsets = (
+        int(rng.integers(0, rare_stride)),
+        int(rng.integers(0, rare_stride)),
+    )
+
+    standard_cty: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+    standard_cpsct: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+    rare_cty: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+    rare_cpsct: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+    cty_candidate_counts = {int(code): 0 for code in HRL_CTY_CLASS_CODES}
+    cpsct_candidate_counts = {int(code): 0 for code in HRL_CPSCT_CLASS_CODES}
+
+    rare_cty_cap = max(
+        samples_per_cty_class,
+        int(np.ceil(samples_per_cty_class * rare_class_sample_multiplier)),
+    )
+    rare_cpsct_cap = max(
+        samples_per_cpsct_class,
+        int(np.ceil(samples_per_cpsct_class * rare_class_sample_multiplier)),
+    )
+
+    n_rows = crop_types.sizes["y"]
+    n_cols = crop_types.sizes["x"]
+    radius = int(training_label_edge_buffer_pixels)
+
+    for y_start in range(0, n_rows, chunk_rows):
+        y_stop = min(y_start + chunk_rows, n_rows)
+        read_start = max(0, y_start - radius)
+        read_stop = min(n_rows, y_stop + radius)
+        crop_read_da = crop_types.isel(y=slice(read_start, read_stop))
+        secondary_read_da = secondary_crop.isel(y=slice(read_start, read_stop))
+
+        crop_read = np.asarray(crop_read_da.values)
+        secondary_read = np.asarray(secondary_read_da.values)
+        if np.issubdtype(crop_read.dtype, np.floating):
+            crop_read = np.nan_to_num(crop_read, nan=_HRL_OUTSIDE_AREA_CODE)
+        if np.issubdtype(secondary_read.dtype, np.floating):
+            secondary_read = np.nan_to_num(
+                secondary_read,
+                nan=_HRL_OUTSIDE_AREA_CODE,
+            )
+        crop_read = crop_read.astype(np.int32, copy=False)
+        secondary_read = secondary_read.astype(np.int32, copy=False)
+
+        core_start = y_start - read_start
+        core_stop = core_start + (y_stop - y_start)
+        crop_values = crop_read[core_start:core_stop]
+        secondary_values = secondary_read[core_start:core_stop]
+        crop_interior = _stable_class_interior_mask(crop_read, radius)[
+            core_start:core_stop
+        ]
+        secondary_interior = _stable_class_interior_mask(secondary_read, radius)[
+            core_start:core_stop
+        ]
+
+        crop_chunk_da = crop_types.isel(y=slice(y_start, y_stop))
+        inside_region = ~rasterio.features.geometry_mask(
+            [geometry_in_raster_crs.__geo_interface__],
+            out_shape=crop_values.shape,
+            transform=crop_chunk_da.rio.transform(recalc=True),
+            invert=False,
+            all_touched=False,
+        )
+
+        def update_lattice(
+            *,
+            stride: int,
+            offsets: tuple[int, int],
+            cty_reservoir: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray]],
+            cpsct_reservoir: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray]],
+            cty_cap: int,
+            cpsct_cap: int,
+            count_candidates: bool,
+        ) -> None:
+            row_positions, col_positions = _lattice_positions(
+                stride=stride,
+                row_offset=offsets[0],
+                col_offset=offsets[1],
+                y_start=y_start,
+                chunk_height=crop_values.shape[0],
+                n_cols=n_cols,
+            )
+            if row_positions.size == 0 or col_positions.size == 0:
+                return
+
+            crop_lattice = crop_values[np.ix_(row_positions, col_positions)]
+            secondary_lattice = secondary_values[np.ix_(row_positions, col_positions)]
+            cty_eligible = (
+                inside_region[np.ix_(row_positions, col_positions)]
+                & crop_interior[np.ix_(row_positions, col_positions)]
+            )
+            cpsct_eligible = (
+                cty_eligible & secondary_interior[np.ix_(row_positions, col_positions)]
+            )
+            global_rows = row_positions + y_start
+
+            for class_code in HRL_CTY_CLASS_CODES:
+                candidate_rows, candidate_cols = np.where(
+                    cty_eligible & (crop_lattice == class_code)
+                )
+                if count_candidates:
+                    cty_candidate_counts[int(class_code)] += int(candidate_rows.size)
+                if candidate_rows.size:
+                    rows = global_rows[candidate_rows]
+                    cols = col_positions[candidate_cols]
+                    _update_priority_reservoir(
+                        cty_reservoir,
+                        class_code=int(class_code),
+                        rows=rows,
+                        cols=cols,
+                        priorities=rng.random(rows.size),
+                        maximum_samples=cty_cap,
+                    )
+
+            cropland = np.isin(crop_lattice, HRL_CTY_CLASS_CODES[1:])
+            for class_code in HRL_CPSCT_CLASS_CODES:
+                candidate_rows, candidate_cols = np.where(
+                    cpsct_eligible & cropland & (secondary_lattice == class_code)
+                )
+                if count_candidates:
+                    cpsct_candidate_counts[int(class_code)] += int(candidate_rows.size)
+                if candidate_rows.size:
+                    rows = global_rows[candidate_rows]
+                    cols = col_positions[candidate_cols]
+                    _update_priority_reservoir(
+                        cpsct_reservoir,
+                        class_code=int(class_code),
+                        rows=rows,
+                        cols=cols,
+                        priorities=rng.random(rows.size),
+                        maximum_samples=cpsct_cap,
+                    )
+
+        update_lattice(
+            stride=sample_stride_pixels,
+            offsets=standard_offsets,
+            cty_reservoir=standard_cty,
+            cpsct_reservoir=standard_cpsct,
+            cty_cap=samples_per_cty_class,
+            cpsct_cap=samples_per_cpsct_class,
+            count_candidates=(rare_stride == sample_stride_pixels),
+        )
+        if rare_stride != sample_stride_pixels:
+            update_lattice(
+                stride=rare_stride,
+                offsets=rare_offsets,
+                cty_reservoir=rare_cty,
+                cpsct_reservoir=rare_cpsct,
+                cty_cap=rare_cty_cap,
+                cpsct_cap=rare_cpsct_cap,
+                count_candidates=True,
+            )
+        else:
+            rare_cty = standard_cty
+            rare_cpsct = standard_cpsct
+
+    selected_locations: set[tuple[int, int]] = set()
+    for class_code in HRL_CTY_CLASS_CODES:
+        is_rare = (
+            cty_candidate_counts[int(class_code)] < rare_class_threshold_candidates
+        )
+        reservoir = rare_cty if is_rare else standard_cty
+        selected = reservoir.get(int(class_code))
+        if selected is not None:
+            selected_locations.update(
+                (int(row), int(col))
+                for row, col in zip(selected[0], selected[1], strict=True)
+            )
+    for class_code in HRL_CPSCT_CLASS_CODES:
+        is_rare = (
+            cpsct_candidate_counts[int(class_code)] < rare_class_threshold_candidates
+        )
+        reservoir = rare_cpsct if is_rare else standard_cpsct
+        selected = reservoir.get(int(class_code))
+        if selected is not None:
+            selected_locations.update(
+                (int(row), int(col))
+                for row, col in zip(selected[0], selected[1], strict=True)
+            )
+
+    if not selected_locations:
+        raise ValueError("No HRL sample locations were selected.")
+
+    ordered_locations = sorted(selected_locations)
+    rows = np.asarray([location[0] for location in ordered_locations], dtype=np.int64)
+    cols = np.asarray([location[1] for location in ordered_locations], dtype=np.int64)
+    row_indexer = xr.DataArray(rows, dims=("sample",))
+    col_indexer = xr.DataArray(cols, dims=("sample",))
+    cty_labels = np.asarray(
+        crop_types.isel(y=row_indexer, x=col_indexer).values,
+        dtype=np.int32,
+    )
+    cpsct_labels = np.asarray(
+        secondary_crop.isel(y=row_indexer, x=col_indexer).values,
+        dtype=np.int32,
+    )
+    cpsct_labels = np.where(cty_labels == 0, 0, cpsct_labels).astype(np.int32)
+
+    transform = crop_types.rio.transform(recalc=True)
+    x_coordinates, y_coordinates = rasterio.transform.xy(
+        transform,
+        rows,
+        cols,
+        offset="center",
+    )
+    return pd.DataFrame(
+        {
+            "row": rows,
+            "col": cols,
+            "x": np.asarray(x_coordinates, dtype=np.float64),
+            "y": np.asarray(y_coordinates, dtype=np.float64),
+            "cty_label": cty_labels,
+            "cpsct_label": cpsct_labels,
+        }
+    )
+
+
+def select_alphaearth_cogs_for_geometry(
+    selected_cogs: gpd.GeoDataFrame,
+    *,
+    year: int,
+    clip_geometry: BaseGeometry,
+) -> gpd.GeoDataFrame:
+    """Select downloaded AlphaEarth COGs for one year and geometry.
+
+    This helper allows one study-area-wide AlphaEarth download to be reused by
+    many regional sampling passes or HRL prediction tiles without repeatedly
+    downloading the same large COGs.
+
+    Args:
+        selected_cogs: Study-area AlphaEarth selection returned by the adapter.
+        year: Required AlphaEarth observation year.
+        clip_geometry: WGS84 region or output-tile geometry.
+
+    Returns:
+        GeoDataFrame containing only COGs from ``year`` that intersect
+        ``clip_geometry``.
+
+    Raises:
+        ValueError: If required columns, CRS information, or geometry are invalid.
+    """
+    if "year" not in selected_cogs.columns:
+        raise ValueError("selected_cogs must contain a 'year' column.")
+    if selected_cogs.crs is None:
+        raise ValueError("selected_cogs must have a CRS.")
+    if clip_geometry is None or clip_geometry.is_empty:
+        raise ValueError("clip_geometry must be a non-empty WGS84 geometry.")
+
+    cogs_wgs84 = (
+        selected_cogs
+        if selected_cogs.crs.to_epsg() == 4326
+        else selected_cogs.to_crs("EPSG:4326")
+    )
+    year_mask = cogs_wgs84["year"].astype(int).eq(int(year))
+    geometry_mask = cogs_wgs84.geometry.intersects(clip_geometry)
+    return cogs_wgs84.loc[year_mask & geometry_mask].copy()
+
+
+def sample_alphaearth_embeddings(
+    selected_cogs: gpd.GeoDataFrame,
+    longitude: np.ndarray,
+    latitude: np.ndarray,
+) -> np.ndarray:
+    """Sample dequantized AlphaEarth embeddings from downloaded COGs.
+
+    Args:
+        selected_cogs: AlphaEarth index rows containing ``local_path`` and
+            WGS84 geometries for one year.
+        longitude: Sample longitudes in EPSG:4326.
+        latitude: Sample latitudes in EPSG:4326.
+
+    Returns:
+        Float32 array with shape ``(n_samples, 64)``. Samples not covered by a
+        valid COG remain ``NaN``.
+    """
+    if "local_path" not in selected_cogs.columns:
+        raise ValueError("selected_cogs must contain a 'local_path' column.")
+    longitude = np.asarray(longitude, dtype=np.float64)
+    latitude = np.asarray(latitude, dtype=np.float64)
+    if longitude.shape != latitude.shape:
+        raise ValueError("longitude and latitude must align.")
+
+    cogs = selected_cogs
+    if cogs.crs is None:
+        cogs = cogs.set_crs("EPSG:4326")
+    elif cogs.crs.to_epsg() != 4326:
+        cogs = cogs.to_crs("EPSG:4326")
+
+    embeddings = np.full(
+        (longitude.size, len(ALPHAEARTH_EMBEDDING_BANDS)),
+        np.nan,
+        dtype=np.float32,
+    )
+    unresolved = np.ones(longitude.size, dtype=bool)
+
+    for cog in cogs.itertuples(index=False):
+        if not unresolved.any():
+            break
+        local_path = Path(str(cog.local_path))
+        if not local_path.exists():
+            raise FileNotFoundError(f"Missing downloaded AlphaEarth COG: {local_path}")
+
+        west, south, east, north = cog.geom.bounds
+        candidate_mask = (
+            unresolved
+            & (longitude >= west)
+            & (longitude <= east)
+            & (latitude >= south)
+            & (latitude <= north)
+        )
+        candidate_indices = np.flatnonzero(candidate_mask)
+        if candidate_indices.size == 0:
+            continue
+
+        with rasterio.open(local_path) as source:
+            if source.count != len(ALPHAEARTH_EMBEDDING_BANDS):
+                raise ValueError(
+                    f"Expected 64 AlphaEarth bands in {local_path}, "
+                    f"found {source.count}."
+                )
+            transformer = Transformer.from_crs(
+                "EPSG:4326",
+                source.crs,
+                always_xy=True,
+            )
+            x_values, y_values = transformer.transform(
+                longitude[candidate_indices],
+                latitude[candidate_indices],
+            )
+            raw_samples = np.vstack(
+                list(
+                    source.sample(
+                        zip(x_values, y_values, strict=True),
+                        indexes=list(range(1, source.count + 1)),
+                        masked=False,
+                    )
+                )
+            )
+
+        valid = np.all(raw_samples != ALPHAEARTH_NODATA_VALUE, axis=1)
+        if valid.any():
+            resolved_indices = candidate_indices[valid]
+            embeddings[resolved_indices] = dequantize_alphaearth_embeddings(
+                raw_samples[valid]
+            )
+            unresolved[resolved_indices] = False
+
+    return embeddings
+
+
+def sample_dataarray_at_coordinates(
+    data: xr.DataArray,
+    x_coordinates: np.ndarray,
+    y_coordinates: np.ndarray,
+    *,
+    coordinates_crs: str | CRS,
+) -> np.ndarray:
+    """Sample one regular two-dimensional raster using bilinear interpolation.
+
+    The input coordinates may use any CRS. Values outside the raster or surrounded
+    only by nodata are returned as ``NaN``.
+
+    Args:
+        data: Two-dimensional georeferenced DataArray.
+        x_coordinates: X coordinates of sample locations.
+        y_coordinates: Y coordinates of sample locations.
+        coordinates_crs: CRS of the supplied coordinates.
+
+    Returns:
+        Float32 sampled values aligned with the input coordinates.
+    """
+    if data.ndim != 2:
+        raise ValueError("Topographic predictor rasters must be two-dimensional.")
+    if data.rio.crs is None:
+        raise ValueError("Topographic predictor rasters must have a CRS.")
+
+    x_coordinates = np.asarray(x_coordinates, dtype=np.float64)
+    y_coordinates = np.asarray(y_coordinates, dtype=np.float64)
+    if x_coordinates.shape != y_coordinates.shape:
+        raise ValueError("Topographic sample coordinates must align.")
+
+    coordinate_crs = CRS.from_user_input(coordinates_crs)
+    data_crs = CRS.from_user_input(data.rio.crs)
+    if coordinate_crs != data_crs:
+        transformer = Transformer.from_crs(
+            coordinate_crs,
+            data_crs,
+            always_xy=True,
+        )
+        x_coordinates, y_coordinates = transformer.transform(
+            x_coordinates,
+            y_coordinates,
+        )
+        x_coordinates = np.asarray(x_coordinates, dtype=np.float64)
+        y_coordinates = np.asarray(y_coordinates, dtype=np.float64)
+
+    values = np.asarray(data.values, dtype=np.float32)
+    transform = data.rio.transform(recalc=True)
+    inverse_transform = ~transform
+    col_corner, row_corner = inverse_transform * (x_coordinates, y_coordinates)
+
+    # Rasterio affine coordinates refer to pixel corners. Shift by half a pixel so
+    # integer indices correspond to pixel centres before bilinear interpolation.
+    col_position = np.asarray(col_corner, dtype=np.float64) - 0.5
+    row_position = np.asarray(row_corner, dtype=np.float64) - 0.5
+
+    height, width = values.shape
+    inside = (
+        (col_position >= -0.5)
+        & (col_position <= width - 0.5)
+        & (row_position >= -0.5)
+        & (row_position <= height - 0.5)
+    )
+    result = np.full(x_coordinates.shape, np.nan, dtype=np.float32)
+    if not inside.any():
+        return result
+
+    clipped_cols = np.clip(col_position[inside], 0.0, width - 1.0)
+    clipped_rows = np.clip(row_position[inside], 0.0, height - 1.0)
+    col0 = np.floor(clipped_cols).astype(np.int64)
+    row0 = np.floor(clipped_rows).astype(np.int64)
+    col1 = np.minimum(col0 + 1, width - 1)
+    row1 = np.minimum(row0 + 1, height - 1)
+    col_weight = clipped_cols - col0
+    row_weight = clipped_rows - row0
+
+    v00 = values[row0, col0]
+    v01 = values[row0, col1]
+    v10 = values[row1, col0]
+    v11 = values[row1, col1]
+    weights = np.column_stack(
+        (
+            (1.0 - row_weight) * (1.0 - col_weight),
+            (1.0 - row_weight) * col_weight,
+            row_weight * (1.0 - col_weight),
+            row_weight * col_weight,
+        )
+    ).astype(np.float32)
+    neighbours = np.column_stack((v00, v01, v10, v11)).astype(np.float32)
+    finite = np.isfinite(neighbours)
+    weighted_sum = np.sum(
+        np.where(finite, neighbours * weights, 0.0),
+        axis=1,
+    )
+    weight_sum = np.sum(np.where(finite, weights, 0.0), axis=1)
+    sampled = np.divide(
+        weighted_sum,
+        weight_sum,
+        out=np.full(weighted_sum.shape, np.nan, dtype=np.float32),
+        where=weight_sum > 0.0,
+    )
+    result[np.flatnonzero(inside)] = sampled.astype(np.float32, copy=False)
+    return result
+
+
+def build_alphaearth_crop_feature_matrix(
+    current_embeddings: np.ndarray,
+    longitude: np.ndarray,
+    latitude: np.ndarray,
+    *,
+    include_coordinates: bool = False,
+    include_topography: bool = False,
+    elevation_m: np.ndarray | None = None,
+    slope_gradient: np.ndarray | None = None,
+) -> tuple[np.ndarray, tuple[str, ...]]:
+    """Construct annual remote-sensing predictors for training and inference.
+
+    All 64 AlphaEarth embedding dimensions are included simultaneously. Optional
+    coordinates and topography are appended as additional predictors.
+
+    Args:
+        current_embeddings: Same-year AlphaEarth embeddings with shape ``(n, 64)``.
+        longitude: Longitude per observation.
+        latitude: Latitude per observation.
+        include_coordinates: Include longitude and latitude predictors.
+        include_topography: Include elevation and local terrain gradient.
+        elevation_m: Elevation per observation when topography is enabled.
+        slope_gradient: Local terrain gradient per observation when enabled.
+
+    Returns:
+        Predictor matrix and its ordered feature names.
+    """
+    embeddings = np.asarray(current_embeddings, dtype=np.float32)
+    if embeddings.ndim != 2 or embeddings.shape[1] != 64:
+        raise ValueError("AlphaEarth embeddings must have shape (n, 64).")
+
+    n_samples = embeddings.shape[0]
+    longitude = np.asarray(longitude, dtype=np.float32)
+    latitude = np.asarray(latitude, dtype=np.float32)
+    if longitude.shape != (n_samples,) or latitude.shape != (n_samples,):
+        raise ValueError("Coordinates must contain one value per embedding sample.")
+
+    feature_parts: list[np.ndarray] = [embeddings]
+    if include_coordinates:
+        feature_parts.append(np.column_stack((longitude, latitude)).astype(np.float32))
+
+    if include_topography:
+        if elevation_m is None or slope_gradient is None:
+            raise ValueError(
+                "elevation_m and slope_gradient are required when "
+                "include_topography=True."
+            )
+        elevation_values = np.asarray(elevation_m, dtype=np.float32)
+        slope_values = np.asarray(slope_gradient, dtype=np.float32)
+        if elevation_values.shape != (n_samples,) or slope_values.shape != (n_samples,):
+            raise ValueError(
+                "Topographic predictors must contain one value per embedding sample."
+            )
+        feature_parts.append(
+            np.column_stack((elevation_values, slope_values)).astype(np.float32)
+        )
+
+    feature_matrix = np.column_stack(feature_parts).astype(np.float32, copy=False)
+    feature_names = alphaearth_crop_feature_names(
+        include_coordinates=include_coordinates,
+        include_topography=include_topography,
+    )
+    if feature_matrix.shape[1] != len(feature_names):
+        raise AssertionError("AlphaEarth feature matrix and schema do not align.")
+    return feature_matrix, feature_names
+
+
+def load_alphaearth_crop_training_samples(
+    source: pd.DataFrame | str | Path,
+    *,
+    hrl_years: tuple[int, ...],
+    include_coordinates: bool = False,
+    include_topography: bool = False,
+    active_region_ids: np.ndarray | None = None,
+) -> pd.DataFrame:
+    """Load and validate a previously stored AlphaEarth-HRL sample table.
+
+    The loader allows repeated model-fitting and prediction experiments without
+    rerunning the expensive HRL/AlphaEarth sampling stage. It selects only the
+    requested observation years and validates that the stored feature schema is
+    compatible with the current classifier settings.
+
+    Args:
+        source: Existing sample DataFrame or Parquet path.
+        hrl_years: Observation years that must be present in the stored table.
+        include_coordinates: Require stored longitude and latitude predictors.
+        include_topography: Require stored elevation and slope predictors.
+        active_region_ids: Optional region IDs belonging to the active model. Any
+            stored sample from another region causes an error.
+
+    Returns:
+        Validated sample table restricted to ``hrl_years``.
+
+    Raises:
+        FileNotFoundError: If a supplied Parquet path does not exist.
+        TypeError: If the loaded object is not a DataFrame.
+        ValueError: If required columns, years, labels, or regions are invalid.
+    """
+    requested_years = tuple(int(year) for year in hrl_years)
+    if not requested_years:
+        raise ValueError("hrl_years must contain at least one year.")
+
+    if isinstance(source, pd.DataFrame):
+        samples = source.copy()
+    else:
+        source_path = Path(source)
+        if not source_path.exists():
+            raise FileNotFoundError(
+                f"Stored AlphaEarth sample table does not exist: {source_path}"
+            )
+        samples = pd.read_parquet(source_path)
+
+    if not isinstance(samples, pd.DataFrame):
+        raise TypeError(
+            "Stored AlphaEarth samples must load as a pandas DataFrame; found "
+            f"{type(samples).__name__}."
+        )
+    if samples.empty:
+        raise ValueError("Stored AlphaEarth sample table is empty.")
+
+    feature_names = alphaearth_crop_feature_names(
+        include_coordinates=include_coordinates,
+        include_topography=include_topography,
+    )
+    required_columns = set(feature_names) | {
+        "cty_label",
+        "cpsct_label",
+        "year",
+        "region_id",
+        "country_iso3",
+    }
+    missing_columns = required_columns - set(samples.columns)
+    if missing_columns:
+        raise ValueError(
+            "Stored AlphaEarth samples are incompatible with the current feature "
+            f"settings; missing columns: {sorted(missing_columns)}."
+        )
+
+    numeric_years = pd.to_numeric(samples["year"], errors="coerce")
+    if numeric_years.isna().any() or not np.allclose(
+        numeric_years.to_numpy(dtype=np.float64),
+        np.rint(numeric_years.to_numpy(dtype=np.float64)),
+    ):
+        raise ValueError("Stored AlphaEarth sample years must be finite integers.")
+    samples["year"] = np.rint(numeric_years).astype(np.int32)
+
+    available_years = set(int(year) for year in samples["year"].unique())
+    missing_years = set(requested_years) - available_years
+    if missing_years:
+        raise ValueError(
+            "Stored AlphaEarth samples do not contain every requested HRL year. "
+            f"Missing years: {sorted(missing_years)}; available years: "
+            f"{sorted(available_years)}."
+        )
+    samples = samples.loc[samples["year"].isin(requested_years)].copy()
+
+    numeric_regions = pd.to_numeric(samples["region_id"], errors="coerce")
+    if numeric_regions.isna().any() or not np.allclose(
+        numeric_regions.to_numpy(dtype=np.float64),
+        np.rint(numeric_regions.to_numpy(dtype=np.float64)),
+    ):
+        raise ValueError("Stored AlphaEarth sample region IDs must be finite integers.")
+    samples["region_id"] = np.rint(numeric_regions).astype(np.int32)
+
+    if active_region_ids is not None:
+        expected_regions = np.unique(np.asarray(active_region_ids, dtype=np.int32))
+        stored_regions = np.unique(samples["region_id"].to_numpy(dtype=np.int32))
+        unknown_regions = np.setdiff1d(stored_regions, expected_regions)
+        if unknown_regions.size:
+            raise ValueError(
+                "Stored AlphaEarth samples contain region IDs outside the active "
+                f"model: {unknown_regions[:20].tolist()}."
+            )
+
+    cty_labels = samples["cty_label"].to_numpy(dtype=np.int32)
+    invalid_cty = ~np.isin(cty_labels, HRL_CTY_CLASS_CODES)
+    if invalid_cty.any():
+        invalid_values = np.unique(cty_labels[invalid_cty])
+        raise ValueError(
+            "Stored AlphaEarth samples contain unsupported CTY labels: "
+            f"{invalid_values[:20].tolist()}."
+        )
+
+    cpsct_labels = samples["cpsct_label"].to_numpy(dtype=np.int32)
+    invalid_cpsct = (cty_labels != 0) & ~np.isin(
+        cpsct_labels,
+        HRL_CPSCT_CLASS_CODES,
+    )
+    if invalid_cpsct.any():
+        invalid_values = np.unique(cpsct_labels[invalid_cpsct])
+        raise ValueError(
+            "Stored cropland samples contain unsupported CPSCT labels: "
+            f"{invalid_values[:20].tolist()}."
+        )
+
+    # A Parquet table written by an earlier run may contain a stale split column.
+    # The caller always reconstructs temporal splits from the current settings.
+    return samples.reset_index(drop=True)
+
+
+def create_alphaearth_crop_training_samples(
+    crop_types: xr.DataArray,
+    secondary_crop: xr.DataArray,
+    current_alphaearth_cogs: gpd.GeoDataFrame,
+    clip_geometry: BaseGeometry,
+    *,
+    year: int,
+    region_id: int,
+    country_iso3: str,
+    samples_per_cty_class: int = 500,
+    samples_per_cpsct_class: int = 500,
+    sample_stride_pixels: int = 5,
+    rare_class_sample_stride_pixels: int | None = 1,
+    rare_class_threshold_candidates: int = 50_000,
+    rare_class_sample_multiplier: float = 3.0,
+    training_label_edge_buffer_pixels: int = 0,
+    sample_chunk_rows: int = 512,
+    include_coordinates: bool = False,
+    include_topography: bool = False,
+    elevation: xr.DataArray | None = None,
+    slope: xr.DataArray | None = None,
+    random_seed: int = 42,
+) -> pd.DataFrame:
+    """Create one regional, annual AlphaEarth-HRL training sample table.
+
+    Each HRL observation year is independent: labels from year ``t`` are paired
+    only with AlphaEarth embeddings from year ``t``. Elevation and slope are
+    optional static auxiliary predictors. No previous crop type is included.
+
+    Args:
+        crop_types: Same-year native HRL Crop Types raster.
+        secondary_crop: Same-year native HRL Secondary Crops raster.
+        current_alphaearth_cogs: Downloaded same-year AlphaEarth COG index rows.
+        clip_geometry: Active regional geometry in EPSG:4326.
+        year: HRL/AlphaEarth observation year.
+        region_id: Model region identifier.
+        country_iso3: Region country code.
+        samples_per_cty_class: Maximum CTY samples per class.
+        samples_per_cpsct_class: Maximum CPSCT samples per class.
+        sample_stride_pixels: Standard sampling-lattice spacing in native HRL
+            pixels.
+        rare_class_sample_stride_pixels: Denser lattice used for rare classes.
+        rare_class_threshold_candidates: Candidate count below which a class is
+            considered rare.
+        rare_class_sample_multiplier: Multiplier for rare-class reservoir sizes.
+        training_label_edge_buffer_pixels: Class-boundary erosion radius in native
+            HRL pixels.
+        sample_chunk_rows: Native HRL rows scanned in each sampling chunk.
+        include_coordinates: Include coordinates as optional predictors.
+        include_topography: Include elevation and local terrain gradient.
+        elevation: Georeferenced model-subgrid elevation.
+        slope: Georeferenced local terrain-gradient raster.
+        random_seed: Reproducible regional-year seed.
+
+    Returns:
+        Sample table containing annual predictors, labels, coordinates, year,
+        and region metadata.
+    """
+    if include_topography and (elevation is None or slope is None):
+        raise ValueError(
+            "elevation and slope are required when include_topography=True."
+        )
+
+    locations = balanced_hrl_sample_locations(
+        crop_types,
+        secondary_crop,
+        clip_geometry,
+        samples_per_cty_class=samples_per_cty_class,
+        samples_per_cpsct_class=samples_per_cpsct_class,
+        sample_stride_pixels=sample_stride_pixels,
+        rare_class_sample_stride_pixels=rare_class_sample_stride_pixels,
+        rare_class_threshold_candidates=rare_class_threshold_candidates,
+        rare_class_sample_multiplier=rare_class_sample_multiplier,
+        training_label_edge_buffer_pixels=training_label_edge_buffer_pixels,
+        chunk_rows=sample_chunk_rows,
+        random_seed=random_seed,
+    )
+
+    source_x = locations["x"].to_numpy(dtype=np.float64)
+    source_y = locations["y"].to_numpy(dtype=np.float64)
+    coordinate_transformer = Transformer.from_crs(
+        crop_types.rio.crs,
+        "EPSG:4326",
+        always_xy=True,
+    )
+    longitude, latitude = coordinate_transformer.transform(source_x, source_y)
+    longitude = np.asarray(longitude, dtype=np.float64)
+    latitude = np.asarray(latitude, dtype=np.float64)
+
+    embeddings = sample_alphaearth_embeddings(
+        current_alphaearth_cogs,
+        longitude,
+        latitude,
+    )
+
+    elevation_values: np.ndarray | None = None
+    slope_values: np.ndarray | None = None
+    if include_topography:
+        assert elevation is not None and slope is not None
+        elevation_values = sample_dataarray_at_coordinates(
+            elevation,
+            source_x,
+            source_y,
+            coordinates_crs=crop_types.rio.crs,
+        )
+        slope_values = sample_dataarray_at_coordinates(
+            slope,
+            source_x,
+            source_y,
+            coordinates_crs=crop_types.rio.crs,
+        )
+
+    cty_label = locations["cty_label"].to_numpy(dtype=np.int32)
+    cpsct_label = locations["cpsct_label"].to_numpy(dtype=np.int32)
+    valid = (
+        np.isfinite(embeddings).all(axis=1)
+        & np.isin(cty_label, HRL_CTY_CLASS_CODES)
+        & ((cty_label == 0) | np.isin(cpsct_label, HRL_CPSCT_CLASS_CODES))
+    )
+    if include_topography:
+        assert elevation_values is not None and slope_values is not None
+        valid &= np.isfinite(elevation_values) & np.isfinite(slope_values)
+
+    if not valid.any():
+        raise ValueError(
+            f"No valid same-year AlphaEarth-HRL samples remain for region "
+            f"{region_id}, year {year}."
+        )
+
+    feature_matrix, feature_names = build_alphaearth_crop_feature_matrix(
+        embeddings[valid],
+        longitude[valid],
+        latitude[valid],
+        include_coordinates=include_coordinates,
+        include_topography=include_topography,
+        elevation_m=(None if elevation_values is None else elevation_values[valid]),
+        slope_gradient=(None if slope_values is None else slope_values[valid]),
+    )
+    samples = pd.DataFrame(feature_matrix, columns=feature_names)
+    samples["cty_label"] = cty_label[valid]
+    samples["cpsct_label"] = cpsct_label[valid]
+    samples["year"] = int(year)
+    samples["region_id"] = int(region_id)
+    samples["country_iso3"] = str(country_iso3)
+    samples["source_x"] = source_x[valid]
+    samples["source_y"] = source_y[valid]
+    return samples
+
+
+def _create_alphaearth_crop_classifier(
+    *,
+    model_type: str,
+    random_seed: int,
+    n_estimators: int,
+    max_depth: int | None,
+    min_samples_leaf: int,
+    max_features: float | int | str | None,
+    use_internal_class_weight: bool,
+    n_jobs: int,
+) -> Any:
+    """Construct a supported scikit-learn crop classifier."""
+    if model_type == "random_forest":
+        from sklearn.ensemble import RandomForestClassifier
+
+        return RandomForestClassifier(
+            n_estimators=n_estimators,
+            max_depth=max_depth,
+            min_samples_leaf=min_samples_leaf,
+            max_features=max_features,
+            class_weight=("balanced_subsample" if use_internal_class_weight else None),
+            n_jobs=n_jobs,
+            random_state=random_seed,
+            oob_score=False,
+        )
+    if model_type == "hist_gradient_boosting":
+        from sklearn.ensemble import HistGradientBoostingClassifier
+
+        return HistGradientBoostingClassifier(
+            learning_rate=0.08,
+            max_iter=n_estimators,
+            max_leaf_nodes=31,
+            max_depth=max_depth,
+            min_samples_leaf=min_samples_leaf,
+            l2_regularization=1.0,
+            random_state=random_seed,
+        )
+    raise ValueError("model_type must be 'random_forest' or 'hist_gradient_boosting'.")
+
+
+def _class_region_year_balanced_weights(
+    samples: pd.DataFrame,
+    *,
+    label_column: str,
+) -> np.ndarray:
+    """Balance classes and their represented region-year groups simultaneously.
+
+    Every class receives equal total weight. Within a class, every represented
+    ``(region_id, year)`` group also receives equal total weight, regardless of
+    its raw number of sampled pixels. Returned weights are normalized to mean one.
+    """
+    required = {label_column, "region_id", "year"}
+    missing = required - set(samples.columns)
+    if missing:
+        raise ValueError(
+            f"Cannot create class-region-year weights; missing {sorted(missing)}."
+        )
+    if samples.empty:
+        raise ValueError("Cannot create sample weights for an empty table.")
+
+    grouping = samples.groupby(
+        [label_column, "region_id", "year"],
+        sort=False,
+        observed=True,
+    )
+    group_size = grouping[label_column].transform("size").to_numpy(dtype=np.float64)
+    groups_per_class = (
+        samples[[label_column, "region_id", "year"]]
+        .drop_duplicates()
+        .groupby(label_column, observed=True)
+        .size()
+    )
+    class_group_count = (
+        samples[label_column].map(groups_per_class).to_numpy(dtype=np.float64)
+    )
+    weights = 1.0 / (group_size * class_group_count)
+    mean_weight = float(weights.mean())
+    if not np.isfinite(mean_weight) or mean_weight <= 0.0:
+        raise ValueError("Calculated invalid class-region-year sample weights.")
+    return (weights / mean_weight).astype(np.float64, copy=False)
+
+
+def fit_alphaearth_crop_models(
+    samples: pd.DataFrame,
+    *,
+    include_coordinates: bool = False,
+    include_topography: bool = False,
+    model_type: str = "random_forest",
+    random_seed: int = 42,
+    n_estimators: int = 500,
+    max_depth: int | None = None,
+    min_samples_leaf: int = 2,
+    max_features: float | int | str | None = 1.0,
+    sample_weight_mode: str = "class_region_year_balanced",
+    n_jobs: int = -1,
+) -> AlphaEarthCropModelBundle:
+    """Fit CTY and CPSCT classifiers from annual study-area samples.
+
+    ``max_features=1.0`` makes every tree split evaluate the full predictor vector:
+    all 64 AlphaEarth embedding axes simultaneously, plus optional coordinates,
+    elevation, and slope.
+    """
+    if sample_weight_mode not in {"none", "class_region_year_balanced"}:
+        raise ValueError(
+            "sample_weight_mode must be 'none' or 'class_region_year_balanced'."
+        )
+    feature_names = alphaearth_crop_feature_names(
+        include_coordinates=include_coordinates,
+        include_topography=include_topography,
+    )
+    required_columns = set(feature_names) | {"cty_label", "cpsct_label"}
+    missing_columns = required_columns - set(samples.columns)
+    if missing_columns:
+        raise ValueError(
+            f"AlphaEarth training samples are missing columns: {sorted(missing_columns)}"
+        )
+    if samples.empty:
+        raise ValueError("Cannot train crop classifiers from an empty sample table.")
+
+    features = samples.loc[:, feature_names].to_numpy(dtype=np.float32)
+    cty_target = samples["cty_label"].to_numpy(dtype=np.int32)
+    if np.unique(cty_target).size < 2:
+        raise ValueError("CTY training requires at least two represented classes.")
+
+    use_internal_class_weight = sample_weight_mode == "none"
+    cty_model = _create_alphaearth_crop_classifier(
+        model_type=model_type,
+        random_seed=random_seed,
+        n_estimators=n_estimators,
+        max_depth=max_depth,
+        min_samples_leaf=min_samples_leaf,
+        max_features=max_features,
+        use_internal_class_weight=use_internal_class_weight,
+        n_jobs=n_jobs,
+    )
+    cty_fit_kwargs: dict[str, np.ndarray] = {}
+    if sample_weight_mode == "class_region_year_balanced":
+        cty_fit_kwargs["sample_weight"] = _class_region_year_balanced_weights(
+            samples,
+            label_column="cty_label",
+        )
+    elif model_type == "hist_gradient_boosting":
+        from sklearn.utils.class_weight import compute_sample_weight
+
+        cty_fit_kwargs["sample_weight"] = compute_sample_weight(
+            class_weight="balanced",
+            y=cty_target,
+        )
+    cty_model.fit(features, cty_target, **cty_fit_kwargs)
+
+    cpsct_mask = (samples["cty_label"].to_numpy(dtype=np.int32) > 0) & np.isin(
+        samples["cpsct_label"].to_numpy(dtype=np.int32),
+        HRL_CPSCT_CLASS_CODES,
+    )
+    cpsct_samples = samples.loc[cpsct_mask]
+    cpsct_target = cpsct_samples["cpsct_label"].to_numpy(dtype=np.int32)
+    if np.unique(cpsct_target).size < 2:
+        raise ValueError(
+            "CPSCT training requires at least two represented secondary-crop classes."
+        )
+    cpsct_model = _create_alphaearth_crop_classifier(
+        model_type=model_type,
+        random_seed=random_seed + 1,
+        n_estimators=n_estimators,
+        max_depth=max_depth,
+        min_samples_leaf=min_samples_leaf,
+        max_features=max_features,
+        use_internal_class_weight=use_internal_class_weight,
+        n_jobs=n_jobs,
+    )
+    cpsct_fit_kwargs: dict[str, np.ndarray] = {}
+    if sample_weight_mode == "class_region_year_balanced":
+        cpsct_fit_kwargs["sample_weight"] = _class_region_year_balanced_weights(
+            cpsct_samples,
+            label_column="cpsct_label",
+        )
+    elif model_type == "hist_gradient_boosting":
+        from sklearn.utils.class_weight import compute_sample_weight
+
+        cpsct_fit_kwargs["sample_weight"] = compute_sample_weight(
+            class_weight="balanced",
+            y=cpsct_target,
+        )
+    cpsct_model.fit(
+        features[cpsct_mask],
+        cpsct_target,
+        **cpsct_fit_kwargs,
+    )
+
+    return AlphaEarthCropModelBundle(
+        cty_model=cty_model,
+        cpsct_model=cpsct_model,
+        feature_names=feature_names,
+        model_type=model_type,
+    )
+
+
+def _map_hrl_cty_to_crop_group(values: np.ndarray) -> np.ndarray:
+    """Map native CTY codes to the HRL crop-group accuracy classes."""
+    values = np.asarray(values, dtype=np.int32)
+    mapped = np.full(values.shape, -1, dtype=np.int32)
+    for source_code, target_code in HRL_CTY_CROP_GROUP_MAP.items():
+        mapped[values == source_code] = target_code
+    return mapped
+
+
+def _map_hrl_cty_to_aggregation_level_1(values: np.ndarray) -> np.ndarray:
+    """Map native CTY codes to the HRL aggregation-level-1 classes."""
+    values = np.asarray(values, dtype=np.int32)
+    mapped = np.full(values.shape, -1, dtype=np.int32)
+    for source_code, target_code in HRL_CTY_AGGREGATION_LEVEL_1_MAP.items():
+        mapped[values == source_code] = target_code
+    return mapped
+
+
+def _append_remote_sensing_accuracy_assessment(
+    *,
+    split_name: str,
+    target_name: str,
+    observed: np.ndarray,
+    predicted: np.ndarray,
+    labels: tuple[int, ...] | np.ndarray,
+    metric_rows: list[dict[str, float | int | str]],
+    confusion_rows: list[dict[str, int | str]],
+    confusion_labels: tuple[int, ...] | np.ndarray | None = None,
+) -> None:
+    """Append classic thematic-map accuracy statistics for one target."""
+    from sklearn.metrics import (
+        accuracy_score,
+        balanced_accuracy_score,
+        cohen_kappa_score,
+        confusion_matrix,
+        precision_recall_fscore_support,
+    )
+
+    observed = np.asarray(observed, dtype=np.int32)
+    predicted = np.asarray(predicted, dtype=np.int32)
+    labels = np.asarray(labels, dtype=np.int32)
+    matrix_labels = (
+        labels
+        if confusion_labels is None
+        else np.asarray(confusion_labels, dtype=np.int32)
+    )
+    if observed.size == 0:
+        return
+
+    user_accuracy, producer_accuracy, f_score, support = (
+        precision_recall_fscore_support(
+            observed,
+            predicted,
+            labels=labels,
+            zero_division=0,
+        )
+    )
+    product_support = np.asarray(
+        [(predicted == class_code).sum() for class_code in labels],
+        dtype=np.int64,
+    )
+
+    for (
+        class_code,
+        class_ua,
+        class_pa,
+        class_f_score,
+        reference_support,
+        mapped_support,
+    ) in zip(
+        labels,
+        user_accuracy,
+        producer_accuracy,
+        f_score,
+        support,
+        product_support,
+        strict=True,
+    ):
+        metric_rows.append(
+            {
+                "split": split_name,
+                "target": target_name,
+                "metric_scope": "class",
+                "class_code": int(class_code),
+                "reference_support": int(reference_support),
+                "product_support": int(mapped_support),
+                "producer_accuracy": float(class_pa),
+                "user_accuracy": float(class_ua),
+                "omission_error": float(1.0 - class_pa),
+                "commission_error": float(1.0 - class_ua),
+                "f_score": float(class_f_score),
+                # Backward-compatible aliases used by earlier tables.
+                "precision": float(class_ua),
+                "recall": float(class_pa),
+                "f1": float(class_f_score),
+                "support": int(reference_support),
+                "accuracy": np.nan,
+                "balanced_accuracy": np.nan,
+                "kappa": np.nan,
+            }
+        )
+
+    metric_rows.append(
+        {
+            "split": split_name,
+            "target": target_name,
+            "metric_scope": "summary",
+            "class_code": -1,
+            "reference_support": int(observed.size),
+            "product_support": int(predicted.size),
+            "producer_accuracy": np.nan,
+            "user_accuracy": np.nan,
+            "omission_error": np.nan,
+            "commission_error": np.nan,
+            "f_score": float(np.mean(f_score)),
+            "precision": np.nan,
+            "recall": np.nan,
+            "f1": float(np.mean(f_score)),
+            "support": int(observed.size),
+            "accuracy": float(accuracy_score(observed, predicted)),
+            "balanced_accuracy": float(balanced_accuracy_score(observed, predicted)),
+            "kappa": float(cohen_kappa_score(observed, predicted)),
+        }
+    )
+
+    # sklearn returns Reference rows x Product columns. The HRL PUM presents
+    # Product rows x Reference columns, so transpose it for storage/reporting.
+    product_by_reference = confusion_matrix(
+        observed,
+        predicted,
+        labels=matrix_labels,
+    ).T
+    for product_index, product_class in enumerate(matrix_labels):
+        for reference_index, reference_class in enumerate(matrix_labels):
+            count = int(product_by_reference[product_index, reference_index])
+            confusion_rows.append(
+                {
+                    "split": split_name,
+                    "target": target_name,
+                    "product_class": int(product_class),
+                    "reference_class": int(reference_class),
+                    # Backward-compatible aliases.
+                    "predicted_class": int(product_class),
+                    "observed_class": int(reference_class),
+                    "count": count,
+                }
+            )
+
+
+def evaluate_alphaearth_crop_predictions(
+    samples: pd.DataFrame,
+    predicted_cty: np.ndarray,
+    predicted_cpsct: np.ndarray,
+    *,
+    split_name: str,
+    cty_classes: Sequence[int] = HRL_CTY_CLASS_CODES,
+    cpsct_classes: Sequence[int] = HRL_CPSCT_CLASS_CODES,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Evaluate aligned CTY/CPSCT predictions against stored HRL samples.
+
+    This function is used for both ordinary classifier predictions and values
+    sampled from fully post-processed raster products. Predictions equal to the
+    HRL outside-area code, or otherwise outside the supported class schema, are
+    excluded explicitly and counted in the summary rows.
+
+    Args:
+        samples: Evaluation sample table containing CTY and CPSCT references.
+        predicted_cty: Final CTY prediction per sample.
+        predicted_cpsct: Final CPSCT prediction per sample.
+        split_name: Display name such as ``"validation"`` or ``"test"``.
+        cty_classes: Native CTY classes included in the assessment.
+        cpsct_classes: CPSCT classes included in the assessment.
+
+    Returns:
+        Metric and Product-by-Reference confusion-matrix tables.
+    """
+    if samples.empty:
+        raise ValueError(f"Cannot evaluate an empty {split_name!r} sample split.")
+
+    predicted_cty = np.asarray(predicted_cty, dtype=np.int32)
+    predicted_cpsct = np.asarray(predicted_cpsct, dtype=np.int32)
+    if predicted_cty.shape != (len(samples),):
+        raise ValueError(
+            "predicted_cty must contain one value per sample; found "
+            f"{predicted_cty.shape} for {len(samples)} samples."
+        )
+    if predicted_cpsct.shape != (len(samples),):
+        raise ValueError(
+            "predicted_cpsct must contain one value per sample; found "
+            f"{predicted_cpsct.shape} for {len(samples)} samples."
+        )
+
+    observed_cty_all = samples["cty_label"].to_numpy(dtype=np.int32)
+    valid_cty_prediction = np.isin(predicted_cty, np.asarray(cty_classes))
+    if not valid_cty_prediction.any():
+        raise ValueError(
+            f"No valid CTY predictions remain for {split_name!r} evaluation."
+        )
+
+    observed_cty = observed_cty_all[valid_cty_prediction]
+    evaluated_cty = predicted_cty[valid_cty_prediction]
+    metric_rows: list[dict[str, float | int | str]] = []
+    confusion_rows: list[dict[str, int | str]] = []
+
+    _append_remote_sensing_accuracy_assessment(
+        split_name=split_name,
+        target_name="CTY_CROP_GROUP",
+        observed=_map_hrl_cty_to_crop_group(observed_cty),
+        predicted=_map_hrl_cty_to_crop_group(evaluated_cty),
+        labels=HRL_CTY_CROP_GROUP_CLASS_CODES,
+        metric_rows=metric_rows,
+        confusion_rows=confusion_rows,
+    )
+
+    observed_level_1 = _map_hrl_cty_to_aggregation_level_1(observed_cty)
+    predicted_level_1 = _map_hrl_cty_to_aggregation_level_1(evaluated_cty)
+    level_1_reference_mask = observed_level_1 != -1
+    _append_remote_sensing_accuracy_assessment(
+        split_name=split_name,
+        target_name="CTY_AGGREGATION_LEVEL_1",
+        observed=observed_level_1[level_1_reference_mask],
+        predicted=predicted_level_1[level_1_reference_mask],
+        labels=HRL_CTY_AGGREGATION_LEVEL_1_CLASS_CODES,
+        confusion_labels=(-1, *HRL_CTY_AGGREGATION_LEVEL_1_CLASS_CODES),
+        metric_rows=metric_rows,
+        confusion_rows=confusion_rows,
+    )
+    _append_remote_sensing_accuracy_assessment(
+        split_name=split_name,
+        target_name="CTY",
+        observed=observed_cty,
+        predicted=evaluated_cty,
+        labels=np.asarray(cty_classes, dtype=np.int32),
+        metric_rows=metric_rows,
+        confusion_rows=confusion_rows,
+    )
+
+    observed_cropland = observed_cty_all > 0
+    valid_cpsct_prediction = (
+        observed_cropland
+        & valid_cty_prediction
+        & np.isin(predicted_cpsct, np.asarray(cpsct_classes))
+    )
+    if valid_cpsct_prediction.any():
+        _append_remote_sensing_accuracy_assessment(
+            split_name=split_name,
+            target_name="CPSCT",
+            observed=samples.loc[
+                valid_cpsct_prediction,
+                "cpsct_label",
+            ].to_numpy(dtype=np.int32),
+            predicted=predicted_cpsct[valid_cpsct_prediction],
+            labels=np.asarray(cpsct_classes, dtype=np.int32),
+            metric_rows=metric_rows,
+            confusion_rows=confusion_rows,
+        )
+
+    metrics = pd.DataFrame(metric_rows)
+    confusion = pd.DataFrame(confusion_rows)
+    if not metrics.empty:
+        excluded_by_target = {
+            "CTY_CROP_GROUP": int((~valid_cty_prediction).sum()),
+            "CTY_AGGREGATION_LEVEL_1": int((~valid_cty_prediction).sum()),
+            "CTY": int((~valid_cty_prediction).sum()),
+            "CPSCT": int(observed_cropland.sum() - valid_cpsct_prediction.sum()),
+        }
+        metrics["excluded_predictions"] = np.nan
+        summary_mask = metrics["metric_scope"].eq("summary")
+        metrics.loc[summary_mask, "excluded_predictions"] = (
+            metrics.loc[
+                summary_mask,
+                "target",
+            ]
+            .map(excluded_by_target)
+            .astype(float)
+        )
+    return metrics, confusion
+
+
+def evaluate_alphaearth_crop_models(
+    models: AlphaEarthCropModelBundle,
+    samples: pd.DataFrame,
+    *,
+    split_name: str,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Evaluate annual crop maps using classic remote-sensing diagnostics.
+
+    The returned diagnostics include the native CTY classes, the official HRL
+    crop-group aggregation, and CPSCT classes. Per-class Producer's Accuracy,
+    User's Accuracy, omission error, commission error, and F-score are derived
+    from Product-by-Reference confusion matrices. Summary rows contain Overall
+    Accuracy, balanced accuracy, macro F-score, and Cohen's kappa.
+
+    The statistics are unweighted sample estimates because the workflow uses a
+    spatially thinned, class-balanced sample rather than the probability sample
+    and area weights used by the official pan-European HRL verification.
+    """
+    if samples.empty:
+        raise ValueError(f"Cannot evaluate an empty {split_name!r} sample split.")
+
+    features = samples.loc[:, models.feature_names].to_numpy(dtype=np.float32)
+    predicted_cty = np.asarray(
+        models.cty_model.predict(features),
+        dtype=np.int32,
+    )
+    predicted_cpsct = np.full(len(samples), _HRL_NO_CROPLAND_CODE, dtype=np.int32)
+    observed_cropland = samples["cty_label"].to_numpy(dtype=np.int32) > 0
+    if observed_cropland.any():
+        predicted_cpsct[observed_cropland] = np.asarray(
+            models.cpsct_model.predict(features[observed_cropland]),
+            dtype=np.int32,
+        )
+
+    return evaluate_alphaearth_crop_predictions(
+        samples,
+        predicted_cty,
+        predicted_cpsct,
+        split_name=split_name,
+        cty_classes=HRL_CTY_CLASS_CODES,
+        cpsct_classes=HRL_CPSCT_CLASS_CODES,
+    )
+
+
+def _accuracy_class_name(target: str, class_code: int) -> str:
+    """Return a readable class label for an accuracy report."""
+    if target == "CTY_CROP_GROUP":
+        return HRL_CTY_CROP_GROUP_NAMES.get(class_code, str(class_code))
+    if target == "CTY_AGGREGATION_LEVEL_1":
+        return HRL_CTY_AGGREGATION_LEVEL_1_NAMES.get(
+            class_code,
+            str(class_code),
+        )
+    if target == "CPSCT":
+        return HRL_CPSCT_CLASS_NAMES.get(class_code, str(class_code))
+    return str(class_code)
+
+
+def format_alphaearth_accuracy_report(
+    metrics: pd.DataFrame,
+    confusion: pd.DataFrame,
+) -> str:
+    """Format validation/test results in an HRL-style accuracy report.
+
+    Confusion matrices are printed with mapped/Product classes in rows and
+    Reference classes in columns, followed by Overall Accuracy (OA), Cohen's
+    kappa, macro F-score, and class-level PA, UA, omission/commission errors,
+    and F-score.
+    """
+    if metrics.empty:
+        return "No AlphaEarth crop-classification accuracy statistics available."
+
+    split_order = [
+        split for split in ("validation", "test") if split in set(metrics["split"])
+    ]
+    split_order.extend(sorted(set(metrics["split"]) - set(split_order)))
+    target_order = (
+        "CTY_CROP_GROUP",
+        "CTY_AGGREGATION_LEVEL_1",
+        "CTY",
+        "CPSCT",
+    )
+    target_titles = {
+        "CTY_CROP_GROUP": "CTY crop-group level",
+        "CTY_AGGREGATION_LEVEL_1": "CTY aggregation level 1",
+        "CTY": "CTY native class level",
+        "CPSCT": "CPSCT native class level",
+    }
+
+    sections: list[str] = []
+    for split in split_order:
+        split_years = ""
+        split_metrics = metrics.loc[metrics["split"] == split]
+        sections.append("=" * 100)
+        sections.append(f"{split.upper()} THEMATIC ACCURACY ASSESSMENT{split_years}")
+        sections.append(
+            "Unweighted, spatially thinned class-balanced samples; "
+            "Product rows x Reference columns."
+        )
+
+        for target in target_order:
+            target_metrics = split_metrics.loc[split_metrics["target"] == target]
+            if target_metrics.empty:
+                continue
+            summary = target_metrics.loc[
+                target_metrics["metric_scope"] == "summary"
+            ].iloc[0]
+            class_metrics = target_metrics.loc[
+                target_metrics["metric_scope"] == "class"
+            ].copy()
+            target_confusion = confusion.loc[
+                (confusion["split"] == split) & (confusion["target"] == target)
+            ]
+
+            sections.append("")
+            sections.append(f"--- {target_titles[target]} ---")
+            sections.append(
+                "Reference samples: "
+                f"{int(summary['reference_support']):,} | "
+                f"Overall Accuracy (OA): {summary['accuracy']:.2%} | "
+                f"Cohen's kappa: {summary['kappa']:.3f} | "
+                f"Macro F-score: {summary['f_score']:.2%} | "
+                "Balanced accuracy: "
+                f"{summary['balanced_accuracy']:.2%}"
+            )
+
+            if not target_confusion.empty:
+                matrix = (
+                    target_confusion.pivot(
+                        index="product_class",
+                        columns="reference_class",
+                        values="count",
+                    )
+                    .fillna(0)
+                    .astype(np.int64)
+                )
+                matrix = matrix.sort_index().sort_index(axis=1)
+                matrix.columns = [f"Ref. {code}" for code in matrix.columns]
+                matrix.index = [f"Product {code}" for code in matrix.index]
+                matrix["Total"] = matrix.sum(axis=1)
+                total_row = matrix.sum(axis=0).to_frame().T
+                total_row.index = ["Total"]
+                sections.append("Confusion matrix:")
+                sections.append(pd.concat([matrix, total_row]).to_string())
+
+            class_metrics["class"] = [
+                f"{int(code)} ({_accuracy_class_name(target, int(code))})"
+                for code in class_metrics["class_code"]
+            ]
+            accuracy_table = class_metrics[
+                [
+                    "class",
+                    "reference_support",
+                    "product_support",
+                    "producer_accuracy",
+                    "user_accuracy",
+                    "omission_error",
+                    "commission_error",
+                    "f_score",
+                ]
+            ].copy()
+            accuracy_table = accuracy_table.rename(
+                columns={
+                    "reference_support": "n Ref.",
+                    "product_support": "n Product",
+                    "producer_accuracy": "PA",
+                    "user_accuracy": "UA",
+                    "omission_error": "Omission",
+                    "commission_error": "Commission",
+                    "f_score": "F-score",
+                }
+            )
+            for column in (
+                "PA",
+                "UA",
+                "Omission",
+                "Commission",
+                "F-score",
+            ):
+                accuracy_table[column] = accuracy_table[column].map(
+                    lambda value: f"{value:.2%}"
+                )
+            sections.append("Class accuracy statistics:")
+            sections.append(accuracy_table.to_string(index=False))
+
+            if target == "CTY_CROP_GROUP":
+                assessed = class_metrics.loc[class_metrics["class_code"] != 30]
+                passing = int((assessed["f_score"] >= 0.85).sum())
+                sections.append(
+                    "HRL crop-group reference threshold (F-score >= 85%): "
+                    f"{passing}/{len(assessed)} assessed classes reached."
+                )
+            elif target == "CTY_AGGREGATION_LEVEL_1":
+                passing = int((class_metrics["f_score"] >= 0.80).sum())
+                sections.append(
+                    "HRL aggregation-level-1 reference threshold "
+                    "(F-score >= 80%): "
+                    f"{passing}/{len(class_metrics)} assessed classes reached."
+                )
+
+    return "\n".join(sections)
+
+
+def alphaearth_crop_feature_importance(
+    models: AlphaEarthCropModelBundle,
+) -> pd.DataFrame:
+    """Return model feature importances when supported by the estimators."""
+    rows: list[pd.DataFrame] = []
+    for target_name, estimator in (
+        ("CTY", models.cty_model),
+        ("CPSCT", models.cpsct_model),
+    ):
+        importance = getattr(estimator, "feature_importances_", None)
+        if importance is None:
+            continue
+        table = pd.DataFrame(
+            {
+                "target": target_name,
+                "feature": models.feature_names,
+                "importance": np.asarray(importance, dtype=np.float64),
+            }
+        ).sort_values("importance", ascending=False)
+        rows.append(table)
+    if not rows:
+        return pd.DataFrame(columns=["target", "feature", "importance"])
+    return pd.concat(rows, ignore_index=True)
+
+
+def save_alphaearth_crop_models(
+    models: AlphaEarthCropModelBundle,
+    path: str | Path,
+) -> Path:
+    """Serialize a trained AlphaEarth crop-model bundle with joblib."""
+    import joblib
+
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump(models, output_path)
+    return output_path
+
+
+def hrl_tile_code_from_name(tile_name: str | Path) -> str:
+    """Extract an HRL 100-km tile code such as ``E40N30`` from a filename."""
+    stem = Path(tile_name).stem
+    match = _HRL_TILE_NAME_PATTERN.fullmatch(stem)
+    if match is None:
+        raise ValueError(f"Unrecognized HRL Croplands tile name: {tile_name}")
+    return match.group("tile")
+
+
+def build_hrl_prediction_tile_name(
+    template_tile_name: str,
+    *,
+    product_code: str,
+    prediction_year: int,
+) -> str:
+    """Build an HRL-compatible annual prediction filename.
+
+    Args:
+        template_tile_name: Existing HRL CTY/CPSCT filename.
+        product_code: ``"CTY"``, ``"CTYCL"`` or ``"CPSCT"``.
+        prediction_year: Target annual product year.
+
+    Returns:
+        HRL-compatible GeoTIFF filename including the ``.tif`` suffix.
+    """
+    if product_code not in {"CTY", "CTYCL", "CPSCT"}:
+        raise ValueError("product_code must be 'CTY', 'CTYCL' or 'CPSCT'.")
+    stem = Path(template_tile_name).stem
+    match = _HRL_TILE_NAME_PATTERN.fullmatch(stem)
+    if match is None:
+        raise ValueError(f"Unrecognized HRL Croplands tile name: {template_tile_name}")
+    return (
+        f"CLMS_HRLVLCC_{product_code}_S{int(prediction_year)}_R10m_"
+        f"{match.group('tile')}_03035_{match.group('version')}.tif"
+    )
+
+
+def find_hrl_tile_path(
+    adapter_root: str | Path,
+    *,
+    year: int,
+    tile_id: str,
+) -> Path:
+    """Locate an extracted HRL GeoTIFF below an adapter year folder."""
+    root = Path(adapter_root) / str(int(year))
+    stem = Path(tile_id).stem
+    direct = root / f"{stem}.tif"
+    if direct.exists():
+        return direct
+    matches = sorted(root.rglob(f"{stem}.tif"))
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        raise FileNotFoundError(
+            f"Could not find extracted HRL tile {stem}.tif below {root}."
+        )
+    raise RuntimeError(
+        f"Found multiple extracted HRL tiles for {stem} below {root}: {matches}"
+    )
+
+
+def _open_alphaearth_vrts_for_template(
+    selected_cogs: gpd.GeoDataFrame,
+    template: rasterio.io.DatasetReader,
+    stack: ExitStack,
+) -> list[rasterio.vrt.WarpedVRT]:
+    """Open downloaded AlphaEarth COGs as VRTs on an exact HRL tile grid."""
+    if "local_path" not in selected_cogs.columns:
+        raise ValueError("selected_cogs must contain a 'local_path' column.")
+
+    vrts: list[rasterio.vrt.WarpedVRT] = []
+    for local_path_value in selected_cogs["local_path"].drop_duplicates():
+        local_path = Path(str(local_path_value))
+        if not local_path.exists():
+            raise FileNotFoundError(f"Missing downloaded AlphaEarth COG: {local_path}")
+        source = stack.enter_context(rasterio.open(local_path))
+        if source.count != len(ALPHAEARTH_EMBEDDING_BANDS):
+            raise ValueError(
+                f"Expected 64 AlphaEarth bands in {local_path}, found {source.count}."
+            )
+        vrts.append(
+            stack.enter_context(
+                rasterio.vrt.WarpedVRT(
+                    source,
+                    crs=template.crs,
+                    transform=template.transform,
+                    width=template.width,
+                    height=template.height,
+                    # Nearest-neighbour preserves the quantized embedding vector;
+                    # bilinear interpolation of the nonlinearly quantized int8 values
+                    # would not represent interpolation in dequantized embedding space.
+                    resampling=rasterio.enums.Resampling.nearest,
+                    src_nodata=ALPHAEARTH_NODATA_VALUE,
+                    nodata=ALPHAEARTH_NODATA_VALUE,
+                )
+            )
+        )
+    if not vrts:
+        raise ValueError("No AlphaEarth COGs were supplied for prediction.")
+    return vrts
+
+
+def _read_merged_alphaearth_window(
+    vrts: list[rasterio.vrt.WarpedVRT],
+    window: rasterio.windows.Window,
+) -> np.ndarray:
+    """Read and merge one 64-band window from multiple AlphaEarth VRTs."""
+    height = int(window.height)
+    width = int(window.width)
+    merged = np.full(
+        (len(ALPHAEARTH_EMBEDDING_BANDS), height, width),
+        ALPHAEARTH_NODATA_VALUE,
+        dtype=np.int8,
+    )
+    unresolved = np.ones((height, width), dtype=bool)
+    for vrt in vrts:
+        raw = vrt.read(
+            indexes=list(range(1, len(ALPHAEARTH_EMBEDDING_BANDS) + 1)),
+            window=window,
+            out_dtype="int8",
+            masked=False,
+        )
+        valid = unresolved & np.all(raw != ALPHAEARTH_NODATA_VALUE, axis=0)
+        if valid.any():
+            merged[:, valid] = raw[:, valid]
+            unresolved[valid] = False
+        if not unresolved.any():
+            break
+    return dequantize_alphaearth_embeddings(merged)
+
+
+def _assert_matching_rasterio_grid(
+    first: rasterio.io.DatasetReader,
+    second: rasterio.io.DatasetReader,
+) -> None:
+    """Validate that two HRL product tiles share the exact raster grid."""
+    if (
+        first.crs != second.crs
+        or first.transform != second.transform
+        or first.width != second.width
+        or first.height != second.height
+    ):
+        raise ValueError(
+            "CTY and CPSCT template tiles do not share the exact grid: "
+            f"{first.name} versus {second.name}."
+        )
+
+
+def _copy_raster_metadata(
+    source: rasterio.io.DatasetReader,
+    destination: rasterio.io.DatasetWriter,
+) -> None:
+    """Copy non-grid GeoTIFF metadata from an HRL template."""
+    global_tags = source.tags()
+    if global_tags:
+        destination.update_tags(**global_tags)
+    band_tags = source.tags(1)
+    if band_tags:
+        destination.update_tags(1, **band_tags)
+    if source.descriptions and source.descriptions[0]:
+        destination.set_band_description(1, source.descriptions[0])
+    if source.units and source.units[0]:
+        destination.set_band_unit(1, source.units[0])
+    try:
+        color_map = source.colormap(1)
+    except ValueError:
+        color_map = None
+    if color_map:
+        destination.write_colormap(1, color_map)
+
+
+def _predict_full_class_probabilities(
+    model: Any,
+    features: np.ndarray,
+    class_codes: Sequence[int],
+) -> np.ndarray:
+    """Return classifier probabilities in one fixed HRL class order.
+
+    Empty feature batches can occur when a prediction chunk initially contains
+    valid AlphaEarth/cropland pixels but all of them are subsequently rejected
+    because elevation or slope is nodata. Returning an empty probability matrix
+    lets the caller write the chunk without invoking scikit-learn with zero rows.
+    """
+    if not hasattr(model, "predict_proba") or not hasattr(model, "classes_"):
+        raise TypeError("Crop classifiers must provide predict_proba and classes_.")
+
+    features = np.asarray(features)
+    if features.ndim != 2:
+        raise ValueError(
+            "Prediction features must be a two-dimensional matrix; "
+            f"found shape {features.shape}."
+        )
+    if features.shape[0] == 0:
+        return np.zeros((0, len(class_codes)), dtype=np.float32)
+
+    raw_probabilities = np.asarray(model.predict_proba(features), dtype=np.float32)
+    model_classes = np.asarray(model.classes_, dtype=np.int32)
+    requested_classes = np.asarray(class_codes, dtype=np.int32)
+    probabilities = np.zeros(
+        (features.shape[0], requested_classes.size),
+        dtype=np.float32,
+    )
+    class_positions = {int(code): index for index, code in enumerate(requested_classes)}
+    for model_index, class_code in enumerate(model_classes):
+        output_index = class_positions.get(int(class_code))
+        if output_index is not None:
+            probabilities[:, output_index] = raw_probabilities[:, model_index]
+    row_sums = probabilities.sum(axis=1)
+    valid = row_sums > 0.0
+    probabilities[valid] /= row_sums[valid, None]
+    return probabilities
+
+
+def _normalized_gaussian_filter_3x3(
+    probabilities: np.ndarray,
+    valid_mask: np.ndarray,
+) -> np.ndarray:
+    """Apply a nodata-aware 3×3 Gaussian filter to per-class probabilities."""
+    probabilities = np.asarray(probabilities, dtype=np.float32)
+    valid_mask = np.asarray(valid_mask, dtype=bool)
+    if probabilities.ndim != 3:
+        raise ValueError("probabilities must have shape (class, y, x).")
+    if probabilities.shape[1:] != valid_mask.shape:
+        raise ValueError("Probability and validity grids must align.")
+
+    kernel = np.asarray(
+        (
+            (1.0, 2.0, 1.0),
+            (2.0, 4.0, 2.0),
+            (1.0, 2.0, 1.0),
+        ),
+        dtype=np.float32,
+    )
+    padded_probabilities = np.pad(
+        probabilities,
+        ((0, 0), (1, 1), (1, 1)),
+        mode="constant",
+        constant_values=0.0,
+    )
+    padded_valid = np.pad(
+        valid_mask.astype(np.float32),
+        ((1, 1), (1, 1)),
+        mode="constant",
+        constant_values=0.0,
+    )
+    weighted_sum = np.zeros_like(probabilities, dtype=np.float32)
+    weight_sum = np.zeros(valid_mask.shape, dtype=np.float32)
+    height, width = valid_mask.shape
+    for row_offset in range(3):
+        for col_offset in range(3):
+            weight = kernel[row_offset, col_offset]
+            neighbour_valid = padded_valid[
+                row_offset : row_offset + height,
+                col_offset : col_offset + width,
+            ]
+            weighted_sum += (
+                padded_probabilities[
+                    :,
+                    row_offset : row_offset + height,
+                    col_offset : col_offset + width,
+                ]
+                * neighbour_valid[None, :, :]
+                * weight
+            )
+            weight_sum += neighbour_valid * weight
+
+    smoothed = np.divide(
+        weighted_sum,
+        weight_sum[None, :, :],
+        out=np.zeros_like(weighted_sum),
+        where=weight_sum[None, :, :] > 0.0,
+    )
+    smoothed[:, ~valid_mask] = 0.0
+    class_sums = smoothed.sum(axis=0)
+    normalizable = valid_mask & (class_sums > 0.0)
+    smoothed[:, normalizable] /= class_sums[normalizable][None, :]
+    return smoothed
+
+
+def _binary_dilate_square(mask: np.ndarray, radius: int) -> np.ndarray:
+    """Dilate a Boolean mask using a square neighbourhood."""
+    mask = np.asarray(mask, dtype=bool)
+    if radius < 0:
+        raise ValueError("Dilation radius cannot be negative.")
+    if radius == 0:
+        return mask.copy()
+    padded = np.pad(mask, radius, mode="constant", constant_values=False)
+    result = np.zeros_like(mask, dtype=bool)
+    height, width = mask.shape
+    for row_offset in range(2 * radius + 1):
+        for col_offset in range(2 * radius + 1):
+            result |= padded[
+                row_offset : row_offset + height,
+                col_offset : col_offset + width,
+            ]
+    return result
+
+
+def _open_dataarray_vrt_for_template(
+    data: xr.DataArray,
+    template: rasterio.io.DatasetReader,
+    stack: ExitStack,
+) -> rasterio.vrt.WarpedVRT:
+    """Open a model-grid DataArray as a bilinear VRT on an HRL tile grid."""
+    if data.ndim != 2:
+        raise ValueError("Auxiliary predictor DataArrays must be two-dimensional.")
+    if data.rio.crs is None:
+        raise ValueError("Auxiliary predictor DataArrays must have a CRS.")
+
+    nodata = np.float32(-9999.0)
+    values = np.asarray(data.values, dtype=np.float32)
+    values = np.where(np.isfinite(values), values, nodata).astype(np.float32)
+    memory_file = stack.enter_context(rasterio.io.MemoryFile())
+    with memory_file.open(
+        driver="GTiff",
+        width=values.shape[1],
+        height=values.shape[0],
+        count=1,
+        dtype="float32",
+        crs=data.rio.crs,
+        transform=data.rio.transform(recalc=True),
+        nodata=float(nodata),
+    ) as writer:
+        writer.write(values, 1)
+
+    # WarpedVRT requires a source opened in read-only mode. Reopen the completed
+    # in-memory GeoTIFF after closing its writer instead of passing the writer
+    # dataset directly to the VRT.
+    source = stack.enter_context(memory_file.open())
+    return stack.enter_context(
+        rasterio.vrt.WarpedVRT(
+            source,
+            crs=template.crs,
+            transform=template.transform,
+            width=template.width,
+            height=template.height,
+            resampling=rasterio.enums.Resampling.bilinear,
+            src_nodata=float(nodata),
+            nodata=float(nodata),
+            dtype="float32",
+        )
+    )
+
+
+def _read_historical_cropland_mask(
+    historical_sources: Sequence[rasterio.io.DatasetReader],
+    window: rasterio.windows.Window,
+    *,
+    dilation_pixels: int = 0,
+) -> np.ndarray:
+    """Return the union of observed HRL cropland extents for one window."""
+    if not historical_sources:
+        return np.ones((int(window.height), int(window.width)), dtype=bool)
+    cropland = np.zeros((int(window.height), int(window.width)), dtype=bool)
+    for source in historical_sources:
+        values = source.read(1, window=window, masked=False)
+        cropland |= (values > 0) & (values != _HRL_OUTSIDE_AREA_CODE)
+    if dilation_pixels:
+        cropland = _binary_dilate_square(cropland, dilation_pixels)
+    return cropland
+
+
+def _copy_raster_to_temporary(
+    source_path: Path,
+    temporary_path: Path,
+) -> None:
+    """Create an atomic-edit working copy of one raster."""
+    temporary_path.unlink(missing_ok=True)
+    with rasterio.open(source_path) as source:
+        profile = source.profile.copy()
+        with rasterio.open(temporary_path, "w", **profile) as destination:
+            for _, window in source.block_windows(1):
+                destination.write(source.read(1, window=window), 1, window=window)
+            _copy_raster_metadata(source, destination)
+
+
+def predict_alphaearth_crop_tile_to_hrl_geotiffs(
+    models: AlphaEarthCropModelBundle,
+    cty_template_path: str | Path,
+    cpsct_template_path: str | Path,
+    current_alphaearth_cogs: gpd.GeoDataFrame,
+    clip_geometry: BaseGeometry,
+    cty_output_path: str | Path,
+    cpsct_output_path: str | Path,
+    *,
+    geometry_crs: str = "EPSG:4326",
+    chunk_size: int = 512,
+    overwrite: bool = True,
+    elevation: xr.DataArray | None = None,
+    slope: xr.DataArray | None = None,
+    historical_cty_paths: Sequence[str | Path] = (),
+    apply_historical_cropland_mask: bool = True,
+    historical_cropland_mask_dilation_pixels: int = 0,
+    smooth_cty_probabilities: bool = True,
+    smooth_cpsct_probabilities: bool = True,
+    unclassified_probability_threshold: float = 0.25,
+    cty_confidence_output_path: str | Path | None = None,
+) -> tuple[Path, Path]:
+    """Predict and spatially post-process annual CTY/CPSCT HRL tiles.
+
+    The prediction uses all 64 AlphaEarth dimensions and any optional topographic
+    features stored in the model schema. A maximum historical HRL cropland extent
+    can be applied as a BVL-like mask. Per-class probabilities are optionally
+    smoothed with a nodata-aware 3×3 Gaussian kernel before reclassification.
+    Low-confidence crop predictions are mapped to HRL unclassified annual or
+    permanent crop classes.
+
+    CTY minimum-mapping-unit filtering and interannual permanent-crop consistency
+    are intentionally applied later, once all tiles and prediction years exist.
+
+    Args:
+        models: Final trained annual model bundle.
+        cty_template_path: Existing HRL CTY tile defining the exact output grid.
+        cpsct_template_path: Matching HRL CPSCT tile defining its output profile.
+        current_alphaearth_cogs: Downloaded target-year AlphaEarth COG rows.
+        clip_geometry: Active study-area geometry intersecting this HRL tile.
+        cty_output_path: HRL-compatible CTY output path.
+        cpsct_output_path: HRL-compatible CPSCT output path.
+        geometry_crs: CRS of ``clip_geometry``.
+        chunk_size: Core prediction-window width and height in pixels.
+        overwrite: Replace existing outputs when True.
+        elevation: Model-subgrid elevation used when required by the model.
+        slope: Model-subgrid terrain gradient used when required by the model.
+        historical_cty_paths: Observed HRL CTY tiles used to form maximum cropland
+            extent.
+        apply_historical_cropland_mask: Restrict crop predictions to the union of
+            historical cropland pixels.
+        historical_cropland_mask_dilation_pixels: Optional square dilation of the
+            historical cropland union.
+        smooth_cty_probabilities: Apply 3×3 Gaussian smoothing to CTY probabilities.
+        smooth_cpsct_probabilities: Apply analogous smoothing to CPSCT probabilities.
+        unclassified_probability_threshold: Maximum-probability threshold below
+            which annual/permanent crops become 3100/3200.
+        cty_confidence_output_path: Optional uint8 CTY confidence-layer output.
+
+    Returns:
+        Paths of the written CTY and CPSCT GeoTIFFs.
+    """
+    if chunk_size < 16:
+        raise ValueError("chunk_size must be at least 16 pixels.")
+    if historical_cropland_mask_dilation_pixels < 0:
+        raise ValueError("historical_cropland_mask_dilation_pixels cannot be negative.")
+    if not 0.0 <= unclassified_probability_threshold <= 1.0:
+        raise ValueError(
+            "unclassified_probability_threshold must lie between zero and one."
+        )
+
+    coordinates_required = {
+        "longitude",
+        "latitude",
+    }.issubset(models.feature_names)
+    topography_required = {
+        "elevation_m",
+        "slope_gradient",
+    }.issubset(models.feature_names)
+    if topography_required and (elevation is None or slope is None):
+        raise ValueError(
+            "The trained feature schema requires elevation and slope predictors."
+        )
+
+    cty_output = Path(cty_output_path)
+    cpsct_output = Path(cpsct_output_path)
+    confidence_output = (
+        None if cty_confidence_output_path is None else Path(cty_confidence_output_path)
+    )
+    cty_output.parent.mkdir(parents=True, exist_ok=True)
+    cpsct_output.parent.mkdir(parents=True, exist_ok=True)
+    if confidence_output is not None:
+        confidence_output.parent.mkdir(parents=True, exist_ok=True)
+
+    existing_outputs = [cty_output, cpsct_output]
+    if confidence_output is not None:
+        existing_outputs.append(confidence_output)
+    if not overwrite and any(path.exists() for path in existing_outputs):
+        raise FileExistsError("Prediction output already exists and overwrite=False.")
+
+    cty_temporary = cty_output.with_name(f".{cty_output.name}.part")
+    cpsct_temporary = cpsct_output.with_name(f".{cpsct_output.name}.part")
+    confidence_temporary = (
+        None
+        if confidence_output is None
+        else confidence_output.with_name(f".{confidence_output.name}.part")
+    )
+    for temporary in (cty_temporary, cpsct_temporary, confidence_temporary):
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+    smoothing_halo = (
+        1 if (smooth_cty_probabilities or smooth_cpsct_probabilities) else 0
+    )
+    processing_halo = max(
+        smoothing_halo,
+        historical_cropland_mask_dilation_pixels,
+    )
+
+    try:
+        with ExitStack() as stack:
+            cty_template = stack.enter_context(rasterio.open(cty_template_path))
+            cpsct_template = stack.enter_context(rasterio.open(cpsct_template_path))
+            _assert_matching_rasterio_grid(cty_template, cpsct_template)
+            if cty_template.count != 1 or cpsct_template.count != 1:
+                raise ValueError("HRL CTY/CPSCT templates must contain one band.")
+
+            geometry_in_template_crs = (
+                gpd.GeoSeries([clip_geometry], crs=geometry_crs)
+                .to_crs(cty_template.crs)
+                .iloc[0]
+            )
+            if geometry_in_template_crs.is_empty:
+                raise ValueError("Prediction geometry is empty after reprojection.")
+
+            historical_sources: list[rasterio.io.DatasetReader] = []
+            if apply_historical_cropland_mask:
+                for historical_path_value in historical_cty_paths:
+                    historical_source = stack.enter_context(
+                        rasterio.open(historical_path_value)
+                    )
+                    _assert_matching_rasterio_grid(cty_template, historical_source)
+                    historical_sources.append(historical_source)
+                if not historical_sources:
+                    raise ValueError(
+                        "At least one historical CTY tile is required when "
+                        "apply_historical_cropland_mask=True."
+                    )
+
+            cty_profile = cty_template.profile.copy()
+            cpsct_profile = cpsct_template.profile.copy()
+            for profile in (cty_profile, cpsct_profile):
+                profile.update(
+                    driver="GTiff",
+                    count=1,
+                    dtype="uint16",
+                    nodata=_HRL_OUTSIDE_AREA_CODE,
+                    width=cty_template.width,
+                    height=cty_template.height,
+                    crs=cty_template.crs,
+                    transform=cty_template.transform,
+                )
+
+            vrts = _open_alphaearth_vrts_for_template(
+                current_alphaearth_cogs,
+                cty_template,
+                stack,
+            )
+            elevation_vrt = None
+            slope_vrt = None
+            if topography_required:
+                assert elevation is not None and slope is not None
+                elevation_vrt = _open_dataarray_vrt_for_template(
+                    elevation,
+                    cty_template,
+                    stack,
+                )
+                slope_vrt = _open_dataarray_vrt_for_template(
+                    slope,
+                    cty_template,
+                    stack,
+                )
+
+            cty_writer = stack.enter_context(
+                rasterio.open(cty_temporary, "w", **cty_profile)
+            )
+            cpsct_writer = stack.enter_context(
+                rasterio.open(cpsct_temporary, "w", **cpsct_profile)
+            )
+            _copy_raster_metadata(cty_template, cty_writer)
+            _copy_raster_metadata(cpsct_template, cpsct_writer)
+
+            confidence_writer = None
+            if confidence_temporary is not None:
+                confidence_profile = cty_template.profile.copy()
+                confidence_profile.update(
+                    driver="GTiff",
+                    count=1,
+                    dtype="uint8",
+                    nodata=_HRL_CTY_CONFIDENCE_OUTSIDE_AREA,
+                    width=cty_template.width,
+                    height=cty_template.height,
+                    crs=cty_template.crs,
+                    transform=cty_template.transform,
+                )
+                confidence_writer = stack.enter_context(
+                    rasterio.open(
+                        confidence_temporary,
+                        "w",
+                        **confidence_profile,
+                    )
+                )
+                confidence_writer.update_tags(
+                    PRODUCT="AlphaEarth-derived HRL-compatible CTY confidence",
+                    VALUE_RANGE="0-100",
+                    NO_CROPLAND=str(_HRL_CTY_CONFIDENCE_NO_CROPLAND),
+                    OUTSIDE_AREA=str(_HRL_CTY_CONFIDENCE_OUTSIDE_AREA),
+                )
+                confidence_writer.set_band_description(
+                    1,
+                    "Probability of selected CTY class (%)",
+                )
+
+            coordinate_transformer = None
+            if coordinates_required:
+                coordinate_transformer = Transformer.from_crs(
+                    cty_template.crs,
+                    "EPSG:4326",
+                    always_xy=True,
+                )
+
+            height = cty_template.height
+            width = cty_template.width
+            transform = cty_template.transform
+            cty_codes = np.asarray(HRL_CTY_CLASS_CODES, dtype=np.int32)
+            cpsct_codes = np.asarray(HRL_CPSCT_CLASS_CODES, dtype=np.int32)
+
+            for row_start in range(0, height, chunk_size):
+                core_height = min(chunk_size, height - row_start)
+                read_row_start = max(0, row_start - processing_halo)
+                read_row_stop = min(
+                    height,
+                    row_start + core_height + processing_halo,
+                )
+                for col_start in range(0, width, chunk_size):
+                    core_width = min(chunk_size, width - col_start)
+                    read_col_start = max(0, col_start - processing_halo)
+                    read_col_stop = min(
+                        width,
+                        col_start + core_width + processing_halo,
+                    )
+                    read_window = rasterio.windows.Window(
+                        read_col_start,
+                        read_row_start,
+                        read_col_stop - read_col_start,
+                        read_row_stop - read_row_start,
+                    )
+                    read_height = int(read_window.height)
+                    read_width = int(read_window.width)
+                    read_affine = rasterio.windows.transform(
+                        read_window,
+                        transform,
+                    )
+                    inside_region = ~rasterio.features.geometry_mask(
+                        [geometry_in_template_crs.__geo_interface__],
+                        out_shape=(read_height, read_width),
+                        transform=read_affine,
+                        invert=False,
+                        all_touched=False,
+                    )
+
+                    embeddings = _read_merged_alphaearth_window(vrts, read_window)
+                    embeddings_flat = np.moveaxis(embeddings, 0, -1).reshape(-1, 64)
+                    alphaearth_valid = (
+                        np.isfinite(embeddings_flat)
+                        .all(axis=1)
+                        .reshape(
+                            read_height,
+                            read_width,
+                        )
+                    )
+                    valid_data = inside_region & alphaearth_valid
+
+                    if apply_historical_cropland_mask:
+                        historical_cropland = _read_historical_cropland_mask(
+                            historical_sources,
+                            read_window,
+                            dilation_pixels=(historical_cropland_mask_dilation_pixels),
+                        )
+                    else:
+                        historical_cropland = np.ones_like(valid_data, dtype=bool)
+                    classify_mask = valid_data & historical_cropland
+
+                    cty_probabilities = np.zeros(
+                        (len(HRL_CTY_CLASS_CODES), read_height, read_width),
+                        dtype=np.float32,
+                    )
+                    cpsct_probabilities = np.zeros(
+                        (len(HRL_CPSCT_CLASS_CODES), read_height, read_width),
+                        dtype=np.float32,
+                    )
+
+                    classify_flat = classify_mask.reshape(-1)
+                    if classify_flat.any():
+                        local_rows, local_cols = np.indices(
+                            (read_height, read_width),
+                            dtype=np.int64,
+                        )
+                        global_rows = (
+                            local_rows.reshape(-1)[classify_flat] + read_row_start
+                        )
+                        global_cols = (
+                            local_cols.reshape(-1)[classify_flat] + read_col_start
+                        )
+                        x_coordinates, y_coordinates = rasterio.transform.xy(
+                            transform,
+                            global_rows,
+                            global_cols,
+                            offset="center",
+                        )
+
+                        if coordinates_required:
+                            assert coordinate_transformer is not None
+                            longitude, latitude = coordinate_transformer.transform(
+                                x_coordinates,
+                                y_coordinates,
+                            )
+                            longitude = np.asarray(longitude, dtype=np.float64)
+                            latitude = np.asarray(latitude, dtype=np.float64)
+                        else:
+                            n_valid = int(classify_flat.sum())
+                            longitude = np.zeros(n_valid, dtype=np.float64)
+                            latitude = np.zeros(n_valid, dtype=np.float64)
+
+                        elevation_values = None
+                        slope_values = None
+                        if topography_required:
+                            assert elevation_vrt is not None and slope_vrt is not None
+                            elevation_window = elevation_vrt.read(
+                                1,
+                                window=read_window,
+                                out_dtype="float32",
+                                masked=False,
+                            ).reshape(-1)[classify_flat]
+                            slope_window = slope_vrt.read(
+                                1,
+                                window=read_window,
+                                out_dtype="float32",
+                                masked=False,
+                            ).reshape(-1)[classify_flat]
+                            elevation_values = np.where(
+                                elevation_window == elevation_vrt.nodata,
+                                np.nan,
+                                elevation_window,
+                            )
+                            slope_values = np.where(
+                                slope_window == slope_vrt.nodata,
+                                np.nan,
+                                slope_window,
+                            )
+                            topography_valid = np.isfinite(
+                                elevation_values
+                            ) & np.isfinite(slope_values)
+                            if not topography_valid.all():
+                                valid_indices = np.flatnonzero(classify_flat)
+                                invalid_indices = valid_indices[~topography_valid]
+                                classify_flat[invalid_indices] = False
+                                classify_mask = classify_flat.reshape(
+                                    read_height,
+                                    read_width,
+                                )
+
+                                # Missing topography means the complete trained
+                                # feature schema is unavailable. Mark these pixels
+                                # as invalid data rather than silently converting
+                                # them to the no-cropland class downstream.
+                                valid_data_flat = valid_data.reshape(-1)
+                                valid_data_flat[invalid_indices] = False
+                                valid_data = valid_data_flat.reshape(
+                                    read_height,
+                                    read_width,
+                                )
+
+                                longitude = longitude[topography_valid]
+                                latitude = latitude[topography_valid]
+                                elevation_values = elevation_values[topography_valid]
+                                slope_values = slope_values[topography_valid]
+
+                        features, feature_names = build_alphaearth_crop_feature_matrix(
+                            embeddings_flat[classify_flat],
+                            longitude,
+                            latitude,
+                            include_coordinates=coordinates_required,
+                            include_topography=topography_required,
+                            elevation_m=elevation_values,
+                            slope_gradient=slope_values,
+                        )
+                        if feature_names != models.feature_names:
+                            raise ValueError(
+                                "Prediction feature schema differs from the trained model."
+                            )
+
+                        cty_prediction_probabilities = (
+                            _predict_full_class_probabilities(
+                                models.cty_model,
+                                features,
+                                HRL_CTY_CLASS_CODES,
+                            )
+                        )
+                        cpsct_prediction_probabilities = (
+                            _predict_full_class_probabilities(
+                                models.cpsct_model,
+                                features,
+                                HRL_CPSCT_CLASS_CODES,
+                            )
+                        )
+                        cty_probabilities.reshape(
+                            len(HRL_CTY_CLASS_CODES),
+                            -1,
+                        )[:, classify_flat] = cty_prediction_probabilities.T
+                        cpsct_probabilities.reshape(
+                            len(HRL_CPSCT_CLASS_CODES),
+                            -1,
+                        )[:, classify_flat] = cpsct_prediction_probabilities.T
+
+                    if smooth_cty_probabilities:
+                        cty_probabilities = _normalized_gaussian_filter_3x3(
+                            cty_probabilities,
+                            classify_mask,
+                        )
+                    if smooth_cpsct_probabilities:
+                        cpsct_probabilities = _normalized_gaussian_filter_3x3(
+                            cpsct_probabilities,
+                            classify_mask,
+                        )
+
+                    row_offset = row_start - read_row_start
+                    col_offset = col_start - read_col_start
+                    core_rows = slice(row_offset, row_offset + core_height)
+                    core_cols = slice(col_offset, col_offset + core_width)
+                    core_valid_data = valid_data[core_rows, core_cols]
+                    core_classify = classify_mask[core_rows, core_cols]
+
+                    cty_values = np.full(
+                        (core_height, core_width),
+                        _HRL_OUTSIDE_AREA_CODE,
+                        dtype=np.uint16,
+                    )
+                    cpsct_values = np.full_like(
+                        cty_values,
+                        _HRL_OUTSIDE_AREA_CODE,
+                    )
+                    confidence_values = np.full(
+                        (core_height, core_width),
+                        _HRL_CTY_CONFIDENCE_OUTSIDE_AREA,
+                        dtype=np.uint8,
+                    )
+
+                    historical_background = core_valid_data & ~core_classify
+                    cty_values[historical_background] = _HRL_NO_CROPLAND_CODE
+                    cpsct_values[historical_background] = 0
+                    confidence_values[historical_background] = (
+                        _HRL_CTY_CONFIDENCE_NO_CROPLAND
+                    )
+
+                    if core_classify.any():
+                        core_cty_probabilities = cty_probabilities[
+                            :,
+                            core_rows,
+                            core_cols,
+                        ]
+                        best_cty_indices = np.argmax(
+                            core_cty_probabilities,
+                            axis=0,
+                        )
+                        best_cty_probabilities = np.take_along_axis(
+                            core_cty_probabilities,
+                            best_cty_indices[None, :, :],
+                            axis=0,
+                        )[0]
+                        predicted_cty = cty_codes[best_cty_indices]
+
+                        low_confidence = core_classify & (
+                            best_cty_probabilities < unclassified_probability_threshold
+                        )
+                        annual_low_confidence = low_confidence & np.isin(
+                            predicted_cty,
+                            HRL_ANNUAL_CTY_CLASS_CODES,
+                        )
+                        permanent_low_confidence = low_confidence & np.isin(
+                            predicted_cty,
+                            HRL_PERMANENT_CTY_CLASS_CODES,
+                        )
+                        predicted_cty = predicted_cty.copy()
+                        predicted_cty[annual_low_confidence] = 3100
+                        predicted_cty[permanent_low_confidence] = 3200
+                        cty_values[core_classify] = predicted_cty[core_classify].astype(
+                            np.uint16
+                        )
+
+                        confidence_percent = np.clip(
+                            np.rint(best_cty_probabilities * 100.0),
+                            0,
+                            100,
+                        ).astype(np.uint8)
+                        confidence_values[core_classify] = confidence_percent[
+                            core_classify
+                        ]
+                        predicted_background = core_classify & (
+                            predicted_cty == _HRL_NO_CROPLAND_CODE
+                        )
+                        confidence_values[predicted_background] = (
+                            _HRL_CTY_CONFIDENCE_NO_CROPLAND
+                        )
+
+                        core_cpsct_probabilities = cpsct_probabilities[
+                            :,
+                            core_rows,
+                            core_cols,
+                        ]
+                        best_cpsct_indices = np.argmax(
+                            core_cpsct_probabilities,
+                            axis=0,
+                        )
+                        predicted_cpsct = cpsct_codes[best_cpsct_indices]
+                        annual_cropland = core_classify & np.isin(
+                            predicted_cty,
+                            HRL_ANNUAL_CTY_CLASS_CODES,
+                        )
+                        cpsct_values[core_classify] = 0
+                        cpsct_values[annual_cropland] = predicted_cpsct[
+                            annual_cropland
+                        ].astype(np.uint16)
+
+                    core_window = rasterio.windows.Window(
+                        col_start,
+                        row_start,
+                        core_width,
+                        core_height,
+                    )
+                    cty_writer.write(cty_values, 1, window=core_window)
+                    cpsct_writer.write(cpsct_values, 1, window=core_window)
+                    if confidence_writer is not None:
+                        confidence_writer.write(
+                            confidence_values,
+                            1,
+                            window=core_window,
+                        )
+
+        cty_temporary.replace(cty_output)
+        cpsct_temporary.replace(cpsct_output)
+        if confidence_temporary is not None and confidence_output is not None:
+            confidence_temporary.replace(confidence_output)
+        return cty_output, cpsct_output
+    except Exception:
+        for temporary in (cty_temporary, cpsct_temporary, confidence_temporary):
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+        raise
+
+
+def sample_alphaearth_crop_prediction_tiles(
+    samples: pd.DataFrame,
+    cty_paths_by_tile: dict[str, str | Path],
+    cpsct_paths_by_tile: dict[str, str | Path],
+    *,
+    sample_coordinates_crs: str | CRS | None = None,
+    batch_size: int = 100_000,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Sample final CTY and CPSCT tile products at evaluation locations.
+
+    ``source_x``/``source_y`` are preferred because they preserve the exact HRL
+    sample positions. When those columns are unavailable, longitude/latitude are
+    accepted. Samples outside all supplied tiles retain the HRL outside-area code.
+
+    Args:
+        samples: Evaluation sample table.
+        cty_paths_by_tile: CTY prediction paths keyed by HRL tile code.
+        cpsct_paths_by_tile: Matching CPSCT paths keyed by tile code.
+        sample_coordinates_crs: CRS of ``source_x`` and ``source_y``.
+        batch_size: Maximum coordinates sampled from one raster at once.
+
+    Returns:
+        CTY and CPSCT arrays aligned with ``samples``.
+    """
+    if samples.empty:
+        raise ValueError("Cannot sample predictions for an empty sample table.")
+    if batch_size < 1:
+        raise ValueError("batch_size must be at least one.")
+    if set(cty_paths_by_tile) != set(cpsct_paths_by_tile):
+        raise ValueError("CTY and CPSCT prediction tile sets must match.")
+    if not cty_paths_by_tile:
+        raise ValueError("At least one prediction tile is required.")
+
+    if {"source_x", "source_y"}.issubset(samples.columns):
+        if sample_coordinates_crs is None:
+            raise ValueError(
+                "sample_coordinates_crs is required for source_x/source_y samples."
+            )
+        original_x = samples["source_x"].to_numpy(dtype=np.float64)
+        original_y = samples["source_y"].to_numpy(dtype=np.float64)
+        original_crs = CRS.from_user_input(sample_coordinates_crs)
+    elif {"longitude", "latitude"}.issubset(samples.columns):
+        original_x = samples["longitude"].to_numpy(dtype=np.float64)
+        original_y = samples["latitude"].to_numpy(dtype=np.float64)
+        original_crs = CRS.from_epsg(4326)
+    else:
+        raise ValueError(
+            "Post-processed evaluation requires source_x/source_y or "
+            "longitude/latitude sample coordinates."
+        )
+
+    predicted_cty = np.full(
+        len(samples),
+        _HRL_OUTSIDE_AREA_CODE,
+        dtype=np.int32,
+    )
+    predicted_cpsct = np.full(
+        len(samples),
+        _HRL_OUTSIDE_AREA_CODE,
+        dtype=np.int32,
+    )
+    assigned = np.zeros(len(samples), dtype=bool)
+    transformed_coordinates: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+
+    for tile_code in sorted(cty_paths_by_tile):
+        cty_path = Path(cty_paths_by_tile[tile_code])
+        cpsct_path = Path(cpsct_paths_by_tile[tile_code])
+        with (
+            rasterio.open(cty_path) as cty_source,
+            rasterio.open(cpsct_path) as cpsct_source,
+        ):
+            _assert_matching_rasterio_grid(cty_source, cpsct_source)
+            destination_crs = CRS.from_user_input(cty_source.crs)
+            cache_key = destination_crs.to_string()
+            if cache_key not in transformed_coordinates:
+                if original_crs == destination_crs:
+                    transformed_coordinates[cache_key] = (original_x, original_y)
+                else:
+                    transformer = Transformer.from_crs(
+                        original_crs,
+                        destination_crs,
+                        always_xy=True,
+                    )
+                    transformed_x, transformed_y = transformer.transform(
+                        original_x,
+                        original_y,
+                    )
+                    transformed_coordinates[cache_key] = (
+                        np.asarray(transformed_x, dtype=np.float64),
+                        np.asarray(transformed_y, dtype=np.float64),
+                    )
+            x_values, y_values = transformed_coordinates[cache_key]
+            bounds = cty_source.bounds
+            inside = (
+                ~assigned
+                & np.isfinite(x_values)
+                & np.isfinite(y_values)
+                & (x_values >= bounds.left)
+                & (x_values <= bounds.right)
+                & (y_values >= bounds.bottom)
+                & (y_values <= bounds.top)
+            )
+            indices = np.flatnonzero(inside)
+            if indices.size == 0:
+                continue
+
+            for start in range(0, indices.size, batch_size):
+                batch_indices = indices[start : start + batch_size]
+                coordinates = list(
+                    zip(
+                        x_values[batch_indices],
+                        y_values[batch_indices],
+                        strict=True,
+                    )
+                )
+                cty_values = np.fromiter(
+                    (
+                        int(value[0])
+                        for value in cty_source.sample(
+                            coordinates,
+                            indexes=1,
+                            masked=False,
+                        )
+                    ),
+                    dtype=np.int32,
+                    count=len(coordinates),
+                )
+                cpsct_values = np.fromiter(
+                    (
+                        int(value[0])
+                        for value in cpsct_source.sample(
+                            coordinates,
+                            indexes=1,
+                            masked=False,
+                        )
+                    ),
+                    dtype=np.int32,
+                    count=len(coordinates),
+                )
+                predicted_cty[batch_indices] = cty_values
+                predicted_cpsct[batch_indices] = cpsct_values
+                assigned[batch_indices] = True
+
+    return predicted_cty, predicted_cpsct
+
+
+def apply_alphaearth_permanent_crop_temporal_consistency(
+    historical_cty_paths: Sequence[str | Path],
+    predicted_cty_paths: dict[int, str | Path],
+    *,
+    predicted_confidence_paths: dict[int, str | Path] | None = None,
+    chunk_size: int = 1024,
+) -> dict[str, int]:
+    """Apply conservative HRL-style consistency rules to permanent crops.
+
+    Historical HRL labels act as categorical evidence because historical
+    per-class probability rasters are not available in this workflow. Only
+    generated prediction years are modified.
+
+    Implemented rules are:
+
+    * a complete permanent-crop sequence is assigned its dominant exact permanent
+      class;
+    * one non-permanent interior prediction surrounded by an otherwise permanent
+      sequence is filled with the dominant permanent class;
+    * a permanent prediction between two annual-crop years is changed to
+      no-cropland.
+
+    Args:
+        historical_cty_paths: Ordered observed HRL CTY tiles.
+        predicted_cty_paths: Mapping from prediction year to generated CTY tile.
+        predicted_confidence_paths: Optional matching CTY confidence tiles.
+        chunk_size: Processing window size.
+
+    Returns:
+        Counts of changed pixels by temporal rule.
+    """
+    if chunk_size < 16:
+        raise ValueError("chunk_size must be at least 16.")
+    if not historical_cty_paths or not predicted_cty_paths:
+        return {
+            "all_permanent_harmonized": 0,
+            "interior_permanent_gap_filled": 0,
+            "isolated_permanent_removed": 0,
+        }
+
+    ordered_prediction_years = sorted(int(year) for year in predicted_cty_paths)
+    cty_paths = {
+        year: Path(predicted_cty_paths[year]) for year in ordered_prediction_years
+    }
+    confidence_paths = {
+        int(year): Path(path)
+        for year, path in (predicted_confidence_paths or {}).items()
+    }
+
+    temporary_cty = {
+        year: path.with_name(f".{path.name}.temporal.part")
+        for year, path in cty_paths.items()
+    }
+    temporary_confidence = {
+        year: path.with_name(f".{path.name}.temporal.part")
+        for year, path in confidence_paths.items()
+        if year in cty_paths
+    }
+    for year, path in cty_paths.items():
+        _copy_raster_to_temporary(path, temporary_cty[year])
+    for year, path in confidence_paths.items():
+        if year in temporary_confidence:
+            _copy_raster_to_temporary(path, temporary_confidence[year])
+
+    stats = {
+        "all_permanent_harmonized": 0,
+        "interior_permanent_gap_filled": 0,
+        "isolated_permanent_removed": 0,
+    }
+    try:
+        with ExitStack() as stack:
+            historical_sources = [
+                stack.enter_context(rasterio.open(path))
+                for path in historical_cty_paths
+            ]
+            predicted_sources = {
+                year: stack.enter_context(rasterio.open(temporary_cty[year], "r+"))
+                for year in ordered_prediction_years
+            }
+            confidence_sources = {
+                year: stack.enter_context(
+                    rasterio.open(temporary_confidence[year], "r+")
+                )
+                for year in temporary_confidence
+            }
+            reference = historical_sources[0]
+            for source in historical_sources[1:]:
+                _assert_matching_rasterio_grid(reference, source)
+            for source in predicted_sources.values():
+                _assert_matching_rasterio_grid(reference, source)
+            for source in confidence_sources.values():
+                _assert_matching_rasterio_grid(reference, source)
+
+            exact_permanent_codes = np.asarray(
+                HRL_EXACT_PERMANENT_CTY_CLASS_CODES,
+                dtype=np.uint16,
+            )
+            permanent_codes = np.asarray(
+                HRL_PERMANENT_CTY_CLASS_CODES,
+                dtype=np.uint16,
+            )
+            annual_codes = np.asarray(HRL_ANNUAL_CTY_CLASS_CODES, dtype=np.uint16)
+            height = reference.height
+            width = reference.width
+
+            for row_start in range(0, height, chunk_size):
+                window_height = min(chunk_size, height - row_start)
+                for col_start in range(0, width, chunk_size):
+                    window_width = min(chunk_size, width - col_start)
+                    window = rasterio.windows.Window(
+                        col_start,
+                        row_start,
+                        window_width,
+                        window_height,
+                    )
+                    historical = np.stack(
+                        [
+                            source.read(1, window=window, masked=False)
+                            for source in historical_sources
+                        ],
+                        axis=0,
+                    ).astype(np.uint16, copy=False)
+                    predicted = np.stack(
+                        [
+                            predicted_sources[year].read(
+                                1,
+                                window=window,
+                                masked=False,
+                            )
+                            for year in ordered_prediction_years
+                        ],
+                        axis=0,
+                    ).astype(np.uint16, copy=False)
+                    complete = np.concatenate((historical, predicted), axis=0)
+
+                    exact_counts = np.stack(
+                        [
+                            np.count_nonzero(complete == code, axis=0)
+                            for code in exact_permanent_codes
+                        ],
+                        axis=0,
+                    )
+                    exact_total = exact_counts.sum(axis=0)
+                    dominant_indices = np.argmax(exact_counts, axis=0)
+                    dominant_permanent = exact_permanent_codes[dominant_indices]
+                    dominant_count = np.take_along_axis(
+                        exact_counts,
+                        dominant_indices[None, :, :],
+                        axis=0,
+                    )[0]
+                    temporal_confidence = np.clip(
+                        np.rint(
+                            np.divide(
+                                dominant_count,
+                                exact_total,
+                                out=np.zeros_like(
+                                    dominant_count,
+                                    dtype=np.float64,
+                                ),
+                                where=exact_total > 0,
+                            )
+                            * 100.0
+                        ),
+                        0,
+                        100,
+                    ).astype(np.uint8)
+
+                    permanent_sequence = np.isin(
+                        complete,
+                        permanent_codes,
+                    )
+                    changed_by_year: dict[int, np.ndarray] = {
+                        year: np.zeros(
+                            (window_height, window_width),
+                            dtype=bool,
+                        )
+                        for year in ordered_prediction_years
+                    }
+
+                    # First fill one interior non-permanent gap in an otherwise
+                    # permanent sequence. This can turn the complete sequence into
+                    # a valid all-permanent sequence for the harmonisation below.
+                    for prediction_position, year in enumerate(
+                        ordered_prediction_years
+                    ):
+                        complete_position = (
+                            len(historical_sources) + prediction_position
+                        )
+                        if not 0 < complete_position < complete.shape[0] - 1:
+                            continue
+                        current = predicted[prediction_position]
+                        permanent_except_current = np.delete(
+                            permanent_sequence,
+                            complete_position,
+                            axis=0,
+                        ).all(axis=0)
+                        fill_gap = (
+                            permanent_except_current
+                            & ~np.isin(current, permanent_codes)
+                            & (exact_total > 0)
+                        )
+                        if fill_gap.any():
+                            current[fill_gap] = dominant_permanent[fill_gap]
+                            predicted[prediction_position] = current
+                            complete[complete_position] = current
+                            permanent_sequence[complete_position] = np.isin(
+                                current,
+                                permanent_codes,
+                            )
+                            changed_by_year[year] |= fill_gap
+                            stats["interior_permanent_gap_filled"] += int(
+                                fill_gap.sum()
+                            )
+
+                    all_permanent = permanent_sequence.all(axis=0) & (exact_total > 0)
+                    for prediction_position, year in enumerate(
+                        ordered_prediction_years
+                    ):
+                        current = predicted[prediction_position]
+                        harmonize = all_permanent & (current != dominant_permanent)
+                        if harmonize.any():
+                            current[harmonize] = dominant_permanent[harmonize]
+                            predicted[prediction_position] = current
+                            complete[len(historical_sources) + prediction_position] = (
+                                current
+                            )
+                            changed_by_year[year] |= harmonize
+                            stats["all_permanent_harmonized"] += int(harmonize.sum())
+
+                    # Finally remove a one-year permanent prediction occurring
+                    # between two annual-crop years.
+                    for prediction_position, year in enumerate(
+                        ordered_prediction_years
+                    ):
+                        complete_position = (
+                            len(historical_sources) + prediction_position
+                        )
+                        if not 0 < complete_position < complete.shape[0] - 1:
+                            continue
+                        current = predicted[prediction_position]
+                        previous_values = complete[complete_position - 1]
+                        next_values = complete[complete_position + 1]
+                        remove_isolated = (
+                            np.isin(current, permanent_codes)
+                            & np.isin(previous_values, annual_codes)
+                            & np.isin(next_values, annual_codes)
+                        )
+                        if remove_isolated.any():
+                            current[remove_isolated] = _HRL_NO_CROPLAND_CODE
+                            predicted[prediction_position] = current
+                            complete[complete_position] = current
+                            changed_by_year[year] |= remove_isolated
+                            stats["isolated_permanent_removed"] += int(
+                                remove_isolated.sum()
+                            )
+
+                    for prediction_position, year in enumerate(
+                        ordered_prediction_years
+                    ):
+                        predicted_sources[year].write(
+                            predicted[prediction_position],
+                            1,
+                            window=window,
+                        )
+                        confidence_source = confidence_sources.get(year)
+                        if confidence_source is None:
+                            continue
+                        confidence = confidence_source.read(
+                            1,
+                            window=window,
+                            masked=False,
+                        ).astype(np.uint8, copy=False)
+                        changed = changed_by_year[year]
+                        changed_to_background = changed & (
+                            predicted[prediction_position] == _HRL_NO_CROPLAND_CODE
+                        )
+                        changed_to_permanent = changed & np.isin(
+                            predicted[prediction_position],
+                            exact_permanent_codes,
+                        )
+                        confidence[changed_to_background] = (
+                            _HRL_CTY_CONFIDENCE_NO_CROPLAND
+                        )
+                        confidence[changed_to_permanent] = np.maximum(
+                            confidence[changed_to_permanent],
+                            temporal_confidence[changed_to_permanent],
+                        )
+                        confidence_source.write(confidence, 1, window=window)
+
+        for year, temporary in temporary_cty.items():
+            temporary.replace(cty_paths[year])
+        for year, temporary in temporary_confidence.items():
+            temporary.replace(confidence_paths[year])
+        return stats
+    except Exception:
+        for temporary in (*temporary_cty.values(), *temporary_confidence.values()):
+            temporary.unlink(missing_ok=True)
+        raise
+
+
+def _matching_class_neighbour_confidence(
+    labels: np.ndarray,
+    confidence: np.ndarray,
+    target_class: int,
+) -> np.ndarray:
+    """Return mean 3×3 confidence of neighbours carrying ``target_class``."""
+    valid = (labels == target_class) & (confidence <= 100)
+    padded_values = np.pad(
+        np.where(valid, confidence, 0).astype(np.float32),
+        1,
+        mode="constant",
+        constant_values=0.0,
+    )
+    padded_valid = np.pad(
+        valid.astype(np.float32),
+        1,
+        mode="constant",
+        constant_values=0.0,
+    )
+    height, width = labels.shape
+    total = np.zeros((height, width), dtype=np.float32)
+    count = np.zeros((height, width), dtype=np.float32)
+    for row_offset in range(3):
+        for col_offset in range(3):
+            total += padded_values[
+                row_offset : row_offset + height,
+                col_offset : col_offset + width,
+            ]
+            count += padded_valid[
+                row_offset : row_offset + height,
+                col_offset : col_offset + width,
+            ]
+    return np.divide(
+        total,
+        count,
+        out=np.zeros_like(total),
+        where=count > 0.0,
+    )
+
+
+def apply_alphaearth_cty_mmu_sieve(
+    cty_paths: Sequence[str | Path],
+    *,
+    confidence_paths: Sequence[str | Path] | None = None,
+    minimum_mapping_unit_pixels: int = 25,
+    connectivity: int = 4,
+    padding_pixels: int = 25,
+    maximum_iterations: int = 3,
+) -> pd.DataFrame:
+    """Apply a padded, multi-pass HRL-style MMU sieve to CTY tiles.
+
+    Neighbouring generated tiles are mosaicked into a padded processing window so
+    connected patches crossing 100-km tile boundaries are treated consistently.
+
+    Args:
+        cty_paths: Generated CTY tiles for one prediction year.
+        confidence_paths: Optional CTY confidence tiles in matching order.
+        minimum_mapping_unit_pixels: Sieve threshold; 25 pixels equals 0.25 ha at
+            10 m.
+        connectivity: Four- or eight-neighbour connectivity.
+        padding_pixels: Tile padding used before sieving.
+        maximum_iterations: Maximum sieve passes; multiple passes better enforce
+            MMU in multi-class rasters.
+
+    Returns:
+        Per-tile table with changed-pixel counts and sieve iterations.
+    """
+    if minimum_mapping_unit_pixels < 1:
+        raise ValueError("minimum_mapping_unit_pixels must be at least one.")
+    if connectivity not in {4, 8}:
+        raise ValueError("connectivity must be 4 or 8.")
+    if padding_pixels < 0:
+        raise ValueError("padding_pixels cannot be negative.")
+    if maximum_iterations < 1:
+        raise ValueError("maximum_iterations must be at least one.")
+
+    tile_paths = [Path(path) for path in cty_paths]
+    if not tile_paths:
+        return pd.DataFrame()
+    confidence_by_stem = {
+        Path(path).stem.replace("CTYCL", "CTY"): Path(path)
+        for path in (confidence_paths or ())
+    }
+    results: list[dict[str, int | str]] = []
+
+    with ExitStack() as source_stack:
+        all_sources = [
+            source_stack.enter_context(rasterio.open(path)) for path in tile_paths
+        ]
+        reference_crs = all_sources[0].crs
+        for source in all_sources:
+            if source.crs != reference_crs:
+                raise ValueError("All CTY tiles must share one CRS for MMU sieving.")
+
+        confidence_sources = []
+        confidence_paths_available = list(confidence_by_stem.values())
+        for path in confidence_paths_available:
+            confidence_sources.append(source_stack.enter_context(rasterio.open(path)))
+
+        for tile_path in tile_paths:
+            with rasterio.open(tile_path) as template:
+                x_resolution = abs(float(template.transform.a))
+                y_resolution = abs(float(template.transform.e))
+                expanded_bounds = (
+                    template.bounds.left - padding_pixels * x_resolution,
+                    template.bounds.bottom - padding_pixels * y_resolution,
+                    template.bounds.right + padding_pixels * x_resolution,
+                    template.bounds.top + padding_pixels * y_resolution,
+                )
+                merged, merged_transform = rasterio_merge(
+                    all_sources,
+                    bounds=expanded_bounds,
+                    res=(x_resolution, y_resolution),
+                    nodata=_HRL_OUTSIDE_AREA_CODE,
+                    dtype="uint16",
+                    method="first",
+                    target_aligned_pixels=True,
+                )
+                padded_labels = merged[0].astype(np.int32, copy=False)
+                valid_mask = padded_labels != _HRL_OUTSIDE_AREA_CODE
+                sieved = padded_labels
+                iterations_used = 0
+                for iteration in range(maximum_iterations):
+                    next_sieved = rasterio.features.sieve(
+                        sieved,
+                        size=minimum_mapping_unit_pixels,
+                        mask=valid_mask,
+                        connectivity=connectivity,
+                    )
+                    iterations_used = iteration + 1
+                    if np.array_equal(next_sieved, sieved):
+                        sieved = next_sieved
+                        break
+                    sieved = next_sieved
+
+                core_window = (
+                    rasterio.windows.from_bounds(
+                        *template.bounds,
+                        transform=merged_transform,
+                    )
+                    .round_offsets()
+                    .round_lengths()
+                )
+                row_start = int(core_window.row_off)
+                col_start = int(core_window.col_off)
+                row_stop = row_start + template.height
+                col_stop = col_start + template.width
+                final_core = sieved[
+                    row_start:row_stop,
+                    col_start:col_stop,
+                ].astype(np.uint16)
+                original_core = template.read(1, masked=False)
+                changed = final_core != original_core
+
+                temporary = tile_path.with_name(f".{tile_path.name}.sieve.part")
+                temporary.unlink(missing_ok=True)
+                profile = template.profile.copy()
+                with rasterio.open(temporary, "w", **profile) as destination:
+                    destination.write(final_core, 1)
+                    _copy_raster_metadata(template, destination)
+
+                confidence_path = confidence_by_stem.get(tile_path.stem)
+                confidence_changed = 0
+                confidence_temporary = None
+                if confidence_path is not None and confidence_sources:
+                    merged_confidence, _ = rasterio_merge(
+                        confidence_sources,
+                        bounds=expanded_bounds,
+                        res=(x_resolution, y_resolution),
+                        nodata=_HRL_CTY_CONFIDENCE_OUTSIDE_AREA,
+                        dtype="uint8",
+                        method="first",
+                        target_aligned_pixels=True,
+                    )
+                    padded_confidence = merged_confidence[0].astype(
+                        np.uint8,
+                        copy=False,
+                    )
+                    with rasterio.open(confidence_path) as confidence_template:
+                        confidence_core = confidence_template.read(
+                            1,
+                            masked=False,
+                        ).astype(np.uint8, copy=False)
+                        updated_confidence = confidence_core.copy()
+                        changed_to_background = changed & (
+                            final_core == _HRL_NO_CROPLAND_CODE
+                        )
+                        updated_confidence[changed_to_background] = (
+                            _HRL_CTY_CONFIDENCE_NO_CROPLAND
+                        )
+                        for class_code in np.unique(final_core[changed]):
+                            class_code = int(class_code)
+                            if class_code in {
+                                _HRL_NO_CROPLAND_CODE,
+                                _HRL_OUTSIDE_AREA_CODE,
+                            }:
+                                continue
+                            neighbour_confidence = _matching_class_neighbour_confidence(
+                                sieved,
+                                padded_confidence,
+                                class_code,
+                            )
+                            neighbour_core = neighbour_confidence[
+                                row_start:row_stop,
+                                col_start:col_stop,
+                            ]
+                            class_changed = changed & (final_core == class_code)
+                            usable = class_changed & (neighbour_core > 0.0)
+                            updated_confidence[usable] = np.clip(
+                                np.rint(neighbour_core[usable]),
+                                0,
+                                100,
+                            ).astype(np.uint8)
+                        confidence_changed = int(
+                            np.count_nonzero(updated_confidence != confidence_core)
+                        )
+                        confidence_temporary = confidence_path.with_name(
+                            f".{confidence_path.name}.sieve.part"
+                        )
+                        confidence_temporary.unlink(missing_ok=True)
+                        confidence_profile = confidence_template.profile.copy()
+                        with rasterio.open(
+                            confidence_temporary,
+                            "w",
+                            **confidence_profile,
+                        ) as confidence_destination:
+                            confidence_destination.write(updated_confidence, 1)
+                            _copy_raster_metadata(
+                                confidence_template,
+                                confidence_destination,
+                            )
+
+                temporary.replace(tile_path)
+                if confidence_temporary is not None:
+                    confidence_temporary.replace(confidence_path)
+                results.append(
+                    {
+                        "tile": tile_path.stem,
+                        "changed_pixels": int(changed.sum()),
+                        "confidence_changed_pixels": confidence_changed,
+                        "iterations": iterations_used,
+                    }
+                )
+
+    return pd.DataFrame(results)
+
+
+def enforce_cpsct_annual_cropland_mask(
+    cty_path: str | Path,
+    cpsct_path: str | Path,
+) -> int:
+    """Set CPSCT to zero outside final annual cropland and preserve outside-area."""
+    cty_path = Path(cty_path)
+    cpsct_path = Path(cpsct_path)
+    temporary = cpsct_path.with_name(f".{cpsct_path.name}.ctymask.part")
+    temporary.unlink(missing_ok=True)
+    changed_total = 0
+    try:
+        with (
+            rasterio.open(cty_path) as cty_source,
+            rasterio.open(cpsct_path) as cpsct_source,
+        ):
+            _assert_matching_rasterio_grid(cty_source, cpsct_source)
+            profile = cpsct_source.profile.copy()
+            with rasterio.open(temporary, "w", **profile) as destination:
+                for _, window in cpsct_source.block_windows(1):
+                    cty = cty_source.read(1, window=window, masked=False)
+                    cpsct = cpsct_source.read(1, window=window, masked=False)
+                    updated = cpsct.copy()
+                    outside = cty == _HRL_OUTSIDE_AREA_CODE
+                    annual = np.isin(cty, HRL_ANNUAL_CTY_CLASS_CODES)
+                    updated[~outside & ~annual] = 0
+                    updated[outside] = _HRL_OUTSIDE_AREA_CODE
+                    changed_total += int(np.count_nonzero(updated != cpsct))
+                    destination.write(updated, 1, window=window)
+                _copy_raster_metadata(cpsct_source, destination)
+        temporary.replace(cpsct_path)
+        return changed_total
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def remove_alphaearth_downloads(
+    selected_cogs: gpd.GeoDataFrame,
+    *,
+    logger: logging.Logger | None = None,
+) -> int:
+    """Delete downloaded AlphaEarth COGs while preserving the cached index.
+
+    Args:
+        selected_cogs: Adapter selection containing ``local_path`` values.
+        logger: Optional logger used for deletion diagnostics.
+
+    Returns:
+        Number of local files removed.
+    """
+    if "local_path" not in selected_cogs.columns:
+        return 0
+    removed = 0
+    for local_path_value in selected_cogs["local_path"].drop_duplicates():
+        local_path = Path(str(local_path_value))
+        if local_path.exists():
+            local_path.unlink()
+            removed += 1
+            if logger is not None:
+                logger.debug("Removed cached AlphaEarth COG %s.", local_path)
+        parent = local_path.parent
+        while parent.name and parent.exists():
+            try:
+                parent.rmdir()
+            except OSError:
+                break
+            parent = parent.parent
+    return removed
