@@ -531,7 +531,7 @@ class Government(AgentBaseClass):
         #     return
 
         return_periods = self.agents.households.return_periods
-        self.flood_risk_module.calculate_building_flood_damages()
+        self.flood_risk_module.calculate_building_flood_damages(dynamic=False)
         damages_do_not_adapt = self.flood_risk_module.damages_do_not_adapt
         damages_adapt = self.flood_risk_module.damages_adapt
         adapted = self.agents.households.var.adapted.data
