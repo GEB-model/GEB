@@ -164,8 +164,6 @@ class Households(AgentBaseClass):
             "y",
             "COST_STRUCTURAL_USD_SQM",
             "COST_CONTENTS_USD_SQM",
-            "distance_to_river_m",
-            "distance_to_coastline_m",
             "COMID",
             "distance_to_river_m",
             "distance_to_coastline_m",
@@ -285,13 +283,6 @@ class Households(AgentBaseClass):
         # drop buildings which are not flooded
         if drop_not_flooded:
             self.buildings = self.buildings[self.buildings["flooded"]]
-        # also set index to flooded households
-        flooded_building_ids = self.buildings.loc[
-            self.buildings["flooded"], "id"
-        ].to_numpy()
-        self.households_exposed_to_flooding = np.where(
-            np.isin(self.var.building_id_of_household.data, flooded_building_ids)
-        )[0]
 
     def update_building_adaptation_status(self, household_adapting: np.ndarray) -> None:
         """Update the floodproofing status of buildings based on adapting households."""
@@ -933,10 +924,8 @@ class Households(AgentBaseClass):
             wealth=self.var.wealth.data,
             income=self.var.income.data,
             expendature_cap=1,
-            amenity_value=self.var.amenity_value.data,
             household_distance_to_coastline_m=self.household_distance_to_coastline_m,
             household_distance_to_river_m=self.household_distance_to_river_m,
-            amenity_weight=1,
             risk_perception=self.var.risk_perception.data,
             expected_damages_adapt=damages_adapt,
             adaptation_costs=self.var.adaptation_costs.data,
@@ -953,10 +942,8 @@ class Households(AgentBaseClass):
             n_agents=self.n,
             wealth=self.var.wealth.data,
             income=self.var.income.data,
-            amenity_value=self.var.amenity_value.data,
             household_distance_to_coastline_m=self.household_distance_to_coastline_m,
             household_distance_to_river_m=self.household_distance_to_river_m,
-            amenity_weight=1,
             risk_perception=self.var.risk_perception.data,
             expected_damages=damages_do_not_adapt,
             adapted=self.var.adapted.data,
@@ -966,8 +953,31 @@ class Households(AgentBaseClass):
             sigma=1,
         )
 
+        EU_relocate = self.decision_module.calcEU_relocate(
+            geom_id="NoID",
+            n_agents=self.n,
+            wealth=self.var.wealth.data,
+            income=self.var.income.data,
+            amenity_value=self.var.amenity_value.data,
+            amenity_weight=1,
+            migration_costs=2.5e5,
+            T=35,
+            r=0.03,
+            sigma=1,
+        )
+
+        EU_relocate = np.random.uniform(
+            low=EU_do_not_adapt[EU_do_not_adapt > 0].mean() * 0.8,
+            high=EU_do_not_adapt[EU_do_not_adapt > 0].mean() * 1.01,
+            size=self.n,
+        )
         # execute strategy
-        household_adapting = np.where(EU_adapt > EU_do_not_adapt)[0]
+        households_relocating = np.where(
+            np.logical_and(EU_relocate > EU_adapt, EU_relocate > EU_do_not_adapt)
+        )[0]
+        household_adapting = np.where(
+            np.logical_and(EU_adapt > EU_do_not_adapt, EU_adapt > EU_relocate)
+        )[0]
         self.var.adapted[household_adapting] = 1
         self.var.time_adapted[household_adapting] += 1
 
@@ -976,9 +986,78 @@ class Households(AgentBaseClass):
 
         # print percentage of households that adapted
         print(f"N households that adapted: {len(household_adapting)}")
+
         self.var.ead_usd_per_year[:] = self.flood_risk_module.calculate_ead(
             damages_do_not_adapt, damages_adapt, self.var.adapted.data
         ).astype(np.float32)
+
+        # process relocation decisions
+        self.remove_households_from_model(households_relocating)
+
+    def remove_households_from_model(self, household_relocating: np.ndarray) -> None:
+        """This function removes households from the model.
+
+        Args:
+            household_relocating: A boolean array indicating which households are relocating.
+        """
+        # ensure array is in descending order
+        households_relocating = np.sort(household_relocating)[::-1]
+
+        # attributes to remove for households that are relocating
+        attributes_to_remove = [
+            "locations",
+            "region_id",
+            "sizes",
+            "building_id_of_household",
+            "age_household_head",
+            "education_level",
+            "adapted",
+            "warning_reached",
+            "warning_level",
+            "response_probability",
+            "evacuated",
+            "warning_trigger",
+            "recommended_measures",
+            "actions_taken",
+            "risk_perception",
+            "risk_aversion",
+            "wealth",
+            "income",
+            "ead_usd_per_year",
+            "time_adapted",
+            "years_since_last_flood",
+            "property_value",
+            "adaptation_costs",
+        ]
+
+        attributes_movers_to_move = {}
+        # first remove households from the model
+        for attribute in attributes_to_remove:
+            attribute_to_process = getattr(self.var, attribute)
+            attribute_movers = np.empty_like(attribute_to_process)
+            for i, household in enumerate(households_relocating):
+                # read the attribute value of the relocating household and store it in the movers array
+                attribute_movers[i] = attribute_to_process[household]
+                # move last element to the position of the relocating household.
+                attribute_to_process._data[household] = attribute_to_process.data[-1]
+                # now remove the last element.
+                attribute_to_process.n -= 1
+            # store the movers array in a dictionary for later use if needed
+            attributes_movers_to_move[attribute] = attribute_movers
+        # process the cached comid map if it exists
+        if hasattr(self, "_comid_map"):
+            comid_map = getattr(self, "_comid_map")
+            for household in households_relocating:
+                comid_map[household] = comid_map[
+                    comid_map.size - 1
+                ]  # move last element to the position of the relocating household
+                comid_map = comid_map[:-1]  # now remove the last element
+                # also process the cached comid map for the movers
+                self._cached_mapped_comids[household] = self._cached_mapped_comids[-1]
+                self._cached_mapped_comids = self._cached_mapped_comids[:-1]
+            setattr(self, "_comid_map", comid_map)
+        # Print the number of households that are removed
+        print(f"N households that relocated: {len(household_relocating)}")
 
     def spinup(self) -> None:
         """This function runs the spin-up process for the household agents."""
@@ -1316,9 +1395,7 @@ class Households(AgentBaseClass):
         Returns:
             A numpy array with the adaptation uptake in the flood zone.
         """
-        if not hasattr(self, "households_exposed_to_flooding"):
-            self.update_building_attributes()
-        return self.var.adapted.data[self.households_exposed_to_flooding]
+        return self.var.adapted.data[self.households_exposed_to_flooding].copy()
 
     @property
     def comid_of_household(self) -> np.ndarray:
@@ -1345,29 +1422,16 @@ class Households(AgentBaseClass):
             .astype(int)
             .to_numpy()
         )
-        self._cached_mapped_comids = mapped_comids
+        self._cached_mapped_comids = mapped_comids.copy()
         return mapped_comids
 
     @property
-    def household_distance_to_river_m(self) -> np.ndarray:
-        """Get the distance to the nearest river for each household.
-
-        Returns:
-            np.ndarray: Array of distances to the nearest river for each household.
-        """
-        return np.take(
-            np.array(self.buildings["distance_to_river_m"]),
-            self.var.building_id_of_household,
-        )
-
-    @property
-    def household_distance_to_coastline_m(self) -> np.ndarray:
-        """Get the distance to the nearest coastline for each household.
-
-        Returns:
-            np.ndarray: Array of distances to the nearest coastline for each household.
-        """
-        return np.take(
-            np.array(self.buildings["distance_to_coastline_m"]),
-            self.var.building_id_of_household,
-        )
+    def households_exposed_to_flooding(self) -> np.ndarray:
+        # also set index to flooded households
+        flooded_building_ids = self.buildings.loc[
+            self.buildings["flooded"], "id"
+        ].to_numpy()
+        households_exposed_to_flooding = np.where(
+            np.isin(self.var.building_id_of_household.data, flooded_building_ids)
+        )[0]
+        return households_exposed_to_flooding

@@ -581,15 +581,15 @@ def plot_multirun_results_within_base_or_future(
 if __name__ == "__main__":
     model_path = os.path.join("..", "..", "models", "models", "mex_dev", "cluster_020")
     model_name = "default"
-    scenario = "future"
+    scenario = "base"
     scenarios_to_compare = ["base", "government_cba"]
     prefixes = ["nogov_", "cba_"]
     # plot_multirun_results_for_scenarios(model_path, scenarios_to_compare)
-    plot_multirun_results_within_scenario(model_path, scenario, prefixes)
+    # plot_multirun_results_within_scenario(model_path, scenario, prefixes)
 
     # plot_multirun_results_base_and_future(model_path)
     # plot_multirun_results_across_scenarios(
     #     model_path,
     #     scenarios=["base", "future", "policy_variant"],
     # )
-    # process_household_attributes(model_path, scenario, model_name)
+    process_household_attributes(model_path, scenario, model_name)
