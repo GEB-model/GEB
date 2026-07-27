@@ -803,4 +803,6 @@ class Government(AgentBaseClass):
         Returns:
             A dictionary mapping subbasin IDs to their flood protection standards.
         """
-        return self.agents.households.flood_risk_module.flood_protection_standard_subbasins
+        return (
+            self.agents.households.flood_risk_module.flood_protection_standard_subbasins
+        )
