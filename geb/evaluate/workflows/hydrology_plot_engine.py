@@ -721,6 +721,105 @@ def _draw_violin_box(
     )
 
 
+def plot_seasonal_kge(
+    evaluation_df: pd.DataFrame,
+    output_folder: Path,
+    logger: logging.Logger,
+    export: bool = True,
+) -> None:
+    """Plot station-level daily KGE distributions by meteorological season.
+
+    Args:
+        evaluation_df: Per-station discharge evaluation metrics containing the
+            four ``KGE_daily_<season>`` columns.
+        output_folder: Root discharge evaluation output folder.
+        logger: Logger used for output messages.
+        export: Whether to save PNG and SVG versions of the figure.
+    """
+    season_names: tuple[str, ...] = ("winter", "spring", "summer", "autumn")
+    season_colors: tuple[str, ...] = ("#4C78A8", "#59A14F", "#F2A541", "#B2794C")
+    seasonal_values: list[np.ndarray] = []
+    available_seasons: list[str] = []
+    available_colors: list[str] = []
+
+    for season_name, season_color in zip(season_names, season_colors, strict=True):
+        column_name: str = f"KGE_daily_{season_name}"
+        if column_name not in evaluation_df.columns:
+            logger.info("Seasonal KGE column '%s' is unavailable.", column_name)
+            continue
+        values: np.ndarray = pd.to_numeric(
+            evaluation_df[column_name], errors="coerce"
+        ).to_numpy(dtype=float)
+        finite_values: np.ndarray = values[np.isfinite(values)]
+        if finite_values.size == 0:
+            continue
+        seasonal_values.append(finite_values)
+        available_seasons.append(season_name)
+        available_colors.append(season_color)
+
+    if not seasonal_values:
+        logger.info("No seasonal KGE values available; skipping seasonal figure.")
+        return
+
+    figure, axis = plt.subplots(figsize=(6.3, 4.2))
+    for position, (season_name, season_color, values) in enumerate(
+        zip(
+            available_seasons,
+            available_colors,
+            seasonal_values,
+            strict=True,
+        ),
+        start=1,
+    ):
+        _draw_violin_box(
+            axis=axis,
+            values=values,
+            position=float(position),
+            bar_color=season_color,
+            violin_width=0.7,
+            violin_limits=(-1.0, 1.0),
+        )
+        axis.text(
+            position,
+            -0.94,
+            f"med={float(np.median(values)):.2f}",
+            ha="center",
+            va="bottom",
+            fontsize=7,
+            color="0.25",
+            bbox={
+                "boxstyle": "round,pad=0.12",
+                "facecolor": "white",
+                "edgecolor": "none",
+                "alpha": 0.75,
+            },
+        )
+
+    axis.axhline(0.0, color="0.55", linewidth=0.8, linestyle="--", zorder=0)
+    axis.set(
+        ylabel="KGE",
+        xticks=np.arange(1, len(available_seasons) + 1),
+        xticklabels=[season_name.title() for season_name in available_seasons],
+        ylim=(-1.0, 1.0),
+    )
+    axis.spines["top"].set_visible(False)
+    axis.spines["right"].set_visible(False)
+    axis.grid(axis="y", color="0.88", linewidth=0.7)
+    figure.tight_layout()
+
+    if export:
+        boxplots_folder: Path = output_folder / "skill_score_boxplots"
+        boxplots_folder.mkdir(parents=True, exist_ok=True)
+        for extension in ("svg", "png"):
+            output_path: Path = (
+                boxplots_folder / f"evaluation_skill_scores_kge_seasonal.{extension}"
+            )
+            figure.savefig(output_path, bbox_inches="tight", dpi=150)
+            logger.info("Seasonal KGE plot saved to: %s", output_path)
+
+    plt.close(figure)
+
+
 def plot_skill_score_boxplots(
     evaluation_df: pd.DataFrame,
     external_models: dict[str, pd.DataFrame],

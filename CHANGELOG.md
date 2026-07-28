@@ -1,4 +1,5 @@
 # dev
+- Added daily discharge KGE evaluation for winter, spring, summer, and autumn
 - Added an optional GRDC-Caravan integration to extract hydrological and geographical properties from GRDC Caravan (e.g. aridity, elevation etc).
 - simplified and improved the discharge evaluation
 - Reduced the default discharge-evaluation requirement from ten to five total years of valid paired observations and simulations; the paired values do not need to be continuous.

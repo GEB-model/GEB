@@ -53,6 +53,13 @@ DISCHARGE_OBSERVATION_FREQUENCIES: dict[str, str] = {
     "daily": "D",
 }
 
+METEOROLOGICAL_SEASONS: dict[str, tuple[int, ...]] = {
+    "winter": (12, 1, 2),
+    "spring": (3, 4, 5),
+    "summer": (6, 7, 8),
+    "autumn": (9, 10, 11),
+}
+
 # Configure global style for all plots in this module
 mpl.rcParams["figure.facecolor"] = "white"
 mpl.rcParams["axes.facecolor"] = "white"
@@ -238,6 +245,39 @@ def _calculate_discharge_validation_metrics(
         RMSE=rmse,
         RRMSE=rrmse,
     )
+
+
+def _calculate_seasonal_kge(validation_df_daily: pd.DataFrame) -> dict[str, float]:
+    """Calculate daily KGE separately for each meteorological season.
+
+    All available daily values from the same season are pooled across years.
+    This preserves the existing full-period evaluation while exposing seasonal
+    differences in discharge skill.
+
+    Args:
+        validation_df_daily: Daily observed and simulated discharge (m3/s) with
+            a DatetimeIndex.
+
+    Returns:
+        Seasonal KGE values keyed by lowercase season name.
+
+    Raises:
+        TypeError: If the dataframe does not use a DatetimeIndex.
+    """
+    if not isinstance(validation_df_daily.index, pd.DatetimeIndex):
+        raise TypeError("Seasonal discharge evaluation requires a DatetimeIndex.")
+
+    month_numbers: np.ndarray = (
+        validation_df_daily.index.to_series().dt.month.to_numpy()
+    )
+    seasonal_kge: dict[str, float] = {}
+    for season_name, season_months in METEOROLOGICAL_SEASONS.items():
+        season_mask: np.ndarray = np.isin(month_numbers, season_months)
+        season_metrics: DischargeMetrics = _calculate_discharge_validation_metrics(
+            validation_df_daily.loc[season_mask]
+        )
+        seasonal_kge[season_name] = season_metrics.KGE
+    return seasonal_kge
 
 
 # Discharge and outflow plots
@@ -841,41 +881,6 @@ def _plot_outflow_discharge_timeseries(
     return plots_created
 
 
-# Discharge time-series alignment
-
-
-def _get_fixed_frequency_timedelta(
-    frequency: Any,
-    frequency_name: str,
-) -> pd.Timedelta:
-    """Convert a fixed pandas frequency offset to a timestep duration.
-
-    Args:
-        frequency: Pandas frequency offset to convert.
-        frequency_name: Human-readable frequency label used in error messages.
-
-    Returns:
-        Fixed timestep duration.
-
-    Raises:
-        ValueError: If the frequency is variable-length and cannot be converted
-            to one fixed duration.
-    """
-    try:
-        fixed_timestep: pd.Timedelta = cast(pd.Timedelta, pd.Timedelta(frequency))
-        return fixed_timestep
-    except TypeError, ValueError:
-        pass
-
-    try:
-        frequency_nanoseconds: int = int(frequency.nanos)
-    except ValueError as error:
-        raise ValueError(
-            f"{frequency_name} frequency must have a fixed timestep duration."
-        ) from error
-    return cast(pd.Timedelta, pd.Timedelta(nanoseconds=frequency_nanoseconds))
-
-
 def create_validation_df(
     output_folder: Path,
     station_id: str | int,
@@ -916,14 +921,14 @@ def create_validation_df(
             f"Hydrology routing directory does not exist: {routing_dir}"
         )
 
-    station_file_name: str = f"discharge_hourly_m3_per_s_{station_id}.parquet"
-    station_file_path: Path = routing_dir / station_file_name
-
+    station_file_path: Path = (
+        routing_dir / f"discharge_hourly_m3_per_s_{station_id}.parquet"
+    )
     simulated_discharge: pd.Series = pd.read_parquet(station_file_path)[
         f"discharge_hourly_m3_per_s_{station_id}"
     ]
 
-    if np.isnan(simulated_discharge.values).any():
+    if simulated_discharge.isna().any():
         raise ValueError(
             f"NaN values found in GEB discharge data for station {station_id}. Please check the station file {station_file_path}."
         )
@@ -931,10 +936,8 @@ def create_validation_df(
     simulated_index: pd.Index = simulated_discharge.index
     if not isinstance(simulated_index, pd.DatetimeIndex):
         raise ValueError("Simulated discharge must have a DateTimeIndex.")
-    simulated_frequency: str | None = pd.infer_freq(simulated_index)
-    if simulated_frequency is None:
+    if pd.infer_freq(simulated_index) is None:
         raise ValueError("Simulated discharge must have a regular frequency.")
-    simulated_discharge = simulated_discharge.asfreq(simulated_frequency)
 
     if apply_upstream_area_correction:
         simulated_discharge = simulated_discharge * upstream_area_ratio
@@ -949,48 +952,36 @@ def create_validation_df(
 
     if observed_index.freq is None:
         raise ValueError("Observed discharge index must have a defined frequency.")
-    if not np.isfinite(timezone_utc_offset):
-        raise ValueError("Station UTC offset must be finite.")
-    if not -12.0 <= timezone_utc_offset <= 14.0:
-        raise ValueError("Station UTC offset must be between UTC-12 and UTC+14 hours.")
-
-    observed_frequency = observed_index.freq
-    simulated_timestep: pd.Timedelta = _get_fixed_frequency_timedelta(
-        simulated_frequency,
-        "Simulated discharge",
-    )
-    observed_timestep: pd.Timedelta = _get_fixed_frequency_timedelta(
-        observed_frequency,
-        "Observed discharge",
-    )
-
-    # Pandas 3 no longer orders frequency offsets directly; compare explicit
-    # durations to keep the validation independent of pandas internals.
-    if simulated_timestep > observed_timestep:
+    if len(observed_index) < 2:
+        raise ValueError("Observed discharge must contain at least two timestamps.")
+    if not np.isfinite(timezone_utc_offset) or not (
+        -12.0 <= timezone_utc_offset <= 14.0
+    ):
         raise ValueError(
-            "Simulated discharge frequency is lower than observed discharge frequency. Please ensure the simulated discharge is at least as frequent as the observed discharge."
-        )
-    if (observed_timestep.value % simulated_timestep.value) != 0:
-        raise ValueError(
-            "Observed discharge frequency is not a multiple of simulated discharge frequency. Please ensure the observed discharge frequency is a multiple of the simulated discharge frequency."
+            "Station UTC offset must be finite and between UTC-12 and UTC+14 hours."
         )
 
-    observation_frequency = observed_frequency
-    observation_timestep: pd.Timedelta = observed_timestep
-    should_use_local_calendar: bool = (
-        observation_timestep >= pd.Timedelta(days=1) and timezone_utc_offset != 0.0
-    )
-    simulation_for_aggregation: pd.Series = simulated_discharge.copy()
-    if should_use_local_calendar:
+    observed_frequency: Any = observed_index.freq
+    simulated_timestep: pd.Timedelta = simulated_index[1] - simulated_index[0]
+    observed_timestep: pd.Timedelta = observed_index[1] - observed_index[0]
+    if (
+        observed_timestep < simulated_timestep
+        or observed_timestep % simulated_timestep != pd.Timedelta(0)
+    ):
+        raise ValueError(
+            "Observed discharge timestep must be a multiple of the simulated timestep."
+        )
+
+    if observed_timestep >= pd.Timedelta(days=1) and timezone_utc_offset != 0.0:
         # GRDC daily values represent fixed-offset local calendar days. For
         # UTC+3, adding three hours makes the bin labelled January 1 span
         # December 31 21:00 UTC through January 1 20:59 UTC.
-        simulation_for_aggregation.index = (
-            simulation_for_aggregation.index + pd.Timedelta(hours=timezone_utc_offset)
+        simulated_discharge.index = simulated_discharge.index + pd.Timedelta(
+            hours=timezone_utc_offset
         )
 
-    simulated_discharge = simulation_for_aggregation.resample(
-        observation_frequency,
+    simulated_discharge = simulated_discharge.resample(
+        observed_frequency,
         closed="left",
         label="left",
     ).mean()
@@ -1828,6 +1819,9 @@ class Hydrology:
             The discharge simulation files must exist in the report directory structure.
             If no discharge stations are found in the basin, empty evaluation datasets
             are created. The evaluation can be skipped if results already exist.
+            Daily KGE is also calculated for the meteorological seasons winter
+            (December-February), spring (March-May), summer (June-August), and
+            autumn (September-November).
 
         Args:
             run_name: Name of the simulation run to evaluate. Must correspond to an
@@ -1854,7 +1848,7 @@ class Hydrology:
 
         Returns:
             Dictionary containing median frequency-specific discharge skill
-            scores (e.g., KGE_hourly, KGE_daily).
+            scores (e.g., KGE_hourly, KGE_daily) and median seasonal daily KGE.
             Stations with hourly data are also evaluated on the daily resampled data, and those metrics are included in
             the returned dictionary. Stations with only daily data are not evaluated on the hourly data.
 
@@ -2067,7 +2061,7 @@ class Hydrology:
                     # Incomplete days must not influence daily benchmark scores.
                     daily_resampler: Any = validation_df.resample("D")
                     valid_hourly_counts_per_day = daily_resampler.count()
-                    validation_df_daily = daily_resampler.mean()[
+                    validation_df_daily: pd.DataFrame = daily_resampler.mean()[
                         valid_hourly_counts_per_day == 24
                     ].dropna()
                     daily_discharge_metrics = _calculate_discharge_validation_metrics(
@@ -2082,6 +2076,7 @@ class Hydrology:
                 # Daily-frequency stations have no hourly data; fill with NaN so the
                 # DataFrame columns remain consistent across all stations.
                 elif frequency_label == "daily":
+                    validation_df_daily = validation_df
                     station_evaluation.update(
                         {
                             f"{metric_name}_hourly": float("nan")
@@ -2092,6 +2087,16 @@ class Hydrology:
                     raise ValueError(
                         f"Unexpected frequency label '{frequency_label}' in evaluation loop."
                     )
+
+                seasonal_kge: dict[str, float] = _calculate_seasonal_kge(
+                    validation_df_daily
+                )
+                station_evaluation.update(
+                    {
+                        f"KGE_daily_{season_name}": kge_value
+                        for season_name, kge_value in seasonal_kge.items()
+                    }
+                )
 
                 validation_df_monthly = validation_df.resample("ME").mean().dropna()
                 monthly_discharge_metrics = _calculate_discharge_validation_metrics(
@@ -2113,6 +2118,9 @@ class Hydrology:
                 for frequency in ("monthly", "daily", "hourly")
                 for metric_name in DischargeMetrics._fields
             ]
+            seasonal_cols: list[str] = [
+                f"KGE_daily_{season_name}" for season_name in METEOROLOGICAL_SEASONS
+            ]
             evaluation_df = pd.DataFrame(
                 columns=[
                     "station_name",
@@ -2121,6 +2129,7 @@ class Hydrology:
                     "upstream_area_GEB",
                     "discharge_observations_to_GEB_upstream_area_ratio",
                     *freq_cols,
+                    *seasonal_cols,
                 ],
                 index=pd.Index([], name="station_ID"),
             )
@@ -2187,6 +2196,14 @@ class Hydrology:
                 for frequency in ("hourly", "daily", "monthly")
                 for metric_name in DischargeMetrics._fields
             }
+            scores.update(
+                {
+                    f"KGE_daily_{season_name}": float(
+                        evaluation_df[f"KGE_daily_{season_name}"].median()
+                    )
+                    for season_name in METEOROLOGICAL_SEASONS
+                }
+            )
         else:
             self.model.logger.warning(
                 "No discharge stations found for evaluation. Returning None for all metrics."
@@ -2197,6 +2214,12 @@ class Hydrology:
                 for frequency in ("hourly", "daily", "monthly")
                 for metric_name in DischargeMetrics._fields
             }
+            scores.update(
+                {
+                    f"KGE_daily_{season_name}": None
+                    for season_name in METEOROLOGICAL_SEASONS
+                }
+            )
 
         self.model.logger.info(f"Discharge evaluation completed. Scores: {scores}")
 
@@ -2677,6 +2700,12 @@ class Hydrology:
             matched_only=False,
             minimum_upstream_area_km2=minimum_upstream_area_km2,
             station_count=len(evaluation_df),
+        )
+        hydrology_plot_engine.plot_seasonal_kge(
+            evaluation_df=evaluation_df,
+            output_folder=evaluation_paths.plot_folder,
+            logger=self.model.logger,
+            export=export,
         )
 
         matched_scores_by_model: dict[str, external_skill_scores.MatchedSkillScores] = (

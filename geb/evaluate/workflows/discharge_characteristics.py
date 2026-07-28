@@ -11,7 +11,6 @@ import pandas as pd
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 from scipy.stats import spearmanr
-from statsmodels.stats.multitest import multipletests
 
 from geb.evaluate.workflows.external_skill_scores import format_grdc_station_key
 
@@ -74,7 +73,7 @@ METRIC_STYLES: dict[str, MetricStyle] = {
 # The paper panels span natural and managed process families; the larger set is
 # for transparent exploratory screening, not automatic variable selection.
 MAIN_CHARACTERISTICS: tuple[Characteristic, ...] = (
-    Characteristic("upstream_area_GEB", "Catchment area (km²)", 0, 1e-6),
+    Characteristic("upstream_area_GEB", "Upstream catchment area (km²)", 0, 1e-6),
     Characteristic("aridity_FAO_PM", "Aridity, PET/P (–)", 2),
     Characteristic("ele_mt_sav", "Mean elevation (m)", 0),
     Characteristic("gwt_cm_sav", "Depth to groundwater table (cm)", 0),
@@ -110,6 +109,44 @@ SCREENING_CHARACTERISTICS: tuple[Characteristic, ...] = (
     Characteristic("ppd_pk_sav", "Population density (people/km²)", 0),
     Characteristic("rdd_mk_sav", "Road density (m/km²)", 0),
 )
+
+
+def _calculate_spearman_rho(
+    characteristic_values: pd.Series,
+    metric_values: pd.Series,
+) -> float:
+    """Calculate Spearman's rank correlation using complete station pairs.
+
+    Args:
+        characteristic_values: Continuous catchment-characteristic values,
+            including the units stated in the corresponding figure panel.
+        metric_values: Dimensionless station-level skill scores.
+
+    Returns:
+        Spearman rank correlation.
+
+    Raises:
+        ValueError: If fewer than three complete pairs or fewer than two distinct
+            values are available.
+    """
+    analysis_table: pd.DataFrame = pd.DataFrame(
+        {
+            "characteristic": pd.to_numeric(characteristic_values, errors="coerce"),
+            "metric": pd.to_numeric(metric_values, errors="coerce"),
+        }
+    ).dropna()
+    if len(analysis_table) < 3:
+        raise ValueError("A Spearman association needs at least three complete pairs.")
+    if (
+        analysis_table["characteristic"].nunique() < 2
+        or analysis_table["metric"].nunique() < 2
+    ):
+        raise ValueError("A Spearman association needs two distinct values per input.")
+
+    correlation_result = spearmanr(
+        analysis_table["characteristic"], analysis_table["metric"]
+    )
+    return float(correlation_result.statistic)
 
 
 def enrich_discharge_evaluation(
@@ -164,14 +201,13 @@ def calculate_characteristic_associations(
     """Screen catchment characteristics against KGE, NSE, and RRMSE.
 
     Spearman correlations are complemented by correlations between
-    within-country percentile ranks. Benjamini-Hochberg correction is applied
-    separately to each metric and correlation type.
+    within-country percentile ranks.
 
     Args:
         evaluation_df: Enriched per-station discharge evaluation table.
 
     Returns:
-        Long table of sample sizes, correlations, p-values, and FDR q-values.
+        Long table of sample sizes and raw and within-country correlations.
 
     Raises:
         ValueError: If matched stations, metrics, country, or attributes are missing.
@@ -233,21 +269,37 @@ def calculate_characteristic_associations(
                     "characteristic": characteristic.label,
                     "n": len(analysis_table),
                     "spearman_rho": float(raw_result.statistic),
-                    "p_value": float(raw_result.pvalue),
                     "within_country_rho": float(country_result.statistic),
-                    "within_country_p_value": float(country_result.pvalue),
                 }
             )
 
-    association_df: pd.DataFrame = pd.DataFrame(rows)
-    for p_column, q_column in (
-        ("p_value", "fdr_q_value"),
-        ("within_country_p_value", "within_country_fdr_q_value"),
-    ):
-        association_df[q_column] = association_df.groupby("metric")[p_column].transform(
-            lambda values: multipletests(values, method="fdr_bh")[1]
-        )
-    return association_df
+    return pd.DataFrame(rows)
+
+
+def _alphabetic_panel_label(panel_index: int) -> str:
+    """Convert a zero-based panel index to an alphabetic plot label.
+
+    Args:
+        panel_index: Zero-based panel position.
+
+    Returns:
+        Panel label such as ``a)`` or ``aa)``.
+
+    Raises:
+        ValueError: If ``panel_index`` is negative.
+    """
+    if panel_index < 0:
+        raise ValueError("Panel index cannot be negative.")
+
+    label_characters: list[str] = []
+    remaining_index: int = panel_index
+    while True:
+        remaining_index, remainder = divmod(remaining_index, 26)
+        label_characters.append(chr(ord("a") + remainder))
+        if remaining_index == 0:
+            break
+        remaining_index -= 1
+    return f"{''.join(reversed(label_characters))})"
 
 
 def _categorize_characteristic(values: pd.Series, decimals: int) -> pd.Series:
@@ -316,6 +368,7 @@ def _finish_characteristic_axis(
     title_pad: float,
     x_label_size: float,
     y_label_size: float,
+    panel_label: str | None = None,
 ) -> None:
     """Apply shared styling to one characteristic panel.
 
@@ -329,6 +382,7 @@ def _finish_characteristic_axis(
         title_pad: Padding below the panel title.
         x_label_size: X-axis tick-label font size.
         y_label_size: Y-axis tick-label font size.
+        panel_label: Optional label placed in the upper-left plot corner.
     """
     if style.benchmark is not None:
         axis.axhline(
@@ -337,6 +391,20 @@ def _finish_characteristic_axis(
     axis.set_title(
         title, loc="left", fontsize=title_size, fontweight="bold", pad=title_pad
     )
+    if panel_label is not None:
+        # Keeping the label separate from the title gives every panel the same
+        # fixed reference point, independent of title length.
+        axis.text(
+            0.01,
+            0.99,
+            panel_label,
+            transform=axis.transAxes,
+            ha="left",
+            va="top",
+            fontsize=title_size,
+            fontweight="bold",
+            zorder=10,
+        )
     axis.set_xticks(positions, [str(label) for label in category_values])
     axis.set_ylim(style.limits)
     axis.set_yticks(style.ticks)
@@ -354,6 +422,7 @@ def _draw_panel(
     style: MetricStyle,
     random_generator: np.random.Generator,
     compact: bool = False,
+    panel_label: str | None = None,
 ) -> None:
     """Draw one categorical skill-score panel.
 
@@ -365,6 +434,7 @@ def _draw_panel(
         style: Metric-specific axis and benchmark settings.
         random_generator: Generator used for reproducible point jitter.
         compact: Whether to use the smaller exploratory-panel typography.
+        panel_label: Optional label placed in the upper-left plot corner.
     """
     plot_table: pd.DataFrame = pd.DataFrame(
         {
@@ -410,7 +480,7 @@ def _draw_panel(
         axis.text(
             position,
             0.97,
-            f"n={len(values)}",
+            f"{np.median(values):.2f}",
             transform=axis.get_xaxis_transform(),
             ha="center",
             va="top",
@@ -430,6 +500,7 @@ def _draw_panel(
         title_pad=6 if compact else 8,
         x_label_size=5.8 if compact else 7.5,
         y_label_size=7 if compact else 8,
+        panel_label=panel_label,
     )
 
 
@@ -441,6 +512,7 @@ def _draw_paired_panel(
     title: str,
     style: MetricStyle,
     random_generator: np.random.Generator,
+    panel_label: str | None = None,
 ) -> None:
     """Draw one paired GEB-versus-external characteristic panel.
 
@@ -452,6 +524,7 @@ def _draw_paired_panel(
         title: Panel title.
         style: Metric-specific axis and benchmark settings.
         random_generator: Generator used for reproducible point jitter.
+        panel_label: Optional label placed in the upper-left plot corner.
 
     """
     plot_table: pd.DataFrame = pd.DataFrame(
@@ -503,19 +576,27 @@ def _draw_paired_panel(
             )
 
     for position, category_label in zip(positions, category_values, strict=True):
-        station_count: int = int((plot_table["category"] == category_label).sum())
-        axis.text(
-            position,
-            0.97,
-            f"n={station_count}",
-            transform=axis.get_xaxis_transform(),
-            ha="center",
-            va="top",
-            fontsize=7.2,
-            color="#303030",
-            bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.8, "pad": 0.4},
-            zorder=5,
-        )
+        for model_label, offset in offsets.items():
+            category_values_for_model: np.ndarray = plot_table.loc[
+                plot_table["category"] == category_label, model_label
+            ].to_numpy(dtype=float)
+            axis.text(
+                position + offset,
+                0.97,
+                f"{np.median(category_values_for_model):.2f}",
+                transform=axis.get_xaxis_transform(),
+                ha="center",
+                va="top",
+                fontsize=6.5,
+                color=colors[model_label],
+                bbox={
+                    "facecolor": "white",
+                    "edgecolor": "none",
+                    "alpha": 0.8,
+                    "pad": 0.3,
+                },
+                zorder=5,
+            )
 
     _finish_characteristic_axis(
         axis,
@@ -523,10 +604,11 @@ def _draw_paired_panel(
         positions,
         category_values,
         title,
-        title_size=10.5,
+        title_size=8.8,
         title_pad=8,
         x_label_size=7.2,
         y_label_size=8,
+        panel_label=panel_label,
     )
 
 
@@ -613,21 +695,21 @@ def plot_skill_by_characteristics(
         stations: pd.DataFrame = (
             all_stations if item.column == "upstream_area_GEB" else matched_stations
         )
-        title: str = (
-            "Catchment area (km²) — all stations"
-            if item.column == "upstream_area_GEB"
-            else item.label
+        title: str = item.label
+        panel_label: str = _alphabetic_panel_label(panel_index)
+        spearman_rho: float = _calculate_spearman_rho(
+            stations[item.column], stations[metric_column]
         )
-        panel_letter: str = chr(ord("a") + panel_index)
         _draw_panel(
             axis,
             stations[metric_column],
             _categorize_characteristic(
                 stations[item.column] * item.scale, decimals=item.decimals
             ),
-            f"{panel_letter}  {title}",
+            f"{title}\n" rf"$\rho_s={spearman_rho:+.2f}$",
             style,
             random_generator,
+            panel_label=panel_label,
         )
 
     for axis in axes[:, 0]:
@@ -732,11 +814,32 @@ def plot_paired_skill_by_characteristics(
         if stations.empty:
             raise ValueError("No paired stations match GRDC-Caravan attributes.")
         title: str = (
-            "Catchment area (km²) — paired stations"
+            f"{item.label} — paired stations"
             if item.column == "upstream_area_GEB"
             else item.label
         )
-        panel_letter: str = chr(ord("a") + panel_index)
+        panel_label: str = _alphabetic_panel_label(panel_index)
+        paired_analysis_table: pd.DataFrame = (
+            stations[[item.column, metric_column, "external_skill_score"]]
+            .apply(pd.to_numeric, errors="coerce")
+            .dropna()
+        )
+        geb_spearman_rho: float = _calculate_spearman_rho(
+            paired_analysis_table[item.column],
+            paired_analysis_table[metric_column],
+        )
+        external_spearman_rho: float = _calculate_spearman_rho(
+            paired_analysis_table[item.column],
+            paired_analysis_table["external_skill_score"],
+        )
+        short_external_name: str = {
+            "Google Streamflow": "Google",
+            "Utrecht": "PCR-GLOBWB",
+        }.get(external_model_name, external_model_name)
+        association_subtitle: str = (
+            rf"$\rho_s$ (GEB/{short_external_name}) = "
+            f"{geb_spearman_rho:+.2f}/{external_spearman_rho:+.2f}"
+        )
         _draw_paired_panel(
             axis,
             stations[metric_column],
@@ -744,9 +847,10 @@ def plot_paired_skill_by_characteristics(
             _categorize_characteristic(
                 stations[item.column] * item.scale, decimals=item.decimals
             ),
-            f"{panel_letter}  {title}",
+            f"{title}\n{association_subtitle}",
             style,
             random_generator,
+            panel_label=panel_label,
         )
 
     for axis in axes[:, 0]:
@@ -828,24 +932,33 @@ def plot_characteristic_screening(
     kge_associations: pd.DataFrame = association_df[
         association_df["metric"] == "KGE_daily"
     ].set_index("variable")
+    ordered_characteristics: tuple[Characteristic, ...] = tuple(
+        sorted(
+            SCREENING_CHARACTERISTICS,
+            key=lambda item: abs(
+                float(kge_associations.loc[item.column, "spearman_rho"])
+            ),
+            reverse=True,
+        )
+    )
 
-    column_count: int = 4
-    row_count: int = int(np.ceil(len(SCREENING_CHARACTERISTICS) / column_count))
+    column_count: int = 5
+    row_count: int = int(np.ceil(len(ordered_characteristics) / column_count))
     figure, axes = plt.subplots(
         row_count,
         column_count,
-        figsize=(13.0, 2.25 * row_count),
+        figsize=(16.25, 2.25 * row_count),
         sharey=True,
     )
     random_generator: np.random.Generator = np.random.default_rng(42)
     style: MetricStyle = METRIC_STYLES["KGE_daily"]
     for panel_index, (axis, item) in enumerate(
-        zip(axes.flat, SCREENING_CHARACTERISTICS, strict=False)
+        zip(axes.flat, ordered_characteristics, strict=False)
     ):
         association: pd.Series = kge_associations.loc[item.column]
         title: str = (
-            f"{panel_index + 1}  {item.label}\n"
-            f"rₛ={association['spearman_rho']:+.2f}; q={association['fdr_q_value']:.2g}"
+            f"{item.label}\n"
+            rf"$\rho_s={association['spearman_rho']:+.2f}$"
         )
         _draw_panel(
             axis,
@@ -857,8 +970,9 @@ def plot_characteristic_screening(
             style,
             random_generator,
             compact=True,
+            panel_label=_alphabetic_panel_label(panel_index),
         )
-    for axis in axes.flat[len(SCREENING_CHARACTERISTICS) :]:
+    for axis in axes.flat[len(ordered_characteristics) :]:
         axis.set_visible(False)
     for axis in axes[:, 0]:
         axis.set_ylabel("KGE (–)", fontsize=8)
