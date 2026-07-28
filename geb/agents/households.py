@@ -907,19 +907,119 @@ class Households(AgentBaseClass):
         )
         postal_codes_with_assets.to_parquet(path)
 
+    def calculate_distance_between_buildings(
+        self,
+        sampled_buildings_xy: np.ndarray,
+        households_exposed_to_flooding: np.ndarray,
+    ) -> np.ndarray:
+        """Calculate distances between exposed-household buildings and sampled buildings.
+
+        Args:
+            sampled_buildings_xy: Array of sampled building coordinates (WGS84
+                longitude/latitude in decimal degrees).
+                Expected shape is either
+                ``(n_households, n_buildings, 2)`` or ``(n_households, 2, n_buildings)``.
+            households_exposed_to_flooding: Indices of households exposed to flooding.
+
+        Returns:
+            A 2D array of distances (meters) with shape
+            ``(n_households, n_buildings)``.
+
+        Raises:
+            ValueError: If the sampled coordinate array has an invalid shape.
+            ValueError: If the number of sampled rows does not match the number of
+                exposed households.
+            ValueError: If an exposed household references a building ID that is not
+                present in the building table.
+        """
+        sampled_coords_m: np.ndarray = np.asarray(sampled_buildings_xy)
+        if sampled_coords_m.ndim != 3:
+            raise ValueError(
+                "sampled_buildings_xy must be a 3D array with sampled coordinates."
+            )
+
+        # Accept both historical and current layouts by normalizing to
+        # (n_households, n_buildings, 2).
+        if sampled_coords_m.shape[1] == 2:
+            sampled_coords_m = np.moveaxis(sampled_coords_m, 1, 2)
+        elif sampled_coords_m.shape[2] != 2:
+            raise ValueError(
+                "sampled_buildings_xy must have one axis of length 2 for x/y coordinates."
+            )
+
+        n_households: int = households_exposed_to_flooding.size
+        if sampled_coords_m.shape[0] != n_households:
+            raise ValueError(
+                "Number of sampled coordinate rows must match exposed households."
+            )
+
+        building_ids_of_households: np.ndarray = self.var.building_id_of_household.data[
+            households_exposed_to_flooding
+        ]
+
+        building_coords_by_id: pd.DataFrame = self.buildings.set_index("id")[["x", "y"]]
+        household_coords_df: pd.DataFrame = building_coords_by_id.reindex(
+            building_ids_of_households
+        )
+        if household_coords_df.isna().any(axis=None):
+            n_missing_ids: int = int(household_coords_df.isna().any(axis=1).sum())
+            raise ValueError(
+                f"Could not find coordinates for {n_missing_ids} exposed household building IDs."
+            )
+
+        household_coords_deg: np.ndarray = household_coords_df.to_numpy(
+            dtype=np.float64
+        )
+
+        # Use a vectorized equirectangular approximation on lon/lat to avoid costly
+        # reprojection while still returning distances in meters.
+        earth_radius_m: float = 6_371_008.8
+        household_lon_rad: np.ndarray = np.deg2rad(household_coords_deg[:, 0])[
+            :, np.newaxis
+        ]
+        household_lat_rad: np.ndarray = np.deg2rad(household_coords_deg[:, 1])[
+            :, np.newaxis
+        ]
+        sampled_lon_rad: np.ndarray = np.deg2rad(sampled_coords_m[:, :, 0])
+        sampled_lat_rad: np.ndarray = np.deg2rad(sampled_coords_m[:, :, 1])
+
+        delta_lon_rad: np.ndarray = sampled_lon_rad - household_lon_rad
+        delta_lat_rad: np.ndarray = sampled_lat_rad - household_lat_rad
+        mean_lat_rad: np.ndarray = (sampled_lat_rad + household_lat_rad) * 0.5
+
+        x_component: np.ndarray = delta_lon_rad * np.cos(mean_lat_rad)
+        distances_m: np.ndarray = earth_radius_m * np.sqrt(
+            x_component * x_component + delta_lat_rad * delta_lat_rad
+        )
+        return distances_m
+
     def sample_buildings_for_relocation(
         self, n_buildings: int = 10, outside_floodplain: bool = True
-    ) -> np.ndarray:
-        """Sample a number of buildings for relocation based on their flood risk and other factors.
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Sample relocation candidates for flood-exposed households.
+
+        This implementation uses chunked vectorized sampling to keep memory usage
+        bounded while remaining much faster than per-household Python loops.
 
         Args:
             n_buildings: Number of buildings to sample for relocation.
             outside_floodplain: If True, only sample buildings outside the floodplain.
+
         Returns:
-            sampled_buildings: A DataFrame containing the sampled buildings for relocation.
+            Tuple containing sampled building IDs, distances to coastline (m), and
+            distances to river (m). Each array has shape
+            (n_exposed_households, n_buildings).
+
         Raises:
+            ValueError: If n_buildings is not a positive integer.
             ValueError: If the number of buildings to sample exceeds the available buildings.
         """
+        if n_buildings <= 0:
+            raise ValueError("n_buildings must be a positive integer.")
+
+        # copy the households_exposed_to_flooding array to avoid modifying the original
+        households_exposed_to_flooding = self.households_exposed_to_flooding.copy()
+
         if outside_floodplain:
             building_ids = self.buildings.loc[
                 ~self.buildings["flooded"], "id"
@@ -930,33 +1030,52 @@ class Households(AgentBaseClass):
             distance_to_river = self.buildings.loc[
                 ~self.buildings["flooded"], "distance_to_river_m"
             ].to_numpy()
+            buildings_x = self.buildings.loc[~self.buildings["flooded"], "x"].to_numpy()
+            buildings_y = self.buildings.loc[~self.buildings["flooded"], "y"].to_numpy()
         else:
             building_ids = self.buildings["id"].to_numpy()
             distance_to_coastline = self.buildings["distance_to_coastline_m"].to_numpy()
             distance_to_river = self.buildings["distance_to_river_m"].to_numpy()
+            buildings_x = self.buildings["x"].to_numpy()
+            buildings_y = self.buildings["y"].to_numpy()
 
-        n_samples = self.households_exposed_to_flooding.size
+        n_samples = households_exposed_to_flooding.size
+        n_candidates: int = len(building_ids)
 
-        if n_buildings > len(building_ids):
+        if n_buildings > n_candidates:
             raise ValueError(
                 f"Cannot sample {n_buildings} buildings from "
-                f"{len(building_ids)} available buildings without replacement."
+                f"{n_candidates} available buildings without replacement."
             )
 
-        # Generate random values and select the n smallest in each row.
-        random_values = np.random.random((n_samples, len(building_ids)))
-        indices = np.argpartition(random_values, n_buildings - 1, axis=1)[
-            :, :n_buildings
-        ]
+        if n_samples == 0:
+            empty_shape: tuple[int, int] = (0, n_buildings)
+            return (
+                np.empty(empty_shape, dtype=building_ids.dtype),
+                np.empty(empty_shape, dtype=distance_to_coastline.dtype),
+                np.empty(empty_shape, dtype=distance_to_river.dtype),
+            )
 
+        # this approach could result in the same building being sampled multiple times for different households, but it is much faster than sampling without replacement for each household individually.
+        indices = np.random.randint(
+            low=0, high=n_candidates, size=(n_samples, n_buildings)
+        )
         sampled_building_ids = building_ids[indices]
         sampled_distance_to_coastline = distance_to_coastline[indices]
         sampled_distance_to_river = distance_to_river[indices]
+        sampled_buildings_xy = np.stack(
+            (buildings_x[indices], buildings_y[indices]), axis=2
+        )
+        # calculate distances between sampled buildings and households
+        sampled_distances = self.calculate_distance_between_buildings(
+            sampled_buildings_xy, households_exposed_to_flooding
+        )
 
         return (
             sampled_building_ids,
             sampled_distance_to_coastline,
             sampled_distance_to_river,
+            sampled_distances,
         )
 
     def decide_household_strategy(self) -> None:
@@ -1013,6 +1132,7 @@ class Households(AgentBaseClass):
             sampled_building_ids,
             sampled_distance_to_coastline,
             sampled_distance_to_river,
+            sampled_distances,
         ) = self.sample_buildings_for_relocation(
             n_buildings=10, outside_floodplain=True
         )
@@ -1024,7 +1144,8 @@ class Households(AgentBaseClass):
             income=self.var.income.data[households_exposed_to_flooding],
             distance_to_coastline_m=sampled_distance_to_coastline,
             distance_to_river_m=sampled_distance_to_river,
-            migration_costs=2.5e5,
+            distance_to_building_m=sampled_distances,
+            max_migration_costs=5.5e5,
             T=35,
             r=0.03,
             sigma=1,
@@ -1032,7 +1153,6 @@ class Households(AgentBaseClass):
 
         # fill array of all households with NaN values for relocation utility
         EU_relocate_full = np.full(self.n, -np.inf, dtype=np.float32)
-        building_idx_full = np.full(self.n, -1, dtype=np.int32)
         building_ids_full = np.full(self.n, -1, dtype=np.int32)
 
         # fill the array with the calculated relocation utility for households exposed to flooding
@@ -1523,6 +1643,11 @@ class Households(AgentBaseClass):
 
     @property
     def households_exposed_to_flooding(self) -> np.ndarray:
+        """Get household indices that are located in flooded buildings.
+
+        Returns:
+            Array of household indices exposed to flooding.
+        """
         # also set index to flooded households
         flooded_building_ids = self.buildings.loc[
             self.buildings["flooded"], "id"
@@ -1534,4 +1659,9 @@ class Households(AgentBaseClass):
 
     @property
     def n_households_exposed_to_flooding(self) -> int:
+        """Return the number of households exposed to flooding.
+
+        Returns:
+            Number of households exposed to flooding.
+        """
         return np.int32(self.households_exposed_to_flooding.size)

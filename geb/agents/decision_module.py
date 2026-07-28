@@ -11,7 +11,9 @@ class DecisionModule:
 
     @staticmethod
     def calculate_riverine_amenity(
-        household_distance_to_river_m: float, GDP_i_t: float = 1, phi_i: float = 1
+        household_distance_to_river_m: float,
+        GDP_i_t: float = 1,
+        phi_i: float = 0.254820579,  # scaling factor for riverine amenity based on Tesselaar et al. (2023). Now applied to Mexico (2020)
     ) -> float:
         """This function calculates the riverine amenity value for a given distance to the river.
 
@@ -737,6 +739,28 @@ class DecisionModule:
 
         return EU_do_nothing_array
 
+    def calculate_migration_costs(
+        self,
+        distance_to_building_m: np.ndarray,
+        max_migration_cost: float,
+        cost_shape: float = 0.05,
+    ) -> np.ndarray:
+        """This function calculates the migration costs for each agent based on their distance to each sampled building.
+
+        Args:
+            distance_to_building_m: array containing the distance to each sampled building for each agent
+            max_migration_cost: maximum migration cost for each agent
+            cost_shape: shape parameter for the logistic function (default: 0.05)
+        Returns:
+            migration_costs: array containing the migration costs for each agent based on their distance to each sampled building
+        """
+
+        distance_to_building_m = np.minimum(distance_to_building_m, 5e6)
+        migration_costs = max_migration_cost / (
+            1 + np.exp(-cost_shape * distance_to_building_m * 1e-3)
+        )
+        return migration_costs
+
     def calcEU_relocate(
         self,
         geom_id: int | str,
@@ -745,7 +769,8 @@ class DecisionModule:
         income: np.ndarray,
         distance_to_coastline_m: np.ndarray,
         distance_to_river_m: np.ndarray,
-        migration_costs: np.ndarray,
+        distance_to_building_m: np.ndarray,
+        max_migration_costs: np.ndarray,
         T: np.ndarray | int | float,
         r: float,
         sigma: float,
@@ -760,7 +785,7 @@ class DecisionModule:
             income: array containing the income of each agent
             distance_to_coastline_m: array containing the distance to the coastline for each agent
             distance_to_river_m: array containing the distance to the river for each agent
-            migration_costs: array containing the migration costs for each agent
+            max_migration_costs: array containing the maximum migration costs for each agent
             T: array containing the decision horizon of each agent
             r: time discounting factor for each agent
             sigma: risk aversion setting for each agent
@@ -773,20 +798,29 @@ class DecisionModule:
             x_j=distance_to_coastline_m, GDP_i_t=wealth
         )
 
-        # Get the maximum amenity value for each agent (assuming they can relocate to the best location)
-        building_idx = np.argmax(amenity_value, axis=1)[0]
-        max_amenity_value = np.max(amenity_value, axis=1)
-
-        # Calculate the NPV of relocating for each agent
-        NPV_relocate = wealth + income + max_amenity_value
+        # calculate migration costs based on distance to each building
+        migration_costs = self.calculate_migration_costs(
+            distance_to_building_m=distance_to_building_m,
+            max_migration_cost=max_migration_costs,
+        )
 
         # time discounting
         t_arr = np.arange(1, np.max(T), dtype=np.float32)
         discounts = 1 / (1 + r) ** t_arr
-        NPV_relocate_discounted = np.sum(discounts) * NPV_relocate
+        amenity_value_discounted = np.sum(discounts) * amenity_value
+        amenity_value_discounted -= migration_costs  # subtract migration costs
+        # Get the maximum amenity value for each agent (assuming they can relocate to the best location)
+        building_idx = np.argmax(amenity_value_discounted, axis=1)[0]
+        max_amenity_value = np.max(amenity_value_discounted, axis=1)
 
-        # subtract migration costs
-        NPV_relocate_discounted -= migration_costs * 2
+        # now discount income and wealth
+        wealth_discounted = np.sum(discounts) * wealth
+        income_discounted = np.sum(discounts) * income
+
+        # Calculate NPV of relocating (migration costs are already subtracted from amenity value)
+        NPV_relocate_discounted = (
+            wealth_discounted + income_discounted + max_amenity_value
+        )
 
         # Ensure NPVs are at least a small positive number to prevent NaNs
         NPV_relocate_discounted = np.maximum(NPV_relocate_discounted, 1e-6)
