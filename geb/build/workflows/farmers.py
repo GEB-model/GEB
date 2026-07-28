@@ -4112,7 +4112,7 @@ def load_alphaearth_crop_training_samples(
     older reusable table are ignored by the CTY-only fitting workflow.
 
     Args:
-        source: Existing sample DataFrame or Parquet path.
+        source: Existing sample DataFrame or Parquet, CSV, or pickle path.
         hrl_years: Observation years that must be present in the stored table.
         include_coordinates: Require stored longitude and latitude predictors.
         include_topography: Require stored elevation and slope predictors.
@@ -4123,7 +4123,7 @@ def load_alphaearth_crop_training_samples(
         Validated CTY sample table restricted to ``hrl_years``.
 
     Raises:
-        FileNotFoundError: If a supplied Parquet path does not exist.
+        FileNotFoundError: If a supplied sample-table path does not exist.
         TypeError: If the loaded object is not a DataFrame.
         ValueError: If required columns, years, labels, or regions are invalid.
     """
@@ -4139,7 +4139,18 @@ def load_alphaearth_crop_training_samples(
             raise FileNotFoundError(
                 f"Stored AlphaEarth sample table does not exist: {source_path}"
             )
-        samples = pd.read_parquet(source_path)
+        suffix = source_path.suffix.lower()
+        if suffix in {".parquet", ".pq"}:
+            samples = pd.read_parquet(source_path)
+        elif suffix == ".csv":
+            samples = pd.read_csv(source_path)
+        elif suffix in {".pkl", ".pickle"}:
+            samples = pd.read_pickle(source_path)
+        else:
+            raise ValueError(
+                "Stored AlphaEarth samples must use Parquet, CSV or pickle; "
+                f"found {source_path}."
+            )
 
     if not isinstance(samples, pd.DataFrame):
         raise TypeError(
@@ -4214,6 +4225,242 @@ def load_alphaearth_crop_training_samples(
     # A Parquet table written by an earlier run may contain a stale split column.
     # The caller always reconstructs temporal splits from the current settings.
     return samples.reset_index(drop=True)
+
+
+def parse_europe_model_ids(
+    values: Sequence[int | str] | int | str,
+) -> tuple[int, ...]:
+    """Parse Europe model IDs from integers, names, comma lists, and ranges.
+
+    Args:
+        values: One value or a sequence containing integers, ``Europe_###`` names,
+            comma-separated values, or inclusive ranges such as ``"0-11"``.
+
+    Returns:
+        Unique model IDs in their configured order.
+
+    Raises:
+        ValueError: If no model IDs are provided or a token is invalid.
+    """
+    raw_values: Sequence[int | str]
+    if isinstance(values, (int, str)):
+        raw_values = (values,)
+    else:
+        raw_values = values
+
+    tokens: list[str] = []
+    for raw_value in raw_values:
+        if isinstance(raw_value, (int, np.integer)):
+            tokens.append(str(int(raw_value)))
+        else:
+            tokens.extend(str(raw_value).replace(",", " ").split())
+
+    if not tokens:
+        raise ValueError("At least one Europe model ID must be provided.")
+
+    def parse_one(token: str) -> int:
+        normalized = token.strip()
+        if normalized.lower().startswith("europe_"):
+            normalized = normalized[len("Europe_") :]
+        if not normalized.isdigit():
+            raise ValueError(
+                "Europe model IDs must be integers or names such as Europe_003; "
+                f"found {token!r}."
+            )
+        model_id = int(normalized)
+        if not 0 <= model_id <= 999:
+            raise ValueError(
+                f"Europe model IDs must be between 0 and 999; found {model_id}."
+            )
+        return model_id
+
+    model_ids: list[int] = []
+    for token in tokens:
+        if token.count("-") == 1:
+            start_raw, end_raw = token.split("-", maxsplit=1)
+            start_id = parse_one(start_raw)
+            end_id = parse_one(end_raw)
+            if end_id < start_id:
+                raise ValueError(f"Europe model range {token!r} ends before it starts.")
+            model_ids.extend(range(start_id, end_id + 1))
+        else:
+            model_ids.append(parse_one(token))
+
+    return tuple(dict.fromkeys(model_ids))
+
+
+def europe_model_build_context(
+    base_directory: str | Path | None = None,
+) -> tuple[int, Path, Path]:
+    """Resolve the current Europe model ID, base directory, and common root.
+
+    Args:
+        base_directory: Europe model base directory. The current working directory
+            is used when omitted.
+
+    Returns:
+        Tuple ``(model_id, base_directory, model_root)``.
+
+    Raises:
+        ValueError: If the directory is not ``.../Europe_###/base``.
+    """
+    resolved_base = (
+        Path.cwd().resolve()
+        if base_directory is None
+        else Path(base_directory).expanduser().resolve()
+    )
+    model_directory = resolved_base.parent
+    match = re.fullmatch(r"Europe_(\d{3})", model_directory.name)
+    if resolved_base.name != "base" or match is None:
+        raise ValueError(
+            "The build working directory must have the structure "
+            "'.../<model root>/Europe_###/base'. "
+            f"Found {resolved_base}."
+        )
+    return int(match.group(1)), resolved_base, model_directory.parent
+
+
+def europe_model_base_directory(model_root: str | Path, model_id: int) -> Path:
+    """Return the base directory of one Europe model."""
+    return Path(model_root) / f"Europe_{int(model_id):03d}" / "base"
+
+
+def alphaearth_crop_training_samples_path(
+    model_base_directory: str | Path,
+    training_samples_table_name: str,
+) -> Path:
+    """Resolve a model-local ``self.table`` name to its Parquet path.
+
+    Args:
+        model_base_directory: Path to ``Europe_###/base``.
+        training_samples_table_name: Slash-separated table name passed to
+            ``self.set_table``.
+
+    Returns:
+        Path below ``base/input/table`` with a ``.parquet`` suffix.
+
+    Raises:
+        ValueError: If the table name is empty, absolute, or escapes its root.
+    """
+    table_name = str(training_samples_table_name).strip().replace("\\", "/")
+    relative_path = Path(table_name)
+    if not table_name or relative_path.is_absolute() or ".." in relative_path.parts:
+        raise ValueError(
+            "training_samples_table_name must be a non-empty relative table name."
+        )
+    if relative_path.suffix != ".parquet":
+        relative_path = relative_path.with_suffix(".parquet")
+    return Path(model_base_directory) / "input" / "table" / relative_path
+
+
+def load_europe_alphaearth_crop_training_samples(
+    model_root: str | Path,
+    europe_model_ids: Sequence[int | str] | int | str,
+    *,
+    training_samples_table_name: str,
+    hrl_years: tuple[int, ...],
+    include_coordinates: bool = False,
+    include_topography: bool = False,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Load and pool model-local AlphaEarth CTY samples across Europe models.
+
+    Local region IDs are only unique within one ``Europe_###`` model. The pooled
+    table therefore retains them as ``local_region_id`` and replaces ``region_id``
+    with deterministic Europe-wide IDs. This keeps region-year balancing and
+    diagnostics separated across model boundaries.
+
+    Args:
+        model_root: Directory containing the ``Europe_###`` model folders.
+        europe_model_ids: Selected model IDs or ranges.
+        training_samples_table_name: Model-local sample table name.
+        hrl_years: Observation years required from every selected model.
+        include_coordinates: Require coordinate predictors.
+        include_topography: Require elevation and slope predictors.
+
+    Returns:
+        Pooled sample table and a mapping from global to local region IDs.
+
+    Raises:
+        FileNotFoundError: If a selected model or sample table is missing.
+        ValueError: If sample schemas or configured source-model metadata conflict.
+    """
+    selected_model_ids = parse_europe_model_ids(europe_model_ids)
+    root = Path(model_root).expanduser().resolve()
+    pooled_tables: list[pd.DataFrame] = []
+    mapping_rows: list[dict[str, int | str]] = []
+    next_global_region_id = 0
+
+    for model_id in selected_model_ids:
+        model_base = europe_model_base_directory(root, model_id)
+        if not model_base.is_dir():
+            raise FileNotFoundError(
+                f"Europe model base directory does not exist: {model_base}"
+            )
+        sample_path = alphaearth_crop_training_samples_path(
+            model_base,
+            training_samples_table_name,
+        )
+        samples = load_alphaearth_crop_training_samples(
+            sample_path,
+            hrl_years=hrl_years,
+            include_coordinates=include_coordinates,
+            include_topography=include_topography,
+        )
+
+        if "europe_model_id" in samples.columns:
+            stored_model_ids = pd.to_numeric(
+                samples["europe_model_id"], errors="coerce"
+            )
+            if (
+                stored_model_ids.isna().any()
+                or not (stored_model_ids.astype(np.int64) == model_id).all()
+            ):
+                raise ValueError(
+                    f"Stored source-model metadata in {sample_path} does not match "
+                    f"Europe_{model_id:03d}."
+                )
+
+        samples["europe_model_id"] = np.int16(model_id)
+        samples["europe_model_name"] = f"Europe_{model_id:03d}"
+        samples["local_region_id"] = samples["region_id"].astype(np.int32)
+
+        local_region_ids = np.sort(samples["local_region_id"].unique())
+        local_to_global = {
+            int(local_region_id): next_global_region_id + offset
+            for offset, local_region_id in enumerate(local_region_ids)
+        }
+        samples["region_id"] = (
+            samples["local_region_id"].map(local_to_global).astype(np.int32)
+        )
+
+        country_by_region = (
+            samples[["local_region_id", "country_iso3"]]
+            .drop_duplicates()
+            .groupby("local_region_id", sort=True)["country_iso3"]
+            .agg(lambda values: ",".join(sorted(set(map(str, values)))))
+        )
+        for local_region_id in local_region_ids:
+            mapping_rows.append(
+                {
+                    "region_id": int(local_to_global[int(local_region_id)]),
+                    "europe_model_id": int(model_id),
+                    "europe_model_name": f"Europe_{model_id:03d}",
+                    "local_region_id": int(local_region_id),
+                    "country_iso3": str(country_by_region.loc[local_region_id]),
+                }
+            )
+
+        next_global_region_id += len(local_region_ids)
+        pooled_tables.append(samples)
+
+    if not pooled_tables:
+        raise ValueError("No AlphaEarth CTY sample tables were loaded.")
+
+    pooled = pd.concat(pooled_tables, ignore_index=True)
+    region_mapping = (
+        pd.DataFrame(mapping_rows).sort_values("region_id").reset_index(drop=True)
+    )
+    return pooled, region_mapping
 
 
 def create_alphaearth_crop_training_samples(
@@ -5777,6 +6024,33 @@ def save_alphaearth_crop_models(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(models, output_path)
     return output_path
+
+
+def load_alphaearth_crop_models(path: str | Path) -> AlphaEarthCropModelBundle:
+    """Load and validate a serialized AlphaEarth crop-model bundle.
+
+    Args:
+        path: Joblib file created by :func:`save_alphaearth_crop_models`.
+
+    Returns:
+        Loaded AlphaEarth CTY model bundle.
+
+    Raises:
+        FileNotFoundError: If the model file does not exist.
+        TypeError: If the serialized object is not an AlphaEarth model bundle.
+    """
+    import joblib
+
+    model_path = Path(path).expanduser()
+    if not model_path.exists():
+        raise FileNotFoundError(f"AlphaEarth CTY model does not exist: {model_path}")
+    models = joblib.load(model_path)
+    if not isinstance(models, AlphaEarthCropModelBundle):
+        raise TypeError(
+            "Serialized AlphaEarth model must contain an "
+            f"AlphaEarthCropModelBundle; found {type(models).__name__}."
+        )
+    return models
 
 
 def hrl_tile_code_from_name(tile_name: str | Path) -> str:
