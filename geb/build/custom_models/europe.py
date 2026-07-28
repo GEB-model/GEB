@@ -1,10 +1,8 @@
 """Class to set GEB up for Europe."""
 
-import calendar
 import gc
 import shutil
 from dataclasses import dataclass
-from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -34,36 +32,36 @@ from geb.agents.crop_farmers import (
 )
 from geb.build.data_catalog.wekeo_copernicus import WEkEONoCoverageError
 from geb.build.methods import build_method
-from geb.build.workflows.crop_calendars import MIRCA_OS_CROP_CLASS_MAP
+from geb.build.workflows.crop_calendars import (
+    MIRCA_OS_CROP_CLASS_MAP,
+    parse_MIRCA_crop_calendar,
+)
 from geb.build.workflows.farmers import (
-    HRL_CPSCT_CLASS_CODES,
     HRL_CTY_CLASS_CODES,
     alphaearth_crop_feature_importance,
+    alphaearth_embedding_diagnostics,
     apply_alphaearth_cty_mmu_sieve,
     apply_alphaearth_permanent_crop_temporal_consistency,
-    assert_matching_raster_grid,
     assign_farmer_sequences_to_area_targets,
-    combine_crop_and_secondary_values,
     create_alphaearth_crop_training_samples,
     create_lowder_target_farm_areas,
-    enforce_cpsct_annual_cropland_mask,
     evaluate_alphaearth_crop_models,
     evaluate_alphaearth_crop_predictions,
     format_alphaearth_accuracy_report,
+    format_alphaearth_postprocessed_accuracy_report,
     farm_size_distribution_fit_by_size_class,
     fit_alphaearth_crop_models,
     get_farm_locations,
-    grow_farms_from_exact_crop_sequences,
     grow_farms_from_raster_cells,
     build_hrl_prediction_tile_name,
     find_hrl_tile_path,
     hrl_tile_code_from_name,
     load_alphaearth_crop_training_samples,
+    predict_alphaearth_crop_models,
     predict_alphaearth_crop_tile_to_hrl_geotiffs,
     raster_cell_area_m2,
     relax_lowder_targets_for_sequence_fit,
     remove_alphaearth_downloads,
-    round_crop_states_to_area_targets,
     save_alphaearth_crop_models,
     sample_alphaearth_crop_prediction_tiles,
     select_alphaearth_cogs_for_geometry,
@@ -81,7 +79,6 @@ from geb.workflows.raster import (
 )
 
 from .. import GEBModel
-from ..data_catalog import DataCatalog
 from ..workflows.conversions import setup_donor_countries
 
 _FARMERS_WITH_CROPS_TABLE = "agents/farmers/farmers_with_crops"
@@ -133,22 +130,6 @@ class _LowderSequenceSettings:
     extra_farm_fraction: float
 
 
-@dataclass(frozen=True, slots=True)
-class _ExactSequenceSettings:
-    """Settings for hard exact-sequence grouping.
-
-    Attributes:
-        jump_candidate_sample: Same-sequence cells sampled for a new parcel.
-        distance_scale_m: Distance scale used to prefer nearby parcels.
-        temporal_persistence_weight: Persistence preference used during annual
-            crop-area rounding.
-    """
-
-    jump_candidate_sample: int
-    distance_scale_m: float
-    temporal_persistence_weight: float
-
-
 HRL_TO_MIRCA_OS_CROP_CLASS_MAP: dict[int, int | None] = {
     1110: 0,  # Wheat
     1120: 3,  # Barley
@@ -172,14 +153,6 @@ HRL_TO_MIRCA_OS_CROP_CLASS_MAP: dict[int, int | None] = {
     0: None,  # No cropland
     65535: None,  # Outside area
 }
-
-HRL_SECONDARY_CROP_NONE = 0
-HRL_SECONDARY_CROP_SHORT_SUMMER = 1
-HRL_SECONDARY_CROP_LONG_SUMMER = 2
-HRL_SECONDARY_CROP_SHORT_WINTER = 3
-HRL_SECONDARY_CROP_LONG_WINTER = 4
-
-MIRCA2000_UNIT_GRID = "mirca2000_unit_grid"
 
 _HRL_CROPLANDS_EEA38_ISO3 = frozenset(
     {
@@ -318,79 +291,6 @@ def _active_subgrid_mask_geometry_for_hrl(
     return active_geometry
 
 
-def _align_hrl_rasters_to_common_grid(
-    crop_types: xr.DataArray,
-    secondary_crop: xr.DataArray,
-    *,
-    region_id: int,
-    year: int,
-    logger: Any,
-) -> tuple[xr.DataArray, xr.DataArray]:
-    """Align HRL crop and secondary-crop rasters to their common grid.
-
-    Crop-type and secondary-crop products can occasionally return slightly
-    different clipped extents for the same request bounds. The downstream crop
-    counting requires identical grids, so this function first accepts already
-    matching rasters and otherwise trims both rasters to their shared x/y
-    coordinates.
-
-    Args:
-        crop_types: HRL crop-type raster.
-        secondary_crop: HRL secondary-crop raster.
-        region_id: Region ID used for diagnostics.
-        year: HRL crop year used for diagnostics.
-        logger: Logger used for debug diagnostics.
-
-    Returns:
-        Crop-type and secondary-crop rasters on the same grid.
-
-    Raises:
-        ValueError: If the rasters have no common x/y overlap or cannot be aligned
-            to a matching grid.
-    """
-    try:
-        assert_matching_raster_grid(crop_types, secondary_crop)
-        return crop_types, secondary_crop
-    except AssertionError, ValueError:
-        logger.debug(
-            "Aligning HRL crop and secondary-crop rasters to common grid for "
-            "region %s, year %s. Crop bounds=%s; secondary bounds=%s.",
-            region_id,
-            year,
-            crop_types.rio.bounds(),
-            secondary_crop.rio.bounds(),
-        )
-
-    crop_aligned, secondary_aligned = xr.align(
-        crop_types,
-        secondary_crop,
-        join="inner",
-    )
-
-    if crop_aligned.sizes.get("x", 0) == 0 or crop_aligned.sizes.get("y", 0) == 0:
-        raise ValueError(
-            "HRL crop and secondary-crop rasters have no common overlap after "
-            f"alignment for region {region_id}, year {year}. "
-            f"Crop bounds={crop_types.rio.bounds()}; "
-            f"secondary bounds={secondary_crop.rio.bounds()}."
-        )
-
-    if crop_types.rio.crs is not None:
-        crop_aligned = crop_aligned.rio.write_crs(crop_types.rio.crs)
-    if secondary_crop.rio.crs is not None:
-        secondary_aligned = secondary_aligned.rio.write_crs(secondary_crop.rio.crs)
-
-    crop_nodata = crop_types.rio.nodata
-    secondary_nodata = secondary_crop.rio.nodata
-    if crop_nodata is not None:
-        crop_aligned = crop_aligned.rio.write_nodata(crop_nodata)
-    if secondary_nodata is not None:
-        secondary_aligned = secondary_aligned.rio.write_nodata(secondary_nodata)
-
-    assert_matching_raster_grid(crop_aligned, secondary_aligned)
-    return crop_aligned, secondary_aligned
-
-
 def _assert_compact_farm_ids(
     farms: xr.DataArray,
     farmers: pd.DataFrame,
@@ -439,34 +339,6 @@ def _assert_compact_farm_ids(
             )
 
 
-def decode_crop_type_with_secondary_crop(
-    combined_crop_type: np.ndarray,
-    *,
-    invalid_crop_values: tuple[int, ...] = (-2, -1, 0, 65535),
-) -> tuple[np.ndarray, np.ndarray]:
-    """Decode combined HRL crop-secondary codes.
-
-    Args:
-        combined_crop_type: HRL crop code with optional secondary-crop suffix in
-            the final digit.
-        invalid_crop_values: Crop values treated as missing or outside the valid
-            crop domain.
-
-    Returns:
-        Tuple with main HRL crop codes and secondary-crop timing codes.
-    """
-    combined_crop_type = np.asarray(combined_crop_type, dtype=np.int32)
-    invalid_crop = np.isin(combined_crop_type, invalid_crop_values)
-
-    main_crop = (combined_crop_type // 10) * 10
-    secondary_crop = combined_crop_type % 10
-
-    main_crop = np.where(invalid_crop, -1, main_crop).astype(np.int32)
-    secondary_crop = np.where(invalid_crop, 0, secondary_crop).astype(np.int32)
-
-    return main_crop, secondary_crop
-
-
 def map_hrl_crop_to_mirca_crop(
     hrl_crop: np.ndarray,
     *,
@@ -491,7 +363,7 @@ def map_hrl_crop_to_mirca_crop(
     return mapped
 
 
-def _decode_hrl_crop_combinations_from_farmer_table(
+def _decode_hrl_crops_from_farmer_table(
     farmers_with_crops: pd.DataFrame,
     *,
     crop_column: str,
@@ -499,35 +371,23 @@ def _decode_hrl_crop_combinations_from_farmer_table(
     farmer_region_ids: np.ndarray,
     logger: Any,
 ) -> pd.DataFrame:
-    """Decode final farmer-level HRL crop codes to MIRCA crop combinations.
-
-    The input table is the compact farmer table written by one of the
-    HRL raster farm-construction workflows. Its ``farmer_id`` values
-    already correspond to the final compact ``agents/farmers/farms`` raster and
-    all other farmer arrays. Therefore, no field geometry or farm-raster sampling
-    is needed here.
-
-    The selected HRL crop column is decoded into a main HRL crop and secondary
-    crop timing code. The main HRL crop is then mapped to the corresponding MIRCA
-    crop class used by the crop-growth parameterization.
+    """Map final farmer-level HRL CTY codes to MIRCA crop classes.
 
     Args:
         farmers_with_crops: Final compact farmer table with ``farmer_id``,
             ``area_m2``, and HRL crop-sequence columns.
-        crop_column: HRL crop column to use, for example ``"crop_2023"``.
+        crop_column: HRL CTY column to use, for example ``"crop_2023"``.
         n_farmers: Number of final compact farmers.
         farmer_region_ids: Region ID per final compact farmer.
         logger: Logger used for warnings.
 
     Returns:
         DataFrame with one row per final compact farmer and columns
-        ``farmer_id``, ``mirca_crop``, ``secondary_crop_type``, and
-        ``assigned_crop_area_m2``.
+        ``farmer_id``, ``mirca_crop``, and ``assigned_crop_area_m2``.
 
     Raises:
-        ValueError: If required columns are missing.
-        ValueError: If the farmer table contains duplicate farmer IDs.
-        ValueError: If no farmer-level HRL crops can be mapped to MIRCA crops.
+        ValueError: If required columns are missing, farmer IDs are invalid, or
+            no farmer rows are available.
     """
     required_columns = {"farmer_id", "area_m2", crop_column}
     missing_columns = required_columns - set(farmers_with_crops.columns)
@@ -557,24 +417,28 @@ def _decode_hrl_crop_combinations_from_farmer_table(
             f"compact range [0, {n_farmers - 1}]. Examples: {invalid_ids[:10]}"
         )
 
-    main_hrl_crop, secondary_crop_type = decode_crop_type_with_secondary_crop(
-        farmers[crop_column].fillna(-1).to_numpy(dtype=np.int32)
+    hrl_crop = farmers[crop_column].fillna(-1).to_numpy(dtype=np.int32)
+    invalid_crop = np.isin(
+        hrl_crop,
+        (
+            _HRL_MISSING_CROP_CODE,
+            _HRL_FALLOW_CROP_CODE,
+            _HRL_NO_CROPLAND_CODE,
+            _HRL_OUTSIDE_AREA_CODE,
+        ),
     )
-    mirca_crop = map_hrl_crop_to_mirca_crop(main_hrl_crop)
+    hrl_crop = np.where(invalid_crop, -1, hrl_crop).astype(np.int32)
+    mirca_crop = map_hrl_crop_to_mirca_crop(hrl_crop)
 
     farmer_crops = pd.DataFrame(
         {
             "farmer_id": farmers["farmer_id"].to_numpy(dtype=np.int32),
             "mirca_crop": mirca_crop.astype(np.int32),
-            "secondary_crop_type": secondary_crop_type.astype(np.int32),
             "assigned_crop_area_m2": farmers["area_m2"].to_numpy(dtype=np.float64),
         }
     )
-
     if farmer_crops.empty:
-        raise ValueError(
-            f"No farmer-level HRL crops in {crop_column!r} could be decoded."
-        )
+        raise ValueError(f"No farmer-level HRL crops are available in {crop_column!r}.")
 
     missing_farmers = np.setdiff1d(
         np.arange(n_farmers, dtype=np.int32),
@@ -582,11 +446,10 @@ def _decode_hrl_crop_combinations_from_farmer_table(
     )
     if missing_farmers.size:
         logger.warning(
-            "No valid HRL-to-MIRCA crop could be assigned to %s farmer(s); "
-            "filling with regional modal crop combinations.",
+            "No HRL CTY row is available for %s farmer(s); filling with the "
+            "regional modal MIRCA crop.",
             missing_farmers.size,
         )
-
         farmer_crops = _fill_missing_farmer_crops_with_region_mode(
             farmer_crops,
             missing_farmers=missing_farmers,
@@ -648,47 +511,29 @@ def _fill_missing_farmer_crops_with_region_mode(
     missing_farmers: np.ndarray,
     farmer_region_ids: np.ndarray,
 ) -> pd.DataFrame:
-    """Fill missing farmer crop combinations with regional modal combinations.
-
-    Args:
-        farmer_crops: DataFrame with existing farmer crop assignments.
-        missing_farmers: Farmer IDs without an HRL crop assignment.
-        farmer_region_ids: Region ID per farmer.
-
-    Returns:
-        DataFrame with missing farmers appended.
-    """
+    """Fill missing farmer crop rows with regional modal MIRCA crops."""
     crop_lookup = farmer_crops.copy()
     crop_lookup["region_id"] = farmer_region_ids[
         crop_lookup["farmer_id"].to_numpy(dtype=np.int32)
     ]
+    valid_lookup = crop_lookup.loc[crop_lookup["mirca_crop"] >= 0]
+    if valid_lookup.empty:
+        raise ValueError("No valid HRL-to-MIRCA crop exists for regional fallback.")
 
+    global_mode = int(valid_lookup["mirca_crop"].mode().iloc[0])
     fallback_rows: list[dict[str, float | int]] = []
-
-    global_mode = (
-        crop_lookup.groupby(["mirca_crop", "secondary_crop_type"], sort=False)
-        .size()
-        .idxmax()
-    )
-
     for farmer_id in missing_farmers:
         region_id = int(farmer_region_ids[farmer_id])
-        region_rows = crop_lookup.loc[crop_lookup["region_id"] == region_id]
-
-        if region_rows.empty:
-            mirca_crop, secondary_crop_type = global_mode
-        else:
-            mirca_crop, secondary_crop_type = (
-                region_rows.groupby(["mirca_crop", "secondary_crop_type"], sort=False)
-                .size()
-                .idxmax()
-            )
-
+        region_rows = valid_lookup.loc[valid_lookup["region_id"] == region_id]
+        mirca_crop = (
+            global_mode
+            if region_rows.empty
+            else int(region_rows["mirca_crop"].mode().iloc[0])
+        )
         fallback_rows.append(
             {
                 "farmer_id": int(farmer_id),
-                "mirca_crop": int(mirca_crop),
-                "secondary_crop_type": int(secondary_crop_type),
+                "mirca_crop": mirca_crop,
                 "assigned_crop_area_m2": 0.0,
             }
         )
@@ -863,52 +708,6 @@ def replace_crop(
     return crop_calendar_per_farmer
 
 
-def _fill_missing_mirca2000_crop_calendars(
-    crop_calendar: dict[int, list[tuple[float, TwoDArrayInt32]]],
-    *,
-    logger: Any,
-) -> dict[int, list[tuple[float, TwoDArrayInt32]]]:
-    """Fill empty MIRCA2000 unit calendars from the numerically closest unit.
-
-    Args:
-        crop_calendar: Parsed MIRCA2000 crop calendar dictionary.
-        logger: Logger used for warnings and information messages.
-
-    Returns:
-        Crop calendar dictionary with empty unit entries filled where possible.
-
-    Raises:
-        ValueError: If no valid MIRCA unit calendar exists.
-    """
-    missing_mirca_units = [
-        unit for unit, calendars in crop_calendar.items() if not calendars
-    ]
-
-    if not missing_mirca_units:
-        logger.debug("All MIRCA2000 units have valid crop calendars.")
-        return crop_calendar
-
-    logger.warning(
-        "Missing crop calendar for MIRCA2000 unit(s): %s.",
-        missing_mirca_units,
-    )
-
-    valid_units = [unit for unit, calendars in crop_calendar.items() if calendars]
-    if not valid_units:
-        raise ValueError("No valid MIRCA2000 units found in crop calendar data.")
-
-    for mirca_unit in missing_mirca_units:
-        closest_mirca_unit = min(valid_units, key=lambda unit: abs(unit - mirca_unit))
-        crop_calendar[mirca_unit] = crop_calendar[closest_mirca_unit]
-        logger.info(
-            "Filling missing crop calendar for MIRCA2000 unit %s with data from %s.",
-            mirca_unit,
-            closest_mirca_unit,
-        )
-
-    return crop_calendar
-
-
 def _calendar_active_rows(calendar: np.ndarray) -> np.ndarray:
     """Return active crop rows from a crop calendar matrix.
 
@@ -921,449 +720,133 @@ def _calendar_active_rows(calendar: np.ndarray) -> np.ndarray:
     return calendar[calendar[:, 0] != -1]
 
 
-def _classify_season_from_start_and_length(
-    start_day: int,
-    growth_length: int,
-    *,
-    short_length_threshold_days: int = 150,
-) -> int:
-    """Classify a MIRCA season into an HRL secondary-crop timing class.
-
-    Args:
-        start_day: Zero-based planting day index.
-        growth_length: Growing-season length in days.
-        short_length_threshold_days: Maximum length treated as a short season.
-
-    Returns:
-        HRL-style secondary-crop timing class.
-    """
-    start_day = int(start_day)
-    growth_length = int(growth_length)
-
-    is_summer = 90 <= start_day < 273
-    is_short = growth_length <= short_length_threshold_days
-
-    if is_summer and is_short:
-        return HRL_SECONDARY_CROP_SHORT_SUMMER
-    if is_summer and not is_short:
-        return HRL_SECONDARY_CROP_LONG_SUMMER
-    if not is_summer and is_short:
-        return HRL_SECONDARY_CROP_SHORT_WINTER
-    return HRL_SECONDARY_CROP_LONG_WINTER
-
-
-def _calendar_matches_secondary_type(
-    calendar: np.ndarray,
-    *,
-    main_crop: int,
-    secondary_crop_type: int,
-) -> bool:
-    """Check whether a MIRCA calendar matches an HRL secondary-crop type.
-
-    Args:
-        calendar: MIRCA crop calendar matrix.
-        main_crop: HRL-derived MIRCA main crop class. A value of ``-1``
-            indicates that no valid crop is assigned.
-        secondary_crop_type: HRL secondary-crop timing class.
-
-    Returns:
-        True if the calendar is compatible with the HRL secondary-crop type.
-        For ``main_crop == -1``, only an empty all-``-1`` calendar is considered
-        compatible.
-    """
-    active_rows = _calendar_active_rows(calendar)
-
-    # Missing HRL crop means the farmer should receive an empty calendar, not a
-    # MIRCA fallback crop. This branch is mainly defensive because the caller
-    # already handles main_crop == -1 before searching candidates.
-    if main_crop == -1:
-        return active_rows.shape[0] == 0
-
-    if active_rows.shape[0] == 0:
-        return False
-
-    # No HRL secondary crop: prefer a single-crop MIRCA calendar for the same
-    # main crop.
-    if secondary_crop_type == HRL_SECONDARY_CROP_NONE:
-        return active_rows.shape[0] == 1 and int(active_rows[0, 0]) == main_crop
-
-    # HRL indicates a secondary crop. MIRCA2000 must therefore provide a
-    # multi-crop calendar containing the HRL-derived main crop.
-    if active_rows.shape[0] < 2:
-        return False
-
-    if main_crop not in active_rows[:, 0]:
-        return False
-
-    # HRL only gives the timing class of the secondary crop. The secondary crop
-    # identity itself is taken from the matching MIRCA2000 calendar.
-    for row in active_rows:
-        season_type = _classify_season_from_start_and_length(
-            int(row[2]),
-            int(row[3]),
-        )
-        if season_type == secondary_crop_type:
-            return True
-
-    return False
-
-
-def _select_mirca2000_calendar_for_farmer(
+def _candidate_mirca_calendars(
     crop_calendar: dict[int, list[tuple[float, TwoDArrayInt32]]],
     *,
     mirca_unit: int,
     main_crop: int,
-    secondary_crop_type: int,
     is_irrigated: bool,
     replace_crop_calendar_unit_code: dict[int, int],
-) -> np.ndarray:
-    """Select the most common MIRCA2000 calendar for a farmer crop combination.
+) -> tuple[int, list[tuple[float, TwoDArrayInt32]]]:
+    """Return ordered MIRCA-OS calendar candidates for one farmer state.
 
-    Args:
-        crop_calendar: Parsed MIRCA2000 crop calendar dictionary.
-        mirca_unit: MIRCA2000 unit assigned to the farmer.
-        main_crop: HRL-derived MIRCA crop class. A value of ``-1`` indicates
-            that no valid crop is assigned.
-        secondary_crop_type: HRL secondary-crop timing class.
-        is_irrigated: Whether the farmer has irrigation access.
-        replace_crop_calendar_unit_code: Optional MIRCA unit replacement mapping.
-
-    Returns:
-        MIRCA2000 crop calendar matrix with shape ``(3, 5)``. If ``main_crop`` is
-        ``-1``, returns an empty crop calendar where all values are ``-1``.
-
-    Raises:
-        ValueError: If no calendar exists for the MIRCA unit.
-        ValueError: If no calendar can be found for the crop combination in any
-            MIRCA2000 unit.
+    The search order is local unit with matching irrigation status, local unit
+    regardless of irrigation status, other units with matching status, and finally
+    other units regardless of status.
     """
-    if main_crop == -1:
-        return np.full((3, 5), -1, dtype=np.int32)
+    lookup_unit = int(replace_crop_calendar_unit_code.get(mirca_unit, mirca_unit))
 
-    lookup_unit = replace_crop_calendar_unit_code.get(mirca_unit, mirca_unit)
+    def contains_crop(entry: tuple[float, TwoDArrayInt32]) -> bool:
+        active_rows = _calendar_active_rows(entry[1])
+        return active_rows.size > 0 and main_crop in active_rows[:, 0]
 
-    if lookup_unit not in crop_calendar or not crop_calendar[lookup_unit]:
-        raise ValueError(f"No crop calendar found for MIRCA2000 unit {lookup_unit}.")
+    def matches_irrigation(entry: tuple[float, TwoDArrayInt32]) -> bool:
+        active_rows = _calendar_active_rows(entry[1])
+        return active_rows.size > 0 and bool(active_rows[0, 1]) == is_irrigated
 
-    def _contains_main_crop(entry: tuple[float, np.ndarray]) -> bool:
-        """Check whether a calendar entry contains the requested main crop.
-
-        Returns:
-            ``True`` when an active calendar row contains the requested crop.
-        """
-        _, calendar = entry
-        active_rows = _calendar_active_rows(calendar)
-
-        if active_rows.shape[0] == 0:
-            return False
-
-        return main_crop in active_rows[:, 0]
-
-    def _has_irrigation_status(entry: tuple[float, np.ndarray]) -> bool:
-        """Check whether a calendar entry has the requested irrigation status.
-
-        Returns:
-            ``True`` when the first active crop row matches ``is_irrigated``.
-        """
-        _, calendar = entry
-        active_rows = _calendar_active_rows(calendar)
-
-        if active_rows.shape[0] == 0:
-            return False
-
-        return bool(active_rows[0, 1]) == is_irrigated
-
-    def _select_best_candidate(
-        candidates: list[tuple[float, np.ndarray]],
-    ) -> np.ndarray | None:
-        """Select the largest-area calendar from a candidate list.
-
-        Args:
-            candidates: Calendar candidates paired with their represented areas.
-
-        Returns:
-            The selected calendar as an integer array, or ``None`` when no candidates
-            are available.
-        """
-        if not candidates:
-            return None
-
-        return max(candidates, key=lambda entry: entry[0])[1].astype(np.int32)
-
-    def _select_from_candidates(
-        candidates: list[tuple[float, np.ndarray]],
-    ) -> np.ndarray | None:
-        """Select the best calendar while respecting secondary-crop timing.
-
-        Args:
-            candidates: Calendar candidates paired with their represented areas.
-
-        Returns:
-            The best compatible calendar, or ``None`` when no candidate can be used.
-        """
-        exact_candidates = [
-            entry
-            for entry in candidates
-            if _calendar_matches_secondary_type(
-                entry[1],
-                main_crop=main_crop,
-                secondary_crop_type=secondary_crop_type,
-            )
-        ]
-
-        selected_calendar = _select_best_candidate(exact_candidates)
-        if selected_calendar is not None:
-            return selected_calendar
-
-        if secondary_crop_type != HRL_SECONDARY_CROP_NONE:
-            second_crop_candidates = [
-                entry
-                for entry in candidates
-                if _calendar_active_rows(entry[1]).shape[0] >= 2
-            ]
-
-            selected_calendar = _select_best_candidate(second_crop_candidates)
-            if selected_calendar is not None:
-                return selected_calendar
-
-        return _select_best_candidate(candidates)
-
-    local_entries = crop_calendar[lookup_unit]
-
-    # Preferred local search: same MIRCA unit, same crop, and matching
-    # rainfed/irrigated calendar class.
-    local_matching_irrigation_candidates = [
-        entry
-        for entry in local_entries
-        if _contains_main_crop(entry) and _has_irrigation_status(entry)
+    local_entries = crop_calendar.get(lookup_unit, [])
+    search_groups = [
+        [e for e in local_entries if contains_crop(e) and matches_irrigation(e)],
+        [e for e in local_entries if contains_crop(e)],
+        [
+            e
+            for unit_code, entries in crop_calendar.items()
+            if unit_code != lookup_unit
+            for e in entries
+            if contains_crop(e) and matches_irrigation(e)
+        ],
+        [
+            e
+            for unit_code, entries in crop_calendar.items()
+            if unit_code != lookup_unit
+            for e in entries
+            if contains_crop(e)
+        ],
     ]
-
-    selected_calendar = _select_from_candidates(local_matching_irrigation_candidates)
-    if selected_calendar is not None:
-        return selected_calendar
-
-    # Local fallback: keep the same MIRCA unit and crop, but ignore whether the
-    # available MIRCA2000 calendar is rainfed or irrigated.
-    local_any_irrigation_candidates = [
-        entry for entry in local_entries if _contains_main_crop(entry)
-    ]
-
-    selected_calendar = _select_from_candidates(local_any_irrigation_candidates)
-    if selected_calendar is not None:
-        return selected_calendar
-
-    # Cross-unit fallback 1: if this MIRCA unit does not contain this crop at all,
-    # search other MIRCA units for the same crop and same rainfed/irrigated class.
-    other_unit_matching_irrigation_candidates: list[tuple[float, np.ndarray]] = []
-    for unit_code, entries in crop_calendar.items():
-        if unit_code == lookup_unit:
-            continue
-
-        other_unit_matching_irrigation_candidates.extend(
-            entry
-            for entry in entries
-            if _contains_main_crop(entry) and _has_irrigation_status(entry)
-        )
-
-    selected_calendar = _select_from_candidates(
-        other_unit_matching_irrigation_candidates
-    )
-    if selected_calendar is not None:
-        return selected_calendar
-
-    # Cross-unit fallback 2: final fallback for this crop. Search all other units
-    # for the same crop, ignoring the rainfed/irrigated calendar class.
-    other_unit_any_irrigation_candidates: list[tuple[float, np.ndarray]] = []
-    for unit_code, entries in crop_calendar.items():
-        if unit_code == lookup_unit:
-            continue
-
-        other_unit_any_irrigation_candidates.extend(
-            entry for entry in entries if _contains_main_crop(entry)
-        )
-
-    selected_calendar = _select_from_candidates(other_unit_any_irrigation_candidates)
-    if selected_calendar is not None:
-        return selected_calendar
+    for candidates in search_groups:
+        if candidates:
+            return lookup_unit, candidates
 
     raise ValueError(
-        f"No MIRCA2000 calendar found for unit={lookup_unit}, crop={main_crop}, "
-        f"secondary_type={secondary_crop_type}, is_irrigated={is_irrigated}, "
-        "including cross-unit fallbacks."
+        f"No MIRCA-OS calendar found for unit={lookup_unit}, crop={main_crop}, "
+        f"is_irrigated={is_irrigated}, including cross-unit fallbacks."
     )
 
 
-def _select_mirca2000_calendars_for_farmers(
+def _select_mirca_calendars_for_farmers(
     crop_calendar: dict[int, list[tuple[float, TwoDArrayInt32]]],
     *,
     farmer_mirca_units: np.ndarray,
     farmer_main_crops: np.ndarray,
-    farmer_secondary_crop_types: np.ndarray,
     farmer_is_irrigated: np.ndarray,
     replace_crop_calendar_unit_code: dict[int, int],
     selection_cache: dict[tuple[int, int, int, bool], np.ndarray],
+    random_seed: int,
 ) -> tuple[np.ndarray, int, int]:
-    """Select MIRCA2000 calendars once per unique farmer-state combination.
+    """Assign area-weighted MIRCA-OS calendars using only the HRL main crop.
 
-    Farmers sharing the same MIRCA unit, main crop, secondary-crop timing class,
-    and irrigation state always receive the same MIRCA2000 calendar. This helper
-    therefore resolves each unique combination once and broadcasts the selected
-    calendar back to all farmers. The supplied cache is reused across HRL years.
-
-    Args:
-        crop_calendar: Parsed MIRCA2000 crop-calendar dictionary.
-        farmer_mirca_units: MIRCA2000 unit per compact farmer ID.
-        farmer_main_crops: HRL-derived MIRCA main crop per compact farmer ID.
-        farmer_secondary_crop_types: HRL secondary-crop timing class per compact
-            farmer ID.
-        farmer_is_irrigated: Irrigation state used for calendar selection per
-            compact farmer ID.
-        replace_crop_calendar_unit_code: Optional MIRCA unit replacement mapping.
-        selection_cache: Mutable cache shared across processed HRL years. Keys are
-            ``(lookup_unit, main_crop, secondary_crop_type, is_irrigated)`` and
-            values are selected calendars with shape ``(3, 4)``.
-
-    Returns:
-        Tuple containing the farmer-aligned calendar array, the number of unique
-        combinations in the current year, and the number of new cache entries.
-
-    Raises:
-        ValueError: If the farmer arrays are not one-dimensional and equally sized,
-            or if a selected calendar has an unexpected shape.
+    Each farmer/crop/irrigation state is sampled deterministically from the
+    represented MIRCA-OS calendar areas. The cache keeps repeated crop states stable
+    across HRL years.
     """
     farmer_mirca_units = np.asarray(farmer_mirca_units, dtype=np.int32)
     farmer_main_crops = np.asarray(farmer_main_crops, dtype=np.int32)
-    farmer_secondary_crop_types = np.asarray(
-        farmer_secondary_crop_types,
-        dtype=np.int32,
-    )
     farmer_is_irrigated = np.asarray(farmer_is_irrigated, dtype=bool)
-
-    arrays = (
-        farmer_mirca_units,
-        farmer_main_crops,
-        farmer_secondary_crop_types,
-        farmer_is_irrigated,
-    )
+    arrays = (farmer_mirca_units, farmer_main_crops, farmer_is_irrigated)
     if any(array.ndim != 1 for array in arrays):
         raise ValueError(
             "All farmer calendar-selection arrays must be one-dimensional."
         )
-
     n_farmers = farmer_mirca_units.size
     if any(array.size != n_farmers for array in arrays[1:]):
-        raise ValueError(
-            "All farmer calendar-selection arrays must have equal length. "
-            f"Got {[array.size for array in arrays]}."
-        )
+        raise ValueError("All farmer calendar-selection arrays must have equal length.")
 
-    lookup_units = farmer_mirca_units.copy()
-    if replace_crop_calendar_unit_code:
-        original_units = farmer_mirca_units
-        for source_unit, target_unit in replace_crop_calendar_unit_code.items():
-            lookup_units[original_units == int(source_unit)] = int(target_unit)
-
-    key_matrix = np.column_stack(
-        (
-            lookup_units,
-            farmer_main_crops,
-            farmer_secondary_crop_types,
-            farmer_is_irrigated.astype(np.int32),
-        )
-    ).astype(np.int32, copy=False)
-
-    # Missing crops always map to the same empty calendar, independent of location
-    # or irrigation state. Canonicalizing this key avoids many redundant entries.
-    missing_crop = farmer_main_crops == -1
-    key_matrix[missing_crop, 0] = -1
-    key_matrix[missing_crop, 2] = 0
-    key_matrix[missing_crop, 3] = 0
-
-    unique_keys, inverse = np.unique(key_matrix, axis=0, return_inverse=True)
-    unique_calendars = np.full(
-        (unique_keys.shape[0], 3, 4),
-        -1,
-        dtype=np.int32,
-    )
-
+    calendars = np.full((n_farmers, 3, 4), -1, dtype=np.int32)
+    state_keys: set[tuple[int, int, bool]] = set()
     n_cache_misses = 0
-    for key_index, key_values in enumerate(unique_keys):
-        lookup_unit, main_crop, secondary_crop_type, is_irrigated_int = (
-            int(value) for value in key_values
-        )
-        cache_key = (
-            lookup_unit,
-            main_crop,
-            secondary_crop_type,
-            bool(is_irrigated_int),
-        )
 
-        selected_calendar = selection_cache.get(cache_key)
-        if selected_calendar is None:
-            full_calendar = _select_mirca2000_calendar_for_farmer(
+    for farmer_id in range(n_farmers):
+        main_crop = int(farmer_main_crops[farmer_id])
+        if main_crop == -1:
+            continue
+        mirca_unit = int(farmer_mirca_units[farmer_id])
+        is_irrigated = bool(farmer_is_irrigated[farmer_id])
+        lookup_unit = int(replace_crop_calendar_unit_code.get(mirca_unit, mirca_unit))
+        state_keys.add((lookup_unit, main_crop, is_irrigated))
+        cache_key = (farmer_id, lookup_unit, main_crop, is_irrigated)
+        selected = selection_cache.get(cache_key)
+        if selected is None:
+            _, candidates = _candidate_mirca_calendars(
                 crop_calendar,
                 mirca_unit=lookup_unit,
                 main_crop=main_crop,
-                secondary_crop_type=secondary_crop_type,
-                is_irrigated=bool(is_irrigated_int),
-                # lookup_unit is already normalized above; passing an empty mapping
-                # prevents a target unit from being remapped a second time.
+                is_irrigated=is_irrigated,
                 replace_crop_calendar_unit_code={},
             )
-            selected_calendar = np.asarray(
-                full_calendar[:, [0, 2, 3, 4]],
-                dtype=np.int32,
+            areas = np.asarray([max(float(area), 0.0) for area, _ in candidates])
+            probabilities = (
+                areas / areas.sum()
+                if areas.sum() > 0.0
+                else np.full(len(candidates), 1.0 / len(candidates))
             )
-            if selected_calendar.shape != (3, 4):
+            seed = np.random.SeedSequence(
+                [random_seed, farmer_id, lookup_unit, main_crop, int(is_irrigated)]
+            )
+            rng = np.random.default_rng(seed)
+            candidate_index = int(rng.choice(len(candidates), p=probabilities))
+            full_calendar = candidates[candidate_index][1]
+            selected = np.asarray(full_calendar[:, [0, 2, 3, 4]], dtype=np.int32)
+            if selected.shape != (3, 4):
                 raise ValueError(
-                    "Selected MIRCA2000 calendar must have shape (3, 4) after "
-                    f"column selection. Got {selected_calendar.shape}."
+                    "Selected MIRCA-OS calendar must have shape (3, 4) after "
+                    f"column selection. Got {selected.shape}."
                 )
-            selected_calendar = np.ascontiguousarray(selected_calendar)
-            selection_cache[cache_key] = selected_calendar
+            selected = np.ascontiguousarray(selected)
+            selection_cache[cache_key] = selected
             n_cache_misses += 1
+        calendars[farmer_id] = selected
 
-        unique_calendars[key_index] = selected_calendar
-
-    return (
-        unique_calendars[inverse],
-        int(unique_keys.shape[0]),
-        n_cache_misses,
-    )
-
-
-def get_day_index(date: date) -> int:
-    """Get the day index (0-364) for a given date.
-
-    Args:
-        date: The date for which to get the day index.
-
-    Returns:
-        The day index (0-364).
-    """
-    return date.timetuple().tm_yday - 1  # 0-indexed
-
-
-def get_growing_season_length(start_day_index: int, end_day_index: int) -> int:
-    """Calculate the length of the growing season in days.
-
-    Essentially calculates (end_day_index - start_day_index) mod 365, thus
-    wrapping around the year if necessary. If start and end are the same,
-    we assume the growing season lasts the entire year (365 days) rather
-    than 0 days.
-
-    Args:
-        start_day_index: The starting day index (0-364).
-        end_day_index: The ending day index (0-364).
-
-    Returns:
-        The length of the growing season in days.
-    """
-    length = (end_day_index - start_day_index) % 365
-    if length == 0:
-        return 365
-    else:
-        return length
+    return calendars, len(state_keys), n_cache_misses
 
 
 def _sample_grid_values_at_farmers(
@@ -1695,248 +1178,18 @@ def _build_surface_water_fraction_lookup(
     return lookup
 
 
-def parse_MIRCA_file(
-    parsed_calendar: dict[int, list[tuple[float, TwoDArrayInt32]]],
-    crop_calendar_lines: list[str],
-    MIRCA_units: list[int],
-    is_irrigated: bool,
-) -> dict[int, list[tuple[float, TwoDArrayInt32]]]:
-    """Parse one MIRCA2000 crop-calendar file.
-
-    The parser converts monthly planting and harvest information to day indices,
-    retains at most two positive-area rotations per crop, and appends the resulting
-    calendar matrices to the supplied dictionary.
-
-    Args:
-        parsed_calendar: Dictionary receiving parsed calendars by MIRCA unit.
-        crop_calendar_lines: Raw lines from a MIRCA2000 calendar file.
-        MIRCA_units: MIRCA unit codes that should be retained.
-        is_irrigated: Whether the source file represents irrigated calendars.
-
-    Returns:
-        The input dictionary with parsed calendars appended.
-
-    Raises:
-        NotImplementedError: If a positive-area crop entry contains neither one nor
-            two supported rotations after filtering.
-    """
-    lines: list[str] = [line.strip() for line in crop_calendar_lines if line.strip()]
-    lines = lines[4:]
-
-    for raw_line in lines:
-        values: list[str] = raw_line.replace("  ", " ").split(" ")
-        unit_code: int = int(values[0])
-        if unit_code not in MIRCA_units:
-            continue
-        if unit_code not in parsed_calendar:
-            parsed_calendar[unit_code] = []
-        crop_class: int = int(values[1]) - 1  # minus one to make it zero based
-        number_of_rotations: int = int(values[2])
-        if number_of_rotations == 0:
-            continue
-        crops: list[str] = values[3:]
-        crop_rotations: list[tuple[int, int, float]] = []
-        for rotation in range(number_of_rotations):
-            area: float = float(crops[rotation * 3])
-            if area == 0:
-                continue
-            start_month: int = int(crops[rotation * 3 + 1])
-            end_month: int = int(crops[rotation * 3 + 2])
-            start_day_index: int = get_day_index(date(2000, start_month, 1))
-            end_day_index: int = get_day_index(
-                date(2000, end_month, calendar.monthrange(2000, end_month)[1])
-            )
-            growth_length: int = get_growing_season_length(
-                start_day_index, end_day_index
-            )
-            crop_rotations.append((start_day_index, growth_length, area))
-
-        # discard crop rotations with zero area
-        crop_rotations = [
-            crop_rotation for crop_rotation in crop_rotations if crop_rotation[2] > 0
-        ]
-
-        crop_rotations = sorted(crop_rotations, key=lambda x: x[2])  # sort by area
-        if len(crop_rotations) > 2:
-            crop_rotations = crop_rotations[-2:]
-            import warnings
-
-            warnings.warn(
-                "More than two crop rotations found; discarding the rotation "
-                "with the lowest represented area."
-            )
-        if len(crop_rotations) == 1:
-            start_day_index, growth_length, area = crop_rotations[0]
-            crop_rotation: tuple[float, TwoDArrayInt32] = (
-                area,
-                np.array(
-                    (
-                        (
-                            crop_class,
-                            is_irrigated,
-                            start_day_index,
-                            growth_length,
-                            0,
-                        ),
-                        (-1, -1, -1, -1, -1),
-                        (-1, -1, -1, -1, -1),
-                    )
-                ),
-            )  # -1 means no crop
-            parsed_calendar[unit_code].append(crop_rotation)
-        elif len(crop_rotations) == 2:
-            # if crop rotations start on the same day, they cannot be implemented
-            # by the same farmer, so we split them
-            # TODO: Verify that this branch is limited to non-overlapping rotations.
-            if crop_rotations[0][0] == crop_rotations[1][0]:
-                for crop_rotation in crop_rotations:
-                    start_day_index, growth_length, area = crop_rotation
-                    crop_rotation_entry: tuple[float, TwoDArrayInt32] = (
-                        area,
-                        np.array(
-                            (
-                                (
-                                    crop_class,
-                                    is_irrigated,
-                                    start_day_index,
-                                    growth_length,
-                                    0,
-                                ),
-                                (-1, -1, -1, -1, -1),
-                                (-1, -1, -1, -1, -1),
-                            ),
-                            dtype=np.int32,
-                        ),
-                    )
-                    parsed_calendar[unit_code].append(crop_rotation_entry)
-            # if the crop rotations are consecutive, we assume multi-cropping.
-            else:
-                crop_rotation_entry = (
-                    crop_rotations[1][2] - crop_rotations[0][2],
-                    np.array(
-                        (
-                            (
-                                crop_class,
-                                is_irrigated,
-                                crop_rotations[1][0],
-                                crop_rotations[1][1],
-                                0,
-                            ),
-                            (-1, -1, -1, -1, -1),
-                            (-1, -1, -1, -1, -1),
-                        ),
-                        dtype=np.int32,
-                    ),  # -1 means no crop
-                )
-                parsed_calendar[unit_code].append(crop_rotation_entry)
-                crop_rotation_entry = (
-                    crop_rotations[0][2],
-                    np.array(
-                        (
-                            (
-                                crop_class,
-                                is_irrigated,
-                                crop_rotations[0][0],
-                                crop_rotations[0][1],
-                                0,
-                            ),
-                            (
-                                crop_class,
-                                is_irrigated,
-                                crop_rotations[1][0],
-                                crop_rotations[1][1],
-                                0,
-                            ),
-                            (-1, -1, -1, -1, -1),
-                        ),
-                        dtype=np.int32,
-                    ),
-                )
-            parsed_calendar[unit_code].append(crop_rotation_entry)
-            assert crop_rotation_entry[1][0][2] != crop_rotation_entry[1][1][2]
-        else:
-            raise NotImplementedError
-    return parsed_calendar
-
-
-def parse_MIRCA2000_crop_calendar(
-    data_catalog: DataCatalog, MIRCA_units: list[int]
-) -> dict[int, list[tuple[float, TwoDArrayInt32]]]:
-    """Parse MIRCA2000 crop calendars for given MIRCA units.
-
-    Args:
-        data_catalog: The data catalog containing the MIRCA2000 files.
-        MIRCA_units: The list of MIRCA unit codes to parse.
-
-    Returns:
-        A dictionary containing the parsed crop calendars.
-
-    Raises:
-        TypeError: If the calendar data is not provided as a list of strings.
-    """
-    rainfed_source = data_catalog.fetch("mirca2000_cropping_calendar_rainfed").read()
-    irrigated_source = data_catalog.fetch(
-        "mirca2000_cropping_calendar_irrigated"
-    ).read()
-
-    if not isinstance(rainfed_source, list) or not isinstance(irrigated_source, list):
-        raise TypeError("Expected MIRCA2000 calendar lines as a list of strings.")
-
-    rainfed_lines: list[str] = rainfed_source
-    irrigated_lines: list[str] = irrigated_source
-
-    mirca2000_data: dict[int, list[tuple[float, TwoDArrayInt32]]] = {}
-
-    mirca2000_data = parse_MIRCA_file(
-        mirca2000_data,
-        rainfed_lines,
-        MIRCA_units,
-        is_irrigated=False,
-    )
-    mirca2000_data = parse_MIRCA_file(
-        mirca2000_data,
-        irrigated_lines,
-        MIRCA_units,
-        is_irrigated=True,
-    )
-
-    return mirca2000_data
-
-
 def _native_hrl_crop_category_areas_m2(
     crop_types: xr.DataArray,
-    secondary_crop: xr.DataArray,
     clip_geometry: BaseGeometry,
     *,
     geometry_crs: str = "EPSG:4326",
     chunk_rows: int = 4096,
 ) -> dict[int, float]:
-    """Calculate native HRL area by combined crop category inside a geometry.
-
-    The source raster is scanned in row chunks before modal reprojection to the
-    model grid. Minority crop categories inside a coarse model cell therefore
-    remain represented without loading the complete regional HRL raster into one
-    in-memory NumPy array.
-
-    Args:
-        crop_types: Native HRL Crop Types raster.
-        secondary_crop: Native HRL Secondary Crops raster on the same grid.
-        clip_geometry: Active regional geometry used to restrict source pixels.
-        geometry_crs: CRS of ``clip_geometry``.
-        chunk_rows: Number of native HRL rows processed at once.
-
-    Returns:
-        Mapping from combined primary-plus-secondary HRL crop code to cultivated
-        area in square metres.
-
-    Raises:
-        ValueError: If source grids are inconsistent, lack a CRS, or are not 2D.
-    """
-    assert_matching_raster_grid(crop_types, secondary_crop)
+    """Calculate native HRL CTY area by main crop inside a geometry."""
     if crop_types.rio.crs is None:
-        raise ValueError("Native HRL crop rasters must have a CRS.")
-    if crop_types.ndim != 2 or secondary_crop.ndim != 2:
-        raise ValueError("Native HRL crop rasters must be two-dimensional.")
+        raise ValueError("The native HRL Crop Types raster must have a CRS.")
+    if crop_types.ndim != 2:
+        raise ValueError("The native HRL Crop Types raster must be two-dimensional.")
     if chunk_rows < 1:
         raise ValueError("chunk_rows must be at least 1.")
 
@@ -1958,24 +1211,12 @@ def _native_hrl_crop_category_areas_m2(
     for y_start in range(0, n_rows, chunk_rows):
         y_stop = min(y_start + chunk_rows, n_rows)
         crop_chunk_da = crop_types.isel(y=slice(y_start, y_stop))
-        secondary_chunk_da = secondary_crop.isel(y=slice(y_start, y_stop))
         crop_values = crop_chunk_da.values
-        secondary_values = secondary_chunk_da.values
         if np.issubdtype(crop_values.dtype, np.floating):
             crop_values = np.nan_to_num(crop_values, nan=_HRL_OUTSIDE_AREA_CODE)
-        if np.issubdtype(secondary_values.dtype, np.floating):
-            secondary_values = np.nan_to_num(
-                secondary_values, nan=_HRL_OUTSIDE_AREA_CODE
-            )
-
         crop_values = np.asarray(crop_values, dtype=np.int32)
-        secondary_values = np.asarray(secondary_values, dtype=np.int32)
         valid_crop = (crop_values > _HRL_NO_CROPLAND_CODE) & (
             crop_values != _HRL_OUTSIDE_AREA_CODE
-        )
-        combined_values = combine_crop_and_secondary_values(
-            crop_values,
-            secondary_values,
         )
         inside_geometry = features.geometry_mask(
             [source_geometry.__geo_interface__],
@@ -1988,31 +1229,19 @@ def _native_hrl_crop_category_areas_m2(
         if not valid.any():
             continue
 
-        crop_codes, inverse = np.unique(
-            combined_values[valid],
-            return_inverse=True,
-        )
+        crop_codes, inverse = np.unique(crop_values[valid], return_inverse=True)
         if projected_cell_area_m2 is not None:
             crop_areas_m2 = (
                 np.bincount(inverse).astype(np.float64) * projected_cell_area_m2
             )
         else:
             chunk_cell_area_m2 = raster_cell_area_m2(crop_chunk_da)
-            crop_areas_m2 = np.bincount(
-                inverse,
-                weights=chunk_cell_area_m2[valid],
-            )
-
-        for crop_code, crop_area_m2 in zip(
-            crop_codes,
-            crop_areas_m2,
-            strict=True,
-        ):
-            crop_code_int = int(crop_code)
-            if crop_code_int < 0 or crop_area_m2 <= 0.0:
-                continue
-            totals[crop_code_int] = totals.get(crop_code_int, 0.0) + float(crop_area_m2)
-
+            crop_areas_m2 = np.bincount(inverse, weights=chunk_cell_area_m2[valid])
+        for crop_code, crop_area_m2 in zip(crop_codes, crop_areas_m2, strict=True):
+            if int(crop_code) > 0 and crop_area_m2 > 0.0:
+                totals[int(crop_code)] = totals.get(int(crop_code), 0.0) + float(
+                    crop_area_m2
+                )
     return totals
 
 
@@ -2099,53 +1328,19 @@ def _crop_area_fit_scores(diagnostics: pd.DataFrame) -> dict[str, float]:
 
 def _multi_year_crop_area_comparison(
     diagnostics: pd.DataFrame,
-    *,
-    aggregate_to_main_crop: bool = False,
 ) -> tuple[pd.DataFrame, dict[str, float | int]]:
-    """Compare raw and final crop areas over every year-crop combination.
-
-    The comparison is symmetric: each year-crop pair is evaluated against the
-    larger of its raw HRL area and final farmer-assigned area. This means that
-    both missing final area and spurious final area reduce the score. The
-    area-weighted score gives larger year-crop pairs more influence, while the
-    balanced score gives every represented year-crop pair equal influence.
-
-    Args:
-        diagnostics: Per-region crop-area diagnostics containing ``year``,
-            ``crop_code``, ``source_area_m2``, and ``assigned_area_m2``.
-        aggregate_to_main_crop: Whether combined primary-plus-secondary HRL crop
-            codes should first be collapsed to their main crop classes.
-
-    Returns:
-        Tuple containing a per-year, per-crop comparison table and a dictionary
-        with multi-year area-weighted and balanced summary scores.
-
-    Raises:
-        ValueError: If one or more required diagnostic columns are absent.
-    """
-    required_columns = {
-        "year",
-        "crop_code",
-        "source_area_m2",
-        "assigned_area_m2",
-    }
+    """Compare raw and final CTY areas over every year-crop combination."""
+    required_columns = {"year", "crop_code", "source_area_m2", "assigned_area_m2"}
     missing_columns = required_columns - set(diagnostics.columns)
     if missing_columns:
         raise ValueError(
             "Crop-area diagnostics are missing required column(s): "
             f"{sorted(missing_columns)}"
         )
-
     table = diagnostics.loc[
         diagnostics["crop_code"].to_numpy(dtype=np.int32) > 0,
         ["year", "crop_code", "source_area_m2", "assigned_area_m2"],
     ].copy()
-
-    if aggregate_to_main_crop and not table.empty:
-        table["crop_code"] = (
-            table["crop_code"].to_numpy(dtype=np.int32) // 10 * 10
-        ).astype(np.int32)
-
     table = (
         table.groupby(["year", "crop_code"], as_index=False)[
             ["source_area_m2", "assigned_area_m2"]
@@ -2157,7 +1352,6 @@ def _multi_year_crop_area_comparison(
     table = table.loc[
         (table["source_area_m2"] > 0.0) | (table["assigned_area_m2"] > 0.0)
     ].reset_index(drop=True)
-
     if table.empty:
         return table, {
             "n_year_crop_pairs": 0,
@@ -2169,16 +1363,11 @@ def _multi_year_crop_area_comparison(
             "area_weighted_error_pct": np.nan,
             "balanced_error_pct": np.nan,
         }
-
     raw_area = table["source_area_m2"].to_numpy(dtype=np.float64)
     final_area = table["assigned_area_m2"].to_numpy(dtype=np.float64)
     comparison_area = np.maximum(raw_area, final_area)
     overlapping_area = np.minimum(raw_area, final_area)
     absolute_error = np.abs(final_area - raw_area)
-
-    # A pair receives 100 when raw and final areas are equal, and 0 when area
-    # occurs on only one side. Using max(raw, final) keeps the metric bounded and
-    # also penalizes crop categories introduced only in the final assignment.
     pair_fit_pct = (
         np.divide(
             overlapping_area,
@@ -2188,17 +1377,7 @@ def _multi_year_crop_area_comparison(
         )
         * 100.0
     )
-    pair_error_pct = 100.0 - pair_fit_pct
     total_comparison_area = float(comparison_area.sum())
-
-    table["main_crop"] = (
-        table["crop_code"].to_numpy(dtype=np.int32) // 10 * 10
-    ).astype(np.int32)
-    table["secondary_crop"] = np.where(
-        aggregate_to_main_crop,
-        0,
-        table["crop_code"].to_numpy(dtype=np.int32) % 10,
-    ).astype(np.int32)
     table["difference_m2"] = final_area - raw_area
     table["difference_pct_raw"] = (
         np.divide(
@@ -2219,47 +1398,34 @@ def _multi_year_crop_area_comparison(
         )
         * 100.0
     )
-
     raw_total = float(raw_area.sum())
     final_total = float(final_area.sum())
-    area_weighted_fit_pct = (
-        float(overlapping_area.sum()) / total_comparison_area * 100.0
-        if total_comparison_area > 0.0
-        else np.nan
-    )
-    area_weighted_error_pct = (
-        float(absolute_error.sum()) / total_comparison_area * 100.0
-        if total_comparison_area > 0.0
-        else np.nan
-    )
-
-    summary: dict[str, float | int] = {
+    return table, {
         "n_year_crop_pairs": int(len(table)),
         "raw_area_m2": raw_total,
         "final_area_m2": final_total,
         "net_difference_pct": (
             (final_total - raw_total) / raw_total * 100.0 if raw_total > 0.0 else np.nan
         ),
-        "area_weighted_fit_pct": area_weighted_fit_pct,
+        "area_weighted_fit_pct": (
+            float(overlapping_area.sum()) / total_comparison_area * 100.0
+            if total_comparison_area > 0.0
+            else np.nan
+        ),
         "balanced_fit_pct": float(pair_fit_pct.mean()),
-        "area_weighted_error_pct": area_weighted_error_pct,
-        "balanced_error_pct": float(pair_error_pct.mean()),
+        "area_weighted_error_pct": (
+            float(absolute_error.sum()) / total_comparison_area * 100.0
+            if total_comparison_area > 0.0
+            else np.nan
+        ),
+        "balanced_error_pct": float((100.0 - pair_fit_pct).mean()),
     }
-    return table, summary
 
 
 def _format_multi_year_crop_area_comparison(comparison: pd.DataFrame) -> str:
-    """Format all raw-versus-final year-crop area comparisons for logging.
-
-    Args:
-        comparison: Table returned by ``_multi_year_crop_area_comparison``.
-
-    Returns:
-        Human-readable table with one row per represented year-crop pair.
-    """
+    """Format raw-versus-final CTY area comparisons for logging."""
     if comparison.empty:
         return "no positive year-crop area pairs"
-
     table = comparison.copy()
     table["raw_km2"] = table["source_area_m2"] / 1_000_000.0
     table["final_km2"] = table["assigned_area_m2"] / 1_000_000.0
@@ -2269,8 +1435,6 @@ def _format_multi_year_crop_area_comparison(comparison: pd.DataFrame) -> str:
             [
                 "year",
                 "crop_code",
-                "main_crop",
-                "secondary_crop",
                 "raw_km2",
                 "final_km2",
                 "difference_km2",
@@ -2298,36 +1462,15 @@ def _format_hrl_crop_area_alignment(
     *,
     top_n: int,
 ) -> str:
-    """Format the largest HRL-versus-agent crop-area differences for logging.
-
-    Args:
-        diagnostics: Crop-area diagnostic table for one region and year.
-        top_n: Maximum number of crop categories to include.
-
-    Returns:
-        Human-readable table ordered by the largest represented category area, or a
-        short message when no positive crop categories are available.
-    """
+    """Format the largest CTY-versus-agent crop-area differences for logging."""
     if diagnostics.empty:
         return "no crop categories"
-
     table = diagnostics.copy()
     table = table.loc[
         (table["source_area_m2"] > 0.0) | (table["assigned_area_m2"] > 0.0)
     ].copy()
     if table.empty:
         return "no positive crop area"
-
-    table["main_crop"] = np.where(
-        table["crop_code"] > 0,
-        (table["crop_code"] // 10) * 10,
-        -1,
-    )
-    table["secondary_crop"] = np.where(
-        table["crop_code"] > 0,
-        table["crop_code"] % 10,
-        0,
-    )
     table["source_km2"] = table["source_area_m2"] / 1_000_000.0
     table["agent_km2"] = table["assigned_area_m2"] / 1_000_000.0
     table["difference_km2"] = (
@@ -2348,19 +1491,15 @@ def _format_hrl_crop_area_alignment(
         table["assigned_share"] - table["source_share"]
     ) * 100.0
     table["ranking_area"] = np.maximum(
-        table["source_area_m2"],
-        table["assigned_area_m2"],
+        table["source_area_m2"], table["assigned_area_m2"]
     )
     table = table.sort_values(
-        ["ranking_area", "crop_code"],
-        ascending=[False, True],
+        ["ranking_area", "crop_code"], ascending=[False, True]
     ).head(max(top_n, 1))
     return (
         table[
             [
                 "crop_code",
-                "main_crop",
-                "secondary_crop",
                 "source_km2",
                 "agent_km2",
                 "difference_km2",
@@ -2381,42 +1520,6 @@ def _format_hrl_crop_area_alignment(
     )
 
 
-def _crop_area_targets_from_model_grid(
-    crop_values: np.ndarray,
-    cultivated_mask: np.ndarray,
-    cell_area_m2: np.ndarray,
-) -> dict[int, float]:
-    """Aggregate positive crop areas on the selected model grid.
-
-    Args:
-        crop_values: Combined crop code per model cell.
-        cultivated_mask: Boolean mask selecting cells in the static farm domain.
-        cell_area_m2: Full area of each model cell in square metres.
-
-    Returns:
-        Mapping from positive crop code to represented full-cell area in square
-        metres.
-
-    Raises:
-        ValueError: If the crop, mask, and cell-area arrays do not have identical
-            shapes.
-    """
-    crop_values = np.asarray(crop_values, dtype=np.int32)
-    cultivated_mask = np.asarray(cultivated_mask, dtype=bool)
-    cell_area_m2 = np.asarray(cell_area_m2, dtype=np.float64)
-    if not (crop_values.shape == cultivated_mask.shape == cell_area_m2.shape):
-        raise ValueError("crop_values, cultivated_mask, and cell_area_m2 must align.")
-    valid = cultivated_mask & (crop_values > 0)
-    if not valid.any():
-        return {}
-    crop_codes, inverse = np.unique(crop_values[valid], return_inverse=True)
-    crop_areas = np.bincount(inverse, weights=cell_area_m2[valid])
-    return {
-        int(code): float(area)
-        for code, area in zip(crop_codes, crop_areas, strict=True)
-    }
-
-
 def _crop_area_diagnostics_from_assignments(
     assigned_crop_codes: np.ndarray,
     farmer_areas_m2: np.ndarray,
@@ -2425,9 +1528,9 @@ def _crop_area_diagnostics_from_assignments(
     """Compare existing farmer crop assignments with source area targets.
 
     Args:
-        assigned_crop_codes: One assigned combined crop code per farmer.
+        assigned_crop_codes: One assigned CTY crop code per farmer.
         farmer_areas_m2: Area of each farmer in square metres.
-        source_crop_areas_m2: Source area target by combined crop code.
+        source_crop_areas_m2: Source area target by CTY crop code.
 
     Returns:
         DataFrame containing source area, assigned area, differences, and area shares
@@ -2485,200 +1588,70 @@ def _crop_area_diagnostics_from_assignments(
     return table
 
 
-def _aggregate_crop_alignment_to_main_categories(
-    diagnostics: pd.DataFrame,
-) -> pd.DataFrame:
-    """Aggregate combined HRL crop diagnostics to main crop classes.
-
-    Args:
-        diagnostics: Diagnostic table using combined primary-secondary crop codes.
-
-    Returns:
-        Diagnostic table with secondary-crop suffixes collapsed into their main HRL
-        crop categories and all area and share fields recomputed.
-    """
-    if diagnostics.empty:
-        return diagnostics.copy()
-    table = diagnostics.copy()
-    table["crop_code"] = np.where(
-        table["crop_code"].to_numpy(dtype=np.int32) > 0,
-        (table["crop_code"].to_numpy(dtype=np.int32) // 10) * 10,
-        -1,
-    ).astype(np.int32)
-    table = table.groupby("crop_code", as_index=False)[
-        [
-            "source_area_m2",
-            "adjusted_target_area_m2",
-            "assigned_area_m2",
-        ]
-    ].sum()
-    table["difference_from_source_m2"] = (
-        table["assigned_area_m2"] - table["source_area_m2"]
-    )
-    table["difference_from_adjusted_target_m2"] = (
-        table["assigned_area_m2"] - table["adjusted_target_area_m2"]
-    )
-    positive = table["crop_code"] > 0
-    source_total = float(table.loc[positive, "source_area_m2"].sum())
-    assigned_total = float(table.loc[positive, "assigned_area_m2"].sum())
-    table["source_share"] = (
-        table["source_area_m2"].to_numpy(dtype=np.float64) / source_total
-        if source_total > 0.0
-        else np.zeros(len(table), dtype=np.float64)
-    )
-    table["assigned_share"] = (
-        table["assigned_area_m2"].to_numpy(dtype=np.float64) / assigned_total
-        if assigned_total > 0.0
-        else np.zeros(len(table), dtype=np.float64)
-    )
-    table["positive_target_scale"] = np.divide(
-        table["adjusted_target_area_m2"].to_numpy(dtype=np.float64),
-        table["source_area_m2"].to_numpy(dtype=np.float64),
-        out=np.ones(len(table), dtype=np.float64),
-        where=table["source_area_m2"].to_numpy(dtype=np.float64) > 0.0,
-    )
-    return table
-
-
 def _reproject_HRL_year_to_subgrid(
     crop_types: xr.DataArray,
-    secondary_crop: xr.DataArray,
     template: xr.DataArray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Aggregate one native-resolution HRL year to the final model subgrid.
-
-    Native Crop Types states remain distinct during reprojection:
-
-    - positive HRL crop codes are active crops;
-    - ``0`` is native no-cropland;
-    - ``65535`` is outside the HRL product area.
-
-    Active combined primary-plus-secondary codes are aggregated with modal
-    resampling. Active-crop fraction and HRL coverage fraction are aggregated
-    separately with average resampling. A destination cell without an active
-    modal crop is returned as native no-cropland (``0``) when it has source
-    coverage and as ``_HRL_MISSING_CROP_CODE`` when it has no HRL coverage.
-    Conversion of no-cropland to model fallow (``-1``) is deliberately deferred
-    until the complete multi-year agricultural union is known.
-
-    Args:
-        crop_types: Native HRL Crop Types raster.
-        secondary_crop: Native HRL Secondary Crops raster on the same grid.
-        template: Final model-grid template for the selected region window.
-
-    Returns:
-        Tuple containing modal combined crop state, active-crop fraction, and
-        HRL coverage fraction on the model-grid template.
-
-    Raises:
-        ValueError: If the source rasters are not aligned or the template has no
-            CRS.
-    """
-    assert_matching_raster_grid(crop_types, secondary_crop)
+    """Aggregate one native-resolution HRL CTY year to the model subgrid."""
+    if crop_types.rio.crs is None:
+        raise ValueError("The HRL Crop Types raster must have a CRS.")
+    if crop_types.ndim != 2:
+        raise ValueError("The HRL Crop Types raster must be two-dimensional.")
     if template.rio.crs is None:
         raise ValueError("The regional subgrid template must have a CRS.")
 
     crop_values = crop_types.values
-    secondary_values = secondary_crop.values
     if np.issubdtype(crop_values.dtype, np.floating):
-        crop_values = np.nan_to_num(
-            crop_values,
-            nan=_HRL_OUTSIDE_AREA_CODE,
-        )
-    if np.issubdtype(secondary_values.dtype, np.floating):
-        secondary_values = np.nan_to_num(
-            secondary_values,
-            nan=_HRL_OUTSIDE_AREA_CODE,
-        )
-
+        crop_values = np.nan_to_num(crop_values, nan=_HRL_OUTSIDE_AREA_CODE)
     crop_values = np.ascontiguousarray(crop_values.astype(np.int32, copy=False))
-    secondary_values = np.ascontiguousarray(
-        secondary_values.astype(np.int32, copy=False)
-    )
     has_hrl_coverage = crop_values != _HRL_OUTSIDE_AREA_CODE
     active_crop = (crop_values > _HRL_NO_CROPLAND_CODE) & has_hrl_coverage
 
-    combined_values = combine_crop_and_secondary_values(
-        crop_values,
-        secondary_values,
+    crop_states = crop_values.copy()
+    crop_states[~active_crop] = _HRL_MISSING_CROP_CODE
+    crop_state_da = crop_types.copy(data=crop_states)
+    crop_state_da.attrs = {}
+    crop_state_da = crop_state_da.rio.write_crs(crop_types.rio.crs)
+    crop_state_da = crop_state_da.rio.write_nodata(_HRL_MISSING_CROP_CODE)
+    crop_subgrid = crop_state_da.rio.reproject_match(
+        template, resampling=Resampling.mode, nodata=_HRL_MISSING_CROP_CODE
     )
-    # Non-active native states are excluded from modal crop resampling. Their
-    # distinction is reconstructed from the independently reprojected HRL
-    # coverage fraction below.
-    combined_values[~active_crop] = _HRL_MISSING_CROP_CODE
-
-    combined = crop_types.copy(data=combined_values)
-    combined.attrs = {}
-    combined = combined.rio.write_crs(crop_types.rio.crs)
-    combined = combined.rio.write_nodata(_HRL_MISSING_CROP_CODE)
-    combined_subgrid = combined.rio.reproject_match(
-        template,
-        resampling=Resampling.mode,
-        nodata=_HRL_MISSING_CROP_CODE,
-    )
-    combined_subgrid_values = combined_subgrid.values
-    if np.issubdtype(combined_subgrid_values.dtype, np.floating):
-        combined_subgrid_values = np.nan_to_num(
-            combined_subgrid_values,
-            nan=_HRL_MISSING_CROP_CODE,
+    crop_subgrid_values = crop_subgrid.values
+    if np.issubdtype(crop_subgrid_values.dtype, np.floating):
+        crop_subgrid_values = np.nan_to_num(
+            crop_subgrid_values, nan=_HRL_MISSING_CROP_CODE
         )
-    combined_subgrid_values = combined_subgrid_values.astype(np.int32, copy=False)
+    crop_subgrid_values = crop_subgrid_values.astype(np.int32, copy=False)
 
     cultivated = crop_types.copy(data=active_crop.astype(np.float32))
     cultivated.attrs = {}
-    cultivated = cultivated.rio.write_crs(crop_types.rio.crs)
-    cultivated = cultivated.rio.write_nodata(None)
+    cultivated = cultivated.rio.write_crs(crop_types.rio.crs).rio.write_nodata(None)
     cultivated_fraction = cultivated.rio.reproject_match(
-        template,
-        resampling=Resampling.average,
-        nodata=0.0,
+        template, resampling=Resampling.average, nodata=0.0
     )
-    cultivated_fraction_values = np.nan_to_num(
-        cultivated_fraction.values,
-        nan=0.0,
-        posinf=0.0,
-        neginf=0.0,
-    ).astype(np.float32, copy=False)
     cultivated_fraction_values = np.clip(
-        cultivated_fraction_values,
+        np.nan_to_num(cultivated_fraction.values, nan=0.0, posinf=0.0, neginf=0.0),
         0.0,
         1.0,
-    )
+    ).astype(np.float32, copy=False)
 
     coverage = crop_types.copy(data=has_hrl_coverage.astype(np.float32))
     coverage.attrs = {}
-    coverage = coverage.rio.write_crs(crop_types.rio.crs)
-    coverage = coverage.rio.write_nodata(None)
+    coverage = coverage.rio.write_crs(crop_types.rio.crs).rio.write_nodata(None)
     coverage_fraction = coverage.rio.reproject_match(
-        template,
-        resampling=Resampling.average,
-        nodata=0.0,
+        template, resampling=Resampling.average, nodata=0.0
     )
-    coverage_fraction_values = np.nan_to_num(
-        coverage_fraction.values,
-        nan=0.0,
-        posinf=0.0,
-        neginf=0.0,
-    ).astype(np.float32, copy=False)
     coverage_fraction_values = np.clip(
-        coverage_fraction_values,
+        np.nan_to_num(coverage_fraction.values, nan=0.0, posinf=0.0, neginf=0.0),
         0.0,
         1.0,
-    )
+    ).astype(np.float32, copy=False)
 
-    # A destination cell with source coverage but no active modal crop retains
-    # the native no-cropland state. Only cells with no source coverage remain
-    # missing/outside.
-    no_active_modal = combined_subgrid_values == _HRL_MISSING_CROP_CODE
-    combined_subgrid_values[no_active_modal & (coverage_fraction_values > 0.0)] = (
+    no_active_modal = crop_subgrid_values == _HRL_MISSING_CROP_CODE
+    crop_subgrid_values[no_active_modal & (coverage_fraction_values > 0.0)] = (
         _HRL_NO_CROPLAND_CODE
     )
-
-    return (
-        combined_subgrid_values,
-        cultivated_fraction_values,
-        coverage_fraction_values,
-    )
+    return crop_subgrid_values, cultivated_fraction_values, coverage_fraction_values
 
 
 class Europe(GEBModel):
@@ -2710,7 +1683,6 @@ class Europe(GEBModel):
         validation_year: int | None = 2022,
         test_year: int | None = 2023,
         samples_per_cty_class_per_region_year: int = 1000,
-        samples_per_cpsct_class_per_region_year: int = 1000,
         sample_stride_pixels: int = 5,
         rare_class_sample_stride_pixels: int | None = 1,
         rare_class_threshold_candidates: int = 50_000,
@@ -2719,26 +1691,38 @@ class Europe(GEBModel):
         sample_chunk_rows: int = 512,
         prediction_chunk_size: int = 512,
         include_coordinates: bool = False,
-        include_topography: bool = True,
-        apply_historical_cropland_mask: bool = True,
+        include_topography: bool = False,
+        normalize_embeddings: bool = True,
+        classifier_structure: str = "flat",
+        residual_class_mode: str = "uncertainty",
+        calibrate_class_thresholds: bool = False,
+        class_probability_thresholds: dict[int, float] | None = None,
+        class_threshold_grid: tuple[float, ...] = (
+            0.10,
+            0.15,
+            0.20,
+            0.25,
+            0.30,
+            0.35,
+            0.40,
+            0.50,
+        ),
+        class_threshold_min_reference_samples: int = 25,
+        apply_historical_cropland_mask: bool = False,
         cropland_mask_years: tuple[int, ...] | None = None,
         historical_cropland_mask_dilation_pixels: int = 0,
         smooth_cty_probabilities: bool = True,
-        smooth_cpsct_probabilities: bool = True,
         unclassified_probability_threshold: float = 0.25,
         write_cty_confidence: bool = True,
         cty_confidence_output_root: str | None = None,
-        apply_permanent_crop_temporal_consistency: bool = True,
+        apply_permanent_crop_temporal_consistency: bool = False,
         apply_cty_mmu_sieve: bool = True,
         cty_mmu_minimum_pixels: int = 25,
         cty_mmu_connectivity: int = 4,
         cty_mmu_padding_pixels: int = 25,
         cty_mmu_maximum_iterations: int = 3,
-        model_type: str = "random_forest",
-        n_estimators: int = 500,
-        max_depth: int | None = None,
-        min_samples_leaf: int = 2,
-        max_features: float | int | str | None = 1.0,
+        model_type: str = "logistic_regression",
+        model_parameters: dict[str, Any] | None = None,
         sample_weight_mode: str = "class_region_year_balanced",
         n_jobs: int = -1,
         random_seed: int = 42,
@@ -2760,183 +1744,119 @@ class Europe(GEBModel):
         model_output_path: str | None = None,
         overwrite_prediction_files: bool = True,
     ) -> None:
-        """Train annual AlphaEarth crop classifiers for the active study area.
+        """Train an annual AlphaEarth classifier for HRL Crop Types (CTY).
 
-        This is a conventional annual remote-sensing classification workflow. For
-        every observed year, HRL CTY and CPSCT labels from year ``t`` are paired
-        only with AlphaEarth embeddings from year ``t``. No previous crop map,
-        previous embedding year, crop rotation, or farmer state is used.
+        For every observed year, HRL CTY labels from year ``t`` are paired only with
+        AlphaEarth embeddings from year ``t``. Samples are generated region by region
+        but pooled into one study-area CTY classifier. Complete years can be held out
+        for temporal validation and testing, after which the final model is refitted
+        using all configured observation years.
 
-        AlphaEarth downloads are organized at study-area level rather than at
-        region level. First, all COGs required for every configured HRL year and
-        the full active model bounds are downloaded once. Regional sampling then
-        reuses that shared local selection. After all regions and years have been
-        sampled, the downloaded training COGs are optionally removed in one cleanup
-        pass. The prediction year is handled similarly: it is downloaded once for
-        the full active model bounds and reused by every HRL output tile.
+        Generated maps use the native HRL 100-km tile grids and filenames. Optional
+        post-processing includes a historical cropland mask, 3x3 probability smoothing,
+        confidence-based assignment to classes 3100/3200, permanent-crop temporal
+        consistency, and a padded minimum-mapping-unit sieve. A leakage-safe full-map
+        assessment can be run for the held-out years.
 
-        Samples are still generated region by region to bound memory use, but all
-        regional samples are pooled into one CTY model and one CPSCT model for the
-        complete active study area. Temporal validation and testing are performed
-        by holding out complete HRL years. The final models are then retrained on
-        all configured HRL years and applied independently to every year in
-        ``prediction_years``.
-
-        Validation and blind-test results are logged as Product-by-Reference
-        confusion matrices with Overall Accuracy, Producer's Accuracy, User's
-        Accuracy, omission and commission errors, F-score, balanced accuracy, and
-        Cohen's kappa. CTY is reported at native class level, crop-group level,
-        and HRL aggregation level 1.
-
-        Prediction is performed on the exact native HRL 100-km tile grids supplied
-        by ``template_year``. The resulting files use the original HRL filenames
-        with the target year substituted and are written directly to the existing
-        catalog locations::
-
-            $GEB_DATA_ROOT/hrl_crop_types/v1/<prediction_year>/
-            $GEB_DATA_ROOT/hrl_secondary_crop/v1/<prediction_year>/
-
-        By default, both 2024 and 2025 are classified from their corresponding
-        annual AlphaEarth embeddings. The same final model is applied separately
-        to each year; no recursive or previous-year crop type is used as a model
-        feature.
-
-        The optional HRL-style post-classification chain uses only data already
-        available in the setup: elevation and slope are appended to all 64
-        AlphaEarth embedding dimensions; the union of observed HRL cropland years
-        acts as a BVL-like crop-extent mask; per-class probabilities are smoothed
-        with a 3x3 Gaussian kernel; low-confidence crop predictions become HRL
-        classes 3100/3200; stable permanent crops receive conservative temporal
-        corrections; and CTY is cleaned with a padded multi-pass 0.25 ha sieve.
-        A CTY confidence layer is written alongside the generated crop maps.
+        Existing sample tables can be reused. Only the CTY label and current predictor
+        schema are required; unrelated legacy columns are ignored.
 
         Args:
             region_id_column: Column containing compact model-region IDs.
             country_iso3_column: Column containing country ISO3 codes.
-            hrl_years: Independent annual HRL/AlphaEarth observations used for
-                sampling, temporal evaluation, and final model fitting.
-            prediction_years: Ordered AlphaEarth years to classify. Defaults to
-                2024 and 2025. Each year is predicted independently.
-            template_year: Existing HRL year used only for tile names, profiles,
-                transforms, and dimensions. Defaults to the final ``hrl_years`` year.
-            validation_year: Optional complete observation year held out for model
-                selection diagnostics.
-            test_year: Optional complete observation year held out as a blind test.
-            samples_per_cty_class_per_region_year: Maximum CTY samples retained per
-                class, model region, and year.
-            samples_per_cpsct_class_per_region_year: Maximum CPSCT samples retained
-                per class, model region, and year.
-            sample_stride_pixels: Standard sampling-lattice spacing in native
-                10 m pixels.
-            rare_class_sample_stride_pixels: Denser lattice spacing used for classes
-                with fewer than ``rare_class_threshold_candidates`` eligible
-                candidates. Set to None to disable adaptive rare-class sampling.
-            rare_class_threshold_candidates: Candidate-count threshold below which a
-                class uses the rare-class lattice and enlarged sample reservoir.
-            rare_class_sample_multiplier: Multiplier applied to the per-class sample
-                cap for rare classes.
-            training_label_edge_buffer_pixels: Number of native pixels removed from
-                every CTY/CPSCT class boundary before selecting samples. Prediction
-                still covers every valid AlphaEarth pixel.
-            sample_chunk_rows: Native HRL rows scanned in each sampling chunk.
+            hrl_years: Annual HRL/AlphaEarth observations used for sampling and fitting.
+            prediction_years: Ordered AlphaEarth years to classify independently.
+            template_year: Existing HRL CTY year used for output grids and filenames.
+            validation_year: Optional complete year held out for validation.
+            test_year: Optional complete year held out for blind testing.
+            samples_per_cty_class_per_region_year: Maximum samples retained per CTY
+                class, region, and year.
+            sample_stride_pixels: Standard native-HRL sampling-lattice spacing.
+            rare_class_sample_stride_pixels: Denser lattice spacing for rare CTY classes.
+            rare_class_threshold_candidates: Candidate-count threshold defining rarity.
+            rare_class_sample_multiplier: Sample-cap multiplier for rare CTY classes.
+            training_label_edge_buffer_pixels: Pixels removed from CTY class boundaries.
+            sample_chunk_rows: HRL rows scanned in each sampling chunk.
             prediction_chunk_size: Width and height of each prediction window.
-            include_coordinates: Include longitude/latitude predictors.
-            include_topography: Include model-subgrid elevation and terrain gradient
-                alongside all 64 AlphaEarth dimensions.
-            apply_historical_cropland_mask: Restrict crop predictions to the union
-                of observed HRL cropland extents.
-            cropland_mask_years: Observed years used for the maximum cropland
-                extent; defaults to all ``hrl_years``.
-            historical_cropland_mask_dilation_pixels: Optional native-pixel
-                dilation of the historical cropland union.
-            smooth_cty_probabilities: Apply a nodata-aware 3x3 Gaussian filter to
-                CTY class probabilities before reclassification.
-            smooth_cpsct_probabilities: Apply the same spatial probability
-                smoothing to CPSCT.
-            unclassified_probability_threshold: CTY maximum-probability threshold
-                below which annual/permanent crops become 3100/3200.
-            write_cty_confidence: Write a uint8 0-100 CTY confidence product.
-            cty_confidence_output_root: Optional confidence catalog root; when
-                omitted, a sibling ``hrl_crop_types_confidence/v1`` root is used.
-            apply_permanent_crop_temporal_consistency: Apply conservative
-                historical permanent-crop consistency rules to generated years.
-            apply_cty_mmu_sieve: Apply padded multi-pass CTY sieving.
-            cty_mmu_minimum_pixels: MMU threshold; 25 pixels equals 0.25 ha.
+            include_coordinates: Include longitude and latitude predictors for an
+                explicit portability ablation.
+            include_topography: Include elevation and slope predictors for an
+                explicit auxiliary-feature ablation.
+            normalize_embeddings: L2-normalize each dequantized 64-dimensional AEF
+                vector before model fitting and inference.
+            classifier_structure: ``"flat"`` or soft ``"hierarchical"`` crop-group
+                followed by within-group classification.
+            residual_class_mode: Learn residual classes directly or derive 1150,
+                3100 and 3200 from uncertainty.
+            calibrate_class_thresholds: Calibrate class-specific thresholds on the
+                latest complete year available within each training set.
+            class_probability_thresholds: Optional manually specified CTY thresholds.
+            class_threshold_grid: Candidate thresholds for automatic calibration.
+            class_threshold_min_reference_samples: Minimum calibration-year reference
+                samples required before fitting a class-specific threshold.
+            apply_historical_cropland_mask: Restrict predictions to historical cropland.
+            cropland_mask_years: Observation years used to construct that mask.
+            historical_cropland_mask_dilation_pixels: Optional dilation of the mask.
+            smooth_cty_probabilities: Smooth CTY class probabilities before selection.
+            unclassified_probability_threshold: Confidence threshold for 3100/3200.
+            write_cty_confidence: Write a uint8 CTY confidence product.
+            cty_confidence_output_root: Optional root for confidence products.
+            apply_permanent_crop_temporal_consistency: Apply permanent-crop rules.
+            apply_cty_mmu_sieve: Apply the CTY minimum-mapping-unit sieve.
+            cty_mmu_minimum_pixels: Minimum retained CTY patch size.
             cty_mmu_connectivity: Four- or eight-neighbour sieve connectivity.
-            cty_mmu_padding_pixels: Neighbour-tile padding used during sieving.
-            cty_mmu_maximum_iterations: Maximum sieve passes.
-            model_type: ``"random_forest"`` or ``"hist_gradient_boosting"``.
-            n_estimators: Number of trees or boosting iterations.
-            max_depth: Optional estimator tree-depth limit.
-            min_samples_leaf: Minimum observations per terminal leaf.
-            max_features: Number or fraction of predictors considered at every Random
-                Forest split. ``1.0`` evaluates all 64 AlphaEarth embedding features
-                simultaneously, plus coordinates when enabled.
-            sample_weight_mode: ``"class_region_year_balanced"`` gives equal total
-                influence to every represented class while balancing its region-year
-                groups. ``"none"`` uses Random Forest balanced-subsample weights.
-            n_jobs: Parallel jobs used by Random Forest.
+            cty_mmu_padding_pixels: Neighbour-tile padding during sieving.
+            cty_mmu_maximum_iterations: Maximum number of sieve passes.
+            model_type: Estimator family: ``logistic_regression``,
+                ``random_forest``, ``extra_trees``, or
+                ``hist_gradient_boosting``.
+            model_parameters: Estimator-specific keyword settings. The selected
+                mapping is stored in the serialized model bundle.
+            sample_weight_mode: ``none``, ``class_balanced``, or
+                ``class_region_year_balanced``.
+            n_jobs: Parallel worker count for Random Forest and Extra Trees.
             random_seed: Reproducible sampling and estimator seed.
-            hrl_raster_chunks: Native HRL read chunks. Defaults to the Europe module
-                chunk configuration.
-            max_alphaearth_files_for_sampling: Optional safety limit for the total
-                number of AlphaEarth COGs downloaded across all ``hrl_years`` and
-                the full active model bounds.
-            max_alphaearth_files_for_prediction: Optional safety limit for the total
-                number of COGs downloaded across all ``prediction_years`` and the
-                full active model bounds.
-            alphaearth_max_parallel_downloads: Optional runtime override for the
-                adapter's number of simultaneous COG downloads. When omitted, the
-                value configured in the data catalog is retained.
-            cleanup_alphaearth_downloads: Delete study-area AlphaEarth COGs after
-                all sampling passes and, separately, after all prediction tiles.
-                False keeps the cache for repeated testing and debugging.
-            store_training_samples: Store newly generated pooled annual samples in
-                GEB. Reused samples from the default table are not rewritten.
-            reuse_training_samples: Load a previously written sample table and skip
-                all HRL/AlphaEarth training-sample downloads and extraction.
-            training_samples_table_name: Key in ``self.table`` used when reusing
-                samples without an explicit path.
-            training_samples_path: Optional explicit Parquet path. When supplied, it
-                takes precedence over ``training_samples_table_name``.
-            evaluate_postprocessed_accuracy: Generate leakage-safe full-tile
-                validation/test predictions, apply the complete enabled HRL-style
-                post-processing chain, sample the final maps at the held-out sample
-                locations, and report final-map accuracy alongside raw rolling-origin
-                accuracy.
-            postprocessed_evaluation_output_root: Optional directory for temporary
-                held-out-year CTY/CPSCT/confidence rasters. The observed HRL folders
-                are never overwritten.
-            cleanup_postprocessed_evaluation_outputs: Remove temporary held-out-year
-                rasters after their accuracy statistics have been sampled.
-            max_alphaearth_files_for_postprocessed_evaluation: Optional safety limit
-                for AlphaEarth COGs selected across held-out evaluation years.
-            model_output_path: Optional joblib path for the final fitted model bundle.
-            overwrite_prediction_files: Replace existing generated HRL tiles.
+            hrl_raster_chunks: Native HRL read chunks.
+            max_alphaearth_files_for_sampling: Optional training-download safety limit.
+            max_alphaearth_files_for_prediction: Optional prediction-download safety limit.
+            alphaearth_max_parallel_downloads: Optional simultaneous-download override.
+            cleanup_alphaearth_downloads: Remove downloaded COGs after use.
+            store_training_samples: Store newly generated pooled samples.
+            reuse_training_samples: Reuse a prior sample table and skip sampling.
+            training_samples_table_name: ``self.table`` key for reusable samples.
+            training_samples_path: Optional explicit reusable Parquet path.
+            evaluate_postprocessed_accuracy: Evaluate leakage-safe final CTY maps.
+            postprocessed_evaluation_output_root: Temporary evaluation-output directory.
+            cleanup_postprocessed_evaluation_outputs: Remove evaluation rasters afterwards.
+            max_alphaearth_files_for_postprocessed_evaluation: Evaluation download limit.
+            model_output_path: Optional joblib output for the final model bundle.
+            overwrite_prediction_files: Replace existing generated CTY tiles.
 
         Raises:
-            ValueError: If years, regions, samples, templates, or model settings are
-                invalid.
+            ValueError: If years, samples, regions, templates, or settings are invalid.
         """
         hrl_years = tuple(int(year) for year in hrl_years)
         if len(hrl_years) < 3:
             raise ValueError("At least three HRL observation years are required.")
         if tuple(sorted(set(hrl_years))) != hrl_years:
             raise ValueError("hrl_years must be unique and strictly increasing.")
+
         template_year = hrl_years[-1] if template_year is None else int(template_year)
         if template_year not in hrl_years:
             raise ValueError("template_year must be included in hrl_years.")
+
         prediction_years = tuple(int(year) for year in prediction_years)
         if not prediction_years:
             raise ValueError("prediction_years must contain at least one year.")
         if tuple(sorted(set(prediction_years))) != prediction_years:
             raise ValueError("prediction_years must be unique and strictly increasing.")
-        overlapping_prediction_years = set(prediction_years).intersection(hrl_years)
-        if overlapping_prediction_years:
+        overlap = set(prediction_years).intersection(hrl_years)
+        if overlap:
             raise ValueError(
-                "prediction_years must not overlap the observed HRL years. "
-                f"Overlap: {sorted(overlapping_prediction_years)}."
+                "prediction_years must not overlap observed HRL years. "
+                f"Overlap: {sorted(overlap)}."
             )
+
         cropland_mask_years = (
             hrl_years
             if cropland_mask_years is None
@@ -2948,20 +1868,30 @@ class Europe(GEBModel):
             raise ValueError(
                 "cropland_mask_years must be unique and strictly increasing."
             )
-        unknown_cropland_mask_years = set(cropland_mask_years) - set(hrl_years)
-        if unknown_cropland_mask_years:
+        unknown_mask_years = set(cropland_mask_years) - set(hrl_years)
+        if unknown_mask_years:
             raise ValueError(
                 "cropland_mask_years must be selected from hrl_years. "
-                f"Unknown years: {sorted(unknown_cropland_mask_years)}."
+                f"Unknown years: {sorted(unknown_mask_years)}."
             )
+
         for split_year, split_name in (
             (validation_year, "validation_year"),
             (test_year, "test_year"),
         ):
             if split_year is not None and int(split_year) not in hrl_years:
                 raise ValueError(f"{split_name} must be one of {hrl_years}.")
+        if validation_year is not None:
+            validation_year = int(validation_year)
+        if test_year is not None:
+            test_year = int(test_year)
         if validation_year is not None and validation_year == test_year:
             raise ValueError("validation_year and test_year must differ.")
+
+        if samples_per_cty_class_per_region_year < 1:
+            raise ValueError(
+                "samples_per_cty_class_per_region_year must be at least one."
+            )
         if sample_chunk_rows < 1:
             raise ValueError("sample_chunk_rows must be at least one.")
         if sample_stride_pixels < 1:
@@ -2993,9 +1923,56 @@ class Europe(GEBModel):
             raise ValueError("cty_mmu_padding_pixels cannot be negative.")
         if cty_mmu_maximum_iterations < 1:
             raise ValueError("cty_mmu_maximum_iterations must be at least one.")
-        if sample_weight_mode not in {"none", "class_region_year_balanced"}:
+        if sample_weight_mode not in {
+            "none",
+            "class_balanced",
+            "class_region_year_balanced",
+        }:
             raise ValueError(
-                "sample_weight_mode must be 'none' or 'class_region_year_balanced'."
+                "sample_weight_mode must be 'none', 'class_balanced', or "
+                "'class_region_year_balanced'."
+            )
+        if classifier_structure not in {"flat", "hierarchical"}:
+            raise ValueError("classifier_structure must be 'flat' or 'hierarchical'.")
+        if residual_class_mode not in {"learned", "uncertainty"}:
+            raise ValueError("residual_class_mode must be 'learned' or 'uncertainty'.")
+        if (
+            classifier_structure == "hierarchical"
+            and residual_class_mode != "uncertainty"
+        ):
+            raise ValueError(
+                "classifier_structure='hierarchical' requires "
+                "residual_class_mode='uncertainty'."
+            )
+        supported_model_types = {
+            "logistic_regression",
+            "random_forest",
+            "extra_trees",
+            "hist_gradient_boosting",
+        }
+        model_type = str(model_type).strip().lower()
+        if model_type not in supported_model_types:
+            raise ValueError(
+                f"model_type must be one of {sorted(supported_model_types)}, "
+                f"found {model_type!r}."
+            )
+        if model_parameters is not None and not isinstance(model_parameters, dict):
+            raise TypeError("model_parameters must be a dictionary or None.")
+        if class_probability_thresholds is not None:
+            for class_code, threshold in class_probability_thresholds.items():
+                if int(class_code) not in HRL_CTY_CLASS_CODES:
+                    raise ValueError(f"Unknown CTY threshold class: {class_code}.")
+                if not 0.0 < float(threshold) <= 1.0:
+                    raise ValueError(
+                        f"Threshold for CTY {class_code} must lie in (0, 1]."
+                    )
+        if not class_threshold_grid or any(
+            not 0.0 < float(value) <= 1.0 for value in class_threshold_grid
+        ):
+            raise ValueError("class_threshold_grid values must lie in (0, 1].")
+        if class_threshold_min_reference_samples < 1:
+            raise ValueError(
+                "class_threshold_min_reference_samples must be at least one."
             )
         if prediction_chunk_size < 16:
             raise ValueError("prediction_chunk_size must be at least 16.")
@@ -3052,7 +2029,7 @@ class Europe(GEBModel):
             subgrid_slope.name = "slope_gradient"
             self.logger.info(
                 "Including elevation and slope with all 64 AlphaEarth embedding "
-                "dimensions in training and prediction."
+                "dimensions in CTY training and prediction."
             )
 
         study_bounds = tuple(float(value) for value in active_geometry.bounds)
@@ -3064,6 +2041,7 @@ class Europe(GEBModel):
             if hrl_raster_chunks is None
             else hrl_raster_chunks
         )
+
         alphaearth_adapter = self.data_catalog.fetch("alphaearth")
         if alphaearth_max_parallel_downloads is not None:
             alphaearth_adapter.max_parallel_downloads = int(
@@ -3075,15 +2053,13 @@ class Europe(GEBModel):
         )
 
         template_cty_tile_ids: set[str] = set()
-        template_cpsct_tile_ids: set[str] = set()
 
-        def read_hrl_year(
+        def read_cty_year(
             *,
             year: int,
             region_bounds: tuple[float, float, float, float],
-            region_id: int,
-        ) -> tuple[xr.DataArray, xr.DataArray]:
-            """Read and align one annual CTY/CPSCT observation."""
+        ) -> xr.DataArray:
+            """Read one annual native-grid HRL CTY observation."""
             crop_types_adapter = self.data_catalog.fetch(
                 f"hrl_crop_types_{year}",
                 bounds=region_bounds,
@@ -3096,36 +2072,12 @@ class Europe(GEBModel):
                 normalize_nodata=False,
                 chunks=raster_chunks,
             )
-            secondary_adapter = self.data_catalog.fetch(
-                f"hrl_secondary_crop_{year}",
-                bounds=region_bounds,
-                year=year,
-            )
-            secondary_crop = secondary_adapter.read(
-                bounds=region_bounds,
-                year=year,
-                dst_crs=None,
-                normalize_nodata=False,
-                chunks=raster_chunks,
-            )
-
             if year == template_year:
                 template_cty_tile_ids.update(
                     str(tile_id)
                     for tile_id in getattr(crop_types_adapter, "tile_ids", ())
                 )
-                template_cpsct_tile_ids.update(
-                    str(tile_id)
-                    for tile_id in getattr(secondary_adapter, "tile_ids", ())
-                )
-
-            return _align_hrl_rasters_to_common_grid(
-                crop_types,
-                secondary_crop,
-                region_id=region_id,
-                year=year,
-                logger=self.logger,
-            )
+            return crop_types
 
         reused_default_table = False
         if reuse_training_samples:
@@ -3154,31 +2106,19 @@ class Europe(GEBModel):
                 active_region_ids=np.unique(region_id_values[active_subgrid_mask]),
             )
             self.logger.info(
-                "Reusing %s stored annual AlphaEarth-HRL samples from %s. "
+                "Reusing %s stored annual AlphaEarth-HRL CTY samples from %s. "
                 "Skipping all training COG downloads and regional sampling.",
                 len(samples),
                 source_description,
             )
 
-            # Sampling normally populates template tile IDs as each region reads
-            # template_year. Prediction still needs those IDs, so collect them
-            # directly from the template adapters when sampling is skipped.
-            cty_template_fetch = self.data_catalog.fetch(
+            template_fetch = self.data_catalog.fetch(
                 f"hrl_crop_types_{template_year}",
                 bounds=study_bounds,
                 year=template_year,
             )
-            cpsct_template_fetch = self.data_catalog.fetch(
-                f"hrl_secondary_crop_{template_year}",
-                bounds=study_bounds,
-                year=template_year,
-            )
             template_cty_tile_ids.update(
-                str(tile_id) for tile_id in getattr(cty_template_fetch, "tile_ids", ())
-            )
-            template_cpsct_tile_ids.update(
-                str(tile_id)
-                for tile_id in getattr(cpsct_template_fetch, "tile_ids", ())
+                str(tile_id) for tile_id in getattr(template_fetch, "tile_ids", ())
             )
         else:
             sample_tables: list[pd.DataFrame] = []
@@ -3186,7 +2126,7 @@ class Europe(GEBModel):
             try:
                 self.logger.info(
                     "Downloading all AlphaEarth training COGs for years %s and full "
-                    "study-area bounds %s before regional sampling.",
+                    "study-area bounds %s before regional CTY sampling.",
                     hrl_years,
                     study_bounds,
                 )
@@ -3201,14 +2141,6 @@ class Europe(GEBModel):
                         "No AlphaEarth training COGs were selected for the active "
                         "study-area bounds."
                     )
-
-                self.logger.info(
-                    "Creating independent annual AlphaEarth-HRL samples for %s "
-                    "study-area regions and years %s using %s shared downloaded COGs.",
-                    len(regions_wgs84),
-                    hrl_years,
-                    len(selected_training_cogs),
-                )
 
                 for region_index, (_, region) in enumerate(regions_wgs84.iterrows()):
                     region_id = int(region[region_id_column])
@@ -3227,10 +2159,9 @@ class Europe(GEBModel):
 
                     for year in hrl_years:
                         try:
-                            crop_types, secondary_crop = read_hrl_year(
+                            crop_types = read_cty_year(
                                 year=year,
                                 region_bounds=region_bounds,
-                                region_id=region_id,
                             )
                             region_year_cogs = select_alphaearth_cogs_for_geometry(
                                 selected_training_cogs,
@@ -3239,14 +2170,13 @@ class Europe(GEBModel):
                             )
                             if region_year_cogs.empty:
                                 raise ValueError(
-                                    f"No downloaded AlphaEarth COGs intersect region "
+                                    "No downloaded AlphaEarth COGs intersect region "
                                     f"{region_id}, year {year}."
                                 )
 
                             region_year_samples = (
                                 create_alphaearth_crop_training_samples(
                                     crop_types,
-                                    secondary_crop,
                                     region_year_cogs,
                                     region_geometry,
                                     year=year,
@@ -3254,9 +2184,6 @@ class Europe(GEBModel):
                                     country_iso3=country_iso3,
                                     samples_per_cty_class=(
                                         samples_per_cty_class_per_region_year
-                                    ),
-                                    samples_per_cpsct_class=(
-                                        samples_per_cpsct_class_per_region_year
                                     ),
                                     sample_stride_pixels=sample_stride_pixels,
                                     rare_class_sample_stride_pixels=(
@@ -3282,15 +2209,6 @@ class Europe(GEBModel):
                                 )
                             )
                             sample_tables.append(region_year_samples)
-                            self.logger.info(
-                                "Created %s annual AlphaEarth-HRL samples for "
-                                "region %s (%s), year %s from %s cached COG(s).",
-                                len(region_year_samples),
-                                region_id,
-                                country_iso3,
-                                year,
-                                len(region_year_cogs),
-                            )
                         except WEkEONoCoverageError as error:
                             if country_iso3.upper() in _HRL_CROPLANDS_EEA38_ISO3:
                                 raise
@@ -3310,29 +2228,45 @@ class Europe(GEBModel):
                         logger=self.logger,
                     )
                     self.logger.info(
-                        "Removed %s AlphaEarth training COGs after all regional "
-                        "sampling passes completed.",
+                        "Removed %s AlphaEarth training COGs after regional sampling.",
                         removed,
                     )
                 elif selected_training_cogs is not None:
                     self.logger.info(
-                        "Retaining %s AlphaEarth training COGs in the local cache "
-                        "for reuse because cleanup_alphaearth_downloads=False.",
+                        "Retaining %s AlphaEarth training COGs in the local cache.",
                         len(selected_training_cogs),
                     )
 
             if not sample_tables:
-                raise ValueError("No annual AlphaEarth-HRL samples were created.")
+                raise ValueError("No annual AlphaEarth-HRL CTY samples were created.")
             samples = pd.concat(sample_tables, ignore_index=True)
+
         if evaluate_postprocessed_accuracy and not (
             {"source_x", "source_y"}.issubset(samples.columns)
             or {"longitude", "latitude"}.issubset(samples.columns)
         ):
             raise ValueError(
-                "Post-processed accuracy evaluation requires stored sample "
-                "coordinates. Recreate samples with the current workflow or reuse "
-                "a table containing source_x/source_y or longitude/latitude."
+                "Post-processed accuracy evaluation requires sample coordinates."
             )
+
+        embedding_diagnostics = alphaearth_embedding_diagnostics(samples)
+        self.set_table(
+            pd.DataFrame([embedding_diagnostics]),
+            name="machine_learning/crop_classification/embedding_diagnostics",
+        )
+        self.logger.info(
+            "AlphaEarth embedding check: dequantized range=[%.4f, %.4f], "
+            "median L2 norm before optional normalization=%.4f "
+            "(p05=%.4f, p95=%.4f), non-finite rows=%s. "
+            "L2 normalization during fitting/inference=%s.",
+            embedding_diagnostics["minimum_value"],
+            embedding_diagnostics["maximum_value"],
+            embedding_diagnostics["median_l2_norm_before_normalization"],
+            embedding_diagnostics["p05_l2_norm_before_normalization"],
+            embedding_diagnostics["p95_l2_norm_before_normalization"],
+            embedding_diagnostics["nonfinite_rows"],
+            normalize_embeddings,
+        )
 
         samples["split"] = "train"
         if validation_year is not None:
@@ -3345,11 +2279,30 @@ class Europe(GEBModel):
                 "The configured temporal split leaves no training samples."
             )
 
+        split_counts = samples.groupby("split", sort=False).size().to_dict()
+        represented_regions = (
+            int(samples["region_id"].nunique()) if "region_id" in samples.columns else 0
+        )
+        represented_countries = (
+            int(samples["country_iso3"].nunique())
+            if "country_iso3" in samples.columns
+            else 0
+        )
+        self.logger.info(
+            "CTY sample table ready: %s samples across %s region(s), %s "
+            "country/countries and years %s. Split counts: train=%s, "
+            "validation=%s, test=%s.",
+            f"{len(samples):,}",
+            represented_regions,
+            represented_countries,
+            tuple(sorted(int(year) for year in samples["year"].unique())),
+            f"{int(split_counts.get('train', 0)):,}",
+            f"{int(split_counts.get('validation', 0)):,}",
+            f"{int(split_counts.get('test', 0)):,}",
+        )
+
         if store_training_samples and not reused_default_table:
-            self.set_table(
-                samples,
-                name=training_samples_table_name,
-            )
+            self.set_table(samples, name=training_samples_table_name)
         elif store_training_samples and reused_default_table:
             self.logger.info(
                 "Reused stored sample table %s without rewriting it.",
@@ -3360,14 +2313,19 @@ class Europe(GEBModel):
             training_samples,
             include_coordinates=include_coordinates,
             include_topography=include_topography,
+            normalize_embeddings=normalize_embeddings,
+            classifier_structure=classifier_structure,
+            residual_class_mode=residual_class_mode,
             model_type=model_type,
+            model_parameters=model_parameters,
             random_seed=random_seed,
-            n_estimators=n_estimators,
-            max_depth=max_depth,
-            min_samples_leaf=min_samples_leaf,
-            max_features=max_features,
             sample_weight_mode=sample_weight_mode,
             n_jobs=n_jobs,
+            unclassified_probability_threshold=unclassified_probability_threshold,
+            class_probability_thresholds=class_probability_thresholds,
+            calibrate_class_thresholds=calibrate_class_thresholds,
+            class_threshold_grid=class_threshold_grid,
+            calibration_min_reference_samples=(class_threshold_min_reference_samples),
         )
         metric_tables: list[pd.DataFrame] = []
         confusion_tables: list[pd.DataFrame] = []
@@ -3385,36 +2343,52 @@ class Europe(GEBModel):
 
         if metric_tables:
             metrics = pd.concat(metric_tables, ignore_index=True)
+            confusion = pd.concat(confusion_tables, ignore_index=True)
             self.set_table(
                 metrics,
                 name="machine_learning/crop_classification/metrics",
             )
-            accuracy_report = format_alphaearth_accuracy_report(
-                metrics,
-                pd.concat(confusion_tables, ignore_index=True),
+            self.set_table(
+                confusion,
+                name="machine_learning/crop_classification/confusion_matrix",
+            )
+            raw_training_years = tuple(
+                sorted(int(year) for year in training_samples["year"].unique())
+            )
+            raw_accuracy_heading = (
+                "ACCURACY STAGE 1/2 — RAW FIXED-HOLDOUT CLASSIFIER"
+                if evaluate_postprocessed_accuracy
+                else "ACCURACY — RAW FIXED-HOLDOUT CLASSIFIER"
             )
             self.logger.info(
-                "Annual AlphaEarth crop-classification accuracy assessment:\n%s",
-                accuracy_report,
-            )
-        if confusion_tables:
-            self.set_table(
-                pd.concat(confusion_tables, ignore_index=True),
-                name="machine_learning/crop_classification/confusion_matrix",
+                "%s\n"
+                "Purpose: model-development diagnostic before any spatial "
+                "post-processing. One classifier is trained on years %s; "
+                "validation=%s and test=%s are both held out.\n%s",
+                raw_accuracy_heading,
+                raw_training_years,
+                validation_year,
+                test_year,
+                format_alphaearth_accuracy_report(metrics, confusion),
             )
 
         final_models = fit_alphaearth_crop_models(
             samples,
             include_coordinates=include_coordinates,
             include_topography=include_topography,
+            normalize_embeddings=normalize_embeddings,
+            classifier_structure=classifier_structure,
+            residual_class_mode=residual_class_mode,
             model_type=model_type,
+            model_parameters=model_parameters,
             random_seed=random_seed,
-            n_estimators=n_estimators,
-            max_depth=max_depth,
-            min_samples_leaf=min_samples_leaf,
-            max_features=max_features,
             sample_weight_mode=sample_weight_mode,
             n_jobs=n_jobs,
+            unclassified_probability_threshold=unclassified_probability_threshold,
+            class_probability_thresholds=class_probability_thresholds,
+            calibrate_class_thresholds=calibrate_class_thresholds,
+            class_threshold_grid=class_threshold_grid,
+            calibration_min_reference_samples=(class_threshold_min_reference_samples),
         )
         feature_importance = alphaearth_crop_feature_importance(final_models)
         if not feature_importance.empty:
@@ -3422,27 +2396,47 @@ class Europe(GEBModel):
                 feature_importance,
                 name="machine_learning/crop_classification/feature_importance",
             )
+        if final_models.class_probability_thresholds:
+            threshold_table = pd.DataFrame(
+                {
+                    "cty_class": list(
+                        sorted(final_models.class_probability_thresholds)
+                    ),
+                    "probability_threshold": [
+                        final_models.class_probability_thresholds[class_code]
+                        for class_code in sorted(
+                            final_models.class_probability_thresholds
+                        )
+                    ],
+                }
+            )
+            self.set_table(
+                threshold_table,
+                name=(
+                    "machine_learning/crop_classification/class_probability_thresholds"
+                ),
+            )
+            self.logger.info(
+                "Using calibrated/manual CTY decision thresholds for %s class(es).",
+                len(threshold_table),
+            )
         if model_output_path is not None:
             saved_model_path = save_alphaearth_crop_models(
                 final_models,
                 model_output_path,
             )
             self.logger.info(
-                "Saved final AlphaEarth crop models to %s.", saved_model_path
+                "Saved final AlphaEarth CTY model to %s.", saved_model_path
             )
 
-        if not template_cty_tile_ids or not template_cpsct_tile_ids:
+        if not template_cty_tile_ids:
             raise ValueError(
-                f"No {template_year} HRL CTY/CPSCT template tile IDs were collected."
+                f"No {template_year} HRL CTY template tile IDs were collected."
             )
 
         cty_template_adapter = self.data_catalog.catalog[
             f"hrl_crop_types_{template_year}"
         ]["adapter"]
-        cpsct_template_adapter = self.data_catalog.catalog[
-            f"hrl_secondary_crop_{template_year}"
-        ]["adapter"]
-
         cty_templates_by_code = {
             hrl_tile_code_from_name(tile_id): find_hrl_tile_path(
                 cty_template_adapter.root,
@@ -3451,22 +2445,6 @@ class Europe(GEBModel):
             )
             for tile_id in template_cty_tile_ids
         }
-        cpsct_templates_by_code = {
-            hrl_tile_code_from_name(tile_id): find_hrl_tile_path(
-                cpsct_template_adapter.root,
-                year=template_year,
-                tile_id=tile_id,
-            )
-            for tile_id in template_cpsct_tile_ids
-        }
-        missing_cpsct_templates = set(cty_templates_by_code) - set(
-            cpsct_templates_by_code
-        )
-        if missing_cpsct_templates:
-            raise ValueError(
-                "Missing CPSCT templates for HRL tile codes: "
-                f"{sorted(missing_cpsct_templates)}"
-            )
 
         historical_cty_paths_by_code: dict[str, tuple[Path, ...]] = {}
         for tile_code, template_path in cty_templates_by_code.items():
@@ -3498,6 +2476,12 @@ class Europe(GEBModel):
             confidence_root = Path(cty_confidence_output_root)
 
         if evaluate_postprocessed_accuracy:
+            self.logger.info(
+                "ACCURACY STAGE 2/2 — LEAKAGE-SAFE FINAL MAPS. "
+                "Each held-out year will be refitted using only earlier years, "
+                "predicted as complete tiles, post-processed, and then compared "
+                "with the held-out HRL reference."
+            )
             evaluation_year_to_split = {
                 int(year): split_name
                 for year, split_name in (
@@ -3525,11 +2509,6 @@ class Europe(GEBModel):
             postprocessed_change_rows: list[dict[str, int | str]] = []
             selected_evaluation_cogs: gpd.GeoDataFrame | None = None
             try:
-                self.logger.info(
-                    "Downloading/reusing AlphaEarth COGs for leakage-safe "
-                    "post-processed evaluation years %s.",
-                    evaluation_years,
-                )
                 selected_evaluation_cogs = alphaearth_adapter.read(
                     years=list(evaluation_years),
                     bounds=study_bounds,
@@ -3538,8 +2517,7 @@ class Europe(GEBModel):
                 )
                 if selected_evaluation_cogs.empty:
                     raise ValueError(
-                        "No AlphaEarth coverage selected for post-processed "
-                        f"evaluation years {evaluation_years}."
+                        "No AlphaEarth coverage selected for post-processed evaluation."
                     )
 
                 for evaluation_year in evaluation_years:
@@ -3566,37 +2544,31 @@ class Europe(GEBModel):
                         rolling_training_samples,
                         include_coordinates=include_coordinates,
                         include_topography=include_topography,
+                        normalize_embeddings=normalize_embeddings,
+                        classifier_structure=classifier_structure,
+                        residual_class_mode=residual_class_mode,
                         model_type=model_type,
+                        model_parameters=model_parameters,
                         random_seed=random_seed,
-                        n_estimators=n_estimators,
-                        max_depth=max_depth,
-                        min_samples_leaf=min_samples_leaf,
-                        max_features=max_features,
                         sample_weight_mode=sample_weight_mode,
                         n_jobs=n_jobs,
+                        unclassified_probability_threshold=(
+                            unclassified_probability_threshold
+                        ),
+                        class_probability_thresholds=class_probability_thresholds,
+                        calibrate_class_thresholds=calibrate_class_thresholds,
+                        class_threshold_grid=class_threshold_grid,
+                        calibration_min_reference_samples=(
+                            class_threshold_min_reference_samples
+                        ),
                     )
-                    raw_features = held_out_samples.loc[
-                        :, rolling_models.feature_names
-                    ].to_numpy(dtype=np.float32)
-                    raw_cty = np.asarray(
-                        rolling_models.cty_model.predict(raw_features),
-                        dtype=np.int32,
+                    raw_cty, _ = predict_alphaearth_crop_models(
+                        rolling_models,
+                        held_out_samples,
                     )
-                    raw_cpsct = np.zeros(len(held_out_samples), dtype=np.int32)
-                    observed_cropland = (
-                        held_out_samples["cty_label"].to_numpy(dtype=np.int32) > 0
-                    )
-                    if observed_cropland.any():
-                        raw_cpsct[observed_cropland] = np.asarray(
-                            rolling_models.cpsct_model.predict(
-                                raw_features[observed_cropland]
-                            ),
-                            dtype=np.int32,
-                        )
                     raw_metrics, raw_confusion = evaluate_alphaearth_crop_predictions(
                         held_out_samples,
                         raw_cty,
-                        raw_cpsct,
                         split_name=split_name,
                     )
                     raw_metrics.insert(0, "assessment_stage", "raw_rolling_origin")
@@ -3607,30 +2579,23 @@ class Europe(GEBModel):
                     )
                     raw_metrics["evaluation_year"] = evaluation_year
                     raw_confusion["evaluation_year"] = evaluation_year
-                    raw_metrics["training_years"] = ",".join(
-                        str(year) for year in prior_years
-                    )
-                    raw_confusion["training_years"] = ",".join(
-                        str(year) for year in prior_years
-                    )
+                    training_year_text = ",".join(str(year) for year in prior_years)
+                    raw_metrics["training_years"] = training_year_text
+                    raw_confusion["training_years"] = training_year_text
                     postprocessed_metric_tables.append(raw_metrics)
                     postprocessed_confusion_tables.append(raw_confusion)
 
                     split_root = evaluation_root / split_name / str(evaluation_year)
                     cty_directory = split_root / "cty"
-                    cpsct_directory = split_root / "cpsct"
                     confidence_directory = split_root / "ctycl"
                     cty_directory.mkdir(parents=True, exist_ok=True)
-                    cpsct_directory.mkdir(parents=True, exist_ok=True)
                     if write_cty_confidence:
                         confidence_directory.mkdir(parents=True, exist_ok=True)
 
                     evaluation_cty_paths: dict[str, Path] = {}
-                    evaluation_cpsct_paths: dict[str, Path] = {}
                     evaluation_confidence_paths: dict[str, Path] = {}
                     for tile_code in sorted(cty_templates_by_code):
                         cty_template_path = cty_templates_by_code[tile_code]
-                        cpsct_template_path = cpsct_templates_by_code[tile_code]
                         with rasterio.open(cty_template_path) as template_source:
                             tile_bounds_wgs84 = transform_bounds(
                                 template_source.crs,
@@ -3658,11 +2623,6 @@ class Europe(GEBModel):
                         cty_path = cty_directory / build_hrl_prediction_tile_name(
                             cty_template_path.name,
                             product_code="CTY",
-                            prediction_year=evaluation_year,
-                        )
-                        cpsct_path = cpsct_directory / build_hrl_prediction_tile_name(
-                            cpsct_template_path.name,
-                            product_code="CPSCT",
                             prediction_year=evaluation_year,
                         )
                         confidence_path = (
@@ -3695,11 +2655,9 @@ class Europe(GEBModel):
                         predict_alphaearth_crop_tile_to_hrl_geotiffs(
                             rolling_models,
                             cty_template_path,
-                            cpsct_template_path,
                             tile_cogs,
                             prediction_geometry,
                             cty_path,
-                            cpsct_path,
                             chunk_size=prediction_chunk_size,
                             overwrite=True,
                             elevation=subgrid_elevation,
@@ -3712,14 +2670,12 @@ class Europe(GEBModel):
                                 historical_cropland_mask_dilation_pixels
                             ),
                             smooth_cty_probabilities=smooth_cty_probabilities,
-                            smooth_cpsct_probabilities=smooth_cpsct_probabilities,
                             unclassified_probability_threshold=(
                                 unclassified_probability_threshold
                             ),
                             cty_confidence_output_path=confidence_path,
                         )
                         evaluation_cty_paths[tile_code] = cty_path
-                        evaluation_cpsct_paths[tile_code] = cpsct_path
                         if confidence_path is not None:
                             evaluation_confidence_paths[tile_code] = confidence_path
 
@@ -3731,25 +2687,27 @@ class Europe(GEBModel):
                                 ]
                                 for year in prior_years
                             )
-                            temporal_stats = apply_alphaearth_permanent_crop_temporal_consistency(
-                                temporal_history,
-                                {evaluation_year: cty_path},
-                                predicted_confidence_paths=(
-                                    {
-                                        evaluation_year: evaluation_confidence_paths[
-                                            tile_code
-                                        ]
-                                    }
-                                    if tile_code in evaluation_confidence_paths
-                                    else None
-                                ),
-                                chunk_size=max(prediction_chunk_size, 512),
+                            temporal_stats = (
+                                apply_alphaearth_permanent_crop_temporal_consistency(
+                                    temporal_history,
+                                    {evaluation_year: cty_path},
+                                    predicted_confidence_paths=(
+                                        {
+                                            evaluation_year: (
+                                                evaluation_confidence_paths[tile_code]
+                                            )
+                                        }
+                                        if tile_code in evaluation_confidence_paths
+                                        else None
+                                    ),
+                                    chunk_size=max(prediction_chunk_size, 512),
+                                )
                             )
                             postprocessed_change_rows.append(
                                 {
                                     "split": split_name,
                                     "evaluation_year": evaluation_year,
-                                    "stage": "permanent_crop_temporal_consistency",
+                                    "stage": ("permanent_crop_temporal_consistency"),
                                     "tile": tile_code,
                                     **temporal_stats,
                                 }
@@ -3786,32 +2744,15 @@ class Europe(GEBModel):
                                     }
                                 )
 
-                    for tile_code, cty_path in evaluation_cty_paths.items():
-                        changed = enforce_cpsct_annual_cropland_mask(
-                            cty_path,
-                            evaluation_cpsct_paths[tile_code],
-                        )
-                        postprocessed_change_rows.append(
-                            {
-                                "split": split_name,
-                                "evaluation_year": evaluation_year,
-                                "stage": "cpsct_annual_cropland_mask",
-                                "tile": tile_code,
-                                "changed_pixels": changed,
-                            }
-                        )
-
-                    final_cty, final_cpsct = sample_alphaearth_crop_prediction_tiles(
+                    final_cty = sample_alphaearth_crop_prediction_tiles(
                         held_out_samples,
                         evaluation_cty_paths,
-                        evaluation_cpsct_paths,
                         sample_coordinates_crs=sample_coordinates_crs,
                     )
                     final_metrics, final_confusion = (
                         evaluate_alphaearth_crop_predictions(
                             held_out_samples,
                             final_cty,
-                            final_cpsct,
                             split_name=split_name,
                         )
                     )
@@ -3827,54 +2768,27 @@ class Europe(GEBModel):
                     )
                     final_metrics["evaluation_year"] = evaluation_year
                     final_confusion["evaluation_year"] = evaluation_year
-                    final_metrics["training_years"] = ",".join(
-                        str(year) for year in prior_years
-                    )
-                    final_confusion["training_years"] = ",".join(
-                        str(year) for year in prior_years
-                    )
+                    final_metrics["training_years"] = training_year_text
+                    final_confusion["training_years"] = training_year_text
                     postprocessed_metric_tables.append(final_metrics)
                     postprocessed_confusion_tables.append(final_confusion)
 
                     valid_final_cty = np.isin(final_cty, HRL_CTY_CLASS_CODES)
-                    valid_final_cpsct = np.isin(
-                        final_cpsct,
-                        HRL_CPSCT_CLASS_CODES,
-                    )
-                    postprocessed_change_rows.extend(
-                        [
-                            {
-                                "split": split_name,
-                                "evaluation_year": evaluation_year,
-                                "stage": "sample_level_comparison",
-                                "target": "CTY",
-                                "samples": len(held_out_samples),
-                                "valid_final_predictions": int(valid_final_cty.sum()),
-                                "changed_predictions": int(
-                                    (valid_final_cty & (raw_cty != final_cty)).sum()
-                                ),
-                            },
-                            {
-                                "split": split_name,
-                                "evaluation_year": evaluation_year,
-                                "stage": "sample_level_comparison",
-                                "target": "CPSCT",
-                                "samples": int(observed_cropland.sum()),
-                                "valid_final_predictions": int(
-                                    (observed_cropland & valid_final_cpsct).sum()
-                                ),
-                                "changed_predictions": int(
-                                    (
-                                        observed_cropland
-                                        & valid_final_cpsct
-                                        & (raw_cpsct != final_cpsct)
-                                    ).sum()
-                                ),
-                            },
-                        ]
+                    postprocessed_change_rows.append(
+                        {
+                            "split": split_name,
+                            "evaluation_year": evaluation_year,
+                            "stage": "sample_level_comparison",
+                            "target": "CTY",
+                            "samples": len(held_out_samples),
+                            "valid_final_predictions": int(valid_final_cty.sum()),
+                            "changed_predictions": int(
+                                (valid_final_cty & (raw_cty != final_cty)).sum()
+                            ),
+                        }
                     )
                     self.logger.info(
-                        "Completed leakage-safe %s final-map evaluation for %s "
+                        "Completed leakage-safe %s final CTY-map evaluation for %s "
                         "using training years %s.",
                         split_name,
                         evaluation_year,
@@ -3893,8 +2807,7 @@ class Europe(GEBModel):
                         logger=self.logger,
                     )
                     self.logger.info(
-                        "Removed %s AlphaEarth COGs after post-processed "
-                        "validation/test evaluation.",
+                        "Removed %s AlphaEarth COGs after post-processed evaluation.",
                         removed,
                     )
 
@@ -3938,9 +2851,13 @@ class Europe(GEBModel):
                         "accuracy",
                         "balanced_accuracy",
                         "f_score",
+                        "macro_f_score_observed",
                         "kappa",
                         "reference_support",
                         "excluded_predictions",
+                        "observed_class_count",
+                        "configured_class_count",
+                        "predicted_only_class_count",
                     ):
                         comparison[f"raw_{metric_name}"] = raw_summary.loc[
                             common_index, metric_name
@@ -3952,6 +2869,7 @@ class Europe(GEBModel):
                             "accuracy",
                             "balanced_accuracy",
                             "f_score",
+                            "macro_f_score_observed",
                             "kappa",
                         }:
                             comparison[f"delta_{metric_name}"] = (
@@ -3965,31 +2883,14 @@ class Europe(GEBModel):
                             "postprocessed_accuracy_comparison"
                         ),
                     )
-                report_sections = []
-                for stage, title in (
-                    ("raw_rolling_origin", "RAW ROLLING-ORIGIN ACCURACY"),
-                    ("final_postprocessed", "FINAL POST-PROCESSED MAP ACCURACY"),
-                ):
-                    stage_metrics = postprocessed_metrics.loc[
-                        postprocessed_metrics["assessment_stage"] == stage
-                    ]
-                    stage_confusion = postprocessed_confusion.loc[
-                        postprocessed_confusion["assessment_stage"] == stage
-                    ]
-                    if not stage_metrics.empty:
-                        report_sections.extend(
-                            [
-                                title,
-                                format_alphaearth_accuracy_report(
-                                    stage_metrics,
-                                    stage_confusion,
-                                ),
-                            ]
-                        )
+
                 self.logger.info(
-                    "Leakage-safe AlphaEarth final-map accuracy assessment:\n%s",
-                    "\n\n".join(report_sections),
+                    "ACCURACY STAGE 2/2 — LEAKAGE-SAFE FINAL-MAP RESULTS AND CLASS TABLES\n%s",
+                    format_alphaearth_postprocessed_accuracy_report(
+                        postprocessed_metrics
+                    ),
                 )
+
             if postprocessed_change_rows:
                 self.set_table(
                     pd.DataFrame(postprocessed_change_rows),
@@ -4002,46 +2903,30 @@ class Europe(GEBModel):
         generated_cty_tile_ids: dict[int, list[str]] = {
             year: [] for year in prediction_years
         }
-        generated_cpsct_tile_ids: dict[int, list[str]] = {
-            year: [] for year in prediction_years
-        }
         generated_cty_paths: dict[int, dict[str, Path]] = {
-            year: {} for year in prediction_years
-        }
-        generated_cpsct_paths: dict[int, dict[str, Path]] = {
             year: {} for year in prediction_years
         }
         generated_confidence_paths: dict[int, dict[str, Path]] = {
             year: {} for year in prediction_years
         }
         prediction_tasks: list[
-            tuple[int, str, Path, Path, Path, Path, Path | None, BaseGeometry]
+            tuple[int, str, Path, Path, Path | None, BaseGeometry]
         ] = []
 
         for prediction_year in prediction_years:
             cty_output_directory = Path(cty_template_adapter.root) / str(
                 prediction_year
             )
-            cpsct_output_directory = Path(cpsct_template_adapter.root) / str(
-                prediction_year
-            )
             confidence_output_directory = confidence_root / str(prediction_year)
             cty_output_directory.mkdir(parents=True, exist_ok=True)
-            cpsct_output_directory.mkdir(parents=True, exist_ok=True)
             if write_cty_confidence:
                 confidence_output_directory.mkdir(parents=True, exist_ok=True)
 
             for tile_code in sorted(cty_templates_by_code):
                 cty_template_path = cty_templates_by_code[tile_code]
-                cpsct_template_path = cpsct_templates_by_code[tile_code]
                 cty_output_name = build_hrl_prediction_tile_name(
                     cty_template_path.name,
                     product_code="CTY",
-                    prediction_year=prediction_year,
-                )
-                cpsct_output_name = build_hrl_prediction_tile_name(
-                    cpsct_template_path.name,
-                    product_code="CPSCT",
                     prediction_year=prediction_year,
                 )
                 confidence_output_name = build_hrl_prediction_tile_name(
@@ -4050,35 +2935,23 @@ class Europe(GEBModel):
                     prediction_year=prediction_year,
                 )
                 cty_output_path = cty_output_directory / cty_output_name
-                cpsct_output_path = cpsct_output_directory / cpsct_output_name
                 confidence_output_path = (
                     confidence_output_directory / confidence_output_name
                     if write_cty_confidence
                     else None
                 )
 
-                required_outputs_exist = (
-                    cty_output_path.exists()
-                    and cpsct_output_path.exists()
-                    and (
-                        confidence_output_path is None
-                        or confidence_output_path.exists()
-                    )
+                required_outputs_exist = cty_output_path.exists() and (
+                    confidence_output_path is None or confidence_output_path.exists()
                 )
                 if not overwrite_prediction_files and required_outputs_exist:
                     self.logger.info(
-                        "Using existing generated HRL tiles for %s, year %s.",
+                        "Using existing generated CTY tile for %s, year %s.",
                         tile_code,
                         prediction_year,
                     )
                     generated_cty_tile_ids[prediction_year].append(cty_output_path.stem)
-                    generated_cpsct_tile_ids[prediction_year].append(
-                        cpsct_output_path.stem
-                    )
                     generated_cty_paths[prediction_year][tile_code] = cty_output_path
-                    generated_cpsct_paths[prediction_year][tile_code] = (
-                        cpsct_output_path
-                    )
                     if confidence_output_path is not None:
                         generated_confidence_paths[prediction_year][tile_code] = (
                             confidence_output_path
@@ -4092,8 +2965,9 @@ class Europe(GEBModel):
                         *template_source.bounds,
                         densify_pts=21,
                     )
-                tile_geometry = box(*tile_bounds_wgs84)
-                prediction_geometry = tile_geometry.intersection(active_geometry)
+                prediction_geometry = box(*tile_bounds_wgs84).intersection(
+                    active_geometry
+                )
                 if prediction_geometry.is_empty:
                     continue
 
@@ -4102,9 +2976,7 @@ class Europe(GEBModel):
                         prediction_year,
                         tile_code,
                         cty_template_path,
-                        cpsct_template_path,
                         cty_output_path,
-                        cpsct_output_path,
                         confidence_output_path,
                         prediction_geometry,
                     )
@@ -4118,8 +2990,7 @@ class Europe(GEBModel):
             try:
                 self.logger.info(
                     "Downloading all AlphaEarth prediction COGs for years %s and "
-                    "full study-area bounds %s before classifying %s HRL "
-                    "year-tile task(s).",
+                    "full study-area bounds %s before classifying %s CTY tile task(s).",
                     task_prediction_years,
                     study_bounds,
                     len(prediction_tasks),
@@ -4143,9 +3014,7 @@ class Europe(GEBModel):
                     prediction_year,
                     tile_code,
                     cty_template_path,
-                    cpsct_template_path,
                     cty_output_path,
-                    cpsct_output_path,
                     confidence_output_path,
                     prediction_geometry,
                 ) in prediction_tasks:
@@ -4156,7 +3025,7 @@ class Europe(GEBModel):
                     )
                     if tile_alphaearth_cogs.empty:
                         raise ValueError(
-                            f"No downloaded AlphaEarth COGs intersect HRL tile "
+                            "No downloaded AlphaEarth COGs intersect HRL tile "
                             f"{tile_code}, year {prediction_year}."
                         )
 
@@ -4167,11 +3036,9 @@ class Europe(GEBModel):
                     predict_alphaearth_crop_tile_to_hrl_geotiffs(
                         final_models,
                         cty_template_path,
-                        cpsct_template_path,
                         tile_alphaearth_cogs,
                         prediction_geometry,
                         cty_output_path,
-                        cpsct_output_path,
                         chunk_size=prediction_chunk_size,
                         overwrite=overwrite_prediction_files,
                         elevation=subgrid_elevation,
@@ -4182,27 +3049,20 @@ class Europe(GEBModel):
                             historical_cropland_mask_dilation_pixels
                         ),
                         smooth_cty_probabilities=smooth_cty_probabilities,
-                        smooth_cpsct_probabilities=smooth_cpsct_probabilities,
                         unclassified_probability_threshold=(
                             unclassified_probability_threshold
                         ),
                         cty_confidence_output_path=confidence_output_path,
                     )
                     generated_cty_tile_ids[prediction_year].append(cty_output_path.stem)
-                    generated_cpsct_tile_ids[prediction_year].append(
-                        cpsct_output_path.stem
-                    )
                     generated_cty_paths[prediction_year][tile_code] = cty_output_path
-                    generated_cpsct_paths[prediction_year][tile_code] = (
-                        cpsct_output_path
-                    )
                     if confidence_output_path is not None:
                         generated_confidence_paths[prediction_year][tile_code] = (
                             confidence_output_path
                         )
                     self.logger.info(
-                        "Wrote smoothed, historically masked HRL-compatible "
-                        "predictions for tile %s, year %s from %s cached COG(s).",
+                        "Wrote historically masked HRL-compatible CTY prediction "
+                        "for tile %s, year %s from %s cached COG(s).",
                         tile_code,
                         prediction_year,
                         len(tile_alphaearth_cogs),
@@ -4218,15 +3078,12 @@ class Europe(GEBModel):
                         logger=self.logger,
                     )
                     self.logger.info(
-                        "Removed %s AlphaEarth prediction COGs after all years "
-                        "and HRL prediction tiles completed.",
+                        "Removed %s AlphaEarth prediction COGs.",
                         removed,
                     )
                 elif selected_prediction_cogs is not None:
                     self.logger.info(
-                        "Retaining %s AlphaEarth prediction COGs in the local "
-                        "cache for reuse because "
-                        "cleanup_alphaearth_downloads=False.",
+                        "Retaining %s AlphaEarth prediction COGs in the local cache.",
                         len(selected_prediction_cogs),
                     )
 
@@ -4264,11 +3121,6 @@ class Europe(GEBModel):
                         "tile": tile_code,
                         **temporal_stats,
                     }
-                )
-                self.logger.info(
-                    "Applied permanent-crop temporal consistency to %s: %s.",
-                    tile_code,
-                    temporal_stats,
                 )
 
         if apply_cty_mmu_sieve:
@@ -4308,22 +3160,6 @@ class Europe(GEBModel):
                         int(sieve_results["changed_pixels"].sum()),
                     )
 
-        for prediction_year in prediction_years:
-            for tile_code, cty_path in generated_cty_paths[prediction_year].items():
-                cpsct_path = generated_cpsct_paths[prediction_year][tile_code]
-                changed = enforce_cpsct_annual_cropland_mask(
-                    cty_path,
-                    cpsct_path,
-                )
-                postprocessing_rows.append(
-                    {
-                        "stage": "cpsct_annual_cropland_mask",
-                        "year": prediction_year,
-                        "tile": tile_code,
-                        "changed_pixels": changed,
-                    }
-                )
-
         if postprocessing_rows:
             self.set_table(
                 pd.DataFrame(postprocessing_rows),
@@ -4332,99 +3168,23 @@ class Europe(GEBModel):
 
         for prediction_year in prediction_years:
             year_cty_ids = generated_cty_tile_ids[prediction_year]
-            year_cpsct_ids = generated_cpsct_tile_ids[prediction_year]
-            if not year_cty_ids or not year_cpsct_ids:
+            if not year_cty_ids:
                 raise ValueError(
-                    "No HRL-compatible CTY/CPSCT tiles were generated for "
-                    f"{prediction_year}."
+                    f"No HRL-compatible CTY tiles were generated for {prediction_year}."
                 )
 
-            for catalog_name, tile_ids in (
-                (f"hrl_crop_types_{prediction_year}", year_cty_ids),
-                (f"hrl_secondary_crop_{prediction_year}", year_cpsct_ids),
-            ):
-                if catalog_name in self.data_catalog.catalog:
-                    self.data_catalog.catalog[catalog_name][
-                        "adapter"
-                    ].tile_ids = tile_ids
+            catalog_name = f"hrl_crop_types_{prediction_year}"
+            if catalog_name in self.data_catalog.catalog:
+                self.data_catalog.catalog[catalog_name][
+                    "adapter"
+                ].tile_ids = year_cty_ids
 
             self.logger.info(
-                "Finished annual AlphaEarth classification for %s. Generated %s "
-                "CTY and %s CPSCT tiles in the standard HRL catalog folders.",
+                "Finished annual AlphaEarth CTY classification for %s. Generated "
+                "%s CTY tiles in the standard HRL catalog folder.",
                 prediction_year,
                 len(year_cty_ids),
-                len(year_cpsct_ids),
             )
-
-    @build_method(
-        depends_on=["setup_regions_and_land_use"],
-        required=False,
-    )
-    def setup_create_farms_from_HRL_exact_sequences(
-        self,
-        region_id_column: str = "region_id",
-        country_iso3_column: str = "ISO3",
-        size_class_boundaries: dict[str, tuple[int | float, int | float]] | None = None,
-        years: tuple[int, ...] = (2017, 2018, 2019, 2020, 2021, 2022, 2023),
-        random_seed: int = 42,
-        hrl_raster_chunks: dict[str, int] | None = None,
-        subgrid_chunk_size: int = 256,
-        minimum_cells_per_farm: float = 1.0,
-        exact_sequence_jump_candidate_sample: int = 1_024,
-        exact_sequence_distance_scale_m: float = 10_000.0,
-        rounding_temporal_persistence_weight: float = 0.15,
-        crop_area_diagnostics_top_n: int = 0,
-        crop_area_fit_warning_threshold_pct: float = 80.0,
-    ) -> None:
-        """Create farms whose cells share one exact observed crop sequence.
-
-        Native fractional crop areas are first rounded to full model cells by
-        year and crop category. The union of those rounded cells forms the static
-        agricultural domain. A complete multi-year sequence is then a hard
-        grouping constraint: a farmer can contain disconnected parcels, but all
-        its cells must carry exactly the same observed sequence. Lowder remains a
-        soft prior for the number and size of farms.
-
-        Args:
-            region_id_column: Column containing compact model-region IDs.
-            country_iso3_column: Column containing country ISO3 codes.
-            size_class_boundaries: Optional Lowder class boundaries in square
-                metres. Default boundaries are used when omitted.
-            years: Ordered HRL years included in each complete sequence.
-            random_seed: Base seed for target sizes and raster farm growth.
-            hrl_raster_chunks: Native HRL read chunks. Defaults to the module
-                chunk configuration.
-            subgrid_chunk_size: Destination-tile width and height in model cells.
-            minimum_cells_per_farm: Minimum Lowder target size in model cells.
-            exact_sequence_jump_candidate_sample: Same-sequence cells sampled
-                when a connected parcel is exhausted.
-            exact_sequence_distance_scale_m: Distance scale used to prefer nearby
-                disconnected parcels carrying the same sequence.
-            rounding_temporal_persistence_weight: Preference for retaining the
-                same active cells between consecutive years during rounding.
-            crop_area_diagnostics_top_n: Number of largest crop-area errors logged
-                per region and year; zero disables the detailed listing.
-            crop_area_fit_warning_threshold_pct: Combined-crop fit below which a
-                completed region is logged as a warning.
-
-        """
-        self._setup_create_farms_from_HRL(
-            region_id_column=region_id_column,
-            country_iso3_column=country_iso3_column,
-            size_class_boundaries=size_class_boundaries,
-            years=years,
-            random_seed=random_seed,
-            hrl_raster_chunks=hrl_raster_chunks,
-            subgrid_chunk_size=subgrid_chunk_size,
-            minimum_cells_per_farm=minimum_cells_per_farm,
-            workflow_settings=_ExactSequenceSettings(
-                jump_candidate_sample=exact_sequence_jump_candidate_sample,
-                distance_scale_m=exact_sequence_distance_scale_m,
-                temporal_persistence_weight=rounding_temporal_persistence_weight,
-            ),
-            crop_area_diagnostics_top_n=crop_area_diagnostics_top_n,
-            crop_area_fit_warning_threshold_pct=crop_area_fit_warning_threshold_pct,
-        )
 
     @build_method(
         depends_on=["setup_regions_and_land_use"],
@@ -4511,7 +3271,7 @@ class Europe(GEBModel):
                 farm count obtained by splitting large Lowder targets.
             crop_area_diagnostics_top_n: Number of largest crop-area errors logged
                 per region and year; zero disables the detailed listing.
-            crop_area_fit_warning_threshold_pct: Combined-crop fit below which a
+            crop_area_fit_warning_threshold_pct: CTY crop-area fit below which a
                 completed region is logged as a warning.
 
         """
@@ -4555,17 +3315,15 @@ class Europe(GEBModel):
         hrl_raster_chunks: dict[str, int] | None,
         subgrid_chunk_size: int,
         minimum_cells_per_farm: float,
-        workflow_settings: _LowderSequenceSettings | _ExactSequenceSettings,
+        workflow_settings: _LowderSequenceSettings,
         crop_area_diagnostics_top_n: int,
         crop_area_fit_warning_threshold_pct: float,
     ) -> None:
-        """Run the shared HRL loading and one of the two supported workflows.
+        """Create Lowder-guided farms from multi-year HRL CTY observations.
 
-        The shared stages load native HRL crop areas, reproject annual crops in
-        destination-grid tiles, construct Lowder target sizes, register outputs,
-        and produce diagnostics. ``workflow_settings`` selects either the current
-        Lowder sequence-balanced method or hard exact-sequence grouping; no legacy
-        annual crop-assignment or alternative mask/reprojection modes remain.
+        The workflow loads native HRL main-crop areas, reprojects annual CTY states
+        in destination-grid tiles, constructs Lowder target sizes, assigns complete
+        observed main-crop sequences, registers outputs, and produces diagnostics.
 
         Args:
             region_id_column: Column containing compact model-region IDs.
@@ -4577,8 +3335,7 @@ class Europe(GEBModel):
             hrl_raster_chunks: Native HRL read chunks.
             subgrid_chunk_size: Destination-tile width and height in model cells.
             minimum_cells_per_farm: Minimum target size in model cells.
-            workflow_settings: Settings for the Lowder sequence-balanced or exact-
-                sequence workflow.
+            workflow_settings: Settings for the Lowder sequence-balanced workflow.
             crop_area_diagnostics_top_n: Number of detailed crop errors to log.
             crop_area_fit_warning_threshold_pct: Regional fit warning threshold.
 
@@ -4602,114 +3359,68 @@ class Europe(GEBModel):
                 "crop_area_fit_warning_threshold_pct must be between 0 and 100."
             )
 
-        exact_sequence_settings = (
-            workflow_settings
-            if isinstance(workflow_settings, _ExactSequenceSettings)
-            else None
+        lowder_sequence_settings = workflow_settings
+        score_weight_sum = (
+            lowder_sequence_settings.distance_weight
+            + lowder_sequence_settings.crop_sequence_weight
+            + lowder_sequence_settings.switch_timing_weight
         )
-        lowder_sequence_settings = (
-            workflow_settings
-            if isinstance(workflow_settings, _LowderSequenceSettings)
-            else None
+        if score_weight_sum <= 0.0:
+            raise ValueError("Farm-growth score weights must sum to a positive value.")
+        if lowder_sequence_settings.min_valid_crop_sequence_overlap < 1:
+            raise ValueError("min_valid_crop_sequence_overlap must be at least 1.")
+        if lowder_sequence_settings.jump_candidate_sample < 1:
+            raise ValueError("jump_candidate_sample must be at least 1.")
+        if lowder_sequence_settings.max_jump_distance_m < 0.0:
+            raise ValueError("max_jump_distance_m cannot be negative.")
+        if not 0.0 <= lowder_sequence_settings.crop_area_alignment_weight <= 1.0:
+            raise ValueError("crop_area_alignment_weight must be between 0 and 1.")
+        if lowder_sequence_settings.max_local_sequences < 1:
+            raise ValueError("max_crop_candidates_per_farmer must be at least 1.")
+        if lowder_sequence_settings.max_regional_sequences < 1:
+            raise ValueError(
+                "max_regional_sequence_candidates_per_farmer must be at least 1."
+            )
+        if lowder_sequence_settings.regional_sequence_pool_size < 1:
+            raise ValueError("regional_sequence_pool_size must be at least 1.")
+        if lowder_sequence_settings.local_search_passes < 0:
+            raise ValueError("crop_area_local_search_passes cannot be negative.")
+        if lowder_sequence_settings.regional_search_passes < 0:
+            raise ValueError("crop_area_regional_search_passes cannot be negative.")
+        if not 0.0 <= lowder_sequence_settings.local_fit_threshold_pct <= 100.0:
+            raise ValueError(
+                "local_sequence_fit_threshold_pct must be between 0 and 100."
+            )
+        if not 0.0 <= lowder_sequence_settings.fallow_penalty <= 1.0:
+            raise ValueError("fallow_sequence_penalty must be between 0 and 1.")
+        if not 0.0 <= lowder_sequence_settings.extra_farm_fraction <= 1.0:
+            raise ValueError("lowder_extra_farm_fraction must be between 0 and 1.")
+
+        distance_weight = lowder_sequence_settings.distance_weight
+        crop_sequence_weight = lowder_sequence_settings.crop_sequence_weight
+        switch_timing_weight = lowder_sequence_settings.switch_timing_weight
+        min_valid_crop_sequence_overlap = (
+            lowder_sequence_settings.min_valid_crop_sequence_overlap
         )
-        is_exact_sequence = exact_sequence_settings is not None
-
-        if is_exact_sequence:
-            assert exact_sequence_settings is not None
-            if exact_sequence_settings.jump_candidate_sample < 1:
-                raise ValueError(
-                    "exact_sequence_jump_candidate_sample must be at least 1."
-                )
-            if exact_sequence_settings.distance_scale_m <= 0.0:
-                raise ValueError("exact_sequence_distance_scale_m must be positive.")
-            if not 0.0 <= exact_sequence_settings.temporal_persistence_weight <= 1.0:
-                raise ValueError(
-                    "rounding_temporal_persistence_weight must be between 0 and 1."
-                )
-            workflow_name = "exact_sequence"
-        else:
-            assert lowder_sequence_settings is not None
-            score_weight_sum = (
-                lowder_sequence_settings.distance_weight
-                + lowder_sequence_settings.crop_sequence_weight
-                + lowder_sequence_settings.switch_timing_weight
-            )
-            if score_weight_sum <= 0.0:
-                raise ValueError(
-                    "Farm-growth score weights must sum to a positive value."
-                )
-            if lowder_sequence_settings.min_valid_crop_sequence_overlap < 1:
-                raise ValueError("min_valid_crop_sequence_overlap must be at least 1.")
-            if lowder_sequence_settings.jump_candidate_sample < 1:
-                raise ValueError("jump_candidate_sample must be at least 1.")
-            if lowder_sequence_settings.max_jump_distance_m < 0.0:
-                raise ValueError("max_jump_distance_m cannot be negative.")
-            if not 0.0 <= lowder_sequence_settings.crop_area_alignment_weight <= 1.0:
-                raise ValueError("crop_area_alignment_weight must be between 0 and 1.")
-            if lowder_sequence_settings.max_local_sequences < 1:
-                raise ValueError("max_crop_candidates_per_farmer must be at least 1.")
-            if lowder_sequence_settings.max_regional_sequences < 1:
-                raise ValueError(
-                    "max_regional_sequence_candidates_per_farmer must be at least 1."
-                )
-            if lowder_sequence_settings.regional_sequence_pool_size < 1:
-                raise ValueError("regional_sequence_pool_size must be at least 1.")
-            if lowder_sequence_settings.local_search_passes < 0:
-                raise ValueError("crop_area_local_search_passes cannot be negative.")
-            if lowder_sequence_settings.regional_search_passes < 0:
-                raise ValueError("crop_area_regional_search_passes cannot be negative.")
-            if not 0.0 <= lowder_sequence_settings.local_fit_threshold_pct <= 100.0:
-                raise ValueError(
-                    "local_sequence_fit_threshold_pct must be between 0 and 100."
-                )
-            if not 0.0 <= lowder_sequence_settings.fallow_penalty <= 1.0:
-                raise ValueError("fallow_sequence_penalty must be between 0 and 1.")
-            if not 0.0 <= lowder_sequence_settings.extra_farm_fraction <= 1.0:
-                raise ValueError("lowder_extra_farm_fraction must be between 0 and 1.")
-            workflow_name = "lowder_sequence_balanced"
-
-        # Bind workflow-specific values once so the regional loop can focus on
-        # the shared data flow rather than repeatedly unpacking configuration.
-        if is_exact_sequence:
-            assert exact_sequence_settings is not None
-            exact_sequence_jump_candidate_sample = (
-                exact_sequence_settings.jump_candidate_sample
-            )
-            exact_sequence_distance_scale_m = exact_sequence_settings.distance_scale_m
-            exact_sequence_rounding_temporal_persistence_weight = (
-                exact_sequence_settings.temporal_persistence_weight
-            )
-        else:
-            assert lowder_sequence_settings is not None
-            distance_weight = lowder_sequence_settings.distance_weight
-            crop_sequence_weight = lowder_sequence_settings.crop_sequence_weight
-            switch_timing_weight = lowder_sequence_settings.switch_timing_weight
-            min_valid_crop_sequence_overlap = (
-                lowder_sequence_settings.min_valid_crop_sequence_overlap
-            )
-            jump_candidate_sample = lowder_sequence_settings.jump_candidate_sample
-            max_jump_distance_m = lowder_sequence_settings.max_jump_distance_m
-            crop_area_alignment_weight = (
-                lowder_sequence_settings.crop_area_alignment_weight
-            )
-            max_crop_candidates_per_farmer = (
-                lowder_sequence_settings.max_local_sequences
-            )
-            max_regional_sequence_candidates_per_farmer = (
-                lowder_sequence_settings.max_regional_sequences
-            )
-            regional_sequence_pool_size = (
-                lowder_sequence_settings.regional_sequence_pool_size
-            )
-            crop_area_local_search_passes = lowder_sequence_settings.local_search_passes
-            crop_area_regional_search_passes = (
-                lowder_sequence_settings.regional_search_passes
-            )
-            local_sequence_fit_threshold_pct = (
-                lowder_sequence_settings.local_fit_threshold_pct
-            )
-            fallow_sequence_penalty = lowder_sequence_settings.fallow_penalty
-            lowder_extra_farm_fraction = lowder_sequence_settings.extra_farm_fraction
+        jump_candidate_sample = lowder_sequence_settings.jump_candidate_sample
+        max_jump_distance_m = lowder_sequence_settings.max_jump_distance_m
+        crop_area_alignment_weight = lowder_sequence_settings.crop_area_alignment_weight
+        max_crop_candidates_per_farmer = lowder_sequence_settings.max_local_sequences
+        max_regional_sequence_candidates_per_farmer = (
+            lowder_sequence_settings.max_regional_sequences
+        )
+        regional_sequence_pool_size = (
+            lowder_sequence_settings.regional_sequence_pool_size
+        )
+        crop_area_local_search_passes = lowder_sequence_settings.local_search_passes
+        crop_area_regional_search_passes = (
+            lowder_sequence_settings.regional_search_passes
+        )
+        local_sequence_fit_threshold_pct = (
+            lowder_sequence_settings.local_fit_threshold_pct
+        )
+        fallow_sequence_penalty = lowder_sequence_settings.fallow_penalty
+        lowder_extra_farm_fraction = lowder_sequence_settings.extra_farm_fraction
 
         if size_class_boundaries is None:
             size_class_boundaries = _default_size_class_boundaries()
@@ -4767,15 +3478,13 @@ class Europe(GEBModel):
         missing_farmers_by_year = {year: 0 for year in years}
         farmer_id_offset = 0
 
-        static_selection_name = (
-            "exact_sequence_union" if is_exact_sequence else "multiyear_coverage"
-        )
+        static_selection_name = "multiyear_coverage"
         self.logger.info(
             "Starting HRL-only raster farm construction for %s model regions "
             "(reprojection=tiled; static selection=%s; workflow=%s).",
             len(regions_shapes_hrl),
             static_selection_name,
-            workflow_name,
+            "lowder_sequence_balanced",
         )
 
         for region_index, (_, region) in enumerate(regions_shapes_hrl.iterrows()):
@@ -4806,18 +3515,15 @@ class Europe(GEBModel):
                 region_bounds,
             )
 
-            combined_crop_per_year: list[np.ndarray] = []
+            crop_per_year: list[np.ndarray] = []
             cultivated_fraction_per_year: list[np.ndarray] = []
             hrl_coverage_fraction_per_year: list[np.ndarray] = []
             native_crop_areas_per_year: list[dict[int, float]] = []
             region_has_hrl_coverage = True
-            incomplete_field_cell_count = 0
 
             for year in years:
                 crop_types = None
-                secondary_crop = None
                 crop_types_adapter = None
-                secondary_crop_adapter = None
                 try:
                     crop_types_adapter = self.data_catalog.fetch(
                         f"hrl_crop_types_{year}",
@@ -4831,23 +3537,11 @@ class Europe(GEBModel):
                         normalize_nodata=False,
                         chunks=raster_chunks,
                     )
-                    secondary_crop_adapter = self.data_catalog.fetch(
-                        f"hrl_secondary_crop_{year}",
-                        bounds=region_bounds,
-                        year=year,
-                    )
-                    secondary_crop = secondary_crop_adapter.read(
-                        bounds=region_bounds,
-                        year=year,
-                        dst_crs=None,
-                        normalize_nodata=False,
-                        chunks=raster_chunks,
-                    )
                 except WEkEONoCoverageError as error:
                     if original_iso3.upper() in _HRL_CROPLANDS_EEA38_ISO3:
                         raise
                     self.logger.warning(
-                        "Skipping region %s (%s): no HRL Croplands coverage for "
+                        "Skipping region %s (%s): no HRL Crop Types coverage for "
                         "year %s. Original error: %s",
                         region_id,
                         original_iso3,
@@ -4857,34 +3551,24 @@ class Europe(GEBModel):
                     region_has_hrl_coverage = False
                     break
 
-                crop_types, secondary_crop = _align_hrl_rasters_to_common_grid(
-                    crop_types,
-                    secondary_crop,
-                    region_id=region_id,
-                    year=year,
-                    logger=self.logger,
-                )
                 native_crop_areas_per_year.append(
                     _native_hrl_crop_category_areas_m2(
                         crop_types,
-                        secondary_crop,
                         region_active_geometry,
                         chunk_rows=max(int(raster_chunks.get("y", 4096)), 1),
                     )
                 )
 
-                combined_year = np.full(
+                crop_year = np.full(
                     region_template.shape,
                     _HRL_MISSING_CROP_CODE,
                     dtype=np.int32,
                 )
                 cultivated_fraction_year = np.zeros(
-                    region_template.shape,
-                    dtype=np.float32,
+                    region_template.shape, dtype=np.float32
                 )
                 coverage_fraction_year = np.zeros(
-                    region_template.shape,
-                    dtype=np.float32,
+                    region_template.shape, dtype=np.float32
                 )
                 source_bounds = crop_types.rio.bounds()
                 source_resolution = crop_types.rio.resolution()
@@ -4892,18 +3576,13 @@ class Europe(GEBModel):
                 source_buffer_y = abs(float(source_resolution[1])) * 2.0
 
                 for tile_y_start in range(
-                    0,
-                    region_template.sizes["y"],
-                    subgrid_chunk_size,
+                    0, region_template.sizes["y"], subgrid_chunk_size
                 ):
                     tile_y_stop = min(
-                        tile_y_start + subgrid_chunk_size,
-                        region_template.sizes["y"],
+                        tile_y_start + subgrid_chunk_size, region_template.sizes["y"]
                     )
                     for tile_x_start in range(
-                        0,
-                        region_template.sizes["x"],
-                        subgrid_chunk_size,
+                        0, region_template.sizes["x"], subgrid_chunk_size
                     ):
                         tile_x_stop = min(
                             tile_x_start + subgrid_chunk_size,
@@ -4911,16 +3590,12 @@ class Europe(GEBModel):
                         )
                         tile_y_slice = slice(tile_y_start, tile_y_stop)
                         tile_x_slice = slice(tile_x_start, tile_x_stop)
-                        tile_region_mask = region_mask[
-                            tile_y_slice,
-                            tile_x_slice,
-                        ]
+                        tile_region_mask = region_mask[tile_y_slice, tile_x_slice]
                         if not tile_region_mask.any():
                             continue
 
                         tile_template = region_template.isel(
-                            y=tile_y_slice,
-                            x=tile_x_slice,
+                            y=tile_y_slice, x=tile_x_slice
                         )
                         tile_bounds = transform_bounds(
                             tile_template.rio.crs,
@@ -4929,20 +3604,16 @@ class Europe(GEBModel):
                             densify_pts=21,
                         )
                         clip_min_x = max(
-                            tile_bounds[0] - source_buffer_x,
-                            source_bounds[0],
+                            tile_bounds[0] - source_buffer_x, source_bounds[0]
                         )
                         clip_min_y = max(
-                            tile_bounds[1] - source_buffer_y,
-                            source_bounds[1],
+                            tile_bounds[1] - source_buffer_y, source_bounds[1]
                         )
                         clip_max_x = min(
-                            tile_bounds[2] + source_buffer_x,
-                            source_bounds[2],
+                            tile_bounds[2] + source_buffer_x, source_bounds[2]
                         )
                         clip_max_y = min(
-                            tile_bounds[3] + source_buffer_y,
-                            source_bounds[3],
+                            tile_bounds[3] + source_buffer_y, source_bounds[3]
                         )
                         if clip_min_x >= clip_max_x or clip_min_y >= clip_max_y:
                             continue
@@ -4954,65 +3625,35 @@ class Europe(GEBModel):
                             maxy=clip_max_y,
                             allow_one_dimensional_raster=True,
                         )
-                        secondary_crop_tile = secondary_crop.rio.clip_box(
-                            minx=clip_min_x,
-                            miny=clip_min_y,
-                            maxx=clip_max_x,
-                            maxy=clip_max_y,
-                            allow_one_dimensional_raster=True,
-                        )
-                        crop_types_tile, secondary_crop_tile = (
-                            _align_hrl_rasters_to_common_grid(
-                                crop_types_tile,
-                                secondary_crop_tile,
-                                region_id=region_id,
-                                year=year,
-                                logger=self.logger,
+                        tile_crop, tile_fraction, tile_coverage_fraction = (
+                            _reproject_HRL_year_to_subgrid(
+                                crop_types_tile, tile_template
                             )
                         )
-                        (
-                            tile_combined,
-                            tile_fraction,
-                            tile_coverage_fraction,
-                        ) = _reproject_HRL_year_to_subgrid(
-                            crop_types_tile,
-                            secondary_crop_tile,
-                            tile_template,
-                        )
-                        tile_combined[~tile_region_mask] = _HRL_MISSING_CROP_CODE
+                        tile_crop[~tile_region_mask] = _HRL_MISSING_CROP_CODE
                         tile_fraction[~tile_region_mask] = 0.0
                         tile_coverage_fraction[~tile_region_mask] = 0.0
-                        combined_year[
-                            tile_y_slice,
-                            tile_x_slice,
-                        ] = tile_combined
-                        cultivated_fraction_year[
-                            tile_y_slice,
-                            tile_x_slice,
-                        ] = tile_fraction
-                        coverage_fraction_year[
-                            tile_y_slice,
-                            tile_x_slice,
-                        ] = tile_coverage_fraction
-
+                        crop_year[tile_y_slice, tile_x_slice] = tile_crop
+                        cultivated_fraction_year[tile_y_slice, tile_x_slice] = (
+                            tile_fraction
+                        )
+                        coverage_fraction_year[tile_y_slice, tile_x_slice] = (
+                            tile_coverage_fraction
+                        )
                         del (
                             crop_types_tile,
-                            secondary_crop_tile,
-                            tile_combined,
+                            tile_crop,
                             tile_fraction,
                             tile_coverage_fraction,
                         )
 
-                combined_crop_per_year.append(combined_year)
+                crop_per_year.append(crop_year)
                 cultivated_fraction_per_year.append(cultivated_fraction_year)
                 hrl_coverage_fraction_per_year.append(coverage_fraction_year)
-
                 del (
                     crop_types,
-                    secondary_crop,
                     crop_types_adapter,
-                    secondary_crop_adapter,
-                    combined_year,
+                    crop_year,
                     cultivated_fraction_year,
                     coverage_fraction_year,
                 )
@@ -5020,14 +3661,14 @@ class Europe(GEBModel):
             if not region_has_hrl_coverage:
                 continue
             if (
-                len(combined_crop_per_year) != len(years)
+                len(crop_per_year) != len(years)
                 or len(cultivated_fraction_per_year) != len(years)
                 or len(hrl_coverage_fraction_per_year) != len(years)
                 or len(native_crop_areas_per_year) != len(years)
             ):
                 raise ValueError(f"Incomplete HRL crop stack for region {region_id}.")
 
-            crop_stack = np.stack(combined_crop_per_year).astype(
+            crop_stack = np.stack(crop_per_year).astype(
                 np.int32,
                 copy=False,
             )
@@ -5040,7 +3681,7 @@ class Europe(GEBModel):
                 copy=False,
             )
             del (
-                combined_crop_per_year,
+                crop_per_year,
                 cultivated_fraction_per_year,
                 hrl_coverage_fraction_per_year,
             )
@@ -5065,141 +3706,54 @@ class Europe(GEBModel):
                 dtype=np.float64,
             )
 
-            binary_rounding_diagnostics = pd.DataFrame()
-            binary_rounding_wape_pct = np.nan
+            reference_index = years.index(max(years))
+            reference_fraction = fraction_stack[reference_index].astype(
+                np.float64, copy=False
+            )
+            base_static_target_area_m2 = float(
+                np.sum(
+                    reference_fraction[region_mask] * region_cell_area_m2[region_mask]
+                )
+            )
+            selection_target_area_m2 = max(
+                base_static_target_area_m2,
+                float(native_hrl_area_by_year_m2.max(initial=0.0)),
+            )
 
-            if is_exact_sequence:
-                # Exact-sequence farms require a complete crop state for every
-                # selected cell and year. Category-aware rounding defines that
-                # hard domain before any farm targets are grown.
-                (
-                    crop_stack,
-                    eligible_mask,
-                    binary_rounding_diagnostics,
-                    incomplete_field_cell_count,
-                ) = round_crop_states_to_area_targets(
-                    modal_crop_stack=crop_stack,
-                    cultivated_fraction_stack=fraction_stack,
-                    coverage_fraction_stack=coverage_fraction_stack,
-                    cell_area_m2=region_cell_area_m2,
-                    region_mask=region_mask,
-                    target_crop_areas_per_year=native_crop_areas_per_year,
-                    fallow_code=_HRL_FALLOW_CROP_CODE,
-                    missing_code=_HRL_MISSING_CROP_CODE,
-                    temporal_persistence_weight=(
-                        exact_sequence_rounding_temporal_persistence_weight
-                    ),
-                )
-                if incomplete_field_cell_count > 0:
-                    self.logger.warning(
-                        "Region %s excludes %s potential crop cells because at "
-                        "least one requested year lacks HRL coverage.",
-                        region_id,
-                        incomplete_field_cell_count,
-                    )
-                if not binary_rounding_diagnostics.empty:
-                    rounding_target_total_m2 = float(
-                        binary_rounding_diagnostics["target_area_m2"].sum()
-                    )
-                    binary_rounding_wape_pct = (
-                        float(binary_rounding_diagnostics["difference_m2"].abs().sum())
-                        / rounding_target_total_m2
-                        * 100.0
-                        if rounding_target_total_m2 > 0.0
-                        else np.nan
-                    )
-                    capacity_shortfall = binary_rounding_diagnostics.loc[
-                        binary_rounding_diagnostics["target_area_m2"]
-                        > binary_rounding_diagnostics["candidate_area_m2"] + 1e-6
-                    ]
-                    if not capacity_shortfall.empty:
-                        self.logger.warning(
-                            "Region %s has %s year-category targets whose native "
-                            "area exceeds the full-cell area where that category "
-                            "is modal. Their combined unavoidable shortfall is "
-                            "%.3f km².",
-                            region_id,
-                            len(capacity_shortfall),
-                            float(
-                                (
-                                    capacity_shortfall["target_area_m2"]
-                                    - capacity_shortfall["candidate_area_m2"]
-                                ).sum()
-                            )
-                            / 1_000_000.0,
-                        )
-
-                selection_score = eligible_mask.astype(np.float64)
-                base_static_target_area_m2 = float(
-                    region_cell_area_m2[eligible_mask].sum()
-                )
-                selection_target_area_m2 = base_static_target_area_m2
-                cultivated_mask = eligible_mask.copy()
-            else:
-                # The current Lowder workflow uses the most recent requested year
-                # as its baseline, but never allows the static farm map to be
-                # smaller than the largest native annual cultivated area.
-                reference_index = years.index(max(years))
-                reference_fraction = fraction_stack[reference_index].astype(
-                    np.float64,
-                    copy=False,
-                )
-                base_static_target_area_m2 = float(
-                    np.sum(
-                        reference_fraction[region_mask]
-                        * region_cell_area_m2[region_mask]
-                    )
-                )
-                selection_target_area_m2 = max(
-                    base_static_target_area_m2,
-                    float(native_hrl_area_by_year_m2.max(initial=0.0)),
-                )
-
-                # Only cells with at least one observed crop can support a valid
-                # complete regional sequence. Repeated annual crop occurrence is
-                # the primary ranking criterion; mean HRL fraction breaks ties.
-                union_valid_crop = np.any(crop_stack > 0, axis=0)
-                eligible_mask = region_mask & union_valid_crop
-                valid_frequency = np.mean(crop_stack > 0, axis=0)
-                mean_fraction = fraction_stack.mean(axis=0, dtype=np.float64)
-                selection_score = 0.80 * valid_frequency + 0.20 * mean_fraction
-
-                if not eligible_mask.any():
-                    self.logger.warning(
-                        "Skipping region %s because it has no model cells with an "
-                        "observed HRL crop in any requested year.",
-                        region_id,
-                    )
-                    continue
-
-                available_static_capacity_m2 = float(
-                    region_cell_area_m2[eligible_mask].sum()
-                )
-                if selection_target_area_m2 > available_static_capacity_m2:
-                    self.logger.warning(
-                        "Region %s has only %.3f km² of cells with at least one "
-                        "valid modal crop, below the requested static capacity "
-                        "%.3f km². Using the available modal-crop capacity.",
-                        region_id,
-                        available_static_capacity_m2 / 1_000_000.0,
-                        selection_target_area_m2 / 1_000_000.0,
-                    )
-                    selection_target_area_m2 = available_static_capacity_m2
-
-                cultivated_mask = select_cultivated_cells_by_area(
-                    selection_score,
-                    eligible_mask,
-                    region_cell_area_m2,
-                    target_area_m2=selection_target_area_m2,
-                )
+            union_valid_crop = np.any(crop_stack > 0, axis=0)
+            eligible_mask = region_mask & union_valid_crop
+            valid_frequency = np.mean(crop_stack > 0, axis=0)
+            mean_fraction = fraction_stack.mean(axis=0, dtype=np.float64)
+            selection_score = 0.80 * valid_frequency + 0.20 * mean_fraction
 
             if not eligible_mask.any():
                 self.logger.warning(
-                    "Skipping region %s because no valid HRL agricultural cells "
-                    "remain after workflow-specific selection.",
+                    "Skipping region %s because it has no model cells with an "
+                    "observed HRL CTY crop in any requested year.",
                     region_id,
                 )
                 continue
+
+            available_static_capacity_m2 = float(
+                region_cell_area_m2[eligible_mask].sum()
+            )
+            if selection_target_area_m2 > available_static_capacity_m2:
+                self.logger.warning(
+                    "Region %s has only %.3f km² of cells with at least one "
+                    "valid modal CTY crop, below the requested static capacity "
+                    "%.3f km². Using the available modal-crop capacity.",
+                    region_id,
+                    available_static_capacity_m2 / 1_000_000.0,
+                    selection_target_area_m2 / 1_000_000.0,
+                )
+                selection_target_area_m2 = available_static_capacity_m2
+
+            cultivated_mask = select_cultivated_cells_by_area(
+                selection_score,
+                eligible_mask,
+                region_cell_area_m2,
+                target_area_m2=selection_target_area_m2,
+            )
 
             # Convert native HRL no-cropland (0) to model fallow (-1) only
             # inside the final multi-year agricultural domain. Native outside/
@@ -5212,13 +3766,6 @@ class Europe(GEBModel):
             crop_stack[:, ~cultivated_mask] = _HRL_MISSING_CROP_CODE
 
             selected_missing = selected_3d & (crop_stack == _HRL_MISSING_CROP_CODE)
-            if is_exact_sequence and selected_missing.any():
-                raise RuntimeError(
-                    "Exact-sequence farm domain contains HRL outside/missing "
-                    f"states in region {region_id}; these cells must be excluded "
-                    "rather than interpreted as fallow."
-                )
-
             selected_area_m2 = float(region_cell_area_m2[cultivated_mask].sum())
             selected_fractional_area_by_year_m2 = np.asarray(
                 [
@@ -5283,24 +3830,6 @@ class Europe(GEBModel):
                     f"static agricultural domain in region {region_id}."
                 )
 
-            if is_exact_sequence:
-                active_sequences = crop_stack[:, cultivated_mask]
-                if np.any(
-                    np.all(
-                        active_sequences == _HRL_FALLOW_CROP_CODE,
-                        axis=0,
-                    )
-                ):
-                    raise RuntimeError(
-                        "Exact-sequence field union contains a cell that is "
-                        "fallow in every requested year."
-                    )
-                if np.any(active_sequences == _HRL_MISSING_CROP_CODE):
-                    raise RuntimeError(
-                        "Exact-sequence field union contains an outside/missing "
-                        "HRL state."
-                    )
-
             iso3 = farm_size_donor_country.get(original_iso3, original_iso3)
             if iso3 != original_iso3:
                 self.logger.info(
@@ -5328,7 +3857,7 @@ class Europe(GEBModel):
                 mean_cell_area_m2=float(region_cell_area_m2[cultivated_mask].mean()),
             )
             lowder_target_farm_count = len(target_farms)
-            if not is_exact_sequence and lowder_extra_farm_fraction > 0.0:
+            if lowder_extra_farm_fraction > 0.0:
                 target_farms = relax_lowder_targets_for_sequence_fit(
                     target_farms,
                     extra_farm_fraction=lowder_extra_farm_fraction,
@@ -5340,181 +3869,83 @@ class Europe(GEBModel):
                 )
             sequence_fit_target_farm_count = len(target_farms)
 
-            if is_exact_sequence:
-                local_farms, farmers_region = grow_farms_from_exact_crop_sequences(
-                    cultivated_mask=cultivated_mask,
-                    crop_sequences=crop_stack,
-                    cell_area_m2=region_cell_area_m2,
-                    target_farms=target_farms,
-                    crop_columns=crop_columns,
-                    random_seed=random_seed + 10_000 + region_index,
-                    jump_candidate_sample=exact_sequence_jump_candidate_sample,
-                    jump_distance_scale_m=exact_sequence_distance_scale_m,
-                )
-            else:
-                local_farms, farmers_region = grow_farms_from_raster_cells(
-                    cultivated_mask=cultivated_mask,
-                    crop_sequences=crop_stack,
-                    cell_area_m2=region_cell_area_m2,
-                    target_farms=target_farms,
-                    random_seed=random_seed + 10_000 + region_index,
-                    distance_weight=distance_weight,
-                    crop_sequence_weight=crop_sequence_weight,
-                    switch_timing_weight=switch_timing_weight,
-                    min_valid_crop_sequence_overlap=min_valid_crop_sequence_overlap,
-                    jump_candidate_sample=jump_candidate_sample,
-                    max_jump_distance_m=max_jump_distance_m,
-                )
+            local_farms, farmers_region = grow_farms_from_raster_cells(
+                cultivated_mask=cultivated_mask,
+                crop_sequences=crop_stack,
+                cell_area_m2=region_cell_area_m2,
+                target_farms=target_farms,
+                random_seed=random_seed + 10_000 + region_index,
+                distance_weight=distance_weight,
+                crop_sequence_weight=crop_sequence_weight,
+                switch_timing_weight=switch_timing_weight,
+                min_valid_crop_sequence_overlap=min_valid_crop_sequence_overlap,
+                jump_candidate_sample=jump_candidate_sample,
+                max_jump_distance_m=max_jump_distance_m,
+            )
 
             farmer_areas_local_m2 = farmers_region["area_m2"].to_numpy(dtype=np.float64)
-            sequence_alignment = pd.DataFrame()
+            (
+                assigned_sequences,
+                sequence_quality,
+                sequence_alignment,
+            ) = assign_farmer_sequences_to_area_targets(
+                farm_values=local_farms,
+                crop_sequences=crop_stack,
+                cell_area_m2=region_cell_area_m2,
+                farmer_areas_m2=farmer_areas_local_m2,
+                target_crop_areas_per_year=native_crop_areas_per_year,
+                fallow_code=_HRL_FALLOW_CROP_CODE,
+                missing_code=_HRL_MISSING_CROP_CODE,
+                alignment_weight=crop_area_alignment_weight,
+                max_local_sequences=max_crop_candidates_per_farmer,
+                max_regional_sequences=max_regional_sequence_candidates_per_farmer,
+                regional_sequence_pool_size=regional_sequence_pool_size,
+                local_search_passes=crop_area_local_search_passes,
+                regional_search_passes=crop_area_regional_search_passes,
+                local_fit_threshold_pct=local_sequence_fit_threshold_pct,
+                fallow_penalty=fallow_sequence_penalty,
+            )
+            farmers_region.loc[:, crop_columns] = assigned_sequences
+            for quality_column in sequence_quality.columns:
+                farmers_region[quality_column] = sequence_quality[
+                    quality_column
+                ].to_numpy()
 
-            if is_exact_sequence:
-                # Every exact-sequence farmer is necessarily assigned its locally
-                # observed complete sequence. Use the same quality schema as the
-                # Lowder-prioritized workflow for downstream sampling.
-                farmers_region["crop_sequence_quality_flag"] = np.full(
-                    len(farmers_region),
-                    2,
-                    dtype=np.int8,
-                )
-                farmers_region["crop_sequence_is_original"] = True
-                farmers_region["crop_sequence_is_local"] = True
-                farmers_region["crop_sequence_is_local_dominant"] = True
-                farmers_region["crop_sequence_local_support_fraction"] = np.ones(
-                    len(farmers_region),
-                    dtype=np.float32,
-                )
-                farmers_region["crop_sequence_fallow_fraction"] = np.mean(
-                    farmers_region[crop_columns].to_numpy(dtype=np.int32)
-                    == _HRL_FALLOW_CROP_CODE,
-                    axis=1,
-                    dtype=np.float64,
-                ).astype(np.float32)
-            else:
-                (
-                    assigned_sequences,
-                    sequence_quality,
-                    sequence_alignment,
-                ) = assign_farmer_sequences_to_area_targets(
-                    farm_values=local_farms,
-                    crop_sequences=crop_stack,
-                    cell_area_m2=region_cell_area_m2,
-                    farmer_areas_m2=farmer_areas_local_m2,
-                    target_crop_areas_per_year=native_crop_areas_per_year,
-                    fallow_code=_HRL_FALLOW_CROP_CODE,
-                    missing_code=_HRL_MISSING_CROP_CODE,
-                    alignment_weight=crop_area_alignment_weight,
-                    max_local_sequences=max_crop_candidates_per_farmer,
-                    max_regional_sequences=(
-                        max_regional_sequence_candidates_per_farmer
-                    ),
-                    regional_sequence_pool_size=regional_sequence_pool_size,
-                    local_search_passes=crop_area_local_search_passes,
-                    regional_search_passes=crop_area_regional_search_passes,
-                    local_fit_threshold_pct=local_sequence_fit_threshold_pct,
-                    fallow_penalty=fallow_sequence_penalty,
-                )
-                farmers_region.loc[:, crop_columns] = assigned_sequences
-                for quality_column in sequence_quality.columns:
-                    farmers_region[quality_column] = sequence_quality[
-                        quality_column
-                    ].to_numpy()
             crop_alignment_summary_by_year: list[dict[str, float | int]] = []
             for year_index, (year, crop_column) in enumerate(
                 zip(years, crop_columns, strict=True)
             ):
-                selected_grid_fit_score = np.nan
-                assigned_fallow_area_m2 = np.nan
-                assigned_missing_area_m2 = np.nan
-                if is_exact_sequence:
-                    assigned_crop_codes = farmers_region[crop_column].to_numpy(
-                        dtype=np.int32
+                assigned_crop_codes = farmers_region[crop_column].to_numpy(
+                    dtype=np.int32
+                )
+                assigned_fallow_area_m2 = float(
+                    farmer_areas_local_m2[
+                        assigned_crop_codes == _HRL_FALLOW_CROP_CODE
+                    ].sum()
+                )
+                assigned_missing_area_m2 = float(
+                    farmer_areas_local_m2[
+                        assigned_crop_codes == _HRL_MISSING_CROP_CODE
+                    ].sum()
+                )
+                if assigned_missing_area_m2 > 1e-3:
+                    raise RuntimeError(
+                        "Sequence-balanced assignment produced a missing farmer "
+                        f"crop in region {region_id}, year {year}."
                     )
-                    assigned_fallow_area_m2 = float(
-                        farmer_areas_local_m2[
-                            assigned_crop_codes == _HRL_FALLOW_CROP_CODE
-                        ].sum()
-                    )
-                    assigned_missing_area_m2 = float(
-                        farmer_areas_local_m2[
-                            assigned_crop_codes == _HRL_MISSING_CROP_CODE
-                        ].sum()
-                    )
-                    if assigned_missing_area_m2 > 1e-3:
-                        raise RuntimeError(
-                            "Exact-sequence grouping assigned outside/missing "
-                            f"HRL states in region {region_id}, year {year}."
-                        )
-                    if not np.isclose(
-                        assigned_fallow_area_m2,
-                        selected_fallow_area_by_year_m2[year_index],
-                        rtol=1e-12,
-                        atol=1e-3,
-                    ):
-                        raise RuntimeError(
-                            "Exact-sequence grouping did not conserve fallow "
-                            f"area for region {region_id}, year {year}."
-                        )
-                    crop_alignment = _crop_area_diagnostics_from_assignments(
-                        assigned_crop_codes,
-                        farmer_areas_local_m2,
-                        native_crop_areas_per_year[year_index],
-                    )
-                    selected_grid_targets = _crop_area_targets_from_model_grid(
-                        crop_stack[year_index],
-                        cultivated_mask,
-                        region_cell_area_m2,
-                    )
-                    selected_grid_alignment = _crop_area_diagnostics_from_assignments(
-                        assigned_crop_codes,
-                        farmer_areas_local_m2,
-                        selected_grid_targets,
-                    )
-                    selected_grid_fit_score = _crop_area_fit_scores(
-                        selected_grid_alignment
-                    )["crop_area_fit_score"]
-                    if selected_grid_fit_score < 100.0 - 1e-9:
-                        raise RuntimeError(
-                            "Exact-sequence grouping did not conserve selected-grid "
-                            f"crop area for region {region_id}, year {year}."
-                        )
-                else:
-                    assigned_crop_codes = farmers_region[crop_column].to_numpy(
-                        dtype=np.int32
-                    )
-                    assigned_fallow_area_m2 = float(
-                        farmer_areas_local_m2[
-                            assigned_crop_codes == _HRL_FALLOW_CROP_CODE
-                        ].sum()
-                    )
-                    assigned_missing_area_m2 = float(
-                        farmer_areas_local_m2[
-                            assigned_crop_codes == _HRL_MISSING_CROP_CODE
-                        ].sum()
-                    )
-                    if assigned_missing_area_m2 > 1e-3:
-                        raise RuntimeError(
-                            "Sequence-balanced assignment produced a missing "
-                            f"farmer crop in region {region_id}, year {year}."
-                        )
-                    crop_alignment = (
-                        sequence_alignment.loc[
-                            sequence_alignment["year_index"] == year_index
-                        ]
-                        .drop(columns="year_index")
-                        .reset_index(drop=True)
-                    )
+                crop_alignment = (
+                    sequence_alignment.loc[
+                        sequence_alignment["year_index"] == year_index
+                    ]
+                    .drop(columns="year_index")
+                    .reset_index(drop=True)
+                )
                 crop_alignment[region_id_column] = region_id
                 crop_alignment[country_iso3_column] = original_iso3
                 crop_alignment["year"] = int(year)
                 all_crop_area_diagnostics.append(crop_alignment.copy())
 
-                combined_fit = _crop_area_fit_scores(crop_alignment)
-                main_crop_alignment = _aggregate_crop_alignment_to_main_categories(
-                    crop_alignment
-                )
-                main_fit = _crop_area_fit_scores(main_crop_alignment)
+                cty_fit = _crop_area_fit_scores(crop_alignment)
                 positive_target_scale = float(
                     crop_alignment["positive_target_scale"].iloc[0]
                 )
@@ -5522,7 +3953,7 @@ class Europe(GEBModel):
                 crop_alignment_summary_by_year.append(
                     {
                         "year": int(year),
-                        "source_crop_area_m2": combined_fit["source_area_m2"],
+                        "source_crop_area_m2": cty_fit["source_area_m2"],
                         "fractional_subgrid_area_m2": float(
                             subgrid_hrl_area_by_year_m2[year_index]
                         ),
@@ -5532,7 +3963,7 @@ class Europe(GEBModel):
                         "selected_modal_area_m2": float(
                             selected_modal_area_by_year_m2[year_index]
                         ),
-                        "assigned_crop_area_m2": combined_fit["assigned_area_m2"],
+                        "assigned_crop_area_m2": cty_fit["assigned_area_m2"],
                         "assigned_fallow_area_m2": assigned_fallow_area_m2,
                         "assigned_missing_area_m2": assigned_missing_area_m2,
                         "agricultural_union_area_m2": selected_area_m2,
@@ -5548,20 +3979,13 @@ class Europe(GEBModel):
                             and np.isfinite(assigned_missing_area_m2)
                             else np.nan
                         ),
-                        "total_area_difference_pct": combined_fit[
+                        "total_area_difference_pct": cty_fit[
                             "total_area_difference_pct"
                         ],
-                        "total_area_fit_score": combined_fit["total_area_fit_score"],
-                        "combined_crop_area_fit_score": combined_fit[
-                            "crop_area_fit_score"
-                        ],
-                        "combined_crop_share_fit_score": combined_fit[
-                            "crop_share_fit_score"
-                        ],
-                        "main_crop_area_fit_score": main_fit["crop_area_fit_score"],
-                        "main_crop_share_fit_score": main_fit["crop_share_fit_score"],
+                        "total_area_fit_score": cty_fit["total_area_fit_score"],
+                        "cty_crop_area_fit_score": cty_fit["crop_area_fit_score"],
+                        "cty_crop_share_fit_score": cty_fit["crop_share_fit_score"],
                         "positive_target_scale": positive_target_scale,
-                        "selected_grid_crop_fit_score": selected_grid_fit_score,
                     }
                 )
 
@@ -5689,14 +4113,11 @@ class Europe(GEBModel):
 
             selected_sequences = crop_stack[:, cultivated_mask].T
             complete_original_mask = ~np.any(
-                selected_sequences == _HRL_MISSING_CROP_CODE,
-                axis=1,
+                selected_sequences == _HRL_MISSING_CROP_CODE, axis=1
             ) & np.any(selected_sequences > 0, axis=1)
-            complete_original_sequences = np.unique(
-                selected_sequences[complete_original_mask],
-                axis=0,
+            n_observed_sequences = int(
+                np.unique(selected_sequences[complete_original_mask], axis=0).shape[0]
             )
-            n_exact_sequences = int(complete_original_sequences.shape[0])
             extra_sequence_farms = max(
                 len(farmers_region) - lowder_target_farm_count,
                 0,
@@ -5709,15 +4130,8 @@ class Europe(GEBModel):
             local_sequence_pct = float(np.mean(quality_flags >= 1) * 100.0)
             regional_fallback_sequence_pct = float(np.mean(quality_flags == 0) * 100.0)
 
-            if is_exact_sequence:
-                sequence_homogeneity_pct = 100.0
-                novel_sequence_count = 0
-            else:
-                # The assignment function returns only integer IDs into the
-                # complete regional original-sequence catalog and validates those
-                # IDs before returning. No additional large Python set is needed.
-                novel_sequence_count = 0
-                sequence_homogeneity_pct = np.nan
+            novel_sequence_count = 0
+
             region_diagnostics.append(
                 {
                     region_id_column: region_id,
@@ -5737,15 +4151,12 @@ class Europe(GEBModel):
                     "n_farmers": int(len(farmers_region)),
                     "lowder_target_farms": int(lowder_target_farm_count),
                     "sequence_fit_target_farms": int(sequence_fit_target_farm_count),
-                    "n_exact_sequences": n_exact_sequences,
+                    "n_observed_sequences": n_observed_sequences,
                     "extra_sequence_farms": int(extra_sequence_farms),
-                    "sequence_homogeneity_pct": sequence_homogeneity_pct,
                     "novel_sequence_count": novel_sequence_count,
                     "local_dominant_sequence_pct": (local_dominant_sequence_pct),
                     "local_sequence_pct": local_sequence_pct,
                     "regional_fallback_sequence_pct": (regional_fallback_sequence_pct),
-                    "excluded_incomplete_hrl_cells": (incomplete_field_cell_count),
-                    "binary_rounding_wape_pct": binary_rounding_wape_pct,
                     "median_farm_area_ha": float(np.median(actual_areas_m2) / 10_000.0),
                     "mean_farm_area_ha": float(actual_areas_m2.mean() / 10_000.0),
                     "mean_target_error_pct": float(relative_area_errors.mean() * 100.0),
@@ -5801,26 +4212,18 @@ class Europe(GEBModel):
                             ]
                         )
                     ),
-                    "mean_combined_crop_fit_score": float(
+                    "mean_cty_crop_fit_score": float(
                         np.mean(
                             [
-                                summary["combined_crop_area_fit_score"]
+                                summary["cty_crop_area_fit_score"]
                                 for summary in crop_alignment_summary_by_year
                             ]
                         )
                     ),
-                    "minimum_combined_crop_fit_score": float(
+                    "minimum_cty_crop_fit_score": float(
                         np.min(
                             [
-                                summary["combined_crop_area_fit_score"]
-                                for summary in crop_alignment_summary_by_year
-                            ]
-                        )
-                    ),
-                    "mean_main_crop_fit_score": float(
-                        np.mean(
-                            [
-                                summary["main_crop_area_fit_score"]
+                                summary["cty_crop_area_fit_score"]
                                 for summary in crop_alignment_summary_by_year
                             ]
                         )
@@ -5828,7 +4231,7 @@ class Europe(GEBModel):
                     "mean_crop_share_fit_score": float(
                         np.mean(
                             [
-                                summary["combined_crop_share_fit_score"]
+                                summary["cty_crop_share_fit_score"]
                                 for summary in crop_alignment_summary_by_year
                             ]
                         )
@@ -5836,10 +4239,10 @@ class Europe(GEBModel):
                 }
             )
 
-            mean_combined_fit = float(
+            mean_cty_fit = float(
                 np.mean(
                     [
-                        summary["combined_crop_area_fit_score"]
+                        summary["cty_crop_area_fit_score"]
                         for summary in crop_alignment_summary_by_year
                     ]
                 )
@@ -5858,37 +4261,21 @@ class Europe(GEBModel):
             )
             log_method = (
                 self.logger.warning
-                if mean_combined_fit < crop_area_fit_warning_threshold_pct
+                if mean_cty_fit < crop_area_fit_warning_threshold_pct
                 else self.logger.info
             )
-            if is_exact_sequence:
-                log_method(
-                    "Completed exact-sequence region %s (%s): %.2f km² static "
-                    "area; %s agents from %s rounded sequences (%s Lowder "
-                    "targets); mean annual active/native area %.1f%%; mean "
-                    "combined crop fit %.1f/100.",
-                    region_id,
-                    original_iso3,
-                    selected_area_m2 / 1_000_000.0,
-                    len(farmers_region),
-                    n_exact_sequences,
-                    lowder_target_farm_count,
-                    mean_agent_retention,
-                    mean_combined_fit,
-                )
-            else:
-                log_method(
-                    "Completed Lowder-prioritized region %s (%s): %.2f km² "
-                    "static area; %s farms from %s Lowder targets; mean annual "
-                    "active/native area %.1f%%; mean combined crop fit %.1f/100.",
-                    region_id,
-                    original_iso3,
-                    selected_area_m2 / 1_000_000.0,
-                    len(farmers_region),
-                    lowder_target_farm_count,
-                    mean_agent_retention,
-                    mean_combined_fit,
-                )
+            log_method(
+                "Completed Lowder-prioritized region %s (%s): %.2f km² static "
+                "area; %s farms from %s Lowder targets; mean annual "
+                "active/native area %.1f%%; mean CTY crop fit %.1f/100.",
+                region_id,
+                original_iso3,
+                selected_area_m2 / 1_000_000.0,
+                len(farmers_region),
+                lowder_target_farm_count,
+                mean_agent_retention,
+                mean_cty_fit,
+            )
 
             farmer_id_offset += len(farmers_region)
             del (
@@ -5910,7 +4297,6 @@ class Europe(GEBModel):
                 local_farms,
                 farmers_region,
                 crop_alignment_summary_by_year,
-                binary_rounding_diagnostics,
             )
             gc.collect()
 
@@ -5949,14 +4335,12 @@ class Europe(GEBModel):
             "n_farmers",
             "lowder_target_farms",
             "sequence_fit_target_farms",
-            "n_exact_sequences",
+            "n_observed_sequences",
             "extra_sequence_farms",
             "local_dominant_sequence_pct",
             "local_sequence_pct",
             "regional_fallback_sequence_pct",
             "novel_sequence_count",
-            "excluded_incomplete_hrl_cells",
-            "binary_rounding_wape_pct",
             "median_farm_area_ha",
             "multi_parcel_farms_pct",
             "mean_fallow_area_pct",
@@ -5964,8 +4348,7 @@ class Europe(GEBModel):
             "mean_selected_fraction_retention_pct",
             "mean_agent_area_retention_pct",
             "maximum_absolute_agent_area_difference_pct",
-            "mean_combined_crop_fit_score",
-            "mean_main_crop_fit_score",
+            "mean_cty_crop_fit_score",
         ]
         regional_summary = regional_diagnostics[regional_summary_columns].rename(
             columns={
@@ -5974,14 +4357,12 @@ class Europe(GEBModel):
                 "n_farmers": "agents",
                 "lowder_target_farms": "Lowder_n",
                 "sequence_fit_target_farms": "sequence_target_n",
-                "n_exact_sequences": "sequences",
+                "n_observed_sequences": "sequences",
                 "extra_sequence_farms": "extra_n",
                 "local_dominant_sequence_pct": "local_dominant_pct",
                 "local_sequence_pct": "local_total_pct",
                 "regional_fallback_sequence_pct": "regional_fallback_pct",
                 "novel_sequence_count": "novel_sequences",
-                "excluded_incomplete_hrl_cells": "incomplete_cells",
-                "binary_rounding_wape_pct": "rounding_WAPE_pct",
                 "median_farm_area_ha": "median_ha",
                 "multi_parcel_farms_pct": "multi_parcel_pct",
                 "mean_fallow_area_pct": "fallow_area_pct",
@@ -5989,8 +4370,7 @@ class Europe(GEBModel):
                 "mean_selected_fraction_retention_pct": "fraction_in_union_pct",
                 "mean_agent_area_retention_pct": "agent_native_pct",
                 "maximum_absolute_agent_area_difference_pct": "worst_area_diff_pct",
-                "mean_combined_crop_fit_score": "combined_fit",
-                "mean_main_crop_fit_score": "main_fit",
+                "mean_cty_crop_fit_score": "cty_fit",
             }
         )
         self.logger.info(
@@ -5998,7 +4378,6 @@ class Europe(GEBModel):
             regional_summary.round(
                 {
                     "static_km2": 2,
-                    "rounding_WAPE_pct": 2,
                     "median_ha": 2,
                     "multi_parcel_pct": 1,
                     "fallow_area_pct": 1,
@@ -6006,8 +4385,7 @@ class Europe(GEBModel):
                     "fraction_in_union_pct": 1,
                     "agent_native_pct": 1,
                     "worst_area_diff_pct": 1,
-                    "combined_fit": 1,
-                    "main_fit": 1,
+                    "cty_fit": 1,
                 }
             ).to_string(index=False),
         )
@@ -6055,13 +4433,6 @@ class Europe(GEBModel):
             multi_year_crop_comparison,
             multi_year_crop_summary,
         ) = _multi_year_crop_area_comparison(crop_area_diagnostics)
-        (
-            _,
-            multi_year_main_crop_summary,
-        ) = _multi_year_crop_area_comparison(
-            crop_area_diagnostics,
-            aggregate_to_main_crop=True,
-        )
         overall_annual_rows: list[dict[str, float | int]] = []
         low_fit_years: list[int] = []
         for year in years:
@@ -6113,23 +4484,16 @@ class Europe(GEBModel):
                 where=overall_source_areas > 0.0,
             )
 
-            combined_fit = _crop_area_fit_scores(overall_year)
-            overall_main_year = _aggregate_crop_alignment_to_main_categories(
-                overall_year
-            )
-            main_fit = _crop_area_fit_scores(overall_main_year)
+            cty_fit = _crop_area_fit_scores(overall_year)
             subgrid_total_m2 = total_subgrid_hrl_area_by_year_m2[year]
             native_to_subgrid_pct = (
-                (subgrid_total_m2 - combined_fit["source_area_m2"])
-                / combined_fit["source_area_m2"]
+                (subgrid_total_m2 - cty_fit["source_area_m2"])
+                / cty_fit["source_area_m2"]
                 * 100.0
-                if combined_fit["source_area_m2"] > 0.0
+                if cty_fit["source_area_m2"] > 0.0
                 else np.nan
             )
-            if (
-                combined_fit["crop_area_fit_score"]
-                < crop_area_fit_warning_threshold_pct
-            ):
+            if cty_fit["crop_area_fit_score"] < crop_area_fit_warning_threshold_pct:
                 low_fit_years.append(int(year))
 
             selected_fractional_total_m2 = total_selected_fractional_area_by_year_m2[
@@ -6158,14 +4522,12 @@ class Europe(GEBModel):
             overall_annual_rows.append(
                 {
                     "year": int(year),
-                    "native_active_km2": (combined_fit["source_area_m2"] / 1_000_000.0),
+                    "native_active_km2": (cty_fit["source_area_m2"] / 1_000_000.0),
                     "subgrid_active_km2": subgrid_total_m2 / 1_000_000.0,
                     "fraction_in_union_km2": (
                         selected_fractional_total_m2 / 1_000_000.0
                     ),
-                    "agent_active_km2": (
-                        combined_fit["assigned_area_m2"] / 1_000_000.0
-                    ),
+                    "agent_active_km2": (cty_fit["assigned_area_m2"] / 1_000_000.0),
                     "fallow_km2": selected_fallow_total_m2 / 1_000_000.0,
                     "missing_km2": selected_missing_total_m2 / 1_000_000.0,
                     "agricultural_union_km2": (
@@ -6174,10 +4536,9 @@ class Europe(GEBModel):
                     "native_subgrid_diff_pct": native_to_subgrid_pct,
                     "fraction_in_union_pct": selected_fraction_retention_pct,
                     "binary_vs_fraction_pct": modal_conversion_pct,
-                    "active_native_diff_pct": combined_fit["total_area_difference_pct"],
-                    "combined_fit": combined_fit["crop_area_fit_score"],
-                    "main_fit": main_fit["crop_area_fit_score"],
-                    "share_fit": combined_fit["crop_share_fit_score"],
+                    "active_native_diff_pct": cty_fit["total_area_difference_pct"],
+                    "cty_fit": cty_fit["crop_area_fit_score"],
+                    "share_fit": cty_fit["crop_share_fit_score"],
                     "active_agents_pct": (
                         active_farmer_crops_by_year[year] / len(farmers) * 100.0
                     ),
@@ -6216,8 +4577,7 @@ class Europe(GEBModel):
                     "fraction_in_union_pct": 1,
                     "binary_vs_fraction_pct": 1,
                     "active_native_diff_pct": 1,
-                    "combined_fit": 1,
-                    "main_fit": 1,
+                    "cty_fit": 1,
                     "share_fit": 1,
                     "active_agents_pct": 1,
                     "fallow_agents_pct": 1,
@@ -6228,7 +4588,7 @@ class Europe(GEBModel):
         multi_year_fit_summary = pd.DataFrame(
             [
                 {
-                    "crop_level": "combined",
+                    "crop_level": "CTY",
                     "year_crop_pairs": multi_year_crop_summary["n_year_crop_pairs"],
                     "raw_km2": multi_year_crop_summary["raw_area_m2"] / 1_000_000.0,
                     "final_km2": multi_year_crop_summary["final_area_m2"] / 1_000_000.0,
@@ -6241,28 +4601,7 @@ class Europe(GEBModel):
                         "area_weighted_error_pct"
                     ],
                     "balanced_error": multi_year_crop_summary["balanced_error_pct"],
-                },
-                {
-                    "crop_level": "main",
-                    "year_crop_pairs": multi_year_main_crop_summary[
-                        "n_year_crop_pairs"
-                    ],
-                    "raw_km2": multi_year_main_crop_summary["raw_area_m2"]
-                    / 1_000_000.0,
-                    "final_km2": multi_year_main_crop_summary["final_area_m2"]
-                    / 1_000_000.0,
-                    "net_diff_pct": multi_year_main_crop_summary["net_difference_pct"],
-                    "area_weighted_fit": multi_year_main_crop_summary[
-                        "area_weighted_fit_pct"
-                    ],
-                    "balanced_fit": multi_year_main_crop_summary["balanced_fit_pct"],
-                    "area_weighted_error": multi_year_main_crop_summary[
-                        "area_weighted_error_pct"
-                    ],
-                    "balanced_error": multi_year_main_crop_summary[
-                        "balanced_error_pct"
-                    ],
-                },
+                }
             ]
         )
         self.logger.info(
@@ -6283,14 +4622,14 @@ class Europe(GEBModel):
         )
         self.logger.info(
             "HRL-only raw-versus-final crop-area comparison by year and "
-            "combined crop. pair_fit_pct is min(raw, final) / max(raw, final); "
+            "CTY crop. pair_fit_pct is min(raw, final) / max(raw, final); "
             "area_weight_pct is the pair's share of the total comparison area:\n%s",
             _format_multi_year_crop_area_comparison(multi_year_crop_comparison),
         )
 
         if low_fit_years:
             self.logger.warning(
-                "Combined crop-area fit is below %.1f/100 for years %s.",
+                "CTY crop-area fit is below %.1f/100 for years %s.",
                 crop_area_fit_warning_threshold_pct,
                 low_fit_years,
             )
@@ -6588,14 +4927,14 @@ class Europe(GEBModel):
         multiple_years: bool = False,
         hrl_years: tuple[int, ...] = (2017, 2018, 2019, 2020, 2021, 2022, 2023),
         reduce_crops: bool = False,
+        random_seed: int = 42,
     ) -> None:
-        """Build farmer crop calendars by combining HRL crops with MIRCA2000 calendars.
+        """Build farmer crop calendars from HRL CTY crops and MIRCA-OS calendars.
 
         The final compact farmer table from
-        one of the two HRL raster farm-construction methods determines which
-        HRL crop sequence assigned to each farmer. HRL crop classes are mapped
-        to MIRCA crop classes,
-        because crop-growth parametrization is available for MIRCA crops. MIRCA2000
+        the HRL raster farm-construction method determines the main-crop sequence
+        assigned to each farmer. HRL CTY classes are mapped to MIRCA crop classes
+        because crop-growth parametrization is available for MIRCA crops. MIRCA-OS
         calendars then provide planting dates and growing-season lengths.
 
         MIRCA-OS crop-area fractions constrain which farmers receive irrigation
@@ -6632,19 +4971,21 @@ class Europe(GEBModel):
                 crop-area fractions.
             minimum_area_ratio: Minimum MIRCA-OS crop-area fraction used inside the
                 MIRCA-OS fraction preprocessing.
-            replace_crop_calendar_unit_code: Optional mapping to replace MIRCA2000
+            replace_crop_calendar_unit_code: Optional mapping to replace MIRCA-OS
                 unit codes when a unit has missing or unsuitable crop calendars.
             multiple_years: If True, build crop calendars for all years in
                 ``hrl_years`` and accumulate irrigation adaptations only for farmers
                 with missing crop histories in previous years.
             hrl_years: HRL years processed when ``multiple_years`` is True.
             reduce_crops: Replace rice by a different crop in region 4.
+            random_seed: Base seed for reproducible area-weighted MIRCA-OS calendar
+                selection.
 
         Raises:
             ValueError: If required final farmer crop-table columns are missing.
             ValueError: If ``multiple_years`` is True and ``hrl_years`` is empty.
-            ValueError: If farmers cannot be assigned to valid MIRCA2000 units.
-            ValueError: If no MIRCA2000 calendar can be found for an assigned crop.
+            ValueError: If farmers cannot be assigned to valid MIRCA-OS units.
+            ValueError: If no MIRCA-OS calendar can be found for an assigned crop.
         """
         if replace_crop_calendar_unit_code is None:
             replace_crop_calendar_unit_code = {}
@@ -6669,45 +5010,87 @@ class Europe(GEBModel):
 
         farmer_locations = get_farm_locations(farms, method="centroid")
 
-        # MIRCA2000 is used for calendar timing, not for the rainfed/irrigated split.
-        MIRCA_unit_grid = self.data_catalog.fetch(MIRCA2000_UNIT_GRID).read()
-        assert isinstance(MIRCA_unit_grid, xr.DataArray)
-
-        MIRCA_unit_grid = MIRCA_unit_grid.isel(
-            {
-                **get_window(
-                    MIRCA_unit_grid.x,
-                    MIRCA_unit_grid.y,
-                    self.bounds,
-                    buffer=2,
-                ),
-                **{"band": 0},
-            }
+        # Use MIRCA-OS for both calendar timing and irrigation-area fractions,
+        # matching the standard farmer crop-calendar setup workflow. The cropping-area
+        # raster is loaded only as a spatial reference for the MIRCA unit grid.
+        reference_crop_map = self.data_catalog.fetch(
+            f"mirca_os_cropping_area_{mirca_year}_5-arcminute_Wheat_rf"
+        ).read()
+        reference_map_buffer = 100
+        reference_crop_map = reference_crop_map.isel(
+            get_window(
+                reference_crop_map.x,
+                reference_crop_map.y,
+                self.bounds,
+                buffer=reference_map_buffer,
+                raise_on_buffer_out_of_bounds=False,
+            )
         )
 
-        MIRCA_units = np.unique(MIRCA_unit_grid.values)
-        MIRCA_units = MIRCA_units[MIRCA_units > 0].astype(int).tolist()
+        mirca_unit_geom = self.data_catalog.fetch(
+            f"mirca_os_admin_boundaries_{mirca_year}"
+        ).read()
+        if not isinstance(mirca_unit_geom, gpd.GeoDataFrame):
+            raise TypeError(
+                "MIRCA-OS administrative boundaries must be a GeoDataFrame."
+            )
 
-        crop_calendar = parse_MIRCA2000_crop_calendar(
-            self.data_catalog,
-            MIRCA_units=MIRCA_units,
+        mirca_unit_geom = mirca_unit_geom.cx[
+            reference_crop_map.x.values.min() : reference_crop_map.x.values.max(),
+            reference_crop_map.y.values.min() : reference_crop_map.y.values.max(),
+        ]
+        if mirca_unit_geom.empty:
+            raise ValueError("No MIRCA-OS units overlap the model bounds.")
+
+        rainfed_calendar_source = self.data_catalog.fetch(
+            f"mirca_os_crop_calendar_{mirca_year}_rf"
+        ).read()
+        irrigated_calendar_source = self.data_catalog.fetch(
+            f"mirca_os_crop_calendar_{mirca_year}_ir"
+        ).read()
+
+        mirca_units = mirca_unit_geom["unit_code"].astype(np.int64).tolist()
+        rainfed_calendar_source = rainfed_calendar_source.loc[
+            rainfed_calendar_source["unit_code"].isin(mirca_units)
+        ]
+        irrigated_calendar_source = irrigated_calendar_source.loc[
+            irrigated_calendar_source["unit_code"].isin(mirca_units)
+        ]
+
+        crop_calendar: dict[int, list[tuple[float, TwoDArrayInt32]]] = {}
+        crop_calendar = parse_MIRCA_crop_calendar(
+            crop_calendar,
+            rainfed_calendar_source,
+            mirca_units,
+            is_irrigated=False,
+        )
+        crop_calendar = parse_MIRCA_crop_calendar(
+            crop_calendar,
+            irrigated_calendar_source,
+            mirca_units,
+            is_irrigated=True,
         )
         crop_calendar = _fix_365_in_crop_calendar(crop_calendar)
-        crop_calendar = _fill_missing_mirca2000_crop_calendars(
-            crop_calendar,
-            logger=self.logger,
-        )
+        if not crop_calendar:
+            raise ValueError("No MIRCA-OS crop calendars overlap the model bounds.")
 
+        mirca_unit_grid = rasterize_like(
+            mirca_unit_geom,
+            reference_crop_map,
+            dtype=np.int32,
+            nodata=-1,
+            column="unit_code",
+            name="MIRCA_unit",
+        )
+        mirca_unit_grid.values = fillna_2d(mirca_unit_grid.values, nodata=-1)
         farmer_mirca_units = sample_from_map(
-            MIRCA_unit_grid.values,
+            mirca_unit_grid.values,
             farmer_locations,
-            MIRCA_unit_grid.rio.transform(recalc=True).to_gdal(),
+            mirca_unit_grid.rio.transform(recalc=True).to_gdal(),
         ).astype(np.int32)
 
-        if (farmer_mirca_units <= 0).any():
-            raise ValueError(
-                "All farmers should be assigned to a valid MIRCA2000 unit."
-            )
+        if (farmer_mirca_units == -1).any():
+            raise ValueError("All farmers should be assigned to a valid MIRCA-OS unit.")
 
         # MIRCA-OS is used for the crop-specific rainfed/irrigated area fractions.
         # These fractions are static here, so changes in yearly candidate irrigation
@@ -6780,8 +5163,8 @@ class Europe(GEBModel):
             farmer_locations,
         )
 
-        # Calendar selections depend only on MIRCA unit, crop combination, and
-        # irrigation state. Reuse resolved combinations across all HRL years.
+        # Cache each farmer's area-weighted MIRCA-OS calendar selection so that an
+        # unchanged main crop and irrigation state remains stable across HRL years.
         calendar_selection_cache: dict[
             tuple[int, int, int, bool],
             np.ndarray,
@@ -6810,9 +5193,9 @@ class Europe(GEBModel):
 
             crop_column = f"crop_{current_hrl_year}"
 
-            # Only this part is HRL-year specific. The spatial sampling, MIRCA2000
-            # calendar parsing, and MIRCA-OS fraction loading can be reused.
-            farmer_crops = _decode_hrl_crop_combinations_from_farmer_table(
+            # Only this part is HRL-year specific. MIRCA-OS calendar parsing and
+            # spatial sampling are reused across all requested years.
+            farmer_crops = _decode_hrl_crops_from_farmer_table(
                 farmers_with_crops,
                 crop_column=crop_column,
                 n_farmers=n_farmers,
@@ -6828,9 +5211,6 @@ class Europe(GEBModel):
                 )
 
             farmer_main_crops = farmer_crops["mirca_crop"].to_numpy(dtype=np.int32)
-            farmer_secondary_crop_types = farmer_crops["secondary_crop_type"].to_numpy(
-                dtype=np.int32
-            )
 
             # Track whether the current HRL year provides a valid MIRCA crop. In
             # multi-year mode, this controls whether later years are allowed to add
@@ -6931,14 +5311,14 @@ class Europe(GEBModel):
                 crop_calendar_per_farmer,
                 n_unique_calendar_keys,
                 n_new_calendar_cache_entries,
-            ) = _select_mirca2000_calendars_for_farmers(
+            ) = _select_mirca_calendars_for_farmers(
                 crop_calendar,
                 farmer_mirca_units=farmer_mirca_units,
                 farmer_main_crops=farmer_main_crops,
-                farmer_secondary_crop_types=farmer_secondary_crop_types,
                 farmer_is_irrigated=is_irrigated_for_calendar,
                 replace_crop_calendar_unit_code=replace_crop_calendar_unit_code,
                 selection_cache=calendar_selection_cache,
+                random_seed=random_seed,
             )
 
             self.logger.info(

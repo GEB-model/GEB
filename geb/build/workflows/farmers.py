@@ -6,9 +6,9 @@ import logging
 import math
 import re
 from contextlib import ExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 import geopandas as gpd
 import numpy as np
@@ -869,94 +869,6 @@ class TargetFarm:
     size_class: str
 
 
-def assert_matching_raster_grid(
-    crop_types: xr.DataArray,
-    secondary_crop: xr.DataArray,
-) -> None:
-    """Check whether crop and secondary-crop rasters are exactly aligned.
-
-    Args:
-        crop_types: HRL crop-type raster.
-        secondary_crop: HRL secondary-crop raster.
-
-    Raises:
-        ValueError: If the rasters do not have matching dimensions, shape, CRS,
-            or coordinates.
-    """
-    if crop_types.ndim != 2 or secondary_crop.ndim != 2:
-        raise ValueError("Crop and secondary-crop rasters must both be 2D.")
-
-    if crop_types.rio.crs is None or secondary_crop.rio.crs is None:
-        raise ValueError("Crop and secondary-crop rasters must both have a CRS.")
-
-    if crop_types.rio.crs != secondary_crop.rio.crs:
-        raise ValueError(
-            "Crop and secondary-crop rasters must have the same CRS. "
-            f"Got {crop_types.rio.crs} and {secondary_crop.rio.crs}."
-        )
-
-    if crop_types.shape != secondary_crop.shape:
-        raise ValueError(
-            "Crop and secondary-crop rasters must have the same shape. "
-            f"Got {crop_types.shape} and {secondary_crop.shape}."
-        )
-
-    if crop_types.dims != secondary_crop.dims:
-        raise ValueError(
-            "Crop and secondary-crop rasters must have the same dimensions. "
-            f"Got {crop_types.dims} and {secondary_crop.dims}."
-        )
-
-    for dim in crop_types.dims:
-        if not np.array_equal(crop_types[dim].values, secondary_crop[dim].values):
-            raise ValueError(f"Rasters are not aligned on dimension {dim!r}.")
-
-
-def combine_crop_and_secondary_values(
-    crop_values: np.ndarray,
-    secondary_values: np.ndarray,
-) -> np.ndarray:
-    """Combine one year of HRL crop and secondary-crop values.
-
-    The final digit of the returned crop code stores the secondary-crop class.
-    Only secondary-crop values 1, 2, 3, and 4 are encoded. All other secondary
-    values are treated as no valid secondary crop.
-
-    Args:
-        crop_values: Two-dimensional HRL crop-type values.
-        secondary_values: Two-dimensional HRL secondary-crop values.
-
-    Returns:
-        Two-dimensional encoded crop raster with dtype ``np.int32``.
-
-    Raises:
-        ValueError: If both input arrays do not have the same shape.
-    """
-    if crop_values.shape != secondary_values.shape:
-        raise ValueError(
-            "crop_values and secondary_values must have the same shape. "
-            f"Got {crop_values.shape} and {secondary_values.shape}."
-        )
-
-    crop_values = np.ascontiguousarray(crop_values.astype(np.int32, copy=False))
-    secondary_values = np.ascontiguousarray(
-        secondary_values.astype(np.int32, copy=False)
-    )
-
-    combined = crop_values.copy()
-
-    valid_crop = (crop_values > _HRL_NO_CROPLAND_CODE) & (
-        crop_values != _HRL_OUTSIDE_AREA_CODE
-    )
-    valid_secondary = (secondary_values >= 1) & (secondary_values <= 4)
-
-    # Only valid main-crop pixels receive the secondary-crop suffix.
-    encode_mask = valid_crop & valid_secondary
-    combined[encode_mask] = crop_values[encode_mask] + secondary_values[encode_mask]
-
-    return combined
-
-
 @njit(cache=True)
 def _crop_sequence_similarity_numba(
     sequence_i: np.ndarray,
@@ -1178,193 +1090,6 @@ def select_cultivated_cells_by_area(
     selected = np.zeros(scores.size, dtype=bool)
     selected[ordered_indices[:n_selected]] = True
     return selected.reshape(scores.shape)
-
-
-def round_crop_states_to_area_targets(
-    modal_crop_stack: np.ndarray,
-    cultivated_fraction_stack: np.ndarray,
-    coverage_fraction_stack: np.ndarray,
-    cell_area_m2: np.ndarray,
-    region_mask: np.ndarray,
-    target_crop_areas_per_year: list[dict[int, float]],
-    *,
-    fallow_code: int = _HRL_FALLOW_CROP_CODE,
-    missing_code: int = _HRL_MISSING_CROP_CODE,
-    temporal_persistence_weight: float = 0.15,
-) -> tuple[np.ndarray, np.ndarray, pd.DataFrame, int]:
-    """Round fractional HRL crops to binary model cells with area control.
-
-    Every selected model cell can contain only one crop state per year. For each
-    year and modal crop category, candidate cells are ranked by their annual HRL
-    cultivated fraction, with a small preference for cells that are cultivated in
-    many observed years. The highest-ranked cells are activated until their full-
-    cell area is as close as possible to the native HRL target area for that crop.
-
-    Cells activated in at least one year form the static agricultural union. A
-    non-active year inside that union becomes valid fallow. Cells outside the union
-    or without complete HRL coverage remain missing. Crop categories are never
-    assigned to cells where that category is not the modal HRL crop, so the method
-    improves absolute area conservation without spatially relocating crops.
-
-    Args:
-        modal_crop_stack: Integer array with shape ``(year, y, x)`` containing
-            positive modal crop codes, native no-cropland ``0``, and a negative
-            missing/outside sentinel.
-        cultivated_fraction_stack: Fractional active-crop cover with the same
-            shape as ``modal_crop_stack``.
-        coverage_fraction_stack: HRL coverage fraction with the same shape.
-        cell_area_m2: Model-cell area array with shape ``(y, x)``.
-        region_mask: Boolean mask selecting the active region.
-        target_crop_areas_per_year: Native HRL target area by positive crop code
-            for every year.
-        fallow_code: Final code assigned to non-active years inside the union.
-        missing_code: Code assigned outside the union or where coverage is
-            incomplete.
-        temporal_persistence_weight: Weight in ``[0, 1]`` given to the fraction
-            of observed years in which a cell is actively cultivated. The
-            remaining weight is given to the current-year cultivated fraction.
-
-    Returns:
-        Tuple with the rounded crop-state stack, static agricultural-union mask,
-        a per-year/per-category diagnostics table, and the number of potential
-        crop cells excluded because HRL coverage is incomplete.
-
-    Raises:
-        ValueError: If array shapes, target years, codes, or weight are invalid.
-        RuntimeError: If the resulting union contains an all-fallow sequence or
-            an unresolved missing state.
-    """
-    modal_crop_stack = np.asarray(modal_crop_stack, dtype=np.int32)
-    cultivated_fraction_stack = np.asarray(cultivated_fraction_stack, dtype=np.float64)
-    coverage_fraction_stack = np.asarray(coverage_fraction_stack, dtype=np.float64)
-    cell_area_m2 = np.asarray(cell_area_m2, dtype=np.float64)
-    region_mask = np.asarray(region_mask, dtype=bool)
-
-    if modal_crop_stack.ndim != 3:
-        raise ValueError("modal_crop_stack must have shape (year, y, x).")
-    if cultivated_fraction_stack.shape != modal_crop_stack.shape:
-        raise ValueError("cultivated_fraction_stack must align with modal_crop_stack.")
-    if coverage_fraction_stack.shape != modal_crop_stack.shape:
-        raise ValueError("coverage_fraction_stack must align with modal_crop_stack.")
-    if cell_area_m2.shape != modal_crop_stack.shape[1:]:
-        raise ValueError("cell_area_m2 must align with the spatial crop grid.")
-    if region_mask.shape != cell_area_m2.shape:
-        raise ValueError("region_mask must align with cell_area_m2.")
-    if len(target_crop_areas_per_year) != modal_crop_stack.shape[0]:
-        raise ValueError("One target crop-area mapping is required per year.")
-    if not 0.0 <= temporal_persistence_weight <= 1.0:
-        raise ValueError("temporal_persistence_weight must be between 0 and 1.")
-    if fallow_code >= 0 or missing_code >= 0 or fallow_code == missing_code:
-        raise ValueError("fallow_code and missing_code must be distinct negatives.")
-    if np.any(cell_area_m2[region_mask] <= 0.0):
-        raise ValueError("All active model cells must have positive area.")
-
-    n_years = modal_crop_stack.shape[0]
-    complete_coverage = np.all(coverage_fraction_stack > 0.0, axis=0)
-    has_modal_crop_any_year = np.any(modal_crop_stack > 0, axis=0)
-    incomplete_candidate_mask = (
-        region_mask & has_modal_crop_any_year & ~complete_coverage
-    )
-    incomplete_cell_count = int(np.count_nonzero(incomplete_candidate_mask))
-
-    eligible = region_mask & complete_coverage
-    active_frequency = np.mean(modal_crop_stack > 0, axis=0, dtype=np.float64)
-    rounded = np.full(modal_crop_stack.shape, missing_code, dtype=np.int32)
-    diagnostics: list[dict[str, float | int]] = []
-    flat_indices = np.arange(cell_area_m2.size, dtype=np.int64).reshape(
-        cell_area_m2.shape
-    )
-
-    for year_index in range(n_years):
-        modal_year = modal_crop_stack[year_index]
-        fraction_year = np.clip(cultivated_fraction_stack[year_index], 0.0, 1.0)
-        targets = {
-            int(code): max(float(area), 0.0)
-            for code, area in target_crop_areas_per_year[year_index].items()
-            if int(code) > 0
-        }
-        modal_codes = np.unique(modal_year[eligible & (modal_year > 0)])
-        crop_codes = sorted(set(targets) | {int(code) for code in modal_codes})
-
-        for crop_code in crop_codes:
-            candidate_mask = eligible & (modal_year == crop_code)
-            candidate_positions = np.flatnonzero(candidate_mask)
-            target_area_m2 = targets.get(crop_code, 0.0)
-
-            if candidate_positions.size == 0:
-                diagnostics.append(
-                    {
-                        "year_index": year_index,
-                        "crop_code": crop_code,
-                        "target_area_m2": target_area_m2,
-                        "candidate_area_m2": 0.0,
-                        "assigned_area_m2": 0.0,
-                        "difference_m2": -target_area_m2,
-                        "candidate_cells": 0,
-                        "selected_cells": 0,
-                    }
-                )
-                continue
-
-            candidate_area = cell_area_m2.ravel()[candidate_positions]
-            candidate_fraction = fraction_year.ravel()[candidate_positions]
-            candidate_persistence = active_frequency.ravel()[candidate_positions]
-            candidate_score = (
-                1.0 - temporal_persistence_weight
-            ) * candidate_fraction + temporal_persistence_weight * candidate_persistence
-            candidate_flat_index = flat_indices.ravel()[candidate_positions]
-            order = np.lexsort((candidate_flat_index, -candidate_score))
-            ordered_positions = candidate_positions[order]
-            ordered_areas = candidate_area[order]
-            cumulative_area = np.cumsum(ordered_areas, dtype=np.float64)
-            possible_areas = np.concatenate(([0.0], cumulative_area))
-            absolute_error = np.abs(possible_areas - target_area_m2)
-            minimum_error = float(absolute_error.min())
-            closest = np.flatnonzero(
-                np.isclose(absolute_error, minimum_error, rtol=0.0, atol=1e-9)
-            )
-            # Prefer the smaller represented area for an exact tie so rounding
-            # does not systematically inflate crop and water-use totals.
-            selected_count = int(closest[0])
-            selected_positions = ordered_positions[:selected_count]
-            rounded[year_index].ravel()[selected_positions] = crop_code
-            assigned_area_m2 = float(possible_areas[selected_count])
-
-            diagnostics.append(
-                {
-                    "year_index": year_index,
-                    "crop_code": crop_code,
-                    "target_area_m2": target_area_m2,
-                    "candidate_area_m2": float(candidate_area.sum()),
-                    "assigned_area_m2": assigned_area_m2,
-                    "difference_m2": assigned_area_m2 - target_area_m2,
-                    "candidate_cells": int(candidate_positions.size),
-                    "selected_cells": selected_count,
-                }
-            )
-
-    agricultural_union = region_mask & np.any(rounded > 0, axis=0)
-    rounded[:, agricultural_union] = np.where(
-        rounded[:, agricultural_union] > 0,
-        rounded[:, agricultural_union],
-        fallow_code,
-    )
-    rounded[:, ~agricultural_union] = missing_code
-
-    union_sequences = rounded[:, agricultural_union]
-    if union_sequences.size == 0:
-        raise RuntimeError("Area-constrained rounding produced no agricultural cells.")
-    if np.any(np.all(union_sequences == fallow_code, axis=0)):
-        raise RuntimeError("The agricultural union contains an all-fallow sequence.")
-    if np.any(union_sequences == missing_code):
-        raise RuntimeError("The agricultural union contains missing HRL states.")
-
-    return (
-        rounded,
-        agricultural_union,
-        pd.DataFrame(diagnostics),
-        incomplete_cell_count,
-    )
 
 
 def _target_cell_counts_from_areas(
@@ -2901,637 +2626,6 @@ def grow_farms_from_raster_cells(
     return farm_values.astype(np.int32, copy=False), farmers
 
 
-def _allocate_farm_counts_to_sequence_groups(
-    group_cell_counts: np.ndarray,
-    requested_n_farms: int,
-) -> np.ndarray:
-    """Allocate a regional farm count over exact-sequence groups.
-
-    Every non-empty sequence group receives at least one farm. The Lowder-derived
-    count is increased when required because one farm cannot contain multiple exact
-    sequences. Counts remain proportional to group area where possible and cannot
-    exceed one farm per cell.
-
-    Args:
-        group_cell_counts: Number of selected model cells in each sequence group.
-        requested_n_farms: Lowder-derived number of farms for the region.
-
-    Returns:
-        Positive farm counts per sequence group. Their sum is the feasible maximum
-        of the Lowder request and number of sequence groups.
-
-    Raises:
-        RuntimeError: If the requested total cannot be allocated over groups.
-        ValueError: If group counts or the requested farm count are invalid.
-    """
-    group_cell_counts = np.asarray(group_cell_counts, dtype=np.int64)
-    if group_cell_counts.ndim != 1 or group_cell_counts.size == 0:
-        raise ValueError("group_cell_counts must be a non-empty 1D array.")
-    if (group_cell_counts <= 0).any():
-        raise ValueError("Every exact-sequence group must contain at least one cell.")
-
-    n_groups = int(group_cell_counts.size)
-    n_cells = int(group_cell_counts.sum())
-    total_n_farms = min(max(int(requested_n_farms), n_groups), n_cells)
-
-    raw = group_cell_counts.astype(np.float64) / n_cells * total_n_farms
-    counts = np.floor(raw).astype(np.int64)
-    counts = np.maximum(counts, 1)
-    counts = np.minimum(counts, group_cell_counts)
-
-    while int(counts.sum()) < total_n_farms:
-        available = counts < group_cell_counts
-        if not available.any():
-            raise RuntimeError("No sequence group has capacity for another farm.")
-        priority = raw - counts
-        priority[~available] = -np.inf
-        best = int(np.argmax(priority))
-        if not np.isfinite(priority[best]):
-            # All proportional remainders are exhausted. Split the group with
-            # the currently largest mean number of cells per farm.
-            mean_cells = np.divide(
-                group_cell_counts,
-                counts,
-                out=np.zeros_like(raw),
-                where=counts > 0,
-            )
-            mean_cells[~available] = -np.inf
-            best = int(np.argmax(mean_cells))
-        counts[best] += 1
-
-    while int(counts.sum()) > total_n_farms:
-        removable = counts > 1
-        if not removable.any():
-            raise RuntimeError("Cannot reduce sequence-group farm counts further.")
-        priority = counts - raw
-        priority[~removable] = -np.inf
-        counts[int(np.argmax(priority))] -= 1
-
-    return counts.astype(np.int32)
-
-
-def _prepare_exact_sequence_targets(
-    target_farms: list[TargetFarm],
-    group_cell_counts: np.ndarray,
-) -> tuple[list[TargetFarm], np.ndarray, np.ndarray]:
-    """Allocate Lowder targets to exact crop-sequence groups.
-
-    Lowder remains a soft size prior. Additional targets are created when the number
-    of exact sequences exceeds the Lowder holding count. Within every sequence group,
-    integer target counts exactly exhaust the available cells.
-
-    Args:
-        target_farms: Regional Lowder-derived target farms.
-        group_cell_counts: Number of cells in every exact-sequence group.
-
-    Returns:
-        Ordered target farms, exact target cell counts, and the sequence-group ID of
-        every target farm.
-
-    Raises:
-        ValueError: If targets are absent or sequence-group counts are inconsistent.
-    """
-    if not target_farms:
-        raise ValueError("target_farms must contain at least one target.")
-
-    group_cell_counts = np.asarray(group_cell_counts, dtype=np.int32)
-    farms_per_group = _allocate_farm_counts_to_sequence_groups(
-        group_cell_counts,
-        len(target_farms),
-    )
-    required_n_farms = int(farms_per_group.sum())
-
-    target_pool = sorted(
-        list(target_farms),
-        key=lambda target: target.target_area_m2,
-        reverse=True,
-    )
-    if required_n_farms > len(target_pool):
-        representative_target = target_pool[len(target_pool) // 2]
-        target_pool.extend(
-            TargetFarm(
-                target_area_m2=float(representative_target.target_area_m2),
-                size_class=str(representative_target.size_class),
-            )
-            for _ in range(required_n_farms - len(target_pool))
-        )
-    elif required_n_farms < len(target_pool):
-        # This can only occur when Lowder requests more farms than there are
-        # cultivated cells. Retain evenly spaced target quantiles rather than
-        # keeping only one end of the size distribution.
-        selected_indices = (
-            np.linspace(
-                0,
-                len(target_pool) - 1,
-                required_n_farms,
-            )
-            .round()
-            .astype(np.int32)
-        )
-        target_pool = [target_pool[index] for index in selected_indices]
-
-    # Pair larger Lowder targets with sequence groups that require larger farms
-    # on average. Exact group totals are subsequently enforced in cell units.
-    slot_groups = np.repeat(
-        np.arange(group_cell_counts.size, dtype=np.int32),
-        farms_per_group,
-    )
-    mean_cells_per_slot = group_cell_counts[slot_groups] / farms_per_group[slot_groups]
-    slot_order = np.lexsort((slot_groups, -mean_cells_per_slot))
-    slot_groups = slot_groups[slot_order]
-
-    targets_by_group: list[list[TargetFarm]] = [
-        [] for _ in range(group_cell_counts.size)
-    ]
-    for target, group_id in zip(target_pool, slot_groups, strict=True):
-        targets_by_group[int(group_id)].append(target)
-
-    ordered_targets: list[TargetFarm] = []
-    target_cell_counts: list[np.ndarray] = []
-    farm_sequence_groups: list[np.ndarray] = []
-    for group_id, group_targets in enumerate(targets_by_group):
-        group_ordered_targets, group_counts = _target_cell_counts_from_areas(
-            group_targets,
-            int(group_cell_counts[group_id]),
-        )
-        ordered_targets.extend(group_ordered_targets)
-        target_cell_counts.append(group_counts)
-        farm_sequence_groups.append(
-            np.full(len(group_ordered_targets), group_id, dtype=np.int32)
-        )
-
-    return (
-        ordered_targets,
-        np.concatenate(target_cell_counts).astype(np.int32, copy=False),
-        np.concatenate(farm_sequence_groups).astype(np.int32, copy=False),
-    )
-
-
-@njit(cache=True)
-def _add_exact_sequence_frontier_neighbors(
-    flat_index: int,
-    required_sequence_group: int,
-    n_rows: int,
-    n_cols: int,
-    cultivated_flat: np.ndarray,
-    sequence_groups_flat: np.ndarray,
-    assignments_flat: np.ndarray,
-    frontier: np.ndarray,
-    frontier_size: int,
-    frontier_generation: np.ndarray,
-    generation: int,
-) -> int:
-    """Add free four-neighbours carrying the required exact sequence.
-
-    Args:
-        flat_index: Flat index of the cell whose neighbours are inspected.
-        required_sequence_group: Exact-sequence group required by the current farm.
-        n_rows: Number of raster rows.
-        n_cols: Number of raster columns.
-        cultivated_flat: Flat boolean agricultural mask.
-        sequence_groups_flat: Exact-sequence group per flat cell.
-        assignments_flat: Current farmer assignment per flat cell.
-        frontier: Preallocated frontier indices.
-        frontier_size: Number of valid frontier entries.
-        frontier_generation: Generation marker per cell.
-        generation: Marker for the current farm.
-
-    Returns:
-        Updated number of valid frontier entries.
-    """
-    row = flat_index // n_cols
-    col = flat_index - row * n_cols
-
-    if row > 0:
-        neighbor = flat_index - n_cols
-        if (
-            cultivated_flat[neighbor]
-            and sequence_groups_flat[neighbor] == required_sequence_group
-            and assignments_flat[neighbor] < 0
-            and frontier_generation[neighbor] != generation
-        ):
-            frontier[frontier_size] = neighbor
-            frontier_size += 1
-            frontier_generation[neighbor] = generation
-
-    if row + 1 < n_rows:
-        neighbor = flat_index + n_cols
-        if (
-            cultivated_flat[neighbor]
-            and sequence_groups_flat[neighbor] == required_sequence_group
-            and assignments_flat[neighbor] < 0
-            and frontier_generation[neighbor] != generation
-        ):
-            frontier[frontier_size] = neighbor
-            frontier_size += 1
-            frontier_generation[neighbor] = generation
-
-    if col > 0:
-        neighbor = flat_index - 1
-        if (
-            cultivated_flat[neighbor]
-            and sequence_groups_flat[neighbor] == required_sequence_group
-            and assignments_flat[neighbor] < 0
-            and frontier_generation[neighbor] != generation
-        ):
-            frontier[frontier_size] = neighbor
-            frontier_size += 1
-            frontier_generation[neighbor] = generation
-
-    if col + 1 < n_cols:
-        neighbor = flat_index + 1
-        if (
-            cultivated_flat[neighbor]
-            and sequence_groups_flat[neighbor] == required_sequence_group
-            and assignments_flat[neighbor] < 0
-            and frontier_generation[neighbor] != generation
-        ):
-            frontier[frontier_size] = neighbor
-            frontier_size += 1
-            frontier_generation[neighbor] = generation
-
-    return frontier_size
-
-
-@njit(cache=True)
-def _exact_sequence_distance_score(
-    candidate: int,
-    seed: int,
-    n_cols: int,
-    target_size_cells: int,
-) -> float:
-    """Calculate compactness within an exact-sequence farm.
-
-    Args:
-        candidate: Flat candidate-cell index.
-        seed: Flat seed-cell index.
-        n_cols: Number of raster columns.
-        target_size_cells: Target farm size in cells.
-
-    Returns:
-        Compactness score in the interval ``(0, 1]``.
-    """
-    candidate_row = candidate // n_cols
-    candidate_col = candidate - candidate_row * n_cols
-    seed_row = seed // n_cols
-    seed_col = seed - seed_row * n_cols
-    delta_row = candidate_row - seed_row
-    delta_col = candidate_col - seed_col
-    distance_cells = math.sqrt(delta_row * delta_row + delta_col * delta_col)
-    target_radius_cells = max(math.sqrt(target_size_cells / math.pi), 1.0)
-    return 1.0 / (1.0 + distance_cells / target_radius_cells)
-
-
-@njit(cache=True)
-def _grow_raster_farms_exact_sequences_numba(
-    cultivated_mask: np.ndarray,
-    sequence_groups: np.ndarray,
-    target_cell_counts: np.ndarray,
-    farm_sequence_groups: np.ndarray,
-    grouped_seed_order: np.ndarray,
-    group_offsets: np.ndarray,
-    jump_candidate_sample: int,
-    jump_distance_scale_cells: float,
-) -> np.ndarray:
-    """Assign cells without mixing complete crop-sequence groups.
-
-    Each farm receives cells only from its required exact-sequence group. Connected
-    cells are preferred; if the component is exhausted, another same-sequence cell
-    starts a disconnected parcel.
-
-    Args:
-        cultivated_mask: Boolean exact-sequence agricultural union.
-        sequence_groups: Exact-sequence group ID per selected cell.
-        target_cell_counts: Exact positive target cell count per farmer.
-        farm_sequence_groups: Required exact-sequence group per farmer.
-        grouped_seed_order: Selected flat indices grouped by sequence.
-        group_offsets: Start and end offsets of every sequence group.
-        jump_candidate_sample: Same-sequence cells sampled for a new parcel.
-        jump_distance_scale_cells: Distance scale for parcel-jump preference.
-
-    Returns:
-        Two-dimensional compact local farmer-ID raster.
-
-    Raises:
-        RuntimeError: If a sequence group is exhausted before all of its farm targets
-            can be filled.
-    """
-    n_rows, n_cols = cultivated_mask.shape
-    n_total = n_rows * n_cols
-    cultivated_flat = cultivated_mask.ravel()
-    sequence_groups_flat = sequence_groups.ravel()
-    assignments_flat = np.full(n_total, -1, dtype=np.int32)
-
-    frontier = np.empty(n_total, dtype=np.int32)
-    frontier_generation = np.zeros(n_total, dtype=np.int32)
-    generation = 0
-    group_cursors = group_offsets[:-1].copy()
-    distance_scale = max(jump_distance_scale_cells, 1.0)
-
-    for farmer_id in range(target_cell_counts.size):
-        required_group = int(farm_sequence_groups[farmer_id])
-        cursor = int(group_cursors[required_group])
-        group_end = int(group_offsets[required_group + 1])
-        while cursor < group_end and assignments_flat[grouped_seed_order[cursor]] >= 0:
-            cursor += 1
-        if cursor >= group_end:
-            raise RuntimeError("No exact-sequence seed remains for a target farm.")
-
-        seed = int(grouped_seed_order[cursor])
-        group_cursors[required_group] = cursor + 1
-        assignments_flat[seed] = farmer_id
-        assigned_count = 1
-        target_size = int(target_cell_counts[farmer_id])
-
-        generation += 1
-        frontier_size = 0
-        frontier_size = _add_exact_sequence_frontier_neighbors(
-            seed,
-            required_group,
-            n_rows,
-            n_cols,
-            cultivated_flat,
-            sequence_groups_flat,
-            assignments_flat,
-            frontier,
-            frontier_size,
-            frontier_generation,
-            generation,
-        )
-
-        while assigned_count < target_size:
-            best_position = -1
-            best_candidate = -1
-            best_score = -1.0e30
-            position = 0
-            while position < frontier_size:
-                candidate = int(frontier[position])
-                if assignments_flat[candidate] >= 0:
-                    frontier_size -= 1
-                    frontier[position] = frontier[frontier_size]
-                    continue
-                score = _exact_sequence_distance_score(
-                    candidate,
-                    seed,
-                    n_cols,
-                    target_size,
-                )
-                if score > best_score or (
-                    score == best_score and candidate < best_candidate
-                ):
-                    best_score = score
-                    best_candidate = candidate
-                    best_position = position
-                position += 1
-
-            if best_candidate < 0:
-                # Connected cells with this exact sequence are exhausted. Search
-                # only within the same sequence group. Distance is deliberately a
-                # soft preference rather than a hard exclusion.
-                sampled = 0
-                scan = int(group_cursors[required_group])
-                best_jump = -1
-                best_jump_score = -1.0e30
-                seed_row = seed // n_cols
-                seed_col = seed - seed_row * n_cols
-                while scan < group_end and sampled < jump_candidate_sample:
-                    candidate = int(grouped_seed_order[scan])
-                    scan += 1
-                    if assignments_flat[candidate] >= 0:
-                        continue
-                    sampled += 1
-                    candidate_row = candidate // n_cols
-                    candidate_col = candidate - candidate_row * n_cols
-                    delta_row = candidate_row - seed_row
-                    delta_col = candidate_col - seed_col
-                    distance_cells = math.sqrt(
-                        delta_row * delta_row + delta_col * delta_col
-                    )
-                    jump_score = 1.0 / (1.0 + distance_cells / distance_scale)
-                    if jump_score > best_jump_score or (
-                        jump_score == best_jump_score and candidate < best_jump
-                    ):
-                        best_jump_score = jump_score
-                        best_jump = candidate
-
-                if best_jump < 0:
-                    scan = int(group_offsets[required_group])
-                    while scan < group_end:
-                        candidate = int(grouped_seed_order[scan])
-                        if assignments_flat[candidate] < 0:
-                            best_jump = candidate
-                            break
-                        scan += 1
-
-                if best_jump < 0:
-                    raise RuntimeError(
-                        "The exact-sequence group was exhausted before its farm "
-                        "targets were filled."
-                    )
-                best_candidate = best_jump
-            else:
-                frontier_size -= 1
-                frontier[best_position] = frontier[frontier_size]
-
-            assignments_flat[best_candidate] = farmer_id
-            assigned_count += 1
-            frontier_size = _add_exact_sequence_frontier_neighbors(
-                best_candidate,
-                required_group,
-                n_rows,
-                n_cols,
-                cultivated_flat,
-                sequence_groups_flat,
-                assignments_flat,
-                frontier,
-                frontier_size,
-                frontier_generation,
-                generation,
-            )
-
-    return assignments_flat.reshape((n_rows, n_cols))
-
-
-def grow_farms_from_exact_crop_sequences(
-    cultivated_mask: np.ndarray,
-    crop_sequences: np.ndarray,
-    cell_area_m2: np.ndarray,
-    target_farms: list[TargetFarm],
-    *,
-    crop_columns: list[str],
-    random_seed: int = 42,
-    jump_candidate_sample: int = 1_024,
-    jump_distance_scale_m: float = 10_000.0,
-) -> tuple[np.ndarray, pd.DataFrame]:
-    """Create sequence-homogeneous farms with Lowder as a soft prior.
-
-    The complete primary-plus-secondary sequence is a hard constraint. All cells of
-    a farm carry the same observed sequence, including genuine fallow years. Missing
-    values are excluded from the exact-sequence domain. Lowder controls the preferred
-    number and relative sizes of farms but cannot override sequence homogeneity.
-    Disconnected same-sequence parcels may belong to one farmer.
-
-    Args:
-        cultivated_mask: Static selected agricultural mask.
-        crop_sequences: Combined HRL crop codes with shape ``(year, y, x)``.
-        cell_area_m2: Model-cell areas in square metres.
-        target_farms: Lowder-derived regional target farms.
-        crop_columns: Farmer-table crop columns matching the year dimension.
-        random_seed: Deterministic seed for within-sequence cell ordering.
-        jump_candidate_sample: Same-sequence cells considered when a connected
-            component is exhausted.
-        jump_distance_scale_m: Distance scale used to prefer nearby disconnected
-            parcels.
-
-    Returns:
-        Compact farm raster and farmer table. Each farmer contains one complete
-        sequence observed on the selected model grid.
-
-    Raises:
-        RuntimeError: If growth violates compact IDs, exact cell coverage, sequence
-            homogeneity, or total target counts.
-        ValueError: If arrays, crop columns, targets, or jump settings are invalid.
-    """
-    cultivated_mask = np.asarray(cultivated_mask, dtype=bool)
-    crop_sequences = np.asarray(crop_sequences, dtype=np.int32)
-    cell_area_m2 = np.asarray(cell_area_m2, dtype=np.float64)
-
-    if cultivated_mask.ndim != 2:
-        raise ValueError("cultivated_mask must be two-dimensional.")
-    if crop_sequences.ndim != 3 or crop_sequences.shape[1:] != cultivated_mask.shape:
-        raise ValueError(
-            "crop_sequences must have shape (year, y, x) aligned with cultivated_mask."
-        )
-    if cell_area_m2.shape != cultivated_mask.shape:
-        raise ValueError("cell_area_m2 must align with cultivated_mask.")
-    if len(crop_columns) != crop_sequences.shape[0]:
-        raise ValueError("crop_columns must match the crop_sequences year dimension.")
-    if jump_candidate_sample < 1:
-        raise ValueError("jump_candidate_sample must be at least 1.")
-    if jump_distance_scale_m <= 0:
-        raise ValueError("jump_distance_scale_m must be positive.")
-
-    active_indices = np.flatnonzero(cultivated_mask).astype(np.int32)
-    if active_indices.size == 0:
-        raise ValueError("No cultivated model cells are available.")
-
-    active_sequences = np.ascontiguousarray(
-        crop_sequences[:, cultivated_mask].T,
-        dtype=np.int32,
-    )
-    if np.any(active_sequences == _HRL_MISSING_CROP_CODE):
-        raise ValueError(
-            "cultivated_mask contains native HRL outside/missing states (-2). "
-            "These cells must be excluded rather than interpreted as fallow."
-        )
-    if np.any(np.all(active_sequences == _HRL_FALLOW_CROP_CODE, axis=1)):
-        raise ValueError(
-            "cultivated_mask contains cells that are fallow in every requested "
-            "year; cells without any observed crop are not fields."
-        )
-    unique_sequences, inverse, group_cell_counts = np.unique(
-        active_sequences,
-        axis=0,
-        return_inverse=True,
-        return_counts=True,
-    )
-    inverse = inverse.astype(np.int32, copy=False)
-    group_cell_counts = group_cell_counts.astype(np.int32, copy=False)
-
-    ordered_targets, target_cell_counts, farm_sequence_groups = (
-        _prepare_exact_sequence_targets(
-            target_farms,
-            group_cell_counts,
-        )
-    )
-
-    sequence_groups = np.full(cultivated_mask.shape, -1, dtype=np.int32)
-    sequence_groups[cultivated_mask] = inverse
-
-    rng = np.random.default_rng(random_seed)
-    random_keys = rng.random(active_indices.size)
-    grouped_order = np.lexsort((random_keys, inverse))
-    grouped_seed_order = active_indices[grouped_order].astype(np.int32, copy=False)
-    group_offsets = np.concatenate(
-        (
-            np.array([0], dtype=np.int64),
-            np.cumsum(group_cell_counts, dtype=np.int64),
-        )
-    )
-
-    mean_cell_area_m2 = float(cell_area_m2[cultivated_mask].mean())
-    mean_cell_length_m = max(math.sqrt(mean_cell_area_m2), 1.0)
-    jump_distance_scale_cells = jump_distance_scale_m / mean_cell_length_m
-
-    farm_values = _grow_raster_farms_exact_sequences_numba(
-        cultivated_mask,
-        sequence_groups,
-        target_cell_counts,
-        farm_sequence_groups,
-        grouped_seed_order,
-        group_offsets,
-        int(jump_candidate_sample),
-        float(jump_distance_scale_cells),
-    )
-    farm_values[~cultivated_mask] = -1
-
-    represented = np.unique(farm_values[farm_values >= 0])
-    expected = np.arange(len(ordered_targets), dtype=np.int32)
-    if not np.array_equal(represented, expected):
-        raise RuntimeError("Exact-sequence farm IDs are not compact.")
-    if not ((farm_values >= 0) == cultivated_mask).all():
-        raise RuntimeError("Every selected cultivated cell must have one farm ID.")
-
-    flat_farms = farm_values[cultivated_mask]
-    actual_areas_m2 = np.bincount(
-        flat_farms,
-        weights=cell_area_m2[cultivated_mask],
-        minlength=len(ordered_targets),
-    )
-    n_cells = np.bincount(
-        flat_farms,
-        minlength=len(ordered_targets),
-    ).astype(np.int32)
-    n_parcels = _count_farm_components_numba(
-        farm_values,
-        len(ordered_targets),
-    )
-
-    farmer_sequences = unique_sequences[farm_sequence_groups]
-    farmers = pd.DataFrame(
-        {
-            "farmer_id": np.arange(len(ordered_targets), dtype=np.int32),
-            "target_area_m2": np.asarray(
-                [target.target_area_m2 for target in ordered_targets],
-                dtype=np.float64,
-            ),
-            "area_m2": actual_areas_m2.astype(np.float64),
-            "area_ha": actual_areas_m2.astype(np.float64) / 10_000.0,
-            "size_class": [target.size_class for target in ordered_targets],
-            "n_cells": n_cells,
-            "n_fields": n_parcels,
-            "sequence_group_id": farm_sequence_groups.astype(np.int32),
-        }
-    )
-    for year_index, crop_column in enumerate(crop_columns):
-        farmers[crop_column] = farmer_sequences[:, year_index].astype(np.int32)
-
-    # Efficient defensive validation of the hard constraint: all cells of one
-    # farmer must map to the same exact-sequence group.
-    active_farm_ids = farm_values[cultivated_mask].astype(np.int32, copy=False)
-    active_group_ids = sequence_groups[cultivated_mask].astype(np.int32, copy=False)
-    minimum_group = np.full(len(farmers), np.iinfo(np.int32).max, dtype=np.int32)
-    maximum_group = np.full(len(farmers), -1, dtype=np.int32)
-    np.minimum.at(minimum_group, active_farm_ids, active_group_ids)
-    np.maximum.at(maximum_group, active_farm_ids, active_group_ids)
-    if not np.array_equal(minimum_group, maximum_group):
-        raise RuntimeError("At least one farmer contains multiple crop sequences.")
-    if not np.array_equal(minimum_group, farm_sequence_groups):
-        raise RuntimeError("Farmer sequence labels do not match assigned cells.")
-
-    return farm_values.astype(np.int32, copy=False), farmers
-
-
 def _assign_size_class(
     area_m2: pd.Series,
     size_class_boundaries: dict[str, tuple[int | float, int | float]],
@@ -4045,7 +3139,28 @@ HRL_CTY_CLASS_CODES = (
     3100,
     3200,
 )
-HRL_CPSCT_CLASS_CODES = (0, 1, 2, 3, 4)
+HRL_CTY_CLASS_NAMES = {
+    0: "No cropland",
+    1110: "Wheat",
+    1120: "Barley",
+    1130: "Maize",
+    1140: "Rice",
+    1150: "Other cereals",
+    1210: "Fresh vegetables",
+    1220: "Dry pulses",
+    1310: "Potatoes",
+    1320: "Sugar beet",
+    1410: "Sunflower",
+    1420: "Soybeans",
+    1430: "Rapeseed",
+    1440: "Flax, cotton and hemp",
+    2100: "Grapes",
+    2200: "Olives",
+    2310: "Fruits",
+    2320: "Nuts",
+    3100: "Unclassified annual crop",
+    3200: "Unclassified permanent crop",
+}
 
 # Crop-group aggregation used by the official HRL Croplands verification.
 # The codes correspond to Table 8-3 of the Product User Manual.
@@ -4124,39 +3239,85 @@ HRL_CTY_AGGREGATION_LEVEL_1_NAMES = {
     1440: "Flax, cotton and hemp",
     20: "Permanent crops",
 }
-HRL_CPSCT_CLASS_NAMES = {
-    0: "No secondary crop",
-    1: "Short summer crop",
-    2: "Long summer crop",
-    3: "Short winter crop",
-    4: "Long winter crop",
-}
 
 _HRL_TILE_NAME_PATTERN = re.compile(
-    r"^CLMS_HRLVLCC_(?P<product>CTY|CTYCL|CPSCT)_S(?P<year>\d{4})_"
+    r"^CLMS_HRLVLCC_(?P<product>CTY|CTYCL)_S(?P<year>\d{4})_"
     r"R10m_(?P<tile>[EW]\d+[NS]\d+)_03035_(?P<version>V\d+_R\d+)$"
 )
 
 
+@dataclass
+class AlphaEarthConstantClassifier:
+    """Minimal probability classifier for a branch containing one CTY class."""
+
+    class_code: int
+
+    def __post_init__(self) -> None:
+        self.classes_ = np.asarray([int(self.class_code)], dtype=np.int32)
+
+    def predict_proba(self, features: np.ndarray) -> np.ndarray:
+        """Return probability one for the only represented class."""
+        features = np.asarray(features)
+        return np.ones((features.shape[0], 1), dtype=np.float32)
+
+    def predict(self, features: np.ndarray) -> np.ndarray:
+        """Return the only represented class for every row."""
+        features = np.asarray(features)
+        return np.full(features.shape[0], int(self.class_code), dtype=np.int32)
+
+
 @dataclass(slots=True)
 class AlphaEarthCropModelBundle:
-    """Trained CTY and CPSCT models sharing one annual predictor schema.
+    """Trained annual CTY classifier and its complete inference configuration.
+
+    The bundle supports flat or soft-hierarchical native-CTY classification with
+    any estimator family exposed by :func:`fit_alphaearth_crop_models`.
 
     Attributes:
-        cty_model: Classifier predicting the HRL Crop Types class.
-        cpsct_model: Classifier predicting HRL Secondary Crops Type on cropland.
-        feature_names: Ordered predictor names expected by both classifiers.
-        model_type: Name of the estimator family used during fitting.
-        cty_classes: Ordered CTY class codes represented by the workflow.
-        cpsct_classes: Ordered CPSCT class codes represented by the workflow.
+        cty_model: Flat native-CTY classifier, or ``None`` for a hierarchical model.
+        feature_names: Ordered predictor names expected by the classifier.
+        model_type: Estimator family used by all trainable branches.
+        model_parameters: Configured estimator settings retained for reproducibility.
+        cty_classes: Ordered complete CTY output schema.
+        trained_cty_classes: Native classes represented directly by the estimator.
+        normalize_embeddings: Whether each 64-dimensional AEF vector is L2-normalized.
+        classifier_structure: ``"flat"`` or ``"hierarchical"``.
+        residual_class_mode: ``"learned"`` or ``"uncertainty"``.
+        unclassified_probability_threshold: Default confidence rejection threshold.
+        class_probability_thresholds: Optional class-specific decision thresholds.
+        group_model: Crop-group classifier for hierarchical inference.
+        within_group_models: Conditional native classifiers keyed by crop-group code.
     """
 
-    cty_model: Any
-    cpsct_model: Any
+    cty_model: Any | None
     feature_names: tuple[str, ...]
-    model_type: str
+    model_type: str = "logistic_regression"
+    model_parameters: dict[str, Any] = field(default_factory=dict)
     cty_classes: tuple[int, ...] = HRL_CTY_CLASS_CODES
-    cpsct_classes: tuple[int, ...] = HRL_CPSCT_CLASS_CODES
+    trained_cty_classes: tuple[int, ...] = HRL_CTY_CLASS_CODES
+    normalize_embeddings: bool = True
+    classifier_structure: str = "flat"
+    residual_class_mode: str = "uncertainty"
+    unclassified_probability_threshold: float = 0.25
+    class_probability_thresholds: dict[int, float] = field(default_factory=dict)
+    group_model: Any | None = None
+    within_group_models: dict[int, Any] = field(default_factory=dict)
+
+
+ALPHAEARTH_SUPPORTED_MODEL_TYPES = (
+    "logistic_regression",
+    "random_forest",
+    "extra_trees",
+    "hist_gradient_boosting",
+)
+
+
+HRL_CTY_RESIDUAL_CLASS_CODES = (1150, 3100, 3200)
+HRL_CTY_UNCERTAINTY_TRAINING_CLASS_CODES = tuple(
+    code for code in HRL_CTY_CLASS_CODES if code not in HRL_CTY_RESIDUAL_CLASS_CODES
+)
+HRL_CTY_HIERARCHICAL_GROUP_CODES = (0, 11, 12, 13, 14, 20)
+HRL_CTY_CEREAL_EXPLICIT_CLASS_CODES = (1110, 1120, 1130, 1140)
 
 
 def alphaearth_crop_feature_names(
@@ -4200,6 +3361,90 @@ def dequantize_alphaearth_embeddings(values: np.ndarray) -> np.ndarray:
     result = ((raw_float / 127.5) ** 2) * np.sign(raw_float)
     result[nodata] = np.nan
     return result
+
+
+def normalize_alphaearth_embeddings(values: np.ndarray) -> np.ndarray:
+    """L2-normalize dequantized AlphaEarth vectors row by row.
+
+    AlphaEarth embeddings are trained on a unit hypersphere. Quantization and
+    dequantization introduce small norm deviations; this function restores the
+    intended geometry without changing the information contained in each vector.
+
+    Args:
+        values: Dequantized embedding matrix with shape ``(n, 64)``.
+
+    Returns:
+        Float32 matrix with unit-length finite rows. Non-finite rows remain NaN.
+    """
+    embeddings = np.asarray(values, dtype=np.float32)
+    if embeddings.ndim != 2 or embeddings.shape[1] != 64:
+        raise ValueError("AlphaEarth embeddings must have shape (n, 64).")
+
+    normalized = embeddings.copy()
+    finite_rows = np.isfinite(normalized).all(axis=1)
+    if finite_rows.any():
+        norms = np.linalg.norm(normalized[finite_rows], axis=1)
+        valid_norms = np.isfinite(norms) & (norms > 1.0e-12)
+        finite_indices = np.flatnonzero(finite_rows)
+        invalid_indices = finite_indices[~valid_norms]
+        if invalid_indices.size:
+            normalized[invalid_indices] = np.nan
+        valid_indices = finite_indices[valid_norms]
+        normalized[valid_indices] /= norms[valid_norms, None]
+    return normalized.astype(np.float32, copy=False)
+
+
+def alphaearth_embedding_diagnostics(
+    samples: pd.DataFrame,
+) -> dict[str, float | int]:
+    """Summarize whether stored AEF columns look dequantized and well formed.
+
+    The check is intentionally performed before optional L2 normalization. Raw
+    signed-int8 values or values outside the documented dequantized range cause
+    an error, while ordinary quantization-related norm variation is reported.
+
+    Args:
+        samples: Sample table containing all 64 ``alphaearth_*`` columns.
+
+    Returns:
+        Scalar diagnostics suitable for a one-row table or log message.
+
+    Raises:
+        ValueError: If embedding columns are missing, non-finite, or inconsistent
+            with dequantized AlphaEarth values.
+    """
+    embedding_names = tuple(f"alphaearth_{band}" for band in ALPHAEARTH_EMBEDDING_BANDS)
+    missing = set(embedding_names) - set(samples.columns)
+    if missing:
+        raise ValueError(
+            f"AlphaEarth sample table is missing embedding columns: {sorted(missing)}"
+        )
+    embeddings = samples.loc[:, embedding_names].to_numpy(dtype=np.float32)
+    finite_rows = np.isfinite(embeddings).all(axis=1)
+    if not finite_rows.any():
+        raise ValueError("No fully finite AlphaEarth embedding rows are available.")
+
+    finite = embeddings[finite_rows]
+    minimum = float(np.min(finite))
+    maximum = float(np.max(finite))
+    maximum_absolute = float(np.max(np.abs(finite)))
+    if maximum_absolute > 1.0001:
+        raise ValueError(
+            "AlphaEarth features do not appear dequantized: expected values within "
+            f"[-1, 1], found range [{minimum:.4f}, {maximum:.4f}]."
+        )
+
+    norms = np.linalg.norm(finite, axis=1)
+    return {
+        "sample_rows": int(len(samples)),
+        "finite_rows": int(finite_rows.sum()),
+        "nonfinite_rows": int((~finite_rows).sum()),
+        "minimum_value": minimum,
+        "maximum_value": maximum,
+        "median_l2_norm_before_normalization": float(np.median(norms)),
+        "p05_l2_norm_before_normalization": float(np.quantile(norms, 0.05)),
+        "p95_l2_norm_before_normalization": float(np.quantile(norms, 0.95)),
+    }
 
 
 def _update_priority_reservoir(
@@ -4290,12 +3535,10 @@ def _lattice_positions(
 
 def balanced_hrl_sample_locations(
     crop_types: xr.DataArray,
-    secondary_crop: xr.DataArray,
     clip_geometry: BaseGeometry,
     *,
     geometry_crs: str = "EPSG:4326",
     samples_per_cty_class: int = 500,
-    samples_per_cpsct_class: int = 500,
     sample_stride_pixels: int = 5,
     rare_class_sample_stride_pixels: int | None = 1,
     rare_class_threshold_candidates: int = 50_000,
@@ -4304,19 +3547,18 @@ def balanced_hrl_sample_locations(
     chunk_rows: int = 512,
     random_seed: int = 42,
 ) -> pd.DataFrame:
-    """Select edge-filtered, adaptive, class-balanced HRL sample locations.
+    """Select edge-filtered, adaptive, class-balanced CTY sample locations.
 
     Common classes use the standard spatially thinned lattice. Classes with fewer
     than ``rare_class_threshold_candidates`` eligible observations on the denser
     rare-class lattice use that lattice instead and receive an enlarged bounded
-    reservoir. CTY and CPSCT pixels close to class boundaries can be excluded to
-    reduce mixed-pixel and label-registration noise.
+    reservoir. Pixels close to CTY class boundaries can be excluded to reduce
+    mixed-pixel and label-registration noise.
     """
-    assert_matching_raster_grid(crop_types, secondary_crop)
     if crop_types.rio.crs is None:
-        raise ValueError("HRL crop rasters must have a CRS.")
-    if samples_per_cty_class < 1 or samples_per_cpsct_class < 1:
-        raise ValueError("Samples per class must be at least one.")
+        raise ValueError("The HRL CTY raster must have a CRS.")
+    if samples_per_cty_class < 1:
+        raise ValueError("samples_per_cty_class must be at least one.")
     if sample_stride_pixels < 1:
         raise ValueError("sample_stride_pixels must be at least one.")
     if (
@@ -4357,19 +3599,11 @@ def balanced_hrl_sample_locations(
     )
 
     standard_cty: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
-    standard_cpsct: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
     rare_cty: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
-    rare_cpsct: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
     cty_candidate_counts = {int(code): 0 for code in HRL_CTY_CLASS_CODES}
-    cpsct_candidate_counts = {int(code): 0 for code in HRL_CPSCT_CLASS_CODES}
-
     rare_cty_cap = max(
         samples_per_cty_class,
         int(np.ceil(samples_per_cty_class * rare_class_sample_multiplier)),
-    )
-    rare_cpsct_cap = max(
-        samples_per_cpsct_class,
-        int(np.ceil(samples_per_cpsct_class * rare_class_sample_multiplier)),
     )
 
     n_rows = crop_types.sizes["y"]
@@ -4381,28 +3615,16 @@ def balanced_hrl_sample_locations(
         read_start = max(0, y_start - radius)
         read_stop = min(n_rows, y_stop + radius)
         crop_read_da = crop_types.isel(y=slice(read_start, read_stop))
-        secondary_read_da = secondary_crop.isel(y=slice(read_start, read_stop))
 
         crop_read = np.asarray(crop_read_da.values)
-        secondary_read = np.asarray(secondary_read_da.values)
         if np.issubdtype(crop_read.dtype, np.floating):
             crop_read = np.nan_to_num(crop_read, nan=_HRL_OUTSIDE_AREA_CODE)
-        if np.issubdtype(secondary_read.dtype, np.floating):
-            secondary_read = np.nan_to_num(
-                secondary_read,
-                nan=_HRL_OUTSIDE_AREA_CODE,
-            )
         crop_read = crop_read.astype(np.int32, copy=False)
-        secondary_read = secondary_read.astype(np.int32, copy=False)
 
         core_start = y_start - read_start
         core_stop = core_start + (y_stop - y_start)
         crop_values = crop_read[core_start:core_stop]
-        secondary_values = secondary_read[core_start:core_stop]
         crop_interior = _stable_class_interior_mask(crop_read, radius)[
-            core_start:core_stop
-        ]
-        secondary_interior = _stable_class_interior_mask(secondary_read, radius)[
             core_start:core_stop
         ]
 
@@ -4419,10 +3641,8 @@ def balanced_hrl_sample_locations(
             *,
             stride: int,
             offsets: tuple[int, int],
-            cty_reservoir: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray]],
-            cpsct_reservoir: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray]],
-            cty_cap: int,
-            cpsct_cap: int,
+            reservoir: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray]],
+            sample_cap: int,
             count_candidates: bool,
         ) -> None:
             row_positions, col_positions = _lattice_positions(
@@ -4437,19 +3657,15 @@ def balanced_hrl_sample_locations(
                 return
 
             crop_lattice = crop_values[np.ix_(row_positions, col_positions)]
-            secondary_lattice = secondary_values[np.ix_(row_positions, col_positions)]
-            cty_eligible = (
+            eligible = (
                 inside_region[np.ix_(row_positions, col_positions)]
                 & crop_interior[np.ix_(row_positions, col_positions)]
-            )
-            cpsct_eligible = (
-                cty_eligible & secondary_interior[np.ix_(row_positions, col_positions)]
             )
             global_rows = row_positions + y_start
 
             for class_code in HRL_CTY_CLASS_CODES:
                 candidate_rows, candidate_cols = np.where(
-                    cty_eligible & (crop_lattice == class_code)
+                    eligible & (crop_lattice == class_code)
                 )
                 if count_candidates:
                     cty_candidate_counts[int(class_code)] += int(candidate_rows.size)
@@ -4457,55 +3673,31 @@ def balanced_hrl_sample_locations(
                     rows = global_rows[candidate_rows]
                     cols = col_positions[candidate_cols]
                     _update_priority_reservoir(
-                        cty_reservoir,
+                        reservoir,
                         class_code=int(class_code),
                         rows=rows,
                         cols=cols,
                         priorities=rng.random(rows.size),
-                        maximum_samples=cty_cap,
-                    )
-
-            cropland = np.isin(crop_lattice, HRL_CTY_CLASS_CODES[1:])
-            for class_code in HRL_CPSCT_CLASS_CODES:
-                candidate_rows, candidate_cols = np.where(
-                    cpsct_eligible & cropland & (secondary_lattice == class_code)
-                )
-                if count_candidates:
-                    cpsct_candidate_counts[int(class_code)] += int(candidate_rows.size)
-                if candidate_rows.size:
-                    rows = global_rows[candidate_rows]
-                    cols = col_positions[candidate_cols]
-                    _update_priority_reservoir(
-                        cpsct_reservoir,
-                        class_code=int(class_code),
-                        rows=rows,
-                        cols=cols,
-                        priorities=rng.random(rows.size),
-                        maximum_samples=cpsct_cap,
+                        maximum_samples=sample_cap,
                     )
 
         update_lattice(
             stride=sample_stride_pixels,
             offsets=standard_offsets,
-            cty_reservoir=standard_cty,
-            cpsct_reservoir=standard_cpsct,
-            cty_cap=samples_per_cty_class,
-            cpsct_cap=samples_per_cpsct_class,
+            reservoir=standard_cty,
+            sample_cap=samples_per_cty_class,
             count_candidates=(rare_stride == sample_stride_pixels),
         )
         if rare_stride != sample_stride_pixels:
             update_lattice(
                 stride=rare_stride,
                 offsets=rare_offsets,
-                cty_reservoir=rare_cty,
-                cpsct_reservoir=rare_cpsct,
-                cty_cap=rare_cty_cap,
-                cpsct_cap=rare_cpsct_cap,
+                reservoir=rare_cty,
+                sample_cap=rare_cty_cap,
                 count_candidates=True,
             )
         else:
             rare_cty = standard_cty
-            rare_cpsct = standard_cpsct
 
     selected_locations: set[tuple[int, int]] = set()
     for class_code in HRL_CTY_CLASS_CODES:
@@ -4519,20 +3711,9 @@ def balanced_hrl_sample_locations(
                 (int(row), int(col))
                 for row, col in zip(selected[0], selected[1], strict=True)
             )
-    for class_code in HRL_CPSCT_CLASS_CODES:
-        is_rare = (
-            cpsct_candidate_counts[int(class_code)] < rare_class_threshold_candidates
-        )
-        reservoir = rare_cpsct if is_rare else standard_cpsct
-        selected = reservoir.get(int(class_code))
-        if selected is not None:
-            selected_locations.update(
-                (int(row), int(col))
-                for row, col in zip(selected[0], selected[1], strict=True)
-            )
 
     if not selected_locations:
-        raise ValueError("No HRL sample locations were selected.")
+        raise ValueError("No HRL CTY sample locations were selected.")
 
     ordered_locations = sorted(selected_locations)
     rows = np.asarray([location[0] for location in ordered_locations], dtype=np.int64)
@@ -4543,11 +3724,6 @@ def balanced_hrl_sample_locations(
         crop_types.isel(y=row_indexer, x=col_indexer).values,
         dtype=np.int32,
     )
-    cpsct_labels = np.asarray(
-        secondary_crop.isel(y=row_indexer, x=col_indexer).values,
-        dtype=np.int32,
-    )
-    cpsct_labels = np.where(cty_labels == 0, 0, cpsct_labels).astype(np.int32)
 
     transform = crop_types.rio.transform(recalc=True)
     x_coordinates, y_coordinates = rasterio.transform.xy(
@@ -4563,7 +3739,6 @@ def balanced_hrl_sample_locations(
             "x": np.asarray(x_coordinates, dtype=np.float64),
             "y": np.asarray(y_coordinates, dtype=np.float64),
             "cty_label": cty_labels,
-            "cpsct_label": cpsct_labels,
         }
     )
 
@@ -4813,13 +3988,15 @@ def build_alphaearth_crop_feature_matrix(
     *,
     include_coordinates: bool = False,
     include_topography: bool = False,
+    normalize_embeddings: bool = False,
     elevation_m: np.ndarray | None = None,
     slope_gradient: np.ndarray | None = None,
 ) -> tuple[np.ndarray, tuple[str, ...]]:
-    """Construct annual remote-sensing predictors for training and inference.
+    """Construct target-year AlphaEarth predictors for training and inference.
 
-    All 64 AlphaEarth embedding dimensions are included simultaneously. Optional
-    coordinates and topography are appended as additional predictors.
+    The 64 dequantized AEF dimensions are always retained. Optional coordinate and
+    topographic predictors are appended only for controlled ablation experiments.
+    No lagged year or external EO time-series feature is introduced.
 
     Args:
         current_embeddings: Same-year AlphaEarth embeddings with shape ``(n, 64)``.
@@ -4827,6 +4004,8 @@ def build_alphaearth_crop_feature_matrix(
         latitude: Latitude per observation.
         include_coordinates: Include longitude and latitude predictors.
         include_topography: Include elevation and local terrain gradient.
+        normalize_embeddings: Restore unit-hypersphere geometry with row-wise L2
+            normalization.
         elevation_m: Elevation per observation when topography is enabled.
         slope_gradient: Local terrain gradient per observation when enabled.
 
@@ -4836,6 +4015,8 @@ def build_alphaearth_crop_feature_matrix(
     embeddings = np.asarray(current_embeddings, dtype=np.float32)
     if embeddings.ndim != 2 or embeddings.shape[1] != 64:
         raise ValueError("AlphaEarth embeddings must have shape (n, 64).")
+    if normalize_embeddings:
+        embeddings = normalize_alphaearth_embeddings(embeddings)
 
     n_samples = embeddings.shape[0]
     longitude = np.asarray(longitude, dtype=np.float32)
@@ -4873,6 +4054,47 @@ def build_alphaearth_crop_feature_matrix(
     return feature_matrix, feature_names
 
 
+def alphaearth_features_from_samples(
+    samples: pd.DataFrame,
+    feature_names: Sequence[str],
+    *,
+    normalize_embeddings: bool,
+) -> np.ndarray:
+    """Extract one model matrix from a reusable AEF sample table.
+
+    Normalization is applied at fit/evaluation time so existing Parquet tables
+    containing dequantized but non-normalized vectors remain reusable.
+    """
+    names = tuple(str(name) for name in feature_names)
+    missing = set(names) - set(samples.columns)
+    if missing:
+        raise ValueError(f"AlphaEarth samples are missing features: {sorted(missing)}")
+    # ``DataFrame.to_numpy`` may expose a read-only zero-copy view when the
+    # reusable table was loaded from Parquet through an Arrow-backed block.
+    # Normalization replaces only the embedding columns below, so explicitly
+    # materialize an owned, C-contiguous and writable float32 matrix first.
+    features = np.array(
+        samples.loc[:, names].to_numpy(dtype=np.float32),
+        dtype=np.float32,
+        copy=True,
+        order="C",
+    )
+    if not features.flags.writeable:
+        # This is defensive; ``np.array(..., copy=True)`` should already own a
+        # writable buffer on supported NumPy versions.
+        features = features.copy(order="C")
+
+    embedding_names = tuple(f"alphaearth_{band}" for band in ALPHAEARTH_EMBEDDING_BANDS)
+    embedding_positions = [names.index(name) for name in embedding_names]
+    if normalize_embeddings:
+        features[:, embedding_positions] = normalize_alphaearth_embeddings(
+            features[:, embedding_positions]
+        )
+    if not np.isfinite(features).all():
+        raise ValueError("AlphaEarth model features contain non-finite values.")
+    return features
+
+
 def load_alphaearth_crop_training_samples(
     source: pd.DataFrame | str | Path,
     *,
@@ -4881,12 +4103,13 @@ def load_alphaearth_crop_training_samples(
     include_topography: bool = False,
     active_region_ids: np.ndarray | None = None,
 ) -> pd.DataFrame:
-    """Load and validate a previously stored AlphaEarth-HRL sample table.
+    """Load and validate a previously stored AlphaEarth-HRL CTY sample table.
 
     The loader allows repeated model-fitting and prediction experiments without
     rerunning the expensive HRL/AlphaEarth sampling stage. It selects only the
     requested observation years and validates that the stored feature schema is
-    compatible with the current classifier settings.
+    compatible with the current CTY classifier settings. Additional columns in an
+    older reusable table are ignored by the CTY-only fitting workflow.
 
     Args:
         source: Existing sample DataFrame or Parquet path.
@@ -4897,7 +4120,7 @@ def load_alphaearth_crop_training_samples(
             stored sample from another region causes an error.
 
     Returns:
-        Validated sample table restricted to ``hrl_years``.
+        Validated CTY sample table restricted to ``hrl_years``.
 
     Raises:
         FileNotFoundError: If a supplied Parquet path does not exist.
@@ -4932,7 +4155,6 @@ def load_alphaearth_crop_training_samples(
     )
     required_columns = set(feature_names) | {
         "cty_label",
-        "cpsct_label",
         "year",
         "region_id",
         "country_iso3",
@@ -4989,18 +4211,6 @@ def load_alphaearth_crop_training_samples(
             f"{invalid_values[:20].tolist()}."
         )
 
-    cpsct_labels = samples["cpsct_label"].to_numpy(dtype=np.int32)
-    invalid_cpsct = (cty_labels != 0) & ~np.isin(
-        cpsct_labels,
-        HRL_CPSCT_CLASS_CODES,
-    )
-    if invalid_cpsct.any():
-        invalid_values = np.unique(cpsct_labels[invalid_cpsct])
-        raise ValueError(
-            "Stored cropland samples contain unsupported CPSCT labels: "
-            f"{invalid_values[:20].tolist()}."
-        )
-
     # A Parquet table written by an earlier run may contain a stale split column.
     # The caller always reconstructs temporal splits from the current settings.
     return samples.reset_index(drop=True)
@@ -5008,7 +4218,6 @@ def load_alphaearth_crop_training_samples(
 
 def create_alphaearth_crop_training_samples(
     crop_types: xr.DataArray,
-    secondary_crop: xr.DataArray,
     current_alphaearth_cogs: gpd.GeoDataFrame,
     clip_geometry: BaseGeometry,
     *,
@@ -5016,7 +4225,6 @@ def create_alphaearth_crop_training_samples(
     region_id: int,
     country_iso3: str,
     samples_per_cty_class: int = 500,
-    samples_per_cpsct_class: int = 500,
     sample_stride_pixels: int = 5,
     rare_class_sample_stride_pixels: int | None = 1,
     rare_class_threshold_candidates: int = 50_000,
@@ -5029,30 +4237,26 @@ def create_alphaearth_crop_training_samples(
     slope: xr.DataArray | None = None,
     random_seed: int = 42,
 ) -> pd.DataFrame:
-    """Create one regional, annual AlphaEarth-HRL training sample table.
+    """Create one regional, annual AlphaEarth-HRL CTY training sample table.
 
-    Each HRL observation year is independent: labels from year ``t`` are paired
+    Each HRL observation year is independent: CTY labels from year ``t`` are paired
     only with AlphaEarth embeddings from year ``t``. Elevation and slope are
     optional static auxiliary predictors. No previous crop type is included.
 
     Args:
         crop_types: Same-year native HRL Crop Types raster.
-        secondary_crop: Same-year native HRL Secondary Crops raster.
         current_alphaearth_cogs: Downloaded same-year AlphaEarth COG index rows.
         clip_geometry: Active regional geometry in EPSG:4326.
         year: HRL/AlphaEarth observation year.
         region_id: Model region identifier.
         country_iso3: Region country code.
         samples_per_cty_class: Maximum CTY samples per class.
-        samples_per_cpsct_class: Maximum CPSCT samples per class.
-        sample_stride_pixels: Standard sampling-lattice spacing in native HRL
-            pixels.
+        sample_stride_pixels: Standard sampling-lattice spacing in native HRL pixels.
         rare_class_sample_stride_pixels: Denser lattice used for rare classes.
-        rare_class_threshold_candidates: Candidate count below which a class is
-            considered rare.
+        rare_class_threshold_candidates: Candidate count below which a class is rare.
         rare_class_sample_multiplier: Multiplier for rare-class reservoir sizes.
-        training_label_edge_buffer_pixels: Class-boundary erosion radius in native
-            HRL pixels.
+        training_label_edge_buffer_pixels: CTY class-boundary erosion radius in
+            native HRL pixels.
         sample_chunk_rows: Native HRL rows scanned in each sampling chunk.
         include_coordinates: Include coordinates as optional predictors.
         include_topography: Include elevation and local terrain gradient.
@@ -5061,7 +4265,7 @@ def create_alphaearth_crop_training_samples(
         random_seed: Reproducible regional-year seed.
 
     Returns:
-        Sample table containing annual predictors, labels, coordinates, year,
+        Sample table containing annual predictors, CTY labels, coordinates, year,
         and region metadata.
     """
     if include_topography and (elevation is None or slope is None):
@@ -5071,10 +4275,8 @@ def create_alphaearth_crop_training_samples(
 
     locations = balanced_hrl_sample_locations(
         crop_types,
-        secondary_crop,
         clip_geometry,
         samples_per_cty_class=samples_per_cty_class,
-        samples_per_cpsct_class=samples_per_cpsct_class,
         sample_stride_pixels=sample_stride_pixels,
         rare_class_sample_stride_pixels=rare_class_sample_stride_pixels,
         rare_class_threshold_candidates=rare_class_threshold_candidates,
@@ -5119,11 +4321,9 @@ def create_alphaearth_crop_training_samples(
         )
 
     cty_label = locations["cty_label"].to_numpy(dtype=np.int32)
-    cpsct_label = locations["cpsct_label"].to_numpy(dtype=np.int32)
-    valid = (
-        np.isfinite(embeddings).all(axis=1)
-        & np.isin(cty_label, HRL_CTY_CLASS_CODES)
-        & ((cty_label == 0) | np.isin(cpsct_label, HRL_CPSCT_CLASS_CODES))
+    valid = np.isfinite(embeddings).all(axis=1) & np.isin(
+        cty_label,
+        HRL_CTY_CLASS_CODES,
     )
     if include_topography:
         assert elevation_values is not None and slope_values is not None
@@ -5131,7 +4331,7 @@ def create_alphaearth_crop_training_samples(
 
     if not valid.any():
         raise ValueError(
-            f"No valid same-year AlphaEarth-HRL samples remain for region "
+            f"No valid same-year AlphaEarth-HRL CTY samples remain for region "
             f"{region_id}, year {year}."
         )
 
@@ -5146,7 +4346,6 @@ def create_alphaearth_crop_training_samples(
     )
     samples = pd.DataFrame(feature_matrix, columns=feature_names)
     samples["cty_label"] = cty_label[valid]
-    samples["cpsct_label"] = cpsct_label[valid]
     samples["year"] = int(year)
     samples["region_id"] = int(region_id)
     samples["country_iso3"] = str(country_iso3)
@@ -5158,41 +4357,137 @@ def create_alphaearth_crop_training_samples(
 def _create_alphaearth_crop_classifier(
     *,
     model_type: str,
+    model_parameters: Mapping[str, Any] | None,
     random_seed: int,
-    n_estimators: int,
-    max_depth: int | None,
-    min_samples_leaf: int,
-    max_features: float | int | str | None,
-    use_internal_class_weight: bool,
     n_jobs: int,
 ) -> Any:
-    """Construct a supported scikit-learn crop classifier."""
+    """Construct one supported AlphaEarth CTY estimator.
+
+    All estimators expose ``predict_proba`` and accept optional sample weights.
+    Scaling is applied only to logistic regression; tree estimators operate on the
+    normalized embedding coordinates directly.
+    """
+    parameters = dict(model_parameters or {})
+    model_type = str(model_type).strip().lower()
+    if model_type not in ALPHAEARTH_SUPPORTED_MODEL_TYPES:
+        raise ValueError(
+            "model_type must be one of "
+            f"{ALPHAEARTH_SUPPORTED_MODEL_TYPES}, found {model_type!r}."
+        )
+
+    if model_type == "logistic_regression":
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.pipeline import Pipeline
+        from sklearn.preprocessing import StandardScaler
+
+        C = float(parameters.get("C", 0.1))
+        max_iter = int(parameters.get("max_iter", 1500))
+        tolerance = float(parameters.get("tol", 1.0e-4))
+        if C <= 0.0:
+            raise ValueError("Logistic-regression C must be greater than zero.")
+        if max_iter < 1:
+            raise ValueError("Logistic-regression max_iter must be at least one.")
+        if tolerance <= 0.0:
+            raise ValueError("Logistic-regression tol must be greater than zero.")
+
+        return Pipeline(
+            (
+                ("scaler", StandardScaler()),
+                (
+                    "classifier",
+                    LogisticRegression(
+                        C=C,
+                        solver=str(parameters.get("solver", "lbfgs")),
+                        max_iter=max_iter,
+                        tol=tolerance,
+                        random_state=int(random_seed),
+                    ),
+                ),
+            )
+        )
+
     if model_type == "random_forest":
         from sklearn.ensemble import RandomForestClassifier
 
+        bootstrap = bool(parameters.get("bootstrap", True))
+        max_samples = parameters.get("max_samples")
+        if not bootstrap and max_samples is not None:
+            raise ValueError("random_forest max_samples requires bootstrap=true.")
         return RandomForestClassifier(
-            n_estimators=n_estimators,
-            max_depth=max_depth,
-            min_samples_leaf=min_samples_leaf,
-            max_features=max_features,
-            class_weight=("balanced_subsample" if use_internal_class_weight else None),
-            n_jobs=n_jobs,
-            random_state=random_seed,
+            n_estimators=int(parameters.get("n_estimators", 800)),
+            criterion=str(parameters.get("criterion", "gini")),
+            max_depth=parameters.get("max_depth"),
+            min_samples_split=int(parameters.get("min_samples_split", 2)),
+            min_samples_leaf=int(parameters.get("min_samples_leaf", 1)),
+            max_features=parameters.get("max_features", "sqrt"),
+            max_samples=max_samples,
+            bootstrap=bootstrap,
+            n_jobs=int(n_jobs),
+            random_state=int(random_seed),
             oob_score=False,
         )
-    if model_type == "hist_gradient_boosting":
-        from sklearn.ensemble import HistGradientBoostingClassifier
 
-        return HistGradientBoostingClassifier(
-            learning_rate=0.08,
-            max_iter=n_estimators,
-            max_leaf_nodes=31,
-            max_depth=max_depth,
-            min_samples_leaf=min_samples_leaf,
-            l2_regularization=1.0,
-            random_state=random_seed,
+    if model_type == "extra_trees":
+        from sklearn.ensemble import ExtraTreesClassifier
+
+        bootstrap = bool(parameters.get("bootstrap", False))
+        max_samples = parameters.get("max_samples")
+        if not bootstrap and max_samples is not None:
+            raise ValueError("extra_trees max_samples requires bootstrap=true.")
+        return ExtraTreesClassifier(
+            n_estimators=int(parameters.get("n_estimators", 800)),
+            criterion=str(parameters.get("criterion", "gini")),
+            max_depth=parameters.get("max_depth"),
+            min_samples_split=int(parameters.get("min_samples_split", 2)),
+            min_samples_leaf=int(parameters.get("min_samples_leaf", 1)),
+            max_features=parameters.get("max_features", "sqrt"),
+            max_samples=max_samples,
+            bootstrap=bootstrap,
+            n_jobs=int(n_jobs),
+            random_state=int(random_seed),
         )
-    raise ValueError("model_type must be 'random_forest' or 'hist_gradient_boosting'.")
+
+    from sklearn.ensemble import HistGradientBoostingClassifier
+
+    return HistGradientBoostingClassifier(
+        learning_rate=float(parameters.get("learning_rate", 0.06)),
+        max_iter=int(parameters.get("max_iter", 500)),
+        max_leaf_nodes=parameters.get("max_leaf_nodes", 31),
+        max_depth=parameters.get("max_depth"),
+        min_samples_leaf=int(parameters.get("min_samples_leaf", 20)),
+        l2_regularization=float(parameters.get("l2_regularization", 1.0)),
+        max_features=float(parameters.get("max_features", 1.0)),
+        max_bins=int(parameters.get("max_bins", 255)),
+        early_stopping=parameters.get("early_stopping", "auto"),
+        validation_fraction=float(parameters.get("validation_fraction", 0.10)),
+        n_iter_no_change=int(parameters.get("n_iter_no_change", 20)),
+        random_state=int(random_seed),
+    )
+
+
+def _fit_alphaearth_estimator(
+    estimator: Any,
+    features: np.ndarray,
+    target: np.ndarray,
+    *,
+    sample_weight: np.ndarray | None,
+) -> Any:
+    """Fit one supported estimator with optional external sample weights."""
+    target = np.asarray(target, dtype=np.int32)
+    represented = np.unique(target)
+    if represented.size == 1:
+        return AlphaEarthConstantClassifier(int(represented[0]))
+
+    if sample_weight is None:
+        estimator.fit(features, target)
+        return estimator
+
+    weights = np.asarray(sample_weight, dtype=np.float64)
+    if hasattr(estimator, "named_steps"):
+        estimator.fit(features, target, classifier__sample_weight=weights)
+    else:
+        estimator.fit(features, target, sample_weight=weights)
+    return estimator
 
 
 def _class_region_year_balanced_weights(
@@ -5237,118 +4532,524 @@ def _class_region_year_balanced_weights(
     return (weights / mean_weight).astype(np.float64, copy=False)
 
 
+def _alphaearth_sample_weights(
+    samples: pd.DataFrame,
+    *,
+    label_column: str,
+    sample_weight_mode: str,
+) -> np.ndarray | None:
+    """Return the configured row weights for one estimator."""
+    if sample_weight_mode == "none":
+        return None
+    if sample_weight_mode == "class_region_year_balanced":
+        return _class_region_year_balanced_weights(
+            samples,
+            label_column=label_column,
+        )
+    if sample_weight_mode == "class_balanced":
+        from sklearn.utils.class_weight import compute_sample_weight
+
+        return np.asarray(
+            compute_sample_weight(
+                class_weight="balanced",
+                y=samples[label_column].to_numpy(),
+            ),
+            dtype=np.float64,
+        )
+    raise ValueError(
+        "sample_weight_mode must be 'none', 'class_balanced', or "
+        "'class_region_year_balanced'."
+    )
+
+
+def _fit_alphaearth_model_core(
+    samples: pd.DataFrame,
+    *,
+    feature_names: tuple[str, ...],
+    normalize_embeddings: bool,
+    classifier_structure: str,
+    residual_class_mode: str,
+    model_type: str,
+    model_parameters: Mapping[str, Any] | None,
+    random_seed: int,
+    sample_weight_mode: str,
+    n_jobs: int,
+    unclassified_probability_threshold: float,
+    class_probability_thresholds: Mapping[int, float] | None,
+) -> AlphaEarthCropModelBundle:
+    """Fit one flat or soft-hierarchical classifier without calibration."""
+    if classifier_structure not in {"flat", "hierarchical"}:
+        raise ValueError("classifier_structure must be 'flat' or 'hierarchical'.")
+    if residual_class_mode not in {"learned", "uncertainty"}:
+        raise ValueError("residual_class_mode must be 'learned' or 'uncertainty'.")
+    if classifier_structure == "hierarchical" and residual_class_mode != "uncertainty":
+        raise ValueError(
+            "Hierarchical classification requires residual_class_mode='uncertainty' "
+            "because group 30 is generated from uncertainty rather than learned."
+        )
+
+    model_type = str(model_type).strip().lower()
+    if model_type not in ALPHAEARTH_SUPPORTED_MODEL_TYPES:
+        raise ValueError(
+            "model_type must be one of "
+            f"{ALPHAEARTH_SUPPORTED_MODEL_TYPES}, found {model_type!r}."
+        )
+    resolved_parameters = dict(model_parameters or {})
+
+    explicit_classes = (
+        HRL_CTY_CLASS_CODES
+        if residual_class_mode == "learned"
+        else HRL_CTY_UNCERTAINTY_TRAINING_CLASS_CODES
+    )
+    normalized_thresholds = {
+        int(code): float(value)
+        for code, value in (class_probability_thresholds or {}).items()
+    }
+    for code, threshold in normalized_thresholds.items():
+        if code not in HRL_CTY_CLASS_CODES:
+            raise ValueError(f"Unknown CTY threshold class: {code}.")
+        if not 0.0 < threshold <= 1.0:
+            raise ValueError(
+                f"Class threshold for {code} must lie in (0, 1], found {threshold}."
+            )
+
+    def create_estimator(seed: int) -> Any:
+        return _create_alphaearth_crop_classifier(
+            model_type=model_type,
+            model_parameters=resolved_parameters,
+            random_seed=seed,
+            n_jobs=n_jobs,
+        )
+
+    if classifier_structure == "flat":
+        training = samples.loc[samples["cty_label"].isin(explicit_classes)].copy()
+        if training.empty:
+            raise ValueError("No explicit CTY samples remain for flat training.")
+
+        features = alphaearth_features_from_samples(
+            training,
+            feature_names,
+            normalize_embeddings=normalize_embeddings,
+        )
+        target = training["cty_label"].to_numpy(dtype=np.int32)
+        weights = _alphaearth_sample_weights(
+            training,
+            label_column="cty_label",
+            sample_weight_mode=sample_weight_mode,
+        )
+        estimator = _fit_alphaearth_estimator(
+            create_estimator(random_seed),
+            features,
+            target,
+            sample_weight=weights,
+        )
+        represented_classes = tuple(
+            int(code) for code in np.asarray(estimator.classes_, dtype=np.int32)
+        )
+        return AlphaEarthCropModelBundle(
+            cty_model=estimator,
+            feature_names=feature_names,
+            model_type=model_type,
+            model_parameters=resolved_parameters,
+            trained_cty_classes=represented_classes,
+            normalize_embeddings=normalize_embeddings,
+            classifier_structure=classifier_structure,
+            residual_class_mode=residual_class_mode,
+            unclassified_probability_threshold=unclassified_probability_threshold,
+            class_probability_thresholds=normalized_thresholds,
+        )
+
+    hierarchical = samples.copy()
+    hierarchical["group_label"] = _map_hrl_cty_to_crop_group(
+        hierarchical["cty_label"].to_numpy(dtype=np.int32)
+    )
+    group_training = hierarchical.loc[
+        hierarchical["group_label"].isin(HRL_CTY_HIERARCHICAL_GROUP_CODES)
+    ].copy()
+    if group_training.empty:
+        raise ValueError("No supported crop-group samples remain for training.")
+
+    group_features = alphaearth_features_from_samples(
+        group_training,
+        feature_names,
+        normalize_embeddings=normalize_embeddings,
+    )
+    group_target = group_training["group_label"].to_numpy(dtype=np.int32)
+    group_weights = _alphaearth_sample_weights(
+        group_training,
+        label_column="group_label",
+        sample_weight_mode=sample_weight_mode,
+    )
+    group_estimator = _fit_alphaearth_estimator(
+        create_estimator(random_seed),
+        group_features,
+        group_target,
+        sample_weight=group_weights,
+    )
+
+    within_group_models: dict[int, Any] = {}
+    represented_native: list[int] = []
+    for group_code in HRL_CTY_HIERARCHICAL_GROUP_CODES:
+        native_codes = tuple(
+            code
+            for code in HRL_CTY_UNCERTAINTY_TRAINING_CLASS_CODES
+            if HRL_CTY_CROP_GROUP_MAP[code] == group_code
+        )
+        branch = hierarchical.loc[hierarchical["cty_label"].isin(native_codes)].copy()
+        if branch.empty:
+            continue
+
+        branch_features = alphaearth_features_from_samples(
+            branch,
+            feature_names,
+            normalize_embeddings=normalize_embeddings,
+        )
+        branch_target = branch["cty_label"].to_numpy(dtype=np.int32)
+        represented = np.unique(branch_target)
+        represented_native.extend(int(code) for code in represented)
+
+        if represented.size == 1:
+            within_group_models[int(group_code)] = AlphaEarthConstantClassifier(
+                int(represented[0])
+            )
+            continue
+
+        branch_weights = _alphaearth_sample_weights(
+            branch,
+            label_column="cty_label",
+            sample_weight_mode=sample_weight_mode,
+        )
+        within_group_models[int(group_code)] = _fit_alphaearth_estimator(
+            create_estimator(random_seed + int(group_code)),
+            branch_features,
+            branch_target,
+            sample_weight=branch_weights,
+        )
+
+    return AlphaEarthCropModelBundle(
+        cty_model=None,
+        feature_names=feature_names,
+        model_type=model_type,
+        model_parameters=resolved_parameters,
+        trained_cty_classes=tuple(sorted(set(represented_native))),
+        normalize_embeddings=normalize_embeddings,
+        classifier_structure=classifier_structure,
+        residual_class_mode=residual_class_mode,
+        unclassified_probability_threshold=unclassified_probability_threshold,
+        class_probability_thresholds=normalized_thresholds,
+        group_model=group_estimator,
+        within_group_models=within_group_models,
+    )
+
+
+def predict_alphaearth_crop_probabilities(
+    models: AlphaEarthCropModelBundle,
+    features: np.ndarray,
+) -> np.ndarray:
+    """Return probabilities in the complete fixed native-CTY class order."""
+    features = np.asarray(features, dtype=np.float32)
+    if models.classifier_structure == "flat":
+        if models.cty_model is None:
+            raise ValueError("Flat AlphaEarth model bundle has no CTY estimator.")
+        return _predict_full_class_probabilities(
+            models.cty_model,
+            features,
+            models.cty_classes,
+        )
+
+    if models.group_model is None:
+        raise ValueError("Hierarchical AlphaEarth model bundle has no group estimator.")
+    group_probabilities = _predict_full_class_probabilities(
+        models.group_model,
+        features,
+        HRL_CTY_HIERARCHICAL_GROUP_CODES,
+    )
+    native_probabilities = np.zeros(
+        (features.shape[0], len(models.cty_classes)),
+        dtype=np.float32,
+    )
+    native_positions = {
+        int(code): index for index, code in enumerate(models.cty_classes)
+    }
+    group_positions = {
+        int(code): index for index, code in enumerate(HRL_CTY_HIERARCHICAL_GROUP_CODES)
+    }
+
+    for group_code, branch_model in models.within_group_models.items():
+        branch_classes = tuple(
+            int(code) for code in np.asarray(branch_model.classes_, dtype=np.int32)
+        )
+        conditional = _predict_full_class_probabilities(
+            branch_model,
+            features,
+            branch_classes,
+        )
+        group_probability = group_probabilities[:, group_positions[int(group_code)]]
+        for branch_index, class_code in enumerate(branch_classes):
+            native_probabilities[:, native_positions[class_code]] = (
+                group_probability * conditional[:, branch_index]
+            )
+
+    row_sums = native_probabilities.sum(axis=1)
+    valid = row_sums > 0.0
+    native_probabilities[valid] /= row_sums[valid, None]
+    return native_probabilities
+
+
+def alphaearth_cty_from_probabilities(
+    models: AlphaEarthCropModelBundle,
+    probabilities: np.ndarray,
+    *,
+    unclassified_probability_threshold: float | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Convert native probabilities to CTY classes and confidence.
+
+    Class-specific thresholds influence the multiclass decision through
+    ``probability / threshold``. A lower calibrated threshold therefore permits
+    conservative classes to compete more readily. Predictions below their winning
+    class threshold are mapped to 1150, 3100, or 3200 in uncertainty mode.
+    """
+    probabilities = np.asarray(probabilities, dtype=np.float32)
+    if probabilities.ndim != 2 or probabilities.shape[1] != len(models.cty_classes):
+        raise ValueError("CTY probability matrix does not match the model schema.")
+    global_threshold = (
+        models.unclassified_probability_threshold
+        if unclassified_probability_threshold is None
+        else float(unclassified_probability_threshold)
+    )
+    if not 0.0 <= global_threshold <= 1.0:
+        raise ValueError("unclassified_probability_threshold must be in [0, 1].")
+
+    classes = np.asarray(models.cty_classes, dtype=np.int32)
+    thresholds = np.asarray(
+        [
+            float(models.class_probability_thresholds.get(int(code), global_threshold))
+            for code in classes
+        ],
+        dtype=np.float32,
+    )
+    thresholds = np.clip(thresholds, 1.0e-6, 1.0)
+    decision_scores = probabilities / thresholds[None, :]
+    best_indices = np.argmax(decision_scores, axis=1)
+    predicted = classes[best_indices].copy()
+    confidence = probabilities[np.arange(probabilities.shape[0]), best_indices]
+    winning_threshold = thresholds[best_indices]
+
+    low_confidence = confidence < winning_threshold
+    if models.residual_class_mode == "learned":
+        low_confidence &= ~np.isin(predicted, HRL_CTY_RESIDUAL_CLASS_CODES)
+    if low_confidence.any():
+        cereal = low_confidence & np.isin(
+            predicted,
+            HRL_CTY_CEREAL_EXPLICIT_CLASS_CODES,
+        )
+        annual = low_confidence & np.isin(
+            predicted,
+            HRL_ANNUAL_CTY_CLASS_CODES,
+        )
+        permanent = low_confidence & np.isin(
+            predicted,
+            HRL_PERMANENT_CTY_CLASS_CODES,
+        )
+        predicted[cereal] = 1150
+        predicted[annual & ~cereal] = 3100
+        predicted[permanent] = 3200
+
+    return predicted.astype(np.int32), confidence.astype(np.float32)
+
+
+def predict_alphaearth_crop_models(
+    models: AlphaEarthCropModelBundle,
+    samples: pd.DataFrame,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Predict CTY classes and confidence for a sample table."""
+    features = alphaearth_features_from_samples(
+        samples,
+        models.feature_names,
+        normalize_embeddings=models.normalize_embeddings,
+    )
+    probabilities = predict_alphaearth_crop_probabilities(models, features)
+    return alphaearth_cty_from_probabilities(models, probabilities)
+
+
+def calibrate_alphaearth_class_thresholds(
+    models: AlphaEarthCropModelBundle,
+    calibration_samples: pd.DataFrame,
+    *,
+    threshold_grid: Sequence[float],
+    minimum_reference_samples: int = 25,
+) -> dict[int, float]:
+    """Calibrate per-class probability thresholds on a prior complete year.
+
+    Each explicit class receives the grid threshold maximizing its one-vs-rest F1.
+    During multiclass inference the resulting thresholds are used as relative
+    decision scales and acceptance thresholds.
+    """
+    from sklearn.metrics import f1_score
+
+    if calibration_samples.empty:
+        return {}
+    grid = np.asarray(tuple(float(value) for value in threshold_grid), dtype=np.float64)
+    if grid.size == 0 or np.any((grid <= 0.0) | (grid > 1.0)):
+        raise ValueError("threshold_grid values must lie in (0, 1].")
+
+    features = alphaearth_features_from_samples(
+        calibration_samples,
+        models.feature_names,
+        normalize_embeddings=models.normalize_embeddings,
+    )
+    probabilities = predict_alphaearth_crop_probabilities(models, features)
+    observed = calibration_samples["cty_label"].to_numpy(dtype=np.int32)
+    positions = {int(code): index for index, code in enumerate(models.cty_classes)}
+    calibrated: dict[int, float] = {}
+
+    for class_code in models.trained_cty_classes:
+        reference = observed == int(class_code)
+        if int(reference.sum()) < int(minimum_reference_samples):
+            continue
+        class_probability = probabilities[:, positions[int(class_code)]]
+        scores = np.asarray(
+            [
+                f1_score(
+                    reference,
+                    class_probability >= threshold,
+                    zero_division=0,
+                )
+                for threshold in grid
+            ],
+            dtype=np.float64,
+        )
+        best_score = float(scores.max())
+        candidates = grid[np.isclose(scores, best_score)]
+        calibrated[int(class_code)] = float(
+            candidates[
+                np.argmin(
+                    np.abs(candidates - models.unclassified_probability_threshold)
+                )
+            ]
+        )
+    return calibrated
+
+
 def fit_alphaearth_crop_models(
     samples: pd.DataFrame,
     *,
     include_coordinates: bool = False,
     include_topography: bool = False,
-    model_type: str = "random_forest",
+    normalize_embeddings: bool = True,
+    classifier_structure: str = "flat",
+    residual_class_mode: str = "uncertainty",
+    model_type: str = "logistic_regression",
+    model_parameters: Mapping[str, Any] | None = None,
     random_seed: int = 42,
-    n_estimators: int = 500,
-    max_depth: int | None = None,
-    min_samples_leaf: int = 2,
-    max_features: float | int | str | None = 1.0,
     sample_weight_mode: str = "class_region_year_balanced",
     n_jobs: int = -1,
+    unclassified_probability_threshold: float = 0.25,
+    class_probability_thresholds: Mapping[int, float] | None = None,
+    calibrate_class_thresholds: bool = False,
+    class_threshold_grid: Sequence[float] = (
+        0.10,
+        0.15,
+        0.20,
+        0.25,
+        0.30,
+        0.35,
+        0.40,
+        0.50,
+    ),
+    calibration_min_reference_samples: int = 25,
 ) -> AlphaEarthCropModelBundle:
-    """Fit CTY and CPSCT classifiers from annual study-area samples.
+    """Fit one flat or soft-hierarchical target-year CTY classifier.
 
-    ``max_features=1.0`` makes every tree split evaluate the full predictor vector:
-    all 64 AlphaEarth embedding axes simultaneously, plus optional coordinates,
-    elevation, and slope.
+    Supported estimator families are multinomial logistic regression, Random
+    Forest, Extra Trees, and histogram gradient boosting. All families use the
+    same target-year predictor schema, temporal split, sample weighting, residual
+    handling, and optional threshold calibration.
+
+    When threshold calibration is enabled, the latest year in ``samples`` is used
+    only to calibrate a temporary model fitted on earlier years. The final estimator
+    is then refitted on every supplied row.
     """
-    if sample_weight_mode not in {"none", "class_region_year_balanced"}:
+    if sample_weight_mode not in {
+        "none",
+        "class_balanced",
+        "class_region_year_balanced",
+    }:
         raise ValueError(
-            "sample_weight_mode must be 'none' or 'class_region_year_balanced'."
+            "sample_weight_mode must be 'none', 'class_balanced', or "
+            "'class_region_year_balanced'."
         )
+    if samples.empty:
+        raise ValueError("Cannot train a CTY classifier from an empty sample table.")
+
+    model_type = str(model_type).strip().lower()
+    if model_type not in ALPHAEARTH_SUPPORTED_MODEL_TYPES:
+        raise ValueError(
+            "model_type must be one of "
+            f"{ALPHAEARTH_SUPPORTED_MODEL_TYPES}, found {model_type!r}."
+        )
+    if model_parameters is not None and not isinstance(model_parameters, Mapping):
+        raise TypeError("model_parameters must be a mapping or None.")
+
+    alphaearth_embedding_diagnostics(samples)
     feature_names = alphaearth_crop_feature_names(
         include_coordinates=include_coordinates,
         include_topography=include_topography,
     )
-    required_columns = set(feature_names) | {"cty_label", "cpsct_label"}
+    required_columns = set(feature_names) | {"cty_label"}
     missing_columns = required_columns - set(samples.columns)
     if missing_columns:
         raise ValueError(
             f"AlphaEarth training samples are missing columns: {sorted(missing_columns)}"
         )
-    if samples.empty:
-        raise ValueError("Cannot train crop classifiers from an empty sample table.")
 
-    features = samples.loc[:, feature_names].to_numpy(dtype=np.float32)
-    cty_target = samples["cty_label"].to_numpy(dtype=np.int32)
-    if np.unique(cty_target).size < 2:
-        raise ValueError("CTY training requires at least two represented classes.")
+    thresholds = {
+        int(code): float(value)
+        for code, value in (class_probability_thresholds or {}).items()
+    }
+    if calibrate_class_thresholds:
+        if "year" not in samples.columns:
+            raise ValueError("Threshold calibration requires a year column.")
+        calibration_year = int(samples["year"].max())
+        calibration_samples = samples.loc[samples["year"] == calibration_year].copy()
+        prior_samples = samples.loc[samples["year"] < calibration_year].copy()
+        if not prior_samples.empty and not calibration_samples.empty:
+            temporary = _fit_alphaearth_model_core(
+                prior_samples,
+                feature_names=feature_names,
+                normalize_embeddings=normalize_embeddings,
+                classifier_structure=classifier_structure,
+                residual_class_mode=residual_class_mode,
+                model_type=model_type,
+                model_parameters=model_parameters,
+                random_seed=random_seed,
+                sample_weight_mode=sample_weight_mode,
+                n_jobs=n_jobs,
+                unclassified_probability_threshold=(unclassified_probability_threshold),
+                class_probability_thresholds=None,
+            )
+            calibrated = calibrate_alphaearth_class_thresholds(
+                temporary,
+                calibration_samples,
+                threshold_grid=class_threshold_grid,
+                minimum_reference_samples=calibration_min_reference_samples,
+            )
+            calibrated.update(thresholds)
+            thresholds = calibrated
 
-    use_internal_class_weight = sample_weight_mode == "none"
-    cty_model = _create_alphaearth_crop_classifier(
-        model_type=model_type,
-        random_seed=random_seed,
-        n_estimators=n_estimators,
-        max_depth=max_depth,
-        min_samples_leaf=min_samples_leaf,
-        max_features=max_features,
-        use_internal_class_weight=use_internal_class_weight,
-        n_jobs=n_jobs,
-    )
-    cty_fit_kwargs: dict[str, np.ndarray] = {}
-    if sample_weight_mode == "class_region_year_balanced":
-        cty_fit_kwargs["sample_weight"] = _class_region_year_balanced_weights(
-            samples,
-            label_column="cty_label",
-        )
-    elif model_type == "hist_gradient_boosting":
-        from sklearn.utils.class_weight import compute_sample_weight
-
-        cty_fit_kwargs["sample_weight"] = compute_sample_weight(
-            class_weight="balanced",
-            y=cty_target,
-        )
-    cty_model.fit(features, cty_target, **cty_fit_kwargs)
-
-    cpsct_mask = (samples["cty_label"].to_numpy(dtype=np.int32) > 0) & np.isin(
-        samples["cpsct_label"].to_numpy(dtype=np.int32),
-        HRL_CPSCT_CLASS_CODES,
-    )
-    cpsct_samples = samples.loc[cpsct_mask]
-    cpsct_target = cpsct_samples["cpsct_label"].to_numpy(dtype=np.int32)
-    if np.unique(cpsct_target).size < 2:
-        raise ValueError(
-            "CPSCT training requires at least two represented secondary-crop classes."
-        )
-    cpsct_model = _create_alphaearth_crop_classifier(
-        model_type=model_type,
-        random_seed=random_seed + 1,
-        n_estimators=n_estimators,
-        max_depth=max_depth,
-        min_samples_leaf=min_samples_leaf,
-        max_features=max_features,
-        use_internal_class_weight=use_internal_class_weight,
-        n_jobs=n_jobs,
-    )
-    cpsct_fit_kwargs: dict[str, np.ndarray] = {}
-    if sample_weight_mode == "class_region_year_balanced":
-        cpsct_fit_kwargs["sample_weight"] = _class_region_year_balanced_weights(
-            cpsct_samples,
-            label_column="cpsct_label",
-        )
-    elif model_type == "hist_gradient_boosting":
-        from sklearn.utils.class_weight import compute_sample_weight
-
-        cpsct_fit_kwargs["sample_weight"] = compute_sample_weight(
-            class_weight="balanced",
-            y=cpsct_target,
-        )
-    cpsct_model.fit(
-        features[cpsct_mask],
-        cpsct_target,
-        **cpsct_fit_kwargs,
-    )
-
-    return AlphaEarthCropModelBundle(
-        cty_model=cty_model,
-        cpsct_model=cpsct_model,
+    return _fit_alphaearth_model_core(
+        samples,
         feature_names=feature_names,
+        normalize_embeddings=normalize_embeddings,
+        classifier_structure=classifier_structure,
+        residual_class_mode=residual_class_mode,
         model_type=model_type,
+        model_parameters=model_parameters,
+        random_seed=random_seed,
+        sample_weight_mode=sample_weight_mode,
+        n_jobs=n_jobs,
+        unclassified_probability_threshold=unclassified_probability_threshold,
+        class_probability_thresholds=thresholds,
     )
 
 
@@ -5384,7 +5085,6 @@ def _append_remote_sensing_accuracy_assessment(
     """Append classic thematic-map accuracy statistics for one target."""
     from sklearn.metrics import (
         accuracy_score,
-        balanced_accuracy_score,
         cohen_kappa_score,
         confusion_matrix,
         precision_recall_fscore_support,
@@ -5413,6 +5113,14 @@ def _append_remote_sensing_accuracy_assessment(
         [(predicted == class_code).sum() for class_code in labels],
         dtype=np.int64,
     )
+    reference_present = support > 0
+    if not reference_present.any():
+        return
+    macro_f_score_observed = float(np.mean(f_score[reference_present]))
+    balanced_accuracy_observed = float(np.mean(producer_accuracy[reference_present]))
+    observed_class_count = int(reference_present.sum())
+    configured_class_count = int(labels.size)
+    predicted_only_class_count = int(((support == 0) & (product_support > 0)).sum())
 
     for (
         class_code,
@@ -5466,14 +5174,23 @@ def _append_remote_sensing_accuracy_assessment(
             "user_accuracy": np.nan,
             "omission_error": np.nan,
             "commission_error": np.nan,
+            # Retain the earlier all-configured-class macro F-score for
+            # backwards compatibility in stored tables. The concise console
+            # report uses macro_f_score_observed because region-specific
+            # assessments often contain no reference samples for several CTY
+            # classes.
             "f_score": float(np.mean(f_score)),
+            "macro_f_score_observed": macro_f_score_observed,
             "precision": np.nan,
             "recall": np.nan,
             "f1": float(np.mean(f_score)),
             "support": int(observed.size),
             "accuracy": float(accuracy_score(observed, predicted)),
-            "balanced_accuracy": float(balanced_accuracy_score(observed, predicted)),
+            "balanced_accuracy": balanced_accuracy_observed,
             "kappa": float(cohen_kappa_score(observed, predicted)),
+            "observed_class_count": observed_class_count,
+            "configured_class_count": configured_class_count,
+            "predicted_only_class_count": predicted_only_class_count,
         }
     )
 
@@ -5504,26 +5221,22 @@ def _append_remote_sensing_accuracy_assessment(
 def evaluate_alphaearth_crop_predictions(
     samples: pd.DataFrame,
     predicted_cty: np.ndarray,
-    predicted_cpsct: np.ndarray,
     *,
     split_name: str,
     cty_classes: Sequence[int] = HRL_CTY_CLASS_CODES,
-    cpsct_classes: Sequence[int] = HRL_CPSCT_CLASS_CODES,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Evaluate aligned CTY/CPSCT predictions against stored HRL samples.
+    """Evaluate aligned CTY predictions against stored HRL samples.
 
     This function is used for both ordinary classifier predictions and values
     sampled from fully post-processed raster products. Predictions equal to the
-    HRL outside-area code, or otherwise outside the supported class schema, are
+    HRL outside-area code, or otherwise outside the supported CTY schema, are
     excluded explicitly and counted in the summary rows.
 
     Args:
-        samples: Evaluation sample table containing CTY and CPSCT references.
+        samples: Evaluation sample table containing CTY references.
         predicted_cty: Final CTY prediction per sample.
-        predicted_cpsct: Final CPSCT prediction per sample.
         split_name: Display name such as ``"validation"`` or ``"test"``.
         cty_classes: Native CTY classes included in the assessment.
-        cpsct_classes: CPSCT classes included in the assessment.
 
     Returns:
         Metric and Product-by-Reference confusion-matrix tables.
@@ -5531,17 +5244,11 @@ def evaluate_alphaearth_crop_predictions(
     if samples.empty:
         raise ValueError(f"Cannot evaluate an empty {split_name!r} sample split.")
 
-    predicted_cty = np.asarray(predicted_cty, dtype=np.int32)
-    predicted_cpsct = np.asarray(predicted_cpsct, dtype=np.int32)
+    predicted_cty = np.asarray(predicted_cty, dtype=np.int32).reshape(-1)
     if predicted_cty.shape != (len(samples),):
         raise ValueError(
             "predicted_cty must contain one value per sample; found "
             f"{predicted_cty.shape} for {len(samples)} samples."
-        )
-    if predicted_cpsct.shape != (len(samples),):
-        raise ValueError(
-            "predicted_cpsct must contain one value per sample; found "
-            f"{predicted_cpsct.shape} for {len(samples)} samples."
         )
 
     observed_cty_all = samples["cty_label"].to_numpy(dtype=np.int32)
@@ -5589,26 +5296,6 @@ def evaluate_alphaearth_crop_predictions(
         confusion_rows=confusion_rows,
     )
 
-    observed_cropland = observed_cty_all > 0
-    valid_cpsct_prediction = (
-        observed_cropland
-        & valid_cty_prediction
-        & np.isin(predicted_cpsct, np.asarray(cpsct_classes))
-    )
-    if valid_cpsct_prediction.any():
-        _append_remote_sensing_accuracy_assessment(
-            split_name=split_name,
-            target_name="CPSCT",
-            observed=samples.loc[
-                valid_cpsct_prediction,
-                "cpsct_label",
-            ].to_numpy(dtype=np.int32),
-            predicted=predicted_cpsct[valid_cpsct_prediction],
-            labels=np.asarray(cpsct_classes, dtype=np.int32),
-            metric_rows=metric_rows,
-            confusion_rows=confusion_rows,
-        )
-
     metrics = pd.DataFrame(metric_rows)
     confusion = pd.DataFrame(confusion_rows)
     if not metrics.empty:
@@ -5616,17 +5303,11 @@ def evaluate_alphaearth_crop_predictions(
             "CTY_CROP_GROUP": int((~valid_cty_prediction).sum()),
             "CTY_AGGREGATION_LEVEL_1": int((~valid_cty_prediction).sum()),
             "CTY": int((~valid_cty_prediction).sum()),
-            "CPSCT": int(observed_cropland.sum() - valid_cpsct_prediction.sum()),
         }
         metrics["excluded_predictions"] = np.nan
         summary_mask = metrics["metric_scope"].eq("summary")
         metrics.loc[summary_mask, "excluded_predictions"] = (
-            metrics.loc[
-                summary_mask,
-                "target",
-            ]
-            .map(excluded_by_target)
-            .astype(float)
+            metrics.loc[summary_mask, "target"].map(excluded_by_target).astype(float)
         )
     return metrics, confusion
 
@@ -5637,46 +5318,27 @@ def evaluate_alphaearth_crop_models(
     *,
     split_name: str,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Evaluate annual crop maps using classic remote-sensing diagnostics.
+    """Evaluate one fitted CTY bundle with its configured decision rules.
 
-    The returned diagnostics include the native CTY classes, the official HRL
-    crop-group aggregation, and CPSCT classes. Per-class Producer's Accuracy,
-    User's Accuracy, omission error, commission error, and F-score are derived
-    from Product-by-Reference confusion matrices. Summary rows contain Overall
-    Accuracy, balanced accuracy, macro F-score, and Cohen's kappa.
-
-    The statistics are unweighted sample estimates because the workflow uses a
-    spatially thinned, class-balanced sample rather than the probability sample
-    and area weights used by the official pan-European HRL verification.
+    Native CTY, official crop-group, and aggregation-level-1 diagnostics are
+    returned. Class-specific thresholds, residual-class generation, hierarchy,
+    and embedding normalization are applied exactly as they are during raster
+    inference.
     """
     if samples.empty:
         raise ValueError(f"Cannot evaluate an empty {split_name!r} sample split.")
 
-    features = samples.loc[:, models.feature_names].to_numpy(dtype=np.float32)
-    predicted_cty = np.asarray(
-        models.cty_model.predict(features),
-        dtype=np.int32,
-    )
-    predicted_cpsct = np.full(len(samples), _HRL_NO_CROPLAND_CODE, dtype=np.int32)
-    observed_cropland = samples["cty_label"].to_numpy(dtype=np.int32) > 0
-    if observed_cropland.any():
-        predicted_cpsct[observed_cropland] = np.asarray(
-            models.cpsct_model.predict(features[observed_cropland]),
-            dtype=np.int32,
-        )
-
+    predicted_cty, _ = predict_alphaearth_crop_models(models, samples)
     return evaluate_alphaearth_crop_predictions(
         samples,
         predicted_cty,
-        predicted_cpsct,
         split_name=split_name,
         cty_classes=HRL_CTY_CLASS_CODES,
-        cpsct_classes=HRL_CPSCT_CLASS_CODES,
     )
 
 
 def _accuracy_class_name(target: str, class_code: int) -> str:
-    """Return a readable class label for an accuracy report."""
+    """Return a readable CTY class label for an accuracy report."""
     if target == "CTY_CROP_GROUP":
         return HRL_CTY_CROP_GROUP_NAMES.get(class_code, str(class_code))
     if target == "CTY_AGGREGATION_LEVEL_1":
@@ -5684,53 +5346,80 @@ def _accuracy_class_name(target: str, class_code: int) -> str:
             class_code,
             str(class_code),
         )
-    if target == "CPSCT":
-        return HRL_CPSCT_CLASS_NAMES.get(class_code, str(class_code))
-    return str(class_code)
+    return HRL_CTY_CLASS_NAMES.get(class_code, str(class_code))
+
+
+def _alphaearth_summary_macro_f_score(
+    target_metrics: pd.DataFrame,
+) -> float:
+    """Return macro F1 over classes represented in the reference data."""
+    summary = target_metrics.loc[target_metrics["metric_scope"] == "summary"].iloc[0]
+    stored = summary.get("macro_f_score_observed", np.nan)
+    if pd.notna(stored):
+        return float(stored)
+
+    class_metrics = target_metrics.loc[
+        (target_metrics["metric_scope"] == "class")
+        & (target_metrics["reference_support"] > 0)
+    ]
+    if class_metrics.empty:
+        return float("nan")
+    return float(class_metrics["f_score"].mean())
+
+
+def _alphaearth_summary_observed_class_count(
+    target_metrics: pd.DataFrame,
+) -> tuple[int, int]:
+    """Return represented and configured class counts for one assessment."""
+    summary = target_metrics.loc[target_metrics["metric_scope"] == "summary"].iloc[0]
+    observed = summary.get("observed_class_count", np.nan)
+    configured = summary.get("configured_class_count", np.nan)
+    if pd.notna(observed) and pd.notna(configured):
+        return int(observed), int(configured)
+
+    class_metrics = target_metrics.loc[target_metrics["metric_scope"] == "class"]
+    return (
+        int((class_metrics["reference_support"] > 0).sum()),
+        int(len(class_metrics)),
+    )
 
 
 def format_alphaearth_accuracy_report(
     metrics: pd.DataFrame,
-    confusion: pd.DataFrame,
+    confusion: pd.DataFrame | None = None,
 ) -> str:
-    """Format validation/test results in an HRL-style accuracy report.
+    """Format a compact raw CTY accuracy summary for console logging.
 
-    Confusion matrices are printed with mapped/Product classes in rows and
-    Reference classes in columns, followed by Overall Accuracy (OA), Cohen's
-    kappa, macro F-score, and class-level PA, UA, omission/commission errors,
-    and F-score.
+    The full per-class statistics and Product-by-Reference confusion matrices
+    remain available in the stored parquet tables. Console output deliberately
+    reports only the native CTY result and the coarser crop-group diagnostic.
+
+    Args:
+        metrics: Accuracy metric table returned by the CTY evaluation helpers.
+        confusion: Retained for API compatibility. Confusion matrices are not
+            printed to the console.
+
+    Returns:
+        Compact explanatory accuracy summary.
     """
+    del confusion
     if metrics.empty:
-        return "No AlphaEarth crop-classification accuracy statistics available."
+        return "No AlphaEarth CTY-classification accuracy statistics available."
 
     split_order = [
         split for split in ("validation", "test") if split in set(metrics["split"])
     ]
     split_order.extend(sorted(set(metrics["split"]) - set(split_order)))
-    target_order = (
-        "CTY_CROP_GROUP",
-        "CTY_AGGREGATION_LEVEL_1",
-        "CTY",
-        "CPSCT",
-    )
+    target_order = ("CTY", "CTY_CROP_GROUP")
     target_titles = {
-        "CTY_CROP_GROUP": "CTY crop-group level",
-        "CTY_AGGREGATION_LEVEL_1": "CTY aggregation level 1",
-        "CTY": "CTY native class level",
-        "CPSCT": "CPSCT native class level",
+        "CTY": "Native CTY (primary)",
+        "CTY_CROP_GROUP": "Crop group (coarse)",
     }
 
-    sections: list[str] = []
+    rows: list[dict[str, str]] = []
+    include_year = "evaluation_year" in metrics.columns
     for split in split_order:
-        split_years = ""
         split_metrics = metrics.loc[metrics["split"] == split]
-        sections.append("=" * 100)
-        sections.append(f"{split.upper()} THEMATIC ACCURACY ASSESSMENT{split_years}")
-        sections.append(
-            "Unweighted, spatially thinned class-balanced samples; "
-            "Product rows x Reference columns."
-        )
-
         for target in target_order:
             target_metrics = split_metrics.loc[split_metrics["target"] == target]
             if target_metrics.empty:
@@ -5738,125 +5427,343 @@ def format_alphaearth_accuracy_report(
             summary = target_metrics.loc[
                 target_metrics["metric_scope"] == "summary"
             ].iloc[0]
-            class_metrics = target_metrics.loc[
-                target_metrics["metric_scope"] == "class"
-            ].copy()
-            target_confusion = confusion.loc[
-                (confusion["split"] == split) & (confusion["target"] == target)
-            ]
-
-            sections.append("")
-            sections.append(f"--- {target_titles[target]} ---")
-            sections.append(
-                "Reference samples: "
-                f"{int(summary['reference_support']):,} | "
-                f"Overall Accuracy (OA): {summary['accuracy']:.2%} | "
-                f"Cohen's kappa: {summary['kappa']:.3f} | "
-                f"Macro F-score: {summary['f_score']:.2%} | "
-                "Balanced accuracy: "
-                f"{summary['balanced_accuracy']:.2%}"
+            observed_classes, configured_classes = (
+                _alphaearth_summary_observed_class_count(target_metrics)
             )
-
-            if not target_confusion.empty:
-                matrix = (
-                    target_confusion.pivot(
-                        index="product_class",
-                        columns="reference_class",
-                        values="count",
-                    )
-                    .fillna(0)
-                    .astype(np.int64)
-                )
-                matrix = matrix.sort_index().sort_index(axis=1)
-                matrix.columns = [f"Ref. {code}" for code in matrix.columns]
-                matrix.index = [f"Product {code}" for code in matrix.index]
-                matrix["Total"] = matrix.sum(axis=1)
-                total_row = matrix.sum(axis=0).to_frame().T
-                total_row.index = ["Total"]
-                sections.append("Confusion matrix:")
-                sections.append(pd.concat([matrix, total_row]).to_string())
-
-            class_metrics["class"] = [
-                f"{int(code)} ({_accuracy_class_name(target, int(code))})"
-                for code in class_metrics["class_code"]
-            ]
-            accuracy_table = class_metrics[
-                [
-                    "class",
-                    "reference_support",
-                    "product_support",
-                    "producer_accuracy",
-                    "user_accuracy",
-                    "omission_error",
-                    "commission_error",
-                    "f_score",
-                ]
-            ].copy()
-            accuracy_table = accuracy_table.rename(
-                columns={
-                    "reference_support": "n Ref.",
-                    "product_support": "n Product",
-                    "producer_accuracy": "PA",
-                    "user_accuracy": "UA",
-                    "omission_error": "Omission",
-                    "commission_error": "Commission",
-                    "f_score": "F-score",
+            row = {
+                "Split": split.capitalize(),
+                "Level": target_titles[target],
+                "Samples": f"{int(summary['reference_support']):,}",
+                "OA": f"{float(summary['accuracy']):.2%}",
+                "Macro F1*": (
+                    f"{_alphaearth_summary_macro_f_score(target_metrics):.2%}"
+                ),
+                "Mean PA": f"{float(summary['balanced_accuracy']):.2%}",
+                "Classes": f"{observed_classes}/{configured_classes}",
+            }
+            if include_year and pd.notna(summary.get("evaluation_year", np.nan)):
+                row = {
+                    "Year": str(int(summary["evaluation_year"])),
+                    **row,
                 }
+            rows.append(row)
+
+    if not rows:
+        return "No AlphaEarth CTY summary rows are available."
+
+    table = pd.DataFrame(rows).to_string(index=False)
+    return "\n".join(
+        [
+            table,
+            "",
+            "Interpretation:",
+            "  • Native CTY is the primary detailed crop-class result.",
+            "  • Crop group is a coarser diagnostic and is normally higher.",
+            "  • OA is the share of evaluated samples classified correctly.",
+            "  • Macro F1* averages class F1 only over classes present in the reference.",
+            "  • Mean PA is mean Producer's Accuracy over reference-present classes.",
+            "  • Classes reports reference-present/configured classes.",
+            "  • Raw per-class tables are omitted here to avoid repetition.",
+            "  • Final crop-group and native-crop class tables are reported once in stage 2.",
+            "  • Complete raw/final confusion matrices remain stored in parquet tables.",
+        ]
+    )
+
+
+def _format_alphaearth_training_years(value: Any) -> str:
+    """Format comma-separated training years as a compact range when possible."""
+    years = [int(part) for part in str(value).replace(" ", "").split(",") if part]
+    if not years:
+        return "—"
+    if years == list(range(years[0], years[-1] + 1)):
+        return str(years[0]) if len(years) == 1 else f"{years[0]}–{years[-1]}"
+    return ",".join(str(year) for year in years)
+
+
+def _format_alphaearth_class_support(
+    reference_support: int,
+    product_support: int,
+) -> str:
+    """Format reference and product sample counts for one accuracy class."""
+    return f"{reference_support:,}/{product_support:,}"
+
+
+def _format_alphaearth_class_percentage(
+    value: Any,
+    *,
+    weak: bool = False,
+) -> str:
+    """Format one class accuracy percentage and optionally flag a weak F-score."""
+    if value is None or pd.isna(value):
+        return "—"
+    rendered = f"{float(value):.1%}"
+    return f"{rendered}!" if weak else rendered
+
+
+def _format_alphaearth_final_class_table(
+    metrics: pd.DataFrame,
+    *,
+    target: str,
+    title: str,
+) -> str:
+    """Format final per-class accuracy for all held-out years in one table.
+
+    A class is included when it occurs in the reference data for at least one
+    held-out year. Reference-absent cells are rendered as an em dash rather than
+    as a misleading zero-percent accuracy.
+    """
+    class_metrics = metrics.loc[
+        (metrics["assessment_stage"] == "final_postprocessed")
+        & (metrics["target"] == target)
+        & (metrics["metric_scope"] == "class")
+    ].copy()
+    if class_metrics.empty:
+        return f"{title}\nNo final per-class statistics available."
+
+    years = sorted(
+        int(year) for year in class_metrics["evaluation_year"].dropna().unique()
+    )
+    represented = class_metrics.loc[class_metrics["reference_support"] > 0]
+    class_codes = sorted(int(code) for code in represented["class_code"].unique())
+    if not class_codes:
+        return f"{title}\nNo reference-present classes available."
+
+    rows: list[dict[str, str]] = []
+    for class_code in class_codes:
+        row: dict[str, str] = {
+            "Code": str(class_code),
+            "Class": _accuracy_class_name(target, class_code),
+        }
+        for year in years:
+            selected = class_metrics.loc[
+                (class_metrics["evaluation_year"] == year)
+                & (class_metrics["class_code"] == class_code)
+            ]
+            if selected.empty or int(selected.iloc[0]["reference_support"]) == 0:
+                row[f"{year} Ref/Pred"] = "—"
+                row[f"{year} PA"] = "—"
+                row[f"{year} UA"] = "—"
+                row[f"{year} F1"] = "—"
+                continue
+
+            values = selected.iloc[0]
+            reference_support = int(values["reference_support"])
+            product_support = int(values["product_support"])
+            weak = reference_support >= 100 and float(values["f_score"]) < 0.50
+            row[f"{year} Ref/Pred"] = _format_alphaearth_class_support(
+                reference_support,
+                product_support,
             )
-            for column in (
-                "PA",
-                "UA",
-                "Omission",
-                "Commission",
-                "F-score",
-            ):
-                accuracy_table[column] = accuracy_table[column].map(
-                    lambda value: f"{value:.2%}"
-                )
-            sections.append("Class accuracy statistics:")
-            sections.append(accuracy_table.to_string(index=False))
+            row[f"{year} PA"] = _format_alphaearth_class_percentage(
+                values["producer_accuracy"]
+            )
+            row[f"{year} UA"] = _format_alphaearth_class_percentage(
+                values["user_accuracy"]
+            )
+            row[f"{year} F1"] = _format_alphaearth_class_percentage(
+                values["f_score"],
+                weak=weak,
+            )
+        rows.append(row)
 
-            if target == "CTY_CROP_GROUP":
-                assessed = class_metrics.loc[class_metrics["class_code"] != 30]
-                passing = int((assessed["f_score"] >= 0.85).sum())
-                sections.append(
-                    "HRL crop-group reference threshold (F-score >= 85%): "
-                    f"{passing}/{len(assessed)} assessed classes reached."
-                )
-            elif target == "CTY_AGGREGATION_LEVEL_1":
-                passing = int((class_metrics["f_score"] >= 0.80).sum())
-                sections.append(
-                    "HRL aggregation-level-1 reference threshold "
-                    "(F-score >= 80%): "
-                    f"{passing}/{len(class_metrics)} assessed classes reached."
-                )
+    table = pd.DataFrame(rows).to_string(index=False)
+    return f"{title}\n{table}"
 
-    return "\n".join(sections)
+
+def format_alphaearth_postprocessed_accuracy_report(
+    metrics: pd.DataFrame,
+) -> str:
+    """Format leakage-safe map accuracy with non-redundant class tables.
+
+    Console output contains:
+
+    1. One raw-versus-final summary for native CTY and crop-group accuracy.
+    2. One final crop-group class table with all held-out years side by side.
+    3. One final native CTY class table with all held-out years side by side.
+
+    Aggregation-level-1 diagnostics and all confusion matrices remain available
+    in the parquet outputs but are not repeated in the console.
+    """
+    if metrics.empty:
+        return "No post-processed AlphaEarth CTY accuracy statistics available."
+
+    summary = metrics.loc[metrics["metric_scope"] == "summary"].copy()
+    required_stages = {"raw_rolling_origin", "final_postprocessed"}
+    if not required_stages.issubset(set(summary["assessment_stage"])):
+        return "Raw and final post-processed summary rows are not both available."
+
+    target_order = ("CTY", "CTY_CROP_GROUP")
+    target_titles = {
+        "CTY": "Native CTY (primary)",
+        "CTY_CROP_GROUP": "Crop group (coarse)",
+    }
+    rows: list[dict[str, str]] = []
+
+    group_columns = ["split", "evaluation_year", "target", "training_years"]
+    for keys, group in summary.groupby(group_columns, sort=False, dropna=False):
+        split, evaluation_year, target, training_years = keys
+        if target not in target_order:
+            continue
+        raw_rows = group.loc[group["assessment_stage"] == "raw_rolling_origin"]
+        final_rows = group.loc[group["assessment_stage"] == "final_postprocessed"]
+        if raw_rows.empty or final_rows.empty:
+            continue
+        raw = raw_rows.iloc[0]
+        final = final_rows.iloc[0]
+
+        target_metrics = metrics.loc[
+            (metrics["split"] == split)
+            & (metrics["evaluation_year"] == evaluation_year)
+            & (metrics["target"] == target)
+            & (metrics["training_years"] == training_years)
+        ]
+        raw_target_metrics = target_metrics.loc[
+            target_metrics["assessment_stage"] == "raw_rolling_origin"
+        ]
+        final_target_metrics = target_metrics.loc[
+            target_metrics["assessment_stage"] == "final_postprocessed"
+        ]
+        raw_f1 = _alphaearth_summary_macro_f_score(raw_target_metrics)
+        final_f1 = _alphaearth_summary_macro_f_score(final_target_metrics)
+        observed_classes, configured_classes = _alphaearth_summary_observed_class_count(
+            final_target_metrics
+        )
+
+        rows.append(
+            {
+                "Year": str(int(evaluation_year)),
+                "Split": str(split).capitalize(),
+                "Level": target_titles[target],
+                "Train": _format_alphaearth_training_years(training_years),
+                "Final N": f"{int(final['reference_support']):,}",
+                "Excluded": f"{int(final.get('excluded_predictions', 0) or 0):,}",
+                "Raw OA": f"{float(raw['accuracy']):.2%}",
+                "Final OA": f"{float(final['accuracy']):.2%}",
+                "ΔOA": f"{float(final['accuracy'] - raw['accuracy']):+.2%}",
+                "Raw F1*": f"{raw_f1:.2%}",
+                "Final F1*": f"{final_f1:.2%}",
+                "ΔF1": f"{final_f1 - raw_f1:+.2%}",
+                "Classes": f"{observed_classes}/{configured_classes}",
+            }
+        )
+
+    if not rows:
+        return "No comparable raw and final CTY summary rows are available."
+
+    order = {target: index for index, target in enumerate(target_order)}
+    rows.sort(
+        key=lambda row: (
+            int(row["Year"]),
+            order["CTY" if row["Level"].startswith("Native") else "CTY_CROP_GROUP"],
+        )
+    )
+    summary_table = pd.DataFrame(rows).to_string(index=False)
+
+    crop_group_table = _format_alphaearth_final_class_table(
+        metrics,
+        target="CTY_CROP_GROUP",
+        title="FINAL MAP CLASS ACCURACY — CROP GROUPS",
+    )
+    native_table = _format_alphaearth_final_class_table(
+        metrics,
+        target="CTY",
+        title="FINAL MAP CLASS ACCURACY — NATIVE CTY CROPS",
+    )
+
+    return "\n".join(
+        [
+            "OVERALL RAW-VERSUS-FINAL ACCURACY",
+            summary_table,
+            "",
+            "The two class tables below report final post-processed maps only.",
+            "Years are shown side by side so each class is listed once.",
+            "Ref/Pred = reference sample count / predicted sample count.",
+            "PA = Producer's Accuracy (reference recall); UA = User's Accuracy "
+            "(prediction precision).",
+            "F1 balances PA and UA; ! marks F1 < 50% where reference n ≥ 100.",
+            "An em dash means that the class was absent from that year's reference.",
+            "",
+            crop_group_table,
+            "",
+            native_table,
+            "",
+            "Aggregation-level-1 results and complete raw/final confusion matrices "
+            "remain stored in parquet tables.",
+        ]
+    )
+
+
+def _alphaearth_estimator_feature_importance(
+    estimator: Any,
+    feature_names: Sequence[str],
+    *,
+    target: str,
+) -> pd.DataFrame:
+    """Extract normalized absolute logistic-regression coefficient magnitudes."""
+    fitted = (
+        estimator.named_steps["classifier"]
+        if hasattr(estimator, "named_steps")
+        else estimator
+    )
+    importance = getattr(fitted, "feature_importances_", None)
+    if importance is None:
+        coefficients = getattr(fitted, "coef_", None)
+        if coefficients is not None:
+            importance = np.mean(np.abs(np.asarray(coefficients)), axis=0)
+    if importance is None:
+        return pd.DataFrame(columns=["target", "feature", "importance"])
+    values = np.asarray(importance, dtype=np.float64).reshape(-1)
+    if values.size != len(feature_names):
+        return pd.DataFrame(columns=["target", "feature", "importance"])
+    total = float(values.sum())
+    if total > 0.0:
+        values = values / total
+    return pd.DataFrame(
+        {
+            "target": target,
+            "feature": tuple(feature_names),
+            "importance": values,
+        }
+    )
 
 
 def alphaearth_crop_feature_importance(
     models: AlphaEarthCropModelBundle,
 ) -> pd.DataFrame:
-    """Return model feature importances when supported by the estimators."""
-    rows: list[pd.DataFrame] = []
-    for target_name, estimator in (
-        ("CTY", models.cty_model),
-        ("CPSCT", models.cpsct_model),
-    ):
-        importance = getattr(estimator, "feature_importances_", None)
-        if importance is None:
-            continue
-        table = pd.DataFrame(
-            {
-                "target": target_name,
-                "feature": models.feature_names,
-                "importance": np.asarray(importance, dtype=np.float64),
-            }
-        ).sort_values("importance", ascending=False)
-        rows.append(table)
-    if not rows:
+    """Return available importance diagnostics for flat or hierarchical models."""
+    tables: list[pd.DataFrame] = []
+    if models.cty_model is not None:
+        tables.append(
+            _alphaearth_estimator_feature_importance(
+                models.cty_model,
+                models.feature_names,
+                target="CTY",
+            )
+        )
+    if models.group_model is not None:
+        tables.append(
+            _alphaearth_estimator_feature_importance(
+                models.group_model,
+                models.feature_names,
+                target="CTY_GROUP",
+            )
+        )
+    for group_code, estimator in sorted(models.within_group_models.items()):
+        tables.append(
+            _alphaearth_estimator_feature_importance(
+                estimator,
+                models.feature_names,
+                target=f"CTY_WITHIN_GROUP_{group_code}",
+            )
+        )
+    nonempty = [table for table in tables if not table.empty]
+    if not nonempty:
         return pd.DataFrame(columns=["target", "feature", "importance"])
-    return pd.concat(rows, ignore_index=True)
+    return (
+        pd.concat(nonempty, ignore_index=True)
+        .sort_values(["target", "importance"], ascending=[True, False])
+        .reset_index(drop=True)
+    )
 
 
 def save_alphaearth_crop_models(
@@ -5887,18 +5794,18 @@ def build_hrl_prediction_tile_name(
     product_code: str,
     prediction_year: int,
 ) -> str:
-    """Build an HRL-compatible annual prediction filename.
+    """Build an HRL-compatible CTY or CTY-confidence prediction filename.
 
     Args:
-        template_tile_name: Existing HRL CTY/CPSCT filename.
-        product_code: ``"CTY"``, ``"CTYCL"`` or ``"CPSCT"``.
+        template_tile_name: Existing HRL CTY filename.
+        product_code: ``"CTY"`` or ``"CTYCL"``.
         prediction_year: Target annual product year.
 
     Returns:
         HRL-compatible GeoTIFF filename including the ``.tif`` suffix.
     """
-    if product_code not in {"CTY", "CTYCL", "CPSCT"}:
-        raise ValueError("product_code must be 'CTY', 'CTYCL' or 'CPSCT'.")
+    if product_code not in {"CTY", "CTYCL"}:
+        raise ValueError("product_code must be 'CTY' or 'CTYCL'.")
     stem = Path(template_tile_name).stem
     match = _HRL_TILE_NAME_PATTERN.fullmatch(stem)
     if match is None:
@@ -6007,7 +5914,7 @@ def _assert_matching_rasterio_grid(
     first: rasterio.io.DatasetReader,
     second: rasterio.io.DatasetReader,
 ) -> None:
-    """Validate that two HRL product tiles share the exact raster grid."""
+    """Validate that two raster products share the exact grid."""
     if (
         first.crs != second.crs
         or first.transform != second.transform
@@ -6015,7 +5922,7 @@ def _assert_matching_rasterio_grid(
         or first.height != second.height
     ):
         raise ValueError(
-            "CTY and CPSCT template tiles do not share the exact grid: "
+            "Raster products do not share the exact grid: "
             f"{first.name} versus {second.name}."
         )
 
@@ -6068,6 +5975,17 @@ def _predict_full_class_probabilities(
         return np.zeros((0, len(class_codes)), dtype=np.float32)
 
     raw_probabilities = np.asarray(model.predict_proba(features), dtype=np.float32)
+    if raw_probabilities.ndim != 2:
+        raise ValueError(
+            "Classifier predict_proba must return a two-dimensional matrix; "
+            f"found shape {raw_probabilities.shape}."
+        )
+    raw_probabilities = np.nan_to_num(
+        raw_probabilities,
+        nan=0.0,
+        posinf=0.0,
+        neginf=0.0,
+    )
     model_classes = np.asarray(model.classes_, dtype=np.int32)
     requested_classes = np.asarray(class_codes, dtype=np.int32)
     probabilities = np.zeros(
@@ -6082,6 +6000,16 @@ def _predict_full_class_probabilities(
     row_sums = probabilities.sum(axis=1)
     valid = row_sums > 0.0
     probabilities[valid] /= row_sums[valid, None]
+    if (~valid).any():
+        represented_positions = [
+            class_positions[int(code)]
+            for code in model_classes
+            if int(code) in class_positions
+        ]
+        if represented_positions:
+            probabilities[np.ix_(~valid, represented_positions)] = 1.0 / len(
+                represented_positions
+            )
     return probabilities
 
 
@@ -6251,11 +6179,9 @@ def _copy_raster_to_temporary(
 def predict_alphaearth_crop_tile_to_hrl_geotiffs(
     models: AlphaEarthCropModelBundle,
     cty_template_path: str | Path,
-    cpsct_template_path: str | Path,
     current_alphaearth_cogs: gpd.GeoDataFrame,
     clip_geometry: BaseGeometry,
     cty_output_path: str | Path,
-    cpsct_output_path: str | Path,
     *,
     geometry_crs: str = "EPSG:4326",
     chunk_size: int = 512,
@@ -6266,11 +6192,10 @@ def predict_alphaearth_crop_tile_to_hrl_geotiffs(
     apply_historical_cropland_mask: bool = True,
     historical_cropland_mask_dilation_pixels: int = 0,
     smooth_cty_probabilities: bool = True,
-    smooth_cpsct_probabilities: bool = True,
     unclassified_probability_threshold: float = 0.25,
     cty_confidence_output_path: str | Path | None = None,
-) -> tuple[Path, Path]:
-    """Predict and spatially post-process annual CTY/CPSCT HRL tiles.
+) -> Path:
+    """Predict and spatially post-process one annual CTY HRL tile.
 
     The prediction uses all 64 AlphaEarth dimensions and any optional topographic
     features stored in the model schema. A maximum historical HRL cropland extent
@@ -6283,13 +6208,11 @@ def predict_alphaearth_crop_tile_to_hrl_geotiffs(
     are intentionally applied later, once all tiles and prediction years exist.
 
     Args:
-        models: Final trained annual model bundle.
+        models: Final trained annual CTY model bundle.
         cty_template_path: Existing HRL CTY tile defining the exact output grid.
-        cpsct_template_path: Matching HRL CPSCT tile defining its output profile.
         current_alphaearth_cogs: Downloaded target-year AlphaEarth COG rows.
         clip_geometry: Active study-area geometry intersecting this HRL tile.
         cty_output_path: HRL-compatible CTY output path.
-        cpsct_output_path: HRL-compatible CPSCT output path.
         geometry_crs: CRS of ``clip_geometry``.
         chunk_size: Core prediction-window width and height in pixels.
         overwrite: Replace existing outputs when True.
@@ -6302,13 +6225,12 @@ def predict_alphaearth_crop_tile_to_hrl_geotiffs(
         historical_cropland_mask_dilation_pixels: Optional square dilation of the
             historical cropland union.
         smooth_cty_probabilities: Apply 3×3 Gaussian smoothing to CTY probabilities.
-        smooth_cpsct_probabilities: Apply analogous smoothing to CPSCT probabilities.
         unclassified_probability_threshold: Maximum-probability threshold below
             which annual/permanent crops become 3100/3200.
         cty_confidence_output_path: Optional uint8 CTY confidence-layer output.
 
     Returns:
-        Paths of the written CTY and CPSCT GeoTIFFs.
+        Path of the written CTY GeoTIFF.
     """
     if chunk_size < 16:
         raise ValueError("chunk_size must be at least 16 pixels.")
@@ -6333,35 +6255,30 @@ def predict_alphaearth_crop_tile_to_hrl_geotiffs(
         )
 
     cty_output = Path(cty_output_path)
-    cpsct_output = Path(cpsct_output_path)
     confidence_output = (
         None if cty_confidence_output_path is None else Path(cty_confidence_output_path)
     )
     cty_output.parent.mkdir(parents=True, exist_ok=True)
-    cpsct_output.parent.mkdir(parents=True, exist_ok=True)
     if confidence_output is not None:
         confidence_output.parent.mkdir(parents=True, exist_ok=True)
 
-    existing_outputs = [cty_output, cpsct_output]
+    existing_outputs = [cty_output]
     if confidence_output is not None:
         existing_outputs.append(confidence_output)
     if not overwrite and any(path.exists() for path in existing_outputs):
         raise FileExistsError("Prediction output already exists and overwrite=False.")
 
     cty_temporary = cty_output.with_name(f".{cty_output.name}.part")
-    cpsct_temporary = cpsct_output.with_name(f".{cpsct_output.name}.part")
     confidence_temporary = (
         None
         if confidence_output is None
         else confidence_output.with_name(f".{confidence_output.name}.part")
     )
-    for temporary in (cty_temporary, cpsct_temporary, confidence_temporary):
+    for temporary in (cty_temporary, confidence_temporary):
         if temporary is not None:
             temporary.unlink(missing_ok=True)
 
-    smoothing_halo = (
-        1 if (smooth_cty_probabilities or smooth_cpsct_probabilities) else 0
-    )
+    smoothing_halo = 1 if smooth_cty_probabilities else 0
     processing_halo = max(
         smoothing_halo,
         historical_cropland_mask_dilation_pixels,
@@ -6370,10 +6287,8 @@ def predict_alphaearth_crop_tile_to_hrl_geotiffs(
     try:
         with ExitStack() as stack:
             cty_template = stack.enter_context(rasterio.open(cty_template_path))
-            cpsct_template = stack.enter_context(rasterio.open(cpsct_template_path))
-            _assert_matching_rasterio_grid(cty_template, cpsct_template)
-            if cty_template.count != 1 or cpsct_template.count != 1:
-                raise ValueError("HRL CTY/CPSCT templates must contain one band.")
+            if cty_template.count != 1:
+                raise ValueError("The HRL CTY template must contain one band.")
 
             geometry_in_template_crs = (
                 gpd.GeoSeries([clip_geometry], crs=geometry_crs)
@@ -6398,18 +6313,16 @@ def predict_alphaearth_crop_tile_to_hrl_geotiffs(
                     )
 
             cty_profile = cty_template.profile.copy()
-            cpsct_profile = cpsct_template.profile.copy()
-            for profile in (cty_profile, cpsct_profile):
-                profile.update(
-                    driver="GTiff",
-                    count=1,
-                    dtype="uint16",
-                    nodata=_HRL_OUTSIDE_AREA_CODE,
-                    width=cty_template.width,
-                    height=cty_template.height,
-                    crs=cty_template.crs,
-                    transform=cty_template.transform,
-                )
+            cty_profile.update(
+                driver="GTiff",
+                count=1,
+                dtype="uint16",
+                nodata=_HRL_OUTSIDE_AREA_CODE,
+                width=cty_template.width,
+                height=cty_template.height,
+                crs=cty_template.crs,
+                transform=cty_template.transform,
+            )
 
             vrts = _open_alphaearth_vrts_for_template(
                 current_alphaearth_cogs,
@@ -6434,11 +6347,7 @@ def predict_alphaearth_crop_tile_to_hrl_geotiffs(
             cty_writer = stack.enter_context(
                 rasterio.open(cty_temporary, "w", **cty_profile)
             )
-            cpsct_writer = stack.enter_context(
-                rasterio.open(cpsct_temporary, "w", **cpsct_profile)
-            )
             _copy_raster_metadata(cty_template, cty_writer)
-            _copy_raster_metadata(cpsct_template, cpsct_writer)
 
             confidence_writer = None
             if confidence_temporary is not None:
@@ -6482,9 +6391,6 @@ def predict_alphaearth_crop_tile_to_hrl_geotiffs(
             height = cty_template.height
             width = cty_template.width
             transform = cty_template.transform
-            cty_codes = np.asarray(HRL_CTY_CLASS_CODES, dtype=np.int32)
-            cpsct_codes = np.asarray(HRL_CPSCT_CLASS_CODES, dtype=np.int32)
-
             for row_start in range(0, height, chunk_size):
                 core_height = min(chunk_size, height - row_start)
                 read_row_start = max(0, row_start - processing_halo)
@@ -6535,7 +6441,7 @@ def predict_alphaearth_crop_tile_to_hrl_geotiffs(
                         historical_cropland = _read_historical_cropland_mask(
                             historical_sources,
                             read_window,
-                            dilation_pixels=(historical_cropland_mask_dilation_pixels),
+                            dilation_pixels=historical_cropland_mask_dilation_pixels,
                         )
                     else:
                         historical_cropland = np.ones_like(valid_data, dtype=bool)
@@ -6543,10 +6449,6 @@ def predict_alphaearth_crop_tile_to_hrl_geotiffs(
 
                     cty_probabilities = np.zeros(
                         (len(HRL_CTY_CLASS_CODES), read_height, read_width),
-                        dtype=np.float32,
-                    )
-                    cpsct_probabilities = np.zeros(
-                        (len(HRL_CPSCT_CLASS_CODES), read_height, read_width),
                         dtype=np.float32,
                     )
 
@@ -6642,6 +6544,7 @@ def predict_alphaearth_crop_tile_to_hrl_geotiffs(
                             latitude,
                             include_coordinates=coordinates_required,
                             include_topography=topography_required,
+                            normalize_embeddings=models.normalize_embeddings,
                             elevation_m=elevation_values,
                             slope_gradient=slope_values,
                         )
@@ -6651,36 +6554,19 @@ def predict_alphaearth_crop_tile_to_hrl_geotiffs(
                             )
 
                         cty_prediction_probabilities = (
-                            _predict_full_class_probabilities(
-                                models.cty_model,
+                            predict_alphaearth_crop_probabilities(
+                                models,
                                 features,
-                                HRL_CTY_CLASS_CODES,
-                            )
-                        )
-                        cpsct_prediction_probabilities = (
-                            _predict_full_class_probabilities(
-                                models.cpsct_model,
-                                features,
-                                HRL_CPSCT_CLASS_CODES,
                             )
                         )
                         cty_probabilities.reshape(
                             len(HRL_CTY_CLASS_CODES),
                             -1,
                         )[:, classify_flat] = cty_prediction_probabilities.T
-                        cpsct_probabilities.reshape(
-                            len(HRL_CPSCT_CLASS_CODES),
-                            -1,
-                        )[:, classify_flat] = cpsct_prediction_probabilities.T
 
                     if smooth_cty_probabilities:
                         cty_probabilities = _normalized_gaussian_filter_3x3(
                             cty_probabilities,
-                            classify_mask,
-                        )
-                    if smooth_cpsct_probabilities:
-                        cpsct_probabilities = _normalized_gaussian_filter_3x3(
-                            cpsct_probabilities,
                             classify_mask,
                         )
 
@@ -6696,10 +6582,6 @@ def predict_alphaearth_crop_tile_to_hrl_geotiffs(
                         _HRL_OUTSIDE_AREA_CODE,
                         dtype=np.uint16,
                     )
-                    cpsct_values = np.full_like(
-                        cty_values,
-                        _HRL_OUTSIDE_AREA_CODE,
-                    )
                     confidence_values = np.full(
                         (core_height, core_width),
                         _HRL_CTY_CONFIDENCE_OUTSIDE_AREA,
@@ -6708,7 +6590,6 @@ def predict_alphaearth_crop_tile_to_hrl_geotiffs(
 
                     historical_background = core_valid_data & ~core_classify
                     cty_values[historical_background] = _HRL_NO_CROPLAND_CODE
-                    cpsct_values[historical_background] = 0
                     confidence_values[historical_background] = (
                         _HRL_CTY_CONFIDENCE_NO_CROPLAND
                     )
@@ -6719,34 +6600,31 @@ def predict_alphaearth_crop_tile_to_hrl_geotiffs(
                             core_rows,
                             core_cols,
                         ]
-                        best_cty_indices = np.argmax(
-                            core_cty_probabilities,
-                            axis=0,
+                        probability_rows = core_cty_probabilities[
+                            :,
+                            core_classify,
+                        ].T
+                        predicted_rows, confidence_rows = (
+                            alphaearth_cty_from_probabilities(
+                                models,
+                                probability_rows,
+                                unclassified_probability_threshold=(
+                                    unclassified_probability_threshold
+                                ),
+                            )
                         )
-                        best_cty_probabilities = np.take_along_axis(
-                            core_cty_probabilities,
-                            best_cty_indices[None, :, :],
-                            axis=0,
-                        )[0]
-                        predicted_cty = cty_codes[best_cty_indices]
-
-                        low_confidence = core_classify & (
-                            best_cty_probabilities < unclassified_probability_threshold
+                        predicted_cty = np.full(
+                            (core_height, core_width),
+                            _HRL_OUTSIDE_AREA_CODE,
+                            dtype=np.int32,
                         )
-                        annual_low_confidence = low_confidence & np.isin(
-                            predicted_cty,
-                            HRL_ANNUAL_CTY_CLASS_CODES,
+                        best_cty_probabilities = np.zeros(
+                            (core_height, core_width),
+                            dtype=np.float32,
                         )
-                        permanent_low_confidence = low_confidence & np.isin(
-                            predicted_cty,
-                            HRL_PERMANENT_CTY_CLASS_CODES,
-                        )
-                        predicted_cty = predicted_cty.copy()
-                        predicted_cty[annual_low_confidence] = 3100
-                        predicted_cty[permanent_low_confidence] = 3200
-                        cty_values[core_classify] = predicted_cty[core_classify].astype(
-                            np.uint16
-                        )
+                        predicted_cty[core_classify] = predicted_rows
+                        best_cty_probabilities[core_classify] = confidence_rows
+                        cty_values[core_classify] = predicted_rows.astype(np.uint16)
 
                         confidence_percent = np.clip(
                             np.rint(best_cty_probabilities * 100.0),
@@ -6763,25 +6641,6 @@ def predict_alphaearth_crop_tile_to_hrl_geotiffs(
                             _HRL_CTY_CONFIDENCE_NO_CROPLAND
                         )
 
-                        core_cpsct_probabilities = cpsct_probabilities[
-                            :,
-                            core_rows,
-                            core_cols,
-                        ]
-                        best_cpsct_indices = np.argmax(
-                            core_cpsct_probabilities,
-                            axis=0,
-                        )
-                        predicted_cpsct = cpsct_codes[best_cpsct_indices]
-                        annual_cropland = core_classify & np.isin(
-                            predicted_cty,
-                            HRL_ANNUAL_CTY_CLASS_CODES,
-                        )
-                        cpsct_values[core_classify] = 0
-                        cpsct_values[annual_cropland] = predicted_cpsct[
-                            annual_cropland
-                        ].astype(np.uint16)
-
                     core_window = rasterio.windows.Window(
                         col_start,
                         row_start,
@@ -6789,7 +6648,6 @@ def predict_alphaearth_crop_tile_to_hrl_geotiffs(
                         core_height,
                     )
                     cty_writer.write(cty_values, 1, window=core_window)
-                    cpsct_writer.write(cpsct_values, 1, window=core_window)
                     if confidence_writer is not None:
                         confidence_writer.write(
                             confidence_values,
@@ -6798,12 +6656,11 @@ def predict_alphaearth_crop_tile_to_hrl_geotiffs(
                         )
 
         cty_temporary.replace(cty_output)
-        cpsct_temporary.replace(cpsct_output)
         if confidence_temporary is not None and confidence_output is not None:
             confidence_temporary.replace(confidence_output)
-        return cty_output, cpsct_output
+        return cty_output
     except Exception:
-        for temporary in (cty_temporary, cpsct_temporary, confidence_temporary):
+        for temporary in (cty_temporary, confidence_temporary):
             if temporary is not None:
                 temporary.unlink(missing_ok=True)
         raise
@@ -6812,12 +6669,11 @@ def predict_alphaearth_crop_tile_to_hrl_geotiffs(
 def sample_alphaearth_crop_prediction_tiles(
     samples: pd.DataFrame,
     cty_paths_by_tile: dict[str, str | Path],
-    cpsct_paths_by_tile: dict[str, str | Path],
     *,
     sample_coordinates_crs: str | CRS | None = None,
     batch_size: int = 100_000,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Sample final CTY and CPSCT tile products at evaluation locations.
+) -> np.ndarray:
+    """Sample final CTY tile products at evaluation locations.
 
     ``source_x``/``source_y`` are preferred because they preserve the exact HRL
     sample positions. When those columns are unavailable, longitude/latitude are
@@ -6826,21 +6682,18 @@ def sample_alphaearth_crop_prediction_tiles(
     Args:
         samples: Evaluation sample table.
         cty_paths_by_tile: CTY prediction paths keyed by HRL tile code.
-        cpsct_paths_by_tile: Matching CPSCT paths keyed by tile code.
         sample_coordinates_crs: CRS of ``source_x`` and ``source_y``.
         batch_size: Maximum coordinates sampled from one raster at once.
 
     Returns:
-        CTY and CPSCT arrays aligned with ``samples``.
+        CTY array aligned with ``samples``.
     """
     if samples.empty:
         raise ValueError("Cannot sample predictions for an empty sample table.")
     if batch_size < 1:
         raise ValueError("batch_size must be at least one.")
-    if set(cty_paths_by_tile) != set(cpsct_paths_by_tile):
-        raise ValueError("CTY and CPSCT prediction tile sets must match.")
     if not cty_paths_by_tile:
-        raise ValueError("At least one prediction tile is required.")
+        raise ValueError("At least one CTY prediction tile is required.")
 
     if {"source_x", "source_y"}.issubset(samples.columns):
         if sample_coordinates_crs is None:
@@ -6865,22 +6718,12 @@ def sample_alphaearth_crop_prediction_tiles(
         _HRL_OUTSIDE_AREA_CODE,
         dtype=np.int32,
     )
-    predicted_cpsct = np.full(
-        len(samples),
-        _HRL_OUTSIDE_AREA_CODE,
-        dtype=np.int32,
-    )
     assigned = np.zeros(len(samples), dtype=bool)
     transformed_coordinates: dict[str, tuple[np.ndarray, np.ndarray]] = {}
 
     for tile_code in sorted(cty_paths_by_tile):
         cty_path = Path(cty_paths_by_tile[tile_code])
-        cpsct_path = Path(cpsct_paths_by_tile[tile_code])
-        with (
-            rasterio.open(cty_path) as cty_source,
-            rasterio.open(cpsct_path) as cpsct_source,
-        ):
-            _assert_matching_rasterio_grid(cty_source, cpsct_source)
+        with rasterio.open(cty_path) as cty_source:
             destination_crs = CRS.from_user_input(cty_source.crs)
             cache_key = destination_crs.to_string()
             if cache_key not in transformed_coordinates:
@@ -6936,23 +6779,10 @@ def sample_alphaearth_crop_prediction_tiles(
                     dtype=np.int32,
                     count=len(coordinates),
                 )
-                cpsct_values = np.fromiter(
-                    (
-                        int(value[0])
-                        for value in cpsct_source.sample(
-                            coordinates,
-                            indexes=1,
-                            masked=False,
-                        )
-                    ),
-                    dtype=np.int32,
-                    count=len(coordinates),
-                )
                 predicted_cty[batch_indices] = cty_values
-                predicted_cpsct[batch_indices] = cpsct_values
                 assigned[batch_indices] = True
 
-    return predicted_cty, predicted_cpsct
+    return predicted_cty
 
 
 def apply_alphaearth_permanent_crop_temporal_consistency(
@@ -7500,42 +7330,6 @@ def apply_alphaearth_cty_mmu_sieve(
                 )
 
     return pd.DataFrame(results)
-
-
-def enforce_cpsct_annual_cropland_mask(
-    cty_path: str | Path,
-    cpsct_path: str | Path,
-) -> int:
-    """Set CPSCT to zero outside final annual cropland and preserve outside-area."""
-    cty_path = Path(cty_path)
-    cpsct_path = Path(cpsct_path)
-    temporary = cpsct_path.with_name(f".{cpsct_path.name}.ctymask.part")
-    temporary.unlink(missing_ok=True)
-    changed_total = 0
-    try:
-        with (
-            rasterio.open(cty_path) as cty_source,
-            rasterio.open(cpsct_path) as cpsct_source,
-        ):
-            _assert_matching_rasterio_grid(cty_source, cpsct_source)
-            profile = cpsct_source.profile.copy()
-            with rasterio.open(temporary, "w", **profile) as destination:
-                for _, window in cpsct_source.block_windows(1):
-                    cty = cty_source.read(1, window=window, masked=False)
-                    cpsct = cpsct_source.read(1, window=window, masked=False)
-                    updated = cpsct.copy()
-                    outside = cty == _HRL_OUTSIDE_AREA_CODE
-                    annual = np.isin(cty, HRL_ANNUAL_CTY_CLASS_CODES)
-                    updated[~outside & ~annual] = 0
-                    updated[outside] = _HRL_OUTSIDE_AREA_CODE
-                    changed_total += int(np.count_nonzero(updated != cpsct))
-                    destination.write(updated, 1, window=window)
-                _copy_raster_metadata(cpsct_source, destination)
-        temporary.replace(cpsct_path)
-        return changed_total
-    except Exception:
-        temporary.unlink(missing_ok=True)
-        raise
 
 
 def remove_alphaearth_downloads(
