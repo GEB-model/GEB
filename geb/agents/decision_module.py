@@ -774,7 +774,7 @@ class DecisionModule:
         )
 
         # Get the maximum amenity value for each agent (assuming they can relocate to the best location)
-        building_idx = np.argmax(amenity_value, axis=1)
+        building_idx = np.argmax(amenity_value, axis=1)[0]
         max_amenity_value = np.max(amenity_value, axis=1)
 
         # Calculate the NPV of relocating for each agent
@@ -786,7 +786,7 @@ class DecisionModule:
         NPV_relocate_discounted = np.sum(discounts) * NPV_relocate
 
         # subtract migration costs
-        NPV_relocate_discounted -= migration_costs
+        NPV_relocate_discounted -= migration_costs * 2
 
         # Ensure NPVs are at least a small positive number to prevent NaNs
         NPV_relocate_discounted = np.maximum(NPV_relocate_discounted, 1e-6)

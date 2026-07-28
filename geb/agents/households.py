@@ -917,9 +917,9 @@ class Households(AgentBaseClass):
             outside_floodplain: If True, only sample buildings outside the floodplain.
         Returns:
             sampled_buildings: A DataFrame containing the sampled buildings for relocation.
-
+        Raises:
+            ValueError: If the number of buildings to sample exceeds the available buildings.
         """
-
         if outside_floodplain:
             building_ids = self.buildings.loc[
                 ~self.buildings["flooded"], "id"
@@ -1032,8 +1032,14 @@ class Households(AgentBaseClass):
 
         # fill array of all households with NaN values for relocation utility
         EU_relocate_full = np.full(self.n, -np.inf, dtype=np.float32)
+        building_idx_full = np.full(self.n, -1, dtype=np.int32)
+        building_ids_full = np.full(self.n, -1, dtype=np.int32)
+
         # fill the array with the calculated relocation utility for households exposed to flooding
         EU_relocate_full[households_exposed_to_flooding] = EU_relocate
+        building_ids_full[households_exposed_to_flooding] = np.take(
+            sampled_building_ids, building_idx, axis=1
+        )
 
         # execute strategy
         households_relocating = np.where(
@@ -1058,7 +1064,31 @@ class Households(AgentBaseClass):
         ).astype(np.float32)
 
         # process relocation decisions
-        self.remove_households_from_model(households_relocating)
+        self.move_households_to_new_buildings(
+            building_ids=building_ids_full, household_relocating=households_relocating
+        )
+        # self.remove_households_from_model(households_relocating)
+
+    def move_households_to_new_buildings(
+        self, building_ids: np.ndarray, household_relocating: np.ndarray
+    ) -> None:
+        """This function moves households that are relocating to new buildings.
+
+        Args:
+            building_ids: An array of IDs for the new buildings.
+            household_relocating: A boolean array indicating which households are relocating.
+        """
+        # ensure array is in descending order
+        households_relocating = np.sort(household_relocating)[::-1]
+        buildings_to_locate_to = building_ids[households_relocating]
+
+        # for now we just update the building_id_of_household attribute for the relocating households
+        self.var.building_id_of_household[households_relocating] = (
+            buildings_to_locate_to
+        )
+        self.model.logger.info(
+            f"Moved {len(households_relocating)} households to new buildings."
+        )
 
     def remove_households_from_model(self, household_relocating: np.ndarray) -> None:
         """This function removes households from the model.
@@ -1501,3 +1531,7 @@ class Households(AgentBaseClass):
             np.isin(self.var.building_id_of_household.data, flooded_building_ids)
         )[0]
         return households_exposed_to_flooding
+
+    @property
+    def n_households_exposed_to_flooding(self) -> int:
+        return np.int32(self.households_exposed_to_flooding.size)
