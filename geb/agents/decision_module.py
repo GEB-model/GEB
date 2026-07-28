@@ -74,11 +74,13 @@ class DecisionModule:
         Returns:
             Coastal amenity value
         """
-        x_arr = np.array([0, 500, 1_000, 10_000, 12_000], dtype=np.float32)
+        x_arr = np.array([0, 500, 1_000, 9_999, 10_000], dtype=np.float32)
         y_arr = np.array([0.6, 0.6, 0.1, 0.03, 0], dtype=np.float32)
         amenity_value = np.interp(x_j, x_arr, y_arr)
-
-        return GDP_i_t * phi_i * amenity_value
+        if amenity_value.ndim == 1:
+            return GDP_i_t * phi_i * amenity_value
+        else:
+            return GDP_i_t[:, None] * phi_i * amenity_value
 
     @staticmethod
     @njit(cache=True)
@@ -545,7 +547,7 @@ class DecisionModule:
         # weigh amenities
         amenity_value = self.calculate_riverine_amenity(household_distance_to_river_m)
         amenity_value += self.calculate_coastal_amenity(
-            household_distance_to_coastline_m
+            x_j=household_distance_to_coastline_m, GDP_i_t=wealth
         )
         # Ensure p floods is in increasing order
         indices = np.argsort(p_floods)
@@ -663,7 +665,7 @@ class DecisionModule:
         # weigh amenities
         amenity_value = self.calculate_riverine_amenity(household_distance_to_river_m)
         amenity_value += self.calculate_coastal_amenity(
-            household_distance_to_coastline_m
+            x_j=household_distance_to_coastline_m, GDP_i_t=wealth
         )
 
         # Ensure p floods is in increasing order
@@ -741,8 +743,8 @@ class DecisionModule:
         n_agents: int,
         wealth: np.ndarray,
         income: np.ndarray,
-        amenity_value: np.ndarray,
-        amenity_weight: float | int,
+        distance_to_coastline_m: np.ndarray,
+        distance_to_river_m: np.ndarray,
         migration_costs: np.ndarray,
         T: np.ndarray | int | float,
         r: float,
@@ -756,12 +758,42 @@ class DecisionModule:
             n_agents: number of agents present in the current floodplain
             wealth: array containing the wealth of each agent
             income: array containing the income of each agent
-            amenity_value: array containing the amenity value of each agent
-            amenity_weight: weight of the amenity value in the utility calculation
+            distance_to_coastline_m: array containing the distance to the coastline for each agent
+            distance_to_river_m: array containing the distance to the river for each agent
+            migration_costs: array containing the migration costs for each agent
             T: array containing the decision horizon of each agent
             r: time discounting factor for each agent
             sigma: risk aversion setting for each agent
         Returns:
             EU_relocate: array containing the time discounted subjective utility of relocating for each agent.
         """
-        EU_relocate = np.full(n_agents, -np.inf, dtype=np.float32)
+        # First calculate the coastal and riverine amenity values for each sampled building
+        amenity_value = self.calculate_riverine_amenity(distance_to_river_m)
+        amenity_value += self.calculate_coastal_amenity(
+            x_j=distance_to_coastline_m, GDP_i_t=wealth
+        )
+
+        # Get the maximum amenity value for each agent (assuming they can relocate to the best location)
+        building_idx = np.argmax(amenity_value, axis=1)
+        max_amenity_value = np.max(amenity_value, axis=1)
+
+        # Calculate the NPV of relocating for each agent
+        NPV_relocate = wealth + income + max_amenity_value
+
+        # time discounting
+        t_arr = np.arange(1, np.max(T), dtype=np.float32)
+        discounts = 1 / (1 + r) ** t_arr
+        NPV_relocate_discounted = np.sum(discounts) * NPV_relocate
+
+        # subtract migration costs
+        NPV_relocate_discounted -= migration_costs
+
+        # Ensure NPVs are at least a small positive number to prevent NaNs
+        NPV_relocate_discounted = np.maximum(NPV_relocate_discounted, 1e-6)
+
+        # Calculate expected utility
+        if sigma == 1:
+            EU_relocate = np.log(NPV_relocate_discounted)
+        else:
+            EU_relocate = (NPV_relocate_discounted ** (1 - sigma)) / (1 - sigma)
+        return building_idx, EU_relocate

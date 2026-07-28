@@ -907,10 +907,65 @@ class Households(AgentBaseClass):
         )
         postal_codes_with_assets.to_parquet(path)
 
+    def sample_buildings_for_relocation(
+        self, n_buildings: int = 10, outside_floodplain: bool = True
+    ) -> np.ndarray:
+        """Sample a number of buildings for relocation based on their flood risk and other factors.
+
+        Args:
+            n_buildings: Number of buildings to sample for relocation.
+            outside_floodplain: If True, only sample buildings outside the floodplain.
+        Returns:
+            sampled_buildings: A DataFrame containing the sampled buildings for relocation.
+
+        """
+
+        if outside_floodplain:
+            building_ids = self.buildings.loc[
+                ~self.buildings["flooded"], "id"
+            ].to_numpy()
+            distance_to_coastline = self.buildings.loc[
+                ~self.buildings["flooded"], "distance_to_coastline_m"
+            ].to_numpy()
+            distance_to_river = self.buildings.loc[
+                ~self.buildings["flooded"], "distance_to_river_m"
+            ].to_numpy()
+        else:
+            building_ids = self.buildings["id"].to_numpy()
+            distance_to_coastline = self.buildings["distance_to_coastline_m"].to_numpy()
+            distance_to_river = self.buildings["distance_to_river_m"].to_numpy()
+
+        n_samples = self.households_exposed_to_flooding.size
+
+        if n_buildings > len(building_ids):
+            raise ValueError(
+                f"Cannot sample {n_buildings} buildings from "
+                f"{len(building_ids)} available buildings without replacement."
+            )
+
+        # Generate random values and select the n smallest in each row.
+        random_values = np.random.random((n_samples, len(building_ids)))
+        indices = np.argpartition(random_values, n_buildings - 1, axis=1)[
+            :, :n_buildings
+        ]
+
+        sampled_building_ids = building_ids[indices]
+        sampled_distance_to_coastline = distance_to_coastline[indices]
+        sampled_distance_to_river = distance_to_river[indices]
+
+        return (
+            sampled_building_ids,
+            sampled_distance_to_coastline,
+            sampled_distance_to_river,
+        )
+
     def decide_household_strategy(self) -> None:
         """This function calculates the utility of adapting to flood risk for each household and decides whether to adapt or not."""
         # update risk perceptions
         self.update_risk_perceptions()
+
+        # make a copy of households exposed to flooding to use for relocation decisions
+        households_exposed_to_flooding = self.households_exposed_to_flooding.copy()
 
         # calculate damages for adapting and not adapting households based on building footprints
         # calculate expected utilities
@@ -953,30 +1008,41 @@ class Households(AgentBaseClass):
             sigma=1,
         )
 
-        EU_relocate = self.decision_module.calcEU_relocate(
+        # fist sample building IDs to be considere for relocation
+        (
+            sampled_building_ids,
+            sampled_distance_to_coastline,
+            sampled_distance_to_river,
+        ) = self.sample_buildings_for_relocation(
+            n_buildings=10, outside_floodplain=True
+        )
+
+        building_idx, EU_relocate = self.decision_module.calcEU_relocate(
             geom_id="NoID",
-            n_agents=self.n,
-            wealth=self.var.wealth.data,
-            income=self.var.income.data,
-            amenity_value=self.var.amenity_value.data,
-            amenity_weight=1,
+            n_agents=households_exposed_to_flooding.size,
+            wealth=self.var.wealth.data[households_exposed_to_flooding],
+            income=self.var.income.data[households_exposed_to_flooding],
+            distance_to_coastline_m=sampled_distance_to_coastline,
+            distance_to_river_m=sampled_distance_to_river,
             migration_costs=2.5e5,
             T=35,
             r=0.03,
             sigma=1,
         )
 
-        EU_relocate = np.random.uniform(
-            low=EU_do_not_adapt[EU_do_not_adapt > 0].mean() * 0.8,
-            high=EU_do_not_adapt[EU_do_not_adapt > 0].mean() * 1.01,
-            size=self.n,
-        )
+        # fill array of all households with NaN values for relocation utility
+        EU_relocate_full = np.full(self.n, -np.inf, dtype=np.float32)
+        # fill the array with the calculated relocation utility for households exposed to flooding
+        EU_relocate_full[households_exposed_to_flooding] = EU_relocate
+
         # execute strategy
         households_relocating = np.where(
-            np.logical_and(EU_relocate > EU_adapt, EU_relocate > EU_do_not_adapt)
+            np.logical_and(
+                EU_relocate_full > EU_adapt, EU_relocate_full > EU_do_not_adapt
+            )
         )[0]
         household_adapting = np.where(
-            np.logical_and(EU_adapt > EU_do_not_adapt, EU_adapt > EU_relocate)
+            np.logical_and(EU_adapt > EU_do_not_adapt, EU_adapt > EU_relocate_full)
         )[0]
         self.var.adapted[household_adapting] = 1
         self.var.time_adapted[household_adapting] += 1
