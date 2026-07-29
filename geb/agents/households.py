@@ -1106,7 +1106,7 @@ class Households(AgentBaseClass):
             time_adapted=self.var.time_adapted.data,
             loan_duration=20,
             p_floods=1 / self.return_periods,
-            T=35,
+            T=15,
             r=0.03,
             sigma=1,
         )
@@ -1122,7 +1122,7 @@ class Households(AgentBaseClass):
             expected_damages=damages_do_not_adapt,
             adapted=self.var.adapted.data,
             p_floods=1 / self.return_periods,
-            T=35,
+            T=15,
             r=0.03,
             sigma=1,
         )
@@ -1145,8 +1145,8 @@ class Households(AgentBaseClass):
             distance_to_coastline_m=sampled_distance_to_coastline,
             distance_to_river_m=sampled_distance_to_river,
             distance_to_building_m=sampled_distances,
-            max_migration_costs=5.5e5,
-            T=35,
+            max_migration_costs=5e5,
+            T=15,
             r=0.03,
             sigma=1,
         )
