@@ -28,35 +28,35 @@ class DecisionModule:
         Returns:
             Riverine amenity value
         """
+        household_distance_to_river_km = household_distance_to_river_m / 1000.0
         amenity_values = np.full(
-            household_distance_to_river_m.shape, 0.0, dtype=np.float32
+            household_distance_to_river_km.shape, 0.0, dtype=np.float32
         )
-        amenity_values[household_distance_to_river_m < 10_000] = (
+        amenity_values[household_distance_to_river_km < 10] = (
             4000
-            - 150
-            * household_distance_to_river_m[household_distance_to_river_m < 10_000]
+            - 150 * household_distance_to_river_km[household_distance_to_river_km < 10]
         )
         amenity_values[
-            (household_distance_to_river_m >= 10_000)
-            & (household_distance_to_river_m < 25_000)
+            (household_distance_to_river_km >= 10)
+            & (household_distance_to_river_km < 25)
         ] = 2500 - 100 * (
-            household_distance_to_river_m[
-                (household_distance_to_river_m >= 10_000)
-                & (household_distance_to_river_m < 25_000)
+            household_distance_to_river_km[
+                (household_distance_to_river_km >= 10)
+                & (household_distance_to_river_km < 25)
             ]
-            - 10_000
+            - 10
         )
         amenity_values[
-            (household_distance_to_river_m >= 25_000)
-            & (household_distance_to_river_m < 50_000)
+            (household_distance_to_river_km >= 25)
+            & (household_distance_to_river_km < 50)
         ] = 1000 - 40 * (
-            household_distance_to_river_m[
-                (household_distance_to_river_m >= 25_000)
-                & (household_distance_to_river_m < 50_000)
+            household_distance_to_river_km[
+                (household_distance_to_river_km >= 25)
+                & (household_distance_to_river_km < 50)
             ]
-            - 25_000
+            - 25
         )
-        amenity_values[household_distance_to_river_m >= 50_000] = 0
+        amenity_values[household_distance_to_river_km >= 50] = 0
         return GDP_i_t * phi_i * amenity_values
 
     @staticmethod
