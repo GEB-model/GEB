@@ -4,6 +4,7 @@ import logging
 from typing import Any
 
 from .alphaearth import AlphaEarth
+from .eurocrops_v2 import EuroCropsV2
 from .aquastat import AQUASTAT
 from .base import Adapter
 from .cmip6 import CMIP6
@@ -58,6 +59,7 @@ from .undp import HumanDevelopmentIndex
 from .wekeo_copernicus import WEkEOCopernicus
 from .why_map import WhyMap
 from .world_bank import WorldBankData
+from .worldcereal_reference_data import WorldCerealReferenceData
 from .worldfloods import WorldFloodsV2
 
 data_catalog: dict[str, dict[str, Any]] = {
@@ -77,6 +79,49 @@ data_catalog: dict[str, dict[str, Any]] = {
             "attribution": (
                 "The AlphaEarth Foundations Satellite Embedding "
                 "dataset is produced by Google and Google DeepMind."
+            ),
+        },
+    },
+    "eurocrops_v2": {
+        "adapter": EuroCropsV2(
+            folder="eurocrops_v2",
+            local_version=1,
+            filename="parcels",
+            cache="global",
+            max_parallel_downloads=3,
+        ),
+        "url": None,
+        "source": {
+            "name": "EuroCrops v2",
+            "author": "European Commission Joint Research Centre et al.",
+            "license": "CC BY 4.0",
+            "url": (
+                "https://data.jrc.ec.europa.eu/dataset/"
+                "b9fb9e67-78a9-4327-9d59-39a928d812d3"
+            ),
+            "paper_doi": "10.5194/essd-18-4075-2026",
+            "dataset_doi": "10.2905/JRC.FX0BVKR",
+            "alternate_dataset_doi": ("10.2905/b9fb9e67-78a9-4327-9d59-39a928d812d3"),
+        },
+    },
+    "worldcereal_reference_data": {
+        "adapter": WorldCerealReferenceData(
+            folder="worldcereal_reference_data",
+            local_version=1,
+            filename="reference_data",
+            cache="global",
+            max_parallel_downloads=4,
+        ),
+        "url": None,
+        "source": {
+            "name": "WorldCereal Reference Data Module",
+            "author": "WorldCereal consortium and contributing data providers",
+            "license": "Dataset-specific; inspect each collection metadata record",
+            "url": "https://rdm.esa-worldcereal.org",
+            "doi": "10.60566/80p50-6z433",
+            "attribution": (
+                "Every selected collection retains its own license, citation and "
+                "source metadata."
             ),
         },
     },

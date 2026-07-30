@@ -13,6 +13,8 @@ import geopandas as gpd
 import numpy as np
 from aiohttp_retry import ExponentialRetry, RetryClient
 from shapely.geometry import box
+from shapely.geometry.base import BaseGeometry
+from shapely.ops import unary_union
 
 from .base import Adapter
 
@@ -355,6 +357,210 @@ class AlphaEarth(Adapter):
             if column in selected.columns
         ]
         return selected.sort_values(sort_columns, ignore_index=True)
+
+    @staticmethod
+    def _normalize_query_geometry(
+        geometry: BaseGeometry | gpd.GeoSeries | gpd.GeoDataFrame,
+    ) -> BaseGeometry:
+        """Return one valid WGS84 geometry for exact tile selection.
+
+        Bare Shapely geometries are interpreted as WGS84. GeoSeries and
+        GeoDataFrames are reprojected to EPSG:4326 before their geometries are
+        combined.
+        """
+        if isinstance(geometry, gpd.GeoDataFrame):
+            if geometry.crs is None:
+                raise ValueError("Query GeoDataFrame must define a CRS.")
+            result = unary_union(geometry.to_crs(4326).geometry.dropna().tolist())
+        elif isinstance(geometry, gpd.GeoSeries):
+            if geometry.crs is None:
+                raise ValueError("Query GeoSeries must define a CRS.")
+            result = unary_union(geometry.to_crs(4326).dropna().tolist())
+        elif isinstance(geometry, BaseGeometry):
+            result = geometry
+        else:
+            raise TypeError(
+                "geometry must be a Shapely geometry, GeoSeries or GeoDataFrame."
+            )
+
+        if result.is_empty:
+            raise ValueError("AlphaEarth query geometry is empty.")
+        if not result.is_valid:
+            result = result.buffer(0)
+        if result.is_empty:
+            raise ValueError("AlphaEarth query geometry could not be repaired.")
+        return result
+
+    def select_files_for_geometry(
+        self,
+        index: gpd.GeoDataFrame,
+        years: int | Sequence[int],
+        geometry: BaseGeometry | gpd.GeoSeries | gpd.GeoDataFrame,
+        buffer_degrees: float = 0.0,
+    ) -> gpd.GeoDataFrame:
+        """Select unique COGs intersecting an exact WGS84 geometry.
+
+        A bounds query is used only as a fast prefilter. Polygon queries then
+        require positive-area overlap, preventing boundary-only tiles from being
+        selected. Point and line queries retain every intersecting tile.
+        """
+        query_geometry = self._normalize_query_geometry(geometry)
+        if buffer_degrees < 0:
+            raise ValueError("buffer_degrees cannot be negative.")
+        if buffer_degrees:
+            query_geometry = query_geometry.buffer(float(buffer_degrees))
+
+        selected = self.select_files(
+            index=index,
+            years=years,
+            bounds=tuple(float(value) for value in query_geometry.bounds),
+            buffer_degrees=0.0,
+        )
+        if selected.crs is None:
+            selected = selected.set_crs(4326)
+        elif selected.crs.to_epsg() != 4326:
+            selected = selected.to_crs(4326)
+
+        intersects = selected.geometry.intersects(query_geometry)
+        if query_geometry.area > 0:
+            intersects &= ~selected.geometry.touches(query_geometry)
+        selected = selected.loc[intersects].copy()
+        if selected.empty:
+            raise FileNotFoundError(
+                "No AlphaEarth COGs intersect the exact requested geometry."
+            )
+
+        path_column = self._detect_path_column(selected)
+        selected["remote_url"] = selected.apply(
+            lambda row: self._to_https_url(
+                path_value=str(row[path_column]),
+                year=int(row["year"]),
+                utm_zone=str(row.get("utm_zone", "unknown")),
+            ),
+            axis=1,
+        )
+        sort_columns = [
+            column
+            for column in ("year", "utm_zone", "remote_url")
+            if column in selected.columns
+        ]
+        return selected.drop_duplicates("remote_url").sort_values(
+            sort_columns,
+            ignore_index=True,
+        )
+
+    async def read_geometry_async(
+        self,
+        years: int | Sequence[int],
+        geometry: BaseGeometry | gpd.GeoSeries | gpd.GeoDataFrame,
+        download_dir: str | Path | None = None,
+        *,
+        buffer_degrees: float = 0.0,
+        dry_run: bool = False,
+        overwrite: bool = False,
+        refresh_index: bool = False,
+        max_files: int | None = 50,
+    ) -> gpd.GeoDataFrame:
+        """Select and optionally download COGs for exact reference geometries."""
+        index_path = await self._ensure_index(refresh=refresh_index)
+        index = gpd.read_parquet(index_path)
+        selected = self.select_files_for_geometry(
+            index=index,
+            years=years,
+            geometry=geometry,
+            buffer_degrees=buffer_degrees,
+        )
+
+        if not dry_run and max_files is not None and len(selected) > max_files:
+            raise RuntimeError(
+                f"Selection contains {len(selected)} COGs, exceeding "
+                f"max_files={max_files}. Run with dry_run=True, narrow the "
+                "geometry, or explicitly increase max_files."
+            )
+
+        root = self.download_root if download_dir is None else Path(download_dir)
+        root.mkdir(parents=True, exist_ok=True)
+        selected["local_path"] = selected.apply(
+            lambda row: str(
+                root
+                / str(int(row["year"]))
+                / str(row.get("utm_zone", "unknown"))
+                / Path(urlparse(str(row["remote_url"])).path).name
+            ),
+            axis=1,
+        )
+
+        print(
+            f"Selected {len(selected)} unique AlphaEarth COG(s) for exact "
+            f"geometry and year(s) "
+            f"{sorted(selected['year'].astype(int).unique().tolist())}."
+        )
+        if dry_run:
+            return selected
+
+        retry_options = ExponentialRetry(
+            attempts=8,
+            start_timeout=5,
+            max_timeout=120,
+            factor=2,
+            retry_all_server_errors=True,
+        )
+        timeout = aiohttp.ClientTimeout(
+            total=None,
+            sock_connect=60,
+            sock_read=1800,
+        )
+        semaphore = asyncio.Semaphore(self.max_parallel_downloads)
+        async with RetryClient(
+            retry_options=retry_options,
+            timeout=timeout,
+        ) as client:
+            await asyncio.gather(
+                *(
+                    self._download_file(
+                        client=client,
+                        remote_url=str(row.remote_url),
+                        destination=Path(row.local_path),
+                        overwrite=overwrite,
+                        semaphore=semaphore,
+                    )
+                    for row in selected.itertuples(index=False)
+                )
+            )
+        return selected
+
+    def read_geometry(
+        self,
+        years: int | Sequence[int],
+        geometry: BaseGeometry | gpd.GeoSeries | gpd.GeoDataFrame,
+        download_dir: str | Path | None = None,
+        *,
+        buffer_degrees: float = 0.0,
+        dry_run: bool = False,
+        overwrite: bool = False,
+        refresh_index: bool = False,
+        max_files: int | None = 50,
+    ) -> gpd.GeoDataFrame:
+        """Synchronously retrieve COGs intersecting exact geometries."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(
+                self.read_geometry_async(
+                    years=years,
+                    geometry=geometry,
+                    download_dir=download_dir,
+                    buffer_degrees=buffer_degrees,
+                    dry_run=dry_run,
+                    overwrite=overwrite,
+                    refresh_index=refresh_index,
+                    max_files=max_files,
+                )
+            )
+        raise RuntimeError(
+            "AlphaEarth.read_geometry() cannot run inside an active asyncio "
+            "event loop. Use 'await adapter.read_geometry_async(...)' instead."
+        )
 
     async def read_async(
         self,
