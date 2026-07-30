@@ -1,6 +1,7 @@
 """Class to set GEB up for Europe."""
 
 import gc
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -36,8 +37,8 @@ from geb.build.workflows.crop_calendars import (
     parse_MIRCA_crop_calendar,
 )
 from geb.build.workflows.farmers import (
+    HRL_CTY_CLASS_CODES,
     alphaearth_crop_feature_importance,
-    alphaearth_crop_training_samples_path,
     alphaearth_embedding_diagnostics,
     apply_alphaearth_cty_mmu_sieve,
     apply_alphaearth_permanent_crop_temporal_consistency,
@@ -45,7 +46,10 @@ from geb.build.workflows.farmers import (
     create_alphaearth_crop_training_samples,
     create_lowder_target_farm_areas,
     evaluate_alphaearth_crop_models,
+    evaluate_alphaearth_crop_predictions,
+    europe_model_build_context,
     format_alphaearth_accuracy_report,
+    format_alphaearth_postprocessed_accuracy_report,
     farm_size_distribution_fit_by_size_class,
     fit_alphaearth_crop_models,
     get_farm_locations,
@@ -53,16 +57,15 @@ from geb.build.workflows.farmers import (
     build_hrl_prediction_tile_name,
     find_hrl_tile_path,
     hrl_tile_code_from_name,
-    europe_model_build_context,
     load_alphaearth_crop_models,
     load_alphaearth_crop_training_samples,
-    load_europe_alphaearth_crop_training_samples,
-    parse_europe_model_ids,
+    predict_alphaearth_crop_models,
     predict_alphaearth_crop_tile_to_hrl_geotiffs,
     raster_cell_area_m2,
     relax_lowder_targets_for_sequence_fit,
     remove_alphaearth_downloads,
     save_alphaearth_crop_models,
+    sample_alphaearth_crop_prediction_tiles,
     select_alphaearth_cogs_for_geometry,
     select_cultivated_cells_by_area,
 )
@@ -1672,12 +1675,15 @@ class Europe(GEBModel):
         depends_on=["setup_regions_and_land_use"],
         required=False,
     )
-    def setup_sample_alphaearth_crop_classification(
+    def setup_alphaearth_crop_classification(
         self,
-        europe_model_ids: tuple[int | str, ...] = tuple(range(12)),
         region_id_column: str = "region_id",
         country_iso3_column: str = "ISO3",
         hrl_years: tuple[int, ...] = (2017, 2018, 2019, 2020, 2021, 2022, 2023),
+        prediction_years: tuple[int, ...] = (2024, 2025),
+        template_year: int | None = None,
+        validation_year: int | None = 2022,
+        test_year: int | None = 2023,
         samples_per_cty_class_per_region_year: int = 1000,
         sample_stride_pixels: int = 5,
         rare_class_sample_stride_pixels: int | None = 1,
@@ -1685,87 +1691,205 @@ class Europe(GEBModel):
         rare_class_sample_multiplier: float = 3.0,
         training_label_edge_buffer_pixels: int = 2,
         sample_chunk_rows: int = 512,
+        prediction_chunk_size: int = 512,
         include_coordinates: bool = False,
         include_topography: bool = False,
+        normalize_embeddings: bool = True,
+        classifier_structure: str = "flat",
+        residual_class_mode: str = "uncertainty",
+        calibrate_class_thresholds: bool = False,
+        class_probability_thresholds: dict[int, float] | None = None,
+        class_threshold_grid: tuple[float, ...] = (
+            0.10,
+            0.15,
+            0.20,
+            0.25,
+            0.30,
+            0.35,
+            0.40,
+            0.50,
+        ),
+        class_threshold_min_reference_samples: int = 25,
+        apply_historical_cropland_mask: bool = False,
+        cropland_mask_years: tuple[int, ...] | None = None,
+        historical_cropland_mask_dilation_pixels: int = 0,
+        smooth_cty_probabilities: bool = True,
+        unclassified_probability_threshold: float = 0.25,
+        write_cty_confidence: bool = True,
+        cty_confidence_output_root: str | None = None,
+        apply_permanent_crop_temporal_consistency: bool = False,
+        apply_cty_mmu_sieve: bool = True,
+        cty_mmu_minimum_pixels: int = 25,
+        cty_mmu_connectivity: int = 4,
+        cty_mmu_padding_pixels: int = 25,
+        cty_mmu_maximum_iterations: int = 3,
+        model_type: str = "logistic_regression",
+        model_parameters: dict[str, Any] | None = None,
+        sample_weight_mode: str = "class_region_year_balanced",
+        n_jobs: int = -1,
         random_seed: int = 42,
         hrl_raster_chunks: dict[str, int] | None = None,
         max_alphaearth_files_for_sampling: int | None = None,
+        max_alphaearth_files_for_prediction: int | None = None,
         alphaearth_max_parallel_downloads: int | None = None,
-        cleanup_alphaearth_downloads: bool = True,
+        cleanup_alphaearth_downloads: bool = False,
+        store_training_samples: bool = True,
+        reuse_training_samples: bool = False,
         training_samples_table_name: str = (
             "machine_learning/crop_classification/samples"
         ),
-        overwrite_training_samples: bool = True,
+        training_samples_path: str | None = None,
+        evaluate_postprocessed_accuracy: bool = False,
+        postprocessed_evaluation_output_root: str | None = None,
+        cleanup_postprocessed_evaluation_outputs: bool = True,
+        max_alphaearth_files_for_postprocessed_evaluation: int | None = None,
+        model_output_path: str | None = None,
+        overwrite_prediction_files: bool = True,
     ) -> None:
-        """Sample annual HRL CTY labels and same-year AlphaEarth embeddings.
+        """Train an annual AlphaEarth classifier for HRL Crop Types (CTY).
 
-        This is the first stage of the Europe-wide workflow. The same method can be
-        configured in every ``Europe_###`` model. ``europe_model_ids`` determines
-        which model-level builds participate; each participating build downloads
-        AlphaEarth COGs once for its complete active model extent, samples every
-        contained region and year, writes one model-local sample table, and removes
-        the downloaded COGs by default.
+        For every observed year, HRL CTY labels from year ``t`` are paired only with
+        AlphaEarth embeddings from year ``t``. Samples are generated region by region
+        but pooled into one study-area CTY classifier. Complete years can be held out
+        for temporal validation and testing, after which the final model is refitted
+        using all configured observation years.
 
-        The resulting model-local tables are pooled by
-        :meth:`setup_train_alphaearth_crop_classification`. Keeping sampling separate
-        from fitting allows estimator and parameter experiments to reuse the same
-        expensive Earth-observation samples.
+        Generated maps use the native HRL 100-km tile grids and filenames. Optional
+        post-processing includes a historical cropland mask, 3x3 probability smoothing,
+        confidence-based assignment to classes 3100/3200, permanent-crop temporal
+        consistency, and a padded minimum-mapping-unit sieve. A leakage-safe full-map
+        assessment can be run for the held-out years.
+
+        Existing sample tables can be reused. Only the CTY label and current predictor
+        schema are required; unrelated legacy columns are ignored.
 
         Args:
-            europe_model_ids: Europe models included in the pooled workflow. Accepts
-                integers, ``Europe_###`` names, comma-separated values, and ranges.
             region_id_column: Column containing compact model-region IDs.
             country_iso3_column: Column containing country ISO3 codes.
-            hrl_years: Annual HRL and AlphaEarth years sampled together.
-            samples_per_cty_class_per_region_year: Maximum retained samples per CTY
+            hrl_years: Annual HRL/AlphaEarth observations used for sampling and fitting.
+            prediction_years: Ordered AlphaEarth years to classify independently.
+            template_year: Existing HRL CTY year used for output grids and filenames.
+            validation_year: Optional complete year held out for validation.
+            test_year: Optional complete year held out for blind testing.
+            samples_per_cty_class_per_region_year: Maximum samples retained per CTY
                 class, region, and year.
             sample_stride_pixels: Standard native-HRL sampling-lattice spacing.
-            rare_class_sample_stride_pixels: Denser lattice spacing for rare classes.
+            rare_class_sample_stride_pixels: Denser lattice spacing for rare CTY classes.
             rare_class_threshold_candidates: Candidate-count threshold defining rarity.
-            rare_class_sample_multiplier: Sample-cap multiplier for rare classes.
-            training_label_edge_buffer_pixels: Pixels removed from CTY boundaries.
+            rare_class_sample_multiplier: Sample-cap multiplier for rare CTY classes.
+            training_label_edge_buffer_pixels: Pixels removed from CTY class boundaries.
             sample_chunk_rows: HRL rows scanned in each sampling chunk.
-            include_coordinates: Store longitude and latitude predictors.
-            include_topography: Store elevation and slope predictors.
-            random_seed: Reproducible sampling seed.
-            hrl_raster_chunks: Optional native HRL read chunks.
-            max_alphaearth_files_for_sampling: Optional model-level download limit.
-            alphaearth_max_parallel_downloads: Optional parallel-download override.
-            cleanup_alphaearth_downloads: Remove downloaded AlphaEarth COGs after
-                sampling. Defaults to ``True``.
-            training_samples_table_name: Model-local ``self.table`` output name.
-            overwrite_training_samples: Replace an existing model-local sample table.
+            prediction_chunk_size: Width and height of each prediction window.
+            include_coordinates: Include longitude and latitude predictors for an
+                explicit portability ablation.
+            include_topography: Include elevation and slope predictors for an
+                explicit auxiliary-feature ablation.
+            normalize_embeddings: L2-normalize each dequantized 64-dimensional AEF
+                vector before model fitting and inference.
+            classifier_structure: ``"flat"`` or soft ``"hierarchical"`` crop-group
+                followed by within-group classification.
+            residual_class_mode: Learn residual classes directly or derive 1150,
+                3100 and 3200 from uncertainty.
+            calibrate_class_thresholds: Calibrate class-specific thresholds on the
+                latest complete year available within each training set.
+            class_probability_thresholds: Optional manually specified CTY thresholds.
+            class_threshold_grid: Candidate thresholds for automatic calibration.
+            class_threshold_min_reference_samples: Minimum calibration-year reference
+                samples required before fitting a class-specific threshold.
+            apply_historical_cropland_mask: Restrict predictions to historical cropland.
+            cropland_mask_years: Observation years used to construct that mask.
+            historical_cropland_mask_dilation_pixels: Optional dilation of the mask.
+            smooth_cty_probabilities: Smooth CTY class probabilities before selection.
+            unclassified_probability_threshold: Confidence threshold for 3100/3200.
+            write_cty_confidence: Write a uint8 CTY confidence product.
+            cty_confidence_output_root: Optional root for confidence products.
+            apply_permanent_crop_temporal_consistency: Apply permanent-crop rules.
+            apply_cty_mmu_sieve: Apply the CTY minimum-mapping-unit sieve.
+            cty_mmu_minimum_pixels: Minimum retained CTY patch size.
+            cty_mmu_connectivity: Four- or eight-neighbour sieve connectivity.
+            cty_mmu_padding_pixels: Neighbour-tile padding during sieving.
+            cty_mmu_maximum_iterations: Maximum number of sieve passes.
+            model_type: Estimator family: ``logistic_regression``,
+                ``random_forest``, ``extra_trees``, or
+                ``hist_gradient_boosting``.
+            model_parameters: Estimator-specific keyword settings. The selected
+                mapping is stored in the serialized model bundle.
+            sample_weight_mode: ``none``, ``class_balanced``, or
+                ``class_region_year_balanced``.
+            n_jobs: Parallel worker count for Random Forest and Extra Trees.
+            random_seed: Reproducible sampling and estimator seed.
+            hrl_raster_chunks: Native HRL read chunks.
+            max_alphaearth_files_for_sampling: Optional training-download safety limit.
+            max_alphaearth_files_for_prediction: Optional prediction-download safety limit.
+            alphaearth_max_parallel_downloads: Optional simultaneous-download override.
+            cleanup_alphaearth_downloads: Remove downloaded COGs after use.
+            store_training_samples: Store newly generated pooled samples.
+            reuse_training_samples: Reuse a prior sample table and skip sampling.
+            training_samples_table_name: ``self.table`` key for reusable samples.
+            training_samples_path: Optional explicit reusable Parquet path.
+            evaluate_postprocessed_accuracy: Evaluate leakage-safe final CTY maps.
+            postprocessed_evaluation_output_root: Temporary evaluation-output directory.
+            cleanup_postprocessed_evaluation_outputs: Remove evaluation rasters afterwards.
+            max_alphaearth_files_for_postprocessed_evaluation: Evaluation download limit.
+            model_output_path: Optional joblib output for the final model bundle.
+            overwrite_prediction_files: Replace existing generated CTY tiles.
 
         Raises:
-            FileExistsError: If the sample table exists and overwrite is disabled.
-            ValueError: If years, settings, geometry, or samples are invalid.
+            ValueError: If years, samples, regions, templates, or settings are invalid.
         """
-        selected_model_ids = parse_europe_model_ids(europe_model_ids)
-        current_model_id, current_base, _ = europe_model_build_context()
-        current_model_name = f"Europe_{current_model_id:03d}"
-        if current_model_id not in selected_model_ids:
-            self.logger.info(
-                "Skipping AlphaEarth CTY sampling for %s; selected models are %s.",
-                current_model_name,
-                [f"Europe_{model_id:03d}" for model_id in selected_model_ids],
-            )
-            return
-
-        sample_output_path = alphaearth_crop_training_samples_path(
-            current_base,
-            training_samples_table_name,
-        )
-        if sample_output_path.exists() and not overwrite_training_samples:
-            raise FileExistsError(
-                "AlphaEarth CTY samples already exist and "
-                f"overwrite_training_samples=False: {sample_output_path}"
-            )
-
         hrl_years = tuple(int(year) for year in hrl_years)
-        if not hrl_years:
-            raise ValueError("hrl_years must contain at least one year.")
+        if len(hrl_years) < 3:
+            raise ValueError("At least three HRL observation years are required.")
         if tuple(sorted(set(hrl_years))) != hrl_years:
             raise ValueError("hrl_years must be unique and strictly increasing.")
+
+        template_year = hrl_years[-1] if template_year is None else int(template_year)
+        if template_year not in hrl_years:
+            raise ValueError("template_year must be included in hrl_years.")
+
+        prediction_years = tuple(int(year) for year in prediction_years)
+        if not prediction_years:
+            raise ValueError("prediction_years must contain at least one year.")
+        if tuple(sorted(set(prediction_years))) != prediction_years:
+            raise ValueError("prediction_years must be unique and strictly increasing.")
+        overlap = set(prediction_years).intersection(hrl_years)
+        if overlap:
+            raise ValueError(
+                "prediction_years must not overlap observed HRL years. "
+                f"Overlap: {sorted(overlap)}."
+            )
+
+        cropland_mask_years = (
+            hrl_years
+            if cropland_mask_years is None
+            else tuple(int(year) for year in cropland_mask_years)
+        )
+        if not cropland_mask_years:
+            raise ValueError("cropland_mask_years must contain at least one year.")
+        if tuple(sorted(set(cropland_mask_years))) != cropland_mask_years:
+            raise ValueError(
+                "cropland_mask_years must be unique and strictly increasing."
+            )
+        unknown_mask_years = set(cropland_mask_years) - set(hrl_years)
+        if unknown_mask_years:
+            raise ValueError(
+                "cropland_mask_years must be selected from hrl_years. "
+                f"Unknown years: {sorted(unknown_mask_years)}."
+            )
+
+        for split_year, split_name in (
+            (validation_year, "validation_year"),
+            (test_year, "test_year"),
+        ):
+            if split_year is not None and int(split_year) not in hrl_years:
+                raise ValueError(f"{split_name} must be one of {hrl_years}.")
+        if validation_year is not None:
+            validation_year = int(validation_year)
+        if test_year is not None:
+            test_year = int(test_year)
+        if validation_year is not None and validation_year == test_year:
+            raise ValueError("validation_year and test_year must differ.")
+
         if samples_per_cty_class_per_region_year < 1:
             raise ValueError(
                 "samples_per_cty_class_per_region_year must be at least one."
@@ -1785,11 +1909,91 @@ class Europe(GEBModel):
             raise ValueError("rare_class_sample_multiplier must be at least 1.0.")
         if training_label_edge_buffer_pixels < 0:
             raise ValueError("training_label_edge_buffer_pixels cannot be negative.")
+        if historical_cropland_mask_dilation_pixels < 0:
+            raise ValueError(
+                "historical_cropland_mask_dilation_pixels cannot be negative."
+            )
+        if not 0.0 <= unclassified_probability_threshold <= 1.0:
+            raise ValueError(
+                "unclassified_probability_threshold must lie between zero and one."
+            )
+        if cty_mmu_minimum_pixels < 1:
+            raise ValueError("cty_mmu_minimum_pixels must be at least one.")
+        if cty_mmu_connectivity not in {4, 8}:
+            raise ValueError("cty_mmu_connectivity must be 4 or 8.")
+        if cty_mmu_padding_pixels < 0:
+            raise ValueError("cty_mmu_padding_pixels cannot be negative.")
+        if cty_mmu_maximum_iterations < 1:
+            raise ValueError("cty_mmu_maximum_iterations must be at least one.")
+        if sample_weight_mode not in {
+            "none",
+            "class_balanced",
+            "class_region_year_balanced",
+        }:
+            raise ValueError(
+                "sample_weight_mode must be 'none', 'class_balanced', or "
+                "'class_region_year_balanced'."
+            )
+        if classifier_structure not in {"flat", "hierarchical"}:
+            raise ValueError("classifier_structure must be 'flat' or 'hierarchical'.")
+        if residual_class_mode not in {"learned", "uncertainty"}:
+            raise ValueError("residual_class_mode must be 'learned' or 'uncertainty'.")
+        if (
+            classifier_structure == "hierarchical"
+            and residual_class_mode != "uncertainty"
+        ):
+            raise ValueError(
+                "classifier_structure='hierarchical' requires "
+                "residual_class_mode='uncertainty'."
+            )
+        supported_model_types = {
+            "logistic_regression",
+            "random_forest",
+            "extra_trees",
+            "hist_gradient_boosting",
+        }
+        model_type = str(model_type).strip().lower()
+        if model_type not in supported_model_types:
+            raise ValueError(
+                f"model_type must be one of {sorted(supported_model_types)}, "
+                f"found {model_type!r}."
+            )
+        if model_parameters is not None and not isinstance(model_parameters, dict):
+            raise TypeError("model_parameters must be a dictionary or None.")
+        if class_probability_thresholds is not None:
+            for class_code, threshold in class_probability_thresholds.items():
+                if int(class_code) not in HRL_CTY_CLASS_CODES:
+                    raise ValueError(f"Unknown CTY threshold class: {class_code}.")
+                if not 0.0 < float(threshold) <= 1.0:
+                    raise ValueError(
+                        f"Threshold for CTY {class_code} must lie in (0, 1]."
+                    )
+        if not class_threshold_grid or any(
+            not 0.0 < float(value) <= 1.0 for value in class_threshold_grid
+        ):
+            raise ValueError("class_threshold_grid values must lie in (0, 1].")
+        if class_threshold_min_reference_samples < 1:
+            raise ValueError(
+                "class_threshold_min_reference_samples must be at least one."
+            )
+        if prediction_chunk_size < 16:
+            raise ValueError("prediction_chunk_size must be at least 16.")
         if (
             alphaearth_max_parallel_downloads is not None
             and alphaearth_max_parallel_downloads < 1
         ):
             raise ValueError("alphaearth_max_parallel_downloads must be at least 1.")
+        if not str(training_samples_table_name).strip():
+            raise ValueError("training_samples_table_name cannot be empty.")
+        if (
+            evaluate_postprocessed_accuracy
+            and validation_year is None
+            and test_year is None
+        ):
+            raise ValueError(
+                "evaluate_postprocessed_accuracy=True requires validation_year and/or "
+                "test_year."
+            )
 
         regions_shapes: gpd.GeoDataFrame = self.geom["regions"]
         for required_column in (region_id_column, country_iso3_column):
@@ -1825,6 +2029,10 @@ class Europe(GEBModel):
                 data=np.asarray(slope_values, dtype=np.float32)
             )
             subgrid_slope.name = "slope_gradient"
+            self.logger.info(
+                "Including elevation and slope with all 64 AlphaEarth embedding "
+                "dimensions in CTY training and prediction."
+            )
 
         study_bounds = tuple(float(value) for value in active_geometry.bounds)
         regions_wgs84 = regions_shapes[
@@ -1842,10 +2050,11 @@ class Europe(GEBModel):
                 alphaearth_max_parallel_downloads
             )
         self.logger.info(
-            "Sampling %s with %s simultaneous AlphaEarth download(s).",
-            current_model_name,
+            "Using %s simultaneous AlphaEarth download(s).",
             alphaearth_adapter.max_parallel_downloads,
         )
+
+        template_cty_tile_ids: set[str] = set()
 
         def read_cty_year(
             *,
@@ -1858,434 +2067,207 @@ class Europe(GEBModel):
                 bounds=region_bounds,
                 year=year,
             )
-            return crop_types_adapter.read(
+            crop_types = crop_types_adapter.read(
                 bounds=region_bounds,
                 year=year,
                 dst_crs=None,
                 normalize_nodata=False,
                 chunks=raster_chunks,
             )
-
-        sample_tables: list[pd.DataFrame] = []
-        selected_training_cogs: gpd.GeoDataFrame | None = None
-        try:
-            self.logger.info(
-                "Downloading AlphaEarth COGs for years %s and the complete %s "
-                "model extent %s before regional sampling.",
-                hrl_years,
-                current_model_name,
-                study_bounds,
-            )
-            selected_training_cogs = alphaearth_adapter.read(
-                years=hrl_years,
-                bounds=study_bounds,
-                dry_run=False,
-                max_files=max_alphaearth_files_for_sampling,
-            )
-            if selected_training_cogs.empty:
-                raise ValueError(
-                    "No AlphaEarth training COGs were selected for "
-                    f"{current_model_name}."
+            if year == template_year:
+                template_cty_tile_ids.update(
+                    str(tile_id)
+                    for tile_id in getattr(crop_types_adapter, "tile_ids", ())
                 )
+            return crop_types
 
-            for region_index, (_, region) in enumerate(regions_wgs84.iterrows()):
-                region_id = int(region[region_id_column])
-                country_iso3 = str(region[country_iso3_column])
-                region_mask_full = active_subgrid_mask & (region_id_values == region_id)
-                if not region_mask_full.any():
-                    continue
-                region_geometry = region.geometry.intersection(active_geometry)
-                if region_geometry.is_empty:
-                    continue
-                region_bounds = tuple(float(value) for value in region_geometry.bounds)
+        reused_default_table = False
+        if reuse_training_samples:
+            if training_samples_path is not None:
+                sample_source: pd.DataFrame | str | Path = Path(
+                    training_samples_path
+                ).expanduser()
+                source_description = str(sample_source)
+            else:
+                if training_samples_table_name not in self.table:
+                    raise ValueError(
+                        "reuse_training_samples=True, but no stored sample table "
+                        f"was found under self.table[{training_samples_table_name!r}]. "
+                        "Run once with store_training_samples=True or provide "
+                        "training_samples_path."
+                    )
+                sample_source = self.table[training_samples_table_name]
+                source_description = f"self.table[{training_samples_table_name!r}]"
+                reused_default_table = True
 
-                for year in hrl_years:
-                    try:
-                        crop_types = read_cty_year(
-                            year=year,
-                            region_bounds=region_bounds,
-                        )
-                        region_year_cogs = select_alphaearth_cogs_for_geometry(
-                            selected_training_cogs,
-                            year=year,
-                            clip_geometry=region_geometry,
-                        )
-                        if region_year_cogs.empty:
-                            raise ValueError(
-                                "No downloaded AlphaEarth COGs intersect region "
-                                f"{region_id}, year {year}, in {current_model_name}."
-                            )
-
-                        region_year_samples = create_alphaearth_crop_training_samples(
-                            crop_types,
-                            region_year_cogs,
-                            region_geometry,
-                            year=year,
-                            region_id=region_id,
-                            country_iso3=country_iso3,
-                            samples_per_cty_class=(
-                                samples_per_cty_class_per_region_year
-                            ),
-                            sample_stride_pixels=sample_stride_pixels,
-                            rare_class_sample_stride_pixels=(
-                                rare_class_sample_stride_pixels
-                            ),
-                            rare_class_threshold_candidates=(
-                                rare_class_threshold_candidates
-                            ),
-                            rare_class_sample_multiplier=rare_class_sample_multiplier,
-                            training_label_edge_buffer_pixels=(
-                                training_label_edge_buffer_pixels
-                            ),
-                            sample_chunk_rows=sample_chunk_rows,
-                            include_coordinates=include_coordinates,
-                            include_topography=include_topography,
-                            elevation=subgrid_elevation,
-                            slope=subgrid_slope,
-                            random_seed=(
-                                random_seed
-                                + current_model_id * 1_000_000
-                                + region_index * 10_000
-                                + year
-                            ),
-                        )
-                        sample_tables.append(region_year_samples)
-                    except WEkEONoCoverageError as error:
-                        if country_iso3.upper() in _HRL_CROPLANDS_EEA38_ISO3:
-                            raise
-                        self.logger.warning(
-                            "Skipping region %s (%s), year %s in %s: no HRL "
-                            "coverage. %s",
-                            region_id,
-                            country_iso3,
-                            year,
-                            current_model_name,
-                            error,
-                        )
-                    finally:
-                        gc.collect()
-        finally:
-            if cleanup_alphaearth_downloads and selected_training_cogs is not None:
-                removed = remove_alphaearth_downloads(
-                    selected_training_cogs,
-                    logger=self.logger,
-                )
-                self.logger.info(
-                    "Removed %s AlphaEarth COGs after sampling %s.",
-                    removed,
-                    current_model_name,
-                )
-            elif selected_training_cogs is not None:
-                self.logger.info(
-                    "Retaining %s AlphaEarth COGs in the local cache for %s.",
-                    len(selected_training_cogs),
-                    current_model_name,
-                )
-
-        if not sample_tables:
-            raise ValueError(
-                "No annual AlphaEarth-HRL CTY samples were created for "
-                f"{current_model_name}."
-            )
-        samples = pd.concat(sample_tables, ignore_index=True)
-        samples["europe_model_id"] = np.int16(current_model_id)
-        samples["europe_model_name"] = current_model_name
-
-        embedding_diagnostics = alphaearth_embedding_diagnostics(samples)
-        embedding_diagnostics.update(
-            {
-                "europe_model_id": current_model_id,
-                "europe_model_name": current_model_name,
-                "sample_count": len(samples),
-            }
-        )
-        self.set_table(
-            pd.DataFrame([embedding_diagnostics]),
-            name="machine_learning/crop_classification/embedding_diagnostics",
-        )
-        self.set_table(samples, name=training_samples_table_name)
-        self.logger.info(
-            "Stored %s AlphaEarth-HRL CTY samples for %s at %s.",
-            f"{len(samples):,}",
-            current_model_name,
-            sample_output_path,
-        )
-
-    @build_method(
-        depends_on=["setup_regions_and_land_use"],
-        required=False,
-    )
-    def setup_train_alphaearth_crop_classification(
-        self,
-        europe_model_ids: tuple[int | str, ...] = tuple(range(12)),
-        training_model_id: int | str | None = None,
-        hrl_years: tuple[int, ...] = (2017, 2018, 2019, 2020, 2021, 2022, 2023),
-        validation_year: int | None = 2022,
-        test_year: int | None = 2023,
-        include_coordinates: bool = False,
-        include_topography: bool = False,
-        normalize_embeddings: bool = True,
-        classifier_structure: str = "flat",
-        residual_class_mode: str = "uncertainty",
-        calibrate_class_thresholds: bool = False,
-        class_probability_thresholds: dict[int, float] | None = None,
-        class_threshold_grid: tuple[float, ...] = (
-            0.10,
-            0.15,
-            0.20,
-            0.25,
-            0.30,
-            0.35,
-            0.40,
-            0.50,
-        ),
-        class_threshold_min_reference_samples: int = 25,
-        unclassified_probability_threshold: float = 0.25,
-        model_type: str = "logistic_regression",
-        model_parameters: dict[str, Any] | None = None,
-        sample_weight_mode: str = "class_region_year_balanced",
-        n_jobs: int = -1,
-        random_seed: int = 42,
-        training_samples_table_name: str = (
-            "machine_learning/crop_classification/samples"
-        ),
-        training_samples_path: str | None = None,
-        pooled_training_samples_path: str | None = None,
-        reuse_pooled_training_samples: bool = False,
-        model_output_path: str | None = None,
-        overwrite_outputs: bool = True,
-    ) -> None:
-        """Pool Europe-model samples, evaluate one setting, and fit the final model.
-
-        This is the second stage of the Europe-wide workflow. Only one selected model
-        performs the pooled fit, controlled by ``training_model_id``; the other model
-        builds return without duplicating the job. Samples from all selected models are
-        loaded together, with local region IDs remapped to globally unique IDs before
-        region-year balancing.
-
-        The pooled sample table is written explicitly so the existing
-        ``compare_alphaearth_cty_models.py``/``.sh`` workflow can compare estimator
-        families and generic ``model_parameters`` mappings without rerunning sampling.
-        The configured model is evaluated on complete held-out years and then refitted
-        on every selected sample year for production inference.
-
-        Args:
-            europe_model_ids: Europe models whose model-local samples are pooled.
-            training_model_id: Model build that performs training. Defaults to the first
-                selected model ID.
-            hrl_years: Observation years loaded from every selected model.
-            validation_year: Optional complete year held out for validation.
-            test_year: Optional complete year held out for blind testing.
-            include_coordinates: Require and use coordinate predictors.
-            include_topography: Require and use elevation and slope predictors.
-            normalize_embeddings: L2-normalize dequantized embeddings.
-            classifier_structure: ``"flat"`` or ``"hierarchical"``.
-            residual_class_mode: ``"learned"`` or ``"uncertainty"``.
-            calibrate_class_thresholds: Calibrate class-specific thresholds.
-            class_probability_thresholds: Optional manual CTY thresholds.
-            class_threshold_grid: Candidate thresholds for calibration.
-            class_threshold_min_reference_samples: Minimum calibration support.
-            unclassified_probability_threshold: Confidence rejection threshold.
-            model_type: Estimator family supported by
-                :func:`fit_alphaearth_crop_models`.
-            model_parameters: Generic estimator-specific keyword mapping.
-            sample_weight_mode: Sample weighting strategy.
-            n_jobs: Parallel estimator workers where supported.
-            random_seed: Reproducible estimator seed.
-            training_samples_table_name: Model-local table name to load when pooling.
-            training_samples_path: Optional existing Europe-wide or comparison-selected
-                sample table. A relative path is resolved below the common model root.
-            pooled_training_samples_path: Europe-wide Parquet output and optional
-                reusable input. A relative path is resolved below the common model root.
-            reuse_pooled_training_samples: Load the pooled table instead of reading and
-                concatenating every model-local table. Ignored when
-                ``training_samples_path`` is provided.
-            model_output_path: Optional final Joblib path. A relative path is resolved
-                below the common model root.
-            overwrite_outputs: Replace pooled samples and model outputs.
-
-        Raises:
-            FileExistsError: If an output exists and overwrite is disabled.
-            ValueError: If temporal splits or model settings are invalid.
-        """
-        selected_model_ids = parse_europe_model_ids(europe_model_ids)
-        current_model_id, _, model_root = europe_model_build_context()
-        if training_model_id is None:
-            coordinator_id = selected_model_ids[0]
-        else:
-            coordinator_ids = parse_europe_model_ids(training_model_id)
-            if len(coordinator_ids) != 1:
-                raise ValueError(
-                    "training_model_id must identify exactly one Europe model."
-                )
-            coordinator_id = coordinator_ids[0]
-        if coordinator_id not in selected_model_ids:
-            raise ValueError(
-                "training_model_id must be included in europe_model_ids; found "
-                f"Europe_{coordinator_id:03d}."
-            )
-        if current_model_id != coordinator_id:
-            self.logger.info(
-                "Skipping pooled AlphaEarth CTY training in Europe_%03d; "
-                "Europe_%03d is the configured training model.",
-                current_model_id,
-                coordinator_id,
-            )
-            return
-
-        hrl_years = tuple(int(year) for year in hrl_years)
-        if len(hrl_years) < 3:
-            raise ValueError("At least three HRL observation years are required.")
-        if tuple(sorted(set(hrl_years))) != hrl_years:
-            raise ValueError("hrl_years must be unique and strictly increasing.")
-        for split_year, split_name in (
-            (validation_year, "validation_year"),
-            (test_year, "test_year"),
-        ):
-            if split_year is not None and int(split_year) not in hrl_years:
-                raise ValueError(f"{split_name} must be one of {hrl_years}.")
-        validation_year = None if validation_year is None else int(validation_year)
-        test_year = None if test_year is None else int(test_year)
-        if validation_year is not None and validation_year == test_year:
-            raise ValueError("validation_year and test_year must differ.")
-        if not 0.0 <= unclassified_probability_threshold <= 1.0:
-            raise ValueError(
-                "unclassified_probability_threshold must lie between zero and one."
-            )
-        if model_parameters is not None and not isinstance(model_parameters, dict):
-            raise TypeError("model_parameters must be a dictionary or None.")
-        if class_threshold_min_reference_samples < 1:
-            raise ValueError(
-                "class_threshold_min_reference_samples must be at least one."
-            )
-
-        shared_directory = (
-            model_root / "machine_learning_models" / "alphaearth_crop_classification"
-        )
-        default_pooled_path = shared_directory / "samples.parquet"
-        default_model_path = shared_directory / "alphaearth_cty_model.joblib"
-
-        def resolve_shared_path(
-            configured_path: str | None,
-            default_path: Path,
-        ) -> Path:
-            path = default_path if configured_path is None else Path(configured_path)
-            path = path.expanduser()
-            return path if path.is_absolute() else model_root / path
-
-        pooled_path = resolve_shared_path(
-            pooled_training_samples_path,
-            default_pooled_path,
-        )
-        final_model_path = resolve_shared_path(model_output_path, default_model_path)
-        if final_model_path.exists() and not overwrite_outputs:
-            raise FileExistsError(
-                f"Model output exists and overwrite_outputs=False: {final_model_path}"
-            )
-        final_model_path.parent.mkdir(parents=True, exist_ok=True)
-
-        reusable_source: Path | None = None
-        if training_samples_path is not None:
-            reusable_source = resolve_shared_path(
-                training_samples_path,
-                pooled_path,
-            )
-        elif reuse_pooled_training_samples:
-            reusable_source = pooled_path
-
-        if reusable_source is None:
-            if pooled_path.exists() and not overwrite_outputs:
-                raise FileExistsError(
-                    "Pooled sample output exists and overwrite_outputs=False: "
-                    f"{pooled_path}"
-                )
-            pooled_path.parent.mkdir(parents=True, exist_ok=True)
-            samples, region_mapping = load_europe_alphaearth_crop_training_samples(
-                model_root,
-                selected_model_ids,
-                training_samples_table_name=training_samples_table_name,
-                hrl_years=hrl_years,
-                include_coordinates=include_coordinates,
-                include_topography=include_topography,
-            )
-            samples.drop(columns="split", errors="ignore").to_parquet(
-                pooled_path,
-                index=False,
-            )
-            sample_source_description = str(pooled_path)
-        else:
             samples = load_alphaearth_crop_training_samples(
-                reusable_source,
+                sample_source,
                 hrl_years=hrl_years,
                 include_coordinates=include_coordinates,
                 include_topography=include_topography,
+                active_region_ids=np.unique(region_id_values[active_subgrid_mask]),
             )
-            required_metadata = {
-                "europe_model_id",
-                "europe_model_name",
-                "local_region_id",
-            }
-            missing_metadata = required_metadata - set(samples.columns)
-            if missing_metadata:
-                raise ValueError(
-                    "Reusable Europe-wide samples are missing source metadata: "
-                    f"{sorted(missing_metadata)}."
-                )
-            represented_model_ids = set(
-                pd.to_numeric(samples["europe_model_id"], errors="raise")
-                .astype(np.int64)
-                .unique()
+            self.logger.info(
+                "Reusing %s stored annual AlphaEarth-HRL CTY samples from %s. "
+                "Skipping all training COG downloads and regional sampling.",
+                len(samples),
+                source_description,
             )
-            expected_model_ids = set(selected_model_ids)
-            if represented_model_ids != expected_model_ids:
-                raise ValueError(
-                    "Reusable Europe-wide samples do not represent exactly the "
-                    "selected models. Expected "
-                    f"{sorted(expected_model_ids)}, found "
-                    f"{sorted(represented_model_ids)}."
-                )
-            region_mapping = (
-                samples[
-                    [
-                        "region_id",
-                        "europe_model_id",
-                        "europe_model_name",
-                        "local_region_id",
-                        "country_iso3",
-                    ]
-                ]
-                .drop_duplicates()
-                .sort_values("region_id")
-                .reset_index(drop=True)
-            )
-            if (
-                region_mapping["region_id"].duplicated().any()
-                or region_mapping[["europe_model_id", "local_region_id"]]
-                .duplicated()
-                .any()
-            ):
-                raise ValueError(
-                    "Reusable Europe-wide samples contain an ambiguous global-region "
-                    "mapping."
-                )
-            sample_source_description = str(reusable_source)
 
-        self.set_table(
-            region_mapping,
-            name="machine_learning/crop_classification/europe_region_mapping",
-        )
+            template_fetch = self.data_catalog.fetch(
+                f"hrl_crop_types_{template_year}",
+                bounds=study_bounds,
+                year=template_year,
+            )
+            template_cty_tile_ids.update(
+                str(tile_id) for tile_id in getattr(template_fetch, "tile_ids", ())
+            )
+        else:
+            sample_tables: list[pd.DataFrame] = []
+            selected_training_cogs: gpd.GeoDataFrame | None = None
+            try:
+                self.logger.info(
+                    "Downloading all AlphaEarth training COGs for years %s and full "
+                    "study-area bounds %s before regional CTY sampling.",
+                    hrl_years,
+                    study_bounds,
+                )
+                selected_training_cogs = alphaearth_adapter.read(
+                    years=hrl_years,
+                    bounds=study_bounds,
+                    dry_run=False,
+                    max_files=max_alphaearth_files_for_sampling,
+                )
+                if selected_training_cogs.empty:
+                    raise ValueError(
+                        "No AlphaEarth training COGs were selected for the active "
+                        "study-area bounds."
+                    )
+
+                for region_index, (_, region) in enumerate(regions_wgs84.iterrows()):
+                    region_id = int(region[region_id_column])
+                    country_iso3 = str(region[country_iso3_column])
+                    region_mask_full = active_subgrid_mask & (
+                        region_id_values == region_id
+                    )
+                    if not region_mask_full.any():
+                        continue
+                    region_geometry = region.geometry.intersection(active_geometry)
+                    if region_geometry.is_empty:
+                        continue
+                    region_bounds = tuple(
+                        float(value) for value in region_geometry.bounds
+                    )
+
+                    for year in hrl_years:
+                        try:
+                            crop_types = read_cty_year(
+                                year=year,
+                                region_bounds=region_bounds,
+                            )
+                            region_year_cogs = select_alphaearth_cogs_for_geometry(
+                                selected_training_cogs,
+                                year=year,
+                                clip_geometry=region_geometry,
+                            )
+                            if region_year_cogs.empty:
+                                raise ValueError(
+                                    "No downloaded AlphaEarth COGs intersect region "
+                                    f"{region_id}, year {year}."
+                                )
+
+                            region_year_samples = (
+                                create_alphaearth_crop_training_samples(
+                                    crop_types,
+                                    region_year_cogs,
+                                    region_geometry,
+                                    year=year,
+                                    region_id=region_id,
+                                    country_iso3=country_iso3,
+                                    samples_per_cty_class=(
+                                        samples_per_cty_class_per_region_year
+                                    ),
+                                    sample_stride_pixels=sample_stride_pixels,
+                                    rare_class_sample_stride_pixels=(
+                                        rare_class_sample_stride_pixels
+                                    ),
+                                    rare_class_threshold_candidates=(
+                                        rare_class_threshold_candidates
+                                    ),
+                                    rare_class_sample_multiplier=(
+                                        rare_class_sample_multiplier
+                                    ),
+                                    training_label_edge_buffer_pixels=(
+                                        training_label_edge_buffer_pixels
+                                    ),
+                                    sample_chunk_rows=sample_chunk_rows,
+                                    include_coordinates=include_coordinates,
+                                    include_topography=include_topography,
+                                    elevation=subgrid_elevation,
+                                    slope=subgrid_slope,
+                                    random_seed=(
+                                        random_seed + region_index * 10_000 + year
+                                    ),
+                                )
+                            )
+                            sample_tables.append(region_year_samples)
+                        except WEkEONoCoverageError as error:
+                            if country_iso3.upper() in _HRL_CROPLANDS_EEA38_ISO3:
+                                raise
+                            self.logger.warning(
+                                "Skipping region %s (%s), year %s: no HRL coverage. %s",
+                                region_id,
+                                country_iso3,
+                                year,
+                                error,
+                            )
+                        finally:
+                            gc.collect()
+            finally:
+                if cleanup_alphaearth_downloads and selected_training_cogs is not None:
+                    removed = remove_alphaearth_downloads(
+                        selected_training_cogs,
+                        logger=self.logger,
+                    )
+                    self.logger.info(
+                        "Removed %s AlphaEarth training COGs after regional sampling.",
+                        removed,
+                    )
+                elif selected_training_cogs is not None:
+                    self.logger.info(
+                        "Retaining %s AlphaEarth training COGs in the local cache.",
+                        len(selected_training_cogs),
+                    )
+
+            if not sample_tables:
+                raise ValueError("No annual AlphaEarth-HRL CTY samples were created.")
+            samples = pd.concat(sample_tables, ignore_index=True)
+
+        if evaluate_postprocessed_accuracy and not (
+            {"source_x", "source_y"}.issubset(samples.columns)
+            or {"longitude", "latitude"}.issubset(samples.columns)
+        ):
+            raise ValueError(
+                "Post-processed accuracy evaluation requires sample coordinates."
+            )
 
         embedding_diagnostics = alphaearth_embedding_diagnostics(samples)
-        embedding_diagnostics.update(
-            {
-                "sample_count": len(samples),
-                "europe_model_count": len(selected_model_ids),
-                "region_count": int(samples["region_id"].nunique()),
-            }
-        )
         self.set_table(
             pd.DataFrame([embedding_diagnostics]),
             name="machine_learning/crop_classification/embedding_diagnostics",
+        )
+        self.logger.info(
+            "AlphaEarth embedding check: dequantized range=[%.4f, %.4f], "
+            "median L2 norm before optional normalization=%.4f "
+            "(p05=%.4f, p95=%.4f), non-finite rows=%s. "
+            "L2 normalization during fitting/inference=%s.",
+            embedding_diagnostics["minimum_value"],
+            embedding_diagnostics["maximum_value"],
+            embedding_diagnostics["median_l2_norm_before_normalization"],
+            embedding_diagnostics["p05_l2_norm_before_normalization"],
+            embedding_diagnostics["p95_l2_norm_before_normalization"],
+            embedding_diagnostics["nonfinite_rows"],
+            normalize_embeddings,
         )
 
         samples["split"] = "train"
@@ -2296,18 +2278,38 @@ class Europe(GEBModel):
         training_samples = samples.loc[samples["split"] == "train"].copy()
         if training_samples.empty:
             raise ValueError(
-                "The configured temporal split leaves no pooled training samples."
+                "The configured temporal split leaves no training samples."
             )
 
-        self.logger.info(
-            "Loaded %s pooled CTY samples from %s Europe model(s), %s globally "
-            "unique region(s), and years %s. Training source: %s.",
-            f"{len(samples):,}",
-            len(selected_model_ids),
-            samples["region_id"].nunique(),
-            tuple(sorted(int(year) for year in samples["year"].unique())),
-            sample_source_description,
+        split_counts = samples.groupby("split", sort=False).size().to_dict()
+        represented_regions = (
+            int(samples["region_id"].nunique()) if "region_id" in samples.columns else 0
         )
+        represented_countries = (
+            int(samples["country_iso3"].nunique())
+            if "country_iso3" in samples.columns
+            else 0
+        )
+        self.logger.info(
+            "CTY sample table ready: %s samples across %s region(s), %s "
+            "country/countries and years %s. Split counts: train=%s, "
+            "validation=%s, test=%s.",
+            f"{len(samples):,}",
+            represented_regions,
+            represented_countries,
+            tuple(sorted(int(year) for year in samples["year"].unique())),
+            f"{int(split_counts.get('train', 0)):,}",
+            f"{int(split_counts.get('validation', 0)):,}",
+            f"{int(split_counts.get('test', 0)):,}",
+        )
+
+        if store_training_samples and not reused_default_table:
+            self.set_table(samples, name=training_samples_table_name)
+        elif store_training_samples and reused_default_table:
+            self.logger.info(
+                "Reused stored sample table %s without rewriting it.",
+                training_samples_table_name,
+            )
 
         evaluation_models = fit_alphaearth_crop_models(
             training_samples,
@@ -2352,10 +2354,21 @@ class Europe(GEBModel):
                 confusion,
                 name="machine_learning/crop_classification/confusion_matrix",
             )
+            raw_training_years = tuple(
+                sorted(int(year) for year in training_samples["year"].unique())
+            )
+            raw_accuracy_heading = (
+                "ACCURACY STAGE 1/2 — RAW FIXED-HOLDOUT CLASSIFIER"
+                if evaluate_postprocessed_accuracy
+                else "ACCURACY — RAW FIXED-HOLDOUT CLASSIFIER"
+            )
             self.logger.info(
-                "ACCURACY — POOLED EUROPE FIXED-HOLDOUT CLASSIFIER\n"
-                "Training years=%s; validation=%s; test=%s.\n%s",
-                tuple(sorted(int(year) for year in training_samples["year"].unique())),
+                "%s\n"
+                "Purpose: model-development diagnostic before any spatial "
+                "post-processing. One classifier is trained on years %s; "
+                "validation=%s and test=%s are both held out.\n%s",
+                raw_accuracy_heading,
+                raw_training_years,
                 validation_year,
                 test_year,
                 format_alphaearth_accuracy_report(metrics, confusion),
@@ -2388,7 +2401,9 @@ class Europe(GEBModel):
         if final_models.class_probability_thresholds:
             threshold_table = pd.DataFrame(
                 {
-                    "cty_class": sorted(final_models.class_probability_thresholds),
+                    "cty_class": list(
+                        sorted(final_models.class_probability_thresholds)
+                    ),
                     "probability_threshold": [
                         final_models.class_probability_thresholds[class_code]
                         for class_code in sorted(
@@ -2403,18 +2418,775 @@ class Europe(GEBModel):
                     "machine_learning/crop_classification/class_probability_thresholds"
                 ),
             )
+            self.logger.info(
+                "Using calibrated/manual CTY decision thresholds for %s class(es).",
+                len(threshold_table),
+            )
+        if model_output_path is not None:
+            saved_model_path = save_alphaearth_crop_models(
+                final_models,
+                model_output_path,
+            )
+            self.logger.info(
+                "Saved final AlphaEarth CTY model to %s.", saved_model_path
+            )
 
-        saved_model_path = save_alphaearth_crop_models(
-            final_models,
-            final_model_path,
+        if not template_cty_tile_ids:
+            raise ValueError(
+                f"No {template_year} HRL CTY template tile IDs were collected."
+            )
+
+        cty_template_adapter = self.data_catalog.catalog[
+            f"hrl_crop_types_{template_year}"
+        ]["adapter"]
+        cty_templates_by_code = {
+            hrl_tile_code_from_name(tile_id): find_hrl_tile_path(
+                cty_template_adapter.root,
+                year=template_year,
+                tile_id=tile_id,
+            )
+            for tile_id in template_cty_tile_ids
+        }
+
+        historical_cty_paths_by_code: dict[str, tuple[Path, ...]] = {}
+        for tile_code, template_path in cty_templates_by_code.items():
+            historical_paths: list[Path] = []
+            for historical_year in hrl_years:
+                historical_name = build_hrl_prediction_tile_name(
+                    template_path.name,
+                    product_code="CTY",
+                    prediction_year=historical_year,
+                )
+                historical_paths.append(
+                    find_hrl_tile_path(
+                        cty_template_adapter.root,
+                        year=historical_year,
+                        tile_id=Path(historical_name).stem,
+                    )
+                )
+            historical_cty_paths_by_code[tile_code] = tuple(historical_paths)
+
+        if cty_confidence_output_root is None:
+            cty_root = Path(cty_template_adapter.root)
+            if cty_root.name.lower().startswith("v"):
+                confidence_root = (
+                    cty_root.parent.parent / "hrl_crop_types_confidence" / cty_root.name
+                )
+            else:
+                confidence_root = cty_root.parent / "hrl_crop_types_confidence"
+        else:
+            confidence_root = Path(cty_confidence_output_root)
+
+        if evaluate_postprocessed_accuracy:
+            self.logger.info(
+                "ACCURACY STAGE 2/2 — LEAKAGE-SAFE FINAL MAPS. "
+                "Each held-out year will be refitted using only earlier years, "
+                "predicted as complete tiles, post-processed, and then compared "
+                "with the held-out HRL reference."
+            )
+            evaluation_year_to_split = {
+                int(year): split_name
+                for year, split_name in (
+                    (validation_year, "validation"),
+                    (test_year, "test"),
+                )
+                if year is not None
+            }
+            evaluation_years = tuple(sorted(evaluation_year_to_split))
+            if postprocessed_evaluation_output_root is None:
+                evaluation_root = (
+                    Path(cty_template_adapter.root).parent.parent
+                    / "alphaearth_postprocessed_evaluation"
+                    / Path(cty_template_adapter.root).name
+                )
+            else:
+                evaluation_root = Path(postprocessed_evaluation_output_root)
+            evaluation_root.mkdir(parents=True, exist_ok=True)
+
+            with rasterio.open(next(iter(cty_templates_by_code.values()))) as source:
+                sample_coordinates_crs = source.crs
+
+            postprocessed_metric_tables: list[pd.DataFrame] = []
+            postprocessed_confusion_tables: list[pd.DataFrame] = []
+            postprocessed_change_rows: list[dict[str, int | str]] = []
+            selected_evaluation_cogs: gpd.GeoDataFrame | None = None
+            try:
+                selected_evaluation_cogs = alphaearth_adapter.read(
+                    years=list(evaluation_years),
+                    bounds=study_bounds,
+                    dry_run=False,
+                    max_files=max_alphaearth_files_for_postprocessed_evaluation,
+                )
+                if selected_evaluation_cogs.empty:
+                    raise ValueError(
+                        "No AlphaEarth coverage selected for post-processed evaluation."
+                    )
+
+                for evaluation_year in evaluation_years:
+                    split_name = evaluation_year_to_split[evaluation_year]
+                    prior_years = tuple(
+                        year for year in hrl_years if year < evaluation_year
+                    )
+                    if not prior_years:
+                        raise ValueError(
+                            f"No observation years precede {evaluation_year}."
+                        )
+                    rolling_training_samples = samples.loc[
+                        samples["year"].isin(prior_years)
+                    ].copy()
+                    held_out_samples = samples.loc[
+                        samples["year"] == evaluation_year
+                    ].copy()
+                    if held_out_samples.empty:
+                        raise ValueError(
+                            f"No held-out samples are available for {evaluation_year}."
+                        )
+
+                    rolling_models = fit_alphaearth_crop_models(
+                        rolling_training_samples,
+                        include_coordinates=include_coordinates,
+                        include_topography=include_topography,
+                        normalize_embeddings=normalize_embeddings,
+                        classifier_structure=classifier_structure,
+                        residual_class_mode=residual_class_mode,
+                        model_type=model_type,
+                        model_parameters=model_parameters,
+                        random_seed=random_seed,
+                        sample_weight_mode=sample_weight_mode,
+                        n_jobs=n_jobs,
+                        unclassified_probability_threshold=(
+                            unclassified_probability_threshold
+                        ),
+                        class_probability_thresholds=class_probability_thresholds,
+                        calibrate_class_thresholds=calibrate_class_thresholds,
+                        class_threshold_grid=class_threshold_grid,
+                        calibration_min_reference_samples=(
+                            class_threshold_min_reference_samples
+                        ),
+                    )
+                    raw_cty, _ = predict_alphaearth_crop_models(
+                        rolling_models,
+                        held_out_samples,
+                    )
+                    raw_metrics, raw_confusion = evaluate_alphaearth_crop_predictions(
+                        held_out_samples,
+                        raw_cty,
+                        split_name=split_name,
+                    )
+                    raw_metrics.insert(0, "assessment_stage", "raw_rolling_origin")
+                    raw_confusion.insert(
+                        0,
+                        "assessment_stage",
+                        "raw_rolling_origin",
+                    )
+                    raw_metrics["evaluation_year"] = evaluation_year
+                    raw_confusion["evaluation_year"] = evaluation_year
+                    training_year_text = ",".join(str(year) for year in prior_years)
+                    raw_metrics["training_years"] = training_year_text
+                    raw_confusion["training_years"] = training_year_text
+                    postprocessed_metric_tables.append(raw_metrics)
+                    postprocessed_confusion_tables.append(raw_confusion)
+
+                    split_root = evaluation_root / split_name / str(evaluation_year)
+                    cty_directory = split_root / "cty"
+                    confidence_directory = split_root / "ctycl"
+                    cty_directory.mkdir(parents=True, exist_ok=True)
+                    if write_cty_confidence:
+                        confidence_directory.mkdir(parents=True, exist_ok=True)
+
+                    evaluation_cty_paths: dict[str, Path] = {}
+                    evaluation_confidence_paths: dict[str, Path] = {}
+                    for tile_code in sorted(cty_templates_by_code):
+                        cty_template_path = cty_templates_by_code[tile_code]
+                        with rasterio.open(cty_template_path) as template_source:
+                            tile_bounds_wgs84 = transform_bounds(
+                                template_source.crs,
+                                "EPSG:4326",
+                                *template_source.bounds,
+                                densify_pts=21,
+                            )
+                        prediction_geometry = box(*tile_bounds_wgs84).intersection(
+                            active_geometry
+                        )
+                        if prediction_geometry.is_empty:
+                            continue
+
+                        tile_cogs = select_alphaearth_cogs_for_geometry(
+                            selected_evaluation_cogs,
+                            year=evaluation_year,
+                            clip_geometry=prediction_geometry,
+                        )
+                        if tile_cogs.empty:
+                            raise ValueError(
+                                "No AlphaEarth COGs intersect evaluation tile "
+                                f"{tile_code}, year {evaluation_year}."
+                            )
+
+                        cty_path = cty_directory / build_hrl_prediction_tile_name(
+                            cty_template_path.name,
+                            product_code="CTY",
+                            prediction_year=evaluation_year,
+                        )
+                        confidence_path = (
+                            confidence_directory
+                            / build_hrl_prediction_tile_name(
+                                cty_template_path.name,
+                                product_code="CTYCL",
+                                prediction_year=evaluation_year,
+                            )
+                            if write_cty_confidence
+                            else None
+                        )
+                        prior_mask_years = tuple(
+                            year
+                            for year in cropland_mask_years
+                            if year < evaluation_year
+                        )
+                        historical_mask_paths = tuple(
+                            historical_cty_paths_by_code[tile_code][
+                                hrl_years.index(year)
+                            ]
+                            for year in prior_mask_years
+                        )
+                        if apply_historical_cropland_mask and not historical_mask_paths:
+                            raise ValueError(
+                                "Historical cropland masking requires at least one "
+                                f"year before {evaluation_year}."
+                            )
+
+                        predict_alphaearth_crop_tile_to_hrl_geotiffs(
+                            rolling_models,
+                            cty_template_path,
+                            tile_cogs,
+                            prediction_geometry,
+                            cty_path,
+                            chunk_size=prediction_chunk_size,
+                            overwrite=True,
+                            elevation=subgrid_elevation,
+                            slope=subgrid_slope,
+                            historical_cty_paths=historical_mask_paths,
+                            apply_historical_cropland_mask=(
+                                apply_historical_cropland_mask
+                            ),
+                            historical_cropland_mask_dilation_pixels=(
+                                historical_cropland_mask_dilation_pixels
+                            ),
+                            smooth_cty_probabilities=smooth_cty_probabilities,
+                            unclassified_probability_threshold=(
+                                unclassified_probability_threshold
+                            ),
+                            cty_confidence_output_path=confidence_path,
+                        )
+                        evaluation_cty_paths[tile_code] = cty_path
+                        if confidence_path is not None:
+                            evaluation_confidence_paths[tile_code] = confidence_path
+
+                    if apply_permanent_crop_temporal_consistency:
+                        for tile_code, cty_path in evaluation_cty_paths.items():
+                            temporal_history = tuple(
+                                historical_cty_paths_by_code[tile_code][
+                                    hrl_years.index(year)
+                                ]
+                                for year in prior_years
+                            )
+                            temporal_stats = (
+                                apply_alphaearth_permanent_crop_temporal_consistency(
+                                    temporal_history,
+                                    {evaluation_year: cty_path},
+                                    predicted_confidence_paths=(
+                                        {
+                                            evaluation_year: (
+                                                evaluation_confidence_paths[tile_code]
+                                            )
+                                        }
+                                        if tile_code in evaluation_confidence_paths
+                                        else None
+                                    ),
+                                    chunk_size=max(prediction_chunk_size, 512),
+                                )
+                            )
+                            postprocessed_change_rows.append(
+                                {
+                                    "split": split_name,
+                                    "evaluation_year": evaluation_year,
+                                    "stage": ("permanent_crop_temporal_consistency"),
+                                    "tile": tile_code,
+                                    **temporal_stats,
+                                }
+                            )
+
+                    if apply_cty_mmu_sieve:
+                        ordered_tile_codes = sorted(evaluation_cty_paths)
+                        sieve_results = apply_alphaearth_cty_mmu_sieve(
+                            [
+                                evaluation_cty_paths[tile_code]
+                                for tile_code in ordered_tile_codes
+                            ],
+                            confidence_paths=(
+                                [
+                                    evaluation_confidence_paths[tile_code]
+                                    for tile_code in ordered_tile_codes
+                                ]
+                                if write_cty_confidence
+                                else None
+                            ),
+                            minimum_mapping_unit_pixels=cty_mmu_minimum_pixels,
+                            connectivity=cty_mmu_connectivity,
+                            padding_pixels=cty_mmu_padding_pixels,
+                            maximum_iterations=cty_mmu_maximum_iterations,
+                        )
+                        if not sieve_results.empty:
+                            for row in sieve_results.to_dict(orient="records"):
+                                postprocessed_change_rows.append(
+                                    {
+                                        "split": split_name,
+                                        "evaluation_year": evaluation_year,
+                                        "stage": "cty_mmu_sieve",
+                                        **row,
+                                    }
+                                )
+
+                    final_cty = sample_alphaearth_crop_prediction_tiles(
+                        held_out_samples,
+                        evaluation_cty_paths,
+                        sample_coordinates_crs=sample_coordinates_crs,
+                    )
+                    final_metrics, final_confusion = (
+                        evaluate_alphaearth_crop_predictions(
+                            held_out_samples,
+                            final_cty,
+                            split_name=split_name,
+                        )
+                    )
+                    final_metrics.insert(
+                        0,
+                        "assessment_stage",
+                        "final_postprocessed",
+                    )
+                    final_confusion.insert(
+                        0,
+                        "assessment_stage",
+                        "final_postprocessed",
+                    )
+                    final_metrics["evaluation_year"] = evaluation_year
+                    final_confusion["evaluation_year"] = evaluation_year
+                    final_metrics["training_years"] = training_year_text
+                    final_confusion["training_years"] = training_year_text
+                    postprocessed_metric_tables.append(final_metrics)
+                    postprocessed_confusion_tables.append(final_confusion)
+
+                    valid_final_cty = np.isin(final_cty, HRL_CTY_CLASS_CODES)
+                    postprocessed_change_rows.append(
+                        {
+                            "split": split_name,
+                            "evaluation_year": evaluation_year,
+                            "stage": "sample_level_comparison",
+                            "target": "CTY",
+                            "samples": len(held_out_samples),
+                            "valid_final_predictions": int(valid_final_cty.sum()),
+                            "changed_predictions": int(
+                                (valid_final_cty & (raw_cty != final_cty)).sum()
+                            ),
+                        }
+                    )
+                    self.logger.info(
+                        "Completed leakage-safe %s final CTY-map evaluation for %s "
+                        "using training years %s.",
+                        split_name,
+                        evaluation_year,
+                        prior_years,
+                    )
+                    if cleanup_postprocessed_evaluation_outputs:
+                        shutil.rmtree(split_root, ignore_errors=True)
+                    gc.collect()
+            finally:
+                if (
+                    cleanup_alphaearth_downloads
+                    and selected_evaluation_cogs is not None
+                ):
+                    removed = remove_alphaearth_downloads(
+                        selected_evaluation_cogs,
+                        logger=self.logger,
+                    )
+                    self.logger.info(
+                        "Removed %s AlphaEarth COGs after post-processed evaluation.",
+                        removed,
+                    )
+
+            if postprocessed_metric_tables:
+                postprocessed_metrics = pd.concat(
+                    postprocessed_metric_tables,
+                    ignore_index=True,
+                )
+                postprocessed_confusion = pd.concat(
+                    postprocessed_confusion_tables,
+                    ignore_index=True,
+                )
+                self.set_table(
+                    postprocessed_metrics,
+                    name=(
+                        "machine_learning/crop_classification/"
+                        "postprocessed_accuracy_metrics"
+                    ),
+                )
+                self.set_table(
+                    postprocessed_confusion,
+                    name=(
+                        "machine_learning/crop_classification/"
+                        "postprocessed_accuracy_confusion_matrix"
+                    ),
+                )
+                summary_metrics = postprocessed_metrics.loc[
+                    postprocessed_metrics["metric_scope"] == "summary"
+                ].copy()
+                comparison_keys = ["split", "evaluation_year", "target"]
+                raw_summary = summary_metrics.loc[
+                    summary_metrics["assessment_stage"] == "raw_rolling_origin"
+                ].set_index(comparison_keys)
+                final_summary = summary_metrics.loc[
+                    summary_metrics["assessment_stage"] == "final_postprocessed"
+                ].set_index(comparison_keys)
+                common_index = raw_summary.index.intersection(final_summary.index)
+                if len(common_index):
+                    comparison = pd.DataFrame(index=common_index).reset_index()
+                    for metric_name in (
+                        "accuracy",
+                        "balanced_accuracy",
+                        "f_score",
+                        "macro_f_score_observed",
+                        "kappa",
+                        "reference_support",
+                        "excluded_predictions",
+                        "observed_class_count",
+                        "configured_class_count",
+                        "predicted_only_class_count",
+                    ):
+                        comparison[f"raw_{metric_name}"] = raw_summary.loc[
+                            common_index, metric_name
+                        ].to_numpy()
+                        comparison[f"final_{metric_name}"] = final_summary.loc[
+                            common_index, metric_name
+                        ].to_numpy()
+                        if metric_name in {
+                            "accuracy",
+                            "balanced_accuracy",
+                            "f_score",
+                            "macro_f_score_observed",
+                            "kappa",
+                        }:
+                            comparison[f"delta_{metric_name}"] = (
+                                comparison[f"final_{metric_name}"]
+                                - comparison[f"raw_{metric_name}"]
+                            )
+                    self.set_table(
+                        comparison,
+                        name=(
+                            "machine_learning/crop_classification/"
+                            "postprocessed_accuracy_comparison"
+                        ),
+                    )
+
+                self.logger.info(
+                    "ACCURACY STAGE 2/2 — LEAKAGE-SAFE FINAL-MAP RESULTS AND CLASS TABLES\n%s",
+                    format_alphaearth_postprocessed_accuracy_report(
+                        postprocessed_metrics
+                    ),
+                )
+
+            if postprocessed_change_rows:
+                self.set_table(
+                    pd.DataFrame(postprocessed_change_rows),
+                    name=(
+                        "machine_learning/crop_classification/"
+                        "postprocessed_accuracy_changes"
+                    ),
+                )
+
+        generated_cty_tile_ids: dict[int, list[str]] = {
+            year: [] for year in prediction_years
+        }
+        generated_cty_paths: dict[int, dict[str, Path]] = {
+            year: {} for year in prediction_years
+        }
+        generated_confidence_paths: dict[int, dict[str, Path]] = {
+            year: {} for year in prediction_years
+        }
+        prediction_tasks: list[
+            tuple[int, str, Path, Path, Path | None, BaseGeometry]
+        ] = []
+
+        for prediction_year in prediction_years:
+            cty_output_directory = Path(cty_template_adapter.root) / str(
+                prediction_year
+            )
+            confidence_output_directory = confidence_root / str(prediction_year)
+            cty_output_directory.mkdir(parents=True, exist_ok=True)
+            if write_cty_confidence:
+                confidence_output_directory.mkdir(parents=True, exist_ok=True)
+
+            for tile_code in sorted(cty_templates_by_code):
+                cty_template_path = cty_templates_by_code[tile_code]
+                cty_output_name = build_hrl_prediction_tile_name(
+                    cty_template_path.name,
+                    product_code="CTY",
+                    prediction_year=prediction_year,
+                )
+                confidence_output_name = build_hrl_prediction_tile_name(
+                    cty_template_path.name,
+                    product_code="CTYCL",
+                    prediction_year=prediction_year,
+                )
+                cty_output_path = cty_output_directory / cty_output_name
+                confidence_output_path = (
+                    confidence_output_directory / confidence_output_name
+                    if write_cty_confidence
+                    else None
+                )
+
+                required_outputs_exist = cty_output_path.exists() and (
+                    confidence_output_path is None or confidence_output_path.exists()
+                )
+                if not overwrite_prediction_files and required_outputs_exist:
+                    self.logger.info(
+                        "Using existing generated CTY tile for %s, year %s.",
+                        tile_code,
+                        prediction_year,
+                    )
+                    generated_cty_tile_ids[prediction_year].append(cty_output_path.stem)
+                    generated_cty_paths[prediction_year][tile_code] = cty_output_path
+                    if confidence_output_path is not None:
+                        generated_confidence_paths[prediction_year][tile_code] = (
+                            confidence_output_path
+                        )
+                    continue
+
+                with rasterio.open(cty_template_path) as template_source:
+                    tile_bounds_wgs84 = transform_bounds(
+                        template_source.crs,
+                        "EPSG:4326",
+                        *template_source.bounds,
+                        densify_pts=21,
+                    )
+                prediction_geometry = box(*tile_bounds_wgs84).intersection(
+                    active_geometry
+                )
+                if prediction_geometry.is_empty:
+                    continue
+
+                prediction_tasks.append(
+                    (
+                        prediction_year,
+                        tile_code,
+                        cty_template_path,
+                        cty_output_path,
+                        confidence_output_path,
+                        prediction_geometry,
+                    )
+                )
+
+        selected_prediction_cogs: gpd.GeoDataFrame | None = None
+        if prediction_tasks:
+            task_prediction_years = tuple(
+                sorted({task[0] for task in prediction_tasks})
+            )
+            try:
+                self.logger.info(
+                    "Downloading all AlphaEarth prediction COGs for years %s and "
+                    "full study-area bounds %s before classifying %s CTY tile task(s).",
+                    task_prediction_years,
+                    study_bounds,
+                    len(prediction_tasks),
+                )
+                selected_prediction_cogs = alphaearth_adapter.read(
+                    years=list(task_prediction_years),
+                    bounds=study_bounds,
+                    dry_run=False,
+                    max_files=max_alphaearth_files_for_prediction,
+                )
+                if selected_prediction_cogs.empty:
+                    raise ValueError(
+                        "No AlphaEarth coverage selected for prediction years "
+                        f"{prediction_years}."
+                    )
+
+                cropland_year_positions = [
+                    hrl_years.index(year) for year in cropland_mask_years
+                ]
+                for (
+                    prediction_year,
+                    tile_code,
+                    cty_template_path,
+                    cty_output_path,
+                    confidence_output_path,
+                    prediction_geometry,
+                ) in prediction_tasks:
+                    tile_alphaearth_cogs = select_alphaearth_cogs_for_geometry(
+                        selected_prediction_cogs,
+                        year=prediction_year,
+                        clip_geometry=prediction_geometry,
+                    )
+                    if tile_alphaearth_cogs.empty:
+                        raise ValueError(
+                            "No downloaded AlphaEarth COGs intersect HRL tile "
+                            f"{tile_code}, year {prediction_year}."
+                        )
+
+                    historical_mask_paths = tuple(
+                        historical_cty_paths_by_code[tile_code][position]
+                        for position in cropland_year_positions
+                    )
+                    predict_alphaearth_crop_tile_to_hrl_geotiffs(
+                        final_models,
+                        cty_template_path,
+                        tile_alphaearth_cogs,
+                        prediction_geometry,
+                        cty_output_path,
+                        chunk_size=prediction_chunk_size,
+                        overwrite=overwrite_prediction_files,
+                        elevation=subgrid_elevation,
+                        slope=subgrid_slope,
+                        historical_cty_paths=historical_mask_paths,
+                        apply_historical_cropland_mask=(apply_historical_cropland_mask),
+                        historical_cropland_mask_dilation_pixels=(
+                            historical_cropland_mask_dilation_pixels
+                        ),
+                        smooth_cty_probabilities=smooth_cty_probabilities,
+                        unclassified_probability_threshold=(
+                            unclassified_probability_threshold
+                        ),
+                        cty_confidence_output_path=confidence_output_path,
+                    )
+                    generated_cty_tile_ids[prediction_year].append(cty_output_path.stem)
+                    generated_cty_paths[prediction_year][tile_code] = cty_output_path
+                    if confidence_output_path is not None:
+                        generated_confidence_paths[prediction_year][tile_code] = (
+                            confidence_output_path
+                        )
+                    self.logger.info(
+                        "Wrote historically masked HRL-compatible CTY prediction "
+                        "for tile %s, year %s from %s cached COG(s).",
+                        tile_code,
+                        prediction_year,
+                        len(tile_alphaearth_cogs),
+                    )
+                    gc.collect()
+            finally:
+                if (
+                    cleanup_alphaearth_downloads
+                    and selected_prediction_cogs is not None
+                ):
+                    removed = remove_alphaearth_downloads(
+                        selected_prediction_cogs,
+                        logger=self.logger,
+                    )
+                    self.logger.info(
+                        "Removed %s AlphaEarth prediction COGs.",
+                        removed,
+                    )
+                elif selected_prediction_cogs is not None:
+                    self.logger.info(
+                        "Retaining %s AlphaEarth prediction COGs in the local cache.",
+                        len(selected_prediction_cogs),
+                    )
+
+        postprocessing_rows: list[dict[str, int | str]] = []
+        available_tile_codes = sorted(
+            set.intersection(
+                *[set(generated_cty_paths[year]) for year in prediction_years]
+            )
+            if prediction_years
+            else set()
         )
-        self.logger.info(
-            "Saved pooled Europe AlphaEarth CTY model to %s. The estimator is %s "
-            "with model_parameters=%s.",
-            saved_model_path,
-            final_models.model_type,
-            final_models.model_parameters,
-        )
+        if apply_permanent_crop_temporal_consistency:
+            for tile_code in available_tile_codes:
+                temporal_stats = apply_alphaearth_permanent_crop_temporal_consistency(
+                    historical_cty_paths_by_code[tile_code],
+                    {
+                        year: generated_cty_paths[year][tile_code]
+                        for year in prediction_years
+                    },
+                    predicted_confidence_paths=(
+                        {
+                            year: generated_confidence_paths[year][tile_code]
+                            for year in prediction_years
+                            if tile_code in generated_confidence_paths[year]
+                        }
+                        if write_cty_confidence
+                        else None
+                    ),
+                    chunk_size=max(prediction_chunk_size, 512),
+                )
+                postprocessing_rows.append(
+                    {
+                        "stage": "permanent_crop_temporal_consistency",
+                        "year": -1,
+                        "tile": tile_code,
+                        **temporal_stats,
+                    }
+                )
+
+        if apply_cty_mmu_sieve:
+            for prediction_year in prediction_years:
+                year_tile_codes = sorted(generated_cty_paths[prediction_year])
+                cty_year_paths = [
+                    generated_cty_paths[prediction_year][tile_code]
+                    for tile_code in year_tile_codes
+                ]
+                confidence_year_paths = (
+                    [
+                        generated_confidence_paths[prediction_year][tile_code]
+                        for tile_code in year_tile_codes
+                        if tile_code in generated_confidence_paths[prediction_year]
+                    ]
+                    if write_cty_confidence
+                    else None
+                )
+                sieve_results = apply_alphaearth_cty_mmu_sieve(
+                    cty_year_paths,
+                    confidence_paths=confidence_year_paths,
+                    minimum_mapping_unit_pixels=cty_mmu_minimum_pixels,
+                    connectivity=cty_mmu_connectivity,
+                    padding_pixels=cty_mmu_padding_pixels,
+                    maximum_iterations=cty_mmu_maximum_iterations,
+                )
+                if not sieve_results.empty:
+                    sieve_results.insert(0, "year", prediction_year)
+                    sieve_results.insert(0, "stage", "cty_mmu_sieve")
+                    postprocessing_rows.extend(sieve_results.to_dict(orient="records"))
+                    self.logger.info(
+                        "Applied %s-pixel CTY MMU sieve to %s tile(s) for %s; "
+                        "%s pixels changed.",
+                        cty_mmu_minimum_pixels,
+                        len(sieve_results),
+                        prediction_year,
+                        int(sieve_results["changed_pixels"].sum()),
+                    )
+
+        if postprocessing_rows:
+            self.set_table(
+                pd.DataFrame(postprocessing_rows),
+                name="machine_learning/crop_classification/postprocessing",
+            )
+
+        for prediction_year in prediction_years:
+            year_cty_ids = generated_cty_tile_ids[prediction_year]
+            if not year_cty_ids:
+                raise ValueError(
+                    f"No HRL-compatible CTY tiles were generated for {prediction_year}."
+                )
+
+            catalog_name = f"hrl_crop_types_{prediction_year}"
+            if catalog_name in self.data_catalog.catalog:
+                self.data_catalog.catalog[catalog_name][
+                    "adapter"
+                ].tile_ids = year_cty_ids
+
+            self.logger.info(
+                "Finished annual AlphaEarth CTY classification for %s. Generated "
+                "%s CTY tiles in the standard HRL catalog folder.",
+                prediction_year,
+                len(year_cty_ids),
+            )
 
     @build_method(
         depends_on=["setup_regions_and_land_use"],
@@ -2422,7 +3194,6 @@ class Europe(GEBModel):
     )
     def setup_classify_alphaearth_crop_types(
         self,
-        europe_model_ids: tuple[int | str, ...] = tuple(range(12)),
         hrl_years: tuple[int, ...] = (2017, 2018, 2019, 2020, 2021, 2022, 2023),
         prediction_years: tuple[int, ...] = (2024, 2025),
         template_year: int | None = None,
@@ -2448,20 +3219,18 @@ class Europe(GEBModel):
     ) -> None:
         """Classify AlphaEarth years and write post-processed HRL-compatible CTY tiles.
 
-        This is the third stage of the Europe-wide workflow. Each selected
-        ``Europe_###`` model loads the same pooled model bundle, downloads AlphaEarth
-        COGs once for its complete active extent, predicts its native HRL 100-km tile
-        grids, applies the configured historical mask, probability smoothing,
-        permanent-crop consistency and minimum-mapping-unit sieve, and writes the
-        results into the standard HRL catalog directories.
+        This per-model build method loads the shared Europe-wide model bundle,
+        downloads AlphaEarth COGs once for the current model extent, predicts its
+        native HRL 100-km tile grids, applies the configured historical mask,
+        probability smoothing, permanent-crop consistency and minimum-mapping-unit
+        sieve, and writes the results into the standard HRL catalog directories.
 
         Args:
-            europe_model_ids: Europe models that should classify their local extent.
             hrl_years: Historical HRL years used for templates and post-processing.
             prediction_years: Ordered AlphaEarth years to classify.
             template_year: HRL year defining output grids and filenames.
             model_path: Pooled Joblib model. A relative path is resolved below the
-                common model root; the shared default from the training method is used
+                common model root; the shared default written by the standalone training script is used
                 when omitted.
             prediction_chunk_size: Prediction-window width and height.
             apply_historical_cropland_mask: Restrict predictions to historical cropland.
@@ -2487,17 +3256,8 @@ class Europe(GEBModel):
         Raises:
             ValueError: If years, templates, settings, or model features are invalid.
         """
-        selected_model_ids = parse_europe_model_ids(europe_model_ids)
         current_model_id, _, model_root = europe_model_build_context()
         current_model_name = f"Europe_{current_model_id:03d}"
-        if current_model_id not in selected_model_ids:
-            self.logger.info(
-                "Skipping AlphaEarth CTY classification for %s; selected models "
-                "are %s.",
-                current_model_name,
-                [f"Europe_{model_id:03d}" for model_id in selected_model_ids],
-            )
-            return
 
         hrl_years = tuple(int(year) for year in hrl_years)
         if not hrl_years:
