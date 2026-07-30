@@ -1,6 +1,7 @@
 """Utilities for reading and plotting household attribute results."""
 
 import os
+from typing import Literal
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -8,16 +9,21 @@ import pandas as pd
 PLOT_Y_LIMS_DEFAULT: dict[str, tuple[float, float]] = {
     "expected_annual_damage": (0.0, 1.0),
     "adaptation_uptake": (0.0, 1.0),
+    "n_households_exposed_to_flooding": (0.0, 1.0),
 }
+
+
 PLOT_Y_LIMS_MULTIRUN_BASE_FUTURE: dict[str, tuple[float, float]] = {
     "expected_annual_damage": (0.0, 3e9),
     "adaptation_uptake": (0.0, 1.0),
+    "n_households_exposed_to_flooding": (0.0, 1.0),
 }
 PLOT_Y_LABELS: dict[str, str] = {
     "expected_annual_damage": "Expected Annual Damage (USD)",
     "adaptation_uptake": "Adaptation Uptake (fraction)",
+    "n_households_exposed_to_flooding": "Number of Households Exposed to Flooding",
 }
-SCENARIOS_BASE_FUTURE: tuple[str, str] = ("base", "future")
+SCENARIOS_BASE_FUTURE: tuple[str, str] = ("base", "_future")
 
 
 def _list_household_attribute_files(results_path: str) -> list[str]:
@@ -85,6 +91,55 @@ def _resolve_ylim(
     return ylims_variable
 
 
+def _validate_x_axis_mode(x_axis: str) -> Literal["year", "timestep"]:
+    """Validate and normalize x-axis mode.
+
+    Args:
+        x_axis: X-axis mode, either year or timestep.
+
+    Returns:
+        Validated x-axis mode.
+
+    Raises:
+        ValueError: If x_axis is not one of the supported values.
+    """
+    if x_axis not in {"year", "timestep"}:
+        raise ValueError("x_axis must be either 'year' or 'timestep'.")
+    return x_axis
+
+
+def _resolve_x_axis_values(
+    df: pd.DataFrame,
+    x_axis: Literal["year", "timestep"],
+) -> pd.Index:
+    """Resolve x-axis values for plotting household time series.
+
+    Args:
+        df: Time-indexed dataframe to plot.
+        x_axis: X-axis mode.
+
+    Returns:
+        Index used for plotting.
+    """
+    if x_axis == "year":
+        return df.index
+    return pd.RangeIndex(start=0, stop=len(df.index), step=1)
+
+
+def _resolve_x_axis_label(x_axis: Literal["year", "timestep"]) -> str:
+    """Resolve x-axis label text from x-axis mode.
+
+    Args:
+        x_axis: X-axis mode.
+
+    Returns:
+        Label for the x-axis.
+    """
+    if x_axis == "year":
+        return "Year"
+    return "Timestep"
+
+
 def _read_multirun_results(
     model_path: str,
     scenario_to_prefixes: dict[str, list[str]],
@@ -149,6 +204,7 @@ def process_household_attributes(
     model_path: str,
     scenario: str,
     model_name: str = "default",
+    x_axis: Literal["year", "timestep"] = "year",
 ) -> None:
     """Plot household attribute timeseries for one model run.
 
@@ -156,7 +212,10 @@ def process_household_attributes(
         model_path: Root model path.
         scenario: Scenario name (e.g., base or future).
         model_name: Name of the model output folder.
+        x_axis: X-axis mode, either year (data index) or timestep (0..n-1).
     """
+    x_axis = _validate_x_axis_mode(x_axis)
+
     results_path: str = os.path.join(
         model_path, scenario, "output", model_name, "report", "agents.households"
     )
@@ -170,21 +229,24 @@ def process_household_attributes(
         figsize=(7 * len(household_attributes_fns), 5),
     )
     axes_list: list[plt.Axes] = _ensure_axes_array(axes, len(household_attributes_fns))
+    x_axis_label: str = _resolve_x_axis_label(x_axis)
 
     for ax, fn in zip(axes_list, household_attributes_fns):
         household_attribute_name: str = fn.removesuffix(".parquet")
         df: pd.DataFrame = pd.read_parquet(os.path.join(results_path, fn))
+        x_values: pd.Index = _resolve_x_axis_values(df, x_axis)
 
         ylims_variable: tuple[float, float] | None = _resolve_ylim(
             df,
             household_attribute_name,
             PLOT_Y_LIMS_DEFAULT,
         )
-        df.plot(ax=ax)
+        ax.plot(x_values, df.to_numpy())
         if ylims_variable is not None:
             ax.set_ylim(ylims_variable)
         if household_attribute_name in PLOT_Y_LABELS:
             ax.set_ylabel(PLOT_Y_LABELS[household_attribute_name])
+        ax.set_xlabel(x_axis_label)
 
     fig.suptitle("Household Attributes Over Time")
     fig.tight_layout()
@@ -364,6 +426,7 @@ def _plot_multirun_results(
     colors: dict[str, str],
     output_path: str,
     predefined_ylims: dict[str, tuple[float, float]] | None = None,
+    x_axis: Literal["year", "timestep"] = "year",
 ) -> None:
     """Plot multirun household attributes for grouped scenarios or prefixes.
 
@@ -372,7 +435,10 @@ def _plot_multirun_results(
         colors: Line colors per group name.
         output_path: Path to save the plot image.
         predefined_ylims: Optional y-axis bounds per attribute.
+        x_axis: X-axis mode, either year (data index) or timestep (0..n-1).
     """
+    x_axis = _validate_x_axis_mode(x_axis)
+
     if not results:
         return
 
@@ -392,6 +458,7 @@ def _plot_multirun_results(
         figsize=(7 * len(attribute_names), 5),
     )
     axes_list: list[plt.Axes] = _ensure_axes_array(axes, len(attribute_names))
+    x_axis_label: str = _resolve_x_axis_label(x_axis)
 
     for ax, household_attribute_name in zip(axes_list, attribute_names):
         ax.grid(axis="y", linestyle="--", alpha=0.7)
@@ -403,11 +470,12 @@ def _plot_multirun_results(
             df: pd.DataFrame = group_results[household_attribute_name]
             if df.empty:
                 continue
+            x_values: pd.Index = _resolve_x_axis_values(df, x_axis)
 
-            ax.plot(df.index, df.to_numpy(), alpha=0.3, color="grey")
+            ax.plot(x_values, df.to_numpy(), alpha=0.3, color="grey")
             has_individual_runs = True
             ax.plot(
-                df.index,
+                x_values,
                 df.to_numpy().mean(axis=1),
                 label=f"Mean {group_name}",
                 linewidth=2,
@@ -427,6 +495,7 @@ def _plot_multirun_results(
         ax.set_title(household_attribute_name)
         if household_attribute_name in PLOT_Y_LABELS:
             ax.set_ylabel(PLOT_Y_LABELS[household_attribute_name])
+        ax.set_xlabel(x_axis_label)
         ax.legend()
 
     fig.suptitle("Household Attributes Over Time for Multiple Runs")
@@ -439,6 +508,7 @@ def plot_multirun_results_for_scenarios(
     model_path: str,
     scenarios: list[str],
     output_path: str | None = None,
+    x_axis: Literal["year", "timestep"] = "year",
 ) -> None:
     """Plot run_* household attributes for a list of scenarios.
 
@@ -446,10 +516,12 @@ def plot_multirun_results_for_scenarios(
         model_path: Root model path containing scenario folders.
         scenarios: Scenario names to compare in one plot.
         output_path: Optional output image path.
+        x_axis: X-axis mode, either year (data index) or timestep (0..n-1).
     """
     plot_multirun_results_across_scenarios(
         model_path=model_path,
         scenarios=scenarios,
+        x_axis=x_axis,
         output_path=(
             output_path
             if output_path is not None
@@ -461,16 +533,19 @@ def plot_multirun_results_for_scenarios(
 def plot_multirun_results_base_and_future(
     model_path: str,
     output_path: str | None = None,
+    x_axis: Literal["year", "timestep"] = "year",
 ) -> None:
     """Compatibility wrapper for plotting base and future scenarios.
 
     Args:
         model_path: Root model path containing scenario folders.
         output_path: Optional output image path.
+        x_axis: X-axis mode, either year (data index) or timestep (0..n-1).
     """
     plot_multirun_results_for_scenarios(
         model_path=model_path,
         scenarios=list(SCENARIOS_BASE_FUTURE),
+        x_axis=x_axis,
         output_path=(
             output_path
             if output_path is not None
@@ -483,8 +558,9 @@ def plot_multirun_results_across_scenarios(
     model_path: str,
     scenarios: list[str],
     output_path: str | None = None,
-    run_prefix: str = "run_",
+    run_prefix: str = "nogov_",
     colors: dict[str, str] | None = None,
+    x_axis: Literal["year", "timestep"] = "year",
 ) -> None:
     """Plot run-prefixed household attributes for any list of scenarios.
 
@@ -494,6 +570,7 @@ def plot_multirun_results_across_scenarios(
         output_path: Optional output image path.
         run_prefix: Run folder prefix to include from each scenario.
         colors: Optional custom line colors keyed by scenario.
+        x_axis: X-axis mode, either year (data index) or timestep (0..n-1).
     """
     if not scenarios:
         return
@@ -509,6 +586,7 @@ def plot_multirun_results_across_scenarios(
     _plot_multirun_results(
         results=results,
         colors=resolved_colors,
+        x_axis=x_axis,
         output_path=(
             output_path
             if output_path is not None
@@ -523,6 +601,7 @@ def plot_multirun_results_within_scenario(
     scenario: str = "base",
     prefixes: list[str] | None = None,
     output_path: str | None = None,
+    x_axis: Literal["year", "timestep"] = "year",
 ) -> None:
     """Plot multirun household attributes for run groups in one scenario.
 
@@ -531,6 +610,7 @@ def plot_multirun_results_within_scenario(
         scenario: Scenario name to compare prefixes within.
         prefixes: Optional run prefixes to compare.
         output_path: Optional output image path.
+        x_axis: X-axis mode, either year (data index) or timestep (0..n-1).
     """
     if prefixes is None:
         prefixes = ["nogov_", "cba_"]
@@ -547,6 +627,7 @@ def plot_multirun_results_within_scenario(
     _plot_multirun_results(
         results=results,
         colors=colors,
+        x_axis=x_axis,
         output_path=(
             output_path
             if output_path is not None
@@ -561,6 +642,7 @@ def plot_multirun_results_within_base_or_future(
     scenario: str = "base",
     prefixes: list[str] | None = None,
     output_path: str | None = None,
+    x_axis: Literal["year", "timestep"] = "year",
 ) -> None:
     """Compatibility wrapper for the old function name.
 
@@ -569,25 +651,28 @@ def plot_multirun_results_within_base_or_future(
         scenario: Scenario name to compare prefixes within.
         prefixes: Optional run prefixes to compare.
         output_path: Optional output image path.
+        x_axis: X-axis mode, either year (data index) or timestep (0..n-1).
     """
     plot_multirun_results_within_scenario(
         model_path=model_path,
         scenario=scenario,
         prefixes=prefixes,
         output_path=output_path,
+        x_axis=x_axis,
     )
 
 
 if __name__ == "__main__":
+    # model_path = os.path.join("..", "..", "models", "models", "etaple_new")
     model_path = os.path.join("..", "..", "models", "models", "mex_dev", "cluster_020")
     model_name = "default"
     scenario = "base"
-    scenarios_to_compare = ["base", "government_cba"]
+    scenarios_to_compare = ["base", "_future"]
     prefixes = ["nogov_", "cba_"]
     # plot_multirun_results_for_scenarios(model_path, scenarios_to_compare)
-    # plot_multirun_results_within_scenario(model_path, scenario, prefixes)
+    plot_multirun_results_within_scenario(model_path, scenario, prefixes)
 
-    # plot_multirun_results_base_and_future(model_path)
+    plot_multirun_results_base_and_future(model_path, x_axis="timestep")
     # plot_multirun_results_across_scenarios(
     #     model_path,
     #     scenarios=["base", "future", "policy_variant"],
