@@ -167,8 +167,13 @@ class Households(AgentBaseClass):
             "COMID",
             "distance_to_river_m",
             "distance_to_coastline_m",
+            "GDLcode",
         ]
-        self.buildings = read_geom(self.model.files["geom"]["assets/open_building_map"])
+
+        self.buildings = read_table(
+            self.model.files["geom"]["assets/open_building_map"],
+            columns=columns_to_load,
+        )
 
         self.buildings["object_type"] = (
             "building_unprotected"  # before it was "building_structure"

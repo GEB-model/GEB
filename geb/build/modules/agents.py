@@ -1636,6 +1636,29 @@ class Agents(BuildModelBase):
         )
         return buildings_with_subbasin
 
+    def assign_GDL_region_to_buildings(
+        self, buildings: gpd.GeoDataFrame
+    ) -> gpd.GeoDataFrame:
+        """Assigns GDL region IDs to buildings based on their spatial location.
+
+        Args:
+            buildings: A GeoDataFrame containing building data within the model domain.
+        Returns:
+            A GeoDataFrame with GDL region IDs assigned to each building.
+        """
+        # load GDL region within model domain
+        GDL_regions = self.data_catalog.fetch("GDL_regions_v4").read(
+            geom=self.region.union_all(), columns=["GDLcode", "iso_code", "geometry"]
+        )
+        buildings_with_GDL = gpd.sjoin(
+            buildings,
+            GDL_regions[["GDLcode", "geometry"]],
+            how="left",
+            predicate="within",
+        ).drop(columns="index_right")
+        buildings_with_GDL["GDLcode"] = buildings_with_GDL["GDLcode"].fillna("missing")
+        return buildings_with_GDL
+
     @build_method(required=True)
     def setup_buildings(self) -> None:
         """Gets buildings per GDL region within the model domain and assigns grid indices from GLOPOP-S grid."""
@@ -1644,10 +1667,10 @@ class Agents(BuildModelBase):
         buildings = self.data_catalog.fetch("open_building_map").read(
             geom=mask,
         )
+        buildings = self.assign_GDL_region_to_buildings(buildings)
         buildings = self.setup_building_reconstruction_costs(buildings)
         buildings = self.calculate_distance_parameters(buildings)
         buildings = self.assign_subbasins_to_buildings(buildings)
-
         # reset id column to avoid issues with duplicate ids
         buildings["id"] = np.arange(len(buildings))
 

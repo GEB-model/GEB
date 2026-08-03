@@ -653,6 +653,63 @@ class FloodRiskModule:
 
         return self.damages_do_not_adapt, self.damages_adapt
 
+    def calculate_ead_per_gdl_region(
+        self, ead_per_household: np.ndarray
+    ) -> pd.DataFrame:
+        """Calculate and accumulate expected annual damages (EAD) per GDL region.
+
+        The method aggregates household-level EAD values to GDL regions for the
+        current model year, stores the result in a wide dataframe with years as
+        rows and GDL regions as columns, and preserves the final dataframe on
+        the last timestep.
+
+        Args:
+            ead_per_household: Expected annual damages per household (USD per year).
+
+        Returns:
+            A dataframe with years as rows and GDL regions as columns.
+        """
+        # Get gdl region for each household
+        gdl_regions: pd.Series = self.households.buildings.loc[
+            self.households.var.building_id_of_household, "GDLcode"
+        ]
+
+        current_year: int = self.households.model.current_time.year
+
+        # Aggregate household EAD to regions for this timestep and keep a stable
+        # set of columns across the full simulation.
+        ead_per_gdl_region: pd.Series = (
+            pd.DataFrame({"GDLcode": gdl_regions, "EAD": ead_per_household})
+            .groupby("GDLcode", sort=True)["EAD"]
+            .sum()
+        )
+
+        if not hasattr(self, "ead_per_gdl_region") or not isinstance(
+            self.ead_per_gdl_region, pd.DataFrame
+        ):
+            self.ead_per_gdl_region = pd.DataFrame()
+
+        # Keep one column per unique GDL region and one row per model year.
+        all_regions: list[str] = sorted(
+            set(self.ead_per_gdl_region.columns).union(ead_per_gdl_region.index)
+        )
+        self.ead_per_gdl_region = self.ead_per_gdl_region.reindex(columns=all_regions)
+        self.ead_per_gdl_region.loc[current_year, ead_per_gdl_region.index] = (
+            ead_per_gdl_region.astype(np.float32).values
+        )
+        self.ead_per_gdl_region.index.name = "year"
+
+        if (
+            self.households.model.current_timestep
+            == self.households.model.n_timesteps - 1
+        ):
+            self.ead_per_gdl_region = self.ead_per_gdl_region.sort_index()
+            self.ead_per_gdl_region.to_parquet(
+                self.households.model.output_folder / "ead_per_gdl_region.parquet"
+            )
+
+        return self.ead_per_gdl_region
+
     def calculate_ead(
         self,
         damages_do_not_adapt: np.ndarray,
@@ -699,7 +756,7 @@ class FloodRiskModule:
         ead_usd_per_year = np.trapezoid(
             y=all_damages[sort_idx, :], x=probabilities[sort_idx], axis=0
         )
-
+        self.calculate_ead_per_gdl_region(ead_usd_per_year)
         return ead_usd_per_year
 
     def flood(self, flood_depth: xr.DataArray) -> float:
