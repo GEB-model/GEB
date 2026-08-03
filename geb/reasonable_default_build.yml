@@ -210,3 +210,5 @@ setup_osm_land_polygons:
 setup_groundwater_well_observations:
 
 setup_meteorological_stations_observations:
+
+setup_flood_observations:

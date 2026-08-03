@@ -7,8 +7,6 @@ Two checks are performed:
    (float32 only; no threshold assertion, purely diagnostic).
 """
 
-from __future__ import annotations
-
 import time
 from pathlib import Path
 

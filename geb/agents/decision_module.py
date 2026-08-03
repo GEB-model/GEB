@@ -616,7 +616,7 @@ class DecisionModule:
         n_agents: int,
         wealth: np.ndarray,
         income: np.ndarray,
-        expendature_cap: float,
+        expenditure_cap: float,
         amenity_value: np.ndarray,
         amenity_weight: float | int,
         risk_perception: np.ndarray,
@@ -643,27 +643,39 @@ class DecisionModule:
         expected_damages_adapt = expected_damages_adapt[indices]
         p_floods = np.sort(p_floods)
 
-        # Preallocate arrays
+        # # Preallocate arrays
+        # n_floods, n_agents = expected_damages_adapt.shape
+        # p_all_events = np.full((p_floods.size + 3, n_agents), -1, dtype=np.float32)
+
+        # # calculate perceived risk
+        # perc_risk = p_floods.repeat(n_agents).reshape(p_floods.size, n_agents)
+        # perc_risk *= risk_perception
+        # p_all_events[1:-2, :] = perc_risk
+
+        # # Cap percieved probability at 0.998. People cannot percieve any flood
+        # # event to occur more than once per year
+        # if np.max(p_all_events > 0.998):
+        #     p_all_events[np.where(p_all_events > 0.998)] = 0.998
+
+        # # Add lasts p to complete x axis to 1 for trapezoid function (integrate
+        # # domain [0,1])
+        # p_all_events[-2, :] = p_all_events[-3, :] + 0.001
+        # p_all_events[-1, :] = 1
+
         n_floods, n_agents = expected_damages_adapt.shape
         p_all_events = np.full((p_floods.size + 3, n_agents), -1, dtype=np.float32)
 
-        # calculate perceived risk
         perc_risk = p_floods.repeat(n_agents).reshape(p_floods.size, n_agents)
-        perc_risk *= risk_perception
-        p_all_events[1:-2, :] = perc_risk
+        perc_risk = perc_risk * risk_perception
+        perc_risk = np.clip(perc_risk, 0.0, 0.998)
 
-        # Cap percieved probability at 0.998. People cannot percieve any flood
-        # event to occur more than once per year
-        if np.max(p_all_events > 0.998):
-            p_all_events[np.where(p_all_events > 0.998)] = 0.998
-
-        # Add lasts p to complete x axis to 1 for trapezoid function (integrate
-        # domain [0,1])
-        p_all_events[-2, :] = p_all_events[-3, :] + 0.001
-        p_all_events[-1, :] = 1
+        perc_risk = np.maximum.accumulate(perc_risk, axis=0)
 
         # Add 0 to ensure we integrate [0, 1]
-        p_all_events[0, :] = 0
+        p_all_events[0, :] = 0.0
+        p_all_events[1:-2, :] = perc_risk
+        p_all_events[-2, :] = np.minimum(perc_risk[-1, :] + 0.001, 0.999)
+        p_all_events[-1, :] = 1.0
 
         # Prepare arrays
         max_T = int(np.max(T))
@@ -724,7 +736,7 @@ class DecisionModule:
         EU_adapt_array = np.trapezoid(y=y, x=x, axis=0)
 
         # set EU of adapt to -np.inf for those unable to afford the annual loan payment
-        constrained = np.where(income * expendature_cap <= adaptation_costs)
+        constrained = np.where(income * expenditure_cap <= adaptation_costs)
         EU_adapt_array[constrained] = -np.inf
         # EU_adapt_array *= self.error_terms_stay
         return EU_adapt_array
@@ -760,26 +772,41 @@ class DecisionModule:
         p_floods = np.sort(p_floods)
 
         # Preallocate arrays
+        # n_floods, n_agents = expected_damages.shape
+        # p_all_events = np.full((p_floods.size + 3, n_agents), -1, dtype=np.float32)
+
+        # # calculate perceived risk
+        # perc_risk = p_floods.repeat(n_agents).reshape(p_floods.size, n_agents)
+        # perc_risk *= risk_perception
+        # p_all_events[1:-2, :] = perc_risk
+
+        # # Cap percieved probability at 0.998. People cannot percieve any flood
+        # # event to occur more than once per year
+        # if np.max(p_all_events > 0.998):
+        #     p_all_events[np.where(p_all_events > 0.998)] = 0.998
+
+        # # Add lasts p to complete x axis to 1 for trapezoid function (integrate
+        # # domain [0,1])
+        # p_all_events[-2, :] = p_all_events[-3, :] + 0.001
+        # p_all_events[-1, :] = 1
+
+        # # Add 0 to ensure we integrate [0, 1]
+        # p_all_events[0, :] = 0
+
         n_floods, n_agents = expected_damages.shape
         p_all_events = np.full((p_floods.size + 3, n_agents), -1, dtype=np.float32)
 
-        # calculate perceived risk
         perc_risk = p_floods.repeat(n_agents).reshape(p_floods.size, n_agents)
-        perc_risk *= risk_perception
-        p_all_events[1:-2, :] = perc_risk
+        perc_risk = perc_risk * risk_perception
+        perc_risk = np.clip(perc_risk, 0.0, 0.998)
 
-        # Cap percieved probability at 0.998. People cannot percieve any flood
-        # event to occur more than once per year
-        if np.max(p_all_events > 0.998):
-            p_all_events[np.where(p_all_events > 0.998)] = 0.998
-
-        # Add lasts p to complete x axis to 1 for trapezoid function (integrate
-        # domain [0,1])
-        p_all_events[-2, :] = p_all_events[-3, :] + 0.001
-        p_all_events[-1, :] = 1
+        perc_risk = np.maximum.accumulate(perc_risk, axis=0)
 
         # Add 0 to ensure we integrate [0, 1]
-        p_all_events[0, :] = 0
+        p_all_events[0, :] = 0.0
+        p_all_events[1:-2, :] = perc_risk
+        p_all_events[-2, :] = np.minimum(perc_risk[-1, :] + 0.001, 0.999)
+        p_all_events[-1, :] = 1.0
 
         # Prepare arrays
         max_T = int(np.max(T))
@@ -830,7 +857,7 @@ class DecisionModule:
         n_agents: int,
         wealth: np.ndarray,
         income: np.ndarray,
-        expendature_cap,
+        expenditure_cap,
         amenity_value: np.ndarray,
         amenity_weight,
         risk_perception: np.ndarray,
@@ -858,25 +885,41 @@ class DecisionModule:
         p_windstorm = np.sort(p_windstorm)
 
         # Preallocate arrays
+        # n_windstorms, n_agents = expected_damages_adapt.shape
+        # p_all_windstorms = np.full(
+        #     (p_windstorm.size + 3, n_agents), -1, dtype=np.float32
+        # )
+
+        # # calculate perceived risk
+        # perc_risk = p_windstorm.repeat(n_agents).reshape(p_windstorm.size, n_agents)
+        # perc_risk *= risk_perception
+        # p_all_windstorms[1:-2, :] = perc_risk
+
+        # # Cap perceived probability at 0.998. People cannot percieve any flood event
+        # # to occur more than once per year
+        # if np.max(p_all_windstorms > 0.998):
+        #     p_all_windstorms[np.where(p_all_windstorms > 0.998)] = 0.998
+
+        # # Add lasts p to complete x axis to 1 for trapezoid function
+        # p_all_windstorms[-2, :] = p_all_windstorms[-3, :] + 0.001
+        # p_all_windstorms[-1, :] = 1
+        # p_all_windstorms[0, :] = 0
+
         n_windstorms, n_agents = expected_damages_adapt.shape
         p_all_windstorms = np.full(
             (p_windstorm.size + 3, n_agents), -1, dtype=np.float32
         )
 
-        # calculate perceived risk
         perc_risk = p_windstorm.repeat(n_agents).reshape(p_windstorm.size, n_agents)
-        perc_risk *= risk_perception
-        p_all_windstorms[1:-2, :] = perc_risk
+        perc_risk = perc_risk * risk_perception
+        perc_risk = np.clip(perc_risk, 0.0, 0.998)
+        perc_risk = np.maximum.accumulate(perc_risk, axis=0)
 
-        # Cap perceived probability at 0.998. People cannot percieve any flood event
-        # to occur more than once per year
-        if np.max(p_all_windstorms > 0.998):
-            p_all_windstorms[np.where(p_all_windstorms > 0.998)] = 0.998
+        p_all_windstorms[0, :] = 0.0
+        p_all_windstorms[1: -2, :] = perc_risk
+        p_all_windstorms[-2, :] = np.minimum(perc_risk[-1, :] + 0.001, 0.999)
+        p_all_windstorms[-1, :] = 1.0
 
-        # Add lasts p to complete x axis to 1 for trapezoid function
-        p_all_windstorms[-2, :] = p_all_windstorms[-3, :] + 0.001
-        p_all_windstorms[-1, :] = 1
-        p_all_windstorms[0, :] = 0
 
         # Prepare arrays
         max_T = np.int32(np.max(T))
@@ -935,7 +978,7 @@ class DecisionModule:
         EU_shutters_array = np.trapezoid(y=y, x=x, axis=0)
 
         # Constrained affordability -> set EU of adapt to -np.inf for those unable to afford the annual loan payment
-        constrained = np.where(income * expendature_cap <= adaptation_costs)
+        constrained = np.where(income * expenditure_cap <= adaptation_costs)
         EU_shutters_array[constrained] = -np.inf
 
         return EU_shutters_array
@@ -970,34 +1013,49 @@ class DecisionModule:
         expected_damages = expected_damages[indices]
         p_windstorm = np.sort(p_windstorm)
 
-        # Preallocate arrays
-        n_windstorm, n_agents = expected_damages.shape
-        p_all_events = np.full((p_windstorm.size + 3, n_agents), -1, dtype=np.float32)
+        # # Preallocate arrays
+        # n_windstorm, n_agents = expected_damages.shape
+        # p_all_events = np.full((p_windstorm.size + 3, n_agents), -1, dtype=np.float32)
 
-        # calculate perceived risk
+        # # calculate perceived risk
+        # perc_risk = p_windstorm.repeat(n_agents).reshape(p_windstorm.size, n_agents)
+        # perc_risk *= risk_perception
+        # p_all_events[1:-2, :] = perc_risk
+
+        # # Cap percieved probability at 0.998. People cannot percieve any flood
+        # # event to occur more than once per year
+        # if np.max(p_all_events > 0.998):
+        #     p_all_events[np.where(p_all_events > 0.998)] = 0.998
+
+        # # Add lasts p to complete x axis to 1 for trapezoid function (integrate
+        # # domain [0,1])
+        # p_all_events[-2, :] = p_all_events[-3, :] + 0.001
+        # p_all_events[-1, :] = 1
+
+        # # Add 0 to ensure we integrate [0, 1]
+        # p_all_events[0, :] = 0
+
+        n_windstorms, n_agents = expected_damages.shape
+        p_all_events = np.full(
+            (p_windstorm.size + 3, n_agents), -1, dtype=np.float32
+        )
+
         perc_risk = p_windstorm.repeat(n_agents).reshape(p_windstorm.size, n_agents)
-        perc_risk *= risk_perception
-        p_all_events[1:-2, :] = perc_risk
+        perc_risk = perc_risk * risk_perception
+        perc_risk = np.clip(perc_risk, 0.0, 0.998)
+        perc_risk = np.maximum.accumulate(perc_risk, axis=0)
 
-        # Cap percieved probability at 0.998. People cannot percieve any flood
-        # event to occur more than once per year
-        if np.max(p_all_events > 0.998):
-            p_all_events[np.where(p_all_events > 0.998)] = 0.998
-
-        # Add lasts p to complete x axis to 1 for trapezoid function (integrate
-        # domain [0,1])
-        p_all_events[-2, :] = p_all_events[-3, :] + 0.001
-        p_all_events[-1, :] = 1
-
-        # Add 0 to ensure we integrate [0, 1]
-        p_all_events[0, :] = 0
+        p_all_events[0, :] = 0.0
+        p_all_events[1: -2, :] = perc_risk
+        p_all_events[-2, :] = np.minimum(perc_risk[-1, :] + 0.001, 0.999)
+        p_all_events[-1, :] = 1.0
 
         # Prepare arrays
         max_T = np.int32(np.max(T))
 
         n_agents = np.int32(n_agents)
         NPV_summed = self.IterateThroughEvents(
-            n_events=n_windstorm,
+            n_events=n_windstorms,
             n_agents=n_agents,
             discount_rate=r,
             wealth=wealth,
@@ -1137,7 +1195,7 @@ class DecisionModule:
             n_agents=n_agents,
             wealth=wealth,
             income=income,
-            expendature_cap=expenditure_cap,
+            expenditure_cap=expenditure_cap,
             amenity_value=amenity_value,
             amenity_weight=amenity_weight,
             risk_perception=risk_perception_wind,
@@ -1297,7 +1355,7 @@ class DecisionModule:
             n_agents=n_agents,
             wealth=wealth_after_premium,
             income=income,
-            expendature_cap=expenditure_cap,
+            expenditure_cap=expenditure_cap,
             amenity_value=amenity_value,
             amenity_weight=amenity_weight,
             risk_perception=risk_perception_wind,
@@ -1407,11 +1465,13 @@ class DecisionModule:
             else np.zeros(expected_damages_flood.shape[1])
         )
 
-        lecz_mask = kwargs.get("lecz_mask")
+        # lecz_mask = kwargs.get("lecz_mask")
 
         EAD_households = EAD_flood + EAD_wind
 
-        EAD_total = np.mean(EAD_households[lecz_mask])
+        # EAD_total = np.mean(EAD_households[lecz_mask])
+
+        EAD_total = np.mean(EAD_households)
 
         premium_total = EAD_total * (1.0 + operating_insurer)
 
