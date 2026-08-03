@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Sequence
 import io
+import json
 from pathlib import Path
 import re
 from typing import Any
@@ -12,6 +13,7 @@ from urllib.parse import urlparse
 
 import aiohttp
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 from aiohttp_retry import ExponentialRetry, RetryClient
 from shapely.geometry import box
@@ -434,6 +436,166 @@ class EuroCropsV2(Adapter):
             for subdirectory in self.data_subdirectories
         )
 
+    @staticmethod
+    def _geoparquet_geometry_column(path: Path) -> str:
+        """Return the stored primary geometry-column name for one GeoParquet file.
+
+        EuroCrops releases are not fully consistent: some files store the active
+        geometry as ``geometry`` while older/preprocessed files may use ``geom``.
+        The GeoParquet metadata is authoritative when present. A schema-name
+        fallback keeps the reader compatible with files whose metadata is absent
+        or incomplete.
+        """
+        try:
+            import pyarrow.parquet as pq
+        except ImportError as error:  # pragma: no cover - required by GeoPandas IO
+            raise ImportError(
+                "Reading EuroCrops GeoParquet files requires pyarrow."
+            ) from error
+        schema = pq.read_schema(path)
+        names = set(schema.names)
+        metadata = schema.metadata or {}
+        raw_geo_metadata = metadata.get(b"geo")
+        if raw_geo_metadata is not None:
+            try:
+                geo_metadata = json.loads(raw_geo_metadata.decode("utf-8"))
+            except UnicodeDecodeError, json.JSONDecodeError, TypeError:
+                geo_metadata = {}
+            primary_column = geo_metadata.get("primary_column")
+            if isinstance(primary_column, str) and primary_column in names:
+                return primary_column
+
+        for candidate in ("geometry", "geom"):
+            if candidate in names:
+                return candidate
+        raise ValueError(
+            f"EuroCrops GeoParquet file {path} has no geometry column. "
+            f"Available columns: {sorted(names)}."
+        )
+
+    @classmethod
+    def _read_spatial_parquet_subset(
+        cls,
+        path: Path,
+        query_geometry: BaseGeometry | None,
+    ) -> gpd.GeoDataFrame:
+        """Read required columns and use GeoParquet bbox pushdown when available.
+
+        The stored geometry-column name is discovered from the file rather than
+        assumed to be ``geom``. Recent GeoParquet files may expose row-group
+        covering metadata, in which case ``bbox`` prevents unrelated row groups
+        from being decoded. Older files fall back to a projected-column read;
+        exact geometry clipping still occurs in :meth:`read_async`.
+        """
+        geometry_column = cls._geoparquet_geometry_column(path)
+        try:
+            import pyarrow.parquet as pq
+        except ImportError as error:  # pragma: no cover - required by GeoPandas IO
+            raise ImportError(
+                "Reading EuroCrops GeoParquet files requires pyarrow."
+            ) from error
+        schema_names = set(pq.read_schema(path).names)
+        requested = ("cropfield", "original_code", "area_ha")
+        missing = set(requested) - schema_names
+        if missing:
+            raise ValueError(
+                f"EuroCrops file {path} is missing required columns "
+                f"{sorted(missing)}. Available columns: {sorted(schema_names)}."
+            )
+        columns = [*requested, geometry_column]
+
+        if query_geometry is not None:
+            try:
+                return gpd.read_parquet(
+                    path,
+                    columns=columns,
+                    bbox=tuple(map(float, query_geometry.bounds)),
+                )
+            except OSError, TypeError, ValueError:
+                # Missing/unsupported GeoParquet covering metadata is expected
+                # for some country-year files. Exact clipping still occurs below.
+                pass
+        return gpd.read_parquet(path, columns=columns)
+
+    @staticmethod
+    def _stable_hash(values: pd.Series, seed: int) -> pd.Series:
+        """Return deterministic unsigned hashes for source-feature sampling."""
+        rendered = values.astype("string").fillna("") + f"|{int(seed)}"
+        return pd.util.hash_pandas_object(
+            rendered,
+            index=False,
+            hash_key="eurocropsv2_seed",
+        ).astype("uint64")
+
+    @classmethod
+    def _preselect_file_candidates(
+        cls,
+        parcels: gpd.GeoDataFrame,
+        *,
+        max_features_per_label_spatial_block: int | None,
+        spatial_block_size_m: int,
+        sampling_seed: int,
+    ) -> gpd.GeoDataFrame:
+        """Cap redundant parcels per HCAT label and spatial block in one file.
+
+        One EuroCrops file already represents one dataset region and year. The
+        grouping therefore preserves country/year coverage implicitly, while the
+        projected spatial block prevents a dense local parcel system from
+        dominating the returned candidate pool. Rare groups below the cap are
+        retained completely.
+        """
+        cap = max_features_per_label_spatial_block
+        if cap is None or parcels.empty:
+            return parcels
+        if int(cap) < 1:
+            raise ValueError(
+                "max_features_per_label_spatial_block must be at least one or None."
+            )
+        if int(spatial_block_size_m) < 1:
+            raise ValueError("spatial_block_size_m must be at least one metre.")
+
+        result = parcels.copy()
+        points = result.geometry.representative_point()
+        result["_preselection_block_x"] = np.floor(
+            points.x.to_numpy(dtype=np.float64) / float(spatial_block_size_m)
+        ).astype(np.int64)
+        result["_preselection_block_y"] = np.floor(
+            points.y.to_numpy(dtype=np.float64) / float(spatial_block_size_m)
+        ).astype(np.int64)
+        hcat = result.get(
+            "hcat4_code",
+            pd.Series(pd.NA, index=result.index, dtype="string"),
+        ).astype("string")
+        original = result["original_code"].astype("string")
+        result["_preselection_label"] = hcat.fillna(original).fillna("unmapped")
+        result["_preselection_hash"] = cls._stable_hash(
+            result["source_feature_id"],
+            sampling_seed,
+        )
+
+        group_columns = [
+            "_preselection_label",
+            "_preselection_block_x",
+            "_preselection_block_y",
+        ]
+        result = (
+            result.sort_values(
+                group_columns + ["_preselection_hash"],
+                kind="stable",
+            )
+            .groupby(group_columns, sort=False, observed=True, dropna=False)
+            .head(int(cap))
+            .sort_index(kind="stable")
+        )
+        return result.drop(
+            columns=[
+                "_preselection_block_x",
+                "_preselection_block_y",
+                "_preselection_label",
+                "_preselection_hash",
+            ]
+        ).copy()
+
     async def read_async(
         self,
         *,
@@ -448,6 +610,9 @@ class EuroCropsV2(Adapter):
         refresh_manifest: bool = False,
         refresh_mapping: bool = False,
         max_files: int | None = 100,
+        max_features_per_label_spatial_block: int | None = None,
+        preselection_spatial_block_size_m: int = 25_000,
+        sampling_seed: int = 42,
     ) -> gpd.GeoDataFrame:
         """Download, harmonize and spatially filter EuroCrops parcels."""
         selection = await self.select_files_async(
@@ -494,13 +659,15 @@ class EuroCropsV2(Adapter):
         )
         query_geometry = self._normalize_geometry(geometry, bounds)
         tables: list[gpd.GeoDataFrame] = []
+        preselection_rows_before = 0
+        preselection_rows_after = 0
 
         for row, (path, resolved_url) in zip(
             selection.itertuples(index=False),
             downloaded,
             strict=True,
         ):
-            parcels = gpd.read_parquet(path)
+            parcels = self._read_spatial_parquet_subset(path, query_geometry)
             if parcels.crs is None:
                 parcels = parcels.set_crs(3035)
             elif parcels.crs.to_epsg() != 3035:
@@ -556,10 +723,21 @@ class EuroCropsV2(Adapter):
                 )
                 if drop_unmapped:
                     parcels = parcels.loc[parcels["hcat4_code"].notna()].copy()
+
+            preselection_rows_before += len(parcels)
+            parcels = self._preselect_file_candidates(
+                parcels,
+                max_features_per_label_spatial_block=(
+                    max_features_per_label_spatial_block
+                ),
+                spatial_block_size_m=preselection_spatial_block_size_m,
+                sampling_seed=sampling_seed,
+            )
+            preselection_rows_after += len(parcels)
             tables.append(parcels)
 
         if not tables:
-            return gpd.GeoDataFrame(
+            empty = gpd.GeoDataFrame(
                 columns=[
                     "cropfield",
                     "original_code",
@@ -572,13 +750,31 @@ class EuroCropsV2(Adapter):
                 geometry="geom",
                 crs="EPSG:3035",
             )
+            empty.attrs["preselection_summary"] = {
+                "rows_before": int(preselection_rows_before),
+                "rows_after": int(preselection_rows_after),
+                "max_features_per_label_spatial_block": (
+                    max_features_per_label_spatial_block
+                ),
+                "spatial_block_size_m": int(preselection_spatial_block_size_m),
+            }
+            return empty
 
         combined = gpd.GeoDataFrame(
             pd.concat(tables, ignore_index=True),
             geometry="geom",
             crs="EPSG:3035",
         )
-        return combined.drop_duplicates("source_feature_id").reset_index(drop=True)
+        combined = combined.drop_duplicates("source_feature_id").reset_index(drop=True)
+        combined.attrs["preselection_summary"] = {
+            "rows_before": int(preselection_rows_before),
+            "rows_after": int(preselection_rows_after),
+            "max_features_per_label_spatial_block": (
+                max_features_per_label_spatial_block
+            ),
+            "spatial_block_size_m": int(preselection_spatial_block_size_m),
+        }
+        return combined
 
     def read(self, **kwargs: Any) -> gpd.GeoDataFrame:
         """Synchronously retrieve selected EuroCrops v2 parcels."""

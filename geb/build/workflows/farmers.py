@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import math
 import re
+import warnings
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -3300,6 +3301,16 @@ class AlphaEarthCropModelBundle:
     residual_class_mode: str = "uncertainty"
     unclassified_probability_threshold: float = 0.25
     class_probability_thresholds: dict[int, float] = field(default_factory=dict)
+    class_names: dict[int, str] = field(
+        default_factory=lambda: dict(HRL_CTY_CLASS_NAMES)
+    )
+    crop_group_map: dict[int, int] = field(
+        default_factory=lambda: dict(HRL_CTY_CROP_GROUP_MAP)
+    )
+    crop_group_names: dict[int, str] = field(
+        default_factory=lambda: dict(HRL_CTY_CROP_GROUP_NAMES)
+    )
+    low_confidence_class_code: int | None = None
     group_model: Any | None = None
     within_group_models: dict[int, Any] = field(default_factory=dict)
 
@@ -3309,6 +3320,7 @@ ALPHAEARTH_SUPPORTED_MODEL_TYPES = (
     "random_forest",
     "extra_trees",
     "hist_gradient_boosting",
+    "lightgbm",
 )
 
 
@@ -4112,7 +4124,7 @@ def load_alphaearth_crop_training_samples(
     older reusable table are ignored by the CTY-only fitting workflow.
 
     Args:
-        source: Existing sample DataFrame or Parquet, CSV, or pickle path.
+        source: Existing sample DataFrame or Parquet path.
         hrl_years: Observation years that must be present in the stored table.
         include_coordinates: Require stored longitude and latitude predictors.
         include_topography: Require stored elevation and slope predictors.
@@ -4123,7 +4135,7 @@ def load_alphaearth_crop_training_samples(
         Validated CTY sample table restricted to ``hrl_years``.
 
     Raises:
-        FileNotFoundError: If a supplied sample-table path does not exist.
+        FileNotFoundError: If a supplied Parquet path does not exist.
         TypeError: If the loaded object is not a DataFrame.
         ValueError: If required columns, years, labels, or regions are invalid.
     """
@@ -4139,18 +4151,7 @@ def load_alphaearth_crop_training_samples(
             raise FileNotFoundError(
                 f"Stored AlphaEarth sample table does not exist: {source_path}"
             )
-        suffix = source_path.suffix.lower()
-        if suffix in {".parquet", ".pq"}:
-            samples = pd.read_parquet(source_path)
-        elif suffix == ".csv":
-            samples = pd.read_csv(source_path)
-        elif suffix in {".pkl", ".pickle"}:
-            samples = pd.read_pickle(source_path)
-        else:
-            raise ValueError(
-                "Stored AlphaEarth samples must use Parquet, CSV or pickle; "
-                f"found {source_path}."
-            )
+        samples = pd.read_parquet(source_path)
 
     if not isinstance(samples, pd.DataFrame):
         raise TypeError(
@@ -4694,6 +4695,39 @@ def _create_alphaearth_crop_classifier(
             random_state=int(random_seed),
         )
 
+    if model_type == "lightgbm":
+        try:
+            from lightgbm import LGBMClassifier
+        except ImportError as error:
+            raise ImportError(
+                "LightGBM is required for model_type='lightgbm'. Install it in "
+                "the active GEB environment, for example with `uv add lightgbm`."
+            ) from error
+
+        lightgbm_parameters: dict[str, Any] = {
+            "learning_rate": float(parameters.get("learning_rate", 0.03)),
+            "n_estimators": int(parameters.get("n_estimators", 900)),
+            "num_leaves": int(parameters.get("num_leaves", 255)),
+            "max_depth": int(parameters.get("max_depth", -1)),
+            "min_child_samples": int(parameters.get("min_child_samples", 50)),
+            "min_split_gain": float(parameters.get("min_split_gain", 0.0)),
+            "reg_alpha": float(parameters.get("reg_alpha", 0.1)),
+            "reg_lambda": float(parameters.get("reg_lambda", 3.0)),
+            "colsample_bytree": float(parameters.get("colsample_bytree", 0.75)),
+            "subsample": float(parameters.get("subsample", 0.9)),
+            "subsample_freq": int(parameters.get("subsample_freq", 1)),
+            "max_bin": int(parameters.get("max_bin", 255)),
+            "n_jobs": int(n_jobs),
+            "random_state": int(random_seed),
+            "verbosity": int(parameters.get("verbosity", -1)),
+        }
+        # Let the sklearn wrapper infer binary versus multiclass objectives for
+        # generic HRL hierarchical branches. The production GEB model is flat and
+        # multiclass, but this helper is shared by both structures.
+        if parameters.get("objective") is not None:
+            lightgbm_parameters["objective"] = str(parameters["objective"])
+        return LGBMClassifier(**lightgbm_parameters)
+
     from sklearn.ensemble import HistGradientBoostingClassifier
 
     return HistGradientBoostingClassifier(
@@ -4823,6 +4857,11 @@ def _fit_alphaearth_model_core(
     n_jobs: int,
     unclassified_probability_threshold: float,
     class_probability_thresholds: Mapping[int, float] | None,
+    cty_classes: Sequence[int],
+    class_names: Mapping[int, str],
+    crop_group_map: Mapping[int, int],
+    crop_group_names: Mapping[int, str],
+    low_confidence_class_code: int | None,
 ) -> AlphaEarthCropModelBundle:
     """Fit one flat or soft-hierarchical classifier without calibration."""
     if classifier_structure not in {"flat", "hierarchical"}:
@@ -4843,8 +4882,21 @@ def _fit_alphaearth_model_core(
         )
     resolved_parameters = dict(model_parameters or {})
 
+    resolved_cty_classes = tuple(dict.fromkeys(int(code) for code in cty_classes))
+    if not resolved_cty_classes:
+        raise ValueError("cty_classes must contain at least one class code.")
+    custom_schema = resolved_cty_classes != tuple(HRL_CTY_CLASS_CODES)
+    if custom_schema and classifier_structure != "flat":
+        raise ValueError(
+            "Custom crop schemas currently support flat classification only."
+        )
+    if custom_schema and residual_class_mode != "learned":
+        raise ValueError(
+            "Custom crop schemas require residual_class_mode='learned'; use "
+            "low_confidence_class_code for confidence rejection."
+        )
     explicit_classes = (
-        HRL_CTY_CLASS_CODES
+        resolved_cty_classes
         if residual_class_mode == "learned"
         else HRL_CTY_UNCERTAINTY_TRAINING_CLASS_CODES
     )
@@ -4853,8 +4905,8 @@ def _fit_alphaearth_model_core(
         for code, value in (class_probability_thresholds or {}).items()
     }
     for code, threshold in normalized_thresholds.items():
-        if code not in HRL_CTY_CLASS_CODES:
-            raise ValueError(f"Unknown CTY threshold class: {code}.")
+        if code not in resolved_cty_classes:
+            raise ValueError(f"Unknown crop threshold class: {code}.")
         if not 0.0 < threshold <= 1.0:
             raise ValueError(
                 f"Class threshold for {code} must lie in (0, 1], found {threshold}."
@@ -4898,12 +4950,25 @@ def _fit_alphaearth_model_core(
             feature_names=feature_names,
             model_type=model_type,
             model_parameters=resolved_parameters,
+            cty_classes=resolved_cty_classes,
             trained_cty_classes=represented_classes,
             normalize_embeddings=normalize_embeddings,
             classifier_structure=classifier_structure,
             residual_class_mode=residual_class_mode,
             unclassified_probability_threshold=unclassified_probability_threshold,
             class_probability_thresholds=normalized_thresholds,
+            class_names={int(key): str(value) for key, value in class_names.items()},
+            crop_group_map={
+                int(key): int(value) for key, value in crop_group_map.items()
+            },
+            crop_group_names={
+                int(key): str(value) for key, value in crop_group_names.items()
+            },
+            low_confidence_class_code=(
+                None
+                if low_confidence_class_code is None
+                else int(low_confidence_class_code)
+            ),
         )
 
     hierarchical = samples.copy()
@@ -4978,12 +5043,23 @@ def _fit_alphaearth_model_core(
         feature_names=feature_names,
         model_type=model_type,
         model_parameters=resolved_parameters,
+        cty_classes=resolved_cty_classes,
         trained_cty_classes=tuple(sorted(set(represented_native))),
         normalize_embeddings=normalize_embeddings,
         classifier_structure=classifier_structure,
         residual_class_mode=residual_class_mode,
         unclassified_probability_threshold=unclassified_probability_threshold,
         class_probability_thresholds=normalized_thresholds,
+        class_names={int(key): str(value) for key, value in class_names.items()},
+        crop_group_map={int(key): int(value) for key, value in crop_group_map.items()},
+        crop_group_names={
+            int(key): str(value) for key, value in crop_group_names.items()
+        },
+        low_confidence_class_code=(
+            None
+            if low_confidence_class_code is None
+            else int(low_confidence_class_code)
+        ),
         group_model=group_estimator,
         within_group_models=within_group_models,
     )
@@ -5086,21 +5162,24 @@ def alphaearth_cty_from_probabilities(
     if models.residual_class_mode == "learned":
         low_confidence &= ~np.isin(predicted, HRL_CTY_RESIDUAL_CLASS_CODES)
     if low_confidence.any():
-        cereal = low_confidence & np.isin(
-            predicted,
-            HRL_CTY_CEREAL_EXPLICIT_CLASS_CODES,
-        )
-        annual = low_confidence & np.isin(
-            predicted,
-            HRL_ANNUAL_CTY_CLASS_CODES,
-        )
-        permanent = low_confidence & np.isin(
-            predicted,
-            HRL_PERMANENT_CTY_CLASS_CODES,
-        )
-        predicted[cereal] = 1150
-        predicted[annual & ~cereal] = 3100
-        predicted[permanent] = 3200
+        if models.low_confidence_class_code is not None:
+            predicted[low_confidence] = int(models.low_confidence_class_code)
+        else:
+            cereal = low_confidence & np.isin(
+                predicted,
+                HRL_CTY_CEREAL_EXPLICIT_CLASS_CODES,
+            )
+            annual = low_confidence & np.isin(
+                predicted,
+                HRL_ANNUAL_CTY_CLASS_CODES,
+            )
+            permanent = low_confidence & np.isin(
+                predicted,
+                HRL_PERMANENT_CTY_CLASS_CODES,
+            )
+            predicted[cereal] = 1150
+            predicted[annual & ~cereal] = 3100
+            predicted[permanent] = 3200
 
     return predicted.astype(np.int32), confidence.astype(np.float32)
 
@@ -5193,6 +5272,11 @@ def fit_alphaearth_crop_models(
     n_jobs: int = -1,
     unclassified_probability_threshold: float = 0.25,
     class_probability_thresholds: Mapping[int, float] | None = None,
+    cty_classes: Sequence[int] | None = None,
+    cty_class_names: Mapping[int, str] | None = None,
+    cty_crop_group_map: Mapping[int, int] | None = None,
+    cty_crop_group_names: Mapping[int, str] | None = None,
+    low_confidence_class_code: int | None = None,
     calibrate_class_thresholds: bool = False,
     class_threshold_grid: Sequence[float] = (
         0.10,
@@ -5209,7 +5293,8 @@ def fit_alphaearth_crop_models(
     """Fit one flat or soft-hierarchical target-year CTY classifier.
 
     Supported estimator families are multinomial logistic regression, Random
-    Forest, Extra Trees, and histogram gradient boosting. All families use the
+    Forest, Extra Trees, histogram gradient boosting, and LightGBM. All families
+    use the
     same target-year predictor schema, temporal split, sample weighting, residual
     handling, and optional threshold calibration.
 
@@ -5250,6 +5335,38 @@ def fit_alphaearth_crop_models(
             f"AlphaEarth training samples are missing columns: {sorted(missing_columns)}"
         )
 
+    resolved_cty_classes = tuple(
+        HRL_CTY_CLASS_CODES
+        if cty_classes is None
+        else dict.fromkeys(int(code) for code in cty_classes)
+    )
+    if not resolved_cty_classes:
+        raise ValueError("cty_classes must contain at least one class code.")
+    observed_classes = set(
+        pd.to_numeric(samples["cty_label"], errors="raise").astype(np.int32)
+    )
+    unsupported = sorted(observed_classes - set(resolved_cty_classes))
+    if unsupported:
+        raise ValueError(
+            "AlphaEarth training samples contain labels outside the configured "
+            f"class schema: {unsupported}."
+        )
+    resolved_class_names = (
+        dict(HRL_CTY_CLASS_NAMES)
+        if cty_class_names is None
+        else {int(key): str(value) for key, value in cty_class_names.items()}
+    )
+    resolved_group_map = (
+        dict(HRL_CTY_CROP_GROUP_MAP)
+        if cty_crop_group_map is None
+        else {int(key): int(value) for key, value in cty_crop_group_map.items()}
+    )
+    resolved_group_names = (
+        dict(HRL_CTY_CROP_GROUP_NAMES)
+        if cty_crop_group_names is None
+        else {int(key): str(value) for key, value in cty_crop_group_names.items()}
+    )
+
     thresholds = {
         int(code): float(value)
         for code, value in (class_probability_thresholds or {}).items()
@@ -5274,6 +5391,11 @@ def fit_alphaearth_crop_models(
                 n_jobs=n_jobs,
                 unclassified_probability_threshold=(unclassified_probability_threshold),
                 class_probability_thresholds=None,
+                cty_classes=resolved_cty_classes,
+                class_names=resolved_class_names,
+                crop_group_map=resolved_group_map,
+                crop_group_names=resolved_group_names,
+                low_confidence_class_code=low_confidence_class_code,
             )
             calibrated = calibrate_alphaearth_class_thresholds(
                 temporary,
@@ -5297,6 +5419,11 @@ def fit_alphaearth_crop_models(
         n_jobs=n_jobs,
         unclassified_probability_threshold=unclassified_probability_threshold,
         class_probability_thresholds=thresholds,
+        cty_classes=resolved_cty_classes,
+        class_names=resolved_class_names,
+        crop_group_map=resolved_group_map,
+        crop_group_names=resolved_group_names,
+        low_confidence_class_code=low_confidence_class_code,
     )
 
 
@@ -5465,28 +5592,34 @@ def _append_remote_sensing_accuracy_assessment(
             )
 
 
+def _map_crop_classes(
+    values: np.ndarray,
+    mapping: Mapping[int, int],
+) -> np.ndarray:
+    """Map arbitrary native crop classes to one configured coarse hierarchy."""
+    values = np.asarray(values, dtype=np.int32)
+    mapped = np.full(values.shape, -1, dtype=np.int32)
+    for source_code, target_code in mapping.items():
+        mapped[values == int(source_code)] = int(target_code)
+    return mapped
+
+
 def evaluate_alphaearth_crop_predictions(
     samples: pd.DataFrame,
     predicted_cty: np.ndarray,
     *,
     split_name: str,
     cty_classes: Sequence[int] = HRL_CTY_CLASS_CODES,
+    class_names: Mapping[int, str] | None = None,
+    crop_group_map: Mapping[int, int] | None = None,
+    crop_group_names: Mapping[int, str] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Evaluate aligned CTY predictions against stored HRL samples.
+    """Evaluate aligned native crop predictions against stored references.
 
-    This function is used for both ordinary classifier predictions and values
-    sampled from fully post-processed raster products. Predictions equal to the
-    HRL outside-area code, or otherwise outside the supported CTY schema, are
-    excluded explicitly and counted in the summary rows.
-
-    Args:
-        samples: Evaluation sample table containing CTY references.
-        predicted_cty: Final CTY prediction per sample.
-        split_name: Display name such as ``"validation"`` or ``"test"``.
-        cty_classes: Native CTY classes included in the assessment.
-
-    Returns:
-        Metric and Product-by-Reference confusion-matrix tables.
+    The default configuration reproduces the HRL CTY assessment. A custom flat
+    crop schema can provide its own native class names and coarse group mapping.
+    Predictions outside ``cty_classes`` (for example ``-1`` after confidence
+    rejection) are counted as excluded and are not silently coerced to a crop.
     """
     if samples.empty:
         raise ValueError(f"Cannot evaluate an empty {split_name!r} sample split.")
@@ -5498,11 +5631,12 @@ def evaluate_alphaearth_crop_predictions(
             f"{predicted_cty.shape} for {len(samples)} samples."
         )
 
+    native_classes = tuple(dict.fromkeys(int(code) for code in cty_classes))
     observed_cty_all = samples["cty_label"].to_numpy(dtype=np.int32)
-    valid_cty_prediction = np.isin(predicted_cty, np.asarray(cty_classes))
+    valid_cty_prediction = np.isin(predicted_cty, np.asarray(native_classes))
     if not valid_cty_prediction.any():
         raise ValueError(
-            f"No valid CTY predictions remain for {split_name!r} evaluation."
+            f"No valid crop predictions remain for {split_name!r} evaluation."
         )
 
     observed_cty = observed_cty_all[valid_cty_prediction]
@@ -5510,52 +5644,104 @@ def evaluate_alphaearth_crop_predictions(
     metric_rows: list[dict[str, float | int | str]] = []
     confusion_rows: list[dict[str, int | str]] = []
 
-    _append_remote_sensing_accuracy_assessment(
-        split_name=split_name,
-        target_name="CTY_CROP_GROUP",
-        observed=_map_hrl_cty_to_crop_group(observed_cty),
-        predicted=_map_hrl_cty_to_crop_group(evaluated_cty),
-        labels=HRL_CTY_CROP_GROUP_CLASS_CODES,
-        metric_rows=metric_rows,
-        confusion_rows=confusion_rows,
+    resolved_group_map = (
+        dict(HRL_CTY_CROP_GROUP_MAP)
+        if crop_group_map is None and native_classes == tuple(HRL_CTY_CLASS_CODES)
+        else {int(key): int(value) for key, value in (crop_group_map or {}).items()}
     )
+    if resolved_group_map:
+        observed_group = _map_crop_classes(observed_cty, resolved_group_map)
+        predicted_group = _map_crop_classes(evaluated_cty, resolved_group_map)
+        valid_group_reference = observed_group != -1
+        group_classes = tuple(sorted(set(resolved_group_map.values())))
+        _append_remote_sensing_accuracy_assessment(
+            split_name=split_name,
+            target_name="CTY_CROP_GROUP",
+            observed=observed_group[valid_group_reference],
+            predicted=predicted_group[valid_group_reference],
+            labels=group_classes,
+            confusion_labels=(-1, *group_classes),
+            metric_rows=metric_rows,
+            confusion_rows=confusion_rows,
+        )
 
-    observed_level_1 = _map_hrl_cty_to_aggregation_level_1(observed_cty)
-    predicted_level_1 = _map_hrl_cty_to_aggregation_level_1(evaluated_cty)
-    level_1_reference_mask = observed_level_1 != -1
-    _append_remote_sensing_accuracy_assessment(
-        split_name=split_name,
-        target_name="CTY_AGGREGATION_LEVEL_1",
-        observed=observed_level_1[level_1_reference_mask],
-        predicted=predicted_level_1[level_1_reference_mask],
-        labels=HRL_CTY_AGGREGATION_LEVEL_1_CLASS_CODES,
-        confusion_labels=(-1, *HRL_CTY_AGGREGATION_LEVEL_1_CLASS_CODES),
-        metric_rows=metric_rows,
-        confusion_rows=confusion_rows,
-    )
+    # Retain the official HRL aggregation-level-1 diagnostic only for the native
+    # HRL schema. It has no one-to-one equivalent for the GEB crop taxonomy.
+    if native_classes == tuple(HRL_CTY_CLASS_CODES):
+        observed_level_1 = _map_hrl_cty_to_aggregation_level_1(observed_cty)
+        predicted_level_1 = _map_hrl_cty_to_aggregation_level_1(evaluated_cty)
+        level_1_reference_mask = observed_level_1 != -1
+        _append_remote_sensing_accuracy_assessment(
+            split_name=split_name,
+            target_name="CTY_AGGREGATION_LEVEL_1",
+            observed=observed_level_1[level_1_reference_mask],
+            predicted=predicted_level_1[level_1_reference_mask],
+            labels=HRL_CTY_AGGREGATION_LEVEL_1_CLASS_CODES,
+            confusion_labels=(-1, *HRL_CTY_AGGREGATION_LEVEL_1_CLASS_CODES),
+            metric_rows=metric_rows,
+            confusion_rows=confusion_rows,
+        )
+
     _append_remote_sensing_accuracy_assessment(
         split_name=split_name,
         target_name="CTY",
         observed=observed_cty,
         predicted=evaluated_cty,
-        labels=np.asarray(cty_classes, dtype=np.int32),
+        labels=np.asarray(native_classes, dtype=np.int32),
         metric_rows=metric_rows,
         confusion_rows=confusion_rows,
     )
 
     metrics = pd.DataFrame(metric_rows)
     confusion = pd.DataFrame(confusion_rows)
+    native_name_map = (
+        dict(HRL_CTY_CLASS_NAMES)
+        if class_names is None
+        else {int(key): str(value) for key, value in class_names.items()}
+    )
+    group_name_map = (
+        dict(HRL_CTY_CROP_GROUP_NAMES)
+        if crop_group_names is None
+        else {int(key): str(value) for key, value in crop_group_names.items()}
+    )
     if not metrics.empty:
-        excluded_by_target = {
-            "CTY_CROP_GROUP": int((~valid_cty_prediction).sum()),
-            "CTY_AGGREGATION_LEVEL_1": int((~valid_cty_prediction).sum()),
-            "CTY": int((~valid_cty_prediction).sum()),
-        }
+
+        def metric_name(row: pd.Series) -> str | None:
+            code = int(row["class_code"])
+            if code == -1:
+                return None
+            if row["target"] == "CTY":
+                return native_name_map.get(code, str(code))
+            if row["target"] == "CTY_CROP_GROUP":
+                return group_name_map.get(code, str(code))
+            return HRL_CTY_AGGREGATION_LEVEL_1_NAMES.get(code, str(code))
+
+        metrics["class_name"] = metrics.apply(metric_name, axis=1)
+        excluded_count = int((~valid_cty_prediction).sum())
         metrics["excluded_predictions"] = np.nan
         summary_mask = metrics["metric_scope"].eq("summary")
-        metrics.loc[summary_mask, "excluded_predictions"] = (
-            metrics.loc[summary_mask, "target"].map(excluded_by_target).astype(float)
-        )
+        metrics.loc[summary_mask, "excluded_predictions"] = float(excluded_count)
+    if not confusion.empty:
+
+        def names_for_target(target: str) -> Mapping[int, str]:
+            if target == "CTY":
+                return native_name_map
+            if target == "CTY_CROP_GROUP":
+                return group_name_map
+            return HRL_CTY_AGGREGATION_LEVEL_1_NAMES
+
+        confusion["product_class_name"] = [
+            names_for_target(str(target)).get(int(code), str(code))
+            for target, code in zip(
+                confusion["target"], confusion["product_class"], strict=True
+            )
+        ]
+        confusion["reference_class_name"] = [
+            names_for_target(str(target)).get(int(code), str(code))
+            for target, code in zip(
+                confusion["target"], confusion["reference_class"], strict=True
+            )
+        ]
     return metrics, confusion
 
 
@@ -5580,7 +5766,10 @@ def evaluate_alphaearth_crop_models(
         samples,
         predicted_cty,
         split_name=split_name,
-        cty_classes=HRL_CTY_CLASS_CODES,
+        cty_classes=models.cty_classes,
+        class_names=models.class_names,
+        crop_group_map=models.crop_group_map,
+        crop_group_names=models.crop_group_names,
     )
 
 
@@ -6248,7 +6437,23 @@ def _predict_full_class_probabilities(
     if features.shape[0] == 0:
         return np.zeros((0, len(class_codes)), dtype=np.float32)
 
-    raw_probabilities = np.asarray(model.predict_proba(features), dtype=np.float32)
+    # Recent LightGBM/scikit-learn combinations can emit this warning even when
+    # both fit and prediction use positional NumPy matrices. Raster inference
+    # invokes predict_proba for many chunks, so suppress only this harmless,
+    # estimator-specific warning rather than flooding the Snellius log.
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=(
+                "X does not have valid feature names, but LGBMClassifier was "
+                "fitted with feature names"
+            ),
+            category=UserWarning,
+        )
+        raw_probabilities = np.asarray(
+            model.predict_proba(features),
+            dtype=np.float32,
+        )
     if raw_probabilities.ndim != 2:
         raise ValueError(
             "Classifier predict_proba must return a two-dimensional matrix; "
@@ -6722,7 +6927,7 @@ def predict_alphaearth_crop_tile_to_hrl_geotiffs(
                     classify_mask = valid_data & historical_cropland
 
                     cty_probabilities = np.zeros(
-                        (len(HRL_CTY_CLASS_CODES), read_height, read_width),
+                        (len(models.cty_classes), read_height, read_width),
                         dtype=np.float32,
                     )
 
@@ -6834,7 +7039,7 @@ def predict_alphaearth_crop_tile_to_hrl_geotiffs(
                             )
                         )
                         cty_probabilities.reshape(
-                            len(HRL_CTY_CLASS_CODES),
+                            len(models.cty_classes),
                             -1,
                         )[:, classify_flat] = cty_prediction_probabilities.T
 

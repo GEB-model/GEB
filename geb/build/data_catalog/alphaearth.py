@@ -46,6 +46,7 @@ class AlphaEarth(Adapter):
         self,
         *args: Any,
         max_parallel_downloads: int = 2,
+        verbose_file_logging: bool = True,
         **kwargs: Any,
     ) -> None:
         """Initialize the AlphaEarth adapter.
@@ -54,6 +55,9 @@ class AlphaEarth(Adapter):
             *args: Positional arguments passed to :class:`Adapter`.
             max_parallel_downloads: Maximum number of simultaneous COG
                 downloads. Individual COGs are large, so the default is low.
+            verbose_file_logging: Print one line for every cached, downloading,
+                and saved COG. The source-reference workflow disables this and
+                emits aggregate cache/download summaries instead.
             **kwargs: Keyword arguments passed to :class:`Adapter`, including
                 ``folder``, ``local_version``, ``filename``, and ``cache``.
 
@@ -72,6 +76,7 @@ class AlphaEarth(Adapter):
         self.download_root.mkdir(parents=True, exist_ok=True)
 
         self.max_parallel_downloads = max_parallel_downloads
+        self.verbose_file_logging = bool(verbose_file_logging)
         self.url = DEFAULT_BASE_URL
         self.index_url = f"{self.url}/{INDEX_FILENAME}"
         self._path_column: str | None = None
@@ -125,14 +130,16 @@ class AlphaEarth(Adapter):
         destination.parent.mkdir(parents=True, exist_ok=True)
 
         if destination.exists() and destination.stat().st_size > 0 and not overwrite:
-            print(f"Using cached AlphaEarth file: {destination}")
+            if self.verbose_file_logging:
+                print(f"Using cached AlphaEarth file: {destination}")
             return destination
 
         temporary_path = destination.with_suffix(destination.suffix + ".part")
         temporary_path.unlink(missing_ok=True)
 
         async with semaphore:
-            print(f"Downloading {remote_url}")
+            if self.verbose_file_logging:
+                print(f"Downloading {remote_url}")
             async with client.get(remote_url, raise_for_status=True) as response:
                 with temporary_path.open("wb") as file:
                     async for chunk in response.content.iter_chunked(
@@ -141,7 +148,8 @@ class AlphaEarth(Adapter):
                         file.write(chunk)
 
         temporary_path.replace(destination)
-        print(f"Saved AlphaEarth file: {destination}")
+        if self.verbose_file_logging:
+            print(f"Saved AlphaEarth file: {destination}")
         return destination
 
     async def _ensure_index(self, refresh: bool = False) -> Path:
