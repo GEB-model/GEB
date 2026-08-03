@@ -61,7 +61,7 @@ class DecisionModule:
 
     @staticmethod
     def calculate_coastal_amenity(
-        x_j: float, GDP_i_t: float = 1, phi_i: float = 1
+        x_j: float, GDP_i_t: float = 1, phi_i: float = 0.254820579
     ) -> float:
         """This function calculates the coastal amenity value for a given distance to the coast.
 
@@ -79,10 +79,8 @@ class DecisionModule:
         x_arr = np.array([0, 500, 1_000, 9_999, 10_000], dtype=np.float32)
         y_arr = np.array([0.6, 0.6, 0.1, 0.03, 0], dtype=np.float32)
         amenity_value = np.interp(x_j, x_arr, y_arr)
-        if amenity_value.ndim == 1:
-            return GDP_i_t * phi_i * amenity_value
-        else:
-            return GDP_i_t[:, None] * phi_i * amenity_value
+        amenity_value *= 6666.666666666667
+        return GDP_i_t * phi_i * amenity_value
 
     @staticmethod
     @njit(cache=True)
@@ -549,7 +547,7 @@ class DecisionModule:
         # weigh amenities
         amenity_value = self.calculate_riverine_amenity(household_distance_to_river_m)
         amenity_value += self.calculate_coastal_amenity(
-            x_j=household_distance_to_coastline_m, GDP_i_t=wealth
+            x_j=household_distance_to_coastline_m,
         )
         # Ensure p floods is in increasing order
         indices = np.argsort(p_floods)
@@ -667,7 +665,7 @@ class DecisionModule:
         # weigh amenities
         amenity_value = self.calculate_riverine_amenity(household_distance_to_river_m)
         amenity_value += self.calculate_coastal_amenity(
-            x_j=household_distance_to_coastline_m, GDP_i_t=wealth
+            x_j=household_distance_to_coastline_m,
         )
 
         # Ensure p floods is in increasing order
@@ -744,6 +742,7 @@ class DecisionModule:
         distance_to_building_m: np.ndarray,
         max_migration_cost: float,
         cost_shape: float = 0.05,
+        phi_i: float = 0.254820579,
     ) -> np.ndarray:
         """This function calculates the migration costs for each agent based on their distance to each sampled building.
 
@@ -751,6 +750,7 @@ class DecisionModule:
             distance_to_building_m: array containing the distance to each sampled building for each agent
             max_migration_cost: maximum migration cost for each agent
             cost_shape: shape parameter for the logistic function (default: 0.05)
+            phi_i: Deviation of average national housing prices from the European average
         Returns:
             migration_costs: array containing the migration costs for each agent based on their distance to each sampled building
         """
@@ -759,7 +759,7 @@ class DecisionModule:
         migration_costs = max_migration_cost / (
             1 + np.exp(-cost_shape * distance_to_building_m * 1e-3)
         )
-        return migration_costs
+        return migration_costs * phi_i
 
     def calcEU_relocate(
         self,
@@ -794,9 +794,7 @@ class DecisionModule:
         """
         # First calculate the coastal and riverine amenity values for each sampled building
         amenity_value = self.calculate_riverine_amenity(distance_to_river_m)
-        amenity_value += self.calculate_coastal_amenity(
-            x_j=distance_to_coastline_m, GDP_i_t=wealth
-        )
+        amenity_value += self.calculate_coastal_amenity(x_j=distance_to_coastline_m)
 
         # calculate migration costs based on distance to each building
         migration_costs = self.calculate_migration_costs(
