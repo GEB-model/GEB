@@ -143,6 +143,7 @@ def _resolve_x_axis_label(x_axis: Literal["year", "timestep"]) -> str:
 def _read_multirun_results(
     model_path: str,
     scenario_to_prefixes: dict[str, list[str]],
+    process_adaptation_uptake: bool = True,
 ) -> dict[str, dict[str, pd.DataFrame]]:
     """Read and merge household attribute results for multiple runs.
 
@@ -152,7 +153,7 @@ def _read_multirun_results(
     Args:
         model_path: Root model path containing scenario folders.
         scenario_to_prefixes: Mapping of scenario name to run prefixes to include.
-
+        process_adaptation_uptake: Whether to process adaptation uptake data.
     Returns:
         Nested dictionary {scenario: {attribute_name: dataframe}}.
     """
@@ -191,6 +192,7 @@ def _read_multirun_results(
                     household_attribute_name == "n_adaptation_uptake"
                     and "n_households_exposed_to_flooding.parquet"
                     in _list_household_attribute_files(results_path)
+                    and process_adaptation_uptake
                 ):
                     # Calculate the fraction of households that have adopted adaptation measures
                     exposed_df: pd.DataFrame = pd.read_parquet(
@@ -203,13 +205,22 @@ def _read_multirun_results(
                         / exposed_df["n_households_exposed_to_flooding"]
                     ).fillna(0)
 
+                # Keep run identity in column names so downstream aggregation can
+                # align runs by name instead of by positional column index.
+                if attribute_df.shape[1] == 1:
+                    attribute_df.columns = [model_run]
+                else:
+                    attribute_df.columns = [
+                        f"{model_run}_{column_name}"
+                        for column_name in attribute_df.columns
+                    ]
+
                 if household_attribute_name not in results[scenario]:
                     results[scenario][household_attribute_name] = attribute_df
                 else:
                     results[scenario][household_attribute_name] = pd.concat(
                         [results[scenario][household_attribute_name], attribute_df],
                         axis=1,
-                        ignore_index=True,
                     )
 
     return results
@@ -325,6 +336,7 @@ def read_multirun_results_within_scenario(
     model_path: str,
     scenario: str,
     run_prefixes: list[str],
+    process_adaptation_uptake: bool = True,
 ) -> dict[str, dict[str, pd.DataFrame]]:
     """Read grouped runs for one scenario and return one dataframe per prefix.
 
@@ -336,6 +348,8 @@ def read_multirun_results_within_scenario(
         model_path: Root model path containing scenario folders.
         scenario: Scenario name to read.
         run_prefixes: Prefixes used to group runs.
+        process_adaptation_uptake: Whether to normalize adaptation uptake by
+            exposed households.
 
     Returns:
         Nested dictionary {run_prefix: {attribute_name: dataframe}}.
@@ -376,6 +390,7 @@ def read_multirun_results_within_scenario(
                     household_attribute_name == "n_adaptation_uptake"
                     and "n_households_exposed_to_flooding.parquet"
                     in _list_household_attribute_files(results_path)
+                    and process_adaptation_uptake
                 ):
                     # Calculate the fraction of households that have adopted adaptation measures
                     exposed_df: pd.DataFrame = pd.read_parquet(
@@ -388,6 +403,16 @@ def read_multirun_results_within_scenario(
                         / exposed_df["n_households_exposed_to_flooding"]
                     ).fillna(0)
 
+                # Keep run identity in column names so cluster-level sums keep
+                # no_reloc_0..N as separate columns.
+                if attribute_df.shape[1] == 1:
+                    attribute_df.columns = [model_run]
+                else:
+                    attribute_df.columns = [
+                        f"{model_run}_{column_name}"
+                        for column_name in attribute_df.columns
+                    ]
+
                 if household_attribute_name not in results_by_prefix[run_prefix]:
                     results_by_prefix[run_prefix][household_attribute_name] = (
                         attribute_df
@@ -399,7 +424,6 @@ def read_multirun_results_within_scenario(
                             attribute_df,
                         ],
                         axis=1,
-                        ignore_index=True,
                     )
 
     return results_by_prefix
@@ -708,15 +732,96 @@ def plot_multirun_results_within_base_or_future(
     )
 
 
+def combine_cluster_results(
+    model_path: str,
+    scenario: str,
+    run_prefixes: list[str] | None = None,
+) -> None:
+    """Combine household attribute results from multiple cluster runs.
+
+    Args:
+        model_path: Root model path.
+        scenario: Scenario name to read from each cluster folder.
+        run_prefixes: Optional list of prefixes to include in the combined results.
+
+    Raises:
+        ValueError: If run_prefixes is empty.
+    """
+    if run_prefixes is None or len(run_prefixes) == 0:
+        raise ValueError("run_prefixes must contain at least one prefix.")
+
+    output_root: str = model_path
+    if not os.path.exists(output_root):
+        return
+
+    cluster_folders: list[str] = sorted(
+        model_dir
+        for model_dir in os.listdir(output_root)
+        if model_dir.startswith("cluster_")
+        and os.path.isdir(os.path.join(output_root, model_dir))
+    )
+    if not cluster_folders:
+        return
+
+    combined_results: dict[str, dict[str, pd.DataFrame]] = {
+        run_prefix: {} for run_prefix in run_prefixes
+    }
+
+    for cluster_folder in cluster_folders:
+        cluster_results: dict[str, dict[str, pd.DataFrame]] = (
+            read_multirun_results_within_scenario(
+                model_path=os.path.join(model_path, cluster_folder),
+                scenario=scenario,
+                run_prefixes=run_prefixes,
+                process_adaptation_uptake=False,
+            )
+        )
+        for run_prefix, prefix_results in cluster_results.items():
+            for household_attribute_name, attribute_df in prefix_results.items():
+                if household_attribute_name not in combined_results[run_prefix]:
+                    combined_results[run_prefix][household_attribute_name] = (
+                        attribute_df.copy()
+                    )
+                else:
+                    # Sum aligned runs and timesteps across clusters.
+                    combined_results[run_prefix][household_attribute_name] = (
+                        combined_results[run_prefix][household_attribute_name].add(
+                            attribute_df,
+                            fill_value=0.0,
+                        )
+                    )
+
+    combined_results_path: str = os.path.join(
+        model_path,
+        "combined_results",
+        scenario,
+        "report",
+        "agents.households",
+    )
+    for run_prefix, prefix_results in combined_results.items():
+        prefix_results_path: str = os.path.join(combined_results_path, run_prefix)
+        os.makedirs(prefix_results_path, exist_ok=True)
+        for household_attribute_name, attribute_df in prefix_results.items():
+            attribute_output_path: str = os.path.join(
+                prefix_results_path,
+                f"{household_attribute_name}.parquet",
+            )
+            attribute_df.to_parquet(attribute_output_path)
+
+
 if __name__ == "__main__":
     # model_path = os.path.join("..", "..", "models", "models", "etaple_new")
     # model_path = os.path.join("..", "..", "models", "models", "mex_dev", "cluster_020")
-    model_path = os.path.join("..", "..", "models", "models", "mex", "cluster_003")
+    # model_path = os.path.join("..", "..", "models", "models", "mex", "cluster_003")
+    model_path = os.path.join("..", "..", "models", "models", "mex")
 
     model_name = "default"
     scenario = "base"
     scenarios_to_compare = ["base", "_future"]
     prefixes = ["no_reloc", "no_gov_", "no_adapt", "full"]
+
+    combine_cluster_results(model_path, scenario, prefixes)
+
     # plot_multirun_results_for_scenarios(model_path, scenarios_to_compare)
     plot_multirun_results_within_scenario(model_path, scenario, prefixes)
 
