@@ -564,6 +564,7 @@ class Government(AgentBaseClass):
                 damages_do_not_adapt[:, households],
                 damages_adapt[:, households],
                 adapted[households],
+                update_gdl_ead=False,
             ).sum()
 
             altered_ead = self.flood_risk_module.calculate_ead(
@@ -571,6 +572,7 @@ class Government(AgentBaseClass):
                 damages_adapt[:, households],
                 adapted[households],
                 altered_fps,
+                update_gdl_ead=False,
             ).sum()
 
             # calculate the cost of raising the dike to the next flood protection standard
