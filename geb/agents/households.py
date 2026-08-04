@@ -1097,24 +1097,27 @@ class Households(AgentBaseClass):
             self.flood_risk_module.calculate_building_flood_damages(dynamic=False)
         )
         # calculate expected utilities
-        EU_adapt = self.decision_module.calcEU_adapt_flood(
-            geom_id="NoID",
-            n_agents=self.n,
-            wealth=self.var.wealth.data,
-            income=self.var.income.data,
-            expendature_cap=1,
-            household_distance_to_coastline_m=self.household_distance_to_coastline_m,
-            household_distance_to_river_m=self.household_distance_to_river_m,
-            risk_perception=self.var.risk_perception.data,
-            expected_damages_adapt=damages_adapt,
-            adaptation_costs=self.var.adaptation_costs.data,
-            time_adapted=self.var.time_adapted.data,
-            loan_duration=20,
-            p_floods=1 / self.return_periods,
-            T=15,
-            r=0.03,
-            sigma=1,
-        )
+        if self.config["dry_floodproofing"]:
+            EU_adapt = self.decision_module.calcEU_adapt_flood(
+                geom_id="NoID",
+                n_agents=self.n,
+                wealth=self.var.wealth.data,
+                income=self.var.income.data,
+                expendature_cap=1,
+                household_distance_to_coastline_m=self.household_distance_to_coastline_m,
+                household_distance_to_river_m=self.household_distance_to_river_m,
+                risk_perception=self.var.risk_perception.data,
+                expected_damages_adapt=damages_adapt,
+                adaptation_costs=self.var.adaptation_costs.data,
+                time_adapted=self.var.time_adapted.data,
+                loan_duration=20,
+                p_floods=1 / self.return_periods,
+                T=15,
+                r=0.03,
+                sigma=1,
+            )
+        else:
+            EU_adapt = np.full(self.n, -np.inf)
 
         EU_do_not_adapt = self.decision_module.calcEU_do_nothing_flood(
             geom_id="NoID",
@@ -1133,28 +1136,35 @@ class Households(AgentBaseClass):
         )
 
         # fist sample building IDs to be considere for relocation
-        (
-            sampled_building_ids,
-            sampled_distance_to_coastline,
-            sampled_distance_to_river,
-            sampled_distances,
-        ) = self.sample_buildings_for_relocation(
-            n_buildings=10, outside_floodplain=True
-        )
+        if self.config["relocate"]:
+            (
+                sampled_building_ids,
+                sampled_distance_to_coastline,
+                sampled_distance_to_river,
+                sampled_distances,
+            ) = self.sample_buildings_for_relocation(
+                n_buildings=10, outside_floodplain=True
+            )
 
-        building_idx, EU_relocate = self.decision_module.calcEU_relocate(
-            geom_id="NoID",
-            n_agents=households_exposed_to_flooding.size,
-            wealth=self.var.wealth.data[households_exposed_to_flooding],
-            income=self.var.income.data[households_exposed_to_flooding],
-            distance_to_coastline_m=sampled_distance_to_coastline,
-            distance_to_river_m=sampled_distance_to_river,
-            distance_to_building_m=sampled_distances,
-            max_migration_costs=5e5,
-            T=15,
-            r=0.03,
-            sigma=1,
-        )
+            building_idx, EU_relocate = self.decision_module.calcEU_relocate(
+                geom_id="NoID",
+                n_agents=households_exposed_to_flooding.size,
+                wealth=self.var.wealth.data[households_exposed_to_flooding],
+                income=self.var.income.data[households_exposed_to_flooding],
+                distance_to_coastline_m=sampled_distance_to_coastline,
+                distance_to_river_m=sampled_distance_to_river,
+                distance_to_building_m=sampled_distances,
+                max_migration_costs=5e5,
+                T=15,
+                r=0.03,
+                sigma=1,
+            )
+        else:
+            sampled_building_ids = np.full(
+                (households_exposed_to_flooding.size, 10), -1, dtype=np.int32
+            )
+            EU_relocate = np.full(households_exposed_to_flooding.size, -np.inf)
+            building_idx = 0
 
         # fill array of all households with NaN values for relocation utility
         EU_relocate_full = np.full(self.n, -np.inf, dtype=np.float32)
@@ -1172,6 +1182,19 @@ class Households(AgentBaseClass):
                 EU_relocate_full > EU_adapt, EU_relocate_full > EU_do_not_adapt
             )
         )[0]
+        # account for intention-behavior gap by randomly selecting a fraction of households that will not relocate even if they have the intention to do so
+        if len(households_relocating) > 0:
+            n_households_relocating = len(households_relocating)
+            n_households_not_relocating = int(
+                n_households_relocating * (1 - self.config["intention_behavior_gap"])
+            )
+            households_not_relocating = np.random.choice(
+                households_relocating, size=n_households_not_relocating, replace=False
+            )
+            households_relocating = np.setdiff1d(
+                households_relocating, households_not_relocating
+            )
+            EU_relocate_full[households_not_relocating] = -np.inf
         household_adapting = np.where(
             np.logical_and(EU_adapt > EU_do_not_adapt, EU_adapt > EU_relocate_full)
         )[0]

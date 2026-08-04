@@ -98,7 +98,10 @@ agent_settings:
     dynamic_market: false
     price_frequency: yearly
   households:
-    adapt: false # If True households adapt their houses based on random floods, like DYNAMO-M
+    adapt: false # If True household behavior is modeled, like DYNAMO-M
+    dry_floodproofing: true # If True households adapt their houses , like DYNAMO-M
+    relocate: true # If True households relocate based on EUT, like DYNAMO-M
+    intention_behavior_gap: 0.12  # fraction of households that have the intention to relocate but do not do so
     adapt_to_actual_floods: false # If True households adapt their houses based on actual floods experienced
     water_demand:
       method: default
