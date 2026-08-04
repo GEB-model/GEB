@@ -204,6 +204,11 @@ def VectorScannerMultiCurves(
             "No vulnerability curves for structure damages were found. "
             "Ensure that at least one curve name contains the substring 'structure'."
         )
+
+    i_curves_content = [i for i, n in enumerate(curve_names) if "content" in n.lower()]
+    curve_content = curve_y[i_curves_content, :]
+    slopes_content = curve_slopes[i_curves_content, :]
+
     curve_structure = curve_y[i_curves_structure, :]
     slopes_structure = curve_slopes[i_curves_structure, :]
     damage_matrix_structure = compute_all_numba(
@@ -214,6 +219,23 @@ def VectorScannerMultiCurves(
         curve_structure,
         slopes_structure,
     )
+    if len(damage_matrix_structure) == 0:
+        # If no damage was computed (e.g., no inundation), return a DataFrame of zeros
+        df_damage_structure = pd.DataFrame(
+            0.0,
+            columns=np.array(curve_names)[i_curves_structure],
+            index=filtered.index,
+        )
+        df_damage_structure = df_damage_structure.reindex(
+            index_features, fill_value=0.0
+        )
+        df_damage_content = pd.DataFrame(
+            0.0,
+            columns=np.array(curve_names)[i_curves_content],
+            index=filtered.index,
+        )
+        df_damage_content = df_damage_content.reindex(index_features, fill_value=0.0)
+        return pd.concat([df_damage_structure, df_damage_content], axis=1)
 
     damage_matrix_structure_final = np.add.reduceat(
         damage_matrix_structure, starts, axis=0
@@ -228,9 +250,6 @@ def VectorScannerMultiCurves(
     df_damage_structure = df_damage_structure.reindex(index_features, fill_value=0.0)
 
     # only select curves relevant for content
-    i_curves_content = [i for i, n in enumerate(curve_names) if "content" in n.lower()]
-    curve_content = curve_y[i_curves_content, :]
-    slopes_content = curve_slopes[i_curves_content, :]
     damage_matrix_content = compute_all_numba(
         inundation_parts,
         coverage_parts,
