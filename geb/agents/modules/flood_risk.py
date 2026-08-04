@@ -654,7 +654,8 @@ class FloodRiskModule:
         return self.damages_do_not_adapt, self.damages_adapt
 
     def calculate_ead_per_gdl_region(
-        self, ead_per_household: np.ndarray
+        self,
+        ead_per_household: np.ndarray,
     ) -> pd.DataFrame:
         """Calculate and accumulate expected annual damages (EAD) per GDL region.
 
@@ -704,8 +705,8 @@ class FloodRiskModule:
             == self.households.model.n_timesteps - 1
         ):
             self.ead_per_gdl_region = self.ead_per_gdl_region.sort_index()
-            self.ead_per_gdl_region.to_parquet(
-                self.households.model.output_folder / "ead_per_gdl_region.parquet"
+            self.ead_per_gdl_region.to_csv(
+                self.households.model.output_folder / "ead_per_gdl_region.csv"
             )
 
         return self.ead_per_gdl_region
@@ -716,6 +717,7 @@ class FloodRiskModule:
         damages_adapt: np.ndarray,
         adapted: np.ndarray,
         altered_flood_protection_standard: int | None = None,
+        update_gdl_ead: bool = True,
     ) -> np.ndarray:
         """Calculate expected annual damages (EAD) for each household.
 
@@ -756,7 +758,8 @@ class FloodRiskModule:
         ead_usd_per_year = np.trapezoid(
             y=all_damages[sort_idx, :], x=probabilities[sort_idx], axis=0
         )
-        self.calculate_ead_per_gdl_region(ead_usd_per_year)
+        if update_gdl_ead:
+            self.calculate_ead_per_gdl_region(ead_usd_per_year)
         return ead_usd_per_year
 
     def flood(self, flood_depth: xr.DataArray) -> float:
