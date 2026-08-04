@@ -8,19 +8,19 @@ import pandas as pd
 
 PLOT_Y_LIMS_DEFAULT: dict[str, tuple[float, float]] = {
     "expected_annual_damage": (0.0, 1.0),
-    "adaptation_uptake": (0.0, 1.0),
+    "n_adaptation_uptake": (0.0, 1.0),
     "n_households_exposed_to_flooding": (0.0, 1.0),
 }
 
 
 PLOT_Y_LIMS_MULTIRUN_BASE_FUTURE: dict[str, tuple[float, float]] = {
     "expected_annual_damage": (0.0, 3e9),
-    "adaptation_uptake": (0.0, 1.0),
+    "n_adaptation_uptake": (0.0, 1.0),
     "n_households_exposed_to_flooding": (0.0, 1.0),
 }
 PLOT_Y_LABELS: dict[str, str] = {
     "expected_annual_damage": "Expected Annual Damage (USD)",
-    "adaptation_uptake": "Adaptation Uptake (fraction)",
+    "n_adaptation_uptake": "Adaptation Uptake (fraction of households)",
     "n_households_exposed_to_flooding": "Number of Households Exposed to Flooding",
 }
 SCENARIOS_BASE_FUTURE: tuple[str, str] = ("base", "_future")
@@ -187,6 +187,21 @@ def _read_multirun_results(
                 attribute_df: pd.DataFrame = pd.read_parquet(
                     os.path.join(results_path, household_attribute_fn)
                 )
+                if (
+                    household_attribute_name == "n_adaptation_uptake"
+                    and "n_households_exposed_to_flooding.parquet"
+                    in _list_household_attribute_files(results_path)
+                ):
+                    # Calculate the fraction of households that have adopted adaptation measures
+                    exposed_df: pd.DataFrame = pd.read_parquet(
+                        os.path.join(
+                            results_path, "n_households_exposed_to_flooding.parquet"
+                        )
+                    )
+                    attribute_df["n_adaptation_uptake"] = (
+                        attribute_df["n_adaptation_uptake"]
+                        / exposed_df["n_households_exposed_to_flooding"]
+                    ).fillna(0)
 
                 if household_attribute_name not in results[scenario]:
                     results[scenario][household_attribute_name] = attribute_df
@@ -234,6 +249,19 @@ def process_household_attributes(
     for ax, fn in zip(axes_list, household_attributes_fns):
         household_attribute_name: str = fn.removesuffix(".parquet")
         df: pd.DataFrame = pd.read_parquet(os.path.join(results_path, fn))
+
+        if (
+            household_attribute_name == "n_adaptation_uptake"
+            and "n_households_exposed_to_flooding.parquet" in household_attributes_fns
+        ):
+            # Calculate the fraction of households that have adopted adaptation measures
+            exposed_df: pd.DataFrame = pd.read_parquet(
+                os.path.join(results_path, "n_households_exposed_to_flooding.parquet")
+            )
+            df["n_adaptation_uptake"] = (
+                df["n_adaptation_uptake"]
+                / exposed_df["n_households_exposed_to_flooding"]
+            )
         x_values: pd.Index = _resolve_x_axis_values(df, x_axis)
 
         ylims_variable: tuple[float, float] | None = _resolve_ylim(
@@ -343,6 +371,22 @@ def read_multirun_results_within_scenario(
                 attribute_df: pd.DataFrame = pd.read_parquet(
                     os.path.join(results_path, household_attribute_fn)
                 )
+
+                if (
+                    household_attribute_name == "n_adaptation_uptake"
+                    and "n_households_exposed_to_flooding.parquet"
+                    in _list_household_attribute_files(results_path)
+                ):
+                    # Calculate the fraction of households that have adopted adaptation measures
+                    exposed_df: pd.DataFrame = pd.read_parquet(
+                        os.path.join(
+                            results_path, "n_households_exposed_to_flooding.parquet"
+                        )
+                    )
+                    attribute_df["n_adaptation_uptake"] = (
+                        attribute_df["n_adaptation_uptake"]
+                        / exposed_df["n_households_exposed_to_flooding"]
+                    ).fillna(0)
 
                 if household_attribute_name not in results_by_prefix[run_prefix]:
                     results_by_prefix[run_prefix][household_attribute_name] = (
@@ -455,7 +499,7 @@ def _plot_multirun_results(
     fig, axes = plt.subplots(
         nrows=1,
         ncols=len(attribute_names),
-        figsize=(7 * len(attribute_names), 5),
+        figsize=(5 * len(attribute_names), 5),
     )
     axes_list: list[plt.Axes] = _ensure_axes_array(axes, len(attribute_names))
     x_axis_label: str = _resolve_x_axis_label(x_axis)
@@ -613,11 +657,13 @@ def plot_multirun_results_within_scenario(
         x_axis: X-axis mode, either year (data index) or timestep (0..n-1).
     """
     if prefixes is None:
-        prefixes = ["nogov_", "cba_"]
+        prefixes = ["no_gov_", "no_adapt", "full"]
 
     colors: dict[str, str] = {
-        "nogov_": "black",
-        "cba_": "red",
+        "no_reloc": "black",
+        "no_gov_": "red",
+        "no_adapt": "green",
+        "full": "blue",
     }
     results: dict[str, dict[str, pd.DataFrame]] = read_multirun_results_within_scenario(
         model_path,
@@ -664,11 +710,13 @@ def plot_multirun_results_within_base_or_future(
 
 if __name__ == "__main__":
     # model_path = os.path.join("..", "..", "models", "models", "etaple_new")
-    model_path = os.path.join("..", "..", "models", "models", "mex_dev", "cluster_020")
+    # model_path = os.path.join("..", "..", "models", "models", "mex_dev", "cluster_020")
+    model_path = os.path.join("..", "..", "models", "models", "mex", "cluster_003")
+
     model_name = "default"
     scenario = "base"
     scenarios_to_compare = ["base", "_future"]
-    prefixes = ["nogov_", "cba_"]
+    prefixes = ["no_reloc", "no_gov_", "no_adapt", "full"]
     # plot_multirun_results_for_scenarios(model_path, scenarios_to_compare)
     plot_multirun_results_within_scenario(model_path, scenario, prefixes)
 
