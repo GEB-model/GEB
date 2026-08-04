@@ -809,25 +809,131 @@ def combine_cluster_results(
             attribute_df.to_parquet(attribute_output_path)
 
 
+def read_combined_cluster_results(
+    model_path: str,
+    scenario: str,
+    run_prefixes: list[str] | None = None,
+) -> dict[str, dict[str, pd.DataFrame]]:
+    """Read combined household attribute results stored by run prefix.
+
+    Args:
+        model_path: Root model path.
+        scenario: Scenario name under combined_results.
+        run_prefixes: Optional run prefixes to read. If omitted, all available
+            prefixes in the combined results folder are read.
+
+    Returns:
+        Nested dictionary {run_prefix: {attribute_name: dataframe}}.
+    """
+    combined_results_root: str = os.path.join(
+        model_path,
+        "combined_results",
+        scenario,
+        "report",
+        "agents.households",
+    )
+    if not os.path.exists(combined_results_root):
+        return {}
+
+    available_prefixes: list[str] = sorted(
+        prefix_name
+        for prefix_name in os.listdir(combined_results_root)
+        if os.path.isdir(os.path.join(combined_results_root, prefix_name))
+    )
+    prefixes_to_read: list[str] = (
+        run_prefixes if run_prefixes is not None else available_prefixes
+    )
+
+    results: dict[str, dict[str, pd.DataFrame]] = {}
+    for run_prefix in prefixes_to_read:
+        prefix_results_path: str = os.path.join(combined_results_root, run_prefix)
+        if not os.path.exists(prefix_results_path):
+            continue
+
+        prefix_results: dict[str, pd.DataFrame] = {}
+        for household_attribute_fn in _list_household_attribute_files(
+            prefix_results_path
+        ):
+            household_attribute_name: str = household_attribute_fn.removesuffix(
+                ".parquet"
+            )
+            prefix_results[household_attribute_name] = pd.read_parquet(
+                os.path.join(prefix_results_path, household_attribute_fn)
+            )
+
+        if prefix_results:
+            results[run_prefix] = prefix_results
+
+    return results
+
+
+def plot_combined_cluster_results_within_scenario(
+    model_path: str,
+    scenario: str = "base",
+    run_prefixes: list[str] | None = None,
+    output_path: str | None = None,
+    x_axis: Literal["year", "timestep"] = "year",
+) -> None:
+    """Plot merged cluster household attributes for run prefixes in one scenario.
+
+    Notes:
+        This expects files created by combine_cluster_results under
+        combined_results/<scenario>/report/agents.households/<run_prefix>/.
+
+    Args:
+        model_path: Root model path.
+        scenario: Scenario name to plot.
+        run_prefixes: Optional run prefixes to include.
+        output_path: Optional output image path.
+        x_axis: X-axis mode, either year (data index) or timestep (0..n-1).
+    """
+    results: dict[str, dict[str, pd.DataFrame]] = read_combined_cluster_results(
+        model_path=model_path,
+        scenario=scenario,
+        run_prefixes=run_prefixes,
+    )
+    if not results:
+        return
+
+    colors: dict[str, str] = _build_group_colors(list(results.keys()))
+    _plot_multirun_results(
+        results=results,
+        colors=colors,
+        x_axis=x_axis,
+        output_path=(
+            output_path
+            if output_path is not None
+            else _comparison_output_path(model_path, "combined_clusters", scenario)
+        ),
+        predefined_ylims=PLOT_Y_LIMS_DEFAULT,
+    )
+
+
 if __name__ == "__main__":
-    # model_path = os.path.join("..", "..", "models", "models", "etaple_new")
-    # model_path = os.path.join("..", "..", "models", "models", "mex_dev", "cluster_020")
-    # model_path = os.path.join("..", "..", "models", "models", "mex", "cluster_003")
     model_path = os.path.join("..", "..", "models", "models", "mex")
 
     model_name = "default"
     scenario = "base"
-    scenarios_to_compare = ["base", "_future"]
-    prefixes = ["no_reloc", "no_gov_", "no_adapt", "full"]
+    scenarios_to_compare = list(SCENARIOS_BASE_FUTURE)
+    prefixes = ["no_reloc", "no_gov", "no_adapt", "full"]
 
-    combine_cluster_results(model_path, scenario, prefixes)
+    # 1) Build merged (cluster-summed) results while keeping per-run columns.
+    combine_cluster_results(
+        model_path=model_path, scenario=scenario, run_prefixes=prefixes
+    )
 
-    # plot_multirun_results_for_scenarios(model_path, scenarios_to_compare)
+    # 2) Plot merged cluster results for the selected scenario.
+    plot_combined_cluster_results_within_scenario(
+        model_path=model_path,
+        scenario=scenario,
+        run_prefixes=prefixes,
+        x_axis="year",
+    )
+
+    # 3) Plot non-merged reference views from regular multirun outputs.
+    model_path = os.path.join("..", "..", "models", "models", "etaple_new")
     plot_multirun_results_within_scenario(model_path, scenario, prefixes)
+    plot_multirun_results_for_scenarios(model_path, scenarios_to_compare, x_axis="year")
 
-    plot_multirun_results_base_and_future(model_path, x_axis="timestep")
-    # plot_multirun_results_across_scenarios(
-    #     model_path,
-    #     scenarios=["base", "future", "policy_variant"],
-    # )
+    # 4) Single-run timeseries diagnostics.
     process_household_attributes(model_path, scenario, model_name)
