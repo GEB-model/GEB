@@ -21,6 +21,7 @@ import rasterio.features
 import rasterio.vrt
 import rasterio.windows
 from rasterio.merge import merge as rasterio_merge
+from rasterio.warp import transform_bounds as rasterio_transform_bounds
 from numba import njit
 from pyproj import CRS, Transformer
 from shapely.geometry.base import BaseGeometry
@@ -6242,6 +6243,52 @@ def load_alphaearth_crop_models(path: str | Path) -> AlphaEarthCropModelBundle:
     return models
 
 
+def _configure_estimator_prediction_threads(estimator: Any, n_jobs: int) -> None:
+    """Set inference thread counts on one supported estimator in place."""
+    if estimator is None:
+        return
+
+    # Pipelines can contain a threaded tree estimator as one of their steps.
+    named_steps = getattr(estimator, "named_steps", None)
+    if isinstance(named_steps, Mapping):
+        for step in named_steps.values():
+            _configure_estimator_prediction_threads(step, n_jobs)
+
+    if not hasattr(estimator, "get_params") or not hasattr(estimator, "set_params"):
+        return
+    try:
+        parameters = estimator.get_params(deep=False)
+    except Exception:
+        return
+
+    updates: dict[str, int] = {}
+    for parameter_name in ("n_jobs", "nthread", "num_threads"):
+        if parameter_name in parameters:
+            updates[parameter_name] = int(n_jobs)
+    if updates:
+        estimator.set_params(**updates)
+
+
+def configure_alphaearth_crop_prediction_threads(
+    models: AlphaEarthCropModelBundle,
+    n_jobs: int,
+) -> AlphaEarthCropModelBundle:
+    """Configure per-estimator inference threads for one loaded model bundle.
+
+    Complete-map inference can run several independent HRL tiles concurrently.
+    Restricting each estimator to a share of the allocated CPUs prevents nested
+    LightGBM/scikit-learn thread pools from oversubscribing the Slurm allocation.
+    The supplied bundle is mutated and returned for convenient chaining.
+    """
+    if int(n_jobs) < 1:
+        raise ValueError("Prediction n_jobs must be at least one.")
+    _configure_estimator_prediction_threads(models.cty_model, int(n_jobs))
+    _configure_estimator_prediction_threads(models.group_model, int(n_jobs))
+    for estimator in models.within_group_models.values():
+        _configure_estimator_prediction_threads(estimator, int(n_jobs))
+    return models
+
+
 def hrl_tile_code_from_name(tile_name: str | Path) -> str:
     """Extract an HRL 100-km tile code such as ``E40N30`` from a filename."""
     stem = Path(tile_name).stem
@@ -6303,16 +6350,58 @@ def find_hrl_tile_path(
     )
 
 
+@dataclass(frozen=True)
+class _AlphaEarthWarpedSource:
+    """One AlphaEarth VRT plus its non-nodata footprint on the HRL grid."""
+
+    vrt: rasterio.vrt.WarpedVRT
+    template_window: rasterio.windows.Window
+
+
+def _integer_window_covering_bounds(
+    bounds: tuple[float, float, float, float],
+    *,
+    transform: rasterio.Affine,
+    width: int,
+    height: int,
+) -> rasterio.windows.Window | None:
+    """Return an integer template window covering bounds, clipped to the grid."""
+    floating = rasterio.windows.from_bounds(*bounds, transform=transform)
+    col_start = max(0, int(math.floor(float(floating.col_off))))
+    row_start = max(0, int(math.floor(float(floating.row_off))))
+    col_stop = min(
+        int(width),
+        int(math.ceil(float(floating.col_off + floating.width))),
+    )
+    row_stop = min(
+        int(height),
+        int(math.ceil(float(floating.row_off + floating.height))),
+    )
+    if col_stop <= col_start or row_stop <= row_start:
+        return None
+    return rasterio.windows.Window(
+        col_start,
+        row_start,
+        col_stop - col_start,
+        row_stop - row_start,
+    )
+
+
 def _open_alphaearth_vrts_for_template(
     selected_cogs: gpd.GeoDataFrame,
     template: rasterio.io.DatasetReader,
     stack: ExitStack,
-) -> list[rasterio.vrt.WarpedVRT]:
-    """Open downloaded AlphaEarth COGs as VRTs on an exact HRL tile grid."""
+) -> list[_AlphaEarthWarpedSource]:
+    """Open COGs as VRTs and retain their exact template-grid footprints.
+
+    A tile can intersect several AlphaEarth COGs. Retaining each source footprint
+    lets the chunk reader avoid issuing a 64-band read against COGs that do not
+    overlap the current inference window.
+    """
     if "local_path" not in selected_cogs.columns:
         raise ValueError("selected_cogs must contain a 'local_path' column.")
 
-    vrts: list[rasterio.vrt.WarpedVRT] = []
+    warped_sources: list[_AlphaEarthWarpedSource] = []
     for local_path_value in selected_cogs["local_path"].drop_duplicates():
         local_path = Path(str(local_path_value))
         if not local_path.exists():
@@ -6322,33 +6411,48 @@ def _open_alphaearth_vrts_for_template(
             raise ValueError(
                 f"Expected 64 AlphaEarth bands in {local_path}, found {source.count}."
             )
-        vrts.append(
-            stack.enter_context(
-                rasterio.vrt.WarpedVRT(
-                    source,
-                    crs=template.crs,
-                    transform=template.transform,
-                    width=template.width,
-                    height=template.height,
-                    # Nearest-neighbour preserves the quantized embedding vector;
-                    # bilinear interpolation of the nonlinearly quantized int8 values
-                    # would not represent interpolation in dequantized embedding space.
-                    resampling=rasterio.enums.Resampling.nearest,
-                    src_nodata=ALPHAEARTH_NODATA_VALUE,
-                    nodata=ALPHAEARTH_NODATA_VALUE,
-                )
+        source_bounds = rasterio_transform_bounds(
+            source.crs,
+            template.crs,
+            *source.bounds,
+            densify_pts=21,
+        )
+        source_window = _integer_window_covering_bounds(
+            source_bounds,
+            transform=template.transform,
+            width=template.width,
+            height=template.height,
+        )
+        if source_window is None:
+            continue
+        vrt = stack.enter_context(
+            rasterio.vrt.WarpedVRT(
+                source,
+                crs=template.crs,
+                transform=template.transform,
+                width=template.width,
+                height=template.height,
+                # Nearest-neighbour preserves the quantized embedding vector;
+                # bilinear interpolation of the nonlinearly quantized int8 values
+                # would not represent interpolation in dequantized embedding space.
+                resampling=rasterio.enums.Resampling.nearest,
+                src_nodata=ALPHAEARTH_NODATA_VALUE,
+                nodata=ALPHAEARTH_NODATA_VALUE,
             )
         )
-    if not vrts:
+        warped_sources.append(
+            _AlphaEarthWarpedSource(vrt=vrt, template_window=source_window)
+        )
+    if not warped_sources:
         raise ValueError("No AlphaEarth COGs were supplied for prediction.")
-    return vrts
+    return warped_sources
 
 
 def _read_merged_alphaearth_window(
-    vrts: list[rasterio.vrt.WarpedVRT],
+    warped_sources: Sequence[_AlphaEarthWarpedSource],
     window: rasterio.windows.Window,
 ) -> np.ndarray:
-    """Read and merge one 64-band window from multiple AlphaEarth VRTs."""
+    """Read one 64-band window from only the COG footprints that overlap it."""
     height = int(window.height)
     width = int(window.width)
     merged = np.full(
@@ -6357,17 +6461,42 @@ def _read_merged_alphaearth_window(
         dtype=np.int8,
     )
     unresolved = np.ones((height, width), dtype=bool)
-    for vrt in vrts:
-        raw = vrt.read(
+    requested_col_start = int(window.col_off)
+    requested_row_start = int(window.row_off)
+
+    for warped_source in warped_sources:
+        if not rasterio.windows.intersect(window, warped_source.template_window):
+            continue
+        overlap = rasterio.windows.intersection(
+            window,
+            warped_source.template_window,
+        )
+        # All stored windows are integer-aligned on the common HRL template grid.
+        overlap = rasterio.windows.Window(
+            int(overlap.col_off),
+            int(overlap.row_off),
+            int(overlap.width),
+            int(overlap.height),
+        )
+        raw = warped_source.vrt.read(
             indexes=list(range(1, len(ALPHAEARTH_EMBEDDING_BANDS) + 1)),
-            window=window,
+            window=overlap,
             out_dtype="int8",
             masked=False,
         )
-        valid = unresolved & np.all(raw != ALPHAEARTH_NODATA_VALUE, axis=0)
+        row_start = int(overlap.row_off) - requested_row_start
+        col_start = int(overlap.col_off) - requested_col_start
+        row_stop = row_start + int(overlap.height)
+        col_stop = col_start + int(overlap.width)
+        unresolved_overlap = unresolved[row_start:row_stop, col_start:col_stop]
+        valid = unresolved_overlap & np.all(
+            raw != ALPHAEARTH_NODATA_VALUE,
+            axis=0,
+        )
         if valid.any():
-            merged[:, valid] = raw[:, valid]
-            unresolved[valid] = False
+            merged_overlap = merged[:, row_start:row_stop, col_start:col_stop]
+            merged_overlap[:, valid] = raw[:, valid]
+            unresolved_overlap[valid] = False
         if not unresolved.any():
             break
     return dequantize_alphaearth_embeddings(merged)
@@ -6663,7 +6792,7 @@ def predict_alphaearth_crop_tile_to_hrl_geotiffs(
     cty_output_path: str | Path,
     *,
     geometry_crs: str = "EPSG:4326",
-    chunk_size: int = 512,
+    chunk_size: int = 1024,
     overwrite: bool = True,
     elevation: xr.DataArray | None = None,
     slope: xr.DataArray | None = None,
@@ -6673,43 +6802,15 @@ def predict_alphaearth_crop_tile_to_hrl_geotiffs(
     smooth_cty_probabilities: bool = True,
     unclassified_probability_threshold: float = 0.25,
     cty_confidence_output_path: str | Path | None = None,
+    diagnostics_output: dict[str, Any] | None = None,
 ) -> Path:
-    """Predict and spatially post-process one annual CTY HRL tile.
+    """Predict one annual CTY HRL tile using optimized chunked inference.
 
-    The prediction uses all 64 AlphaEarth dimensions and any optional topographic
-    features stored in the model schema. A maximum historical HRL cropland extent
-    can be applied as a BVL-like mask. Per-class probabilities are optionally
-    smoothed with a nodata-aware 3×3 Gaussian kernel before reclassification.
-    Low-confidence crop predictions are mapped to HRL unclassified annual or
-    permanent crop classes.
-
-    CTY minimum-mapping-unit filtering and interannual permanent-crop consistency
-    are intentionally applied later, once all tiles and prediction years exist.
-
-    Args:
-        models: Final trained annual CTY model bundle.
-        cty_template_path: Existing HRL CTY tile defining the exact output grid.
-        current_alphaearth_cogs: Downloaded target-year AlphaEarth COG rows.
-        clip_geometry: Active study-area geometry intersecting this HRL tile.
-        cty_output_path: HRL-compatible CTY output path.
-        geometry_crs: CRS of ``clip_geometry``.
-        chunk_size: Core prediction-window width and height in pixels.
-        overwrite: Replace existing outputs when True.
-        elevation: Model-subgrid elevation used when required by the model.
-        slope: Model-subgrid terrain gradient used when required by the model.
-        historical_cty_paths: Observed HRL CTY tiles used to form maximum cropland
-            extent.
-        apply_historical_cropland_mask: Restrict crop predictions to the union of
-            historical cropland pixels.
-        historical_cropland_mask_dilation_pixels: Optional square dilation of the
-            historical cropland union.
-        smooth_cty_probabilities: Apply 3×3 Gaussian smoothing to CTY probabilities.
-        unclassified_probability_threshold: Maximum-probability threshold below
-            which annual/permanent crops become 3100/3200.
-        cty_confidence_output_path: Optional uint8 CTY confidence-layer output.
-
-    Returns:
-        Path of the written CTY GeoTIFF.
+    Independent HRL tiles may safely call this function concurrently because all
+    raster handles and temporary outputs are tile-local. When the pre-existing
+    historical HRL cropland mask is enabled, chunks without any historical crop
+    pixels are skipped before the expensive 64-band AlphaEarth read. No model-local
+    cultivated-land or ESA WorldCover mask is applied by this function.
     """
     if chunk_size < 16:
         raise ValueError("chunk_size must be at least 16 pixels.")
@@ -6720,14 +6821,10 @@ def predict_alphaearth_crop_tile_to_hrl_geotiffs(
             "unclassified_probability_threshold must lie between zero and one."
         )
 
-    coordinates_required = {
-        "longitude",
-        "latitude",
-    }.issubset(models.feature_names)
-    topography_required = {
-        "elevation_m",
-        "slope_gradient",
-    }.issubset(models.feature_names)
+    coordinates_required = {"longitude", "latitude"}.issubset(models.feature_names)
+    topography_required = {"elevation_m", "slope_gradient"}.issubset(
+        models.feature_names
+    )
     if topography_required and (elevation is None or slope is None):
         raise ValueError(
             "The trained feature schema requires elevation and slope predictors."
@@ -6763,6 +6860,7 @@ def predict_alphaearth_crop_tile_to_hrl_geotiffs(
         historical_cropland_mask_dilation_pixels,
     )
 
+    diagnostics: dict[str, Any] = {}
     try:
         with ExitStack() as stack:
             cty_template = stack.enter_context(rasterio.open(cty_template_path))
@@ -6777,7 +6875,23 @@ def predict_alphaearth_crop_tile_to_hrl_geotiffs(
             if geometry_in_template_crs.is_empty:
                 raise ValueError("Prediction geometry is empty after reprojection.")
 
+            height = cty_template.height
+            width = cty_template.width
+            transform = cty_template.transform
+            full_window = rasterio.windows.Window(0, 0, width, height)
+
+            # Build all inexpensive spatial masks before opening or reading the
+            # 64-band AlphaEarth embeddings. This is the main runtime optimization.
+            inside_region = ~rasterio.features.geometry_mask(
+                [geometry_in_template_crs.__geo_interface__],
+                out_shape=(height, width),
+                transform=transform,
+                invert=False,
+                all_touched=False,
+            )
+
             historical_sources: list[rasterio.io.DatasetReader] = []
+            historical_cropland = None
             if apply_historical_cropland_mask:
                 for historical_path_value in historical_cty_paths:
                     historical_source = stack.enter_context(
@@ -6790,6 +6904,51 @@ def predict_alphaearth_crop_tile_to_hrl_geotiffs(
                         "At least one historical CTY tile is required when "
                         "apply_historical_cropland_mask=True."
                     )
+                historical_cropland = _read_historical_cropland_mask(
+                    historical_sources,
+                    full_window,
+                    dilation_pixels=historical_cropland_mask_dilation_pixels,
+                )
+
+            if historical_cropland is None:
+                candidate_cropland = inside_region.copy()
+            else:
+                candidate_cropland = inside_region & historical_cropland
+
+            active_pixel_count = int(np.count_nonzero(inside_region))
+            candidate_pixel_count = int(np.count_nonzero(candidate_cropland))
+            diagnostics.update(
+                {
+                    "active_pixel_count": active_pixel_count,
+                    "candidate_pixel_count": candidate_pixel_count,
+                    "candidate_fraction_of_active": (
+                        float(candidate_pixel_count / active_pixel_count)
+                        if active_pixel_count
+                        else 0.0
+                    ),
+                    "historical_cropland_pixel_count": (
+                        None
+                        if historical_cropland is None
+                        else int(np.count_nonzero(inside_region & historical_cropland))
+                    ),
+                }
+            )
+
+            # Full output arrays allow all non-candidate active pixels to be filled
+            # once and permit the expensive loop to visit candidate chunks only.
+            cty_values_full = np.full(
+                (height, width),
+                _HRL_OUTSIDE_AREA_CODE,
+                dtype=np.uint16,
+            )
+            confidence_values_full = np.full(
+                (height, width),
+                _HRL_CTY_CONFIDENCE_OUTSIDE_AREA,
+                dtype=np.uint8,
+            )
+            known_non_cropland = inside_region & ~candidate_cropland
+            cty_values_full[known_non_cropland] = _HRL_NO_CROPLAND_CODE
+            confidence_values_full[known_non_cropland] = _HRL_CTY_CONFIDENCE_NO_CROPLAND
 
             cty_profile = cty_template.profile.copy()
             cty_profile.update(
@@ -6797,32 +6956,11 @@ def predict_alphaearth_crop_tile_to_hrl_geotiffs(
                 count=1,
                 dtype="uint16",
                 nodata=_HRL_OUTSIDE_AREA_CODE,
-                width=cty_template.width,
-                height=cty_template.height,
+                width=width,
+                height=height,
                 crs=cty_template.crs,
-                transform=cty_template.transform,
+                transform=transform,
             )
-
-            vrts = _open_alphaearth_vrts_for_template(
-                current_alphaearth_cogs,
-                cty_template,
-                stack,
-            )
-            elevation_vrt = None
-            slope_vrt = None
-            if topography_required:
-                assert elevation is not None and slope is not None
-                elevation_vrt = _open_dataarray_vrt_for_template(
-                    elevation,
-                    cty_template,
-                    stack,
-                )
-                slope_vrt = _open_dataarray_vrt_for_template(
-                    slope,
-                    cty_template,
-                    stack,
-                )
-
             cty_writer = stack.enter_context(
                 rasterio.open(cty_temporary, "w", **cty_profile)
             )
@@ -6836,17 +6974,13 @@ def predict_alphaearth_crop_tile_to_hrl_geotiffs(
                     count=1,
                     dtype="uint8",
                     nodata=_HRL_CTY_CONFIDENCE_OUTSIDE_AREA,
-                    width=cty_template.width,
-                    height=cty_template.height,
+                    width=width,
+                    height=height,
                     crs=cty_template.crs,
-                    transform=cty_template.transform,
+                    transform=transform,
                 )
                 confidence_writer = stack.enter_context(
-                    rasterio.open(
-                        confidence_temporary,
-                        "w",
-                        **confidence_profile,
-                    )
+                    rasterio.open(confidence_temporary, "w", **confidence_profile)
                 )
                 confidence_writer.update_tags(
                     PRODUCT="AlphaEarth-derived HRL-compatible CTY confidence",
@@ -6859,284 +6993,306 @@ def predict_alphaearth_crop_tile_to_hrl_geotiffs(
                     "Probability of selected CTY class (%)",
                 )
 
-            coordinate_transformer = None
-            if coordinates_required:
-                coordinate_transformer = Transformer.from_crs(
-                    cty_template.crs,
-                    "EPSG:4326",
-                    always_xy=True,
-                )
+            processed_chunks = 0
+            skipped_chunks = 0
+            total_candidate_chunks = 0
 
-            height = cty_template.height
-            width = cty_template.width
-            transform = cty_template.transform
-            for row_start in range(0, height, chunk_size):
-                core_height = min(chunk_size, height - row_start)
-                read_row_start = max(0, row_start - processing_halo)
-                read_row_stop = min(
+            if candidate_pixel_count:
+                candidate_rows = np.flatnonzero(candidate_cropland.any(axis=1))
+                candidate_cols = np.flatnonzero(candidate_cropland.any(axis=0))
+                row_loop_start = (int(candidate_rows[0]) // chunk_size) * chunk_size
+                row_loop_stop = min(
                     height,
-                    row_start + core_height + processing_halo,
+                    ((int(candidate_rows[-1]) // chunk_size) + 1) * chunk_size,
                 )
-                for col_start in range(0, width, chunk_size):
-                    core_width = min(chunk_size, width - col_start)
-                    read_col_start = max(0, col_start - processing_halo)
-                    read_col_stop = min(
-                        width,
-                        col_start + core_width + processing_halo,
-                    )
-                    read_window = rasterio.windows.Window(
-                        read_col_start,
-                        read_row_start,
-                        read_col_stop - read_col_start,
-                        read_row_stop - read_row_start,
-                    )
-                    read_height = int(read_window.height)
-                    read_width = int(read_window.width)
-                    read_affine = rasterio.windows.transform(
-                        read_window,
-                        transform,
-                    )
-                    inside_region = ~rasterio.features.geometry_mask(
-                        [geometry_in_template_crs.__geo_interface__],
-                        out_shape=(read_height, read_width),
-                        transform=read_affine,
-                        invert=False,
-                        all_touched=False,
-                    )
+                col_loop_start = (int(candidate_cols[0]) // chunk_size) * chunk_size
+                col_loop_stop = min(
+                    width,
+                    ((int(candidate_cols[-1]) // chunk_size) + 1) * chunk_size,
+                )
 
-                    embeddings = _read_merged_alphaearth_window(vrts, read_window)
-                    embeddings_flat = np.moveaxis(embeddings, 0, -1).reshape(-1, 64)
-                    alphaearth_valid = (
-                        np.isfinite(embeddings_flat)
-                        .all(axis=1)
-                        .reshape(
-                            read_height,
-                            read_width,
-                        )
+                # Open expensive predictor VRTs only when at least one candidate
+                # pixel exists in this HRL tile.
+                vrts = _open_alphaearth_vrts_for_template(
+                    current_alphaearth_cogs,
+                    cty_template,
+                    stack,
+                )
+                elevation_vrt = None
+                slope_vrt = None
+                if topography_required:
+                    assert elevation is not None and slope is not None
+                    elevation_vrt = _open_dataarray_vrt_for_template(
+                        elevation,
+                        cty_template,
+                        stack,
                     )
-                    valid_data = inside_region & alphaearth_valid
-
-                    if apply_historical_cropland_mask:
-                        historical_cropland = _read_historical_cropland_mask(
-                            historical_sources,
-                            read_window,
-                            dilation_pixels=historical_cropland_mask_dilation_pixels,
-                        )
-                    else:
-                        historical_cropland = np.ones_like(valid_data, dtype=bool)
-                    classify_mask = valid_data & historical_cropland
-
-                    cty_probabilities = np.zeros(
-                        (len(models.cty_classes), read_height, read_width),
-                        dtype=np.float32,
+                    slope_vrt = _open_dataarray_vrt_for_template(
+                        slope,
+                        cty_template,
+                        stack,
                     )
 
-                    classify_flat = classify_mask.reshape(-1)
-                    if classify_flat.any():
-                        local_rows, local_cols = np.indices(
-                            (read_height, read_width),
-                            dtype=np.int64,
-                        )
-                        global_rows = (
-                            local_rows.reshape(-1)[classify_flat] + read_row_start
-                        )
-                        global_cols = (
-                            local_cols.reshape(-1)[classify_flat] + read_col_start
-                        )
-                        x_coordinates, y_coordinates = rasterio.transform.xy(
-                            transform,
-                            global_rows,
-                            global_cols,
-                            offset="center",
-                        )
-
-                        if coordinates_required:
-                            assert coordinate_transformer is not None
-                            longitude, latitude = coordinate_transformer.transform(
-                                x_coordinates,
-                                y_coordinates,
-                            )
-                            longitude = np.asarray(longitude, dtype=np.float64)
-                            latitude = np.asarray(latitude, dtype=np.float64)
-                        else:
-                            n_valid = int(classify_flat.sum())
-                            longitude = np.zeros(n_valid, dtype=np.float64)
-                            latitude = np.zeros(n_valid, dtype=np.float64)
-
-                        elevation_values = None
-                        slope_values = None
-                        if topography_required:
-                            assert elevation_vrt is not None and slope_vrt is not None
-                            elevation_window = elevation_vrt.read(
-                                1,
-                                window=read_window,
-                                out_dtype="float32",
-                                masked=False,
-                            ).reshape(-1)[classify_flat]
-                            slope_window = slope_vrt.read(
-                                1,
-                                window=read_window,
-                                out_dtype="float32",
-                                masked=False,
-                            ).reshape(-1)[classify_flat]
-                            elevation_values = np.where(
-                                elevation_window == elevation_vrt.nodata,
-                                np.nan,
-                                elevation_window,
-                            )
-                            slope_values = np.where(
-                                slope_window == slope_vrt.nodata,
-                                np.nan,
-                                slope_window,
-                            )
-                            topography_valid = np.isfinite(
-                                elevation_values
-                            ) & np.isfinite(slope_values)
-                            if not topography_valid.all():
-                                valid_indices = np.flatnonzero(classify_flat)
-                                invalid_indices = valid_indices[~topography_valid]
-                                classify_flat[invalid_indices] = False
-                                classify_mask = classify_flat.reshape(
-                                    read_height,
-                                    read_width,
-                                )
-
-                                # Missing topography means the complete trained
-                                # feature schema is unavailable. Mark these pixels
-                                # as invalid data rather than silently converting
-                                # them to the no-cropland class downstream.
-                                valid_data_flat = valid_data.reshape(-1)
-                                valid_data_flat[invalid_indices] = False
-                                valid_data = valid_data_flat.reshape(
-                                    read_height,
-                                    read_width,
-                                )
-
-                                longitude = longitude[topography_valid]
-                                latitude = latitude[topography_valid]
-                                elevation_values = elevation_values[topography_valid]
-                                slope_values = slope_values[topography_valid]
-
-                        features, feature_names = build_alphaearth_crop_feature_matrix(
-                            embeddings_flat[classify_flat],
-                            longitude,
-                            latitude,
-                            include_coordinates=coordinates_required,
-                            include_topography=topography_required,
-                            normalize_embeddings=models.normalize_embeddings,
-                            elevation_m=elevation_values,
-                            slope_gradient=slope_values,
-                        )
-                        if feature_names != models.feature_names:
-                            raise ValueError(
-                                "Prediction feature schema differs from the trained model."
-                            )
-
-                        cty_prediction_probabilities = (
-                            predict_alphaearth_crop_probabilities(
-                                models,
-                                features,
-                            )
-                        )
-                        cty_probabilities.reshape(
-                            len(models.cty_classes),
-                            -1,
-                        )[:, classify_flat] = cty_prediction_probabilities.T
-
-                    if smooth_cty_probabilities:
-                        cty_probabilities = _normalized_gaussian_filter_3x3(
-                            cty_probabilities,
-                            classify_mask,
-                        )
-
-                    row_offset = row_start - read_row_start
-                    col_offset = col_start - read_col_start
-                    core_rows = slice(row_offset, row_offset + core_height)
-                    core_cols = slice(col_offset, col_offset + core_width)
-                    core_valid_data = valid_data[core_rows, core_cols]
-                    core_classify = classify_mask[core_rows, core_cols]
-
-                    cty_values = np.full(
-                        (core_height, core_width),
-                        _HRL_OUTSIDE_AREA_CODE,
-                        dtype=np.uint16,
-                    )
-                    confidence_values = np.full(
-                        (core_height, core_width),
-                        _HRL_CTY_CONFIDENCE_OUTSIDE_AREA,
-                        dtype=np.uint8,
+                coordinate_transformer = None
+                if coordinates_required:
+                    coordinate_transformer = Transformer.from_crs(
+                        cty_template.crs,
+                        "EPSG:4326",
+                        always_xy=True,
                     )
 
-                    historical_background = core_valid_data & ~core_classify
-                    cty_values[historical_background] = _HRL_NO_CROPLAND_CODE
-                    confidence_values[historical_background] = (
-                        _HRL_CTY_CONFIDENCE_NO_CROPLAND
-                    )
-
-                    if core_classify.any():
-                        core_cty_probabilities = cty_probabilities[
-                            :,
-                            core_rows,
-                            core_cols,
+                for row_start in range(row_loop_start, row_loop_stop, chunk_size):
+                    core_height = min(chunk_size, height - row_start)
+                    for col_start in range(col_loop_start, col_loop_stop, chunk_size):
+                        core_width = min(chunk_size, width - col_start)
+                        core_candidate = candidate_cropland[
+                            row_start : row_start + core_height,
+                            col_start : col_start + core_width,
                         ]
-                        probability_rows = core_cty_probabilities[
-                            :,
-                            core_classify,
-                        ].T
-                        predicted_rows, confidence_rows = (
-                            alphaearth_cty_from_probabilities(
-                                models,
-                                probability_rows,
-                                unclassified_probability_threshold=(
-                                    unclassified_probability_threshold
-                                ),
-                            )
+                        if not core_candidate.any():
+                            skipped_chunks += 1
+                            continue
+                        total_candidate_chunks += 1
+
+                        read_row_start = max(0, row_start - processing_halo)
+                        read_row_stop = min(
+                            height,
+                            row_start + core_height + processing_halo,
                         )
-                        predicted_cty = np.full(
-                            (core_height, core_width),
-                            _HRL_OUTSIDE_AREA_CODE,
-                            dtype=np.int32,
+                        read_col_start = max(0, col_start - processing_halo)
+                        read_col_stop = min(
+                            width,
+                            col_start + core_width + processing_halo,
                         )
-                        best_cty_probabilities = np.zeros(
-                            (core_height, core_width),
+                        read_window = rasterio.windows.Window(
+                            read_col_start,
+                            read_row_start,
+                            read_col_stop - read_col_start,
+                            read_row_stop - read_row_start,
+                        )
+                        read_height = int(read_window.height)
+                        read_width = int(read_window.width)
+                        candidate_read = candidate_cropland[
+                            read_row_start:read_row_stop,
+                            read_col_start:read_col_stop,
+                        ]
+                        inside_read = inside_region[
+                            read_row_start:read_row_stop,
+                            read_col_start:read_col_stop,
+                        ]
+
+                        embeddings = _read_merged_alphaearth_window(vrts, read_window)
+                        embeddings_flat = np.moveaxis(embeddings, 0, -1).reshape(-1, 64)
+                        alphaearth_valid = (
+                            np.isfinite(embeddings_flat)
+                            .all(axis=1)
+                            .reshape(read_height, read_width)
+                        )
+                        valid_data = inside_read & alphaearth_valid
+                        classify_mask = valid_data & candidate_read
+
+                        cty_probabilities = np.zeros(
+                            (len(models.cty_classes), read_height, read_width),
                             dtype=np.float32,
                         )
-                        predicted_cty[core_classify] = predicted_rows
-                        best_cty_probabilities[core_classify] = confidence_rows
-                        cty_values[core_classify] = predicted_rows.astype(np.uint16)
+                        classify_flat = classify_mask.reshape(-1)
+                        if classify_flat.any():
+                            valid_positions = np.flatnonzero(classify_flat)
+                            local_rows = valid_positions // read_width
+                            local_cols = valid_positions % read_width
+                            global_rows = local_rows + read_row_start
+                            global_cols = local_cols + read_col_start
+                            # Direct affine evaluation is substantially faster than
+                            # rasterio.transform.xy for million-pixel chunks and also
+                            # supports rotated transforms.
+                            centered_cols = global_cols.astype(np.float64) + 0.5
+                            centered_rows = global_rows.astype(np.float64) + 0.5
+                            x_coordinates = (
+                                transform.c
+                                + centered_cols * transform.a
+                                + centered_rows * transform.b
+                            )
+                            y_coordinates = (
+                                transform.f
+                                + centered_cols * transform.d
+                                + centered_rows * transform.e
+                            )
 
-                        confidence_percent = np.clip(
-                            np.rint(best_cty_probabilities * 100.0),
-                            0,
-                            100,
-                        ).astype(np.uint8)
-                        confidence_values[core_classify] = confidence_percent[
-                            core_classify
-                        ]
-                        predicted_background = core_classify & (
-                            predicted_cty == _HRL_NO_CROPLAND_CODE
-                        )
-                        confidence_values[predicted_background] = (
-                            _HRL_CTY_CONFIDENCE_NO_CROPLAND
-                        )
+                            if coordinates_required:
+                                assert coordinate_transformer is not None
+                                longitude, latitude = coordinate_transformer.transform(
+                                    x_coordinates,
+                                    y_coordinates,
+                                )
+                                longitude = np.asarray(longitude, dtype=np.float64)
+                                latitude = np.asarray(latitude, dtype=np.float64)
+                            else:
+                                n_valid = int(classify_flat.sum())
+                                longitude = np.zeros(n_valid, dtype=np.float64)
+                                latitude = np.zeros(n_valid, dtype=np.float64)
 
-                    core_window = rasterio.windows.Window(
-                        col_start,
-                        row_start,
-                        core_width,
-                        core_height,
-                    )
-                    cty_writer.write(cty_values, 1, window=core_window)
-                    if confidence_writer is not None:
-                        confidence_writer.write(
-                            confidence_values,
-                            1,
-                            window=core_window,
-                        )
+                            elevation_values = None
+                            slope_values = None
+                            if topography_required:
+                                assert (
+                                    elevation_vrt is not None and slope_vrt is not None
+                                )
+                                elevation_window = elevation_vrt.read(
+                                    1,
+                                    window=read_window,
+                                    out_dtype="float32",
+                                    masked=False,
+                                ).reshape(-1)[classify_flat]
+                                slope_window = slope_vrt.read(
+                                    1,
+                                    window=read_window,
+                                    out_dtype="float32",
+                                    masked=False,
+                                ).reshape(-1)[classify_flat]
+                                elevation_values = np.where(
+                                    elevation_window == elevation_vrt.nodata,
+                                    np.nan,
+                                    elevation_window,
+                                )
+                                slope_values = np.where(
+                                    slope_window == slope_vrt.nodata,
+                                    np.nan,
+                                    slope_window,
+                                )
+                                topography_valid = np.isfinite(
+                                    elevation_values
+                                ) & np.isfinite(slope_values)
+                                if not topography_valid.all():
+                                    invalid_indices = valid_positions[~topography_valid]
+                                    classify_flat[invalid_indices] = False
+                                    classify_mask = classify_flat.reshape(
+                                        read_height,
+                                        read_width,
+                                    )
+                                    longitude = longitude[topography_valid]
+                                    latitude = latitude[topography_valid]
+                                    elevation_values = elevation_values[
+                                        topography_valid
+                                    ]
+                                    slope_values = slope_values[topography_valid]
+
+                            features, feature_names = (
+                                build_alphaearth_crop_feature_matrix(
+                                    embeddings_flat[classify_flat],
+                                    longitude,
+                                    latitude,
+                                    include_coordinates=coordinates_required,
+                                    include_topography=topography_required,
+                                    normalize_embeddings=models.normalize_embeddings,
+                                    elevation_m=elevation_values,
+                                    slope_gradient=slope_values,
+                                )
+                            )
+                            if feature_names != models.feature_names:
+                                raise ValueError(
+                                    "Prediction feature schema differs from the trained model."
+                                )
+
+                            cty_prediction_probabilities = (
+                                predict_alphaearth_crop_probabilities(models, features)
+                            )
+                            cty_probabilities.reshape(len(models.cty_classes), -1)[
+                                :, classify_flat
+                            ] = cty_prediction_probabilities.T
+
+                        if smooth_cty_probabilities:
+                            cty_probabilities = _normalized_gaussian_filter_3x3(
+                                cty_probabilities,
+                                classify_mask,
+                            )
+
+                        row_offset = row_start - read_row_start
+                        col_offset = col_start - read_col_start
+                        core_rows = slice(row_offset, row_offset + core_height)
+                        core_cols = slice(col_offset, col_offset + core_width)
+                        core_classify = classify_mask[core_rows, core_cols]
+
+                        if core_classify.any():
+                            core_cty_probabilities = cty_probabilities[
+                                :, core_rows, core_cols
+                            ]
+                            probability_rows = core_cty_probabilities[
+                                :, core_classify
+                            ].T
+                            predicted_rows, confidence_rows = (
+                                alphaearth_cty_from_probabilities(
+                                    models,
+                                    probability_rows,
+                                    unclassified_probability_threshold=(
+                                        unclassified_probability_threshold
+                                    ),
+                                )
+                            )
+                            output_rows, output_cols = np.where(core_classify)
+                            output_rows = output_rows + row_start
+                            output_cols = output_cols + col_start
+                            cty_values_full[output_rows, output_cols] = (
+                                predicted_rows.astype(np.uint16)
+                            )
+                            confidence_values_full[output_rows, output_cols] = np.clip(
+                                np.rint(confidence_rows * 100.0),
+                                0,
+                                100,
+                            ).astype(np.uint8)
+                            predicted_background = (
+                                predicted_rows == _HRL_NO_CROPLAND_CODE
+                            )
+                            if predicted_background.any():
+                                confidence_values_full[
+                                    output_rows[predicted_background],
+                                    output_cols[predicted_background],
+                                ] = _HRL_CTY_CONFIDENCE_NO_CROPLAND
+
+                        processed_chunks += 1
+
+            diagnostics.update(
+                {
+                    "processed_chunk_count": int(processed_chunks),
+                    "skipped_chunk_count": int(skipped_chunks),
+                    "candidate_chunk_count": int(total_candidate_chunks),
+                    "chunk_size": int(chunk_size),
+                }
+            )
+
+            cty_writer.write(cty_values_full, 1)
+            cty_writer.update_tags(
+                CLASSIFICATION_MASK=(
+                    "historical_hrl_cropland"
+                    if historical_cropland is not None
+                    else "active_model_geometry"
+                ),
+                ACTIVE_PIXEL_COUNT=str(active_pixel_count),
+                CANDIDATE_PIXEL_COUNT=str(candidate_pixel_count),
+                CANDIDATE_FRACTION_OF_ACTIVE=(
+                    f"{diagnostics['candidate_fraction_of_active']:.8f}"
+                ),
+                PROCESSED_CHUNK_COUNT=str(processed_chunks),
+                SKIPPED_CHUNK_COUNT=str(skipped_chunks),
+                INFERENCE_CHUNK_SIZE=str(int(chunk_size)),
+            )
+            if confidence_writer is not None:
+                confidence_writer.write(confidence_values_full, 1)
+                confidence_writer.update_tags(
+                    CLASSIFICATION_MASK=(
+                        "historical_hrl_cropland"
+                        if historical_cropland is not None
+                        else "active_model_geometry"
+                    ),
+                    ACTIVE_PIXEL_COUNT=str(active_pixel_count),
+                    CANDIDATE_PIXEL_COUNT=str(candidate_pixel_count),
+                )
 
         cty_temporary.replace(cty_output)
         if confidence_temporary is not None and confidence_output is not None:
             confidence_temporary.replace(confidence_output)
+        if diagnostics_output is not None:
+            diagnostics_output.clear()
+            diagnostics_output.update(diagnostics)
         return cty_output
     except Exception:
         for temporary in (cty_temporary, confidence_temporary):
@@ -7816,26 +7972,70 @@ def remove_alphaearth_downloads(
     *,
     logger: logging.Logger | None = None,
 ) -> int:
-    """Delete downloaded AlphaEarth COGs while preserving the cached index.
+    """Delete downloaded AlphaEarth COGs and matching temporary fragments.
+
+    The adapter can raise while a COG is still being written to a temporary
+    sibling path. Complete-map classification therefore calls this function with
+    the preceding dry-run selection when the download call itself fails. Besides
+    the final ``local_path``, narrowly matched ``.part``, ``.partial`` and ``.tmp``
+    siblings for that exact target filename are removed. The cached AlphaEarth
+    index is not part of the selection and is preserved.
 
     Args:
         selected_cogs: Adapter selection containing ``local_path`` values.
         logger: Optional logger used for deletion diagnostics.
 
     Returns:
-        Number of local files removed.
+        Number of local files or temporary fragments removed.
     """
     if "local_path" not in selected_cogs.columns:
         return 0
+
     removed = 0
+    removed_paths: set[Path] = set()
+    parent_directories: set[Path] = set()
+    temporary_suffixes = (".part", ".partial", ".tmp")
+
     for local_path_value in selected_cogs["local_path"].drop_duplicates():
         local_path = Path(str(local_path_value))
-        if local_path.exists():
-            local_path.unlink()
-            removed += 1
-            if logger is not None:
-                logger.debug("Removed cached AlphaEarth COG %s.", local_path)
-        parent = local_path.parent
+        parent_directories.add(local_path.parent)
+        candidates: set[Path] = {local_path}
+        if local_path.parent.exists():
+            # Match only fragments derived from this exact destination filename.
+            # Examples covered include ``.tile.tif.<uuid>.part``,
+            # ``tile.tif.part`` and ``tile.tif.<pid>.tmp``.
+            prefixes = (
+                local_path.name,
+                f".{local_path.name}",
+                local_path.stem,
+                f".{local_path.stem}",
+            )
+            for sibling in local_path.parent.iterdir():
+                if not sibling.is_file() and not sibling.is_symlink():
+                    continue
+                sibling_name = sibling.name
+                if not sibling_name.startswith(prefixes):
+                    continue
+                if sibling_name.endswith(temporary_suffixes):
+                    candidates.add(sibling)
+
+        for candidate in sorted(candidates):
+            if candidate in removed_paths:
+                continue
+            try:
+                if candidate.exists() or candidate.is_symlink():
+                    candidate.unlink()
+                    removed += 1
+                    removed_paths.add(candidate)
+                    if logger is not None:
+                        logger.debug("Removed cached AlphaEarth file %s.", candidate)
+            except FileNotFoundError:
+                # Another cleanup may already have removed the same path.
+                continue
+
+    for parent in sorted(
+        parent_directories, key=lambda value: len(value.parts), reverse=True
+    ):
         while parent.name and parent.exists():
             try:
                 parent.rmdir()
