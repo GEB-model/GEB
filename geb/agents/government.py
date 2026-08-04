@@ -820,4 +820,4 @@ class Government(AgentBaseClass):
         Returns:
             Total dike investment costs in USD.
         """
-        return self._dike_investment_costs_USD
+        return np.int64(self._dike_investment_costs_USD)
