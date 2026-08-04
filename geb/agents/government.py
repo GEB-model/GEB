@@ -44,6 +44,7 @@ class Government(AgentBaseClass):
             else {}
         )
         self.ratio_farmers_to_provide_subsidies_per_year = 0.05
+        self._dike_investment_costs_USD = 0.0
 
     @property
     def name(self) -> str:
@@ -619,10 +620,12 @@ class Government(AgentBaseClass):
                     self.flood_protection_standard_subbasins[subbasin] = 0
                     continue
 
-            if self._apply_cumulative_time_discounting(
-                damage_reduction
-            ) > total_cost + self._apply_cumulative_time_discounting(
+            maintenance_cost_discounted = self._apply_cumulative_time_discounting(
                 maintenance_cost_per_year
+            )
+            if (
+                self._apply_cumulative_time_discounting(damage_reduction)
+                > total_cost + maintenance_cost_discounted
             ):
                 self.flood_protection_standard_subbasins[subbasin] = altered_fps
                 self.model.logger.info(
@@ -631,6 +634,7 @@ class Government(AgentBaseClass):
                     current_fps,
                     altered_fps,
                 )
+                self._dike_investment_costs_USD += total_cost
 
     def calculate_EAD(self) -> None | float:
         """Calculate the expected annual damage (EAD) for the current year.
@@ -808,3 +812,12 @@ class Government(AgentBaseClass):
         return (
             self.agents.households.flood_risk_module.flood_protection_standard_subbasins
         )
+
+    @property
+    def dike_investment_costs_USD(self) -> float:
+        """Get the total dike investment costs in USD.
+
+        Returns:
+            Total dike investment costs in USD.
+        """
+        return self._dike_investment_costs_USD
