@@ -435,7 +435,9 @@ class Government(AgentBaseClass):
         if not self.config["adaptation"]["enabled"]:
             return  # exits because adaptation is not (enabled) in the config file
         if not (
-            self.model.current_time.month == 1 and self.model.current_time.day == 1
+            self.model.current_time.month == 1
+            and self.model.current_time.day == 1
+            and self.model.current_timestep > 0
         ):
             return  # exits because it is not the first of January
 
