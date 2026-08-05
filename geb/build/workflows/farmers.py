@@ -5648,6 +5648,17 @@ def _read_historical_cropland_mask(
     return cropland
 
 
+def _read_static_crop_extent_mask(
+    source: rasterio.io.DatasetReader,
+    window: rasterio.windows.Window,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return candidate mask and raw uint8 flags for one static extent window."""
+    values = source.read(1, window=window, masked=False).astype(np.uint8, copy=False)
+    nodata = 255 if source.nodata is None else int(source.nodata)
+    candidate = (values != 0) & (values != nodata)
+    return candidate, values
+
+
 def predict_alphaearth_crop_tile_to_hrl_geotiffs(
     models: AlphaEarthCropModelBundle,
     cty_template_path: str | Path,
@@ -5661,6 +5672,7 @@ def predict_alphaearth_crop_tile_to_hrl_geotiffs(
     elevation: xr.DataArray | None = None,
     slope: xr.DataArray | None = None,
     historical_cty_paths: Sequence[str | Path] = (),
+    static_extent_flags_path: str | Path | None = None,
     apply_historical_cropland_mask: bool = True,
     historical_cropland_mask_dilation_pixels: int = 0,
     smooth_cty_probabilities: bool = True,
@@ -5671,10 +5683,10 @@ def predict_alphaearth_crop_tile_to_hrl_geotiffs(
     """Predict one annual CTY HRL tile using optimized chunked inference.
 
     Independent HRL tiles may safely call this function concurrently because all
-    raster handles and temporary outputs are tile-local. When the pre-existing
-    historical HRL cropland mask is enabled, chunks without any historical crop
-    pixels are skipped before the expensive 64-band AlphaEarth read. No model-local
-    cultivated-land or ESA WorldCover mask is applied by this function.
+    raster handles and temporary outputs are tile-local. The preferred production
+    domain is a static multi-year HRL Crop Types flag raster. Chunks without any
+    candidate crop pixels are skipped before the expensive 64-band AlphaEarth read.
+    Historical CTY masks remain available as a backward-compatible fallback.
     """
     if chunk_size < 16:
         raise ValueError("chunk_size must be at least 16 pixels.")
@@ -5754,9 +5766,24 @@ def predict_alphaearth_crop_tile_to_hrl_geotiffs(
                 all_touched=False,
             )
 
+            static_extent_source = None
+            static_extent_cropland = None
+            static_extent_flags = None
+            if static_extent_flags_path is not None:
+                static_extent_source = stack.enter_context(
+                    rasterio.open(static_extent_flags_path)
+                )
+                _assert_matching_rasterio_grid(cty_template, static_extent_source)
+                static_extent_cropland, static_extent_flags = (
+                    _read_static_crop_extent_mask(
+                        static_extent_source,
+                        full_window,
+                    )
+                )
+
             historical_sources: list[rasterio.io.DatasetReader] = []
             historical_cropland = None
-            if apply_historical_cropland_mask:
+            if apply_historical_cropland_mask and static_extent_source is None:
                 for historical_path_value in historical_cty_paths:
                     historical_source = stack.enter_context(
                         rasterio.open(historical_path_value)
@@ -5774,10 +5801,15 @@ def predict_alphaearth_crop_tile_to_hrl_geotiffs(
                     dilation_pixels=historical_cropland_mask_dilation_pixels,
                 )
 
-            if historical_cropland is None:
-                candidate_cropland = inside_region.copy()
-            else:
+            if static_extent_cropland is not None:
+                candidate_cropland = inside_region & static_extent_cropland
+                classification_mask_name = "hrl_static_cty_union"
+            elif historical_cropland is not None:
                 candidate_cropland = inside_region & historical_cropland
+                classification_mask_name = "historical_hrl_cropland"
+            else:
+                candidate_cropland = inside_region.copy()
+                classification_mask_name = "active_model_geometry"
 
             active_pixel_count = int(np.count_nonzero(inside_region))
             candidate_pixel_count = int(np.count_nonzero(candidate_cropland))
@@ -5794,6 +5826,35 @@ def predict_alphaearth_crop_tile_to_hrl_geotiffs(
                         None
                         if historical_cropland is None
                         else int(np.count_nonzero(inside_region & historical_cropland))
+                    ),
+                    "static_extent_pixel_count": (
+                        None
+                        if static_extent_cropland is None
+                        else int(
+                            np.count_nonzero(inside_region & static_extent_cropland)
+                        )
+                    ),
+                    "static_extent_ever_annual_pixel_count": (
+                        None
+                        if static_extent_flags is None
+                        else int(
+                            np.count_nonzero(
+                                inside_region
+                                & static_extent_cropland
+                                & (static_extent_flags & np.uint8(1) != 0)
+                            )
+                        )
+                    ),
+                    "static_extent_ever_permanent_pixel_count": (
+                        None
+                        if static_extent_flags is None
+                        else int(
+                            np.count_nonzero(
+                                inside_region
+                                & static_extent_cropland
+                                & (static_extent_flags & np.uint8(2) != 0)
+                            )
+                        )
                     ),
                 }
             )
@@ -6125,11 +6186,7 @@ def predict_alphaearth_crop_tile_to_hrl_geotiffs(
 
             cty_writer.write(cty_values_full, 1)
             cty_writer.update_tags(
-                CLASSIFICATION_MASK=(
-                    "historical_hrl_cropland"
-                    if historical_cropland is not None
-                    else "active_model_geometry"
-                ),
+                CLASSIFICATION_MASK=classification_mask_name,
                 ACTIVE_PIXEL_COUNT=str(active_pixel_count),
                 CANDIDATE_PIXEL_COUNT=str(candidate_pixel_count),
                 CANDIDATE_FRACTION_OF_ACTIVE=(
@@ -6142,11 +6199,7 @@ def predict_alphaearth_crop_tile_to_hrl_geotiffs(
             if confidence_writer is not None:
                 confidence_writer.write(confidence_values_full, 1)
                 confidence_writer.update_tags(
-                    CLASSIFICATION_MASK=(
-                        "historical_hrl_cropland"
-                        if historical_cropland is not None
-                        else "active_model_geometry"
-                    ),
+                    CLASSIFICATION_MASK=classification_mask_name,
                     ACTIVE_PIXEL_COUNT=str(active_pixel_count),
                     CANDIDATE_PIXEL_COUNT=str(candidate_pixel_count),
                 )
