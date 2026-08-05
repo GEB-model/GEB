@@ -501,15 +501,11 @@ class Households(AgentBaseClass):
         )
         # initiate array with RANDOM annual adaptation costs [dummy data for now, values are available in literature]
         adaptation_costs = (
-            np.maximum(self.var.property_value.data * 0.05, 10_800)
+            np.maximum(
+                self.var.property_value.data * 0.05, 10_800 * 0.88
+            )  # .88 used based on construction inflators for Mexico.
         ).astype(np.int64)
         self.var.adaptation_costs = DynamicArray(adaptation_costs, max_n=self.max_n)
-
-        # initiate array with amenity value [dummy data for now, use hedonic pricing studies to calculate actual values]
-        amenity_premiums = np.random.uniform(0, 0.2, self.n)
-        self.var.amenity_value = DynamicArray(
-            amenity_premiums * self.var.wealth, max_n=self.max_n
-        )
 
         # load household points
         household_points = gpd.GeoDataFrame(
@@ -1693,3 +1689,14 @@ class Households(AgentBaseClass):
             Number of households exposed to flooding.
         """
         return np.int32(self.households_exposed_to_flooding.size)
+
+    @property
+    def investment_costs_per_household(self) -> np.ndarray:
+        """Get the investment costs for each household.
+
+        Returns:
+            Array of investment costs for each household.
+        """
+        investment_costs = self.var.adaptation_costs.copy()
+        investment_costs[self.var.adapted == 0] = 0
+        return investment_costs
