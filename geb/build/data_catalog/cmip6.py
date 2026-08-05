@@ -150,11 +150,12 @@ class CMIP6(Adapter):
             if "time_bounds" in ds:
                 ds = ds.drop_vars("time_bounds")
 
-            ds["time"] = xr.cftime_range(
+            ds["time"] = xr.date_range(
                 start=str(ds.time.dt.strftime("%Y-%m-01").values[0]),
                 periods=ds.sizes["time"],
                 freq="MS",
                 calendar=ds.time.dt.calendar,
+                use_cftime=True,
             )
             return ds
 
@@ -166,7 +167,11 @@ class CMIP6(Adapter):
         xr.testing.assert_allclose(historical.lon, future.lon)
 
         # Merge along time and sort by time to ensure proper alignment
-        merged = xr.concat([historical, future], dim="time").sortby("time")
+        merged = xr.concat(
+            [historical, future],
+            dim="time",
+            data_vars="all",
+        ).sortby("time")
 
         # Define periods and compute representative year shift
         shift = representative_forcing_year - end_year  # years
