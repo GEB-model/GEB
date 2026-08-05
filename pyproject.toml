@@ -86,7 +86,6 @@ dependencies = [
     "hda>=2.39",
     "huggingface-hub>=1.18.0",
     "aiohttp-retry>=2.9.1",
-    "torch>=2.10.0",
     "imageio-ffmpeg>=0.6.0",
 ]
 requires-python = ">=3.14.4, <3.15"
@@ -140,6 +139,12 @@ fairstream = [
     "pgmpy==0.1.26",
     "daft-pgm>=0.1.4",
     "opt-einsum>=3.3.0",
+]
+europe = [
+    "pgmpy==0.1.26",
+    "lightgbm>=4.7.0",
+    "catboost>=1.2.10",
+    "torch>=2.10.0",
 ]
 display = [
     "jupyter>=1.1.1",
