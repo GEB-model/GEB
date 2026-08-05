@@ -7,9 +7,9 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 PLOT_Y_LIMS_DEFAULT: dict[str, tuple[float, float]] = {
-    "expected_annual_damage": (0.0, 1.0),
-    "n_adaptation_uptake": (0.0, 1.0),
-    "n_households_exposed_to_flooding": (0.0, 1.0),
+    "expected_annual_damage": (0.0, 1e7),
+    "n_adaptation_uptake": (0.0, 1e3),
+    "n_households_exposed_to_flooding": (0.0, 3e3),
 }
 
 
@@ -732,6 +732,489 @@ def plot_multirun_results_within_base_or_future(
     )
 
 
+def read_ead_per_gdl_region(
+    model_path: str,
+    scenario: str,
+    run_prefixes: list[str] | None = None,
+) -> dict[str, dict[str, pd.DataFrame]]:
+    """Read expected annual damage (EAD) per GDL region for multiple runs.
+
+    Args:
+        model_path: Root model path.
+        scenario: Scenario name to read from each cluster folder.
+        run_prefixes: Optional list of prefixes to include in the results.
+
+    Returns:
+        Nested dictionary {run_prefix: {run_name: dataframe}} where each
+        dataframe contains yearly EAD values summed across all clusters and one
+        column per region (e.g., MEXr126, USAr103).
+
+    Raises:
+        ValueError: If run_prefixes is provided but empty.
+    """
+    if run_prefixes is not None and len(run_prefixes) == 0:
+        raise ValueError("run_prefixes must contain at least one prefix when provided.")
+
+    if not os.path.exists(model_path):
+        return {}
+
+    cluster_folders: list[str] = sorted(
+        folder_name
+        for folder_name in os.listdir(model_path)
+        if folder_name.startswith("cluster_")
+        and os.path.isdir(os.path.join(model_path, folder_name))
+    )
+    if not cluster_folders:
+        return {}
+
+    ead_results: dict[str, dict[str, pd.DataFrame]] = {}
+    for cluster_folder in cluster_folders:
+        output_root: str = os.path.join(model_path, cluster_folder, scenario, "output")
+        if not os.path.exists(output_root):
+            continue
+
+        run_names: list[str] = sorted(
+            run_name
+            for run_name in os.listdir(output_root)
+            if os.path.isdir(os.path.join(output_root, run_name))
+        )
+        for run_name in run_names:
+            matched_prefix: str | None = None
+            if run_prefixes is None:
+                matched_prefix = run_name
+            else:
+                for run_prefix in run_prefixes:
+                    if run_name.startswith(run_prefix):
+                        matched_prefix = run_prefix
+                        break
+
+            if matched_prefix is None:
+                continue
+
+            csv_path: str = os.path.join(
+                output_root, run_name, "ead_per_gdl_region.csv"
+            )
+            if not os.path.exists(csv_path):
+                continue
+
+            ead_df: pd.DataFrame = pd.read_csv(csv_path)
+            if "year" in ead_df.columns:
+                ead_df = ead_df.set_index("year")
+            elif len(ead_df.columns) > 0 and str(ead_df.columns[0]).startswith(
+                "Unnamed"
+            ):
+                ead_df = ead_df.set_index(ead_df.columns[0])
+                ead_df.index.name = "year"
+
+            ead_df = ead_df.apply(pd.to_numeric, errors="coerce").fillna(0.0)
+
+            if matched_prefix not in ead_results:
+                ead_results[matched_prefix] = {}
+
+            if run_name not in ead_results[matched_prefix]:
+                ead_results[matched_prefix][run_name] = ead_df
+            else:
+                # Align both year index and region columns, then sum values.
+                ead_results[matched_prefix][run_name] = ead_results[matched_prefix][
+                    run_name
+                ].add(ead_df, fill_value=0.0)
+
+    for run_prefix, runs_by_name in ead_results.items():
+        for run_name, run_df in runs_by_name.items():
+            ead_results[run_prefix][run_name] = run_df.sort_index().sort_index(axis=1)
+
+    return ead_results
+
+
+def _read_run_level_gdl_metric(
+    run_output_path: str,
+    candidate_filenames: list[str],
+) -> pd.DataFrame | None:
+    """Read one run-level metric table with year index and GDL region columns.
+
+    Notes:
+        The metric can be stored as CSV or parquet. Values are coerced to numeric
+        and missing values are filled with zeros before returning.
+
+    Args:
+        run_output_path: Path to one run output folder.
+        candidate_filenames: Candidate file names to try in priority order.
+
+    Returns:
+        Dataframe indexed by year with one column per GDL region, or None when no
+        candidate file exists for the run.
+    """
+    metric_df: pd.DataFrame | None = None
+    for candidate_filename in candidate_filenames:
+        file_path: str = os.path.join(run_output_path, candidate_filename)
+        if not os.path.exists(file_path):
+            continue
+
+        if candidate_filename.endswith(".csv"):
+            metric_df = pd.read_csv(file_path)
+        elif candidate_filename.endswith(".parquet"):
+            metric_df = pd.read_parquet(file_path)
+        else:
+            continue
+        break
+
+    if metric_df is None:
+        return None
+
+    if "year" in metric_df.columns:
+        metric_df = metric_df.set_index("year")
+    elif len(metric_df.columns) > 0 and str(metric_df.columns[0]).startswith("Unnamed"):
+        metric_df = metric_df.set_index(metric_df.columns[0])
+        metric_df.index.name = "year"
+
+    metric_df = metric_df.apply(pd.to_numeric, errors="coerce").fillna(0.0)
+    return metric_df
+
+
+def read_floodzone_households_per_gdl_region(
+    model_path: str,
+    scenario: str,
+    run_prefixes: list[str] | None = None,
+) -> dict[str, dict[str, pd.DataFrame]]:
+    """Read flood-exposed household counts per GDL region for multiple runs.
+
+    Notes:
+        Files are read from each run folder and summed across cluster folders,
+        matching runs by exact run name.
+
+    Args:
+        model_path: Root model path.
+        scenario: Scenario name to read from each cluster folder.
+        run_prefixes: Optional list of prefixes to include in the results.
+
+    Returns:
+        Nested dictionary {run_prefix: {run_name: dataframe}} where each dataframe
+        contains yearly exposed-household counts per GDL region.
+
+    Raises:
+        ValueError: If run_prefixes is provided but empty.
+    """
+    if run_prefixes is not None and len(run_prefixes) == 0:
+        raise ValueError("run_prefixes must contain at least one prefix when provided.")
+
+    if not os.path.exists(model_path):
+        return {}
+
+    cluster_folders: list[str] = sorted(
+        folder_name
+        for folder_name in os.listdir(model_path)
+        if folder_name.startswith("cluster_")
+        and os.path.isdir(os.path.join(model_path, folder_name))
+    )
+    if not cluster_folders:
+        return {}
+
+    floodzone_results: dict[str, dict[str, pd.DataFrame]] = {}
+    candidate_filenames: list[str] = [
+        "n_households_in_floodzone_per_gdl_region.csv",
+        "n_households_exposed_to_flooding_per_gdl_region.csv",
+        "households_exposed_to_flooding_per_gdl_region.csv",
+        "n_households_in_floodzone_per_gdl_region.parquet",
+        "n_households_exposed_to_flooding_per_gdl_region.parquet",
+        "households_exposed_to_flooding_per_gdl_region.parquet",
+    ]
+
+    for cluster_folder in cluster_folders:
+        output_root: str = os.path.join(model_path, cluster_folder, scenario, "output")
+        if not os.path.exists(output_root):
+            continue
+
+        run_names: list[str] = sorted(
+            run_name
+            for run_name in os.listdir(output_root)
+            if os.path.isdir(os.path.join(output_root, run_name))
+        )
+        for run_name in run_names:
+            matched_prefix: str | None = None
+            if run_prefixes is None:
+                matched_prefix = run_name
+            else:
+                for run_prefix in run_prefixes:
+                    if run_name.startswith(run_prefix):
+                        matched_prefix = run_prefix
+                        break
+
+            if matched_prefix is None:
+                continue
+
+            run_output_path: str = os.path.join(output_root, run_name)
+            floodzone_df: pd.DataFrame | None = _read_run_level_gdl_metric(
+                run_output_path=run_output_path,
+                candidate_filenames=candidate_filenames,
+            )
+            if floodzone_df is None:
+                continue
+
+            if matched_prefix not in floodzone_results:
+                floodzone_results[matched_prefix] = {}
+
+            if run_name not in floodzone_results[matched_prefix]:
+                floodzone_results[matched_prefix][run_name] = floodzone_df
+            else:
+                floodzone_results[matched_prefix][run_name] = floodzone_results[
+                    matched_prefix
+                ][run_name].add(floodzone_df, fill_value=0.0)
+
+    for run_prefix, runs_by_name in floodzone_results.items():
+        for run_name, run_df in runs_by_name.items():
+            floodzone_results[run_prefix][run_name] = run_df.sort_index().sort_index(
+                axis=1
+            )
+
+    return floodzone_results
+
+
+def _last_timestep_mean_by_region(
+    runs_by_name: dict[str, pd.DataFrame],
+) -> pd.Series:
+    """Compute mean value per region at the final timestep over runs.
+
+    Args:
+        runs_by_name: Mapping of run name to per-region time series table.
+
+    Returns:
+        Series indexed by GDL region with the mean value at the last timestep.
+    """
+    run_frames: list[pd.DataFrame] = [run_df for run_df in runs_by_name.values()]
+    all_years: pd.Index = run_frames[0].index
+    all_regions: pd.Index = run_frames[0].columns
+    for run_df in run_frames[1:]:
+        all_years = all_years.union(run_df.index)
+        all_regions = all_regions.union(run_df.columns)
+
+    aligned_runs: list[pd.DataFrame] = [
+        run_df.reindex(index=all_years, columns=all_regions).fillna(0.0)
+        for run_df in run_frames
+    ]
+
+    last_timestep_year: int | float | str = all_years.max()
+    last_step_series_list: list[pd.Series] = [
+        aligned_run.loc[last_timestep_year] for aligned_run in aligned_runs
+    ]
+    return pd.concat(last_step_series_list, axis=1).mean(axis=1)
+
+
+def _export_last_timestep_gdl_summary(
+    model_path: str,
+    scenario: str,
+    ead_results: dict[str, dict[str, pd.DataFrame]],
+    floodzone_results: dict[str, dict[str, pd.DataFrame]],
+) -> None:
+    """Export one summary table with GDL region and last-step run means.
+
+    Notes:
+        This creates a wide table where each row is one GDL region and each
+        metric/prefix combination gets its own column.
+
+    Args:
+        model_path: Root model path.
+        scenario: Scenario name used for output folder naming.
+        ead_results: Cluster-summed EAD tables grouped by run prefix and run name.
+        floodzone_results: Cluster-summed exposed-household tables grouped by run
+            prefix and run name.
+    """
+    summary_root: str = os.path.join(
+        model_path,
+        "combined_results",
+        scenario,
+        "ead_floodzone_last_timestep_summary",
+    )
+    os.makedirs(summary_root, exist_ok=True)
+
+    all_regions: set[str] = set()
+    for runs_by_name in ead_results.values():
+        for run_df in runs_by_name.values():
+            all_regions.update(str(column_name) for column_name in run_df.columns)
+    for runs_by_name in floodzone_results.values():
+        for run_df in runs_by_name.values():
+            all_regions.update(str(column_name) for column_name in run_df.columns)
+
+    if not all_regions:
+        return
+
+    summary_df: pd.DataFrame = pd.DataFrame({"gdl_region": sorted(all_regions)})
+
+    for run_prefix, runs_by_name in ead_results.items():
+        if not runs_by_name:
+            continue
+        ead_last_mean: pd.Series = _last_timestep_mean_by_region(runs_by_name)
+        summary_df = summary_df.merge(
+            ead_last_mean.rename(f"{run_prefix}_ead_mean_last_timestep_usd_per_year"),
+            left_on="gdl_region",
+            right_index=True,
+            how="left",
+        )
+
+    for run_prefix, runs_by_name in floodzone_results.items():
+        if not runs_by_name:
+            continue
+        floodzone_last_mean: pd.Series = _last_timestep_mean_by_region(runs_by_name)
+        summary_df = summary_df.merge(
+            floodzone_last_mean.rename(
+                f"{run_prefix}_n_households_in_floodzone_mean_last_timestep"
+            ),
+            left_on="gdl_region",
+            right_index=True,
+            how="left",
+        )
+
+    summary_df = summary_df.sort_values("gdl_region").fillna(0.0)
+    summary_output_path: str = os.path.join(
+        summary_root,
+        "gdl_region_last_timestep_mean_ead_and_floodzone_households.csv",
+    )
+    summary_df.to_csv(summary_output_path, index=False)
+
+
+def plot_ead_per_gdl_region_across_clusters(
+    model_path: str,
+    scenario: str,
+    run_prefixes: list[str] | None = None,
+    output_path: str | None = None,
+    x_axis: Literal["year", "timestep"] = "year",
+) -> None:
+    """Plot cluster-summed EAD per GDL region while keeping runs separate.
+
+    Notes:
+        The function first aggregates `ead_per_gdl_region.csv` over all cluster
+        folders by matching run names and summing each region column name.
+        It also writes one CSV per adaptation scenario containing the mean EAD
+        per GDL region over runs for each timestep/year.
+
+    Args:
+        model_path: Root model path.
+        scenario: Scenario name to read from each cluster folder.
+        run_prefixes: Optional run prefixes to include.
+        output_path: Optional output image path.
+        x_axis: X-axis mode, either year (data index) or timestep (0..n-1).
+    """
+    x_axis = _validate_x_axis_mode(x_axis)
+
+    ead_results: dict[str, dict[str, pd.DataFrame]] = read_ead_per_gdl_region(
+        model_path=model_path,
+        scenario=scenario,
+        run_prefixes=run_prefixes,
+    )
+    if not ead_results:
+        return
+
+    floodzone_results: dict[str, dict[str, pd.DataFrame]] = (
+        read_floodzone_households_per_gdl_region(
+            model_path=model_path,
+            scenario=scenario,
+            run_prefixes=run_prefixes,
+        )
+    )
+    _export_last_timestep_gdl_summary(
+        model_path=model_path,
+        scenario=scenario,
+        ead_results=ead_results,
+        floodzone_results=floodzone_results,
+    )
+
+    mean_output_root: str = os.path.join(
+        model_path,
+        "combined_results",
+        scenario,
+        "ead_mean_over_runs_by_scenario",
+    )
+    os.makedirs(mean_output_root, exist_ok=True)
+    for run_prefix, runs_by_name in ead_results.items():
+        if not runs_by_name:
+            continue
+
+        run_frames: list[pd.DataFrame] = [run_df for run_df in runs_by_name.values()]
+        all_years: pd.Index = run_frames[0].index
+        all_regions: pd.Index = run_frames[0].columns
+        for run_df in run_frames[1:]:
+            all_years = all_years.union(run_df.index)
+            all_regions = all_regions.union(run_df.columns)
+
+        aligned_runs: list[pd.DataFrame] = [
+            run_df.reindex(index=all_years, columns=all_regions).fillna(0.0)
+            for run_df in run_frames
+        ]
+        summed_by_region: pd.DataFrame = aligned_runs[0].copy()
+        for run_df in aligned_runs[1:]:
+            summed_by_region = summed_by_region.add(run_df, fill_value=0.0)
+
+        mean_by_region: pd.DataFrame = (
+            (summed_by_region / float(len(aligned_runs)))
+            .sort_index()
+            .sort_index(axis=1)
+        )
+        mean_output_path: str = os.path.join(
+            mean_output_root,
+            f"{run_prefix}_ead_per_gdl_region_mean_over_runs.csv",
+        )
+        mean_by_region.T.to_csv(mean_output_path, index_label="year")
+
+    non_zero_regions: set[str] = set()
+    for runs_by_name in ead_results.values():
+        for run_df in runs_by_name.values():
+            non_zero_columns: pd.Index = run_df.columns[(run_df != 0.0).any(axis=0)]
+            non_zero_regions.update(
+                str(column_name) for column_name in non_zero_columns
+            )
+
+    if not non_zero_regions:
+        return
+
+    results_for_plot: dict[str, dict[str, pd.DataFrame]] = {}
+    for run_prefix, runs_by_name in ead_results.items():
+        if not runs_by_name:
+            continue
+
+        all_regions: list[str] = sorted(
+            {
+                region_name
+                for run_df in runs_by_name.values()
+                for region_name in run_df.columns
+                if region_name in non_zero_regions
+            }
+        )
+        if not all_regions:
+            continue
+
+        per_region_frames: dict[str, pd.DataFrame] = {}
+        for region_name in all_regions:
+            region_series_by_run: dict[str, pd.Series] = {}
+            for run_name, run_df in runs_by_name.items():
+                if region_name in run_df.columns:
+                    region_series_by_run[run_name] = run_df[region_name]
+
+            if not region_series_by_run:
+                continue
+
+            per_region_frames[region_name] = pd.DataFrame(region_series_by_run).fillna(
+                0.0
+            )
+
+        if per_region_frames:
+            results_for_plot[run_prefix] = per_region_frames
+
+    if not results_for_plot:
+        return
+
+    colors: dict[str, str] = _build_group_colors(list(results_for_plot.keys()))
+    _plot_multirun_results(
+        results=results_for_plot,
+        colors=colors,
+        output_path=(
+            output_path
+            if output_path is not None
+            else _comparison_output_path(model_path, "ead_regions_combined", scenario)
+        ),
+        predefined_ylims=None,
+        x_axis=x_axis,
+    )
+
+
 def combine_cluster_results(
     model_path: str,
     scenario: str,
@@ -766,7 +1249,6 @@ def combine_cluster_results(
     combined_results: dict[str, dict[str, pd.DataFrame]] = {
         run_prefix: {} for run_prefix in run_prefixes
     }
-
     for cluster_folder in cluster_folders:
         cluster_results: dict[str, dict[str, pd.DataFrame]] = (
             read_multirun_results_within_scenario(
@@ -807,6 +1289,20 @@ def combine_cluster_results(
                 f"{household_attribute_name}.parquet",
             )
             attribute_df.to_parquet(attribute_output_path)
+
+    ead_results: dict[str, dict[str, pd.DataFrame]] = read_ead_per_gdl_region(
+        model_path=model_path,
+        scenario=scenario,
+        run_prefixes=run_prefixes,
+    )
+    combined_ead_root: str = os.path.join(
+        model_path, "combined_results", scenario, "output"
+    )
+    for _, runs_by_name in ead_results.items():
+        for run_name, run_df in runs_by_name.items():
+            run_output_path: str = os.path.join(combined_ead_root, run_name)
+            os.makedirs(run_output_path, exist_ok=True)
+            run_df.to_csv(os.path.join(run_output_path, "ead_per_gdl_region.csv"))
 
 
 def read_combined_cluster_results(
@@ -924,6 +1420,12 @@ if __name__ == "__main__":
 
     # 2) Plot merged cluster results for the selected scenario.
     plot_combined_cluster_results_within_scenario(
+        model_path=model_path,
+        scenario=scenario,
+        run_prefixes=prefixes,
+        x_axis="year",
+    )
+    plot_ead_per_gdl_region_across_clusters(
         model_path=model_path,
         scenario=scenario,
         run_prefixes=prefixes,
