@@ -501,9 +501,7 @@ class Households(AgentBaseClass):
         )
         # initiate array with RANDOM annual adaptation costs [dummy data for now, values are available in literature]
         adaptation_costs = (
-            np.maximum(
-                self.var.property_value.data * 0.05, 10_800 * 0.88
-            )  # .88 used based on construction inflators for Mexico.
+            np.maximum(self.var.property_value.data * 0.05, 2705)  # scaled to mexico.
         ).astype(np.int64)
         self.var.adaptation_costs = DynamicArray(adaptation_costs, max_n=self.max_n)
 
