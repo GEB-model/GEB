@@ -40,7 +40,6 @@ _EXTERNAL_MODEL_DISPLAY_NAMES: dict[str, str] = {
 
 def _create_discharge_timeseries_figure(
     validation_df: pd.DataFrame,
-    title: str,
     upstream_area_ratio: float,
     metrics: Mapping[str, float],
     include_mean: bool,
@@ -49,7 +48,6 @@ def _create_discharge_timeseries_figure(
 
     Args:
         validation_df: Observed and simulated discharge time series (m3/s).
-        title: Figure title.
         upstream_area_ratio: Observed-to-modeled upstream-area ratio
             (dimensionless).
         metrics: Discharge validation metrics keyed by metric name.
@@ -71,7 +69,6 @@ def _create_discharge_timeseries_figure(
             color=color,
         )
     axis.set(
-        title=title,
         xlabel="Time",
         ylabel="Discharge [m3/s]",
         xlim=(validation_df.index.min(), validation_df.index.max()),
@@ -108,7 +105,6 @@ def _create_discharge_timeseries_figure(
 def save_discharge_timeseries_plots(
     station_id: Any,
     validation_df: pd.DataFrame,
-    station_name: str,
     upstream_area_ratio: float,
     metrics: Mapping[str, float],
     plot_folder: Path,
@@ -119,7 +115,6 @@ def save_discharge_timeseries_plots(
     Args:
         station_id: Station identifier used in output filenames.
         validation_df: Observed and simulated discharge time series (m3/s).
-        station_name: Human-readable station name.
         upstream_area_ratio: Observed-to-modeled upstream-area ratio
             (dimensionless).
         metrics: Discharge validation metrics keyed by metric name.
@@ -130,12 +125,11 @@ def save_discharge_timeseries_plots(
     timeseries_folder.mkdir(parents=True, exist_ok=True)
     figure: plt.Figure = _create_discharge_timeseries_figure(
         validation_df=validation_df,
-        title=f"Discharge vs observations for station {station_name}",
         upstream_area_ratio=upstream_area_ratio,
         metrics=metrics,
         include_mean=True,
     )
-    figure.savefig(timeseries_folder / f"timeseries_plot_{station_id}.png", dpi=72)
+    figure.savefig(timeseries_folder / f"timeseries_plot_{station_id}.png", dpi=300)
     plt.close(figure)
 
     if include_yearly_plots:
@@ -144,14 +138,13 @@ def save_discharge_timeseries_plots(
             year_value: int = int(year)
             yearly_figure: plt.Figure = _create_discharge_timeseries_figure(
                 validation_df=yearly_df,
-                title=f"GEB discharge vs observations for {year_value} at station {station_name}",
                 upstream_area_ratio=upstream_area_ratio,
                 metrics=metrics,
                 include_mean=False,
             )
             yearly_figure.savefig(
                 timeseries_folder / f"timeseries_plot_{station_id}_{year_value}.png",
-                dpi=72,
+                dpi=300,
             )
             plt.close(yearly_figure)
 
@@ -223,7 +216,6 @@ def _plot_skill_score_map_single(
     evaluation_gdf: gpd.GeoDataFrame,
     metric_col: str,
     metric_label: str,
-    metric_title: str,
     cmap_name: str,
     vmin: float,
     vmax: float,
@@ -236,7 +228,6 @@ def _plot_skill_score_map_single(
         evaluation_gdf: Per-station metrics with point geometry in any CRS.
         metric_col: Column name of the metric to plot (e.g. ``"KGE"``).
         metric_label: Short colorbar label (e.g. ``"KGE"``).
-        metric_title: Figure title.
         cmap_name: Matplotlib colormap name.
         vmin: Colorbar minimum value.
         vmax: Colorbar maximum value.
@@ -343,13 +334,12 @@ def _plot_skill_score_map_single(
         zorder=5,
     )
 
-    ax.set_title(metric_title, fontsize=13, fontweight="bold", pad=10)
     ax.tick_params(labelbottom=False, labelleft=False, bottom=False, left=False)
     for spine in ax.spines.values():
         spine.set_edgecolor("0.3")
 
     for ext in ("svg", "png"):
-        fig.savefig(f"{output_path}.{ext}", bbox_inches="tight", dpi=200)
+        fig.savefig(f"{output_path}.{ext}", bbox_inches="tight", dpi=300)
     plt.close(fig)
 
 
@@ -393,16 +383,29 @@ def _plot_kge_component_maps(
     gdf_3857: gpd.GeoDataFrame = evaluation_gdf.to_crs("EPSG:3857")
     region_3857: gpd.GeoDataFrame = region_geom.to_crs("EPSG:3857")
 
-    fig: plt.Figure
-    axes: np.ndarray
-    fig, axes = plt.subplots(
+    fig: plt.Figure = plt.figure(figsize=(15, 12))
+    grid = fig.add_gridspec(
         2,
         2,
-        figsize=(15, 12),
-        constrained_layout=True,
+        left=0.02,
+        right=0.92,
+        bottom=0.03,
+        top=0.94,
+        wspace=0.12,
+        hspace=0.18,
     )
+    map_axes: list[plt.Axes] = [
+        fig.add_subplot(grid[0, 0]),
+        fig.add_subplot(grid[0, 1]),
+        fig.add_subplot(grid[1, 0]),
+        fig.add_subplot(grid[1, 1]),
+    ]
 
-    for ax, cfg in zip(axes.flat, metric_configs, strict=True):
+    panel_labels: tuple[str, ...] = ("a", "b", "c", "d")
+    scalar_mappables: list[plt.cm.ScalarMappable] = []
+    for ax, cfg, panel_label in zip(
+        map_axes, metric_configs, panel_labels, strict=True
+    ):
         metric_col: str = str(cfg["col"])
         vmin_value: object = cfg["vmin"]
         vmax_value: object = cfg["vmax"]
@@ -462,24 +465,64 @@ def _plot_kge_component_maps(
             norm=norm,
         )
         scalar_mappable.set_array([])
+        scalar_mappables.append(scalar_mappable)
+
+        ax.tick_params(labelbottom=False, labelleft=False, bottom=False, left=False)
+        for spine in ax.spines.values():
+            spine.set_edgecolor("0.3")
+        ax.text(
+            0.015,
+            0.985,
+            f"{panel_label})",
+            transform=ax.transAxes,
+            fontsize=12,
+            fontweight="bold",
+            ha="left",
+            va="top",
+            color="black",
+            bbox={
+                "facecolor": "white",
+                "edgecolor": "none",
+                "alpha": 0.85,
+                "pad": 1.5,
+            },
+            zorder=6,
+        )
+
+    # Fixed-aspect map axes move within their grid cells. Positioning each
+    # colorbar from the rendered map edge keeps it directly beside the map.
+    fig.canvas.draw()
+    for ax, cfg, scalar_mappable in zip(
+        map_axes, metric_configs, scalar_mappables, strict=True
+    ):
+        axis_position = ax.get_position()
+        colorbar_axis: plt.Axes = fig.add_axes(
+            (
+                axis_position.x1 + 0.006,
+                axis_position.y0,
+                0.012,
+                axis_position.height,
+            )
+        )
         colorbar: Colorbar = fig.colorbar(
             scalar_mappable,
-            ax=ax,
-            fraction=0.035,
-            pad=0.02,
-            aspect=28,
+            cax=colorbar_axis,
         )
         colorbar.set_label(str(cfg["label"]), fontsize=10)
         colorbar.ax.yaxis.set_tick_params(color="black", labelcolor="black")
         colorbar.outline.set_edgecolor("0.3")  # ty:ignore[call-non-callable]
-
-        ax.set_title(str(cfg["label"]), fontsize=12, fontweight="bold", pad=8)
-        ax.tick_params(labelbottom=False, labelleft=False, bottom=False, left=False)
-        for spine in ax.spines.values():
-            spine.set_edgecolor("0.3")
+        fig.text(
+            (axis_position.x0 + axis_position.x1) / 2,
+            axis_position.y1 + 0.008,
+            str(cfg["label"]),
+            fontsize=12,
+            fontweight="bold",
+            ha="center",
+            va="bottom",
+        )
 
     # One orientation aid is enough because all panels have identical extents.
-    lower_right_axis: plt.Axes = axes[1, 1]
+    lower_right_axis: plt.Axes = map_axes[3]
     x_min, x_max = lower_right_axis.get_xlim()
     y_min, y_max = lower_right_axis.get_ylim()
     map_width_m: float = x_max - x_min
@@ -508,14 +551,8 @@ def _plot_kge_component_maps(
         va="bottom",
         zorder=5,
     )
-    fig.suptitle(
-        "KGE and its components",
-        fontsize=14,
-        fontweight="bold",
-    )
-
     for extension in ("svg", "png"):
-        fig.savefig(f"{output_path}.{extension}", bbox_inches="tight", dpi=200)
+        fig.savefig(f"{output_path}.{extension}", dpi=300)
     plt.close(fig)
 
 
@@ -583,7 +620,6 @@ def plot_skill_score_maps(
             evaluation_gdf=evaluation_gdf,
             metric_col=col,
             metric_label=str(cfg["label"]),
-            metric_title=str(cfg["label"]),
             cmap_name=str(cfg["cmap"]),
             vmin=float(cast(float, cfg["vmin"])),
             vmax=vmax,
@@ -596,13 +632,17 @@ def plot_skill_score_maps(
         if "KGE_difference" not in difference_df:
             continue
         has_geometry: bool = "geometry" in difference_df
-        if not has_geometry and not {"x", "y"}.issubset(difference_df):
+        coordinate_columns: set[str] = {"station_longitude", "station_latitude"}
+        if not has_geometry and not coordinate_columns.issubset(difference_df):
             logger.info("No station geometry found for %s difference map.", model_name)
             continue
         if not has_geometry:
             difference_df = gpd.GeoDataFrame(
                 difference_df,
-                geometry=gpd.points_from_xy(difference_df["x"], difference_df["y"]),
+                geometry=gpd.points_from_xy(
+                    difference_df["station_longitude"],
+                    difference_df["station_latitude"],
+                ),
                 crs="EPSG:4326",
             )
         unmatched_difference_df: gpd.GeoDataFrame = gpd.GeoDataFrame(
@@ -644,7 +684,6 @@ def plot_skill_score_maps(
             evaluation_gdf=difference_gdf,
             metric_col="KGE_difference",
             metric_label="KGE difference (-)",
-            metric_title=f"KGE Difference: GEB - {model_name}",
             cmap_name="RdBu",
             vmin=-visible_limit,
             vmax=visible_limit,
@@ -727,84 +766,129 @@ def plot_seasonal_kge(
     logger: logging.Logger,
     export: bool = True,
 ) -> None:
-    """Plot station-level daily KGE distributions by meteorological season.
+    """Plot seasonal distributions of KGE and its three components.
 
     Args:
         evaluation_df: Per-station discharge evaluation metrics containing the
-            four ``KGE_daily_<season>`` columns.
+            seasonal daily KGE, correlation, bias-ratio, and variability-ratio
+            columns.
         output_folder: Root discharge evaluation output folder.
         logger: Logger used for output messages.
         export: Whether to save PNG and SVG versions of the figure.
     """
     season_names: tuple[str, ...] = ("winter", "spring", "summer", "autumn")
     season_colors: tuple[str, ...] = ("#4C78A8", "#59A14F", "#F2A541", "#B2794C")
-    seasonal_values: list[np.ndarray] = []
-    available_seasons: list[str] = []
-    available_colors: list[str] = []
-
-    for season_name, season_color in zip(season_names, season_colors, strict=True):
-        column_name: str = f"KGE_daily_{season_name}"
-        if column_name not in evaluation_df.columns:
-            logger.info("Seasonal KGE column '%s' is unavailable.", column_name)
-            continue
-        values: np.ndarray = pd.to_numeric(
-            evaluation_df[column_name], errors="coerce"
-        ).to_numpy(dtype=float)
-        finite_values: np.ndarray = values[np.isfinite(values)]
-        if finite_values.size == 0:
-            continue
-        seasonal_values.append(finite_values)
-        available_seasons.append(season_name)
-        available_colors.append(season_color)
-
-    if not seasonal_values:
-        logger.info("No seasonal KGE values available; skipping seasonal figure.")
+    metric_configs: tuple[dict[str, object], ...] = (
+        {
+            "column": "KGE",
+            "title": "Overall KGE",
+            "ylabel": "KGE",
+            "ylim": (-1.0, 1.0),
+            "reference": 0.0,
+        },
+        {
+            "column": "KGE_correlation",
+            "title": "Correlation component",
+            "ylabel": "Correlation, r",
+            "ylim": (-1.0, 1.0),
+            "reference": 0.0,
+        },
+        {
+            "column": "KGE_bias_ratio",
+            "title": "Bias component",
+            "ylabel": "Bias ratio, β",
+            "ylim": (0.0, 2.0),
+            "reference": 1.0,
+        },
+        {
+            "column": "KGE_variability_ratio",
+            "title": "Variability component",
+            "ylabel": "Variability ratio, α",
+            "ylim": (0.0, 2.0),
+            "reference": 1.0,
+        },
+    )
+    available_metric_columns: set[str] = {
+        str(metric_config["column"])
+        for metric_config in metric_configs
+        if any(
+            f"{metric_config['column']}_daily_{season_name}" in evaluation_df.columns
+            for season_name in season_names
+        )
+    }
+    if not available_metric_columns:
+        logger.info("No seasonal KGE metrics available; skipping seasonal figure.")
         return
 
-    figure, axis = plt.subplots(figsize=(6.3, 4.2))
-    for position, (season_name, season_color, values) in enumerate(
-        zip(
-            available_seasons,
-            available_colors,
-            seasonal_values,
-            strict=True,
-        ),
-        start=1,
-    ):
-        _draw_violin_box(
-            axis=axis,
-            values=values,
-            position=float(position),
-            bar_color=season_color,
-            violin_width=0.7,
-            violin_limits=(-1.0, 1.0),
+    figure, axes = plt.subplots(2, 2, figsize=(10.0, 7.2))
+    for axis, metric_config in zip(axes.flat, metric_configs, strict=True):
+        metric_name: str = str(metric_config["column"])
+        if metric_name not in available_metric_columns:
+            axis.set_visible(False)
+            continue
+        y_limits: tuple[float, float] = cast(tuple[float, float], metric_config["ylim"])
+        plotted_positions: list[int] = []
+        plotted_seasons: list[str] = []
+        for position, (season_name, season_color) in enumerate(
+            zip(season_names, season_colors, strict=True), start=1
+        ):
+            column_name: str = f"{metric_name}_daily_{season_name}"
+            if column_name not in evaluation_df.columns:
+                logger.info("Seasonal KGE column '%s' is unavailable.", column_name)
+                continue
+            values: np.ndarray = pd.to_numeric(
+                evaluation_df[column_name], errors="coerce"
+            ).to_numpy(dtype=float)
+            finite_values: np.ndarray = values[np.isfinite(values)]
+            if finite_values.size == 0:
+                continue
+            plotted_positions.append(position)
+            plotted_seasons.append(season_name)
+            _draw_violin_box(
+                axis=axis,
+                values=finite_values,
+                position=float(position),
+                bar_color=season_color,
+                violin_width=0.7,
+                violin_limits=y_limits,
+            )
+            annotation_y: float = y_limits[0] + 0.03 * (y_limits[1] - y_limits[0])
+            axis.text(
+                position,
+                annotation_y,
+                f"med={float(np.median(finite_values)):.2f}",
+                ha="center",
+                va="bottom",
+                fontsize=6.5,
+                color="0.25",
+                bbox={
+                    "boxstyle": "round,pad=0.12",
+                    "facecolor": "white",
+                    "edgecolor": "none",
+                    "alpha": 0.75,
+                },
+            )
+        if not plotted_positions:
+            axis.set_visible(False)
+            continue
+        axis.axhline(
+            float(cast(float, metric_config["reference"])),
+            color="0.55",
+            linewidth=0.8,
+            linestyle="--",
+            zorder=0,
         )
-        axis.text(
-            position,
-            -0.94,
-            f"med={float(np.median(values)):.2f}",
-            ha="center",
-            va="bottom",
-            fontsize=7,
-            color="0.25",
-            bbox={
-                "boxstyle": "round,pad=0.12",
-                "facecolor": "white",
-                "edgecolor": "none",
-                "alpha": 0.75,
-            },
+        axis.set(
+            title=str(metric_config["title"]),
+            ylabel=str(metric_config["ylabel"]),
+            xticks=plotted_positions,
+            xticklabels=[season_name.title() for season_name in plotted_seasons],
+            xlim=(0.5, 4.5),
+            ylim=y_limits,
         )
-
-    axis.axhline(0.0, color="0.55", linewidth=0.8, linestyle="--", zorder=0)
-    axis.set(
-        ylabel="KGE",
-        xticks=np.arange(1, len(available_seasons) + 1),
-        xticklabels=[season_name.title() for season_name in available_seasons],
-        ylim=(-1.0, 1.0),
-    )
-    axis.spines["top"].set_visible(False)
-    axis.spines["right"].set_visible(False)
-    axis.grid(axis="y", color="0.88", linewidth=0.7)
+        axis.spines["top"].set_visible(False)
+        axis.spines["right"].set_visible(False)
+        axis.grid(axis="y", color="0.88", linewidth=0.7)
     figure.tight_layout()
 
     if export:
@@ -814,7 +898,7 @@ def plot_seasonal_kge(
             output_path: Path = (
                 boxplots_folder / f"evaluation_skill_scores_kge_seasonal.{extension}"
             )
-            figure.savefig(output_path, bbox_inches="tight", dpi=150)
+            figure.savefig(output_path, bbox_inches="tight", dpi=300)
             logger.info("Seasonal KGE plot saved to: %s", output_path)
 
     plt.close(figure)
@@ -882,7 +966,7 @@ def plot_skill_score_boxplots(
     logger.info("Creating evaluation metrics skill score plots...")
 
     fig = plt.figure(
-        figsize=(8.2, 8.2) if single_model else (13.0, 6.5),
+        figsize=(8.0, 5.0) if single_model else (13.0, 6.5),
         constrained_layout=False,
     )
     outer_grid = fig.add_gridspec(
@@ -940,24 +1024,6 @@ def plot_skill_score_boxplots(
         )
     displayed_station_count: int | None = (
         station_count if station_count is not None else len(evaluation_df)
-    )
-    title_context_parts: list[str] = []
-    if matched_only and external_models:
-        title_context_parts.append("matched stations only")
-    if minimum_upstream_area_km2 is not None and minimum_upstream_area_km2 > 0.0:
-        title_context_parts.append(
-            f"upstream area >= {minimum_upstream_area_km2:g} km2"
-        )
-    if displayed_station_count is not None:
-        title_context_parts.append(f"n={displayed_station_count}")
-    plot_context: str = (
-        f" ({'; '.join(title_context_parts)})" if title_context_parts else ""
-    )
-    fig.suptitle(
-        f"Discharge Evaluation — Skill Score Distributions{plot_context}",
-        fontsize=14,
-        fontweight="bold",
-        y=0.97,
     )
 
     component_titles: dict[str, str] = {
@@ -1116,7 +1182,7 @@ def plot_skill_score_boxplots(
     fig.subplots_adjust(
         left=0.07 if single_model else 0.055,
         right=0.985,
-        top=0.89 if single_model else 0.88,
+        top=0.96,
         bottom=0.07 if single_model else 0.14,
     )
 
@@ -1147,7 +1213,7 @@ def plot_skill_score_boxplots(
             fig.savefig(
                 output_path,
                 bbox_inches=None if single_model else "tight",
-                dpi=150,
+                dpi=300,
             )
             logger.info("Skill score plot saved to: %s", output_path)
 
@@ -1263,17 +1329,10 @@ def plot_kge_external_model_comparison(
         plt.close(fig)
         return
 
-    axis.axhline(1.0, color="0.5", linewidth=0.8, linestyle="--", zorder=0)
     axis.set_ylim(visible_y_min, visible_y_max)
     axis.set_ylabel("KGE")
     axis.set_xticks(x_tick_positions)
     axis.set_xticklabels(x_tick_labels, fontsize=8)
-    axis.set_title(
-        "Discharge Evaluation — KGE Comparison Across Matched External Models",
-        fontsize=12,
-        fontweight="bold",
-        pad=12,
-    )
     axis.grid(axis="y", color="0.85", linewidth=0.5)
     for spine in axis.spines.values():
         spine.set_edgecolor("0.7")
@@ -1294,7 +1353,7 @@ def plot_kge_external_model_comparison(
         edgecolor="0.7",
         bbox_to_anchor=(0.5, -0.34),
     )
-    fig.subplots_adjust(left=0.09, right=0.98, top=0.84, bottom=0.33)
+    fig.subplots_adjust(left=0.09, right=0.98, top=0.96, bottom=0.33)
 
     if export:
         boxplots_folder: Path = output_folder / "skill_score_boxplots"
@@ -1304,7 +1363,7 @@ def plot_kge_external_model_comparison(
                 boxplots_folder
                 / f"evaluation_skill_scores_kge_external_comparison.{extension}"
             )
-            plt.savefig(output_path, bbox_inches="tight", dpi=150)
+            plt.savefig(output_path, bbox_inches="tight", dpi=300)
             logger.info("KGE external comparison plot saved to: %s", output_path)
 
     plt.show()
@@ -1448,11 +1507,6 @@ def plot_skill_scores_vs_upstream_area(
         plt.close(fig)
         return
 
-    fig.suptitle(
-        "Discharge Skill Scores vs Upstream Area",
-        fontweight="bold",
-        fontsize=14,
-    )
     for axis in axes_by_metric.values():
         axis.set_xlabel("Upstream area (km2)")
 
@@ -1468,10 +1522,10 @@ def plot_skill_scores_vs_upstream_area(
         fontsize=8,
     )
 
-    scatterplots_folder: Path = output_folder / "skill_score_scatterplots"
-    scatterplots_folder.mkdir(parents=True, exist_ok=True)
-    output_path: Path = scatterplots_folder / "skill_scores_vs_upstream_area"
+    explanations_folder: Path = output_folder / "skill_score_explanations"
+    explanations_folder.mkdir(parents=True, exist_ok=True)
+    output_path: Path = explanations_folder / "skill_scores_vs_upstream_area"
     for ext in ("svg", "png"):
-        plt.savefig(f"{output_path}.{ext}", bbox_inches="tight", dpi=200)
+        plt.savefig(f"{output_path}.{ext}", bbox_inches="tight", dpi=300)
     plt.close(fig)
     logger.info("Saved skill score upstream-area scatterplot to: %s", output_path)

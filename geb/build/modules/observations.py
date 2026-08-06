@@ -123,6 +123,7 @@ class Observations(BuildModelBase):
             {
                 "discharge_observations_station_ID": discharge_observations.id.values,
                 "discharge_observations_station_name": discharge_observations.station_name.values,
+                "discharge_observations_source": "GRDC",
                 "x": discharge_observations.x.values,
                 "y": discharge_observations.y.values,
                 "discharge_observations_upstream_area_m2": discharge_observations.area.values
@@ -213,6 +214,7 @@ class Observations(BuildModelBase):
                             {
                                 "discharge_observations_station_ID": station_id,
                                 "discharge_observations_station_name": station_name,
+                                "discharge_observations_source": f"custom:{station_path.name}",
                                 "x": lon_lat[0],
                                 "y": lon_lat[1],
                                 "discharge_observations_upstream_area_m2": np.nan,  # Not provided in basic CSV
@@ -263,6 +265,7 @@ class Observations(BuildModelBase):
             # Create empty snapping results Excel file with proper columns
             empty_cols = [
                 "discharge_observations_station_name",
+                "discharge_observations_source",
                 "discharge_observations_station_ID",
                 "discharge_observations_river_name",
                 "discharge_observations_upstream_area_m2",
@@ -310,6 +313,7 @@ class Observations(BuildModelBase):
         for _, station_row in tqdm(obs_metadata.iterrows(), total=len(obs_metadata)):
             station_id = station_row["discharge_observations_station_ID"]
             station_name = station_row["discharge_observations_station_name"]
+            station_source = station_row["discharge_observations_source"]
             station_coords: tuple[float, float] = (station_row["x"], station_row["y"])
 
             discharge_observations_uparea_m2 = station_row[
@@ -344,6 +348,7 @@ class Observations(BuildModelBase):
             discharge_snapping_results.append(
                 {
                     "discharge_observations_station_name": station_name,
+                    "discharge_observations_source": station_source,
                     "discharge_observations_station_ID": station_id,
                     "discharge_observations_river_name": discharge_observations_rivername,
                     "discharge_observations_upstream_area_m2": discharge_observations_uparea_m2,

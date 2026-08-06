@@ -9,7 +9,8 @@ The hydrology evaluation module provides comprehensive tools to assess model per
 | Method | Purpose | Output |
 | --- | --- | --- |
 | `evaluate_discharge` | Compare simulated vs observed discharge at gauging stations | Performance metrics (KGE, NSE, R), timeseries plots, interactive maps |
-| `plot_discharge_characteristics` | Relate discharge skill scores to catchment characteristics | Six-panel scientific figures and enriched station table |
+| `export_discharge_publication_data` | Collect observation-free station simulations for publication | Raw station Parquet files, station catalogue, evaluation spreadsheet, README |
+| `plot_discharge_characteristics` | Relate KGE and its components to catchment characteristics from GRDC-Caravan | Combined heatmap–scatterplot figure, 32-characteristic scatterplot figure, and association table |
 | `plot_discharge` | Visualize spatial patterns of mean discharge | Spatial maps showing discharge distribution |
 | `skill_score_graphs` | Summarize performance across all stations in the model domain | Boxplots of KGE, NSE, R distributions |
 | `water_circle` | Visualize water balance as flow diagram | Interactive Sankey diagram of water fluxes |
@@ -52,14 +53,15 @@ Three metrics are calculated for each station:
 
 - **KGE** (Kling-Gupta Efficiency): Overall model performance (-∞ to 1, perfect = 1)
 - **NSE** (Nash-Sutcliffe Efficiency): How well model predicts observations (-∞ to 1, perfect = 1)
-- **R** (Correlation): Linear relationship between simulated and observed (0 to 1, perfect = 1)
+- **R** (Correlation): Linear relationship between simulated and observed (-1 to 1, perfect = 1)
 
 ### Outputs
 
-The discharge evaluation results are saved to `output/evaluate/discharge/`:
+The discharge evaluation results are saved to
+`output/<run_name>/evaluate/hydrology/evaluate_discharge/`:
 
 **Overall evaluation results** (`evaluation_results/`):
-- `evaluation_metrics.xlsx`: Performance metrics (KGE, NSE, R) for all stations with coordinates
+- `evaluation_metrics.xlsx`: Performance metrics for all stations.
 - `evaluation_metrics.geoparquet`: Same metrics in geospatial format for GIS analysis
 - `discharge_evaluation_metrics.png`: Map showing spatial distribution of metrics
 - `discharge_evaluation_map.html`: Interactive Folium map to explore station performance
@@ -83,7 +85,8 @@ For discharge evaluation, your model must have been build and run, in which the 
 
 - Observed discharge data in the data catalog (`discharge/Q_obs`)
 - Gauging station locations snapped to river network (`discharge/discharge_snapped_locations`)
-- Simulated discharge output from model run (`output/report/{run_name}/hydrology.routing/discharge_daily.zarr`)
+- Per-station simulated discharge reports from the model run
+  (`output/<run_name>/report/hydrology.routing/discharge_hourly_m3_per_s_<station_id>.parquet`)
 
 ### Mean-flow benchmark
 
@@ -92,6 +95,37 @@ Use the observed mean flow as a simple benchmark for discharge evaluation:
 - NSE > 0: The simulation improves upon using the observed mean flow as the prediction.
 - KGE > -0.41: The simulation improves upon the observed mean-flow benchmark.
 - R describes correlation between simulated and observed flow, but is not itself a mean-flow benchmark score.
+
+### Catchment-characteristic explanation
+
+Run the GRDC-Caravan analysis after discharge evaluation:
+
+```bash
+geb evaluate --method hydrology.plot_discharge_characteristics --run-name default
+```
+
+The combined figure reports Spearman associations with correlation `r`,
+mean-flow ratio `beta`, variability ratio `alpha`, and the original KGE. 
+
+### Publication-ready station simulations
+
+After running discharge evaluation, create a self-contained folder for a later
+Zenodo deposition:
+
+```bash
+geb evaluate --method hydrology.export_discharge_publication_data --run-name default
+```
+
+The resulting `evaluate_discharge/publication_data/` folder contains one raw
+hourly reporter Parquet file per evaluated station, a CSV station catalogue
+with the station identity and source plus original and snapped coordinates, the
+evaluation spreadsheet, and a README. Simulations are raw GEB reporter values
+in m3/s: no observation-based upstream-area correction or daily resampling is
+applied.
+
+Observed discharge is intentionally excluded because source-specific licences
+can restrict redistribution. For GRDC stations, users should obtain the
+observations from the GRDC Data Portal.
 
 ### External skill-score comparisons
 

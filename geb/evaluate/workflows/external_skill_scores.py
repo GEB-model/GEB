@@ -23,12 +23,6 @@ EXTERNAL_METRICS_ARCHIVE_FILE_NAME: str = "google_streamflow_metrics.tgz"
 GOOGLE_MODEL_NAME: str = "Google Streamflow"
 GLOFAS_MODEL_NAME: str = "GloFAS"
 UTRECHT_MODEL_NAME: str = "Utrecht"
-# Some external products document recommended minimum basin sizes. These are
-# applied to GEB rows in pairwise plots so comparisons use similar station sets.
-EXTERNAL_MODEL_MINIMUM_UPSTREAM_AREA_KM2: dict[str, float] = {
-    UTRECHT_MODEL_NAME: 400.0,
-    GLOFAS_MODEL_NAME: 500.0,
-}
 GOOGLE_METRIC_ROOT: Path = Path(
     "metrics/hydrograph_metrics/per_metric/google/2014/dual_lstm/"
     "hydrologically_separated"
@@ -346,15 +340,9 @@ def match_external_skill_scores(
 
     keyed_evaluation_df: pd.DataFrame = _add_match_keys(evaluation_df)
     for model_name, external_model_df in external_models.items():
-        model_minimum_area_km2: float = max(
-            minimum_upstream_area_km2,
-            EXTERNAL_MODEL_MINIMUM_UPSTREAM_AREA_KM2.get(
-                model_name, minimum_upstream_area_km2
-            ),
-        )
         eligible_geb_df: pd.DataFrame = keyed_evaluation_df[
             keyed_evaluation_df["upstream_area_GEB"]
-            >= model_minimum_area_km2 * 1_000_000.0
+            >= minimum_upstream_area_km2 * 1_000_000.0
         ].copy()
         external_station_keys: set[str] = set(external_model_df.index.str.upper())
         matched_geb_df: pd.DataFrame = eligible_geb_df[
@@ -393,6 +381,6 @@ def match_external_skill_scores(
                 columns=["station_name_key", "station_id_key"], errors="ignore"
             ),
             external=matched_external_df,
-            minimum_upstream_area_km2=model_minimum_area_km2,
+            minimum_upstream_area_km2=minimum_upstream_area_km2,
         )
     return matched_scores
