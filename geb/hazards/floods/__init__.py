@@ -670,11 +670,18 @@ class Floods(Module):
         # load model settings
         coastal_only = self.config["coastal_only"]
 
+        # get year of slr
+        if not self.config["slr"] == "auto":
+            year_of_slr = self.config["slr"]
+        else:
+            year_of_slr = self.model.current_time.year
+
         # load the subbasin geometry for the model domain
         subbasins = read_geom(self.model.files["geom"]["routing/subbasins"])
         coastal = subbasins["is_coastal"].any()
 
         rivers = self.model.hydrology.routing.var.rivers
+        active_rivers = self.model.hydrology.routing.get_active_rivers()
         # if coastal load files
         if coastal:
             # Load mask of lower elevation coastal zones to activate cells for the different sfincs model regions
@@ -778,13 +785,15 @@ class Floods(Module):
             if downstream_basin != -1:
                 region_subbasins.at[downstream_basin, "is_downstream_outflow"] = True
                 region_rivers.at[downstream_basin, "is_downstream_outflow"] = True
-
-                sfincs_inland_root_model = self.build(
-                    name=f"inland_subbasin_{subbasin_id}",
-                    subbasins=region_subbasins,
-                    all_rivers=region_rivers,
-                    coastal=False,
-                )
+                try:
+                    sfincs_inland_root_model = self.build(
+                        name=f"inland_subbasin_{subbasin_id}",
+                        subbasins=region_subbasins,
+                        all_rivers=region_rivers,
+                        coastal=False,
+                    )
+                except:
+                    continue
                 _shape_config = self.config.get("hydrograph_shape", {})
 
                 spinup_name = self.model.config["general"]["spinup_name"]
@@ -835,7 +844,7 @@ class Floods(Module):
                         coastal_forcing_locations,
                         offset=coastal_offset,
                         sea_level_rise=sea_level_rise_rcp8p5,
-                        year=self.model.current_time.year,
+                        year=year_of_slr,
                     )
                 )
                 simulations.append(sfincs_coastal_simulation)
@@ -861,10 +870,10 @@ class Floods(Module):
 
                 for node_idx in inflow_nodes[
                     inflow_nodes["is_downstream_outflow"]
-                ].index:
-                    upstream_rivers = rivers[
-                        (rivers["downstream_ID"] == node_idx)
-                        & (~rivers.index.isin(inflow_nodes.index))
+                ].index:  # zoekt nu in alle rivieren, maar zou in alleen active rivers moeten zijn
+                    upstream_rivers = active_rivers[
+                        (active_rivers["downstream_ID"] == node_idx)
+                        & (~active_rivers.index.isin(inflow_nodes.index))
                     ]
 
                     Q.append(
