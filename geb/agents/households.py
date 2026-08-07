@@ -500,9 +500,13 @@ class Households(AgentBaseClass):
             (self.var.wealth.data * 0.8).astype(np.int64), max_n=self.max_n
         )
         # initiate array with RANDOM annual adaptation costs [dummy data for now, values are available in literature]
-        adaptation_costs = (
-            np.maximum(self.var.property_value.data * 0.05, 2705)  # scaled to mexico.
-        ).astype(np.int64)
+        adaptation_costs = np.full(
+            self.n,
+            10_800  # adaptation costs Europe
+            * 1.11  # EUR to USD conversion factor
+            * 0.254820579,  # scaling factor based on GDP (Mexico 2015)
+            np.int64,
+        )  # cost scaled to mexico
         self.var.adaptation_costs = DynamicArray(adaptation_costs, max_n=self.max_n)
 
         # load household points
