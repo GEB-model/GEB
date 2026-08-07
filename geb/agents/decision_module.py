@@ -13,7 +13,8 @@ class DecisionModule:
     def calculate_riverine_amenity(
         household_distance_to_river_m: float,
         GDP_i_t: float = 1,
-        phi_i: float = 0.254820579,  # scaling factor for riverine amenity based on Tesselaar et al. (2023). Now applied to Mexico (2020)
+        phi_i: float = 0.254820579
+        * 1.11,  # scaling factor for riverine amenity based on Tesselaar et al. (2023). Now applied to Mexico (2020) (first converting from EUR to USD). This is a rough estimate, but should be sufficient for now.
     ) -> float:
         """This function calculates the riverine amenity value for a given distance to the river.
 
@@ -61,7 +62,7 @@ class DecisionModule:
 
     @staticmethod
     def calculate_coastal_amenity(
-        x_j: float, GDP_i_t: float = 1, phi_i: float = 0.254820579
+        x_j: float, GDP_i_t: float = 1, phi_i: float = 0.254820579 * 1.11
     ) -> float:
         """This function calculates the coastal amenity value for a given distance to the coast.
 
