@@ -1,5 +1,6 @@
 """Module implementing hydrology evaluation functions for the GEB model."""
 
+import logging
 import re
 import shutil
 from pathlib import Path
@@ -59,6 +60,30 @@ METEOROLOGICAL_SEASONS: dict[str, tuple[int, ...]] = {
     "summer": (6, 7, 8),
     "autumn": (9, 10, 11),
 }
+
+
+def _load_discharge_dashboard_characteristics(
+    evaluation_gdf: gpd.GeoDataFrame,
+    logger: logging.Logger,
+) -> pd.DataFrame:
+    """Load and prepare GRDC-Caravan attributes for the discharge dashboard.
+
+    Args:
+        evaluation_gdf: Evaluated station metrics and geometries.
+        logger: Logger used by the shared GEB data catalog.
+
+    Returns:
+        Station table containing the curated dashboard characteristics in
+        display units.
+    """
+    data_catalog: DataCatalog = DataCatalog(logger=logger)
+    attribute_df: pd.DataFrame = data_catalog.fetch("GRDC_Caravan").read()
+    enriched_df: pd.DataFrame = discharge_characteristics.enrich_discharge_evaluation(
+        evaluation_df=evaluation_gdf,
+        attribute_df=attribute_df,
+    )
+    return discharge_characteristics.prepare_dashboard_characteristics(enriched_df)
+
 
 # Configure global style for all plots in this module
 mpl.rcParams["figure.facecolor"] = "white"
@@ -2135,6 +2160,12 @@ class Hydrology:
 
                 dashboard_evaluation_gdf: gpd.GeoDataFrame = evaluation_gdf.copy()
                 _add_daily_discharge_metric_columns(dashboard_evaluation_gdf)
+                dashboard_characteristics: pd.DataFrame = (
+                    _load_discharge_dashboard_characteristics(
+                        evaluation_gdf=dashboard_evaluation_gdf,
+                        logger=self.model.logger,
+                    )
+                )
                 create_discharge_folium_map(
                     evaluation_gdf=dashboard_evaluation_gdf,
                     output_path=dashboard_path,
@@ -2142,6 +2173,7 @@ class Hydrology:
                     rivers=dashboard_geometries.rivers,
                     station_chart_files=station_dashboard_chart_files,
                     waterbodies=dashboard_geometries.waterbodies,
+                    characteristic_df=dashboard_characteristics,
                 )
 
                 self.model.logger.info("Discharge evaluation dashboard created.")
@@ -2310,6 +2342,12 @@ class Hydrology:
 
         dashboard_evaluation_gdf: gpd.GeoDataFrame = evaluation_gdf.copy()
         _add_daily_discharge_metric_columns(dashboard_evaluation_gdf)
+        dashboard_characteristics: pd.DataFrame | None = None
+        if not dashboard_evaluation_gdf.empty:
+            dashboard_characteristics = _load_discharge_dashboard_characteristics(
+                evaluation_gdf=dashboard_evaluation_gdf,
+                logger=self.model.logger,
+            )
 
         self.model.logger.info("Loading dashboard geometries...")
         dashboard_geometries: DischargeDashboardGeometries = (
@@ -2335,6 +2373,7 @@ class Hydrology:
             rivers=dashboard_geometries.rivers,
             station_chart_files=station_dashboard_chart_files,
             waterbodies=dashboard_geometries.waterbodies,
+            characteristic_df=dashboard_characteristics,
         )
         self.model.logger.info(
             "Discharge evaluation dashboard created: %s", dashboard_path

@@ -15,6 +15,10 @@ import pandas as pd
 from folium import MacroElement, TileLayer
 from jinja2 import Template
 
+from geb.evaluate.workflows.discharge_characteristics import (
+    DASHBOARD_CHARACTERISTICS,
+    Characteristic,
+)
 from geb.workflows.extreme_value_analysis import ReturnPeriodModel
 from geb.workflows.io import read_geom
 
@@ -38,6 +42,23 @@ RESERVOIR_WATERBODY_TYPE: int = 2
 _WATERBODY_STYLE: dict[int, dict[str, str]] = {
     RESERVOIR_WATERBODY_TYPE: {"color": "#FF8A65", "label": "Reservoir"},
 }
+_CHARACTERISTIC_COLORS: list[str] = [
+    "#440154",
+    "#414487",
+    "#2A788E",
+    "#22A884",
+    "#7AD151",
+    "#FDE725",
+]
+_CHARACTERISTIC_MISSING_COLOR: str = "#B8BEC7"
+_CHARACTERISTIC_ZERO_COLOR: str = "#EEE8DD"
+_CARAVAN_AVAILABLE_COLOR: str = "#1B9E77"
+_CARAVAN_UNAVAILABLE_COLOR: str = "#9CA3AF"
+_CHARACTERISTIC_COLORMAP: cm.LinearColormap = cm.LinearColormap(
+    colors=_CHARACTERISTIC_COLORS,
+    vmin=0.0,
+    vmax=100.0,
+)
 
 
 class DischargeDashboardGeometries(NamedTuple):
@@ -176,6 +197,195 @@ def _as_finite_float(value: float | int | np.floating | None) -> float | None:
         return None
     float_value: float = float(value)
     return float_value if np.isfinite(float_value) else None
+
+
+def _characteristic_color_statistics(
+    values: pd.Series,
+    characteristic: Characteristic,
+) -> dict[str, float | int | bool | list[float]]:
+    """Calculate distribution summaries for a characteristic map legend.
+
+    Map colours use empirical percentile ranks rather than raw-value intervals,
+    so skewed variables retain spatial contrast across their observed range.
+    For variables where zero means absence, the reference distribution contains
+    positive values only and zero is reported as a separate category.
+
+    Args:
+        values: Characteristic values in display units.
+        characteristic: Characteristic metadata, including zero handling.
+
+    Returns:
+        Reference quantiles and counts in display units.
+
+    Raises:
+        ValueError: If fewer than two finite, distinct ranked values are available.
+    """
+    numeric_values: pd.Series = pd.to_numeric(values, errors="coerce")
+    valid_values: pd.Series = numeric_values.loc[np.isfinite(numeric_values)]
+    ranked_values: pd.Series = (
+        valid_values.loc[valid_values != 0.0]
+        if characteristic.zero_is_distinct
+        else valid_values
+    )
+    if len(ranked_values) < 2 or ranked_values.nunique() < 2:
+        raise ValueError(
+            f"Characteristic {characteristic.column} needs two distinct values."
+        )
+    reference_values: np.ndarray = np.nanpercentile(
+        ranked_values.to_numpy(dtype=float), [0.0, 25.0, 50.0, 75.0, 100.0]
+    )
+    return {
+        "reference_values": reference_values.astype(float).tolist(),
+        "available_count": int(len(valid_values)),
+        "missing_count": int(len(numeric_values) - len(valid_values)),
+        "ranked_count": int(len(ranked_values)),
+        "zero_count": int((valid_values == 0.0).sum()),
+        "zero_is_distinct": characteristic.zero_is_distinct,
+    }
+
+
+def _characteristic_percentile_ranks(
+    values: pd.Series,
+    characteristic: Characteristic,
+) -> pd.Series:
+    """Rank finite characteristic values from zero to 100 percent.
+
+    Ties receive their average empirical rank. When zero denotes absence, zero
+    values remain unranked so the positive range uses the complete colour scale.
+
+    Args:
+        values: Characteristic values in display units.
+        characteristic: Characteristic metadata, including zero handling.
+
+    Returns:
+        Percentile ranks (percent), aligned to ``values``; missing and distinct
+        zero values are represented by NaN.
+    """
+    numeric_values: pd.Series = pd.to_numeric(values, errors="coerce")
+    finite_values: pd.Series = numeric_values.where(np.isfinite(numeric_values))
+    ranked_values: pd.Series = (
+        finite_values.where(finite_values != 0.0)
+        if characteristic.zero_is_distinct
+        else finite_values
+    )
+    valid_values: pd.Series = ranked_values.dropna()
+    percentile_ranks: pd.Series = pd.Series(np.nan, index=values.index, dtype=float)
+    if valid_values.empty:
+        return percentile_ranks
+    if len(valid_values) == 1:
+        percentile_ranks.loc[valid_values.index] = 50.0
+        return percentile_ranks
+
+    average_ranks: pd.Series = valid_values.rank(method="average")
+    percentile_ranks.loc[valid_values.index] = (
+        (average_ranks - 1.0) / (len(valid_values) - 1.0) * 100.0
+    )
+    return percentile_ranks
+
+
+def _build_characteristic_layer_payload(
+    evaluation_gdf: gpd.GeoDataFrame,
+    characteristic_df: pd.DataFrame,
+) -> dict[str, Any]:
+    """Build characteristic-layer metadata aligned to evaluated stations.
+
+    Args:
+        evaluation_gdf: Evaluated stations indexed by station identifier.
+        characteristic_df: Curated GRDC-Caravan values in display units, with
+            a unique ``station_ID`` column.
+
+    Returns:
+        Characteristic configuration and compact per-station values.
+
+    Raises:
+        ValueError: If station identifiers or usable characteristic data are
+            unavailable.
+    """
+    if "station_ID" not in characteristic_df.columns:
+        raise ValueError("Dashboard characteristics have no station_ID column.")
+    if "grdc_caravan_matched" not in characteristic_df.columns:
+        raise ValueError("Dashboard characteristics have no GRDC-Caravan match status.")
+    if characteristic_df["station_ID"].duplicated().any():
+        raise ValueError("Dashboard characteristics contain duplicate station IDs.")
+    if evaluation_gdf.index.astype(str).duplicated().any():
+        raise ValueError("Dashboard evaluation contains duplicate station IDs.")
+
+    characteristic_index: pd.DataFrame = characteristic_df.copy()
+    characteristic_index["station_ID"] = characteristic_index["station_ID"].astype(str)
+    characteristic_index = characteristic_index.set_index("station_ID")
+    evaluation_station_ids: pd.Index = pd.Index(
+        evaluation_gdf.index.astype(str), name="station_ID"
+    )
+    # Restrict distributions to displayed stations so percentile colours and
+    # legend counts describe exactly the points visible on the dashboard.
+    characteristic_index = characteristic_index.reindex(evaluation_station_ids)
+    characteristic_configs: list[dict[str, Any]] = []
+    percentile_by_characteristic: dict[str, pd.Series] = {}
+    usable_characteristics: list[Characteristic] = []
+    for characteristic in DASHBOARD_CHARACTERISTICS:
+        if characteristic.column not in characteristic_index.columns:
+            continue
+        try:
+            statistics: dict[str, float | int | bool | list[float]] = (
+                _characteristic_color_statistics(
+                    characteristic_index[characteristic.column], characteristic
+                )
+            )
+        except ValueError:
+            continue
+        percentile_by_characteristic[characteristic.column] = (
+            _characteristic_percentile_ranks(
+                characteristic_index[characteristic.column], characteristic
+            )
+        )
+        characteristic_configs.append(
+            {
+                "column": characteristic.column,
+                "label": characteristic.label,
+                **statistics,
+            }
+        )
+        usable_characteristics.append(characteristic)
+    if not usable_characteristics:
+        raise ValueError("No usable GRDC-Caravan dashboard characteristics found.")
+
+    station_records: list[dict[str, Any]] = []
+    for station_id in evaluation_gdf.index:
+        station_id_string: str = str(station_id)
+        characteristic_row: pd.Series | None = (
+            characteristic_index.loc[station_id_string]
+            if station_id_string in characteristic_index.index
+            else None
+        )
+        values: dict[str, float | None] = {}
+        percentiles: dict[str, float | None] = {}
+        for characteristic in usable_characteristics:
+            values[characteristic.column] = _as_finite_float(
+                characteristic_row[characteristic.column]
+                if characteristic_row is not None
+                else None
+            )
+            percentile_series: pd.Series = percentile_by_characteristic[
+                characteristic.column
+            ]
+            percentiles[characteristic.column] = _as_finite_float(
+                percentile_series.get(station_id_string)
+            )
+        station_records.append(
+            {
+                "id": station_id_string,
+                "caravan_available": bool(characteristic_row["grdc_caravan_matched"])
+                if characteristic_row is not None
+                and pd.notna(characteristic_row["grdc_caravan_matched"])
+                else False,
+                "values": values,
+                "percentiles": percentiles,
+            }
+        )
+    return {
+        "characteristics": characteristic_configs,
+        "stations": station_records,
+    }
 
 
 def _timestamp_to_isoformat(timestamp: Any) -> str:
@@ -675,6 +885,186 @@ def _inject_station_search_script(
     ).add_to(m)
 
 
+def _inject_station_layer_legend_script(
+    discharge_map: folium.Map,
+    metric_layers: list[tuple[folium.FeatureGroup, cm.LinearColormap, str]],
+    upstream_layer: folium.FeatureGroup | None,
+    characteristic_layers: list[tuple[folium.FeatureGroup, dict[str, Any]]],
+    availability_layer: folium.FeatureGroup | None,
+    caravan_available_count: int,
+    station_count: int,
+) -> None:
+    """Add one dynamic legend and enforce one active station-value layer.
+
+    Args:
+        discharge_map: Performance map receiving the legend control.
+        metric_layers: Metric feature groups, colormaps, and source columns.
+        upstream_layer: Optional upstream-area-ratio feature group.
+        characteristic_layers: GRDC-Caravan feature groups and metadata.
+        availability_layer: Optional GRDC-Caravan coverage feature group.
+        caravan_available_count: Stations matched to GRDC-Caravan.
+        station_count: Total evaluated stations.
+    """
+    configs_by_column: dict[str, dict[str, Any]] = {
+        str(config["col"]): config for config in _METRIC_LAYER_CONFIGS
+    }
+    legend_configs: list[dict[str, Any]] = []
+    for layer, _, column in metric_layers:
+        config: dict[str, Any] = configs_by_column[column]
+        legend_configs.append(
+            {
+                "layer": layer.get_name(),
+                "kind": "continuous",
+                "name": config["name"],
+                "colors": config["colors"],
+                "minimum": config["vmin"],
+                "maximum": config["vmax"],
+                "show": config["show"],
+            }
+        )
+    if upstream_layer is not None:
+        legend_configs.append(
+            {
+                "layer": upstream_layer.get_name(),
+                "kind": "continuous",
+                "name": "Upstream Area Ratio",
+                "colors": ["red", "orange", "yellow", "blue", "green"],
+                "minimum": 0.5,
+                "maximum": 2.0,
+                "show": False,
+            }
+        )
+    for layer, characteristic in characteristic_layers:
+        legend_configs.append(
+            {
+                "layer": layer.get_name(),
+                "kind": "characteristic",
+                "name": characteristic["label"],
+                "colors": _CHARACTERISTIC_COLORS,
+                "minimum": 0.0,
+                "maximum": 100.0,
+                "reference_values": characteristic["reference_values"],
+                "ranked_count": characteristic["ranked_count"],
+                "zero_count": characteristic["zero_count"],
+                "missing_count": characteristic["missing_count"],
+                "zero_is_distinct": characteristic["zero_is_distinct"],
+                "show": False,
+            }
+        )
+    if availability_layer is not None:
+        legend_configs.append(
+            {
+                "layer": availability_layer.get_name(),
+                "kind": "availability",
+                "name": "GRDC-Caravan data availability",
+                "available_count": caravan_available_count,
+                "unavailable_count": station_count - caravan_available_count,
+                "available_color": _CARAVAN_AVAILABLE_COLOR,
+                "unavailable_color": _CARAVAN_UNAVAILABLE_COLOR,
+                "show": False,
+            }
+        )
+    config_json: str = json.dumps(legend_configs, separators=(",", ":"))
+    _JavascriptMacro(
+        "var gebMetricLegendConfigs="
+        + config_json
+        + ";\n"
+        + r"""
+(function(){
+  var map = {{this._parent.get_name()}};
+  var configByLayer = {};
+  var layerByName = {};
+  var activeConfig = null;
+  gebMetricLegendConfigs.forEach(function(config) {
+    var layer = null;
+    try { layer = window[config.layer] || eval(config.layer); } catch(error) { layer = null; }
+    if (!layer) return;
+    configByLayer[L.stamp(layer)] = config;
+    layerByName[config.layer] = layer;
+    if (config.show) activeConfig = config;
+  });
+
+  var legendControl = L.control({position: 'bottomleft'});
+  legendControl.onAdd = function() {
+    var element = L.DomUtil.create('div', 'geb-metric-legend');
+    L.DomEvent.disableClickPropagation(element);
+    return element;
+  };
+  legendControl.addTo(map);
+  var legendRoot = map.getContainer().querySelector('.geb-metric-legend');
+
+  function formatTick(value) {
+    var numericValue = Number(value);
+    var absoluteValue = Math.abs(numericValue);
+    if (numericValue === 0) return '0';
+    if (absoluteValue < 0.01) return numericValue.toExponential(1);
+    var digits = absoluteValue >= 1000 ? 0 : absoluteValue >= 100 ? 1 : absoluteValue >= 10 ? 1 : absoluteValue >= 1 ? 2 : 3;
+    return numericValue.toLocaleString(undefined, {maximumFractionDigits: digits});
+  }
+
+  function renderLegend(config) {
+    if (!config) {
+      legendRoot.style.display = 'none';
+      return;
+    }
+    legendRoot.style.display = '';
+    if (config.kind === 'availability') {
+      legendRoot.innerHTML = '<b>' + config.name + '</b>' +
+        '<div class="geb-categorical-key"><i style="background:' + config.available_color + '"></i>' +
+        'Available (n=' + config.available_count + ')</div>' +
+        '<div class="geb-categorical-key"><i style="background:' + config.unavailable_color + '"></i>' +
+        'Not available (n=' + config.unavailable_count + ')</div>';
+      return;
+    }
+    var ticks = [];
+    for (var index = 0; index < 5; index += 1) {
+      ticks.push(config.minimum + (config.maximum - config.minimum) * index / 4);
+    }
+    var detail = '';
+    if (config.kind === 'characteristic') {
+      ticks = config.reference_values;
+      detail = '<div class="geb-metric-note">Colour shows empirical percentile rank (n=' +
+        config.ranked_count + '); ticks are values at ranks 0 / 25 / 50 / 75 / 100.</div>' +
+        (config.zero_is_distinct && config.zero_count > 0 ?
+          '<div class="geb-categorical-key"><i style="background:#EEE8DD"></i>' +
+          'Zero / none (n=' + config.zero_count + ')</div>' : '') +
+        '<div class="geb-metric-note">Missing value: n=' + config.missing_count + '</div>';
+    }
+    legendRoot.innerHTML = '<b>' + config.name + '</b>' +
+      '<div class="geb-metric-gradient" style="background:linear-gradient(90deg,' +
+      config.colors.join(',') + ')"></div><div class="geb-metric-ticks">' +
+      ticks.map(function(value) { return '<span>' + formatTick(value) + '</span>'; }).join('') +
+      '</div>' + detail;
+  }
+
+  map.on('overlayadd', function(event) {
+    var config = configByLayer[L.stamp(event.layer)];
+    if (!config) return;
+    gebMetricLegendConfigs.forEach(function(otherConfig) {
+      if (otherConfig.layer === config.layer) return;
+      var otherLayer = layerByName[otherConfig.layer];
+      if (otherLayer && map.hasLayer(otherLayer)) map.removeLayer(otherLayer);
+    });
+    activeConfig = config;
+    renderLegend(activeConfig);
+  });
+  map.on('overlayremove', function(event) {
+    var config = configByLayer[L.stamp(event.layer)];
+    if (config && activeConfig && config.layer === activeConfig.layer) {
+      activeConfig = null;
+      renderLegend(null);
+    }
+  });
+
+  var style = document.createElement('style');
+  style.textContent = '.geb-metric-legend{background:rgba(255,255,255,.96);border:1px solid #d8dee8;border-radius:8px;box-shadow:0 6px 20px rgba(15,23,42,.18);font-family:Inter,system-ui,sans-serif;margin-bottom:22px!important;padding:9px 10px;width:240px}.geb-metric-legend>b{color:#111827;display:block;font-size:11px;margin-bottom:6px}.geb-metric-gradient{border-radius:2px;height:9px}.geb-metric-ticks{color:#475569;display:flex;font-size:9px;justify-content:space-between;margin-top:3px}.geb-metric-note{color:#64748b;font-size:9px;line-height:1.3;margin-top:5px}.geb-categorical-key{align-items:center;color:#475569;display:flex;font-size:9px;gap:6px;margin-top:5px}.geb-categorical-key i{border:1px solid #fff;border-radius:50%;height:9px;width:9px}';
+  document.head.appendChild(style);
+  renderLegend(activeConfig);
+})();
+"""
+    ).add_to(discharge_map)
+
+
 def _add_station_marker(
     layer: folium.FeatureGroup,
     coords: list[float],
@@ -754,6 +1144,110 @@ def _add_metric_station_markers(
     return marker_names
 
 
+def _format_characteristic_value(value: float) -> str:
+    """Format a catchment-characteristic value for a map tooltip.
+
+    Args:
+        value: Characteristic value in the display unit stated by its label.
+
+    Returns:
+        Compact locale-independent value string.
+    """
+    absolute_value: float = abs(value)
+    decimal_places: int = (
+        0
+        if absolute_value >= 1000.0
+        else 1
+        if absolute_value >= 100.0
+        else 2
+        if absolute_value >= 10.0
+        else 3
+    )
+    return f"{value:,.{decimal_places}f}"
+
+
+def _add_characteristic_station_markers(
+    station_record: dict[str, Any],
+    characteristic_layers: list[tuple[folium.FeatureGroup, dict[str, Any]]],
+    availability_layer: folium.FeatureGroup,
+    coords: list[float],
+    circle_radius: float,
+    popup_html: str,
+    popup_width: int,
+    station_tooltip: str,
+) -> list[str]:
+    """Add GRDC-Caravan availability and characteristic markers for a station.
+
+    Characteristic layers contain only stations with a finite value. The
+    availability layer contains every evaluated station, making absent
+    GRDC-Caravan coverage explicit without treating it as a numeric zero.
+
+    Args:
+        station_record: JSON-safe station characteristic record.
+        characteristic_layers: Feature groups and their characteristic metadata.
+        availability_layer: Feature group showing GRDC-Caravan match status.
+        coords: Marker coordinates as ``[latitude, longitude]`` (degrees).
+        circle_radius: Marker radius (pixels).
+        popup_html: Popup placeholder HTML.
+        popup_width: Popup width (pixels).
+        station_tooltip: Station identifier and name.
+
+    Returns:
+        Folium JavaScript variable names for the created markers.
+    """
+    marker_names: list[str] = []
+    caravan_available: bool = bool(station_record["caravan_available"])
+    availability_label: str = "available" if caravan_available else "not available"
+    marker_names.append(
+        _add_station_marker(
+            layer=availability_layer,
+            coords=coords,
+            radius=circle_radius,
+            fill_color=(
+                _CARAVAN_AVAILABLE_COLOR
+                if caravan_available
+                else _CARAVAN_UNAVAILABLE_COLOR
+            ),
+            popup_html=popup_html,
+            popup_width=popup_width,
+            tooltip=f"{station_tooltip}<br>GRDC-Caravan data: {availability_label}",
+        )
+    )
+
+    for layer, characteristic in characteristic_layers:
+        value: float | None = station_record["values"][characteristic["column"]]
+        if value is None:
+            continue
+        percentile: float | None = station_record["percentiles"][
+            characteristic["column"]
+        ]
+        distinct_zero: bool = bool(characteristic["zero_is_distinct"]) and value == 0
+        if distinct_zero:
+            fill_color: str = _CHARACTERISTIC_ZERO_COLOR
+            rank_text: str = "zero / none"
+        elif percentile is not None:
+            fill_color = _CHARACTERISTIC_COLORMAP(percentile)
+            rank_text = f"percentile rank {percentile:.0f}"
+        else:
+            fill_color = _CHARACTERISTIC_MISSING_COLOR
+            rank_text = "rank unavailable"
+        marker_names.append(
+            _add_station_marker(
+                layer=layer,
+                coords=coords,
+                radius=circle_radius,
+                fill_color=fill_color,
+                popup_html=popup_html,
+                popup_width=popup_width,
+                tooltip=(
+                    f"{station_tooltip}<br>{characteristic['label']}: "
+                    f"{_format_characteristic_value(value)} ({rank_text})"
+                ),
+            )
+        )
+    return marker_names
+
+
 def _add_waterbody_layers(
     discharge_map: folium.Map,
     waterbodies: gpd.GeoDataFrame,
@@ -824,6 +1318,7 @@ def create_discharge_folium_map(
     rivers: gpd.GeoDataFrame,
     station_chart_files: dict[str, str],
     waterbodies: gpd.GeoDataFrame | None = None,
+    characteristic_df: pd.DataFrame | None = None,
     minimum_river_upstream_area_km2: float = 5000.0,
 ) -> folium.Map:
     """Create an interactive Folium discharge evaluation map.
@@ -834,6 +1329,8 @@ def create_discharge_folium_map(
     available.  Station popup charts are lazy-rendered with Plotly when the
     popup is opened. Reservoirs are rendered as dot markers when ``waterbodies``
     is provided; lakes are skipped because they make large dashboards slow.
+    GRDC-Caravan characteristics are optional station layers on the same map,
+    together with a separate data-availability layer.
 
     Args:
         evaluation_gdf: Per-station GeoDataFrame with discharge metric columns,
@@ -851,6 +1348,8 @@ def create_discharge_folium_map(
         waterbodies: Optional GeoDataFrame with columns ``waterbody_type``
             (2 = reservoir) and polygon geometries. Centroids are used for dot
             placement.
+        characteristic_df: Optional station table containing ``station_ID`` and
+            the curated GRDC-Caravan characteristics in display units.
         minimum_river_upstream_area_km2: Minimum upstream area (km²) for
             rivers shown on the map. Larger values reduce file size.  Rivers
             with an ``uparea_m2`` column smaller than this threshold are
@@ -861,20 +1360,21 @@ def create_discharge_folium_map(
     """
     min_lon, min_lat, max_lon, max_lat = region_geom.total_bounds
     map_center: list[float] = [(min_lat + max_lat) / 2, (min_lon + max_lon) / 2]
-    discharge_map = folium.Map(
-        location=map_center,
-        tiles=TileLayer(
-            tiles=_ESRI_TOPO_TILES,
-            attr=_ESRI_TOPO_ATTR,
-            name="Topographic Map",
-        ),
-    )
+    discharge_map = folium.Map(location=map_center, tiles=None)
+    TileLayer(
+        tiles=_ESRI_TOPO_TILES,
+        attr=_ESRI_TOPO_ATTR,
+        name="Topographic Map",
+    ).add_to(discharge_map)
     discharge_map.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]], padding=(30, 30))
-
     folium.GeoJson(
         region_geom,
         name="Catchment",
-        style_function=lambda x: {"fillColor": "none", "color": "black", "weight": 2},
+        style_function=lambda feature: {
+            "fillColor": "none",
+            "color": "black",
+            "weight": 2,
+        },
         z_index=1,
     ).add_to(discharge_map)
 
@@ -886,7 +1386,11 @@ def create_discharge_folium_map(
     folium.GeoJson(
         rivers_for_map[["geometry"]].to_json(),
         name="Rivers",
-        style_function=lambda x: {"color": "#4A90D9", "weight": 1.0, "opacity": 0.6},
+        style_function=lambda feature: {
+            "color": "#4A90D9",
+            "weight": 1.0,
+            "opacity": 0.6,
+        },
         z_index=2,
     ).add_to(discharge_map)
 
@@ -918,6 +1422,38 @@ def create_discharge_folium_map(
             caption="Upstream Area Ratio",
         )
         layer_upstream = folium.FeatureGroup(name="Upstream Area Ratio", show=False)
+
+    characteristic_layers: list[tuple[folium.FeatureGroup, dict[str, Any]]] = []
+    availability_layer: folium.FeatureGroup | None = None
+    characteristic_records: dict[str, dict[str, Any]] = {}
+    caravan_available_count: int = 0
+    if characteristic_df is not None:
+        characteristic_payload: dict[str, Any] = _build_characteristic_layer_payload(
+            evaluation_gdf=evaluation_gdf,
+            characteristic_df=characteristic_df,
+        )
+        characteristic_layers = [
+            (
+                folium.FeatureGroup(
+                    name=f"GRDC-Caravan · {characteristic['label']}",
+                    show=False,
+                ),
+                characteristic,
+            )
+            for characteristic in characteristic_payload["characteristics"]
+        ]
+        availability_layer = folium.FeatureGroup(
+            name="GRDC-Caravan · Data availability",
+            show=False,
+        )
+        characteristic_records = {
+            str(station["id"]): station
+            for station in characteristic_payload["stations"]
+        }
+        caravan_available_count = sum(
+            bool(station["caravan_available"])
+            for station in characteristic_payload["stations"]
+        )
 
     largest_upstream_area_sqrt: float = math.sqrt(
         evaluation_gdf["upstream_area_GEB"].max()
@@ -972,6 +1508,21 @@ def create_discharge_folium_map(
                     )
                 )
 
+        if availability_layer is not None:
+            station_record: dict[str, Any] = characteristic_records[station_id_str]
+            station_marker_names.extend(
+                _add_characteristic_station_markers(
+                    station_record=station_record,
+                    characteristic_layers=characteristic_layers,
+                    availability_layer=availability_layer,
+                    coords=coords,
+                    circle_radius=circle_radius,
+                    popup_html=popup_html,
+                    popup_width=popup_width,
+                    station_tooltip=tooltip,
+                )
+            )
+
         station_marker_index.append(
             {
                 "id": station_id_str,
@@ -980,13 +1531,26 @@ def create_discharge_folium_map(
             }
         )
 
-    for layer, colormap, _ in metric_layers:
-        colormap.add_to(discharge_map)
+    for layer, _, _ in metric_layers:
         layer.add_to(discharge_map)
 
     if layer_upstream is not None and colormap_upstream is not None:
-        colormap_upstream.add_to(discharge_map)
         layer_upstream.add_to(discharge_map)
+
+    for characteristic_layer, _ in characteristic_layers:
+        characteristic_layer.add_to(discharge_map)
+    if availability_layer is not None:
+        availability_layer.add_to(discharge_map)
+
+    _inject_station_layer_legend_script(
+        discharge_map=discharge_map,
+        metric_layers=metric_layers,
+        upstream_layer=layer_upstream,
+        characteristic_layers=characteristic_layers,
+        availability_layer=availability_layer,
+        caravan_available_count=caravan_available_count,
+        station_count=len(evaluation_gdf),
+    )
 
     _inject_popup_chart_script(discharge_map, station_chart_files)
     _inject_station_search_script(discharge_map, station_marker_index)
@@ -996,6 +1560,7 @@ def create_discharge_folium_map(
         _add_waterbody_layers(discharge_map, waterbodies)
 
     folium.LayerControl(collapsed=False).add_to(discharge_map)
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     discharge_map.save(str(output_path))
     return discharge_map

@@ -25,12 +25,15 @@ class Characteristic:
         label: Publication label including units.
         scale: Factor converting stored values to displayed units.
         logarithmic_x: Whether the 32-panel atlas uses a base-10 x-axis.
+        zero_is_distinct: Whether zero represents absence and should be shown
+            separately from the ranked positive values on the dashboard.
     """
 
     column: str
     label: str
     scale: float = 1.0
     logarithmic_x: bool = False
+    zero_is_distinct: bool = False
 
 
 @dataclass(frozen=True)
@@ -73,9 +76,9 @@ SCREENING_CHARACTERISTICS: tuple[Characteristic, ...] = (
     Characteristic("aridity_FAO_PM", "Aridity, PET/P (–)"),
     Characteristic("ele_mt_sav", "Mean elevation (m)"),
     Characteristic("gwt_cm_sav", "Depth to groundwater table (cm)"),
-    Characteristic("lka_pc_sse", "Lake-area coverage (%)"),
+    Characteristic("lka_pc_sse", "Lake-area coverage (%)", zero_is_distinct=True),
     Characteristic("rev_mc_usu", "Total reservoir volume (million m³)"),
-    Characteristic("frac_snow", "Snowfall fraction (–)"),
+    Characteristic("frac_snow", "Snowfall fraction (–)", zero_is_distinct=True),
     Characteristic("p_mean", "Mean precipitation (mm/day)"),
     Characteristic("moisture_index_FAO_PM", "Moisture index (–)"),
     Characteristic("tmp_dc_syr", "Mean annual temperature (°C)", scale=0.1),
@@ -87,7 +90,7 @@ SCREENING_CHARACTERISTICS: tuple[Characteristic, ...] = (
     Characteristic("slp_dg_sav", "Mean slope (degrees)", scale=0.1),
     Characteristic("sgr_dk_sav", "Stream gradient (dm/km)"),
     Characteristic("wet_pc_sg1", "Wetland-area coverage (%)"),
-    Characteristic("dor_pc_pva", "Degree of regulation (%)"),
+    Characteristic("dor_pc_pva", "Degree of regulation (%)", zero_is_distinct=True),
     Characteristic("for_pc_sse", "Forest cover (%)"),
     Characteristic("crp_pc_sse", "Cropland (%)"),
     Characteristic("pst_pc_sse", "Pasture (%)"),
@@ -101,6 +104,60 @@ SCREENING_CHARACTERISTICS: tuple[Characteristic, ...] = (
     Characteristic("hft_ix_s09", "Human-footprint index (–)", scale=0.01),
     Characteristic("ppd_pk_sav", "Population density (people/km²)"),
     Characteristic("rdd_mk_sav", "Road density (m/km²)"),
+)
+
+
+def _select_characteristics(columns: tuple[str, ...]) -> tuple[Characteristic, ...]:
+    """Select characteristic metadata in a deliberate display order.
+
+    Args:
+        columns: GRDC-Caravan or evaluation-table column names to select.
+
+    Returns:
+        Characteristic metadata in the requested order.
+
+    Raises:
+        ValueError: If an unknown characteristic column is requested.
+    """
+    characteristics_by_column: dict[str, Characteristic] = {
+        characteristic.column: characteristic
+        for characteristic in SCREENING_CHARACTERISTICS
+    }
+    missing_columns: set[str] = set(columns) - set(characteristics_by_column)
+    if missing_columns:
+        raise ValueError(
+            f"Unknown discharge characteristics: {sorted(missing_columns)}"
+        )
+    return tuple(characteristics_by_column[column] for column in columns)
+
+
+# The dashboard subset prioritizes distinct, actionable hydrological mechanisms.
+# Keeping this list short makes spatial comparison substantially easier than a
+# layer menu containing every variable in the exploratory 32-panel atlas.
+DASHBOARD_CHARACTERISTICS: tuple[Characteristic, ...] = (
+    _select_characteristics(
+        (
+            "sgr_dk_sav",
+            "ele_mt_sav",
+        )
+    )
+    + (
+        Characteristic(
+            "area",
+            "GRDC-Caravan catchment area (km²)",
+            logarithmic_x=True,
+        ),
+    )
+    + _select_characteristics(
+        (
+            "gwt_cm_sav",
+            "low_prec_freq",
+            "frac_snow",
+            "aridity_FAO_PM",
+            "dor_pc_pva",
+            "lka_pc_sse",
+        )
+    )
 )
 
 KGE_COMPONENT_TARGETS: tuple[KGEComponentTarget, ...] = (
@@ -224,6 +281,57 @@ def prepare_kge_characteristic_analysis(
     for characteristic in SCREENING_CHARACTERISTICS:
         analysis_table[characteristic.column] *= characteristic.scale
     return analysis_table
+
+
+def prepare_dashboard_characteristics(
+    enriched_evaluation_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """Prepare the curated GRDC-Caravan attributes for the spatial dashboard.
+
+    Unlike the publication-figure preparation, this function retains stations
+    without a GRDC-Caravan match so they can be shown as missing on the map.
+    Values are converted to the human-readable units defined by
+    :data:`DASHBOARD_CHARACTERISTICS`.
+
+    Args:
+        enriched_evaluation_df: Discharge evaluation enriched with
+            GRDC-Caravan attributes and a ``grdc_caravan_matched`` indicator.
+
+    Returns:
+        Evaluation table with dashboard characteristics in display units.
+
+    Raises:
+        ValueError: If station identifiers, match status, or selected
+            characteristic columns are unavailable.
+    """
+    required_columns: set[str] = {
+        "station_ID",
+        "grdc_caravan_matched",
+        *(item.column for item in DASHBOARD_CHARACTERISTICS),
+    }
+    missing_columns: set[str] = required_columns - set(enriched_evaluation_df.columns)
+    if missing_columns:
+        raise ValueError(
+            "Enriched discharge metrics are missing dashboard columns: "
+            f"{sorted(missing_columns)}"
+        )
+    if enriched_evaluation_df["station_ID"].duplicated().any():
+        raise ValueError("Dashboard discharge metrics contain duplicate station IDs.")
+
+    dashboard_table: pd.DataFrame = enriched_evaluation_df.copy()
+    matched_stations: pd.Series = (
+        dashboard_table["grdc_caravan_matched"].fillna(False).astype(bool)
+    )
+    for characteristic in DASHBOARD_CHARACTERISTICS:
+        numeric_values: pd.Series = pd.to_numeric(
+            dashboard_table[characteristic.column], errors="coerce"
+        )
+        # Mask every selected field explicitly so unmatched rows can never be
+        # mistaken for valid zero-valued GRDC-Caravan observations.
+        dashboard_table[characteristic.column] = (
+            numeric_values.where(matched_stations) * characteristic.scale
+        )
+    return dashboard_table
 
 
 def calculate_kge_component_associations(
@@ -520,7 +628,7 @@ def _plot_relationship_panel(
             "boxstyle": "round,pad=0.22",
             "facecolor": "#E8E8E8",
             "edgecolor": "none",
-            "alpha": 0.82,
+            "alpha": 0.60,
         },
     )
 
@@ -561,7 +669,7 @@ def _relationship_legend_handles() -> list[Line2D | Patch]:
             [0],
             color=LOWESS_COLOR,
             linewidth=2.3,
-            label="Robust LOWESS",
+            label="LOWESS fit",
         ),
         Patch(
             facecolor=LOWESS_INTERVAL_COLOR,
@@ -651,8 +759,8 @@ def plot_kge_characteristic_heatmaps(
     association_matrix = association_matrix.loc[variable_order, target_columns]
     significance_matrix = significance_matrix.loc[variable_order, target_columns]
 
-    figure: plt.Figure = plt.figure(figsize=(13.6, 10.9))
-    outer_grid = figure.add_gridspec(1, 2, width_ratios=(1.18, 1.0), wspace=0.36)
+    figure: plt.Figure = plt.figure(figsize=(14.8, 11.8))
+    outer_grid = figure.add_gridspec(1, 2, width_ratios=(1.12, 1.10), wspace=0.30)
     association_axis: plt.Axes = figure.add_subplot(outer_grid[0, 0])
     correlation_grid = outer_grid[0, 1].subgridspec(
         5,
@@ -705,7 +813,7 @@ def plot_kge_characteristic_heatmaps(
     )
     association_axis.tick_params(
         axis="x",
-        labelsize=7.4,
+        labelsize=8.2,
         length=0,
         top=True,
         labeltop=True,
@@ -713,6 +821,7 @@ def plot_kge_characteristic_heatmaps(
         labelbottom=False,
         pad=4,
     )
+    association_axis.get_xticklabels()[-1].set_fontweight("bold")
     association_axis.tick_params(axis="y", labelsize=7.3, length=0)
     association_axis.set_xticks(np.arange(-0.5, 4.0, 1.0), minor=True)
     association_axis.set_yticks(np.arange(-0.5, len(variable_order), 1.0), minor=True)
@@ -728,7 +837,7 @@ def plot_kge_characteristic_heatmaps(
     association_colorbar.set_ticks([-0.5, -0.25, 0.0, 0.25, 0.5])
     association_colorbar.ax.tick_params(labelsize=7.4, length=3.0)
     association_colorbar.set_label(
-        "Spearman rank correlation, ρ  (* nominal p < 0.05)", fontsize=8.5
+        "Spearman rank correlation, ρ  (* p < 0.05)", fontsize=8.5
     )
 
     random_generator: np.random.Generator = np.random.default_rng(42)
@@ -807,24 +916,20 @@ def plot_kge_characteristic_heatmaps(
         )
         figure.add_artist(connector)
 
-    colorbar_label_bounds = association_colorbar.ax.xaxis.label.get_window_extent()
-    colorbar_label_center_display: tuple[float, float] = (
-        float(colorbar_label_bounds.x0 + colorbar_label_bounds.x1) / 2.0,
-        float(colorbar_label_bounds.y0 + colorbar_label_bounds.y1) / 2.0,
-    )
-    colorbar_label_center_figure: np.ndarray = figure.transFigure.inverted().transform(
-        colorbar_label_center_display
+    colorbar_position = association_colorbar.ax.get_position()
+    colorbar_center_y: float = float(
+        colorbar_position.y0 + colorbar_position.height / 2.0
     )
     figure.legend(
         handles=_relationship_legend_handles(),
         loc="center right",
-        bbox_to_anchor=(0.985, float(colorbar_label_center_figure[1])),
+        bbox_to_anchor=(0.985, colorbar_center_y),
         bbox_transform=figure.transFigure,
         ncols=3,
         frameon=False,
-        fontsize=6.7,
+        fontsize=7.5,
         columnspacing=0.8,
-        handlelength=1.9,
+        handlelength=2.1,
     )
     if export:
         _save_figure(
@@ -990,7 +1095,7 @@ def plot_all_kge_characteristic_scatterplots(
             [0],
             color="#0C526C",
             linewidth=1.8,
-            label="Robust LOWESS",
+            label="LOWESS fit",
         ),
         Line2D(
             [0],
