@@ -161,10 +161,10 @@ DASHBOARD_CHARACTERISTICS: tuple[Characteristic, ...] = (
 )
 
 KGE_COMPONENT_TARGETS: tuple[KGEComponentTarget, ...] = (
-    KGEComponentTarget("KGE_correlation_daily", "Correlation r"),
-    KGEComponentTarget("KGE_bias_ratio_daily", "Mean-flow ratio β"),
-    KGEComponentTarget("KGE_variability_ratio_daily", "Variability ratio α"),
-    KGEComponentTarget("KGE_daily", "Overall KGE"),
+    KGEComponentTarget("KGE_correlation_daily", "ρ (correlation)"),
+    KGEComponentTarget("KGE_bias_ratio_daily", "ρ (mean-flow ratio)"),
+    KGEComponentTarget("KGE_variability_ratio_daily", "ρ (variability ratio)"),
+    KGEComponentTarget("KGE_daily", "ρ (KGE)"),
 )
 
 # The selected panels represent distinct topographic, subsurface, channel, and
@@ -669,7 +669,7 @@ def _relationship_legend_handles() -> list[Line2D | Patch]:
             [0],
             color=LOWESS_COLOR,
             linewidth=2.3,
-            label="LOWESS fit",
+            label="Local regression (LOWESS)",
         ),
         Patch(
             facecolor=LOWESS_INTERVAL_COLOR,
@@ -837,7 +837,7 @@ def plot_kge_characteristic_heatmaps(
     association_colorbar.set_ticks([-0.5, -0.25, 0.0, 0.25, 0.5])
     association_colorbar.ax.tick_params(labelsize=7.4, length=3.0)
     association_colorbar.set_label(
-        "Spearman rank correlation, ρ  (* p < 0.05)", fontsize=8.5
+        "Spearman rank correlation, ρ  (* p-value < 0.05)", fontsize=8.5
     )
 
     random_generator: np.random.Generator = np.random.default_rng(42)
@@ -1095,7 +1095,7 @@ def plot_all_kge_characteristic_scatterplots(
             [0],
             color="#0C526C",
             linewidth=1.8,
-            label="LOWESS fit",
+            label="Local regression (LOWESS)",
         ),
         Line2D(
             [0],
