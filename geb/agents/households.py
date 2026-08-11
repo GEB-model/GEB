@@ -236,6 +236,8 @@ class Households(AgentBaseClass):
 
         # assign household disposable income based on income percentile households
         income = read_array(self.model.files["array"]["agents/households/disp_income"])
+        # convert income to USD
+        income = income / 21.49  ### CONVERT PESOS TO USD (MEXICAN CONTEXT)
         self.var.income = DynamicArray(income, max_n=self.max_n)
 
         # assign wealth based on income (dummy data, there are ratios available in literature)
@@ -1580,12 +1582,12 @@ class Households(AgentBaseClass):
                     self.config["adapt"]
                     and self.model.current_time.month == 1
                     and self.model.current_time.day == 1
-                    and self.model.current_timestep > 0
                 ):
                     if "flooded" not in self.buildings.columns:
                         self.update_building_attributes()
-                    print("Thinking about adapting...")
-                    self.decide_household_strategy()
+                    if self.model.current_timestep > 0:
+                        print("Thinking about adapting...")
+                        self.decide_household_strategy()
 
         self.report(locals())
 
