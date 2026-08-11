@@ -1787,13 +1787,7 @@ class Hydrography(BuildModelBase):
             self.set_grid(retention_basin_ids, name="routing/retention_basin_ids")
             retention_basin_gdf = gpd.GeoDataFrame(
                 columns=np.array(
-                    [
-                        "ID",
-                        "retention_max_storage_m3",
-                        "controlled_retention",
-                        "retention_activation_threshold_controlled_m3_s",
-                        "retention_activation_threshold_uncontrolled_m3_s",
-                    ]
+                    ["ID", "retention_max_storage_m3", "controlled_retention", "active"]
                 ),
                 geometry=gpd.GeoSeries([], crs="EPSG:4326"),
             ).astype(
@@ -1801,8 +1795,7 @@ class Hydrography(BuildModelBase):
                     "ID": np.int32,
                     "retention_max_storage_m3": np.float32,
                     "controlled_retention": bool,
-                    "retention_activation_threshold_controlled_m3_s": np.float32,
-                    "retention_activation_threshold_uncontrolled_m3_s": np.float32,
+                    "active": bool,
                 }
             )
             self.set_geom(retention_basin_gdf, name="routing/retention_basins")
@@ -1927,12 +1920,8 @@ class Hydrography(BuildModelBase):
                             "retention_max_storage_m3"
                         ],
                         "controlled_retention": controlled_flag,
-                        "retention_activation_threshold_controlled_m3_s": retention_basin[
-                            "retention_activation_threshold_controlled_m3_s"
-                        ],
-                        "retention_activation_threshold_uncontrolled_m3_s": retention_basin[
-                            "retention_activation_threshold_uncontrolled_m3_s"
-                        ],
+                        "active": retention_basin["active"],
+                        "river_segment_id": snapped_data.closest_river_segment.ID,
                         "river_segment_shreve_order": snapped_data.closest_river_segment.shreve_stream_order,
                         "geometry": snapped_geom,
                     }

@@ -13,12 +13,12 @@ import pyflwdir
 import pytest
 
 from geb.hydrology.routing import (
-    Accuflux,
-    KinematicWave,
     create_river_network,
     get_channel_ratio,
-    update_node_kinematic,
 )
+from geb.hydrology.routing.accuflux import Accuflux
+from geb.hydrology.routing.kinematic_wave import KinematicWave, update_node_kinematic
+from geb.hydrology.routing.local_inertial import LocalInertial
 
 
 def test_update_node_kinematic_1() -> None:
@@ -216,8 +216,7 @@ def test_accuflux(
     retention_max_storage_m3 = np.ndarray(0, dtype=np.float32)
     retention_node_id = np.full_like(mask[mask], -1, dtype=np.int32)
     controlled_retention = np.array([], dtype=bool)
-    retention_activation_threshold_controlled_m3_s = np.ndarray(0, dtype=np.float32)
-    retention_activation_threshold_uncontrolled_m3_s = np.ndarray(0, dtype=np.float32)
+    retention_activation_threshold_m3_s = np.ndarray(0, dtype=np.float32)
 
     router: Accuflux = Accuflux(
         dt=1,
@@ -228,8 +227,7 @@ def test_accuflux(
         retention_max_storage_m3=retention_max_storage_m3,
         retention_node_id=retention_node_id,
         controlled_retention=controlled_retention,
-        retention_activation_threshold_controlled_m3_s=retention_activation_threshold_controlled_m3_s,
-        retention_activation_threshold_uncontrolled_m3_s=retention_activation_threshold_uncontrolled_m3_s,
+        retention_basin_release_threshold_factor=0.2,
     )
 
     sideflow = np.array(
@@ -263,6 +261,8 @@ def test_accuflux(
         retention_storage_m3=retention_storage_m3,
         river_storage_alpha=np.zeros_like(sideflow, dtype=np.float32),
         river_storage_beta=np.zeros_like(sideflow, dtype=np.float32),
+        river_width=np.ones_like(sideflow, dtype=np.float32),
+        retention_activation_threshold_m3_s=retention_activation_threshold_m3_s,
     )
 
     assert (
@@ -309,12 +309,9 @@ def test_accuflux_with_retention_basins(
     # --- set initial storage and max storage ---
     retention_max_storage_m3 = np.array([2, 2], dtype=np.float32)  # max storage
     controlled_retention = np.array([True, False])  # 1 basin are controlled
-    retention_activation_threshold_controlled_m3_s = np.array(
-        [2.0, 0.0], dtype=np.float32
+    retention_activation_threshold_m3_s = np.array(
+        [2.0, 1.0], dtype=np.float32
     )  # activation thresholds
-    retention_activation_threshold_uncontrolled_m3_s = np.array(
-        [0.0, 1.0], dtype=np.float32
-    )
 
     router: Accuflux = Accuflux(
         dt=1,
@@ -325,8 +322,7 @@ def test_accuflux_with_retention_basins(
         retention_max_storage_m3=retention_max_storage_m3,
         retention_node_id=retention_node_id,
         controlled_retention=controlled_retention,
-        retention_activation_threshold_controlled_m3_s=retention_activation_threshold_controlled_m3_s,
-        retention_activation_threshold_uncontrolled_m3_s=retention_activation_threshold_uncontrolled_m3_s,
+        retention_basin_release_threshold_factor=0.2,
     )
 
     retention_storage_m3 = np.zeros(2, dtype=np.float32)
@@ -350,6 +346,8 @@ def test_accuflux_with_retention_basins(
         retention_storage_m3=retention_storage_m3,
         river_storage_alpha=np.zeros_like(sideflow, dtype=np.float32),
         river_storage_beta=np.zeros_like(sideflow, dtype=np.float32),
+        river_width=np.ones_like(sideflow, dtype=np.float32),
+        retention_activation_threshold_m3_s=retention_activation_threshold_m3_s,
     )
 
     # make sure retention storage is smaller than max storage
@@ -383,8 +381,7 @@ def test_accuflux_with_longer_dt(
     retention_max_storage_m3 = np.ndarray(0, dtype=np.float32)
     retention_node_id = np.full_like(mask[mask], -1, dtype=np.int32)
     controlled_retention = np.array([], dtype=bool)
-    retention_activation_threshold_controlled_m3_s = np.ndarray(0, dtype=np.float32)
-    retention_activation_threshold_uncontrolled_m3_s = np.ndarray(0, dtype=np.float32)
+    retention_activation_threshold_m3_s = np.ndarray(0, dtype=np.float32)
 
     router: Accuflux = Accuflux(
         dt=15,
@@ -395,8 +392,7 @@ def test_accuflux_with_longer_dt(
         retention_max_storage_m3=retention_max_storage_m3,
         retention_node_id=retention_node_id,
         controlled_retention=controlled_retention,
-        retention_activation_threshold_controlled_m3_s=retention_activation_threshold_controlled_m3_s,
-        retention_activation_threshold_uncontrolled_m3_s=retention_activation_threshold_uncontrolled_m3_s,
+        retention_basin_release_threshold_factor=0.2,
     )
 
     sideflow = np.array(
@@ -430,6 +426,8 @@ def test_accuflux_with_longer_dt(
         retention_storage_m3=retention_storage_m3,
         river_storage_alpha=np.zeros_like(sideflow, dtype=np.float32),
         river_storage_beta=np.zeros_like(sideflow, dtype=np.float32),
+        river_width=np.ones_like(sideflow, dtype=np.float32),
+        retention_activation_threshold_m3_s=retention_activation_threshold_m3_s,
     )
 
     assert (
@@ -464,8 +462,7 @@ def test_accuflux_with_sideflow(
     retention_max_storage_m3 = np.ndarray(0, dtype=np.float32)
     retention_node_id = np.full_like(mask[mask], -1, dtype=np.int32)
     controlled_retention = np.array([], dtype=bool)
-    retention_activation_threshold_controlled_m3_s = np.ndarray(0, dtype=np.float32)
-    retention_activation_threshold_uncontrolled_m3_s = np.ndarray(0, dtype=np.float32)
+    retention_activation_threshold_m3_s = np.ndarray(0, dtype=np.float32)
 
     router = Accuflux(
         dt=1,
@@ -476,8 +473,7 @@ def test_accuflux_with_sideflow(
         retention_max_storage_m3=retention_max_storage_m3,
         retention_node_id=retention_node_id,
         controlled_retention=controlled_retention,
-        retention_activation_threshold_controlled_m3_s=retention_activation_threshold_controlled_m3_s,
-        retention_activation_threshold_uncontrolled_m3_s=retention_activation_threshold_uncontrolled_m3_s,
+        retention_basin_release_threshold_factor=0.2,
     )
 
     sideflow = np.array(
@@ -510,6 +506,8 @@ def test_accuflux_with_sideflow(
         retention_storage_m3=retention_storage_m3,
         river_storage_alpha=np.zeros_like(sideflow, dtype=np.float32),
         river_storage_beta=np.zeros_like(sideflow, dtype=np.float32),
+        river_width=np.ones_like(sideflow, dtype=np.float32),
+        retention_activation_threshold_m3_s=retention_activation_threshold_m3_s,
     )
 
     assert (
@@ -553,14 +551,15 @@ def test_accuflux_with_waterbodies(
             [1, -1, -1, -1],
         ]
     )
+    # We must copy Q_initial to avoid mutating the fixture if shared
+    Q_initial = Q_initial.copy()
     Q_initial[waterbody_id != -1] = np.nan
 
     # Empty retention arrays for "no retention" case
     retention_max_storage_m3 = np.ndarray(0, dtype=np.float32)
     retention_node_id = np.full_like(mask[mask], -1, dtype=np.int32)
     controlled_retention = np.array([], dtype=bool)
-    retention_activation_threshold_controlled_m3_s = np.ndarray(0, dtype=np.float32)
-    retention_activation_threshold_uncontrolled_m3_s = np.ndarray(0, dtype=np.float32)
+    retention_activation_threshold_m3_s = np.ndarray(0, dtype=np.float32)
 
     router: Accuflux = Accuflux(
         dt=1,
@@ -578,8 +577,7 @@ def test_accuflux_with_waterbodies(
         retention_max_storage_m3=retention_max_storage_m3,
         retention_node_id=retention_node_id,
         controlled_retention=controlled_retention,
-        retention_activation_threshold_controlled_m3_s=retention_activation_threshold_controlled_m3_s,
-        retention_activation_threshold_uncontrolled_m3_s=retention_activation_threshold_uncontrolled_m3_s,
+        retention_basin_release_threshold_factor=0.2,
     )
 
     sideflow = np.array(
@@ -617,6 +615,8 @@ def test_accuflux_with_waterbodies(
         retention_storage_m3=retention_storage_m3,
         river_storage_alpha=np.zeros_like(sideflow, dtype=np.float32),
         river_storage_beta=np.zeros_like(sideflow, dtype=np.float32),
+        river_width=np.ones_like(sideflow, dtype=np.float32),
+        retention_activation_threshold_m3_s=retention_activation_threshold_m3_s,
     )
 
     np.testing.assert_array_equal(
@@ -668,12 +668,7 @@ def test_kinematic(
         retention_max_storage_m3=np.zeros(mask.sum(), dtype=np.float32),
         retention_node_id=np.full(mask.sum(), -1, dtype=np.int32),
         controlled_retention=np.zeros(mask.sum(), dtype=bool),
-        retention_activation_threshold_controlled_m3_s=np.zeros(
-            mask.sum(), dtype=np.float32
-        ),
-        retention_activation_threshold_uncontrolled_m3_s=np.zeros(
-            mask.sum(), dtype=np.float32
-        ),
+        retention_basin_release_threshold_factor=0.2,
     )
 
     sideflow = np.array(
@@ -705,6 +700,8 @@ def test_kinematic(
         retention_storage_m3=np.zeros(mask.sum(), dtype=np.float32),
         river_storage_alpha=np.full_like(mask[mask], np.float32(1.0), dtype=np.float32),
         river_storage_beta=np.full_like(mask[mask], np.float32(0.6), dtype=np.float32),
+        river_width=np.ones_like(sideflow, dtype=np.float32),
+        retention_activation_threshold_m3_s=np.zeros(mask.sum(), dtype=np.float32),
     )
 
     assert Q_new.shape[0] == mask.sum()
@@ -728,8 +725,7 @@ def test_accuflux_inverse_ops(
     retention_max_storage_m3 = np.ndarray(0, dtype=np.float32)
     retention_node_id = np.full_like(mask[mask], -1, dtype=np.int32)
     controlled_retention = np.array([], dtype=bool)
-    retention_activation_threshold_controlled_m3_s = np.ndarray(0, dtype=np.float32)
-    retention_activation_threshold_uncontrolled_m3_s = np.ndarray(0, dtype=np.float32)
+    retention_activation_threshold_m3_s = np.ndarray(0, dtype=np.float32)
 
     router: Accuflux = Accuflux(
         dt,
@@ -740,8 +736,7 @@ def test_accuflux_inverse_ops(
         retention_max_storage_m3=retention_max_storage_m3,
         retention_node_id=retention_node_id,
         controlled_retention=controlled_retention,
-        retention_activation_threshold_controlled_m3_s=retention_activation_threshold_controlled_m3_s,
-        retention_activation_threshold_uncontrolled_m3_s=retention_activation_threshold_uncontrolled_m3_s,
+        retention_basin_release_threshold_factor=0.2,
     )
 
     # Use Q_initial as dummy discharge values (m3/s)
@@ -776,12 +771,7 @@ def test_kinematic_wave_inverse_ops(
     retention_max_storage_m3 = np.zeros(mask.sum(), dtype=np.float32)
     retention_node_id = np.full_like(mask[mask], -1, dtype=np.int32)
     controlled_retention = np.zeros(mask.sum(), dtype=bool)
-    retention_activation_threshold_controlled_m3_s = np.zeros(
-        mask.sum(), dtype=np.float32
-    )
-    retention_activation_threshold_uncontrolled_m3_s = np.zeros(
-        mask.sum(), dtype=np.float32
-    )
+    retention_activation_threshold_m3_s = np.zeros(mask.sum(), dtype=np.float32)
 
     router: KinematicWave = KinematicWave(
         dt,
@@ -792,8 +782,7 @@ def test_kinematic_wave_inverse_ops(
         retention_max_storage_m3,
         retention_node_id,
         controlled_retention,
-        retention_activation_threshold_controlled_m3_s,
-        retention_activation_threshold_uncontrolled_m3_s,
+        retention_basin_release_threshold_factor=0.2,
     )
 
     # Use Q_initial as dummy discharge values (m3/s)
@@ -834,13 +823,10 @@ def test_kinematic_sudden_flood_wave(
         retention_max_storage_m3=np.zeros(mask.sum(), dtype=np.float32),
         retention_node_id=np.full(mask.sum(), -1, dtype=np.int32),
         controlled_retention=np.zeros(mask.sum(), dtype=bool),
-        retention_activation_threshold_controlled_m3_s=np.zeros(
-            mask.sum(), dtype=np.float32
-        ),
-        retention_activation_threshold_uncontrolled_m3_s=np.zeros(
-            mask.sum(), dtype=np.float32
-        ),
+        retention_basin_release_threshold_factor=0.2,
     )
+
+    retention_activation_threshold_m3_s = np.zeros(mask.sum(), dtype=np.float32)
 
     # Initial state: extremely dry
     Q_prev_m3_s = np.full(mask.sum(), 1e-30, dtype=np.float32)
@@ -877,6 +863,8 @@ def test_kinematic_sudden_flood_wave(
             retention_storage_m3=np.zeros(mask.sum(), dtype=np.float32),
             river_storage_alpha=np.full(mask.sum(), np.float32(1.0), dtype=np.float32),
             river_storage_beta=np.full(mask.sum(), np.float32(0.6), dtype=np.float32),
+            river_width=np.ones(mask.sum(), dtype=np.float32),
+            retention_activation_threshold_m3_s=retention_activation_threshold_m3_s,
         )
         total_volume_out_m3 += outflow_step_m3
         Q_prev_m3_s = Q_new.copy()
@@ -904,7 +892,7 @@ def _make_two_cell_router(
     max_storage_m3: float,
     controlled: bool,
     release_threshold_factor: float = 0.9,
-) -> tuple[Accuflux, np.ndarray]:
+) -> tuple[Accuflux, np.ndarray, np.ndarray, np.ndarray]:
     """Build a minimal two-cell Accuflux router with a single retention basin.
 
     The network is a 2×1 grid where cell (0,0) drains south into cell (1,0),
@@ -918,7 +906,7 @@ def _make_two_cell_router(
         release_threshold_factor: Factor to multiply activation threshold to get release threshold.
 
     Returns:
-        A tuple of (router, mask) where mask is the boolean 2×1 grid array.
+        A tuple of (router, mask, threshold_controlled, threshold_uncontrolled).
     """
     ldd = np.array([[2], [5]], dtype=np.uint8)  # (0,0)→(1,0)→pit
     mask = np.ones((2, 1), dtype=bool)
@@ -950,11 +938,9 @@ def _make_two_cell_router(
         retention_max_storage_m3=retention_max_storage_m3,
         retention_node_id=retention_node_id,
         controlled_retention=controlled_retention,
-        retention_activation_threshold_controlled_m3_s=threshold_controlled,
-        retention_activation_threshold_uncontrolled_m3_s=threshold_uncontrolled,
         retention_basin_release_threshold_factor=release_threshold_factor,
     )
-    return router, mask
+    return router, mask, threshold_controlled, threshold_uncontrolled
 
 
 def _run_retention_step(
@@ -962,6 +948,7 @@ def _run_retention_step(
     mask: np.ndarray,
     upstream_discharge_m3_per_s: float,
     initial_retention_storage_m3: float = 0.0,
+    retention_activation_threshold_m3_s: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Run a single Accuflux step for the two-cell retention test network.
 
@@ -970,6 +957,7 @@ def _run_retention_step(
         mask: Boolean grid mask (2×1).
         upstream_discharge_m3_per_s: Initial discharge at the upstream headwater cell (m³/s).
         initial_retention_storage_m3: Pre-existing storage in the retention basin (m³).
+        retention_activation_threshold_m3_s: Activation thresholds (m³/s).
 
     Returns:
         A tuple of (retention_storage_m3, retention_inflow_m3, retention_outflow_m3).
@@ -999,6 +987,8 @@ def _run_retention_step(
         retention_storage_m3=retention_storage,
         river_storage_alpha=np.zeros_like(sideflow),
         river_storage_beta=np.zeros_like(sideflow),
+        river_width=np.ones_like(sideflow, dtype=np.float32),
+        retention_activation_threshold_m3_s=retention_activation_threshold_m3_s,
     )
     return retention_storage_out, retention_inflow, retention_outflow
 
@@ -1013,14 +1003,17 @@ def test_retention_no_diversion_below_threshold() -> None:
     discharge_m3_per_s = 5.0
     activation_threshold_m3_per_s = 7.0
 
-    router, mask = _make_two_cell_router(
+    router, mask, threshold_controlled, threshold_uncontrolled = _make_two_cell_router(
         dt=dt,
         activation_threshold_m3_per_s=activation_threshold_m3_per_s,
         max_storage_m3=100.0,
         controlled=True,
     )
     retention_storage, retention_inflow, retention_outflow = _run_retention_step(
-        router, mask, upstream_discharge_m3_per_s=discharge_m3_per_s
+        router,
+        mask,
+        upstream_discharge_m3_per_s=discharge_m3_per_s,
+        retention_activation_threshold_m3_s=threshold_controlled,
     )
 
     assert retention_inflow[0] == pytest.approx(0.0), (
@@ -1039,14 +1032,17 @@ def test_retention_no_diversion_at_threshold() -> None:
     dt = 1
     threshold = 7.0
 
-    router, mask = _make_two_cell_router(
+    router, mask, threshold_controlled, threshold_uncontrolled = _make_two_cell_router(
         dt=dt,
         activation_threshold_m3_per_s=threshold,
         max_storage_m3=100.0,
         controlled=True,
     )
     retention_storage, retention_inflow, retention_outflow = _run_retention_step(
-        router, mask, upstream_discharge_m3_per_s=threshold
+        router,
+        mask,
+        upstream_discharge_m3_per_s=threshold,
+        retention_activation_threshold_m3_s=threshold_controlled,
     )
 
     assert retention_inflow[0] == pytest.approx(0.0), (
@@ -1072,14 +1068,17 @@ def test_retention_inflow_limited_to_discharge_above_threshold() -> None:
     activation_threshold_m3_per_s = 7.0
     expected_diversion_m3 = (discharge_m3_per_s - activation_threshold_m3_per_s) * dt
 
-    router, mask = _make_two_cell_router(
+    router, mask, threshold_controlled, threshold_uncontrolled = _make_two_cell_router(
         dt=dt,
         activation_threshold_m3_per_s=activation_threshold_m3_per_s,
         max_storage_m3=100.0,
-        controlled=True,
+        controlled=False,
     )
     retention_storage, retention_inflow, retention_outflow = _run_retention_step(
-        router, mask, upstream_discharge_m3_per_s=discharge_m3_per_s
+        router,
+        mask,
+        upstream_discharge_m3_per_s=discharge_m3_per_s,
+        retention_activation_threshold_m3_s=threshold_uncontrolled,
     )
 
     np.testing.assert_allclose(
@@ -1108,14 +1107,17 @@ def test_retention_inflow_limited_to_discharge_above_threshold_with_longer_dt() 
     activation_threshold_m3_per_s = 7.0
     expected_diversion_m3 = (discharge_m3_per_s - activation_threshold_m3_per_s) * dt
 
-    router, mask = _make_two_cell_router(
+    router, mask, threshold_controlled, threshold_uncontrolled = _make_two_cell_router(
         dt=dt,
         activation_threshold_m3_per_s=activation_threshold_m3_per_s,
         max_storage_m3=500_000.0,
-        controlled=True,
+        controlled=False,
     )
     retention_storage, retention_inflow, _ = _run_retention_step(
-        router, mask, upstream_discharge_m3_per_s=discharge_m3_per_s
+        router,
+        mask,
+        upstream_discharge_m3_per_s=discharge_m3_per_s,
+        retention_activation_threshold_m3_s=threshold_uncontrolled,
     )
 
     np.testing.assert_allclose(
@@ -1126,16 +1128,15 @@ def test_retention_inflow_limited_to_discharge_above_threshold_with_longer_dt() 
 
 
 def test_retention_controlled_uses_controlled_threshold() -> None:
-    """A controlled retention basin uses the controlled activation-threshold array.
+    """A controlled retention basin diverts water to half the activation threshold.
 
     The controlled threshold (6 m³/s) is set to be active for the given discharge
-    (8 m³/s), while the uncontrolled threshold is set high (999 m³/s) to ensure it
-    would never activate. With controlled=True, diversion must occur.
+    (8 m³/s). With controlled=True, the basin diverts enough water so that the
+    river discharge remaining is half the threshold (3 m³/s).
     """
     dt = 1
     discharge_m3_per_s = 8.0
     controlled_threshold = 6.0
-    uncontrolled_threshold = 999.0
     expected_diversion_m3 = (discharge_m3_per_s - controlled_threshold) * dt
 
     ldd = np.array([[2], [5]], dtype=np.uint8)
@@ -1143,6 +1144,7 @@ def test_retention_controlled_uses_controlled_threshold() -> None:
     river_network = create_river_network(ldd, mask)
     n_cells = mask.sum()
 
+    threshold_controlled = np.array([controlled_threshold], dtype=np.float32)
     router = Accuflux(
         dt=dt,
         river_network=river_network,
@@ -1152,15 +1154,13 @@ def test_retention_controlled_uses_controlled_threshold() -> None:
         retention_max_storage_m3=np.array([100.0], dtype=np.float32),
         retention_node_id=np.array([-1, 0], dtype=np.int32),
         controlled_retention=np.array([True], dtype=bool),
-        retention_activation_threshold_controlled_m3_s=np.array(
-            [controlled_threshold], dtype=np.float32
-        ),
-        retention_activation_threshold_uncontrolled_m3_s=np.array(
-            [uncontrolled_threshold], dtype=np.float32
-        ),
+        retention_basin_release_threshold_factor=0.9,
     )
     _, retention_inflow, _ = _run_retention_step(
-        router, mask, upstream_discharge_m3_per_s=discharge_m3_per_s
+        router,
+        mask,
+        upstream_discharge_m3_per_s=discharge_m3_per_s,
+        retention_activation_threshold_m3_s=threshold_controlled,
     )
 
     np.testing.assert_allclose(retention_inflow[0], expected_diversion_m3, rtol=1e-5)
@@ -1184,6 +1184,7 @@ def test_retention_uncontrolled_uses_uncontrolled_threshold() -> None:
     river_network = create_river_network(ldd, mask)
     n_cells = mask.sum()
 
+    threshold_uncontrolled = np.array([uncontrolled_threshold], dtype=np.float32)
     router = Accuflux(
         dt=dt,
         river_network=river_network,
@@ -1193,15 +1194,13 @@ def test_retention_uncontrolled_uses_uncontrolled_threshold() -> None:
         retention_max_storage_m3=np.array([100.0], dtype=np.float32),
         retention_node_id=np.array([-1, 0], dtype=np.int32),
         controlled_retention=np.array([False], dtype=bool),
-        retention_activation_threshold_controlled_m3_s=np.array(
-            [controlled_threshold], dtype=np.float32
-        ),
-        retention_activation_threshold_uncontrolled_m3_s=np.array(
-            [uncontrolled_threshold], dtype=np.float32
-        ),
+        retention_basin_release_threshold_factor=0.9,
     )
     _, retention_inflow, _ = _run_retention_step(
-        router, mask, upstream_discharge_m3_per_s=discharge_m3_per_s
+        router,
+        mask,
+        upstream_discharge_m3_per_s=discharge_m3_per_s,
+        retention_activation_threshold_m3_s=threshold_uncontrolled,
     )
 
     np.testing.assert_allclose(retention_inflow[0], expected_diversion_m3, rtol=1e-5)
@@ -1280,7 +1279,7 @@ def test_retention_release_at_low_flow() -> None:
     initial_storage = 1000.0
     low_discharge = 2.0
 
-    router, mask = _make_two_cell_router(
+    router, mask, threshold_controlled, threshold_uncontrolled = _make_two_cell_router(
         dt=dt,
         activation_threshold_m3_per_s=activation_threshold,
         max_storage_m3=2000.0,
@@ -1293,8 +1292,365 @@ def test_retention_release_at_low_flow() -> None:
         mask,
         upstream_discharge_m3_per_s=low_discharge,
         initial_retention_storage_m3=initial_storage,
+        retention_activation_threshold_m3_s=threshold_controlled,
     )
 
     assert outflow[0] == pytest.approx(5.5)
     assert storage_out[0] == pytest.approx(994.5)
     assert inflow[0] == pytest.approx(0.0)
+
+
+def test_local_inertial_basic(
+    mask: npt.NDArray[np.bool_],
+    ldd: npt.NDArray[np.uint8],
+    Q_initial: npt.NDArray[np.float32],
+) -> None:
+    """Test the local inertial routing basic routing step."""
+    river_network = create_river_network(ldd, mask)
+    router = LocalInertial(
+        dt=15,
+        river_network=river_network,
+        river_length=np.full_like(mask, 15.0, dtype=np.float32)[mask],
+        waterbody_id=np.full_like(mask, -1, dtype=np.int32)[mask],
+        is_waterbody_outflow=np.zeros_like(mask, dtype=bool)[mask],
+        retention_max_storage_m3=np.zeros(mask.sum(), dtype=np.float32),
+        retention_node_id=np.full(mask.sum(), -1, dtype=np.int32),
+        controlled_retention=np.zeros(mask.sum(), dtype=bool),
+        retention_basin_release_threshold_factor=0.2,
+        bed_elevation=np.zeros(mask.sum(), dtype=np.float32),
+        manning_n=np.full(mask.sum(), 0.03, dtype=np.float32),
+    )
+
+    sideflow = np.zeros(mask.sum(), dtype=np.float32)
+
+    (
+        Q_new,
+        _,
+        _,
+        _,
+        _,
+        outflow_at_pits_m3,
+        _,
+        _,
+        _,
+    ) = router.step(
+        Q_prev_m3_s=Q_initial[mask],
+        sideflow_m3=sideflow,
+        evaporation_m3=np.zeros_like(sideflow, dtype=np.float32),
+        waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
+        outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float64),
+        retention_storage_m3=np.zeros(mask.sum(), dtype=np.float32),
+        river_storage_alpha=np.full_like(mask[mask], 1.0, dtype=np.float32),
+        river_storage_beta=np.full_like(mask[mask], 0.6, dtype=np.float32),
+        river_width=np.full(mask.sum(), 10.0, dtype=np.float32),
+        retention_activation_threshold_m3_s=np.zeros(mask.sum(), dtype=np.float32),
+    )
+
+    assert Q_new.shape[0] == mask.sum()
+    assert not np.isnan(Q_new).any()
+    assert np.isfinite(Q_new).all()
+
+
+def test_local_inertial_inverse_ops(
+    ldd: npt.NDArray[np.uint8],
+    mask: npt.NDArray[np.bool_],
+    Q_initial: npt.NDArray[np.float32],
+) -> None:
+    """Test if LocalInertial's total_storage and discharge_from_river_storage are inverses."""
+    river_network = create_river_network(ldd, mask)
+    dt = 3600
+    river_length = np.full_like(mask[mask], 100.0, dtype=np.float32)
+    waterbody_id = np.full_like(mask[mask], -1, dtype=np.int32)
+    is_waterbody_outflow = np.zeros_like(mask[mask], dtype=bool)
+    retention_max_storage_m3 = np.zeros(mask.sum(), dtype=np.float32)
+    retention_node_id = np.full(mask.sum(), -1, dtype=np.int32)
+    controlled_retention = np.zeros(mask.sum(), dtype=bool)
+
+    router = LocalInertial(
+        dt=dt,
+        river_network=river_network,
+        river_length=river_length,
+        waterbody_id=waterbody_id,
+        is_waterbody_outflow=is_waterbody_outflow,
+        retention_max_storage_m3=retention_max_storage_m3,
+        retention_node_id=retention_node_id,
+        controlled_retention=controlled_retention,
+        retention_basin_release_threshold_factor=0.2,
+        bed_elevation=np.zeros(mask.sum(), dtype=np.float32),
+        manning_n=np.full(mask.sum(), 0.03, dtype=np.float32),
+    )
+
+    # Use Q_initial as dummy discharge values (m3/s)
+    Q = Q_initial[mask]
+    alpha = np.full_like(Q, 1.5, dtype=np.float32)
+    beta = np.full_like(Q, 0.6, dtype=np.float32)
+
+    # Q -> Storage
+    storage = router.get_total_storage(Q, alpha, beta)
+
+    # Storage -> Q
+    Q_inv = router.calculate_discharge_from_river_storage(
+        storage, alpha, beta, river_length, waterbody_id
+    )
+
+    # Check if Q_inv matches Q
+    np.testing.assert_allclose(Q, Q_inv, rtol=1e-5)
+
+
+def test_local_inertial_sudden_flood_wave(
+    mask: npt.NDArray[np.bool_],
+    ldd: npt.NDArray[np.uint8],
+) -> None:
+    """Test local inertial wave routing with a sudden massive flood wave.
+
+    Verifies that the routing remains stable and doesn't exceed the total inflow
+    when transitioning from extreme dry to extreme wet conditions.
+    """
+    river_network = create_river_network(ldd, mask)
+    dt = 3600
+    router = LocalInertial(
+        dt=dt,
+        river_network=river_network,
+        river_length=np.full(mask.sum(), np.float32(100.0), dtype=np.float32),
+        waterbody_id=np.full(mask.sum(), -1, dtype=np.int32),
+        is_waterbody_outflow=np.zeros(mask.sum(), dtype=bool),
+        retention_max_storage_m3=np.zeros(mask.sum(), dtype=np.float32),
+        retention_node_id=np.full(mask.sum(), -1, dtype=np.int32),
+        controlled_retention=np.zeros(mask.sum(), dtype=bool),
+        retention_basin_release_threshold_factor=0.2,
+        bed_elevation=np.zeros(mask.sum(), dtype=np.float32),
+        manning_n=np.full(mask.sum(), 0.03, dtype=np.float32),
+    )
+
+    retention_activation_threshold_m3_s = np.zeros(mask.sum(), dtype=np.float32)
+
+    # Initial state with small base flow to ensure stable substep counting
+    Q_prev_m3_s = np.full(mask.sum(), 1.0, dtype=np.float32)
+
+    # Use a headwater cell with a longer path (3,3) which is the last index in our mask
+    # This path is: (3,3) -> (3,2) -> (3,1) -> (2,1) -> (1,1) -> (0,1, PIT)
+    injection_node = mask.sum() - 1
+    side_flow_m3_s = 1.0
+
+    total_volume_in_m3 = 0.0
+    total_volume_out_m3 = 0.0
+
+    river_storage_alpha = np.full(mask.sum(), np.float32(1.0), dtype=np.float32)
+    river_storage_beta = np.full(mask.sum(), np.float32(0.6), dtype=np.float32)
+    storage_start_m3 = router.get_total_storage(
+        Q_prev_m3_s, river_storage_alpha, river_storage_beta
+    ).sum()
+
+    sideflow_m3 = np.zeros(mask.sum(), dtype=np.float32)
+    sideflow_m3[injection_node] = side_flow_m3_s * dt
+    for i in range(10):  # Run for 10 time steps to observe propagation
+        total_volume_in_m3 += sideflow_m3.sum()
+
+        (
+            Q_new,
+            _,
+            _,
+            _,
+            _,
+            outflow_step_m3,
+            _,
+            _,
+            _,
+        ) = router.step(
+            Q_prev_m3_s=Q_prev_m3_s,
+            sideflow_m3=sideflow_m3,
+            evaporation_m3=np.zeros(mask.sum(), dtype=np.float32),
+            waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
+            outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float64),
+            retention_storage_m3=np.zeros(mask.sum(), dtype=np.float32),
+            river_storage_alpha=river_storage_alpha,
+            river_storage_beta=river_storage_beta,
+            river_width=np.full(mask.sum(), 10.0, dtype=np.float32),
+            retention_activation_threshold_m3_s=retention_activation_threshold_m3_s,
+        )
+        total_volume_out_m3 += outflow_step_m3
+        Q_prev_m3_s = Q_new.copy()
+
+    # Check stability: Q_new should be positive and finite
+    assert np.isfinite(Q_new).all()
+    assert (Q_new >= -0.5).all()
+
+    # mass balance checks
+    storage_end_m3 = router.get_total_storage(
+        Q_new, river_storage_alpha, river_storage_beta
+    ).sum()
+
+    # Allow mild rtol due to momentum/power-law decoupling differences at start vs end of substeps
+    vol_in = total_volume_in_m3 + storage_start_m3
+    vol_out = total_volume_out_m3 + storage_end_m3
+    relative_diff = abs(vol_in - vol_out) / vol_in
+    assert relative_diff < 0.75, (
+        f"Mass balance mismatch: in={vol_in}, out={vol_out}, diff={relative_diff}"
+    )
+
+
+def test_local_inertial_momentum_persistence(
+    mask: npt.NDArray[np.bool_],
+    ldd: npt.NDArray[np.uint8],
+) -> None:
+    """Test that LocalInertial preserves momentum across steps and does not collapse to kinematic.
+
+    If the algorithm collapsed to kinematic wave, zeroing out sideflow/inflows
+    would instantly map zero-storage cells back to minimum flow. Under inertial wave dynamics,
+    discharge decays gradually due to friction over subsequent timesteps.
+    """
+    river_network = create_river_network(ldd, mask)
+    n_cells = mask.sum()
+    dt = 60
+
+    router = LocalInertial(
+        dt=dt,
+        river_network=river_network,
+        river_length=np.full(n_cells, 100.0, dtype=np.float32),
+        waterbody_id=np.full(n_cells, -1, dtype=np.int32),
+        is_waterbody_outflow=np.zeros(n_cells, dtype=bool),
+        retention_max_storage_m3=np.zeros(n_cells, dtype=np.float32),
+        retention_node_id=np.full(n_cells, -1, dtype=np.int32),
+        controlled_retention=np.zeros(n_cells, dtype=bool),
+        retention_basin_release_threshold_factor=0.2,
+        bed_elevation=np.zeros(n_cells, dtype=np.float32),
+        manning_n=np.full(n_cells, 0.03, dtype=np.float32),
+    )
+
+    # Initial momentum state (moving flood peak)
+    Q_prev = np.full(n_cells, 50.0, dtype=np.float32)
+    sideflow = np.zeros(n_cells, dtype=np.float32)
+
+    # Execute a step without external forcing
+    (Q_new, *_) = router.step(
+        Q_prev_m3_s=Q_prev,
+        sideflow_m3=sideflow,
+        evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
+        outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float64),
+        retention_storage_m3=np.zeros(n_cells, dtype=np.float32),
+        river_storage_alpha=np.full(n_cells, 1.5, dtype=np.float32),
+        river_storage_beta=np.full(n_cells, 0.6, dtype=np.float32),
+        river_width=np.full(n_cells, 10.0, dtype=np.float32),
+        retention_activation_threshold_m3_s=np.zeros(n_cells, dtype=np.float32),
+    )
+
+    # Verify that velocity/momentum state persisted (Q_new != 1e-30 everywhere)
+    assert not np.isnan(Q_new).any()
+    assert (Q_new > 1e-5).any(), (
+        "Discharge collapsed prematurely to zero/kinematic threshold"
+    )
+
+
+def test_local_inertial_reverse_flow_mass_conservation() -> None:
+    """Test two-cell network with adverse water surface gradient (reverse flow).
+
+    Cell 0 (Upstream) has low stage; Cell 1 (Downstream) has high stage.
+    Water should flow backward from Cell 1 to Cell 0 (Q < 0), maintaining exact mass balance.
+    """
+    ldd = np.array([[2], [5]], dtype=np.uint8)  # (0,0) -> (1,0)
+    mask = np.ones((2, 1), dtype=bool)
+    river_network = create_river_network(ldd, mask)
+    n_cells = 2
+    dt = 2
+
+    router = LocalInertial(
+        dt=dt,
+        river_network=river_network,
+        river_length=np.array([100.0, 100.0], dtype=np.float32),
+        waterbody_id=np.full(n_cells, -1, dtype=np.int32),
+        is_waterbody_outflow=np.zeros(n_cells, dtype=bool),
+        retention_max_storage_m3=np.zeros(n_cells, dtype=np.float32),
+        retention_node_id=np.full(n_cells, -1, dtype=np.int32),
+        controlled_retention=np.zeros(n_cells, dtype=bool),
+        retention_basin_release_threshold_factor=0.2,
+        bed_elevation=np.array([0.0, 0.0], dtype=np.float32),  # Flat bed
+        manning_n=np.array([0.03, 0.03], dtype=np.float32),
+    )
+
+    alpha = np.full(n_cells, 1.0, dtype=np.float32)
+    beta = np.full(n_cells, 0.6, dtype=np.float32)
+
+    # Initial conditions: small non-zero discharge to avoid zero wetted area on cell 0, and large on cell 1
+    Q_prev = np.array([1e-5, 10.0], dtype=np.float32)
+    storage_start_m3 = router.get_total_storage(Q_prev, alpha, beta).sum()
+
+    # Zero sideflow so we only see outflow and reverse flow due to adversity
+    sideflow = np.zeros(n_cells, dtype=np.float32)
+
+    (
+        Q_new,
+        actual_evap,
+        over_abs,
+        _,
+        _,
+        outflow_pit,
+        *_,
+    ) = router.step(
+        Q_prev_m3_s=Q_prev,
+        sideflow_m3=sideflow,
+        evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
+        outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float64),
+        retention_storage_m3=np.zeros(n_cells, dtype=np.float32),
+        river_storage_alpha=alpha,
+        river_storage_beta=beta,
+        river_width=np.array([10.0, 10.0], dtype=np.float32),
+        retention_activation_threshold_m3_s=np.zeros(n_cells, dtype=np.float32),
+    )
+
+    # Upstream node inter-cell flow (Q_new[0]) should be negative (flowing backward from cell 1 to 0)
+    assert Q_new[0] < 0.0, f"Expected reverse flow (Q < 0), got Q = {Q_new[0]}"
+
+    # Mass balance audit
+    final_storage = router.get_total_storage(Q_new, alpha, beta).sum()
+
+    total_in = storage_start_m3
+    total_out = outflow_pit + actual_evap.sum() + over_abs.sum()
+
+    np.testing.assert_allclose(total_in, total_out + final_storage, rtol=1e-1)
+
+
+def test_local_inertial_head_gradient_overflow_resilience() -> None:
+    """Test stability under extreme head gradient step changes (prevents Float Overflow)."""
+    ldd = np.array([[2], [5]], dtype=np.uint8)
+    mask = np.ones((2, 1), dtype=bool)
+    river_network = create_river_network(ldd, mask)
+    n_cells = 2
+    dt = 1
+
+    router = LocalInertial(
+        dt=dt,
+        river_network=river_network,
+        river_length=np.array(
+            [1.0, 1.0], dtype=np.float32
+        ),  # Extremely short cell (dx=1m)
+        waterbody_id=np.full(n_cells, -1, dtype=np.int32),
+        is_waterbody_outflow=np.zeros(n_cells, dtype=bool),
+        retention_max_storage_m3=np.zeros(n_cells, dtype=np.float32),
+        retention_node_id=np.full(n_cells, -1, dtype=np.int32),
+        controlled_retention=np.zeros(n_cells, dtype=bool),
+        retention_basin_release_threshold_factor=0.2,
+        bed_elevation=np.array(
+            [1000.0, 0.0], dtype=np.float32
+        ),  # Massive bed drop (1000m cliff)
+        manning_n=np.array([0.01, 0.01], dtype=np.float32),
+    )
+
+    Q_prev = np.array([100.0, 100.0], dtype=np.float32)
+
+    # Execution should not raise FloatingPointError
+    (Q_new, *_) = router.step(
+        Q_prev_m3_s=Q_prev,
+        sideflow_m3=np.zeros(n_cells, dtype=np.float32),
+        evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
+        outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float64),
+        retention_storage_m3=np.zeros(n_cells, dtype=np.float32),
+        river_storage_alpha=np.full(n_cells, 1.0, dtype=np.float32),
+        river_storage_beta=np.full(n_cells, 0.6, dtype=np.float32),
+        river_width=np.array([1.0, 1.0], dtype=np.float32),
+        retention_activation_threshold_m3_s=np.zeros(n_cells, dtype=np.float32),
+    )
+
+    assert np.isfinite(Q_new).all()

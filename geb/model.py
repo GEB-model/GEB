@@ -661,6 +661,9 @@ class GEBModel(Module):
 
     def step_to_end(self) -> None:
         """Run the model to the end of the simulation period."""
+        self.model.logger.info(
+            f"Running from {self.current_time.date()} to {self.run_end.date()}"
+        )
         for _ in range(self.n_timesteps - self.current_timestep):
             self.step()
 

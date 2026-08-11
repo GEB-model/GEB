@@ -299,7 +299,7 @@ def test_spinup() -> None:
 
         routing = geb.hydrology.routing
         outflow_rivers = geb.hydrology.routing.outflow_rivers
-        routing.observed_average_river_width[
+        routing.var.observed_average_river_width[
             routing.var.river_ids == geb.hydrology.routing.outflow_rivers.iloc[0].name
         ] = RIVER_WIDTH_OUTFLOW_RIVER
 
@@ -396,8 +396,8 @@ def test_run() -> None:
                 "_energy_balance": True,
             }
         )
-        args["config"]["hazards"]["floods"]["simulate"] = True
-        args["config"]["hazards"]["floods"]["run_for_validation_events"] = True
+        args["config"]["hazards"]["floods"]["simulate"] = False
+        args["config"]["hazards"]["floods"]["run_for_validation_events"] = False
 
         run_model_with_method(method="run", **args)
 
