@@ -1580,6 +1580,7 @@ class Households(AgentBaseClass):
                     self.config["adapt"]
                     and self.model.current_time.month == 1
                     and self.model.current_time.day == 1
+                    and self.model.current_timestep > 0
                 ):
                     if "flooded" not in self.buildings.columns:
                         self.update_building_attributes()
@@ -1693,12 +1694,19 @@ class Households(AgentBaseClass):
         return np.int32(self.households_exposed_to_flooding.size)
 
     @property
-    def investment_costs_per_household(self) -> np.ndarray:
+    def total_investment_costs(self) -> np.ndarray:
         """Get the investment costs for each household.
 
         Returns:
             Array of investment costs for each household.
         """
-        investment_costs = self.var.adaptation_costs.copy()
-        investment_costs[self.var.adapted == 0] = 0
-        return investment_costs
+        if not hasattr(self, "_total_investment_costs"):
+            self._total_investment_costs = 0
+        investment_costs = self.var.adaptation_costs[self.var.time_adapted == 1].sum()
+        # calculate the investment costs plus interest over the loan duration (20 years)
+        loan_duration = 20
+        interest_rate = 0.03
+        self._total_investment_costs = (
+            investment_costs * (1 + interest_rate) ** loan_duration
+        )
+        return self._total_investment_costs
