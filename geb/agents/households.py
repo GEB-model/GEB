@@ -1580,6 +1580,7 @@ class Households(AgentBaseClass):
                     self.config["adapt"]
                     and self.model.current_time.month == 1
                     and self.model.current_time.day == 1
+                    and self.model.current_timestep > 0
                 ):
                     if "flooded" not in self.buildings.columns:
                         self.update_building_attributes()
