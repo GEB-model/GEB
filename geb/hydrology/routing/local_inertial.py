@@ -5,7 +5,9 @@ Implements a hydrodynamically simplified 1D local inertial routing formulation
 retention basins, and waterbody (lakes/reservoirs) dynamics.
 """
 
+import geopandas as gpd
 import numpy as np
+import pandas as pd
 import pyflwdir
 from numba import njit, prange
 
@@ -65,6 +67,7 @@ def _run_single_inertial_substep(
     is_waterbody_outflow: ArrayBool,
     waterbody_id: ArrayInt32,
     cfl_river_length: ArrayFloat32,  # Pre-computed: 0.85 * river_length
+    river_length: ArrayFloat32,
     inv_reach_length: ArrayFloat32,
     inv_cell_area: ArrayFloat32,
     river_width: ArrayFloat32,
@@ -77,6 +80,8 @@ def _run_single_inertial_substep(
     retention_basin_release_threshold_factor: np.float32,
     ds_node: ArrayInt32,
     is_pit: ArrayBool,
+    is_ocean_pit: ArrayBool,
+    pit_slope: ArrayFloat32,
     use_kinematic: ArrayBool,
     lateral_flux_m3: ArrayFloat32,
     next_substep_discharge_m3_s: ArrayFloat32,
@@ -93,7 +98,6 @@ def _run_single_inertial_substep(
     g_dt_substep = GRAVITY_ACCELERATION * dt_substep
 
     # 1. State Buffer Initialization
-    # Full copies required to maintain pointer-swap state integrity across full domain
     river_storage_out[:] = river_storage_in
     waterbody_storage_out[:] = waterbody_storage_in
     retention_storage_out[:] = retention_storage_in
@@ -106,14 +110,12 @@ def _run_single_inertial_substep(
     discharge_vol_sum_out[:] = discharge_vol_sum_in
     wb_processed_out[:] = wb_processed_in
 
-    # Fast memsets required to prevent stale data accumulation across substeps
     lateral_flux_m3.fill(np.float32(0.0))
     next_substep_discharge_m3_s.fill(np.float32(0.0))
     net_vol_m3.fill(0.0)
     wb_extra_lateral_m3_buf.fill(np.float32(0.0))
     wb_outflow_avail_buf[:] = wb_outflow_substep_m3[:]
 
-    # Target zero-fills only for modified active slices
     wb_extra_lateral_m3_buf[n_kinematic:inertial_end].fill(np.float32(0.0))
     wb_outflow_avail_buf[:] = wb_outflow_substep_m3[:]
 
@@ -137,7 +139,7 @@ def _run_single_inertial_substep(
 
     # --- Pass 1 & 2: Local Inertial Momentum Solver ---
     error_flag = 0
-    for i in prange(n_kinematic, inertial_end):
+    for i in prange(n_kinematic, inertial_end):  # ty:ignore[not-iterable]
         node_lateral_inflow = (
             np.float32(sideflow_substep_m3[i]) + wb_extra_lateral_m3_buf[i]
         )
@@ -194,9 +196,19 @@ def _run_single_inertial_substep(
         water_stage_node = bed_elev_node + flow_depth
         ds = ds_node[i]
 
-        # Stage calculation
-        is_valid_ds = (ds != -1) and (not is_pit[i])
-        if is_valid_ds:
+        # Stage calculation with Boundary Conditions
+        if is_pit[i]:
+            if is_ocean_pit[i]:
+                # 1. Ocean Outlets: Fixed 0m MSL Boundary
+                water_stage_ds = np.float32(0.0)
+                bed_elev_ds = bed_elev_node
+            else:
+                # 2. Inland River Pits: Slope-floored normal depth
+                dx = river_length[i]
+                eff_slope = pit_slope[i]
+                bed_elev_ds = bed_elev_node - eff_slope * dx
+                water_stage_ds = bed_elev_ds + flow_depth
+        elif ds != -1:
             bed_elev_ds = bed_elevation[ds]
             wb_ds = waterbody_id[ds]
             if wb_ds == -1:
@@ -231,12 +243,10 @@ def _run_single_inertial_substep(
         hydraulic_radius = max(effective_depth, np.float32(1e-6))
         water_slope = (water_stage_ds - water_stage_node) * inv_length_m
 
-        # OPTIMIZATION: Replaced generic pow(x, 1/3) with np.cbrt intrinsic
         r_4_3 = hydraulic_radius * np.cbrt(hydraulic_radius)
         friction_denom_term = max(r_4_3 * cross_sectional_area, np.float32(1e-6))
 
         q_in = substep_discharge_in[i]
-        # OPTIMIZATION: Used pre-computed g_manning_n_sq[i]
         friction_factor_val = dt_substep * g_manning_n_sq[i]
         friction_denom = np.float32(1.0) + (
             friction_factor_val * abs(q_in) / friction_denom_term
@@ -247,6 +257,7 @@ def _run_single_inertial_substep(
         ) / friction_denom
 
         # Boundary condition masking
+        is_valid_ds = (ds != -1) and (not is_pit[i])
         is_boundary = (
             (ds == -1) or is_pit[i] or (is_valid_ds and waterbody_id[ds] != -1)
         )
@@ -293,7 +304,7 @@ def _run_single_inertial_substep(
 
     # --- Pass 3: Mass Balance & CFL Check ---
     error_flag = 0
-    for i in prange(n_kinematic, inertial_end):
+    for i in prange(n_kinematic, inertial_end):  # ty:ignore[not-iterable]
         vol_in = kinematic_inflow_rate[i] * dt_substep + lateral_flux_m3[i]
 
         for j in range(max_up_connections):
@@ -340,7 +351,6 @@ def _run_single_inertial_substep(
             abs(next_substep_discharge_m3_s[i]) / (effective_depth_new * river_width[i])
         )
 
-        # OPTIMIZATION: Used pre-computed cfl_river_length
         max_dt_cfl = cfl_river_length[i] / (celerity + flow_velocity + np.float32(1e-9))
 
         if dt_substep > max_dt_cfl:
@@ -383,6 +393,8 @@ def _run_inertial_substeps(
     retention_basin_release_threshold_factor: np.float32,
     ds_node: ArrayInt32,
     is_pit: ArrayBool,
+    is_ocean_pit: ArrayBool,
+    pit_slope: ArrayFloat32,
     use_kinematic: ArrayBool,
     over_abstraction_m3: ArrayFloat32,
     actual_evaporation_m3: ArrayFloat32,
@@ -401,17 +413,14 @@ def _run_inertial_substeps(
     t_simulated = np.float64(0.0)
     MIN_DT_THRESHOLD = np.float64(1e-6)
 
-    # OPTIMIZATION: Pre-compute static derived terms once outside the temporal loop
     g_manning_n_sq = np.float32(9.80665) * manning_n_sq
     cfl_river_length = np.float32(0.85) * river_length
 
-    # Pre-cast inputs once outside loop to avoid repeated casting heap allocations
     sideflow_m3_f64 = sideflow_m3.astype(np.float64)
     evaporation_m3_f64 = evaporation_m3.astype(np.float64)
     outflow_per_waterbody_m3_f64 = outflow_per_waterbody_m3.astype(np.float64)
     retention_max_storage_m3_f64 = retention_max_storage_m3.astype(np.float64)
 
-    # Pre-allocate substep input buffers once
     sideflow_substep_m3_buf = np.empty(sideflow_m3.size, dtype=np.float64)
     evap_substep_m3_buf = np.empty(evaporation_m3.size, dtype=np.float64)
     wb_outflow_substep_m3_buf = np.empty(
@@ -424,12 +433,10 @@ def _run_inertial_substeps(
         retention_max_storage_m3.size, dtype=np.float64
     )
 
-    # Pre-allocate internal scratch buffers once
     wb_outflow_avail_buf = np.empty(waterbody_storage_m3.size, dtype=np.float64)
     wb_extra_lateral_m3_buf = np.empty(inertial_end, dtype=np.float32)
     net_vol_m3_buf = np.empty(river_storage_m3.size, dtype=np.float64)
 
-    # Double Buffering: Initialize State Buffer A with input parameters
     river_storage_A = river_storage_m3.copy()
     waterbody_storage_A = waterbody_storage_m3.copy()
     retention_storage_A = retention_storage_m3.copy()
@@ -443,7 +450,6 @@ def _run_inertial_substeps(
     discharge_vol_sum_A.fill(np.float32(0.0))
     wb_processed_A = np.zeros(waterbody_storage_m3.size, dtype=np.bool_)
 
-    # Double Buffering: Initialize State Buffer B
     river_storage_B = np.empty_like(river_storage_A)
     waterbody_storage_B = np.empty_like(waterbody_storage_A)
     retention_storage_B = np.empty_like(retention_storage_A)
@@ -463,7 +469,6 @@ def _run_inertial_substeps(
         fraction_f64 = current_substep_dt / dt_f64
         substep_dt_f32 = np.float32(current_substep_dt)
 
-        # OPTIMIZATION: Fused scaling passes for better cache temporal locality
         n_nodes = sideflow_m3.size
         for i in range(n_nodes):
             sideflow_substep_m3_buf[i] = sideflow_m3_f64[i] * fraction_f64
@@ -486,7 +491,6 @@ def _run_inertial_substeps(
             n_kinematic=n_kinematic,
             inertial_end=inertial_end,
             max_up_connections=max_up_connections,
-            # Read state A
             substep_discharge_in=substep_discharge_A,
             river_storage_in=river_storage_A,
             waterbody_storage_in=waterbody_storage_A,
@@ -498,7 +502,6 @@ def _run_inertial_substeps(
             retention_outflow_in=retention_outflow_A,
             discharge_vol_sum_in=discharge_vol_sum_A,
             wb_processed_in=wb_processed_A,
-            # Write state B
             substep_discharge_out=substep_discharge_B,
             river_storage_out=river_storage_B,
             waterbody_storage_out=waterbody_storage_B,
@@ -510,7 +513,6 @@ def _run_inertial_substeps(
             retention_outflow_out=retention_outflow_B,
             discharge_vol_sum_out=discharge_vol_sum_B,
             wb_processed_out=wb_processed_B,
-            # Scratch buffers
             sideflow_substep_m3=sideflow_substep_m3_buf,
             evap_substep_m3=evap_substep_m3_buf,
             wb_outflow_substep_m3=wb_outflow_substep_m3_buf,
@@ -519,11 +521,11 @@ def _run_inertial_substeps(
             wb_outflow_avail_buf=wb_outflow_avail_buf,
             wb_extra_lateral_m3_buf=wb_extra_lateral_m3_buf,
             net_vol_m3=net_vol_m3_buf,
-            # Static parameters
             upstream_matrix=upstream_matrix,
             is_waterbody_outflow=is_waterbody_outflow,
             waterbody_id=waterbody_id,
             cfl_river_length=cfl_river_length,
+            river_length=river_length,
             inv_reach_length=inv_reach_length,
             inv_cell_area=inv_cell_area,
             river_width=river_width,
@@ -536,6 +538,8 @@ def _run_inertial_substeps(
             retention_basin_release_threshold_factor=retention_basin_release_threshold_factor,
             ds_node=ds_node,
             is_pit=is_pit,
+            is_ocean_pit=is_ocean_pit,
+            pit_slope=pit_slope,
             use_kinematic=use_kinematic,
             lateral_flux_m3=lateral_flux_m3,
             next_substep_discharge_m3_s=next_substep_discharge_m3_s,
@@ -544,7 +548,6 @@ def _run_inertial_substeps(
         )
 
         if success:
-            # Pointer Swap: O(1) exchange
             river_storage_A, river_storage_B = river_storage_B, river_storage_A
             waterbody_storage_A, waterbody_storage_B = (
                 waterbody_storage_B,
@@ -594,7 +597,6 @@ def _run_inertial_substeps(
                     "Substep dt reduced below minimum threshold. Integration Unstable."
                 )
 
-    # Copy final accumulated states once back into user output references
     river_storage_m3[:] = river_storage_A[:]
     waterbody_storage_m3[:] = waterbody_storage_A[:]
     retention_storage_m3[:] = retention_storage_A[:]
@@ -638,6 +640,8 @@ class LocalInertial(Router):
         bankfull_river_elevation_m: ArrayFloat32,
         manning_n: ArrayFloat32,
         use_kinematic: ArrayBool,
+        rivers_gdf: gpd.GeoDataFrame,
+        min_slope: float = 1e-4,
     ) -> None:
         """Initializes the LocalInertial routing instance.
 
@@ -656,6 +660,8 @@ class LocalInertial(Router):
             bankfull_river_elevation_m: Bed elevation above datum per node.
             manning_n: Manning's roughness coefficient per node.
             use_kinematic: Mask indicating nodes that use kinematic wave formulation.
+            rivers_gdf: GeoDataFrame containing COMID, downstream_ID, and slope attributes.
+            min_slope: Minimum slope floor threshold for non-ocean pit boundaries.
         """
         super().__init__(
             dt,
@@ -676,6 +682,29 @@ class LocalInertial(Router):
         self.retention_node_id = retention_node_id
         self.retention_max_storage_m3 = retention_max_storage_m3
         self.controlled_retention = controlled_retention
+
+        # Classify pits and calculate effective boundary slope
+        n_nodes_total = self.is_pit.size
+        is_ocean_pit_orig = np.zeros(n_nodes_total, dtype=np.bool_)
+        pit_slope_orig = np.zeros(n_nodes_total, dtype=np.float32)
+
+        for node_idx in range(n_nodes_total):
+            if self.is_pit[node_idx]:
+                rid = self.river_ids[node_idx]
+                if rid in rivers_gdf.index:
+                    row = rivers_gdf.loc[rid]
+                    if isinstance(row, pd.DataFrame):
+                        row = row.iloc[0]
+
+                    ds_id = row["downstream_ID"]
+                    if ds_id == -1:
+                        is_ocean_pit_orig[node_idx] = True
+                    else:
+                        raw_slope = float(row["slope"])
+                        pit_slope_orig[node_idx] = np.float32(max(raw_slope, min_slope))
+                else:
+                    # Fallback if COMID not in GeoDataFrame
+                    pit_slope_orig[node_idx] = np.float32(min_slope)
 
         mapper = np.full(river_network.size + 1, -1, dtype=np.int32)
         indices = np.arange(river_network.size, dtype=np.int32)[river_network.mask]
@@ -757,6 +786,8 @@ class LocalInertial(Router):
         self._manning_n = self.manning_n[sorted_idxs]
         self._use_kinematic = self.use_kinematic[sorted_idxs]
         self._is_pit = self.is_pit[sorted_idxs]
+        self._is_ocean_pit = is_ocean_pit_orig[sorted_idxs]
+        self._pit_slope = pit_slope_orig[sorted_idxs]
         self._waterbody_ids = self.waterbody_ids[sorted_idxs]
         self._river_ids = self.river_ids[sorted_idxs]
         self._is_waterbody_outflow = self.is_waterbody_outflow[sorted_idxs]
@@ -941,6 +972,8 @@ class LocalInertial(Router):
         retention_basin_release_threshold_factor: np.float32,
         ds_node: ArrayInt32,
         is_pit: ArrayBool,
+        is_ocean_pit: ArrayBool,
+        pit_slope: ArrayFloat32,
         use_kinematic: ArrayBool,
         n_kinematic: int,
         n_inertial: int,
@@ -997,6 +1030,8 @@ class LocalInertial(Router):
             retention_basin_release_threshold_factor: Release threshold factor for retention.
             ds_node: Downstream node index vector.
             is_pit: Sink/pour point mask vector.
+            is_ocean_pit: Ocean pour point mask vector.
+            pit_slope: Bed slope boundary array for non-ocean pits.
             use_kinematic: Routing mode flag vector.
             n_kinematic: Count of kinematic nodes.
             n_inertial: Count of local inertial nodes.
@@ -1229,6 +1264,8 @@ class LocalInertial(Router):
                 retention_basin_release_threshold_factor=retention_basin_release_threshold_factor,
                 ds_node=ds_node,
                 is_pit=is_pit,
+                is_ocean_pit=is_ocean_pit,
+                pit_slope=pit_slope,
                 use_kinematic=use_kinematic,
                 over_abstraction_m3=over_abstraction_m3,
                 actual_evaporation_m3=actual_evaporation_m3,
@@ -1242,7 +1279,6 @@ class LocalInertial(Router):
                 discharge_vol_sum_m3=discharge_vol_sum_m3,
             )
 
-        # Deduct terminal/unconnected lake outflows and tally boundary outflow
         terminal_waterbody_outflow_m3 = np.float32(0.0)
         for wb_id in range(waterbody_storage_m3.size):
             rem_outflow = inertial_outflow_per_waterbody[wb_id]
@@ -1363,6 +1399,8 @@ class LocalInertial(Router):
             retention_basin_release_threshold_factor=self.retention_basin_release_threshold_factor,
             ds_node=self._ds_node,
             is_pit=self._is_pit,
+            is_ocean_pit=self._is_ocean_pit,
+            pit_slope=self._pit_slope,
             use_kinematic=self._use_kinematic,
             n_kinematic=self.n_kinematic,
             n_inertial=self.n_inertial,

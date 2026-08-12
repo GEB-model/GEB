@@ -465,7 +465,6 @@ class Routing(Module):
 
         self.router = LocalInertial(
             dt=3600,
-            rivers=self.var.rivers,
             river_network=self.river_network,
             river_length=self.grid.var.river_length,
             river_width=self.var.observed_average_river_width,
@@ -481,6 +480,7 @@ class Routing(Module):
             ),
             manning_n=self.grid.var.river_mannings,
             use_kinematic=use_kinematic,
+            rivers_gdf=self.var.rivers,
         )
 
         # ---------------------------------------------------------------------
