@@ -658,11 +658,14 @@ class Floods(Module):
                     flood_depth=flood_depth
                 )
 
-    def get_return_period_maps(self, run_name: str) -> None:
+    def get_return_period_maps(
+        self, run_name: str, overwrite_flood_maps: bool = False
+    ) -> None:
         """Generates flood maps for specified return periods using the SFINCS model.
 
         Args:
             run_name: The name of the run to use for estimating return periods (e.g., "spinup").
+            overwrite_flood_maps: Whether to overwrite existing flood maps.
 
         Raises:
             ValueError: If no hydrograph is found for a node and return period.
@@ -834,6 +837,16 @@ class Floods(Module):
                 sfincs_inland_root_models.append(sfincs_inland_root_model)
 
         for return_period in self.config["return_periods"]:
+            flood_map_path = (
+                self.model.output_folder / "flood_maps" / f"{return_period}.zarr"
+            )
+
+            if flood_map_path.exists() and not overwrite_flood_maps:
+                self.model.logger.info(
+                    f"Skipping return period {return_period} as flood map already exists "
+                    "and overwrite_flood_maps is False."
+                )
+                continue
             simulations: list[SFINCSSimulation] = []
 
             if coastal:
