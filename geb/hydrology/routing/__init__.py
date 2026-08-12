@@ -751,7 +751,9 @@ class Routing(Module):
             ValueError: If inflow is added to waterbody cells.
         """
         if __debug__:
-            pre_storage: np.ndarray = self.hydrology.waterbodies.var.storage.copy()
+            pre_waterbody_storage: np.ndarray = (
+                self.hydrology.waterbodies.var.storage.copy()
+            )
             pre_river_storage_m3: ArrayFloat64 = self.grid.var.river_storage_m3.copy()
             pre_retention_storage_m3: ArrayFloat32 = (
                 self.grid.var.retention_basin_storage_m3.copy()
@@ -1099,7 +1101,7 @@ class Routing(Module):
                     command_area_release_m3,
                 ],
                 prestorages=[
-                    pre_storage,
+                    pre_waterbody_storage,
                     pre_river_storage_m3,
                     pre_retention_storage_m3,
                 ],
@@ -1121,6 +1123,16 @@ class Routing(Module):
             total_outflow_at_pits_m3: np.float64 = outflow_at_pits_m3.astype(
                 np.float64
             ).sum()
+            print(
+                "total_outflow_at_pits_m3_per_s",
+                total_outflow_at_pits_m3 / 24 / 3600,
+                "m3/s",
+            )
+            print(
+                "storage difference",
+                pre_waterbody_storage.sum()
+                - self.hydrology.waterbodies.var.storage.sum(),
+            )
             total_retention_evaporation_m3: np.float64 = (
                 retention_evaporation_m3.astype(np.float64).sum()
             )
