@@ -237,10 +237,10 @@ class Households(AgentBaseClass):
         # assign household disposable income based on income percentile households
         income = read_array(self.model.files["array"]["agents/households/disp_income"])
         # convert income to USD
-        income = income / 21.49  ### CONVERT PESOS TO USD (MEXICAN CONTEXT)
+        income = income / 21.49  ### CONVERT PESOS TO USD 2020 (MEXICAN CONTEXT)
         self.var.income = DynamicArray(income, max_n=self.max_n)
 
-        # assign wealth based on income (dummy data, there are ratios available in literature)
+        # assign wealth based on income (dummy data, there are limited ratios available in literature)
         self.var.wealth = DynamicArray(2.5 * self.var.income.data, max_n=self.max_n)
 
     def update_building_attributes(self, drop_not_flooded: bool = False) -> None:
@@ -505,8 +505,8 @@ class Households(AgentBaseClass):
         adaptation_costs = np.full(
             self.n,
             10_800  # adaptation costs Europe
-            * 1.11  # EUR to USD conversion factor
-            * 0.254820579,  # scaling factor based on GDP (Mexico 2015)
+            * 1.11  # EUR to USD conversion factor (EUR -> USD 2020)
+            * 0.254820579,  # scaling factor based on GDP (EU -> Mexico 2020)
             np.int64,
         )  # cost scaled to mexico
         self.var.adaptation_costs = DynamicArray(adaptation_costs, max_n=self.max_n)
