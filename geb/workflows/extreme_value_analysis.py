@@ -402,7 +402,7 @@ class ReturnPeriodModel:
 
         # Check return levels for each return period, with error handling for non-finite or extreme values
         # MAX_Q = 400_000
-        MAX_Q = 2e6  # DISABLED FOR MEXICO CLIMATE CHANGE
+        MAX_Q = 2e9  # DISABLED FOR MEXICO CLIMATE CHANGE
 
         for _, row in self.rl_table.iterrows():
             T = row["T_years"]
