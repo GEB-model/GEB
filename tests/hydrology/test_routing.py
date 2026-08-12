@@ -1311,13 +1311,13 @@ def test_local_inertial_basic(
         dt=15,
         river_network=river_network,
         river_length=np.full_like(mask, 15.0, dtype=np.float32)[mask],
-        waterbody_id=np.full_like(mask, -1, dtype=np.int32)[mask],
+        waterbody_ids=np.full_like(mask, -1, dtype=np.int32)[mask],
         is_waterbody_outflow=np.zeros_like(mask, dtype=bool)[mask],
         retention_max_storage_m3=np.zeros(mask.sum(), dtype=np.float32),
         retention_node_id=np.full(mask.sum(), -1, dtype=np.int32),
         controlled_retention=np.zeros(mask.sum(), dtype=bool),
         retention_basin_release_threshold_factor=0.2,
-        bed_elevation=np.zeros(mask.sum(), dtype=np.float32),
+        bankfull_river_elevation_m=np.zeros(mask.sum(), dtype=np.float32),
         manning_n=np.full(mask.sum(), 0.03, dtype=np.float32),
     )
 
@@ -1370,13 +1370,13 @@ def test_local_inertial_inverse_ops(
         dt=dt,
         river_network=river_network,
         river_length=river_length,
-        waterbody_id=waterbody_id,
+        waterbody_ids=waterbody_id,
         is_waterbody_outflow=is_waterbody_outflow,
         retention_max_storage_m3=retention_max_storage_m3,
         retention_node_id=retention_node_id,
         controlled_retention=controlled_retention,
         retention_basin_release_threshold_factor=0.2,
-        bed_elevation=np.zeros(mask.sum(), dtype=np.float32),
+        bankfull_river_elevation_m=np.zeros(mask.sum(), dtype=np.float32),
         manning_n=np.full(mask.sum(), 0.03, dtype=np.float32),
     )
 
@@ -1412,13 +1412,13 @@ def test_local_inertial_sudden_flood_wave(
         dt=dt,
         river_network=river_network,
         river_length=np.full(mask.sum(), np.float32(100.0), dtype=np.float32),
-        waterbody_id=np.full(mask.sum(), -1, dtype=np.int32),
+        waterbody_ids=np.full(mask.sum(), -1, dtype=np.int32),
         is_waterbody_outflow=np.zeros(mask.sum(), dtype=bool),
         retention_max_storage_m3=np.zeros(mask.sum(), dtype=np.float32),
         retention_node_id=np.full(mask.sum(), -1, dtype=np.int32),
         controlled_retention=np.zeros(mask.sum(), dtype=bool),
         retention_basin_release_threshold_factor=0.2,
-        bed_elevation=np.zeros(mask.sum(), dtype=np.float32),
+        bankfull_river_elevation_m=np.zeros(mask.sum(), dtype=np.float32),
         manning_n=np.full(mask.sum(), 0.03, dtype=np.float32),
     )
 
@@ -1507,13 +1507,13 @@ def test_local_inertial_momentum_persistence(
         dt=dt,
         river_network=river_network,
         river_length=np.full(n_cells, 100.0, dtype=np.float32),
-        waterbody_id=np.full(n_cells, -1, dtype=np.int32),
+        waterbody_ids=np.full(n_cells, -1, dtype=np.int32),
         is_waterbody_outflow=np.zeros(n_cells, dtype=bool),
         retention_max_storage_m3=np.zeros(n_cells, dtype=np.float32),
         retention_node_id=np.full(n_cells, -1, dtype=np.int32),
         controlled_retention=np.zeros(n_cells, dtype=bool),
         retention_basin_release_threshold_factor=0.2,
-        bed_elevation=np.zeros(n_cells, dtype=np.float32),
+        bankfull_river_elevation_m=np.zeros(n_cells, dtype=np.float32),
         manning_n=np.full(n_cells, 0.03, dtype=np.float32),
     )
 
@@ -1558,13 +1558,13 @@ def test_local_inertial_reverse_flow_mass_conservation() -> None:
         dt=dt,
         river_network=river_network,
         river_length=np.array([100.0, 100.0], dtype=np.float32),
-        waterbody_id=np.full(n_cells, -1, dtype=np.int32),
+        waterbody_ids=np.full(n_cells, -1, dtype=np.int32),
         is_waterbody_outflow=np.zeros(n_cells, dtype=bool),
         retention_max_storage_m3=np.zeros(n_cells, dtype=np.float32),
         retention_node_id=np.full(n_cells, -1, dtype=np.int32),
         controlled_retention=np.zeros(n_cells, dtype=bool),
         retention_basin_release_threshold_factor=0.2,
-        bed_elevation=np.array([0.0, 0.0], dtype=np.float32),  # Flat bed
+        bankfull_river_elevation_m=np.array([0.0, 0.0], dtype=np.float32),  # Flat bed
         manning_n=np.array([0.03, 0.03], dtype=np.float32),
     )
 
@@ -1625,13 +1625,13 @@ def test_local_inertial_head_gradient_overflow_resilience() -> None:
         river_length=np.array(
             [1.0, 1.0], dtype=np.float32
         ),  # Extremely short cell (dx=1m)
-        waterbody_id=np.full(n_cells, -1, dtype=np.int32),
+        waterbody_ids=np.full(n_cells, -1, dtype=np.int32),
         is_waterbody_outflow=np.zeros(n_cells, dtype=bool),
         retention_max_storage_m3=np.zeros(n_cells, dtype=np.float32),
         retention_node_id=np.full(n_cells, -1, dtype=np.int32),
         controlled_retention=np.zeros(n_cells, dtype=bool),
         retention_basin_release_threshold_factor=0.2,
-        bed_elevation=np.array(
+        bankfull_river_elevation_m=np.array(
             [1000.0, 0.0], dtype=np.float32
         ),  # Massive bed drop (1000m cliff)
         manning_n=np.array([0.01, 0.01], dtype=np.float32),

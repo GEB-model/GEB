@@ -5,7 +5,7 @@ import warnings
 from datetime import timedelta
 from pathlib import Path
 from types import CodeType
-from typing import Literal
+from typing import Any, Literal
 
 import geopandas as gpd
 import networkx as nx
@@ -467,6 +467,56 @@ def get_SWORD_river_widths(
     return SWORD_river_width
 
 
+def propagate_downstream(
+    data: npt.NDArray,
+    idxs_ds: npt.NDArray[np.int64],
+    upstream_area: npt.NDArray[np.float32],
+    missing_val: Any = -1,
+    mask: npt.NDArray[np.bool_] | None = None,
+) -> npt.NDArray:
+    """Propagates values downstream along flow paths ordered from upstream to downstream.
+
+    Args:
+        data: Input 1D or 2D array containing values to propagate.
+        idxs_ds: 1D or 2D array of downstream linear indices.
+        upstream_area: 1D or 2D array of upstream areas used to order traversal.
+        missing_val: Sentinel value representing unassigned/missing data (e.g., -1 or np.nan).
+        mask: Optional boolean mask restricting propagation cells.
+
+    Returns:
+        npt.NDArray with values propagated downstream into missing cells.
+    """
+    flat_data = data.ravel().copy()
+    flat_ds = idxs_ds.ravel()
+    flat_ua = upstream_area.ravel()
+
+    if mask is not None:
+        indices = np.where(mask.ravel())[0]
+    else:
+        indices = np.arange(flat_data.size)
+
+    if indices.size > 0:
+        sorted_indices = indices[np.argsort(flat_ua[indices])]
+        is_nan_val = isinstance(missing_val, float) and np.isnan(missing_val)
+
+        for idx in sorted_indices:
+            ds_idx = flat_ds[idx]
+            if ds_idx != -1 and ds_idx < flat_data.size:
+                if mask is not None and not mask.ravel()[ds_idx]:
+                    continue
+
+                val = flat_data[idx]
+                ds_val = flat_data[ds_idx]
+
+                val_valid = not np.isnan(val) if is_nan_val else val != missing_val
+                ds_missing = np.isnan(ds_val) if is_nan_val else ds_val == missing_val
+
+                if val_valid and ds_missing:
+                    flat_data[ds_idx] = val
+
+    return flat_data.reshape(data.shape)
+
+
 class Hydrography(BuildModelBase):
     """Contains all build methods for the hydrography for GEB."""
 
@@ -784,6 +834,14 @@ class Hydrography(BuildModelBase):
             latlon=True,
         )
 
+        bankfull_river_elevation_m = self.full_like(
+            elevation_min, fill_value=np.nan, nodata=np.nan, dtype=np.float32
+        )
+        bankfull_river_elevation_m.data = flow_raster.dem_adjust(elevation_min.values)
+        self.set_grid(
+            bankfull_river_elevation_m, name="routing/bankfull_river_elevation_m"
+        )
+
         # flow direction
         ldd: xr.DataArray = self.full_like(
             elevation_min, fill_value=255, nodata=255, dtype=np.uint8
@@ -851,16 +909,9 @@ class Hydrography(BuildModelBase):
             self.grid["idxs_outflow"].values.ravel()
         ].reshape(self.grid["idxs_outflow"].shape)
 
-        # The outflow detected by the upscale method is not neccesarily the one of the main stream. This may result
-        # in a side branch river, being "inside" the main river. This finally meant that the discharge of the main
-        # river was used for the side branch, which is not correct.
-        # In principle, every river should have no (headwater) or 2 upstream rivers. However, in this situation, a
-        # river would only have 1 upstream river, which is the main river. Therefore, we can detect these situations and correct them.
-        # We do so by detecting situations with only 1 upstream river. If this is the case, we can
-        # overwrite the river raster with the COMID of the main river.
         for COMID in rivers.sort_values(
             by="shreve_stream_order",
-            ascending=False,  # Process from downstream to upstream
+            ascending=False,
         ).index:
             river_cells = np.where(river_raster_LR.ravel() == COMID)[0]
             if river_cells.size == 0:
@@ -875,6 +926,14 @@ class Hydrography(BuildModelBase):
                 river_raster_LR[upstream_river_cells.reshape(river_raster_LR.shape)] = (
                     COMID
                 )
+
+        # Propagate river IDs downstream to fill gaps in the LR river network
+        river_raster_LR = propagate_downstream(
+            data=river_raster_LR,
+            idxs_ds=flow_raster.idxs_ds,
+            upstream_area=upstream_area_data,
+            missing_val=-1,
+        )
 
         missing_rivers: set[int] = set(rivers.index) - set(
             np.unique(river_raster_LR[river_raster_LR != -1]).tolist()
@@ -898,8 +957,6 @@ class Hydrography(BuildModelBase):
             "rasterization of the river lines"
         )
 
-        # Derive the xy coordinates of the river network. Here the coordinates
-        # are the PIXEL coordinates for the coarse drainage network.
         rivers["hydrography_xy"] = [[] for _ in range(len(rivers))]
         rivers["hydrography_upstream_area_m2"] = [[] for _ in range(len(rivers))]
         xy_per_river_segment = value_indices(river_raster_LR, ignore_value=-1)
@@ -920,8 +977,6 @@ class Hydrography(BuildModelBase):
                 upstream_area_sorted.tolist()
             )
 
-        # Derive the xy coordinates of the river network. Here the coordinates
-        # are the PIXEL coordinates for the high-resolution drainage network.
         rivers["hydrography_high_res_lons_lats"] = [[] for _ in range(len(rivers))]
         rivers["hydrography_high_res_upstream_area_m2"] = [
             [] for _ in range(len(rivers))
@@ -1055,7 +1110,16 @@ class Hydrography(BuildModelBase):
             lambda ID: river_with_mapper.get(ID, np.nan)
         )(COMID_IDs_raster.values).astype(np.float32)
 
-        # check river with is positive where river is present
+        # Propagate missing river width data downstream
+        river_width_data = propagate_downstream(
+            data=river_width_data,
+            idxs_ds=flow_raster.idxs_ds,
+            upstream_area=upstream_area_data,
+            missing_val=np.nan,
+            mask=COMID_IDs_raster.values != -1,
+        )
+
+        # check river width is positive where river is present
         assert ((river_width_data > 0) | np.isnan(river_width_data)).all(), (
             "River width should be positive or nan"
         )

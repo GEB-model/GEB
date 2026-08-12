@@ -25,7 +25,8 @@ class Router:
         river_network: The river network as a FlwdirRaster object, which contains the flow
             direction and other information about the river network.
         is_waterbody_outflow: A 1D array with the same shape as the grid, which is True for the outflow cells.
-        waterbody_id: A 1D array with the same shape as the grid, which is the waterbody ID for each cell.
+        waterbody_ids: A 1D array with the same shape as the grid, which is the waterbody ID for each cell.
+        river_ids: A 1D array with the same shape as the grid, which is the river ID for each cell.
 
     Notes:
         The ldd is a 2D array with the same shape as the grid, where each cell
@@ -73,7 +74,7 @@ class Router:
         self,
         dt: float | int,
         river_network: pyflwdir.FlwdirRaster,
-        waterbody_id: np.ndarray,
+        waterbody_ids: np.ndarray,
         is_waterbody_outflow: np.ndarray,
         retention_basin_release_threshold_factor: float,
     ) -> None:
@@ -82,7 +83,7 @@ class Router:
         Args:
             dt: Number of seconds in the time step, must be > 0
             river_network: The river network as a FlwdirRaster object
-            waterbody_id: A 1D array with the same shape as the grid, which is the waterbody ID for each cell.
+            waterbody_ids: A 1D array with the same shape as the grid, which is the waterbody ID for each cell.
                 -1 indicates no waterbody.
             is_waterbody_outflow: A 1D array with the same shape as the grid, which is True for the outflow cells.
             retention_basin_release_threshold_factor: Factor to multiply the activation threshold by to get the release threshold.
@@ -132,15 +133,15 @@ class Router:
         assert is_waterbody_outflow is not None, (
             "is_waterbody_outflow must be provided if waterbody_id is provided"
         )
-        assert waterbody_id.shape == self.idxs_up_to_downstream.shape
-        self.waterbody_id = waterbody_id
+        assert waterbody_ids.shape == self.idxs_up_to_downstream.shape
+        self.waterbody_ids = waterbody_ids
 
         assert is_waterbody_outflow.shape == self.idxs_up_to_downstream.shape
         # ensurre each waterbody has one outflow (no more, no less)
         assert (
             np.bincount(
-                self.waterbody_id[self.waterbody_id != -1],
-                weights=is_waterbody_outflow[self.waterbody_id != -1],
+                self.waterbody_ids[self.waterbody_ids != -1],
+                weights=is_waterbody_outflow[self.waterbody_ids != -1],
             )
             == 1
         ).all()

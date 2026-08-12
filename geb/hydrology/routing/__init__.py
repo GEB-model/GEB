@@ -7,6 +7,7 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import pyflwdir
+from affine import Affine
 from numba import njit
 from tqdm import tqdm
 
@@ -28,8 +29,8 @@ from geb.workflows import balance_check
 from geb.workflows.extreme_value_analysis import ReturnPeriodModel
 from geb.workflows.io import read_geom, read_table
 
-from .accuflux import Accuflux
-from .kinematic_wave import KinematicWave
+from .accuflux import Accuflux as Accuflux
+from .kinematic_wave import KinematicWave as KinematicWave
 from .local_inertial import LocalInertial
 
 if TYPE_CHECKING:
@@ -181,7 +182,7 @@ def get_channel_ratio(
 
 
 def create_river_network(
-    ldd_uncompressed: TwoDArrayUint8, mask: TwoDArrayBool
+    ldd_uncompressed: TwoDArrayUint8, mask: TwoDArrayBool, transform: Affine
 ) -> pyflwdir.FlwdirRaster:
     """Create a river network from a local drain direction (LDD) array.
 
@@ -189,6 +190,7 @@ def create_river_network(
         ldd_uncompressed: A 2D array with the local drain direction (LDD) values.
         mask: A 2D boolean array with the same shape as the LDD array, where True indicates
             that the cell is part of the river network.
+        transform: The affine transformation for the river network.
 
     Returns:
         A FlwdirRaster object representing the river network.
@@ -198,6 +200,7 @@ def create_river_network(
         ftype="ldd",
         latlon=True,
         mask=mask,
+        transform=transform,
     )
 
 
@@ -294,7 +297,7 @@ class Routing(Module):
         ldd_uncompressed[mask] = self.ldd.ravel()
 
         self.river_network: pyflwdir.FlwdirRaster = create_river_network(
-            ldd_uncompressed=ldd_uncompressed, mask=mask
+            ldd_uncompressed=ldd_uncompressed, mask=mask, transform=self.grid.transform
         )
 
         self.basin_ids: TwoDArrayInt32 = self.hydrology.grid.load2d(
@@ -452,69 +455,68 @@ class Routing(Module):
         return rivers, river_ids, river_ids_no_waterbodies_removed
 
     def set_router(self) -> None:
-        """Initialize the routing algorithm based on the configuration.
-
-        Options in the configuration are 'kinematic_wave' and 'accuflux'.
-
-        Raises:
-            ValueError: If an unknown routing algorithm is specified in the configuration.
-        """
-        routing_algorithm: str = self.config["algorithm"]
+        """Initialize the local inertial routing algorithm."""
         is_waterbody_outflow: ArrayBool = self.grid.var.waterbody_outflow_points != -1
         retention_basin_release_threshold_factor: float = self.config[
             "retention_basins"
         ]["release_threshold_factor"]
-        if routing_algorithm == "kinematic_wave":
-            self.router = KinematicWave(
-                dt=3600,
-                river_network=self.river_network,
-                river_length=self.grid.var.river_length,
-                waterbody_id=self.grid.var.waterbody_ids,
-                is_waterbody_outflow=is_waterbody_outflow,
-                retention_max_storage_m3=self.retention_max_storage_m3,
-                retention_node_id=self.retention_basin_ids,
-                controlled_retention=self.controlled_retention,
-                retention_basin_release_threshold_factor=retention_basin_release_threshold_factor,
-            )
-        elif routing_algorithm == "accuflux":
-            self.router = Accuflux(
-                dt=3600,
-                river_network=self.river_network,
-                river_length=self.grid.var.river_length,
-                waterbody_id=self.grid.var.waterbody_ids,
-                is_waterbody_outflow=is_waterbody_outflow,
-                retention_max_storage_m3=self.retention_max_storage_m3,
-                retention_node_id=self.retention_basin_ids,
-                controlled_retention=self.controlled_retention,
-                retention_basin_release_threshold_factor=retention_basin_release_threshold_factor,
-            )
-        elif routing_algorithm == "local_inertial":
-            self.router = LocalInertial(
-                dt=3600,
-                river_network=self.river_network,
-                river_length=self.grid.var.river_length,
-                waterbody_id=self.grid.var.waterbody_ids,
-                is_waterbody_outflow=is_waterbody_outflow,
-                retention_max_storage_m3=self.retention_max_storage_m3,
-                retention_node_id=self.retention_basin_ids,
-                controlled_retention=self.controlled_retention,
-                retention_basin_release_threshold_factor=retention_basin_release_threshold_factor,
-                bed_elevation=self.grid.load2d(
-                    self.model.files["grid"]["landsurface/elevation_min_m"]
-                ),
-                manning_n=self.grid.var.river_mannings,
-            )
-        else:
-            raise ValueError(
-                f"Unknown routing algorithm: {routing_algorithm}. "
-                "Available algorithms are 'kinematic_wave', 'accuflux', and 'local_inertial'."
-            )
 
-        # Initialize persistent river storage state
-        self.grid.var.river_storage_m3 = self.router.get_total_storage(
-            self.grid.var.discharge_in_rivers_m3_s_substep,
-            self.grid.var.river_storage_alpha,
-            self.grid.var.river_storage_beta,
+        use_kinematic: ArrayBool = np.isnan(self.var.observed_average_river_width)
+
+        self.router = LocalInertial(
+            dt=3600,
+            river_network=self.river_network,
+            river_length=self.grid.var.river_length,
+            river_width=self.var.observed_average_river_width,
+            waterbody_ids=self.grid.var.waterbody_ids,
+            river_ids=self.var.river_ids,
+            is_waterbody_outflow=is_waterbody_outflow,
+            retention_max_storage_m3=self.retention_max_storage_m3,
+            retention_node_id=self.retention_basin_ids,
+            controlled_retention=self.controlled_retention,
+            retention_basin_release_threshold_factor=retention_basin_release_threshold_factor,
+            bankfull_river_elevation_m=self.grid.load2d(
+                self.model.files["grid"]["routing/bankfull_river_elevation_m"]
+            ),
+            manning_n=self.grid.var.river_mannings,
+            use_kinematic=use_kinematic,
+        )
+
+        # ---------------------------------------------------------------------
+        # Initialize persistent river storage state (Width-based depth assumption)
+        # ---------------------------------------------------------------------
+        # Assume depth scales with river width (W / 20), clamped between 0.5 m and 3.0 m
+        assumed_depth_m = np.clip(
+            np.where(
+                np.isnan(self.var.observed_average_river_width),
+                0.25,
+                self.var.observed_average_river_width / 20.0,
+            ),
+            0.5,
+            3.0,
+        )
+
+        assumed_width_m = np.where(
+            np.isnan(self.var.observed_average_river_width),
+            1.0,
+            self.var.observed_average_river_width,
+        )
+
+        # Storage = Length * Width * Depth
+        initial_storage = self.grid.var.river_length * assumed_width_m * assumed_depth_m
+        initial_storage[self.grid.var.waterbody_ids != -1] = 0.0
+
+        self.grid.var.river_storage_m3 = initial_storage.astype(np.float64)
+
+        # Calculate consistent initial discharge Q from storage
+        self.grid.var.discharge_in_rivers_m3_s_substep = (
+            self.router.calculate_discharge_from_river_storage(
+                river_storage=self.grid.var.river_storage_m3,
+                river_storage_alpha=self.grid.var.river_storage_alpha,
+                river_storage_beta=self.grid.var.river_storage_beta,
+                river_length=self.grid.var.river_length,
+                waterbody_id=self.grid.var.waterbody_ids,
+            )
         )
 
     def spinup(self) -> None:
@@ -585,7 +587,7 @@ class Routing(Module):
 
         # Channel gradient (fraction, dy/dx)
         minimum_river_slope = 0.00001
-        self.grid.var.river_slope = np.maximum(
+        self.grid.var.river_slope_m_per_m = np.maximum(
             self.grid.load2d(self.model.files["grid"]["routing/river_slope_m_per_m"]),
             minimum_river_slope,
         )
@@ -602,7 +604,7 @@ class Routing(Module):
         self.grid.var.river_storage_alpha = (
             self.grid.var.river_mannings
             * river_wetted_perimeter ** (2 / 3)
-            / np.sqrt(self.grid.var.river_slope)
+            / np.sqrt(self.grid.var.river_slope_m_per_m)
         ) ** self.grid.var.river_storage_beta
 
         # For dynamic river width, we need the average discharge. Therefore,
@@ -750,7 +752,7 @@ class Routing(Module):
         """
         if __debug__:
             pre_storage: np.ndarray = self.hydrology.waterbodies.var.storage.copy()
-            pre_river_storage_m3: ArrayFloat32 = self.grid.var.river_storage_m3.copy()
+            pre_river_storage_m3: ArrayFloat64 = self.grid.var.river_storage_m3.copy()
             pre_retention_storage_m3: ArrayFloat32 = (
                 self.grid.var.retention_basin_storage_m3.copy()
             )
@@ -939,13 +941,6 @@ class Routing(Module):
                 if __debug__:
                     total_inflow_m3 += inflow_m3
 
-            self.grid.var.river_slope = np.maximum(
-                self.grid.load2d(
-                    self.model.files["grid"]["routing/river_slope_m_per_m"]
-                ),
-                0.0001,
-            )
-
             assert not np.isnan(
                 self.grid.var.discharge_in_rivers_m3_s_substep[
                     self.grid.var.waterbody_ids == -1
@@ -992,10 +987,7 @@ class Routing(Module):
                 retention_storage_m3=self.grid.var.retention_basin_storage_m3,
                 river_storage_alpha=self.grid.var.river_storage_alpha,
                 river_storage_beta=self.grid.var.river_storage_beta,
-                river_width=self.var.observed_average_river_width,
                 retention_activation_threshold_m3_s=self.retention_activation_threshold_m3_s,
-                use_kinematic=(self.grid.var.river_slope > np.float32(0.005))
-                | np.isnan(self.var.observed_average_river_width),
             )
 
             if not (actual_evaporation_in_rivers_m3_per_hour >= 0.0).all():
@@ -1089,15 +1081,7 @@ class Routing(Module):
         ):
             self.update_return_periods()
 
-        self.model.logger.info(outflow_at_pits_m3.sum())
-
         if __debug__:
-            # TODO: make dependent on routing step length
-            # river_storage_m3: ArrayFloat32 = self.router.get_total_storage(
-            #     self.grid.var.discharge_in_rivers_m3_s_substep,
-            #     river_storage_alpha=self.grid.var.river_storage_alpha,
-            #     river_storage_beta=self.grid.var.river_storage_beta,
-            # )
             balance_check(
                 how="sum",
                 influxes=[
