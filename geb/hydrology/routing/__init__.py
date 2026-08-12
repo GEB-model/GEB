@@ -1123,16 +1123,6 @@ class Routing(Module):
             total_outflow_at_pits_m3: np.float64 = outflow_at_pits_m3.astype(
                 np.float64
             ).sum()
-            print(
-                "total_outflow_at_pits_m3_per_s",
-                total_outflow_at_pits_m3 / 24 / 3600,
-                "m3/s",
-            )
-            print(
-                "storage difference",
-                pre_waterbody_storage.sum()
-                - self.hydrology.waterbodies.var.storage.sum(),
-            )
             total_retention_evaporation_m3: np.float64 = (
                 retention_evaporation_m3.astype(np.float64).sum()
             )
