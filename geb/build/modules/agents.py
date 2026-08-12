@@ -11,7 +11,6 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from dateutil.relativedelta import relativedelta
-from shapely import union_all
 from tqdm import tqdm
 
 from geb.build.data_catalog.global_exposure_model import gem_country_name_aliases
@@ -1812,7 +1811,7 @@ class Agents(BuildModelBase):
         self,
         maximum_age: int = 85,
         skip_countries_ISO3: list[str] = [],
-        single_household_per_building: bool = False,
+        single_household_per_building: bool = True,
         redundancy_array_size: int = 20_000_000,
     ) -> None:
         """New method to set up household characteristics for agents using GLOPOP-S data. This method is still under development and may not be fully functional.
