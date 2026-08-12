@@ -7,7 +7,7 @@ retention basins, and waterbody (lakes/reservoirs) dynamics.
 
 import numpy as np
 import pyflwdir
-from numba import njit
+from numba import njit, prange
 
 from geb.geb_types import (
     ArrayBool,
@@ -21,7 +21,7 @@ from .kinematic_wave import update_node_kinematic
 from .routerbase import Router, compute_retention_routing
 
 
-@njit(cache=True)
+@njit(parallel=True, cache=True)
 def _run_single_inertial_substep(
     dt_substep: np.float32,
     n_kinematic: int,
@@ -66,60 +66,6 @@ def _run_single_inertial_substep(
     previous_discharge_m3_s: ArrayFloat32,
     wb_processed_by_inertial: ArrayBool,
 ) -> bool:
-    """Executes a single time-substep for the 1D local inertial routing equation.
-
-    Calculates lateral fluxes, retention diversions, momentum-based discharge
-    updates, and performs volume mass balance and CFL stability checks across
-    all inertial reaches.
-
-    Args:
-        dt_substep: Length of the current sub-timestep in seconds.
-        n_kinematic: Number of kinematic wave nodes.
-        inertial_end: End index (non-inclusive) of local inertial nodes.
-        max_up_connections: Maximum number of upstream connections per node.
-        substep_discharge_m3_s: Discharge state array for the current substep.
-        river_storage_m3: Channel volume storage per node.
-        sideflow_substep_m3: Lateral inflow volume partitioned for this substep.
-        evap_substep_m3: Potential evaporation volume partitioned for this substep.
-        waterbody_storage_m3: Reservoir and lake volume storage.
-        wb_outflow_substep_m3: Available scheduled outflow per waterbody.
-        upstream_matrix: Matrix mapping downstream nodes to upstream node indices.
-        is_waterbody_outflow: Boolean mask indicating if a node is a lake outflow point.
-        waterbody_id: ID of associated waterbody (-1 if standard channel node).
-        river_length: Segment channel length.
-        inv_reach_length: Reciprocal of reach length (1 / river_length).
-        inv_cell_area: Reciprocal of surface area (1 / (river_width * river_length)).
-        river_width: Channel width.
-        bed_elevation: Channel bed elevation above datum.
-        manning_n_sq: Squared Manning's roughness coefficient (n^2).
-        retention_storage_m3: Current retention basin storage volumes.
-        retention_max_storage_m3: Maximum storage capacity of retention basins.
-        retention_node_id: Retention basin index mapped to nodes (-1 if none).
-        controlled_retention: Boolean mask indicating if retention basin flow is controlled.
-        retention_activation_threshold_m3_s: Discharge threshold triggering retention inflow.
-        retention_basin_release_threshold_factor: Fractional factor governing basin release.
-        retention_inflow_limit_sub: Maximum inflow volume to retention basin per substep.
-        retention_max_outflow_limit_sub: Maximum outflow volume from retention basin per substep.
-        ds_node: Downstream node index for each node (-1 if boundary/pit).
-        is_pit: Boolean mask indicating terminal pour points or sinks.
-        use_kinematic: Mask indicating whether nodes use kinematic wave formulation.
-        over_abstraction_m3: Cumulative volume tracking negative storage deficits.
-        actual_evaporation_m3: Cumulative actual channel evaporation volume.
-        waterbody_inflow_m3: Cumulative total inflow volume into waterbodies.
-        retention_inflow_m3: Cumulative volume diverted into retention basins.
-        retention_outflow_m3: Cumulative volume released from retention basins.
-        lateral_flux_m3: Scratch array for node lateral inflow volume.
-        next_substep_discharge_m3_s: Scratch array for calculated target discharge.
-        kinematic_inflow_rate: Fixed inflow rate from upstream kinematic nodes.
-        discharge_vol_sum_m3: Cumulative sum of discharge volume over full timestep.
-        net_vol_m3: Scratch array for node net volumetric balance in substep.
-        previous_discharge_m3_s: Discharge state at the start of the primary timestep.
-        wb_processed_by_inertial: Flag matrix tracking waterbody outflow processing.
-
-    Returns:
-        True if integration succeeded within numerical limits and CFL bounds,
-        False if numerical instability or invalid flow depths occur.
-    """
     MIN_WET_DEPTH_M: np.float32 = np.float32(0.01)
     GRAVITY_ACCELERATION: np.float32 = np.float32(9.80665)
     SQRT_GRAVITY: np.float32 = np.float32(3.1315574)
@@ -134,12 +80,11 @@ def _run_single_inertial_substep(
     next_substep_discharge_m3_s.fill(np.float32(0.0))
     net_vol_m3.fill(0.0)
 
+    # --- Pre-Pass: Waterbody Outflows (Serial to avoid shared-array data races) ---
     wb_outflow_avail = wb_outflow_substep_m3.copy()
+    wb_extra_lateral_m3 = np.zeros(inertial_end, dtype=np.float32)
 
-    # Pass 1 & 2: Lateral Fluxes & Local Inertial Momentum Solver
     for i in range(n_kinematic, inertial_end):
-        node_lateral_inflow = sideflow_substep_m3[i]
-
         for j in range(max_up_connections):
             up_node = upstream_matrix[i, j]
             if up_node == -1:
@@ -153,9 +98,14 @@ def _run_single_inertial_substep(
                     )
                     if actual_outflow > 0.0:
                         waterbody_storage_m3[wb_id] -= actual_outflow
-                        node_lateral_inflow += np.float32(actual_outflow)
+                        wb_extra_lateral_m3[i] += np.float32(actual_outflow)
                     wb_outflow_avail[wb_id] = 0.0
                     wb_processed_by_inertial[wb_id] = True
+
+    # --- Pass 1 & 2: Decoupled Local Inertial Momentum Solver (Parallel) ---
+    error_flag = 0
+    for i in prange(n_kinematic, inertial_end):
+        node_lateral_inflow = sideflow_substep_m3[i] + wb_extra_lateral_m3[i]
 
         ret_id = retention_node_id[i]
         if ret_id != -1:
@@ -200,24 +150,13 @@ def _run_single_inertial_substep(
         inv_length_m = inv_reach_length[i]
         inv_area_m2 = inv_cell_area[i]
 
-        node_inflow_vol = lateral_flux_m3[i] + kinematic_inflow_rate[i] * dt_substep
-        for j in range(max_up_connections):
-            up_node = upstream_matrix[i, j]
-            if up_node == -1:
-                break
-            if not is_waterbody_outflow[up_node] and not (
-                use_kinematic[up_node] and waterbody_id[up_node] == -1
-            ):
-                node_inflow_vol += (
-                    max(next_substep_discharge_m3_s[up_node], np.float32(0.0))
-                    * dt_substep
-                )
-
-        avail_vol = max(river_storage_m3[i] + np.float64(node_inflow_vol), 0.0)
+        # Explicit t-state volume evaluation for stage calculations
+        avail_vol = max(river_storage_m3[i], 0.0)
         flow_depth = max(np.float32(avail_vol) * inv_area_m2, np.float32(0.0))
 
         if not np.isfinite(flow_depth):
-            return False
+            error_flag += 1
+            continue
 
         water_stage_node = bed_elev_node + flow_depth
         ds = ds_node[i]
@@ -247,7 +186,8 @@ def _run_single_inertial_substep(
         cross_sectional_area = effective_depth * width_m
 
         if not np.isfinite(cross_sectional_area) or cross_sectional_area >= 1e6:
-            return False
+            error_flag += 1
+            continue
 
         hydraulic_radius = max(effective_depth, np.float32(1e-6))
         water_slope: np.float32 = (water_stage_ds - water_stage_node) * inv_length_m
@@ -290,49 +230,65 @@ def _run_single_inertial_substep(
                 computed_discharge = np.float32(0.0)
 
         if not np.isfinite(computed_discharge):
-            return False
+            error_flag += 1
+            continue
 
         next_substep_discharge_m3_s[i] = computed_discharge
 
-    # Pass 3A: Accumulate Net Volumetric Fluxes
+    if error_flag > 0:
+        return False
+
+    # --- Post-Pass: Waterbody Inflows (Serial to avoid shared-array data races) ---
     for i in range(n_kinematic, inertial_end):
+        ds = ds_node[i]
+        if ds != -1 and not is_pit[i]:
+            wb_ds_id = waterbody_id[ds]
+            if wb_ds_id != -1:
+                vol_out = next_substep_discharge_m3_s[i] * dt_substep
+                waterbody_storage_m3[wb_ds_id] += np.float64(vol_out)
+                if vol_out > np.float32(0.0):
+                    waterbody_inflow_m3[wb_ds_id] += vol_out
+
+    # --- Pass 3 (Merged): Gather Fluxes, Mass Balance & CFL Check (Parallel) ---
+    error_flag = 0
+    for i in prange(n_kinematic, inertial_end):
+        # 1. Gather incoming volumetric fluxes
         vol_in = kinematic_inflow_rate[i] * dt_substep + lateral_flux_m3[i]
-        net_vol_m3[i] += np.float64(vol_in)
+
+        for j in range(max_up_connections):
+            up_node = upstream_matrix[i, j]
+            if up_node == -1:
+                break
+            if not is_waterbody_outflow[up_node] and not (
+                use_kinematic[up_node] and waterbody_id[up_node] == -1
+            ):
+                up_vol_out = next_substep_discharge_m3_s[up_node] * dt_substep
+                vol_in += up_vol_out
 
         vol_out = next_substep_discharge_m3_s[i] * dt_substep
-        ds = ds_node[i]
-
-        if is_pit[i] or ds == -1:
-            net_vol_m3[i] -= np.float64(vol_out)
-        elif waterbody_id[ds] != -1:
-            wb_ds_id = waterbody_id[ds]
-            waterbody_storage_m3[wb_ds_id] += np.float64(vol_out)
-            if vol_out > np.float32(0.0):
-                waterbody_inflow_m3[wb_ds_id] += vol_out
-            net_vol_m3[i] -= np.float64(vol_out)
-        else:
-            net_vol_m3[i] -= np.float64(vol_out)
-            net_vol_m3[ds] += np.float64(vol_out)
-
+        net_vol = np.float64(vol_in - vol_out)
+        net_vol_m3[i] = net_vol
         discharge_vol_sum_m3[i] += vol_out
 
-    # Pass 3B: Mass Balance, Evaporation, & CFL Stability Checks
-    for i in range(n_kinematic, inertial_end):
-        river_storage_m3[i] += net_vol_m3[i]
+        # 2. Update storage & handle over-abstraction
+        river_storage_m3[i] += net_vol
 
         if river_storage_m3[i] < np.float64(0.0):
             over_abstraction_m3[i] += np.float32(-river_storage_m3[i])
             river_storage_m3[i] = np.float64(0.0)
 
+        # 3. Channel evaporation
         evap_actual = np.float32(min(evap_substep_m3[i], river_storage_m3[i]))
         evap_actual = max(evap_actual, np.float32(0.0))
         actual_evaporation_m3[i] += evap_actual
         river_storage_m3[i] -= np.float64(evap_actual)
 
+        # 4. Final depth and CFL stability verification
         depth_new = np.float32(river_storage_m3[i]) * inv_cell_area[i]
 
         if depth_new >= MAX_ALLOWED_DEPTH_M or not np.isfinite(river_storage_m3[i]):
-            return False
+            error_flag += 1
+            continue
 
         effective_depth_new = max(depth_new, MIN_WET_DEPTH_M)
         celerity = np.sqrt(GRAVITY_ACCELERATION * effective_depth_new)
@@ -346,9 +302,13 @@ def _run_single_inertial_substep(
         )
 
         if dt_substep > max_dt_cfl:
-            return False
+            error_flag += 1
+            continue
 
         substep_discharge_m3_s[i] = next_substep_discharge_m3_s[i]
+
+    if error_flag > 0:
+        return False
 
     return True
 
