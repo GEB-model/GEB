@@ -199,11 +199,22 @@ class CMIP6(Adapter):
                 future_subset[variable_in_netcdf]
                 - historical_subset[variable_in_netcdf]
             )
+            # set any deltas exceeding the 90th percentile to 0 to avoid extreme outliers
+            threshold = np.nanpercentile(delta.values, 90)
+            delta = delta.where(
+                delta <= threshold, 0
+            )  # for temperature, set extreme outliers to 0 (no change)
+
         else:
             delta = (
                 future_subset[variable_in_netcdf]
                 / historical_subset[variable_in_netcdf]
             )
+            # set any deltas exceeding the 90th percentile to 1 to avoid extreme outliers
+            threshold = np.nanpercentile(delta.values, 90)
+            delta = delta.where(
+                delta <= threshold, 1.0
+            )  # for precipitation, set extreme outliers to 1 (no change)
 
         return delta.rio.write_crs("EPSG:4326")  # ensure the deltas have a CRS
 
