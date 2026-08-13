@@ -84,14 +84,14 @@ def _run_single_inertial_substep(
     previous_discharge_m3_s: ArrayFloat32,
     reset_counters: ArrayInt32,
 ) -> None:
-    MIN_WET_DEPTH_M = np.float32(0.01)
+    MIN_WET_DEPTH_M = np.float32(1e-4)
     GRAVITY_ACCELERATION = np.float32(9.80665)
     SQRT_GRAVITY = np.float32(3.1315574)
 
     inv_dt_substep = np.float32(1.0) / dt_substep
     g_dt_substep = GRAVITY_ACCELERATION * dt_substep
 
-    # Target inertial-only copies (size n_inertial)
+    # Copy state variables to target double buffers
     river_storage_out[:] = river_storage_in[:]
     over_abstraction_out[:] = over_abstraction_in[:]
     actual_evaporation_out[:] = actual_evaporation_in[:]
@@ -112,6 +112,7 @@ def _run_single_inertial_substep(
     wb_extra_lateral_m3_buf.fill(np.float32(0.0))
     wb_outflow_avail_buf[:] = wb_outflow_substep_m3[:]
 
+    # 1. UPSTREAM WATERBODY RELEASE LOOP
     for k in range(n_inertial):
         i = n_kinematic + k
         for j in range(max_up_connections):
@@ -129,6 +130,7 @@ def _run_single_inertial_substep(
                     wb_outflow_avail_buf[wb_id] = 0.0
                     wb_processed_out[wb_id] = True
 
+    # 2. HYDRAULIC DISCHARGE ROUTING & MOMENTUM SOLVER
     for k in range(n_inertial):
         i = n_kinematic + k
         sideflow_sub = sideflow_substep_m3[k]
@@ -184,13 +186,13 @@ def _run_single_inertial_substep(
         if not np.isfinite(curr_st):
             curr_st = 0.0
 
-        avail_vol_f32 = max(np.float32(curr_st), np.float32(0.0))
+        avail_vol_f32 = max(np.float32(curr_st) + node_lateral_inflow, np.float32(0.0))
         flow_depth = max(avail_vol_f32 * inv_area_m2, np.float32(0.0))
 
         if not np.isfinite(flow_depth):
-            next_substep_discharge_m3_s[k] = np.float32(0.0)
-            reset_counters[2] += 1
-            continue
+            raise ValueError(
+                "Non-finite flow_depth encountered in local inertial substep."
+            )
 
         water_stage_node = bed_elev_node + flow_depth
         ds = ds_node[i]
@@ -237,9 +239,9 @@ def _run_single_inertial_substep(
         if (not np.isfinite(cross_sectional_area)) or (
             cross_sectional_area >= np.float32(1e6)
         ):
-            next_substep_discharge_m3_s[k] = np.float32(0.0)
-            reset_counters[2] += 1
-            continue
+            raise ValueError(
+                "Invalid cross_sectional_area (non-finite or >= 1e6 m2) in local inertial substep."
+            )
 
         hydraulic_radius = max(effective_depth, np.float32(1e-6))
         water_slope = (water_stage_ds - water_stage_node) * inv_length_m
@@ -288,13 +290,15 @@ def _run_single_inertial_substep(
             else:
                 computed_discharge = np.float32(0.0)
 
+        # HARD ERROR ON NON-FINITE COMPUTED DISCHARGE
         if not np.isfinite(computed_discharge):
-            next_substep_discharge_m3_s[k] = np.float32(0.0)
-            reset_counters[2] += 1
-            continue
+            raise ValueError(
+                "Non-finite computed_discharge encountered in local inertial substep."
+            )
 
         next_substep_discharge_m3_s[k] = computed_discharge
 
+    # 3. CONTINUITY EQUATION & STORAGE UPDATES
     for k in range(n_inertial):
         i = n_kinematic + k
         ds = ds_node[i]
@@ -313,7 +317,6 @@ def _run_single_inertial_substep(
             if up_node == -1:
                 break
 
-            # Strictly isolate upstream nodes that are inertial river cells
             if waterbody_id[up_node] == -1 and not use_kinematic[up_node]:
                 up_k = up_node - n_kinematic
                 vol_in += next_substep_discharge_m3_s[up_k] * dt_substep
@@ -325,9 +328,11 @@ def _run_single_inertial_substep(
 
         st = river_storage_in[k] + net_vol
 
+        # HARD ERROR ON NON-FINITE STORAGE
         if not np.isfinite(st):
-            st = 0.0
-            reset_counters[2] += 1
+            raise ValueError(
+                "Non-finite river storage encountered in local inertial substep."
+            )
 
         over_abs = over_abstraction_in[k]
         if st < 0.0:
@@ -432,7 +437,7 @@ def _run_inertial_substeps(
 
     reset_counters = np.zeros(3, dtype=np.int32)
 
-    # Copy states only for n_inertial elements
+    # Initialize double-buffer workspace arrays
     river_storage_A[:] = river_storage_m3_inertial[:]
     river_storage_B[:] = river_storage_m3_inertial[:]
 
@@ -524,6 +529,9 @@ def _run_inertial_substeps(
         retention_inflow_limit_sub_buf[i] = np.float64(0.20) * ret_max
         retention_max_outflow_limit_sub_buf[i] = np.float64(0.05) * ret_max
 
+    wb_extra_lateral_accum = np.float32(0.0)
+
+    # Substep iteration loop
     for _step_idx in range(num_inertial_substeps):
         _run_single_inertial_substep(
             dt_substep=substep_dt_f32,
@@ -586,6 +594,9 @@ def _run_inertial_substeps(
             reset_counters=reset_counters,
         )
 
+        wb_extra_lateral_accum += np.sum(wb_extra_lateral_m3_buf)
+
+        # Swap double buffers
         curr_river_storage, next_river_storage = next_river_storage, curr_river_storage
         curr_waterbody_storage, next_waterbody_storage = (
             next_waterbody_storage,
@@ -625,6 +636,11 @@ def _run_inertial_substeps(
         )
         curr_wb_processed, next_wb_processed = next_wb_processed, curr_wb_processed
 
+    # Store accumulated lateral volume into buffer for balance validation
+    wb_extra_lateral_m3_buf.fill(np.float32(0.0))
+    wb_extra_lateral_m3_buf[0] = wb_extra_lateral_accum
+
+    # Copy final accumulated state variables back to output arrays
     river_storage_m3_inertial[:] = curr_river_storage[:]
     waterbody_storage_m3[:] = curr_waterbody_storage[:]
     retention_storage_m3[:] = curr_retention_storage[:]
@@ -639,6 +655,7 @@ def _run_inertial_substeps(
     for k in range(n_inertial):
         updated_discharge_m3_s_inertial[k] = curr_discharge_vol_sum[k] * inv_dt_f32
 
+    # Zero out waterbody outflow array for waterbodies processed by the inertial solver
     for wb_id in range(waterbody_storage_m3.size):
         if curr_wb_processed[wb_id]:
             outflow_per_waterbody_m3[wb_id] = np.float32(0.0)
@@ -742,6 +759,11 @@ class LocalInertial(Router):
                     f"has downstream kinematic node ({ds_node}, river_id {river_ids[ds_node_compressed]}). "
                     "Downstream nodes of inertial reaches cannot be kinematic."
                 )
+
+        # check that  pit is not located inside a lake
+        assert np.all(
+            np.logical_or(np.logical_not(self.is_pit), waterbody_ids == -1)
+        ), "Pits cannot be located inside waterbodies."
 
         n_up_nodes = self.upstream_matrix_from_up_to_downstream.shape[0]
         sorted_idxs = np.empty(n_up_nodes, dtype=np.int32)
@@ -1070,6 +1092,27 @@ class LocalInertial(Router):
 
         inertial_outflow_per_waterbody = outflow_per_waterbody_m3.copy()
 
+        # Direct Lake-to-Lake Topological Transfers
+        for i in range(n_cells):
+            if is_waterbody_outflow[i]:
+                wb_id = waterbody_id[i]
+                if wb_id != -1 and inertial_outflow_per_waterbody[wb_id] > 0.0:
+                    ds = ds_node[i]
+                    if ds != -1 and waterbody_id[ds] != -1:
+                        ds_wb_id = waterbody_id[ds]
+                        if ds_wb_id != wb_id:
+                            actual_outflow = min(
+                                np.float64(inertial_outflow_per_waterbody[wb_id]),
+                                waterbody_storage_m3[wb_id],
+                            )
+                            if actual_outflow > 0.0:
+                                waterbody_storage_m3[wb_id] -= actual_outflow
+                                waterbody_storage_m3[ds_wb_id] += actual_outflow
+                                waterbody_inflow_m3[ds_wb_id] += np.float32(
+                                    actual_outflow
+                                )
+                            inertial_outflow_per_waterbody[wb_id] = np.float32(0.0)
+
         # Kinematic wave routing loop
         for i in range(n_kinematic):
             upstream_inflow_m3_s: np.float32 = np.float32(0.0)
@@ -1082,13 +1125,18 @@ class LocalInertial(Router):
 
                 if is_waterbody_outflow[up_node]:
                     wb_id = waterbody_id[up_node]
-                    wb_outflow: np.float32 = min(
-                        inertial_outflow_per_waterbody[wb_id],
-                        np.float32(waterbody_storage_m3[wb_id]),
-                    )
-                    waterbody_storage_m3[wb_id] -= np.float64(wb_outflow)
-                    node_sideflow += wb_outflow
-                    inertial_outflow_per_waterbody[wb_id] = np.float32(0.0)
+                    if wb_id != -1 and inertial_outflow_per_waterbody[wb_id] > 0.0:
+                        wb_st = max(waterbody_storage_m3[wb_id], 0.0)
+                        wb_outflow = np.float32(
+                            min(
+                                np.float64(inertial_outflow_per_waterbody[wb_id]),
+                                wb_st,
+                            )
+                        )
+                        if wb_outflow > 0.0:
+                            waterbody_storage_m3[wb_id] -= np.float64(wb_outflow)
+                            node_sideflow += wb_outflow
+                        inertial_outflow_per_waterbody[wb_id] = np.float32(0.0)
                 elif waterbody_id[up_node] == -1:
                     upstream_inflow_m3_s += max(
                         updated_discharge_m3_s[up_node], np.float32(0.0)
@@ -1163,7 +1211,10 @@ class LocalInertial(Router):
                 over_abstraction_m3[i] += np.float32(-river_storage_m3[i])
                 river_storage_m3[i] = np.float64(0.0)
 
-            assert np.isfinite(updated_discharge_m3_s[i])
+            if not np.isfinite(updated_discharge_m3_s[i]):
+                raise ValueError(
+                    "Non-finite discharge computed in kinematic wave reach."
+                )
 
         # Local inertial wave routing loop
         if n_inertial > 0:
@@ -1215,6 +1266,7 @@ class LocalInertial(Router):
             min_stable_dt = max(min_stable_dt, np.float32(0.5))
             raw_substeps = int(np.ceil(dt_f32 / min_stable_dt))
             num_inertial_substeps: int = max(1, min(raw_substeps, 1000))
+
             _run_inertial_substeps(
                 num_inertial_substeps=num_inertial_substeps,
                 dt_f32=dt_f32,
@@ -1317,6 +1369,73 @@ class LocalInertial(Router):
             terminal_waterbody_outflow_m3,
         )
 
+    def _check_inertial_water_balance(
+        self,
+        storage_before: float,
+        storage_after: float,
+        sideflow_m3: float,
+        kinematic_inflow_m3: float,
+        actual_evap_m3: float,
+        over_abs_m3: float,
+        Q_perm: ArrayFloat32,
+        retention_inflow_m3: ArrayFloat32,
+        retention_outflow_m3: ArrayFloat32,
+        tolerance_m3: float = 1.0,
+    ) -> float:
+        """Validates mass conservation strictly for the inertial channel subdomain."""
+        inertial_start = self.n_kinematic
+        inertial_end = self.n_kinematic + self.n_inertial
+
+        # 1. Total lateral volume transferred from upstream lakes (accumulated over substeps)
+        total_wb_inflow_to_inertial = float(np.sum(self._wb_extra_lateral_m3_buf))
+
+        # 2. Outflow/inflow across downstream boundaries (pits + downstream waterbodies)
+        ds_flux_m3 = 0.0
+        total_inertial_outflow_to_wb = 0.0
+
+        for i in range(inertial_start, inertial_end):
+            vol = float(Q_perm[i]) * self.dt
+            if self._is_pit[i]:
+                ds_flux_m3 += vol
+            else:
+                ds = self._ds_node[i]
+                if ds != -1 and self._waterbody_ids[ds] != -1:
+                    # Retain sign: Positive is outflow to lake; Negative is backwater flow into channel
+                    total_inertial_outflow_to_wb += vol
+
+        # 3. Retention basin fluxes for inertial nodes only
+        total_retention_diverted_m3 = 0.0
+        total_retention_released_m3 = 0.0
+        for i in range(inertial_start, inertial_end):
+            ret_id = self._retention_node_id[i]
+            if ret_id != -1:
+                total_retention_diverted_m3 += float(retention_inflow_m3[ret_id])
+                total_retention_released_m3 += float(retention_outflow_m3[ret_id])
+
+        delta_storage = storage_after - storage_before
+        expected_delta = (
+            sideflow_m3
+            + kinematic_inflow_m3
+            + total_wb_inflow_to_inertial
+            + total_retention_released_m3
+            + over_abs_m3  # Mass addition from floor-clamping negative storage
+            - actual_evap_m3
+            - ds_flux_m3
+            - total_inertial_outflow_to_wb
+            - total_retention_diverted_m3
+        )
+
+        balance_err = delta_storage - expected_delta
+
+        if abs(balance_err) > tolerance_m3:
+            print(
+                f"[INERTIAL DOMAIN LEAK] Error: {balance_err:+.4f} m³ | "
+                f"ΔStorage: {delta_storage:+.4f} m³ | "
+                f"Expected Δ: {expected_delta:+.4f} m³"
+            )
+
+        return balance_err
+
     def step(
         self,
         Q_prev_m3_s: ArrayFloat32,
@@ -1348,16 +1467,18 @@ class LocalInertial(Router):
         np.take(river_storage_alpha, self.sorted_idxs, out=self._alpha_perm)
         np.take(river_storage_beta, self.sorted_idxs, out=self._beta_perm)
 
-        # ------------------------------------------------------------------
-        # WATER BALANCE: Snapshot pre-step state (Inertial sub-domain)
-        # ------------------------------------------------------------------
         inertial_start = self.n_kinematic
         inertial_end = self.n_kinematic + self.n_inertial
 
-        storage_inertial_before = np.sum(
-            self._river_storage_perm[inertial_start:inertial_end]
+        # Reset accumulated lake lateral inflow buffer before substepping
+        self._wb_extra_lateral_m3_buf.fill(np.float32(0.0))
+
+        storage_inertial_before = float(
+            np.sum(self._river_storage_perm[inertial_start:inertial_end])
         )
-        sideflow_inertial = np.sum(self._sideflow_perm[inertial_start:inertial_end])
+        sideflow_inertial = float(
+            np.sum(self._sideflow_perm[inertial_start:inertial_end])
+        )
 
         (
             Q_perm,
@@ -1442,70 +1563,31 @@ class LocalInertial(Router):
             wb_processed_B=self._wb_processed_B,
         )
 
-        # ------------------------------------------------------------------
-        # WATER BALANCE: Snapshot post-step state & Check delta
-        # ------------------------------------------------------------------
-        storage_inertial_after = np.sum(river_storage_perm[inertial_start:inertial_end])
-        actual_evap_inertial = np.sum(
-            actual_evaporation_perm[inertial_start:inertial_end]
+        storage_inertial_after = float(
+            np.sum(river_storage_perm[inertial_start:inertial_end])
         )
-
-        ds_flux_inertial = 0.0
-        for i in range(inertial_start, inertial_end):
-            if self._is_pit[i]:
-                ds_flux_inertial += Q_perm[i] * self.dt
-
+        actual_evap_inertial = float(
+            np.sum(actual_evaporation_perm[inertial_start:inertial_end])
+        )
+        over_abs_inertial = float(
+            np.sum(over_abstraction_perm[inertial_start:inertial_end])
+        )
         kinematic_inflow_vol_m3 = (
             float(np.sum(self._kinematic_inflow_rate_inertial)) * self.dt
         )
 
-        # ------------------------------------------------------------------
-        # NEW: Compute missing waterbody & retention fluxes for Inertial Domain
-        # ------------------------------------------------------------------
-        # 1. Lateral inflow from upstream waterbodies into inertial river cells
-        total_wb_inflow_to_inertial = float(np.sum(self._wb_extra_lateral_m3_buf))
-
-        # 2. Outflow from inertial river cells draining INTO downstream waterbodies
-        total_inertial_outflow_to_wb = 0.0
-        for i in range(inertial_start, inertial_end):
-            ds = self._ds_node[i]
-            if ds != -1 and not self._is_pit[i] and self._waterbody_ids[ds] != -1:
-                # Positive discharge going into a downstream waterbody
-                total_inertial_outflow_to_wb += (
-                    float(max(Q_perm[i], np.float32(0.0))) * self.dt
-                )
-
-        # 3. Retention basin fluxes for inertial river nodes
-        total_retention_diverted_m3 = 0.0
-        total_retention_released_m3 = 0.0
-        for i in range(inertial_start, inertial_end):
-            ret_id = self._retention_node_id[i]
-            if ret_id != -1:
-                total_retention_diverted_m3 += float(retention_inflow_m3[ret_id])
-                total_retention_released_m3 += float(retention_outflow_m3[ret_id])
-
-        # ------------------------------------------------------------------
-        # CORRECTED LEDGER
-        # ------------------------------------------------------------------
-        delta_storage = storage_inertial_after - storage_inertial_before
-        expected_delta = (
-            sideflow_inertial
-            + kinematic_inflow_vol_m3
-            + total_wb_inflow_to_inertial
-            + total_retention_released_m3
-            - actual_evap_inertial
-            - ds_flux_inertial
-            - total_inertial_outflow_to_wb
-            - total_retention_diverted_m3
-        )
-
-        balance_err = delta_storage - expected_delta
-
-        if abs(balance_err) > 1e-3:
-            print(
-                f"[INERTIAL DOMAIN LEAK] Error: {balance_err:+.4f} m³ | "
-                f"ΔStorage: {delta_storage:+.4f} m³ | "
-                f"Expected Δ: {expected_delta:+.4f} m³"
+        if __debug__:
+            # Validate domain mass balance
+            self._check_inertial_water_balance(
+                storage_before=storage_inertial_before,
+                storage_after=storage_inertial_after,
+                sideflow_m3=sideflow_inertial,
+                kinematic_inflow_m3=kinematic_inflow_vol_m3,
+                actual_evap_m3=actual_evap_inertial,
+                over_abs_m3=over_abs_inertial,
+                Q_perm=Q_perm,
+                retention_inflow_m3=retention_inflow_m3,
+                retention_outflow_m3=retention_outflow_m3,
             )
 
         outflow_at_pits_m3 = np.float32(0.0)
@@ -1514,7 +1596,7 @@ class LocalInertial(Router):
                 outflow_at_pits_m3 += Q_perm[i] * self.dt
         outflow_at_pits_m3 += terminal_wb_outflow_m3
 
-        # In-place unpermute to avoid temporary array allocations
+        # In-place unpermute output buffers
         np.take(Q_perm, self.inv_idxs, out=self._Q_out)
         np.take(actual_evaporation_perm, self.inv_idxs, out=self._actual_evap_out)
         np.take(over_abstraction_perm, self.inv_idxs, out=self._over_abs_out)
