@@ -158,7 +158,7 @@ class Government(AgentBaseClass):
             self.model.config["general"]["end_time"], datetime.min.time()
         )
 
-        if self.model.current_time.year == end_time.year - 1:
+        if self.model.current_time.year == end_time.year - 1 and adaptation_enabled:
             self.export_flood_protection_standards()
 
     def prepare_modified_soil_maps_for_forest(self) -> None:
