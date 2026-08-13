@@ -581,6 +581,11 @@ class Households(AgentBaseClass):
 
 
         self.var.household_building_area = DynamicArray(hh_footprint_m2, max_n=self.max_n)
+        #NC-BothHazards
+        self.var.property_value = DynamicArray(
+            hh_structural_value_usd.astype(np.float32),
+            max_n=self.max_n,
+        )
 
         adaptation_costs = np.maximum(hh_structural_value_usd * 0.05, 10_800).astype(np.int64)
         self.var.adaptation_costs = DynamicArray(adaptation_costs, max_n=self.max_n)
@@ -2025,44 +2030,51 @@ class Households(AgentBaseClass):
 
     def decide_household_strategy(self) -> None:
         """This function calculates the utility of adapting to flood risk for each household and decides whether to adapt or not."""
-        
+        #LECZ version
+        lecz_mask = self.var.in_lecz.data[: self.n] == 1
+        n_lecz = int(lecz_mask.sum())
+        print(f"Total N households: {self.n}")
+        print(f"Toral N households in LECZ: {n_lecz}")
+
         adapt_flood = self.config.get("adapt", False)
         adapt_wind = self.config.get("wind_adaptation", False)
 
-        lecz_mask = np.ones(self.n, dtype=bool)
-        n_lecz = self.n
+        #NC-OnlyOneHazard
+        if not adapt_flood and not adapt_wind:
+            return
 
-        #LECZ version
-        #lecz_mask = self.var.in_lecz.data[: self.n] == 1
-        #n_lecz = int(lecz_mask.sum())
-
-        #Evaluation: shape checks
-        # assert lecz_mask.shape == (self.n,)
-        # assert self.var.wealth.data[: self.n][lecz_mask].shape[0] == n_lecz
-        # assert self.var.income.data[: self.n][lecz_mask].shape[0] == n_lecz
-
-        # print(f"Total N households: {self.n}")
-        # print(f"Toral N households in LECZ: {n_lecz}")
-
+        flood_return_periods = np.array([np.inf], dtype=np.float32)
+        wind_return_periods = np.array([np.inf], dtype=np.float32)
+        p_flood = np.zeros(1, dtype=np.float32)
+        p_wind = np.zeros(1, dtype=np.float32)
+        
         # Activate Flood damages and risk perceptions
         if adapt_flood:
             self.update_risk_perceptions()
             damages_do_not_adapt, damages_adapt = (
                 self.flood_risk_module.calculate_building_flood_damages()
             )
+            #NC-OnlyOneHazard
+            flood_return_periods = np.asarray(self.return_periods, dtype=np.float32)
+            p_flood = 1.0 / flood_return_periods
         else:
             damages_do_not_adapt = np.zeros((1, self.n), np.float32)
             damages_adapt = np.zeros((1, self.n), np.float32)
-            self.return_periods = np.array([np.inf])
+            #NC-OnlyOneHazard
+            #self.return_periods = np.array([np.inf])
 
         # Activate Wind damages and risk perceptions
         if adapt_wind:
             damages_unprotected_w, damages_adapt_w = (
                 self.wind_risk_module.calculate_building_wind_damages()
             )
+            
             self._last_damages_unprotected_w = damages_unprotected_w
             self._last_damages_adapt_w = damages_adapt_w
             self.update_windstorm_risk_perceptions()
+            #NC-OnlyOneHazard
+            wind_return_periods = np.asarray(self.windstorm_return_periods, dtype=np.float32)
+            p_wind = 1.0 / wind_return_periods
         else:
             damages_unprotected_w = np.zeros((1, self.n), np.float32)
             damages_adapt_w = np.zeros((1, self.n), np.float32)
@@ -2206,29 +2218,35 @@ class Households(AgentBaseClass):
         EU_adapt_shutters[lecz_mask] = EU_adapt_shutters_lecz
         EU_unprotected_w[lecz_mask] = EU_unprotected_w_lecz
 
-        EU_do_nothing_lecz = self.decision_module.calcEU_no_insure(
-            #n_agents=self.n,
-            n_agents=n_lecz,
-            wealth=self.var.wealth.data[lecz_mask],
-            income=self.var.income.data[lecz_mask],
-            expenditure_cap=eu_cap,
-            amenity_value=self.var.amenity_value.data[lecz_mask],
-            amenity_weight=1,
-            risk_perception_flood=self.var.risk_perception.data[lecz_mask],
-            risk_perception_wind=self.var.risk_perception_windstorm.data[lecz_mask],
-            expected_damages_flood=damages_do_not_adapt[:, lecz_mask],
-            expected_damages_wind=damages_unprotected_w[:, lecz_mask],
-            p_flood=1 / self.return_periods,
-            p_wind=1 / self.windstorm_return_periods,
-            T=35,
-            r=0.03,
-            sigma=1,
-            public_reinsurer=0.5,
-        )
-        EU_do_nothing[lecz_mask] = EU_do_nothing_lecz
+        if adapt_flood and adapt_wind:
+            insured_value = self.var.property_value.data[: self.n].astype(np.float32)
+            EU_do_nothing_lecz = self.decision_module.calcEU_no_insure(
+                #n_agents=self.n,
+                n_agents=n_lecz,
+                wealth=self.var.wealth.data[lecz_mask],
+                income=self.var.income.data[lecz_mask],
+                expenditure_cap=eu_cap,
+                amenity_value=self.var.amenity_value.data[lecz_mask],
+                amenity_weight=1,
+                risk_perception_flood=self.var.risk_perception.data[lecz_mask],
+                risk_perception_wind=self.var.risk_perception_windstorm.data[lecz_mask],
+                expected_damages_flood=damages_do_not_adapt[:, lecz_mask],
+                expected_damages_wind=damages_unprotected_w[:, lecz_mask],
+                p_flood=1 / self.return_periods,
+                p_wind=1 / self.windstorm_return_periods,
+                T=35,
+                r=0.03,
+                sigma=1,
+                public_reinsurer=0.5,
+            )
+            EU_do_nothing[lecz_mask] = EU_do_nothing_lecz
 
-        EU_multirisk_insurance_lecz, premium_lecz, premium_private_lecz, premium_public_lecz = (
-            self.decision_module.calcEU_insure_multirisk_residual(
+            (
+                EU_multirisk_insurance_lecz, 
+                premium_lecz, 
+                premium_private_lecz, 
+                premium_public_lecz,
+            ) = self.decision_module.calcEU_insure_multirisk_residual(
                 geom_id="NoID",
                 #n_agents=self.n,
                 n_agents=n_lecz,
@@ -2257,14 +2275,74 @@ class Households(AgentBaseClass):
                 public_reinsurer=0.5,
                 adapted_floodproofing=self.var.adapted.data[lecz_mask] == 1,
                 adapted_windshutters=self.var.adapted_shutters.data[lecz_mask] == 1,
-                insured_value=self.var.property_value.data[lecz_mask].astype(np.float32),
+                #insured_value=self.var.property_value.data[lecz_mask].astype(np.float32),
+                insured_value=insured_value[lecz_mask],
             )
-        )
+        
 
-        EU_multirisk_insurance[lecz_mask] = EU_multirisk_insurance_lecz
-        premium[lecz_mask] = np.asarray(premium_lecz, dtype=np.float32).reshape(-1)
-        premium_private[lecz_mask] = np.asarray(premium_private_lecz, dtype=np.float32).reshape(-1)
-        premium_public[lecz_mask] = np.asarray(premium_public_lecz, dtype=np.float32).reshape(-1)
+            EU_multirisk_insurance[lecz_mask] = EU_multirisk_insurance_lecz
+            premium[lecz_mask] = np.asarray(premium_lecz, dtype=np.float32).reshape(-1)
+            premium_private[lecz_mask] = np.asarray(premium_private_lecz, dtype=np.float32).reshape(-1)
+            premium_public[lecz_mask] = np.asarray(premium_public_lecz, dtype=np.float32).reshape(-1)
+        else:
+            deductible = np.float32(0.1)
+            operating_insurer = 0.3
+            public_reinsurer = 0.5
+        
+            if adapt_flood:
+                EU_do_nothing_lecz = EU_do_not_adapt_lecz
+            else:
+                EU_do_nothing_lecz = EU_unprotected_w_lecz
+        
+            EU_do_nothing[lecz_mask] = EU_do_nothing_lecz
+            EU_multirisk_insurance[lecz_mask] = -np.inf
+        
+            if self.var.insurance_scheme == "catnat":
+                zero_hazard = np.zeros((1, n_lecz), dtype=np.float32)
+        
+                if adapt_flood:
+                    insured_flood = (
+                        damages_do_not_adapt[:, lecz_mask].astype(np.float32)
+                        * np.float32(1.0 - deductible)
+                    )
+                    premium_lecz, premium_public_lecz, premium_private_lecz = (
+                        self.decision_module.premium_CATNAT(
+                            expected_damages_flood=insured_flood,
+                            p_flood=p_flood,
+                            expected_damages_wind=zero_hazard,
+                            p_wind=np.zeros(1, dtype=np.float32),
+                            operating_insurer=operating_insurer,
+                            reinsurance_share=public_reinsurer,
+                        )
+                    )
+                else:
+                    insured_wind = (
+                        damages_unprotected_w[:, lecz_mask].astype(np.float32)
+                        * np.float32(1.0 - deductible)
+                    )
+                    premium_lecz, premium_public_lecz, premium_private_lecz = (
+                        self.decision_module.premium_CATNAT(
+                            expected_damages_flood=zero_hazard,
+                            p_flood=np.zeros(1, dtype=np.float32),
+                            expected_damages_wind=insured_wind,
+                            p_wind=p_wind,
+                            operating_insurer=operating_insurer,
+                            reinsurance_share=public_reinsurer,
+                        )
+                    )
+        
+                premium[lecz_mask] = np.asarray(premium_lecz, dtype=np.float32).reshape(-1)
+                premium_private[lecz_mask] = np.asarray(
+                    premium_private_lecz, dtype=np.float32
+                ).reshape(-1)
+                premium_public[lecz_mask] = np.asarray(
+                    premium_public_lecz, dtype=np.float32
+                ).reshape(-1)
+            else:
+                premium[lecz_mask] = 0.0
+                premium_private[lecz_mask] = 0.0
+                premium_public[lecz_mask] = 0.0
+
 
 
         ## CARO REPORTING
@@ -2368,6 +2446,7 @@ class Households(AgentBaseClass):
         choose_flood = np.zeros(self.n, dtype=bool)
         choose_shutters = np.zeros(self.n, dtype=bool)
         choose_ins = np.zeros(self.n, dtype=bool)
+         
 
         choose_flood[lecz_mask] = (
             (EU_adapt[lecz_mask] > EU_do_not_adapt[lecz_mask])
@@ -2393,16 +2472,16 @@ class Households(AgentBaseClass):
         #     f"p50={float(np.median(gain_s)):.4f}, "
         #     f"p95={float(np.percentile(gain_s, 95)):.4f}, "
         #     f"max={float(np.max(gain_s)):.4f}"
-        # )
+         # )
         # print(
         #     f"[shutters diag] risk_perc_wind: "
         #     f"mean={float(np.mean(self.var.risk_perception_windstorm.data)):.4f}, "
         #     f"max={float(np.max(self.var.risk_perception_windstorm.data)):.4f}"
         # )
-        wind_ead_nonadapted = self.decision_module.calc_EAD(
-            damages_unprotected_w[:, not_yet_adapted],
-            1.0 / self.windstorm_return_periods,
-        )
+        # wind_ead_nonadapted = self.decision_module.calc_EAD(
+        #     damages_unprotected_w[:, not_yet_adapted],
+        #     1.0 / self.windstorm_return_periods,
+        # )
         # print(
         #     f"[shutters diag] wind EAD (non-adapted): "
         #     f"p50={float(np.median(wind_ead_nonadapted)):.2f}, "
@@ -2414,20 +2493,54 @@ class Households(AgentBaseClass):
         #     f"p50={float(np.median(shutters_cost[not_yet_adapted])):.2f}, "
         #     f"p95={float(np.percentile(shutters_cost[not_yet_adapted], 95)):.2f}"
         # )
-        
-
-        if self.var.insurance_scheme == "private":
-            choose_ins[lecz_mask] = EU_multirisk_insurance[lecz_mask] > EU_do_nothing[lecz_mask]
+        if adapt_wind and np.any(not_yet_adapted):
+            wind_ead_nonadapted = self.decision_module.calc_EAD(
+                damages_unprotected_w[:, not_yet_adapted],
+                p_wind,
+            )
         else:
-            choose_ins[lecz_mask] = True
-            # np.ones(self.n,dtype=bool)
+            wind_ead_nonadapted = np.zeros(0, dtype=np.float32)
 
+       #NC-OnlyOneHazard
+       # if self.var.insurance_scheme == "private":
+        #     choose_ins[lecz_mask] = EU_multirisk_insurance[lecz_mask] > EU_do_nothing[lecz_mask]
+        # else:
+        #     choose_ins[lecz_mask] = True
+        #     # np.ones(self.n,dtype=bool)
+        if self.var.insurance_scheme == "no_insurance":
+            choose_ins[:] = False
+        elif self.var.insurance_scheme in {"catnat", "reform"}:
+            choose_ins[lecz_mask] = True
+        elif self.var.insurance_scheme == "private":
+            choose_ins[lecz_mask] = (
+                EU_multirisk_insurance[lecz_mask] > EU_do_nothing[lecz_mask]
+            )
+        else:
+            raise ValueError(f"Unknown insurance scheme: {self.var.insurance_scheme}")
 
         # "benefit" of each choice (used to decide what to drop if over budget)
         # OLD CODE
-        gain_flood = (EU_adapt - EU_do_not_adapt).astype(np.float32)
-        gain_shutters = (EU_adapt_shutters - EU_unprotected_w).astype(np.float32)
-        gain_ins = (EU_multirisk_insurance - EU_do_nothing).astype(np.float32)
+        # gain_flood = (EU_adapt - EU_do_not_adapt).astype(np.float32)
+        # gain_shutters = (EU_adapt_shutters - EU_unprotected_w).astype(np.float32)
+        # gain_ins = (EU_multirisk_insurance - EU_do_nothing).astype(np.float32)
+        #NC-OnlyOneHazard
+        gain_flood = np.full(self.n, -np.inf, dtype=np.float32)
+        flood_gain_mask = np.isfinite(EU_adapt) & np.isfinite(EU_do_not_adapt)
+        gain_flood[flood_gain_mask] = (
+            EU_adapt[flood_gain_mask] - EU_do_not_adapt[flood_gain_mask]
+        ).astype(np.float32)
+
+        gain_shutters = np.full(self.n, -np.inf, dtype=np.float32)
+        shutters_gain_mask = np.isfinite(EU_adapt_shutters) & np.isfinite(EU_unprotected_w)
+        gain_shutters[shutters_gain_mask] = (
+            EU_adapt_shutters[shutters_gain_mask] - EU_unprotected_w[shutters_gain_mask]
+        ).astype(np.float32)
+
+        gain_ins = np.full(self.n, -np.inf, dtype=np.float32)
+        ins_gain_mask = np.isfinite(EU_multirisk_insurance) & np.isfinite(EU_do_nothing)
+        gain_ins[ins_gain_mask] = (
+            EU_multirisk_insurance[ins_gain_mask] - EU_do_nothing[ins_gain_mask]
+        ).astype(np.float32)
 
         # DEBUG DIAGNOSTIC
         # wants_flood = gain_flood > 0  # EU positive before budget
@@ -2589,11 +2702,20 @@ class Households(AgentBaseClass):
         pre_flood = (gain_flood > 0) & lecz_mask
         pre_shut = (gain_shutters > 0) & lecz_mask
 
-        if self.var.insurance_scheme == "private":
+        #NC-OnlyOneHazard
+        # if self.var.insurance_scheme == "private":
+        #     pre_ins = (EU_multirisk_insurance > EU_do_nothing) & lecz_mask
+        # else:
+        #     #pre_ins = np.ones(self.n, dtype=bool)
+        #     pre_ins = lecz_mask.copy()
+        if self.var.insurance_scheme == "no_insurance":
+            pre_ins = np.zeros(self.n, dtype=bool)
+        elif self.var.insurance_scheme in {"catnat", "reform"}:
+            pre_ins = lecz_mask.copy()
+        elif self.var.insurance_scheme == "private":
             pre_ins = (EU_multirisk_insurance > EU_do_nothing) & lecz_mask
         else:
-            #pre_ins = np.ones(self.n, dtype=bool)
-            pre_ins = lecz_mask.copy()
+            raise ValueError(f"Unknown insurance scheme: {self.var.insurance_scheme}")
 
         # Compute pre-cost and budget
         pre_cost = (
@@ -2675,6 +2797,21 @@ class Households(AgentBaseClass):
 
         # Compute effective EAD per household using current adaptation status.
         # Adapted households get reduced damages; others get full damages.
+        # effective_damages_flood = damages_do_not_adapt.copy()
+        # adapted_flood_mask = self.var.adapted.data[: self.n] == 1
+        # effective_damages_flood[:, adapted_flood_mask] = damages_adapt[:, adapted_flood_mask]
+
+        # effective_damages_wind = damages_unprotected_w.copy()
+        # adapted_wind_mask = self.var.adapted_shutters.data[: self.n] == 1
+        # effective_damages_wind[:, adapted_wind_mask] = damages_adapt_w[:, adapted_wind_mask]
+
+        # self.var.ead_flood = self.decision_module.calc_EAD(
+        #     effective_damages_flood, 1.0 / self.return_periods
+        # ).astype(np.float32)
+        # self.var.ead_wind = self.decision_module.calc_EAD(
+        #     effective_damages_wind, 1.0 / self.windstorm_return_periods
+        # ).astype(np.float32)
+        #NC-OnlyOneHazard
         effective_damages_flood = damages_do_not_adapt.copy()
         adapted_flood_mask = self.var.adapted.data[: self.n] == 1
         effective_damages_flood[:, adapted_flood_mask] = damages_adapt[:, adapted_flood_mask]
@@ -2683,12 +2820,21 @@ class Households(AgentBaseClass):
         adapted_wind_mask = self.var.adapted_shutters.data[: self.n] == 1
         effective_damages_wind[:, adapted_wind_mask] = damages_adapt_w[:, adapted_wind_mask]
 
-        self.var.ead_flood = self.decision_module.calc_EAD(
-            effective_damages_flood, 1.0 / self.return_periods
-        ).astype(np.float32)
-        self.var.ead_wind = self.decision_module.calc_EAD(
-            effective_damages_wind, 1.0 / self.windstorm_return_periods
-        ).astype(np.float32)
+        if adapt_flood:
+            self.var.ead_flood = self.decision_module.calc_EAD(
+                effective_damages_flood,
+                p_flood,
+            ).astype(np.float32)
+        else:
+            self.var.ead_flood = np.zeros(self.n, dtype=np.float32)
+
+        if adapt_wind:
+            self.var.ead_wind = self.decision_module.calc_EAD(
+                effective_damages_wind, 
+                p_wind,
+            ).astype(np.float32)
+        else:
+            self.var.ead_wind = np.zeros(self.n, dtype=np.float32)
 
         n_households = self.n
         print(f"Total N households: {n_households}")
@@ -3135,3 +3281,10 @@ class Households(AgentBaseClass):
         mask = self.var.in_lecz.data[: self.n] == 1
         return self.var.ead_wind[mask]
     
+    @property
+    def adaptation_total_lecz(self) -> np.ndarray:
+        mask = self.var.in_lecz.data[: self.n] ==1
+        return (
+            (self.var.adapted.data[: self.n] ==1)
+            | (self.var.adapted_shutters.data[: self.n] == 1)
+        )[mask].astype(np.int32)

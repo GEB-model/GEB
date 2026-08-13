@@ -1688,7 +1688,7 @@ class Agents(BuildModelBase):
         self,
         maximum_age: int = 85,
         skip_countries_ISO3: list[str] = [],
-        single_household_per_building: bool = False,
+        single_household_per_building: bool = True, #CARO used to be false
         redundancy_array_size: int = 20_000_000,
     ) -> None:
         """New method to set up household characteristics for agents using GLOPOP-S data. This method is still under development and may not be fully functional.

@@ -47,7 +47,7 @@ class WindRiskModule:
 
 
         windstorm_maps = {}
-        windstorm_path = (Path(self.model.config["general"]["output_folder"])/ "default"/"wind_maps")
+        windstorm_path = (Path(self.model.config["general"]["output_folder"])/ "spinup"/"wind_maps")
         for return_period in self.households.windstorm_return_periods:
             file_path = (
                 windstorm_path / f"return_level_rp{return_period}.tif"
@@ -134,12 +134,30 @@ class WindRiskModule:
         # Optional filter to focus only on flooded households (only if flood data available)
         # if only_flooded_buildings and "flooded" in self.households.buildings.columns:
         #     mask &= self.households.buildings["flooded"]
-        buildings = self.households.buildings[mask]
+        # buildings = self.households.buildings[mask]
 
         #LECZ version
-        #lecz_mask = self.households.var.in_lecz.data == 1
+        lecz_mask = self.households.var.in_lecz.data == 1
         # lecz_config = self.model.config.get("agent_settings", {}).get("households",{})
         # only_lecz_buildings = bool(lecz_config.get("debug_damage_stats", True))
+        lecz_building_ids = np.unique(
+            self.households.var.building_id_of_household.data[: self.households.n][lecz_mask]
+        )
+
+        agent_df = pd.DataFrame(
+            {
+                "building_id_of_household":
+                    self.households.var.building_id_of_household.data[: self.households.n][lecz_mask]
+            }
+        )
+
+        if "n_occupants" in self.households.buildings.columns:
+            mask = self.households.buildings["n_occupants"] > 0
+        else:
+            mask = pd.Series(True, index=self.households.buildings.index)
+
+        mask &= self.households.buildings["id"].isin(lecz_building_ids)
+        buildings = self.households.buildings[mask].copy()
 
         # if only_lecz_buildings:
         #     lecz_mask = self.households.var.in_lecz.data == 1
@@ -154,7 +172,7 @@ class WindRiskModule:
         #         lecz_building_ids
         #     )
 
-        #buildings = self.households.buildings[mask]
+        # buildings = self.households.buildings[mask]
 
         # lecz_building_ids = np.unique(
         #     self.households.var.building_id_of_household[lecz_mask]
@@ -358,15 +376,15 @@ class WindRiskModule:
                     fn_export / f"building_wind_damages_rp{rp}_{self.households.model.current_time.year}.parquet"
                 )
             
-            # damages_do_not_adapt_lecz, damages_adapt_lecz = (
-            #     self.households.assign_wdamages_to_agents(agent_df, out)
-            # )
-
-            # damages_unprotected_w[i, lecz_mask] = damages_do_not_adapt_lecz
-            # damages_adapt_w[i, lecz_mask] = damages_adapt_lecz
-            damages_unprotected_w[i], damages_adapt_w[i] = (
+            damages_do_not_adapt_lecz, damages_adapt_lecz = (
                 self.households.assign_wdamages_to_agents(agent_df, out)
             )
+
+            damages_unprotected_w[i, lecz_mask] = damages_do_not_adapt_lecz
+            damages_adapt_w[i, lecz_mask] = damages_adapt_lecz
+            # damages_unprotected_w[i], damages_adapt_w[i] = (
+            #     self.households.assign_wdamages_to_agents(agent_df, out)
+            # )
     
             if verbose:
                 print(f"Wind Damages rp{rp}: {round(damages_unprotected_w[i].sum() / 1e6)} million")
