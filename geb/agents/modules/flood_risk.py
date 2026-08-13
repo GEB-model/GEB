@@ -618,7 +618,10 @@ class FloodRiskModule:
             building_multicurve = building_multicurve[
                 ["id", "damages", "damages_flood_proofed"]
             ]
-
+            building_multicurve["damages_t0"] = building_multicurve["damages"].copy()
+            building_multicurve["damages_flood_proofed_t0"] = building_multicurve[
+                "damages_flood_proofed"
+            ].copy()
             if not dynamic:
                 self._building_damages_all_return_periods[return_period] = (
                     building_multicurve
