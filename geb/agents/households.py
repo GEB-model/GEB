@@ -1514,6 +1514,45 @@ class Households(AgentBaseClass):
             self.var.water_efficiency_per_household,
         )
 
+    def update_monetary_variables_to_ssp(self) -> None:
+        """Update monetary variables to match the specified SSP scenario.
+
+        Args:
+            ssp: The SSP scenario to use for updating monetary variables.
+        """
+        if not hasattr(self.var, "iiasa_ssp"):
+            self.iiasa_ssp = read_table(self.model.files["table"]["ssp/iiasa_ssp"])
+        growth_rate = self.iiasa_ssp.loc[self.model.current_time.year][
+            "GDP_growth_rate"
+        ]
+        factor_change = self.iiasa_ssp.loc[self.model.current_time.year]["GDP_scaled"]
+        self.var.wealth *= 1 + growth_rate
+        self.var.income *= 1 + growth_rate
+        self.var.property_value *= 1 + growth_rate
+        self.var.adaptation_costs *= 1 + growth_rate
+        if hasattr(self, "flood_risk_module"):
+            self.flood_risk_module._damages_do_not_adapt *= 1 + growth_rate
+            self.flood_risk_module._damages_adapt *= 1 + growth_rate
+            for (
+                return_period
+            ) in self.flood_risk_module._building_damages_all_return_periods:
+                self.flood_risk_module._building_damages_all_return_periods[
+                    return_period
+                ]["damages"] = (
+                    self.flood_risk_module._building_damages_all_return_periods[
+                        return_period
+                    ]["damages_t0"]
+                    * factor_change
+                )
+                self.flood_risk_module._building_damages_all_return_periods[
+                    return_period
+                ]["damages_flood_proofed"] = (
+                    self.flood_risk_module._building_damages_all_return_periods[
+                        return_period
+                    ]["damages_flood_proofed_t0"]
+                    * factor_change
+                )
+
     def step(self) -> None:
         """Advance the households by one time step."""
         if self.config["adapt"]:
@@ -1585,9 +1624,10 @@ class Households(AgentBaseClass):
                 ):
                     if "flooded" not in self.buildings.columns:
                         self.update_building_attributes()
-                    if self.model.current_timestep > 0:
-                        print("Thinking about adapting...")
-                        self.decide_household_strategy()
+                    print("Thinking about adapting...")
+                    self.decide_household_strategy()
+                    if self.model.current_time.year >= 2020:
+                        self.update_monetary_variables_to_ssp()
 
         self.report(locals())
 
