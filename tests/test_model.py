@@ -402,6 +402,7 @@ def test_run() -> None:
         run_model_with_method(method="run", **args)
 
         for evaluation_method in (
+            "hydrology.evaluate_discharge",
             "hydrology.plot_discharge",
             "hydrology.plot_water_balance",
             "hydrology.plot_water_storage",

@@ -1151,6 +1151,14 @@ class Routing(Module):
             total_outflow_at_pits_m3: np.float64 = np.float64(np.nan)
             total_retention_evaporation_m3: np.float64 = np.float64(np.nan)
 
+        print(total_outflow_at_pits_m3 / (24 * 3600), "m3/s outflow at pits")
+
+        import matplotlib.pyplot as plt
+
+        discharge_decomprssed = self.grid.decompress(self.grid.var.discharge_m3_s)
+        plt.imshow(discharge_decomprssed, cmap="Blues")
+        plt.savefig(self.model.report_folder / "discharge_m3_s.png")
+
         # store daily retention basin flows
         if __debug__:
             self.grid.var.retention_inflow_m3_daily = retention_inflow_m3
