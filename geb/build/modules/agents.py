@@ -1799,6 +1799,22 @@ class Agents(BuildModelBase):
             output[gdl_name] = buildings_gdl
         return output
 
+    @build_method(required=True)
+    def setup_iiasa_ssp(
+        self, country: str = "Mexico", ssp: str = "SSP5", reference_year: int = 2020
+    ) -> None:
+        """Sets up the IIASA SSPs for the model.
+
+        Args:
+            country: The country for which to set up the SSPs. Default is "Mexico".
+            ssp: The SSP scenario to use. Default is "SSP5".
+            reference_year: The reference year for the SSPs. Default is 2020.
+        """
+        iiasa_ssps = self.data_catalog.fetch("iiasa_ssp").read(
+            country=country, ssp=ssp, reference_year=reference_year
+        )
+        self.set_table(iiasa_ssps, name="ssp/iiasa_ssp")
+
     @build_method(
         depends_on=[
             "setup_assets",
