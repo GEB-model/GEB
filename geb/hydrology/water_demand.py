@@ -315,6 +315,10 @@ class WaterDemand(Module):
             available_groundwater_m3,
         ) = self.get_available_water(gross_irrigation_demand_m3_per_reservoir)
 
+        # Disable all groundwater withdrawals for this diagnostic run to isolate whether
+        # groundwater-level bias is driven by hydrological simulation or water-use behavior.
+        available_groundwater_m3[:] = 0
+
         available_channel_storage_m3_pre = available_channel_storage_m3.copy()
         available_reservoir_storage_m3_pre = available_reservoir_storage_m3.copy()
         available_groundwater_m3_pre = available_groundwater_m3.copy()
