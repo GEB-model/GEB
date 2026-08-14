@@ -437,7 +437,7 @@ class Government(AgentBaseClass):
         if not (
             self.model.current_time.month == 1
             and self.model.current_time.day == 1
-            and self.model.current_timestep > 0
+            and self.model.current_time.year > 2020
         ):
             return  # exits because it is not the first of January
 
@@ -540,9 +540,11 @@ class Government(AgentBaseClass):
         adapted = self.agents.households.var.adapted.data
 
         # iterate over each subbasin in the model and calculate the EAD for the current and next flood protection standard
-        dike_heights = self.flood_risk_module.dike_heights()
-        for subbasin in dike_heights[
-            next(iter(dike_heights))
+        coastal_dike_heights, riverine_dike_heights = (
+            self.flood_risk_module.dike_heights()
+        )
+        for subbasin in riverine_dike_heights[
+            next(iter(riverine_dike_heights))
         ]:  # get return period of 10 years
             if (
                 subbasin
@@ -579,15 +581,37 @@ class Government(AgentBaseClass):
             ).sum()
 
             # calculate the cost of raising the dike to the next flood protection standard
-            dike_heights_current_fps = dike_heights[current_fps][subbasin]
-            dike_heights_altered_fps = dike_heights[altered_fps][subbasin]
+            riverine_dike_heights_current_fps = riverine_dike_heights[current_fps][
+                subbasin
+            ]
+            riverine_dike_heights_altered_fps = riverine_dike_heights[altered_fps][
+                subbasin
+            ]
+            if subbasin in coastal_dike_heights[current_fps]:
+                coastal_dike_heights_current_fps = coastal_dike_heights[current_fps][
+                    subbasin
+                ]
+                coastal_dike_heights_altered_fps = coastal_dike_heights[altered_fps][
+                    subbasin
+                ]
+            else:
+                coastal_dike_heights_current_fps = np.array([0])
+                coastal_dike_heights_altered_fps = np.array([0])
             damage_reduction = current_ead - altered_ead
             # account for indirect damages
             damage_reduction *= indirect_damages
 
             # get total length and height difference of the dikes that need to be raised
-            height_difference = dike_heights_altered_fps - dike_heights_current_fps
-            if height_difference.sum() == 0:
+            riverine_height_difference = (
+                riverine_dike_heights_altered_fps - riverine_dike_heights_current_fps
+            )
+            coastal_height_difference = (
+                coastal_dike_heights_altered_fps - coastal_dike_heights_current_fps
+            )
+            if (
+                riverine_height_difference.sum() == 0
+                and coastal_height_difference.sum() == 0
+            ):
                 continue
             cost_per_meter = self.config["adaptation"][
                 "dike_elevation_cost_per_meter_usd"
@@ -595,13 +619,25 @@ class Government(AgentBaseClass):
             maintenance_cost_per_km_dike = self.config["adaptation"][
                 "dike_maintenance_cost_per_year_usd"
             ]
-            total_cost = (
-                np.sum(height_difference * 100 * cost_per_meter) * 2
+            if hasattr(self.model.agents.households, "factor_change"):
+                cost_per_meter *= self.model.agents.households.factor_change
+                maintenance_cost_per_km_dike *= (
+                    self.model.agents.households.factor_change
+                )
+
+            total_cost_riverine = (
+                np.sum(riverine_height_difference * 100 * cost_per_meter) * 2
             )  # investment cost in euros; segments are roughly 100 meters long, double the cost to account for both sides of the dike
 
-            maintenance_cost_per_year = (
-                maintenance_cost_per_km_dike * height_difference.size * 100 * 2
-            )  # maintenance cost per year in euros; segments are roughly 100 meters long, double the cost to account for both sides of the dike
+            total_cost_coastal = np.sum(
+                coastal_height_difference * 100 * cost_per_meter
+            )  # investment cost in euros; segments are roughly 100 meters long, double the cost to account for both sides of the dike
+
+            total_cost = total_cost_riverine + total_cost_coastal
+            maintenance_cost_per_year = maintenance_cost_per_km_dike * (
+                riverine_height_difference.size * 100 * 2
+            ) + (coastal_height_difference.size * 100)
+            # maintenance cost per year in euros; segments are roughly 100 meters long, double the cost to account for both sides of the dike
 
             if model_removal_flood_protection_standards:
                 ead_no_flood_protection_standard = self.flood_risk_module.calculate_ead(
