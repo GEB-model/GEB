@@ -12,7 +12,7 @@ class DecisionModule:
     @staticmethod
     def calculate_riverine_amenity(
         household_distance_to_river_m: float,
-        GDP_i_t: float = 1,
+        GDP_i_t: float,
         phi_i: float = 0.254820579
         * 1.11,  # scaling factor for riverine amenity based on Tesselaar et al. (2023). Now applied to Mexico (2020) (first converting from EUR to USD). This is a rough estimate, but should be sufficient for now.
     ) -> float:
@@ -62,7 +62,7 @@ class DecisionModule:
 
     @staticmethod
     def calculate_coastal_amenity(
-        x_j: float, GDP_i_t: float = 1, phi_i: float = 0.254820579 * 1.11
+        x_j: float, GDP_i_t: float, phi_i: float = 0.254820579 * 1.11
     ) -> float:
         """This function calculates the coastal amenity value for a given distance to the coast.
 
@@ -538,6 +538,7 @@ class DecisionModule:
         T: np.ndarray | int | float,
         r: float,
         sigma: float,
+        GDP_i_t: float,
         **kwargs: dict,
     ) -> np.ndarray:
         """This function calculates the time discounted subjective utility of not undertaking any action.
@@ -546,9 +547,11 @@ class DecisionModule:
             EU_do_nothing_array: array containing the time discounted subjective utility of doing nothing for each agent.
         """
         # weigh amenities
-        amenity_value = self.calculate_riverine_amenity(household_distance_to_river_m)
+        amenity_value = self.calculate_riverine_amenity(
+            household_distance_to_river_m, GDP_i_t=GDP_i_t
+        )
         amenity_value += self.calculate_coastal_amenity(
-            x_j=household_distance_to_coastline_m,
+            x_j=household_distance_to_coastline_m, GDP_i_t=GDP_i_t
         )
         # Ensure p floods is in increasing order
         indices = np.argsort(p_floods)
@@ -656,6 +659,7 @@ class DecisionModule:
         T: np.ndarray | float | int,
         r: float,
         sigma: float,
+        GDP_i_t: float,
         **kwargs: dict,
     ) -> np.ndarray:
         """This function calculates the time discounted subjective utility of not undertaking any action.
@@ -664,9 +668,11 @@ class DecisionModule:
             EU_do_nothing_array: array containing the time discounted subjective utility of doing nothing for each agent.
         """
         # weigh amenities
-        amenity_value = self.calculate_riverine_amenity(household_distance_to_river_m)
+        amenity_value = self.calculate_riverine_amenity(
+            household_distance_to_river_m, GDP_i_t=GDP_i_t
+        )
         amenity_value += self.calculate_coastal_amenity(
-            x_j=household_distance_to_coastline_m,
+            x_j=household_distance_to_coastline_m, GDP_i_t=GDP_i_t
         )
 
         # Ensure p floods is in increasing order
@@ -775,6 +781,7 @@ class DecisionModule:
         T: np.ndarray | int | float,
         r: float,
         sigma: float,
+        GDP_i_t: float,
         **kwargs: dict,
     ):
         """This function calculates the time discounted subjective utility of relocating for each agent.
@@ -791,11 +798,15 @@ class DecisionModule:
             r: time discounting factor for each agent
             sigma: risk aversion setting for each agent
         Returns:
-            EU_relocate: array containing the time discounted subjective utility of relocating for each agent.
+            tuple: A tuple containing the index of the best building for each agent and the time discounted subjective utility of relocating for each agent.
         """
         # First calculate the coastal and riverine amenity values for each sampled building
-        amenity_value = self.calculate_riverine_amenity(distance_to_river_m)
-        amenity_value += self.calculate_coastal_amenity(x_j=distance_to_coastline_m)
+        amenity_value = self.calculate_riverine_amenity(
+            distance_to_river_m, GDP_i_t=GDP_i_t
+        )
+        amenity_value += self.calculate_coastal_amenity(
+            x_j=distance_to_coastline_m, GDP_i_t=GDP_i_t
+        )
 
         # calculate migration costs based on distance to each building
         migration_costs = self.calculate_migration_costs(
