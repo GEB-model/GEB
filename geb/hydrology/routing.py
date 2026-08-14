@@ -2585,7 +2585,7 @@ class Routing(Module):
             model = ReturnPeriodModel(
                 series=discharge_by_river_daily[idx],
                 return_periods=[2],
-                min_exceed=30,
+                min_exceed=5,  # set for Mexico (be careful to remove this later)
                 nboot=2000,
                 fixed_shape=0.0,
                 fixed_scale=None,
