@@ -64,10 +64,10 @@ class IIASA_SSP(Adapter):
         historical_df = df[df["Scenario"] == "Historical Reference"]
         ssp_df = df[(df["Scenario"] == ssp) & (df["Model"] == "IIASA GDP 2023")]
 
-        combined_df = pd.DataFrame(index=range(1980, 2101))
+        combined_df = pd.DataFrame(index=range(2020, 2101))
         combined_df.index.name = "Year"
 
-        for year in range(1980, 2021):
+        for year in range(2020, 2021):
             col = str(year)
             if col in historical_df.columns:
                 combined_df.loc[year, "GDP"] = historical_df[col].iloc[0]
@@ -83,5 +83,7 @@ class IIASA_SSP(Adapter):
         combined_df["GDP_scaled"] = (
             combined_df["GDP"] / combined_df.loc[reference_year, "GDP"]
         )
+        # add column for GDP growth rate relative to reference year
+        combined_df["GDP_growth_rate"] = combined_df["GDP"].pct_change().fillna(0)
 
         return combined_df
