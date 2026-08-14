@@ -234,7 +234,7 @@ class ReturnPeriodModel:
         quantile_start: float = 0.80,
         quantile_end: float = 0.99,
         quantile_step: float = 0.01,
-        min_exceed: int = 20,
+        min_exceed: int = 5,  # set for Mexico for now.
         nboot: int = 2000,
         random_seed: int = 42,
         fixed_shape: float | None = None,
