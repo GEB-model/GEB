@@ -1202,7 +1202,9 @@ class FloodRiskModule:
         """Return damages for households that adapt."""
         return self._adjust_damages_for_flood_protection(self._damages_adapt)
 
-    def dike_heights(self) -> dict[int, dict[int, np.ndarray]]:
+    def _calculate_dike_heights(
+        self, dikes, floodmap_template
+    ) -> dict[int, dict[int, np.ndarray]]:
         """Calculate dike heights for each river and return period.
 
         This is done by sampling the flood maps along the river geometries and extracting the flood depths at those points.
@@ -1211,32 +1213,23 @@ class FloodRiskModule:
         Returns:
             dict[int, dict[int, np.ndarray]]: A nested dictionary where the first key is the return period, the second key is the river ID, and the value is an array of dike heights (flood depths) along the river.
         """
-        if hasattr(self, "_dike_heights"):
-            return self._dike_heights
 
         dike_heights = {}
-        # load river network
-        river_network = gpd.read_parquet(
-            Path(self.households.model.files["geom"]["routing/rivers"])
-        )
-        floodmap_template = self.households.flood_maps[
-            self.households.return_periods[0]
-        ]
-        for river in river_network.itertuples():
-            river_geom = river.geometry
+        for coastal_dike in dikes.itertuples():
+            coastal_geom = coastal_dike.geometry
             # check if geom is within bounds of floodmap_template
-            if not box(*floodmap_template.rio.bounds()).contains(river_geom):
+            if not box(*floodmap_template.rio.bounds()).contains(coastal_geom):
                 continue
             # initialize idx_river_points to False to avoid recalculating for each return period
             idx_river_points = False
             # sample every 100 m (TODO: build dike lines in model build with 100 m spacing. For now use interpolation to get points along the river geometry)
             distances = np.arange(
-                0, river_geom.length, 0.0008333
+                0, coastal_geom.length, 0.0008333
             )  # 100 m in degrees (approximate, for WGS84)
 
             # Extract x/y directly without creating intermediate Point objects
-            x = np.array([river_geom.interpolate(d).x for d in distances])
-            y = np.array([river_geom.interpolate(d).y for d in distances])
+            x = np.array([coastal_geom.interpolate(d).x for d in distances])
+            y = np.array([coastal_geom.interpolate(d).y for d in distances])
 
             for rp in self.households.return_periods:
                 flood_map: xr.DataArray = self.households.flood_maps[rp]
@@ -1250,6 +1243,57 @@ class FloodRiskModule:
                     )
                 depths = flood_map_array[(idx_river_points[1], idx_river_points[0])]
                 depths = np.nan_to_num(depths, nan=0.0)
-                dike_heights[rp][river[0]] = depths
-        self._dike_heights = dike_heights
+                dike_heights[rp][coastal_dike[0]] = depths
+
         return dike_heights
+
+    def dike_heights(self) -> dict[int, dict[int, np.ndarray]]:
+        """Calculate dike heights for each river and return period.
+
+        This is done by sampling the flood maps along the river geometries and extracting the flood depths at those points.
+        These dike heights are then stored in a dictionary for later use by the government agent to determine the required dike height for each river and return period.
+
+        Returns:
+            dict[int, dict[int, np.ndarray]]: A nested dictionary where the first key is the return period, the second key is the river ID, and the value is an array of dike heights (flood depths) along the river.
+        """
+        if hasattr(self, "_coastal_dike_heights") and hasattr(
+            self, "_riverine_dike_heights"
+        ):
+            return self._coastal_dike_heights, self._riverine_dike_heights
+        elif hasattr(self, "_coastal_dike_heights"):
+            return self._coastal_dike_heights, {}
+        elif hasattr(self, "_riverine_dike_heights"):
+            return {}, self._riverine_dike_heights
+        # load river network
+        river_network = gpd.read_parquet(
+            Path(self.households.model.files["geom"]["routing/rivers"])
+        )
+        # load the coastline
+        coastline = gpd.read_parquet(
+            Path(self.households.model.files["geom"]["coastal/coastlines"])
+        )
+        # load the subbasins
+        subbasins = gpd.read_parquet(
+            Path(self.households.model.files["geom"]["routing/subbasins"])
+        )
+
+        coastal_dikes = gpd.GeoDataFrame([])
+
+        for subbasin in subbasins.reset_index().itertuples():
+            # clip the coastline to the subbasin geometry
+            coastline_clipped = gpd.clip(coastline, subbasin.geometry.buffer(0.0008333))
+            # assign the clipped coastline to the subbasin
+            coastline_clipped["COMID"] = subbasin.COMID
+            coastal_dikes = pd.concat([coastal_dikes, coastline_clipped])
+        coastal_dikes = coastal_dikes.set_index("COMID", drop=True)
+        floodmap_template = self.households.flood_maps[
+            self.households.return_periods[0]
+        ]
+
+        self._coastal_dike_heights = self._calculate_dike_heights(
+            coastal_dikes, floodmap_template
+        )
+        self._riverine_dike_heights = self._calculate_dike_heights(
+            river_network, floodmap_template
+        )
+        return self._coastal_dike_heights, self._riverine_dike_heights
