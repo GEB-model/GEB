@@ -999,7 +999,7 @@ class Households(AgentBaseClass):
         return distances_m
 
     def sample_buildings_for_relocation(
-        self, n_buildings: int = 10, outside_floodplain: bool = True
+        self, n_buildings: int = 3, outside_floodplain: bool = True
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Sample relocation candidates for flood-exposed households.
 
@@ -1096,8 +1096,12 @@ class Households(AgentBaseClass):
         damages_do_not_adapt, damages_adapt = (
             self.flood_risk_module.calculate_building_flood_damages(dynamic=False)
         )
+        if hasattr(self, "factor_change"):
+            GDP_i_t = self.factor_change
+        else:
+            GDP_i_t = 1
         # calculate expected utilities
-        if self.config["dry_floodproofing"]:
+        if self.config["dry_floodproofing"] or self.model.current_time.year < 2021:
             EU_adapt = self.decision_module.calcEU_adapt_flood(
                 geom_id="NoID",
                 n_agents=self.n,
@@ -1115,6 +1119,7 @@ class Households(AgentBaseClass):
                 T=15,
                 r=0.03,
                 sigma=1,
+                GDP_i_t=GDP_i_t,
             )
         else:
             EU_adapt = np.full(self.n, -np.inf)
@@ -1133,6 +1138,7 @@ class Households(AgentBaseClass):
             T=15,
             r=0.03,
             sigma=1,
+            GDP_i_t=GDP_i_t,
         )
 
         # fist sample building IDs to be considere for relocation
@@ -1143,7 +1149,7 @@ class Households(AgentBaseClass):
                 sampled_distance_to_river,
                 sampled_distances,
             ) = self.sample_buildings_for_relocation(
-                n_buildings=10, outside_floodplain=True
+                n_buildings=3, outside_floodplain=True
             )
 
             building_idx, EU_relocate = self.decision_module.calcEU_relocate(
@@ -1154,14 +1160,16 @@ class Households(AgentBaseClass):
                 distance_to_coastline_m=sampled_distance_to_coastline,
                 distance_to_river_m=sampled_distance_to_river,
                 distance_to_building_m=sampled_distances,
-                max_migration_costs=5e5,
+                max_migration_costs=5e5
+                * GDP_i_t,  # max migration costs scaled to GDP change
                 T=15,
                 r=0.03,
                 sigma=1,
+                GDP_i_t=GDP_i_t,
             )
         else:
             sampled_building_ids = np.full(
-                (households_exposed_to_flooding.size, 10), -1, dtype=np.int32
+                (households_exposed_to_flooding.size, 3), -1, dtype=np.int32
             )
             EU_relocate = np.full(households_exposed_to_flooding.size, -np.inf)
             building_idx = 0
@@ -1515,17 +1523,14 @@ class Households(AgentBaseClass):
         )
 
     def update_monetary_variables_to_ssp(self) -> None:
-        """Update monetary variables to match the specified SSP scenario.
-
-        Args:
-            ssp: The SSP scenario to use for updating monetary variables.
-        """
+        """Update monetary variables to match the specified SSP scenario."""
         if not hasattr(self.var, "iiasa_ssp"):
             self.iiasa_ssp = read_table(self.model.files["table"]["ssp/iiasa_ssp"])
         growth_rate = self.iiasa_ssp.loc[self.model.current_time.year][
             "GDP_growth_rate"
         ]
         factor_change = self.iiasa_ssp.loc[self.model.current_time.year]["GDP_scaled"]
+        self.factor_change = factor_change
         self.var.wealth *= 1 + growth_rate
         self.var.income *= 1 + growth_rate
         self.var.property_value *= 1 + growth_rate
@@ -1748,7 +1753,7 @@ class Households(AgentBaseClass):
         # calculate the investment costs plus interest over the loan duration (20 years)
         loan_duration = 20
         interest_rate = 0.03
-        self._total_investment_costs = (
+        self._total_investment_costs += (
             investment_costs * (1 + interest_rate) ** loan_duration
         )
         return self._total_investment_costs
