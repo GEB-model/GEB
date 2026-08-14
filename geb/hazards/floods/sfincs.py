@@ -1376,7 +1376,7 @@ class SFINCSRootModel:
         discharge_by_river: pd.DataFrame,
         return_periods: list[int | float],
         prefix: str = "Q",
-        min_exceed: int = 30,
+        min_exceed: int = 5,  # set for Mexico (be careful to remove this later)
         nboot: int = 2000,
         fixed_shape: float | None = None,
         fixed_scale: float | None = None,
