@@ -1000,7 +1000,7 @@ class Households(AgentBaseClass):
         return distances_m
 
     def sample_buildings_for_relocation(
-        self, n_buildings: int = 3, outside_floodplain: bool = True
+        self, n_buildings: int = 10, outside_floodplain: bool = True
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Sample relocation candidates for flood-exposed households.
 
@@ -1102,13 +1102,14 @@ class Households(AgentBaseClass):
         else:
             GDP_i_t = 1
         # calculate expected utilities
+
         if self.config["dry_floodproofing"] or self.model.current_time.year < 2021:
             EU_adapt = self.decision_module.calcEU_adapt_flood(
                 geom_id="NoID",
                 n_agents=self.n,
                 wealth=self.var.wealth.data,
                 income=self.var.income.data,
-                expendature_cap=1,
+                expendature_cap=0.06,
                 household_distance_to_coastline_m=self.household_distance_to_coastline_m,
                 household_distance_to_river_m=self.household_distance_to_river_m,
                 risk_perception=self.var.risk_perception.data,
@@ -1143,14 +1144,14 @@ class Households(AgentBaseClass):
         )
 
         # fist sample building IDs to be considere for relocation
-        if self.config["relocate"]:
+        if self.config["relocate"] or self.model.current_time.year < 2021:
             (
                 sampled_building_ids,
                 sampled_distance_to_coastline,
                 sampled_distance_to_river,
                 sampled_distances,
             ) = self.sample_buildings_for_relocation(
-                n_buildings=3, outside_floodplain=True
+                n_buildings=10, outside_floodplain=True
             )
 
             building_idx, EU_relocate = self.decision_module.calcEU_relocate(
@@ -1214,7 +1215,7 @@ class Households(AgentBaseClass):
         self.update_building_adaptation_status(household_adapting)
 
         # print percentage of households that adapted
-        print(f"N households that adapted: {len(household_adapting)}")
+        # print(f"N households that adapted: {len(household_adapting)}")
 
         self.var.ead_usd_per_year[:] = self.flood_risk_module.calculate_ead(
             damages_do_not_adapt, damages_adapt, self.var.adapted.data
@@ -1537,8 +1538,6 @@ class Households(AgentBaseClass):
         self.var.property_value *= 1 + growth_rate
         self.var.adaptation_costs *= 1 + growth_rate
         if hasattr(self, "flood_risk_module"):
-            self.flood_risk_module._damages_do_not_adapt *= 1 + growth_rate
-            self.flood_risk_module._damages_adapt *= 1 + growth_rate
             for (
                 return_period
             ) in self.flood_risk_module._building_damages_all_return_periods:
@@ -1588,7 +1587,7 @@ class Households(AgentBaseClass):
                 ) or is_flood_triggered:
                     if "flooded" not in self.buildings.columns:
                         self.update_building_attributes()
-                    print(f"Thinking about adapting at {current_time}...")
+                    # print(f"Thinking about adapting at {current_time}...")
                     self.decide_household_strategy()
 
                 end_time: datetime = datetime.combine(
@@ -1628,13 +1627,12 @@ class Households(AgentBaseClass):
                     and self.model.current_time.month == 1
                     and self.model.current_time.day == 1
                 ):
+                    if self.model.current_time.year >= 2021:
+                        self.update_monetary_variables_to_ssp()
                     if "flooded" not in self.buildings.columns:
                         self.update_building_attributes()
-                    print("Thinking about adapting...")
+                    # print("Thinking about adapting...")
                     self.decide_household_strategy()
-                    if self.model.current_time.year >= 2020:
-                        self.update_monetary_variables_to_ssp()
-
         self.report(locals())
 
     @property
@@ -1739,6 +1737,9 @@ class Households(AgentBaseClass):
         Returns:
             Number of households exposed to flooding.
         """
+        print(
+            f"Number of households exposed to flooding: {self.households_exposed_to_flooding.size}"
+        )
         return np.int32(self.households_exposed_to_flooding.size)
 
     @property
