@@ -829,10 +829,12 @@ class DecisionModule:
         t_arr = np.arange(1, int(np.max(T)), dtype=np.float32)
         discounts = 1 / (1 + r) ** t_arr
         discount_factor = 1 + np.sum(discounts, dtype=np.float32)
-        NPV_relocate_discounted = discount_factor * (wealth + income + max_amenity_value)
+        NPV_relocate_discounted = discount_factor * (
+            wealth + income + max_amenity_value
+        )
 
         # Ensure NPVs are at least a small positive number to prevent NaNs.
-        NPV_relocate_discounted = np.maximum(NPV_relocate_discounted, 1e-6)
+        NPV_relocate_discounted = np.maximum(NPV_relocate_discounted, 1)
 
         # Calculate expected utility.
         if sigma == 1:
