@@ -39,10 +39,10 @@ class FloodRiskModule:
         if (
             self.model.config["hazards"]["floods"]["flood_risk"]
             or self.model.config["agent_settings"]["households"]["adapt"]
-        ) and self.model.current_timestep > 0:
+        ):
             self.load_return_period_flood_maps()
-        self.load_flood_protection_standard()
-        self.flood_in_last_year = False
+            self.load_flood_protection_standard()
+            self.flood_in_last_year = False
 
     def load_flood_protection_standard(self) -> None:
         """Load flood protection standards for each subbasin.
@@ -1148,6 +1148,8 @@ class FloodRiskModule:
             Array of indices of flooded households.
         """
         # draw a single random number
+        if self.model.current_timestep == 0:
+            return np.array([], dtype=int)
         u = np.random.random()
         return_period = 1 / u
         affected_subbasins = [
