@@ -39,7 +39,7 @@ class FloodRiskModule:
         if (
             self.model.config["hazards"]["floods"]["flood_risk"]
             or self.model.config["agent_settings"]["households"]["adapt"]
-        ):
+        ) and self.model.current_timestep > 0:
             self.load_return_period_flood_maps()
         self.load_flood_protection_standard()
         self.flood_in_last_year = False
@@ -1213,7 +1213,6 @@ class FloodRiskModule:
         Returns:
             dict[int, dict[int, np.ndarray]]: A nested dictionary where the first key is the return period, the second key is the river ID, and the value is an array of dike heights (flood depths) along the river.
         """
-
         dike_heights = {}
         for coastal_dike in dikes.itertuples():
             coastal_geom = coastal_dike.geometry
