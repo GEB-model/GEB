@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 from collections.abc import Sequence
+import os
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+from uuid import uuid4
 
 import aiohttp
 import geopandas as gpd
@@ -126,31 +129,73 @@ class AlphaEarth(Adapter):
         overwrite: bool,
         semaphore: asyncio.Semaphore,
     ) -> Path:
-        """Download one remote file atomically."""
+        """Download one remote file atomically and safely across processes.
+
+        A per-destination advisory lock prevents separate Slurm jobs from
+        downloading the same COG simultaneously. The final download is first
+        written to a globally unique temporary path and is then atomically
+        published with :meth:`Path.replace`.
+        """
         destination.parent.mkdir(parents=True, exist_ok=True)
 
+        # Fast path for the usual cache-hit case.
         if destination.exists() and destination.stat().st_size > 0 and not overwrite:
-            if self.verbose_file_logging:
-                print(f"Using cached AlphaEarth file: {destination}")
+            print(f"Using cached AlphaEarth file: {destination}")
             return destination
 
-        temporary_path = destination.with_suffix(destination.suffix + ".part")
-        temporary_path.unlink(missing_ok=True)
+        # Multiple model-year Slurm jobs can request the same COG. Serialize the
+        # download for each destination without blocking this asyncio event loop.
+        # The lock file may remain after completion; that is harmless, and the
+        # year-level cache cleanup can remove it together with the downloaded COGs.
+        lock_path = destination.with_suffix(destination.suffix + ".lock")
+        lock_handle = lock_path.open("a+", encoding="utf-8")
+        while True:
+            try:
+                fcntl.flock(
+                    lock_handle.fileno(),
+                    fcntl.LOCK_EX | fcntl.LOCK_NB,
+                )
+                break
+            except BlockingIOError:
+                await asyncio.sleep(0.5)
 
-        async with semaphore:
-            if self.verbose_file_logging:
+        temporary_path: Path | None = None
+        try:
+            # Another Slurm job may have completed this COG while we were waiting
+            # for its lock. Recheck before starting a redundant download.
+            if (
+                destination.exists()
+                and destination.stat().st_size > 0
+                and not overwrite
+            ):
+                print(f"Using cached AlphaEarth file: {destination}")
+                return destination
+
+            # PID alone is not unique across cluster nodes, so include a UUID as
+            # well. This also keeps interrupted temporary files isolated.
+            temporary_path = destination.with_name(
+                f".{destination.name}.{os.getpid()}.{uuid4().hex}.part"
+            )
+
+            async with semaphore:
                 print(f"Downloading {remote_url}")
-            async with client.get(remote_url, raise_for_status=True) as response:
-                with temporary_path.open("wb") as file:
-                    async for chunk in response.content.iter_chunked(
-                        DOWNLOAD_CHUNK_SIZE_BYTES
-                    ):
-                        file.write(chunk)
+                async with client.get(remote_url, raise_for_status=True) as response:
+                    with temporary_path.open("wb") as file:
+                        async for chunk in response.content.iter_chunked(
+                            DOWNLOAD_CHUNK_SIZE_BYTES
+                        ):
+                            file.write(chunk)
 
-        temporary_path.replace(destination)
-        if self.verbose_file_logging:
+            # Atomically publish only a fully completed download.
+            temporary_path.replace(destination)
             print(f"Saved AlphaEarth file: {destination}")
-        return destination
+            return destination
+
+        finally:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+            lock_handle.close()
 
     async def _ensure_index(self, refresh: bool = False) -> Path:
         """Download the official AlphaEarth index when it is not cached."""
