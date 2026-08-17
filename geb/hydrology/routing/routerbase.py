@@ -149,14 +149,14 @@ class Router:
 
     def get_total_storage(
         self,
-        Q: ArrayFloat32,
+        discharge: ArrayFloat32,
         river_storage_alpha: ArrayFloat32,
         river_storage_beta: ArrayFloat32,
     ) -> ArrayFloat64:
         """Get the total storage of the river network.
 
         Args:
-            Q: The discharge in each cell, in m3/s.
+            discharge: The discharge in each cell, in m3/s.
             river_storage_alpha: The alpha parameter for the kinematic wave equation.
             river_storage_beta: The beta parameter for the kinematic wave equation.
 
@@ -167,7 +167,7 @@ class Router:
 
     def get_available_storage(
         self,
-        Q: ArrayFloat32,
+        discharge: ArrayFloat32,
         river_storage_alpha: ArrayFloat32,
         river_storage_beta: ArrayFloat32,
         maximum_abstraction_ratio: float = 0.9,
@@ -175,7 +175,7 @@ class Router:
         """Get the available storage of the river network.
 
         Args:
-            Q: The discharge in each cell, in m3/s.
+            discharge: The discharge in each cell, in m3/s.
             river_storage_alpha: The alpha parameter for the kinematic wave equation.
             river_storage_beta: The beta parameter for the kinematic wave equation.
             maximum_abstraction_ratio: The maximum abstraction ratio.

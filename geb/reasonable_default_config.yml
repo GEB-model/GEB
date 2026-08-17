@@ -68,7 +68,6 @@ hazards:
 
 hydrology:
   routing:
-    algorithm: kinematic_wave  # accuflux or kinematic_wave or local_inertial
     retention_basins:
       release_threshold_factor: 0.2
       activation_threshold_return_period_years: 2

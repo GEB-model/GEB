@@ -1,4 +1,5 @@
 # dev
+- Removed legacy `accuflux` and `kinematic_wave` routing modules in favor of `local_inertial` routing.
 - Unify the retention basin diversion and release logic across all three routing algorithms into a single shared, Numba JIT-compiled helper `compute_retention_routing` in `routerbase.py`.
 - Implement the local inertial routing algorithm in `local_inertial.py` as an unconditionally stable alternative routing algorithm using adaptive sub-stepping and power-law storage inversion.
 - Implemented the `early_warning.py` module outside of `households.py`, launching the latest GEB-IbF system, including options for: area and building based warnings; warning communication weighted by socio-economic factor; time-dependent damage reduction.

@@ -29,9 +29,10 @@ from geb.workflows import balance_check
 from geb.workflows.extreme_value_analysis import ReturnPeriodModel
 from geb.workflows.io import read_geom, read_table
 
-from .accuflux import Accuflux as Accuflux
-from .kinematic_wave import KinematicWave as KinematicWave
-from .local_inertial import LocalInertial
+from .local_inertial import (
+    LocalInertial as LocalInertial,
+    update_node_kinematic as update_node_kinematic,
+)
 
 if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology

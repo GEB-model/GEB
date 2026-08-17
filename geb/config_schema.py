@@ -215,11 +215,6 @@ class RiverDepthConfig(BaseModel):
 
 class RoutingConfig(BaseModel):
     """Configuration for routing."""
-
-    algorithm: Literal["accuflux", "kinematic_wave", "local_inertial"] = Field(
-        "kinematic_wave",
-        description="Routing algorithm: 'accuflux', 'kinematic_wave', or 'local_inertial'.",
-    )
     retention_basin_release_threshold_factor: float = Field(
         0.9,
         description="Factor to multiply the activation threshold by to get the release threshold.",
