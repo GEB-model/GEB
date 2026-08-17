@@ -500,7 +500,24 @@ class Hydrography(BuildModelBase):
             latlon=True,
             transform=subgrid_elevation.rio.transform(recalc=True),
         )
+        slope_high_res_grid = xr.DataArray(
+            slope_high_res,
+            coords=subgrid_elevation.coords,
+            dims=subgrid_elevation.dims,
+            name="landsurface/slope",
+        )
 
+        if subgrid_elevation.rio.crs is not None:
+            slope_high_res_grid = slope_high_res_grid.rio.write_crs(
+                subgrid_elevation.rio.crs
+            )
+
+        slope_high_res_grid.attrs["_FillValue"] = np.nan
+
+        self.set_subgrid(
+            slope_high_res_grid,
+            name="landsurface/slope",
+        )
         surface_area_ratio_high_res = xr.DataArray(
             np.sqrt(1 + slope_high_res**2),
             coords=subgrid_elevation.coords,

@@ -528,7 +528,8 @@ class Agents(BuildModelBase):
         """Sets up the economic data for GEB.
 
         Notes:
-            This method sets up interest rates, inflation rates, price ratios, and local-currency conversion data for GEB.
+            This method sets up interest rates, inflation rates, price ratios, local-currency conversion data,
+            and wholesale price indices for GEB.
             It retrieves the data from the configured data catalog and creates dictionaries for each model region,
             with years as the time dimension.
 
@@ -545,6 +546,9 @@ class Agents(BuildModelBase):
         interest_rates_country_index = interest_rates.set_index("Country Code")
         price_ratio = self.data_catalog.fetch("world_bank_price_ratio").read()
         LCU_per_USD = self.data_catalog.fetch("world_bank_LCU_per_USD").read()
+        wholesale_price_index = self.data_catalog.fetch(
+            "world_bank_wholesale_price_index"
+        ).read()
 
         def select_years_from_df(
             df: pd.DataFrame, additional_cols: list[str]
@@ -599,6 +603,15 @@ class Agents(BuildModelBase):
 
         years_lcu: list[str] = extract_years(lcu_filtered)
         lcu_dict: dict[str, Any] = {"time": years_lcu, "data": {}}  # LCU per USD
+
+        wholesale_price_index_filtered = select_years_from_df(
+            wholesale_price_index, ["Country Name", "Country Code"]
+        )
+        years_wholesale_price_index = extract_years(wholesale_price_index_filtered)
+        wholesale_price_index_dict: dict[str, Any] = {
+            "time": years_wholesale_price_index,
+            "data": {},
+        }
 
         years_inflation_rates = extract_years(inflation_rates)
         years_interest_rates = extract_years(interest_rates)
@@ -921,11 +934,48 @@ class Agents(BuildModelBase):
                     f"Missing LCU (currency conversion) data for {ISO3}, using donor country {donor_country}"
                 )
 
+            wholesale_price_index_dict["data"][region_id] = retrieve_rates(
+                wholesale_price_index_filtered,
+                years_wholesale_price_index,
+                region["ISO3"],
+            )
+
+            if np.all(np.isnan(wholesale_price_index_dict["data"][region_id])):
+                wholesale_price_index_filter_index = (
+                    wholesale_price_index_filtered.set_index("Country Code")
+                )
+                countries_with_wholesale_price_index_data = (
+                    wholesale_price_index_filter_index[years_wholesale_price_index]
+                    .dropna(axis=0, how="all")
+                    .index.unique()
+                    .tolist()
+                )
+                donor_countries = setup_donor_countries(
+                    self.data_catalog,
+                    self.geom["global_countries"],
+                    countries_with_wholesale_price_index_data,
+                    alternative_countries=self.geom["regions"]["ISO3"]
+                    .unique()
+                    .tolist(),
+                )
+                donor_country = donor_countries[ISO3]
+                wholesale_price_index_dict["data"][region_id] = retrieve_rates(
+                    wholesale_price_index_filtered,
+                    years_wholesale_price_index,
+                    donor_country,
+                )
+
+                self.logger.info(
+                    f"Missing wholesale price index data for {ISO3}, "
+                    f"using donor country {donor_country}"
+                )
+
         for d in (
             inflation_rates_dict,
             interest_rates_dict,
             price_ratio_dict,
             lcu_dict,
+            wholesale_price_index_dict,
         ):
             # convert to pandas dataframe
             df = pd.DataFrame(d["data"], index=d["time"])
@@ -954,6 +1004,126 @@ class Agents(BuildModelBase):
         self.set_params(interest_rates_dict, name="socioeconomics/interest_rates")
         self.set_params(price_ratio_dict, name="socioeconomics/price_ratio")
         self.set_params(lcu_dict, name="socioeconomics/LCU_per_USD")
+        self.set_params(
+            wholesale_price_index_dict,
+            name="socioeconomics/wholesale_price_index",
+        )
+
+    @build_method(
+        depends_on=["setup_regions_and_land_use", "set_time_range"],
+        required=True,
+    )
+    def setup_commodity_data(self) -> None:
+        """Set up World Bank Pink Sheet commodity price indices for GEB.
+
+        Notes:
+            This method retrieves annual nominal commodity price indices from
+            the World Bank Commodity Price Data (Pink Sheet).
+
+            Pink Sheet indices are global rather than country-specific. To remain
+            consistent with the other socioeconomic datasets in GEB, the same
+            global time series is stored separately for each model region.
+
+            Missing annual values are linearly interpolated. Years before the
+            first available observation use the first available value, while years
+            after the last available observation use the last available value.
+
+            The resulting datasets are stored under
+            `socioeconomics/commodity_price_indices/<index_name>`.
+        """
+        commodity_indices = self.data_catalog.fetch("world_bank_commodity_prices").read(
+            sheet_name="Annual Indices (Nominal)",
+            header=None,
+            na_values=["…", "..", "..."],
+        )
+
+        # Find the first row containing an actual year.
+        year_values = pd.to_numeric(
+            commodity_indices.iloc[:, 0],
+            errors="coerce",
+        )
+        data_start = year_values[year_values.between(1900, 3000)].index[0]
+
+        # The Pink Sheet index columns have a hierarchical Excel header.
+        # Select the required columns by their stable position in the sheet.
+        index_columns = {
+            1: "commodity_price_index",
+            2: "energy",
+            4: "agriculture",
+            6: "food",
+            7: "oils_and_meals",
+            8: "grains",
+            9: "other_food",
+            13: "fertilizers",
+        }
+
+        commodity_indices = commodity_indices.iloc[
+            data_start:,
+            [0, *index_columns],
+        ].copy()
+
+        commodity_indices.columns = [
+            "year",
+            *index_columns.values(),
+        ]
+
+        # Convert years and index values to numeric.
+        commodity_indices["year"] = pd.to_numeric(
+            commodity_indices["year"],
+            errors="raise",
+        ).astype(int)
+
+        for column in index_columns.values():
+            commodity_indices[column] = pd.to_numeric(
+                commodity_indices[column],
+                errors="coerce",
+            )
+
+        commodity_indices = commodity_indices.set_index("year")
+
+        # Ensure that the complete model period and the preceding 10 years
+        # used for spin-up are available.
+        commodity_indices = commodity_indices.reindex(
+            range(
+                min(
+                    self.start_date.year - 10,
+                    commodity_indices.index.min(),
+                ),
+                max(
+                    self.end_date.year,
+                    commodity_indices.index.max(),
+                )
+                + 1,
+            )
+        )
+
+        # Interpolate internal gaps and use the nearest available value
+        # outside the observed period.
+        for column in commodity_indices.columns:
+            commodity_indices[column] = (
+                commodity_indices[column].interpolate(method="linear").bfill()
+            )
+
+        years = commodity_indices.index.astype(str).tolist()
+
+        # Pink Sheet indices are global. Store the same series for every
+        # model region to retain the standard GEB region-based structure.
+        region_ids = [
+            str(region["region_id"]) for _, region in self.geom["regions"].iterrows()
+        ]
+
+        for index_name in commodity_indices.columns:
+            values = commodity_indices[index_name].tolist()
+
+            commodity_index_dict: dict[str, Any] = {
+                "time": years,
+                "data": {region_id: values.copy() for region_id in region_ids},
+            }
+
+            self.set_params(
+                commodity_index_dict,
+                name=(f"socioeconomics/commodity_price_indices/{index_name}"),
+            )
 
     @build_method(required=False)
     def setup_irrigation_sources(self, *args: Any, **kwargs: Any) -> None:

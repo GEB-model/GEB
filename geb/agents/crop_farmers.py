@@ -237,6 +237,7 @@ class CropFarmersVariables(Bucket):
     why_class: DynamicArray
     locations: DynamicArray
     elevation: DynamicArray
+    slope: DynamicArray
     irrigation_efficiency: DynamicArray
     GEV_parameters: DynamicArray
     yearly_SPEI: DynamicArray
@@ -629,7 +630,9 @@ class CropFarmers(AgentBaseClass):
             max_n=self.var.max_n,
         )
 
-        self.var.elevation = self.get_farmer_elevation()
+        self.var.elevation = self.get_farmer_landsurface("elevation")
+
+        self.var.slope = self.get_farmer_landsurface("slope")
 
         self.var.crop_calendar = DynamicArray(
             n=self.var.n,
@@ -5815,23 +5818,31 @@ class CropFarmers(AgentBaseClass):
         """Set the number of farmer agents."""
         self.var.n = value
 
-    def get_farmer_elevation(self) -> DynamicArray:
-        """Compute mean elevation per farmer.
+    def get_farmer_landsurface(
+        self,
+        landsurface_type: Literal["elevation", "slope"],
+    ) -> DynamicArray:
+        """Compute mean landsurface characteristic per farmer.
+
+        Args:
+            landsurface_type: Landsurface variable to aggregate. Either
+                ``"elevation"`` or ``"slope"``.
 
         Returns:
-            DynamicArray: Mean elevation per farmer (meters), sized to ``max_n``.
+            DynamicArray: Mean landsurface value per farmer, sized to ``max_n``.
         """
-        # get elevation per farmer
-        elevation_subgrid = read_grid(
-            self.model.files["subgrid"]["landsurface/elevation"], ndim=2
+        landsurface_subgrid = read_grid(
+            self.model.files["subgrid"][f"landsurface/{landsurface_type}"],
+            ndim=2,
         )
-        elevation_subgrid = np.nan_to_num(elevation_subgrid, copy=False, nan=0.0)
+
         decompressed_land_owners = self.HRU.decompress(self.HRU.var.land_owners)
-        mask = decompressed_land_owners != -1
+        mask = (decompressed_land_owners != -1) & np.isfinite(landsurface_subgrid)
+
         return DynamicArray(
             np.bincount(
                 decompressed_land_owners[mask],
-                weights=elevation_subgrid[mask],
+                weights=landsurface_subgrid[mask],
             )
             / np.bincount(decompressed_land_owners[mask]),
             max_n=self.var.max_n,

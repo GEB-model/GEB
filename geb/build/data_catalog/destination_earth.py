@@ -22,6 +22,7 @@ from .base import Adapter
 N_CONNECTION_ATTEMPTS = 3
 RETRY_DELAY_SECONDS = 5
 
+
 async def get_retry_client(**kwargs):
     retry_options = ExponentialRetry(
         attempts=100,
@@ -31,6 +32,7 @@ async def get_retry_client(**kwargs):
         retry_all_server_errors=True,
     )
     return RetryClient(retry_options=retry_options, **kwargs)
+
 
 async def get_retry_client(**kwargs: Any) -> RetryClient:
     """Create a RetryClient with exponential backoff for handling transient errors.

@@ -14,7 +14,7 @@ required-markers = [
 ]
 
 [options]
-exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
+exclude-newer = "2026-08-04T12:25:20.124151134Z"
 exclude-newer-span = "P3D"
 
 [[package]]
@@ -1503,7 +1503,6 @@ source = { editable = "." }
 dependencies = [
     { name = "aiohttp-retry" },
     { name = "cartopy" },
-    { name = "catboost" },
     { name = "cdsapi" },
     { name = "cfgrib" },
     { name = "click" },
@@ -1526,7 +1525,6 @@ dependencies = [
     { name = "imageio" },
     { name = "imageio-ffmpeg" },
     { name = "joblib" },
-    { name = "lightgbm" },
     { name = "matplotlib" },
     { name = "mcp" },
     { name = "memray", marker = "sys_platform != 'win32'" },
@@ -1559,7 +1557,6 @@ dependencies = [
     { name = "snakemake" },
     { name = "snakemake-executor-plugin-slurm" },
     { name = "statsmodels" },
-    { name = "torch" },
     { name = "tqdm" },
     { name = "ty" },
     { name = "xarray" },
@@ -1573,6 +1570,12 @@ dependencies = [
 display = [
     { name = "jupyter" },
     { name = "seaborn" },
+]
+europe = [
+    { name = "catboost" },
+    { name = "lightgbm" },
+    { name = "pgmpy" },
+    { name = "torch" },
 ]
 fairstream = [
     { name = "daft-pgm" },
@@ -1606,7 +1609,7 @@ dev = [
 requires-dist = [
     { name = "aiohttp-retry", specifier = ">=2.9.1" },
     { name = "cartopy", specifier = "==0.24.1" },
-    { name = "catboost", specifier = ">=1.2.10" },
+    { name = "catboost", marker = "extra == 'europe'", specifier = ">=1.2.10" },
     { name = "cdsapi", specifier = ">=0.7.7" },
     { name = "cfgrib", specifier = ">=0.9.14" },
     { name = "click", specifier = ">=8.1.8" },
@@ -1632,7 +1635,7 @@ requires-dist = [
     { name = "imageio-ffmpeg", specifier = ">=0.6.0" },
     { name = "joblib", specifier = ">=1.5.2" },
     { name = "jupyter", marker = "extra == 'display'", specifier = ">=1.1.1" },
-    { name = "lightgbm", specifier = ">=4.7.0" },
+    { name = "lightgbm", marker = "extra == 'europe'", specifier = ">=4.7.0" },
     { name = "matplotlib", specifier = ">=3.10.7" },
     { name = "mcp" },
     { name = "memray", marker = "sys_platform != 'win32'", specifier = ">=1.19.1" },
@@ -1644,6 +1647,7 @@ requires-dist = [
     { name = "opt-einsum", marker = "extra == 'fairstream'", specifier = ">=3.3.0" },
     { name = "osmnx", specifier = ">=2.0.6" },
     { name = "pandas", specifier = ">=3.0.0" },
+    { name = "pgmpy", marker = "extra == 'europe'", specifier = "==0.1.26" },
     { name = "pgmpy", marker = "extra == 'fairstream'", specifier = "==0.1.26" },
     { name = "pyarrow", specifier = ">=17.0.0" },
     { name = "pybind11", marker = "extra == 'plantfate'", specifier = ">=2.13.6" },
@@ -1669,7 +1673,7 @@ requires-dist = [
     { name = "snakemake", specifier = ">=9.0" },
     { name = "snakemake-executor-plugin-slurm", specifier = ">=2.0" },
     { name = "statsmodels", specifier = ">=0.14.5" },
-    { name = "torch", specifier = ">=2.10.0" },
+    { name = "torch", marker = "extra == 'europe'", specifier = ">=2.10.0" },
     { name = "tqdm", specifier = ">=4.66.1" },
     { name = "ty", specifier = ">=0.0.17" },
     { name = "xarray", specifier = ">=2026.2.0" },
@@ -1678,7 +1682,7 @@ requires-dist = [
     { name = "xmipy", specifier = ">=1.5.0" },
     { name = "zarr", extras = ["cast-value-rs"], specifier = ">=3.2.1" },
 ]
-provides-extras = ["fairstream", "display", "plantfate"]
+provides-extras = ["fairstream", "europe", "display", "plantfate"]
 
 [package.metadata.requires-dev]
 dashboard = [{ name = "flask", specifier = ">=3.1.3" }]

@@ -59,6 +59,7 @@ from .undp import HumanDevelopmentIndex
 from .wekeo_copernicus import WEkEOCopernicus
 from .why_map import WhyMap
 from .world_bank import WorldBankData
+from .world_bank_pink_sheet import WorldBankPinkSheetData
 from .worldcereal_reference_data import WorldCerealReferenceData
 from .worldfloods import WorldFloodsV2
 
@@ -807,6 +808,25 @@ data_catalog: dict[str, dict[str, Any]] = {
             "url": "https://gps.econ.uni-bonn.de/downloads#dataset",
         },
     },
+    "world_bank_commodity_prices": {
+        "adapter": WorldBankPinkSheetData(
+            folder="world_bank_commodity_prices",
+            local_version=1,
+            filename="world_bank_commodity_prices.xlsx",
+            cache="global",
+        ),
+        "url": (
+            "https://thedocs.worldbank.org/en/doc/"
+            "74e8be41ceb20fa0da750cda2f6b9e4e-0050012026/"
+            "related/CMO-Historical-Data-Annual.xlsx"
+        ),
+        "source": {
+            "name": "World Bank Commodity Price Data (Pink Sheet)",
+            "author": "The World Bank",
+            "license": "CC BY 4.0",
+            "url": "https://www.worldbank.org/en/research/commodity-markets",
+        },
+    },
     "wb_inflation_rate": {
         "adapter": WorldBankData(
             folder="world_bank_inflation_rate",
@@ -817,6 +837,20 @@ data_catalog: dict[str, dict[str, Any]] = {
         "url": "https://api.worldbank.org/v2/en/indicator/FP.CPI.TOTL.ZG?downloadformat=csv",
         "source": {
             "name": "World Bank Inflation Data",
+            "author": "The World Bank",
+            "license": "CC BY 4.0",
+        },
+    },
+    "world_bank_wholesale_price_index": {
+        "adapter": WorldBankData(
+            folder="world_bank_wholesale_price_index",
+            local_version=1,
+            filename="wb_wholesale_price_index.csv",
+            cache="global",
+        ),
+        "url": "https://api.worldbank.org/v2/en/indicator/FP.WPI.TOTL?downloadformat=csv",
+        "source": {
+            "name": "World Bank Wholesale Price Index Data",
             "author": "The World Bank",
             "license": "CC BY 4.0",
         },
