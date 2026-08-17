@@ -385,6 +385,7 @@ class Households(AgentBaseClass):
 
         # update building attributes based on household data
         if self.config["adapt"]:
+            self.load_objects()
             self.update_building_attributes()
 
         # load age household head
@@ -1180,9 +1181,9 @@ class Households(AgentBaseClass):
 
         # fill the array with the calculated relocation utility for households exposed to flooding
         EU_relocate_full[households_exposed_to_flooding] = EU_relocate
-        building_ids_full[households_exposed_to_flooding] = np.take(
-            sampled_building_ids, building_idx, axis=1
-        )
+        building_ids_full[households_exposed_to_flooding] = sampled_building_ids[
+            np.arange(len(building_idx)), building_idx
+        ]
 
         # execute strategy
         households_relocating = np.where(
