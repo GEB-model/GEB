@@ -758,10 +758,10 @@ class DecisionModule:
             max_migration_cost: maximum migration cost for each agent
             cost_shape: shape parameter for the logistic function (default: 0.05)
             phi_i: Deviation of average national housing prices from the European average
+
         Returns:
             migration_costs: array containing the migration costs for each agent based on their distance to each sampled building
         """
-
         distance_to_building_m = np.minimum(distance_to_building_m, 5e6)
         migration_costs = max_migration_cost / (
             1 + np.exp(-cost_shape * distance_to_building_m * 1e-3)
@@ -783,7 +783,7 @@ class DecisionModule:
         sigma: float,
         GDP_i_t: float,
         **kwargs: dict,
-    ):
+    ) -> tuple[np.ndarray, np.ndarray]:
         """This function calculates the time discounted subjective utility of relocating for each agent.
 
         Args:
@@ -797,6 +797,7 @@ class DecisionModule:
             T: array containing the decision horizon of each agent
             r: time discounting factor for each agent
             sigma: risk aversion setting for each agent
+
         Returns:
             tuple: A tuple containing the index of the best building for each agent and the time discounted subjective utility of relocating for each agent.
         """
@@ -814,28 +815,26 @@ class DecisionModule:
             max_migration_cost=max_migration_costs,
         )
 
-        # time discounting
-        t_arr = np.arange(1, np.max(T), dtype=np.float32)
+        # Relocation utility should be based on the best sampled option for each
+        # agent, while keeping the same economic grounding as the no-action utility.
+        # The model uses float32 throughout, so the safest comparison is to work
+        # on the net amenity value and then scale the total NPV consistently.
+        net_amenity_value = amenity_value - migration_costs
+        building_idx = np.argmax(net_amenity_value, axis=1)
+        max_amenity_value = np.max(net_amenity_value, axis=1)
+
+        # Discount and add the time-0 value using the same pattern as the flood NPV
+        # calculation. This preserves the intended economics without creating a
+        # separate, numerically inconsistent quantity for each agent.
+        t_arr = np.arange(1, int(np.max(T)), dtype=np.float32)
         discounts = 1 / (1 + r) ** t_arr
-        amenity_value_discounted = np.sum(discounts) * amenity_value
-        amenity_value_discounted -= migration_costs  # subtract migration costs
-        # Get the maximum amenity value for each agent (assuming they can relocate to the best location)
-        building_idx = np.argmax(amenity_value_discounted, axis=1)[0]
-        max_amenity_value = np.max(amenity_value_discounted, axis=1)
+        discount_factor = 1 + np.sum(discounts, dtype=np.float32)
+        NPV_relocate_discounted = discount_factor * (wealth + income + max_amenity_value)
 
-        # now discount income and wealth
-        wealth_discounted = np.sum(discounts) * wealth
-        income_discounted = np.sum(discounts) * income
-
-        # Calculate NPV of relocating (migration costs are already subtracted from amenity value)
-        NPV_relocate_discounted = (
-            wealth_discounted + income_discounted + max_amenity_value
-        )
-
-        # Ensure NPVs are at least a small positive number to prevent NaNs
+        # Ensure NPVs are at least a small positive number to prevent NaNs.
         NPV_relocate_discounted = np.maximum(NPV_relocate_discounted, 1e-6)
 
-        # Calculate expected utility
+        # Calculate expected utility.
         if sigma == 1:
             EU_relocate = np.log(NPV_relocate_discounted)
         else:

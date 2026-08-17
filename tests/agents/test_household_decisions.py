@@ -41,7 +41,7 @@ def decision_template() -> dict[str, Any]:
         A dictionary containing the parameters for the decision module.
     """
     geom_id = "<GeoID>"
-    n_agents = 100
+    n_agents = 1
     return_periods = np.array([10, 50])
     income = np.random.randint(10_000, 20_000, n_agents)
     wealth = 1.5 * income
@@ -62,6 +62,12 @@ def decision_template() -> dict[str, Any]:
     distance_to_coastline = np.maximum([10e3], [np.random.randint(5, 50e3, n_agents)])[
         0
     ]
+    GDP_i_t = 1
+    max_migration_cost = 5e5
+    sampled_building_ids = np.random.choice(np.arange(6), (n_agents, 3))
+    distance_to_building_m = np.full_like(sampled_building_ids, 5e3)
+    distance_to_river_buildings = np.random.randint(0, 10e3, (n_agents, 3))
+    distance_to_coastline_buildings = np.random.randint(0, 10e3, (n_agents, 3))
 
     decision_template = {
         "geom_id": geom_id,
@@ -71,6 +77,8 @@ def decision_template() -> dict[str, Any]:
         "expendature_cap": expendature_cap,
         "household_distance_to_river_m": distance_to_river,
         "household_distance_to_coastline_m": distance_to_coastline,
+        "distance_to_river_m": distance_to_river_buildings,
+        "distance_to_coastline_m": distance_to_coastline_buildings,
         "risk_perception": risk_perception,
         "expected_damages": expected_damages_no_adapt,
         "expected_damages_adapt": damages_adapt,
@@ -82,6 +90,10 @@ def decision_template() -> dict[str, Any]:
         "T": T,
         "r": r,
         "sigma": sigma,
+        "GDP_i_t": GDP_i_t,
+        "sampled_building_ids": sampled_building_ids,
+        "max_migration_costs": max_migration_cost,
+        "distance_to_building_m": distance_to_building_m,
     }
 
     return decision_template
@@ -284,4 +296,56 @@ def test_decision_horizon(decision_template: dict) -> None:
 
     assert all(EU_adapt_low < EU_adapt_high), (
         "Expected all EU_adapt_high values to be greater than EU_adapt_low due to summation over longer time period"
+    )
+
+
+def test_amenity_values(decision_template: dict) -> None:
+    """This function tests the functionality of amenity values.
+
+    Args:
+        decision_template: A dictionary containing the parameters for the decision module.
+    """
+    decision_module = DecisionModule()
+    # make sure all can adapt and behave rationally
+    decision_template["expendature_cap"] = 10
+    decision_template["risk_perception"] = np.full(decision_template["n_agents"], 1)
+    decision_template["adaptation_costs"] = 0  # ensure no adaptation costs are incurred
+
+    # set damages to zero
+    decision_template["expected_damages"] = np.zeros(
+        (len(decision_template["p_floods"]), decision_template["n_agents"])
+    )
+    decision_template["expected_damages_adapt"] = np.zeros(
+        (len(decision_template["p_floods"]), decision_template["n_agents"])
+    )
+    # set migration costs to zero
+    decision_template["max_migration_costs"] = 0
+
+    # set amenity values to 100
+    decision_template["household_distance_to_river_m"] = np.full(
+        decision_template["n_agents"], 100
+    )
+    decision_template["household_distance_to_coastline_m"] = np.full(
+        decision_template["n_agents"], 100
+    )
+    decision_template["distance_to_river_m"] = np.full(
+        (decision_template["n_agents"], 3), 100
+    )
+    decision_template["distance_to_coastline_m"] = np.full(
+        (decision_template["n_agents"], 3), 100
+    )
+
+    EU_adapt = decision_module.calcEU_adapt_flood(**decision_template)
+    EU_do_not_adapt = decision_module.calcEU_do_nothing_flood(**decision_template)
+    building_idx, EU_relocate = decision_module.calcEU_relocate(**decision_template)
+
+    # The two calculations are mathematically equivalent here: zero damages,
+    # zero migration costs, and identical amenity values across all sampled homes.
+    # They are evaluated through different float32 summation paths, so tolerance-
+    # based comparison is required rather than exact equality.
+    assert np.allclose(EU_adapt, EU_do_not_adapt), (
+        "Expected all EU_adapt values to be approximately equal to EU_do_not_adapt as there are no costs incurred and no damages expected"
+    )
+    assert np.allclose(EU_relocate, EU_do_not_adapt), (
+        "Expected all EU_relocate values to be approximately equal to EU_do_not_adapt as there are no costs incurred and no damages expected"
     )
