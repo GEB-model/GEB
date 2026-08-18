@@ -500,7 +500,7 @@ class Households(AgentBaseClass):
 
         # initiate array with property values (used as max damage) [dummy data for now, could use Huizinga combined with building footprint to calculate better values]
         self.var.property_value = DynamicArray(
-            (self.var.wealth.data * 0.8).astype(np.int64), max_n=self.max_n
+            (self.var.wealth.data * 0.8).astype(np.float32), max_n=self.max_n
         )
         # initiate array with RANDOM annual adaptation costs [dummy data for now, values are available in literature]
         adaptation_costs = np.full(
@@ -508,9 +508,17 @@ class Households(AgentBaseClass):
             10_800  # adaptation costs Europe
             * 1.11  # EUR to USD conversion factor (EUR -> USD 2020)
             * 0.254820579,  # scaling factor based on GDP (EU -> Mexico 2020)
-            np.int64,
+            np.float32,
         )  # cost scaled to mexico
-        self.var.adaptation_costs = DynamicArray(adaptation_costs, max_n=self.max_n)
+        r_loan = 0.03  # interest rate
+        loan_duration = 20  # years
+        annual_adaptation_costs = adaptation_costs * (
+            r_loan * (1 + r_loan) ** loan_duration / ((1 + r_loan) ** loan_duration - 1)
+        )
+
+        self.var.adaptation_costs = DynamicArray(
+            annual_adaptation_costs, max_n=self.max_n
+        )
 
         # load household points
         household_points = gpd.GeoDataFrame(
@@ -1102,29 +1110,29 @@ class Households(AgentBaseClass):
         else:
             GDP_i_t = 1
         # calculate expected utilities
-
-        if self.config["dry_floodproofing"] or self.model.current_time.year < 2021:
-            EU_adapt = self.decision_module.calcEU_adapt_flood(
-                geom_id="NoID",
-                n_agents=self.n,
-                wealth=self.var.wealth.data,
-                income=self.var.income.data,
-                expendature_cap=0.06,
-                household_distance_to_coastline_m=self.household_distance_to_coastline_m,
-                household_distance_to_river_m=self.household_distance_to_river_m,
-                risk_perception=self.var.risk_perception.data,
-                expected_damages_adapt=damages_adapt,
-                adaptation_costs=self.var.adaptation_costs.data,
-                time_adapted=self.var.time_adapted.data,
-                loan_duration=20,
-                p_floods=1 / self.return_periods,
-                T=15,
-                r=0.03,
-                sigma=1,
-                GDP_i_t=GDP_i_t,
-            )
-        else:
-            EU_adapt = np.full(self.n, -np.inf)
+        EU_adapt = self.decision_module.calcEU_adapt_flood(
+            geom_id="NoID",
+            n_agents=self.n,
+            wealth=self.var.wealth.data,
+            income=self.var.income.data,
+            expendature_cap=0.06,
+            household_distance_to_coastline_m=self.household_distance_to_coastline_m,
+            household_distance_to_river_m=self.household_distance_to_river_m,
+            risk_perception=self.var.risk_perception.data,
+            expected_damages_adapt=damages_adapt,
+            adaptation_costs=self.var.adaptation_costs.data,
+            time_adapted=self.var.time_adapted.data,
+            loan_duration=20,
+            p_floods=1 / self.return_periods,
+            T=15,
+            r=0.03,
+            sigma=1,
+            GDP_i_t=GDP_i_t,
+        )
+        if not (
+            self.config["dry_floodproofing"] or self.model.current_time.year < 2021
+        ):
+            EU_adapt[self.var.adapted.data != 1] = -np.inf
 
         EU_do_not_adapt = self.decision_module.calcEU_do_nothing_flood(
             geom_id="NoID",
@@ -1215,7 +1223,7 @@ class Households(AgentBaseClass):
         self.update_building_adaptation_status(household_adapting)
 
         # print percentage of households that adapted
-        # print(f"N households that adapted: {len(household_adapting)}")
+        print(f"N households that adapted: {len(household_adapting)}")
 
         self.var.ead_usd_per_year[:] = self.flood_risk_module.calculate_ead(
             damages_do_not_adapt, damages_adapt, self.var.adapted.data
