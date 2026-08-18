@@ -441,7 +441,10 @@ class Government(AgentBaseClass):
         ):
             return  # exits because it is not the first of January
 
-        if self.config["adaptation"]["mode"] == "cba":
+        if (
+            self.config["adaptation"]["mode"] == "cba"
+            and self.model.current_time.year > 2020
+        ):
             # for easier access to the flood risk module of the households agent, we store it here as well
             self.flood_risk_module = self.agents.households.flood_risk_module
             self._cost_benefit_adaptation()
