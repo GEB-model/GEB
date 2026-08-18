@@ -43,6 +43,7 @@ class FloodRiskModule:
             self.load_return_period_flood_maps()
             self.load_flood_protection_standard()
             self.flood_in_last_year = False
+        self.random_number_generator = np.random.default_rng(42)
 
     def load_flood_protection_standard(self) -> None:
         """Load flood protection standards for each subbasin.
@@ -1150,7 +1151,13 @@ class FloodRiskModule:
         # draw a single random number
         if self.model.current_timestep == 0:
             return np.array([], dtype=int)
-        u = np.random.random()
+        # Keep historical flooding reproducible, then use stochastic events from 2021 onward.
+
+        u: float = (
+            self.random_number_generator.random()
+            if self.model.current_time.year < 2021
+            else np.random.random()
+        )
         return_period = 1 / u
         affected_subbasins = [
             subbasin
