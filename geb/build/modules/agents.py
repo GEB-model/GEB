@@ -1502,6 +1502,28 @@ class Agents(BuildModelBase):
 
         return buildings
 
+    def assign_subbasins_to_buildings(
+        self, buildings: gpd.GeoDataFrame
+    ) -> gpd.GeoDataFrame:
+        """Assigns sub-basin IDs to buildings based on their spatial location.
+
+        Args:
+            buildings: A GeoDataFrame containing building data within the model domain.
+        Returns:
+            A GeoDataFrame with sub-basin IDs assigned to each building.
+        """
+        subbasins = self.geom["routing/subbasins"].reset_index()
+        buildings_with_subbasin = gpd.sjoin(
+            buildings,
+            subbasins[["COMID", "geometry"]],
+            how="left",
+            predicate="within",
+        ).drop(columns="index_right")
+        buildings_with_subbasin["COMID"] = (
+            buildings_with_subbasin["COMID"].fillna(-1).astype(int)
+        )
+        return buildings_with_subbasin
+
     @build_method(required=True)
     def setup_buildings(self) -> None:
         """Gets buildings per GDL region within the model domain and assigns grid indices from GLOPOP-S grid."""
@@ -1511,6 +1533,7 @@ class Agents(BuildModelBase):
             geom=mask,
         )
         buildings = self.setup_building_reconstruction_costs(buildings)
+        buildings = self.assign_subbasins_to_buildings(buildings)
 
         # reset id column to avoid issues with duplicate ids
         buildings["id"] = np.arange(len(buildings))
@@ -1572,6 +1595,27 @@ class Agents(BuildModelBase):
                 df_damage_class,
                 name=f"damage_model/flood/{damage_class}/structure/curve",
             )
+
+    @build_method(required=False)
+    def setup_warning_communication_weights(self) -> None:
+        """Sets up the weights for warning communication based on socioeconomic factors."""
+        # Normalized Weights based on the regression of the WRP survey data
+        # (https://documents1.worldbank.org/curated/en/099259309032538041/pdf/IDU-c6f56dc5-a0cb-4375-ac15-a91f1c202b09.pdf )
+        # Rows = Education classes, Columns = Income quintiles
+        weights_table = pd.DataFrame(
+            data=[
+                [0.0336, 0.0349, 0.0366, 0.0380, 0.0396],
+                [0.0336, 0.0349, 0.0366, 0.0380, 0.0396],
+                [0.0366, 0.0380, 0.0396, 0.0413, 0.0430],
+                [0.0400, 0.0413, 0.0430, 0.0450, 0.0467],
+                [0.0407, 0.0423, 0.0439, 0.0456, 0.0477],
+            ],
+            index=np.array([1, 2, 3, 4, 5]),  # Education classes
+            columns=np.array([1, 2, 3, 4, 5]),  # Income quintiles
+        )
+        self.set_table(
+            weights_table, name="warning_system/warning_communication_weights"
+        )
 
     def assign_buildings_to_grid_cells(
         self, GDL_regions: gpd.GeoDataFrame
@@ -2406,6 +2450,37 @@ class Agents(BuildModelBase):
         interest_rate = np.full(n_farmers, interest_rate, dtype=np.float32)
         self.set_array(interest_rate, name="agents/farmers/interest_rate")
 
+    @build_method(depends_on=["setup_hydrography"], required=True)
+    def setup_flood_protection_standards(self) -> None:
+        """Set up flood protection standards for river subbasins using FLOPROS.
+
+        Writes a parquet table mapping COMID -> flood protection standard (years).
+        """
+        flopros_gdf = self.data_catalog.fetch("flopros").read()
+
+        # do a spatial join to get the FPS for each river subbasin
+        river_subbasins = self.geom["routing/subbasins"]
+
+        # check if the CRS of the FLOPROS data matches the CRS of the river subbasins, and reproject if necessary
+        if flopros_gdf.crs != river_subbasins.crs:
+            flopros_gdf = flopros_gdf.to_crs(river_subbasins.crs)
+
+        river_subbasins_with_fps = gpd.sjoin(
+            river_subbasins, flopros_gdf, how="left", predicate="intersects"
+        ).reset_index()
+        # Create a table of COMID -> FPS (aggregate if a subbasin intersects multiple FLOPROS features)
+        comid_to_fps = (
+            river_subbasins_with_fps[["COMID", "flood_protection_standard"]]
+            .groupby("COMID", as_index=True)["flood_protection_standard"]
+            .max()
+            .to_frame()
+        )
+
+        # write to table
+        self.set_table(
+            comid_to_fps, name="flood_protection_standards/flood_protection_standards"
+        )
+
     @build_method(depends_on=[], required=True)
     def setup_assets(
         self,
@@ -2420,6 +2495,7 @@ class Agents(BuildModelBase):
             source: The source of the OSM data. Options are 'geofabrik' or 'movisda'. Default is 'geofabrik'.
             use_cache: If True, the data will be cached in the preprocessing directory. Default is True.
         """
+        # TODO change id column to asset_id for each asset to align with future updates in the EWS critical infrastructure functions
         if isinstance(feature_types, str):
             feature_types: list[str] = [feature_types]
 

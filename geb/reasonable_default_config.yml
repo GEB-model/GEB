@@ -4,7 +4,7 @@ general:
   # model end time (YYYY-MM-DD).
   end_time: 2024-12-30
   # start of the spinup time (YYYY-MM-DD).
-  spinup_time: 2000-01-01
+  spinup_time: 1960-01-01
   hydrological_year_start_month: 1
   input_folder: input/
   preprocessing_folder: preprocessing/
@@ -17,11 +17,12 @@ general:
   forecasts:
     use: false
     provider: ECMWF
-    ensemble: merged_control_ensemble
+    processing: merged_control_ensemble  # options: merged_control_ensemble, control_forecast, probabilistic_forecast
 
 hazards:
   floods:
     simulate: false
+    subbasins: auto  # Default: "auto". Can also be "all" to simulate all basins, or a list of subbasin ids, e.g. - 23011134 \n - 23011135
     forcing_method: accumulated_runoff  # headwater_points, accumulated_runoff
     minimum_flood_depth: 0.05
     flood_map_output_interval_seconds: null  # interval in seconds to output flood maps. null means no output.
@@ -29,7 +30,7 @@ hazards:
     subgrid: false
     overwrite: auto  # whether to overwrite existing flood model. True, False, "auto". If "auto", it will check if the model input parameters have changed.
     coastal_only: false  # if true, only simulate floods in coastal areas, defined as areas with elevation below 10m. This can significantly reduce computation time for large domains with small coastal areas.
-    write_figures: true  # whether to generate and save diagnostic figures
+    write_figures: false  # whether to generate and save diagnostic figures
     return_periods:
       - 2
       - 5
@@ -40,6 +41,13 @@ hazards:
       - 250
       - 500
       - 1000
+    flood_protection_standard:
+      mode: 'auto' # "auto" (default) or "manual"". If "auto", the value will be automatically determined based on the flood protection standards table. If "manual", the value must be set in the config file.
+      manual_value: 10 # if "manual" is selected, this value is used as the flood protection standard in years.
+    hydrograph_shape:
+      method: triangular  # triangular (default), direct, or anchor
+      # window_days: 3.5  # days before AND after peak to extract (total window = 2 × window_days; default 3.5 → ±3.5 days = 7 days total)
+      # tolerance: 0.1    # ±fraction tolerance around anchor discharge (default 0.1 = ±10%)
     p_value_threshold: 0.05
     selection_strategy: first_significant
     fixed_shape: 0.0 # set to 0 to force gumbel (Exponential), null to allow free distribution
@@ -50,6 +58,7 @@ hazards:
     threshold_location: 
     - lon
     - lat  # [lon, lat] of the location where the discharge threshold is applied.
+    run_for_validation_events: false
     observation_files:
     - 20210712T090000 - 20210720T090000.zarr # list of observations files for all floods, should be formatted start date - end date.zarr
   damage:
@@ -60,18 +69,27 @@ hazards:
 hydrology:
   routing:
     algorithm: kinematic_wave  # accuflux or kinematic_wave
+    retention_basin_release_threshold_factor: 0.9
     river_width:
       parameters:
         default_alpha: 7.2
         beta: 0.5
     river_depth:
       method: manning # or power law. If power law, alpha and beta must be set additionally in the parameters
+  evaluation:
+    discharge:
+      minimum_upstream_area_km2: 0  # minimum modeled upstream area for discharge evaluation stations (km2)
+      minimum_timeseries_length_years: 10  # minimum paired observation-simulation timeseries length for discharge evaluation stations (years)
+      external_evaluation_folder: null  # optional folder with external discharge evaluation CSV files, relative to the model folder
 
 agent_settings:
   government:
     plant_forest: false  # default false. Enable (true) for forest planting policy for reforestation scenarios
     adaptation:
       enabled: false # default false. Enable (true) for government adaptation policy. 
+      mode: "threshold"  # "cba" for cost-benefit analysis, "threshold" for threshold-based adaptation
+      dike_elevation_cost_per_meter_usd: 6800  # "Unit cost for raising a dike by 1 meter over 1 meter length (USD/m).",
+      dike_maintenance_cost_per_year_usd: 80  # "Maintenance cost for a dike segment of 1 meter length (USD/year).",
       EAD_threshold: 1000000  # in euros (currrently arbitrary)
       equity_indicator_threshold: 0.5  # between 0 and 1, where 1 means perfect equality (currrently arbitrary)
       ecosystem_indicator_threshold: 0.5  # between 0 and 1, where 1 means healthy ecosystem (currrently arbitrary)
@@ -82,10 +100,31 @@ agent_settings:
   households:
     adapt: false # If True households adapt their houses based on random floods, like DYNAMO-M
     adapt_to_actual_floods: false # If True households adapt their houses based on actual floods experienced
-    warning_response: false
     water_demand:
       method: default
     adjust_demand_factor: 1  # multiplier to adjust water demand up or down. 1 = no adjustment, 0.5 = half demand, 2 = double demand
+    warning_response: false # If True households respond to warnings and take measures to reduce damage
+    warning_system:
+      probability_threshold: 0.6 # Flood probability threshold for issuing warnings (0.0-1.0)  
+      area_threshold: 0.1 # Area threshold (percentage of postal code area) for warnings (0.0-1.0)
+      building_threshold: 0.1 # Building threshold (percentage of buildings in postal code) for warnings (0.0-1.0)
+      communication_efficiency: 0.78 # Communication efficiency: fraction of households that can be reached (0.0-1.0)
+      weight_by_socioeconomic_factors: false # Whether to consider the social economic factors in the distribution of warnings.
+      damage_reduction_over_leadtime: false # Whether to consider the reduction of damage over lead time due to more effective warnings. The earlier the action the more damage reduction.
+      evacuation_lead_time_threshold: 48 # Lead time threshold for evacuation warnings (hours)
+      response_rates: # Response rates for different warning types
+        area_based_warnings: 0.35 # Response rate for area-based warnings (0.0-1.0)
+        building_based_warnings: 0.7 # Response rate for building-based warnings with specific measures (0.0-1.0)
+      warning_target: # Warning targets (e.g., residential_buildings, critical_infrastructure)
+        residential_buildings: 
+          enabled: false # Enable water level based warnings with measures for residential buildings
+          warning_type: "building_based" # Type of warnings: "area_based" for basic flood warnings or "building_based" for impact-based warnings
+        critical_infrastructure: 
+          enabled: false  # Enable water level based warnings for critical infrastructure  
+          get_critical_facilities: false # If True, critical facilities (vulnerable and emergency) are extracted from OSM using the catchment polygon as boundary
+          asset_type: 
+            - 'energy_substations'
+
     expected_utility:
       flood_risk_calculations:
         risk_perception:
@@ -205,6 +244,7 @@ report:
   _water_storage: false
   _energy_balance: false
   _discharge_stations: true
+  _retention_basins: false
   _meteorological_stations: true
   _outflow_points: true
 

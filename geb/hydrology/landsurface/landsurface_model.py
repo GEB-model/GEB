@@ -1356,7 +1356,7 @@ class LandSurface(Module):
         )
 
         # Default follows AQUACROP recommendation, see reference manual for AquaCrop v7.1 – Chapter 3
-        self.var.minimum_effective_root_depth_m: np.float32 = np.float32(0.25)
+        self.var.minimum_effective_root_depth_m = np.float32(0.25)
 
         self.setup_soil_properties()
 
@@ -1401,26 +1401,24 @@ class LandSurface(Module):
 
             return output
 
-        self.HRU.var.soil_layer_height_m: TwoDArrayFloat32 = load_soil_layers_to_HRU(
+        self.HRU.var.soil_layer_height_m = load_soil_layers_to_HRU(
             self.model.files["subgrid"]["soil/soil_layer_height_m"]
         )
-        organic_carbon_percentage: TwoDArrayFloat32 = load_soil_layers_to_HRU(
+        organic_carbon_percentage = load_soil_layers_to_HRU(
             self.model.files["subgrid"]["soil/soil_organic_carbon_percentage"],
         )
-        self.HRU.var.bulk_density_kg_per_dm3: TwoDArrayFloat32 = (
-            load_soil_layers_to_HRU(
-                self.model.files["subgrid"]["soil/bulk_density_kg_per_dm3"],
-            )
+        self.HRU.var.bulk_density_kg_per_dm3 = load_soil_layers_to_HRU(
+            self.model.files["subgrid"]["soil/bulk_density_kg_per_dm3"],
         )
-        self.HRU.var.silt_percentage: TwoDArrayFloat32 = load_soil_layers_to_HRU(
+        self.HRU.var.silt_percentage = load_soil_layers_to_HRU(
             self.model.files["subgrid"]["soil/silt_percentage"],
         )
-        self.HRU.var.clay_percentage: TwoDArrayFloat32 = load_soil_layers_to_HRU(
+        self.HRU.var.clay_percentage = load_soil_layers_to_HRU(
             self.model.files["subgrid"]["soil/clay_percentage"],
         )
 
         # calculate sand content based on silt and clay content (together they should sum to 100%)
-        self.HRU.var.sand_percentage: TwoDArrayFloat32 = (
+        self.HRU.var.sand_percentage = (
             100 - self.HRU.var.silt_percentage - self.HRU.var.clay_percentage
         )
 
@@ -1526,15 +1524,13 @@ class LandSurface(Module):
         #     sand=self.HRU.var.sand, clay=self.HRU.var.clay
         # )
 
-        self.HRU.var.saturated_hydraulic_conductivity_m_per_s: TwoDArrayFloat32 = (
-            np.asfortranarray(
-                kv_wosten(
-                    silt=self.HRU.var.silt_percentage,
-                    clay=self.HRU.var.clay_percentage,
-                    bulk_density_kg_per_dm3=self.HRU.var.bulk_density_kg_per_dm3,
-                    organic_carbon_percentage=organic_carbon_percentage,
-                    is_topsoil=is_top_soil,
-                )
+        self.HRU.var.saturated_hydraulic_conductivity_m_per_s = np.asfortranarray(
+            kv_wosten(
+                silt=self.HRU.var.silt_percentage,
+                clay=self.HRU.var.clay_percentage,
+                bulk_density_kg_per_dm3=self.HRU.var.bulk_density_kg_per_dm3,
+                organic_carbon_percentage=organic_carbon_percentage,
+                is_topsoil=is_top_soil,
             )
         )
 
@@ -1602,7 +1598,7 @@ class LandSurface(Module):
         crop_group_forest: ArrayFloat32 = self.hydrology.grid.load2d(
             self.model.files["grid"]["vegetation/crop_group_number_forest"]
         )
-        self.HRU.var.crop_group_number_forest: ArrayFloat32 = self.hydrology.to_HRU(
+        self.HRU.var.crop_group_number_forest = self.hydrology.to_HRU(
             data=crop_group_forest
         )
 

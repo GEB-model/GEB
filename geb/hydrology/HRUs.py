@@ -296,11 +296,14 @@ class GridVariables(Bucket):
     interception_capacity_grassland: ThreeDArrayFloat32
     forest_crop_factor_per_10_days: ThreeDArrayFloat32
     discharge_m3_s_per_substep: TwoDArrayFloat32
+    retention_basin_storage_m3_per_substep: TwoDArrayFloat32
     discharge_m3_s_substep: ArrayFloat32
     river_width_alpha: ArrayFloat32
     river_width_beta: ArrayFloat32
     overland_flow_buffer: TwoDArrayFloat32
     overland_flow_buffer_weights: ArrayFloat32
+    buffer: TwoDArrayFloat64
+    retention_basin_storage_m3: ArrayFloat32
 
 
 class Grid(BaseVariables):

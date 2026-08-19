@@ -1,14 +1,9 @@
 """Module implementing hydrology evaluation functions for the GEB model."""
 
-import base64
-import json
-import math
+import shutil
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast
 
-import branca.colormap as cm
-import contextily as ctx
-import folium
 import geopandas as gpd
 import matplotlib as mpl
 import matplotlib.colors as mcolors
@@ -16,15 +11,46 @@ import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from folium import MacroElement, TileLayer
-from jinja2 import Template
+import xarray as xr
 from matplotlib import colormaps as mcolormaps
 from matplotlib.collections import LineCollection
 from matplotlib.lines import Line2D
-from permetrics.regression import RegressionMetric
+
+# from scores.continuous import (
+#     kge as calculate_kge,
+#     nse as calculate_nse,
+#     rmse as calculate_rmse,
+# )
 from tqdm import tqdm
 
-from geb.hydrology.routing import read_discharge_per_river
+from geb.evaluate.workflows.dashboard import (
+    DischargeDashboardGeometries,
+    build_discharge_dashboard_chart_data,
+    create_discharge_folium_map,
+    load_discharge_dashboard_geometries,
+    write_discharge_dashboard_chart_data,
+)
+from geb.evaluate.workflows.external_skill_scores import (
+    get_external_model_output_suffix as _get_external_model_output_suffix,
+    get_geb_station_keys as _get_geb_station_keys,
+    prepare_external_evaluation as _prepare_external_evaluation,
+    prepare_pairwise_skill_score_boxplot_inputs as _prepare_pairwise_skill_score_boxplot_inputs,
+    prepare_skill_score_boxplot_inputs as _prepare_skill_score_boxplot_inputs,
+    read_external_evaluation_raw as _read_external_evaluation_raw,
+)
+from geb.evaluate.workflows.hydrology_plot_engine import (
+    OBSERVATIONS_COLOR,
+    SIMULATIONS_DEFAULT_COLOR,
+    plot_kge_external_model_comparison as _plot_kge_external_model_comparison,
+    plot_skill_score_boxplots as _plot_skill_score_boxplots,
+    plot_skill_score_maps as _plot_skill_score_maps,
+    plot_skill_scores_vs_upstream_area as _plot_skill_scores_vs_upstream_area,
+    save_discharge_timeseries_plots,
+)
+from geb.evaluate.workflows.hydrology_summary import (
+    create_discharge_skill_score_summary,
+)
+from geb.hydrology.routing import get_discharge_per_river
 from geb.reporter import WATER_STORAGE_REPORT_CONFIG
 from geb.workflows.visualise import plot_sunburst
 
@@ -38,27 +64,52 @@ from geb.workflows.extreme_value_analysis import (
 from geb.workflows.io import read_geom, read_table
 from geb.workflows.timeseries import regularize_discharge_timeseries
 
-OBSERVATIONS_COLOR = "#FED65D"
-SIMULATIONS_DEFAULT_COLOR = "#278DD9"
+GOOGLE_GLOFAS_EVALUATION_START_YEAR: int = 2014
+GOOGLE_GLOFAS_EVALUATION_END_YEAR: int = 2021
+DEFAULT_EXTERNAL_EVALUATION_FOLDER: str = "external_evaluation_data/"
 
-# Configure global dark style for all plots in this module
-mpl.rcParams["figure.facecolor"] = "#000000"
-mpl.rcParams["axes.facecolor"] = "#000000"
-mpl.rcParams["axes.edgecolor"] = "white"
-mpl.rcParams["axes.labelcolor"] = "white"
-mpl.rcParams["xtick.color"] = "white"
-mpl.rcParams["ytick.color"] = "white"
-mpl.rcParams["text.color"] = "white"
-mpl.rcParams["figure.edgecolor"] = "white"
-mpl.rcParams["grid.color"] = "white"
-mpl.rcParams["legend.labelcolor"] = "white"
-mpl.rcParams["savefig.facecolor"] = "#000000"
-mpl.rcParams["savefig.edgecolor"] = "#000000"
+# Configure global style for all plots in this module
+mpl.rcParams["figure.facecolor"] = "white"
+mpl.rcParams["axes.facecolor"] = "white"
+mpl.rcParams["axes.edgecolor"] = "0.15"
+mpl.rcParams["axes.labelcolor"] = "black"
+mpl.rcParams["xtick.color"] = "black"
+mpl.rcParams["ytick.color"] = "black"
+mpl.rcParams["text.color"] = "black"
+mpl.rcParams["figure.edgecolor"] = "black"
+mpl.rcParams["grid.color"] = "0.8"
+mpl.rcParams["legend.labelcolor"] = "black"
+mpl.rcParams["savefig.facecolor"] = "white"
+mpl.rcParams["savefig.edgecolor"] = "white"
+
+
+class DischargeMetrics(NamedTuple):
+    """Discharge validation skill scores for a single station and time period."""
+
+    KGE: float = float("nan")
+    KGE_modified: float = float("nan")
+    KGE_correlation: float = float("nan")
+    KGE_bias_ratio: float = float("nan")
+    KGE_variability_ratio: float = float("nan")
+    NSE: float = float("nan")
+    R2: float = float("nan")
+    RMSE: float = float("nan")
+    RRMSE: float = float("nan")
+
+
+class DischargeEvaluationPaths(NamedTuple):
+    """Output paths for one discharge evaluation period."""
+
+    suffix: str
+    label: str
+    plot_folder: Path
+    xlsx: Path
+    geoparquet: Path
 
 
 def _calculate_discharge_validation_metrics(
     validation_df: pd.DataFrame,
-) -> tuple[float, float, float, float, float, float]:
+) -> DischargeMetrics:
     """Calculate station-level discharge validation metrics.
 
     Args:
@@ -66,32 +117,100 @@ def _calculate_discharge_validation_metrics(
             columns named `discharge_observations` and `discharge_simulations` (m3/s).
 
     Returns:
-        Tuple containing:
-            - Kling-Gupta efficiency (dimensionless).
-            - Nash-Sutcliffe efficiency (dimensionless).
-            - Pearson correlation coefficient (dimensionless).
-            - Correlation coefficient (dimensionless).
-            - Beta coefficient (dimensionless).
-            - Gamma coefficient (dimensionless).
+        DischargeMetrics with KGE, modified KGE, KGE correlation/bias/variability
+        components, NSE, squared Pearson correlation r² (stored as `R2`), RMSE,
+        and RRMSE; all NaN when there are fewer than 2 valid pairs.
+
     """
-    valid_pairs_df: pd.DataFrame = validation_df[
-        ["discharge_observations", "discharge_simulations"]
-    ].dropna()
+    discharge_columns: list[str] = [
+        "discharge_observations",
+        "discharge_simulations",
+    ]
+    valid_pairs_df: pd.DataFrame = validation_df[discharge_columns].dropna()
     if valid_pairs_df.shape[0] < 2:
-        return np.nan, np.nan, np.nan, np.nan, np.nan, np.nan
+        return DischargeMetrics()
 
-    y_true: np.ndarray = valid_pairs_df["discharge_observations"].values
-    y_pred: np.ndarray = valid_pairs_df["discharge_simulations"].values
-    evaluator: RegressionMetric = RegressionMetric(y_true, y_pred)
+    # Keep observed and simulated values aligned after dropping incomplete pairs.
+    observed_discharge_values: np.ndarray = valid_pairs_df[
+        "discharge_observations"
+    ].to_numpy(dtype=float)
+    simulated_discharge_values: np.ndarray = valid_pairs_df[
+        "discharge_simulations"
+    ].to_numpy(dtype=float)
+    observed_discharge_array: xr.DataArray = xr.DataArray(
+        observed_discharge_values, dims=["time"]
+    )
+    simulated_discharge_array: xr.DataArray = xr.DataArray(
+        simulated_discharge_values, dims=["time"]
+    )
 
-    metrics, kge = evaluator.kling_gupta_efficiency()
-    r: float = float(metrics["r"])
-    beta: float = float(metrics["beta"])
-    gamma: float = float(metrics["gamma"])
-    nse: float = float(evaluator.nash_sutcliffe_efficiency())
-    r_value: float = float(evaluator.pearson_correlation_coefficient())
+    observed_discharge_mean: float = float(np.mean(observed_discharge_values))
+    simulated_discharge_mean: float = float(np.mean(simulated_discharge_values))
+    observed_discharge_std: float = float(np.std(observed_discharge_values))
+    simulated_discharge_std: float = float(np.std(simulated_discharge_values))
 
-    return kge, r, beta, gamma, nse, r_value
+    # KGE and its original Gupta et al. components are available from `scores`.
+    kge_result: xr.DataArray | xr.Dataset = calculate_kge(
+        simulated_discharge_array,
+        observed_discharge_array,
+        include_components=True,
+    )
+    kge: float = float(kge_result["kge"].item())
+    kge_correlation: float = float(kge_result["rho"].item())
+    kge_bias_ratio: float = float(kge_result["beta"].item())
+    kge_variability_ratio: float = float(kge_result["alpha"].item())
+
+    # Modified KGE uses the coefficient-of-variation ratio gamma, which is not
+    # included by `scores`, so calculate it directly from the original formula.
+    observed_discharge_variation: float = (
+        float("nan")
+        if observed_discharge_mean == 0.0
+        else observed_discharge_std / observed_discharge_mean
+    )
+    simulated_discharge_variation: float = (
+        float("nan")
+        if simulated_discharge_mean == 0.0
+        else simulated_discharge_std / simulated_discharge_mean
+    )
+    modified_kge_variability_ratio: float = (
+        float("nan")
+        if observed_discharge_variation == 0.0
+        else simulated_discharge_variation / observed_discharge_variation
+    )
+    kge_modified: float = 1.0 - float(
+        np.sqrt(
+            (kge_correlation - 1.0) ** 2
+            + (kge_bias_ratio - 1.0) ** 2
+            + (modified_kge_variability_ratio - 1.0) ** 2
+        )
+    )
+
+    # Remaining skill scores and error metrics use the same filtered time steps.
+    nse: float = float(
+        calculate_nse(simulated_discharge_array, observed_discharge_array).item()
+    )
+    rmse: float = float(
+        calculate_rmse(simulated_discharge_array, observed_discharge_array).item()
+    )
+    rrmse: float = (
+        float("nan") if observed_discharge_std == 0.0 else rmse / observed_discharge_std
+    )
+
+    # The legacy R2 column stores Pearson r² for compatibility with external
+    # Google Streamflow metrics. Uppercase R² is reserved for COD.
+    pearson_r2: float = kge_correlation**2
+
+    return DischargeMetrics(
+        KGE=kge,
+        KGE_modified=kge_modified,
+        KGE_correlation=kge_correlation,
+        KGE_bias_ratio=kge_bias_ratio,
+        KGE_variability_ratio=kge_variability_ratio,
+        NSE=nse,
+        R2=pearson_r2,
+        RMSE=rmse,
+        RRMSE=rrmse,
+    )
 
 
 def _plot_validation_return_periods(
@@ -109,6 +228,7 @@ def _plot_validation_return_periods(
         station_name: Human-readable station name.
         eval_plot_folder: Output directory for generated plots.
         frequency: Data frequency string for plot titles (e.g., "daily", "hourly").
+
     """
     return_periods_years: list[int | float] = [2, 5, 10, 25, 50, 100]
 
@@ -148,10 +268,12 @@ def _plot_validation_return_periods(
         fontsize=14,
         fontweight="bold",
     )
+    return_periods_folder: Path = eval_plot_folder / "return_periods"
+    return_periods_folder.mkdir(parents=True, exist_ok=True)
     plt.savefig(
-        eval_plot_folder / f"return_period_fit_{station_id}.png",
+        return_periods_folder / f"return_period_fit_{station_id}.png",
         bbox_inches="tight",
-        dpi=100,
+        dpi=72,
     )
     plt.close(fig_simple)
 
@@ -213,7 +335,7 @@ def _plot_validation_return_periods(
 
     plt.tight_layout(rect=(0, 0.03, 1, 0.96))
     plt.savefig(
-        eval_plot_folder / f"return_period_validation_{station_id}.svg",
+        return_periods_folder / f"return_period_validation_{station_id}.svg",
         bbox_inches="tight",
     )
     plt.close()
@@ -413,12 +535,12 @@ def _plot_outflow_line_with_context(
 
 
 def _style_dark_timeseries_axis(axis: plt.Axes) -> None:
-    """Apply the shared dark styling used for hydrology timeseries plots.
+    """Apply the shared styling used for hydrology timeseries plots.
 
     Args:
         axis: Axis to style.
     """
-    # Styling is now mostly handled via global mpl.rcParams
+    # Styling is handled via global mpl.rcParams
     pass
 
 
@@ -457,7 +579,7 @@ def _format_full_timeseries_axis(
         draw_zero_line: Whether to add a horizontal zero reference line.
     """
     if draw_zero_line:
-        axis.axhline(0, color="white", linewidth=0.8, linestyle="--")
+        axis.axhline(0, color="0.4", linewidth=0.8, linestyle="--")
     axis.set_title(title)
     axis.set_ylabel(y_label)
     axis.set_xlabel("Time")
@@ -467,7 +589,7 @@ def _format_full_timeseries_axis(
     axis.xaxis.set_major_formatter(
         mdates.ConciseDateFormatter(axis.xaxis.get_major_locator())
     )
-    axis.grid(True, alpha=0.2, color="white")
+    axis.grid(True, alpha=0.5, color="0.8")
 
 
 def _format_yearly_timeseries_axis(
@@ -489,24 +611,36 @@ def _format_yearly_timeseries_axis(
     year_start: pd.Timestamp = pd.Timestamp(year=year, month=1, day=1)  # ty:ignore[invalid-assignment]
     year_end: pd.Timestamp = pd.Timestamp(year=year, month=12, day=31, hour=23)  # ty:ignore[invalid-assignment]
     if draw_zero_line:
-        axis.axhline(0, color="white", linewidth=0.8, linestyle="--")
+        axis.axhline(0, color="0.4", linewidth=0.8, linestyle="--")
     axis.set_xlim(mdates.date2num(year_start), mdates.date2num(year_end))
     axis.margins(x=0)
     axis.xaxis.set_major_locator(mdates.MonthLocator())
     axis.xaxis.set_major_formatter(mdates.DateFormatter("%b"))
     axis.set_title(title)
     axis.set_ylabel(y_label)
-    axis.grid(True, alpha=0.2, color="white")
+    axis.grid(True, alpha=0.5, color="0.8")
 
 
 def _add_dark_legend(
     axis: plt.Axes,
-    loc: str,
+    loc: Literal[
+        "best",
+        "upper right",
+        "upper left",
+        "lower left",
+        "lower right",
+        "right",
+        "center left",
+        "center right",
+        "lower center",
+        "upper center",
+        "center",
+    ],
     ncol: int,
     fontsize: float,
     bbox_to_anchor: tuple[float, float] | None = None,
 ) -> None:
-    """Add a legend with consistent dark-theme styling.
+    """Add a legend with consistent styling.
 
     Args:
         axis: Axis receiving the legend.
@@ -521,7 +655,6 @@ def _add_dark_legend(
         ncol=ncol,
         fontsize=fontsize,
         frameon=False,
-        labelcolor="white",
     )
 
 
@@ -567,7 +700,8 @@ def _plot_outflow_discharge_timeseries(
     Returns:
         Number of outflow plots created (dimensionless).
     """
-    routing_dir: Path = output_folder / "report" / run_name / "hydrology.routing"
+    report_folder: Path = output_folder / "report"
+    routing_dir: Path = report_folder / "hydrology.routing"
     if not routing_dir.exists():
         model.logger.info(
             f"No hydrology routing directory found at {routing_dir}. Skipping outflow plots."
@@ -586,16 +720,15 @@ def _plot_outflow_discharge_timeseries(
     outflow_plot_folder: Path = eval_plot_folder / "outflow"
     outflow_plot_folder.mkdir(parents=True, exist_ok=True)
     total_area_m2: float = _get_total_model_area_m2(model)
-    report_folder: Path = output_folder / "report"
+    report_folder = output_folder / "report"
     frozen_fraction_series_name: str = "_top_soil_frozen_fraction"
     frozen_fraction_series: pd.Series | None = None
-    run_folder: Path = report_folder / run_name
     frozen_fraction_path: Path = (
-        run_folder / "hydrology.landsurface" / frozen_fraction_series_name
+        report_folder / "hydrology.landsurface" / frozen_fraction_series_name
     ).with_suffix(".parquet")
     if frozen_fraction_path.exists():
         frozen_fraction_series = _read_evaluation_series_with_date_index(
-            run_folder,
+            report_folder,
             "hydrology.landsurface",
             frozen_fraction_series_name,
         )
@@ -611,7 +744,7 @@ def _plot_outflow_discharge_timeseries(
 
     plots_created: int = 0
     for outflow_file in outflow_files:
-        outflow_series: pd.Series = pd.read_parquet(outflow_file).squeeze()
+        outflow_series: pd.Series = pd.read_parquet(outflow_file).iloc[:, 0]
 
         if np.isnan(outflow_series.values).all():
             model.logger.info(
@@ -655,10 +788,7 @@ def _plot_outflow_discharge_timeseries(
         _set_outflow_axis_limits(ax, outflow_series)
         ax.legend(
             handles=[Line2D([0], [0], color=SIMULATIONS_DEFAULT_COLOR, linewidth=1.1)],
-            labels=["GEB outflow simulation (blue = unfrozen, white = fully frozen)"],
-            facecolor="#000000",
-            edgecolor="white",
-            labelcolor="white",
+            labels=["GEB outflow simulation (blue = unfrozen, grey = fully frozen)"],
         )
         ax.set_title(
             f"GEB river outflow for outlet {outlet_id}, mean: {outflow_series.mean():.2f} m3/s"
@@ -683,7 +813,6 @@ def _plot_outflow_discharge_timeseries(
             1,
             figsize=(10, max(3.2 * len(outflow_years), 4.5)),
             sharey=True,
-            facecolor="#000000",
         )
         if len(outflow_years) == 1:
             yearly_axes = [yearly_axes]
@@ -719,7 +848,7 @@ def _plot_outflow_discharge_timeseries(
             )
             axis.set_ylabel("Discharge [m3/s]")
             _set_outflow_axis_limits(axis, yearly_outflow_series)
-            axis.grid(True, alpha=0.2, color="white")
+            axis.grid(True, alpha=0.5, color="0.8")
             axis.margins(x=0)
             axis.xaxis.set_major_locator(mdates.MonthLocator())
             axis.xaxis.set_major_formatter(mdates.DateFormatter("%b"))
@@ -735,7 +864,6 @@ def _plot_outflow_discharge_timeseries(
                 fontsize=7,
                 va="top",
                 ha="left",
-                color="white",
                 clip_on=False,
             )
 
@@ -771,393 +899,72 @@ def _plot_outflow_discharge_timeseries(
     return plots_created
 
 
-def _plot_discharge_validation_map(
-    evaluation_gdf: gpd.GeoDataFrame,
-    region_geom: gpd.GeoDataFrame,
-    rivers: gpd.GeoDataFrame,
-    eval_result_folder: Path,
-) -> None:
-    """Plot spatial discharge validation metrics on a map.
+def _get_fixed_frequency_timedelta(
+    frequency: Any,
+    frequency_name: str,
+) -> pd.Timedelta:
+    """Convert a fixed pandas frequency offset to a timestep duration.
 
     Args:
-        evaluation_gdf: Per-station evaluation metrics and geometries.
-        region_geom: Basin/region boundary geometry.
-        rivers: River network geometries.
-        eval_result_folder: Output directory for saved figures.
-    """
-    fig, ax = plt.subplots(1, 3, figsize=(20, 10))
-
-    evaluation_gdf.plot(
-        column="R",
-        ax=ax[0],
-        legend=False,
-        cmap="viridis",
-        markersize=50,
-        zorder=3,
-    )
-    evaluation_gdf.plot(
-        column="KGE",
-        ax=ax[1],
-        legend=False,
-        cmap="viridis",
-        markersize=50,
-        zorder=3,
-    )
-    evaluation_gdf.plot(
-        column="NSE",
-        ax=ax[2],
-        legend=False,
-        cmap="viridis",
-        markersize=50,
-        zorder=3,
-    )
-
-    region_geom.plot(ax=ax[0], color="none", edgecolor="black", linewidth=1, zorder=2)
-    region_geom.plot(ax=ax[1], color="none", edgecolor="black", linewidth=1, zorder=2)
-    region_geom.plot(ax=ax[2], color="none", edgecolor="black", linewidth=1, zorder=2)
-
-    rivers.plot(ax=ax[0], color="blue", linewidth=0.5, zorder=2)
-    rivers.plot(ax=ax[1], color="blue", linewidth=0.5, zorder=2)
-    rivers.plot(ax=ax[2], color="blue", linewidth=0.5, zorder=2)
-
-    ctx.add_basemap(
-        ax[0],
-        crs=evaluation_gdf.crs.to_string(),
-        source=ctx.providers.Esri.WorldImagery,  # ty:ignore[unresolved-attribute]
-        attribution=False,
-    )
-    ctx.add_basemap(
-        ax[1],
-        crs=evaluation_gdf.crs.to_string(),
-        source=ctx.providers.Esri.WorldImagery,  # ty:ignore[unresolved-attribute]
-        attribution=False,
-    )
-    ctx.add_basemap(
-        ax[2],
-        crs=evaluation_gdf.crs.to_string(),
-        source=ctx.providers.Esri.WorldImagery,  # ty:ignore[unresolved-attribute]
-        attribution=False,
-    )
-
-    ax[0].set_title("R")
-    ax[1].set_title("KGE")
-    ax[2].set_title("NSE")
-    ax[0].set_xlabel("Longitude")
-    ax[0].set_ylabel("Latitude")
-    ax[1].set_xlabel("Longitude")
-    ax[2].set_xlabel("Longitude")
-
-    r_colorbar = plt.cm.ScalarMappable(
-        cmap="viridis",
-        norm=mcolors.Normalize(vmin=0, vmax=1),
-    )
-    kge_colorbar = plt.cm.ScalarMappable(
-        cmap="viridis",
-        norm=mcolors.Normalize(vmin=0, vmax=1),
-    )
-    nse_colorbar = plt.cm.ScalarMappable(
-        cmap="viridis",
-        norm=mcolors.Normalize(vmin=0, vmax=1),
-    )
-
-    fig.colorbar(
-        r_colorbar, ax=ax[0], orientation="horizontal", pad=0.1, aspect=50, label="R"
-    )
-    fig.colorbar(
-        kge_colorbar,
-        ax=ax[1],
-        orientation="horizontal",
-        pad=0.1,
-        aspect=50,
-        label="KGE",
-    )
-    fig.colorbar(
-        nse_colorbar,
-        ax=ax[2],
-        orientation="horizontal",
-        pad=0.1,
-        aspect=50,
-        label="NSE",
-    )
-
-    plt.tight_layout()
-    plt.savefig(
-        eval_result_folder / "discharge_evaluation_metrics.svg",
-        bbox_inches="tight",
-    )
-    plt.show()
-    plt.close()
-
-
-def _create_discharge_folium_map(
-    evaluation_gdf: gpd.GeoDataFrame,
-    eval_plot_folder: Path,
-    eval_result_folder: Path,
-    region_geom: gpd.GeoDataFrame,
-    rivers: gpd.GeoDataFrame,
-) -> folium.Map:
-    """Create a folium map with station metrics and station plots in popups.
-
-    Args:
-        evaluation_gdf: Per-station evaluation metrics and geometries.
-        eval_plot_folder: Directory with generated station PNG plots.
-        eval_result_folder: Output directory where the HTML map is saved.
-        region_geom: Basin/region boundary geometry.
-        rivers: River network geometries.
+        frequency: Pandas frequency offset to convert.
+        frequency_name: Human-readable frequency label used in error messages.
 
     Returns:
-        Folium map object.
+        Fixed timestep duration.
+
+    Raises:
+        ValueError: If the frequency is variable-length and cannot be converted
+            to one fixed duration.
     """
-    min_lon, min_lat, max_lon, max_lat = region_geom.total_bounds
-    map_center = [(min_lat + max_lat) / 2, (min_lon + max_lon) / 2]
-    tiles = TileLayer(
-        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
-        attr="Sources: Esri, HERE, Garmin, Intermap, INCREMENT P, GEBCO, USGS, FAO, NPS, NRCan, GeoBase, IGN, Kadaster NL, Ordnance Survey, Esri Japan, METI, Mapwithyou, NOSTRA, © OpenStreetMap contributors, and the GIS user community",
-        name="Topographic Map",
-    )
-    m = folium.Map(
-        location=map_center,
-        tiles=tiles,
-    )
+    try:
+        fixed_timestep: pd.Timedelta = cast(pd.Timedelta, pd.Timedelta(frequency))
+        return fixed_timestep
+    except TypeError:
+        pass
+    except ValueError:
+        pass
 
-    # Fit the map to these boundaries
-    m.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]], padding=(30, 30))
+    try:
+        frequency_nanoseconds: int = int(frequency.nanos)
+    except ValueError as error:
+        raise ValueError(
+            f"{frequency_name} frequency must have a fixed timestep duration."
+        ) from error
+    return cast(pd.Timedelta, pd.Timedelta(nanoseconds=frequency_nanoseconds))
 
-    folium.GeoJson(
-        region_geom,
-        name="Catchment",
-        style_function=lambda x: {
-            "fillColor": "none",
-            "color": "black",
-            "weight": 2,
-        },
-        z_index=1,
-    ).add_to(m)
 
-    max_discharge = np.nanmax(rivers["discharge_m3_per_s"])
-    if np.isnan(max_discharge):
-        max_discharge_sqrt = None
-    else:
-        max_discharge_sqrt = math.sqrt(max_discharge.item())
+def _get_effective_external_evaluation_folder(
+    external_evaluation_folder: str | Path | None,
+    configured_external_evaluation_folder: str | Path | None,
+    include_external: bool,
+) -> str | Path | None:
+    """Choose the external-evaluation folder for high-level hydrology plots.
 
-    min_line_weight = 0.5
-    max_line_weight = 5.0
+    Args:
+        external_evaluation_folder: User-provided external data folder.
+        configured_external_evaluation_folder: Configured external data folder.
+        include_external: Whether external model comparisons are requested.
 
-    folium.GeoJson(
-        rivers[
-            [
-                "geometry",
-                "discharge_m3_per_s",
-            ]
-        ].to_json(),
-        name="Rivers",
-        style_function=lambda x: {
-            "color": "blue"
-            if x["properties"]["discharge_m3_per_s"] is not None
-            else "gray",
-            "weight": math.sqrt(x["properties"]["discharge_m3_per_s"])
-            / max_discharge_sqrt
-            * (max_line_weight - min_line_weight)
-            + min_line_weight
-            if x["properties"]["discharge_m3_per_s"] is not None
-            else min_line_weight,
-        },
-        z_index=2,
-    ).add_to(m)
-
-    colormap_r = cm.LinearColormap(
-        colors=["red", "orange", "yellow", "blue", "green"],
-        vmin=0,
-        vmax=1,
-        caption="R",
-    )
-    colormap_kge = cm.LinearColormap(
-        colors=["red", "orange", "yellow", "blue", "green"],
-        vmin=0,
-        vmax=1,
-        caption="KGE",
-    )
-    colormap_nse = cm.LinearColormap(
-        colors=["red", "orange", "yellow", "blue", "green"],
-        vmin=0,
-        vmax=1,
-        caption="NSE",
-    )
-
-    colormap_r.add_to(m)
-    colormap_kge.add_to(m)
-    colormap_nse.add_to(m)
-
-    layer_upstream: folium.FeatureGroup | None = None
-    colormap_upstream: cm.LinearColormap | None = None
-    if (
-        not evaluation_gdf["discharge_observations_to_GEB_upstream_area_ratio"]
-        .isna()
-        .any()
-    ):
-        colormap_upstream = cm.LinearColormap(
-            colors=["red", "orange", "yellow", "blue", "green"],
-            vmin=0.5,
-            vmax=2.0,
-            caption="Upstream Area Ratio",
-        )
-        colormap_upstream.add_to(m)
-        layer_upstream = folium.FeatureGroup(name="Upstream Area Ratio", show=False)
-
-    layer_kge = folium.FeatureGroup(name="KGE", show=True)
-    layer_nse = folium.FeatureGroup(name="NSE", show=False)
-    layer_r = folium.FeatureGroup(name="R", show=False)
-
-    largest_upstream_area_sqrt = math.sqrt(evaluation_gdf["upstream_area_GEB"].max())
-    # Collects base64 image data keyed by station_id. Injected into the map as a single
-    # JS global after the loop so the heavy image data is stored only once per station.
-    station_images: dict[str, dict[str, str]] = {}
-
-    for station_id, row in evaluation_gdf.iterrows():
-        coords: list[float] = [row.geometry.y, row.geometry.x]
-
-        # return_period_fit_path = (
-        #     eval_plot_folder / f"return_period_fit_{station_id}.png"
-        # )
-        time_series_plot_path = eval_plot_folder / f"timeseries_plot_{station_id}.png"
-
-        # with open(return_period_fit_path, "rb") as img_file:
-        #     encoded_image_return_period = base64.b64encode(img_file.read()).decode(
-        #         "utf-8"
-        #     )
-        with open(time_series_plot_path, "rb") as img_file:
-            encoded_image_time_series = base64.b64encode(img_file.read()).decode(
-                "utf-8"
-            )
-
-        popup_width: int = 800
-
-        # Accumulate image data for the post-loop JS injection.
-        station_images[str(station_id)] = {
-            # "returnPeriod": f"data:image/png;base64,{encoded_image_return_period}",
-            "timeSeries": f"data:image/png;base64,{encoded_image_time_series}",
-        }
-
-        # Popup HTML carries only text metrics and empty <img> placeholders.
-        # A MutationObserver (injected after the loop) populates their src from
-        # window._stationImages when Leaflet adds the popup to the DOM.
-        popup_html = (
-            f"<div data-station-id='{station_id}' style='width:{popup_width}px;'>"
-            f"<img class='rp-img' style='width:100%;height:auto;display:block;'>"
-            f"<img class='ts-img' style='width:100%;height:auto;display:block;'>"
-            f"</div>"
-        )
-
-        # scale circle radius by upstream area, with a minimum of 5 and a maximum of 10
-        circle_radius: int = (
-            5 + math.sqrt(row["upstream_area_GEB"]) / largest_upstream_area_sqrt * 5
-        )
-
-        color_r = colormap_r(row["R"])
-        folium.CircleMarker(
-            location=coords,
-            radius=circle_radius,
-            color="black",
-            fill=True,
-            fill_color=color_r,
-            fill_opacity=0.9,
-            popup=folium.Popup(popup_html, max_width=popup_width),
-            z_index=1000,
-        ).add_to(layer_r)
-
-        color_kge = colormap_kge(row["KGE"])
-        folium.CircleMarker(
-            location=coords,
-            radius=circle_radius,
-            color="black",
-            fill=True,
-            fill_color=color_kge,
-            fill_opacity=0.9,
-            popup=folium.Popup(popup_html, max_width=popup_width),
-            z_index=1000,
-        ).add_to(layer_kge)
-
-        color_nse = colormap_nse(row["NSE"])
-        folium.CircleMarker(
-            location=coords,
-            radius=circle_radius,
-            color="black",
-            fill=True,
-            fill_color=color_nse,
-            fill_opacity=0.9,
-            popup=folium.Popup(popup_html, max_width=popup_width),
-            z_index=1000,
-        ).add_to(layer_nse)
-
-        if layer_upstream is not None and colormap_upstream is not None:
-            color_upstream = colormap_upstream(
-                float(row["discharge_observations_to_GEB_upstream_area_ratio"])
-            )
-            if not isinstance(color_upstream, str) or color_upstream == "nan":
-                continue
-
-            folium.CircleMarker(
-                location=coords,
-                radius=10,
-                color="black",
-                fill=True,
-                fill_color=color_upstream,
-                fill_opacity=0.9,
-                popup=folium.Popup(popup_html, max_width=popup_width),
-                z_index=1000,
-            ).add_to(layer_upstream)
-
-    layer_kge.add_to(m)
-    layer_nse.add_to(m)
-    layer_r.add_to(m)
-    colormap_kge.add_to(m)
-    colormap_nse.add_to(m)
-    colormap_r.add_to(m)
-
-    if layer_upstream is not None and colormap_upstream is not None:
-        layer_upstream.add_to(m)
-        colormap_upstream.add_to(m)
-
-    # Inject all station image data as a single JS global and use Leaflet's popupopen
-    # event to populate the placeholder <img> tags.
-    images_js = json.dumps(station_images)
-
-    class _StationImagesMacro(MacroElement):
-        def __init__(self, images: str) -> None:
-            super().__init__()
-            self._template = Template(
-                "{%- macro script(this, kwargs) -%}\n"
-                "window._stationImages=" + images + ";\n"
-                "{{this._parent.get_name()}}.on('popupopen', function(e) {\n"
-                "  var content = e.popup.getContent();\n"
-                "  if (!content || !content.querySelector) return;\n"
-                "  var el = content.querySelector('[data-station-id]');\n"
-                "  if (!el) return;\n"
-                "  var sid = el.getAttribute('data-station-id');\n"
-                "  var data = window._stationImages[sid];\n"
-                "  if (!data) return;\n"
-                "  var rp = el.querySelector('.rp-img');\n"
-                "  var ts = el.querySelector('.ts-img');\n"
-                "  if (rp) rp.src = data.returnPeriod;\n"
-                "  if (ts) ts.src = data.timeSeries;\n"
-                "});\n"
-                "{%- endmacro -%}"
-            )
-
-    _StationImagesMacro(images_js).add_to(m)
-
-    folium.LayerControl().add_to(m)
-    m.save(eval_result_folder / "discharge_evaluation_map.html")
-    return m
+    Returns:
+        External data folder, or `None` when external comparisons are disabled.
+    """
+    if external_evaluation_folder is not None:
+        return external_evaluation_folder
+    if configured_external_evaluation_folder is not None:
+        return configured_external_evaluation_folder
+    if include_external:
+        return DEFAULT_EXTERNAL_EVALUATION_FOLDER
+    return None
 
 
 def create_validation_df(
     output_folder: Path,
     run_name: str,
-    ID: str | int,
+    station_id: str | int,
     observed_discharge: pd.Series,
     correct_discharge_observations: bool,
     discharge_observations_to_GEB_upstream_area_ratio: float,
+    timezone_utc_offset: float = 0.0,
 ) -> pd.DataFrame:
     """Create a validation dataframe with the discharge observations and the GEB discharge simulation for the selected station.
 
@@ -1165,38 +972,46 @@ def create_validation_df(
         output_folder: Path to the model output folder.
         run_name: Name of the simulation run to evaluate. Must correspond to an existing run directory
             in the model output folder.
-        ID: ID of the station to create the validation dataframe for.
+        station_id: Station identifier to create the validation dataframe for.
         observed_discharge: Series with the discharge observations for the selected station.
         correct_discharge_observations: Whether to correct the discharge_observations discharge timeseries for the difference in upstream
             area between the discharge_observations station and the discharge from GEB.
         discharge_observations_to_GEB_upstream_area_ratio: The ratio of the upstream area of the discharge_observations station to the upstream area of the GEB discharge grid cell. This is used to correct
+        timezone_utc_offset: Fixed UTC offset for the GRDC station metadata
+            (hours). For daily or coarser observations, GEB's hourly UTC
+            timestamps are converted to this fixed local offset before
+            aggregation. Sub-daily observations are not shifted because their
+            timestamp convention is not defined by the GRDC daily product.
+            Defaults to 0 (UTC).
 
     Returns:
         DataFrame with the discharge observations and the GEB discharge simulation for the selected station.
 
     Raises:
         FileNotFoundError: If the hydrology routing directory does not exist.
-        ValueError: If NaN values are found in the GEB discharge data after loading.
+        ValueError: If the GEB discharge data contain NaN values or the fixed UTC
+            offset is non-finite or outside the valid range from UTC-12 to UTC+14.
     """
     # Check if the hydrology.routing directory exists
-    routing_dir = output_folder / "report" / run_name / "hydrology.routing"
+    report_folder: Path = output_folder / "report"
+    routing_dir = report_folder / "hydrology.routing"
     if not routing_dir.exists():
         raise FileNotFoundError(
             f"Hydrology routing directory does not exist: {routing_dir}"
         )
 
     # Construct the path to the individual station discharge file
-    station_file_name = f"discharge_hourly_m3_per_s_{ID}.parquet"
+    station_file_name = f"discharge_hourly_m3_per_s_{station_id}.parquet"
     station_file_path = routing_dir / station_file_name
 
     # Load the individual station discharge timeseries
     simulated_discharge = pd.read_parquet(station_file_path)[
-        f"discharge_hourly_m3_per_s_{ID}"
+        f"discharge_hourly_m3_per_s_{station_id}"
     ]
 
     if np.isnan(simulated_discharge.values).any():
         raise ValueError(
-            f"NaN values found in GEB discharge data for station {ID}. Please check the station file {station_file_path}."
+            f"NaN values found in GEB discharge data for station {station_id}. Please check the station file {station_file_path}."
         )
 
     simulated_discharge = simulated_discharge.asfreq(
@@ -1217,21 +1032,51 @@ def create_validation_df(
     assert observed_discharge.index.freq is not None, (  # ty:ignore[unresolved-attribute]
         "Observed discharge index must have a defined frequency."
     )
-    # check if simulated discharge is at least as frequent as observed discharge, and if multiple of observed discharge frequency
-    if simulated_discharge.index.freq > observed_discharge.index.freq:  # ty:ignore[unresolved-attribute]
+    if not np.isfinite(timezone_utc_offset):
+        raise ValueError("Station UTC offset must be finite.")
+    if not -12.0 <= timezone_utc_offset <= 14.0:
+        raise ValueError("Station UTC offset must be between UTC-12 and UTC+14 hours.")
+
+    simulated_frequency = simulated_discharge.index.freq
+    observed_frequency = observed_discharge.index.freq  # ty:ignore[unresolved-attribute]
+    simulated_timestep: pd.Timedelta = _get_fixed_frequency_timedelta(
+        simulated_frequency,
+        "Simulated discharge",
+    )
+    observed_timestep: pd.Timedelta = _get_fixed_frequency_timedelta(
+        observed_frequency,
+        "Observed discharge",
+    )
+
+    # Pandas 3 no longer orders frequency offsets directly; compare explicit
+    # durations to keep the validation independent of pandas internals.
+    if simulated_timestep > observed_timestep:
         raise ValueError(
             "Simulated discharge frequency is lower than observed discharge frequency. Please ensure the simulated discharge is at least as frequent as the observed discharge."
         )
-    if (
-        observed_discharge.index.freq.nanos % simulated_discharge.index.freq.nanos  # ty:ignore[unresolved-attribute]
-    ) != 0:
+    if (observed_timestep.value % simulated_timestep.value) != 0:
         raise ValueError(
             "Observed discharge frequency is not a multiple of simulated discharge frequency. Please ensure the observed discharge frequency is a multiple of the simulated discharge frequency."
         )
 
-    # resample simulated discharge to match the frequency of observed discharge if needed
-    simulated_discharge = simulated_discharge.resample(
-        observed_discharge.index.freq  # ty:ignore[unresolved-attribute]
+    observation_frequency = observed_frequency
+    observation_timestep: pd.Timedelta = observed_timestep
+    should_use_local_calendar: bool = (
+        observation_timestep >= pd.Timedelta(days=1) and timezone_utc_offset != 0.0
+    )
+    simulation_for_aggregation: pd.Series = simulated_discharge.copy()
+    if should_use_local_calendar:
+        # GRDC daily values represent fixed-offset local calendar days. For
+        # UTC+3, adding three hours makes the bin labelled January 1 span
+        # December 31 21:00 UTC through January 1 20:59 UTC.
+        simulation_for_aggregation.index = (
+            simulation_for_aggregation.index + pd.Timedelta(hours=timezone_utc_offset)
+        )
+
+    simulated_discharge = simulation_for_aggregation.resample(
+        observation_frequency,
+        closed="left",
+        label="left",
     ).mean()
 
     # cut both observed and simulated discharge to the same time range
@@ -1252,533 +1097,76 @@ def create_validation_df(
     return validation_df
 
 
-def create_validation_df_for_forecast_member(
-    routing_dir: Path,
-    station_id: str | int,
-    observed_discharge: pd.Series,
-    correct_discharge_observations: bool,
-    discharge_observations_to_GEB_upstream_area_ratio: float,
-) -> pd.DataFrame:
-    """Create station validation dataframe for one forecast member.
+def _get_discharge_evaluation_paths(
+    output_folder: Path,
+    start_year: int | None,
+    end_year: int | None,
+) -> DischargeEvaluationPaths:
+    """Get output paths for one discharge evaluation period.
 
     Args:
-        routing_dir: Path to forecast member routing output.
-        station_id: Station identifier.
-        observed_discharge: Observed discharge series (m3/s).
-        correct_discharge_observations: Whether to apply upstream area correction.
-        discharge_observations_to_GEB_upstream_area_ratio: Upstream area ratio
-            (dimensionless).
+        output_folder: Root discharge evaluation output folder.
+        start_year: First calendar year included in the evaluation, or `None`
+            for the first available year.
+        end_year: Last calendar year included in the evaluation, or `None` for
+            the last available year.
 
     Returns:
-        DataFrame with observed and simulated discharge columns.
+        Period-specific output suffix, label, plot folder, and metric file paths.
 
     Raises:
-        FileNotFoundError: If the station file is missing.
-        ValueError: If the observed index has no inferable frequency.
+        ValueError: If both years are provided and `start_year` is after
+            `end_year`.
     """
-    station_file_name: str = f"discharge_hourly_m3_per_s_{station_id}.csv"
-    station_file_path: Path = routing_dir / station_file_name
-    if not station_file_path.exists():
-        raise FileNotFoundError(
-            f"Forecast station file does not exist: {station_file_path}"
-        )
-
-    simulated_discharge_df: pd.DataFrame = pd.read_csv(
-        station_file_path,
-        index_col=0,
-        parse_dates=True,
-    )
-    station_column_name: str = f"discharge_hourly_m3_per_s_{station_id}"
-    if station_column_name in simulated_discharge_df.columns:
-        simulated_discharge: pd.Series = simulated_discharge_df[station_column_name]
-    else:
-        simulated_discharge = simulated_discharge_df.squeeze()
-
-    if simulated_discharge.empty or np.isnan(simulated_discharge.values).all():
-        return pd.DataFrame(columns=["discharge_observations", "discharge_simulations"])
-
-    simulated_discharge = simulated_discharge.sort_index()
-    observed_discharge = observed_discharge.sort_index()
-
-    if correct_discharge_observations:
-        simulated_discharge = (
-            simulated_discharge * discharge_observations_to_GEB_upstream_area_ratio
-        )
-
-    observed_frequency = observed_discharge.index.freq
-    if observed_frequency is None:
-        inferred_observed_frequency: str | None = pd.infer_freq(
-            observed_discharge.index
-        )
-        if inferred_observed_frequency is None:
-            raise ValueError(
-                "Observed discharge index must have a defined or inferable frequency."
-            )
-        observed_frequency = pd.tseries.frequencies.to_offset(
-            inferred_observed_frequency
-        )
-
-    simulated_discharge = simulated_discharge.resample(observed_frequency).mean()
-
-    start_time: pd.Timestamp = max(
-        observed_discharge.index.min(), simulated_discharge.index.min()
-    )
-    end_time: pd.Timestamp = min(
-        observed_discharge.index.max(), simulated_discharge.index.max()
-    )
-
-    return pd.DataFrame(
-        {
-            "discharge_observations": observed_discharge.loc[start_time:end_time],
-            "discharge_simulations": simulated_discharge.loc[start_time:end_time],
-        }
+    if start_year is not None and end_year is not None and start_year > end_year:
+        raise ValueError("start_year must be smaller than or equal to end_year.")
+    suffix: str = ""
+    if start_year is not None or end_year is not None:
+        start_label: str = str(start_year) if start_year is not None else "start"
+        end_label: str = str(end_year) if end_year is not None else "end"
+        suffix = f"_{start_label}_{end_label}"
+    return DischargeEvaluationPaths(
+        suffix=suffix,
+        label="the full overlapping period" if not suffix else suffix[1:],
+        plot_folder=output_folder if not suffix else output_folder / f"period{suffix}",
+        xlsx=output_folder / f"evaluation_metrics{suffix}.xlsx",
+        geoparquet=output_folder / f"evaluation_metrics{suffix}.geoparquet",
     )
 
 
-def plot_forecast_discharge_metric_spread(
-    forecast_metrics_df: pd.DataFrame,
-    output_path: Path,
-) -> None:
-    """Plot forecast metric spread and mean per forecast initialization.
-
-    Args:
-        forecast_metrics_df: Dataframe with columns `forecast_init`, `frequency`,
-            `KGE`, `NSE`, and `R`.
-        output_path: Target path for the exported figure.
-    """
-    if forecast_metrics_df.empty:
-        return
-
-    grouped_stats_df: pd.DataFrame = (
-        forecast_metrics_df.groupby(["forecast_init", "frequency"])[["KGE", "NSE", "R"]]
-        .agg(["mean", "min", "max"])
-        .reset_index()
-    )
-
-    grouped_stats_df["forecast_init_dt"] = pd.to_datetime(
-        grouped_stats_df["forecast_init"],
-        format="%Y%m%dT%H%M%S",
-        errors="coerce",
-    )
-    grouped_stats_df = grouped_stats_df.sort_values("forecast_init_dt")
-
-    fig, axes = plt.subplots(3, 1, figsize=(12, 11), sharex=True)
-    fig.suptitle(
-        "Forecast discharge skill per initialization",
-        fontsize=14,
-        fontweight="bold",
-    )
-
-    metric_specs: list[tuple[str, str]] = [
-        ("KGE", "Kling-Gupta efficiency [-]"),
-        ("NSE", "Nash-Sutcliffe efficiency [-]"),
-        ("R", "Pearson correlation coefficient [-]"),
-    ]
-
-    for axis, (metric_name, y_label) in zip(axes, metric_specs, strict=True):
-        for frequency in sorted(grouped_stats_df["frequency"].unique()):
-            frequency_df: pd.DataFrame = grouped_stats_df[
-                grouped_stats_df["frequency"] == frequency
-            ]
-            axis.fill_between(
-                frequency_df["forecast_init_dt"],
-                frequency_df[(metric_name, "min")],
-                frequency_df[(metric_name, "max")],
-                alpha=0.2,
-                label=f"{frequency} spread",
-            )
-            axis.plot(
-                frequency_df["forecast_init_dt"],
-                frequency_df[(metric_name, "mean")],
-                linewidth=2,
-                marker="o",
-                label=f"{frequency} mean",
-            )
-
-        axis.set_ylabel(y_label)
-        axis.grid(True, alpha=0.3)
-        axis.legend()
-
-    axes[-1].set_xlabel("Forecast initialization")
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    plt.savefig(output_path, bbox_inches="tight")
-    plt.close()
-
-
-def parse_grid_xy(grid_xy_raw: Any) -> tuple[int, int] | None:
-    """Parse raw grid-cell coordinates into integer `(x, y)` indices.
-
-    Args:
-        grid_xy_raw: Raw grid-coordinate container from geometry attributes.
-
-    Returns:
-        Parsed `(x, y)` tuple or None if parsing fails.
-    """
-    if isinstance(grid_xy_raw, (list, tuple, np.ndarray)) and len(grid_xy_raw) >= 2:
-        return int(grid_xy_raw[0]), int(grid_xy_raw[1])
-
-    if isinstance(grid_xy_raw, str):
-        try:
-            parsed_value: Any = ast.literal_eval(grid_xy_raw)
-        except ValueError, SyntaxError:
-            return None
-        return parse_grid_xy(parsed_value)
-
-    return None
-
-
-def extract_station_grid_targets(
-    snapped_locations: gpd.GeoDataFrame,
-) -> dict[str, tuple[int, int]]:
-    """Extract station grid-cell targets from snapped station locations.
-
-    Args:
-        snapped_locations: Snapped discharge station geometries with
-            `snapped_grid_pixel_xy` information.
-
-    Returns:
-        Mapping from station label to `(x, y)` grid-cell indices.
-    """
-    if (
-        snapped_locations.empty
-        or "snapped_grid_pixel_xy" not in snapped_locations.columns
-    ):
-        return {}
-
-    station_targets: dict[str, tuple[int, int]] = {}
-    for station_id, station_row in snapped_locations.iterrows():
-        grid_xy: tuple[int, int] | None = parse_grid_xy(
-            station_row["snapped_grid_pixel_xy"]
-        )
-        if grid_xy is None:
-            continue
-        station_targets[f"station_{station_id}"] = grid_xy
-
-    return station_targets
-
-
-def plot_member_spread_timeline(
-    member_timeseries: dict[str, pd.Series],
-    title: str,
-    output_path: Path,
-) -> None:
-    """Plot member spread (min-max) and mean discharge over time.
-
-    Args:
-        member_timeseries: Mapping from member identifier to hourly discharge
-            series (m3/s).
-        title: Plot title.
-        output_path: Path where the figure is saved.
-    """
-    if not member_timeseries:
-        return
-
-    timeseries_df: pd.DataFrame = pd.DataFrame(member_timeseries).sort_index()
-    timeseries_df = timeseries_df.dropna(how="all")
-    if timeseries_df.empty:
-        return
-
-    spread_min: pd.Series = timeseries_df.min(axis=1)
-    spread_max: pd.Series = timeseries_df.max(axis=1)
-    spread_mean: pd.Series = timeseries_df.mean(axis=1)
-
-    fig, ax = plt.subplots(figsize=(11, 4))
-
-    for member_id in sorted(timeseries_df.columns):
-        ax.plot(
-            timeseries_df.index,
-            timeseries_df[member_id],
-            color="gray",
-            linewidth=0.5,
-            alpha=0.25,
-        )
-
-    ax.fill_between(
-        timeseries_df.index,
-        spread_min,
-        spread_max,
-        color="tab:blue",
-        alpha=0.25,
-        label="Member spread (min-max)",
-    )
-    ax.plot(
-        timeseries_df.index,
-        spread_mean,
-        color="black",
-        linewidth=1.5,
-        label="Member mean",
-    )
-
-    ax.set_title(title)
-    ax.set_ylabel("Discharge [m3/s]")
-    ax.set_xlabel("Time")
-    ax.set_ylim(0, None)
-    ax.grid(True, alpha=0.3)
-    ax.legend()
-
-    plt.tight_layout()
-    plt.savefig(output_path, bbox_inches="tight")
-    plt.close()
-
-
-def plot_station_forecast_stack(
-    station_name: str,
-    forecast_member_timeseries: dict[str, dict[str, pd.Series]],
-    output_path: Path,
-) -> None:
-    """Plot one figure per station with forecasts stacked vertically.
-
-    Args:
-        station_name: Name of the station shown in the figure title.
-        forecast_member_timeseries: Mapping
-            `forecast_init -> member -> hourly discharge series (m3/s)`.
-        output_path: Path where the figure is saved.
-    """
-    if not forecast_member_timeseries:
-        return
-
-    sorted_forecast_inits: list[str] = sorted(forecast_member_timeseries)
-    n_forecasts: int = len(sorted_forecast_inits)
-    fig, axes = plt.subplots(
-        n_forecasts,
-        1,
-        figsize=(13, max(3 * n_forecasts, 4)),
-        sharex=False,
-    )
-    if n_forecasts == 1:
-        axes = [axes]
-
-    for axis, forecast_init in zip(axes, sorted_forecast_inits, strict=True):
-        member_timeseries: dict[str, pd.Series] = forecast_member_timeseries[
-            forecast_init
-        ]
-        if not member_timeseries:
-            continue
-
-        timeseries_df: pd.DataFrame = pd.DataFrame(member_timeseries).sort_index()
-        timeseries_df = timeseries_df.dropna(how="all")
-        if timeseries_df.empty:
-            continue
-
-        for member_id in sorted(timeseries_df.columns):
-            axis.plot(
-                timeseries_df.index,
-                timeseries_df[member_id],
-                color="gray",
-                linewidth=0.5,
-                alpha=0.25,
-            )
-
-        axis.fill_between(
-            timeseries_df.index,
-            timeseries_df.min(axis=1),
-            timeseries_df.max(axis=1),
-            color="tab:blue",
-            alpha=0.2,
-            label="Member spread (min-max)",
-        )
-        axis.plot(
-            timeseries_df.index,
-            timeseries_df.mean(axis=1),
-            color="black",
-            linewidth=1.4,
-            label="Member mean",
-        )
-        axis.set_title(f"Forecast init: {forecast_init}")
-        axis.set_ylabel("Q [m3/s]")
-        axis.set_ylim(0, None)
-        axis.grid(True, alpha=0.3)
-        axis.legend(loc="upper right")
-
-    axes[-1].set_xlabel("Time")
-    fig.suptitle(f"Forecast discharge per station: {station_name}", fontweight="bold")
-    plt.tight_layout(rect=[0, 0.02, 1, 0.98])
-    plt.savefig(output_path, bbox_inches="tight")
-    plt.close()
-
-
-def select_requested_station_names(
-    available_station_names: list[str],
-    requested_station_names: str | list[str],
-) -> set[str]:
-    """Resolve selected station names against the available station list.
-
-    Args:
-        available_station_names: Station names that exist in snapped locations.
-        requested_station_names: One station name, a list of station names,
-            or `"all"`.
-
-    Returns:
-        Set of selected station names. Only names that exist in
-        `available_station_names` are returned.
-    """
-    available_name_lookup: dict[str, str] = {
-        station_name.lower(): station_name for station_name in available_station_names
-    }
-
-    if isinstance(requested_station_names, str):
-        if requested_station_names.lower() == "all":
-            return set(available_station_names)
-        requested_names: list[str] = [requested_station_names]
-    else:
-        requested_names = requested_station_names
-
-    selected_station_names: set[str] = set()
-    for requested_name in requested_names:
-        requested_name_normalized: str = requested_name.strip().lower()
-        if requested_name_normalized == "all":
-            return set(available_station_names)
-        if requested_name_normalized in available_name_lookup:
-            selected_station_names.add(available_name_lookup[requested_name_normalized])
-
-    return selected_station_names
-
-
-def _plot_discharge_validation_graphs(
-    model: GEBModel,
-    station_id: Any,
+def _filter_validation_df_to_years(
     validation_df: pd.DataFrame,
-    station_name: str,
-    upstream_area_ratio: float,
-    kge: float,
-    nse: float,
-    r_value: float,
-    eval_plot_folder: Path,
-    include_yearly_plots: bool,
-    frequency: str,
-) -> None:
-    """Plot station-level full timeseries, and optional yearly timeseries.
+    start_year: int | None,
+    end_year: int | None,
+) -> pd.DataFrame:
+    """Filter a validation dataframe to an inclusive calendar-year period.
 
     Args:
-        model: The GEB model
-        station_id: Station identifier used in output file names.
-        validation_df: Validation dataframe containing `discharge_observations` and `discharge_simulations` (m3/s).
-        station_name: Human-readable station name.
-        upstream_area_ratio: Ratio between observed and modeled upstream area
-            (dimensionless).
-        kge: Kling-Gupta efficiency (dimensionless).
-        nse: Nash-Sutcliffe efficiency (dimensionless).
-        r_value: Pearson correlation coefficient (dimensionless).
-        eval_plot_folder: Output directory for generated plots.
-        include_yearly_plots: Whether to generate per-year timeseries plots.
-        frequency: Data frequency string for plot titles (e.g., "daily", "hourly").
+        validation_df: Validation dataframe indexed by time.
+        start_year: First calendar year included in the evaluation, or `None`
+            for the first available year.
+        end_year: Last calendar year included in the evaluation, or `None` for
+            the last available year.
+
+    Returns:
+        Validation dataframe restricted to the requested calendar years.
     """
-    fig, ax = plt.subplots(figsize=(13, 4))
-    ax.plot(
-        validation_df.index,
-        validation_df["discharge_simulations"],
-        label="Simulated",
-        linewidth=0.5,
-        color=SIMULATIONS_DEFAULT_COLOR,
+    if start_year is None and end_year is None:
+        return validation_df
+    start_time: pd.Timestamp | None = (
+        cast(pd.Timestamp, pd.Timestamp(year=start_year, month=1, day=1))
+        if start_year is not None
+        else None
     )
-    ax.plot(
-        validation_df.index,
-        validation_df["discharge_observations"],
-        label="Observed",
-        linewidth=0.5,
-        color=OBSERVATIONS_COLOR,
-    )
-    ax.set_ylabel("Discharge [m3/s]")
-    ax.set_xlabel("Time")
-    ax.set_ylim(0, None)
-    ax.set_xlim(validation_df.index.min(), validation_df.index.max())
-    ax.legend(loc="upper right", fontsize=10)
-
-    if np.isfinite(r_value):
-        ax.text(0.02, 0.9, f"$R^2$={r_value:.2f}", transform=ax.transAxes, fontsize=12)
-        ax.text(0.02, 0.85, f"KGE={kge:.2f}", transform=ax.transAxes, fontsize=12)
-        ax.text(0.02, 0.8, f"NSE={nse:.2f}", transform=ax.transAxes, fontsize=12)
-    else:
-        ax.text(
-            0.02,
-            0.9,
-            "No overlapping values for score metrics",
-            transform=ax.transAxes,
-            fontsize=12,
+    end_time: pd.Timestamp | None = (
+        cast(
+            pd.Timestamp,
+            pd.Timestamp(year=end_year + 1, month=1, day=1) - pd.Timedelta("1ns"),
         )
-    ax.text(
-        0.02,
-        0.75,
-        f"Mean={validation_df['discharge_simulations'].dropna().mean():.2f}",
-        transform=ax.transAxes,
-        fontsize=12,
+        if end_year is not None
+        else None
     )
-    ax.text(
-        0.02,
-        0.70,
-        f"upstream area ratio: {upstream_area_ratio:.2f}",
-        transform=ax.transAxes,
-        fontsize=12,
-    )
-    plt.title(f"Discharge vs observations for station {station_name}")
-    plt.savefig(
-        eval_plot_folder / f"timeseries_plot_{station_id}.svg",
-        bbox_inches="tight",
-    )
-    plt.savefig(
-        eval_plot_folder / f"timeseries_plot_{station_id}.png",
-        bbox_inches="tight",
-        dpi=100,
-    )
-    plt.show()
-    plt.close()
-
-    if include_yearly_plots:
-        years_to_plot: list[int] = sorted(validation_df.index.year.unique())  # ty:ignore[unresolved-attribute]
-        for year in years_to_plot:
-            one_year_df: pd.DataFrame = validation_df[validation_df.index.year == year]  # ty:ignore[unresolved-attribute]
-            if one_year_df.empty:
-                model.logger.info(f"No data available for year {year}, skipping.")
-                continue
-
-            fig, ax = plt.subplots(figsize=(13, 4))
-            ax.plot(
-                one_year_df.index,
-                one_year_df["discharge_simulations"],
-                label="Simulated",
-                color=SIMULATIONS_DEFAULT_COLOR,
-            )
-            ax.plot(
-                one_year_df.index,
-                one_year_df["discharge_observations"],
-                label="Observed",
-                color=OBSERVATIONS_COLOR,
-            )
-            ax.set_xlim(one_year_df.index[0], one_year_df.index[-1])
-            ax.set_ylabel("Discharge [m3/s]")
-            ax.legend()
-
-            ax.text(
-                0.02, 0.9, f"$R^2$={r_value:.2f}", transform=ax.transAxes, fontsize=12
-            )
-            ax.text(0.02, 0.85, f"KGE={kge:.2f}", transform=ax.transAxes, fontsize=12)
-            ax.text(0.02, 0.8, f"NSE={nse:.2f}", transform=ax.transAxes, fontsize=12)
-            ax.text(
-                0.02,
-                0.75,
-                f"upstream area ratio: {upstream_area_ratio:.2f}",
-                transform=ax.transAxes,
-                fontsize=12,
-            )
-
-            plt.title(
-                f"GEB discharge vs observations for {year} at station {station_name}"
-            )
-            plt.savefig(
-                eval_plot_folder / f"timeseries_plot_{station_id}_{year}.svg",
-                bbox_inches="tight",
-            )
-            plt.show()
-            plt.close()
-
-    # _plot_validation_return_periods(
-    #     validation_df=validation_df,
-    #     station_id=station_id,
-    #     station_name=station_name,
-    #     eval_plot_folder=eval_plot_folder,
-    #     frequency=frequency,
-    # )
+    return validation_df.loc[start_time:end_time]
 
 
 def _read_evaluation_series_with_date_index(
@@ -2262,7 +1650,6 @@ def _add_yearly_totals_caption(
         va="top",
         ha="left",
         linespacing=1.15,
-        color="white",
         clip_on=False,
     )
 
@@ -2464,8 +1851,10 @@ class Hydrology:
             A GeoDataFrame containing the river geometries and a DataFrame containing the discharge data for each river.
         """
         # check if discharge files exists
-        discharge_folder = (
-            self.model.output_folder / "report" / run_name / "hydrology.routing"
+        discharge_folder: Path = (
+            self.evaluator.output_folder_evaluate.parent
+            / "report"
+            / "hydrology.routing"
         )
         if not discharge_folder.exists():
             raise FileNotFoundError(
@@ -2484,7 +1873,16 @@ class Hydrology:
             )
         ].copy()
 
-        discharge: pd.DataFrame = read_discharge_per_river(
+        # In merged multi-cluster runs some rivers may not have output files, mostly caused by the outflow reporter to be false in the model.yml. Filter out those rivers here.
+        rivers_of_interest = rivers_of_interest[
+            rivers_of_interest.index.map(
+                lambda rid: (
+                    discharge_folder / f"river_outflow_hourly_m3_per_s_{rid}.parquet"
+                ).exists()
+            )
+        ].copy()
+
+        discharge: pd.DataFrame = get_discharge_per_river(
             folder=discharge_folder,
             rivers=rivers_of_interest,
             all_rivers=all_rivers,
@@ -2499,10 +1897,10 @@ class Hydrology:
     ) -> None:
         """Plot the mean discharge map and all exported outflow time series.
 
-        Creates a spatial visualization of mean discharge values over time from the GEB model
-        simulation results. The mean discharge field is saved as both a zarr file and PNG image.
-        If outflow-point reporter CSV files are available, the method also creates one time-series
-        plot per outflow point in the hydrology evaluation output folder.
+        Creates a spatial visualization of mean discharge values over time from
+        the GEB model simulation results. If outflow-point reporter files are
+        available, the method also creates one time-series plot per outflow
+        point in the hydrology evaluation output folder.
 
         Notes:
             The discharge data must exist in the report directory structure. If the discharge
@@ -2514,8 +1912,47 @@ class Hydrology:
                 run directory in the model output folder.
             *args: Additional positional arguments (ignored).
             **kwargs: Additional keyword arguments (ignored).
+
+        Raises:
+            FileNotFoundError: If the hydrology routing report folder is missing.
         """
-        rivers_of_interest, discharge = self.get_discharge_per_river(run_name)
+        if self.discharge_output_folder.exists():
+            shutil.rmtree(self.discharge_output_folder)
+        self.discharge_output_folder.mkdir(parents=True, exist_ok=True)
+
+        discharge_folder: Path = (
+            self.evaluator.output_folder_evaluate.parent
+            / "report"
+            / "hydrology.routing"
+        )
+        if not discharge_folder.exists():
+            raise FileNotFoundError(
+                f"Discharge files for run '{run_name}' does not exist in the report directory. Did you run the model?"
+            )
+
+        all_rivers: gpd.GeoDataFrame = read_geom(
+            self.model.files["geom"]["routing/rivers"]
+        )
+        rivers_of_interest: gpd.GeoDataFrame = all_rivers[
+            ~(
+                all_rivers["is_downstream_outflow"]
+                | all_rivers["is_upstream_of_downstream_basin"]
+                | all_rivers["is_further_downstream_outflow"]
+            )
+        ].copy()
+        rivers_of_interest = rivers_of_interest[
+            rivers_of_interest.index.map(
+                lambda river_id: (
+                    discharge_folder
+                    / f"river_outflow_hourly_m3_per_s_{river_id}.parquet"
+                ).exists()
+            )
+        ].copy()
+        discharge: pd.DataFrame = read_discharge_per_river(
+            folder=discharge_folder,
+            rivers=rivers_of_interest,
+            all_rivers=all_rivers,
+        )
         for river_id in discharge.columns:
             rivers_of_interest.loc[river_id, "discharge_m3_per_s"] = discharge[
                 river_id
@@ -2528,10 +1965,10 @@ class Hydrology:
         )
         ax.set_xlabel("Longitude")
         ax.set_ylabel("Latitude")
-        ax.set_title(f"Mean discharge (m3/s)")
+        ax.set_title("Mean discharge (m3/s)")
 
         plt.savefig(
-            self.output_folder / "mean_discharge_m3_per_s_map.svg",
+            self.discharge_output_folder / "mean_discharge_m3_per_s_map.svg",
         )
         plt.close()
 
@@ -2539,7 +1976,7 @@ class Hydrology:
             model=self.model,
             output_folder=self.model.output_folder,
             run_name=run_name,
-            eval_plot_folder=self.output_folder,
+            eval_plot_folder=self.discharge_output_folder,
         )
         if outflow_plot_count > 0:
             self.model.logger.info(
@@ -2841,11 +2278,17 @@ class Hydrology:
         include_yearly_plots: bool = True,
         correct_discharge_observations: bool = False,
         create_plots: bool = True,
+        include_return_period_plots: bool = False,
+        minimum_upstream_area_km2: float | None = None,
+        minimum_timeseries_length_years: float | None = None,
+        start_year: int | None = None,
+        end_year: int | None = None,
+        clean_output: bool = False,
     ) -> dict[str, float | None]:
         """Evaluate the discharge grid from GEB against observations from the discharge observations database.
 
         Compares simulated discharge from the GEB model with observed discharge data from
-        gauging stations. Calculates performance metrics (KGE, NSE, R) and creates
+        gauging stations. Calculates discharge skill scores and creates
         evaluation plots and interactive maps for analysis.
 
         Notes:
@@ -2856,13 +2299,28 @@ class Hydrology:
         Args:
             run_name: Name of the simulation run to evaluate. Must correspond to an
                 existing run directory in the model output folder.
-            include_yearly_plots: Whether to create plots for every year showing the evaluation.
+            include_yearly_plots: Whether to save one discharge PNG per station
+                and calendar year.
             correct_discharge_observations: Whether to correct the discharge observations discharge timeseries for the difference
                 in upstream area between the discharge observations station and the discharge from GEB.
             create_plots: Whether to create evaluation plots. Set to False to only calculate the evaluation metrics and save the results without plotting.
+            include_return_period_plots: Whether to fit extreme-value models and
+                create detailed station return-period plots. Defaults to `False`
+                because these plots are expensive for large station collections.
+            minimum_upstream_area_km2: Optional minimum modeled upstream area threshold for station evaluation (km2).
+                If omitted, `hydrology.evaluation.discharge.minimum_upstream_area_km2` is used.
+            minimum_timeseries_length_years: Optional minimum paired observation-simulation timeseries length for station evaluation (years).
+                If omitted, `hydrology.evaluation.discharge.minimum_timeseries_length_years` is used.
+            start_year: Optional first calendar year included in the skill-score
+                calculation. If omitted, the first overlapping year is used.
+            end_year: Optional last calendar year included in the skill-score
+                calculation. If omitted, the last overlapping year is used.
+            clean_output: Whether to remove the existing discharge evaluation
+                output folder before writing new files. Defaults to `False` so
+                period-specific evaluations do not delete full-period outputs.
 
         Returns:
-            Dictionary containing mean metrics (KGE, NSE, R). In addition, the returned dictionary contains
+            Dictionary containing median discharge skill scores. In addition, the returned dictionary contains
             frequency-specific metrics (e.g., KGE_hourly, KGE_daily).
             Stations with hourly data are also evaluated on the daily resampled data, and those metrics are included in
             the returned dictionary. Stations with only daily data are not evaluated on the hourly data.
@@ -2871,6 +2329,53 @@ class Hydrology:
             FileNotFoundError: If the run folder does not exist in the report directory.
             ValueError: If a non-existing frequency label is encountered in the discharge observations data.
         """
+        output_folder = self.evaluate_discharge_output_folder
+        output_folder.mkdir(parents=True, exist_ok=True)
+        if clean_output:
+            shutil.rmtree(output_folder)
+            output_folder.mkdir(parents=True, exist_ok=True)
+        evaluation_paths: DischargeEvaluationPaths = _get_discharge_evaluation_paths(
+            output_folder=output_folder,
+            start_year=start_year,
+            end_year=end_year,
+        )
+        if create_plots:
+            evaluation_paths.plot_folder.mkdir(parents=True, exist_ok=True)
+        dashboard_path: Path = (
+            evaluation_paths.plot_folder
+            / f"discharge_evaluation_map{evaluation_paths.suffix}.html"
+        )
+        self.model.logger.info(
+            "Evaluating discharge skill scores for %s.",
+            evaluation_paths.label,
+        )
+
+        if minimum_upstream_area_km2 is None:
+            minimum_upstream_area_km2 = self.model.config["hydrology"]["evaluation"][
+                "discharge"
+            ]["minimum_upstream_area_km2"]
+        self.model.logger.info(
+            "Using %.1f km2 as the minimum upstream area threshold for discharge evaluation.",
+            minimum_upstream_area_km2,
+        )
+        if minimum_timeseries_length_years is None:
+            if start_year is not None and end_year is not None:
+                # A fixed evaluation window is already a time constraint; applying
+                # a minimum-length filter on top would wrongly exclude stations
+                # (e.g. the 8-year 2014-2021 Google/GloFAS window).
+                minimum_timeseries_length_years = 0.0
+                self.model.logger.info(
+                    "start_year and end_year both provided; disabling timeseries-length filter."
+                )
+            else:
+                minimum_timeseries_length_years = self.model.config["hydrology"][
+                    "evaluation"
+                ]["discharge"]["minimum_timeseries_length_years"]
+                self.model.logger.info(
+                    "Using %.2f years as the minimum paired timeseries length for discharge evaluation.",
+                    minimum_timeseries_length_years,
+                )
+
         # load input data files
         discharge_observations_hourly: pd.DataFrame = read_table(
             self.model.files["table"]["discharge/discharge_observations_hourly"]
@@ -2878,7 +2383,6 @@ class Hydrology:
         discharge_observations_daily: pd.DataFrame = read_table(
             self.model.files["table"]["discharge/discharge_observations_daily"]
         )
-
         if not discharge_observations_hourly.empty:
             discharge_observations_hourly = regularize_discharge_timeseries(
                 discharge_observations_hourly
@@ -2894,16 +2398,17 @@ class Hydrology:
 
         self.model.logger.info(f"Loaded discharge simulation from {run_name} run.")
 
-        # check if run file exists, if not, raise an error
-        if not (self.model.output_folder / "report" / run_name).exists():
+        report_folder: Path = self.model.output_folder / "report"
+        if not report_folder.exists():
             raise FileNotFoundError(
                 f"Run folder '{run_name}' does not exist in the report directory. Did you run the model?"
             )
 
-        evaluation_per_station: list = []
+        evaluation_per_station: list[dict[str, Any]] = []
+        station_dashboard_chart_files: dict[str, str] = {}
 
         self.model.logger.info("Starting discharge evaluation...")
-        for freq_label, discharge_observations_df in zip(
+        for frequency_label, discharge_observations_df in zip(
             ["hourly", "daily"],
             [
                 discharge_observations_hourly,
@@ -2913,170 +2418,192 @@ class Hydrology:
         ):
             if discharge_observations_df.empty:
                 continue
-            for ID in tqdm(discharge_observations_df.columns):
+            for station_id in tqdm(discharge_observations_df.columns):
                 # create a discharge timeseries dataframe
-                discharge_obs_series = discharge_observations_df[ID]
-                if isinstance(discharge_obs_series, pd.DataFrame):
-                    discharge_obs_series.columns = ["Q"]
-                discharge_obs_series.name = "Q"
+                observed_discharge_series = discharge_observations_df[station_id]
+                if isinstance(observed_discharge_series, pd.DataFrame):
+                    observed_discharge_series.columns = ["Q"]
+                observed_discharge_series.name = "Q"
 
                 # extract the properties from the snapping dataframe
                 discharge_observations_station_name = snapped_locations.loc[
-                    ID
+                    station_id
                 ].discharge_observations_station_name
                 discharge_observations_station_coords = snapped_locations.loc[
-                    ID
+                    station_id
                 ].discharge_observations_station_coords
                 discharge_observations_to_GEB_upstream_area_ratio = (
                     snapped_locations.loc[
-                        ID
+                        station_id
                     ].discharge_observations_to_GEB_upstream_area_ratio
                 )
-
-                validation_df = create_validation_df(
-                    self.model.output_folder,
-                    run_name,
-                    ID,
-                    discharge_obs_series,
-                    correct_discharge_observations,
-                    discharge_observations_to_GEB_upstream_area_ratio,
+                geb_upstream_area_m2: float = float(
+                    snapped_locations.at[station_id, "GEB_upstream_area_from_grid"]
                 )
-
-                # Check if validation_df is empty (station was skipped due to all NaN values)
-                if validation_df.empty:
+                if geb_upstream_area_m2 < minimum_upstream_area_km2 * 1_000_000.0:
+                    # Smaller catchments tend to be dominated by local timing and snapping
+                    # errors, so the default benchmark excludes them from summary scores.
                     continue
 
-                KGE, r, Beta, Gamma, NSE, R = _calculate_discharge_validation_metrics(
-                    validation_df
+                timezone_utc_offset: float = float(
+                    snapped_locations.at[station_id, "timezone_utc_offset"]
+                    if "timezone_utc_offset" in snapped_locations.columns
+                    else 0.0
                 )
 
+                try:
+                    validation_df: pd.DataFrame = create_validation_df(
+                        self.model.output_folder,
+                        run_name,
+                        station_id,
+                        observed_discharge_series,
+                        correct_discharge_observations,
+                        discharge_observations_to_GEB_upstream_area_ratio,
+                        timezone_utc_offset=timezone_utc_offset,
+                    )
+                except FileNotFoundError:
+                    self.model.logger.warning(
+                        "Skipping station %s: no simulation output found.", station_id
+                    )
+                    continue
+                validation_df = _filter_validation_df_to_years(
+                    validation_df=validation_df,
+                    start_year=start_year,
+                    end_year=end_year,
+                )
+
+                minimum_valid_steps = (
+                    minimum_timeseries_length_years
+                    * 365.25
+                    * (24 if frequency_label == "hourly" else 1)
+                )
+                if validation_df.dropna().shape[0] < minimum_valid_steps:
+                    continue
+
+                discharge_metrics = _calculate_discharge_validation_metrics(
+                    validation_df
+                )
+                discharge_metric_values: dict[str, float] = discharge_metrics._asdict()
+
                 if create_plots:
-                    _plot_discharge_validation_graphs(
-                        model=self.model,
-                        station_id=ID,
+                    save_discharge_timeseries_plots(
+                        station_id=station_id,
                         validation_df=validation_df,
                         station_name=discharge_observations_station_name,
                         upstream_area_ratio=discharge_observations_to_GEB_upstream_area_ratio,
-                        kge=KGE,
-                        nse=NSE,
-                        r_value=R,
-                        eval_plot_folder=self.output_folder,
+                        metrics=discharge_metric_values,
+                        plot_folder=evaluation_paths.plot_folder,
                         include_yearly_plots=include_yearly_plots,
-                        frequency=freq_label,
+                    )
+                    if include_return_period_plots:
+                        _plot_validation_return_periods(
+                            validation_df=validation_df,
+                            station_id=station_id,
+                            station_name=discharge_observations_station_name,
+                            eval_plot_folder=evaluation_paths.plot_folder,
+                            frequency=frequency_label,
+                        )
+                    station_id_text: str = str(station_id)
+                    station_dashboard_chart_files[station_id_text] = (
+                        write_discharge_dashboard_chart_data(
+                            dashboard_path=dashboard_path,
+                            station_id=station_id_text,
+                            chart_data=build_discharge_dashboard_chart_data(
+                                validation_df=validation_df,
+                                station_name=discharge_observations_station_name,
+                                upstream_area_ratio=discharge_observations_to_GEB_upstream_area_ratio,
+                                metrics=discharge_metric_values,
+                                frequency=frequency_label,
+                            ),
+                        )
                     )
 
-                station_evaluation = {
-                    "station_ID": ID,
+                station_evaluation: dict[str, Any] = {
+                    "station_ID": station_id,
                     "station_name": discharge_observations_station_name,
                     "x": discharge_observations_station_coords[0],
                     "y": discharge_observations_station_coords[1],
                     "discharge_observations_to_GEB_upstream_area_ratio": discharge_observations_to_GEB_upstream_area_ratio,
-                    "upstream_area_GEB": snapped_locations.at[
-                        ID, "GEB_upstream_area_from_grid"
-                    ],
-                    "KGE": KGE,
-                    "r": r,
-                    "Beta": Beta,
-                    "Gamma": Gamma,
-                    "NSE": NSE,
-                    "R": R,
-                    f"KGE_{freq_label}": KGE,  # https://permetrics.readthedocs.io/en/latest/pages/regression/KGE.html
-                    f"NSE_{freq_label}": NSE,  # https://permetrics.readthedocs.io/en/latest/pages/regression/NSE.html # ranges from -inf to 1.0, where 1.0 is a perfect fit. Values less than 0.36 are considered unsatisfactory, while values between 0.36 to 0.75 are classified as good, and values greater than 0.75 are regarded as very good.
-                    f"R_{freq_label}": R,  # https://permetrics.readthedocs.io/en/latest/pages/regression/R.html
+                    "upstream_area_GEB": geb_upstream_area_m2,
+                    "timezone_utc_offset": timezone_utc_offset,
+                    **discharge_metric_values,
+                    **{
+                        f"{metric_name}_{frequency_label}": metric_value
+                        for metric_name, metric_value in discharge_metric_values.items()
+                    },
                 }
 
                 # if the frequency is hourly, also calculate the metrics on the daily resampled data
-                if freq_label == "hourly":
-                    # resample to daily, but keep only the days with 24 valid hourly observations
-                    counts = validation_df.resample("D").count()
-                    validation_df_daily = (
-                        validation_df.resample("D").mean()[counts == 24].dropna()
-                    )
-                    KGE_daily, r_daily, Beta_daily, Gamma_daily, NSE_daily, R_daily = (
-                        _calculate_discharge_validation_metrics(validation_df_daily)
+                if frequency_label == "hourly":
+                    # Resample to daily, keeping only days with 24 valid hourly observations.
+                    daily_resampler: Any = validation_df.resample("D")
+                    valid_hourly_counts_per_day = daily_resampler.count()
+                    validation_df_daily = daily_resampler.mean()[
+                        valid_hourly_counts_per_day == 24
+                    ].dropna()
+                    daily_discharge_metrics = _calculate_discharge_validation_metrics(
+                        validation_df_daily
                     )
                     station_evaluation.update(
                         {
-                            "KGE_daily": KGE_daily,
-                            "r_daily": r_daily,
-                            "Beta_daily": Beta_daily,
-                            "Gamma_daily": Gamma_daily,
-                            "NSE_daily": NSE_daily,
-                            "R_daily": R_daily,
+                            f"{metric_name}_daily": metric_value
+                            for metric_name, metric_value in daily_discharge_metrics._asdict().items()
                         }
                     )
-                # if the frequency is daily, we cannot calculate the metrics on the hourly resampled data,
-                # so we set those to NaN
-                elif freq_label == "daily":
+                # Daily-frequency stations have no hourly data; fill with NaN so the
+                # DataFrame columns remain consistent across all stations.
+                elif frequency_label == "daily":
                     station_evaluation.update(
                         {
-                            "KGE_hourly": np.nan,
-                            "r_hourly": np.nan,
-                            "Beta_hourly": np.nan,
-                            "Gamma_hourly": np.nan,
-                            "NSE_hourly": np.nan,
-                            "R_hourly": np.nan,
+                            f"{metric_name}_hourly": float("nan")
+                            for metric_name in DischargeMetrics._fields
                         }
                     )
                 else:
                     raise ValueError(
-                        f"Unexpected frequency label '{freq_label}' in evaluation loop."
+                        f"Unexpected frequency label '{frequency_label}' in evaluation loop."
                     )
 
-                # Calculate montly metrics for the station
-                validation_df_monthly = validation_df.resample("M").mean().dropna()
-                (
-                    KGE_monthly,
-                    r_monthly,
-                    Beta_monthly,
-                    Gamma_monthly,
-                    NSE_monthly,
-                    R_monthly,
-                ) = _calculate_discharge_validation_metrics(validation_df_monthly)
+                # Monthly metrics
+                validation_df_monthly = validation_df.resample("ME").mean().dropna()
+                monthly_discharge_metrics = _calculate_discharge_validation_metrics(
+                    validation_df_monthly
+                )
                 station_evaluation.update(
                     {
-                        "KGE_monthly": KGE_monthly,
-                        "r_monthly": r_monthly,
-                        "Beta_monthly": Beta_monthly,
-                        "Gamma_monthly": Gamma_monthly,
-                        "NSE_monthly": NSE_monthly,
-                        "R_monthly": R_monthly,
+                        f"{metric_name}_monthly": metric_value
+                        for metric_name, metric_value in monthly_discharge_metrics._asdict().items()
                     }
                 )
 
                 # attach to the evaluation dataframe
                 evaluation_per_station.append(station_evaluation)
 
-        if len(evaluation_per_station) == 0:
+        if not evaluation_per_station:
             # Create empty evaluation dataframe with proper structure
+            # Column names are derived from DischargeMetrics so they stay in sync.
+            freq_cols: list[str] = [
+                f"{metric_name}_{frequency}"
+                for frequency in ("monthly", "daily", "hourly")
+                for metric_name in DischargeMetrics._fields
+            ]
             evaluation_df = pd.DataFrame(
-                columns=np.array(
-                    [
-                        "station_name",
-                        "x",
-                        "y",
-                        "discharge_observations_to_GEB_upstream_area_ratio",
-                        "KGE_monthly",
-                        "NSE_monthly",
-                        "R_monthly",
-                        "KGE_daily",
-                        "NSE_daily",
-                        "R_daily",
-                        "KGE_hourly",
-                        "NSE_hourly",
-                        "R_hourly",
-                        "KGE",
-                        "NSE",
-                        "R",
-                    ]
-                ),
+                columns=[
+                    "station_name",
+                    "x",
+                    "y",
+                    "upstream_area_GEB",
+                    "discharge_observations_to_GEB_upstream_area_ratio",
+                    *freq_cols,
+                    *DischargeMetrics._fields,
+                ],
                 index=pd.Index([], name="station_ID"),
             )
         else:
             evaluation_df = pd.DataFrame(evaluation_per_station).set_index("station_ID")
 
         evaluation_df.to_excel(
-            self.output_folder / "evaluation_metrics.xlsx",
+            evaluation_paths.xlsx,
             index=True,
         )
 
@@ -3087,46 +2614,60 @@ class Hydrology:
             crs="EPSG:4326",
         )  # create a geodataframe from the evaluation dataframe
         evaluation_gdf.to_parquet(
-            self.output_folder / "evaluation_metrics.geoparquet",
+            evaluation_paths.geoparquet,
+        )
+        self.model.logger.info(
+            "Saved discharge evaluation metrics to %s and %s.",
+            evaluation_paths.xlsx,
+            evaluation_paths.geoparquet,
         )
 
         # Return median metrics if available
         if not evaluation_df.empty:
             if create_plots:
-                region_geom = read_geom(
-                    self.model.files["geom"]["mask"]
-                )  # load the region shapefile
-                rivers, discharge = self.get_discharge_per_river(
-                    run_name
-                )  # load the river geometries and discharge data
-                for river_id in discharge.columns:
-                    rivers.loc[river_id, "discharge_m3_per_s"] = discharge[
-                        river_id
-                    ].mean()
+                dashboard_geometries: DischargeDashboardGeometries = (
+                    load_discharge_dashboard_geometries(self.model)
+                )
 
-                _create_discharge_folium_map(
+                create_discharge_folium_map(
                     evaluation_gdf=evaluation_gdf,
-                    eval_plot_folder=self.output_folder,
-                    eval_result_folder=self.output_folder,
-                    region_geom=region_geom,
-                    rivers=rivers,
+                    output_path=dashboard_path,
+                    region_geom=dashboard_geometries.region,
+                    rivers=dashboard_geometries.rivers,
+                    station_chart_files=station_dashboard_chart_files,
+                    waterbodies=dashboard_geometries.waterbodies,
                 )
 
                 self.model.logger.info("Discharge evaluation dashboard created.")
+                self.model.logger.info(
+                    "Tip: If station charts do not appear, download the dashboard "
+                    "HTML and its charts folder to the same local directory."
+                )
+
+                # GEB standalone plot — all GEB stations.
+                self.plot_skill_score_boxplots(
+                    export=True,
+                    start_year=start_year,
+                    end_year=end_year,
+                )
+                self.plot_skill_score_maps(
+                    export=True,
+                    start_year=start_year,
+                    end_year=end_year,
+                )
 
             scores: dict[str, float | None] = {
-                "KGE_hourly": float(evaluation_df["KGE_hourly"].median()),
-                "NSE_hourly": float(evaluation_df["NSE_hourly"].median()),
-                "R_hourly": float(evaluation_df["R_hourly"].median()),
-                "KGE_daily": float(evaluation_df["KGE_daily"].median()),
-                "NSE_daily": float(evaluation_df["NSE_daily"].median()),
-                "R_daily": float(evaluation_df["R_daily"].median()),
-                "KGE_monthly": float(evaluation_df["KGE_monthly"].median()),
-                "NSE_monthly": float(evaluation_df["NSE_monthly"].median()),
-                "R_monthly": float(evaluation_df["R_monthly"].median()),
-                "KGE": float(evaluation_df["KGE"].median()),
-                "NSE": float(evaluation_df["NSE"].median()),
-                "R": float(evaluation_df["R"].median()),
+                **{
+                    f"{metric_name}_{frequency}": float(
+                        evaluation_df[f"{metric_name}_{frequency}"].median()
+                    )
+                    for frequency in ("hourly", "daily", "monthly")
+                    for metric_name in DischargeMetrics._fields
+                },
+                **{
+                    metric_name: float(evaluation_df[metric_name].median())
+                    for metric_name in DischargeMetrics._fields
+                },
             }
         else:
             self.model.logger.warning(
@@ -3134,121 +2675,719 @@ class Hydrology:
             )
 
             scores: dict[str, float | None] = {
-                "KGE_hourly": None,
-                "NSE_hourly": None,
-                "R_hourly": None,
-                "KGE_daily": None,
-                "NSE_daily": None,
-                "R_daily": None,
-                "KGE_monthly": None,
-                "NSE_monthly": None,
-                "R_monthly": None,
-                "KGE": None,
-                "NSE": None,
-                "R": None,
+                **{
+                    f"{metric_name}_{frequency}": None
+                    for frequency in ("hourly", "daily", "monthly")
+                    for metric_name in DischargeMetrics._fields
+                },
+                **{metric_name: None for metric_name in DischargeMetrics._fields},
             }
 
         self.model.logger.info(f"Discharge evaluation completed. Scores: {scores}")
 
         return scores
 
-    def plot_skill_scores(
+    def create_discharge_dashboard(
         self,
-        export: bool = True,
-    ) -> None:
-        """Create skill score boxplot graphs for hydrological model evaluation metrics.
+        run_name: str = "default",
+        correct_discharge_observations: bool = False,
+        output_filename: str = "discharge_evaluation_map.html",
+        **kwargs: Any,
+    ) -> dict[str, str]:
+        """Create only the discharge evaluation dashboard.
 
-        Generates boxplot visualizations of discharge evaluation metrics (KGE, NSE, R)
-        from previously calculated station evaluations. Creates a plot
-        showing the distribution of performance metrics across all gauging stations.
-
-        Notes:
-            Requires evaluation metrics to exist from a previous `evaluate_discharge` run.
-            If no discharge stations are found for evaluation, the method will skip
-            graph creation and return early.
+        This reuses ``evaluation_metrics.geoparquet`` from a previous
+        ``evaluate_discharge`` run. Interactive Plotly chart payloads are
+        rebuilt from the reported discharge time series. Static station plots
+        and skill-score plots are not regenerated.
 
         Args:
-            export: Whether to save the skill score graphs to PNG files.
-        """
-        evaluation_df = pd.read_excel(self.output_folder / "evaluation_metrics.xlsx")
+            run_name: Name of the simulation run to use for river and station
+                discharge time series.
+            correct_discharge_observations: Whether to correct simulated discharge
+                by the observed-to-GEB upstream-area ratio (dimensionless), matching
+                the option in ``evaluate_discharge``.
+            output_filename: Dashboard HTML filename written inside the discharge
+                evaluation output folder.
+            **kwargs: Ignored additional keyword arguments for CLI compatibility.
 
-        # Check if evaluation dataframe is empty
-        if evaluation_df.empty:
+        Returns:
+            Dictionary with the created dashboard path.
+
+        Raises:
+            FileNotFoundError: If saved discharge evaluation metrics do not exist.
+            ValueError: If ``output_filename`` is empty or is an absolute path.
+        """
+        if not output_filename:
+            raise ValueError("output_filename must not be empty.")
+        output_path: Path = Path(output_filename)
+        if output_path.is_absolute():
+            raise ValueError(
+                "output_filename must be a filename, not an absolute path."
+            )
+
+        metrics_path: Path = (
+            self.evaluate_discharge_output_folder / "evaluation_metrics.geoparquet"
+        )
+        if not metrics_path.exists():
+            raise FileNotFoundError(
+                "No discharge evaluation metrics found. Run "
+                "`geb evaluate hydrology.evaluate_discharge` once before creating "
+                "only the dashboard."
+            )
+
+        evaluation_gdf: gpd.GeoDataFrame = gpd.read_parquet(metrics_path)
+        n_stations: int = len(evaluation_gdf)
+        if evaluation_gdf.empty:
+            self.model.logger.warning(
+                "No discharge stations found in saved evaluation metrics. "
+                "Creating an empty dashboard."
+            )
+        else:
+            self.model.logger.info(
+                "Creating discharge dashboard for %d stations.", n_stations
+            )
+
+        self.model.logger.info("Loading dashboard geometries...")
+        dashboard_geometries: DischargeDashboardGeometries = (
+            load_discharge_dashboard_geometries(self.model)
+        )
+
+        dashboard_path: Path = self.evaluate_discharge_output_folder / output_path
+        self.model.logger.info("Building interactive chart payloads...")
+        station_dashboard_chart_files: dict[str, str] = (
+            self._build_saved_station_dashboard_charts(
+                evaluation_gdf=evaluation_gdf,
+                run_name=run_name,
+                correct_discharge_observations=correct_discharge_observations,
+                dashboard_path=dashboard_path,
+            )
+        )
+
+        self.model.logger.info("Rendering Folium map HTML...")
+        create_discharge_folium_map(
+            evaluation_gdf=evaluation_gdf,
+            output_path=dashboard_path,
+            region_geom=dashboard_geometries.region,
+            rivers=dashboard_geometries.rivers,
+            station_chart_files=station_dashboard_chart_files,
+            waterbodies=dashboard_geometries.waterbodies,
+        )
+        self.model.logger.info(
+            "Discharge evaluation dashboard created: %s", dashboard_path
+        )
+        self.model.logger.info(
+            "Tip: If station charts do not appear, download the dashboard HTML "
+            "and its charts folder to the same local directory."
+        )
+        return {"dashboard": str(dashboard_path)}
+
+    def _build_saved_station_dashboard_charts(
+        self,
+        evaluation_gdf: gpd.GeoDataFrame,
+        run_name: str,
+        correct_discharge_observations: bool,
+        dashboard_path: Path,
+    ) -> dict[str, str]:
+        """Write interactive chart payloads for saved evaluation stations.
+
+        Args:
+            evaluation_gdf: Saved per-station discharge evaluation metrics.
+            run_name: Name of the simulation run to use for discharge time series.
+            correct_discharge_observations: Whether to correct simulated discharge
+                by the observed-to-GEB upstream-area ratio (dimensionless).
+            dashboard_path: Output path of the dashboard HTML file.
+
+        Returns:
+            Mapping from station ID to exact chart payload file.
+
+        Raises:
+            ValueError: If saved metrics are missing required station columns.
+        """
+        required_columns: set[str] = {
+            "station_name",
+            "discharge_observations_to_GEB_upstream_area_ratio",
+        } | set(DischargeMetrics._fields)
+        missing_columns: set[str] = required_columns.difference(evaluation_gdf.columns)
+        if missing_columns:
+            raise ValueError(
+                "Saved discharge evaluation metrics are missing columns: "
+                + ", ".join(sorted(missing_columns))
+            )
+
+        discharge_observations_hourly: pd.DataFrame = read_table(
+            self.model.files["table"]["discharge/discharge_observations_hourly"]
+        )
+        discharge_observations_daily: pd.DataFrame = read_table(
+            self.model.files["table"]["discharge/discharge_observations_daily"]
+        )
+        if not discharge_observations_hourly.empty:
+            discharge_observations_hourly = regularize_discharge_timeseries(
+                discharge_observations_hourly
+            )
+        if not discharge_observations_daily.empty:
+            discharge_observations_daily = regularize_discharge_timeseries(
+                discharge_observations_daily
+            )
+
+        evaluation_by_station_id: dict[str, pd.Series] = {
+            str(station_id): station_row
+            for station_id, station_row in evaluation_gdf.iterrows()
+        }
+
+        # Count total work up front for progress reporting.
+        total_work: int = sum(
+            sum(1 for sid in df.columns if str(sid) in evaluation_by_station_id)
+            for df in [discharge_observations_hourly, discharge_observations_daily]
+            if not df.empty
+        )
+        self.model.logger.info(
+            "Processing %d station-frequency combinations "
+            "(includes return-period fits — may take several minutes)...",
+            total_work,
+        )
+
+        station_dashboard_chart_files: dict[str, str] = {}
+        skipped: int = 0
+        processed: int = 0
+        for frequency_label, discharge_observations_df in zip(
+            ["hourly", "daily"],
+            [discharge_observations_hourly, discharge_observations_daily],
+            strict=True,
+        ):
+            if discharge_observations_df.empty:
+                continue
+            for station_id in discharge_observations_df.columns:
+                station_id_text: str = str(station_id)
+                if station_id_text not in evaluation_by_station_id:
+                    continue
+
+                station_row: pd.Series = evaluation_by_station_id[station_id_text]
+                upstream_area_ratio: float = float(
+                    station_row["discharge_observations_to_GEB_upstream_area_ratio"]
+                )
+                observed_discharge_series: pd.Series = discharge_observations_df[
+                    station_id
+                ]
+                if isinstance(observed_discharge_series, pd.DataFrame):
+                    observed_discharge_series.columns = ["Q"]
+                observed_discharge_series.name = "Q"
+
+                timezone_utc_offset: float = float(
+                    station_row.get("timezone_utc_offset", 0.0) or 0.0
+                )
+                try:
+                    validation_df: pd.DataFrame = create_validation_df(
+                        output_folder=self.model.output_folder,
+                        run_name=run_name,
+                        station_id=station_id,
+                        observed_discharge=observed_discharge_series,
+                        correct_discharge_observations=correct_discharge_observations,
+                        discharge_observations_to_GEB_upstream_area_ratio=upstream_area_ratio,
+                        timezone_utc_offset=timezone_utc_offset,
+                    )
+                    metrics: dict[str, float] = {
+                        metric_name: float(station_row[metric_name])
+                        for metric_name in DischargeMetrics._fields
+                        if metric_name in station_row.index
+                    }
+                    station_dashboard_chart_files[station_id_text] = (
+                        write_discharge_dashboard_chart_data(
+                            dashboard_path=dashboard_path,
+                            station_id=station_id_text,
+                            chart_data=build_discharge_dashboard_chart_data(
+                                validation_df=validation_df,
+                                station_name=str(station_row["station_name"]),
+                                upstream_area_ratio=upstream_area_ratio,
+                                metrics=metrics,
+                                frequency=frequency_label,
+                            ),
+                        )
+                    )
+                except Exception as exc:
+                    self.model.logger.warning(
+                        "Skipping chart data for station %s (%s): %s",
+                        station_id_text,
+                        frequency_label,
+                        exc,
+                    )
+                    skipped += 1
+
+                processed += 1
+                if processed % 100 == 0:
+                    self.model.logger.info(
+                        "  %d / %d processed (%d skipped)...",
+                        processed,
+                        total_work,
+                        skipped,
+                    )
+
+        self.model.logger.info(
+            "Chart data built: %d stations, %d skipped.",
+            len(station_dashboard_chart_files),
+            skipped,
+        )
+        return station_dashboard_chart_files
+
+    def _read_external_evaluation_raw(
+        self,
+        external_evaluation_folder: str | Path | None = None,
+        auto_fetch_google_streamflow: bool = False,
+    ) -> dict[str, pd.DataFrame]:
+        """Read external model evaluation CSVs without matching to GEB stations.
+
+        Source-specific filters, such as the PCR-GLOBWB GRDC station criteria, are
+        applied before the external scores are returned.
+
+        Args:
+            external_evaluation_folder: Directory with one CSV per external model.
+                Defaults to the configured folder, resolved from the model folder
+                when relative.
+            auto_fetch_google_streamflow: Download Google/GloFAS archive metrics
+                when no local copy is available.
+
+        Returns:
+            Mapping from model label to prepared external DataFrame (index =
+            station name, columns = metrics and optional metadata).
+        """
+        configured_folder: str | Path | None = self.model.config["hydrology"][
+            "evaluation"
+        ]["discharge"].get("external_evaluation_folder")
+        external_models: dict[str, pd.DataFrame] = _read_external_evaluation_raw(
+            external_evaluation_folder=external_evaluation_folder,
+            configured_external_evaluation_folder=configured_folder,
+            model_folder=self.model.input_folder.parent,
+            logger=self.model.logger,
+            auto_fetch_google_streamflow=auto_fetch_google_streamflow,
+        )
+        return external_models
+
+    def prepare_external_evaluation(
+        self,
+        external_evaluation_folder: str | Path | None = None,
+        **kwargs: Any,
+    ) -> dict[str, pd.DataFrame]:
+        """Filter external model evaluation CSVs to stations present in this model.
+
+        Reads each ``.csv`` in ``external_evaluation_folder`` (one file per
+        external model), keeps only rows whose station name matches GEB stations,
+        saves filtered results as ``external_evaluation_filtered_<name>.xlsx``,
+        and returns them.
+
+        Notes:
+            Station names are matched case-insensitively. Falls back to
+            ``discharge_snapped_locations.geoparquet`` when
+            ``evaluation_metrics.xlsx`` does not yet exist.
+
+        Args:
+            external_evaluation_folder: Directory with one CSV per external model
+                (station names as index, metrics as columns). Defaults to
+                ``external_evaluation_data/`` in the models-root directory.
+            **kwargs: Ignored (CLI compatibility).
+
+        Returns:
+            Mapping from model label to matched-stations DataFrame.
+        """
+        external_models: dict[str, pd.DataFrame] = self._read_external_evaluation_raw(
+            external_evaluation_folder
+        )
+        if not external_models:
+            self.model.logger.info("No external evaluation data found, skipping.")
+            return {}
+
+        geb_xlsx = self.evaluate_discharge_output_folder / "evaluation_metrics.xlsx"
+        station_keys: set[str] = _get_geb_station_keys(
+            evaluation_metrics_path=geb_xlsx,
+            snapped_locations_path=self.model.files["geom"][
+                "discharge/discharge_snapped_locations"
+            ],
+        )
+
+        return _prepare_external_evaluation(
+            external_models=external_models,
+            station_keys=station_keys,
+            output_folder=self.evaluate_discharge_output_folder,
+            logger=self.model.logger,
+        )
+
+    def plot_skill_score_maps(
+        self,
+        export: bool = True,
+        minimum_upstream_area_km2: float | None = None,
+        external_evaluation_folder: str | Path | None = None,
+        include_external: bool = False,
+        start_year: int | None = None,
+        end_year: int | None = None,
+        **kwargs: Any,
+    ) -> None:
+        """Plot per-station skill scores on a satellite basemap, one map per metric.
+
+        Notes:
+            Requires ``evaluate_discharge`` to have been run first so that
+            ``evaluation_metrics.xlsx`` or ``evaluation_metrics.geoparquet`` exist.
+
+        Args:
+            export: Whether to save the figures to disk.
+            minimum_upstream_area_km2: Optional minimum modeled upstream area threshold for plotted stations (km2).
+                If omitted, `hydrology.evaluation.discharge.minimum_upstream_area_km2` is used.
+            external_evaluation_folder: Optional folder containing external
+                model skill scores or Google streamflow `metrics.tgz`.
+            include_external: Include pairwise external-model score differences
+                in the maps. When enabled, missing Google/GLOFAS archive
+                metrics may be downloaded.
+            start_year: Optional first calendar year of the evaluation metrics
+                file to plot.
+            end_year: Optional last calendar year of the evaluation metrics file
+                to plot.
+            **kwargs: Ignored (CLI compatibility).
+        """
+        if minimum_upstream_area_km2 is None:
+            minimum_upstream_area_km2 = self.model.config["hydrology"]["evaluation"][
+                "discharge"
+            ]["minimum_upstream_area_km2"]
+        configured_folder: str | Path | None = self.model.config["hydrology"][
+            "evaluation"
+        ]["discharge"].get("external_evaluation_folder")
+        effective_external_evaluation_folder: str | Path | None = (
+            _get_effective_external_evaluation_folder(
+                external_evaluation_folder=external_evaluation_folder,
+                configured_external_evaluation_folder=configured_folder,
+                include_external=include_external,
+            )
+        )
+        evaluation_paths: DischargeEvaluationPaths = _get_discharge_evaluation_paths(
+            output_folder=self.evaluate_discharge_output_folder,
+            start_year=start_year,
+            end_year=end_year,
+        )
+        if export:
+            evaluation_paths.plot_folder.mkdir(parents=True, exist_ok=True)
+
+        if evaluation_paths.geoparquet.exists():
+            evaluation_gdf: gpd.GeoDataFrame = gpd.read_parquet(
+                evaluation_paths.geoparquet
+            )
+        elif evaluation_paths.xlsx.exists():
+            eval_df: pd.DataFrame = pd.read_excel(evaluation_paths.xlsx)
+            evaluation_gdf = gpd.GeoDataFrame(
+                eval_df,
+                geometry=gpd.points_from_xy(eval_df["x"], eval_df["y"]),
+                crs="EPSG:4326",
+            )
+        else:
+            self.model.logger.warning(
+                "No evaluation_metrics file found. Run evaluate_discharge first."
+            )
+            return
+
+        before_filter_count: int = len(evaluation_gdf)
+        evaluation_gdf = gpd.GeoDataFrame(
+            evaluation_gdf[
+                evaluation_gdf["upstream_area_GEB"]
+                >= minimum_upstream_area_km2 * 1_000_000.0
+            ].copy(),
+            geometry="geometry",
+            crs=evaluation_gdf.crs,
+        )
+        self.model.logger.info(
+            "Upstream-area plot filter retained %d/%d stations at %.1f km2 or larger.",
+            len(evaluation_gdf),
+            before_filter_count,
+            minimum_upstream_area_km2,
+        )
+        if evaluation_gdf.empty:
+            self.model.logger.warning(
+                "No discharge evaluation stations remain after upstream-area filtering. "
+                "Skipping skill score maps."
+            )
+            return
+
+        if export:
+            region_geom: gpd.GeoDataFrame = read_geom(self.model.files["geom"]["mask"])
+            _plot_skill_score_maps(
+                evaluation_gdf=evaluation_gdf,
+                region_geom=region_geom,
+                output_folder=evaluation_paths.plot_folder,
+                logger=self.model.logger,
+                difference_gdfs=(
+                    {
+                        model_name: plot_inputs.evaluation_df
+                        for model_name, plot_inputs in _prepare_pairwise_skill_score_boxplot_inputs(
+                            evaluation_metrics_path=evaluation_paths.xlsx,
+                            external_evaluation_folder=effective_external_evaluation_folder,
+                            configured_external_evaluation_folder=None,
+                            model_folder=self.model.input_folder.parent,
+                            output_folder=evaluation_paths.plot_folder,
+                            logger=self.model.logger,
+                            minimum_upstream_area_km2=minimum_upstream_area_km2,
+                            auto_fetch_google_streamflow=include_external,
+                            archive_evaluation_metrics_path=_get_discharge_evaluation_paths(
+                                output_folder=self.evaluate_discharge_output_folder,
+                                start_year=GOOGLE_GLOFAS_EVALUATION_START_YEAR,
+                                end_year=GOOGLE_GLOFAS_EVALUATION_END_YEAR,
+                            ).xlsx,
+                        ).items()
+                    }
+                    if include_external
+                    else {}
+                ),
+            )
+
+    def plot_skill_score_boxplots(
+        self,
+        export: bool = True,
+        minimum_upstream_area_km2: float | None = None,
+        external_evaluation_folder: str | Path | None = None,
+        include_external: bool = False,
+        start_year: int | None = None,
+        end_year: int | None = None,
+        **kwargs: Any,
+    ) -> None:
+        """Create skill score violin+boxplot graphs for each evaluation metric.
+
+        Produces GEB violin/box plots across gauging stations. When
+        ``include_external=True`` is passed, external-model scores are added and
+        pairwise matched-station comparison plots are created as additional
+        outputs.
+
+        Args:
+            export: Save the figure to disk.
+            minimum_upstream_area_km2: Optional minimum modeled upstream area threshold for plotted GEB stations (km2).
+                If omitted, `hydrology.evaluation.discharge.minimum_upstream_area_km2` is used.
+            external_evaluation_folder: Optional folder containing external
+                model skill scores or Google streamflow `metrics.tgz`.
+            include_external: Include external model scores and pairwise
+                matched comparison plots. When external scores are included,
+                missing Google/GLOFAS archive metrics may be downloaded.
+            start_year: Optional first calendar year of the evaluation metrics
+                file to plot.
+            end_year: Optional last calendar year of the evaluation metrics file
+                to plot.
+            **kwargs: Ignored CLI compatibility options. Supports
+                `minimum_upstream_areakm2` as a backwards-compatible alias for
+                `minimum_upstream_area_km2`.
+        """
+        if minimum_upstream_area_km2 is None:
+            minimum_upstream_area_km2 = kwargs.pop("minimum_upstream_areakm2", None)
+        if minimum_upstream_area_km2 is None:
+            minimum_upstream_area_km2 = self.model.config["hydrology"]["evaluation"][
+                "discharge"
+            ]["minimum_upstream_area_km2"]
+        configured_folder: str | Path | None = self.model.config["hydrology"][
+            "evaluation"
+        ]["discharge"].get("external_evaluation_folder")
+        effective_external_evaluation_folder: str | Path | None = (
+            _get_effective_external_evaluation_folder(
+                external_evaluation_folder=external_evaluation_folder,
+                configured_external_evaluation_folder=configured_folder,
+                include_external=include_external,
+            )
+        )
+        evaluation_paths: DischargeEvaluationPaths = _get_discharge_evaluation_paths(
+            output_folder=self.evaluate_discharge_output_folder,
+            start_year=start_year,
+            end_year=end_year,
+        )
+        evaluation_paths.plot_folder.mkdir(parents=True, exist_ok=True)
+        snapped_locations_path: Path = self.model.files["geom"][
+            "discharge/discharge_snapped_locations"
+        ]
+        plot_inputs = _prepare_skill_score_boxplot_inputs(
+            evaluation_metrics_path=evaluation_paths.xlsx,
+            snapped_locations_path=snapped_locations_path,
+            external_evaluation_folder=effective_external_evaluation_folder,
+            configured_external_evaluation_folder=None,
+            model_folder=self.model.input_folder.parent,
+            output_folder=evaluation_paths.plot_folder,
+            logger=self.model.logger,
+            minimum_upstream_area_km2=minimum_upstream_area_km2,
+            include_geb=True,
+            matched_only=False,
+            include_external=include_external,
+            auto_fetch_google_streamflow=include_external,
+            archive_models_only=bool(evaluation_paths.suffix),
+        )
+
+        if plot_inputs.evaluation_df.empty:
             self.model.logger.info(
                 "No discharge stations found for evaluation. Skipping skill score graphs."
             )
             return
 
-        # Create fancy boxplots for evaluation metrics
-        self.model.logger.info("Creating evaluation metrics boxplots...")
-
-        # Prepare data for boxplots
-        metrics = [
-            {
-                "data": evaluation_df["KGE"].dropna(),
-                "label": "KGE\n(Kling-Gupta)",
-                "color": "#2E86AB",
-            },
-            {
-                "data": evaluation_df["NSE"].dropna(),
-                "label": "NSE\n(Nash-Sutcliffe)",
-                "color": "#A23B72",
-            },
-            {
-                "data": evaluation_df["R"].dropna(),
-                "label": "R\n(Correlation)",
-                "color": "#F18F01",
-            },
-        ]
-
-        # Create the figure with 3 subplots
-        fig, axes = plt.subplots(1, 3, figsize=(15, 6))
-        fig.suptitle(
-            "Hydrological Model Evaluation Metrics", fontsize=16, fontweight="bold"
+        _plot_skill_score_boxplots(
+            evaluation_df=plot_inputs.evaluation_df,
+            external_models=plot_inputs.external_models,
+            output_folder=evaluation_paths.plot_folder,
+            logger=self.model.logger,
+            export=export,
+            include_geb=True,
+            matched_only=False,
+            minimum_upstream_area_km2=plot_inputs.minimum_upstream_area_km2,
+            station_count=len(plot_inputs.evaluation_df),
         )
 
-        for i, metric in enumerate(metrics):
-            ax = axes[i]
+        if include_external:
+            pairwise_plot_inputs = _prepare_pairwise_skill_score_boxplot_inputs(
+                evaluation_metrics_path=evaluation_paths.xlsx,
+                external_evaluation_folder=effective_external_evaluation_folder,
+                configured_external_evaluation_folder=None,
+                model_folder=self.model.input_folder.parent,
+                output_folder=evaluation_paths.plot_folder,
+                logger=self.model.logger,
+                minimum_upstream_area_km2=minimum_upstream_area_km2,
+                auto_fetch_google_streamflow=True,
+                archive_evaluation_metrics_path=_get_discharge_evaluation_paths(
+                    output_folder=self.evaluate_discharge_output_folder,
+                    start_year=GOOGLE_GLOFAS_EVALUATION_START_YEAR,
+                    end_year=GOOGLE_GLOFAS_EVALUATION_END_YEAR,
+                ).xlsx,
+            )
+            kge_comparison_values: dict[
+                str, tuple[np.ndarray, np.ndarray, int, float | None]
+            ] = {}
+            for model_name, matched_plot_inputs in pairwise_plot_inputs.items():
+                _plot_skill_score_boxplots(
+                    evaluation_df=matched_plot_inputs.evaluation_df,
+                    external_models=matched_plot_inputs.external_models,
+                    output_folder=evaluation_paths.plot_folder,
+                    logger=self.model.logger,
+                    export=export,
+                    include_geb=True,
+                    matched_only=True,
+                    output_name_suffix=_get_external_model_output_suffix(model_name),
+                    minimum_upstream_area_km2=matched_plot_inputs.minimum_upstream_area_km2,
+                    station_count=len(matched_plot_inputs.evaluation_df),
+                )
+                external_model_df: pd.DataFrame = next(
+                    iter(matched_plot_inputs.external_models.values())
+                )
+                if (
+                    "KGE" in matched_plot_inputs.evaluation_df.columns
+                    and "KGE" in external_model_df.columns
+                ):
+                    kge_comparison_values[model_name] = (
+                        matched_plot_inputs.evaluation_df["KGE"].to_numpy(dtype=float),
+                        external_model_df["KGE"].to_numpy(dtype=float),
+                        len(matched_plot_inputs.evaluation_df),
+                        matched_plot_inputs.minimum_upstream_area_km2,
+                    )
 
-            # Create boxplot
-            bp = ax.boxplot(
-                metric["data"],
-                patch_artist=True,
-                medianprops={"color": "white", "linewidth": 2},
-                boxprops={"linewidth": 1.5},
-                whiskerprops={"linewidth": 1.5},
-                capprops={"linewidth": 1.5},
+            _plot_kge_external_model_comparison(
+                model_kge_values=kge_comparison_values,
+                output_folder=evaluation_paths.plot_folder,
+                logger=self.model.logger,
+                export=export,
             )
 
-            # Color the box
-            bp["boxes"][0].set_facecolor(metric["color"])
-            bp["boxes"][0].set_alpha(0.7)
+    def plot_skill_scores_vs_upstream_area(
+        self,
+        export: bool = True,
+        minimum_upstream_area_km2: float | None = None,
+        start_year: int | None = None,
+        end_year: int | None = None,
+        **kwargs: Any,
+    ) -> None:
+        """Plot upstream area against discharge skill scores.
 
-            # Add title and styling
-            ax.set_title(metric["label"], fontsize=12, fontweight="bold")
-            ax.set_ylabel("Score", fontsize=11)
-            ax.grid(True, alpha=0.3, linestyle="--")
-            ax.set_xticks([])
+        Notes:
+            Requires ``evaluate_discharge`` to have been run first so that
+            ``evaluation_metrics.xlsx`` exists.
 
-            # Set specific y-limits for each metric
-            if i == 0:  # KGE
-                ax.set_ylim(0, 1)
-            elif i == 1:  # NSE
-                ax.set_ylim(-1, 1)
-            # R (correlation) keeps automatic limits
-
-        plt.tight_layout()
-
-        # Save the plot
+        Args:
+            export: Whether to save the figure to disk.
+            minimum_upstream_area_km2: Optional minimum modeled upstream area threshold for plotted stations (km2).
+                If omitted, `hydrology.evaluation.discharge.minimum_upstream_area_km2` is used.
+            start_year: Optional first calendar year of the evaluation metrics
+                file to plot.
+            end_year: Optional last calendar year of the evaluation metrics file
+                to plot.
+            **kwargs: Ignored (CLI compatibility).
+        """
+        if minimum_upstream_area_km2 is None:
+            minimum_upstream_area_km2 = self.model.config["hydrology"]["evaluation"][
+                "discharge"
+            ]["minimum_upstream_area_km2"]
+        evaluation_paths: DischargeEvaluationPaths = _get_discharge_evaluation_paths(
+            output_folder=self.evaluate_discharge_output_folder,
+            start_year=start_year,
+            end_year=end_year,
+        )
         if export:
-            boxplot_path = self.output_folder / "evaluation_boxplots_simple.svg"
-            plt.savefig(boxplot_path, bbox_inches="tight")
-            self.model.logger.info(f"Boxplots saved to: {boxplot_path}")
+            evaluation_paths.plot_folder.mkdir(parents=True, exist_ok=True)
+        if not evaluation_paths.xlsx.exists():
+            self.model.logger.warning(
+                "No %s file found. Run evaluate_discharge first.",
+                evaluation_paths.xlsx.name,
+            )
+            return
 
-        plt.show()
-        plt.close()
+        evaluation_df: pd.DataFrame = pd.read_excel(evaluation_paths.xlsx)
+        before_filter_count: int = len(evaluation_df)
+        evaluation_df = evaluation_df[
+            evaluation_df["upstream_area_GEB"]
+            >= minimum_upstream_area_km2 * 1_000_000.0
+        ].copy()
+        self.model.logger.info(
+            "Upstream-area plot filter retained %d/%d GEB stations at %.1f km2 or larger.",
+            len(evaluation_df),
+            before_filter_count,
+            minimum_upstream_area_km2,
+        )
+        if evaluation_df.empty:
+            self.model.logger.warning(
+                "No discharge evaluation stations remain after upstream-area filtering. "
+                "Skipping skill-score upstream-area scatterplot."
+            )
+            return
 
-        self.model.logger.info("Skill score graphs created.")
+        if export:
+            _plot_skill_scores_vs_upstream_area(
+                evaluation_df=evaluation_df,
+                output_folder=evaluation_paths.plot_folder,
+                logger=self.model.logger,
+            )
+
+    def plot_discharge_skill_scores(
+        self,
+        export: bool = True,
+        minimum_upstream_area_km2: float | None = None,
+        external_evaluation_folder: str | Path | None = None,
+        include_external: bool = False,
+        start_year: int | None = None,
+        end_year: int | None = None,
+        **kwargs: Any,
+    ) -> None:
+        """Plot all discharge skill score figures in one call.
+
+        Delegates to the hydrology summary workflow, which coordinates maps,
+        external-model score tables and boxplots, and upstream-area plots.
+
+        Args:
+            export: Whether to save all figures to disk.
+            minimum_upstream_area_km2: Optional minimum modeled upstream area
+                threshold applied to every plot (km2). If omitted,
+                ``hydrology.evaluation.discharge.minimum_upstream_area_km2``
+                from the model config is used.
+            external_evaluation_folder: Optional folder containing external
+                model skill scores or Google Streamflow ``metrics.tgz``.
+            include_external: Include external comparison plots. When enabled,
+                missing Google Streamflow/GLOFAS archive metrics may be
+                downloaded.
+            start_year: Optional first calendar year of the evaluation metrics
+                file to plot.
+            end_year: Optional last calendar year of the evaluation metrics file
+                to plot.
+            **kwargs: Ignored (CLI compatibility).
+        """
+        create_discharge_skill_score_summary(
+            self,
+            export=export,
+            minimum_upstream_area_km2=minimum_upstream_area_km2,
+            external_evaluation_folder=external_evaluation_folder,
+            include_external=include_external,
+            start_year=start_year,
+            end_year=end_year,
+        )
 
     def plot_water_circle(
         self,
@@ -3271,7 +3410,7 @@ class Hydrology:
         Returns:
             A matplotlib Figure object representing the water circle.
         """
-        folder = self.model.output_folder / "report" / run_name
+        folder = self.model.output_folder / "report"
 
         def read_parquet_with_date_index(
             folder: Path, module: str, name: str, skip_first_day: bool = True
@@ -3288,14 +3427,14 @@ class Hydrology:
                 A pandas Series with the date index and the values from the PARQUET file.
 
             """
-            df = pd.read_parquet(
+            time_series = pd.read_parquet(
                 (folder / module / name).with_suffix(".parquet"),
             )[name]
 
             if skip_first_day:
-                df = df.iloc[1:]
+                time_series = time_series.iloc[1:]
 
-            return df
+            return time_series
 
         # because storage is the storage at the end of the timestep, we need to calculate the change
         # across the entire simulation period. For all other variables we do skip the first day.
@@ -3389,7 +3528,7 @@ class Hydrology:
 
         if export:
             water_circle.savefig(
-                self.output_folder / "water_circle.svg",
+                self.water_circle_output_folder / "water_circle.svg",
             )
 
         return water_circle
@@ -3413,7 +3552,7 @@ class Hydrology:
         Raises:
             ValueError: If the water balance dataframe does not contain any rows.
         """
-        folder = self.model.output_folder / "report" / run_name
+        folder = self.model.output_folder / "report"
         df_m3_per_timestep: pd.DataFrame = _load_water_balance_dataframe(folder)
         context_series: dict[str, pd.Series] = _load_contextual_water_balance_series(
             folder
@@ -3472,35 +3611,35 @@ class Hydrology:
             bottom = 0
             for col in inputs_cols:
                 label = col.replace("in_", "").replace("_", " ")
-                h = ax.bar(
+                bar_container = ax.bar(
                     "inputs",
                     row[col],
                     bottom=bottom,
                     color=input_colors[col],
                 )
-                add_legend_entry(h[0], f"input • {label}")
+                add_legend_entry(bar_container[0], f"input • {label}")
                 bottom += row[col]
 
             bottom = 0
             for col in outputs_cols:
                 label = col.replace("out_", "").replace("_", " ")
-                h = ax.bar(
+                bar_container = ax.bar(
                     "outputs",
                     row[col],
                     bottom=bottom,
                     color=output_colors[col],
                 )
-                add_legend_entry(h[0], f"output • {label}")
+                add_legend_entry(bar_container[0], f"output • {label}")
                 bottom += row[col]
 
             for col in storage_cols:
                 label = col.replace("_", " ")
-                h = ax.bar(
+                bar_container = ax.bar(
                     "storage",
                     row[col],
                     color=storage_colors[col],
                 )
-                add_legend_entry(h[0], label)
+                add_legend_entry(bar_container[0], label)
 
             for series_name, yearly_series in yearly_context_series.items():
                 label = _format_water_balance_context_label(series_name)
@@ -3512,7 +3651,7 @@ class Hydrology:
                 context_value_m3_per_year: float = float(
                     yearly_series.iloc[yearly_context_positions[0]]
                 )
-                h = ax.bar(
+                bar_container = ax.bar(
                     "context",
                     context_value_m3_per_year,
                     color="none",
@@ -3520,7 +3659,7 @@ class Hydrology:
                     linewidth=1.5,
                     hatch="//",
                 )
-                add_legend_entry(h[0], label)
+                add_legend_entry(bar_container[0], label)
 
             ax.set_title(f"Water Balance – {year}")
             ax.set_ylabel("m3/year")
@@ -3533,15 +3672,16 @@ class Hydrology:
         )
 
         if export:
-            fig_path = self.output_folder / "water_balance_yearly_subplots.svg"
-            fig_path.parent.mkdir(parents=True, exist_ok=True)
+            fig_path = (
+                self.water_balance_output_folder / "water_balance_yearly_subplots.svg"
+            )
             plt.savefig(fig_path)
             self.model.logger.info(f"Water balance yearly plot saved as: {fig_path}")
 
         plt.show()
         plt.close(fig)
 
-        folder: Path = self.model.output_folder / "report" / run_name
+        folder: Path = self.model.output_folder / "report"
         water_balance_df_m3_per_timestep: pd.DataFrame = _load_water_balance_dataframe(
             folder
         )
@@ -3593,9 +3733,9 @@ class Hydrology:
             ]
         )
         context_colors: dict[str, str] = {
-            "potential_evapotranspiration": "white",
+            "potential_evapotranspiration": "#555555",
         }
-        context_linestyles: dict[str, str] = {
+        context_linestyles: dict[str, Literal["-", "--", "-.", ":"]] = {
             "potential_evapotranspiration": ":",
         }
         context_linewidths: dict[str, float] = {
@@ -3623,7 +3763,7 @@ class Hydrology:
             series_name: series * conversion_factor_mm_per_m3
             for series_name, series in context_series.items()
         }
-        full_figure, full_axis = plt.subplots(figsize=(15, 14), facecolor="#000000")
+        full_figure, full_axis = plt.subplots(figsize=(15, 14))
         _style_water_balance_axis(full_axis)
         for column_name in component_columns:
             full_axis.plot(
@@ -3667,7 +3807,6 @@ class Hydrology:
             1,
             figsize=(15, max(7.2 * len(years), 11.0)),
             sharey=True,
-            facecolor="#000000",
         )
         if len(years) == 1:
             yearly_axes = [yearly_axes]
@@ -3743,7 +3882,6 @@ class Hydrology:
             bbox_to_anchor=(0.5, 0.02),
             ncol=min(3, len(yearly_labels)),
             frameon=False,
-            labelcolor="white",
         )
         yearly_figure.subplots_adjust(
             left=0.05,
@@ -3754,9 +3892,11 @@ class Hydrology:
         )
 
         if export:
-            full_path: Path = self.output_folder / "water_balance_timeseries.svg"
+            full_path: Path = (
+                self.water_balance_output_folder / "water_balance_timeseries.svg"
+            )
             yearly_path: Path = (
-                self.output_folder / "water_balance_timeseries_yearly.svg"
+                self.water_balance_output_folder / "water_balance_timeseries_yearly.svg"
             )
             full_figure.savefig(full_path)
             yearly_figure.savefig(yearly_path)
@@ -3823,10 +3963,10 @@ class Hydrology:
             "precipitation": "#72b7b2",
             "runoff": "#f58518",
             "snow": "#4c78a8",
-            "potential_evapotranspiration": "white",
+            "potential_evapotranspiration": "#555555",
             "transpiration": "#54a24b",
         }
-        top_soil_context_linestyles: dict[str, str] = {
+        top_soil_context_linestyles: dict[str, Literal["-", "--", "-.", ":"]] = {
             "precipitation": ":",
             "runoff": "--",
             "snow": "-.",
@@ -3863,7 +4003,7 @@ class Hydrology:
             for column_name in top_soil_component_columns
         }
         if "storage_change" in top_soil_component_colors:
-            top_soil_component_colors["storage_change"] = "white"
+            top_soil_component_colors["storage_change"] = "black"
 
         top_soil_time_index: pd.DatetimeIndex = pd.DatetimeIndex(
             signed_top_soil_water_balance_df_m3_per_timestep.index
@@ -3879,9 +4019,7 @@ class Hydrology:
             series_name: series * conversion_factor_mm_per_m3
             for series_name, series in top_soil_context_series.items()
         }
-        top_soil_full_figure, top_soil_full_axis = plt.subplots(
-            figsize=(15, 13.0), facecolor="#000000"
-        )
+        top_soil_full_figure, top_soil_full_axis = plt.subplots(figsize=(15, 13.0))
         _style_water_balance_axis(top_soil_full_axis)
         for column_name in top_soil_component_columns:
             top_soil_full_axis.plot(
@@ -3934,7 +4072,6 @@ class Hydrology:
             1,
             figsize=(15, max(6.4 * len(top_soil_years), 10.0)),
             sharey=True,
-            facecolor="#000000",
         )
         if len(top_soil_years) == 1:
             top_soil_yearly_axes = [top_soil_yearly_axes]
@@ -4017,10 +4154,12 @@ class Hydrology:
 
         if export:
             top_soil_full_path: Path = (
-                self.output_folder / "water_balance_top_soil_timeseries.svg"
+                self.water_balance_output_folder
+                / "water_balance_top_soil_timeseries.svg"
             )
             top_soil_yearly_path: Path = (
-                self.output_folder / "water_balance_top_soil_timeseries_yearly.svg"
+                self.water_balance_output_folder
+                / "water_balance_top_soil_timeseries_yearly.svg"
             )
             top_soil_full_figure.savefig(top_soil_full_path)
             top_soil_yearly_figure.savefig(top_soil_yearly_path)
@@ -4054,7 +4193,7 @@ class Hydrology:
         Raises:
             ValueError: If the water storage dataframe does not contain any rows.
         """
-        folder: Path = self.model.output_folder / "report" / run_name
+        folder: Path = self.model.output_folder / "report"
         water_storage_df_m: pd.DataFrame = _load_water_storage_dataframe(folder)
 
         if water_storage_df_m.empty:
@@ -4073,7 +4212,7 @@ class Hydrology:
         }
 
         time_index: pd.DatetimeIndex = pd.DatetimeIndex(water_storage_df_m.index)
-        full_figure, full_axis = plt.subplots(figsize=(14, 6.5), facecolor="#000000")
+        full_figure, full_axis = plt.subplots(figsize=(14, 6.5))
         _style_water_balance_axis(full_axis)
         for column_name in component_columns:
             full_axis.plot(
@@ -4105,7 +4244,6 @@ class Hydrology:
             1,
             figsize=(14, max(3.2 * len(years), 5.0)),
             sharey=True,
-            facecolor="#000000",
         )
         if len(years) == 1:
             yearly_axes = [yearly_axes]
@@ -4148,9 +4286,11 @@ class Hydrology:
         )
 
         if export:
-            full_path: Path = self.output_folder / "water_storage_timeseries.svg"
+            full_path: Path = (
+                self.water_storage_output_folder / "water_storage_timeseries.svg"
+            )
             yearly_path: Path = (
-                self.output_folder / "water_storage_timeseries_yearly.svg"
+                self.water_storage_output_folder / "water_storage_timeseries_yearly.svg"
             )
             full_figure.savefig(full_path)
             yearly_figure.savefig(yearly_path)
@@ -4166,8 +4306,38 @@ class Hydrology:
         plt.close(yearly_figure)
 
     @property
-    def output_folder(self) -> Path:
-        """Path to the folder where evaluation outputs for this evaluator are stored."""
-        folder = self.evaluator.output_folder_evaluate / "hydrology"
+    def discharge_output_folder(self) -> Path:
+        """Path to the folder where discharge map outputs are stored."""
+        folder = self.evaluator.output_folder_evaluate / "hydrology" / "discharge"
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+    @property
+    def evaluate_discharge_output_folder(self) -> Path:
+        """Path to the folder where discharge evaluation outputs are stored."""
+        folder = (
+            self.evaluator.output_folder_evaluate / "hydrology" / "evaluate_discharge"
+        )
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+    @property
+    def water_balance_output_folder(self) -> Path:
+        """Path to the folder where water balance outputs are stored."""
+        folder = self.evaluator.output_folder_evaluate / "hydrology" / "water_balance"
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+    @property
+    def water_storage_output_folder(self) -> Path:
+        """Path to the folder where water storage outputs are stored."""
+        folder = self.evaluator.output_folder_evaluate / "hydrology" / "water_storage"
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+    @property
+    def water_circle_output_folder(self) -> Path:
+        """Path to the folder where water circle outputs are stored."""
+        folder = self.evaluator.output_folder_evaluate / "hydrology" / "water_circle"
         folder.mkdir(parents=True, exist_ok=True)
         return folder

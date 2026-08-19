@@ -200,10 +200,13 @@ class MeritBasins(Adapter):
                 del gdf
             del gdfs
 
-            merged = merged.write_crs("EPSG:4326")
+            # MERIT Basins coordinates are distributed in WGS84
+            merged: gpd.GeoDataFrame = merged.set_crs("EPSG:4326", allow_override=True)  # ty:ignore[invalid-assignment]
 
             ascending: bool = True
-            merged = merged.sort_values(by="COMID", ascending=ascending)
+            merged: gpd.GeoDataFrame = merged.sort_values(
+                by="COMID", ascending=ascending
+            )  # ty:ignore[invalid-assignment]
 
             # Use a temporary file to avoid partial writes in case of errors
             with tempfile.NamedTemporaryFile(

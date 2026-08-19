@@ -84,19 +84,13 @@ For discharge evaluation, your model must have been build and run, in which the 
 - Gauging station locations snapped to river network (`discharge/discharge_snapped_locations`)
 - Simulated discharge output from model run (`output/report/{run_name}/hydrology.routing/discharge_daily.zarr`)
 
-### Interpreting results
+### Mean-flow benchmark
 
-**Good performance:**
+Use the observed mean flow as a simple benchmark for discharge evaluation:
 
-- KGE > 0.5: Model captures main discharge patterns
-- NSE > 0.5: Predictions are better than using mean observed value
-- R > 0.7: Strong correlation between simulated and observed
-
-**Common issues:**
-
-- **Low KGE but high R**: Model timing is correct but magnitude is off (check calibration parameters)
-- **Negative NSE**: Model performs worse than using mean (check model setup and forcing data)
-- **High variation between stations**: Some areas may need region-specific parameters or better forcing data
+- NSE > 0: The simulation improves upon using the observed mean flow as the prediction.
+- KGE > -0.41: The simulation improves upon the observed mean-flow benchmark.
+- R describes correlation between simulated and observed flow, but is not itself a mean-flow benchmark score.
 
 ## Water balance
 
@@ -124,4 +118,3 @@ Analyzes inflows, outflows, and storage changes across the model domain to verif
 ## Code reference
 
 ::: geb.evaluate.hydrology
-

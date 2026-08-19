@@ -19,7 +19,6 @@ from typing import Any
 import geopandas as gpd
 import mercantile
 import pandas as pd
-from pyquadkey2 import quadkey
 from shapely import geometry
 from tqdm import tqdm
 
@@ -58,8 +57,6 @@ class OpenBuildingMap(Adapter):
 
         # iterate over tiles intersecting the bbox
         for tile in mercantile.tiles(west, south, east, north, zooms=zoom):
-            qk = quadkey.from_tile((tile.x, tile.y), level=zoom)
-
             # Create a polygon for the tile bounds
             tile_bounds = mercantile.bounds(tile)
             tile_polygon = geometry.box(
@@ -68,7 +65,7 @@ class OpenBuildingMap(Adapter):
 
             # Only include tile if it intersects with the input geometry
             if tile_polygon.intersects(geom):
-                quadkeys.append(qk.key)
+                quadkeys.append(mercantile.quadkey(tile))
 
         return quadkeys
 

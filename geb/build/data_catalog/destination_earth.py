@@ -7,8 +7,12 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import aiohttp
+import fsspec
 import numpy as np
 import xarray as xr
+import zarr.storage
+from aiohttp_retry import ExponentialRetry, RetryClient
+from fsspec.asyn import AsyncFileSystem
 
 from geb.workflows.raster import convert_nodata
 
@@ -16,6 +20,25 @@ from .base import Adapter
 
 N_CONNECTION_ATTEMPTS = 3
 RETRY_DELAY_SECONDS = 5
+
+
+async def get_retry_client(**kwargs: Any) -> RetryClient:
+    """Create a RetryClient with exponential backoff for handling transient errors.
+
+    Args:
+        **kwargs: Additional keyword arguments to pass to the RetryClient constructor.
+
+    Returns:
+        An instance of RetryClient configured with exponential backoff.
+    """
+    retry_options = ExponentialRetry(
+        attempts=100,
+        start_timeout=10,
+        max_timeout=3600,
+        factor=2,
+        retry_all_server_errors=True,
+    )
+    return RetryClient(retry_options=retry_options, **kwargs)
 
 
 class DestinationEarth(Adapter):
@@ -38,7 +61,7 @@ class DestinationEarth(Adapter):
         if DESTINATION_EARTH_KEY is None:
             print("ERROR: DESTINATION_EARTH_KEY environment variable is not set.")
             print(
-                "Please set your Personal Access Token in your .env file or export it in your shell."
+                "Please set your API KEY in your .env file or export it in your shell."
             )
             raise ValueError("DESTINATION_EARTH_KEY environment variable is not set.")
 
@@ -51,16 +74,40 @@ class DestinationEarth(Adapter):
         auth_headers: dict[str, str] = {"Authorization": f"Basic {encoded_auth}"}
         return auth_headers
 
-    def fetch(self, url: str) -> DestinationEarth:
+    def fetch(self, url: None) -> DestinationEarth:
         """Set the URL for the Destination Earth data source.
 
         Args:
             url: The URL of the Destination Earth data source.
+                Must be None, because there are multiple URLs that can be used to access the data, and the correct one is determined automatically.
 
         Returns:
             The current instance of the DestinationEarth adapter.
+
+        Raises:
+            ValueError: If the DESTINATION_EARTH_KEY environment variable is not set or has an invalid format.
         """
-        self.url = url
+        assert url is None, (
+            "URL must be None for Destination Earth, as it is determined automatically."
+        )
+
+        DESTINATION_EARTH_KEY: str | None = os.getenv(key="DESTINATION_EARTH_KEY")
+        if DESTINATION_EARTH_KEY is None:
+            print("ERROR: DESTINATION_EARTH_KEY environment variable is not set.")
+            print(
+                "Please set your API KEY in your .env file or export it in your shell."
+            )
+            raise ValueError("DESTINATION_EARTH_KEY environment variable is not set.")
+
+        if DESTINATION_EARTH_KEY.startswith("edh_pat_"):
+            self.url = "https://data.earthdatahub.destine.eu/era5/reanalysis-era5-land-no-antartica-v0.zarr"
+        elif DESTINATION_EARTH_KEY.startswith("edh_key_"):
+            self.url = "https://api.earthdatahub.destine.eu/era5/reanalysis-era5-land-no-antartica-v0.zarr"
+        else:
+            raise ValueError(
+                "Invalid DESTINATION_EARTH_KEY format. It should start with 'edh_pat_' for Personal Access Tokens or 'edh_key_' for API keys."
+            )
+
         return self
 
     def connect_API(
@@ -86,28 +133,42 @@ class DestinationEarth(Adapter):
         """
         for attempt in range(N_CONNECTION_ATTEMPTS):
             try:
-                da: xr.DataArray = xr.open_dataset(
-                    self.url,
-                    storage_options={"headers": self.get_authentication_header()},
+                fs: AsyncFileSystem = fsspec.filesystem(
+                    protocol="https",
+                    headers=self.get_authentication_header(),
+                    get_client=get_retry_client,
+                    asynchronous=True,
+                    client_kwargs={
+                        "trust_env": True,
+                        "raise_for_status": False,  # Let RetryClient and fsspec handle status codes
+                    },
+                    timeout=600,
+                )
+                store = zarr.storage.FsspecStore(path=self.url, fs=fs)
+
+                ds: xr.Dataset = xr.open_dataset(
+                    filename_or_obj=store,  # ty:ignore[invalid-argument-type]
                     chunks={},
                     engine="zarr",
-                )[variable].rename(
-                    {"valid_time": "time", "latitude": "y", "longitude": "x"}
+                    zarr_format=2,
+                    consolidated=True,
                 )
                 break
-            except aiohttp.ClientResponseError:
+
+            except (aiohttp.ClientResponseError, aiohttp.ClientPayloadError) as e:
                 print(
-                    f"Error connecting to Destination Earth API. This could be due to erroneous credentials or a temporary server issue. Retrying ({attempt}/{N_CONNECTION_ATTEMPTS})..."
+                    f"Error connecting to Destination Earth API: {e}. Retrying ({attempt + 1}/{N_CONNECTION_ATTEMPTS})..."
                 )
-                time.sleep(RETRY_DELAY_SECONDS)
+                time.sleep(RETRY_DELAY_SECONDS * (2**attempt))
         else:
             raise ConnectionError(
-                "Failed to connect to Destination Earth API after 3 attempts."
+                f"Failed to connect to Destination Earth API after {N_CONNECTION_ATTEMPTS} attempts."
             )
 
-        da: xr.DataArray = da.drop_vars(
-            ["number", "surface", "depthBelowLandLayer"], errors="ignore"
-        )
+        da: xr.DataArray = ds[variable]
+        da: xr.DataArray = da.rename(
+            {"valid_time": "time", "latitude": "y", "longitude": "x"}
+        ).drop_vars(["number", "surface", "depthBelowLandLayer"], errors="ignore")
 
         buffer: float = 0.5
         buffered_bounds: tuple[float, float, float, float] = (

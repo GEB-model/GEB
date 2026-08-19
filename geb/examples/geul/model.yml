@@ -23,12 +23,13 @@ general:
 hazards:
   floods:
     simulate: false
+    subbasins: auto  # can also be a list of subbasin ids, e.g. - 23011134 \n - 23011135
     grid_size_multiplier: 4
     subgrid: true
-    flood_risk: false
     gpu: auto
     overwrite: auto
     coastal_only: false
+    run_for_validation_events: false
     return_periods:
       - 2
       - 1000

@@ -1,8 +1,94 @@
 # dev
+- Implemented the `early_warning.py` module outside of `households.py`, launching the latest GEB-IbF system, including options for: area and building based warnings; warning communication weighted by socio-economic factor; time-dependent damage reduction.
+- Users need to run `setup_warning_communication_weights` to enable the warning communication efficiency based on socioeconomic factors.
+- Parameterization of settings in the `model.yml`. Increased overall efficiency and usability of the early warning system.
+- Improved the setup for `critical_infrastructure_warning_strategy`, which now depends on asset type instead of strategy id.
+- Added the option to download and process hindcasts using the MARS API. For that, `setup_forecasts` has additional arguments: forecast_product, hindcast_cycle_start, hindcast_cycle_end and n_hindcast_years.
+- Added a cost-benefit analysis for governments to raise flood protection standards based on household damage reductions. Enable this by setting `agent_settings.government.adaptation.mode: cba` in the model config.
+- Added `geb evaluate hydrodynamics.animate_flood` to render 2D flood-depth animations from SFINCS outputs. To enable per-timestep maps, set `hazards.floods.flood_map_output_interval_seconds` (e.g., `3600` for hourly) and rerun the model; then run `geb evaluate hydrodynamics.animate_flood --run-name default` (see `--help` for options).
+- Added a cost-benefit analysis for governments to raise flood protection standards based on household damage reductions. Enable this by setting `agent_settings.government.adaptation.mode: cba` in the model config.
+- Added `geb evaluate hydrodynamics.animate_flood` to render 2D flood-depth animations from SFINCS outputs. To enable per-timestep maps, set `hazards.floods.flood_map_output_interval_seconds` (e.g., `3600` for hourly) and rerun the model; then run `geb evaluate hydrodynamics.animate_flood --run-name default` (see `--help` for options).
+- Added `setup_flood_protection_standards` build method to process FLOPROS flood protection standards. Subsequently these flood protection standards are used to initialize the flood protection standards for each subbasin in the model domain.
+
+# v1.0.0b30
+- Implement evaporation for retention basins using a constant area based on maximum storage and a depth of 3 meters.
+- Added optional external discharge skill-score comparisons for Google Streamflow, GloFAS, and PCR-GLOBWB/Utrecht.
+- Expanded discharge metrics with original/modified KGE, KGE components, NSE, Pearson r², RMSE, and RRMSE.
+- Added skill-score maps, boxplots, external KGE comparisons, upstream-area diagnostics, and dashboard summaries.
+- Improved the interactive discharge evaluation dashboard, and remove the option for static dashboards. 
+- Add a `--method-arg KEY=VALUE` option to `geb exec` (e.g., `geb exec estimate_return_periods --method-arg run_name=default`) and fix spinup and run discharge not being concatenated for return period estimation.
+- Add hydrograph shape methods for floods. Instead of assuming a triangular shape, the shape of the hydrograph can now be derived from historical GEB discharge.
+- Add a CLI option to run yearly mode multiple times (e.g., `geb run-yearly --multi --n-runs 5`) and write each run to its own output folder.
+- Add new option (and implement) that you can only simulate floods in a subset of the basins in the larger region.
+- Implement general method for setting up an alternative universe.
+- Make it possible to report data from the alternative universe.
+- Fix bug for coastal regions where due to "holes" in deltadtm for lakes and reservoirs while fabdem was not used because it was only used above 30 meters. Solved by instead always using fabdem by default and overwriting with deltadtm where available.
+- Remove redundant iteration from kinematic routing.
+- Add option to run and spinup "--skip-done". When turned on, we first check if the model was not already done and if so, don't run.
+- Set default of writing figures for SFINCS to false in reasonable default config. For example, writing the return period figures is about 10 times as slow as the actual calculation. Of course, users can set this to true whenever needed in their own config!
+- Implement custom and improved algorithm for river burning. Currently only works for the non-subgrid mode of SFINCS.
+- Add a `--method-arg KEY=VALUE` option to `geb exec` (e.g., `geb exec estimate_return_periods --method-arg run_name=default`) and fix spinup and run discharge not being concatenated for return period estimation.
+- Add hydrograph shape methods for floods. Instead of assuming a triangular shape, the shape of the hydrograph can now be derived from historical GEB discharge.
+- Make a new option for subbasin selection for flood simulations (new default): 'auto'. This automatically selects only subbasins that have their bankful discharge exceeded and only simulates flood events for those subbasins.
+- For return period maps, we simulate subbasins one by one. Each simulation includes the downstream subbasin as well. This downstream subbasin also has inflow from other rivers. In this update the downstream subbasins also receive water from sidestreams (all-year mean).
+
+# v1.0.0b29
+- Load return-period flood maps from the spinup output folder (output/{spinup_name}/flood_maps/{return_period}.zarr).
+- Re-organize evaluate hydrodynamics to have all functions outside the method body.
+- Make destination earth API more robust (twice).
+- Use localtime rather that UTC time for logging.
+- Use Event tuple rather than dictionary to track events through model.
+- Refactor evaluation of hydrodynamics. There is now a new "evaluate_flood" that evaluates the flood observations set in the build process. In the future, "evaluate_hydrodynamics" should be removed entirely, but we first need to add the ability to add custom flood maps to the setup_flood_observations build method.
+- Several fixes for hydromt-sfincs 2.0.
+- Update to pandas 3.0. This update has been prepared for a while and tested, but there may be potential issues popping up due to different copy behaviour in pandas 3.0. See [here](https://pandas.pydata.org/docs/whatsnew/v3.0.0.html#consistent-copy-view-behaviour-with-copy-on-write) for more details.
+
+# v1.0.0b28
+- Add setup_flood_observations build method working with WorldFloodsV2
+- Automatically run SFINCS for events that are set up for validation in addition to configured events.
+- Fix: also set nodata in zarr default zarr.json-file for correct displaying in QGIS.
+- Require MERIT Hydro dir/elv tiles to be downloaded manually and report missing tile filenames during build.
+- Update MODFLOW to v6.7 ([#801](https://github.com/GEB-model/GEB/issues/801)).
+- Reorganize output folder so that all output files are saved under the run name ([#852](https://github.com/GEB-model/GEB/issues/852)). This allows us to keep files from different runs nicely separated.
+- Migrate to new Destination Earth API ([#846](https://github.com/GEB-model/GEB/issues/844)).
+- Interactive charts option for discharge plots on evaluation dashboard. 
+- Simplification and optimalization of geb init-multiple functionality, solving https://github.com/GEB-model/GEB/issues/629
+- Improve flood plain delineation when flood plains are very flat. Now flood plains outside the subbasins of interest are included when they are hydrologically connected.
+
+Important notes:
+- In this version, the output folder is re-organized. For a specific run name (e.g., default or spinup) all files (i.e., reported data, evaluation data, flood maps etc.) are saved in the folder output/run_name.
+
+# v1.0.0b27
+- Fix error with zero discharge in routing, closing [#819](https://github.com/GEB-model/GEB/issues/819)
+- Make model building fully deterministic ([#821](https://github.com/GEB-model/GEB/issues/821)).
+- Implement retry mechanism for 429 web error GLOPOP-SG data adapter. Zenodo rate limited making too many range requests. If we get rate limited now, we now go to sleep for a bit and try again later.
+- Further reduce memory use of reporter by using numpy views for identical time series data.
+- In a recent change, discharges were explicitly set to nan in waterbodies (good). This led to a case where rivers had 0 river width in the hydrodynamic model, which led to raised errors. Now, we fix this by looking further downstream of waterbodies to find a valid discharge for estimating river widths. This is also better, because perviously the default alpha for river width was used.
+- Do not simulate flood events for rivers that are fully in waterbodies. We do so by updating the "represented_in_grid" for water bodies.
+- In a recent change, discharges were explictly set to nan in reservoirs (good). This led to a case where rivers had 0 river width in the hydrodynamic model, which led to raised errors. Now, we fix this by looking further downstream of reservoirs to find a valid discharge for estimating river widths. This is also better, because perviously the default alpha for river width was used.
+- Add `geb tool merge` command to merge outputs from multiple GEB cluster sub-models into a single merged model directory that can be evaluated directly with `geb evaluate`.
+- Add `plot_skill_score_maps()` to plot skill scores per station on a satellite basemap for each metric.
+- Update `plot_skill_score_boxplots()` with violin + boxplot panels for KGE, NSE, R², RMSE and RRMSE, including support for overlaying external reference model (e.g. LISFLOOD) results.
+- Add R², RMSE and RRMSE to discharge evaluation metrics at hourly, daily and monthly frequencies.
+- Stations with fewer than 5 years of paired observations are skipped in `evaluate_discharge`.
+- Lakes and reservoirs are now shown as dot markers in the interactive discharge evaluation map.
+- Include height above nearest drainage (HAND) for later use.
+
+# v1.0.0b26
+- Write new model version after each version update in `geb update-version`. This way, when the model is updated multiple versions ahead, and one of the updates fails, the version updates that succeeded are still "saved".
+- Recently, there have been a lot of supply chain effects, where packages contained malicious code or instructions. To avoid most of these issues, but at the same time get relatively new updates (including those with important security updates) we limit any package updates to packages that are at least 3 days old in the uv.lock file. Here we use uv's exclude-newer option.
+- Update routing to include retention basins. By default no retention basins are set (all -1), however a dataset can be passed to set up retention basins. These basins can retain water during flood peaks, and slowly release water during low-flow periods. Set up using `setup_retention_basins`.
+- Fix case where river discharge was 0 in waterbodies (OK), but led to division by zero error in determining alpha for river widths ([#819](https://github.com/GEB-model/GEB/issues/819)).
+- Use MIRCA-OS crop calendars rather than MIRCA2000 ([#813](https://github.com/GEB-model/GEB/issues/813)).
+- Pre-allocate numpy arrays in reporter for both time and data. This uses significantly less memory as compared to Python lists, and because arrays are pre-allocated they do not cause RAM issues very late in the run but immediately instead.
+- Include an array tracking household expected annual damages (based on adaptation status). 
+- Support exporting household attributes (such as ead) using the reporter in run_yearly.
+- When multiple outflow basins were selected that are not coastal basins, it could happen that some basins were erroneously excluded. This is now fixed.
+- Support new Destination Earth keys ([#844](https://github.com/GEB-model/GEB/issues/844)).
 
 # v1.0.0b25
 - Fix cases where subgrid elevation could be nan in coastal areas and DEM was not available. This ultimately leads to an error in the land surface model (propagating nans).
-- Include a delta approach to account for changes in precipitation and temperature under climate change in creating return period maps. To adjust forcing data to future climate, add the `representative_forcing_year` argument to `setup_forcing` in the build.yml to indicate the year for which you want to fast-forward the forcing data. 
+- Include a delta approach to account for changes in precipitation and temperature under climate change in creating return period maps. To adjust forcing data to future climate, add the `representative_forcing_year` argument to `setup_forcing` in the build.yml to indicate the year for which you want to fast-forward the forcing data.
+- Fix a bug where update-version would not write newly created files to `files.yml`.
 
 # v1.0.0b24
 - Add `mode="off"` option to `setup_waterbodies` to completely disable waterbodies, or `mode: "lakes_only"` or `mode: "reservoirs_only"`.
@@ -425,3 +511,4 @@ To support this version:
 To support this version:
 
 - Re-run `setup_forcing` and `setup_spei`
+

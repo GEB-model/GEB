@@ -65,10 +65,44 @@ class FloodEventConfig(BaseModel):
     end_time: datetime = Field(..., description="End time of the event.")
 
 
+class ShapeConfig(BaseModel):
+    """Configuration for the hydrograph shape method used in return-period maps."""
+
+    method: Literal["triangular", "direct", "anchor"] = Field(
+        "triangular",
+        description="Hydrograph shape method: 'triangular' (symmetric), 'direct' (historical shape at target discharge), or 'anchor' (historical shape at Q_2 rescaled to target).",
+    )
+    window_days: float = Field(
+        3.5,
+        description="Days before and after peak to extract when deriving shape from historical events (total window = 2 × window_days).",
+    )
+    tolerance: float = Field(
+        0.1,
+        description="Fractional tolerance around anchor discharge for event selection (e.g. 0.1 = ±10%).",
+    )
+
+
+class FloodProtectionStandardConfig(BaseModel):
+    """Configuration for flood protection standard settings."""
+
+    mode: Literal["auto", "manual"] = Field(
+        "manual",
+        description="Flood protection standard mode: 'auto' (derive from data) or 'manual' (use configured value)",
+    )
+    manual_value: int = Field(
+        10,
+        description="Flood protection standard return period used when mode is 'manual' (years).",
+    )
+
+
 class FloodsConfig(BaseModel):
     """Configuration for flood simulation."""
 
     simulate: bool = Field(False, description="Whether to simulate floods.")
+    subbasins: list[int] | Literal["all"] | Literal["auto"] = Field(
+        "all",
+        description="Subbasin ID, list of subbasin IDs, or 'all' to simulate all subbasins. Only works for flood events currently.",
+    )
     forcing_method: Literal["headwater_points", "accumulated_runoff"] = Field(
         "accumulated_runoff",
         description="Forcing method: 'headwater_points' or 'accumulated_runoff'.",
@@ -97,6 +131,10 @@ class FloodsConfig(BaseModel):
         [2, 5, 10, 25, 50, 100, 250, 500, 1000],
         description="Return periods for flood maps.",
     )
+    flood_protection_standard: FloodProtectionStandardConfig = Field(
+        default_factory=FloodProtectionStandardConfig,
+        description="Flood protection standard settings.",
+    )
     p_value_threshold: float = Field(
         0.05,
         description="Anderson-Darling p-value threshold for threshold selection.",
@@ -109,9 +147,16 @@ class FloodsConfig(BaseModel):
         0.0,
         description="Value to fix the shape parameter (xi) of the GPD. Set to 0.0 to force an Exponential (Gumbel) tail, or null to allow it to be fitted.",
     )
-    flood_risk: bool = Field(False, description="Whether to calculate flood risk.")
     events: list[FloodEventConfig] = Field(
         default_factory=list, description="List of flood events."
+    )
+    hydrograph_shape: ShapeConfig = Field(
+        default_factory=ShapeConfig,
+        description="Hydrograph shape configuration for return-period maps.",
+    )
+    run_for_validation_events: bool = Field(
+        False,
+        description="Whether to run flood model for validation events (i.e., events with observed flood maps).",
     )
     SFINCS: SFINCSConfig = Field(
         default_factory=SFINCSConfig, description="SFINCS configuration."
@@ -175,11 +220,43 @@ class RoutingConfig(BaseModel):
         "kinematic_wave",
         description="Routing algorithm: 'accuflux' or 'kinematic_wave'.",
     )
+    retention_basin_release_threshold_factor: float = Field(
+        0.9,
+        description="Factor to multiply the activation threshold by to get the release threshold.",
+    )
     river_width: RiverWidthConfig = Field(
         default_factory=RiverWidthConfig, description="River width configuration."
     )
     river_depth: RiverDepthConfig = Field(
         default_factory=RiverDepthConfig, description="River depth configuration."
+    )
+
+
+class DischargeEvaluationConfig(BaseModel):
+    """Configuration for discharge evaluation."""
+
+    minimum_upstream_area_km2: float = Field(
+        400.0,
+        ge=0.0,
+        description="Minimum modeled upstream area for stations included in discharge evaluation (km2).",
+    )
+    minimum_timeseries_length_years: float = Field(
+        10.0,
+        ge=0.0,
+        description="Minimum paired observation-simulation timeseries length for stations included in discharge evaluation (years).",
+    )
+    external_evaluation_folder: str | None = Field(
+        None,
+        description="Optional folder with external discharge evaluation CSV files. Relative paths are resolved from the model folder.",
+    )
+
+
+class HydrologyEvaluationConfig(BaseModel):
+    """Configuration for hydrology evaluation."""
+
+    discharge: DischargeEvaluationConfig = Field(
+        default_factory=DischargeEvaluationConfig,
+        description="Discharge evaluation configuration.",
     )
 
 
@@ -189,6 +266,10 @@ class HydrologyConfig(BaseModel):
     routing: RoutingConfig = Field(
         default_factory=RoutingConfig, description="Routing configuration."
     )
+    evaluation: HydrologyEvaluationConfig = Field(
+        default_factory=HydrologyEvaluationConfig,
+        description="Hydrology evaluation configuration.",
+    )
 
 
 class MarketConfig(BaseModel):
@@ -197,6 +278,55 @@ class MarketConfig(BaseModel):
     dynamic_market: bool = Field(False, description="Whether to use dynamic market.")
     price_frequency: Literal["yearly"] = Field(
         "yearly", description="Frequency of price updates."
+    )
+
+
+class GovernmentAdaptationConfig(BaseModel):
+    """Configuration for government-led adaptation policy."""
+
+    enabled: bool = Field(
+        False, description="Whether to enable government adaptation policy."
+    )
+    mode: Literal["cba", "threshold"] = Field(
+        "cba",
+        description="Adaptation policy mode: 'cba' (cost-benefit analysis) or 'threshold'.",
+    )
+    EAD_threshold: float = Field(
+        1000000.0,
+        description="Expected annual damage threshold that can trigger adaptation action.",
+    )
+    equity_indicator_threshold: float = Field(
+        0.5,
+        description="Equity indicator threshold between 0 and 1.",
+    )
+    ecosystem_indicator_threshold: float = Field(
+        0.5,
+        description="Ecosystem indicator threshold between 0 and 1.",
+    )
+    adaptation_fraction: float = Field(
+        0.1,
+        description="Fraction of households selected for adaptation action.",
+    )
+    dike_elevation_cost_per_meter_usd: float = Field(
+        6800.0,
+        description="Unit cost for raising a dike by 1 meter over 1 meter length (USD/m).",
+    )
+    dike_maintenance_cost_per_year_usd: float = Field(
+        80.0,
+        description="Annual maintenance cost for a dike segment of 1 meter length (USD/year).",
+    )
+
+
+class GovernmentConfig(BaseModel):
+    """Configuration for government agent."""
+
+    plant_forest: bool = Field(
+        False,
+        description="Whether to enable forest-planting policy for reforestation scenarios.",
+    )
+    adaptation: GovernmentAdaptationConfig = Field(
+        default_factory=GovernmentAdaptationConfig,
+        description="Government adaptation policy configuration.",
     )
 
 
@@ -492,6 +622,10 @@ class SensitivityAnalysisConfig(BaseModel):
 
 class AgentSettingsConfig(BaseModel):
     """Configuration for agents."""
+
+    government: GovernmentConfig = Field(
+        default_factory=GovernmentConfig, description="Government agent configuration."
+    )
 
     market: MarketConfig = Field(
         default_factory=MarketConfig, description="Market agent configuration."

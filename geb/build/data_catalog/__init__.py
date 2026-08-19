@@ -21,6 +21,7 @@ from .flood_damage_model import (
     GeulFloodDamageModel,
     GlobalFloodDamageModel,
 )
+from .flopros import FLOPROS as FLOPROS
 from .fluxnet import Fluxnet
 from .forest_restoration import ForestRestorationPotential
 from .gadm import GADM, GADM28
@@ -42,7 +43,9 @@ from .merit_basins import MeritBasinsCatchments, MeritBasinsRivers
 from .merit_hydro import MeritHydroDir, MeritHydroElv
 from .merit_sword import MeritSword
 from .mirca2000 import MIRCA2000
-from .mirca_os import MIRCAOS
+from .mirca_os_admin_boundaries import MIRCAOSAdminBoundaries
+from .mirca_os_crop_calendar import MIRCAOSCropCalendar
+from .mirca_os_harvested_grids import MIRCAOSHarvestedGrids
 from .oecd import OECD
 from .open_building_map import OpenBuildingMap
 from .open_street_map import OpenStreetMap
@@ -54,6 +57,7 @@ from .undp import HumanDevelopmentIndex
 from .wekeo_copernicus import WEkEOCopernicus
 from .why_map import WhyMap
 from .world_bank import WorldBankData
+from .worldfloods import WorldFloodsV2
 
 data_catalog: dict[str, dict[str, Any]] = {
     "isimip_co2": {
@@ -69,7 +73,7 @@ data_catalog: dict[str, dict[str, Any]] = {
     },
     "era5": {
         "adapter": DestinationEarth(),
-        "url": "https://data.earthdatahub.destine.eu/era5/reanalysis-era5-land-no-antartica-v0.zarr",
+        "url": None,
         "source": {"name": "ERA5", "author": "ECMWF", "license": "CC BY 4.0"},
     },
     "ecmwf_geopotential": {
@@ -347,6 +351,22 @@ data_catalog: dict[str, dict[str, Any]] = {
             "author": "GADM",
             "version": "2.8",
             "license": "https://gadm.org/license.html",
+        },
+    },
+    "flopros": {
+        "adapter": FLOPROS(
+            column="MerL_Riv",
+            folder="flopros",
+            local_version=1,
+            filename="flopros.parquet",
+            cache="global",
+        ),
+        "url": "https://nhess.copernicus.org/articles/16/1049/2016/nhess-16-1049-2016-supplement.zip",
+        "source": {
+            "name": "FLOPROS",
+            "author": "Scussolini et al. (2016)",
+            "license": "CC Attribution 3.0 License",
+            "paper_doi": "doi:10.5194/nhess-16-1049-2016",
         },
     },
     "mirca2000_unit_grid": {
@@ -866,7 +886,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             filename="tiles",
             cache="global",
         ),
-        "url": "https://hydro.iis.u-tokyo.ac.jp/~yamadai/MERIT_Hydro/distribute/v1.0",
+        "url": "https://global-hydrodynamics.github.io/MERIT_Hydro/",
         "source": {
             "name": "MERIT Hydro",
             "author": "Yamazaki et al.",
@@ -881,7 +901,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             filename="tiles",
             cache="global",
         ),
-        "url": "https://hydro.iis.u-tokyo.ac.jp/~yamadai/MERIT_Hydro/distribute/v1.0",
+        "url": "https://global-hydrodynamics.github.io/MERIT_Hydro/",
         "source": {
             "name": "MERIT Hydro",
             "author": "Yamazaki et al.",
@@ -1121,6 +1141,22 @@ data_catalog: dict[str, dict[str, Any]] = {
             "paper_doi": "10.5281/zenodo.15149480",
         },
     },
+    "worldfloodsv2": {
+        "adapter": WorldFloodsV2(
+            folder="worldfloodsv2",
+            local_version=2,
+            filename="flood_maps.geoparquet",
+            cache="global",
+        ),
+        "url": "isp-uv-es/WorldFloodsv2",
+        "source": {
+            "name": "WorldFloodsV2",
+            "author": "Mateo-Garcia et al. (2023)",
+            "license": "CC BY-NC 4.0",
+            "url": "https://huggingface.co/datasets/isp-uv-es/WorldFloodsv2",
+            "paper_doi": "10.1038/s41598-023-47595-7",
+        },
+    },
     "glopop-sg": {
         "adapter": GLOPOP_SG(
             folder="glopop_sg",
@@ -1175,7 +1211,7 @@ data_catalog: dict[str, dict[str, Any]] = {
     },
     **{
         f"mirca_os_cropping_area_{year}_{resolution}_{crop}_{irrigation}": {
-            "adapter": MIRCAOS(
+            "adapter": MIRCAOSHarvestedGrids(
                 folder="mirca_os",
                 filename=f"Annual Harvested Area Grids/{year}/{resolution}/MIRCA-OS_{crop}_{year}_{irrigation}.tif",
                 local_version=1,
@@ -1217,6 +1253,43 @@ data_catalog: dict[str, dict[str, Any]] = {
             "Pulses",
         ]
         for irrigation in ["ir", "rf"]
+    },
+    **{
+        f"mirca_os_crop_calendar_{year}_{irrigation}": {
+            "adapter": MIRCAOSCropCalendar(
+                folder="mirca_os",
+                filename=f"Crop Calendar/MIRCA-OS_{year}_{irrigation}.csv",
+                local_version=1,
+                cache="global",
+            ),
+            "url": "https://www.hydroshare.org/resource/60a890eb841c460192c03bb590687145/data/contents/Crop%20Calendar",
+            "source": {
+                "name": "MIRCA-OS Crop Calendar",
+                "author": "Kebede et al. (2024)",
+                "license": "CC BY 4.0",
+                "url": "https://doi.org/10.4211/hs.60a890eb841c460192c03bb590687145",
+            },
+        }
+        for year in ["2000", "2005", "2010", "2015"]
+        for irrigation in ["ir", "rf"]
+    },
+    **{
+        f"mirca_os_admin_boundaries_{year}": {
+            "adapter": MIRCAOSAdminBoundaries(
+                folder="mirca_os",
+                filename=f"Admin Boundaries/MIRCAOS_{year}_Admin_v1.shp",
+                local_version=1,
+                cache="global",
+            ),
+            "url": "https://www.hydroshare.org/resource/e4582ca0042148338bb5e0148b749ed6/",
+            "source": {
+                "name": "MIRCA-OS Admin Boundaries",
+                "author": "Kebede et al. (2024)",
+                "license": "CC BY 4.0",
+                "url": "https://www.hydroshare.org/resource/e4582ca0042148338bb5e0148b749ed6/",
+            },
+        }
+        for year in ["2000", "2005", "2010", "2015"]
     },
 }
 
