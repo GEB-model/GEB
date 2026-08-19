@@ -255,7 +255,7 @@ class SFINCSRootModel:
                     self.logger.info(
                         "SFINCS model and code unchanged, reading existing model..."
                     )
-                    return self.read()
+                    return self
                 else:
                     self.logger.info(
                         "SFINCS model or code changed, rebuilding model..."
@@ -658,6 +658,22 @@ class SFINCSRootModel:
                 sf.set_grid(mannings, name="manning")
                 sf.write_grid()
 
+        cross_sections = gpd.read_file(
+            "/scistor/ivm/rpo100/GEB/models/Meuse/base/meuse_crosssections.gpkg"
+        )
+
+        obs_points = gpd.read_file(
+            "/scistor/ivm/rpo100/GEB/models/Meuse/base/meuse_observation_points.gpkg"
+        )
+
+        obs_points = obs_points.explode(index_parts=False).reset_index(
+            drop=True
+        )  # <-- MultiPoint -> Point
+
+        sf.cross_sections.create(cross_sections, merge=False)
+        sf.observation_points.create(obs_points, merge=False)
+        sf.cross_sections.write()
+        sf.observation_points.write()
         # write all components, except forcing which must be done after the model building
         sf.write_geoms()
         sf.write_states()
