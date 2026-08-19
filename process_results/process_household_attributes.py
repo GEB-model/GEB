@@ -7,9 +7,9 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 PLOT_Y_LIMS_DEFAULT: dict[str, tuple[float, float]] = {
-    "expected_annual_damage": (0.0, 1e7),
-    "n_adaptation_uptake": (0.0, 1e3),
-    "n_households_exposed_to_flooding": (0.0, 3e3),
+    "expected_annual_damage": (0.0, 1e6),
+    "n_adaptation_uptake": (0.0, 0.2),
+    "n_households_exposed_to_flooding": (0.0, 2.2e3),
 }
 
 
@@ -559,7 +559,7 @@ def _plot_multirun_results(
                 ax.set_ylim(ylims_variable)
 
         if has_individual_runs:
-            ax.plot([], [], color="grey", alpha=0.3, label="Individual Runs")
+            ax.plot([], [], color="grey", alpha=0.1, label="Individual Runs")
         ax.set_title(household_attribute_name)
         if household_attribute_name in PLOT_Y_LABELS:
             ax.set_ylabel(PLOT_Y_LABELS[household_attribute_name])
@@ -685,7 +685,7 @@ def plot_multirun_results_within_scenario(
 
     colors: dict[str, str] = {
         "no_reloc": "black",
-        "no_gov_": "red",
+        "no_gov": "red",
         "no_adapt": "green",
         "full": "blue",
     }
@@ -1408,10 +1408,10 @@ def plot_combined_cluster_results_within_scenario(
 if __name__ == "__main__":
     model_path = os.path.join("..", "..", "models", "models", "mex")
 
-    model_name = "default"
+    model_name = "no_gov_run_0"
     scenario = "base"
     scenarios_to_compare = list(SCENARIOS_BASE_FUTURE)
-    prefixes = ["no_reloc", "no_gov", "no_adapt", "full"]
+    prefixes = ["no_gov", "no_adapt", "full"]
 
     # 1) Build merged (cluster-summed) results while keeping per-run columns.
     combine_cluster_results(
@@ -1433,9 +1433,31 @@ if __name__ == "__main__":
     )
 
     # 3) Plot non-merged reference views from regular multirun outputs.
-    model_path = os.path.join("..", "..", "models", "models", "etaple_new")
-    plot_multirun_results_within_scenario(model_path, scenario, prefixes)
-    plot_multirun_results_for_scenarios(model_path, scenarios_to_compare, x_axis="year")
+    model_paths = [
+        os.path.join("..", "..", "models", "models", "mex", f"cluster_{i:03d}")
+        for i in range(23)
+    ]
+    output_paths = [
+        os.path.join(
+            "..",
+            "..",
+            "models",
+            "models",
+            "mex",
+            "cluster_plots",
+            f"cluster_{i:03d}.png",
+        )
+        for i in range(23)
+    ]
+    for model_path, output_path in zip(model_paths, output_paths):
+        plot_multirun_results_within_scenario(
+            model_path=model_path,
+            scenario=scenario,
+            prefixes=prefixes,
+            output_path=output_path,
+            x_axis="year",
+        )
+    # plot_multirun_results_for_scenarios(model_path, scenarios_to_compare, x_axis="year")
 
     # 4) Single-run timeseries diagnostics.
     process_household_attributes(model_path, scenario, model_name)
