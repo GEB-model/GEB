@@ -12,6 +12,7 @@ PLOT_Y_LABELS: dict[str, str] = {
     "n_households_exposed_to_flooding": "Number of Households Exposed to Flooding",
 }
 SCENARIOS_BASE_FUTURE: tuple[str, str] = ("base", "_future")
+CLUSTER_SUMMARY_YEARS: tuple[int, ...] = (2000, 2020, 2080)
 
 
 def _list_household_attribute_files(results_path: str) -> list[str]:
@@ -63,6 +64,42 @@ def _resolve_ylim(df: pd.DataFrame) -> tuple[float, float] | None:
     if pd.isna(max_value):
         return None
     return (0.0, max_value * 1.1)
+
+
+def _extract_year_means(
+    df: pd.DataFrame,
+    target_years: tuple[int, ...],
+) -> dict[int, float]:
+    """Extract the across-run mean value at specific calendar years.
+
+    Notes:
+        The dataframe is averaged across its run columns first, then indexed
+        by calendar year. Years not present in the data are omitted.
+
+    Args:
+        df: Time-indexed dataframe with one column per run.
+        target_years: Calendar years to extract, e.g. (2000, 2020, 2080).
+
+    Returns:
+        Mapping from year to the mean value across runs, for years present in
+        the dataframe's index.
+    """
+    if df.empty:
+        return {}
+
+    mean_series: pd.Series = df.mean(axis=1)
+    year_values = (
+        mean_series.index.year
+        if isinstance(mean_series.index, pd.DatetimeIndex)
+        else mean_series.index.astype(int)
+    )
+
+    year_means: dict[int, float] = {}
+    for target_year in target_years:
+        year_mask = year_values == target_year
+        if year_mask.any():
+            year_means[target_year] = float(mean_series.to_numpy()[year_mask][-1])
+    return year_means
 
 
 def _resolve_ylim_across_groups(
@@ -1256,6 +1293,65 @@ def plot_ead_per_gdl_region_across_clusters(
     )
 
 
+def _attribute_year_summary_records(
+    results_by_prefix: dict[str, dict[str, pd.DataFrame]],
+) -> list[dict[str, float | str]]:
+    """Build summary records with the mean attribute value at fixed years.
+
+    Notes:
+        Only years present in the data are included; a scenario that does not
+        cover a given year (e.g. a future scenario without a 2000 timestep)
+        simply omits that column.
+
+    Args:
+        results_by_prefix: Nested dictionary {run_prefix: {attribute_name: dataframe}}.
+
+    Returns:
+        One record per (run_prefix, attribute) combination with a mean_<year>
+        column for each year present in the data.
+    """
+    summary_records: list[dict[str, float | str]] = []
+    for run_prefix, prefix_results in results_by_prefix.items():
+        for household_attribute_name, attribute_df in prefix_results.items():
+            year_means: dict[int, float] = _extract_year_means(
+                attribute_df, CLUSTER_SUMMARY_YEARS
+            )
+            if not year_means:
+                continue
+
+            record: dict[str, float | str] = {
+                "run_prefix": run_prefix,
+                "attribute": household_attribute_name,
+            }
+            for target_year in CLUSTER_SUMMARY_YEARS:
+                if target_year in year_means:
+                    record[f"mean_{target_year}"] = year_means[target_year]
+            summary_records.append(record)
+    return summary_records
+
+
+def _cluster_year_summary_records(
+    cluster_folder: str,
+    cluster_results: dict[str, dict[str, pd.DataFrame]],
+) -> list[dict[str, float | str]]:
+    """Build per-cluster summary records tagged with the cluster name.
+
+    Args:
+        cluster_folder: Cluster folder name (e.g. cluster_007), stored as a
+            column so records from multiple clusters can be combined.
+        cluster_results: Nested dictionary {run_prefix: {attribute_name: dataframe}}
+            for this cluster.
+
+    Returns:
+        One record per (run_prefix, attribute) combination with a mean_<year>
+        column for each year present in the data, tagged with the cluster name.
+    """
+    return [
+        {"cluster": cluster_folder, **record}
+        for record in _attribute_year_summary_records(cluster_results)
+    ]
+
+
 def combine_cluster_results(
     model_path: str,
     scenario: str,
@@ -1290,6 +1386,7 @@ def combine_cluster_results(
     combined_results: dict[str, dict[str, pd.DataFrame]] = {
         run_prefix: {} for run_prefix in run_prefixes
     }
+    cluster_summary_records: list[dict[str, float | str]] = []
     for cluster_folder in cluster_folders:
         cluster_results: dict[str, dict[str, pd.DataFrame]] = (
             read_multirun_results_within_scenario(
@@ -1297,6 +1394,12 @@ def combine_cluster_results(
                 scenario=scenario,
                 run_prefixes=run_prefixes,
                 process_adaptation_uptake=False,
+            )
+        )
+        cluster_summary_records.extend(
+            _cluster_year_summary_records(
+                cluster_folder=cluster_folder,
+                cluster_results=cluster_results,
             )
         )
         for run_prefix, prefix_results in cluster_results.items():
@@ -1313,6 +1416,26 @@ def combine_cluster_results(
                             fill_value=0.0,
                         )
                     )
+
+    if cluster_summary_records:
+        cluster_summary_df: pd.DataFrame = pd.DataFrame(cluster_summary_records)
+        cluster_summary_output_path: str = os.path.join(
+            model_path, f"household_attributes_year_summary_{scenario}.csv"
+        )
+        cluster_summary_df.to_csv(cluster_summary_output_path, index=False)
+
+    # combined_results already holds values summed across clusters (see the
+    # per-cluster loop above), so its year-means represent the summed totals.
+    summed_summary_records: list[dict[str, float | str]] = (
+        _attribute_year_summary_records(combined_results)
+    )
+    if summed_summary_records:
+        summed_summary_df: pd.DataFrame = pd.DataFrame(summed_summary_records)
+        summed_summary_output_path: str = os.path.join(
+            model_path,
+            f"household_attributes_year_summary_{scenario}_summed_across_clusters.csv",
+        )
+        summed_summary_df.to_csv(summed_summary_output_path, index=False)
 
     combined_results_path: str = os.path.join(
         model_path,
