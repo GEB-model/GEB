@@ -193,6 +193,11 @@ class CropFarmersVariables(Bucket):
     field_indices: ArrayInt32
     harvested_crop: DynamicArray
     actual_yield_per_farmer: DynamicArray
+    latest_harvest_spei: DynamicArray
+    latest_harvest_yield_ratio: DynamicArray
+    crop_decision_active_year_index: DynamicArray
+    crop_decision_spei: DynamicArray
+    crop_decision_yield_ratio: DynamicArray
     irrigation_limit_m3: DynamicArray
     water_costs_m3_channel: float
     water_costs_m3_reservoir: float
@@ -871,7 +876,42 @@ class CropFarmers(AgentBaseClass):
             dtype=np.int32,
             fill_value=-1,
         )
+        self.var.latest_harvest_spei = DynamicArray(
+            n=self.var.n,
+            max_n=self.var.max_n,
+            dtype=np.float32,
+            fill_value=np.nan,
+        )
 
+        self.var.latest_harvest_yield_ratio = DynamicArray(
+            n=self.var.n,
+            max_n=self.var.max_n,
+            dtype=np.float32,
+            fill_value=np.nan,
+        )
+
+        # The active-year index also functions as the decision-event marker:
+        # -1 means that no crop decision was made on the current day.
+        self.var.crop_decision_active_year_index = DynamicArray(
+            n=self.var.n,
+            max_n=self.var.max_n,
+            dtype=np.int32,
+            fill_value=-1,
+        )
+
+        self.var.crop_decision_spei = DynamicArray(
+            n=self.var.n,
+            max_n=self.var.max_n,
+            dtype=np.float32,
+            fill_value=np.nan,
+        )
+
+        self.var.crop_decision_yield_ratio = DynamicArray(
+            n=self.var.n,
+            max_n=self.var.max_n,
+            dtype=np.float32,
+            fill_value=np.nan,
+        )
         ## Risk perception variables
         self.var.risk_perception = DynamicArray(
             n=self.var.n,
@@ -2148,6 +2188,11 @@ class CropFarmers(AgentBaseClass):
         Note:
             The function also updates the drought risk perception and tracks disposable income.
         """
+        # Reset the decision reporters
+        self.var.crop_decision_active_year_index.fill(-1)
+        self.var.crop_decision_spei.fill(np.nan)
+        self.var.crop_decision_yield_ratio.fill(np.nan)
+
         # Using the helper function to determine which crops are ready to be harvested
         harvest = self.harvest_numba(
             n=self.var.n,
@@ -2253,7 +2298,29 @@ class CropFarmers(AgentBaseClass):
                 weights=actual_profit_per_field,
                 minlength=self.var.n,
             )
+            harvest_actual_income = np.asarray(
+                self.var.seasonal_income_farmer[harvesting_farmers],
+                dtype=np.float32,
+            )
+            harvest_potential_income = np.asarray(
+                potential_income_farmer[harvesting_farmers],
+                dtype=np.float32,
+            )
 
+            harvest_yield_ratio = np.divide(
+                harvest_actual_income,
+                harvest_potential_income,
+                out=np.full(
+                    harvesting_farmers.size,
+                    np.nan,
+                    dtype=np.float32,
+                ),
+                where=harvest_potential_income > 0,
+            )
+
+            self.var.latest_harvest_yield_ratio[harvesting_farmers] = (
+                harvest_yield_ratio
+            )
             # Get the crop age
             crop_age = self.HRU.var.crop_age_days_map[harvest]
             current_crop_age = (
@@ -2395,6 +2462,33 @@ class CropFarmers(AgentBaseClass):
             days_since_start[i] = (current_date - active_calendar_start).days
 
         return days_since_start
+
+    def _record_crop_prediction_decision(
+        self,
+        deciding_farmers: np.ndarray,
+    ) -> None:
+        """Record predictor values at the final-harvest decision moment.
+
+        The active crop-calendar index is recorded before it is advanced. The
+        reporter time coordinate provides the exact predictor timestamp.
+        """
+        deciding_farmers = np.asarray(deciding_farmers, dtype=np.int64)
+
+        if deciding_farmers.size == 0:
+            return
+
+        active_year_indices = np.asarray(
+            self.var.crop_calendar_active_year_index[deciding_farmers],
+            dtype=np.int32,
+        )
+
+        self.var.crop_decision_active_year_index[deciding_farmers] = active_year_indices
+        self.var.crop_decision_spei[deciding_farmers] = self.var.latest_harvest_spei[
+            deciding_farmers
+        ]
+        self.var.crop_decision_yield_ratio[deciding_farmers] = (
+            self.var.latest_harvest_yield_ratio[deciding_farmers]
+        )
 
     def _advance_crop_calendar_after_last_harvest(
         self,
@@ -2561,8 +2655,13 @@ class CropFarmers(AgentBaseClass):
                 & (~has_active_crop[harvesting_farmers])
             )
 
+            # Record the values of the decision day parameters
+            deciding_farmers = harvesting_farmers[completed_after_harvest]
+
+            self._record_crop_prediction_decision(deciding_farmers)
+
             advance_farmers(
-                harvesting_farmers[completed_after_harvest],
+                deciding_farmers,
                 reason="final scheduled harvest completed",
             )
 
@@ -3148,6 +3247,9 @@ class CropFarmers(AgentBaseClass):
             coords=self.var.locations[harvesting_farmers],
             gt=self.grid.gt,
         )
+
+        # Save harvest for the decision day
+        self.var.latest_harvest_spei[harvesting_farmers] = current_SPEI_per_farmer
 
         full_size_SPEI_per_farmer = np.zeros_like(
             self.var.cumulative_SPEI_during_growing_season
