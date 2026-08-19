@@ -73,35 +73,41 @@ SCREENING_CHARACTERISTICS: tuple[Characteristic, ...] = (
         scale=1e-6,
         logarithmic_x=True,
     ),
-    Characteristic("aridity_FAO_PM", "Aridity, PET/P (–)"),
-    Characteristic("ele_mt_sav", "Mean elevation (m)"),
-    Characteristic("gwt_cm_sav", "Depth to groundwater table (cm)"),
-    Characteristic("lka_pc_sse", "Lake-area coverage (%)", zero_is_distinct=True),
-    Characteristic("rev_mc_usu", "Total reservoir volume (million m³)"),
-    Characteristic("frac_snow", "Snowfall fraction (–)", zero_is_distinct=True),
-    Characteristic("p_mean", "Mean precipitation (mm/day)"),
-    Characteristic("moisture_index_FAO_PM", "Moisture index (–)"),
-    Characteristic("tmp_dc_syr", "Mean annual temperature (°C)", scale=0.1),
-    Characteristic("seasonality_FAO_PM", "Precipitation seasonality (–)"),
-    Characteristic("high_prec_freq", "High-precipitation days (%)", scale=100.0),
-    Characteristic("high_prec_dur", "High-precipitation duration (days)"),
-    Characteristic("low_prec_freq", "Low-precipitation days (%)", scale=100.0),
-    Characteristic("low_prec_dur", "Low-precipitation duration (days)"),
-    Characteristic("slp_dg_sav", "Mean slope (degrees)", scale=0.1),
+    Characteristic("aridity_FAO_PM", "Aridity index, PET/P (–)"),
+    Characteristic("ele_mt_sav", "Elevation (m)"),
+    Characteristic("gwt_cm_sav", "Groundwater-table depth (cm)"),
+    Characteristic("lka_pc_sse", "Lake-area extent (%)", zero_is_distinct=True),
+    Characteristic("rev_mc_usu", "Upstream reservoir volume (million m³)"),
+    Characteristic(
+        "frac_snow",
+        "Fraction of precipitation falling as snow (–)",
+        zero_is_distinct=True,
+    ),
+    Characteristic("p_mean", "Daily precipitation (mm/day)"),
+    Characteristic("inu_pc_slt", "Long-term maximum inundation extent (%)"),
+    Characteristic("tmp_dc_syr", "Annual air temperature (°C)", scale=0.1),
+    Characteristic("seasonality_FAO_PM", "Moisture-index seasonality (–)"),
+    Characteristic(
+        "high_prec_freq", "High-precipitation-day frequency (%)", scale=100.0
+    ),
+    Characteristic("high_prec_dur", "High-precipitation-event duration (days)"),
+    Characteristic("low_prec_freq", "Low-precipitation-day frequency (%)", scale=100.0),
+    Characteristic("low_prec_dur", "Low-precipitation-event duration (days)"),
+    Characteristic("slp_dg_sav", "Terrain slope (degrees)", scale=0.1),
     Characteristic("sgr_dk_sav", "Stream gradient (dm/km)"),
-    Characteristic("wet_pc_sg1", "Wetland-area coverage (%)"),
+    Characteristic("wet_pc_sg1", "Wetland extent (%)"),
     Characteristic("dor_pc_pva", "Degree of regulation (%)", zero_is_distinct=True),
-    Characteristic("for_pc_sse", "Forest cover (%)"),
-    Characteristic("crp_pc_sse", "Cropland (%)"),
-    Characteristic("pst_pc_sse", "Pasture (%)"),
-    Characteristic("ire_pc_sse", "Irrigated area (%)"),
-    Characteristic("urb_pc_sse", "Urban area (%)"),
-    Characteristic("gla_pc_sse", "Glacier area (%)"),
-    Characteristic("kar_pc_sse", "Karst area (%)"),
-    Characteristic("cly_pc_sav", "Clay content (%)"),
-    Characteristic("snd_pc_sav", "Sand content (%)"),
-    Characteristic("swc_pc_syr", "Soil-water content (%)"),
-    Characteristic("hft_ix_s09", "Human-footprint index (–)", scale=0.01),
+    Characteristic("for_pc_sse", "Forest-cover extent (%)"),
+    Characteristic("crp_pc_sse", "Cropland extent (%)"),
+    Characteristic("pst_pc_sse", "Pasture extent (%)"),
+    Characteristic("ire_pc_sse", "Irrigated-area extent (%)"),
+    Characteristic("urb_pc_sse", "Urban extent (%)"),
+    Characteristic("gla_pc_sse", "Glacier extent (%)"),
+    Characteristic("kar_pc_sse", "Karst-area extent (%)"),
+    Characteristic("cly_pc_sav", "Soil clay fraction (%)"),
+    Characteristic("snd_pc_sav", "Soil sand fraction (%)"),
+    Characteristic("swc_pc_syr", "Annual soil-water content (%)"),
+    Characteristic("hft_ix_s09", "Human-footprint index, 2009 (–)", scale=0.01),
     Characteristic("ppd_pk_sav", "Population density (people/km²)"),
     Characteristic("rdd_mk_sav", "Road density (m/km²)"),
 )
@@ -162,7 +168,7 @@ DASHBOARD_CHARACTERISTICS: tuple[Characteristic, ...] = (
 
 KGE_COMPONENT_TARGETS: tuple[KGEComponentTarget, ...] = (
     KGEComponentTarget("KGE_correlation_daily", "ρ (correlation)"),
-    KGEComponentTarget("KGE_bias_ratio_daily", "ρ (mean-flow ratio)"),
+    KGEComponentTarget("KGE_bias_ratio_daily", "ρ (bias ratio)"),
     KGEComponentTarget("KGE_variability_ratio_daily", "ρ (variability ratio)"),
     KGEComponentTarget("KGE_daily", "ρ (KGE)"),
 )
@@ -170,17 +176,21 @@ KGE_COMPONENT_TARGETS: tuple[KGEComponentTarget, ...] = (
 # The selected panels represent distinct topographic, subsurface, channel, and
 # climate relationships while avoiding redundant variants of the same signal.
 KGE_RELATIONSHIP_PANELS: tuple[KGERelationshipPanel, ...] = (
-    KGERelationshipPanel("ele_mt_sav", "b) Mean elevation", "Elevation (m)"),
+    KGERelationshipPanel("ele_mt_sav", "b) Elevation", "Elevation (m)"),
     KGERelationshipPanel(
         "gwt_cm_sav",
-        "c) Depth to groundwater table",
-        "Depth to groundwater table (cm)",
+        "c) Groundwater-table depth",
+        "Groundwater-table depth (cm)",
     ),
-    KGERelationshipPanel("sgr_dk_sav", "d) Stream gradient", "Stream gradient (dm/km)"),
+    KGERelationshipPanel(
+        "sgr_dk_sav",
+        "d) Stream gradient",
+        "Stream gradient (dm/km)",
+    ),
     KGERelationshipPanel(
         "low_prec_freq",
-        "e) Low-precipitation days",
-        "Low-precipitation days (%)",
+        "e) Low-precipitation-day frequency",
+        "Low-precipitation-day frequency (%)",
     ),
 )
 
@@ -344,9 +354,6 @@ def calculate_kge_component_associations(
 
     Returns:
         Long table containing sample sizes, Spearman correlations, and p-values.
-
-    Raises:
-        ValueError: If no valid characteristic-target pair is available.
     """
     association_rows: list[dict[str, float | int | str]] = []
     for characteristic in SCREENING_CHARACTERISTICS:
@@ -354,15 +361,18 @@ def calculate_kge_component_associations(
             pair_table: pd.DataFrame = analysis_df[
                 [characteristic.column, target.column]
             ].dropna()
+            rho: float = np.nan
+            p_value: float = np.nan
             if (
-                len(pair_table) < 3
-                or pair_table[characteristic.column].nunique() < 2
-                or pair_table[target.column].nunique() < 2
+                len(pair_table) >= 3
+                and pair_table[characteristic.column].nunique() >= 2
+                and pair_table[target.column].nunique() >= 2
             ):
-                continue
-            correlation_result = spearmanr(
-                pair_table[characteristic.column], pair_table[target.column]
-            )
+                correlation_result = spearmanr(
+                    pair_table[characteristic.column], pair_table[target.column]
+                )
+                rho = float(correlation_result.statistic)
+                p_value = float(correlation_result.pvalue)
             association_rows.append(
                 {
                     "variable": characteristic.column,
@@ -370,12 +380,10 @@ def calculate_kge_component_associations(
                     "target": target.column,
                     "target_label": target.label,
                     "n": len(pair_table),
-                    "spearman_rho": float(correlation_result.statistic),
-                    "p_value": float(correlation_result.pvalue),
+                    "spearman_rho": rho,
+                    "p_value": p_value,
                 }
             )
-    if not association_rows:
-        raise ValueError("No valid KGE-characteristic associations are available.")
 
     return pd.DataFrame(association_rows)
 
@@ -568,9 +576,15 @@ def _plot_relationship_panel(
         random_generator: Generator for reproducible bootstrap resampling.
         kge_axis_limits: Shared lower and upper dimensionless KGE limits.
 
-    Raises:
-        ValueError: If the KGE association is missing.
     """
+    association_rows: pd.DataFrame = association_df.loc[
+        (association_df["variable"] == characteristic.column)
+        & (association_df["target"] == "KGE_daily")
+    ]
+    if association_rows.empty or pd.isna(association_rows.iloc[0]["spearman_rho"]):
+        axis.set_axis_off()
+        return
+
     displayed_x, kge_values, model_x, evaluation_x = _relationship_data(
         analysis_df, characteristic
     )
@@ -607,12 +621,6 @@ def _plot_relationship_panel(
         linewidth=2.3,
         zorder=4,
     )
-    association_rows: pd.DataFrame = association_df.loc[
-        (association_df["variable"] == characteristic.column)
-        & (association_df["target"] == "KGE_daily")
-    ]
-    if len(association_rows) != 1:
-        raise ValueError(f"Expected one KGE association for {characteristic.column}.")
     rho: float = float(association_rows.iloc[0]["spearman_rho"])
     axis.text(
         0.025,
@@ -660,7 +668,7 @@ def _relationship_legend_handles() -> list[Line2D | Patch]:
             linestyle="none",
             markerfacecolor=STATION_COLOR,
             markeredgecolor="none",
-            markersize=4.5,
+            markersize=6.0,
             alpha=0.5,
             label="Station",
         ),
@@ -668,7 +676,7 @@ def _relationship_legend_handles() -> list[Line2D | Patch]:
             [0],
             [0],
             color=LOWESS_COLOR,
-            linewidth=2.3,
+            linewidth=2.8,
             label="Local regression (LOWESS)",
         ),
         Patch(
@@ -678,37 +686,6 @@ def _relationship_legend_handles() -> list[Line2D | Patch]:
             label="95% bootstrap CI",
         ),
     ]
-
-
-def _ranked_characteristic_order(
-    association_matrix: pd.DataFrame,
-) -> list[str]:
-    """Rank characteristics by overall-KGE association strength.
-
-    Args:
-        association_matrix: Spearman correlations indexed by characteristic.
-
-    Returns:
-        Characteristic columns sorted by decreasing absolute overall-KGE
-        correlation.
-
-    Raises:
-        ValueError: If an expected characteristic is unavailable.
-    """
-    expected_columns: list[str] = [
-        characteristic.column for characteristic in SCREENING_CHARACTERISTICS
-    ]
-    missing_columns: set[str] = set(expected_columns) - set(association_matrix.index)
-    if missing_columns:
-        raise ValueError(
-            f"KGE association table is missing characteristics: {missing_columns}"
-        )
-    return (
-        association_matrix.loc[expected_columns, "KGE_daily"]
-        .abs()
-        .sort_values(ascending=False, kind="stable")
-        .index.tolist()
-    )
 
 
 def plot_kge_characteristic_heatmaps(
@@ -733,7 +710,7 @@ def plot_kge_characteristic_heatmaps(
         Figure containing the heatmap and four continuous relationship panels.
 
     Raises:
-        ValueError: If associations or selected variables are incomplete.
+        ValueError: If selected relationship-panel inputs are incomplete.
     """
     association_matrix: pd.DataFrame = association_df.pivot(
         index="variable", columns="target", values="spearman_rho"
@@ -750,14 +727,23 @@ def plot_kge_characteristic_heatmaps(
     target_columns: list[str] = [target.column for target in KGE_COMPONENT_TARGETS]
     required_variables: list[str] = list(characteristics_by_column)
     selected_variables: set[str] = {panel.column for panel in KGE_RELATIONSHIP_PANELS}
-    if not set(required_variables).issubset(association_matrix.index):
-        raise ValueError("KGE association table does not contain every characteristic.")
     if not {"KGE_daily", *selected_variables}.issubset(analysis_df.columns):
         raise ValueError("KGE relationship-panel inputs are incomplete.")
 
-    variable_order: list[str] = _ranked_characteristic_order(association_matrix)
-    association_matrix = association_matrix.loc[variable_order, target_columns]
-    significance_matrix = significance_matrix.loc[variable_order, target_columns]
+    association_matrix = association_matrix.reindex(
+        index=required_variables, columns=target_columns
+    )
+    significance_matrix = significance_matrix.reindex(
+        index=required_variables, columns=target_columns
+    )
+    variable_order: list[str] = (
+        association_matrix["KGE_daily"]
+        .abs()
+        .sort_values(ascending=False, kind="stable", na_position="last")
+        .index.tolist()
+    )
+    association_matrix = association_matrix.loc[variable_order]
+    significance_matrix = significance_matrix.loc[variable_order]
 
     figure: plt.Figure = plt.figure(figsize=(14.8, 11.8))
     outer_grid = figure.add_gridspec(1, 2, width_ratios=(1.12, 1.10), wspace=0.30)
@@ -791,6 +777,8 @@ def plot_kge_characteristic_heatmaps(
         for column_index in range(len(target_columns)):
             rho: float = float(association_matrix.iloc[row_index, column_index])
             p_value: float = float(significance_matrix.iloc[row_index, column_index])
+            if np.isnan(rho):
+                continue
             significance_marker: str = "*" if p_value < 0.05 else ""
             rho_text: str = "0.00" if abs(rho) < 0.005 else f"{rho:+.2f}"
             text_color: str = "white" if abs(rho) >= 0.34 else "#222222"
@@ -857,20 +845,26 @@ def plot_kge_characteristic_heatmaps(
             random_generator=random_generator,
             kge_axis_limits=kge_axis_limits,
         )
-        characteristic_row: int = variable_order.index(panel.column)
-        association_axis.add_patch(
-            Rectangle(
-                (target_columns.index("KGE_daily") - 0.5, characteristic_row - 0.5),
-                1.0,
-                1.0,
-                fill=False,
-                edgecolor="#111111",
-                linewidth=2.2,
-                zorder=7,
-                clip_on=False,
+        if pd.notna(association_matrix.loc[panel.column, "KGE_daily"]):
+            characteristic_row: int = variable_order.index(panel.column)
+            association_axis.add_patch(
+                Rectangle(
+                    (
+                        target_columns.index("KGE_daily") - 0.5,
+                        characteristic_row - 0.5,
+                    ),
+                    1.0,
+                    1.0,
+                    fill=False,
+                    edgecolor="#111111",
+                    linewidth=2.2,
+                    zorder=7,
+                    clip_on=False,
+                )
             )
-        )
-        association_axis.get_yticklabels()[characteristic_row].set_fontweight("bold")
+            association_axis.get_yticklabels()[characteristic_row].set_fontweight(
+                "bold"
+            )
 
     figure.subplots_adjust(left=0.255, right=0.985, top=0.96, bottom=0.09)
     figure.canvas.draw()
@@ -891,6 +885,8 @@ def plot_kge_characteristic_heatmaps(
         overall_kge_rho: float = float(
             association_matrix.loc[panel.column, "KGE_daily"]
         )
+        if np.isnan(overall_kge_rho):
+            continue
         normalized_rho: np.ndarray = np.asarray(
             association_image.norm(np.asarray([overall_kge_rho], dtype=float)),
             dtype=float,
@@ -927,9 +923,9 @@ def plot_kge_characteristic_heatmaps(
         bbox_transform=figure.transFigure,
         ncols=3,
         frameon=False,
-        fontsize=7.5,
-        columnspacing=0.8,
-        handlelength=2.1,
+        fontsize=9.0,
+        columnspacing=1.2,
+        handlelength=2.6,
     )
     if export:
         _save_figure(
@@ -990,37 +986,50 @@ def plot_all_kge_characteristic_scatterplots(
 
     Returns:
         Four-column atlas containing all 32 continuous KGE relationships.
-
-    Raises:
-        ValueError: If an overall-KGE association is missing.
     """
     overall_associations: pd.DataFrame = association_df.loc[
         association_df["target"] == "KGE_daily"
     ].set_index("variable")
-    required_variables: set[str] = {
+    required_variables: list[str] = [
         characteristic.column for characteristic in SCREENING_CHARACTERISTICS
-    }
-    if not required_variables.issubset(overall_associations.index):
-        raise ValueError("Overall-KGE associations are incomplete.")
-    ordered_characteristics: list[Characteristic] = sorted(
-        SCREENING_CHARACTERISTICS,
-        key=lambda item: abs(
-            float(overall_associations.loc[item.column, "spearman_rho"])
-        ),
-        reverse=True,
+    ]
+    overall_associations = overall_associations.reindex(required_variables)
+    variable_order: list[str] = (
+        overall_associations["spearman_rho"]
+        .abs()
+        .sort_values(ascending=False, kind="stable", na_position="last")
+        .index.tolist()
     )
+    characteristics_by_column: dict[str, Characteristic] = {
+        characteristic.column: characteristic
+        for characteristic in SCREENING_CHARACTERISTICS
+    }
+    ordered_characteristics: list[Characteristic] = [
+        characteristics_by_column[column] for column in variable_order
+    ]
 
     column_count: int = 4
     row_count: int = int(np.ceil(len(ordered_characteristics) / column_count))
+    kge_lower_limit, kge_upper_limit = analysis_df["KGE_daily"].quantile([0.10, 0.90])
+    kge_axis_limits: tuple[float, float] = (
+        float(kge_lower_limit),
+        float(kge_upper_limit),
+    )
     figure, axes = plt.subplots(
         row_count,
         column_count,
-        figsize=(13.6, 2.25 * row_count),
+        figsize=(13.6, 1.68 * row_count),
         sharey=True,
     )
     for panel_index, (axis, characteristic) in enumerate(
         zip(axes.flat, ordered_characteristics, strict=True)
     ):
+        rho: float = float(
+            overall_associations.loc[characteristic.column, "spearman_rho"]
+        )
+        if np.isnan(rho):
+            axis.set_axis_off()
+            continue
         displayed_x, kge_values, model_x, evaluation_x = _relationship_data(
             analysis_df, characteristic
         )
@@ -1031,9 +1040,6 @@ def plot_all_kge_characteristic_scatterplots(
             np.power(10.0, evaluation_x)
             if characteristic.logarithmic_x
             else evaluation_x
-        )
-        rho: float = float(
-            overall_associations.loc[characteristic.column, "spearman_rho"]
         )
         axis.scatter(
             displayed_x,
@@ -1052,28 +1058,21 @@ def plot_all_kge_characteristic_scatterplots(
             linewidth=1.8,
             zorder=4,
         )
-        axis.axhline(
-            -0.41,
-            color="#C44E52",
-            linewidth=0.9,
-            linestyle=(0, (3.0, 2.2)),
-            zorder=1,
-        )
         if characteristic.logarithmic_x:
             axis.set_xscale("log")
         axis.set_xlim(displayed_evaluation_x[0], displayed_evaluation_x[-1])
-        axis.set_ylim(-1.0, 1.0)
+        axis.set_ylim(kge_axis_limits)
         axis.set_title(
             f"{_alphabetic_panel_label(panel_index)} {characteristic.label}\n"
             f"Spearman ρ = {rho:+.2f}",
             loc="left",
-            fontsize=8.2,
+            fontsize=8.0,
             fontweight="bold",
             pad=4,
         )
         axis.grid(axis="y", color="#DDDDDD", linewidth=0.55)
         axis.set_axisbelow(True)
-        axis.tick_params(axis="both", labelsize=6.8)
+        axis.tick_params(axis="both", labelsize=6.7)
         axis.spines[["top", "right"]].set_visible(False)
 
     for axis in axes[:, 0]:
@@ -1086,7 +1085,7 @@ def plot_all_kge_characteristic_scatterplots(
             linestyle="none",
             markerfacecolor="#315F70",
             markeredgecolor="none",
-            markersize=4.0,
+            markersize=5.5,
             alpha=0.5,
             label="Station",
         ),
@@ -1094,33 +1093,27 @@ def plot_all_kge_characteristic_scatterplots(
             [0],
             [0],
             color="#0C526C",
-            linewidth=1.8,
+            linewidth=2.2,
             label="Local regression (LOWESS)",
-        ),
-        Line2D(
-            [0],
-            [0],
-            color="#C44E52",
-            linewidth=0.9,
-            linestyle=(0, (3.0, 2.2)),
-            label="Mean-flow benchmark (KGE = −0.41)",
         ),
     ]
     figure.legend(
         handles=atlas_legend_handles,
         loc="lower center",
-        bbox_to_anchor=(0.5, 0.006),
-        ncols=3,
+        bbox_to_anchor=(0.5, 0.008),
+        ncols=2,
         frameon=False,
-        fontsize=7.2,
+        fontsize=9.2,
+        columnspacing=1.8,
+        handlelength=2.5,
     )
     figure.subplots_adjust(
         left=0.06,
         right=0.99,
         top=0.985,
-        bottom=0.045,
+        bottom=0.06,
         wspace=0.22,
-        hspace=0.62,
+        hspace=0.48,
     )
     if export:
         _save_figure(

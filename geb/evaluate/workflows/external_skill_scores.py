@@ -39,6 +39,7 @@ ARCHIVE_METRIC_FILES: dict[str, str] = {
     "NSE": "NSE.csv",
     "KGE_correlation": "Pearson-r.csv",
     "KGE_bias_ratio": "Beta-KGE.csv",
+    "KGE_variability_ratio": "Alpha-NSE.csv",
 }
 ARCHIVE_LEAD_TIME_COLUMN: str = "0"
 

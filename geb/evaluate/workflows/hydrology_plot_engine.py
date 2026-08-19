@@ -14,8 +14,8 @@ import numpy as np
 import pandas as pd
 from matplotlib.colorbar import Colorbar
 from matplotlib.lines import Line2D
-from matplotlib.ticker import MaxNLocator
-from scipy.stats import linregress
+from scipy.stats import spearmanr
+from statsmodels.nonparametric.smoothers_lowess import lowess
 
 from geb.evaluate.workflows.external_skill_scores import (
     GLOFAS_MODEL_NAME,
@@ -25,6 +25,8 @@ from geb.evaluate.workflows.external_skill_scores import (
 
 OBSERVATIONS_COLOR: str = "#E6900A"
 SIMULATIONS_DEFAULT_COLOR: str = "#278DD9"
+BEST_POSSIBLE_LINE_WIDTH: float = 1.3
+BEST_POSSIBLE_LINE_COLOR: str = "#111111"
 
 _EXTERNAL_MODEL_PLOT_ORDER: dict[str, int] = {
     UTRECHT_MODEL_NAME: 0,
@@ -33,8 +35,8 @@ _EXTERNAL_MODEL_PLOT_ORDER: dict[str, int] = {
 }
 _EXTERNAL_MODEL_DISPLAY_NAMES: dict[str, str] = {
     UTRECHT_MODEL_NAME: "PCR-GLOBWB",
-    GOOGLE_MODEL_NAME: "Google",
-    GLOFAS_MODEL_NAME: "GloFAS",
+    GOOGLE_MODEL_NAME: "Google LSTM",
+    GLOFAS_MODEL_NAME: "GloFAS v4.0",
 }
 
 
@@ -391,8 +393,8 @@ def _plot_kge_component_maps(
         right=0.92,
         bottom=0.03,
         top=0.94,
-        wspace=0.12,
-        hspace=0.18,
+        wspace=0.08,
+        hspace=0.10,
     )
     map_axes: list[plt.Axes] = [
         fig.add_subplot(grid[0, 0]),
@@ -712,10 +714,14 @@ def _draw_violin_box(
         bar_color: Color used for the violin and box.
         violin_width: Width of the violin plot.
         violin_limits: Optional visible y-axis limits. Values outside these
-            limits are excluded from the violin density but retained in the
-            boxplot and median.
+            limits are excluded from the violin density but retained when
+            calculating the boxplot statistics.
     """
-    density_values: np.ndarray = values[np.isfinite(values)]
+    finite_values: np.ndarray = values[np.isfinite(values)]
+    if finite_values.size == 0:
+        return
+
+    density_values: np.ndarray = finite_values
     if violin_limits is not None:
         lower_limit, upper_limit = violin_limits
         density_values = density_values[
@@ -733,17 +739,19 @@ def _draw_violin_box(
         for body in cast(list, parts["bodies"]):
             body.set_facecolor(bar_color)
             body.set_edgecolor(bar_color)
-            body.set_alpha(0.45)
+            body.set_linewidth(0.8)
+            body.set_alpha(0.35)
+            body.set_zorder(3)
 
     axis.boxplot(
-        values,
+        finite_values,
         positions=[position],
         widths=violin_width * 0.35,
         patch_artist=True,
-        medianprops={"color": "black", "linewidth": 2.0, "zorder": 5},
+        medianprops={"color": "black", "linewidth": 1.8, "zorder": 5},
         boxprops={
             "facecolor": bar_color,
-            "alpha": 0.9,
+            "alpha": 0.82,
             "linewidth": 0.8,
             "edgecolor": bar_color,
         },
@@ -752,10 +760,9 @@ def _draw_violin_box(
         flierprops={
             "marker": "o",
             "markerfacecolor": bar_color,
-            "markeredgecolor": bar_color,
-            "markersize": 3,
-            "alpha": 0.5,
-            "linewidth": 0,
+            "markeredgecolor": "none",
+            "markersize": 2.5,
+            "alpha": 0.25,
         },
     )
 
@@ -774,35 +781,35 @@ def plot_seasonal_kge(
             columns.
         output_folder: Root discharge evaluation output folder.
         logger: Logger used for output messages.
-        export: Whether to save PNG and SVG versions of the figure.
+        export: Whether to save PDF, SVG, and PNG versions of the figure.
     """
     season_names: tuple[str, ...] = ("winter", "spring", "summer", "autumn")
     season_colors: tuple[str, ...] = ("#4C78A8", "#59A14F", "#F2A541", "#B2794C")
     metric_configs: tuple[dict[str, object], ...] = (
         {
             "column": "KGE",
-            "title": "Overall KGE",
+            "title": "KGE",
             "ylabel": "KGE",
             "ylim": (-1.0, 1.0),
             "reference": 0.0,
         },
         {
             "column": "KGE_correlation",
-            "title": "Correlation component",
+            "title": "KGE correlation ($r$)",
             "ylabel": "Correlation, r",
             "ylim": (-1.0, 1.0),
             "reference": 0.0,
         },
         {
             "column": "KGE_bias_ratio",
-            "title": "Bias component",
+            "title": "KGE bias ratio ($\\beta$)",
             "ylabel": "Bias ratio, β",
             "ylim": (0.0, 2.0),
             "reference": 1.0,
         },
         {
             "column": "KGE_variability_ratio",
-            "title": "Variability component",
+            "title": "KGE variability ratio ($\\alpha$)",
             "ylabel": "Variability ratio, α",
             "ylim": (0.0, 2.0),
             "reference": 1.0,
@@ -894,11 +901,15 @@ def plot_seasonal_kge(
     if export:
         boxplots_folder: Path = output_folder / "skill_score_boxplots"
         boxplots_folder.mkdir(parents=True, exist_ok=True)
-        for extension in ("svg", "png"):
+        for extension in ("pdf", "svg", "png"):
             output_path: Path = (
                 boxplots_folder / f"evaluation_skill_scores_kge_seasonal.{extension}"
             )
-            figure.savefig(output_path, bbox_inches="tight", dpi=300)
+            figure.savefig(
+                output_path,
+                bbox_inches="tight",
+                dpi=300 if extension == "png" else None,
+            )
             logger.info("Seasonal KGE plot saved to: %s", output_path)
 
     plt.close(figure)
@@ -930,7 +941,6 @@ def plot_skill_score_boxplots(
         minimum_upstream_area_km2: Minimum modeled upstream area threshold for
             plotted GEB stations (km2).
         station_count: Number of plotted GEB stations.
-
     """
     if include_geb and evaluation_df.empty:
         logger.info(
@@ -943,18 +953,18 @@ def plot_skill_score_boxplots(
 
     metric_order: tuple[str, ...] = (
         "KGE",
-        "NSE",
-        "R2",
-        "RRMSE",
         "KGE_correlation",
         "KGE_bias_ratio",
         "KGE_variability_ratio",
+        "NSE",
+        "R2",
+        "RRMSE",
     )
-    geb_color: str = "#1f77b4"
+    geb_color: str = "#0072B2"
     external_colors: dict[str, str] = dict(
         zip(
             external_models,
-            ["#d62728", "#2ca02c", "#ff7f0e", "#9467bd", "#8c564b", "#e377c2"],
+            ["#D55E00", "#009E73", "#E69F00", "#CC79A7", "#56B4E9", "#7A5195"],
             strict=False,
         )
     )
@@ -962,76 +972,67 @@ def plot_skill_score_boxplots(
         {"GEB": geb_color} if include_geb else {}
     ) | external_colors
     single_model: bool = len(model_colors) == 1
+    geb_only: bool = include_geb and not external_models
+
+    if matched_only and include_geb and len(external_models) == 1:
+        paired_model_df: pd.DataFrame = next(iter(external_models.values()))
+        available_metrics: tuple[str, ...] = tuple(
+            metric_col
+            for metric_col in metric_order
+            if metric_col in evaluation_df.columns
+            and metric_col in paired_model_df.columns
+        )
+    else:
+        available_metrics = tuple(
+            metric_col
+            for metric_col in metric_order
+            if (include_geb and metric_col in evaluation_df.columns)
+            or any(
+                metric_col in model_df.columns for model_df in external_models.values()
+            )
+        )
+    if not available_metrics:
+        logger.info("No common skill-score metrics found; skipping skill score graphs.")
+        return
 
     logger.info("Creating evaluation metrics skill score plots...")
 
-    fig = plt.figure(
-        figsize=(8.0, 5.0) if single_model else (13.0, 6.5),
+    metric_count: int = len(available_metrics)
+    row_count: int = 1 if metric_count <= 3 else 2
+    column_count: int = int(np.ceil(metric_count / row_count))
+    figure_width: float = 10.2 if single_model else max(8.0, 3.25 * column_count)
+    fig: plt.Figure = plt.figure(
+        figsize=(figure_width, 3.5 if row_count == 1 else 6.5),
         constrained_layout=False,
+        facecolor="white",
     )
-    outer_grid = fig.add_gridspec(
-        nrows=2,
-        ncols=1,
-        height_ratios=[1.0, 1.0],
-        hspace=0.38 if single_model else 0.80,
+    metric_grid = fig.add_gridspec(
+        nrows=row_count,
+        ncols=2 * column_count,
+        hspace=0.26 if single_model else 0.52,
+        wspace=0.95,
     )
-    other_metric_grid = outer_grid[1, 0].subgridspec(
-        nrows=1,
-        ncols=3,
-        wspace=0.28,
-    )
-    axes_by_metric: dict[str, plt.Axes] = {
-        "NSE": fig.add_subplot(other_metric_grid[0, 0]),
-        "R2": fig.add_subplot(other_metric_grid[0, 1]),
-        "RRMSE": fig.add_subplot(other_metric_grid[0, 2]),
-    }
-    if single_model:
-        # A smaller, centered group visually identifies these as KGE components.
-        kge_grid = outer_grid[0, 0].subgridspec(
-            nrows=1,
-            ncols=2,
-            width_ratios=[1.35, 1.0],
-            wspace=0.20,
-        )
-        component_grid = kge_grid[0, 1].subgridspec(
-            nrows=3,
-            ncols=3,
-            height_ratios=[0.11, 0.78, 0.11],
-            wspace=0.32,
-        )
-        axes_by_metric.update(
-            {
-                "KGE": fig.add_subplot(kge_grid[0, 0]),
-                "KGE_correlation": fig.add_subplot(component_grid[1, 0]),
-                "KGE_bias_ratio": fig.add_subplot(component_grid[1, 1]),
-                "KGE_variability_ratio": fig.add_subplot(component_grid[1, 2]),
-            }
-        )
-    else:
-        kge_grid = outer_grid[0, 0].subgridspec(
-            nrows=1,
-            ncols=4,
-            width_ratios=[4.0, 1.0, 1.0, 1.0],
-            wspace=0.20,
-        )
-        axes_by_metric.update(
-            {
-                "KGE": fig.add_subplot(kge_grid[0, 0]),
-                "KGE_correlation": fig.add_subplot(kge_grid[0, 1]),
-                "KGE_bias_ratio": fig.add_subplot(kge_grid[0, 2]),
-                "KGE_variability_ratio": fig.add_subplot(kge_grid[0, 3]),
-            }
+    axes_by_metric: dict[str, plt.Axes] = {}
+    for panel_index, metric_col in enumerate(available_metrics):
+        row_index: int = panel_index // column_count
+        position_in_row: int = panel_index % column_count
+        metrics_in_row: int = min(column_count, metric_count - row_index * column_count)
+        # One GridSpec column of padding on each side centers a shorter row.
+        row_offset: int = column_count - metrics_in_row
+        grid_column_start: int = row_offset + 2 * position_in_row
+        axes_by_metric[metric_col] = fig.add_subplot(
+            metric_grid[row_index, grid_column_start : grid_column_start + 2]
         )
     displayed_station_count: int | None = (
         station_count if station_count is not None else len(evaluation_df)
     )
 
     component_titles: dict[str, str] = {
-        "KGE_correlation": "Correlation\nr",
-        "KGE_bias_ratio": "Bias ratio\nβ",
-        "KGE_variability_ratio": "Variability\nratio α",
+        "KGE_correlation": "Correlation $r$",
+        "KGE_bias_ratio": "Bias ratio $\\beta$",
+        "KGE_variability_ratio": "Variability ratio $\\alpha$",
     }
-    for metric_col in metric_order:
+    for metric_col in available_metrics:
         config: dict[str, object] = _SKILL_SCORE_CONFIG_BY_COLUMN[metric_col]
         axis = axes_by_metric[str(config["col"])]
         if matched_only and include_geb and len(external_models) == 1:
@@ -1054,18 +1055,21 @@ def plot_skill_score_boxplots(
                 geb_metric_values = np.array([], dtype=float)
                 external_metric_values = {}
         else:
-            geb_metric_values = (
-                evaluation_df[metric_col].dropna().to_numpy(dtype=float)
-                if include_geb and metric_col in evaluation_df.columns
-                else np.array([], dtype=float)
-            )
+            if include_geb and metric_col in evaluation_df.columns:
+                geb_metric_values = pd.to_numeric(
+                    evaluation_df[metric_col], errors="coerce"
+                ).to_numpy(dtype=float)
+                geb_metric_values = geb_metric_values[np.isfinite(geb_metric_values)]
+            else:
+                geb_metric_values = np.array([], dtype=float)
             external_metric_values = {}
             for model_name, model_df in external_models.items():
                 if metric_col not in model_df.columns:
                     continue
-                metric_values: np.ndarray = (
-                    model_df[metric_col].dropna().to_numpy(dtype=float)
-                )
+                metric_values: np.ndarray = pd.to_numeric(
+                    model_df[metric_col], errors="coerce"
+                ).to_numpy(dtype=float)
+                metric_values = metric_values[np.isfinite(metric_values)]
                 if metric_values.size > 0:
                     external_metric_values[model_name] = metric_values
 
@@ -1084,8 +1088,10 @@ def plot_skill_score_boxplots(
             else np.array([0.0])
         )
 
-        if config["ylim"] is not None:
-            y_limits: tuple[float, float] = cast(tuple[float, float], config["ylim"])
+        if metric_col == "RRMSE":
+            density_limits: tuple[float, float] = (0.0, 2.0)
+        elif config["ylim"] is not None:
+            density_limits = cast(tuple[float, float], config["ylim"])
         else:
             error_values: np.ndarray = np.concatenate(
                 [metric_values for _, metric_values in models_with_data]
@@ -1098,17 +1104,18 @@ def plot_skill_score_boxplots(
                 if nonnegative_values.size
                 else 0.0
             )
-            y_limits = (0.0, max(visible_upper_limit * 1.1, 1.0))
+            density_limits = (0.0, max(visible_upper_limit * 1.1, 1.0))
 
-        lower_axis_ticks: np.ndarray | None = None
-        if metric_col == "RRMSE":
-            rrmse_ticks: np.ndarray = np.asarray(
-                MaxNLocator(nbins=4).tick_values(*y_limits), dtype=float
-            )
-            lower_axis_ticks = rrmse_ticks
-            y_limits = (float(rrmse_ticks[0]), float(rrmse_ticks[-1]))
-        elif metric_col in ("NSE", "R2"):
-            lower_axis_ticks = np.linspace(y_limits[0], y_limits[1], 5)
+        axis_ticks: np.ndarray = np.linspace(density_limits[0], density_limits[1], 5)
+        y_limits: tuple[float, float] = density_limits
+        if metric_col in ("KGE", "KGE_correlation", "NSE", "R2"):
+            # Leave room above the theoretical optimum so its reference line
+            # remains visible instead of coinciding with the top frame.
+            y_limits = (density_limits[0], density_limits[1] + 0.04)
+        elif metric_col == "RRMSE":
+            # RRMSE is an error metric with an optimum of zero. A small lower
+            # margin keeps its reference line distinct from the panel boundary.
+            y_limits = (-0.04, density_limits[1])
 
         for (model_name, metric_values), x_position in zip(
             models_with_data, x_positions, strict=True
@@ -1118,72 +1125,119 @@ def plot_skill_score_boxplots(
                 metric_values,
                 x_position,
                 model_colors[model_name],
-                violin_width=0.28 if single_model else 0.35,
-                violin_limits=y_limits,
+                violin_width=0.62 if single_model else 0.32,
+                violin_limits=density_limits,
             )
-        is_component_axis: bool = metric_col.startswith("KGE_")
-        for (_, metric_values), x_position in zip(
-            models_with_data,
-            x_positions,
-            strict=True,
-        ):
-            axis.text(
-                float(x_position),
-                -0.11,
-                f"med={float(np.median(metric_values)):.2f}",
-                transform=axis.get_xaxis_transform(),
-                ha="center",
-                va="top",
-                fontsize=5.5 if is_component_axis else 7.0,
-                color="0.25",
-                clip_on=False,
+
+        summary_lines: list[str] = []
+        for model_name, metric_values in models_with_data:
+            displayed_model_name: str = _EXTERNAL_MODEL_DISPLAY_NAMES.get(
+                model_name, model_name
             )
+            model_prefix: str = "" if geb_only else f"{displayed_model_name}: "
+            if geb_only:
+                summary_lines.append(f"Median = {float(np.median(metric_values)):.2f}")
+            else:
+                summary_lines.append(
+                    f"{model_prefix}{float(np.median(metric_values)):.2f}"
+                )
+        axis.text(
+            0.04 if single_model else 0.96,
+            0.95 if single_model else 0.04,
+            "\n".join(summary_lines),
+            transform=axis.transAxes,
+            ha="left" if single_model else "right",
+            va="top" if single_model else "bottom",
+            fontsize=7.2 if single_model else 6.8,
+            color="0.22",
+            bbox={
+                "boxstyle": "round,pad=0.18",
+                "facecolor": "white",
+                "edgecolor": "none",
+                "alpha": 0.84,
+            },
+            zorder=8,
+        )
+
+        best_possible_value: float = 0.0 if metric_col == "RRMSE" else 1.0
+        axis.axhline(
+            best_possible_value,
+            color=BEST_POSSIBLE_LINE_COLOR,
+            linewidth=BEST_POSSIBLE_LINE_WIDTH,
+            linestyle="--",
+            zorder=1,
+        )
 
         axis_title: str = component_titles.get(metric_col, str(config["label"]))
         axis.set_title(
             axis_title,
-            fontsize=8 if is_component_axis else 9,
+            fontsize=10.0,
             fontweight="bold",
-            pad=8,
+            pad=7,
+            color="0.08",
         )
         axis.set_ylim(*y_limits)
-        if lower_axis_ticks is not None:
-            # Equal relative tick positions align the three lower grid patterns.
-            axis.set_yticks(lower_axis_ticks)
+        axis.set_yticks(axis_ticks)
         axis.set_xticks([])
         axis.tick_params(
             axis="y",
-            labelsize=7 if is_component_axis else 8,
+            labelsize=8.2,
+            colors="0.25",
+            width=0.7,
         )
         axis.set_xlabel("")
         for spine in axis.spines.values():
-            spine.set_edgecolor("0.7")
+            spine.set_edgecolor("0.65")
+            spine.set_linewidth(0.7)
         axis.spines["top"].set_visible(False)
         axis.spines["right"].set_visible(False)
         axis.spines["bottom"].set_visible(False)
-        axis.grid(axis="y", color="0.85", linewidth=0.5)
+        axis.grid(axis="y", color="0.88", linewidth=0.6)
+        axis.set_axisbelow(True)
+        axis.set_xlim((-0.72, 0.72) if single_model else (-0.68, 0.68))
 
-    legend_handles: list[Line2D] = [
-        Line2D([0], [0], color=color, linewidth=5, label=name)
-        for name, color in model_colors.items()
-    ]
-    if len(legend_handles) > 1:
-        fig.legend(
-            handles=legend_handles,
-            loc="lower center",
-            ncol=len(legend_handles),
-            fontsize=9,
-            frameon=True,
-            framealpha=1.0,
-            edgecolor="0.7",
-            bbox_to_anchor=(0.5, 0.01),
+    # A model label is redundant when every distribution belongs to GEB, while
+    # multi-model figures still need colors identified for comparison.
+    legend_handles: list[Line2D] = (
+        []
+        if geb_only
+        else [
+            Line2D(
+                [0],
+                [0],
+                color=color,
+                linewidth=5,
+                label=_EXTERNAL_MODEL_DISPLAY_NAMES.get(name, name),
+            )
+            for name, color in model_colors.items()
+        ]
+    )
+    legend_handles.append(
+        Line2D(
+            [0],
+            [0],
+            color=BEST_POSSIBLE_LINE_COLOR,
+            linewidth=BEST_POSSIBLE_LINE_WIDTH,
+            linestyle="--",
+            label="Best-possible value (1; RRMSE: 0)",
         )
+    )
+    fig.legend(
+        handles=legend_handles,
+        loc="lower center",
+        ncol=len(legend_handles),
+        fontsize=9,
+        frameon=True,
+        framealpha=1.0,
+        edgecolor="0.7",
+        bbox_to_anchor=(0.5, 0.01),
+    )
 
     fig.subplots_adjust(
-        left=0.07 if single_model else 0.055,
+        left=0.065 if single_model else 0.055,
         right=0.985,
-        top=0.96,
-        bottom=0.07 if single_model else 0.14,
+        top=0.955,
+        bottom=0.13 if single_model else 0.14,
     )
 
     if export:
@@ -1205,20 +1259,22 @@ def plot_skill_score_boxplots(
         )
         boxplots_folder: Path = output_folder / "skill_score_boxplots"
         boxplots_folder.mkdir(parents=True, exist_ok=True)
-        for extension in ("svg", "png"):
+        for extension in ("pdf", "svg", "png"):
             output_path: Path = (
                 boxplots_folder
                 / f"evaluation_skill_scores{suffix}{context_suffix}.{extension}"
             )
             fig.savefig(
                 output_path,
-                bbox_inches=None if single_model else "tight",
+                bbox_inches="tight",
+                pad_inches=0.04,
                 dpi=300,
+                facecolor="white",
+                edgecolor="none",
             )
             logger.info("Skill score plot saved to: %s", output_path)
 
-    plt.show()
-    plt.close()
+    plt.close(fig)
 
     logger.info("Skill score plots created.")
 
@@ -1314,7 +1370,7 @@ def plot_kge_external_model_comparison(
             )
 
         threshold_label: str = (
-            f"\n>= {minimum_upstream_area_km2:g} km2"
+            f"\nUpstream area ≥ {minimum_upstream_area_km2:g} km²"
             if minimum_upstream_area_km2 is not None and minimum_upstream_area_km2 > 0.0
             else ""
         )
@@ -1343,7 +1399,13 @@ def plot_kge_external_model_comparison(
     axis.legend(
         handles=[
             Line2D([0], [0], color=geb_color, linewidth=5, label="GEB"),
-            Line2D([0], [0], color=external_color, linewidth=5, label="External model"),
+            Line2D(
+                [0],
+                [0],
+                color=external_color,
+                linewidth=5,
+                label="External model",
+            ),
         ],
         loc="lower center",
         ncol=2,
@@ -1413,8 +1475,8 @@ def plot_skill_scores_vs_upstream_area(
         "RRMSE": fig.add_subplot(grid[1, 3:6]),
     }
     has_values: bool = False
-    total_valid_station_count: int = int(upstream_area_km2.gt(0).sum())
     plot_color: str = "#1f77b4"
+    regression_color: str = "#D55E00"
     for metric_col in metric_order:
         cfg: dict[str, object] = _SKILL_SCORE_CONFIG_BY_COLUMN[metric_col]
         axis: plt.Axes = axes_by_metric[str(cfg["col"])]
@@ -1464,23 +1526,46 @@ def plot_skill_scores_vs_upstream_area(
             & metric_values.notna()
             & metric_values.between(y_limits[0], y_limits[1])
         )
-        if trend_mask.sum() >= 2:
+        if trend_mask.sum() >= 10:
             log_area: np.ndarray = np.log10(
                 upstream_area_km2[trend_mask].to_numpy(dtype=float)
             )
             trend_values: np.ndarray = metric_values[trend_mask].to_numpy(dtype=float)
-            trend_result = linregress(log_area, trend_values)
-            trend_x: np.ndarray = np.logspace(log_area.min(), log_area.max(), 100)
-            trend_y: np.ndarray = (
-                trend_result.slope * np.log10(trend_x) + trend_result.intercept
+            fitted_values: np.ndarray = np.asarray(
+                lowess(
+                    trend_values,
+                    log_area,
+                    frac=0.35,
+                    it=2,
+                    return_sorted=True,
+                ),
+                dtype=float,
             )
-            axis.plot(trend_x, trend_y, color=plot_color, linewidth=1.8, alpha=0.95)
-            slope: float = float(trend_result.slope)
-            p_value: float = float(trend_result.pvalue)
+            fitted_log_area, unique_indices = np.unique(
+                fitted_values[:, 0], return_index=True
+            )
+            trend_x: np.ndarray = np.logspace(
+                fitted_log_area.min(), fitted_log_area.max(), 180
+            )
+            trend_y: np.ndarray = np.interp(
+                np.log10(trend_x),
+                fitted_log_area,
+                fitted_values[unique_indices, 1],
+            )
+            axis.plot(
+                trend_x,
+                trend_y,
+                color=regression_color,
+                linewidth=2.1,
+                zorder=3,
+            )
+            association = spearmanr(log_area, trend_values)
+            rho: float = float(association.statistic)
+            p_value: float = float(association.pvalue)
             axis.text(
                 0.04,
                 0.92,
-                f"slope={slope:.2f}\n"
+                f"Spearman $\\rho$ = {rho:+.2f}\n"
                 f"{'p<0.001' if p_value < 0.001 else f'p={p_value:.3f}'}",
                 transform=axis.transAxes,
                 ha="left",
@@ -1498,7 +1583,6 @@ def plot_skill_scores_vs_upstream_area(
         axis.set_ylim(*y_limits)
         axis.grid(True, color="0.85", linewidth=0.5)
         axis.set_title(str(cfg["label"]), color=plot_color, fontweight="bold")
-        axis.set_ylabel("Error" if use_error_limits else "Score")
         for spine in axis.spines.values():
             spine.set_edgecolor("0.7")
 
@@ -1508,18 +1592,37 @@ def plot_skill_scores_vs_upstream_area(
         return
 
     for axis in axes_by_metric.values():
-        axis.set_xlabel("Upstream area (km2)")
+        axis.set_xlabel("Upstream area (km²)")
 
-    # Robust y-limits keep the main scatter visible; trendlines are fitted vs
-    # log10(upstream area) after excluding values outside the visible limits.
-    fig.text(
-        0.985,
-        0.02,
-        f"n={total_valid_station_count}",
-        ha="right",
-        va="bottom",
-        color="0.45",
-        fontsize=8,
+    lowess_legend_handles: list[Line2D] = [
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            linestyle="none",
+            markerfacecolor=plot_color,
+            markeredgecolor="none",
+            markersize=5.5,
+            alpha=0.55,
+            label="Station",
+        ),
+        Line2D(
+            [0],
+            [0],
+            color=regression_color,
+            linewidth=2.1,
+            label="Local regression (LOWESS)",
+        ),
+    ]
+    fig.legend(
+        handles=lowess_legend_handles,
+        loc="lower center",
+        bbox_to_anchor=(0.5, -0.04),
+        ncols=2,
+        frameon=False,
+        fontsize=9,
+        columnspacing=1.8,
+        handlelength=2.4,
     )
 
     explanations_folder: Path = output_folder / "skill_score_explanations"

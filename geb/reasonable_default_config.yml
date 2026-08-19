@@ -66,6 +66,7 @@ hazards:
 hydrology:
   routing:
     algorithm: kinematic_wave  # accuflux or kinematic_wave
+    minimum_river_slope_m_per_m: 0.0001  # minimum channel slope used by kinematic-wave routing (m/m)
     retention_basin_release_threshold_factor: 0.9
     river_width:
       parameters:

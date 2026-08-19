@@ -13,6 +13,7 @@ import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import seaborn as sns
 from matplotlib import colormaps as mcolormaps
 from matplotlib.collections import LineCollection
 from matplotlib.lines import Line2D
@@ -1902,13 +1903,19 @@ class Hydrology:
             self.model.files["geom"]["discharge/discharge_snapped_locations"]
         )
 
-        self.model.logger.info(f"Loaded discharge simulation from {run_name} run.")
-
-        report_folder: Path = self.model.output_folder / "report"
+        run_output_folder: Path = (
+            Path(self.model.config["general"]["output_folder"]) / run_name
+        )
+        report_folder: Path = run_output_folder / "report"
         if not report_folder.exists():
             raise FileNotFoundError(
                 f"Run folder '{run_name}' does not exist in the report directory. Did you run the model?"
             )
+        self.model.logger.info(
+            "Loading discharge simulation for run '%s' from %s.",
+            run_name,
+            report_folder,
+        )
 
         evaluation_per_station: list[dict[str, Any]] = []
         station_dashboard_chart_files: dict[str, str] = {}
@@ -1951,7 +1958,7 @@ class Hydrology:
 
                 try:
                     validation_df: pd.DataFrame = create_validation_df(
-                        self.model.output_folder,
+                        run_output_folder,
                         station_id,
                         observed_discharge_series,
                         correct_discharge_observations,
@@ -2909,7 +2916,8 @@ class Hydrology:
         all explanation outputs are written to a dedicated subfolder.
 
         Args:
-            export: Whether to save the combined figure and 32-panel atlas.
+            export: Whether to save the correlation matrix, combined figure,
+                and 32-panel atlas.
             minimum_upstream_area_km2: Minimum modeled upstream area (km2). If
                 omitted, the discharge-evaluation configuration value is used.
             start_year: Optional first calendar year of the evaluation metrics.
@@ -2962,7 +2970,8 @@ class Hydrology:
         explanation_folder: Path = (
             evaluation_paths.plot_folder / "skill_score_explanations"
         )
-        explanation_folder.mkdir(parents=True, exist_ok=True)
+        if export:
+            explanation_folder.mkdir(parents=True, exist_ok=True)
 
         self.model.logger.info(
             "Matched %d/%d evaluated stations to GRDC-Caravan attributes.",
@@ -2992,13 +3001,71 @@ class Hydrology:
         association_df: pd.DataFrame = (
             discharge_characteristics.calculate_kge_component_associations(analysis_df)
         )
-        association_path: Path = explanation_folder / (
-            f"discharge_kge_component_associations{evaluation_paths.suffix}.csv"
+        if export:
+            association_path: Path = explanation_folder / (
+                f"discharge_kge_component_associations{evaluation_paths.suffix}.csv"
+            )
+            association_df.to_csv(association_path, index=False)
+            self.model.logger.info(
+                "Saved discharge characteristic associations to %s.", association_path
+            )
+
+        characteristic_columns: list[str] = [
+            characteristic.column
+            for characteristic in discharge_characteristics.SCREENING_CHARACTERISTICS
+        ]
+        correlation_matrix: pd.DataFrame = analysis_df[characteristic_columns].corr(
+            method="spearman", min_periods=3
         )
-        association_df.to_csv(association_path, index=False)
-        self.model.logger.info(
-            "Saved discharge characteristic associations to %s.", association_path
+        characteristic_labels: list[str] = [
+            characteristic.label
+            for characteristic in discharge_characteristics.SCREENING_CHARACTERISTICS
+        ]
+        correlation_matrix.index = characteristic_labels
+        correlation_matrix.columns = characteristic_labels
+
+        correlation_figure: plt.Figure
+        correlation_axis: plt.Axes
+        correlation_figure, correlation_axis = plt.subplots(figsize=(15.8, 14.2))
+        sns.heatmap(
+            correlation_matrix,
+            mask=np.triu(np.ones(correlation_matrix.shape, dtype=bool), k=1),
+            ax=correlation_axis,
+            cmap="BrBG",
+            vmin=-1.0,
+            vmax=1.0,
+            annot=True,
+            fmt="+.2f",
+            annot_kws={"fontsize": 6.1},
+            linewidths=0.35,
+            linecolor="white",
+            cbar_kws={"label": "Spearman rank correlation, ρ", "shrink": 0.74},
         )
+        correlation_axis.tick_params(axis="both", labelsize=7.3, length=0)
+        correlation_axis.set_xticklabels(
+            correlation_axis.get_xticklabels(), rotation=52, ha="right"
+        )
+        correlation_axis.set_yticklabels(correlation_axis.get_yticklabels(), rotation=0)
+        correlation_axis.set_title(
+            "Spearman correlations among GRDC–Caravan catchment characteristics",
+            loc="left",
+            fontsize=13.0,
+            fontweight="bold",
+            pad=16,
+        )
+        correlation_figure.subplots_adjust(
+            left=0.31, right=0.91, top=0.93, bottom=0.285
+        )
+        if export:
+            correlation_output: Path = explanation_folder / (
+                "discharge_characteristic_correlation_matrix"
+                f"{evaluation_paths.suffix}.png"
+            )
+            correlation_figure.savefig(correlation_output, dpi=300, bbox_inches="tight")
+            self.model.logger.info(
+                "Saved characteristic correlation matrix to %s.", correlation_output
+            )
+        plt.close(correlation_figure)
 
         heatmap_figure: plt.Figure = (
             discharge_characteristics.plot_kge_characteristic_heatmaps(

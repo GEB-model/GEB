@@ -203,6 +203,13 @@ class RoutingConfig(BaseModel):
         "kinematic_wave",
         description="Routing algorithm: 'accuflux' or 'kinematic_wave'.",
     )
+    minimum_river_slope_m_per_m: float = Field(
+        1e-4,
+        gt=0.0,
+        description=(
+            "Minimum channel slope used to parameterize kinematic-wave routing (m/m)."
+        ),
+    )
     retention_basin_release_threshold_factor: float = Field(
         0.9,
         description="Factor to multiply the activation threshold by to get the release threshold.",
