@@ -43,7 +43,7 @@ class FloodRiskModule:
             self.load_return_period_flood_maps()
             self.load_flood_protection_standard()
             self.flood_in_last_year = False
-        self.random_number_generator = np.random.default_rng(42)
+        self.random_number_generator = np.random.default_rng(972002)
 
     def load_flood_protection_standard(self) -> None:
         """Load flood protection standards for each subbasin.
