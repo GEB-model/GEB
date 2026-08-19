@@ -6,18 +6,6 @@ from typing import Literal
 import matplotlib.pyplot as plt
 import pandas as pd
 
-PLOT_Y_LIMS_DEFAULT: dict[str, tuple[float, float]] = {
-    "expected_annual_damage": (0.0, 1e6),
-    "n_adaptation_uptake": (0.0, 0.2),
-    "n_households_exposed_to_flooding": (0.0, 2.2e3),
-}
-
-
-PLOT_Y_LIMS_MULTIRUN_BASE_FUTURE: dict[str, tuple[float, float]] = {
-    "expected_annual_damage": (0.0, 3e9),
-    "n_adaptation_uptake": (0.0, 1.0),
-    "n_households_exposed_to_flooding": (0.0, 1.0),
-}
 PLOT_Y_LABELS: dict[str, str] = {
     "expected_annual_damage": "Expected Annual Damage (USD)",
     "n_adaptation_uptake": "Adaptation Uptake (fraction of households)",
@@ -59,36 +47,57 @@ def _ensure_axes_array(axes: object, ncols: int) -> list[plt.Axes]:
     return list(axes)  # type: ignore[arg-type]
 
 
-def _resolve_ylim(
-    df: pd.DataFrame,
-    household_attribute_name: str,
-    predefined_ylims: dict[str, tuple[float, float]] | None = None,
-) -> tuple[float, float] | None:
-    """Resolve a sensible y-axis range for one household attribute.
-
-    Notes:
-        If predefined limits exist and are too small for observed values, the upper
-        bound is expanded to 110% of the data maximum to prevent clipping.
+def _resolve_ylim(df: pd.DataFrame) -> tuple[float, float] | None:
+    """Resolve a y-axis range spanning zero to the observed data maximum.
 
     Args:
         df: Timeseries values for one household attribute.
-        household_attribute_name: Variable name (e.g., expected_annual_damage).
-        predefined_ylims: Optional mapping of variable to preferred y-axis limits.
 
     Returns:
-        A y-limit tuple or None when limits should be left automatic.
+        A y-limit tuple of (0.0, max_value * 1.1), or None when the data
+        contains no finite values.
     """
-    ylims_variable: tuple[float, float] | None = None
-    if predefined_ylims is not None:
-        ylims_variable = predefined_ylims.get(household_attribute_name)
-
-    if ylims_variable is None:
+    if df.empty:
         return None
-
     max_value: float = float(df.max().max())
-    if max_value > ylims_variable[1]:
-        return (0.0, max_value * 1.1)
-    return ylims_variable
+    if pd.isna(max_value):
+        return None
+    return (0.0, max_value * 1.1)
+
+
+def _resolve_ylim_across_groups(
+    results: dict[str, dict[str, pd.DataFrame]],
+    household_attribute_name: str,
+) -> tuple[float, float] | None:
+    """Resolve a shared y-axis range from the maximum across all groups.
+
+    Notes:
+        Using the maximum observed across every scenario/prefix group (rather
+        than one group at a time) keeps the y-axis comparable across all lines
+        drawn for one attribute in the same figure.
+
+    Args:
+        results: Nested dictionary {group_name: {attribute_name: dataframe}}.
+        household_attribute_name: Variable name to resolve limits for.
+
+    Returns:
+        A y-limit tuple of (0.0, max_value * 1.1) across all groups, or None
+        when no group has finite data for this attribute.
+    """
+    max_value: float | None = None
+    for group_results in results.values():
+        df: pd.DataFrame | None = group_results.get(household_attribute_name)
+        if df is None or df.empty:
+            continue
+        group_max: float = float(df.max().max())
+        if pd.isna(group_max):
+            continue
+        if max_value is None or group_max > max_value:
+            max_value = group_max
+
+    if max_value is None:
+        return None
+    return (0.0, max_value * 1.1)
 
 
 def _validate_x_axis_mode(x_axis: str) -> Literal["year", "timestep"]:
@@ -275,11 +284,7 @@ def process_household_attributes(
             )
         x_values: pd.Index = _resolve_x_axis_values(df, x_axis)
 
-        ylims_variable: tuple[float, float] | None = _resolve_ylim(
-            df,
-            household_attribute_name,
-            PLOT_Y_LIMS_DEFAULT,
-        )
+        ylims_variable: tuple[float, float] | None = _resolve_ylim(df)
         ax.plot(x_values, df.to_numpy())
         if ylims_variable is not None:
             ax.set_ylim(ylims_variable)
@@ -493,7 +498,6 @@ def _plot_multirun_results(
     results: dict[str, dict[str, pd.DataFrame]],
     colors: dict[str, str],
     output_path: str,
-    predefined_ylims: dict[str, tuple[float, float]] | None = None,
     x_axis: Literal["year", "timestep"] = "year",
 ) -> None:
     """Plot multirun household attributes for grouped scenarios or prefixes.
@@ -502,7 +506,6 @@ def _plot_multirun_results(
         results: Nested dictionary {group_name: {attribute_name: dataframe}}.
         colors: Line colors per group name.
         output_path: Path to save the plot image.
-        predefined_ylims: Optional y-axis bounds per attribute.
         x_axis: X-axis mode, either year (data index) or timestep (0..n-1).
     """
     x_axis = _validate_x_axis_mode(x_axis)
@@ -550,13 +553,13 @@ def _plot_multirun_results(
                 color=colors.get(group_name, "black"),
             )
 
-            ylims_variable: tuple[float, float] | None = _resolve_ylim(
-                df,
-                household_attribute_name,
-                predefined_ylims,
-            )
-            if ylims_variable is not None:
-                ax.set_ylim(ylims_variable)
+        # Scale the shared y-axis to the highest value across all groups so
+        # every line drawn for this attribute stays comparable in one figure.
+        ylims_variable: tuple[float, float] | None = _resolve_ylim_across_groups(
+            results, household_attribute_name
+        )
+        if ylims_variable is not None:
+            ax.set_ylim(ylims_variable)
 
         if has_individual_runs:
             ax.plot([], [], color="grey", alpha=0.1, label="Individual Runs")
@@ -660,7 +663,6 @@ def plot_multirun_results_across_scenarios(
             if output_path is not None
             else _comparison_output_path(model_path, "scenarios")
         ),
-        predefined_ylims=PLOT_Y_LIMS_MULTIRUN_BASE_FUTURE,
     )
 
 
@@ -703,7 +705,6 @@ def plot_multirun_results_within_scenario(
             if output_path is not None
             else _comparison_output_path(model_path, "within_scenario", scenario)
         ),
-        predefined_ylims=PLOT_Y_LIMS_DEFAULT,
     )
 
 
@@ -1210,7 +1211,6 @@ def plot_ead_per_gdl_region_across_clusters(
             if output_path is not None
             else _comparison_output_path(model_path, "ead_regions_combined", scenario)
         ),
-        predefined_ylims=None,
         x_axis=x_axis,
     )
 
@@ -1401,7 +1401,6 @@ def plot_combined_cluster_results_within_scenario(
             if output_path is not None
             else _comparison_output_path(model_path, "combined_clusters", scenario)
         ),
-        predefined_ylims=PLOT_Y_LIMS_DEFAULT,
     )
 
 
