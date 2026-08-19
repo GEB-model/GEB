@@ -499,6 +499,7 @@ def _plot_multirun_results(
     colors: dict[str, str],
     output_path: str,
     x_axis: Literal["year", "timestep"] = "year",
+    show_std_band: bool = False,
 ) -> None:
     """Plot multirun household attributes for grouped scenarios or prefixes.
 
@@ -507,6 +508,9 @@ def _plot_multirun_results(
         colors: Line colors per group name.
         output_path: Path to save the plot image.
         x_axis: X-axis mode, either year (data index) or timestep (0..n-1).
+        show_std_band: If True, shade the mean plus/minus one standard
+            deviation across runs instead of drawing each individual run as a
+            grey line.
     """
     x_axis = _validate_x_axis_mode(x_axis)
 
@@ -542,15 +546,28 @@ def _plot_multirun_results(
             if df.empty:
                 continue
             x_values: pd.Index = _resolve_x_axis_values(df, x_axis)
+            group_color = colors.get(group_name, "black")
+            mean_values = df.to_numpy().mean(axis=1)
 
-            ax.plot(x_values, df.to_numpy(), alpha=0.3, color="grey")
-            has_individual_runs = True
+            if show_std_band:
+                std_values = df.to_numpy().std(axis=1)
+                ax.fill_between(
+                    x_values,
+                    mean_values - std_values,
+                    mean_values + std_values,
+                    color=group_color,
+                    alpha=0.2,
+                )
+            else:
+                ax.plot(x_values, df.to_numpy(), alpha=0.3, color="grey")
+                has_individual_runs = True
+
             ax.plot(
                 x_values,
-                df.to_numpy().mean(axis=1),
+                mean_values,
                 label=f"Mean {group_name}",
                 linewidth=2,
-                color=colors.get(group_name, "black"),
+                color=group_color,
             )
 
         # Scale the shared y-axis to the highest value across all groups so
@@ -580,6 +597,7 @@ def plot_multirun_results_for_scenarios(
     scenarios: list[str],
     output_path: str | None = None,
     x_axis: Literal["year", "timestep"] = "year",
+    show_std_band: bool = False,
 ) -> None:
     """Plot run_* household attributes for a list of scenarios.
 
@@ -588,11 +606,14 @@ def plot_multirun_results_for_scenarios(
         scenarios: Scenario names to compare in one plot.
         output_path: Optional output image path.
         x_axis: X-axis mode, either year (data index) or timestep (0..n-1).
+        show_std_band: If True, shade the mean plus/minus one standard
+            deviation across runs instead of drawing each individual run.
     """
     plot_multirun_results_across_scenarios(
         model_path=model_path,
         scenarios=scenarios,
         x_axis=x_axis,
+        show_std_band=show_std_band,
         output_path=(
             output_path
             if output_path is not None
@@ -605,6 +626,7 @@ def plot_multirun_results_base_and_future(
     model_path: str,
     output_path: str | None = None,
     x_axis: Literal["year", "timestep"] = "year",
+    show_std_band: bool = False,
 ) -> None:
     """Compatibility wrapper for plotting base and future scenarios.
 
@@ -612,11 +634,14 @@ def plot_multirun_results_base_and_future(
         model_path: Root model path containing scenario folders.
         output_path: Optional output image path.
         x_axis: X-axis mode, either year (data index) or timestep (0..n-1).
+        show_std_band: If True, shade the mean plus/minus one standard
+            deviation across runs instead of drawing each individual run.
     """
     plot_multirun_results_for_scenarios(
         model_path=model_path,
         scenarios=list(SCENARIOS_BASE_FUTURE),
         x_axis=x_axis,
+        show_std_band=show_std_band,
         output_path=(
             output_path
             if output_path is not None
@@ -632,6 +657,7 @@ def plot_multirun_results_across_scenarios(
     run_prefix: str = "nogov_",
     colors: dict[str, str] | None = None,
     x_axis: Literal["year", "timestep"] = "year",
+    show_std_band: bool = False,
 ) -> None:
     """Plot run-prefixed household attributes for any list of scenarios.
 
@@ -642,6 +668,8 @@ def plot_multirun_results_across_scenarios(
         run_prefix: Run folder prefix to include from each scenario.
         colors: Optional custom line colors keyed by scenario.
         x_axis: X-axis mode, either year (data index) or timestep (0..n-1).
+        show_std_band: If True, shade the mean plus/minus one standard
+            deviation across runs instead of drawing each individual run.
     """
     if not scenarios:
         return
@@ -658,6 +686,7 @@ def plot_multirun_results_across_scenarios(
         results=results,
         colors=resolved_colors,
         x_axis=x_axis,
+        show_std_band=show_std_band,
         output_path=(
             output_path
             if output_path is not None
@@ -672,6 +701,7 @@ def plot_multirun_results_within_scenario(
     prefixes: list[str] | None = None,
     output_path: str | None = None,
     x_axis: Literal["year", "timestep"] = "year",
+    show_std_band: bool = False,
 ) -> None:
     """Plot multirun household attributes for run groups in one scenario.
 
@@ -681,6 +711,8 @@ def plot_multirun_results_within_scenario(
         prefixes: Optional run prefixes to compare.
         output_path: Optional output image path.
         x_axis: X-axis mode, either year (data index) or timestep (0..n-1).
+        show_std_band: If True, shade the mean plus/minus one standard
+            deviation across runs instead of drawing each individual run.
     """
     if prefixes is None:
         prefixes = ["no_gov_", "no_adapt", "full"]
@@ -700,6 +732,7 @@ def plot_multirun_results_within_scenario(
         results=results,
         colors=colors,
         x_axis=x_axis,
+        show_std_band=show_std_band,
         output_path=(
             output_path
             if output_path is not None
@@ -714,6 +747,7 @@ def plot_multirun_results_within_base_or_future(
     prefixes: list[str] | None = None,
     output_path: str | None = None,
     x_axis: Literal["year", "timestep"] = "year",
+    show_std_band: bool = False,
 ) -> None:
     """Compatibility wrapper for the old function name.
 
@@ -723,6 +757,8 @@ def plot_multirun_results_within_base_or_future(
         prefixes: Optional run prefixes to compare.
         output_path: Optional output image path.
         x_axis: X-axis mode, either year (data index) or timestep (0..n-1).
+        show_std_band: If True, shade the mean plus/minus one standard
+            deviation across runs instead of drawing each individual run.
     """
     plot_multirun_results_within_scenario(
         model_path=model_path,
@@ -730,6 +766,7 @@ def plot_multirun_results_within_base_or_future(
         prefixes=prefixes,
         output_path=output_path,
         x_axis=x_axis,
+        show_std_band=show_std_band,
     )
 
 
@@ -1078,6 +1115,7 @@ def plot_ead_per_gdl_region_across_clusters(
     run_prefixes: list[str] | None = None,
     output_path: str | None = None,
     x_axis: Literal["year", "timestep"] = "year",
+    show_std_band: bool = False,
 ) -> None:
     """Plot cluster-summed EAD per GDL region while keeping runs separate.
 
@@ -1093,6 +1131,8 @@ def plot_ead_per_gdl_region_across_clusters(
         run_prefixes: Optional run prefixes to include.
         output_path: Optional output image path.
         x_axis: X-axis mode, either year (data index) or timestep (0..n-1).
+        show_std_band: If True, shade the mean plus/minus one standard
+            deviation across runs instead of drawing each individual run.
     """
     x_axis = _validate_x_axis_mode(x_axis)
 
@@ -1212,6 +1252,7 @@ def plot_ead_per_gdl_region_across_clusters(
             else _comparison_output_path(model_path, "ead_regions_combined", scenario)
         ),
         x_axis=x_axis,
+        show_std_band=show_std_band,
     )
 
 
@@ -1369,6 +1410,7 @@ def plot_combined_cluster_results_within_scenario(
     run_prefixes: list[str] | None = None,
     output_path: str | None = None,
     x_axis: Literal["year", "timestep"] = "year",
+    show_std_band: bool = False,
 ) -> None:
     """Plot merged cluster household attributes for run prefixes in one scenario.
 
@@ -1382,6 +1424,8 @@ def plot_combined_cluster_results_within_scenario(
         run_prefixes: Optional run prefixes to include.
         output_path: Optional output image path.
         x_axis: X-axis mode, either year (data index) or timestep (0..n-1).
+        show_std_band: If True, shade the mean plus/minus one standard
+            deviation across runs instead of drawing each individual run.
     """
     results: dict[str, dict[str, pd.DataFrame]] = read_combined_cluster_results(
         model_path=model_path,
@@ -1396,6 +1440,7 @@ def plot_combined_cluster_results_within_scenario(
         results=results,
         colors=colors,
         x_axis=x_axis,
+        show_std_band=show_std_band,
         output_path=(
             output_path
             if output_path is not None
@@ -1410,7 +1455,11 @@ if __name__ == "__main__":
     model_name = "no_gov_run_0"
     scenario = "base"
     scenarios_to_compare = list(SCENARIOS_BASE_FUTURE)
-    prefixes = ["no_gov", "no_adapt", "full"]
+    prefixes = [
+        "full",
+        "no_gov",
+        "no_adapt",
+    ]
 
     # 1) Build merged (cluster-summed) results while keeping per-run columns.
     combine_cluster_results(
@@ -1423,12 +1472,14 @@ if __name__ == "__main__":
         scenario=scenario,
         run_prefixes=prefixes,
         x_axis="year",
+        show_std_band=True,
     )
     plot_ead_per_gdl_region_across_clusters(
         model_path=model_path,
         scenario=scenario,
         run_prefixes=prefixes,
         x_axis="year",
+        show_std_band=True,
     )
 
     # 3) Plot non-merged reference views from regular multirun outputs.
@@ -1444,7 +1495,7 @@ if __name__ == "__main__":
             "models",
             "mex",
             "cluster_plots",
-            f"cluster_{i:03d}.png",
+            f"{scenario}_cluster_{i:03d}.png",
         )
         for i in range(23)
     ]
@@ -1455,6 +1506,7 @@ if __name__ == "__main__":
             prefixes=prefixes,
             output_path=output_path,
             x_axis="year",
+            show_std_band=True,
         )
     # plot_multirun_results_for_scenarios(model_path, scenarios_to_compare, x_axis="year")
 
