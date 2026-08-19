@@ -918,8 +918,6 @@ class GEBModel(Module):
             clean_report_folder=False,
         )
 
-        self.hydrology.routing.update_return_periods()
-
         # ugly switch to determine whether model has coastal basins
         subbasins = read_geom(self.model.files["geom"]["routing/subbasins"])
         if subbasins["is_coastal"].any():

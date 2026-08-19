@@ -670,6 +670,17 @@ class Floods(Module):
         Raises:
             ValueError: If no hydrograph is found for a node and return period.
         """
+        max_rp = np.max(self.config["return_periods"])
+        max_rp_yr_flood_map_path = (
+            self.model.output_folder / "flood_maps" / f"{max_rp}.zarr"
+        )
+        if max_rp_yr_flood_map_path.exists() and not overwrite_flood_maps:
+            raise ValueError(
+                f"Flood map for {max_rp} year return period already exists. Set overwrite_flood_maps=True to overwrite."
+            )
+
+        self.model.hydrology.routing.update_return_periods()
+
         # load model settings
         coastal_only = self.config["coastal_only"]
 
