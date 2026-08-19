@@ -1,6 +1,7 @@
 """Class to set GEB up for Europe."""
 
 import gc
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -25,7 +26,12 @@ from geb.agents.crop_farmers import (
     TRADITIONAL_INSURANCE_ADAPTATION,
     WELL_ADAPTATION,
 )
-from geb.build.data_catalog.wekeo_copernicus import WEkEONoCoverageError
+from geb.build.data_catalog.copernicus_hrl import (
+    CDSENoCoverageError,
+)
+from geb.build.data_catalog.wekeo_copernicus import (
+    WEkEONoCoverageError,
+)
 from geb.build.methods import build_method
 from geb.build.workflows.crop_calendars import (
     MIRCA_OS_CROP_CLASS_MAP,
@@ -61,6 +67,11 @@ _HRL_FALLOW_CROP_CODE = -1
 _HRL_MISSING_CROP_CODE = -2
 _HRL_NO_CROPLAND_CODE = 0
 _HRL_OUTSIDE_AREA_CODE = 65535
+
+_HRL_NO_COVERAGE_ERRORS = (
+    WEkEONoCoverageError,
+    CDSENoCoverageError,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,10 +220,11 @@ def _active_subgrid_mask_geometry_for_hrl(
     """Convert the active model subgrid mask to a geometry for HRL clipping.
 
     The returned geometry is the exact active-mask geometry in EPSG:4326. Its
-    bounds are used only as the WEkEO candidate-tile search envelope. The
-    geometry itself is passed to the WEkEO adapter so tiles outside the active
-    domain can be skipped before merging and intersecting tiles can be clipped
-    before merging.
+    bounds are used only as the Copernicus HRL candidate-tile search envelope.
+    The geometry itself is passed to the configured HRL adapter, which may use
+    the local cache, Copernicus Data Space, or the legacy WEkEO fallback. Tiles
+    outside the active domain can therefore be skipped before merging and
+    intersecting tiles can be clipped before merging.
 
     Args:
         template: Subgrid template defining transform, shape, and CRS.
@@ -370,6 +382,41 @@ def _decode_hrl_crops_from_farmer_table(
             "Final farmer crop table is missing required column(s): "
             f"{sorted(missing_columns)}"
         )
+
+    # Fast path for the normal output of setup_create_farms_from_HRL_lowder: the
+    # table is already compact, ordered, and contains exactly one row per farmer.
+    # Avoid copying/sorting a multi-million-row DataFrame once for every HRL year.
+    compact_farmer_ids = farmers_with_crops["farmer_id"].to_numpy(dtype=np.int32)
+    expected_farmer_ids = np.arange(n_farmers, dtype=np.int32)
+    if compact_farmer_ids.size == n_farmers and np.array_equal(
+        compact_farmer_ids, expected_farmer_ids
+    ):
+        hrl_crop = farmers_with_crops[crop_column].fillna(-1).to_numpy(dtype=np.int32)
+        invalid_crop = np.isin(
+            hrl_crop,
+            (
+                _HRL_MISSING_CROP_CODE,
+                _HRL_FALLOW_CROP_CODE,
+                _HRL_NO_CROPLAND_CODE,
+                _HRL_OUTSIDE_AREA_CODE,
+            ),
+        )
+        hrl_crop = np.where(invalid_crop, -1, hrl_crop).astype(np.int32)
+        mirca_crop = map_hrl_crop_to_mirca_crop(hrl_crop)
+        farmer_crops = pd.DataFrame(
+            {
+                "farmer_id": compact_farmer_ids,
+                "mirca_crop": mirca_crop.astype(np.int32),
+                "assigned_crop_area_m2": farmers_with_crops["area_m2"].to_numpy(
+                    dtype=np.float64
+                ),
+            }
+        )
+        if farmer_crops.empty:
+            raise ValueError(
+                f"No farmer-level HRL crops are available in {crop_column!r}."
+            )
+        return farmer_crops
 
     farmers = farmers_with_crops[["farmer_id", "area_m2", crop_column]].copy()
     farmers["farmer_id"] = farmers["farmer_id"].astype(np.int32)
@@ -704,9 +751,9 @@ def _candidate_mirca_calendars(
 ) -> tuple[int, list[tuple[float, TwoDArrayInt32]]]:
     """Return ordered MIRCA-OS calendar candidates for one farmer state.
 
-    The search order is local unit with matching irrigation status, local unit
-    regardless of irrigation status, other units with matching status, and finally
-    other units regardless of status.
+    The fallback order is unchanged from the original implementation, but each
+    stage is evaluated lazily. This avoids scanning all MIRCA units when a local
+    candidate already exists.
     """
     lookup_unit = int(replace_crop_calendar_unit_code.get(mirca_unit, mirca_unit))
 
@@ -719,27 +766,38 @@ def _candidate_mirca_calendars(
         return active_rows.size > 0 and bool(active_rows[0, 1]) == is_irrigated
 
     local_entries = crop_calendar.get(lookup_unit, [])
-    search_groups = [
-        [e for e in local_entries if contains_crop(e) and matches_irrigation(e)],
-        [e for e in local_entries if contains_crop(e)],
-        [
-            e
-            for unit_code, entries in crop_calendar.items()
-            if unit_code != lookup_unit
-            for e in entries
-            if contains_crop(e) and matches_irrigation(e)
-        ],
-        [
-            e
-            for unit_code, entries in crop_calendar.items()
-            if unit_code != lookup_unit
-            for e in entries
-            if contains_crop(e)
-        ],
+
+    candidates = [
+        entry
+        for entry in local_entries
+        if contains_crop(entry) and matches_irrigation(entry)
     ]
-    for candidates in search_groups:
-        if candidates:
-            return lookup_unit, candidates
+    if candidates:
+        return lookup_unit, candidates
+
+    candidates = [entry for entry in local_entries if contains_crop(entry)]
+    if candidates:
+        return lookup_unit, candidates
+
+    candidates = [
+        entry
+        for unit_code, entries in crop_calendar.items()
+        if unit_code != lookup_unit
+        for entry in entries
+        if contains_crop(entry) and matches_irrigation(entry)
+    ]
+    if candidates:
+        return lookup_unit, candidates
+
+    candidates = [
+        entry
+        for unit_code, entries in crop_calendar.items()
+        if unit_code != lookup_unit
+        for entry in entries
+        if contains_crop(entry)
+    ]
+    if candidates:
+        return lookup_unit, candidates
 
     raise ValueError(
         f"No MIRCA-OS calendar found for unit={lookup_unit}, crop={main_crop}, "
@@ -756,12 +814,17 @@ def _select_mirca_calendars_for_farmers(
     replace_crop_calendar_unit_code: dict[int, int],
     selection_cache: dict[tuple[int, int, int, bool], np.ndarray],
     random_seed: int,
+    candidate_pool_cache: dict[
+        tuple[int, int, bool],
+        tuple[list[tuple[float, TwoDArrayInt32]], np.ndarray],
+    ]
+    | None = None,
 ) -> tuple[np.ndarray, int, int]:
     """Assign area-weighted MIRCA-OS calendars using only the HRL main crop.
 
-    Each farmer/crop/irrigation state is sampled deterministically from the
-    represented MIRCA-OS calendar areas. The cache keeps repeated crop states stable
-    across HRL years.
+    Farmer-specific selections retain the original deterministic RNG key. Candidate
+    discovery and probability construction are cached by MIRCA unit, crop, and
+    irrigation state because those quantities do not depend on farmer ID.
     """
     farmer_mirca_units = np.asarray(farmer_mirca_units, dtype=np.int32)
     farmer_main_crops = np.asarray(farmer_main_crops, dtype=np.int32)
@@ -775,6 +838,9 @@ def _select_mirca_calendars_for_farmers(
     if any(array.size != n_farmers for array in arrays[1:]):
         raise ValueError("All farmer calendar-selection arrays must have equal length.")
 
+    if candidate_pool_cache is None:
+        candidate_pool_cache = {}
+
     calendars = np.full((n_farmers, 3, 4), -1, dtype=np.int32)
     state_keys: set[tuple[int, int, bool]] = set()
     n_cache_misses = 0
@@ -786,23 +852,35 @@ def _select_mirca_calendars_for_farmers(
         mirca_unit = int(farmer_mirca_units[farmer_id])
         is_irrigated = bool(farmer_is_irrigated[farmer_id])
         lookup_unit = int(replace_crop_calendar_unit_code.get(mirca_unit, mirca_unit))
-        state_keys.add((lookup_unit, main_crop, is_irrigated))
+        state_key = (lookup_unit, main_crop, is_irrigated)
+        state_keys.add(state_key)
+
         cache_key = (farmer_id, lookup_unit, main_crop, is_irrigated)
         selected = selection_cache.get(cache_key)
         if selected is None:
-            _, candidates = _candidate_mirca_calendars(
-                crop_calendar,
-                mirca_unit=lookup_unit,
-                main_crop=main_crop,
-                is_irrigated=is_irrigated,
-                replace_crop_calendar_unit_code={},
-            )
-            areas = np.asarray([max(float(area), 0.0) for area, _ in candidates])
-            probabilities = (
-                areas / areas.sum()
-                if areas.sum() > 0.0
-                else np.full(len(candidates), 1.0 / len(candidates))
-            )
+            candidate_pool = candidate_pool_cache.get(state_key)
+            if candidate_pool is None:
+                _, candidates = _candidate_mirca_calendars(
+                    crop_calendar,
+                    mirca_unit=lookup_unit,
+                    main_crop=main_crop,
+                    is_irrigated=is_irrigated,
+                    replace_crop_calendar_unit_code={},
+                )
+                areas = np.asarray(
+                    [max(float(area), 0.0) for area, _ in candidates],
+                    dtype=np.float64,
+                )
+                area_sum = areas.sum()
+                probabilities = (
+                    areas / area_sum
+                    if area_sum > 0.0
+                    else np.full(len(candidates), 1.0 / len(candidates))
+                )
+                candidate_pool = (candidates, probabilities)
+                candidate_pool_cache[state_key] = candidate_pool
+
+            candidates, probabilities = candidate_pool
             seed = np.random.SeedSequence(
                 [random_seed, farmer_id, lookup_unit, main_crop, int(is_irrigated)]
             )
@@ -843,6 +921,77 @@ def _sample_grid_values_at_farmers(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _MIRCAIrrigationFractionLookup:
+    """Reusable flattened MIRCA-OS crop-area arrays for irrigation assignment."""
+
+    rainfed_values: np.ndarray
+    irrigated_values: np.ndarray
+    total_rainfed_by_cell: np.ndarray
+    total_irrigated_by_cell: np.ndarray
+
+
+def _prepare_mirca_irrigation_fraction_lookup(
+    rainfed_fraction: xr.DataArray,
+    irrigated_fraction: xr.DataArray,
+) -> _MIRCAIrrigationFractionLookup:
+    """Prepare static MIRCA-OS fraction arrays once for reuse across HRL years."""
+    if "crop" not in rainfed_fraction.dims or "crop" not in irrigated_fraction.dims:
+        raise ValueError(
+            "rainfed_fraction and irrigated_fraction must have a crop dimension."
+        )
+    if rainfed_fraction.shape != irrigated_fraction.shape:
+        raise ValueError(
+            "rainfed_fraction and irrigated_fraction must have the same shape. "
+            f"Got {rainfed_fraction.shape} and {irrigated_fraction.shape}."
+        )
+    if not np.array_equal(rainfed_fraction.x.values, irrigated_fraction.x.values):
+        raise ValueError(
+            "rainfed_fraction and irrigated_fraction x coordinates differ."
+        )
+    if not np.array_equal(rainfed_fraction.y.values, irrigated_fraction.y.values):
+        raise ValueError(
+            "rainfed_fraction and irrigated_fraction y coordinates differ."
+        )
+
+    n_crops = rainfed_fraction.sizes["crop"]
+    rainfed_values = np.nan_to_num(
+        rainfed_fraction.values.reshape(n_crops, -1).astype(np.float64),
+        nan=0.0,
+    )
+    irrigated_values = np.nan_to_num(
+        irrigated_fraction.values.reshape(n_crops, -1).astype(np.float64),
+        nan=0.0,
+    )
+    n_cells = rainfed_values.shape[1]
+    total_rainfed_by_cell = np.empty(n_cells, dtype=np.float64)
+    total_irrigated_by_cell = np.empty(n_cells, dtype=np.float64)
+    # Use the same per-cell 1-D sum operation as the original fallback path so the
+    # floating-point result remains reproducible.
+    for cell_id in range(n_cells):
+        total_rainfed_by_cell[cell_id] = float(rainfed_values[:, cell_id].sum())
+        total_irrigated_by_cell[cell_id] = float(irrigated_values[:, cell_id].sum())
+
+    return _MIRCAIrrigationFractionLookup(
+        rainfed_values=rainfed_values,
+        irrigated_values=irrigated_values,
+        total_rainfed_by_cell=total_rainfed_by_cell,
+        total_irrigated_by_cell=total_irrigated_by_cell,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _MIRCASpatialContext:
+    """Prepared MIRCA-OS spatial inputs that can be reused within one setup."""
+
+    year: int
+    reference_crop_map: xr.DataArray
+    unit_geom: gpd.GeoDataFrame
+    unit_grid: xr.DataArray
+    farmer_units: np.ndarray
+    reference_map_buffer: int
+
+
 def _assign_irrigation_by_area_targets(
     *,
     farmer_crops: pd.DataFrame,
@@ -856,6 +1005,7 @@ def _assign_irrigation_by_area_targets(
     n_farmers: int,
     logger: Any,
     fallback_to_cell_irrigated_fraction: bool = True,
+    fraction_lookup: _MIRCAIrrigationFractionLookup | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Assign irrigation status and source to farmers by MIRCA-OS area targets.
 
@@ -882,6 +1032,8 @@ def _assign_irrigation_by_area_targets(
         fallback_to_cell_irrigated_fraction: If True, use the total cell-level
             irrigated fraction when the requested crop has zero MIRCA-OS area in
             the sampled cell.
+        fraction_lookup: Optional precomputed flattened MIRCA-OS fraction arrays.
+            Reusing this across years avoids repeating identical conversions.
 
     Returns:
         Tuple containing a boolean irrigated-farmer array and an adaptations
@@ -891,25 +1043,10 @@ def _assign_irrigation_by_area_targets(
         ValueError: If rainfed and irrigated fraction stacks are not aligned.
         ValueError: If the fraction stacks do not contain a ``crop`` dimension.
     """
-    if "crop" not in rainfed_fraction.dims or "crop" not in irrigated_fraction.dims:
-        raise ValueError(
-            "rainfed_fraction and irrigated_fraction must have a crop dimension."
-        )
-
-    if rainfed_fraction.shape != irrigated_fraction.shape:
-        raise ValueError(
-            "rainfed_fraction and irrigated_fraction must have the same shape. "
-            f"Got {rainfed_fraction.shape} and {irrigated_fraction.shape}."
-        )
-
-    if not np.array_equal(rainfed_fraction.x.values, irrigated_fraction.x.values):
-        raise ValueError(
-            "rainfed_fraction and irrigated_fraction x coordinates differ."
-        )
-
-    if not np.array_equal(rainfed_fraction.y.values, irrigated_fraction.y.values):
-        raise ValueError(
-            "rainfed_fraction and irrigated_fraction y coordinates differ."
+    if fraction_lookup is None:
+        fraction_lookup = _prepare_mirca_irrigation_fraction_lookup(
+            rainfed_fraction,
+            irrigated_fraction,
         )
 
     adaptations = np.full(
@@ -935,16 +1072,9 @@ def _assign_irrigation_by_area_targets(
 
     is_irrigated = np.full(n_farmers, False, dtype=bool)
 
-    n_crops = rainfed_fraction.sizes["crop"]
-    rainfed_values = np.nan_to_num(
-        rainfed_fraction.values.reshape(n_crops, -1).astype(np.float64),
-        nan=0.0,
-    )
-    irrigated_values = np.nan_to_num(
-        irrigated_fraction.values.reshape(n_crops, -1).astype(np.float64),
-        nan=0.0,
-    )
-
+    rainfed_values = fraction_lookup.rainfed_values
+    irrigated_values = fraction_lookup.irrigated_values
+    n_crops = rainfed_values.shape[0]
     n_cells = rainfed_values.shape[1]
 
     def get_crop_irrigated_fraction(cell_id: int, crop_id: int) -> float:
@@ -974,8 +1104,10 @@ def _assign_irrigation_by_area_targets(
         if not fallback_to_cell_irrigated_fraction:
             return 0.0
 
-        total_rainfed_cell_area = float(rainfed_values[:, cell_id].sum())
-        total_irrigated_cell_area = float(irrigated_values[:, cell_id].sum())
+        total_rainfed_cell_area = float(fraction_lookup.total_rainfed_by_cell[cell_id])
+        total_irrigated_cell_area = float(
+            fraction_lookup.total_irrigated_by_cell[cell_id]
+        )
         total_cell_area = total_rainfed_cell_area + total_irrigated_cell_area
 
         if total_cell_area <= 0:
@@ -1652,7 +1784,7 @@ class Europe(GEBModel):
         region_id_column: str = "region_id",
         country_iso3_column: str = "ISO3",
         size_class_boundaries: dict[str, tuple[int | float, int | float]] | None = None,
-        years: tuple[int, ...] = (2017, 2018, 2019, 2020, 2021, 2022, 2023),
+        years: tuple[int, ...] = (2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024),
         random_seed: int = 42,
         hrl_raster_chunks: dict[str, int] | None = None,
         subgrid_chunk_size: int = 256,
@@ -1994,12 +2126,12 @@ class Europe(GEBModel):
                         normalize_nodata=False,
                         chunks=raster_chunks,
                     )
-                except WEkEONoCoverageError as error:
+                except _HRL_NO_COVERAGE_ERRORS as error:
                     if original_iso3.upper() in _HRL_CROPLANDS_EEA38_ISO3:
                         raise
                     self.logger.warning(
                         "Skipping region %s (%s): no HRL Crop Types coverage for "
-                        "year %s. Original error: %s",
+                        "year %s from the configured Copernicus source. Error: %s",
                         region_id,
                         original_iso3,
                         year,
@@ -3382,7 +3514,7 @@ class Europe(GEBModel):
         minimum_area_ratio: float = 0.01,
         replace_crop_calendar_unit_code: dict[int, int] | None = None,
         multiple_years: bool = False,
-        hrl_years: tuple[int, ...] = (2017, 2018, 2019, 2020, 2021, 2022, 2023),
+        hrl_years: tuple[int, ...] = (2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024),
         reduce_crops: bool = False,
         random_seed: int = 42,
     ) -> None:
@@ -3444,6 +3576,9 @@ class Europe(GEBModel):
             ValueError: If farmers cannot be assigned to valid MIRCA-OS units.
             ValueError: If no MIRCA-OS calendar can be found for an assigned crop.
         """
+        setup_timer = time.perf_counter()
+        timing_rows: list[dict[str, float | int]] = []
+
         if replace_crop_calendar_unit_code is None:
             replace_crop_calendar_unit_code = {}
 
@@ -3456,6 +3591,7 @@ class Europe(GEBModel):
         farmer_region_ids = self.array["agents/farmers/region_id"]
         farms = self.subgrid["agents/farmers/farms"]
 
+        phase_timer = time.perf_counter()
         farmers_with_crops = self.table[_FARMERS_WITH_CROPS_TABLE]
         if not isinstance(farmers_with_crops, pd.DataFrame):
             farmers_with_crops = pd.read_parquet(farmers_with_crops)
@@ -3464,12 +3600,24 @@ class Europe(GEBModel):
             farmers_with_crops,
             n_farmers=n_farmers,
         )
+        self.logger.info(
+            "HRL calendar setup: loaded farmer table/areas for %s farmers in %.2f s.",
+            n_farmers,
+            time.perf_counter() - phase_timer,
+        )
 
+        phase_timer = time.perf_counter()
         farmer_locations = get_farm_locations(farms, method="centroid")
+        self.logger.info(
+            "HRL calendar setup: calculated %s farmer centroid locations in %.2f s.",
+            n_farmers,
+            time.perf_counter() - phase_timer,
+        )
 
         # Use MIRCA-OS for both calendar timing and irrigation-area fractions,
         # matching the standard farmer crop-calendar setup workflow. The cropping-area
         # raster is loaded only as a spatial reference for the MIRCA unit grid.
+        phase_timer = time.perf_counter()
         reference_crop_map = self.data_catalog.fetch(
             f"mirca_os_cropping_area_{mirca_year}_5-arcminute_Wheat_rf"
         ).read()
@@ -3498,14 +3646,24 @@ class Europe(GEBModel):
         ]
         if mirca_unit_geom.empty:
             raise ValueError("No MIRCA-OS units overlap the model bounds.")
+        self.logger.info(
+            "HRL calendar setup: loaded/clipped MIRCA-OS spatial reference in %.2f s.",
+            time.perf_counter() - phase_timer,
+        )
 
+        phase_timer = time.perf_counter()
         rainfed_calendar_source = self.data_catalog.fetch(
             f"mirca_os_crop_calendar_{mirca_year}_rf"
         ).read()
         irrigated_calendar_source = self.data_catalog.fetch(
             f"mirca_os_crop_calendar_{mirca_year}_ir"
         ).read()
+        self.logger.info(
+            "HRL calendar setup: loaded MIRCA-OS crop-calendar tables in %.2f s.",
+            time.perf_counter() - phase_timer,
+        )
 
+        phase_timer = time.perf_counter()
         mirca_units = mirca_unit_geom["unit_code"].astype(np.int64).tolist()
         rainfed_calendar_source = rainfed_calendar_source.loc[
             rainfed_calendar_source["unit_code"].isin(mirca_units)
@@ -3530,7 +3688,13 @@ class Europe(GEBModel):
         crop_calendar = _fix_365_in_crop_calendar(crop_calendar)
         if not crop_calendar:
             raise ValueError("No MIRCA-OS crop calendars overlap the model bounds.")
+        self.logger.info(
+            "HRL calendar setup: parsed MIRCA-OS calendars for %s unit(s) in %.2f s.",
+            len(mirca_units),
+            time.perf_counter() - phase_timer,
+        )
 
+        phase_timer = time.perf_counter()
         mirca_unit_grid = rasterize_like(
             mirca_unit_geom,
             reference_crop_map,
@@ -3548,17 +3712,41 @@ class Europe(GEBModel):
 
         if (farmer_mirca_units == -1).any():
             raise ValueError("All farmers should be assigned to a valid MIRCA-OS unit.")
+        self.logger.info(
+            "HRL calendar setup: rasterized MIRCA units and sampled farmers in %.2f s.",
+            time.perf_counter() - phase_timer,
+        )
+
+        mirca_spatial_context = _MIRCASpatialContext(
+            year=mirca_year,
+            reference_crop_map=reference_crop_map,
+            unit_geom=mirca_unit_geom,
+            unit_grid=mirca_unit_grid,
+            farmer_units=farmer_mirca_units,
+            reference_map_buffer=reference_map_buffer,
+        )
 
         # MIRCA-OS is used for the crop-specific rainfed/irrigated area fractions.
         # These fractions are static here, so changes in yearly candidate irrigation
         # assignments come from changing HRL crop assignments, not changing MIRCA-OS.
+        phase_timer = time.perf_counter()
         rainfed_fraction, irrigated_fraction = self.get_mirca_os_irrigation_fractions(
             year=mirca_year,
             minimum_area_ratio=minimum_area_ratio,
             replace_crop_calendar_unit_code=replace_crop_calendar_unit_code,
             farmer_locations=farmer_locations,
+            spatial_context=mirca_spatial_context,
+        )
+        irrigation_fraction_lookup = _prepare_mirca_irrigation_fraction_lookup(
+            rainfed_fraction,
+            irrigated_fraction,
+        )
+        self.logger.info(
+            "HRL calendar setup: prepared MIRCA-OS irrigation fractions in %.2f s.",
+            time.perf_counter() - phase_timer,
         )
 
+        phase_timer = time.perf_counter()
         mirca_os_template = rainfed_fraction.isel(crop=0, drop=True)
         mirca_os_cell_grid = get_linear_indices(mirca_os_template)
 
@@ -3567,7 +3755,12 @@ class Europe(GEBModel):
             farmer_locations,
             mirca_os_cell_grid.rio.transform(recalc=True).to_gdal(),
         ).astype(np.int32)
+        self.logger.info(
+            "HRL calendar setup: sampled farmer MIRCA-OS fraction-grid cells in %.2f s.",
+            time.perf_counter() - phase_timer,
+        )
 
+        phase_timer = time.perf_counter()
         fraction_sw_irrigation_data = self.data_catalog.fetch(
             "global_irrigation_area_surface_water"
         ).read()
@@ -3609,15 +3802,30 @@ class Europe(GEBModel):
             fraction_gw_irrigation_data,
             mirca_os_cell_grid,
         )
+        self.logger.info(
+            "HRL calendar setup: prepared surface/groundwater irrigation-source "
+            "fractions in %.2f s.",
+            time.perf_counter() - phase_timer,
+        )
 
+        phase_timer = time.perf_counter()
         hand = self.grid["routing/height_above_nearest_drainage_m"]
         hand = interpolate_na_2d(hand)
         farmer_hand_m = _sample_grid_values_at_farmers(hand, farmer_locations).astype(
             np.float64
         )
+        self.logger.info(
+            "HRL calendar setup: interpolated/sampled HAND in %.2f s.",
+            time.perf_counter() - phase_timer,
+        )
 
+        phase_timer = time.perf_counter()
         farmer_groundwater_depth_m = self.load_initial_groundwater_depth_at_farmers(
             farmer_locations,
+        )
+        self.logger.info(
+            "HRL calendar setup: prepared/sampled initial groundwater depth in %.2f s.",
+            time.perf_counter() - phase_timer,
         )
 
         # Cache each farmer's area-weighted MIRCA-OS calendar selection so that an
@@ -3625,6 +3833,10 @@ class Europe(GEBModel):
         calendar_selection_cache: dict[
             tuple[int, int, int, bool],
             np.ndarray,
+        ] = {}
+        calendar_candidate_pool_cache: dict[
+            tuple[int, int, bool],
+            tuple[list[tuple[float, TwoDArrayInt32]], np.ndarray],
         ] = {}
         expected_farmer_ids = np.arange(n_farmers, dtype=np.int32)
 
@@ -3643,12 +3855,14 @@ class Europe(GEBModel):
             farmer_had_valid_crop_before = np.full(n_farmers, False, dtype=bool)
 
         for year_index, current_hrl_year in enumerate(years_to_process):
+            year_timer = time.perf_counter()
             self.logger.info(
                 "Setting up HRL-based farmer crop calendars for HRL year %s.",
                 current_hrl_year,
             )
 
             crop_column = f"crop_{current_hrl_year}"
+            phase_timer = time.perf_counter()
 
             # Only this part is HRL-year specific. MIRCA-OS calendar parsing and
             # spatial sampling are reused across all requested years.
@@ -3668,12 +3882,14 @@ class Europe(GEBModel):
                 )
 
             farmer_main_crops = farmer_crops["mirca_crop"].to_numpy(dtype=np.int32)
+            decode_seconds = time.perf_counter() - phase_timer
 
             # Track whether the current HRL year provides a valid MIRCA crop. In
             # multi-year mode, this controls whether later years are allowed to add
             # irrigation for this farmer.
             current_valid_crop = farmer_main_crops != -1
 
+            phase_timer = time.perf_counter()
             candidate_is_irrigated, candidate_adaptations = (
                 _assign_irrigation_by_area_targets(
                     farmer_crops=farmer_crops,
@@ -3686,8 +3902,10 @@ class Europe(GEBModel):
                     surface_water_fraction_by_cell=surface_water_fraction_by_cell,
                     n_farmers=n_farmers,
                     logger=self.logger,
+                    fraction_lookup=irrigation_fraction_lookup,
                 )
             )
+            irrigation_seconds = time.perf_counter() - phase_timer
 
             if multiple_years:
                 if persistent_adaptations is None:
@@ -3764,6 +3982,7 @@ class Europe(GEBModel):
             else:
                 is_irrigated_for_calendar = candidate_is_irrigated
 
+            phase_timer = time.perf_counter()
             (
                 crop_calendar_per_farmer,
                 n_unique_calendar_keys,
@@ -3776,17 +3995,24 @@ class Europe(GEBModel):
                 replace_crop_calendar_unit_code=replace_crop_calendar_unit_code,
                 selection_cache=calendar_selection_cache,
                 random_seed=random_seed,
+                candidate_pool_cache=calendar_candidate_pool_cache,
             )
+            calendar_selection_seconds = time.perf_counter() - phase_timer
 
             self.logger.info(
                 "HRL year %s crop calendars resolved from %s unique farmer-state "
-                "combination(s); %s new selection(s) added to the cross-year cache.",
+                "combination(s); %s new farmer selection(s) added; %s shared "
+                "candidate pool(s) cached; selection took %.2f s.",
                 current_hrl_year,
                 n_unique_calendar_keys,
                 n_new_calendar_cache_entries,
+                len(calendar_candidate_pool_cache),
+                calendar_selection_seconds,
             )
 
+            phase_timer = time.perf_counter()
             check_crop_calendar(crop_calendar_per_farmer)
+            validation_seconds = time.perf_counter() - phase_timer
 
             # For region 4 there are a few instances of rice cultivation but no prices
             if reduce_crops:
@@ -3807,6 +4033,28 @@ class Europe(GEBModel):
                 # The replacement changes calendars, so validate once more only in
                 # this branch. Without replacement, the first validation is sufficient.
                 check_crop_calendar(crop_calendar_per_farmer)
+
+            year_seconds = time.perf_counter() - year_timer
+            timing_rows.append(
+                {
+                    "year": int(current_hrl_year),
+                    "decode_s": decode_seconds,
+                    "irrigation_s": irrigation_seconds,
+                    "calendar_s": calendar_selection_seconds,
+                    "validation_s": validation_seconds,
+                    "total_s": year_seconds,
+                }
+            )
+            self.logger.info(
+                "HRL year %s timing: decode=%.2f s, irrigation=%.2f s, "
+                "calendar=%.2f s, validation=%.2f s, total=%.2f s.",
+                current_hrl_year,
+                decode_seconds,
+                irrigation_seconds,
+                calendar_selection_seconds,
+                validation_seconds,
+                year_seconds,
+            )
 
             if multiple_years:
                 crop_calendar_stack[year_index] = crop_calendar_per_farmer
@@ -3869,6 +4117,24 @@ class Europe(GEBModel):
                 name="agents/farmers/adaptations",
             )
 
+        total_seconds = time.perf_counter() - setup_timer
+        if timing_rows:
+            timing_table = pd.DataFrame(timing_rows)
+            self.logger.info(
+                "HRL farmer crop-calendar timing by year:\n%s",
+                timing_table.round(2).to_string(index=False),
+            )
+        self.logger.info(
+            "HRL farmer crop-calendar setup finished for %s farmer(s) and %s year(s) "
+            "in %.2f s; final selection cache=%s farmer-state entries; candidate "
+            "pool cache=%s shared states.",
+            n_farmers,
+            len(years_to_process),
+            total_seconds,
+            len(calendar_selection_cache),
+            len(calendar_candidate_pool_cache),
+        )
+
     def get_mirca_os_irrigation_fractions(
         self,
         *,
@@ -3876,6 +4142,7 @@ class Europe(GEBModel):
         minimum_area_ratio: float = 0.01,
         replace_crop_calendar_unit_code: dict[int, int] | None = None,
         farmer_locations: np.ndarray | None = None,
+        spatial_context: _MIRCASpatialContext | None = None,
     ) -> tuple[xr.DataArray, xr.DataArray]:
         """Derive MIRCA-OS rainfed and irrigated crop-area fractions.
 
@@ -3886,6 +4153,9 @@ class Europe(GEBModel):
             farmer_locations: Optional farmer centroid coordinates with shape
                 ``(n_farmers, 2)``. Locations are derived from the farm raster when
                 omitted.
+            spatial_context: Optional precomputed MIRCA-OS reference map, unit
+                geometry/grid, and farmer-unit sampling. Internal callers can reuse
+                this to avoid repeating identical geospatial preprocessing.
 
         Returns:
             Tuple containing rainfed and irrigated crop-area fraction arrays with
@@ -3900,66 +4170,83 @@ class Europe(GEBModel):
 
         n_farmers = self.array["agents/farmers/region_id"].size
 
-        # For alignment of various input data, we need a reference. So we just
-        # load one. The crops itself are not used, but just the metadata.
-        reference_crop_map = self.data_catalog.fetch(
-            f"mirca_os_cropping_area_{year}_5-arcminute_Wheat_rf"
-        ).read()
-        reference_map_buffer: int = 100
-        reference_crop_map = reference_crop_map.isel(
-            get_window(
-                reference_crop_map.x,
-                reference_crop_map.y,
-                self.bounds,
-                buffer=reference_map_buffer,
-                raise_on_buffer_out_of_bounds=False,
-            )
-            # A large buffer prevents interpolation artefacts near the model edge.
-        )
-
-        # Load MIRCA-OS data for the given year
-        MIRCA_unit_geom = self.data_catalog.fetch(
-            f"mirca_os_admin_boundaries_{year}"
-        ).read()
-        assert isinstance(MIRCA_unit_geom, gpd.GeoDataFrame)
-
-        # Clip geometries to the reference crop map extent so they remain aligned.
-        MIRCA_unit_geom = MIRCA_unit_geom.cx[
-            reference_crop_map.x.values.min() : reference_crop_map.x.values.max(),
-            reference_crop_map.y.values.min() : reference_crop_map.y.values.max(),
-        ]
-
-        if farmer_locations is None:
-            farmer_locations = get_farm_locations(
-                self.subgrid["agents/farmers/farms"],
-                method="centroid",
-            )
-        else:
-            farmer_locations = np.asarray(farmer_locations)
-            if farmer_locations.shape != (n_farmers, 2):
-                raise ValueError(
-                    "farmer_locations must have shape (n_farmers, 2). "
-                    f"Got {farmer_locations.shape} for {n_farmers} farmers."
+        if spatial_context is None:
+            # For alignment of various input data, load one cropping-area raster as
+            # the spatial reference. This path preserves standalone/backwards-compatible
+            # use of the method.
+            reference_crop_map = self.data_catalog.fetch(
+                f"mirca_os_cropping_area_{year}_5-arcminute_Wheat_rf"
+            ).read()
+            reference_map_buffer = 100
+            reference_crop_map = reference_crop_map.isel(
+                get_window(
+                    reference_crop_map.x,
+                    reference_crop_map.y,
+                    self.bounds,
+                    buffer=reference_map_buffer,
+                    raise_on_buffer_out_of_bounds=False,
                 )
+            )
 
-        MIRCA_unit_grid = rasterize_like(
-            MIRCA_unit_geom,
-            reference_crop_map,
-            dtype=np.int32,
-            nodata=-1,
-            column="unit_code",
-            name="MIRCA_unit",
-        )
-        MIRCA_unit_grid.values = fillna_2d(MIRCA_unit_grid.values, nodata=-1)
-        farmer_mirca_units = sample_from_map(
-            MIRCA_unit_grid.values,
-            farmer_locations,
-            MIRCA_unit_grid.rio.transform(recalc=True).to_gdal(),
-        )
+            MIRCA_unit_geom = self.data_catalog.fetch(
+                f"mirca_os_admin_boundaries_{year}"
+            ).read()
+            if not isinstance(MIRCA_unit_geom, gpd.GeoDataFrame):
+                raise TypeError(
+                    "MIRCA-OS administrative boundaries must be a GeoDataFrame."
+                )
+            MIRCA_unit_geom = MIRCA_unit_geom.cx[
+                reference_crop_map.x.values.min() : reference_crop_map.x.values.max(),
+                reference_crop_map.y.values.min() : reference_crop_map.y.values.max(),
+            ]
 
-        assert not (farmer_mirca_units == -1).any(), (
-            "All farmers should be assigned to a MIRCA unit."
-        )
+            if farmer_locations is None:
+                farmer_locations = get_farm_locations(
+                    self.subgrid["agents/farmers/farms"],
+                    method="centroid",
+                )
+            else:
+                farmer_locations = np.asarray(farmer_locations)
+                if farmer_locations.shape != (n_farmers, 2):
+                    raise ValueError(
+                        "farmer_locations must have shape (n_farmers, 2). "
+                        f"Got {farmer_locations.shape} for {n_farmers} farmers."
+                    )
+
+            MIRCA_unit_grid = rasterize_like(
+                MIRCA_unit_geom,
+                reference_crop_map,
+                dtype=np.int32,
+                nodata=-1,
+                column="unit_code",
+                name="MIRCA_unit",
+            )
+            MIRCA_unit_grid.values = fillna_2d(MIRCA_unit_grid.values, nodata=-1)
+            farmer_mirca_units = sample_from_map(
+                MIRCA_unit_grid.values,
+                farmer_locations,
+                MIRCA_unit_grid.rio.transform(recalc=True).to_gdal(),
+            )
+            if (farmer_mirca_units == -1).any():
+                raise ValueError(
+                    "All farmers should be assigned to a valid MIRCA-OS unit."
+                )
+        else:
+            if int(spatial_context.year) != int(year):
+                raise ValueError(
+                    "MIRCA spatial-context year does not match requested year: "
+                    f"{spatial_context.year} != {year}."
+                )
+            reference_crop_map = spatial_context.reference_crop_map
+            reference_map_buffer = int(spatial_context.reference_map_buffer)
+            MIRCA_unit_geom = spatial_context.unit_geom.copy()
+            # get_crop_area_fractions may modify/fill unit assignments. Work on copies
+            # so reusing this context cannot change the calendar-selection units.
+            MIRCA_unit_grid = spatial_context.unit_grid.copy(deep=True)
+            farmer_mirca_units = np.asarray(
+                spatial_context.farmer_units,
+                dtype=np.int32,
+            ).copy()
 
         rainfed_fraction, irrigated_fraction, MIRCA_unit_grid, farmer_mirca_units = (
             self.get_crop_area_fractions(

@@ -3242,7 +3242,7 @@ HRL_CTY_AGGREGATION_LEVEL_1_NAMES = {
 }
 
 _HRL_TILE_NAME_PATTERN = re.compile(
-    r"^CLMS_HRLVLCC_(?P<product>CTY|CTYCL)_S(?P<year>\d{4})_"
+    r"^CLMS_HRLVLCC_(?P<product>CTY|CTYCL|CPSCT)_S(?P<year>\d{4})_"
     r"R10m_(?P<tile>[EW]\d+[NS]\d+)_03035_(?P<version>V\d+_R\d+)$"
 )
 
@@ -5220,7 +5220,11 @@ def configure_alphaearth_crop_prediction_threads(
 
 
 def hrl_tile_code_from_name(tile_name: str | Path) -> str:
-    """Extract an HRL 100-km tile code such as ``E40N30`` from a filename."""
+    """Extract an HRL 100-km tile code such as ``E40N30`` from a filename.
+
+    Both legacy WEkEO files and canonical filenames written by the CDSE-backed
+    adapter are supported for CTY, CTYCL, and CPSCT products.
+    """
     stem = Path(tile_name).stem
     match = _HRL_TILE_NAME_PATTERN.fullmatch(stem)
     if match is None:

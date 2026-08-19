@@ -4,11 +4,11 @@ import logging
 from typing import Any
 
 from .alphaearth import AlphaEarth
-from .eurocrops_v2 import EuroCropsV2
 from .aquastat import AQUASTAT
 from .base import Adapter
 from .cmip6 import CMIP6
 from .coast_rp import CoastRP
+from .copernicus_hrl import CopernicusDataSpace
 from .cwatm_water_demand import CWATMIndustryWaterDemand, CWATMLivestockWaterDemand
 from .deltadtm import DeltaDTM
 from .destination_earth import DestinationEarth
@@ -16,6 +16,7 @@ from .earth_data import GlobalSoilRegolithSediment
 from .ecmwf import ECMWFForecasts
 from .ecmwf_geopotential import ECMWFGeopotential
 from .esa_worldcover import ESAWorldCover
+from .eurocrops_v2 import EuroCropsV2
 from .fabdem import Fabdem as Fabdem
 from .fao import FAOSTAT, GMIA
 from .field_boundaries import FieldBoundaries
@@ -44,10 +45,10 @@ from .lowder import Lowder
 from .merit_basins import MeritBasinsCatchments, MeritBasinsRivers
 from .merit_hydro import MeritHydroDir, MeritHydroElv
 from .merit_sword import MeritSword
-from .mirca2000 import MIRCA2000
 from .mirca_os_admin_boundaries import MIRCAOSAdminBoundaries
 from .mirca_os_crop_calendar import MIRCAOSCropCalendar
 from .mirca_os_harvested_grids import MIRCAOSHarvestedGrids
+from .mirca2000 import MIRCA2000
 from .oecd import OECD
 from .open_building_map import OpenBuildingMap
 from .open_street_map import OpenStreetMap
@@ -58,10 +59,12 @@ from .sword import Sword
 from .undp import HumanDevelopmentIndex
 from .wekeo_copernicus import WEkEOCopernicus
 from .why_map import WhyMap
-from .world_bank import WorldBankData
 from .world_bank_pink_sheet import WorldBankPinkSheetData
+from .world_bank import WorldBankData
 from .worldcereal_reference_data import WorldCerealReferenceData
 from .worldfloods import WorldFloodsV2
+
+CopernicusDataSpace
 
 data_catalog: dict[str, dict[str, Any]] = {
     "alphaearth": {
@@ -349,16 +352,67 @@ data_catalog: dict[str, dict[str, Any]] = {
                     "itemsPerPage": 200,
                     "startIndex": 0,
                 },
+                prefer_local_tiles=True,
+                allow_wekeo_fallback=year != "2024",
             ),
             "url": None,
             "source": {
                 "name": "HRL crop types",
                 "author": "Copernicus Land Monitoring Service",
                 "license": "CC BY 4.0",
-                "url": "https://library.land.copernicus.eu/products/High_Resolution_Layer_Croplands_2017-present_PUM_v2.pdf",
+                "url": "https://library.land.copernicus.eu/products/"
+                "High_Resolution_Layer_Croplands_2017-present_PUM_v2.pdf",
             },
         }
-        for year in ["2017", "2018", "2019", "2020", "2021", "2022", "2023"]
+        for year in [
+            "2017",
+            "2018",
+            "2019",
+            "2020",
+            "2021",
+            "2022",
+            "2023",
+            "2024",
+        ]
+    },
+    **{
+        f"hrl_crop_types_{year}": {
+            "adapter": CopernicusDataSpace(
+                folder="hrl_crop_types",
+                local_version=1,
+                filename="tiles",
+                cache="global",
+                # Kept for backwards-compatible WEkEO fallback:
+                dataset_id="EO:EEA:DAT:HRL:CRL",
+                product_code="CTY",
+                default_query={
+                    "productType": "Crop Types",
+                    "resolution": "10m",
+                    "itemsPerPage": 200,
+                    "startIndex": 0,
+                },
+            ),
+            "url": None,
+            "source": {
+                "name": "HRL crop types",
+                "author": "Copernicus Land Monitoring Service",
+                "license": "CC BY 4.0",
+                "url": (
+                    "https://library.land.copernicus.eu/products/"
+                    "High_Resolution_Layer_Croplands_2017-present_PUM_v2.pdf"
+                ),
+            },
+        }
+        for year in [
+            "2017",
+            "2018",
+            "2019",
+            "2020",
+            "2021",
+            "2022",
+            "2023",
+            "2024",
+        ]
     },
     **{
         f"hrl_secondary_crop_{year}": {
