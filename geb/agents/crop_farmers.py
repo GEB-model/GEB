@@ -3,7 +3,7 @@
 import calendar
 import copy
 import math
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal, Sequence
 
 import numpy as np
@@ -685,6 +685,16 @@ class CropFarmers(AgentBaseClass):
                 ), (
                     "crop_calendar_years must have one entry per year in "
                     "crop_calendar_base_array."
+                )
+                assert self.var.crop_calendar_years.ndim == 1, (
+                    "crop_calendar_years must be one-dimensional."
+                )
+                assert np.all(np.diff(self.var.crop_calendar_years) > 0), (
+                    "crop_calendar_years must be strictly increasing."
+                )
+                assert self.var.crop_calendar_base_array.shape[1] == self.var.n, (
+                    "The farmer axis of crop_calendar_base_array must match the "
+                    "number of CropFarmers agents."
                 )
 
                 self.model.logger.info(
@@ -2343,6 +2353,29 @@ class CropFarmers(AgentBaseClass):
                 potential_income_farmer,
             )
             self.save_harvest_spei(harvesting_farmers)
+            if not np.allclose(
+                np.asarray(
+                    self.var.latest_harvest_yield_ratio[harvesting_farmers],
+                    dtype=np.float32,
+                ),
+                harvest_yield_ratio,
+            ):
+                raise AssertionError(
+                    "latest_harvest_yield_ratio was not updated with the current "
+                    "harvest before crop-decision processing."
+                )
+            if not np.all(
+                np.isfinite(
+                    np.asarray(
+                        self.var.latest_harvest_spei[harvesting_farmers],
+                        dtype=np.float32,
+                    )
+                )
+            ):
+                raise AssertionError(
+                    "latest_harvest_spei contains non-finite values immediately "
+                    "after the current harvest was recorded."
+                )
             self.save_harvest_precipitation(harvesting_farmers, current_crop_age)
 
             if not self.model.in_spinup:
@@ -2463,6 +2496,16 @@ class CropFarmers(AgentBaseClass):
 
         return days_since_start
 
+    def _handle_crop_decision_structure_problem(self, message: str) -> None:
+        """Log an invalid decision structure and raise unless explicitly disabled."""
+        self.model.logger.error(message)
+        strict_checks = self.model.config["agent_settings"]["farmers"].get(
+            "strict_crop_decision_checks",
+            True,
+        )
+        if strict_checks:
+            raise AssertionError(message)
+
     def _record_crop_prediction_decision(
         self,
         deciding_farmers: np.ndarray,
@@ -2477,18 +2520,217 @@ class CropFarmers(AgentBaseClass):
         if deciding_farmers.size == 0:
             return
 
+        if np.unique(deciding_farmers).size != deciding_farmers.size:
+            raise AssertionError(
+                "A farmer cannot record more than one crop decision on the same day."
+            )
+        if np.any(deciding_farmers < 0) or np.any(deciding_farmers >= self.var.n):
+            raise AssertionError("Crop-decision farmer indices are out of range.")
+
         active_year_indices = np.asarray(
             self.var.crop_calendar_active_year_index[deciding_farmers],
             dtype=np.int32,
         )
 
-        self.var.crop_decision_active_year_index[deciding_farmers] = active_year_indices
-        self.var.crop_decision_spei[deciding_farmers] = self.var.latest_harvest_spei[
-            deciding_farmers
-        ]
-        self.var.crop_decision_yield_ratio[deciding_farmers] = (
-            self.var.latest_harvest_yield_ratio[deciding_farmers]
+        valid_active_index = (active_year_indices >= 0) & (
+            active_year_indices < self.var.crop_calendar_base_array.shape[0]
         )
+        if not np.all(valid_active_index):
+            invalid_farmers = deciding_farmers[~valid_active_index][:20]
+            invalid_indices = active_year_indices[~valid_active_index][:20]
+            raise AssertionError(
+                "Crop decisions contain out-of-range active calendar indices: "
+                f"farmers={invalid_farmers.tolist()}, "
+                f"indices={invalid_indices.tolist()}."
+            )
+
+        # This is the strongest pre-advancement check: the runtime calendar must
+        # still equal the base-array calendar identified by the reported index.
+        runtime_calendars = np.asarray(self.var.crop_calendar[deciding_farmers])
+        expected_active_calendars = self.var.crop_calendar_base_array[
+            active_year_indices,
+            deciding_farmers,
+            :,
+            :,
+        ]
+        matching_active_calendar = np.all(
+            runtime_calendars == expected_active_calendars,
+            axis=(1, 2),
+        )
+        if not np.all(matching_active_calendar):
+            invalid_farmers = deciding_farmers[~matching_active_calendar][:20]
+            invalid_indices = active_year_indices[~matching_active_calendar][:20]
+            self._handle_crop_decision_structure_problem(
+                "The runtime crop calendar no longer matches the base calendar "
+                "identified by the pre-advancement active index. This usually "
+                "indicates that the decision was recorded after advancement or "
+                "that the active index is stale. "
+                f"Farmers={invalid_farmers.tolist()}, "
+                f"active_indices={invalid_indices.tolist()}."
+            )
+
+        latest_spei = np.asarray(
+            self.var.latest_harvest_spei[deciding_farmers],
+            dtype=np.float32,
+        )
+        latest_yield_ratio = np.asarray(
+            self.var.latest_harvest_yield_ratio[deciding_farmers],
+            dtype=np.float32,
+        )
+        finite_decision_values = np.isfinite(latest_spei) & np.isfinite(
+            latest_yield_ratio
+        )
+        if not np.all(finite_decision_values):
+            invalid_farmers = deciding_farmers[~finite_decision_values][:20]
+            self._handle_crop_decision_structure_problem(
+                "SPEI and yield ratio must both be updated before a crop decision "
+                "is recorded. Non-finite values were found for farmers "
+                f"{invalid_farmers.tolist()}."
+            )
+
+        reporters_are_reset = (
+            (
+                np.asarray(self.var.crop_decision_active_year_index[deciding_farmers])
+                == -1
+            )
+            & np.isnan(np.asarray(self.var.crop_decision_spei[deciding_farmers]))
+            & np.isnan(np.asarray(self.var.crop_decision_yield_ratio[deciding_farmers]))
+        )
+        if not np.all(reporters_are_reset):
+            invalid_farmers = deciding_farmers[~reporters_are_reset][:20]
+            raise AssertionError(
+                "Decision reporters were not reset before recording the current "
+                f"day for farmers {invalid_farmers.tolist()}."
+            )
+
+        next_year_indices = active_year_indices + 1
+        has_next_calendar = (
+            next_year_indices < self.var.crop_calendar_base_array.shape[0]
+        )
+        target_farmers = deciding_farmers[has_next_calendar]
+        target_indices = next_year_indices[has_next_calendar]
+        malformed_count = 0
+        planting_before_decision_count = 0
+        target_year_min: int | None = None
+        target_year_max: int | None = None
+
+        if target_farmers.size:
+            target_calendars = np.asarray(
+                self.var.crop_calendar_base_array[
+                    target_indices,
+                    target_farmers,
+                    0,
+                    :3,
+                ],
+                dtype=np.int32,
+            )
+            target_years = np.asarray(
+                self.var.crop_calendar_years[target_indices],
+                dtype=np.int32,
+            )
+            target_year_min = int(target_years.min())
+            target_year_max = int(target_years.max())
+            target_crop = target_calendars[:, 0]
+            target_start = target_calendars[:, 1]
+            target_duration = target_calendars[:, 2]
+            fallow_target = np.all(target_calendars == -1, axis=1)
+            cultivated_target = (
+                (target_crop >= 0) & (target_start >= 0) & (target_duration > 0)
+            )
+            malformed_target = ~(fallow_target | cultivated_target)
+            invalid_start_date = np.zeros(target_farmers.size, dtype=bool)
+            planting_before_decision = np.zeros(target_farmers.size, dtype=bool)
+            current_date = datetime(
+                self.model.current_time.year,
+                self.model.current_time.month,
+                self.model.current_time.day,
+            )
+            target_year_before_decision = target_years < current_date.year
+
+            for target_position in np.flatnonzero(cultivated_target):
+                target_year = int(target_years[target_position])
+                start_date = int(target_start[target_position])
+                days_in_year = 366 if calendar.isleap(target_year) else 365
+                if start_date >= days_in_year:
+                    invalid_start_date[target_position] = True
+                    continue
+                planting_date = datetime(target_year, 1, 1) + timedelta(days=start_date)
+                planting_before_decision[target_position] = planting_date < current_date
+
+            malformed_count = int(
+                np.count_nonzero(malformed_target | invalid_start_date)
+            )
+            planting_before_decision_count = int(
+                np.count_nonzero(planting_before_decision)
+            )
+            invalid_target = (
+                malformed_target
+                | invalid_start_date
+                | planting_before_decision
+                | target_year_before_decision
+            )
+            if np.any(invalid_target):
+                sample_positions = np.flatnonzero(invalid_target)[:20]
+                sample = [
+                    {
+                        "farmer": int(target_farmers[position]),
+                        "decision_date": current_date.date().isoformat(),
+                        "active_index": int(
+                            active_year_indices[has_next_calendar][position]
+                        ),
+                        "target_index": int(target_indices[position]),
+                        "target_year": int(target_years[position]),
+                        "target_crop": int(target_crop[position]),
+                        "target_start": int(target_start[position]),
+                        "target_duration": int(target_duration[position]),
+                    }
+                    for position in sample_positions
+                ]
+                self._handle_crop_decision_structure_problem(
+                    "A crop decision points to an invalid next calendar: "
+                    f"{malformed_count} malformed calendars and "
+                    f"{planting_before_decision_count} calendars whose target "
+                    "planting date precedes the decision, including "
+                    f"{int(np.count_nonzero(target_year_before_decision))} "
+                    "targets with a nominal year before the decision year. "
+                    f"Sample={sample}."
+                )
+
+        self.model.logger.info(
+            "Crop-decision diagnostics for %s: decisions=%s, targets=%s, "
+            "target_year_range=%s-%s, malformed=%s, planting_already_passed=%s.",
+            self.model.current_time.date(),
+            deciding_farmers.size,
+            target_farmers.size,
+            target_year_min,
+            target_year_max,
+            malformed_count,
+            planting_before_decision_count,
+        )
+
+        self.var.crop_decision_active_year_index[deciding_farmers] = active_year_indices
+        self.var.crop_decision_spei[deciding_farmers] = latest_spei
+        self.var.crop_decision_yield_ratio[deciding_farmers] = latest_yield_ratio
+
+        if not np.array_equal(
+            np.asarray(
+                self.var.crop_decision_active_year_index[deciding_farmers],
+                dtype=np.int32,
+            ),
+            active_year_indices,
+        ):
+            raise AssertionError("The active calendar index reporter was not written.")
+        if not np.allclose(
+            np.asarray(self.var.crop_decision_spei[deciding_farmers]),
+            latest_spei,
+        ) or not np.allclose(
+            np.asarray(self.var.crop_decision_yield_ratio[deciding_farmers]),
+            latest_yield_ratio,
+        ):
+            raise AssertionError(
+                "Decision SPEI/yield reporters do not equal the values available "
+                "at the decision moment."
+            )
 
     def _advance_crop_calendar_after_last_harvest(
         self,
@@ -2616,6 +2858,34 @@ class CropFarmers(AgentBaseClass):
             self.var.crop_calendar_active_year_index[farmers_to_update] = (
                 next_active_year_index
             )
+
+            updated_indices = np.asarray(
+                self.var.crop_calendar_active_year_index[farmers_to_update],
+                dtype=np.int32,
+            )
+            if not np.array_equal(updated_indices, next_active_year_index):
+                raise AssertionError(
+                    "crop_calendar_active_year_index did not advance to the "
+                    "expected next base-calendar index."
+                )
+            updated_calendars = np.asarray(self.var.crop_calendar[farmers_to_update])
+            expected_calendars = self.var.crop_calendar_base_array[
+                next_active_year_index,
+                farmers_to_update,
+                :,
+                :,
+            ]
+            matching_updated_calendar = np.all(
+                updated_calendars == expected_calendars,
+                axis=(1, 2),
+            )
+            if not np.all(matching_updated_calendar):
+                invalid_farmers = farmers_to_update[~matching_updated_calendar][:20]
+                raise AssertionError(
+                    "The runtime crop calendar does not equal the base calendar "
+                    "after advancement for farmers "
+                    f"{invalid_farmers.tolist()}."
+                )
 
             updated_hrl_years = self.var.crop_calendar_years[next_active_year_index]
 
