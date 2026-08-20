@@ -37,14 +37,14 @@ class Fabdem(Adapter):
         super().__init__(*args, **kwargs)
 
     def _get_item_names_from_catalog(self, catalog_url: str) -> list[str]:
-        """Fetch all STAC item names from the catalog JSON.
+        """Fetch all STAC item names from the collection JSON.
 
-        Parses only the catalog-level JSON (one HTTP request) to extract item
+        Parses only the collection-level JSON (one HTTP request) to extract item
         directory names, without loading each individual item document.
 
         Args:
-            catalog_url: URL of the STAC catalog root JSON
-                (e.g. ``…/stac_catalog/catalog.json``).
+            catalog_url: URL of the STAC collection JSON
+                (e.g. ``…/collection.json``).
 
         Returns:
             List of item names (directory names) found in the catalog.
