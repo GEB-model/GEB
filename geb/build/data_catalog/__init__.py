@@ -982,7 +982,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             filename="placeholder.txt",
             cache="global",
         ),
-        "url": "https://huggingface.co/datasets/links-ads/fabdem-v12/raw/main/stac_catalog/catalog.json",
+        "url": "https://huggingface.co/buckets/links-ads/fabdem/resolve/collection.json",
         "source": {
             "name": "FABDEM",
             "author": "Hawker et al. (2022)",
