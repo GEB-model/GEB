@@ -13,6 +13,11 @@ PLOT_Y_LABELS: dict[str, str] = {
 }
 SCENARIOS_BASE_FUTURE: tuple[str, str] = ("base", "_future")
 CLUSTER_SUMMARY_YEARS: tuple[int, ...] = (2000, 2020, 2080)
+VARIABLES_TO_PLOT = {
+    "expected_annual_damage": "Expected Annual Damage (USD)",
+    "n_adaptation_uptake": "Adaptation Uptake (fraction of households)",
+    "total_investment_costs": "Total Investment Costs (USD)",
+}
 
 
 def _list_household_attribute_files(results_path: str) -> list[str]:
@@ -26,7 +31,17 @@ def _list_household_attribute_files(results_path: str) -> list[str]:
     """
     if not os.path.exists(results_path):
         return []
-    return sorted(fn for fn in os.listdir(results_path) if fn.endswith(".parquet"))
+
+    household_attributes_fns = sorted(
+        fn for fn in os.listdir(results_path) if fn.endswith(".parquet")
+    )
+    household_attributes_fns = [
+        fn
+        for fn in household_attributes_fns
+        if fn.removesuffix(".parquet") in VARIABLES_TO_PLOT
+    ]
+
+    return household_attributes_fns
 
 
 def _ensure_axes_array(axes: object, ncols: int) -> list[plt.Axes]:
@@ -66,6 +81,36 @@ def _resolve_ylim(df: pd.DataFrame) -> tuple[float, float] | None:
     return (0.0, max_value * 1.1)
 
 
+def _extract_values_at_years(
+    series: pd.Series,
+    target_years: tuple[int, ...],
+) -> dict[int, float]:
+    """Extract values from a time-indexed series at specific calendar years.
+
+    Args:
+        series: Time-indexed series (e.g. an across-run mean or sum).
+        target_years: Calendar years to extract, e.g. (2000, 2020, 2080).
+
+    Returns:
+        Mapping from year to value, for years present in the series' index.
+    """
+    if series.empty:
+        return {}
+
+    year_values = (
+        series.index.year
+        if isinstance(series.index, pd.DatetimeIndex)
+        else series.index.astype(int)
+    )
+
+    year_to_value: dict[int, float] = {}
+    for target_year in target_years:
+        year_mask = year_values == target_year
+        if year_mask.any():
+            year_to_value[target_year] = float(series.to_numpy()[year_mask][-1])
+    return year_to_value
+
+
 def _extract_year_means(
     df: pd.DataFrame,
     target_years: tuple[int, ...],
@@ -86,20 +131,26 @@ def _extract_year_means(
     """
     if df.empty:
         return {}
+    return _extract_values_at_years(df.mean(axis=1), target_years)
 
-    mean_series: pd.Series = df.mean(axis=1)
-    year_values = (
-        mean_series.index.year
-        if isinstance(mean_series.index, pd.DatetimeIndex)
-        else mean_series.index.astype(int)
-    )
 
-    year_means: dict[int, float] = {}
-    for target_year in target_years:
-        year_mask = year_values == target_year
-        if year_mask.any():
-            year_means[target_year] = float(mean_series.to_numpy()[year_mask][-1])
-    return year_means
+def _extract_year_sums(
+    df: pd.DataFrame,
+    target_years: tuple[int, ...],
+) -> dict[int, float]:
+    """Extract the across-column sum value at specific calendar years.
+
+    Args:
+        df: Time-indexed dataframe with one column per cluster (or run).
+        target_years: Calendar years to extract, e.g. (2000, 2020, 2080).
+
+    Returns:
+        Mapping from year to the summed value across columns, for years
+        present in the dataframe's index.
+    """
+    if df.empty:
+        return {}
+    return _extract_values_at_years(df.sum(axis=1), target_years)
 
 
 def _resolve_ylim_across_groups(
@@ -231,6 +282,8 @@ def _read_multirun_results(
                 household_attribute_name: str = household_attribute_fn.removesuffix(
                     ".parquet"
                 )
+                if household_attribute_name not in VARIABLES_TO_PLOT:
+                    continue
                 attribute_df: pd.DataFrame = pd.read_parquet(
                     os.path.join(results_path, household_attribute_fn)
                 )
@@ -294,6 +347,12 @@ def process_household_attributes(
     household_attributes_fns: list[str] = _list_household_attribute_files(results_path)
     if not household_attributes_fns:
         return
+    # filter to only include attributes that are in VARIABLES_TO_PLOT
+    household_attributes_fns = [
+        fn
+        for fn in household_attributes_fns
+        if fn.removesuffix(".parquet") in VARIABLES_TO_PLOT
+    ]
 
     fig, axes = plt.subplots(
         nrows=1,
@@ -574,7 +633,6 @@ def _plot_multirun_results(
 
     for ax, household_attribute_name in zip(axes_list, attribute_names):
         ax.grid(axis="y", linestyle="--", alpha=0.7)
-        has_individual_runs: bool = False
 
         for group_name, group_results in results.items():
             if household_attribute_name not in group_results:
@@ -595,9 +653,10 @@ def _plot_multirun_results(
                     color=group_color,
                     alpha=0.2,
                 )
-            else:
-                ax.plot(x_values, df.to_numpy(), alpha=0.3, color="grey")
-                has_individual_runs = True
+            # else:
+            # Draw each individual run in the group's own color so it
+            # reads as a fuzzy band around that group's mean line.
+            # ax.plot(x_values, df.to_numpy(), alpha=0.3, color=group_color)
 
             ax.plot(
                 x_values,
@@ -615,9 +674,9 @@ def _plot_multirun_results(
         if ylims_variable is not None:
             ax.set_ylim(ylims_variable)
 
-        if has_individual_runs:
-            ax.plot([], [], color="grey", alpha=0.1, label="Individual Runs")
-        ax.set_title(household_attribute_name)
+        ax.set_title(
+            VARIABLES_TO_PLOT.get(household_attribute_name, household_attribute_name)
+        )
         if household_attribute_name in PLOT_Y_LABELS:
             ax.set_ylabel(PLOT_Y_LABELS[household_attribute_name])
         ax.set_xlabel(x_axis_label)
@@ -1330,6 +1389,46 @@ def _attribute_year_summary_records(
     return summary_records
 
 
+def _cluster_sum_summary_records(
+    combined_results: dict[str, dict[str, pd.DataFrame]],
+) -> list[dict[str, float | str]]:
+    """Build summary records summing per-cluster mean values at fixed years.
+
+    Notes:
+        Each dataframe in combined_results holds one column per cluster,
+        already averaged across that cluster's completed runs (see
+        combine_cluster_results). Summing those columns gives the
+        domain-wide total without under-weighting clusters that have fewer
+        completed runs than others.
+
+    Args:
+        combined_results: Nested dictionary {run_prefix: {attribute_name: dataframe}}
+            with one column per cluster.
+
+    Returns:
+        One record per (run_prefix, attribute) combination with a sum_<year>
+        column for each year present in the data.
+    """
+    summary_records: list[dict[str, float | str]] = []
+    for run_prefix, prefix_results in combined_results.items():
+        for household_attribute_name, attribute_df in prefix_results.items():
+            year_sums: dict[int, float] = _extract_year_sums(
+                attribute_df, CLUSTER_SUMMARY_YEARS
+            )
+            if not year_sums:
+                continue
+
+            record: dict[str, float | str] = {
+                "run_prefix": run_prefix,
+                "attribute": household_attribute_name,
+            }
+            for target_year in CLUSTER_SUMMARY_YEARS:
+                if target_year in year_sums:
+                    record[f"sum_{target_year}"] = year_sums[target_year]
+            summary_records.append(record)
+    return summary_records
+
+
 def _cluster_year_summary_records(
     cluster_folder: str,
     cluster_results: dict[str, dict[str, pd.DataFrame]],
@@ -1404,17 +1503,25 @@ def combine_cluster_results(
         )
         for run_prefix, prefix_results in cluster_results.items():
             for household_attribute_name, attribute_df in prefix_results.items():
+                if attribute_df.empty:
+                    continue
+                # Average across this cluster's completed runs first, so a
+                # cluster with fewer finished runs is not under-weighted
+                # relative to one with more when clusters are later summed.
+                cluster_mean_df: pd.DataFrame = attribute_df.mean(axis=1).to_frame(
+                    name=cluster_folder
+                )
                 if household_attribute_name not in combined_results[run_prefix]:
                     combined_results[run_prefix][household_attribute_name] = (
-                        attribute_df.copy()
+                        cluster_mean_df
                     )
                 else:
-                    # Sum aligned runs and timesteps across clusters.
-                    combined_results[run_prefix][household_attribute_name] = (
-                        combined_results[run_prefix][household_attribute_name].add(
-                            attribute_df,
-                            fill_value=0.0,
-                        )
+                    combined_results[run_prefix][household_attribute_name] = pd.concat(
+                        [
+                            combined_results[run_prefix][household_attribute_name],
+                            cluster_mean_df,
+                        ],
+                        axis=1,
                     )
 
     if cluster_summary_records:
@@ -1424,10 +1531,11 @@ def combine_cluster_results(
         )
         cluster_summary_df.to_csv(cluster_summary_output_path, index=False)
 
-    # combined_results already holds values summed across clusters (see the
-    # per-cluster loop above), so its year-means represent the summed totals.
-    summed_summary_records: list[dict[str, float | str]] = (
-        _attribute_year_summary_records(combined_results)
+    # combined_results holds one column per cluster (each already averaged
+    # across that cluster's completed runs), so summing columns gives the
+    # domain-wide total.
+    summed_summary_records: list[dict[str, float | str]] = _cluster_sum_summary_records(
+        combined_results
     )
     if summed_summary_records:
         summed_summary_df: pd.DataFrame = pd.DataFrame(summed_summary_records)
@@ -1576,7 +1684,7 @@ if __name__ == "__main__":
     model_path = os.path.join("..", "..", "models", "models", "mex")
 
     model_name = "no_gov_run_0"
-    scenario = "base"
+    scenario = "rcp8p5_2080"
     scenarios_to_compare = list(SCENARIOS_BASE_FUTURE)
     prefixes = [
         "full",
@@ -1595,14 +1703,14 @@ if __name__ == "__main__":
         scenario=scenario,
         run_prefixes=prefixes,
         x_axis="year",
-        show_std_band=True,
+        show_std_band=False,
     )
     plot_ead_per_gdl_region_across_clusters(
         model_path=model_path,
         scenario=scenario,
         run_prefixes=prefixes,
         x_axis="year",
-        show_std_band=True,
+        show_std_band=False,
     )
 
     # 3) Plot non-merged reference views from regular multirun outputs.
@@ -1629,7 +1737,7 @@ if __name__ == "__main__":
             prefixes=prefixes,
             output_path=output_path,
             x_axis="year",
-            show_std_band=True,
+            show_std_band=False,
         )
     # plot_multirun_results_for_scenarios(model_path, scenarios_to_compare, x_axis="year")
 
