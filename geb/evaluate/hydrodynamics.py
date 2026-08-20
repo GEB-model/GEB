@@ -441,7 +441,24 @@ def calculate_performance_metrics(
                     f"CSI = {csi_pct:.2f} %",
                 ]
             )
-            from matplotlib.legend_handler import HandlerEmpty
+            from matplotlib.artist import Artist
+            from matplotlib.legend import Legend
+            from matplotlib.legend_handler import HandlerBase
+            from matplotlib.transforms import Transform
+
+            class TextOnlyHandler(HandlerBase):
+                def create_artists(
+                    self,
+                    legend: Legend,
+                    orig_handle: object,
+                    xdescent: float,
+                    ydescent: float,
+                    width: float,
+                    height: float,
+                    fontsize: float,
+                    trans: Transform,
+                ) -> list[Artist]:
+                    return []
 
             # Create a single legend
             legend = ax.legend(
@@ -451,7 +468,7 @@ def calculate_performance_metrics(
                 edgecolor="grey",
                 prop={"family": "monospace", "size": 10},
                 handler_map={
-                    text_marker: HandlerEmpty()
+                    text_marker: TextOnlyHandler()
                 },  # Strips handle width for text rows
             )
 
