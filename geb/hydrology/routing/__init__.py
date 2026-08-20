@@ -2,10 +2,11 @@
 
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
-
+from datetime import datetime
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import warnings
 import pyflwdir
 from affine import Affine
 from numba import njit
@@ -1152,14 +1153,6 @@ class Routing(Module):
             total_outflow_at_pits_m3: np.float64 = np.float64(np.nan)
             total_retention_evaporation_m3: np.float64 = np.float64(np.nan)
 
-        print(total_outflow_at_pits_m3 / (24 * 3600), "m3/s outflow at pits")
-
-        import matplotlib.pyplot as plt
-
-        discharge_decomprssed = self.grid.decompress(self.grid.var.discharge_m3_s)
-        plt.imshow(discharge_decomprssed, cmap="Blues")
-        plt.savefig(self.model.report_folder / "discharge_m3_s.png")
-
         # store daily retention basin flows
         if __debug__:
             self.grid.var.retention_inflow_m3_daily = retention_inflow_m3
@@ -1325,16 +1318,18 @@ class Routing(Module):
                 )
             river_id = self.var.river_ids[basin_cells[0]]
             if river_id == -1:
-                raise ValueError(
+                warnings.warn(
                     f"Retention basin {basin_id} is not associated with any river."
                 )
-
-            if not self.retention_basin_is_active[basin_id]:
                 self.retention_activation_threshold_m3_s[basin_id] = np.inf
             else:
-                return_period_col = f"return_period_{activation_threshold_return_period_years}_years_daily_m3_per_s"
-                self.retention_activation_threshold_m3_s[basin_id] = (
-                    self.var.rivers.loc[river_id, return_period_col]
-                )
+
+                if not self.retention_basin_is_active[basin_id]:
+                    self.retention_activation_threshold_m3_s[basin_id] = np.inf
+                else:
+                    return_period_col = f"return_period_{activation_threshold_return_period_years}_years_daily_m3_per_s"
+                    self.retention_activation_threshold_m3_s[basin_id] = (
+                        self.var.rivers.loc[river_id, return_period_col]
+                    )
 
         return None
