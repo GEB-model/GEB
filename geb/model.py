@@ -502,8 +502,9 @@ class GEBModel(Module):
         """
         # only if forecasts is used, and if we are not already in multiverse (avoiding infinite recursion)
         # and if the current date is in the list of forecast days
+        forecasts_enabled = self.config["general"]["forecasts"]["use"]
         if (
-            self.config["general"]["forecasts"]["use"]
+            forecasts_enabled
             and self.multiverse_name
             is None  # only start multiverse if not already in one
             and self.current_time.date()
@@ -640,10 +641,7 @@ class GEBModel(Module):
                     )
         else:
             self.logger.debug(
-                "Skipping multiverse check: forecasts_enabled=%s, is_in_multiverse=%s, current_time_date_truthy=%s",
-                forecasts_enabled,
-                is_in_multiverse,
-                current_date_truthy,
+                "Skipping multiverse check: forecasts_enabled=%s", forecasts_enabled
             )
 
         t0 = time()

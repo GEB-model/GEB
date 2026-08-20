@@ -403,17 +403,17 @@ class SFINCSRootModel:
             DEM["reproj_method"] = "bilinear"
         time_start = time.perf_counter()
         self.logger.info("Setting up SFINCS model dep (DEMs)...")
-            DEM["elevation"] = clip_with_geometry(
-                DEM["elevation"]["elevation"],
-                gpd.GeoDataFrame(
-                    [self.subbasins.union_all().buffer(0.1)],
-                    columns=["geometry"],
-                    crs=self.subbasins.crs,
-                ),
-                all_touched=True,
-                drop=True,
-            ).to_dataset(name="elevation")
-            DEMs_in_area_of_interest.append(DEM)
+        DEM["elevation"] = clip_with_geometry(
+            DEM["elevation"]["elevation"],
+            gpd.GeoDataFrame(
+                [self.subbasins.union_all().buffer(0.1)],
+                columns=["geometry"],
+                crs=self.subbasins.crs,
+            ),
+            all_touched=True,
+            drop=True,
+        ).to_dataset(name="elevation")
+        DEMs_in_area_of_interest.append(DEM)
 
         if not DEMs_in_area_of_interest:
             raise ValueError(
@@ -727,27 +727,27 @@ class SFINCSRootModel:
                 # only burn rivers that are wider than the subgrid pixel size
                 start_time = time.perf_counter()
                 sf.subgrid.create(
-                        elevation_list=DEMs,
-                        roughness_list=[
-                            {
-                                "manning": mannings.to_dataset(name="manning"),
-                            }
-                        ],
-                        river_list=[
-                            {
-                                "centerlines": rivers_to_burn.rename(
-                                    columns={"width": "rivwth", "depth": "rivdph"}
-                                )
-                            }
-                        ]
-                        if not rivers_to_burn.empty
-                        else [],
-                        write_dep_tif=True,
-                        write_man_tif=True,
-                        nr_subgrid_pixels=grid_size_multiplier,
-                        nr_levels=20,
-                        nrmax=500,
-                    )
+                    elevation_list=DEMs,
+                    roughness_list=[
+                        {
+                            "manning": mannings.to_dataset(name="manning"),
+                        }
+                    ],
+                    river_list=[
+                        {
+                            "centerlines": rivers_to_burn.rename(
+                                columns={"width": "rivwth", "depth": "rivdph"}
+                            )
+                        }
+                    ]
+                    if not rivers_to_burn.empty
+                    else [],
+                    write_dep_tif=True,
+                    write_man_tif=True,
+                    nr_subgrid_pixels=grid_size_multiplier,
+                    nr_levels=20,
+                    nrmax=500,
+                )
             first_subgrid_time = time.perf_counter() - start_time
             self.logger.info(f"Subgrid setup took {first_subgrid_time:.2f} seconds")
             self.logger.info("Writing grid files...")
@@ -806,10 +806,6 @@ class SFINCSRootModel:
         sf.observation_points.create(obs_points, merge=False)
         sf.cross_sections.write()
         sf.observation_points.write()
-        # write all components, except forcing which must be done after the model building
-        sf.write_geoms()
-        sf.write_states()
-        sf.write_config()
 
         self.subbasins.to_parquet(self.path / "subbasins.geoparquet")
         self.rivers.to_parquet(self.path / "rivers.geoparquet")
@@ -821,8 +817,10 @@ class SFINCSRootModel:
         )
 
         if write_figures:
+            # Use relative path to avoid duplicate folder creation by hydromt_sfincs
+            relative_fig_path = self.figures_path.relative_to(self.path)
             fig, _ = sf.plot_basemap(
-                fn_out=str((self.figures_path / "basemap.png").resolve()),
+                fn_out=str(relative_fig_path / "basemap.png"),
             )
             plt.close(fig)
 
@@ -2120,12 +2118,14 @@ class SFINCSSimulation:
         self.sfincs_model.config.write()
 
         if self.write_figures:
+            # Use relative paths to avoid duplicate folder creation by hydromt_sfincs
+            relative_fig_path = self.figures_path.relative_to(self.root_path)
             fig, _ = self.sfincs_model.plot_forcing(
-                fn_out=str(self.figures_path / "forcing.png")
+                fn_out=str(relative_fig_path / "forcing.png")
             )
             plt.close(fig)
             fig, _ = self.sfincs_model.plot_basemap(
-                fn_out=str(self.figures_path / "basemap.png"),
+                fn_out=str(relative_fig_path / "basemap.png"),
             )
             plt.close(fig)
 
@@ -2249,12 +2249,14 @@ class SFINCSSimulation:
         self.print_forcing_volume()
 
         if self.write_figures:
+            # Use relative paths to avoid duplicate folder creation by hydromt_sfincs
+            relative_fig_path = self.figures_path.relative_to(self.root_path)
             fig, _ = self.sfincs_model.plot_basemap(
-                fn_out=str(self.figures_path / "src_points_check.png"),
+                fn_out=str(relative_fig_path / "src_points_check.png"),
             )
             plt.close(fig)
             fig, _ = self.sfincs_model.plot_forcing(
-                fn_out=str(self.figures_path / "forcing.png")
+                fn_out=str(relative_fig_path / "forcing.png")
             )
             plt.close(fig)
 

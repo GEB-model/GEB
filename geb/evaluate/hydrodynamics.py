@@ -18,8 +18,7 @@ from hydromt_sfincs import SfincsModel
 from matplotlib.colors import BoundaryNorm, LightSource, ListedColormap
 from matplotlib.lines import Line2D
 from pyproj import Transformer
-from rasterio.features import geometry_mask, shapes
-from shapely.geometry import shape
+from rasterio.features import geometry_mask
 from rioxarray.exceptions import NoDataInBounds
 
 from geb.hazards.floods.workflows.utils import FLOOD_DEPTH_COLORS
@@ -1483,13 +1482,13 @@ class Hydrodynamics:
                             **metrics,
                         }
 
-                            performance_metrics_list.append(metrics_with_metadata)
-                            forecast_metrics_list.append(metrics)
-                            all_performance_metrics.append(metrics)
-                            print(
-                                "   Successfully evaluated: "
-                                f"{flood_map_path.name} vs {obs_file.name}"
-                            )
+                        performance_metrics_list.append(metrics_with_metadata)
+                        forecast_metrics_list.append(metrics)
+                        all_performance_metrics.append(metrics)
+                        print(
+                            "   Successfully evaluated: "
+                            f"{flood_map_path.name} vs {obs_file.name}"
+                        )
 
                 if performance_metrics_list:
                     performance_df = pd.DataFrame(performance_metrics_list)
