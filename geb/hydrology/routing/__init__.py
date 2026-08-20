@@ -485,9 +485,6 @@ class Routing(Module):
             rivers_gdf=self.var.rivers,
         )
 
-        # ---------------------------------------------------------------------
-        # Initialize persistent river storage state (Width-based depth assumption)
-        # ---------------------------------------------------------------------
         # Assume depth scales with river width (W / 20), clamped between 0.5 m and 3.0 m
         assumed_depth_m = np.clip(
             np.where(
@@ -505,7 +502,7 @@ class Routing(Module):
             self.var.observed_average_river_width,
         )
 
-        # Storage = Length * Width * Depth
+        # Storage = length * width * depth
         initial_storage = self.grid.var.river_length * assumed_width_m * assumed_depth_m
         initial_storage[self.grid.var.waterbody_ids != -1] = 0.0
 
@@ -703,7 +700,7 @@ class Routing(Module):
             )
         # after the first year, we calculate the alpha value based on the observed average river width and the discharge
         else:
-            average_discharge: ArrayFloat32 = (
+            average_discharge: ArrayFloat64 = (
                 self.var.sum_of_all_discharge_steps / (self.var.discharge_step_count)
             ).astype(np.float64)
             # re-arranged formula for alpha, where we use the observed average river width and the average discharge to calculate alpha

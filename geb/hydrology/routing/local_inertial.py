@@ -474,7 +474,6 @@ def _run_single_inertial_substep(
     # A reach's storage can be drained by both downstream forward discharge (Q[k] > 0)
     # and upstream tributary reverse backflow (Q[up_k] < 0).
     # If the combined outflow demands exceed available storage, scale all outflows leaving reach k proportionally
-    # to guarantee exact non-negative storage without unphysical damping or hidden resets.
     for k in range(n_inertial):
         i = n_kinematic + k
         curr_vol = max(
