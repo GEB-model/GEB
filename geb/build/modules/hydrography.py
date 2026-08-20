@@ -548,7 +548,7 @@ class Hydrography(BuildModelBase):
             subgrid_elevation.values,
             nodata=np.nan,
             latlon=True,
-            transform=subgrid_elevation.rio.transform(recalc=True),
+            transform=np.array(subgrid_elevation.rio.transform(recalc=True)),
         )
 
         surface_area_ratio_high_res = xr.DataArray(
@@ -756,7 +756,7 @@ class Hydrography(BuildModelBase):
         flow_raster_original = pyflwdir.from_array(
             original_d8_ldd_data,
             ftype="d8",
-            transform=original_d8_ldd.rio.transform(recalc=True),
+            transform=np.array(original_d8_ldd.rio.transform(recalc=True)),
             latlon=True,  # hydrography is specified in latlon
             mask=original_d8_ldd_data
             != original_d8_ldd.attrs[
@@ -818,7 +818,7 @@ class Hydrography(BuildModelBase):
             elevation.values,
             nodata=np.nan,
             latlon=True,
-            transform=elevation.rio.transform(recalc=True),
+            transform=np.array(elevation.rio.transform(recalc=True)),
         )
         # set slope to zero on the mask boundary
         slope_data[np.isnan(slope_data) & (~self.grid["mask"].data)] = 0
@@ -829,7 +829,7 @@ class Hydrography(BuildModelBase):
         flow_raster = FlwdirRaster(
             flow_raster_idxs_ds.values.ravel(),
             shape=flow_raster_idxs_ds.shape,
-            transform=flow_raster_idxs_ds.rio.transform(recalc=True),
+            transform=np.array(flow_raster_idxs_ds.rio.transform(recalc=True)),
             ftype="d8",
             latlon=True,
         )
@@ -1896,7 +1896,7 @@ class Hydrography(BuildModelBase):
             flow_direction_raster = pyflwdir.from_array(
                 ldd.values,
                 ftype="ldd",
-                transform=ldd.rio.transform(recalc=True),
+                transform=np.array(ldd.rio.transform(recalc=True)),
                 latlon=True,
             )
             downstream_indices = flow_direction_raster.idxs_ds.reshape(ldd.shape)

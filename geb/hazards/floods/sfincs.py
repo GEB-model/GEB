@@ -1200,7 +1200,7 @@ class SFINCSRootModel:
         elevation, d8 = fill_depressions(elevation, nodata=np.nan)
         flow_raster = pyflwdir.from_array(
             d8,
-            transform=self.elevation.rio.transform(),
+            transform=np.array(self.elevation.rio.transform()),
             latlon=self.is_geographic,
         )
 

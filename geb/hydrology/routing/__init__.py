@@ -202,7 +202,7 @@ def create_river_network(
         ftype="ldd",
         latlon=True,
         mask=mask,
-        transform=transform,
+        transform=np.array(transform),
     )
 
 
