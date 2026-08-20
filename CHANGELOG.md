@@ -1,9 +1,6 @@
 # dev
-- Added daily discharge KGE evaluation for winter, spring, summer, and autumn
-- Added an optional GRDC-Caravan integration to extract hydrological and geographical properties from GRDC Caravan (e.g. aridity, elevation etc).
-- simplified and improved the discharge evaluation
-- Reduced the default discharge-evaluation requirement from ten to five total years of valid paired observations and simulations; the paired values do not need to be continuous.
-- Replaced the external `scores` package dependency in discharge evaluation with in-project metric formulas for KGE, modified KGE, NSE, RMSE, and RRMSE.
+- Simplified discharge evaluation with in-project metrics, seasonal scores, publication exports, improved visualizations, and a five-year default paired record.
+- Added optional GRDC-Caravan catchment characteristics and made the minimum river slope configurable.
 - Implemented the `early_warning.py` module outside of `households.py`, launching the latest GEB-IbF system, including options for: area and building based warnings; warning communication weighted by socio-economic factor; time-dependent damage reduction.
 - Users need to run `setup_warning_communication_weights` to enable the warning communication efficiency based on socioeconomic factors.
 - Parameterization of settings in the `model.yml`. Increased overall efficiency and usability of the early warning system.

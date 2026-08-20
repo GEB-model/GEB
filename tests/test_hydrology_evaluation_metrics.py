@@ -1,14 +1,20 @@
 """Tests for hydrology evaluation metric calculations."""
 
+import logging
 import math
+from pathlib import Path
+from unittest.mock import Mock
 
+import geopandas as gpd
 import pandas as pd
 import pytest
 
 from geb.evaluate.hydrology import (
     DischargeMetrics,
     _calculate_discharge_validation_metrics,
+    _load_discharge_dashboard_characteristics,
 )
+from geb.evaluate.workflows import external_skill_scores
 
 
 def test_calculate_discharge_validation_metrics_known_values() -> None:
@@ -85,3 +91,47 @@ def test_calculate_discharge_validation_metrics_constant_observations() -> None:
     assert math.isnan(metrics.R2)
     assert metrics.RMSE == pytest.approx(math.sqrt(2.0 / 3.0))
     assert math.isnan(metrics.RRMSE)
+
+
+def test_dashboard_characteristics_are_optional(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that unavailable optional attributes do not block dashboard creation."""
+    fetch_mock: Mock = Mock(side_effect=RuntimeError("network unavailable"))
+    monkeypatch.setattr(
+        "geb.evaluate.hydrology.DataCatalog.fetch",
+        fetch_mock,
+    )
+
+    result: pd.DataFrame | None = _load_discharge_dashboard_characteristics(
+        evaluation_gdf=gpd.GeoDataFrame(),
+        logger=logging.getLogger(__name__),
+    )
+
+    assert result is None
+    fetch_mock.assert_called_once_with("GRDC_Caravan")
+
+
+@pytest.mark.parametrize(
+    ("input_folder", "expected_external_folder"),
+    [
+        (
+            Path("/model/input"),
+            Path("/model/external_evaluation_data"),
+        ),
+        (
+            Path("/models/merged/base/input"),
+            Path("/models/external_evaluation_data"),
+        ),
+    ],
+)
+def test_external_scores_use_model_root(
+    input_folder: Path,
+    expected_external_folder: Path,
+) -> None:
+    """Test external score discovery for ordinary and merged model layouts."""
+    external_folder: Path = external_skill_scores._get_external_evaluation_folder(
+        input_folder
+    )
+
+    assert external_folder == expected_external_folder

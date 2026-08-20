@@ -44,6 +44,24 @@ ARCHIVE_METRIC_FILES: dict[str, str] = {
 ARCHIVE_LEAD_TIME_COLUMN: str = "0"
 
 
+def _get_external_evaluation_folder(input_folder: Path) -> Path:
+    """Get the external score folder for ordinary and merged model layouts.
+
+    Args:
+        input_folder: Model input folder.
+
+    Returns:
+        Folder containing optional external evaluation data.
+    """
+    resolved_input_folder: Path = input_folder.resolve()
+    model_folder: Path = resolved_input_folder.parent
+    if model_folder.name == "base":
+        # Merged models use <models>/<merged name>/base/input, while ordinary
+        # models keep external data directly beside their input folder.
+        model_folder = model_folder.parents[1]
+    return model_folder / EXTERNAL_EVALUATION_FOLDER_NAME
+
+
 @dataclass(frozen=True)
 class MatchedSkillScores:
     """GEB and external scores aligned to the same gauging stations.
@@ -165,16 +183,15 @@ def load_external_skill_scores(
     """Read fixed local Utrecht, Google, and GloFAS skill-score files.
 
     Args:
-        input_folder: Input folder of a merged model. The shared external data
-            directory is in the top-level model folder, alongside ``merged/``.
+        input_folder: Model input folder. For a merged model, the shared external
+            data directory is in the top-level folder alongside the merged and
+            cluster model folders.
         logger: Logger used for diagnostics.
 
     Returns:
         External skill-score tables keyed by model label.
     """
-    external_evaluation_folder: Path = (
-        input_folder.resolve().parents[2] / EXTERNAL_EVALUATION_FOLDER_NAME
-    )
+    external_evaluation_folder: Path = _get_external_evaluation_folder(input_folder)
     if not external_evaluation_folder.is_dir():
         logger.info(
             "No optional external evaluation folder found at %s; showing GEB only.",

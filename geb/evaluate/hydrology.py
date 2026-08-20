@@ -66,7 +66,7 @@ METEOROLOGICAL_SEASONS: dict[str, tuple[int, ...]] = {
 def _load_discharge_dashboard_characteristics(
     evaluation_gdf: gpd.GeoDataFrame,
     logger: logging.Logger,
-) -> pd.DataFrame:
+) -> pd.DataFrame | None:
     """Load and prepare GRDC-Caravan attributes for the discharge dashboard.
 
     Args:
@@ -75,10 +75,20 @@ def _load_discharge_dashboard_characteristics(
 
     Returns:
         Station table containing the curated dashboard characteristics in
-        display units.
+        display units, or `None` when the optional data cannot be downloaded.
     """
     data_catalog: DataCatalog = DataCatalog(logger=logger)
-    attribute_df: pd.DataFrame = data_catalog.fetch("GRDC_Caravan").read()
+    try:
+        attribute_df: pd.DataFrame = data_catalog.fetch("GRDC_Caravan").read()
+    except RuntimeError as error:
+        # Catchment attributes enrich the dashboard but must not make the core
+        # discharge evaluation depend on network access.
+        logger.warning(
+            "GRDC-Caravan attributes are unavailable; creating the discharge "
+            "dashboard without catchment-characteristic layers: %s",
+            error,
+        )
+        return None
     enriched_df: pd.DataFrame = discharge_characteristics.enrich_discharge_evaluation(
         evaluation_df=evaluation_gdf,
         attribute_df=attribute_df,
@@ -2167,7 +2177,7 @@ class Hydrology:
 
                 dashboard_evaluation_gdf: gpd.GeoDataFrame = evaluation_gdf.copy()
                 _add_daily_discharge_metric_columns(dashboard_evaluation_gdf)
-                dashboard_characteristics: pd.DataFrame = (
+                dashboard_characteristics: pd.DataFrame | None = (
                     _load_discharge_dashboard_characteristics(
                         evaluation_gdf=dashboard_evaluation_gdf,
                         logger=self.model.logger,

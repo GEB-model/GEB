@@ -19,7 +19,7 @@ The hydrology evaluation module provides comprehensive tools to assess model per
 To use these for the evaluation, you can run them using geb evaluate. Below, you see an example for the evaluate_discharge methodology: 
 
 ```bash
-geb evaluate --method hydrology.evaluate_discharge --run-name default
+geb evaluate hydrology.evaluate_discharge --run-name default
 ```
 
 For more control, use additional options:
@@ -27,10 +27,10 @@ For more control, use additional options:
 | Option | Description | Default |
 | --- | --- | --- |
 | `--run-name` | Name of the simulation run to evaluate | `default` |
-| `--spinup-name` | Name of the spinup run | `spinup` |
-| `--include-spinup` | Include spinup period in evaluation | `False` |
-| `--include-yearly-plots` | Create plots for each year | `False` |
-| `--correct-q-obs` | Correct observed discharge for upstream area differences | `False` |
+| `--include-yearly-plots` | Create plots for each year | `True` |
+| `--correct-discharge-observations` | Correct simulated discharge for upstream-area differences | `False` |
+| `--create-plots` | Create station, dashboard, and skill-score plots | `True` |
+| `--include-return-period-plots` | Create detailed return-period plots | `False` |
 
 ## Discharge evaluation
 
@@ -49,11 +49,13 @@ The evaluation process:
 
 ### Performance metrics
 
-Three metrics are calculated for each station:
+The main metrics calculated for each station are:
 
 - **KGE** (Kling-Gupta Efficiency): Overall model performance (-∞ to 1, perfect = 1)
 - **NSE** (Nash-Sutcliffe Efficiency): How well model predicts observations (-∞ to 1, perfect = 1)
-- **R** (Correlation): Linear relationship between simulated and observed (-1 to 1, perfect = 1)
+- **KGE components**: Correlation, mean-flow bias, and variability ratios
+- **R2**: Squared Pearson correlation (0 to 1, perfect = 1)
+- **RMSE and RRMSE**: Absolute and variability-normalized errors
 
 ### Outputs
 
@@ -81,7 +83,7 @@ The evaluation creates an interactive dashboard showing performance metrics acro
 
 ### Required input data
 
-For discharge evaluation, your model must have been build and run, in which the following files are made in your model input folder: 
+For discharge evaluation, your model must have been built and run. The following files must be available:
 
 - Observed discharge data in the data catalog (`discharge/Q_obs`)
 - Gauging station locations snapped to river network (`discharge/discharge_snapped_locations`)
@@ -101,11 +103,11 @@ Use the observed mean flow as a simple benchmark for discharge evaluation:
 Run the GRDC-Caravan analysis after discharge evaluation:
 
 ```bash
-geb evaluate --method hydrology.plot_discharge_characteristics --run-name default
+geb evaluate hydrology.plot_discharge_characteristics --run-name default
 ```
 
 The combined figure reports Spearman associations with correlation `r`,
-mean-flow ratio `beta`, variability ratio `alpha`, and the original KGE. 
+mean-flow ratio `beta`, variability ratio `alpha`, and the original KGE.
 
 ### Publication-ready station simulations
 
@@ -113,7 +115,7 @@ After running discharge evaluation, create a self-contained folder for a later
 Zenodo deposition:
 
 ```bash
-geb evaluate --method hydrology.export_discharge_publication_data --run-name default
+geb evaluate hydrology.export_discharge_publication_data --run-name default
 ```
 
 The resulting `evaluate_discharge/publication_data/` folder contains one raw
@@ -148,7 +150,7 @@ The water balance evaluation analyzes inflows, outflows, and storage changes acr
 Visualize water balance components as a Sankey diagram:
 
 ```bash
-geb evaluate --method hydrology.water_circle --run-name default
+geb evaluate hydrology.plot_water_circle --run-name default
 ```
 
 Shows flows between precipitation, evaporation, runoff, and storage components.
@@ -158,7 +160,7 @@ Shows flows between precipitation, evaporation, runoff, and storage components.
 Calculate and plot all water balance components:
 
 ```bash
-geb evaluate --method hydrology.water_balance --run-name default 
+geb evaluate hydrology.plot_water_balance --run-name default
 ```
 Analyzes inflows, outflows, and storage changes across the model domain to verify water conservation.
 
