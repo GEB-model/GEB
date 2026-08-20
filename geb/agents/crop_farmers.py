@@ -909,6 +909,11 @@ class CropFarmers(AgentBaseClass):
             fill_value=-1,
         )
 
+        # Daily SPEI at every farmer location. Unlike the active-year index and
+        # yield-ratio reporters below, this is not a sparse decision-event
+        # reporter: ``update_daily_crop_decision_spei`` overwrites it every day.
+        # Keeping it in a DynamicArray makes it directly reportable as an agent
+        # variable and keeps it aligned when the farmer population changes.
         self.var.crop_decision_spei = DynamicArray(
             n=self.var.n,
             max_n=self.var.max_n,
@@ -2198,9 +2203,9 @@ class CropFarmers(AgentBaseClass):
         Note:
             The function also updates the drought risk perception and tracks disposable income.
         """
-        # Reset the decision reporters
+        # Reset only the sparse decision reporters. crop_decision_spei is a
+        # continuous daily state and is updated once at the start of step().
         self.var.crop_decision_active_year_index.fill(-1)
-        self.var.crop_decision_spei.fill(np.nan)
         self.var.crop_decision_yield_ratio.fill(np.nan)
 
         # Using the helper function to determine which crops are ready to be harvested
@@ -2510,10 +2515,12 @@ class CropFarmers(AgentBaseClass):
         self,
         deciding_farmers: np.ndarray,
     ) -> None:
-        """Record predictor values at the final-harvest decision moment.
+        """Record sparse predictor values at the calendar-advancement event.
 
         The active crop-calendar index is recorded before it is advanced. The
-        reporter time coordinate provides the exact predictor timestamp.
+        reporter time coordinate provides the exact event timestamp. SPEI is
+        deliberately not written here: ``crop_decision_spei`` is now sampled
+        daily and later re-anchored to the selected ML predictor timestamp.
         """
         deciding_farmers = np.asarray(deciding_farmers, dtype=np.int64)
 
@@ -2569,33 +2576,28 @@ class CropFarmers(AgentBaseClass):
                 f"active_indices={invalid_indices.tolist()}."
             )
 
-        latest_spei = np.asarray(
-            self.var.latest_harvest_spei[deciding_farmers],
+        current_daily_spei = np.asarray(
+            self.var.crop_decision_spei[deciding_farmers],
             dtype=np.float32,
         )
         latest_yield_ratio = np.asarray(
             self.var.latest_harvest_yield_ratio[deciding_farmers],
             dtype=np.float32,
         )
-        finite_decision_values = np.isfinite(latest_spei) & np.isfinite(
+        finite_decision_values = np.isfinite(current_daily_spei) & np.isfinite(
             latest_yield_ratio
         )
         if not np.all(finite_decision_values):
             invalid_farmers = deciding_farmers[~finite_decision_values][:20]
             self._handle_crop_decision_structure_problem(
-                "SPEI and yield ratio must both be updated before a crop decision "
+                "Daily SPEI and yield ratio must both be updated before a crop decision "
                 "is recorded. Non-finite values were found for farmers "
                 f"{invalid_farmers.tolist()}."
             )
 
         reporters_are_reset = (
-            (
-                np.asarray(self.var.crop_decision_active_year_index[deciding_farmers])
-                == -1
-            )
-            & np.isnan(np.asarray(self.var.crop_decision_spei[deciding_farmers]))
-            & np.isnan(np.asarray(self.var.crop_decision_yield_ratio[deciding_farmers]))
-        )
+            np.asarray(self.var.crop_decision_active_year_index[deciding_farmers]) == -1
+        ) & np.isnan(np.asarray(self.var.crop_decision_yield_ratio[deciding_farmers]))
         if not np.all(reporters_are_reset):
             invalid_farmers = deciding_farmers[~reporters_are_reset][:20]
             raise AssertionError(
@@ -2709,7 +2711,6 @@ class CropFarmers(AgentBaseClass):
         )
 
         self.var.crop_decision_active_year_index[deciding_farmers] = active_year_indices
-        self.var.crop_decision_spei[deciding_farmers] = latest_spei
         self.var.crop_decision_yield_ratio[deciding_farmers] = latest_yield_ratio
 
         if not np.array_equal(
@@ -2722,14 +2723,14 @@ class CropFarmers(AgentBaseClass):
             raise AssertionError("The active calendar index reporter was not written.")
         if not np.allclose(
             np.asarray(self.var.crop_decision_spei[deciding_farmers]),
-            latest_spei,
+            current_daily_spei,
         ) or not np.allclose(
             np.asarray(self.var.crop_decision_yield_ratio[deciding_farmers]),
             latest_yield_ratio,
         ):
             raise AssertionError(
-                "Decision SPEI/yield reporters do not equal the values available "
-                "at the decision moment."
+                "Daily SPEI or the sparse yield reporter changed unexpectedly "
+                "while recording the crop-calendar advancement event."
             )
 
     def _advance_crop_calendar_after_last_harvest(
@@ -3501,8 +3502,45 @@ class CropFarmers(AgentBaseClass):
         # Add the annual cost to the total loan annual costs
         self.var.all_loans_annual_cost.data[:, -1, 0] += annual_cost_water_energy
 
+    def update_daily_crop_decision_spei(self) -> None:
+        """Sample current SPEI once for every farmer on every model day.
+
+        This array is a continuous daily predictor. It is intentionally kept
+        independent of crop-calendar advancement events so an ML sample can be
+        anchored to any admissible pre-planting decision date. Harvest-time SPEI
+        reuses this same sample to avoid a second map lookup on harvest days.
+        """
+        if self.var.n == 0:
+            return
+
+        current_spei = np.asarray(
+            sample_from_map(
+                array=self.model.hydrology.grid.spei_uncompressed,
+                coords=self.var.locations.data,
+                gt=self.grid.gt,
+            ),
+            dtype=np.float32,
+        ).reshape(-1)
+
+        if current_spei.shape != (self.var.n,):
+            raise AssertionError(
+                "Daily crop-decision SPEI sampling returned an unexpected shape: "
+                f"expected {(self.var.n,)}, found {current_spei.shape}."
+            )
+
+        finite = np.isfinite(current_spei)
+        if not np.all(finite):
+            invalid_farmers = np.flatnonzero(~finite)[:20]
+            self._handle_crop_decision_structure_problem(
+                "Daily crop-decision SPEI contains non-finite values for farmer "
+                f"indices {invalid_farmers.tolist()} on "
+                f"{self.model.current_time:%Y-%m-%d}."
+            )
+
+        self.var.crop_decision_spei[:] = current_spei
+
     def save_harvest_spei(self, harvesting_farmers: npt.NDArray[np.bool_]) -> None:
-        """Update monthly SPEI by shifting history and adding the current month.
+        """Save harvest-day SPEI from the already sampled daily farmer values.
 
         Updates ``monthly_SPEI``-related state in place using the current SPEI
         sampled at harvesting farmers' locations.
@@ -3511,12 +3549,19 @@ class CropFarmers(AgentBaseClass):
             harvesting_farmers: Boolean mask of farmers
                 who are harvesting this step.
         """
-        spei = self.model.hydrology.grid.spei_uncompressed
-        current_SPEI_per_farmer = sample_from_map(
-            array=spei,
-            coords=self.var.locations[harvesting_farmers],
-            gt=self.grid.gt,
+        current_SPEI_per_farmer = np.asarray(
+            self.var.crop_decision_spei[harvesting_farmers],
+            dtype=np.float32,
         )
+
+        if not np.all(np.isfinite(current_SPEI_per_farmer)):
+            invalid_farmers = np.flatnonzero(harvesting_farmers)[
+                ~np.isfinite(current_SPEI_per_farmer)
+            ][:20]
+            self._handle_crop_decision_structure_problem(
+                "Harvest-day SPEI is missing from the daily crop-decision SPEI "
+                f"state for farmers {invalid_farmers.tolist()}."
+            )
 
         # Save harvest for the decision day
         self.var.latest_harvest_spei[harvesting_farmers] = current_SPEI_per_farmer
@@ -5759,6 +5804,9 @@ class CropFarmers(AgentBaseClass):
             return
 
         timer = TimingModule("crop_farmers")
+
+        self.update_daily_crop_decision_spei()
+        timer.finish_split("daily crop-decision SPEI")
 
         self.harvest()
         timer.finish_split("harvest")
