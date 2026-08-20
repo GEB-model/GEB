@@ -1,5 +1,4 @@
 # dev
-- Fixed FABDEM data catalog adapter to work with new HuggingFace bucket structure (GeoTIFFs moved from datasets repository to public bucket).
 - Implemented the `early_warning.py` module outside of `households.py`, launching the latest GEB-IbF system, including options for: area and building based warnings; warning communication weighted by socio-economic factor; time-dependent damage reduction.
 - Users need to run `setup_warning_communication_weights` to enable the warning communication efficiency based on socioeconomic factors.
 - Parameterization of settings in the `model.yml`. Increased overall efficiency and usability of the early warning system.
