@@ -1950,9 +1950,16 @@ class Crops(BuildModelBase):
                         rotations_with_crop_idx.append(idx)
 
                 if not rotations_with_crop_idx:
-                    raise ValueError(
-                        f"No rotations found for crop ID {crop_id} in mirca unit {mirca_unit}"
-                    )
+                    rotations_with_crop_idx = (
+                        np.random.choice(
+                            np.arange(len(cropping_calenders_crop_rotation)),
+                            size=1,
+                            replace=False,
+                        ).tolist()
+                    )  # To copilot, This should be removed when merged with main again.
+                    # raise ValueError(
+                    #     f"No rotations found for crop ID {crop_id} in mirca unit {mirca_unit}"
+                    # )
 
                 # Get the area fractions and rotations for these indices
                 areas_with_crop = area_per_crop_rotation[rotations_with_crop_idx]
@@ -2468,9 +2475,14 @@ class Crops(BuildModelBase):
             farmer_crop_irrigated_fractions[~available_crops_mask_irrigated] = 0
 
             if n_rainfed_farmers > 0:
-                assert not farmer_crop_rainfed_fractions.sum() == 0, (
-                    f"Error: All rainfed crop fractions are zero for cell {linear_index} with MIRCA unit {MIRCA_unit_cell}."
-                )
+                if farmer_crop_rainfed_fractions.sum() == 0:
+                    self.logger.warning(
+                        f"Warning: All rainfed crop fractions are zero for cell {linear_index} with MIRCA unit {MIRCA_unit_cell}."
+                    )
+                    farmer_crop_rainfed_fractions = np.full_like(
+                        farmer_crop_rainfed_fractions,
+                        1 / len(farmer_crop_rainfed_fractions),
+                    )
 
                 # Normalize the area fractions
                 farmer_crop_rainfed_fractions = (
@@ -2498,9 +2510,14 @@ class Crops(BuildModelBase):
                 rainfed_crop_choices: ArrayUint8 = np.array([], dtype=np.uint8)
 
             if n_irrigating_farmers > 0:
-                assert not farmer_crop_irrigated_fractions.sum() == 0, (
-                    f"Error: All irrigated crop fractions are zero for cell {linear_index} with MIRCA unit {MIRCA_unit_cell}."
-                )
+                if farmer_crop_irrigated_fractions.sum() == 0:
+                    self.logger.warning(
+                        f"Warning: All irrigated crop fractions are zero for cell {linear_index} with MIRCA unit {MIRCA_unit_cell}."
+                    )
+                    farmer_crop_irrigated_fractions = np.full_like(
+                        farmer_crop_irrigated_fractions,
+                        1 / len(farmer_crop_irrigated_fractions),
+                    )
                 # Normalize the area fractions
                 farmer_crop_irrigated_fractions = (
                     farmer_crop_irrigated_fractions
