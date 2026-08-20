@@ -1,4 +1,4 @@
-"""Local adapter for HRL-compatible generated Croplands tiles."""
+"""Local adapter for HRL-layout-compatible generated Croplands tiles."""
 
 from __future__ import annotations
 
@@ -18,19 +18,57 @@ from .base import Adapter
 
 
 HRL_OUTSIDE_AREA_CODE = 65535
+HRL_CONFIDENCE_OUTSIDE_AREA_CODE = 255
 
 
 class LocalHRLCroplands(Adapter):
-    """Read locally generated CTY or CPSCT tiles using the HRL layout.
+    """Read locally generated CTY, CTYCL or CPSCT tiles using the HRL layout.
 
-    The adapter expects files below ``self.root / str(year)`` with names such as::
+    The adapter expects files below ``self.root / str(year)``. With the normal
+    adapter settings ``folder="local_hrl_croplands"`` and ``local_version=1``,
+    ``self.root`` resolves to::
+
+        ${GEB_DATA_ROOT}/local_hrl_croplands/v1
+
+    The post-processing publisher writes files such as::
 
         CLMS_HRLVLCC_CTY_S2024_R10m_E40N30_03035_V01_R00.tif
-        CLMS_HRLVLCC_CPSCT_S2024_R10m_E40N30_03035_V01_R00.tif
+        CLMS_HRLVLCC_CTYCL_S2024_R10m_E40N30_03035_V01_R00.tif
 
-    It implements the same ``fetch(...).read(...)`` surface used by the existing
-    Europe HRL workflow, but it never contacts WEkEO.
+    ``CPSCT`` remains supported for backwards compatibility with locally generated
+    secondary-crop products.
+
+    Important:
+        Published AlphaEarth-derived ``CTY`` tiles use the GEB raster encoding
+        stored in their GeoTIFF metadata (normally ``0=no cropland``, ``1..26 =
+        GEB crop_id + 1`` and ``65535=outside area``). The HRL-compatible naming
+        and grid do not imply that these generated values use the official HRL CTY
+        class codes.
+
+    The adapter implements the same ``fetch(...).read(...)`` surface used by the
+    existing Europe HRL workflow, but it never contacts WEkEO.
     """
+
+    _PRODUCT_SETTINGS: dict[str, dict[str, Any]] = {
+        "CTY": {
+            "dtype": np.uint16,
+            "nodata": HRL_OUTSIDE_AREA_CODE,
+            "normalized_nodata": 0,
+            "name": "crop_type",
+        },
+        "CPSCT": {
+            "dtype": np.uint16,
+            "nodata": HRL_OUTSIDE_AREA_CODE,
+            "normalized_nodata": 0,
+            "name": "secondary_crop",
+        },
+        "CTYCL": {
+            "dtype": np.uint8,
+            "nodata": HRL_CONFIDENCE_OUTSIDE_AREA_CODE,
+            "normalized_nodata": 0,
+            "name": "crop_type_confidence",
+        },
+    }
 
     def __init__(
         self,
@@ -42,20 +80,26 @@ class LocalHRLCroplands(Adapter):
 
         Args:
             *args: Positional arguments passed to :class:`Adapter`.
-            product_code: ``"CTY"`` or ``"CPSCT"``.
+            product_code: ``"CTY"``, ``"CTYCL"`` or ``"CPSCT"``.
             **kwargs: Standard adapter settings such as ``folder``,
                 ``local_version``, ``filename``, and ``cache``.
         """
         super().__init__(*args, **kwargs)
-        if product_code not in {"CTY", "CPSCT"}:
-            raise ValueError("product_code must be 'CTY' or 'CPSCT'.")
-        self.product_code = product_code
+        normalized_product = str(product_code).strip().upper()
+        if normalized_product not in self._PRODUCT_SETTINGS:
+            raise ValueError("product_code must be 'CTY', 'CTYCL' or 'CPSCT'.")
+        self.product_code = normalized_product
         self.tile_ids: list[str] = []
         self.year: int | None = None
         self.bounds: tuple[float, float, float, float] | None = None
 
+    @property
+    def _product_settings(self) -> dict[str, Any]:
+        """Return dtype/nodata/output-name settings for the selected product."""
+        return self._PRODUCT_SETTINGS[self.product_code]
+
     def _year_directory(self, year: int) -> Path:
-        """Return the local directory containing one generated HRL year."""
+        """Return the local directory containing one generated HRL-layout year."""
         return Path(self.root) / str(int(year))
 
     def _candidate_paths(self, year: int) -> list[Path]:
@@ -165,28 +209,39 @@ class LocalHRLCroplands(Adapter):
             bounds: WGS84 bounds as ``(min_lon, min_lat, max_lon, max_lat)``.
             year: Generated year to read.
             dst_crs: Optional output CRS.
-            normalize_nodata: Convert the HRL outside-area code 65535 to 0.
+            normalize_nodata: Replace the product's outside-area value with 0.
+                For ``CTYCL`` this intentionally makes outside-area pixels
+                indistinguishable from 0% confidence, so callers should normally
+                retain the default ``False`` and use the matching CTY mask.
             chunks: Optional rioxarray/dask chunk mapping.
             **_: Ignored compatibility arguments.
 
         Returns:
             Two-dimensional merged HRL-compatible raster.
         """
-        if self.year != int(year) or self.bounds != tuple(float(v) for v in bounds):
+        normalized_bounds = tuple(float(value) for value in bounds)
+        if self.year != int(year) or self.bounds != normalized_bounds:
             self.fetch(url=None, bounds=bounds, year=year)
 
+        settings = self._product_settings
+        nodata = int(settings["nodata"])
+        dtype = settings["dtype"]
+
         arrays: list[xr.DataArray] = []
+        source_paths: list[Path] = []
         for tile_id in self.tile_ids:
+            tile_path = self._tile_path(tile_id, int(year))
             raster = rioxarray.open_rasterio(
-                self._tile_path(tile_id, int(year)),
+                tile_path,
                 masked=False,
                 chunks=chunks,
             )
             if raster.sizes.get("band", 0) != 1:
                 raise ValueError(f"Generated HRL tile {tile_id} must contain one band.")
             arrays.append(raster.squeeze("band", drop=True))
+            source_paths.append(tile_path)
 
-        merged = merge_arrays(arrays, nodata=HRL_OUTSIDE_AREA_CODE)
+        merged = merge_arrays(arrays, nodata=nodata)
         projected_bounds = transform_bounds(
             "EPSG:4326",
             merged.rio.crs,
@@ -205,16 +260,34 @@ class LocalHRLCroplands(Adapter):
             merged = merged.rio.reproject(
                 dst_crs,
                 resampling=Resampling.nearest,
-                nodata=HRL_OUTSIDE_AREA_CODE,
+                nodata=nodata,
             )
 
         if normalize_nodata:
-            merged = xr.where(merged == HRL_OUTSIDE_AREA_CODE, 0, merged)
-            merged = merged.astype(np.uint16)
-            merged = merged.rio.write_nodata(0)
+            normalized_nodata = int(settings["normalized_nodata"])
+            merged = xr.where(merged == nodata, normalized_nodata, merged)
+            merged = merged.astype(dtype)
+            merged = merged.rio.write_nodata(normalized_nodata)
         else:
-            merged = merged.astype(np.uint16)
-            merged = merged.rio.write_nodata(HRL_OUTSIDE_AREA_CODE)
+            merged = merged.astype(dtype)
+            merged = merged.rio.write_nodata(nodata)
 
-        merged.name = "crop_type" if self.product_code == "CTY" else "secondary_crop"
+        # Preserve the generated encoding/provenance tags in an easily inspectable
+        # form after rioxarray's multi-tile merge. Values come from the first tile;
+        # publication keeps the encoding consistent across the catalogue.
+        if source_paths:
+            with rasterio.open(source_paths[0]) as source:
+                source_tags = source.tags()
+            for key in (
+                "RASTER_ENCODING",
+                "GEB_CROP_CODE_OFFSET",
+                "GEB_FALLBACK_ANNUAL_CODE",
+                "GEB_FALLBACK_PERMANENT_CODE",
+                "LOCAL_HRL_GENERATED",
+                "CATALOG_PRODUCT_CODE",
+            ):
+                if key in source_tags:
+                    merged.attrs[key] = source_tags[key]
+
+        merged.name = str(settings["name"])
         return merged
