@@ -24,6 +24,7 @@ authors = [
     {name = "Joshua Kiesel", email = "j.kiesel@vu.nl"},
 ]
 dependencies = [
+    "affine<3.0",  # release pin when 0.5.13 of pyflwdir or higher is released
     "cartopy==0.24.1", # pin until https://github.com/SciTools/cartopy/issues/2577 is fixed
     "cfgrib>=0.9.14",
     "click>=8.1.8",
@@ -37,10 +38,10 @@ dependencies = [
     "hydromt-sfincs==2.0.0rc3",
     "mcp",
     "networkx",
-    "numba>=0.63.0",
+    "numba>=0.67.0",
     "numpy>=2.1",
     "openpyxl>=3.1.2",
-    "pandas>=3.0.0", # we get some errors with pandas 3.0. Currently working on solving all warnings on 2.3 to make transition smooth. See: https://pandas.pydata.org/docs/dev/user_guide/migration.html
+    "pandas>=3.0.0",
     "pyarrow>=17.0.0",
     "pyflwdir>=0.5.11",
     "pyogrio>=0.9.0",
