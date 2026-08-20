@@ -441,21 +441,7 @@ def calculate_performance_metrics(
                     f"CSI = {csi_pct:.2f} %",
                 ]
             )
-            from matplotlib.legend_handler import HandlerBase, HandlerEmpty
-
-            class TextOnlyHandler(HandlerBase):
-                def create_artists(
-                    self,
-                    legend,
-                    orig_handle,
-                    xdescent,
-                    ydescent,
-                    width,
-                    height,
-                    fontsize,
-                    trans,
-                ):
-                    return []
+            from matplotlib.legend_handler import HandlerEmpty
 
             # Create a single legend
             legend = ax.legend(

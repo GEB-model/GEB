@@ -215,6 +215,7 @@ class RiverDepthConfig(BaseModel):
 
 class RoutingConfig(BaseModel):
     """Configuration for routing."""
+
     retention_basin_release_threshold_factor: float = Field(
         0.9,
         description="Factor to multiply the activation threshold by to get the release threshold.",

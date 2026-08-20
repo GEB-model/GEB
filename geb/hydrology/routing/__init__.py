@@ -1,12 +1,12 @@
 """Routing algorithms for river networks."""
 
+import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
-from datetime import datetime
+
 import geopandas as gpd
 import numpy as np
 import pandas as pd
-import warnings
 import pyflwdir
 from affine import Affine
 from numba import njit
@@ -1323,7 +1323,6 @@ class Routing(Module):
                 )
                 self.retention_activation_threshold_m3_s[basin_id] = np.inf
             else:
-
                 if not self.retention_basin_is_active[basin_id]:
                     self.retention_activation_threshold_m3_s[basin_id] = np.inf
                 else:

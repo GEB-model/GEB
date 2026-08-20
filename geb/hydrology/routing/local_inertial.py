@@ -19,6 +19,8 @@ from geb.geb_types import (
     TwoDArrayInt32,
 )
 
+from .routerbase import Router, compute_retention_routing
+
 MAX_ITERS: int = 10
 
 
@@ -123,9 +125,6 @@ def update_node_kinematic(
         count += 1
 
     return new_discharge, actual_evaporation_m3_s
-
-
-from .routerbase import Router, compute_retention_routing
 
 
 @njit(parallel=False, cache=True, fastmath=True, inline="always")
