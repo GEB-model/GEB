@@ -41,6 +41,9 @@ hazards:
       - 250
       - 500
       - 1000
+    flood_protection_standard:
+      mode: 'auto' # "auto" (default) or "manual"". If "auto", the value will be automatically determined based on the flood protection standards table. If "manual", the value must be set in the config file.
+      manual_value: 10 # if "manual" is selected, this value is used as the flood protection standard in years.
     hydrograph_shape:
       method: triangular  # triangular (default), direct, or anchor
       # window_days: 3.5  # days before AND after peak to extract (total window = 2 × window_days; default 3.5 → ±3.5 days = 7 days total)
@@ -84,6 +87,9 @@ agent_settings:
     plant_forest: false  # default false. Enable (true) for forest planting policy for reforestation scenarios
     adaptation:
       enabled: false # default false. Enable (true) for government adaptation policy. 
+      mode: "threshold"  # "cba" for cost-benefit analysis, "threshold" for threshold-based adaptation
+      dike_elevation_cost_per_meter_usd: 6800  # "Unit cost for raising a dike by 1 meter over 1 meter length (USD/m).",
+      dike_maintenance_cost_per_year_usd: 80  # "Maintenance cost for a dike segment of 1 meter length (USD/year).",
       EAD_threshold: 1000000  # in euros (currrently arbitrary)
       equity_indicator_threshold: 0.5  # between 0 and 1, where 1 means perfect equality (currrently arbitrary)
       ecosystem_indicator_threshold: 0.5  # between 0 and 1, where 1 means healthy ecosystem (currrently arbitrary)
