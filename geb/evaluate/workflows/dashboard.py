@@ -3,6 +3,7 @@
 import hashlib
 import html
 import json
+import logging
 import math
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
@@ -50,8 +51,6 @@ _CHARACTERISTIC_COLORS: list[str] = [
     "#7AD151",
     "#FDE725",
 ]
-_CHARACTERISTIC_MISSING_COLOR: str = "#B8BEC7"
-_CHARACTERISTIC_ZERO_COLOR: str = "#EEE8DD"
 _CARAVAN_AVAILABLE_COLOR: str = "#1B9E77"
 _CARAVAN_UNAVAILABLE_COLOR: str = "#9CA3AF"
 _CHARACTERISTIC_COLORMAP: cm.LinearColormap = cm.LinearColormap(
@@ -199,88 +198,42 @@ def _as_finite_float(value: float | int | np.floating | None) -> float | None:
     return float_value if np.isfinite(float_value) else None
 
 
-def _characteristic_color_statistics(
+def _prepare_characteristic_values(
     values: pd.Series,
-    characteristic: Characteristic,
-) -> dict[str, float | int | bool | list[float]]:
-    """Calculate distribution summaries for a characteristic map legend.
+) -> tuple[dict[str, int | list[float]], pd.Series] | None:
+    """Prepare legend values and percentile ranks for one characteristic.
 
     Map colours use empirical percentile ranks rather than raw-value intervals,
-    so skewed variables retain spatial contrast across their observed range.
-    For variables where zero means absence, the reference distribution contains
-    positive values only and zero is reported as a separate category.
+    so skewed variables retain spatial contrast. Zero is a valid observed value
+    and is ranked consistently with every other finite value.
 
     Args:
         values: Characteristic values in display units.
-        characteristic: Characteristic metadata, including zero handling.
 
     Returns:
-        Reference quantiles and counts in display units.
-
-    Raises:
-        ValueError: If fewer than two finite, distinct ranked values are available.
-    """
-    numeric_values: pd.Series = pd.to_numeric(values, errors="coerce")
-    valid_values: pd.Series = numeric_values.loc[np.isfinite(numeric_values)]
-    ranked_values: pd.Series = (
-        valid_values.loc[valid_values != 0.0]
-        if characteristic.zero_is_distinct
-        else valid_values
-    )
-    if len(ranked_values) < 2 or ranked_values.nunique() < 2:
-        raise ValueError(
-            f"Characteristic {characteristic.column} needs two distinct values."
-        )
-    reference_values: np.ndarray = np.nanpercentile(
-        ranked_values.to_numpy(dtype=float), [0.0, 25.0, 50.0, 75.0, 100.0]
-    )
-    return {
-        "reference_values": reference_values.astype(float).tolist(),
-        "available_count": int(len(valid_values)),
-        "missing_count": int(len(numeric_values) - len(valid_values)),
-        "ranked_count": int(len(ranked_values)),
-        "zero_count": int((valid_values == 0.0).sum()),
-        "zero_is_distinct": characteristic.zero_is_distinct,
-    }
-
-
-def _characteristic_percentile_ranks(
-    values: pd.Series,
-    characteristic: Characteristic,
-) -> pd.Series:
-    """Rank finite characteristic values from zero to 100 percent.
-
-    Ties receive their average empirical rank. When zero denotes absence, zero
-    values remain unranked so the positive range uses the complete colour scale.
-
-    Args:
-        values: Characteristic values in display units.
-        characteristic: Characteristic metadata, including zero handling.
-
-    Returns:
-        Percentile ranks (percent), aligned to ``values``; missing and distinct
-        zero values are represented by NaN.
+        Legend statistics and aligned percentile ranks, or `None` when fewer
+        than two distinct finite values are available.
     """
     numeric_values: pd.Series = pd.to_numeric(values, errors="coerce")
     finite_values: pd.Series = numeric_values.where(np.isfinite(numeric_values))
-    ranked_values: pd.Series = (
-        finite_values.where(finite_values != 0.0)
-        if characteristic.zero_is_distinct
-        else finite_values
-    )
-    valid_values: pd.Series = ranked_values.dropna()
-    percentile_ranks: pd.Series = pd.Series(np.nan, index=values.index, dtype=float)
-    if valid_values.empty:
-        return percentile_ranks
-    if len(valid_values) == 1:
-        percentile_ranks.loc[valid_values.index] = 50.0
-        return percentile_ranks
+    valid_values: pd.Series = finite_values.dropna()
+    if len(valid_values) < 2 or valid_values.nunique() < 2:
+        return None
 
+    reference_values: np.ndarray = np.nanpercentile(
+        valid_values.to_numpy(dtype=float), [0.0, 25.0, 50.0, 75.0, 100.0]
+    )
+    percentile_ranks: pd.Series = pd.Series(np.nan, index=values.index, dtype=float)
     average_ranks: pd.Series = valid_values.rank(method="average")
     percentile_ranks.loc[valid_values.index] = (
         (average_ranks - 1.0) / (len(valid_values) - 1.0) * 100.0
     )
-    return percentile_ranks
+    statistics: dict[str, int | list[float]] = {
+        "reference_values": reference_values.astype(float).tolist(),
+        "missing_count": int(len(numeric_values) - len(valid_values)),
+        "ranked_count": int(len(valid_values)),
+    }
+    return statistics, percentile_ranks
 
 
 def _build_characteristic_layer_payload(
@@ -325,19 +278,13 @@ def _build_characteristic_layer_payload(
     for characteristic in DASHBOARD_CHARACTERISTICS:
         if characteristic.column not in characteristic_index.columns:
             continue
-        try:
-            statistics: dict[str, float | int | bool | list[float]] = (
-                _characteristic_color_statistics(
-                    characteristic_index[characteristic.column], characteristic
-                )
-            )
-        except ValueError:
-            continue
-        percentile_by_characteristic[characteristic.column] = (
-            _characteristic_percentile_ranks(
-                characteristic_index[characteristic.column], characteristic
-            )
+        prepared_values: tuple[dict[str, int | list[float]], pd.Series] | None = (
+            _prepare_characteristic_values(characteristic_index[characteristic.column])
         )
+        if prepared_values is None:
+            continue
+        statistics, percentile_ranks = prepared_values
+        percentile_by_characteristic[characteristic.column] = percentile_ranks
         characteristic_configs.append(
             {
                 "column": characteristic.column,
@@ -454,7 +401,7 @@ def _build_return_period_payload(
         Returns empty lists if the fit fails or the series is too short.
     """
     try:
-        model = ReturnPeriodModel(
+        model: ReturnPeriodModel = ReturnPeriodModel(
             series=series,
             return_periods=return_periods_years,
             fixed_shape=0.0,
@@ -470,7 +417,12 @@ def _build_return_period_payload(
                 for value in model.rl_table["GPD_POT_RL"].to_numpy(dtype=float)
             ],
         }
-    except Exception:
+    except Exception as error:
+        # A failed extreme-value fit should not remove otherwise valid station
+        # charts, but it must remain visible to users diagnosing the output.
+        logging.getLogger(__name__).warning(
+            "Could not fit dashboard return periods: %s", error
+        )
         return {"returnPeriod": [], "discharge": []}
 
 
@@ -945,9 +897,7 @@ def _inject_station_layer_legend_script(
                 "maximum": 100.0,
                 "reference_values": characteristic["reference_values"],
                 "ranked_count": characteristic["ranked_count"],
-                "zero_count": characteristic["zero_count"],
                 "missing_count": characteristic["missing_count"],
-                "zero_is_distinct": characteristic["zero_is_distinct"],
                 "show": False,
             }
         )
@@ -1025,9 +975,6 @@ def _inject_station_layer_legend_script(
       ticks = config.reference_values;
       detail = '<div class="geb-metric-note">Colour shows empirical percentile rank (n=' +
         config.ranked_count + '); ticks are values at ranks 0 / 25 / 50 / 75 / 100.</div>' +
-        (config.zero_is_distinct && config.zero_count > 0 ?
-          '<div class="geb-categorical-key"><i style="background:#EEE8DD"></i>' +
-          'Zero / none (n=' + config.zero_count + ')</div>' : '') +
         '<div class="geb-metric-note">Missing value: n=' + config.missing_count + '</div>';
     }
     legendRoot.innerHTML = '<b>' + config.name + '</b>' +
@@ -1221,16 +1168,11 @@ def _add_characteristic_station_markers(
         percentile: float | None = station_record["percentiles"][
             characteristic["column"]
         ]
-        distinct_zero: bool = bool(characteristic["zero_is_distinct"]) and value == 0
-        if distinct_zero:
-            fill_color: str = _CHARACTERISTIC_ZERO_COLOR
-            rank_text: str = "zero / none"
-        elif percentile is not None:
-            fill_color = _CHARACTERISTIC_COLORMAP(percentile)
-            rank_text = f"percentile rank {percentile:.0f}"
-        else:
-            fill_color = _CHARACTERISTIC_MISSING_COLOR
-            rank_text = "rank unavailable"
+        assert percentile is not None, (
+            f"Finite characteristic {characteristic['column']} has no rank."
+        )
+        fill_color: str = _CHARACTERISTIC_COLORMAP(percentile)
+        rank_text: str = f"percentile rank {percentile:.0f}"
         marker_names.append(
             _add_station_marker(
                 layer=layer,
@@ -1370,7 +1312,7 @@ def create_discharge_folium_map(
     folium.GeoJson(
         region_geom,
         name="Catchment",
-        style_function=lambda feature: {
+        style_function=lambda _feature: {
             "fillColor": "none",
             "color": "black",
             "weight": 2,
@@ -1386,7 +1328,7 @@ def create_discharge_folium_map(
     folium.GeoJson(
         rivers_for_map[["geometry"]].to_json(),
         name="Rivers",
-        style_function=lambda feature: {
+        style_function=lambda _feature: {
             "color": "#4A90D9",
             "weight": 1.0,
             "opacity": 0.6,
@@ -1459,7 +1401,7 @@ def create_discharge_folium_map(
         evaluation_gdf["upstream_area_GEB"].max()
     )
 
-    popup_width = 800
+    popup_width: int = 800
     station_marker_index: list[StationMarkerIndex] = []
 
     for station_id, row in evaluation_gdf.iterrows():
@@ -1471,11 +1413,11 @@ def create_discharge_folium_map(
             else station_id_str
         )
         escaped_station_id: str = html.escape(station_id_str, quote=True)
-        popup_html = (
+        popup_html: str = (
             f"<div class='geb-popup' data-station-id='{escaped_station_id}' "
             f"style='width:{popup_width}px;'>Loading interactive charts...</div>"
         )
-        tooltip = f"{station_id_str}: {station_name}"
+        tooltip: str = f"{station_id_str}: {station_name}"
 
         # Scale circle radius by upstream area (range 5–10 px).
         circle_radius: float = (
@@ -1492,7 +1434,7 @@ def create_discharge_folium_map(
         )
 
         if layer_upstream is not None and colormap_upstream is not None:
-            color_upstream = colormap_upstream(
+            color_upstream: str | tuple[int, int, int, int] = colormap_upstream(
                 float(row["discharge_observations_to_GEB_upstream_area_ratio"])
             )
             if isinstance(color_upstream, str) and color_upstream != "nan":

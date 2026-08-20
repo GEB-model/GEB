@@ -13,7 +13,6 @@ import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import seaborn as sns
 from matplotlib import colormaps as mcolormaps
 from matplotlib.collections import LineCollection
 from matplotlib.lines import Line2D
@@ -702,7 +701,6 @@ def _set_outflow_axis_limits(
 def _plot_outflow_discharge_timeseries(
     model: Any,
     output_folder: Path,
-    run_name: str,
     eval_plot_folder: Path,
 ) -> int:
     """Plot modeled outflow discharge time series without validation overlays.
@@ -714,7 +712,6 @@ def _plot_outflow_discharge_timeseries(
     Args:
         model: Model-like object used to derive the total basin area.
         output_folder: Path to the model output folder.
-        run_name: Name of the run to evaluate.
         eval_plot_folder: Evaluation plot output directory.
 
     Returns:
@@ -740,7 +737,6 @@ def _plot_outflow_discharge_timeseries(
     outflow_plot_folder: Path = eval_plot_folder / "outflow"
     outflow_plot_folder.mkdir(parents=True, exist_ok=True)
     total_area_m2: float = _get_total_model_area_m2(model)
-    report_folder = output_folder / "report"
     frozen_fraction_series_name: str = "_top_soil_frozen_fraction"
     frozen_fraction_series: pd.Series | None = None
     frozen_fraction_path: Path = (
@@ -1738,8 +1734,6 @@ class Hydrology:
     def plot_discharge(
         self,
         run_name: str = "default",
-        *args: Any,
-        **kwargs: Any,
     ) -> None:
         """Plot the mean discharge map and all exported outflow time series.
 
@@ -1756,8 +1750,6 @@ class Hydrology:
         Args:
             run_name: Name of the simulation run to plot. Must correspond to an existing
                 run directory in the model output folder.
-            *args: Additional positional arguments (ignored).
-            **kwargs: Additional keyword arguments (ignored).
         """
         if self.discharge_output_folder.exists():
             shutil.rmtree(self.discharge_output_folder)
@@ -1783,10 +1775,12 @@ class Hydrology:
         )
         plt.close()
 
+        run_output_folder: Path = (
+            Path(self.model.config["general"]["output_folder"]) / run_name
+        )
         outflow_plot_count: int = _plot_outflow_discharge_timeseries(
             model=self.model,
-            output_folder=self.model.output_folder,
-            run_name=run_name,
+            output_folder=run_output_folder,
             eval_plot_folder=self.discharge_output_folder,
         )
         if outflow_plot_count > 0:
@@ -2282,8 +2276,11 @@ class Hydrology:
         publication_folder: Path = (
             self.evaluate_discharge_output_folder / "publication_data"
         )
+        run_output_folder: Path = (
+            Path(self.model.config["general"]["output_folder"]) / run_name
+        )
         discharge_publication.create_discharge_publication_package(
-            routing_folder=self.model.output_folder / "report" / "hydrology.routing",
+            routing_folder=run_output_folder / "report" / "hydrology.routing",
             evaluation_metrics_xlsx=(
                 self.evaluate_discharge_output_folder / "evaluation_metrics.xlsx"
             ),
@@ -2301,7 +2298,6 @@ class Hydrology:
         run_name: str = "default",
         correct_discharge_observations: bool = False,
         output_filename: str = "discharge_evaluation_map.html",
-        **kwargs: Any,
     ) -> dict[str, str]:
         """Create only the discharge evaluation dashboard.
 
@@ -2318,7 +2314,6 @@ class Hydrology:
                 the option in ``evaluate_discharge``.
             output_filename: Dashboard HTML filename written inside the discharge
                 evaluation output folder.
-            **kwargs: Ignored additional keyword arguments for CLI compatibility.
 
         Returns:
             Dictionary with the created dashboard path.
@@ -2372,11 +2367,14 @@ class Hydrology:
         )
 
         dashboard_path: Path = self.evaluate_discharge_output_folder / output_path
+        run_output_folder: Path = (
+            Path(self.model.config["general"]["output_folder"]) / run_name
+        )
         self.model.logger.info("Building interactive chart payloads...")
         station_dashboard_chart_files: dict[str, str] = (
             self._build_saved_station_dashboard_charts(
                 evaluation_gdf=evaluation_gdf,
-                run_name=run_name,
+                run_output_folder=run_output_folder,
                 correct_discharge_observations=correct_discharge_observations,
                 dashboard_path=dashboard_path,
             )
@@ -2404,7 +2402,7 @@ class Hydrology:
     def _build_saved_station_dashboard_charts(
         self,
         evaluation_gdf: gpd.GeoDataFrame,
-        run_name: str,
+        run_output_folder: Path,
         correct_discharge_observations: bool,
         dashboard_path: Path,
     ) -> dict[str, str]:
@@ -2412,7 +2410,7 @@ class Hydrology:
 
         Args:
             evaluation_gdf: Saved per-station discharge evaluation metrics.
-            run_name: Name of the simulation run to use for discharge time series.
+            run_output_folder: Model output folder for the selected run.
             correct_discharge_observations: Whether to correct simulated discharge
                 by the observed-to-GEB upstream-area ratio (dimensionless).
             dashboard_path: Output path of the dashboard HTML file.
@@ -2495,7 +2493,7 @@ class Hydrology:
                 )
                 try:
                     validation_df: pd.DataFrame = create_validation_df(
-                        output_folder=self.model.output_folder,
+                        output_folder=run_output_folder,
                         station_id=station_id,
                         observed_discharge=observed_discharge_series,
                         apply_upstream_area_correction=correct_discharge_observations,
@@ -3020,61 +3018,15 @@ class Hydrology:
                 "Saved discharge characteristic associations to %s.", association_path
             )
 
-        characteristic_columns: list[str] = [
-            characteristic.column
-            for characteristic in discharge_characteristics.SCREENING_CHARACTERISTICS
-        ]
-        correlation_matrix: pd.DataFrame = analysis_df[characteristic_columns].corr(
-            method="spearman", min_periods=3
-        )
-        characteristic_labels: list[str] = [
-            characteristic.label
-            for characteristic in discharge_characteristics.SCREENING_CHARACTERISTICS
-        ]
-        correlation_matrix.index = characteristic_labels
-        correlation_matrix.columns = characteristic_labels
-
-        correlation_figure: plt.Figure
-        correlation_axis: plt.Axes
-        correlation_figure, correlation_axis = plt.subplots(figsize=(15.8, 14.2))
-        sns.heatmap(
-            correlation_matrix,
-            mask=np.triu(np.ones(correlation_matrix.shape, dtype=bool), k=1),
-            ax=correlation_axis,
-            cmap="BrBG",
-            vmin=-1.0,
-            vmax=1.0,
-            annot=True,
-            fmt="+.2f",
-            annot_kws={"fontsize": 6.1},
-            linewidths=0.35,
-            linecolor="white",
-            cbar_kws={"label": "Spearman rank correlation, ρ", "shrink": 0.74},
-        )
-        correlation_axis.tick_params(axis="both", labelsize=7.3, length=0)
-        correlation_axis.set_xticklabels(
-            correlation_axis.get_xticklabels(), rotation=52, ha="right"
-        )
-        correlation_axis.set_yticklabels(correlation_axis.get_yticklabels(), rotation=0)
-        correlation_axis.set_title(
-            "Spearman correlations among GRDC–Caravan catchment characteristics",
-            loc="left",
-            fontsize=13.0,
-            fontweight="bold",
-            pad=16,
-        )
-        correlation_figure.subplots_adjust(
-            left=0.31, right=0.91, top=0.93, bottom=0.285
-        )
-        if export:
-            correlation_output: Path = explanation_folder / (
-                "discharge_characteristic_correlation_matrix"
-                f"{evaluation_paths.suffix}.png"
+        correlation_figure: plt.Figure = (
+            discharge_characteristics.plot_characteristic_correlation_matrix(
+                analysis_df=analysis_df,
+                output_folder=explanation_folder,
+                logger=self.model.logger,
+                output_name_suffix=evaluation_paths.suffix,
+                export=export,
             )
-            correlation_figure.savefig(correlation_output, dpi=300, bbox_inches="tight")
-            self.model.logger.info(
-                "Saved characteristic correlation matrix to %s.", correlation_output
-            )
+        )
         plt.close(correlation_figure)
 
         heatmap_figure: plt.Figure = (

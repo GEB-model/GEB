@@ -3,13 +3,19 @@
 import logging
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import seaborn as sns
+from matplotlib.colorbar import Colorbar
 from matplotlib.colors import TwoSlopeNorm
+from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
+from matplotlib.image import AxesImage
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch, Rectangle
+from matplotlib.transforms import Bbox
 from scipy.stats import spearmanr
 from statsmodels.nonparametric.smoothers_lowess import lowess
 
@@ -25,15 +31,12 @@ class Characteristic:
         label: Publication label including units.
         scale: Factor converting stored values to displayed units.
         logarithmic_x: Whether the 32-panel atlas uses a base-10 x-axis.
-        zero_is_distinct: Whether zero represents absence and should be shown
-            separately from the ranked positive values on the dashboard.
     """
 
     column: str
     label: str
     scale: float = 1.0
     logarithmic_x: bool = False
-    zero_is_distinct: bool = False
 
 
 @dataclass(frozen=True)
@@ -76,13 +79,9 @@ SCREENING_CHARACTERISTICS: tuple[Characteristic, ...] = (
     Characteristic("aridity_FAO_PM", "Aridity index, PET/P (–)"),
     Characteristic("ele_mt_sav", "Elevation (m)"),
     Characteristic("gwt_cm_sav", "Groundwater-table depth (cm)"),
-    Characteristic("lka_pc_sse", "Lake-area extent (%)", zero_is_distinct=True),
+    Characteristic("lka_pc_sse", "Lake-area extent (%)"),
     Characteristic("rev_mc_usu", "Upstream reservoir volume (million m³)"),
-    Characteristic(
-        "frac_snow",
-        "Fraction of precipitation falling as snow (–)",
-        zero_is_distinct=True,
-    ),
+    Characteristic("frac_snow", "Fraction of precipitation falling as snow (–)"),
     Characteristic("p_mean", "Daily precipitation (mm/day)"),
     Characteristic("inu_pc_slt", "Long-term maximum inundation extent (%)"),
     Characteristic("tmp_dc_syr", "Annual air temperature (°C)", scale=0.1),
@@ -96,7 +95,7 @@ SCREENING_CHARACTERISTICS: tuple[Characteristic, ...] = (
     Characteristic("slp_dg_sav", "Terrain slope (degrees)", scale=0.1),
     Characteristic("sgr_dk_sav", "Stream gradient (dm/km)"),
     Characteristic("wet_pc_sg1", "Wetland extent (%)"),
-    Characteristic("dor_pc_pva", "Degree of regulation (%)", zero_is_distinct=True),
+    Characteristic("dor_pc_pva", "Degree of regulation (%)"),
     Characteristic("for_pc_sse", "Forest-cover extent (%)"),
     Characteristic("crp_pc_sse", "Cropland extent (%)"),
     Characteristic("pst_pc_sse", "Pasture extent (%)"),
@@ -112,40 +111,19 @@ SCREENING_CHARACTERISTICS: tuple[Characteristic, ...] = (
     Characteristic("rdd_mk_sav", "Road density (m/km²)"),
 )
 
-
-def _select_characteristics(columns: tuple[str, ...]) -> tuple[Characteristic, ...]:
-    """Select characteristic metadata in a deliberate display order.
-
-    Args:
-        columns: GRDC-Caravan or evaluation-table column names to select.
-
-    Returns:
-        Characteristic metadata in the requested order.
-
-    Raises:
-        ValueError: If an unknown characteristic column is requested.
-    """
-    characteristics_by_column: dict[str, Characteristic] = {
-        characteristic.column: characteristic
-        for characteristic in SCREENING_CHARACTERISTICS
-    }
-    missing_columns: set[str] = set(columns) - set(characteristics_by_column)
-    if missing_columns:
-        raise ValueError(
-            f"Unknown discharge characteristics: {sorted(missing_columns)}"
-        )
-    return tuple(characteristics_by_column[column] for column in columns)
+_SCREENING_CHARACTERISTICS_BY_COLUMN: dict[str, Characteristic] = {
+    characteristic.column: characteristic
+    for characteristic in SCREENING_CHARACTERISTICS
+}
 
 
 # The dashboard subset prioritizes distinct, actionable hydrological mechanisms.
 # Keeping this list short makes spatial comparison substantially easier than a
 # layer menu containing every variable in the exploratory 32-panel atlas.
 DASHBOARD_CHARACTERISTICS: tuple[Characteristic, ...] = (
-    _select_characteristics(
-        (
-            "sgr_dk_sav",
-            "ele_mt_sav",
-        )
+    tuple(
+        _SCREENING_CHARACTERISTICS_BY_COLUMN[column]
+        for column in ("sgr_dk_sav", "ele_mt_sav")
     )
     + (
         Characteristic(
@@ -154,8 +132,9 @@ DASHBOARD_CHARACTERISTICS: tuple[Characteristic, ...] = (
             logarithmic_x=True,
         ),
     )
-    + _select_characteristics(
-        (
+    + tuple(
+        _SCREENING_CHARACTERISTICS_BY_COLUMN[column]
+        for column in (
             "gwt_cm_sav",
             "low_prec_freq",
             "frac_snow",
@@ -368,7 +347,7 @@ def calculate_kge_component_associations(
                 and pair_table[characteristic.column].nunique() >= 2
                 and pair_table[target.column].nunique() >= 2
             ):
-                correlation_result = spearmanr(
+                correlation_result: Any = spearmanr(
                     pair_table[characteristic.column], pair_table[target.column]
                 )
                 rho = float(correlation_result.statistic)
@@ -411,6 +390,74 @@ def _save_figure(
             bbox_inches="tight",
         )
         logger.info("Saved discharge characteristic figure to %s.", output_path)
+
+
+def plot_characteristic_correlation_matrix(
+    analysis_df: pd.DataFrame,
+    output_folder: Path,
+    logger: logging.Logger,
+    output_name_suffix: str = "",
+    export: bool = True,
+) -> plt.Figure:
+    """Plot correlations among GRDC-Caravan catchment characteristics.
+
+    Args:
+        analysis_df: Prepared matched-station analysis table.
+        output_folder: Folder receiving the PNG output.
+        logger: Logger used for export messages.
+        output_name_suffix: Optional evaluation-period filename suffix.
+        export: Whether to save the figure.
+
+    Returns:
+        Lower-triangular characteristic correlation heatmap.
+    """
+    characteristic_columns: list[str] = [
+        characteristic.column for characteristic in SCREENING_CHARACTERISTICS
+    ]
+    correlation_matrix: pd.DataFrame = analysis_df[characteristic_columns].corr(
+        method="spearman", min_periods=3
+    )
+    characteristic_labels: list[str] = [
+        characteristic.label for characteristic in SCREENING_CHARACTERISTICS
+    ]
+    correlation_matrix.index = characteristic_labels
+    correlation_matrix.columns = characteristic_labels
+
+    figure: plt.Figure
+    axis: plt.Axes
+    figure, axis = plt.subplots(figsize=(15.8, 14.2))
+    sns.heatmap(
+        correlation_matrix,
+        mask=np.triu(np.ones(correlation_matrix.shape, dtype=bool), k=1),
+        ax=axis,
+        cmap="BrBG",
+        vmin=-1.0,
+        vmax=1.0,
+        annot=True,
+        fmt="+.2f",
+        annot_kws={"fontsize": 6.1},
+        linewidths=0.35,
+        linecolor="white",
+        cbar_kws={"label": "Spearman rank correlation, ρ", "shrink": 0.74},
+    )
+    axis.tick_params(axis="both", labelsize=7.3, length=0)
+    axis.set_xticklabels(axis.get_xticklabels(), rotation=52, ha="right")
+    axis.set_yticklabels(axis.get_yticklabels(), rotation=0)
+    axis.set_title(
+        "Spearman correlations among GRDC–Caravan catchment characteristics",
+        loc="left",
+        fontsize=13.0,
+        fontweight="bold",
+        pad=16,
+    )
+    figure.subplots_adjust(left=0.31, right=0.91, top=0.93, bottom=0.285)
+    if export:
+        output_path: Path = output_folder / (
+            f"discharge_characteristic_correlation_matrix{output_name_suffix}.png"
+        )
+        figure.savefig(output_path, dpi=300, bbox_inches="tight")
+        logger.info("Saved characteristic correlation matrix to %s.", output_path)
+    return figure
 
 
 def _fit_lowess_to_grid(
@@ -746,9 +793,11 @@ def plot_kge_characteristic_heatmaps(
     significance_matrix = significance_matrix.loc[variable_order]
 
     figure: plt.Figure = plt.figure(figsize=(14.8, 11.8))
-    outer_grid = figure.add_gridspec(1, 2, width_ratios=(1.12, 1.10), wspace=0.30)
+    outer_grid: GridSpec = figure.add_gridspec(
+        1, 2, width_ratios=(1.12, 1.10), wspace=0.30
+    )
     association_axis: plt.Axes = figure.add_subplot(outer_grid[0, 0])
-    correlation_grid = outer_grid[0, 1].subgridspec(
+    correlation_grid: GridSpecFromSubplotSpec = outer_grid[0, 1].subgridspec(
         5,
         1,
         height_ratios=(1.0, 1.0, 1.0, 1.0, 0.005),
@@ -759,7 +808,7 @@ def plot_kge_characteristic_heatmaps(
         for row_index in range(len(KGE_RELATIONSHIP_PANELS))
     ]
 
-    association_image = association_axis.imshow(
+    association_image: AxesImage = association_axis.imshow(
         association_matrix.to_numpy(dtype=float),
         cmap="BrBG",
         norm=TwoSlopeNorm(vmin=-0.5, vcenter=0.0, vmax=0.5),
@@ -815,7 +864,7 @@ def plot_kge_characteristic_heatmaps(
     association_axis.set_yticks(np.arange(-0.5, len(variable_order), 1.0), minor=True)
     association_axis.grid(which="minor", color="white", linewidth=0.8)
     association_axis.tick_params(which="minor", bottom=False, left=False)
-    association_colorbar = figure.colorbar(
+    association_colorbar: Colorbar = figure.colorbar(
         association_image,
         ax=association_axis,
         orientation="horizontal",
@@ -900,7 +949,7 @@ def plot_kge_characteristic_heatmaps(
             float(connector_rgba[2]),
             float(connector_rgba[3]),
         )
-        connector = Line2D(
+        connector: Line2D = Line2D(
             [float(start_figure[0]), end_figure[0]],
             [float(start_figure[1]), end_figure[1]],
             transform=figure.transFigure,
@@ -912,7 +961,7 @@ def plot_kge_characteristic_heatmaps(
         )
         figure.add_artist(connector)
 
-    colorbar_position = association_colorbar.ax.get_position()
+    colorbar_position: Bbox = association_colorbar.ax.get_position()
     colorbar_center_y: float = float(
         colorbar_position.y0 + colorbar_position.height / 2.0
     )
