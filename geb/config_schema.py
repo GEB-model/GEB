@@ -213,12 +213,25 @@ class RiverDepthConfig(BaseModel):
     )
 
 
+class RetentionBasinsConfig(BaseModel):
+    """Configuration for retention basins in routing."""
+
+    release_threshold_factor: float = Field(
+        0.2,
+        description="Factor to multiply the activation threshold by to get the release threshold.",
+    )
+    activation_threshold_return_period_years: float = Field(
+        2.0,
+        description="Return period in years used to calculate the activation threshold for retention basins.",
+    )
+
+
 class RoutingConfig(BaseModel):
     """Configuration for routing."""
 
-    retention_basin_release_threshold_factor: float = Field(
-        0.9,
-        description="Factor to multiply the activation threshold by to get the release threshold.",
+    retention_basins: RetentionBasinsConfig = Field(
+        default_factory=RetentionBasinsConfig,
+        description="Retention basins configuration.",
     )
     river_width: RiverWidthConfig = Field(
         default_factory=RiverWidthConfig, description="River width configuration."
