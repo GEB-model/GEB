@@ -1883,12 +1883,20 @@ class Routing(Module):
             self.default_missing_channel_width,  # Default value for missing values
         )
 
-        # Channel gradient (fraction, dy/dx)
-        minimum_river_slope = 0.0001
-        river_slope = np.maximum(
-            self.grid.load2d(self.model.files["grid"]["routing/river_slope_m_per_m"]),
-            minimum_river_slope,
+        # Channel gradient (fraction, dy/dx). The lower bound is config-wired so that
+        # runs testing different clamps can execute concurrently; 0.0001 keeps the
+        # behaviour of configs written before the option existed.
+        minimum_river_slope = self.config.get("minimum_river_slope", 0.0001)
+        river_slope_map = self.grid.load2d(
+            self.model.files["grid"]["routing/river_slope_m_per_m"]
         )
+        self.model.logger.info(
+            "Minimum river slope clamp %.1e m/m: %d of %d cells clamped.",
+            minimum_river_slope,
+            int((river_slope_map < minimum_river_slope).sum()),
+            river_slope_map.size,
+        )
+        river_slope = np.maximum(river_slope_map, minimum_river_slope)
 
         # river_storage_alpha for kinematic wave storage calculation
         # source: https://gmd.copernicus.org/articles/13/3267/2020/ eq. 21

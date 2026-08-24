@@ -401,19 +401,20 @@ class SFINCSRootModel:
             DEM.pop("coastal_only", None)
             DEM.pop("coastal_zmin", None)
             DEM["reproj_method"] = "bilinear"
-        time_start = time.perf_counter()
-        self.logger.info("Setting up SFINCS model dep (DEMs)...")
-        DEM["elevation"] = clip_with_geometry(
-            DEM["elevation"]["elevation"],
-            gpd.GeoDataFrame(
-                [self.subbasins.union_all().buffer(0.1)],
-                columns=["geometry"],
-                crs=self.subbasins.crs,
-            ),
-            all_touched=True,
-            drop=True,
-        ).to_dataset(name="elevation")
-        DEMs_in_area_of_interest.append(DEM)
+            time_start = time.perf_counter()
+            self.logger.info("Setting up SFINCS model dep (DEMs)...")
+
+            DEM["elevation"] = clip_with_geometry(
+                DEM["elevation"]["elevation"],
+                gpd.GeoDataFrame(
+                    [self.subbasins.union_all().buffer(0.1)],
+                    columns=["geometry"],
+                    crs=self.subbasins.crs,
+                ),
+                all_touched=True,
+                drop=True,
+            ).to_dataset(name="elevation")
+            DEMs_in_area_of_interest.append(DEM)
 
         if not DEMs_in_area_of_interest:
             raise ValueError(
@@ -725,9 +726,9 @@ class SFINCSRootModel:
 
             with np.errstate(invalid="ignore"):
                 # only burn rivers that are wider than the subgrid pixel size
-                start_time = time.perf_counter()
+
                 sf.subgrid.create(
-                    elevation_list=DEMs,
+                    elevation_list=DEMs_in_area_of_interest,
                     roughness_list=[
                         {
                             "manning": mannings.to_dataset(name="manning"),
@@ -748,17 +749,6 @@ class SFINCSRootModel:
                     nr_levels=20,
                     nrmax=500,
                 )
-            first_subgrid_time = time.perf_counter() - start_time
-            self.logger.info(f"Subgrid setup took {first_subgrid_time:.2f} seconds")
-            self.logger.info("Writing grid files...")
-            sf.write_grid()
-            write_grid_time = time.perf_counter() - start_time - first_subgrid_time
-            self.logger.info(f"Grid writing took {write_grid_time:.2f} seconds")
-            self.logger.info("Writing subgrid files...")
-            subgrid_time = (
-                time.perf_counter() - start_time - first_subgrid_time - write_grid_time
-            )
-            self.logger.info(f"Subgrid writing took {subgrid_time:.2f} seconds")
         else:
             self.logger.info(
                 "Setting up SFINCS without subgrid - burning rivers into main grid..."

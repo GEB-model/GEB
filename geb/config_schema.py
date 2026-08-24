@@ -224,6 +224,16 @@ class RoutingConfig(BaseModel):
         0.9,
         description="Factor to multiply the activation threshold by to get the release threshold.",
     )
+    minimum_river_slope: float = Field(
+        0.0001,
+        gt=0.0,
+        description=(
+            "Lower bound clamped onto the river slope map (m/m) before the kinematic "
+            "wave storage alpha is computed. Slope enters as 1/sqrt(slope), so a lower "
+            "bound gives a slower, more attenuated wave in the flat lower reaches."
+        ),
+    )
+
     river_width: RiverWidthConfig = Field(
         default_factory=RiverWidthConfig, description="River width configuration."
     )
