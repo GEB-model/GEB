@@ -2501,6 +2501,24 @@ class GEBModel(
             ValueError: If the start date is not before the end date.
             ValueError: If the start date is before 1960, because of data availability.
         """
+        if not (
+            isinstance(start_date, date)
+            and not isinstance(start_date, datetime)
+            and not isinstance(start_date, str)
+        ):
+            raise ValueError(
+                "Start date must be a datetime.date or datetime.datetime object."
+            )
+
+        if not (
+            isinstance(end_date, date)
+            and not isinstance(end_date, datetime)
+            and not isinstance(end_date, str)
+        ):
+            raise ValueError(
+                "End date must be a datetime.date or datetime.datetime object."
+            )
+
         if not start_date < end_date:
             raise ValueError("Start date must be before end date.")
 
