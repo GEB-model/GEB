@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import shutil
 import time
 import uuid
@@ -28,9 +27,6 @@ from .base import Adapter
 
 _TILE_CRS = "EPSG:3035"
 _REQUEST_CRS = "EPSG:4326"
-_EEA_TILE_SIZE_M = 100_000
-_EEA_TILE_COORD_RE = re.compile(r"_E(?P<e>\d+)N(?P<n>\d+)_03035_")
-_YEAR_COMPONENT_RE = re.compile(r"_S(?P<year>\d{4})_")
 
 _MANUAL_TILE_DOWNLOAD_URL = (
     "https://land.copernicus.eu/en/map-viewer?product=c6d1726c6e824ae4819bdf402b785956"
@@ -96,10 +92,9 @@ class WEkEOCopernicus(Adapter):
         and the corresponding extracted TIFF is assumed to have the same basename
         with ``.tif`` extension.
 
-        Tile identifiers can be discovered locally from the EEA 100 km grid code
-        embedded in the filename (for example ``E73N22``). When a local catalogue is
-        available, the adapter can therefore avoid a WEkEO search entirely. WEkEO is
-        retained as an optional fallback for missing or previously unseen tiles.
+        Tile identifiers are taken directly from the WEkEO API results rather than
+        inferred from a manually reconstructed projected tile grid. This avoids
+        ambiguities in the EEA reference-grid naming convention.
 
         Some WEkEO tiles are known to be problematic because the API can return a
         file with the expected tile name but with incorrect underlying spatial data.
@@ -120,8 +115,6 @@ class WEkEOCopernicus(Adapter):
         download_retries: int | None = None,
         download_backoff_seconds: float | None = None,
         show_download_progress: bool = False,
-        prefer_local_tiles: bool = True,
-        allow_wekeo_fallback: bool = True,
         normalize_nodata_values: tuple[int, ...] = (65535,),
         destination_nodata: int | None = 0,
         **kwargs: Any,
@@ -147,14 +140,6 @@ class WEkEOCopernicus(Adapter):
                 ``WEKEO_DOWNLOAD_BACKOFF_SECONDS`` is used, falling back to 5 s.
             show_download_progress: Whether to allow HDA/tqdm progress bars. The
                 default keeps build logs clean.
-            prefer_local_tiles: If True, identify required HRL tiles from the local
-                cache before querying WEkEO. Local tile discovery uses the EEA 100 km
-                grid code embedded in filenames (for example ``E73N22``), so a fully
-                populated local year can be used without any WEkEO catalogue request.
-            allow_wekeo_fallback: If True, fall back to the WEkEO catalogue/download
-                workflow when the local cache cannot identify or satisfy all required
-                tiles. Set False for locally staged years that are not yet available
-                through WEkEO, such as a manually populated 2024 directory.
             normalize_nodata_values: Source values to map to ``destination_nodata``
                 before reprojection. For HRL crop rasters, 65535 is a common invalid
                 value and otherwise creates repeated rasterio warnings.
@@ -167,8 +152,6 @@ class WEkEOCopernicus(Adapter):
         self.dataset_id = dataset_id
         self.default_query = default_query or {}
         self.product_code = product_code.upper() if product_code is not None else None
-        self.prefer_local_tiles = prefer_local_tiles
-        self.allow_wekeo_fallback = allow_wekeo_fallback
 
         self.max_parallel_downloads = max(
             1,
@@ -328,234 +311,6 @@ class WEkEOCopernicus(Adapter):
 
         return f"_{self.product_code}_" in tile_id.upper()
 
-    def _tile_grid_coordinates(self, tile_id: str) -> tuple[int, int] | None:
-        """Return the EEA 100 km grid indices encoded in a HRL tile identifier.
-
-        HRL filenames use components such as ``E73N22``. For the EEA 100 km grid,
-        those indices correspond to a lower-left corner of 7,300,000 m East and
-        2,200,000 m North in EPSG:3035.
-        """
-        match = _EEA_TILE_COORD_RE.search(tile_id)
-        if match is None:
-            return None
-        return int(match.group("e")), int(match.group("n"))
-
-    def _tile_intersects_projected_bounds(
-        self,
-        tile_id: str,
-        projected_bounds: tuple[float, float, float, float],
-    ) -> bool:
-        """Check whether a filename-derived EEA 100 km tile intersects bounds."""
-        coordinates = self._tile_grid_coordinates(tile_id)
-        if coordinates is None:
-            return False
-
-        e_index, n_index = coordinates
-        tile_min_x = e_index * _EEA_TILE_SIZE_M
-        tile_min_y = n_index * _EEA_TILE_SIZE_M
-        tile_max_x = tile_min_x + _EEA_TILE_SIZE_M
-        tile_max_y = tile_min_y + _EEA_TILE_SIZE_M
-        min_x, min_y, max_x, max_y = projected_bounds
-
-        return not (
-            tile_max_x <= min_x
-            or tile_min_x >= max_x
-            or tile_max_y <= min_y
-            or tile_min_y >= max_y
-        )
-
-    def _project_bounds_to_tile_crs(
-        self,
-        bounds: tuple[float, float, float, float],
-    ) -> tuple[float, float, float, float]:
-        """Project WGS84 request bounds to the native EEA tile CRS."""
-        projected = (
-            gpd.GeoSeries([box(*bounds)], crs=_REQUEST_CRS).to_crs(_TILE_CRS).iloc[0]
-        )
-        return tuple(float(value) for value in projected.bounds)
-
-    def _scan_local_tile_ids(self, year: str | int) -> list[str]:
-        """Return locally cached tile identifiers for a year from ZIP/TIFF names."""
-        year_dir = self._year_dir(year)
-        if not year_dir.exists():
-            return []
-
-        year_component = f"_S{year}_"
-        tile_ids: set[str] = set()
-        for path in year_dir.iterdir():
-            if not path.is_file() or path.suffix.lower() not in {
-                ".zip",
-                ".tif",
-                ".tiff",
-            }:
-                continue
-            tile_id = path.stem
-            if year_component not in tile_id:
-                continue
-            if not self._matches_product_code(tile_id):
-                continue
-            if self._tile_grid_coordinates(tile_id) is None:
-                continue
-            tile_ids.add(tile_id)
-
-        return sorted(tile_ids)
-
-    def _local_reference_years(self, year: str | int) -> list[str]:
-        """Return local numeric year folders ordered by suitability as references."""
-        try:
-            requested_year = int(year)
-        except TypeError, ValueError:
-            return []
-
-        years: list[int] = []
-        if self.root.exists():
-            for path in self.root.iterdir():
-                if path.is_dir() and path.name.isdigit():
-                    years.append(int(path.name))
-
-        # Prefer the closest earlier year, then the closest later year. For an
-        # annual HRL product this normally selects 2023 as the reference for 2024.
-        years = sorted(
-            (candidate for candidate in years if candidate != requested_year),
-            key=lambda candidate: (
-                0 if candidate < requested_year else 1,
-                abs(candidate - requested_year),
-            ),
-        )
-        return [str(candidate) for candidate in years]
-
-    def _replace_tile_year(self, tile_id: str, year: str | int) -> str:
-        """Replace the ``SYYYY`` filename component while preserving all others."""
-        return _YEAR_COMPONENT_RE.sub(f"_S{year}_", tile_id, count=1)
-
-    def _discover_local_tiles_for_bounds(
-        self,
-        bounds: tuple[float, float, float, float],
-        year: str | int,
-    ) -> list[str]:
-        """Identify required tiles from local filenames without contacting WEkEO.
-
-        The target-year directory is used when available. To detect accidentally
-        missing target-year files, the closest locally available year is also used
-        as a reference catalogue. Because HRL CTY/CPSCT use the same EEA 100 km grid
-        every year, only the ``SYYYY`` filename component needs to be replaced.
-        """
-        projected_bounds = self._project_bounds_to_tile_crs(bounds)
-
-        target_tile_ids = self._scan_local_tile_ids(year)
-        target_by_coordinate = {
-            coordinates: tile_id
-            for tile_id in target_tile_ids
-            if (coordinates := self._tile_grid_coordinates(tile_id)) is not None
-        }
-
-        reference_tile_ids: list[str] = []
-        reference_year: str | None = None
-        for candidate_year in self._local_reference_years(year):
-            candidate_ids = self._scan_local_tile_ids(candidate_year)
-            if candidate_ids:
-                reference_tile_ids = candidate_ids
-                reference_year = candidate_year
-                break
-
-        if reference_tile_ids:
-            expected: list[str] = []
-            for reference_tile_id in reference_tile_ids:
-                if not self._tile_intersects_projected_bounds(
-                    reference_tile_id, projected_bounds
-                ):
-                    continue
-                coordinates = self._tile_grid_coordinates(reference_tile_id)
-                assert coordinates is not None
-                expected.append(
-                    target_by_coordinate.get(
-                        coordinates,
-                        self._replace_tile_year(reference_tile_id, year),
-                    )
-                )
-
-            if expected:
-                self.logger.debug(
-                    "Identified %s required %s tile(s) for year %s from local "
-                    "filename catalogue year %s.",
-                    len(expected),
-                    self.product_code or "HRL",
-                    year,
-                    reference_year,
-                )
-                return sorted(set(expected))
-
-        # If no other local year can act as a catalogue, use the target-year files
-        # themselves. This is sufficient for a manually staged complete directory.
-        local_matches = [
-            tile_id
-            for tile_id in target_tile_ids
-            if self._tile_intersects_projected_bounds(tile_id, projected_bounds)
-        ]
-        if local_matches:
-            self.logger.debug(
-                "Identified %s required %s tile(s) for year %s directly from local "
-                "filenames.",
-                len(local_matches),
-                self.product_code or "HRL",
-                year,
-            )
-        return sorted(set(local_matches))
-
-    def _local_tiles_or_none(
-        self,
-        bounds: tuple[float, float, float, float],
-        year: str | int,
-    ) -> list[str] | None:
-        """Return complete local tile IDs, or None when WEkEO fallback is allowed."""
-        if not self.prefer_local_tiles:
-            return None
-
-        tile_ids = self._discover_local_tiles_for_bounds(bounds=bounds, year=year)
-        if not tile_ids:
-            if self.allow_wekeo_fallback:
-                return None
-            raise WEkEONoCoverageError(
-                f"No local {self.product_code or 'HRL'} tile filenames were found for "
-                f"year={year}, bounds={bounds}, and WEkEO fallback is disabled. "
-                f"Expected local directory: {self._year_dir(year)}"
-            )
-
-        cache_status = self._inspect_tile_cache(tile_ids=tile_ids, year=year)
-        if cache_status.is_complete:
-            self.logger.info(
-                "Using %s locally cached %s tile(s) for year %s; skipping WEkEO "
-                "catalogue search.",
-                cache_status.total_tiles,
-                self.product_code or "HRL",
-                year,
-            )
-            return tile_ids
-
-        missing_names = [
-            self._tile_zip_name(tile_id) for tile_id in cache_status.missing_tile_ids
-        ]
-        if not self.allow_wekeo_fallback:
-            missing_preview = ", ".join(missing_names[:20])
-            if len(missing_names) > 20:
-                missing_preview += f", ... (+{len(missing_names) - 20} more)"
-            raise FileNotFoundError(
-                f"Local tile catalogue identified {cache_status.total_tiles} required "
-                f"{self.product_code or 'HRL'} tile(s) for year {year}, but "
-                f"{cache_status.missing_tiles} are missing and WEkEO fallback is "
-                f"disabled. Missing files: {missing_preview}. Directory: "
-                f"{self._year_dir(year)}"
-            )
-
-        self.logger.info(
-            "Local catalogue for year %s is incomplete (%s/%s tiles cached); "
-            "falling back to WEkEO for authoritative discovery/download.",
-            year,
-            cache_status.cached_tiles,
-            cache_status.total_tiles,
-        )
-        return None
-
     def _search_tiles(
         self,
         bounds: tuple[float, float, float, float],
@@ -636,7 +391,7 @@ class WEkEOCopernicus(Adapter):
         year: str | int,
         query_overrides: dict[str, Any] | None = None,
     ) -> list[str]:
-        """Get tile IDs intersecting the mask, preferring the local filename catalogue.
+        """Get the WEkEO tile IDs that intersect with the mask.
 
         Args:
             mask: The geometry used to filter intersecting tiles. The input
@@ -645,12 +400,8 @@ class WEkEOCopernicus(Adapter):
             query_overrides: Additional dataset-specific query fields or overrides.
 
         Returns:
-            A list of HRL tile identifiers that intersect with the mask.
+            A list of WEkEO tile identifiers that intersect with the mask.
         """
-        local_tile_ids = self._local_tiles_or_none(bounds=mask.bounds, year=year)
-        if local_tile_ids is not None:
-            return local_tile_ids
-
         tile_ids, _ = self._search_tiles(
             bounds=mask.bounds,
             year=year,
@@ -1402,7 +1153,7 @@ class WEkEOCopernicus(Adapter):
         url: str | None = None,
         query_overrides: dict[str, Any] | None = None,
     ) -> WEkEOCopernicus:
-        """Fetch HRL tiles for the specified bounds, preferring local files.
+        """Fetch WEkEO tiles for the specified bounds.
 
         Args:
             bounds: Bounding box as ``(min_lon, min_lat, max_lon, max_lat)``.
@@ -1411,14 +1162,8 @@ class WEkEOCopernicus(Adapter):
             query_overrides: Additional dataset-specific query fields or overrides.
 
         Returns:
-            The adapter instance with the requested tiles available locally.
+            The WEkEO Copernicus adapter instance with the downloaded data.
         """
-        local_tile_ids = self._local_tiles_or_none(bounds=bounds, year=year)
-        if local_tile_ids is not None:
-            self.tile_ids = local_tile_ids
-            self.year = year
-            return self
-
         tile_ids, result_lookup = self._search_tiles(
             bounds=bounds,
             year=year,
@@ -1451,14 +1196,13 @@ class WEkEOCopernicus(Adapter):
         normalize_nodata: bool = True,
         chunks: dict[str, int] | None = None,
     ) -> xr.DataArray:
-        """Read and unpack the cached HRL data, clipping it to the requested bounds.
+        """Read and unpack the downloaded WEkEO data, clipping it to the requested bounds.
 
         Args:
             bounds: Bounding box as ``(min_lon, min_lat, max_lon, max_lat)``.
             year: Product year. If None, uses the year from the most recent fetch.
             query_overrides: Additional dataset-specific query fields or overrides.
-                Only used if local tile discovery cannot satisfy the request and
-                WEkEO fallback is enabled.
+                Only used if tiles need to be re-identified from the API.
             dst_crs: Output CRS. Use ``None`` to keep the native tile CRS and skip
                 the expensive full-raster reprojection.
             normalize_nodata: Whether to map ``normalize_nodata_values`` to
