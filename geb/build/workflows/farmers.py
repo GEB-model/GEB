@@ -1058,6 +1058,124 @@ def select_cultivated_cells_by_area(
     return selected.reshape(scores.shape)
 
 
+def ensure_complete_sequence_in_selected_cells(
+    selected_mask: np.ndarray,
+    complete_sequence_mask: np.ndarray,
+    selection_score: np.ndarray,
+    cell_area_m2: np.ndarray,
+    *,
+    target_area_m2: float,
+) -> tuple[np.ndarray, bool, bool]:
+    """Ensure a selected agricultural domain retains an original crop sequence.
+
+    The static HRL domain is selected primarily from multi-year crop support and
+    cultivated fraction. Near dataset edges this ranking can select only cells that
+    contain at least one missing HRL year even though a lower-ranked cell elsewhere
+    in the same region has a complete original crop/fallow sequence. That would leave
+    the downstream sequence assignment without any valid regional source sequence.
+
+    This helper repairs only that avoidable case. If the selection already contains a
+    complete sequence it is returned unchanged. Otherwise the highest-ranked complete
+    candidate is inserted. The lowest-ranked selected incomplete cell is removed when
+    doing so keeps the selected full-cell area at or above ``target_area_m2``. If no
+    such area-safe swap exists, the complete candidate is retained as one additional
+    selected cell. This preserves the static-area target as a lower bound and changes
+    the original ranking by the minimum number of cells.
+
+    Args:
+        selected_mask: Initial selected static agricultural cells.
+        complete_sequence_mask: Eligible cells with no missing year and at least one
+            positive crop year.
+        selection_score: Multi-year static-selection ranking score.
+        cell_area_m2: Full model-cell areas in square metres.
+        target_area_m2: Required minimum selected area.
+
+    Returns:
+        ``(repaired_mask, changed, used_extra_cell)`` where ``changed`` indicates
+        whether the initial selection was modified and ``used_extra_cell`` indicates
+        that no area-safe one-for-one swap existed.
+
+    Raises:
+        ValueError: If array shapes differ or the target area is not positive.
+        RuntimeError: If an attempted repair fails to retain a complete sequence or
+            violates the minimum selected-area target.
+    """
+    selected_mask = np.asarray(selected_mask, dtype=bool)
+    complete_sequence_mask = np.asarray(complete_sequence_mask, dtype=bool)
+    selection_score = np.asarray(selection_score, dtype=np.float64)
+    cell_area_m2 = np.asarray(cell_area_m2, dtype=np.float64)
+
+    if not (
+        selected_mask.shape
+        == complete_sequence_mask.shape
+        == selection_score.shape
+        == cell_area_m2.shape
+    ):
+        raise ValueError(
+            "selected_mask, complete_sequence_mask, selection_score, and "
+            "cell_area_m2 must have the same shape."
+        )
+    if target_area_m2 <= 0.0:
+        raise ValueError("target_area_m2 must be positive.")
+
+    repaired = selected_mask.copy()
+    if np.any(repaired & complete_sequence_mask):
+        return repaired, False, False
+
+    candidate_indices = np.flatnonzero(complete_sequence_mask & ~repaired)
+    if candidate_indices.size == 0:
+        return repaired, False, False
+
+    scores = np.nan_to_num(selection_score, nan=0.0, posinf=0.0, neginf=0.0)
+    flat_scores = scores.ravel()
+    flat_areas = cell_area_m2.ravel()
+    repaired_flat = repaired.ravel()
+
+    # Highest score first; lower flat index is the deterministic tie-breaker, matching
+    # select_cultivated_cells_by_area().
+    candidate_order = np.lexsort((candidate_indices, -flat_scores[candidate_indices]))
+    add_index = int(candidate_indices[candidate_order[0]])
+    add_area = float(flat_areas[add_index])
+    if not np.isfinite(add_area) or add_area <= 0.0:
+        raise RuntimeError(
+            "The selected complete-sequence candidate has invalid model-cell area."
+        )
+
+    selected_area_before = float(flat_areas[repaired_flat].sum())
+    repaired_flat[add_index] = True
+
+    selected_indices = np.flatnonzero(selected_mask & ~complete_sequence_mask)
+    removable: list[int] = []
+    for index in selected_indices:
+        area_after_swap = selected_area_before + add_area - float(flat_areas[index])
+        if area_after_swap + 1e-9 >= float(target_area_m2):
+            removable.append(int(index))
+
+    used_extra_cell = True
+    if removable:
+        removable_indices = np.asarray(removable, dtype=np.int64)
+        # Remove the worst-ranked selected cell. For equal scores, the larger flat
+        # index is lower priority because the original selector keeps lower indices.
+        remove_order = np.lexsort((-removable_indices, flat_scores[removable_indices]))
+        remove_index = int(removable_indices[remove_order[0]])
+        repaired_flat[remove_index] = False
+        used_extra_cell = False
+
+    repaired = repaired_flat.reshape(selected_mask.shape)
+    selected_area_after = float(cell_area_m2[repaired].sum())
+    if selected_area_after + 1e-9 < float(target_area_m2):
+        raise RuntimeError(
+            "Complete-sequence selection repair reduced the static agricultural "
+            "domain below its target area."
+        )
+    if not np.any(repaired & complete_sequence_mask):
+        raise RuntimeError(
+            "Complete-sequence selection repair did not retain an original sequence."
+        )
+
+    return repaired, True, used_extra_cell
+
+
 def _target_cell_counts_from_areas(
     target_farms: list[TargetFarm],
     n_cells: int,
@@ -1550,6 +1668,7 @@ def _count_farm_components_numba(
     return counts
 
 
+@njit(cache=True)
 def _optimize_multiyear_sequence_assignments_numba(
     farmer_areas_m2: np.ndarray,
     sequence_category_indices: np.ndarray,
@@ -1997,8 +2116,11 @@ def assign_farmer_sequences_to_area_targets(
         raise ValueError("fallow_penalty must be between 0 and 1.")
 
     n_farmers = farmer_areas_m2.size
-    represented = np.unique(farm_values[farm_values >= 0])
-    if not np.array_equal(represented, np.arange(n_farmers, dtype=np.int32)):
+    represented = farm_values[farm_values >= 0]
+    if represented.size == 0 or int(represented.max()) >= n_farmers:
+        raise ValueError("farm_values must contain compact farmer IDs 0..n_farmers-1.")
+    represented_counts = np.bincount(represented, minlength=n_farmers)
+    if represented_counts.size != n_farmers or np.any(represented_counts == 0):
         raise ValueError("farm_values must contain compact farmer IDs 0..n_farmers-1.")
 
     farms_flat = farm_values.ravel()
@@ -2312,6 +2434,10 @@ def assign_farmer_sequences_to_area_targets(
             ),
         }
     )
+    # ``sequences`` is already the unique complete original sequence catalogue.
+    # Expose its size so callers do not rebuild/uniquify the full selected stack
+    # solely for diagnostics.
+    quality.attrs["n_observed_sequences"] = int(sequences.shape[0])
 
     diagnostics_rows: list[dict[str, float | int | bool]] = []
     for year_index in range(n_years):
@@ -2555,9 +2681,14 @@ def grow_farms_from_raster_cells(
     )
 
     farm_values[~cultivated_mask] = -1
-    represented = np.unique(farm_values[farm_values >= 0])
-    expected = np.arange(len(ordered_targets), dtype=np.int32)
-    if not np.array_equal(represented, expected):
+    represented = farm_values[farm_values >= 0]
+    n_expected_farms = len(ordered_targets)
+    represented_counts = np.bincount(represented, minlength=n_expected_farms)
+    if (
+        represented.size == 0
+        or represented_counts.size != n_expected_farms
+        or np.any(represented_counts == 0)
+    ):
         raise RuntimeError(
             "Raster farm IDs are not compact or a target farm disappeared."
         )
@@ -2700,38 +2831,113 @@ def _expected_lowder_farms_by_size_class(
 
 
 def _largest_remainder_round(values: np.ndarray, target_sum: int) -> np.ndarray:
-    """Round fractional values to integers while preserving a target sum.
+    """Round non-negative weights to integer counts with an exact target sum.
 
-    The function first floors all values and then distributes the remaining
-    units to the values with the largest fractional remainders. If the floored
-    values exceed the target sum, units are removed from values with the
-    smallest fractional remainders, while avoiding negative counts.
-    This is useful when expected farm counts per size class are fractional but
-    need to be converted to integer counts while preserving the total number of
-    target farms.
+    ``target_sum`` may be much smaller than ``round(values.sum())`` when the
+    Lowder-implied farm count is capped by the number of available model cells.
+    The values are therefore rescaled to the requested total before applying the
+    largest-remainder method. This preserves their relative size-class weights and
+    guarantees that the returned counts sum exactly to the feasible target.
+
     Args:
-        values: Array of fractional values to round.
-        target_sum: Required sum of the returned integer array.
+        values: Non-negative finite size-class weights or expected counts.
+        target_sum: Required non-negative integer sum of the returned counts.
+
     Returns:
-        Integer array with the same shape as ``values``. The values are rounded
-        versions of the input values and sum to ``target_sum`` where possible.
+        Non-negative int64 counts with the same shape as ``values`` and exact sum
+        ``target_sum``.
+
+    Raises:
+        ValueError: If values are not a one-dimensional finite non-negative array,
+            target_sum is negative, or positive counts are requested from zero total
+            weight.
+        RuntimeError: If exact-sum rounding fails unexpectedly.
     """
-    floored = np.floor(values).astype(np.int64)
-    missing = int(target_sum - floored.sum())
+    values = np.asarray(values, dtype=np.float64)
+    if values.ndim != 1:
+        raise ValueError("values must be one-dimensional.")
+    if target_sum < 0:
+        raise ValueError("target_sum cannot be negative.")
+    if not np.isfinite(values).all() or (values < 0.0).any():
+        raise ValueError("values must be finite and non-negative.")
+    if target_sum == 0:
+        return np.zeros(values.shape, dtype=np.int64)
 
-    if missing > 0:
-        order = np.argsort(values - floored)[::-1]
-        floored[order[:missing]] += 1
-    elif missing < 0:
-        order = np.argsort(values - floored)
-        for index in order:
-            if missing == 0:
-                break
-            if floored[index] > 0:
-                floored[index] -= 1
-                missing += 1
+    total = float(values.sum())
+    if total <= 0.0:
+        raise ValueError("Positive target_sum requires at least one positive value.")
 
-    return floored
+    scaled = values / total * int(target_sum)
+    rounded = np.floor(scaled).astype(np.int64)
+    remaining = int(target_sum - rounded.sum())
+    if remaining > 0:
+        fractional = scaled - rounded
+        indices = np.arange(values.size, dtype=np.int64)
+        # Largest fractional remainder first; lower index is the stable tie-breaker.
+        order = np.lexsort((indices, -fractional))
+        rounded[order[:remaining]] += 1
+
+    if (rounded < 0).any() or int(rounded.sum()) != int(target_sum):
+        raise RuntimeError("Largest-remainder rounding did not reach the target sum.")
+    return rounded
+
+
+def _allocate_lowder_target_counts(
+    expected_n_farms: np.ndarray,
+    target_bin_area_m2: np.ndarray,
+    target_sum: int,
+) -> np.ndarray:
+    """Allocate an exact farm count while retaining important size classes.
+
+    When the raster-imposed farm-count cap is smaller than the unconstrained
+    Lowder expectation, ordinary largest-remainder rounding can assign zero farms
+    to a size class that represents a substantial share of agricultural area.
+    That would later discard the entire bin area. This allocator therefore gives
+    every non-empty size class one representative whenever the target count permits
+    it. If there are fewer farms than non-empty classes, bins with the largest area
+    contribution are retained. Remaining farms follow the residual Lowder holding
+    counts using deterministic largest-remainder rounding.
+    """
+    expected_n_farms = np.asarray(expected_n_farms, dtype=np.float64)
+    target_bin_area_m2 = np.asarray(target_bin_area_m2, dtype=np.float64)
+    if expected_n_farms.ndim != 1 or target_bin_area_m2.ndim != 1:
+        raise ValueError("Lowder farm-count inputs must be one-dimensional.")
+    if expected_n_farms.shape != target_bin_area_m2.shape:
+        raise ValueError("Lowder farm-count inputs must have matching shapes.")
+    if target_sum < 1:
+        raise ValueError("target_sum must be at least 1.")
+    if (expected_n_farms < 0.0).any() or not np.isfinite(expected_n_farms).all():
+        raise ValueError("expected_n_farms must be finite and non-negative.")
+    if (target_bin_area_m2 < 0.0).any() or not np.isfinite(target_bin_area_m2).all():
+        raise ValueError("target_bin_area_m2 must be finite and non-negative.")
+
+    positive = (expected_n_farms > 0.0) & (target_bin_area_m2 > 0.0)
+    positive_indices = np.flatnonzero(positive)
+    if positive_indices.size == 0:
+        raise ValueError("At least one Lowder size class must have positive support.")
+
+    counts = np.zeros(expected_n_farms.shape, dtype=np.int64)
+    if target_sum >= positive_indices.size:
+        counts[positive_indices] = 1
+        remaining = int(target_sum - positive_indices.size)
+        if remaining > 0:
+            residual = np.maximum(expected_n_farms[positive_indices] - 1.0, 0.0)
+            if float(residual.sum()) <= 0.0:
+                residual = expected_n_farms[positive_indices]
+            counts[positive_indices] += _largest_remainder_round(residual, remaining)
+    else:
+        # If every non-empty class cannot be represented, retain the classes that
+        # carry the most area. Expected holding count is the secondary tie-breaker,
+        # followed by the original column order for determinism.
+        areas = target_bin_area_m2[positive_indices]
+        expected = expected_n_farms[positive_indices]
+        order = np.lexsort((positive_indices, -expected, -areas))
+        chosen = positive_indices[order[:target_sum]]
+        counts[chosen] = 1
+
+    if (counts < 0).any() or int(counts.sum()) != int(target_sum):
+        raise RuntimeError("Lowder target-count allocation did not reach target_sum.")
+    return counts
 
 
 def create_lowder_target_farm_areas(
@@ -2775,7 +2981,8 @@ def create_lowder_target_farm_areas(
             count would imply fewer represented cells than farms.
     Returns:
         List of ``TargetFarm`` objects. Each object contains a target farm area
-        in square metres and the Lowder size class from which it was derived.
+        in square metres and the Lowder size class from which it was derived. The
+        target areas always sum to ``cultivated_area_m2``.
     Raises:
         ValueError: If no valid Lowder farm-size classes are available for the
             selected ISO3 code.
@@ -2902,10 +3109,45 @@ def create_lowder_target_farm_areas(
             )
             expected_total_n_farms = max_reasonable_n_farms
 
-    farm_statistics["target_n_farms"] = _largest_remainder_round(
+    farm_statistics["target_bin_area_m2"] = (
+        farm_statistics["database_area_m2"] * scale_factor
+    )
+    farm_statistics["target_n_farms"] = _allocate_lowder_target_counts(
         farm_statistics["expected_n_farms"].to_numpy(dtype=np.float64),
+        farm_statistics["target_bin_area_m2"].to_numpy(dtype=np.float64),
         expected_total_n_farms,
     )
+
+    represented = farm_statistics["target_n_farms"] > 0
+    represented_source_area_m2 = float(
+        farm_statistics.loc[represented, "target_bin_area_m2"].sum()
+    )
+    if represented_source_area_m2 <= 0.0:
+        raise RuntimeError(f"No represented Lowder area remains for {iso3}.")
+
+    omitted_area_m2 = max(
+        float(cultivated_area_m2) - represented_source_area_m2,
+        0.0,
+    )
+    farm_statistics["effective_target_bin_area_m2"] = 0.0
+    farm_statistics.loc[represented, "effective_target_bin_area_m2"] = (
+        farm_statistics.loc[represented, "target_bin_area_m2"]
+        * float(cultivated_area_m2)
+        / represented_source_area_m2
+    )
+    if omitted_area_m2 > max(1e-6, float(cultivated_area_m2) * 1e-12):
+        omitted_classes = farm_statistics.loc[
+            ~represented & (farm_statistics["target_bin_area_m2"] > 0.0),
+            "size_class",
+        ].tolist()
+        logger.warning(
+            "Raster farm-count constraints omit Lowder size classes %s in %s "
+            "representing %.3f%% of selected agricultural area. Redistributing "
+            "that area proportionally across represented size classes.",
+            omitted_classes,
+            iso3,
+            omitted_area_m2 / float(cultivated_area_m2) * 100.0,
+        )
 
     target_farms: list[TargetFarm] = []
 
@@ -2913,7 +3155,7 @@ def create_lowder_target_farm_areas(
         if row.target_n_farms <= 0:
             continue
 
-        target_bin_area_m2 = row.database_area_m2 * scale_factor
+        target_bin_area_m2 = float(row.effective_target_bin_area_m2)
         mean_target_area_m2 = target_bin_area_m2 / row.target_n_farms
 
         # Add small deterministic variation around the class mean so all farms
@@ -2948,6 +3190,18 @@ def create_lowder_target_farm_areas(
                     size_class=str(row.size_class),
                 )
             )
+
+    generated_area_m2 = float(sum(target.target_area_m2 for target in target_farms))
+    if not math.isclose(
+        generated_area_m2,
+        float(cultivated_area_m2),
+        rel_tol=1e-12,
+        abs_tol=1e-3,
+    ):
+        raise RuntimeError(
+            f"Lowder target farms for {iso3} cover {generated_area_m2:.6f} m², "
+            f"not the selected agricultural area {cultivated_area_m2:.6f} m²."
+        )
 
     rng.shuffle(target_farms)
 
@@ -3008,18 +3262,37 @@ def farm_size_distribution_fit_by_size_class(
     expected_counts = pd.Series(0.0, index=size_class_boundaries.keys())
     actual_counts = pd.Series(0, index=size_class_boundaries.keys(), dtype=np.int64)
 
-    for _, region in regions.iterrows():
-        region_id = int(region[region_id_column])
-        original_iso3 = region[country_iso3_column]
-        iso3 = farm_size_donor_country.get(original_iso3, original_iso3)
+    # Invariant lookups are built once, and farmers are grouped once. This avoids
+    # scanning the complete multi-million-row farmer table for every region.
+    region_iso3_lookup = (
+        regions[[region_id_column, country_iso3_column]]
+        .drop_duplicates(subset=region_id_column)
+        .set_index(region_id_column)[country_iso3_column]
+        .to_dict()
+    )
+    farm_sizes_by_iso3 = {
+        str(iso3): group
+        for iso3, group in farm_sizes_per_region.groupby("ISO3", sort=False)
+    }
 
-        farmers_region = farmers.loc[farmers[region_id_column] == region_id].copy()
-        if farmers_region.empty:
+    for region_id_value, farmers_region in farmers.groupby(
+        region_id_column, sort=False, observed=True
+    ):
+        region_id = int(region_id_value)
+        if region_id not in region_iso3_lookup:
+            if logger is not None:
+                logger.warning(
+                    "Region %s is present in the farmer table but missing from the "
+                    "region database; skipping its Lowder size-class diagnostic.",
+                    region_id,
+                )
             continue
 
-        region_farm_sizes = farm_sizes_per_region.loc[
-            farm_sizes_per_region["ISO3"] == iso3
-        ]
+        original_iso3 = region_iso3_lookup[region_id]
+        iso3 = farm_size_donor_country.get(original_iso3, original_iso3)
+        region_farm_sizes = farm_sizes_by_iso3.get(str(iso3))
+        if region_farm_sizes is None:
+            region_farm_sizes = farm_sizes_per_region.iloc[0:0]
 
         try:
             expected_region = _expected_lowder_farms_by_size_class(
@@ -3045,12 +3318,10 @@ def farm_size_distribution_fit_by_size_class(
             farmers_region[area_column],
             size_class_boundaries,
         )
-
         actual_region = actual_size_classes.value_counts().reindex(
             size_class_boundaries.keys(),
             fill_value=0,
         )
-
         actual_counts = actual_counts.add(actual_region, fill_value=0).astype(np.int64)
 
     result = pd.DataFrame(

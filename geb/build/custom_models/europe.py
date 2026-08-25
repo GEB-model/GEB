@@ -11,7 +11,7 @@ import pandas as pd
 import xarray as xr
 from rasterio import features
 from rasterio.enums import Resampling
-from rasterio.warp import transform_bounds
+from rasterio.warp import reproject, transform_bounds
 from shapely.geometry import shape as shapely_shape
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
@@ -43,6 +43,7 @@ from geb.build.workflows.farmers import (
     farm_size_distribution_fit_by_size_class,
     get_farm_locations,
     grow_farms_from_raster_cells,
+    ensure_complete_sequence_in_selected_cells,
     raster_cell_area_m2,
     relax_lowder_targets_for_sequence_fit,
     select_cultivated_cells_by_area,
@@ -67,11 +68,77 @@ _HRL_FALLOW_CROP_CODE = -1
 _HRL_MISSING_CROP_CODE = -2
 _HRL_NO_CROPLAND_CODE = 0
 _HRL_OUTSIDE_AREA_CODE = 65535
+_HRL_GDAL_ALTERED_OUTSIDE_AREA_CODE = 65534
+# Temporary destination sentinels used only inside GDAL warp calls. They are
+# deliberately different from both the source missing code (-2) and every valid
+# HRL category so GDAL >=3.11 never needs its nodata-collision replacement logic.
+_HRL_WARP_DST_NODATA = -3
+_HRL_FRACTION_WARP_DST_NODATA = -1.0
 
 _HRL_NO_COVERAGE_ERRORS = (
     WEkEONoCoverageError,
     CDSENoCoverageError,
 )
+
+
+def _process_memory_mib() -> tuple[float | None, float | None]:
+    """Return current RSS and Linux high-water RSS in MiB when available."""
+    rss_mib: float | None = None
+    hwm_mib: float | None = None
+    try:
+        with open("/proc/self/status", encoding="utf-8") as status_file:
+            for line in status_file:
+                if line.startswith("VmRSS:"):
+                    rss_mib = float(line.split()[1]) / 1024.0
+                elif line.startswith("VmHWM:"):
+                    hwm_mib = float(line.split()[1]) / 1024.0
+                if rss_mib is not None and hwm_mib is not None:
+                    break
+    except OSError, ValueError, IndexError:
+        return None, None
+    return rss_mib, hwm_mib
+
+
+def _record_phase_timing(
+    timings: dict[str, float], phase: str, started: float
+) -> float:
+    """Accumulate elapsed wall time for one deterministic workflow phase."""
+    elapsed = time.perf_counter() - started
+    timings[phase] = timings.get(phase, 0.0) + elapsed
+    return elapsed
+
+
+def _validated_HRL_crop_values(values: np.ndarray) -> np.ndarray:
+    """Return normalized int32 CTY values using the documented Croplands codes.
+
+    The HRL Croplands PUM defines CTY value 0 as ``No cropland`` and 65535 as
+    ``Outside area``. The model represents outside/no-coverage with -2, so 65535
+    and non-finite values are normalized to that signed sentinel. Value 65534 is
+    *not* a valid CTY code; it is a legitimate quality flag in some other HRL
+    confidence products, so it must never be globally treated as nodata. If it
+    reaches the CTY workflow, fail explicitly rather than silently relabelling it.
+    """
+    values = np.asarray(values)
+    if np.issubdtype(values.dtype, np.floating):
+        values = np.nan_to_num(
+            values,
+            nan=_HRL_MISSING_CROP_CODE,
+            posinf=_HRL_MISSING_CROP_CODE,
+            neginf=_HRL_MISSING_CROP_CODE,
+        )
+    values = np.ascontiguousarray(values.astype(np.int32, copy=False))
+    if np.any(values == _HRL_GDAL_ALTERED_OUTSIDE_AREA_CODE):
+        raise ValueError(
+            "The HRL Crop Types (CTY) raster contains value 65534. According to "
+            "the HRL Croplands Product User Manual, 65534 is not a valid CTY "
+            "class/quality flag (CTY uses 0, the documented crop codes, and 65535 "
+            "for outside area). A 65534 value in CTY therefore indicates an "
+            "unexpected or altered source/cache value; do not normalize it silently."
+        )
+    if np.any(values == _HRL_OUTSIDE_AREA_CODE):
+        values = values.copy()
+        values[values == _HRL_OUTSIDE_AREA_CODE] = _HRL_MISSING_CROP_CODE
+    return values
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,6 +205,40 @@ HRL_TO_MIRCA_OS_CROP_CLASS_MAP: dict[int, int | None] = {
     0: None,  # No cropland
     65535: None,  # Outside area
 }
+
+# Positive values that are semantically valid in the official HRL CTY product and
+# have an explicit downstream MIRCA/GEB interpretation. Keep this contract separate
+# from transport nodata handling: 65535 is normalized to -2 before this stage, while
+# 0 remains the valid native ``No cropland`` state until the farm domain is selected.
+_HRL_VALID_POSITIVE_CTY_CODES = frozenset(
+    int(code)
+    for code, mirca_code in HRL_TO_MIRCA_OS_CROP_CLASS_MAP.items()
+    if int(code) > 0 and mirca_code is not None
+)
+
+
+def _validate_HRL_crop_area_codes(
+    category_areas_m2: dict[int, float],
+    *,
+    context: str,
+) -> None:
+    """Reject positive CTY categories outside the official workflow contract.
+
+    Validation uses the already aggregated category dictionary rather than rescanning
+    the 10 m raster, so it adds negligible cost to native-area calculation.
+    """
+    unexpected = sorted(
+        int(code)
+        for code in category_areas_m2
+        if int(code) > 0 and int(code) not in _HRL_VALID_POSITIVE_CTY_CODES
+    )
+    if unexpected:
+        raise ValueError(
+            f"{context} contains unexpected positive HRL CTY code(s) {unexpected[:10]}. "
+            "Expected only documented CTY crop classes; 0 is no cropland, 65535 "
+            "is outside area and is normalized to -2, and 65534 is invalid for CTY."
+        )
+
 
 _HRL_CROPLANDS_EEA38_ISO3 = frozenset(
     {
@@ -299,25 +400,31 @@ def _assert_compact_farm_ids(
             ``0..len(farmers)-1``.
     """
     farm_values = farms.values
-    present_ids = np.unique(farm_values[farm_values != nodata]).astype(np.int32)
-
+    present_ids = farm_values[farm_values != nodata]
     if present_ids.size == 0:
         raise ValueError("Farm raster contains no represented farmers.")
 
-    expected_ids = np.arange(len(farmers), dtype=np.int32)
-
-    if not np.array_equal(present_ids, expected_ids):
-        missing_ids = np.setdiff1d(expected_ids, present_ids)
-        extra_ids = np.setdiff1d(present_ids, expected_ids)
+    n_farmers = len(farmers)
+    minimum_present_id = int(present_ids.min())
+    maximum_present_id = int(present_ids.max())
+    if minimum_present_id < 0 or maximum_present_id >= n_farmers:
+        raise ValueError(
+            "Farm raster IDs are outside the compact farmer-table range. "
+            f"Expected IDs 0..{n_farmers - 1}; observed range "
+            f"{minimum_present_id}..{maximum_present_id}."
+        )
+    present_counts = np.bincount(present_ids, minlength=n_farmers)
+    if present_counts.size != n_farmers or np.any(present_counts == 0):
+        missing_ids = np.flatnonzero(present_counts == 0)
         raise ValueError(
             "Farm raster IDs are not compact or not aligned with the farmer table. "
-            f"Expected IDs 0..{len(farmers) - 1}. "
-            f"Missing examples: {missing_ids[:10].tolist()}; "
-            f"extra examples: {extra_ids[:10].tolist()}."
+            f"Expected IDs 0..{n_farmers - 1}. "
+            f"Missing examples: {missing_ids[:10].tolist()}."
         )
 
     if farmer_id_column in farmers.columns:
         farmer_ids = farmers[farmer_id_column].to_numpy(dtype=np.int32)
+        expected_ids = np.arange(n_farmers, dtype=np.int32)
         if not np.array_equal(farmer_ids, expected_ids):
             raise ValueError(
                 f"Farmer table column {farmer_id_column!r} is not compact and "
@@ -403,6 +510,14 @@ def _decode_hrl_crops_from_farmer_table(
         )
         hrl_crop = np.where(invalid_crop, -1, hrl_crop).astype(np.int32)
         mirca_crop = map_hrl_crop_to_mirca_crop(hrl_crop)
+        unexpected_crop = (hrl_crop > 0) & (mirca_crop == -1)
+        if unexpected_crop.any():
+            unexpected_codes = np.unique(hrl_crop[unexpected_crop])[:10].tolist()
+            raise ValueError(
+                f"Farmer crop column {crop_column!r} contains positive HRL CTY "
+                f"code(s) without a configured MIRCA mapping: {unexpected_codes}. "
+                "Refusing to treat an unknown positive category as fallow/missing."
+            )
         farmer_crops = pd.DataFrame(
             {
                 "farmer_id": compact_farmer_ids,
@@ -450,6 +565,14 @@ def _decode_hrl_crops_from_farmer_table(
     )
     hrl_crop = np.where(invalid_crop, -1, hrl_crop).astype(np.int32)
     mirca_crop = map_hrl_crop_to_mirca_crop(hrl_crop)
+    unexpected_crop = (hrl_crop > 0) & (mirca_crop == -1)
+    if unexpected_crop.any():
+        unexpected_codes = np.unique(hrl_crop[unexpected_crop])[:10].tolist()
+        raise ValueError(
+            f"Farmer crop column {crop_column!r} contains positive HRL CTY "
+            f"code(s) without a configured MIRCA mapping: {unexpected_codes}. "
+            "Refusing to treat an unknown positive category as fallow/missing."
+        )
 
     farmer_crops = pd.DataFrame(
         {
@@ -2315,10 +2438,7 @@ def _native_hrl_crop_category_areas_m2(
     for y_start in range(0, n_rows, chunk_rows):
         y_stop = min(y_start + chunk_rows, n_rows)
         crop_chunk_da = crop_types.isel(y=slice(y_start, y_stop))
-        crop_values = crop_chunk_da.values
-        if np.issubdtype(crop_values.dtype, np.floating):
-            crop_values = np.nan_to_num(crop_values, nan=_HRL_OUTSIDE_AREA_CODE)
-        crop_values = np.asarray(crop_values, dtype=np.int32)
+        crop_values = _validated_HRL_crop_values(crop_chunk_da.values)
         valid_crop = (crop_values > _HRL_NO_CROPLAND_CODE) & (
             crop_values != _HRL_OUTSIDE_AREA_CODE
         )
@@ -2333,14 +2453,21 @@ def _native_hrl_crop_category_areas_m2(
         if not valid.any():
             continue
 
-        crop_codes, inverse = np.unique(crop_values[valid], return_inverse=True)
+        valid_codes = crop_values[valid]
         if projected_cell_area_m2 is not None:
+            counts = np.bincount(valid_codes)
+            crop_codes = np.flatnonzero(counts)
             crop_areas_m2 = (
-                np.bincount(inverse).astype(np.float64) * projected_cell_area_m2
+                counts[crop_codes].astype(np.float64) * projected_cell_area_m2
             )
         else:
             chunk_cell_area_m2 = raster_cell_area_m2(crop_chunk_da)
-            crop_areas_m2 = np.bincount(inverse, weights=chunk_cell_area_m2[valid])
+            weighted_areas = np.bincount(
+                valid_codes,
+                weights=chunk_cell_area_m2[valid],
+            )
+            crop_codes = np.flatnonzero(weighted_areas)
+            crop_areas_m2 = weighted_areas[crop_codes]
         for crop_code, crop_area_m2 in zip(crop_codes, crop_areas_m2, strict=True):
             if int(crop_code) > 0 and crop_area_m2 > 0.0:
                 totals[int(crop_code)] = totals.get(int(crop_code), 0.0) + float(
@@ -2695,8 +2822,26 @@ def _crop_area_diagnostics_from_assignments(
 def _reproject_HRL_year_to_subgrid(
     crop_types: xr.DataArray,
     template: xr.DataArray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Aggregate one native-resolution HRL CTY year to the model subgrid."""
+) -> tuple[np.ndarray, np.ndarray]:
+    """Aggregate one native-resolution HRL CTY year to the model subgrid.
+
+    GDAL >= 3.11 contains nodata-collision avoidance logic that may replace a
+    source value when it equals the destination nodata value. In affected GDAL
+    releases this can also be triggered too aggressively. CTY uses UInt16 65535
+    as the documented ``Outside area`` code, so allowing rioxarray/GDAL to choose
+    its default UInt16 destination nodata (also 65535) can turn outside pixels
+    into 65534.
+
+    To make the result independent of that behavior, this routine materializes
+    the already tile-clipped source once, converts CTY to signed int32, and calls
+    rasterio.warp.reproject with *different* source and destination sentinels:
+    - source missing/outside: -2
+    - temporary categorical destination nodata: -3
+    - temporary fraction destination nodata: -1.0
+
+    The temporary destination values are normalized immediately after the warp.
+    No UInt16/65535 nodata value is ever supplied to GDAL here.
+    """
     if crop_types.rio.crs is None:
         raise ValueError("The HRL Crop Types raster must have a CRS.")
     if crop_types.ndim != 2:
@@ -2704,58 +2849,84 @@ def _reproject_HRL_year_to_subgrid(
     if template.rio.crs is None:
         raise ValueError("The regional subgrid template must have a CRS.")
 
-    crop_values = crop_types.values
-    if np.issubdtype(crop_values.dtype, np.floating):
-        crop_values = np.nan_to_num(crop_values, nan=_HRL_OUTSIDE_AREA_CODE)
-    crop_values = np.ascontiguousarray(crop_values.astype(np.int32, copy=False))
-    has_hrl_coverage = crop_values != _HRL_OUTSIDE_AREA_CODE
+    crop_values = _validated_HRL_crop_values(crop_types.values)
+    has_hrl_coverage = crop_values != _HRL_MISSING_CROP_CODE
     active_crop = (crop_values > _HRL_NO_CROPLAND_CODE) & has_hrl_coverage
 
-    crop_states = crop_values.copy()
-    crop_states[~active_crop] = _HRL_MISSING_CROP_CODE
-    crop_state_da = crop_types.copy(data=crop_states)
-    crop_state_da.attrs = {}
-    crop_state_da = crop_state_da.rio.write_crs(crop_types.rio.crs)
-    crop_state_da = crop_state_da.rio.write_nodata(_HRL_MISSING_CROP_CODE)
-    crop_subgrid = crop_state_da.rio.reproject_match(
-        template, resampling=Resampling.mode, nodata=_HRL_MISSING_CROP_CODE
-    )
-    crop_subgrid_values = crop_subgrid.values
-    if np.issubdtype(crop_subgrid_values.dtype, np.floating):
-        crop_subgrid_values = np.nan_to_num(
-            crop_subgrid_values, nan=_HRL_MISSING_CROP_CODE
-        )
-    crop_subgrid_values = crop_subgrid_values.astype(np.int32, copy=False)
+    source_transform = crop_types.rio.transform(recalc=True)
+    destination_transform = template.rio.transform(recalc=True)
+    destination_shape = (template.sizes["y"], template.sizes["x"])
 
-    cultivated = crop_types.copy(data=active_crop.astype(np.float32))
-    cultivated.attrs = {}
-    cultivated = cultivated.rio.write_crs(crop_types.rio.crs).rio.write_nodata(None)
-    cultivated_fraction = cultivated.rio.reproject_match(
-        template, resampling=Resampling.average, nodata=0.0
+    # Categorical crop state. Source -2 is excluded from mode resampling, while
+    # destination -3 is guaranteed not to collide with any source value.
+    crop_states = np.ascontiguousarray(crop_values, dtype=np.int32)
+    crop_subgrid_values = np.full(
+        destination_shape, _HRL_WARP_DST_NODATA, dtype=np.int32
     )
-    cultivated_fraction_values = np.clip(
-        np.nan_to_num(cultivated_fraction.values, nan=0.0, posinf=0.0, neginf=0.0),
-        0.0,
-        1.0,
-    ).astype(np.float32, copy=False)
+    reproject(
+        source=crop_states,
+        destination=crop_subgrid_values,
+        src_transform=source_transform,
+        src_crs=crop_types.rio.crs,
+        src_nodata=_HRL_MISSING_CROP_CODE,
+        dst_transform=destination_transform,
+        dst_crs=template.rio.crs,
+        dst_nodata=_HRL_WARP_DST_NODATA,
+        resampling=Resampling.mode,
+        init_dest_nodata=True,
+    )
+    crop_subgrid_values[crop_subgrid_values == _HRL_WARP_DST_NODATA] = (
+        _HRL_MISSING_CROP_CODE
+    )
 
-    coverage = crop_types.copy(data=has_hrl_coverage.astype(np.float32))
-    coverage.attrs = {}
-    coverage = coverage.rio.write_crs(crop_types.rio.crs).rio.write_nodata(None)
-    coverage_fraction = coverage.rio.reproject_match(
-        template, resampling=Resampling.average, nodata=0.0
+    # Cultivated fraction. Both 0.0 and 1.0 are valid source values, so 0.0 must
+    # never be used as destination nodata. Use -1.0 temporarily and convert
+    # uncovered destination cells to a cultivated fraction of zero afterwards.
+    cultivated_source = np.ascontiguousarray(active_crop.astype(np.float32))
+    cultivated_fraction_values = np.full(
+        destination_shape, _HRL_FRACTION_WARP_DST_NODATA, dtype=np.float32
     )
-    coverage_fraction_values = np.clip(
-        np.nan_to_num(coverage_fraction.values, nan=0.0, posinf=0.0, neginf=0.0),
-        0.0,
-        1.0,
-    ).astype(np.float32, copy=False)
+    reproject(
+        source=cultivated_source,
+        destination=cultivated_fraction_values,
+        src_transform=source_transform,
+        src_crs=crop_types.rio.crs,
+        src_nodata=None,
+        dst_transform=destination_transform,
+        dst_crs=template.rio.crs,
+        dst_nodata=_HRL_FRACTION_WARP_DST_NODATA,
+        resampling=Resampling.average,
+        init_dest_nodata=True,
+    )
+    cultivated_fraction_values = np.nan_to_num(
+        cultivated_fraction_values,
+        nan=0.0,
+        posinf=0.0,
+        neginf=0.0,
+    )
+    cultivated_fraction_values[
+        cultivated_fraction_values == _HRL_FRACTION_WARP_DST_NODATA
+    ] = 0.0
+    np.clip(cultivated_fraction_values, 0.0, 1.0, out=cultivated_fraction_values)
 
-    no_active_modal = crop_subgrid_values == _HRL_MISSING_CROP_CODE
-    crop_subgrid_values[no_active_modal & (coverage_fraction_values > 0.0)] = (
-        _HRL_NO_CROPLAND_CODE
-    )
-    return crop_subgrid_values, cultivated_fraction_values, coverage_fraction_values
+    return crop_subgrid_values, cultivated_fraction_values
+
+
+def _chunk_slices_without_singletons(
+    length: int,
+    chunk_size: int,
+) -> tuple[slice, ...]:
+    """Split an axis while folding a one-cell tail into the previous chunk."""
+    if length < 1:
+        return ()
+    slices = [
+        slice(start, min(start + chunk_size, length))
+        for start in range(0, length, chunk_size)
+    ]
+    if len(slices) > 1 and slices[-1].stop - slices[-1].start == 1:
+        slices[-2] = slice(slices[-2].start, slices[-1].stop)
+        slices.pop()
+    return tuple(slices)
 
 
 class Europe(GEBModel):
@@ -3042,6 +3213,10 @@ class Europe(GEBModel):
         farm_sizes_per_region = self.data_catalog.fetch(
             "lowder_farm_size_distribution"
         ).read()
+        lowder_rows_by_iso3 = {
+            str(iso3): group.drop(["Country", "Census Year", "Total"], axis=1)
+            for iso3, group in farm_sizes_per_region.groupby("ISO3", sort=False)
+        }
         farm_countries_list = list(farm_sizes_per_region["ISO3"].unique())
         farm_size_donor_country = setup_donor_countries(
             self.data_catalog,
@@ -3064,6 +3239,9 @@ class Europe(GEBModel):
         fallow_farmers_by_year = {year: 0 for year in years}
         missing_farmers_by_year = {year: 0 for year in years}
         farmer_id_offset = 0
+        workflow_started = time.perf_counter()
+        phase_totals_seconds: dict[str, float] = {}
+        farmer_chunks_in_compact_order = True
 
         static_selection_name = "multiyear_coverage"
         self.logger.info(
@@ -3081,12 +3259,31 @@ class Europe(GEBModel):
             if not region_mask_full.any():
                 continue
 
+            if original_iso3.upper() not in _HRL_CROPLANDS_EEA38_ISO3:
+                self.logger.warning(
+                    "Skipping region %s (%s) because the country is outside the "
+                    "published HRL Croplands coverage; no farms will be created.",
+                    region_id,
+                    original_iso3,
+                )
+                continue
+
             row_indices, col_indices = np.where(region_mask_full)
             y_slice = slice(int(row_indices.min()), int(row_indices.max()) + 1)
             x_slice = slice(int(col_indices.min()), int(col_indices.max()) + 1)
             region_template = region_ids.isel(y=y_slice, x=x_slice)
             region_mask = region_mask_full[y_slice, x_slice]
             region_cell_area_m2 = cell_area_m2[y_slice, x_slice]
+            if region_template.sizes["x"] < 2 or region_template.sizes["y"] < 2:
+                self.logger.warning(
+                    "Skipping region %s (%s) because its model-cell extent is %sx%s; "
+                    "raster reprojection requires at least two cells on each axis.",
+                    region_id,
+                    original_iso3,
+                    region_template.sizes["x"],
+                    region_template.sizes["y"],
+                )
+                continue
 
             region_active_geometry = region.geometry.intersection(hrl_active_geometry)
             if region_active_geometry.is_empty:
@@ -3101,16 +3298,38 @@ class Europe(GEBModel):
                 original_iso3,
                 region_bounds,
             )
+            region_started = time.perf_counter()
+            region_phase_seconds: dict[str, float] = {}
 
-            crop_per_year: list[np.ndarray] = []
-            cultivated_fraction_per_year: list[np.ndarray] = []
-            hrl_coverage_fraction_per_year: list[np.ndarray] = []
+            crop_stack = np.full(
+                (len(years), *region_template.shape),
+                _HRL_MISSING_CROP_CODE,
+                dtype=np.int32,
+            )
+            fraction_stack = np.zeros(
+                (len(years), *region_template.shape),
+                dtype=np.float32,
+            )
             native_crop_areas_per_year: list[dict[int, float]] = []
             region_has_hrl_coverage = True
+            reprojection_source_crs: Any | None = None
+            reprojection_tiles: (
+                list[
+                    tuple[
+                        slice,
+                        slice,
+                        np.ndarray,
+                        xr.DataArray,
+                        tuple[float, float, float, float],
+                    ]
+                ]
+                | None
+            ) = None
 
-            for year in years:
+            for year_index, year in enumerate(years):
                 crop_types = None
                 crop_types_adapter = None
+                read_started = time.perf_counter()
                 try:
                     crop_types_adapter = self.data_catalog.fetch(
                         f"hrl_crop_types_{year}",
@@ -3121,8 +3340,27 @@ class Europe(GEBModel):
                         bounds=region_bounds,
                         year=year,
                         dst_crs=None,
-                        normalize_nodata=False,
+                        normalize_nodata=True,
                         chunks=raster_chunks,
+                    )
+                    # ``dst_crs=None`` requests the native Copernicus HRL grid,
+                    # which is EPSG:3035. Dask-backed xarray/rioxarray operations can
+                    # occasionally drop only the grid-mapping metadata while retaining
+                    # the correct x/y coordinates. Repair that metadata defensively at
+                    # the workflow boundary so native-area and tiled reprojection never
+                    # receive a CRS-less HRL raster.
+                    if crop_types.rio.crs is None:
+                        self.logger.warning(
+                            "HRL adapter %s returned year %s without CRS metadata; "
+                            "restoring native EPSG:3035 before processing.",
+                            type(crop_types_adapter).__name__,
+                            year,
+                        )
+                        crop_types = crop_types.rio.set_spatial_dims(
+                            x_dim="x", y_dim="y", inplace=False
+                        ).rio.write_crs("EPSG:3035", inplace=False)
+                    read_seconds = _record_phase_timing(
+                        region_phase_seconds, "hrl_read", read_started
                     )
                 except _HRL_NO_COVERAGE_ERRORS as error:
                     if original_iso3.upper() in _HRL_CROPLANDS_EEA38_ISO3:
@@ -3138,141 +3376,133 @@ class Europe(GEBModel):
                     region_has_hrl_coverage = False
                     break
 
-                native_crop_areas_per_year.append(
-                    _native_hrl_crop_category_areas_m2(
-                        crop_types,
-                        region_active_geometry,
-                        chunk_rows=max(int(raster_chunks.get("y", 4096)), 1),
-                    )
+                native_started = time.perf_counter()
+                native_crop_areas = _native_hrl_crop_category_areas_m2(
+                    crop_types,
+                    region_active_geometry,
+                    chunk_rows=max(int(raster_chunks.get("y", 4096)), 1),
+                )
+                _validate_HRL_crop_area_codes(
+                    native_crop_areas,
+                    context=f"Region {region_id}, HRL year {year}",
+                )
+                native_crop_areas_per_year.append(native_crop_areas)
+                native_seconds = _record_phase_timing(
+                    region_phase_seconds, "native_area", native_started
                 )
 
-                crop_year = np.full(
-                    region_template.shape,
-                    _HRL_MISSING_CROP_CODE,
-                    dtype=np.int32,
-                )
-                cultivated_fraction_year = np.zeros(
-                    region_template.shape, dtype=np.float32
-                )
-                coverage_fraction_year = np.zeros(
-                    region_template.shape, dtype=np.float32
-                )
+                crop_year = crop_stack[year_index]
+                cultivated_fraction_year = fraction_stack[year_index]
                 source_bounds = crop_types.rio.bounds()
                 source_resolution = crop_types.rio.resolution()
                 source_buffer_x = abs(float(source_resolution[0])) * 2.0
                 source_buffer_y = abs(float(source_resolution[1])) * 2.0
 
-                for tile_y_start in range(
-                    0, region_template.sizes["y"], subgrid_chunk_size
-                ):
-                    tile_y_stop = min(
-                        tile_y_start + subgrid_chunk_size, region_template.sizes["y"]
+                if crop_types.rio.crs is None:
+                    raise ValueError(
+                        "The native HRL Crop Types raster must have a CRS."
                     )
-                    for tile_x_start in range(
-                        0, region_template.sizes["x"], subgrid_chunk_size
-                    ):
-                        tile_x_stop = min(
-                            tile_x_start + subgrid_chunk_size,
-                            region_template.sizes["x"],
-                        )
-                        tile_y_slice = slice(tile_y_start, tile_y_stop)
-                        tile_x_slice = slice(tile_x_start, tile_x_stop)
-                        tile_region_mask = region_mask[tile_y_slice, tile_x_slice]
-                        if not tile_region_mask.any():
-                            continue
-
-                        tile_template = region_template.isel(
-                            y=tile_y_slice, x=tile_x_slice
-                        )
-                        tile_bounds = transform_bounds(
-                            tile_template.rio.crs,
-                            crop_types.rio.crs,
-                            *tile_template.rio.bounds(),
-                            densify_pts=21,
-                        )
-                        clip_min_x = max(
-                            tile_bounds[0] - source_buffer_x, source_bounds[0]
-                        )
-                        clip_min_y = max(
-                            tile_bounds[1] - source_buffer_y, source_bounds[1]
-                        )
-                        clip_max_x = min(
-                            tile_bounds[2] + source_buffer_x, source_bounds[2]
-                        )
-                        clip_max_y = min(
-                            tile_bounds[3] + source_buffer_y, source_bounds[3]
-                        )
-                        if clip_min_x >= clip_max_x or clip_min_y >= clip_max_y:
-                            continue
-
-                        crop_types_tile = crop_types.rio.clip_box(
-                            minx=clip_min_x,
-                            miny=clip_min_y,
-                            maxx=clip_max_x,
-                            maxy=clip_max_y,
-                            allow_one_dimensional_raster=True,
-                        )
-                        tile_crop, tile_fraction, tile_coverage_fraction = (
-                            _reproject_HRL_year_to_subgrid(
-                                crop_types_tile, tile_template
+                if reprojection_tiles is None:
+                    reprojection_source_crs = crop_types.rio.crs
+                    tile_y_slices = _chunk_slices_without_singletons(
+                        region_template.sizes["y"], subgrid_chunk_size
+                    )
+                    tile_x_slices = _chunk_slices_without_singletons(
+                        region_template.sizes["x"], subgrid_chunk_size
+                    )
+                    reprojection_tiles = []
+                    for tile_y_slice in tile_y_slices:
+                        for tile_x_slice in tile_x_slices:
+                            tile_region_mask = region_mask[tile_y_slice, tile_x_slice]
+                            if not tile_region_mask.any():
+                                continue
+                            tile_template = region_template.isel(
+                                y=tile_y_slice, x=tile_x_slice
                             )
-                        )
-                        tile_crop[~tile_region_mask] = _HRL_MISSING_CROP_CODE
-                        tile_fraction[~tile_region_mask] = 0.0
-                        tile_coverage_fraction[~tile_region_mask] = 0.0
-                        crop_year[tile_y_slice, tile_x_slice] = tile_crop
-                        cultivated_fraction_year[tile_y_slice, tile_x_slice] = (
-                            tile_fraction
-                        )
-                        coverage_fraction_year[tile_y_slice, tile_x_slice] = (
-                            tile_coverage_fraction
-                        )
-                        del (
-                            crop_types_tile,
-                            tile_crop,
-                            tile_fraction,
-                            tile_coverage_fraction,
-                        )
+                            tile_bounds = transform_bounds(
+                                tile_template.rio.crs,
+                                crop_types.rio.crs,
+                                *tile_template.rio.bounds(),
+                                densify_pts=21,
+                            )
+                            reprojection_tiles.append(
+                                (
+                                    tile_y_slice,
+                                    tile_x_slice,
+                                    tile_region_mask,
+                                    tile_template,
+                                    tuple(float(value) for value in tile_bounds),
+                                )
+                            )
+                elif crop_types.rio.crs != reprojection_source_crs:
+                    raise ValueError(
+                        "HRL Crop Types CRS changed between years within region "
+                        f"{region_id}: {reprojection_source_crs} -> {crop_types.rio.crs}."
+                    )
 
-                crop_per_year.append(crop_year)
-                cultivated_fraction_per_year.append(cultivated_fraction_year)
-                hrl_coverage_fraction_per_year.append(coverage_fraction_year)
+                reprojection_started = time.perf_counter()
+                assert reprojection_tiles is not None
+                for (
+                    tile_y_slice,
+                    tile_x_slice,
+                    tile_region_mask,
+                    tile_template,
+                    tile_bounds,
+                ) in reprojection_tiles:
+                    clip_min_x = max(tile_bounds[0] - source_buffer_x, source_bounds[0])
+                    clip_min_y = max(tile_bounds[1] - source_buffer_y, source_bounds[1])
+                    clip_max_x = min(tile_bounds[2] + source_buffer_x, source_bounds[2])
+                    clip_max_y = min(tile_bounds[3] + source_buffer_y, source_bounds[3])
+                    if clip_min_x >= clip_max_x or clip_min_y >= clip_max_y:
+                        continue
+
+                    crop_types_tile = crop_types.rio.clip_box(
+                        minx=clip_min_x,
+                        miny=clip_min_y,
+                        maxx=clip_max_x,
+                        maxy=clip_max_y,
+                        allow_one_dimensional_raster=True,
+                    )
+                    tile_crop, tile_fraction = _reproject_HRL_year_to_subgrid(
+                        crop_types_tile, tile_template
+                    )
+                    tile_crop[~tile_region_mask] = _HRL_MISSING_CROP_CODE
+                    tile_fraction[~tile_region_mask] = 0.0
+                    crop_year[tile_y_slice, tile_x_slice] = tile_crop
+                    cultivated_fraction_year[tile_y_slice, tile_x_slice] = tile_fraction
+                    del crop_types_tile, tile_crop, tile_fraction
+
+                reprojection_seconds = _record_phase_timing(
+                    region_phase_seconds, "reprojection", reprojection_started
+                )
+                rss_mib, hwm_mib = _process_memory_mib()
+                self.logger.debug(
+                    "HRL timing region %s year %s [s]: read=%.3f native=%.3f "
+                    "reprojection=%.3f; RSS=%s MiB; HWM=%s MiB.",
+                    region_id,
+                    year,
+                    read_seconds,
+                    native_seconds,
+                    reprojection_seconds,
+                    "n/a" if rss_mib is None else f"{rss_mib:.1f}",
+                    "n/a" if hwm_mib is None else f"{hwm_mib:.1f}",
+                )
+
+                crop_types.close()
                 del (
                     crop_types,
                     crop_types_adapter,
                     crop_year,
                     cultivated_fraction_year,
-                    coverage_fraction_year,
                 )
 
             if not region_has_hrl_coverage:
+                del crop_stack, fraction_stack
                 continue
-            if (
-                len(crop_per_year) != len(years)
-                or len(cultivated_fraction_per_year) != len(years)
-                or len(hrl_coverage_fraction_per_year) != len(years)
-                or len(native_crop_areas_per_year) != len(years)
-            ):
+            if len(native_crop_areas_per_year) != len(years):
                 raise ValueError(f"Incomplete HRL crop stack for region {region_id}.")
 
-            crop_stack = np.stack(crop_per_year).astype(
-                np.int32,
-                copy=False,
-            )
-            fraction_stack = np.stack(cultivated_fraction_per_year).astype(
-                np.float32,
-                copy=False,
-            )
-            coverage_fraction_stack = np.stack(hrl_coverage_fraction_per_year).astype(
-                np.float32,
-                copy=False,
-            )
-            del (
-                crop_per_year,
-                cultivated_fraction_per_year,
-                hrl_coverage_fraction_per_year,
-            )
-
+            selection_started = time.perf_counter()
             native_hrl_area_by_year_m2 = np.asarray(
                 [
                     float(sum(category_areas.values()))
@@ -3307,9 +3537,9 @@ class Europe(GEBModel):
                 float(native_hrl_area_by_year_m2.max(initial=0.0)),
             )
 
-            union_valid_crop = np.any(crop_stack > 0, axis=0)
-            eligible_mask = region_mask & union_valid_crop
-            valid_frequency = np.mean(crop_stack > 0, axis=0)
+            valid_count = np.count_nonzero(crop_stack > 0, axis=0)
+            eligible_mask = region_mask & (valid_count > 0)
+            valid_frequency = valid_count / float(len(years))
             mean_fraction = fraction_stack.mean(axis=0, dtype=np.float64)
             selection_score = 0.80 * valid_frequency + 0.20 * mean_fraction
 
@@ -3319,6 +3549,33 @@ class Europe(GEBModel):
                     "observed HRL CTY crop in any requested year.",
                     region_id,
                 )
+                continue
+
+            # A complete source sequence may include native no-cropland (0), which is
+            # converted to model fallow (-1) after static-cell selection. Native
+            # outside/missing (-2), however, invalidates the complete sequence. Check
+            # availability before selection so a lower-ranked valid sequence cannot be
+            # accidentally discarded by the static-area ranking.
+            regional_complete_original_sequence = (
+                eligible_mask
+                & ~np.any(crop_stack == _HRL_MISSING_CROP_CODE, axis=0)
+                & np.any(crop_stack > 0, axis=0)
+            )
+            if not regional_complete_original_sequence.any():
+                valid_cells_by_year = [
+                    int(np.count_nonzero(crop_stack[year_index][region_mask] > 0))
+                    for year_index in range(len(years))
+                ]
+                self.logger.warning(
+                    "Skipping region %s (%s) because no eligible model cell has a "
+                    "complete original HRL CTY sequence across requested years %s "
+                    "(valid crop cells by year: %s); no farms will be created.",
+                    region_id,
+                    original_iso3,
+                    years,
+                    valid_cells_by_year,
+                )
+                del crop_stack, fraction_stack
                 continue
 
             available_static_capacity_m2 = float(
@@ -3341,6 +3598,39 @@ class Europe(GEBModel):
                 region_cell_area_m2,
                 target_area_m2=selection_target_area_m2,
             )
+            selected_area_before_sequence_repair_m2 = float(
+                region_cell_area_m2[cultivated_mask].sum()
+            )
+            (
+                cultivated_mask,
+                sequence_selection_repaired,
+                sequence_repair_used_extra_cell,
+            ) = ensure_complete_sequence_in_selected_cells(
+                cultivated_mask,
+                regional_complete_original_sequence,
+                selection_score,
+                region_cell_area_m2,
+                target_area_m2=selection_target_area_m2,
+            )
+            if sequence_selection_repaired:
+                selected_area_after_sequence_repair_m2 = float(
+                    region_cell_area_m2[cultivated_mask].sum()
+                )
+                self.logger.info(
+                    "Region %s static HRL selection excluded every complete original "
+                    "sequence; retained the highest-ranked complete sequence via %s "
+                    "(selected area %.3f -> %.3f km²; %s complete source cells exist "
+                    "regionally).",
+                    region_id,
+                    (
+                        "one additional model cell"
+                        if sequence_repair_used_extra_cell
+                        else "an area-safe one-cell swap"
+                    ),
+                    selected_area_before_sequence_repair_m2 / 1_000_000.0,
+                    selected_area_after_sequence_repair_m2 / 1_000_000.0,
+                    int(np.count_nonzero(regional_complete_original_sequence)),
+                )
 
             # Convert native HRL no-cropland (0) to model fallow (-1) only
             # inside the final multi-year agricultural domain. Native outside/
@@ -3352,7 +3642,18 @@ class Europe(GEBModel):
             )
             crop_stack[:, ~cultivated_mask] = _HRL_MISSING_CROP_CODE
 
-            selected_missing = selected_3d & (crop_stack == _HRL_MISSING_CROP_CODE)
+            complete_original_sequence = (
+                cultivated_mask
+                & ~np.any(crop_stack == _HRL_MISSING_CROP_CODE, axis=0)
+                & np.any(crop_stack > 0, axis=0)
+            )
+            if not complete_original_sequence.any():
+                raise RuntimeError(
+                    "Static HRL sequence repair failed to retain a complete original "
+                    f"crop sequence in region {region_id}."
+                )
+            del regional_complete_original_sequence
+
             selected_area_m2 = float(region_cell_area_m2[cultivated_mask].sum())
             selected_fractional_area_by_year_m2 = np.asarray(
                 [
@@ -3417,6 +3718,8 @@ class Europe(GEBModel):
                     f"static agricultural domain in region {region_id}."
                 )
 
+            _record_phase_timing(region_phase_seconds, "selection", selection_started)
+            lowder_started = time.perf_counter()
             iso3 = farm_size_donor_country.get(original_iso3, original_iso3)
             if iso3 != original_iso3:
                 self.logger.info(
@@ -3424,10 +3727,8 @@ class Europe(GEBModel):
                     original_iso3,
                     iso3,
                 )
-            region_farm_sizes = farm_sizes_per_region.loc[
-                farm_sizes_per_region["ISO3"] == iso3
-            ].drop(["Country", "Census Year", "Total"], axis=1)
-            if len(region_farm_sizes) != 2:
+            region_farm_sizes = lowder_rows_by_iso3.get(str(iso3))
+            if region_farm_sizes is None or len(region_farm_sizes) != 2:
                 raise ValueError(
                     f"No complete Lowder farm-size data are available for region "
                     f"{region_id} ({original_iso3}; source {iso3})."
@@ -3455,7 +3756,9 @@ class Europe(GEBModel):
                     minimum_cells_per_farm=minimum_cells_per_farm,
                 )
             sequence_fit_target_farm_count = len(target_farms)
+            _record_phase_timing(region_phase_seconds, "lowder_targets", lowder_started)
 
+            farm_growth_started = time.perf_counter()
             local_farms, farmers_region = grow_farms_from_raster_cells(
                 cultivated_mask=cultivated_mask,
                 crop_sequences=crop_stack,
@@ -3470,7 +3773,18 @@ class Europe(GEBModel):
                 max_jump_distance_m=max_jump_distance_m,
             )
 
+            _record_phase_timing(
+                region_phase_seconds, "farm_growth", farm_growth_started
+            )
+            if not np.any((local_farms >= 0) & complete_original_sequence):
+                raise RuntimeError(
+                    "Farm growth removed every complete original HRL crop-sequence "
+                    f"source in region {region_id}."
+                )
+            del complete_original_sequence
+
             farmer_areas_local_m2 = farmers_region["area_m2"].to_numpy(dtype=np.float64)
+            sequence_assignment_started = time.perf_counter()
             (
                 assigned_sequences,
                 sequence_quality,
@@ -3492,6 +3806,13 @@ class Europe(GEBModel):
                 local_fit_threshold_pct=local_sequence_fit_threshold_pct,
                 fallow_penalty=fallow_sequence_penalty,
             )
+            _record_phase_timing(
+                region_phase_seconds, "sequence_assignment", sequence_assignment_started
+            )
+            n_observed_sequences = int(
+                sequence_quality.attrs.get("n_observed_sequences", 0)
+            )
+            diagnostics_started = time.perf_counter()
             farmers_region.loc[:, crop_columns] = assigned_sequences
             for quality_column in sequence_quality.columns:
                 farmers_region[quality_column] = sequence_quality[
@@ -3502,9 +3823,7 @@ class Europe(GEBModel):
             for year_index, (year, crop_column) in enumerate(
                 zip(years, crop_columns, strict=True)
             ):
-                assigned_crop_codes = farmers_region[crop_column].to_numpy(
-                    dtype=np.int32
-                )
+                assigned_crop_codes = assigned_sequences[:, year_index]
                 assigned_fallow_area_m2 = float(
                     farmer_areas_local_m2[
                         assigned_crop_codes == _HRL_FALLOW_CROP_CODE
@@ -3605,6 +3924,16 @@ class Europe(GEBModel):
                 region_id,
                 dtype=np.int32,
             )
+            region_farmer_ids = farmers_region["farmer_id"]
+            if len(region_farmer_ids) > 0:
+                expected_last_id = farmer_id_offset + len(region_farmer_ids) - 1
+                if not (
+                    region_farmer_ids.is_monotonic_increasing
+                    and region_farmer_ids.is_unique
+                    and int(region_farmer_ids.iloc[0]) == farmer_id_offset
+                    and int(region_farmer_ids.iloc[-1]) == expected_last_id
+                ):
+                    farmer_chunks_in_compact_order = False
             all_farmers.append(farmers_region)
 
             for year, native_area_m2, subgrid_area_m2 in zip(
@@ -3660,8 +3989,8 @@ class Europe(GEBModel):
             fallow_counts: list[int] = []
             missing_counts: list[int] = []
             unique_crop_counts: list[int] = []
-            for year, crop_column in zip(years, crop_columns, strict=True):
-                crop_values = farmers_region[crop_column].to_numpy(dtype=np.int32)
+            for year_index, year in enumerate(years):
+                crop_values = assigned_sequences[:, year_index]
                 active_crops = crop_values > 0
                 fallow = crop_values == _HRL_FALLOW_CROP_CODE
                 missing = crop_values == _HRL_MISSING_CROP_CODE
@@ -3698,13 +4027,6 @@ class Europe(GEBModel):
                 float(np.mean(missing_counts)) / len(farmers_region) * 100.0
             )
 
-            selected_sequences = crop_stack[:, cultivated_mask].T
-            complete_original_mask = ~np.any(
-                selected_sequences == _HRL_MISSING_CROP_CODE, axis=1
-            ) & np.any(selected_sequences > 0, axis=1)
-            n_observed_sequences = int(
-                np.unique(selected_sequences[complete_original_mask], axis=0).shape[0]
-            )
             extra_sequence_farms = max(
                 len(farmers_region) - lowder_target_farm_count,
                 0,
@@ -3826,6 +4148,10 @@ class Europe(GEBModel):
                 }
             )
 
+            _record_phase_timing(
+                region_phase_seconds, "diagnostics", diagnostics_started
+            )
+
             mean_cty_fit = float(
                 np.mean(
                     [
@@ -3864,11 +4190,39 @@ class Europe(GEBModel):
                 mean_cty_fit,
             )
 
-            farmer_id_offset += len(farmers_region)
+            region_total_seconds = time.perf_counter() - region_started
+            for phase_name, phase_seconds in region_phase_seconds.items():
+                phase_totals_seconds[phase_name] = (
+                    phase_totals_seconds.get(phase_name, 0.0) + phase_seconds
+                )
+            phase_totals_seconds["region_total"] = (
+                phase_totals_seconds.get("region_total", 0.0) + region_total_seconds
+            )
+            rss_mib, hwm_mib = _process_memory_mib()
+            self.logger.info(
+                "HRL phase timing region %s (%s) [s]: read=%.2f native=%.2f "
+                "reproject=%.2f select=%.2f Lowder=%.2f grow=%.2f sequence=%.2f "
+                "diagnostics=%.2f total=%.2f; RSS=%s MiB; HWM=%s MiB.",
+                region_id,
+                original_iso3,
+                region_phase_seconds.get("hrl_read", 0.0),
+                region_phase_seconds.get("native_area", 0.0),
+                region_phase_seconds.get("reprojection", 0.0),
+                region_phase_seconds.get("selection", 0.0),
+                region_phase_seconds.get("lowder_targets", 0.0),
+                region_phase_seconds.get("farm_growth", 0.0),
+                region_phase_seconds.get("sequence_assignment", 0.0),
+                region_phase_seconds.get("diagnostics", 0.0),
+                region_total_seconds,
+                "n/a" if rss_mib is None else f"{rss_mib:.1f}",
+                "n/a" if hwm_mib is None else f"{hwm_mib:.1f}",
+            )
+
+            region_farmer_count = len(farmers_region)
+            farmer_id_offset += region_farmer_count
             del (
                 crop_stack,
                 fraction_stack,
-                coverage_fraction_stack,
                 native_crop_areas_per_year,
                 native_hrl_area_by_year_m2,
                 subgrid_hrl_area_by_year_m2,
@@ -3885,13 +4239,47 @@ class Europe(GEBModel):
                 farmers_region,
                 crop_alignment_summary_by_year,
             )
-            gc.collect()
+            if (
+                region_farmer_count >= 100_000
+                or selected_cell_count >= 1_000_000
+                or (region_index + 1) % 8 == 0
+            ):
+                gc.collect()
 
         if not all_farmers:
             raise ValueError("No HRL-only farmer agents could be created.")
 
         farmers = pd.concat(all_farmers, ignore_index=True)
-        farmers = farmers.sort_values("farmer_id").reset_index(drop=True)
+        farmer_ids_final = farmers["farmer_id"]
+        if not (
+            farmer_chunks_in_compact_order
+            and farmer_ids_final.is_monotonic_increasing
+            and farmer_ids_final.is_unique
+        ):
+            self.logger.warning(
+                "Farmer chunks were not already in compact ID order; applying the "
+                "legacy final farmer_id sort as a fallback."
+            )
+            farmers = farmers.sort_values("farmer_id").reset_index(drop=True)
+        else:
+            farmers = farmers.reset_index(drop=True)
+
+        workflow_total_seconds = time.perf_counter() - workflow_started
+        self.logger.info(
+            "HRL completed-region phase totals [s]: read=%.1f native=%.1f "
+            "reproject=%.1f select=%.1f Lowder=%.1f grow=%.1f sequence=%.1f "
+            "diagnostics=%.1f region_total=%.1f workflow_total=%.1f.",
+            phase_totals_seconds.get("hrl_read", 0.0),
+            phase_totals_seconds.get("native_area", 0.0),
+            phase_totals_seconds.get("reprojection", 0.0),
+            phase_totals_seconds.get("selection", 0.0),
+            phase_totals_seconds.get("lowder_targets", 0.0),
+            phase_totals_seconds.get("farm_growth", 0.0),
+            phase_totals_seconds.get("sequence_assignment", 0.0),
+            phase_totals_seconds.get("diagnostics", 0.0),
+            phase_totals_seconds.get("region_total", 0.0),
+            workflow_total_seconds,
+        )
         farms_values[~active_subgrid_mask] = -1
         farms = xr.DataArray(
             farms_values,

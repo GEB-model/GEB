@@ -8,7 +8,6 @@ from .aquastat import AQUASTAT
 from .base import Adapter
 from .cmip6 import CMIP6
 from .coast_rp import CoastRP
-from .copernicus_hrl import CopernicusDataSpace
 from .cwatm_water_demand import CWATMIndustryWaterDemand, CWATMLivestockWaterDemand
 from .deltadtm import DeltaDTM
 from .destination_earth import DestinationEarth
@@ -16,7 +15,6 @@ from .earth_data import GlobalSoilRegolithSediment
 from .ecmwf import ECMWFForecasts
 from .ecmwf_geopotential import ECMWFGeopotential
 from .esa_worldcover import ESAWorldCover
-from .eurocrops_v2 import EuroCropsV2
 from .fabdem import Fabdem as Fabdem
 from .fao import FAOSTAT, GMIA
 from .field_boundaries import FieldBoundaries
@@ -24,7 +22,6 @@ from .flood_damage_model import (
     GeulFloodDamageModel,
     GlobalFloodDamageModel,
 )
-from .flopros import FLOPROS as FLOPROS
 from .fluxnet import Fluxnet
 from .forest_restoration import ForestRestorationPotential
 from .gadm import GADM, GADM28
@@ -41,15 +38,14 @@ from .gtsm import GTSM, GTSM_timeseries
 from .hydrolakes import HydroLakes
 from .isimip import ISIMIPCO2
 from .lisflood import LISFLOOD
-from .local_hrl_croplands import LocalHRLCroplands
 from .lowder import Lowder
 from .merit_basins import MeritBasinsCatchments, MeritBasinsRivers
 from .merit_hydro import MeritHydroDir, MeritHydroElv
 from .merit_sword import MeritSword
+from .mirca2000 import MIRCA2000
 from .mirca_os_admin_boundaries import MIRCAOSAdminBoundaries
 from .mirca_os_crop_calendar import MIRCAOSCropCalendar
 from .mirca_os_harvested_grids import MIRCAOSHarvestedGrids
-from .mirca2000 import MIRCA2000
 from .oecd import OECD
 from .open_building_map import OpenBuildingMap
 from .open_street_map import OpenStreetMap
@@ -58,14 +54,10 @@ from .soilgrids import SoilGridsV1, SoilGridsV2
 from .superwell import GCAMElectricityRates
 from .sword import Sword
 from .undp import HumanDevelopmentIndex
-from .wekeo_copernicus import WEkEOCopernicus
+from .copernicus_hrl import CopernicusDataSpace
 from .why_map import WhyMap
-from .world_bank_pink_sheet import WorldBankPinkSheetData
 from .world_bank import WorldBankData
-from .worldcereal_reference_data import WorldCerealReferenceData
 from .worldfloods import WorldFloodsV2
-
-CopernicusDataSpace
 
 data_catalog: dict[str, dict[str, Any]] = {
     "alphaearth": {
@@ -84,49 +76,6 @@ data_catalog: dict[str, dict[str, Any]] = {
             "attribution": (
                 "The AlphaEarth Foundations Satellite Embedding "
                 "dataset is produced by Google and Google DeepMind."
-            ),
-        },
-    },
-    "eurocrops_v2": {
-        "adapter": EuroCropsV2(
-            folder="eurocrops_v2",
-            local_version=1,
-            filename="parcels",
-            cache="global",
-            max_parallel_downloads=3,
-        ),
-        "url": None,
-        "source": {
-            "name": "EuroCrops v2",
-            "author": "European Commission Joint Research Centre et al.",
-            "license": "CC BY 4.0",
-            "url": (
-                "https://data.jrc.ec.europa.eu/dataset/"
-                "b9fb9e67-78a9-4327-9d59-39a928d812d3"
-            ),
-            "paper_doi": "10.5194/essd-18-4075-2026",
-            "dataset_doi": "10.2905/JRC.FX0BVKR",
-            "alternate_dataset_doi": ("10.2905/b9fb9e67-78a9-4327-9d59-39a928d812d3"),
-        },
-    },
-    "worldcereal_reference_data": {
-        "adapter": WorldCerealReferenceData(
-            folder="worldcereal_reference_data",
-            local_version=1,
-            filename="reference_data",
-            cache="global",
-            max_parallel_downloads=4,
-        ),
-        "url": None,
-        "source": {
-            "name": "WorldCereal Reference Data Module",
-            "author": "WorldCereal consortium and contributing data providers",
-            "license": "Dataset-specific; inspect each collection metadata record",
-            "url": "https://rdm.esa-worldcereal.org",
-            "doi": "10.60566/80p50-6z433",
-            "attribution": (
-                "Every selected collection retains its own license, citation and "
-                "source metadata."
             ),
         },
     },
@@ -340,96 +289,37 @@ data_catalog: dict[str, dict[str, Any]] = {
     },
     **{
         f"hrl_crop_types_{year}": {
-            "adapter": WEkEOCopernicus(
-                folder="hrl_crop_types",
-                local_version=1,
-                filename="tiles",
-                cache="global",
-                dataset_id="EO:EEA:DAT:HRL:CRL",
-                product_code="CTY",
-                default_query={
-                    "productType": "Crop Types",
-                    "resolution": "10m",
-                    "itemsPerPage": 200,
-                    "startIndex": 0,
-                },
-                prefer_local_tiles=True,
-                allow_wekeo_fallback=year != "2024",
-            ),
-            "url": None,
-            "source": {
-                "name": "HRL crop types",
-                "author": "Copernicus Land Monitoring Service",
-                "license": "CC BY 4.0",
-                "url": "https://library.land.copernicus.eu/products/"
-                "High_Resolution_Layer_Croplands_2017-present_PUM_v2.pdf",
-            },
-        }
-        for year in [
-            "2017",
-            "2018",
-            "2019",
-            "2020",
-            "2021",
-            "2022",
-            "2023",
-            "2024",
-        ]
-    },
-    **{
-        f"hrl_crop_types_{year}": {
             "adapter": CopernicusDataSpace(
                 folder="hrl_crop_types",
                 local_version=1,
                 filename="tiles",
                 cache="global",
-                # Kept for backwards-compatible WEkEO fallback:
-                dataset_id="EO:EEA:DAT:HRL:CRL",
                 product_code="CTY",
-                default_query={
-                    "productType": "Crop Types",
-                    "resolution": "10m",
-                    "itemsPerPage": 200,
-                    "startIndex": 0,
-                },
+                allow_wekeo_fallback=False,
+                normalize_nodata_values=(65535,),
+                destination_nodata=-2,
             ),
             "url": None,
             "source": {
                 "name": "HRL crop types",
                 "author": "Copernicus Land Monitoring Service",
                 "license": "CC BY 4.0",
-                "url": (
-                    "https://library.land.copernicus.eu/products/"
-                    "High_Resolution_Layer_Croplands_2017-present_PUM_v2.pdf"
-                ),
+                "url": "https://library.land.copernicus.eu/products/High_Resolution_Layer_Croplands_2017-present_PUM_v2.pdf",
             },
         }
-        for year in [
-            "2017",
-            "2018",
-            "2019",
-            "2020",
-            "2021",
-            "2022",
-            "2023",
-            "2024",
-        ]
+        for year in [str(year) for year in range(2017, 2031)]
     },
     **{
         f"hrl_secondary_crop_{year}": {
-            "adapter": WEkEOCopernicus(
+            "adapter": CopernicusDataSpace(
                 folder="hrl_secondary_crop",
                 local_version=1,
                 filename="tiles",
                 cache="global",
-                dataset_id="EO:EEA:DAT:HRL:CRL",
                 product_code="CPSCT",
-                default_query={
-                    "productType": "Secondary Crops Type",
-                    "resolution": "10m",
-                    "itemsPerPage": 200,
-                    "startIndex": 0,
-                },
+                allow_wekeo_fallback=False,
+                normalize_nodata_values=(65535,),
+                destination_nodata=-2,
             ),
             "url": None,
             "source": {
@@ -439,53 +329,7 @@ data_catalog: dict[str, dict[str, Any]] = {
                 "url": "https://library.land.copernicus.eu/products/High_Resolution_Layer_Croplands_2017-present_PUM_v2.pdf",
             },
         }
-        for year in ["2017", "2018", "2019", "2020", "2021", "2022", "2023"]
-    },
-    **{
-        f"hrl_crop_types_{year}": {
-            "adapter": LocalHRLCroplands(
-                folder="hrl_crop_types",
-                local_version=1,
-                filename="tiles",
-                cache="global",
-                product_code="CTY",
-            ),
-            "url": None,
-            "source": {
-                "name": "AlphaEarth-derived HRL-compatible crop types",
-                "author": "GEB AlphaEarth crop-classification workflow",
-                "license": "CC BY 4.0",
-                "attribution": (
-                    "Derived from Copernicus HRL Croplands labels and the "
-                    "AlphaEarth Foundations Satellite Embedding dataset produced "
-                    "by Google and Google DeepMind."
-                ),
-            },
-        }
-        for year in [str(year) for year in range(2024, 2031)]
-    },
-    **{
-        f"hrl_secondary_crop_{year}": {
-            "adapter": LocalHRLCroplands(
-                folder="hrl_secondary_crop",
-                local_version=1,
-                filename="tiles",
-                cache="global",
-                product_code="CPSCT",
-            ),
-            "url": None,
-            "source": {
-                "name": "AlphaEarth-derived HRL-compatible secondary crops",
-                "author": "GEB AlphaEarth crop-classification workflow",
-                "license": "CC BY 4.0",
-                "attribution": (
-                    "Derived from Copernicus HRL Croplands labels and the "
-                    "AlphaEarth Foundations Satellite Embedding dataset produced "
-                    "by Google and Google DeepMind."
-                ),
-            },
-        }
-        for year in [str(year) for year in range(2024, 2031)]
+        for year in [str(year) for year in range(2017, 2031)]
     },
     "gebco": {
         "adapter": GEBCO(
@@ -545,22 +389,6 @@ data_catalog: dict[str, dict[str, Any]] = {
             "author": "GADM",
             "version": "2.8",
             "license": "https://gadm.org/license.html",
-        },
-    },
-    "flopros": {
-        "adapter": FLOPROS(
-            column="MerL_Riv",
-            folder="flopros",
-            local_version=1,
-            filename="flopros.parquet",
-            cache="global",
-        ),
-        "url": "https://nhess.copernicus.org/articles/16/1049/2016/nhess-16-1049-2016-supplement.zip",
-        "source": {
-            "name": "FLOPROS",
-            "author": "Scussolini et al. (2016)",
-            "license": "CC Attribution 3.0 License",
-            "paper_doi": "doi:10.5194/nhess-16-1049-2016",
         },
     },
     "mirca2000_unit_grid": {
@@ -879,25 +707,6 @@ data_catalog: dict[str, dict[str, Any]] = {
             "url": "https://gps.econ.uni-bonn.de/downloads#dataset",
         },
     },
-    "world_bank_commodity_prices": {
-        "adapter": WorldBankPinkSheetData(
-            folder="world_bank_commodity_prices",
-            local_version=1,
-            filename="world_bank_commodity_prices.xlsx",
-            cache="global",
-        ),
-        "url": (
-            "https://thedocs.worldbank.org/en/doc/"
-            "74e8be41ceb20fa0da750cda2f6b9e4e-0050012026/"
-            "related/CMO-Historical-Data-Annual.xlsx"
-        ),
-        "source": {
-            "name": "World Bank Commodity Price Data (Pink Sheet)",
-            "author": "The World Bank",
-            "license": "CC BY 4.0",
-            "url": "https://www.worldbank.org/en/research/commodity-markets",
-        },
-    },
     "wb_inflation_rate": {
         "adapter": WorldBankData(
             folder="world_bank_inflation_rate",
@@ -908,20 +717,6 @@ data_catalog: dict[str, dict[str, Any]] = {
         "url": "https://api.worldbank.org/v2/en/indicator/FP.CPI.TOTL.ZG?downloadformat=csv",
         "source": {
             "name": "World Bank Inflation Data",
-            "author": "The World Bank",
-            "license": "CC BY 4.0",
-        },
-    },
-    "world_bank_wholesale_price_index": {
-        "adapter": WorldBankData(
-            folder="world_bank_wholesale_price_index",
-            local_version=1,
-            filename="wb_wholesale_price_index.csv",
-            cache="global",
-        ),
-        "url": "https://api.worldbank.org/v2/en/indicator/FP.WPI.TOTL?downloadformat=csv",
-        "source": {
-            "name": "World Bank Wholesale Price Index Data",
             "author": "The World Bank",
             "license": "CC BY 4.0",
         },
