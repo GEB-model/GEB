@@ -1470,14 +1470,15 @@ class Soil(Module):
                     < self.model.config["plantFATE"]["n_cells"]
                 )
                 and land_use_type_RU == FOREST
-                and self.HRU.var.land_use_ratio[i] > self.model.config["plantFATE"]["min_forest_ratio"]
+                and self.HRU.var.land_use_ratio[i]
+                > self.model.config["plantFATE"]["min_forest_ratio"]
             ):
                 self.plantFATE_forest_RUs[i] = True
 
                 print("Cell ")
                 print(i)
                 print("latlong ")
-                print(self.HRU.lonlat[i,:])
+                print(self.HRU.lonlat[i, :])
 
                 if self.model.in_spinup:
                     PFconfig_ini = Path(
@@ -1560,7 +1561,6 @@ class Soil(Module):
         print(indx)
         print("latlong ")
         print(self.HRU.lonlat[indx])
-
 
     def calculate_soil_water_potential_MPa(
         self,
@@ -1672,7 +1672,6 @@ class Soil(Module):
         if self.plantFATE_forest_RUs[indx]:
             plantFATE_model = self.model.plantFATE[indx]
             if plantFATE_model is not None:
-
                 plantFATE_data = {
                     "soil_water_potential": self.calculate_soil_water_potential_MPa(
                         soil_moisture=self.HRU.var.w[
@@ -1841,7 +1840,10 @@ class Soil(Module):
             forest = gpd.read_file(
                 self.model.config["plantFATE"]["new_forest_filename"]
             )
-            print("using forest file " + self.model.config["plantFATE"]["new_forest_filename"])
+            print(
+                "using forest file "
+                + self.model.config["plantFATE"]["new_forest_filename"]
+            )
             forest = rasterize(
                 [(shape(geom), 1) for geom in forest.geometry],
                 out_shape=self.HRU.shape,
@@ -1894,7 +1896,7 @@ class Soil(Module):
         timer = TimingModule("Soil")
 
         # Save PlantFATE relevant parameters
-        
+
         self.grid.vapour_pressure_deficit_KPa = (
             self.calculate_vapour_pressure_deficit_kPa(
                 temperature_K=self.grid.tas,
@@ -1911,10 +1913,10 @@ class Soil(Module):
             self.calculate_net_radiation(
                 shortwave_radiation_downwelling=self.grid.rsds,
                 longwave_radiation_net=self.grid.rlds,
-                albedo=0.13, # Assumption for forest  
+                albedo=0.13,  # Assumption for forest
             )
         )
-  
+
         w_forest = self.HRU.var.w.sum(axis=0)
         w_forest[self.HRU.var.land_use_type != FOREST] = np.nan
         w_forest = self.hydrology.to_grid(HRU_data=w_forest, fn="nanmax")
@@ -2271,7 +2273,9 @@ class Soil(Module):
             HRU_data=soil_moisture, fn="weightednanmean"
         )
 
-        soil_moisture_normalized = np.nan_to_num(self.HRU.var.w.sum(axis=0) / self.HRU.var.soil_layer_height.sum(axis=0))
+        soil_moisture_normalized = np.nan_to_num(
+            self.HRU.var.w.sum(axis=0) / self.HRU.var.soil_layer_height.sum(axis=0)
+        )
         soil_moisture_normalized_grid = self.hydrology.to_grid(
             HRU_data=soil_moisture_normalized, fn="weightednanmean"
         )
@@ -2283,12 +2287,16 @@ class Soil(Module):
         )
 
         soil_moisture_normalized_forest_HRU = soil_moisture_normalized.copy()
-        soil_moisture_normalized_forest_HRU[self.HRU.var.land_use_type != FOREST] = np.nan
+        soil_moisture_normalized_forest_HRU[self.HRU.var.land_use_type != FOREST] = (
+            np.nan
+        )
         soil_moisture_normalized_forest_grid = self.hydrology.to_grid(
             HRU_data=soil_moisture_normalized_forest_HRU, fn="weightednanmean"
         )
 
-        soil_layer_height_forest_HRU = np.nan_to_num(self.HRU.var.soil_layer_height.sum(axis=0))
+        soil_layer_height_forest_HRU = np.nan_to_num(
+            self.HRU.var.soil_layer_height.sum(axis=0)
+        )
         soil_layer_height_forest_grid = self.hydrology.to_grid(
             HRU_data=soil_layer_height_forest_HRU, fn="weightednanmean"
         )
@@ -2300,17 +2308,19 @@ class Soil(Module):
                 HRU_data=soil_moisture_forest_plantFATE_HRU, fn="weightednanmean"
             )
 
-            soil_moisture_normalized_forest_plantFATE_HRU = soil_moisture_normalized.copy()
-            soil_moisture_normalized_forest_plantFATE_HRU[~self.plantFATE_forest_RUs] = np.nan
+            soil_moisture_normalized_forest_plantFATE_HRU = (
+                soil_moisture_normalized.copy()
+            )
+            soil_moisture_normalized_forest_plantFATE_HRU[
+                ~self.plantFATE_forest_RUs
+            ] = np.nan
             soil_moisture_normalized_forest_plantFATE_grid = self.hydrology.to_grid(
-                HRU_data=soil_moisture_normalized_forest_plantFATE_HRU, fn="weightednanmean"
+                HRU_data=soil_moisture_normalized_forest_plantFATE_HRU,
+                fn="weightednanmean",
             )
 
-
         # Bare soil evaporation
-        actual_bare_soil_evaporation_forest_HRU = (
-            actual_bare_soil_evaporation.copy()
-        )
+        actual_bare_soil_evaporation_forest_HRU = actual_bare_soil_evaporation.copy()
         actual_bare_soil_evaporation_forest_HRU[
             self.HRU.var.land_use_type != FOREST
         ] = np.nan
@@ -2319,7 +2329,6 @@ class Soil(Module):
         )
 
         if self.model.config["general"]["simulate_forest"]:
-            
             actual_bare_soil_evaporation_forest_plantFATE_HRU = (
                 actual_bare_soil_evaporation.copy()
             )
@@ -2351,9 +2360,7 @@ class Soil(Module):
         )
 
         groundwater_recharge_forest_HRU = groundwater_recharge.copy()
-        groundwater_recharge_forest_HRU[self.HRU.var.land_use_type != FOREST] = (
-            np.nan
-        )
+        groundwater_recharge_forest_HRU[self.HRU.var.land_use_type != FOREST] = np.nan
         groundwater_recharge_forest_grid = self.hydrology.to_grid(
             HRU_data=groundwater_recharge_forest_HRU, fn="weightednanmean"
         )
@@ -2372,18 +2379,14 @@ class Soil(Module):
         # PlantFATE outputs
         if self.model.config["general"]["simulate_forest"]:
             biomass_forest_plantFATE_HRU = plantfate_biomass.copy()
-            biomass_forest_plantFATE_HRU[~self.plantFATE_forest_RUs] = (
-                np.nan
-            )
+            biomass_forest_plantFATE_HRU[~self.plantFATE_forest_RUs] = np.nan
 
             biomass_forest_plantFATE_grid = self.hydrology.to_grid(
                 HRU_data=biomass_forest_plantFATE_HRU, fn="weightednanmean"
             )
 
             NPP_forest_plantFATE_HRU = plantfate_co2.copy()
-            NPP_forest_plantFATE_HRU[~self.plantFATE_forest_RUs] = (
-                np.nan
-            )
+            NPP_forest_plantFATE_HRU[~self.plantFATE_forest_RUs] = np.nan
 
             NPP_forest_plantFATE_grid = self.hydrology.to_grid(
                 HRU_data=NPP_forest_plantFATE_HRU, fn="weightednanmean"
@@ -2394,7 +2397,6 @@ class Soil(Module):
             soil_plantfate_cell_area_grid = self.hydrology.to_grid(
                 HRU_data=soil_HRU_plantfate_cell_area, fn="sum"
             )
-
 
         self.report(locals())
 
