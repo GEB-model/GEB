@@ -1,20 +1,13 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
-title: "GEB v0.1: a large-scale agent-based socio-hydrological model -- simulating 10 million individual farming households in a fully distributed hydrological model"
+title: "GEB a large-scale agent-based socio-hydrological model -- simulating 10 million individual farming households in a fully distributed hydrological model"d
 authors:
+  - family-names: "Stefaniak"
+    given-names: "Elisa"
   - family-names: "de Bruijn"
-    given-names: "J. A."
-  - family-names: "Smilovic"
-    given-names: "M."
-  - family-names: "Burek"
-    given-names: "P."
-  - family-names: "Guillaumot"
-    given-names: "L."
-  - family-names: "Wada"
-    given-names: "Y."
-  - family-names: "Aerts"
-    given-names: "J. C. J. H."
-version: 0.1
+    given-names: "Jens Arne"
+
+version: 0.4
 journal-title: "Geoscientific Model Development"
 year: 2023
 month: 9

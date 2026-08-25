@@ -7,16 +7,11 @@ module-root = ""
 
 [project]
 name = "geb"
-version = "1.0.0b6"
+version = "0.4"
 description = "GEB simulates the environment (e.g., hydrology, floods), the individual people, households and orginizations as well as their interactions at both small and large scale."
 authors = [
-    {name = "Jens de Bruijn", email = "jens.de.bruijn@vu.nl"},
-    {name = "Maurice Kalthof", email = "w.m.l.kalthof@vu.nl"},
-    {name = "Veerle Bril", email = "v.c.bril@vu.nl"},
-    {name = "Lars Tierolf", email = "lars.tierolf@vu.nl"},
-    {name = "Tarun Sadana", email = "t.sadana@vu.nl"},
-    {name = "Tim Busker", email = "tim.busker@vu.nl"},
-    {name = "Rafaella Oliveira", email = "r.gouveialoureirooliveira@vu.nl"},
+    {name = "Elisa Stefaniak", email = "stefaniak@iiasa.ac.at"},
+    {name = "Jens de Bruijn", email = "jens.de.bruijn@vu.nl"}
 ]
 dependencies = [
     "cartopy==0.24.1",
