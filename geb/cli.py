@@ -346,17 +346,17 @@ def run_yearly(multi: bool, n_runs: int | None, prefix: str, **kwargs: Any) -> N
         wd = kwargs["working_directory"]
         run_name = f"{prefix}run_{run_id}"
         output_path = wd / "output" / run_name
-        if not output_path.exists():
-            if not any(output_path.iterdir()):
-                run_model_with_method(
-                    method="run_yearly",
-                    method_args={"model_name": f"{prefix}run_{run_id}"},
-                    **kwargs,
+        if output_path.exists():
+            if any(output_path.iterdir()):
+                click.echo(
+                    f"Skipping run {run_id} as output already exists at {output_path}.",
+                    err=True,
                 )
         else:
-            click.echo(
-                f"Skipping run {run_id} as output already exists at {output_path}.",
-                err=True,
+            run_model_with_method(
+                method="run_yearly",
+                method_args={"model_name": f"{prefix}run_{run_id}"},
+                **kwargs,
             )
 
 
