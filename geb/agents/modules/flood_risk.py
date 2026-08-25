@@ -525,12 +525,32 @@ class FloodRiskModule:
                         building_multicurve,
                     )
                 )
-                if export_building_damages:
+                if export_building_damages and (
+                    self.model.current_time.year == 2020
+                    or self.model.current_time.year == 2080
+                ):
                     fn_for_export = (
                         self.households.model.output_folder / "building_damages"
                     )
                     fn_for_export.mkdir(parents=True, exist_ok=True)
-                    building_multicurve.to_parquet(
+                    flooded_building_ids = np.array(building_multicurve["id"])
+
+                    building_geometries = read_geom(
+                        self.households.model.files["geom"]["assets/open_building_map"],
+                        filters=[("id", "in", flooded_building_ids)],
+                    )[["id", "geometry"]]
+
+                    building_multicurve_export = building_geometries.merge(
+                        building_multicurve,
+                        on="id",
+                        how="left",
+                    )
+                    building_multicurve_export = building_multicurve_export.merge(
+                        self.model.agents.households.buildings[["id", "flood_proofed"]],
+                        on="id",
+                        how="left",
+                    )
+                    gpd.GeoDataFrame(building_multicurve_export).to_parquet(
                         self.households.model.output_folder
                         / "building_damages"
                         / f"building_damages_rp{return_period}_{self.households.model.current_time.year}.parquet"
