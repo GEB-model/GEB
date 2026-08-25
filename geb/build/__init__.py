@@ -863,9 +863,9 @@ class GEBModel(
         ).set_index("COMID")
 
         rivers["outflow_type"] = rivers.apply(
-            lambda row: STUDY_AREA_OUTFLOW
-            if row.name in subbasins.index
-            else NEARBY_OUTFLOW,
+            lambda row: (
+                STUDY_AREA_OUTFLOW if row.name in subbasins.index else NEARBY_OUTFLOW
+            ),
             axis=1,
         )
 

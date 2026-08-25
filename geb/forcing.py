@@ -30,8 +30,9 @@ class Forcing(Module):
             "rlds": lambda x: (x >= 0).all(),
             "sfcwind": lambda x: (x >= 0).all() and (x < 150).all(),
             "ps": lambda x: (x > 30_000).all() and (x < 120_000).all(),
-            "pr": lambda x: (x >= 0).all()
-            and (x < 500 / 3600).all(),  # 500 mm/h converted to kg/m²/s
+            "pr": lambda x: (
+                (x >= 0).all() and (x < 500 / 3600).all()
+            ),  # 500 mm/h converted to kg/m²/s
             "pr_hourly": lambda x: (x >= 0).all(),
             "hurs": lambda x: (x >= 0).all() and (x <= 100).all(),
             "SPEI": lambda x: not np.isnan(x).any(),

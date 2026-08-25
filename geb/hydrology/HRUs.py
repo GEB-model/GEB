@@ -561,8 +561,10 @@ class HRUs(BaseVariables):
     def spinup(self) -> None:
         self.var = self.model.store.create_bucket(
             "hydrology.HRU.var",
-            validator=lambda x: isinstance(x, np.ndarray)
-            and (not np.issubdtype(x.dtype, np.floating) or x.dtype == np.float32),
+            validator=lambda x: (
+                isinstance(x, np.ndarray)
+                and (not np.issubdtype(x.dtype, np.floating) or x.dtype == np.float32)
+            ),
         )
 
         (
