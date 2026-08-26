@@ -5,7 +5,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from geb.hydrology.landsurface.constants import LAMBDA_ICE, LAMBDA_WATER
+from geb.hydrology.landsurface.constants import (
+    RHO_WATER_KG_PER_M3,
+    SPECIFIC_HEAT_CAPACITY_ICE_J_PER_KG_K,
+    THERMAL_CONDUCTIVITY_ICE_WATT_PER_MKELVIN,
+    THERMAL_CONDUCTIVITY_WATER_WATT_PER_MKELVIN,
+)
 from geb.hydrology.landsurface.landsurface_model import land_surface_model
 from geb.workflows import balance_check
 
@@ -49,10 +54,10 @@ def test_land_surface_model_error_cases(error_case_path: Path, asfloat64: bool) 
             np.float32(1.0) - porosity
         )
         inputs["thermal_conductivity_saturated_unfrozen_W_per_m_K"] = solid_factor * (
-            LAMBDA_WATER**porosity
+            THERMAL_CONDUCTIVITY_WATER_WATT_PER_MKELVIN**porosity
         )
         inputs["thermal_conductivity_saturated_frozen_W_per_m_K"] = solid_factor * (
-            LAMBDA_ICE**porosity
+            THERMAL_CONDUCTIVITY_ICE_WATT_PER_MKELVIN**porosity
         )
     inputs.pop("solid_thermal_conductivity_W_per_m_K", None)
 
@@ -72,6 +77,14 @@ def test_land_surface_model_error_cases(error_case_path: Path, asfloat64: bool) 
     inputs["liquid_water_in_snow_m"] = inputs["liquid_water_in_snow_m"].astype(
         np.float64
     )
+    if "snow_enthalpy_J_per_m2" not in inputs and "snow_temperature_C" in inputs:
+        snow_temperature_C = inputs.pop("snow_temperature_C").astype(np.float32)
+        inputs["snow_enthalpy_J_per_m2"] = (
+            inputs["snow_water_equivalent_m"].astype(np.float32)
+            * RHO_WATER_KG_PER_M3
+            * SPECIFIC_HEAT_CAPACITY_ICE_J_PER_KG_K
+            * np.minimum(snow_temperature_C, np.float32(0.0))
+        ).astype(np.float32)
 
     # Extract initial storages for balance check
     pre_water_content_m = inputs["water_content_m"].copy()
@@ -92,7 +105,7 @@ def test_land_surface_model_error_cases(error_case_path: Path, asfloat64: bool) 
         post_snow_water_equivalent_m,
         post_liquid_water_in_snow_m,
         out_sublimation_m,
-        post_snow_temperature_C,
+        post_snow_enthalpy_J_per_m2,
         post_interception_storage_m,
         out_interception_evaporation_m,
         out_open_water_evaporation_m,

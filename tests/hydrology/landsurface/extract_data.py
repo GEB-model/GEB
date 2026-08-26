@@ -18,6 +18,11 @@ from pathlib import Path
 
 import numpy as np
 
+from geb.hydrology.landsurface.constants import (
+    RHO_WATER_KG_PER_M3,
+    SPECIFIC_HEAT_CAPACITY_ICE_J_PER_KG_K,
+)
+
 
 def extract_landsurface_error_data(npz_path: str, cell_idx: int) -> str:
     """Extract hardcoded data from landsurface_model_error.npz for a specific cell.
@@ -41,7 +46,16 @@ def extract_landsurface_error_data(npz_path: str, cell_idx: int) -> str:
     topwater_m_data = data["topwater_m"][cell_idx]
     snow_water_equivalent_m_data = data["snow_water_equivalent_m"][cell_idx]
     liquid_water_in_snow_m_data = data["liquid_water_in_snow_m"][cell_idx]
-    snow_temperature_C_data = data["snow_temperature_C"][cell_idx]
+    if "snow_enthalpy_J_per_m2" in data:
+        snow_enthalpy_J_per_m2_data = data["snow_enthalpy_J_per_m2"][cell_idx]
+    else:
+        snow_temperature_C_data = data["snow_temperature_C"][cell_idx]
+        snow_enthalpy_J_per_m2_data = (
+            snow_water_equivalent_m_data.astype(np.float32)
+            * RHO_WATER_KG_PER_M3
+            * SPECIFIC_HEAT_CAPACITY_ICE_J_PER_KG_K
+            * np.minimum(snow_temperature_C_data.astype(np.float32), np.float32(0.0))
+        )
     interception_storage_m_data = data["interception_storage_m"][cell_idx]
     interception_capacity_m_data = data["interception_capacity_m"][cell_idx]
     crop_factor_data = data["crop_factor"][cell_idx]
@@ -103,7 +117,7 @@ def extract_landsurface_error_data(npz_path: str, cell_idx: int) -> str:
         f"liquid_water_in_snow_m_data = np.float32({liquid_water_in_snow_m_data})"
     )
     code_lines.append(
-        f"snow_temperature_C_data = np.float32({snow_temperature_C_data})"
+        f"snow_enthalpy_J_per_m2_data = np.float32({snow_enthalpy_J_per_m2_data})"
     )
     code_lines.append(
         f"interception_storage_m_data = np.float32({interception_storage_m_data})"
