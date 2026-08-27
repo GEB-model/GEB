@@ -1111,9 +1111,8 @@ class Routing(Module):
                     self.grid.var.retention_basin_storage_m3,
                 ],
                 name="routing_1",
-                tolerance=100,
+                tolerance=self.grid.var.river_storage_m3.size * 0.01,
             )
-
             total_evaporation_in_rivers_m3: np.float64 = (
                 evaporation_in_rivers_m3.astype(np.float64).sum()
             )
