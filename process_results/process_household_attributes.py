@@ -17,7 +17,22 @@ VARIABLES_TO_PLOT = {
     "expected_annual_damage": "Expected Annual Damage (USD)",
     "n_adaptation_uptake": "Adaptation Uptake (fraction of households)",
     "total_investment_costs": "Total Investment Costs (USD)",
+    "n_households_exposed_to_flooding": "Number of Households Exposed to Flooding",
 }
+
+LABELS = {
+    "full": "Full adaptation",
+    "no_gov": "Only household adaptation",
+    "no_adapt": "No further adaptation",
+}
+
+COLORS = {
+    "full": "#009E73",
+    "no_gov": "#0072B2",
+    "no_adapt": "#D55E00",
+}
+
+N_RUNS_TO_PROCESS = 9
 
 
 def _list_household_attribute_files(results_path: str) -> list[str]:
@@ -156,6 +171,7 @@ def _extract_year_sums(
 def _resolve_ylim_across_groups(
     results: dict[str, dict[str, pd.DataFrame]],
     household_attribute_name: str,
+    show_std_band: bool = False,
 ) -> tuple[float, float] | None:
     """Resolve a shared y-axis range from the maximum across all groups.
 
@@ -167,6 +183,9 @@ def _resolve_ylim_across_groups(
     Args:
         results: Nested dictionary {group_name: {attribute_name: dataframe}}.
         household_attribute_name: Variable name to resolve limits for.
+        show_std_band: If True, use the mean plus one standard deviation per
+            group (matching the shaded std band) instead of the raw group
+            maximum, so the y-axis fully contains the shaded region.
 
     Returns:
         A y-limit tuple of (0.0, max_value * 1.1) across all groups, or None
@@ -177,7 +196,11 @@ def _resolve_ylim_across_groups(
         df: pd.DataFrame | None = group_results.get(household_attribute_name)
         if df is None or df.empty:
             continue
-        group_max: float = float(df.max().max())
+        if show_std_band:
+            values = df.to_numpy()
+            group_max: float = float((values.mean(axis=1) + values.std(axis=1)).max())
+        else:
+            group_max = float(df.max().max())
         if pd.isna(group_max):
             continue
         if max_value is None or group_max > max_value:
@@ -463,10 +486,9 @@ def read_multirun_results_within_scenario(
     if not os.path.exists(output_root):
         return results_by_prefix
 
-    model_runs: list[str] = sorted(os.listdir(output_root))
     for run_prefix in run_prefixes:
         prefix_runs: list[str] = [
-            model_run for model_run in model_runs if model_run.startswith(run_prefix)
+            f"{run_prefix}_run_{i}" for i in range(N_RUNS_TO_PROCESS)
         ]
 
         for model_run in prefix_runs:
@@ -489,8 +511,6 @@ def read_multirun_results_within_scenario(
 
                 if (
                     household_attribute_name == "n_adaptation_uptake"
-                    and "n_households_exposed_to_flooding.parquet"
-                    in _list_household_attribute_files(results_path)
                     and process_adaptation_uptake
                 ):
                     # Calculate the fraction of households that have adopted adaptation measures
@@ -590,6 +610,25 @@ def _build_group_colors(group_names: list[str]) -> dict[str, str]:
     }
 
 
+def _export_cummulative_flood_risk(results, output_path):
+    if not results:
+        return
+    result_df = pd.DataFrame()
+    for household_attribute_name in ["expected_annual_damage"]:
+        for group_name, group_results in results.items():
+            if not group_results or household_attribute_name not in group_results:
+                continue
+            df: pd.DataFrame = group_results[household_attribute_name].mean(axis=1)
+            df = (
+                df[df.index.year > 2019]
+                if isinstance(df.index, pd.DatetimeIndex)
+                else df[df.index.astype(int) > 2019]
+            )
+            result_df[group_name] = df.cumsum()
+    if len(result_df) > 0:
+        result_df.to_csv(output_path)
+
+
 def _plot_multirun_results(
     results: dict[str, dict[str, pd.DataFrame]],
     colors: dict[str, str],
@@ -630,7 +669,7 @@ def _plot_multirun_results(
     )
     axes_list: list[plt.Axes] = _ensure_axes_array(axes, len(attribute_names))
     x_axis_label: str = _resolve_x_axis_label(x_axis)
-
+    first = True
     for ax, household_attribute_name in zip(axes_list, attribute_names):
         ax.grid(axis="y", linestyle="--", alpha=0.7)
 
@@ -640,6 +679,12 @@ def _plot_multirun_results(
             df: pd.DataFrame = group_results[household_attribute_name]
             if df.empty:
                 continue
+            # filter df to only time > 2020
+            df = (
+                df[df.index.year > 2019]
+                if isinstance(df.index, pd.DatetimeIndex)
+                else df[df.index.astype(int) > 2019]
+            )
             x_values: pd.Index = _resolve_x_axis_values(df, x_axis)
             group_color = colors.get(group_name, "black")
             mean_values = df.to_numpy().mean(axis=1)
@@ -661,7 +706,7 @@ def _plot_multirun_results(
             ax.plot(
                 x_values,
                 mean_values,
-                label=f"Mean {group_name}",
+                label=LABELS[group_name],
                 linewidth=2,
                 color=group_color,
             )
@@ -669,7 +714,7 @@ def _plot_multirun_results(
         # Scale the shared y-axis to the highest value across all groups so
         # every line drawn for this attribute stays comparable in one figure.
         ylims_variable: tuple[float, float] | None = _resolve_ylim_across_groups(
-            results, household_attribute_name
+            results, household_attribute_name, show_std_band=show_std_band
         )
         if ylims_variable is not None:
             ax.set_ylim(ylims_variable)
@@ -680,8 +725,9 @@ def _plot_multirun_results(
         if household_attribute_name in PLOT_Y_LABELS:
             ax.set_ylabel(PLOT_Y_LABELS[household_attribute_name])
         ax.set_xlabel(x_axis_label)
-        ax.legend()
-
+        if first:
+            ax.legend(loc="upper left", framealpha=0.9)  # fontsize="small",
+        first = False
     fig.suptitle("Household Attributes Over Time for Multiple Runs")
     fig.tight_layout()
     plt.savefig(output_path)
@@ -813,12 +859,6 @@ def plot_multirun_results_within_scenario(
     if prefixes is None:
         prefixes = ["no_gov_", "no_adapt", "full"]
 
-    colors: dict[str, str] = {
-        "no_reloc": "black",
-        "no_gov": "red",
-        "no_adapt": "green",
-        "full": "blue",
-    }
     results: dict[str, dict[str, pd.DataFrame]] = read_multirun_results_within_scenario(
         model_path,
         scenario,
@@ -826,7 +866,7 @@ def plot_multirun_results_within_scenario(
     )
     _plot_multirun_results(
         results=results,
-        colors=colors,
+        colors=COLORS,
         x_axis=x_axis,
         show_std_band=show_std_band,
         output_path=(
@@ -835,6 +875,24 @@ def plot_multirun_results_within_scenario(
             else _comparison_output_path(model_path, "within_scenario", scenario)
         ),
     )
+
+
+def export_cummulative_flood_risks(
+    model_path: str, scenario: list[str], prefixes: list[str], output_path: str
+) -> None:
+    """Export cumulative flood risk for each scenario and run.
+
+    Args:
+        model_path: Root model path containing scenario folders.
+        scenario: Scenario names to process.
+        prefixes: List of run prefixes to include.
+    """
+    results: dict[str, dict[str, pd.DataFrame]] = read_multirun_results_within_scenario(
+        model_path,
+        scenario,
+        prefixes,
+    )
+    _export_cummulative_flood_risk(results, output_path)
 
 
 def plot_multirun_results_within_base_or_future(
@@ -870,6 +928,7 @@ def read_ead_per_gdl_region(
     model_path: str,
     scenario: str,
     run_prefixes: list[str] | None = None,
+    cluster_folders: list[str] | None = None,
 ) -> dict[str, dict[str, pd.DataFrame]]:
     """Read expected annual damage (EAD) per GDL region for multiple runs.
 
@@ -877,7 +936,7 @@ def read_ead_per_gdl_region(
         model_path: Root model path.
         scenario: Scenario name to read from each cluster folder.
         run_prefixes: Optional list of prefixes to include in the results.
-
+        cluster_folders: Optional list of cluster folders to process.
     Returns:
         Nested dictionary {run_prefix: {run_name: dataframe}} where each
         dataframe contains yearly EAD values summed across all clusters and one
@@ -885,6 +944,7 @@ def read_ead_per_gdl_region(
 
     Raises:
         ValueError: If run_prefixes is provided but empty.
+        FileNotFoundError: If the expected EAD CSV file is missing for a run.
     """
     if run_prefixes is not None and len(run_prefixes) == 0:
         raise ValueError("run_prefixes must contain at least one prefix when provided.")
@@ -892,26 +952,23 @@ def read_ead_per_gdl_region(
     if not os.path.exists(model_path):
         return {}
 
-    cluster_folders: list[str] = sorted(
-        folder_name
-        for folder_name in os.listdir(model_path)
-        if folder_name.startswith("cluster_")
-        and os.path.isdir(os.path.join(model_path, folder_name))
-    )
     if not cluster_folders:
-        return {}
+        cluster_folders: list[str] = sorted(
+            folder_name
+            for folder_name in os.listdir(model_path)
+            if folder_name.startswith("cluster_")
+            and os.path.isdir(os.path.join(model_path, folder_name))
+        )
 
     ead_results: dict[str, dict[str, pd.DataFrame]] = {}
     for cluster_folder in cluster_folders:
         output_root: str = os.path.join(model_path, cluster_folder, scenario, "output")
         if not os.path.exists(output_root):
             continue
+        run_names = []
+        for prefix in run_prefixes:
+            run_names.extend(f"{prefix}_run_{i}" for i in range(N_RUNS_TO_PROCESS))
 
-        run_names: list[str] = sorted(
-            run_name
-            for run_name in os.listdir(output_root)
-            if os.path.isdir(os.path.join(output_root, run_name))
-        )
         for run_name in run_names:
             matched_prefix: str | None = None
             if run_prefixes is None:
@@ -929,7 +986,9 @@ def read_ead_per_gdl_region(
                 output_root, run_name, "ead_per_gdl_region.csv"
             )
             if not os.path.exists(csv_path):
-                continue
+                raise FileNotFoundError(
+                    f"Expected EAD CSV file not found for run '{run_name}' in scenario '{scenario}' at '{csv_path}'."
+                )
 
             ead_df: pd.DataFrame = pd.read_csv(csv_path)
             if "year" in ead_df.columns:
@@ -941,7 +1000,7 @@ def read_ead_per_gdl_region(
                 ead_df.index.name = "year"
 
             ead_df = ead_df.apply(pd.to_numeric, errors="coerce").fillna(0.0)
-
+            ead_df = ead_df[[col for col in ead_df.columns if col.startswith("MEXr")]]
             if matched_prefix not in ead_results:
                 ead_results[matched_prefix] = {}
 
@@ -1212,6 +1271,7 @@ def plot_ead_per_gdl_region_across_clusters(
     output_path: str | None = None,
     x_axis: Literal["year", "timestep"] = "year",
     show_std_band: bool = False,
+    cluster_folders: list[str] | None = None,
 ) -> None:
     """Plot cluster-summed EAD per GDL region while keeping runs separate.
 
@@ -1229,6 +1289,8 @@ def plot_ead_per_gdl_region_across_clusters(
         x_axis: X-axis mode, either year (data index) or timestep (0..n-1).
         show_std_band: If True, shade the mean plus/minus one standard
             deviation across runs instead of drawing each individual run.
+        cluster_folders: Optional list of cluster folders to process. If None,
+            all folders starting with "cluster_" are included.
     """
     x_axis = _validate_x_axis_mode(x_axis)
 
@@ -1236,6 +1298,7 @@ def plot_ead_per_gdl_region_across_clusters(
         model_path=model_path,
         scenario=scenario,
         run_prefixes=run_prefixes,
+        cluster_folders=cluster_folders,
     )
     if not ead_results:
         return
@@ -1455,6 +1518,7 @@ def combine_cluster_results(
     model_path: str,
     scenario: str,
     run_prefixes: list[str] | None = None,
+    cluster_folders: list[str] | None = None,
 ) -> None:
     """Combine household attribute results from multiple cluster runs.
 
@@ -1462,6 +1526,8 @@ def combine_cluster_results(
         model_path: Root model path.
         scenario: Scenario name to read from each cluster folder.
         run_prefixes: Optional list of prefixes to include in the combined results.
+        cluster_folders: Optional list of cluster folders to process. If None,
+            all folders starting with "cluster_" are included.
 
     Raises:
         ValueError: If run_prefixes is empty.
@@ -1473,15 +1539,21 @@ def combine_cluster_results(
     if not os.path.exists(output_root):
         return
 
-    cluster_folders: list[str] = sorted(
-        model_dir
-        for model_dir in os.listdir(output_root)
-        if model_dir.startswith("cluster_")
-        and os.path.isdir(os.path.join(output_root, model_dir))
-    )
     if not cluster_folders:
-        return
-
+        cluster_folders: list[str] = sorted(
+            model_dir
+            for model_dir in os.listdir(output_root)
+            if model_dir.startswith("cluster_")
+            and os.path.isdir(os.path.join(output_root, model_dir))
+        )
+    else:
+        cluster_folders: list[str] = sorted(
+            model_dir
+            for model_dir in os.listdir(output_root)
+            if model_dir.startswith("cluster_")
+            and model_dir in cluster_folders
+            and os.path.isdir(os.path.join(output_root, model_dir))
+        )
     combined_results: dict[str, dict[str, pd.DataFrame]] = {
         run_prefix: {} for run_prefix in run_prefixes
     }
@@ -1526,6 +1598,19 @@ def combine_cluster_results(
 
     if cluster_summary_records:
         cluster_summary_df: pd.DataFrame = pd.DataFrame(cluster_summary_records)
+        # also sum all clusters for a domain-wide total, which is useful for comparing
+        # across scenarios and run prefixes.
+        all_cluster_summary_df: pd.DataFrame = (
+            cluster_summary_df.drop(columns=["cluster"])
+            .groupby(["run_prefix", "attribute"])
+            .sum()
+            .reset_index()
+        )
+        all_cluster_summary_df["cluster"] = "all_clusters"
+        cluster_summary_df = pd.concat(
+            [cluster_summary_df, all_cluster_summary_df], axis=0
+        )
+
         cluster_summary_output_path: str = os.path.join(
             model_path, f"household_attributes_year_summary_{scenario}.csv"
         )
@@ -1566,6 +1651,7 @@ def combine_cluster_results(
         model_path=model_path,
         scenario=scenario,
         run_prefixes=run_prefixes,
+        cluster_folders=cluster_folders,
     )
     combined_ead_root: str = os.path.join(
         model_path, "combined_results", scenario, "output"
@@ -1581,6 +1667,7 @@ def read_combined_cluster_results(
     model_path: str,
     scenario: str,
     run_prefixes: list[str] | None = None,
+    cluster_folders: list[str] | None = None,
 ) -> dict[str, dict[str, pd.DataFrame]]:
     """Read combined household attribute results stored by run prefix.
 
@@ -1589,6 +1676,7 @@ def read_combined_cluster_results(
         scenario: Scenario name under combined_results.
         run_prefixes: Optional run prefixes to read. If omitted, all available
             prefixes in the combined results folder are read.
+        cluster_folders: Optional list of cluster folders to process.
 
     Returns:
         Nested dictionary {run_prefix: {attribute_name: dataframe}}.
@@ -1684,7 +1772,7 @@ if __name__ == "__main__":
     model_path = os.path.join("..", "..", "models", "models", "mex")
 
     model_name = "no_gov_run_0"
-    scenario = "rcp8p5_2080"
+    scenario = "base"
     scenarios_to_compare = list(SCENARIOS_BASE_FUTURE)
     prefixes = [
         "full",
@@ -1692,9 +1780,56 @@ if __name__ == "__main__":
         "no_adapt",
     ]
 
+    # 3) Plot non-merged reference views from regular multirun outputs.
+    clusters_to_process = [
+        0,
+        1,
+        # 2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        # 15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+    ]
+    cluster_folders = [f"cluster_{i:03d}" for i in clusters_to_process]
+    model_paths = [
+        os.path.join("..", "..", "models", "models", "mex", f"cluster_{i:03d}")
+        for i in clusters_to_process
+    ]
+    output_paths = [
+        os.path.join(
+            "..",
+            "..",
+            "models",
+            "models",
+            "mex",
+            "cluster_plots",
+            f"{scenario}_cluster_{i:03d}.png",
+        )
+        for i in range(23)
+    ]
+
     # 1) Build merged (cluster-summed) results while keeping per-run columns.
     combine_cluster_results(
-        model_path=model_path, scenario=scenario, run_prefixes=prefixes
+        model_path=model_path,
+        scenario=scenario,
+        run_prefixes=prefixes,
+        cluster_folders=cluster_folders,
     )
 
     # 2) Plot merged cluster results for the selected scenario.
@@ -1711,25 +1846,9 @@ if __name__ == "__main__":
         run_prefixes=prefixes,
         x_axis="year",
         show_std_band=False,
+        cluster_folders=cluster_folders,
     )
 
-    # 3) Plot non-merged reference views from regular multirun outputs.
-    model_paths = [
-        os.path.join("..", "..", "models", "models", "mex", f"cluster_{i:03d}")
-        for i in range(23)
-    ]
-    output_paths = [
-        os.path.join(
-            "..",
-            "..",
-            "models",
-            "models",
-            "mex",
-            "cluster_plots",
-            f"{scenario}_cluster_{i:03d}.png",
-        )
-        for i in range(23)
-    ]
     for model_path, output_path in zip(model_paths, output_paths):
         plot_multirun_results_within_scenario(
             model_path=model_path,
@@ -1737,9 +1856,16 @@ if __name__ == "__main__":
             prefixes=prefixes,
             output_path=output_path,
             x_axis="year",
-            show_std_band=False,
+            show_std_band=True,
+            cluster_folders=cluster_folders,
         )
-    # plot_multirun_results_for_scenarios(model_path, scenarios_to_compare, x_axis="year")
+        export_cummulative_flood_risks(
+            model_path=model_path,
+            scenario=scenario,
+            prefixes=prefixes,
+            output_path=output_path.replace(".png", "_cummulative_flood_risks.csv"),
+        )
+    # # plot_multirun_results_for_scenarios(model_path, scenarios_to_compare, x_axis="year")
 
-    # 4) Single-run timeseries diagnostics.
-    process_household_attributes(model_path, scenario, model_name)
+    # # 4) Single-run timeseries diagnostics.
+    # process_household_attributes(model_path, scenario, model_name)
