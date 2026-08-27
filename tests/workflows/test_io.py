@@ -19,8 +19,10 @@ from zarr.codecs import CastValue, ScaleOffset
 import geb.workflows.io as io_module
 from geb.workflows.io import (
     ForcingReader,
+    RemoteFile,
     calculate_scaling,
     create_hash_from_parameters,
+    fetch_and_save,
     get_window,
     read_array,
     read_hash,
@@ -1133,3 +1135,121 @@ def test_write_table_roundtrip() -> None:
     write_table(df_large, fp)
     df_read = read_table(fp)
     pd.testing.assert_frame_equal(df_large, df_read)
+
+
+def test_forcing_reader_source_and_attrs() -> None:
+    """Test that ForcingReader exposes source and attrs correctly."""
+    varname = "precipitation"
+    file_path = tmp_folder / "test_forcing_attrs.zarr"
+    times = pd.date_range("2000-01-01", periods=10, freq="D")
+    data = np.zeros((100, 10), dtype=np.float32)
+
+    ds = xr.Dataset(
+        {varname: (("idxs", "time"), data)},
+        coords={"time": times, "idxs": np.arange(100)},
+    )
+    ds[varname].attrs["source"] = "MSWEP"
+    ds[varname].attrs["units"] = "kg m-2 s-1"
+
+    store = zarr.storage.LocalStore(file_path, read_only=False)
+    ds.to_zarr(
+        store,
+        mode="w",
+        encoding={
+            varname: {
+                "chunks": (100, 1),
+                "fill_value": np.nan,
+            }
+        },
+        consolidated=False,
+    )
+
+    reader = ForcingReader(file_path, variable_name=varname)
+    assert reader.source == "MSWEP"
+    assert reader.attrs.get("units") == "kg m-2 s-1"
+    assert "source" in reader.attrs
+
+    shutil.rmtree(file_path)
+
+
+def test_remote_file_retries_and_logging(caplog: pytest.LogCaptureFixture) -> None:
+    """Test RemoteFile retries on transient errors like 504 and logs warnings."""
+    import logging
+    from unittest.mock import MagicMock, patch
+
+    mock_resp_504 = MagicMock()
+    mock_resp_504.status_code = 504
+    mock_resp_504.headers = {}
+    mock_resp_504.close = MagicMock()
+
+    mock_resp_200 = MagicMock()
+    mock_resp_200.status_code = 200
+    mock_resp_200.url = "https://example.com/file.zip"
+    mock_resp_200.headers = {"Accept-Ranges": "bytes", "Content-Length": "100"}
+    mock_resp_200.close = MagicMock()
+
+    # First test: succeeds after one retry
+    with patch(
+        "requests.request", side_effect=[mock_resp_504, mock_resp_200]
+    ) as mock_req:
+        with caplog.at_level(logging.WARNING):
+            rf = RemoteFile(
+                "https://example.com/file.zip",
+                logger=logging.getLogger("test"),
+                max_retries=2,
+                base_delay=0.01,
+            )
+            assert rf.size == 100
+            assert mock_req.call_count == 2
+            assert "failed (HTTP 504). Retrying (attempt 1/2)" in caplog.text
+
+    # Second test: fails after exhausting all retries
+    caplog.clear()
+    with patch("requests.request", return_value=mock_resp_504) as mock_req:
+        with caplog.at_level(logging.WARNING):
+            with pytest.raises(
+                OSError, match="Server does not support HTTP Range requests"
+            ):
+                RemoteFile(
+                    "https://example.com/file.zip",
+                    logger=logging.getLogger("test"),
+                    max_retries=2,
+                    base_delay=0.01,
+                )
+            assert "failed (HTTP 504) after 2 retries." in caplog.text
+
+
+def test_fetch_and_save_retry(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Test fetch_and_save retries with exponential backoff on failure."""
+    import logging
+    from unittest.mock import MagicMock
+
+    import requests
+
+    mock_resp_fail = MagicMock()
+    mock_resp_fail.raise_for_status.side_effect = requests.RequestException("Timeout")
+
+    mock_resp_ok = MagicMock()
+    mock_resp_ok.headers = {"content-length": "4"}
+    mock_resp_ok.iter_content.return_value = [b"test"]
+    mock_resp_ok.raise_for_status.return_value = None
+
+    dest = tmp_path / "downloaded.txt"
+    session = MagicMock()
+    session.get.side_effect = [mock_resp_fail, mock_resp_ok]
+
+    with caplog.at_level(logging.WARNING):
+        success = fetch_and_save(
+            "https://example.com/data.txt",
+            dest,
+            logger=logging.getLogger("test"),
+            max_retries=3,
+            delay_seconds=0.01,
+            double_delay=True,
+            session=session,
+            verbose=False,
+            show_progress=False,
+        )
+        assert success is True
+        assert dest.read_text() == "test"
+        assert "Request failed: Timeout. Attempt 1 of 3." in caplog.text

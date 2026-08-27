@@ -63,7 +63,9 @@ class CWATMWaterDemand(Adapter):
                 )
 
             file_id = FILES[self.variable][scenario]
-            download_from_google_drive(file_id=file_id, file_path=self.path)
+            download_from_google_drive(
+                file_id=file_id, file_path=self.path, logger=self.logger
+            )
 
         return self
 

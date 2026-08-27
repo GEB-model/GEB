@@ -846,6 +846,9 @@ class LocalInertial(Router):
             use_kinematic: Boolean flag selecting kinematic (True) vs inertial (False) routing per cell.
             rivers_gdf: Vector GeoDataFrame containing river geometry attributes.
             min_slope: Minimum allowable slope for ocean/pit boundary boundaries [-].
+
+        Raises:
+            KeyError: If a local inertial pit reach has a river ID not found in rivers_gdf.
         """
         super().__init__(
             dt,
@@ -869,9 +872,17 @@ class LocalInertial(Router):
         pit_slope_orig = np.zeros(n_nodes_total, dtype=np.float32)
 
         for node_idx in range(n_nodes_total):
-            if self.is_pit[node_idx]:
-                rid = self.river_ids[node_idx]
-                row = rivers_gdf.loc[rid]
+            if (
+                self.is_pit[node_idx]
+                and not self.use_kinematic[node_idx]
+                and self.waterbody_ids[node_idx] == -1
+            ):
+                river_id = self.river_ids[node_idx]
+                if river_id not in rivers_gdf.index:
+                    raise KeyError(
+                        f"Value with index {node_idx} has river ID {river_id}, which was not found in rivers_gdf."
+                    )
+                row = rivers_gdf.loc[river_id]
                 if isinstance(row, pd.DataFrame):
                     row = row.iloc[0]
 
@@ -917,10 +928,6 @@ class LocalInertial(Router):
                     f"has downstream kinematic node ({ds_node}, river_id {river_ids[ds_node_compressed]}). "
                     "Downstream nodes of inertial reaches cannot be kinematic."
                 )
-
-        assert np.all(
-            np.logical_or(np.logical_not(self.is_pit), waterbody_ids == -1)
-        ), "Pits cannot be located inside waterbodies."
 
         # Reorder model nodes into contiguous topological blocks:
         # 1. Kinematic reaches [0 : n_kinematic] in upstream-to-downstream topological sequence (solved in one sweep)

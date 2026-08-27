@@ -67,7 +67,7 @@ class MIRCA2000(Adapter):
 
         zip_filename: str = f"{self.path.stem}.zip"
         download_path: Path = self.root / zip_filename
-        fetch_and_save(url=url, file_path=download_path)
+        fetch_and_save(url=url, file_path=download_path, logger=self.logger)
 
         with zipfile.ZipFile(file=download_path, mode="r") as zip_ref:
             member_name: str = self._find_member(zip_ref)

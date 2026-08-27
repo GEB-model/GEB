@@ -485,15 +485,20 @@ def test_alter() -> None:
 
     Verifies that a model alternative can be made. A model alternative
     references the original model while overwriting specific settings
-    or files. Verifies that the model can be run, but does not check the
-    outputs of the altered model.
+    or files. Verifies that the model can be run with altered forcing data,
+    and that discharge (m3/s) remains in a plausible range to detect unit errors.
     """
     with WorkingDirectory(working_directory):
         args: dict[str, Any] = DEFAULT_BUILD_ARGS.copy()
         del args["continue_"]
         args["build_config"] = {
-            "set_ssp": {"ssp": "ssp1"},
-            "setup_CO2_concentration": {},
+            "set_time_range": {
+                "start_date": date(
+                    1980, 1, 1
+                ),  # MSWEP data is only available from 1979 onwards. One year is needed for spinup. So start from 1980.
+                "end_date": date(2024, 12, 31),
+            },
+            "setup_forcing": {"precipitation_source": "MSWEP", "create_plots": False},
         }
         args["working_directory"] = Path("alter")
 
@@ -503,14 +508,52 @@ def test_alter() -> None:
 
         alter_fn(**args)
 
-        run_args = DEFAULT_RUN_ARGS.copy()
+        run_args: dict[str, Any] = DEFAULT_RUN_ARGS.copy()
         run_args["working_directory"] = args["working_directory"]
         run_args["config"] = parse_config(CONFIG_DEFAULT)
-        run_args["config"]["general"]["start_time"] = run_args["config"]["general"][
-            "spinup_time"
-        ] + timedelta(days=370)  # run just over a year more is not needed
+        run_args["config"]["general"]["spinup_time"] = date(
+            1980, 1, 1
+        )  # MSWEP data is only available from 1979 onwards
 
         run_model_with_method(method="spinup", **run_args)
+
+        # Compare discharge output between original and altered model runs
+        routing_report_folder_original: Path = (
+            working_directory / "output" / "spinup" / "report" / "hydrology.routing"
+        )
+        routing_report_folder_altered: Path = (
+            working_directory
+            / "alter"
+            / "output"
+            / "spinup"
+            / "report"
+            / "hydrology.routing"
+        )
+
+        outflow_files_orig: list[Path] = list(
+            routing_report_folder_original.glob(
+                "river_outflow_hourly_m3_per_s_*.parquet"
+            )
+        )
+        assert len(outflow_files_orig) > 0, (
+            "No original outflow files found to compare against."
+        )
+
+        for orig_file in outflow_files_orig:
+            alt_file: Path = routing_report_folder_altered / orig_file.name
+            assert alt_file.exists(), f"Altered outflow file {alt_file} not found."
+            df_orig: pd.DataFrame = read_table(orig_file)
+            df_alt: pd.DataFrame = read_table(alt_file)
+
+            df_orig = df_orig.loc[df_alt.index[0] : df_alt.index[-1]]
+
+            mean_q_orig: float = float(np.mean(df_orig.values))
+            mean_q_alt: float = float(np.mean(df_alt.values))
+
+            # Ensure discharge is within a plausible range
+            assert 0.5 * mean_q_orig < mean_q_alt < 2.0 * mean_q_orig, (
+                f"Altered discharge ({mean_q_alt:.3f} m3/s) deviates unreasonably from normal ({mean_q_orig:.3f} m3/s)."
+            )
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")

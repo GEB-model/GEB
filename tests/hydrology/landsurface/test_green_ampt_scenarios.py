@@ -9,7 +9,7 @@ from geb.hydrology.landcovers import NON_PADDY_IRRIGATED
 from geb.hydrology.landsurface.energy import (
     get_temperature_and_frozen_fraction_from_enthalpy_scalar,
 )
-from geb.hydrology.landsurface.water import infiltration
+from geb.hydrology.landsurface.water import generate_rainfall_lookup_table, infiltration
 from tests.testconfig import output_folder
 
 
@@ -136,6 +136,7 @@ def run_infiltration_simulation(
             solid_heat_capacity_top_layer,
             rain_temp,
             rain_m,
+            rainfall_lookup_table=generate_rainfall_lookup_table(sigma=0.8),
             distribute_rainfall_lognormally=False,  # For testing, use uniform distribution to simplify analysis
         )
 
@@ -428,6 +429,7 @@ def test_ga_full_column_saturation_processes() -> None:
             solid_heat_capacity_top_layer,
             rain_temp,
             rain_m,
+            rainfall_lookup_table=generate_rainfall_lookup_table(sigma=0.8),
         )
 
         # Simulate Drainage (simple gravity flow)
@@ -570,6 +572,7 @@ def test_ga_top_layer_refill_priority() -> None:
         solid_heat_capacity_top_layer,
         rain_temp,
         rain_m,
+        rainfall_lookup_table=generate_rainfall_lookup_table(sigma=0.8),
     )
 
     # Verify:
@@ -691,6 +694,7 @@ def test_ga_saturation_excess_runoff() -> None:
         solid_heat_capacity_top_layer,
         rain_temp,
         rain_m,
+        rainfall_lookup_table=generate_rainfall_lookup_table(sigma=0.8),
     )
 
     # All rain should be runoff

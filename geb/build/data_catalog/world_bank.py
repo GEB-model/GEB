@@ -25,7 +25,7 @@ class WorldBankData(Adapter):
         """
         if not self.is_ready:
             download_path: Path = self.root / "zipfile.zip"
-            fetch_and_save(url, download_path)
+            fetch_and_save(url, download_path, logger=self.logger)
 
             # list all files in the zip and extract the first one
             with zipfile.ZipFile(file=download_path, mode="r") as zip_ref:

@@ -129,6 +129,7 @@ class OpenBuildingMap(Adapter):
         success: bool = fetch_and_save(
             tile_url,
             target_path,
+            logger=self.logger,
             decompress="bz2",
             delay_seconds=1,
             verbose=False,

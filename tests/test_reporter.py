@@ -67,10 +67,10 @@ class TestDailyFrequency:
         assert _to_datetimes(result)[0] == start
 
     def test_daily_with_substeps(self) -> None:
-        """Verify that substeps subdivide each day evenly.
+        """Verify that substeps subdivide each day evenly at interval midpoints.
 
-        With timestep=1 day and substeps=4, each day should contribute 4
-        entries at 0h, 6h, 12h, and 18h.
+        With timestep=1 day and substeps=4 (6h interval), each day should contribute 4
+        midpoint entries at 3h, 9h, 15h, and 21h.
         """
         start = datetime.datetime(2020, 1, 1)
         end = datetime.datetime(2020, 1, 3)
@@ -83,11 +83,27 @@ class TestDailyFrequency:
         dts = _to_datetimes(result)
         # 3 days × 4 substeps = 12 entries
         assert len(dts) == 12
-        assert dts[0] == datetime.datetime(2020, 1, 1, 0, 0, 0)
-        assert dts[1] == datetime.datetime(2020, 1, 1, 6, 0, 0)
-        assert dts[2] == datetime.datetime(2020, 1, 1, 12, 0, 0)
-        assert dts[3] == datetime.datetime(2020, 1, 1, 18, 0, 0)
-        assert dts[4] == datetime.datetime(2020, 1, 2, 0, 0, 0)
+        assert dts[0] == datetime.datetime(2020, 1, 1, 3, 0, 0)
+        assert dts[1] == datetime.datetime(2020, 1, 1, 9, 0, 0)
+        assert dts[2] == datetime.datetime(2020, 1, 1, 15, 0, 0)
+        assert dts[3] == datetime.datetime(2020, 1, 1, 21, 0, 0)
+        assert dts[4] == datetime.datetime(2020, 1, 2, 3, 0, 0)
+        assert dts[-1] == datetime.datetime(2020, 1, 3, 21, 0, 0)
+
+    def test_daily_with_hourly_substeps_midpoint(self) -> None:
+        """Verify that 24 hourly substeps per day are centered at HH:30:00."""
+        start = datetime.datetime(2020, 1, 1)
+        end = datetime.datetime(2020, 1, 1)
+        timestep = datetime.timedelta(days=1)
+        conf: dict = {"frequency": {"every": "day"}}
+
+        result = create_time_array(start, end, timestep, conf, substeps=24)
+
+        dts = _to_datetimes(result)
+        assert len(dts) == 24
+        assert dts[0] == datetime.datetime(2020, 1, 1, 0, 30, 0)
+        assert dts[1] == datetime.datetime(2020, 1, 1, 1, 30, 0)
+        assert dts[23] == datetime.datetime(2020, 1, 1, 23, 30, 0)
 
     def test_daily_with_relativedelta_timestep(self) -> None:
         """Verify that a relativedelta(days=1) timestep produces correct daily entries."""

@@ -1555,3 +1555,161 @@ def test_local_inertial_tributary_junction_multidirectional_scaling() -> None:
     # Mass balance holds exactly
     total_after = float(np.sum(river_storage_out)) + float(outflow_at_pits)
     assert np.isclose(100000.0, total_after, rtol=1e-4)
+
+
+def test_local_inertial_kinematic_pit_missing_river_id() -> None:
+    """Test that a kinematic pit cell without a river ID initializes and routes without error."""
+    ldd = np.array([[2], [5]], dtype=np.uint8)
+    mask = np.ones((2, 1), dtype=bool)
+    river_network = create_river_network(ldd, mask, transform=Affine.identity())
+    n_cells: int = 2
+
+    # Cell 1 is a pit and kinematic (use_kinematic=True), with river_id=-1
+    river_ids = np.array([0, -1], dtype=np.int32)
+    use_kinematic = np.array([True, True], dtype=bool)
+    rivers_gdf = gpd.GeoDataFrame(
+        {
+            "downstream_ID": np.array([-1], dtype=np.int32),
+            "slope": np.array([0.001], dtype=np.float32),
+        },
+        index=[0],
+    )
+
+    router = _make_local_inertial(
+        dt=3600,
+        river_network=river_network,
+        river_length=np.full(n_cells, 1000.0, dtype=np.float32),
+        river_ids=river_ids,
+        use_kinematic=use_kinematic,
+        rivers_gdf=rivers_gdf,
+    )
+
+    (
+        Q_out,
+        river_storage_out,
+        actual_evap,
+        over_abs,
+        wb_storage_out,
+        wb_inflow,
+        outflow_at_pits,
+        ret_storage,
+        ret_inflow,
+        ret_outflow,
+    ) = router.step(
+        Q_prev_m3_s=np.zeros(n_cells, dtype=np.float32),
+        river_storage_m3=np.array([1000.0, 500.0], dtype=np.float64),
+        sideflow_m3=np.zeros(n_cells, dtype=np.float32),
+        evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
+        outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float32),
+        retention_storage_m3=np.zeros(0, dtype=np.float32),
+        river_storage_alpha=np.full(n_cells, 1.0, dtype=np.float32),
+        river_storage_beta=np.full(n_cells, 0.6, dtype=np.float32),
+        retention_activation_threshold_m3_s=np.zeros(0, dtype=np.float32),
+    )
+
+    assert (river_storage_out >= 0.0).all()
+    assert outflow_at_pits >= 0.0
+
+
+def test_local_inertial_inertial_pit_missing_river_id_raises_keyerror() -> None:
+    """Test that an inertial pit cell without a river ID raises a KeyError upon initialization."""
+    ldd = np.array([[2], [5]], dtype=np.uint8)
+    mask = np.ones((2, 1), dtype=bool)
+    river_network = create_river_network(ldd, mask, transform=Affine.identity())
+    n_cells: int = 2
+
+    # Cell 1 is an inertial pit (use_kinematic=False), with river_id=-1 (not in rivers_gdf)
+    river_ids = np.array([0, -1], dtype=np.int32)
+    use_kinematic = np.array([False, False], dtype=bool)
+    rivers_gdf = gpd.GeoDataFrame(
+        {
+            "downstream_ID": np.array([-1], dtype=np.int32),
+            "slope": np.array([0.001], dtype=np.float32),
+        },
+        index=[0],
+    )
+
+    with pytest.raises(KeyError, match="Value with index 1 has river ID -1"):
+        _make_local_inertial(
+            dt=3600,
+            river_network=river_network,
+            river_length=np.full(n_cells, 1000.0, dtype=np.float32),
+            river_width=np.full(n_cells, 10.0, dtype=np.float32),
+            river_ids=river_ids,
+            use_kinematic=use_kinematic,
+            rivers_gdf=rivers_gdf,
+            bankfull_river_elevation_m=np.array([10.0, 0.0], dtype=np.float32),
+        )
+
+
+def test_local_inertial_terminal_waterbody_on_pit() -> None:
+    """Test that a waterbody located on a pit node initializes and routes correctly."""
+    # Cell 0 drains to cell 1, which is a pit and part of a waterbody
+    ldd = np.array([[2], [5]], dtype=np.uint8)
+    mask = np.ones((2, 1), dtype=bool)
+    river_network = create_river_network(ldd, mask, transform=Affine.identity())
+    n_cells: int = 2
+
+    waterbody_ids = np.array([-1, 0], dtype=np.int32)
+    is_waterbody_outflow = np.array([False, True], dtype=bool)
+    river_ids = np.array([0, -1], dtype=np.int32)
+    use_kinematic = np.array([False, False], dtype=bool)
+    rivers_gdf = gpd.GeoDataFrame(
+        {
+            "downstream_ID": np.array([-1], dtype=np.int32),
+            "slope": np.array([0.001], dtype=np.float32),
+        },
+        index=[0],
+    )
+
+    router = _make_local_inertial(
+        dt=3600,
+        river_network=river_network,
+        river_length=np.full(n_cells, 1000.0, dtype=np.float32),
+        river_width=np.full(n_cells, 10.0, dtype=np.float32),
+        waterbody_ids=waterbody_ids,
+        river_ids=river_ids,
+        is_waterbody_outflow=is_waterbody_outflow,
+        use_kinematic=use_kinematic,
+        rivers_gdf=rivers_gdf,
+        bankfull_river_elevation_m=np.array([10.0, 0.0], dtype=np.float32),
+    )
+
+    wb_storage_init = np.array([10000.0], dtype=np.float64)
+    wb_outflow = np.array([2000.0], dtype=np.float32)
+    river_storage_init = np.array([5000.0, 0.0], dtype=np.float64)
+
+    total_initial: float = float(np.sum(wb_storage_init) + np.sum(river_storage_init))
+
+    (
+        Q_out,
+        river_storage_out,
+        actual_evap,
+        over_abs,
+        wb_storage_out,
+        wb_inflow,
+        outflow_at_pits,
+        ret_storage,
+        ret_inflow,
+        ret_outflow,
+    ) = router.step(
+        Q_prev_m3_s=np.zeros(n_cells, dtype=np.float32),
+        river_storage_m3=river_storage_init.copy(),
+        sideflow_m3=np.zeros(n_cells, dtype=np.float32),
+        evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        waterbody_storage_m3=wb_storage_init.copy(),
+        outflow_per_waterbody_m3=wb_outflow,
+        retention_storage_m3=np.zeros(0, dtype=np.float32),
+        river_storage_alpha=np.full(n_cells, 1.0, dtype=np.float32),
+        river_storage_beta=np.full(n_cells, 0.6, dtype=np.float32),
+        retention_activation_threshold_m3_s=np.zeros(0, dtype=np.float32),
+    )
+
+    # Lake storage was reduced by the terminal release of 2000 m3 plus any inflow from upstream reach
+    assert wb_storage_out[0] >= 0.0
+    # Mass balance for the whole domain must hold
+    total_final: float = float(
+        np.sum(wb_storage_out) + np.sum(river_storage_out) + outflow_at_pits
+    )
+    assert np.isclose(total_initial, total_final, atol=1e-3)

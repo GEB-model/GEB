@@ -507,14 +507,18 @@ def create_time_array(
                             f"Timestep {timestep} is not evenly divisible by substeps={substeps}."
                         )
                     substep_s: int = step_s // substeps
-                    # The outer loop runs while current_time <= end and emits
-                    # `substeps` evenly spaced entries per iteration. The sequence
-                    # is contiguous at substep_s resolution up to
-                    # last_start_s + (substeps - 1) * substep_s.
+                    # Substeps are timestamped at the midpoint of each interval (e.g., 00:30:00 for 1-hour substeps)
+                    # so that all substeps of day T fall strictly within [00:00:00, 24:00:00) without boundary ambiguity.
+                    substep_offset_s: int = substep_s // 2
                     last_start_s: int = ((end_s - start_s) // step_s) * step_s + start_s
-                    last_t_s: int = last_start_s + (substeps - 1) * substep_s
+                    last_t_s: int = (
+                        last_start_s + (substeps - 1) * substep_s + substep_offset_s
+                    )
                     time_array = np.arange(
-                        start_s, last_t_s + 1, substep_s, dtype=np.int64
+                        start_s + substep_offset_s,
+                        last_t_s + 1,
+                        substep_s,
+                        dtype=np.int64,
                     )
 
             else:
@@ -525,8 +529,12 @@ def create_time_array(
                     if substeps is None:
                         time.append(current_time)
                     else:
+                        substep_delta = timestep / substeps
+                        substep_offset = substep_delta / 2
                         for substep in range(substeps):
-                            time.append(current_time + substep * (timestep / substeps))
+                            time.append(
+                                current_time + substep * substep_delta + substep_offset
+                            )
                     current_time += timestep
 
         else:

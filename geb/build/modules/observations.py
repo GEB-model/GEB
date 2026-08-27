@@ -19,6 +19,67 @@ from geb.workflows.timeseries import regularize_discharge_timeseries
 from .base import BuildModelBase
 
 
+def parse_custom_station_filename(
+    station_path: Path,
+) -> tuple[float, float, float, str]:
+    """Parse coordinates, optional upstream area, and station name from a custom station file path.
+
+    The filename stem must follow one of these two conventions:
+    - ``lon_lat+station_name``
+    - ``lon_lat_upstream_area+station_name``
+
+    Args:
+        station_path: Path to the station file.
+
+    Returns:
+        A tuple of (longitude, latitude, upstream_area_m2, station_name), where
+        longitude and latitude are in degrees, upstream_area_m2 is in m2 (np.nan if not provided),
+        and station_name is a string.
+
+    Raises:
+        ValueError: If the filename does not contain '+' separator, contains an invalid number of
+            underscore-separated metadata parts, or coordinates/upstream area cannot be converted to floats.
+    """
+    if "+" not in station_path.stem:
+        raise ValueError(
+            f"Filename '{station_path.name}' does not contain '+' separator. "
+            "Expected format: 'lon_lat+station_name.ext' or 'lon_lat_upstream_area+station_name.ext'."
+        )
+
+    metadata_str: str
+    station_name: str
+    metadata_str, station_name = station_path.stem.split("+", 1)
+
+    parts: list[str] = metadata_str.split("_")
+    if len(parts) == 2:
+        try:
+            lon: float = float(parts[0])
+            lat: float = float(parts[1])
+        except ValueError as err:
+            raise ValueError(
+                f"Filename '{station_path.name}' does not contain valid numeric coordinates. "
+                "Expected format: 'lon_lat+station_name.ext' or 'lon_lat_upstream_area+station_name.ext'."
+            ) from err
+        upstream_area_m2: float = np.nan
+    elif len(parts) == 3:
+        try:
+            lon: float = float(parts[0])
+            lat: float = float(parts[1])
+            upstream_area_m2: float = float(parts[2])
+        except ValueError as err:
+            raise ValueError(
+                f"Filename '{station_path.name}' does not contain valid numeric coordinates or upstream area. "
+                "Expected format: 'lon_lat+station_name.ext' or 'lon_lat_upstream_area+station_name.ext'."
+            ) from err
+    else:
+        raise ValueError(
+            f"Filename '{station_path.name}' contains {len(parts)} metadata parts before '+'. "
+            "Expected format: 'lon_lat+station_name.ext' (2 parts) or 'lon_lat_upstream_area+station_name.ext' (3 parts)."
+        )
+
+    return lon, lat, upstream_area_m2, station_name
+
+
 def process_station_data(Q_station: pd.DataFrame, station_path: Path) -> pd.DataFrame:
     """Parse and preprocess a station CSV read into a DataFrame.
 
@@ -86,13 +147,13 @@ class Observations(BuildModelBase):
         It clips discharge observations to the basin area, and snaps the discharge observations locations to the locations of the GEB discharge simulations, using upstream area estimates recorded in the discharge observations.
         It also saves necessary input data for the model in the input folder, and some additional information in the output folder (e.g snapping plots).
         Additional stations can be added from a custom folder containing station files in either CSV or Parquet format.
-        Custom station filenames must follow the format ``lon_lat+station_name.ext``, where ``lon`` and ``lat`` are the station coordinates in degrees and ``ext`` is either ``.csv`` or ``.parquet``.
+        Custom station filenames must follow either the ``lon_lat+station_name.ext`` or ``lon_lat_upstream_area+station_name.ext`` format, where ``lon`` and ``lat`` are the station coordinates in degrees, ``upstream_area`` is the upstream area in m2, and ``ext`` is either ``.csv`` or ``.parquet``.
         CSV files must contain a datetime index column and a ``Q`` discharge column. Parquet files must contain a ``datetime`` column and a ``Q`` discharge column.
 
         Args:
             max_uparea_difference_ratio: The maximum allowed difference in upstream area between the discharge observations station and the GEB river segment, as a ratio of the discharge observations upstream area. Default is 0.3 (30%).
             max_spatial_difference_degrees: The maximum allowed spatial difference in degrees between the discharge observations station and the GEB river segment. Default is 0.1 degrees.
-            custom_river_stations: Path to a folder containing custom river station files in ``.csv`` or ``.parquet`` format. Coordinates and station name are read from the filename using the ``lon_lat+station_name.ext`` convention. Default is None, which means no custom stations are used.
+            custom_river_stations: Path to a folder containing custom river station files in ``.csv`` or ``.parquet`` format. Coordinates, optional upstream area in m2, and station name are read from the filename using the ``lon_lat+station_name.ext`` or ``lon_lat_upstream_area+station_name.ext`` convention. Default is None, which means no custom stations are used.
             create_plots: Whether to create plots of the snapping results for each station. Default is False.
 
         Raises:
@@ -188,15 +249,11 @@ class Observations(BuildModelBase):
                         )
 
                     station_name: str
-                    lonlat_str: str
-                    lonlat_str, station_name = station_path.stem.split("+", 1)
-                    lon_lat: list[str] = lonlat_str.split("_", maxsplit=1)
-                    assert len(lon_lat) == 2, (
-                        f"Filename {station_path} does not contain valid coordinates. Expected format: 'lon_lat+stationname.csv'"
-                    )
-                    lon_lat: tuple[float, float] = (
-                        float(lon_lat[0]),
-                        float(lon_lat[1]),
+                    lon: float
+                    lat: float
+                    upstream_area_m2: float
+                    lon, lat, upstream_area_m2, station_name = (
+                        parse_custom_station_filename(station_path)
                     )
 
                     Q_station = process_station_data(Q_station, station_path)
@@ -213,16 +270,16 @@ class Observations(BuildModelBase):
                             {
                                 "discharge_observations_station_ID": station_id,
                                 "discharge_observations_station_name": station_name,
-                                "x": lon_lat[0],
-                                "y": lon_lat[1],
-                                "discharge_observations_upstream_area_m2": np.nan,  # Not provided in basic CSV
+                                "x": lon,
+                                "y": lat,
+                                "discharge_observations_upstream_area_m2": upstream_area_m2,
                                 "discharge_observations_river_name": "Unknown",
                             }
                         ]
                     )
                     new_meta_gdf = gpd.GeoDataFrame(
                         new_meta,
-                        geometry=gpd.points_from_xy([lon_lat[0]], [lon_lat[1]]),
+                        geometry=gpd.points_from_xy([lon], [lat]),
                         crs="EPSG:4326",
                     )
                     obs_metadata = pd.concat(

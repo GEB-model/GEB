@@ -84,6 +84,7 @@ class DeltaDTM(Adapter):
             success = fetch_and_save(
                 url=url_delta_dtm_tiles,
                 file_path=filepath,
+                logger=self.logger,
             )
             if not success:
                 raise RuntimeError("Failed to download DeltaDTM tiles geopackage.")
@@ -130,7 +131,9 @@ class DeltaDTM(Adapter):
                 tmpdir = Path(tmpdir_str)
                 temp_zip_path = tmpdir / zip_name
 
-                success = fetch_and_save(url=url, file_path=temp_zip_path)
+                success = fetch_and_save(
+                    url=url, file_path=temp_zip_path, logger=self.logger
+                )
                 if not success:
                     raise RuntimeError(f"Failed to download DeltaDTM zip: {zip_name}")
 

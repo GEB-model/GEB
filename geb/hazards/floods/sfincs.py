@@ -183,15 +183,47 @@ class SFINCSRootModel:
         if not self.exists():
             raise FileNotFoundError(f"SFINCS model not found in {self.path}")
         self.sfincs_model = SfincsModel(root=str(self.path), mode="r")
-        self.sfincs_model.read()
-
-        self.rivers: gpd.GeoDataFrame = read_geom(self.path / "rivers.geoparquet")
-        self.subbasins: gpd.GeoDataFrame = read_geom(self.path / "subbasins.geoparquet")
-
-        self.area_of_interest = read_zarr(self.path / "area_of_interest.zarr")
 
         self.is_build_from_scratch = False
         return self
+
+    @property
+    def rivers(self) -> gpd.GeoDataFrame:
+        """Gets the rivers GeoDataFrame."""
+        if not hasattr(self, "_rivers"):
+            self._rivers = read_geom(self.path / "rivers.geoparquet")
+        return self._rivers
+
+    @rivers.setter
+    def rivers(self, rivers: gpd.GeoDataFrame) -> None:
+        """Sets the rivers GeoDataFrame."""
+        self._rivers = rivers
+        write_geom(rivers, self.path / "rivers.geoparquet")
+
+    @property
+    def subbasins(self) -> gpd.GeoDataFrame:
+        """Gets the subbasins GeoDataFrame."""
+        if not hasattr(self, "_subbasins"):
+            self._subbasins = read_geom(self.path / "subbasins.geoparquet")
+        return self._subbasins
+
+    @subbasins.setter
+    def subbasins(self, subbasins: gpd.GeoDataFrame) -> None:
+        """Sets the subbasins GeoDataFrame."""
+        self._subbasins = subbasins
+        write_geom(subbasins, self.path / "subbasins.geoparquet")
+
+    @property
+    def area_of_interest(self) -> xr.DataArray:
+        """Gets the area of interest DataArray."""
+        if not hasattr(self, "_area_of_interest"):
+            self._area_of_interest = read_zarr(self.path / "area_of_interest.zarr")
+        return self._area_of_interest
+
+    @area_of_interest.setter
+    def area_of_interest(self, area_of_interest: xr.DataArray) -> None:
+        """Sets the area of interest DataArray."""
+        self._area_of_interest = area_of_interest
 
     def build(
         self,

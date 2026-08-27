@@ -451,19 +451,37 @@ TABLE_SIZE: int = 1024
 assert (TABLE_SIZE & (TABLE_SIZE - 1)) == 0, "TABLE_SIZE must be a power of two"
 MASK: np.uint64 = np.uint64(TABLE_SIZE - 1)
 
-_RAINFALL_LOOKUP_TABLE_NON_NORMALIZED: TwoDArrayFloat64 = np.random.default_rng(
-    42
-).lognormal(
-    mean=0,
-    sigma=1.2,
-    size=(TABLE_SIZE, 6),
-)
-# Normalize rows to sum to 1.0
-RAINFALL_LOOKUP_TABLE: TwoDArrayFloat32 = (
-    _RAINFALL_LOOKUP_TABLE_NON_NORMALIZED
-    / _RAINFALL_LOOKUP_TABLE_NON_NORMALIZED.sum(axis=1)[:, np.newaxis]
-).astype(np.float32)
-del _RAINFALL_LOOKUP_TABLE_NON_NORMALIZED  # Free memory
+# Default sigma presets by precipitation forcing source
+FORCING_SOURCE_SIGMA_DEFAULTS: dict[str, float] = {
+    "ERA5-Land": 1.2,
+    "MSWEP": 0.8,
+    "ECMWF": 1.2,
+}
+
+
+def generate_rainfall_lookup_table(
+    sigma: float,
+    table_size: int = TABLE_SIZE,
+    seed: int = 42,
+) -> TwoDArrayFloat32:
+    """Generate precomputed lognormal weights for rainfall distribution across substeps.
+
+    Args:
+        sigma: Lognormal standard deviation shape parameter.
+        table_size: Number of table rows (must be a power of two).
+        seed: Random seed for reproducible table generation.
+
+    Returns:
+        2D array of shape (table_size, 6) with normalized row weights summing to 1.0.
+    """
+    raw: TwoDArrayFloat64 = np.random.default_rng(seed).lognormal(
+        mean=0.0,
+        sigma=sigma,
+        size=(table_size, 6),
+    )
+    table: TwoDArrayFloat32 = (raw / raw.sum(axis=1)[:, np.newaxis]).astype(np.float32)
+
+    return table
 
 
 @njit(cache=True, inline="always")
@@ -489,6 +507,7 @@ def infiltration(
     solid_heat_capacity_top_layer_J_per_m2_K: np.float32,
     rain_temperature_C: np.float32,
     liquid_water_input_for_enthalpy_m: np.float32,
+    rainfall_lookup_table: TwoDArrayFloat32,
     distribute_rainfall_lognormally: bool = True,
 ) -> tuple[
     np.float32,
@@ -536,6 +555,7 @@ def infiltration(
             top-soil thermal control volume during this timestep (m). This should
             include rain and similar new surface inputs, but exclude pre-existing
             ponded water so heat advection is not double counted.
+        rainfall_lookup_table: Precomputed lognormal weights lookup table of shape (table_size, 6).
         distribute_rainfall_lognormally: Whether to distribute rainfall across substeps using a log-normal distribution to simulate temporal variability. If False, rainfall is distributed evenly.
 
     Returns:
@@ -613,9 +633,9 @@ def infiltration(
     # which gives us a unique but deterministic rainfall distribution for this cell and timestep.
     # The total rainfall across the substeps is normalized to match the input rainfall for the timestep,
     # so we are not changing the total amount of water, just how it is distributed within the hour.
-    idx: np.uint64 = splitmix64(seed)
+    idx: np.uint64 = splitmix64(np.uint64(seed))
     if distribute_rainfall_lognormally:
-        rainfall_lookup_table_row: ArrayFloat32 = RAINFALL_LOOKUP_TABLE[idx & MASK]
+        rainfall_lookup_table_row: ArrayFloat32 = rainfall_lookup_table[idx & MASK]
     else:
         rainfall_lookup_table_row: ArrayFloat32 = np.full(
             n_substeps, 1.0 / n_substeps, dtype=np.float32

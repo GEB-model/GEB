@@ -285,6 +285,11 @@ class ForcingLoader(ABC):
         self.forecast_issue_datetime: datetime | None = None
         self.ds_forecast: xr.DataArray | None = None
 
+    @property
+    def source(self) -> str | None:
+        """The original source name of the forcing dataset (e.g. 'ERA5-Land', 'MSWEP')."""
+        return self.reader.source
+
     def _load_forcing_mask(self) -> xr.DataArray:
         """Load the forcing-grid keep mask if it is available.
 
