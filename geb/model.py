@@ -105,6 +105,7 @@ class GEBModel(Module):
         self.evaluator = Evaluate(self)  # initialize the evaluator
 
         self.plantFATE = []  # Empty list to hold plantFATE models. If forests are not used, this will be empty
+        self._timing_start_time: float | None = None
 
     def verify_build_complete(self) -> None:
         """Verify that the build completed.
@@ -578,7 +579,7 @@ class GEBModel(Module):
                             date_time=self.current_time
                         )
 
-        t0 = time()
+        t0: float = time()
         self.agents.step()
         if self.simulate_hydrology:
             self.hydrology.step()
@@ -587,10 +588,40 @@ class GEBModel(Module):
 
         self.report(locals())
 
-        t1 = time()
-        self.logger.info(
-            f"{self.multiverse_name + ' - ' if self.multiverse_name is not None else ''}step {self.current_time.date()} took {round(t1 - t0, 4)}s",
+        t1: float = time()
+        step_duration: float = t1 - t0
+
+        multiverse_prefix: str = (
+            f"{self.multiverse_name} - " if self.multiverse_name is not None else ""
         )
+        base_msg: str = f"{multiverse_prefix}step {self.current_time.date()} took {round(step_duration, 4)}s"
+
+        forecasting_enabled: bool = self.config["general"]["forecasts"]["use"]
+        floods_enabled: bool = self.config["hazards"]["floods"]["simulate"]
+
+        if not forecasting_enabled and not floods_enabled and self.n_timesteps > 0:
+            progress_pct: float = ((self.current_timestep + 1) / self.n_timesteps) * 100
+
+            # Ignore the first step because the first step often needs compiling
+            # and other setup.
+            if self._timing_start_time is None:
+                self._timing_start_time = time()
+                self.logger.info(f"{base_msg} ({progress_pct:.2f}%)")
+            else:
+                elapsed_seconds: float = time() - self._timing_start_time
+                avg_step_duration: float = elapsed_seconds / self.current_timestep
+                remaining_timesteps: int = self.n_timesteps - (
+                    self.current_timestep + 1
+                )
+                remaining_seconds: float = remaining_timesteps * avg_step_duration
+                estimated_completion_time: datetime.datetime = (
+                    datetime.datetime.now()
+                    + datetime.timedelta(seconds=remaining_seconds)
+                )
+                etc_str: str = estimated_completion_time.strftime("%m-%d %H:%M")
+                self.logger.info(f"{base_msg} ({progress_pct:.2f}%, ETC: {etc_str})")
+        else:
+            self.logger.info(base_msg)
 
         self.current_timestep += 1
 
@@ -626,6 +657,7 @@ class GEBModel(Module):
         self.timestep_length = timestep_length
         self.n_timesteps = n_timesteps
         self.current_timestep = 0
+        self._timing_start_time: float | None = None
 
         self.regions: gpd.GeoDataFrame = read_geom(self.files["geom"]["regions"])
 
@@ -661,6 +693,7 @@ class GEBModel(Module):
 
     def step_to_end(self) -> None:
         """Run the model to the end of the simulation period."""
+        self._timing_start_time = None
         self.model.logger.info(
             f"Running from {self.current_time.date()} to {self.run_end.date()}"
         )

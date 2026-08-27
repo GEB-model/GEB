@@ -1,4 +1,5 @@
 # dev
+- Added simulation progress percentage and estimated time of completion (ETC) logging in model runs when forecasting and flood simulations are not enabled.
 - Removed legacy `accuflux` and `kinematic_wave` routing modules in favor of `local_inertial` routing.
 - Unify the retention basin diversion and release logic across all three routing algorithms into a single shared, Numba JIT-compiled helper `compute_retention_routing` in `routerbase.py`.
 - Implement the local inertial routing algorithm in `local_inertial.py` as an unconditionally stable alternative routing algorithm using adaptive sub-stepping and power-law storage inversion.
