@@ -135,6 +135,120 @@ def calculate_stream_length(
     return stream_length
 
 
+def calculate_dem_floodplain_width(
+    flow_raster_high_res: FlwdirRaster,
+    elevation_high_res: xr.DataArray,
+    upstream_area_high_res_m2: xr.DataArray,
+    idxs_outflow_low_res: xr.DataArray,
+    river_raster_low_res: npt.NDArray[np.int32],
+    cell_area_low_res: xr.DataArray,
+    river_length_low_res: xr.DataArray,
+    ldd_scale_factor: int,
+    a: float = 0.01,
+    b: float = 0.30,
+    stream_threshold_m2: float = 1_000_000.0,
+) -> xr.DataArray:
+    """Calculate effective floodplain width for each river reach based on DEM HAND scaling and subbasin attribution.
+
+    Uses GFPLAIN HAND hydrogeomorphic scaling (Nardi et al. 2018, 2019) to delineate active geomorphic
+    floodplains on the high-resolution DEM, then calculates flood plain width by finding the area of the floodplain
+    per river segment and then distributing the width over the length of the entire river segment.
+
+    Thus the entire river segment has the same flood plain width.
+
+    Args:
+        flow_raster_high_res: High-resolution flow direction raster.
+        elevation_high_res: High-resolution digital elevation model (DEM) (m).
+        upstream_area_high_res_m2: Upstream contributing area on high-resolution grid (m²).
+        idxs_outflow_low_res: Low-resolution array mapping each model grid cell to its high-resolution outflow pixel index.
+        river_raster_low_res: Low-resolution 2D array of river IDs (-1 indicates non-river cells).
+        cell_area_low_res: Grid cell area at model resolution (m²).
+        river_length_low_res: River reach length in model grid cell (m).
+        ldd_scale_factor: Coarsening scale factor from high-resolution to model resolution.
+        a: Leopold & Maddock power-law scale factor for stage threshold (m^(1-2b)). Default is 0.01.
+        b: Leopold & Maddock power-law exponent for stage threshold. Default is 0.30.
+        stream_threshold_m2: Minimum upstream area threshold for initiating stream channels (m²).
+
+    Returns:
+        Effective floodplain width for each grid cell in meters (NaN for non-river cells).
+    """
+    # Nardi et al. stage threshold scaling h(A) = a * A^b
+    scale_factor: np.float32 = np.float32(a ** (1.0 / b))
+    scaled_uparea = scale_factor * upstream_area_high_res_m2.values
+    scaled_upa_min: np.float32 = scale_factor * np.float32(stream_threshold_m2)
+
+    floodplain_mask_high_res = flow_raster_high_res.floodplains(
+        elevtn=elevation_high_res.values,
+        uparea=scaled_uparea,
+        upa_min=scaled_upa_min,
+        b=b,
+    )
+
+    # Identify river cells and delineate their high-resolution contributing subbasins
+    river_mask_flat = river_raster_low_res.ravel() != -1
+    river_cell_indices = np.where(river_mask_flat)[0]
+
+    floodplain_width = xr.full_like(
+        river_length_low_res, fill_value=np.nan, dtype=np.float32
+    )
+
+    if river_cell_indices.size == 0:
+        return floodplain_width
+
+    river_outflows_hd = idxs_outflow_low_res.values.ravel()[river_cell_indices]
+    subbasin_ids = np.arange(1, river_cell_indices.size + 1, dtype=np.uint32)
+
+    # Subbasins mapping every high-res pixel to the river reach it drains into
+    subbasins_hd = flow_raster_high_res.basins(idxs=river_outflows_hd, ids=subbasin_ids)
+
+    # Sum high-resolution floodplain pixel counts per river reach
+    flood_plain_pixels = floodplain_mask_high_res.ravel() == 1
+    flood_plain_subbasins = subbasins_hd.ravel()[flood_plain_pixels]
+    flood_plain_pixel_counts = np.bincount(
+        flood_plain_subbasins, minlength=river_cell_indices.size + 1
+    )
+
+    # Compute segment-aggregated floodplain width: W_flood_plain(segment) = sum(A_flood_plain) / sum(L_river)
+    # All grid cells within the same river segment receive the uniform segment-averaged floodplain width.
+    cell_area_flat = cell_area_low_res.values.ravel()[river_cell_indices].astype(
+        np.float32
+    )
+    high_res_pixel_area = cell_area_flat / np.float32(ldd_scale_factor**2)
+
+    reach_flood_plain_areas = (
+        flood_plain_pixel_counts[1 : river_cell_indices.size + 1].astype(np.float32)
+        * high_res_pixel_area
+    )
+
+    river_raster_flat = river_raster_low_res.ravel()
+    unique_segments = np.unique(river_raster_flat[river_mask_flat])
+
+    floodplain_width_data = np.full(river_raster_low_res.size, np.nan, dtype=np.float32)
+
+    for segment_id in unique_segments:
+        segment_mask = river_raster_flat == segment_id
+        total_seg_len = np.sum(
+            river_length_low_res.values.ravel()[segment_mask].astype(np.float32)
+        )
+        seg_reach_mask = river_raster_flat[river_cell_indices] == segment_id
+        total_seg_flood_plain_area = np.sum(reach_flood_plain_areas[seg_reach_mask])
+
+        if total_seg_len > 0:
+            seg_flood_plain_width = np.clip(
+                total_seg_flood_plain_area / total_seg_len,
+                np.float32(0.0),
+                np.float32(100_000.0),  # maximum flood plain width of 100 km
+            ).astype(np.float32)
+        else:
+            seg_flood_plain_width = np.float32(0.0)
+
+        floodplain_width_data[segment_mask] = seg_flood_plain_width
+
+    floodplain_width.data = floodplain_width_data.reshape(river_raster_low_res.shape)
+
+    return floodplain_width
+
+
 def get_all_upstream_subbasin_ids(
     river_graph: nx.DiGraph, subbasin_ids: list[int]
 ) -> set[int]:
@@ -529,20 +643,7 @@ class Hydrography(BuildModelBase):
         required=True,
     )
     def setup_geomorphology(self) -> None:
-        """Sets up the Manning's coefficient for the model.
-
-        Notes:
-            This method sets up the Manning's coefficient for the model by calculating the coefficient based on the cell area
-            and topography of the grid. It first calculates the upstream area of each cell in the grid using the
-            `routing/upstream_area` attribute of the grid. It then calculates the coefficient using the formula:
-
-                C = 0.025 + 0.015 * (2 * A / U) + 0.030 * (Z / 2000)
-
-            where C is the Manning's coefficient, A is the cell area, U is the upstream area, and Z is the elevation of the cell.
-
-            The resulting Manning's coefficient is then set as the `routing/mannings` attribute of the grid using the
-            `set_grid()` method.
-        """
+        """Sets up channel roughness, surface area ratio, and hillslope length."""
         subgrid_elevation: xr.DataArray = self.subgrid["landsurface/elevation"]
         slope_high_res: npt.NDArray[np.float64] = pyflwdir.dem.slope(
             subgrid_elevation.values,
@@ -568,17 +669,37 @@ class Hydrography(BuildModelBase):
         surface_area_ratio: xr.DataArray = snap_to_grid(
             surface_area_ratio, self.grid["mask"], relative_tolerance=0.03
         )
-
         self.set_grid(surface_area_ratio, name="landsurface/surface_area_ratio")
 
-        a: xr.DataArray = (2 * self.grid["cell_area"]) / self.grid[
-            "routing/upstream_area_m2"
-        ]
-        a: xr.DataArray = xr.where(a < 1, a, 1, keep_attrs=True)
-        b: xr.DataArray = self.grid["landsurface/elevation_min_m"] / 2000
-        b: xr.DataArray = xr.where(b < 1, b, 1, keep_attrs=True)
+        # In headwaters / steep reaches (S >= 0.002 m/m), estimate roughness directly
+        # from bed slope using Jarrett (1984) with hydraulic radius R ≈ 0.5 m:
+        # n = 0.39 * S^0.38 * (0.5)^(-0.16) ≈ 0.435 * S^0.38
+        # Original paper:
+        # Jarrett (1984): https://ascelibrary.org/doi/pdf/10.1061/(ASCE)0733-9429(1984)110%3A11(1519)
+        # Open access report by Jarrett that contains the formula:  https://pubs.usgs.gov/wri/1985/4004/report.pdf
+        # See page 35
 
-        mannings: xr.DataArray = 0.025 + 0.015 * a + 0.030 * b
+        # Original equation (US Customary units, R_ft in feet):
+        #   n = 0.39 * S^0.38 * R_ft^(-0.16)
+        #
+        # SI derivation (substituting R_ft = 3.28084 * R_m):
+        #   n = 0.39 * S^0.38 * (3.28084 * R_m)^(-0.16)
+        #   n = (0.39 * 3.28084^(-0.16)) * S^0.38 * R_m^(-0.16)
+        #   n = 0.323 * S^0.38 * R_m^(-0.16)
+
+        R_m = 0.5  # Assumed representative headwater hydraulic radius in meters
+        slope = self.grid["routing/river_slope_m_per_m"]
+
+        mannings_steep: xr.DataArray = 0.323 * (slope**0.38) * (R_m**-0.16)
+
+        # For lowlands (S < 0.002 m/m), scale roughness linearly with slope between
+        # 0.025 at flat reaches up to 0.040
+        mannings_lowland: xr.DataArray = 0.025 + (0.040 - 0.025) * (slope / 0.002)
+
+        mannings: xr.DataArray = xr.where(
+            slope >= 0.002, mannings_steep, mannings_lowland
+        )
+        mannings = mannings.clip(min=0.025, max=0.075)  # clip to reasonable min max
         mannings.attrs["_FillValue"] = np.nan
 
         self.set_grid(mannings, "routing/mannings")
@@ -934,6 +1055,19 @@ class Hydrography(BuildModelBase):
             upstream_area=upstream_area_data,
             missing_val=-1,
         )
+
+        self.logger.info("Computing basin-attributed floodplain width per river reach")
+        floodplain_width = calculate_dem_floodplain_width(
+            flow_raster_high_res=flow_raster_original,
+            elevation_high_res=original_d8_elevation,
+            upstream_area_high_res_m2=upstream_area_high_res,
+            idxs_outflow_low_res=self.grid["idxs_outflow"],
+            river_raster_low_res=river_raster_LR,
+            cell_area_low_res=self.grid["cell_area"],
+            river_length_low_res=river_length,
+            ldd_scale_factor=self.ldd_scale_factor,
+        )
+        self.set_grid(floodplain_width, name="routing/floodplain_width_m")
 
         missing_rivers: set[int] = set(rivers.index) - set(
             np.unique(river_raster_LR[river_raster_LR != -1]).tolist()
