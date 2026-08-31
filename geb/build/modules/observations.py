@@ -1,6 +1,10 @@
 """This module contains the classes and functions processing observational data during model building."""
 
+import io
+import logging
+import zipfile
 from pathlib import Path
+from typing import Any
 
 import geopandas as gpd
 import numpy as np
@@ -80,6 +84,161 @@ def parse_custom_station_filename(
     return lon, lat, upstream_area_m2, station_name
 
 
+def _load_stations_from_zip(
+    zip_source: Path | io.BytesIO,
+    zip_name: str,
+    logger: logging.Logger | None = None,
+) -> list[tuple[Path, pd.DataFrame]]:
+    """Extract and read station files from a zip archive.
+
+    Args:
+        zip_source: Path to the zip file or BytesIO buffer containing zip archive data.
+        zip_name: Display name of the zip file for logging and error reporting.
+        logger: Optional logger instance for recording info messages for skipped files.
+
+    Returns:
+        A list of tuples of (station_file_path, station_dataframe).
+
+    Raises:
+        ValueError: If an unsupported file format is encountered in the zip archive.
+    """
+    stations: list[tuple[Path, pd.DataFrame]] = []
+    with zipfile.ZipFile(zip_source, "r") as zf:
+        for member_info in zf.infolist():
+            if member_info.is_dir():
+                continue
+            member_path: Path = Path(member_info.filename)
+            # Skip hidden files, system files, and macOS metadata
+            if member_path.name.startswith(".") or (
+                len(member_path.parts) > 0 and member_path.parts[0] == "__MACOSX"
+            ):
+                continue
+            if member_path.suffix in (".txt", ".md") or member_path.name in (
+                ".DS_Store",
+                "Thumbs.db",
+            ):
+                if logger is not None:
+                    logger.info(
+                        f"Ignoring file {member_info.filename} in zip archive {zip_name}, as it is not a .csv or .parquet file."
+                    )
+                continue
+            if member_path.suffix == ".csv":
+                with zf.open(member_info) as f:
+                    q_df: pd.DataFrame = pd.read_csv(
+                        f,
+                        delimiter=",",
+                        index_col=0,
+                        parse_dates=True,
+                    )
+                stations.append((member_path, q_df))
+            elif member_path.suffix == ".parquet":
+                with zf.open(member_info) as f:
+                    # BytesIO is required because pd.read_parquet needs a seekable buffer
+                    q_df = pd.read_parquet(io.BytesIO(f.read())).set_index("datetime")
+                stations.append((member_path, q_df))
+            elif member_path.suffix == ".zip":
+                with zf.open(member_info) as f:
+                    nested_stations: list[tuple[Path, pd.DataFrame]] = (
+                        _load_stations_from_zip(
+                            io.BytesIO(f.read()),
+                            zip_name=f"{zip_name}/{member_info.filename}",
+                            logger=logger,
+                        )
+                    )
+                stations.extend(nested_stations)
+            else:
+                raise ValueError(
+                    f"Unsupported file format for station {member_info.filename} in {zip_name}. Only .csv, .parquet, and .zip are supported."
+                )
+    return stations
+
+
+def load_custom_river_stations(
+    path: Path,
+    logger: logging.Logger | None = None,
+) -> list[tuple[Path, pd.DataFrame]]:
+    """Recursively load custom river station data from a directory, file, or zip archive.
+
+    Scans the given path for CSV and Parquet files as well as ZIP archives containing them.
+    Subdirectories and nested archives are traversed. Non-data files like text and markdown
+    files or hidden files are skipped.
+
+    Args:
+        path: Path to a file, directory, or zip archive containing custom station data.
+        logger: Optional logger instance for recording info messages for skipped non-data files.
+
+    Returns:
+        A list of tuples containing the station file Path (used for metadata parsing and error reporting)
+        and the loaded raw pd.DataFrame.
+
+    Raises:
+        ValueError: If an unsupported file format is encountered (other than supported extensions and ignored files).
+    """
+    stations: list[tuple[Path, pd.DataFrame]] = []
+    if path.is_file():
+        if path.suffix == ".zip":
+            return _load_stations_from_zip(path, zip_name=path.name, logger=logger)
+        elif path.suffix == ".csv":
+            q_df: pd.DataFrame = pd.read_csv(
+                path,
+                delimiter=",",
+                index_col=0,
+                parse_dates=True,
+            )
+            return [(path, q_df)]
+        elif path.suffix == ".parquet":
+            q_df = pd.read_parquet(path).set_index("datetime")
+            return [(path, q_df)]
+        elif path.suffix in (".txt", ".md") or path.name.startswith("."):
+            if logger is not None:
+                logger.info(
+                    f"Ignoring file {path} in custom river stations, as it is not a .csv or .parquet file."
+                )
+            return []
+        else:
+            raise ValueError(
+                f"Unsupported file format for station {path}. Only .csv, .parquet, and .zip are supported."
+            )
+
+    for item_path in sorted(path.rglob("*")):
+        if item_path.is_dir():
+            continue
+        if item_path.name.startswith(".") or "__MACOSX" in item_path.parts:
+            continue
+        if item_path.suffix in (".txt", ".md") or item_path.name in (
+            ".DS_Store",
+            "Thumbs.db",
+        ):
+            if logger is not None:
+                logger.info(
+                    f"Ignoring file {item_path} in custom river stations folder, as it is not a .csv or .parquet file."
+                )
+            continue
+        if item_path.suffix == ".zip":
+            stations.extend(
+                _load_stations_from_zip(
+                    item_path, zip_name=item_path.name, logger=logger
+                )
+            )
+        elif item_path.suffix == ".csv":
+            q_df = pd.read_csv(
+                item_path,
+                delimiter=",",
+                index_col=0,
+                parse_dates=True,
+            )
+            stations.append((item_path, q_df))
+        elif item_path.suffix == ".parquet":
+            q_df = pd.read_parquet(item_path).set_index("datetime")
+            stations.append((item_path, q_df))
+        else:
+            raise ValueError(
+                f"Unsupported file format for station {item_path}. Only .csv, .parquet, and .zip are supported."
+            )
+
+    return stations
+
+
 def process_station_data(Q_station: pd.DataFrame, station_path: Path) -> pd.DataFrame:
     """Parse and preprocess a station CSV read into a DataFrame.
 
@@ -139,6 +298,7 @@ class Observations(BuildModelBase):
         self,
         max_uparea_difference_ratio: float = 0.3,
         max_spatial_difference_degrees: float = 0.1,
+        include_GRDC: bool = True,
         custom_river_stations: str | None = None,
         create_plots: bool = False,
     ) -> None:
@@ -146,18 +306,16 @@ class Observations(BuildModelBase):
 
         It clips discharge observations to the basin area, and snaps the discharge observations locations to the locations of the GEB discharge simulations, using upstream area estimates recorded in the discharge observations.
         It also saves necessary input data for the model in the input folder, and some additional information in the output folder (e.g snapping plots).
-        Additional stations can be added from a custom folder containing station files in either CSV or Parquet format.
-        Custom station filenames must follow either the ``lon_lat+station_name.ext`` or ``lon_lat_upstream_area+station_name.ext`` format, where ``lon`` and ``lat`` are the station coordinates in degrees, ``upstream_area`` is the upstream area in m2, and ``ext`` is either ``.csv`` or ``.parquet``.
-        CSV files must contain a datetime index column and a ``Q`` discharge column. Parquet files must contain a ``datetime`` column and a ``Q`` discharge column.
+        Additional stations can be added from a custom folder (or zip file) containing station files in either CSV or Parquet format, or zip files containing them.
+        Custom station filenames must follow either the lon_lat+station_name.ext or lon_lat_upstream_area+station_name.ext format, where lon and lat are the station coordinates in degrees, upstream_area is the upstream area in m2, and ext is either .csv or .parquet.
+        CSV files must contain a datetime index column and a Q discharge column. Parquet files must contain a datetime column and a Q discharge column.
 
         Args:
             max_uparea_difference_ratio: The maximum allowed difference in upstream area between the discharge observations station and the GEB river segment, as a ratio of the discharge observations upstream area. Default is 0.3 (30%).
             max_spatial_difference_degrees: The maximum allowed spatial difference in degrees between the discharge observations station and the GEB river segment. Default is 0.1 degrees.
-            custom_river_stations: Path to a folder containing custom river station files in ``.csv`` or ``.parquet`` format. Coordinates, optional upstream area in m2, and station name are read from the filename using the ``lon_lat+station_name.ext`` or ``lon_lat_upstream_area+station_name.ext`` convention. Default is None, which means no custom stations are used.
+            include_GRDC: Whether to include discharge observation stations from the GRDC dataset. Default is True.
+            custom_river_stations: Path to a folder or file containing custom river station files in .csv or .parquet format, or .zip archives containing them. Coordinates, optional upstream area in m2, and station name are read from the filename using the lon_lat+station_name.ext or lon_lat_upstream_area+station_name.ext convention. Default is None, which means no custom stations are used.
             create_plots: Whether to create plots of the snapping results for each station. Default is False.
-
-        Raises:
-            ValueError: If a custom station file has an unsupported format or contains discharge data with an unsupported time step.
         """
         # load data
         upstream_area_grid = self.grid[
@@ -169,85 +327,99 @@ class Observations(BuildModelBase):
         rivers = self.geom["routing/rivers"]
         region_mask = self.geom["mask"]
 
-        # Load discharge observations dataset
-        discharge_observations = self.data_catalog.fetch("GRDC").read()
-
         # create folders
         discharge_snapping_folder: Path = Path(self.report_dir) / "discharge_snapping"
         discharge_snapping_folder.mkdir(parents=True, exist_ok=True)
 
         # Initialize discharge observation DataFrames
         obs_hourly = pd.DataFrame(index=pd.DatetimeIndex([], name="time"))
+        hourly_ids: set[int] = set()
+        daily_ids: set[int] = set()
 
-        # Initialize metadata GeoDataFrame from GRDC
-        obs_metadata = gpd.GeoDataFrame(
-            {
-                "discharge_observations_station_ID": discharge_observations.id.values,
-                "discharge_observations_station_name": discharge_observations.station_name.values,
-                "x": discharge_observations.x.values,
-                "y": discharge_observations.y.values,
-                "discharge_observations_upstream_area_m2": discharge_observations.area.values
-                * 1e6,  # convert km2 to m2
-                "discharge_observations_river_name": discharge_observations.river_name.values,
-            },
-            geometry=gpd.points_from_xy(
-                discharge_observations.x.values, discharge_observations.y.values
-            ),
-            crs="EPSG:4326",
-        )
+        if include_GRDC:
+            # Load discharge observations dataset
+            discharge_observations = self.data_catalog.fetch("GRDC").read()
 
-        # Track which IDs belong to which frequency
-        hourly_ids = set()
+            # Initialize metadata GeoDataFrame from GRDC
+            obs_metadata = gpd.GeoDataFrame(
+                {
+                    "discharge_observations_station_ID": discharge_observations.id.values,
+                    "discharge_observations_station_name": discharge_observations.station_name.values,
+                    "x": discharge_observations.x.values,
+                    "y": discharge_observations.y.values,
+                    "discharge_observations_upstream_area_m2": discharge_observations.area.values
+                    * 1e6,  # convert km2 to m2
+                    "discharge_observations_river_name": discharge_observations.river_name.values,
+                },
+                geometry=gpd.points_from_xy(
+                    discharge_observations.x.values, discharge_observations.y.values
+                ),
+                crs="EPSG:4326",
+            )
 
-        # Filter metadata by region first
-        region_obs_metadata = obs_metadata[
-            obs_metadata.geometry.within(region_mask.geometry.union_all())
-        ]
+            # Filter metadata by region first
+            region_obs_metadata = obs_metadata[
+                obs_metadata.geometry.within(region_mask.geometry.union_all())
+            ]
 
-        needed_ids = region_obs_metadata["discharge_observations_station_ID"].tolist()
+            needed_ids = region_obs_metadata[
+                "discharge_observations_station_ID"
+            ].tolist()
 
-        # Select only filtered IDs from the xarray dataset before converting to dataframe
-        obs_daily = (
-            discharge_observations.runoff_mean.sel(id=needed_ids)
-            .astype(np.float32)
-            .to_dataframe()
-            .reset_index()
-            .pivot(index="time", columns="id", values="runoff_mean")
-        )
-        obs_daily.index.name = "time"
-        # Replace -999 with NaN in GRDC data
-        obs_daily = obs_daily.replace(-999, np.nan)
-        daily_ids = set(obs_daily.columns.tolist())
+            # Select only filtered IDs from the xarray dataset before converting to dataframe
+            obs_daily = (
+                discharge_observations.runoff_mean.sel(id=needed_ids)
+                .astype(np.float32)
+                .to_dataframe()
+                .reset_index()
+                .pivot(index="time", columns="id", values="runoff_mean")
+            )
+            obs_daily.index.name = "time"
+            # Replace -999 with NaN in GRDC data
+            obs_daily = obs_daily.replace(-999, np.nan)
+            daily_ids = set(obs_daily.columns.tolist())
+        else:
+            obs_metadata = gpd.GeoDataFrame(
+                columns=[
+                    "discharge_observations_station_ID",
+                    "discharge_observations_station_name",
+                    "x",
+                    "y",
+                    "discharge_observations_upstream_area_m2",
+                    "discharge_observations_river_name",
+                    "geometry",
+                ],
+                crs="EPSG:4326",
+            )
+            obs_daily = pd.DataFrame(index=pd.DatetimeIndex([], name="time"))
 
         if custom_river_stations is not None:
-            custom_river_stations: Path = Path(custom_river_stations)
-            if not custom_river_stations.exists():
+            custom_river_stations_path: Path = Path(custom_river_stations)
+            if not custom_river_stations_path.exists():
                 self.logger.warning(
-                    f"Custom river stations folder {custom_river_stations} does not exist. Skipping custom stations."
+                    f"Custom river stations path {custom_river_stations_path} does not exist. Skipping custom stations."
                 )
             else:
-                for station_path in custom_river_stations.iterdir():
-                    if station_path.suffix == ".csv":
-                        Q_station: pd.DataFrame = pd.read_csv(
-                            station_path,
-                            delimiter=",",
-                            index_col=0,
-                            parse_dates=True,
-                        )
-                    elif station_path.suffix == ".parquet":
-                        Q_station: pd.DataFrame = pd.read_parquet(
-                            station_path
-                        ).set_index("datetime")
-                    elif station_path.suffix in (".txt", ".md"):
-                        self.logger.info(
-                            f"Ignoring file {station_path} in custom river stations folder, as it is not a .csv or .parquet file."
-                        )
-                        continue  # ignore txt files (e.g., README)
-                    else:
-                        raise ValueError(
-                            f"Unsupported file format for station {station_path}. Only .csv and .parquet are supported."
-                        )
+                loaded_stations: list[tuple[Path, pd.DataFrame]] = (
+                    load_custom_river_stations(
+                        custom_river_stations_path, logger=self.logger
+                    )
+                )
+                max_existing_id: int = (
+                    int(obs_metadata["discharge_observations_station_ID"].max())
+                    if not obs_metadata.empty
+                    and pd.notna(
+                        obs_metadata["discharge_observations_station_ID"].max()
+                    )
+                    else 0
+                )
+                next_station_id: int = max(max_existing_id, 0) + 1
 
+                custom_metadata_records: list[dict[str, Any]] = []
+                custom_hourly_series: dict[int, pd.Series] = {}
+                custom_daily_series: dict[int, pd.Series] = {}
+
+                for station_path, raw_station_data in loaded_stations:
                     station_name: str
                     lon: float
                     lat: float
@@ -256,45 +428,64 @@ class Observations(BuildModelBase):
                         parse_custom_station_filename(station_path)
                     )
 
-                    Q_station = process_station_data(Q_station, station_path)
-
-                    # Assign a unique ID for custom stations
-                    station_id = int(
-                        max(obs_metadata["discharge_observations_station_ID"].max(), 0)
-                        + 1
+                    Q_station: pd.DataFrame = process_station_data(
+                        raw_station_data, station_path
                     )
 
-                    # Add metadata
-                    new_meta = pd.DataFrame(
-                        [
-                            {
-                                "discharge_observations_station_ID": station_id,
-                                "discharge_observations_station_name": station_name,
-                                "x": lon,
-                                "y": lat,
-                                "discharge_observations_upstream_area_m2": upstream_area_m2,
-                                "discharge_observations_river_name": "Unknown",
-                            }
-                        ]
-                    )
-                    new_meta_gdf = gpd.GeoDataFrame(
-                        new_meta,
-                        geometry=gpd.points_from_xy([lon], [lat]),
-                        crs="EPSG:4326",
-                    )
-                    obs_metadata = pd.concat(
-                        [obs_metadata, new_meta_gdf], ignore_index=True
+                    station_id: int = next_station_id
+                    next_station_id += 1
+
+                    # Collect metadata record
+                    custom_metadata_records.append(
+                        {
+                            "discharge_observations_station_ID": station_id,
+                            "discharge_observations_station_name": station_name,
+                            "x": lon,
+                            "y": lat,
+                            "discharge_observations_upstream_area_m2": upstream_area_m2,
+                            "discharge_observations_river_name": "Unknown",
+                        }
                     )
 
-                    # Add data to the correct DataFrame
+                    # Collect series in dictionary to avoid dataframe column insertion fragmentation
+                    q_series: pd.Series = Q_station["Q"].rename(station_id)
                     if Q_station.index.to_series().diff().median() <= pd.Timedelta(
                         hours=1
                     ):
-                        obs_hourly[station_id] = Q_station["Q"]
+                        custom_hourly_series[station_id] = q_series
                         hourly_ids.add(station_id)
                     else:
-                        obs_daily[station_id] = Q_station["Q"]
+                        custom_daily_series[station_id] = q_series
                         daily_ids.add(station_id)
+
+                if custom_metadata_records:
+                    custom_meta_df: pd.DataFrame = pd.DataFrame(custom_metadata_records)
+                    custom_meta_gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
+                        custom_meta_df,
+                        geometry=gpd.points_from_xy(
+                            custom_meta_df["x"], custom_meta_df["y"]
+                        ),
+                        crs="EPSG:4326",
+                    )
+                    obs_metadata = pd.concat(
+                        [obs_metadata, custom_meta_gdf], ignore_index=True
+                    )
+
+                if custom_hourly_series:
+                    custom_hourly_df: pd.DataFrame = pd.DataFrame(custom_hourly_series)
+                    obs_hourly = (
+                        pd.concat([obs_hourly, custom_hourly_df], axis=1)
+                        if not obs_hourly.empty
+                        else custom_hourly_df
+                    )
+
+                if custom_daily_series:
+                    custom_daily_df: pd.DataFrame = pd.DataFrame(custom_daily_series)
+                    obs_daily = (
+                        pd.concat([obs_daily, custom_daily_df], axis=1)
+                        if not obs_daily.empty
+                        else custom_daily_df
+                    )
 
         # Filter metadata by region
         obs_metadata = obs_metadata[
@@ -303,14 +494,19 @@ class Observations(BuildModelBase):
 
         # GRDC provides a fixed UTC offset relative to the national capital.
         # Custom stations are absent from this metadata and therefore default to UTC.
-        timezone_utc_offsets: pd.Series = discharge_observations.timezone.to_pandas()
         obs_metadata = obs_metadata.copy()
-        obs_metadata["timezone_utc_offset"] = (
-            obs_metadata["discharge_observations_station_ID"]
-            .map(timezone_utc_offsets)
-            .fillna(0.0)
-            .astype(float)
-        )
+        if include_GRDC:
+            timezone_utc_offsets: pd.Series = (
+                discharge_observations.timezone.to_pandas()
+            )
+            obs_metadata["timezone_utc_offset"] = (
+                obs_metadata["discharge_observations_station_ID"]
+                .map(timezone_utc_offsets)
+                .fillna(0.0)
+                .astype(float)
+            )
+        else:
+            obs_metadata["timezone_utc_offset"] = 0.0
 
         if obs_metadata.empty:
             # No stations found - create empty files

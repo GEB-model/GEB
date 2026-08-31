@@ -207,6 +207,7 @@ setup_SPEI:
 setup_pr_GEV:
 
 setup_discharge_observations:
+  include_GRDC: true
   custom_river_stations: data/discharge_observations
 
 setup_CO2_concentration:
