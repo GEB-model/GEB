@@ -1058,10 +1058,8 @@ def create_validation_df(
             "Observed discharge frequency is not a multiple of simulated discharge frequency. Please ensure the observed discharge frequency is a multiple of the simulated discharge frequency."
         )
 
-    observation_frequency = observed_frequency
-    observation_timestep: pd.Timedelta = observed_timestep
     should_use_local_calendar: bool = (
-        observation_timestep >= pd.Timedelta(days=1) and timezone_utc_offset != 0.0
+        observed_timestep >= pd.Timedelta(days=1) and timezone_utc_offset != 0.0
     )
     simulation_for_aggregation: pd.Series = simulated_discharge.copy()
     if should_use_local_calendar:
@@ -1072,11 +1070,13 @@ def create_validation_df(
             simulation_for_aggregation.index + pd.Timedelta(hours=timezone_utc_offset)
         )
 
-    simulated_discharge = simulation_for_aggregation.resample(
-        observation_frequency,
-        closed="left",
-        label="left",
-    ).mean()
+    if simulated_frequency != observed_frequency:
+        simulated_discharge = simulation_for_aggregation.resample(
+            observation_frequency,
+            closed="left",
+            label="left",
+            offset=observation_frequency / 2,
+        ).mean()
 
     # cut both observed and simulated discharge to the same time range
     start_time = max(observed_discharge.index.min(), simulated_discharge.index.min())
