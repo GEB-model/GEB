@@ -18,6 +18,8 @@ VERSION_UPDATES: dict[str, list[str]] = {
         "[update-method;setup_hydrography]",
         "[update-method;setup_forcing]",
         "[update-method;setup_SPEI]",
+        "[update-method;setup_geomorphology]",
+        "[update-method;setup_hydrography]"
     ],
     "1.0.0b30": [
         "[update-method;setup_retention_basins]",
