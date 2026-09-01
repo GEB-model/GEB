@@ -337,6 +337,15 @@ class AdaptationIrrigationExpansionConfig(BaseModel):
 class AdaptationWellConfig(BaseModel):
     """Configuration for well adaptation."""
 
+    groundwater_abstraction_fraction: float = Field(
+        1.0,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Fraction of groundwater available to agricultural irrigation; "
+            "domestic and industrial groundwater use is not restricted."
+        ),
+    )
     seut_factor: float = Field(1.0, description="SEUT factor.")
     loan_duration: int = Field(21, description="Loan duration (years).")
     lifespan: int = Field(20, description="Lifespan (years).")
