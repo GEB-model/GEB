@@ -108,6 +108,10 @@ class GEBModel(Module):
 
         self.discharge_log: list = []  # Empty list to hold discharge logs for each timestep. This will be used for flood detection and warning system
 
+        self.multiverse_mode: (
+            Literal["discharge_detection", "flood_simulation"] | None
+        ) = None
+
     def verify_build_complete(self) -> None:
         """Verify that the build completed.
 
@@ -362,6 +366,9 @@ class GEBModel(Module):
         self, forecast_issue_datetime: datetime.datetime
     ) -> None:
 
+        self.logger.info(
+            f"Running multiverse for discharge detection on {forecast_issue_datetime}..."
+        )
         self.multiverse_hindcasts(
             multiverse_mode="discharge_detection",
             forecast_issue_datetime=forecast_issue_datetime,
@@ -369,6 +376,7 @@ class GEBModel(Module):
 
         # Once the is back to the original timeline, check the probability the discharge is above the threshold
         forecast_log = pd.DataFrame(self.discharge_log)
+        forecast_log.to_csv(self.output_folder / "forecast_log.csv", index=False)
 
         # Load in discharge_threshold after which there is a flood from the config file
         discharge_threshold: int = self.model.config["hazards"]["floods"][
@@ -376,8 +384,11 @@ class GEBModel(Module):
         ]
 
         # Get the forecast_log for the current forecast_issue_datetime
+        # current_forecast = forecast_log[
+        #     forecast_log["forecast_issue_date"] == forecast_issue_datetime.date()
+        # ]
         current_forecast = forecast_log[
-            forecast_log["forecast_issue_date"] == forecast_issue_datetime.date()
+            forecast_log["forecast_issue_date"] == pd.Timestamp(forecast_issue_datetime)
         ]
 
         if not current_forecast.empty:
@@ -392,7 +403,7 @@ class GEBModel(Module):
 
         if probability > probability_threshold_discharge:
             self.logger.info(
-                f"Discharge is forecasted to be higher than threshold at {forecast_issue_datetime} with probability {probability:.2f}. Running SFINCS for ensemble flood simulation..."
+                f"Discharge is forecasted to be higher than threshold for forecast issued at {forecast_issue_datetime} with probability {probability:.2f}."
             )
             # Run SFINCS for the forecast members that exceed the probability threshold
             self.multiverse_hindcasts(
@@ -524,13 +535,14 @@ class GEBModel(Module):
 
             self.logger.info(f"Running forecast member {member}")
 
-            # make reporter AFTER updating n_timesteps
-            self.reporter = Reporter(
-                self,
-                self.report_folder / "multiverse_hindcasts" / self.multiverse_name,
-                clean=True,
-            )  # create a new reporter for the alternate universe
+            # # make reporter AFTER updating n_timesteps
+            # self.reporter = Reporter(
+            #     self,
+            #     self.report_folder / "multiverse_hindcasts" / self.multiverse_name,
+            #     clean=True,
+            # )  # create a new reporter for the alternate universe
 
+            print("Going into step to end...")
             self.step_to_end()  # steps to end of forecast period as defined in self.n_timesteps
 
             # TODO: maybe here store the discharge info required for running SFINCS for each member, so that it is not recomputed after the prob check?
@@ -748,7 +760,7 @@ class GEBModel(Module):
 
                     if self.config["general"]["forecasts"]["long_term_analysis"]:
                         self.logger.info(
-                            f"Running long-term forecast analysis for date time {self.current_time.isoformat()}..."
+                            f"Running long-term forecast analysis for forecast date time {self.current_time.isoformat()}..."
                         )
                         self.run_forecasts_long_term_analysis(forecast_datetime)
                     else:

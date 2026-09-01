@@ -347,7 +347,7 @@ class ECMWFForecasts(Adapter):
                     self.path,
                     forecast_product=forecast_product,
                     forecast_date=format_date(forecast_date),
-                    forecast_model=model_type,
+                    forecast_model=forecast_model,
                     forecast_resolution=forecast_resolution.replace("/", "-"),
                     forecast_horizon=forecast_horizon,
                     forecast_timestep_hours=forecast_timestep_hours,

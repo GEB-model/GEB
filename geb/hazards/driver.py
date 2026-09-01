@@ -49,6 +49,7 @@ class HazardDriver(Module):
             )
             for event in self.config["floods"]["events"]
         ]
+        # TODO: adjust this for when detect_floods_from_discharge is active, then None is not iterable (event needs to be empty in the config file [None] for the step to return nothing)
 
         if (
             not self.model.in_spinup
@@ -131,8 +132,13 @@ class HazardDriver(Module):
             if self.model.config["hazards"]["floods"]["events"] is None:
                 return
 
-            if self.model.config["hazards"]["floods"]["detect_floods_from_discharge"]:
-                print("Detecting floods from discharge...")
+            # TODO: adjust it to work for Veerle's case as well, right now only entering when we are in multiverse and forecasts use is set to true
+            if (
+                self.model.config["hazards"]["floods"]["detect_floods_from_discharge"]
+                and self.model.config["general"]["forecasts"]["use"]
+                and self.model.multiverse_name is not None
+            ):
+                print("Detecting floods from forecasted discharge...")
                 if self.model.in_spinup:
                     return
                 else:
@@ -195,6 +201,9 @@ class HazardDriver(Module):
                                 )
                             else:
                                 if self.model.multiverse_mode == "discharge_detection":
+                                    print(
+                                        "Appending forecasted discharge values for flood detection..."
+                                    )
                                     self.model.discharge_log.append(
                                         {
                                             "forecast_issue_date": self.model.forecast_issue_datetime,
@@ -213,7 +222,13 @@ class HazardDriver(Module):
                             "discharge_threshold"
                         ]
 
-                        if self.model.multiverse_mode == "flood_simulation":
+                        if (
+                            self.model.multiverse_name is not None
+                            and self.model.multiverse_mode == "flood_simulation"
+                        ):
+                            print(
+                                f"Running multiverse in flood simulation mode, using forecast issued at {self.model.forecast_issue_datetime} for member {self.model.forecast_member}."
+                            )
                             time_of_flood_detected = self.model.forecast_issue_datetime
 
                         elif (
@@ -226,34 +241,48 @@ class HazardDriver(Module):
                             time_of_flood_detected = None
 
                         if time_of_flood_detected is not None:
-                            start_time = time_of_flood_detected - timedelta(
-                                days=5
-                            )  # Here we assume a flood duration of 10 days
+                            start_time = time_of_flood_detected
+                            # start_time = time_of_flood_detected - timedelta(days=5) # Here we assume a flood duration of 10 days
                             end_time = time_of_flood_detected + timedelta(days=5)
+                            # TODO: adjust this to Jens new logic of self.flood_events (add in this list instead of memory?)
 
-                            new_event_mem = {
+                            # new_event_mem = {
+                            #     "start_time": start_time,
+                            #     "end_time": end_time,
+                            # }
+
+                            # new_event_yaml = {
+                            #     "start_time": start_time.strftime("%Y-%m-%d %H:%M:%S"),
+                            #     "end_time": end_time.strftime("%Y-%m-%d %H:%M:%S"),
+                            # }
+
+                            new_event = {
                                 "start_time": start_time,
                                 "end_time": end_time,
-                            }
-
-                            new_event_yaml = {
-                                "start_time": start_time.strftime("%Y-%m-%d %H:%M:%S"),
-                                "end_time": end_time.strftime("%Y-%m-%d %H:%M:%S"),
                             }
 
                             hazards_cfg = self.model.config.setdefault("hazards", {})
                             floods_cfg = hazards_cfg.setdefault("floods", {})
                             events_mem = floods_cfg.setdefault("events", [])
 
+                            # event_exists_mem = any(
+                            #     e["start_time"] == new_event_mem["start_time"]
+                            #     and e["end_time"] == new_event_mem["end_time"]
+                            #     for e in events_mem
+                            # )
+
                             event_exists_mem = any(
-                                e["start_time"] == new_event_mem["start_time"]
-                                and e["end_time"] == new_event_mem["end_time"]
+                                e["start_time"] == new_event["start_time"]
+                                and e["end_time"] == new_event["end_time"]
                                 for e in events_mem
                             )
 
                             if not event_exists_mem:
-                                events_mem.append(new_event_mem)
-                                print("Flood event added to in-memory config.")
+                                events_mem.append(new_event.copy())
+                                # events_mem.append(new_event_mem)
+                                print(
+                                    f"Flood event with start_time {new_event['start_time']} and end_time {new_event['end_time']} added to in-memory config."
+                                )
                             else:
                                 print("Flood event already in in-memory config.")
 
@@ -267,25 +296,35 @@ class HazardDriver(Module):
                             events_yaml = floods_yaml.setdefault("events", [])
 
                             event_exists_yaml = any(
-                                e.get("start_time") == new_event_yaml["start_time"]
-                                and e.get("end_time") == new_event_yaml["end_time"]
+                                e.get("start_time") == new_event["start_time"]
+                                and e.get("end_time") == new_event["end_time"]
                                 for e in events_yaml
                             )
 
+                            # event_exists_yaml = any(
+                            #     e.get("start_time") == new_event_yaml["start_time"]
+                            #     and e.get("end_time") == new_event_yaml["end_time"]
+                            #     for e in events_yaml
+                            # )
+
                             if not event_exists_yaml:
-                                events_yaml.append(new_event_yaml)
+                                events_yaml.append(new_event.copy())
+                                # events_yaml.append(new_event_yaml)
 
                                 tmp_path = config_path.with_suffix(".tmp")
                                 with open(tmp_path, "w") as f:
                                     yaml.safe_dump(config_yaml, f, sort_keys=False)
 
                                 tmp_path.replace(config_path)
+                                print(
+                                    f"Flood event with start_time {new_event['start_time']} and end_time {new_event['end_time']} added to added to model.yml."
+                                )
                             else:
                                 print("Flood event already in model.yml.")
 
-                            self.next_detection_time = (
-                                self.model.current_time + timedelta(days=10)
-                            )
+                            # self.next_detection_time = (
+                            #     self.model.current_time + timedelta(days=10)
+                            # )
 
                     end_time: datetime = datetime.combine(
                         self.model.config["general"]["end_time"], datetime.min.time()
@@ -298,10 +337,7 @@ class HazardDriver(Module):
                             index=False,
                         )
 
-            if (
-                self.model.multiverse_name is None
-                or self.model.multiverse_mode == "flood_simulation"
-            ):
+            if self.model.multiverse_mode == "flood_simulation":
                 for event in self.flood_events:
                     event: Event = copy.deepcopy(event)
 
@@ -360,6 +396,6 @@ class HazardDriver(Module):
                             raise ValueError(msg)
 
                         print(
-                            f"Running floods for event from {event.start_time} to {event.end_time}"
+                            f"Running floods for event from {event.start_time} to {event.end_time} for member {self.model.forecast_member}"
                         )
                         self.floods.run_single_event(event)

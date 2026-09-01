@@ -456,6 +456,7 @@ class Floods(Module):
             ValueError: If neither 'export_max_intensity' nor 'export_final_intensity' is True in the event.
             ValueError: If both 'export_max_intensity' and 'export_final_intensity' are True in the event.
         """
+        print("running single event")
         assert event.kind == "flood", (
             f"Expected event type 'flood', but got '{event.kind}'"
         )
