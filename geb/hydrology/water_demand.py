@@ -315,8 +315,7 @@ class WaterDemand(Module):
             available_groundwater_m3,
         ) = self.get_available_water(gross_irrigation_demand_m3_per_reservoir)
 
-        # Disable all groundwater withdrawals for this diagnostic run to isolate whether
-        # groundwater-level bias is driven by hydrological simulation or water-use behavior.
+        # Optional diagnostic: uncomment the next line to disable all groundwater withdrawals.
         # available_groundwater_m3[:] = 0
 
         available_channel_storage_m3_pre = available_channel_storage_m3.copy()
@@ -392,6 +391,15 @@ class WaterDemand(Module):
 
         timer.finish_split("Water withdrawal")
 
+        gw_cfg = self.model.config["agent_settings"]["farmers"]["expected_utility"][
+            "adaptation_well"
+        ]
+        gw_fraction = gw_cfg.get("groundwater_abstraction_fraction", 1.0)
+        # Restrict groundwater availability for agricultural irrigation only.
+        # Domestic and industrial withdrawals above use the unscaled groundwater array.
+        available_groundwater_m3_irrigation = available_groundwater_m3.copy()
+        available_groundwater_m3_irrigation *= gw_fraction
+
         # 4. irrigation (surface + reservoir + ground)
         (
             irrigation_water_withdrawal_m,
@@ -406,7 +414,7 @@ class WaterDemand(Module):
             gross_irrigation_demand_m3_per_field_limit_adjusted_channel=gross_irrigation_demand_m3_per_field_limit_adjusted_channel,
             gross_irrigation_demand_m3_per_field_limit_adjusted_groundwater=gross_irrigation_demand_m3_per_field_limit_adjusted_groundwater,
             available_channel_storage_m3=available_channel_storage_m3,
-            available_groundwater_m3=available_groundwater_m3,
+            available_groundwater_m3=available_groundwater_m3_irrigation,
             groundwater_depth=self.hydrology.groundwater.modflow.groundwater_depth,
             available_reservoir_storage_m3=available_reservoir_storage_m3,
         )
