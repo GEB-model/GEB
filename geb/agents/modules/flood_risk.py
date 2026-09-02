@@ -1102,8 +1102,10 @@ class FloodRiskModule:
         flooded_household_indices = np.nonzero(mask)[0]
 
         self.flood_in_last_year = len(flooded_household_indices) > 0
-        print(
-            f"Flood event with return period {return_period:.2f} years affected {len(flooded_household_indices)} households."
+        self.model.logger.info(
+            "Flood event with return period %.2f years affected %d households.",
+            return_period,
+            len(flooded_household_indices),
         )
         return flooded_household_indices
 

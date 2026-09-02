@@ -1,6 +1,7 @@
 """Data catalog for predefined datasets in GEB."""
 
 import logging
+import os
 from typing import Any
 
 from .aquastat import AQUASTAT
@@ -46,6 +47,7 @@ from .mirca2000 import MIRCA2000
 from .mirca_os_admin_boundaries import MIRCAOSAdminBoundaries
 from .mirca_os_crop_calendar import MIRCAOSCropCalendar
 from .mirca_os_harvested_grids import MIRCAOSHarvestedGrids
+from .mswep import MSWEPPrecipitation as MSWEPPrecipitation
 from .oecd import OECD
 from .open_building_map import OpenBuildingMap
 from .open_street_map import OpenStreetMap
@@ -60,6 +62,21 @@ from .world_bank import WorldBankData
 from .worldfloods import WorldFloodsV2
 
 data_catalog: dict[str, dict[str, Any]] = {
+    "mswep_precipitation": {
+        "adapter": MSWEPPrecipitation(
+            folder="mswep_precipitation",
+            filename="precipitation.zarr",
+            local_version=1,
+            cache="global",
+        ),
+        "url": os.getenv("MSWEP_URL"),
+        "source": {
+            "name": "MSWEP Precipitation",
+            "author": "GloH2O / Hylke Beck",
+            "license": "Open Data",
+            "url": "https://www.gloh2o.org/mswep/",
+        },
+    },
     "isimip_co2": {
         "adapter": ISIMIPCO2(),
         "url": "https://files.isimip.org",

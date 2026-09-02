@@ -1,3 +1,7 @@
+"""Workflows for Google Drive data catalog adapters."""
+
+import logging
+
 """Workflows for interacting with Google Drive."""
 
 import re
@@ -34,6 +38,7 @@ def check_quota(text: str, file_path: Path | None = None) -> None:
 def download_from_google_drive(
     file_id: str,
     file_path: Path,
+    logger: logging.Logger,
     session: requests.Session | None = None,
     timeout: int = 30,
 ) -> None:
@@ -44,6 +49,7 @@ def download_from_google_drive(
     Args:
         file_id: The Google Drive file ID.
         file_path: The path to save the file to.
+        logger: A logging.Logger instance to use for logging.
         session: An optional requests.Session object.
         timeout: Timeout for requests in seconds.
 
@@ -90,6 +96,7 @@ def download_from_google_drive(
             fetch_and_save(
                 url=action_url,
                 file_path=file_path,
+                logger=logger,
                 params=inputs,
                 session=session,
                 timeout=timeout,
@@ -127,6 +134,7 @@ def download_from_google_drive(
         fetch_and_save(
             url=url,
             file_path=file_path,
+            logger=logger,
             session=session,
             timeout=timeout,
         )

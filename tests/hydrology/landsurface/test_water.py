@@ -10,7 +10,9 @@ from geb.hydrology.landcovers import (
     SEALED,
 )
 from geb.hydrology.landsurface.water import (
+    FORCING_SOURCE_SIGMA_DEFAULTS,
     add_water_to_topwater_and_evaporate_open_water,
+    generate_rainfall_lookup_table,
     get_bubbling_pressure_m_positive,
     get_pore_size_index_brakensiek,
     get_pore_size_index_wosten,
@@ -26,6 +28,8 @@ from geb.hydrology.landsurface.water import (
 )
 
 from ...testconfig import output_folder
+
+DEFAULT_TEST_LUT = generate_rainfall_lookup_table(sigma=0.8)
 
 
 def test_add_water_to_topwater_and_evaporate_open_water() -> None:
@@ -236,6 +240,7 @@ def test_infiltration() -> None:
         solid_heat_capacity_top_layer_J_per_m2_K=np.float32(100000.0),
         rain_temperature_C=rain_temp,
         liquid_water_input_for_enthalpy_m=topwater,
+        rainfall_lookup_table=DEFAULT_TEST_LUT,
     )
 
     # Check that some water was infiltrated
@@ -301,6 +306,7 @@ def test_infiltration() -> None:
         solid_heat_capacity_top_layer_J_per_m2_K=solid_heat_capacity_top_layer_J_per_m2_K,
         rain_temperature_C=np.float32(0.0),
         liquid_water_input_for_enthalpy_m=np.float32(0.0),
+        rainfall_lookup_table=DEFAULT_TEST_LUT,
     )
 
     # No infiltration on a fully frozen top layer without advected heat input.
@@ -349,6 +355,7 @@ def test_infiltration() -> None:
         solid_heat_capacity_top_layer_J_per_m2_K=solid_heat_capacity_top_layer_J_per_m2_K,
         rain_temperature_C=np.float32(0.0),
         liquid_water_input_for_enthalpy_m=np.float32(0.0),
+        rainfall_lookup_table=DEFAULT_TEST_LUT,
     )
 
     assert infiltration_amount > 0.0
@@ -398,6 +405,7 @@ def test_infiltration() -> None:
         solid_heat_capacity_top_layer_J_per_m2_K=solid_heat_capacity_top_layer_J_per_m2_K,
         rain_temperature_C=np.float32(20.0),
         liquid_water_input_for_enthalpy_m=topwater,
+        rainfall_lookup_table=DEFAULT_TEST_LUT,
     )
 
     assert infiltration_amount > 0.0
@@ -442,6 +450,7 @@ def test_infiltration() -> None:
         solid_heat_capacity_top_layer_J_per_m2_K=solid_heat_capacity_top_layer_J_per_m2_K,
         rain_temperature_C=np.float32(20.0),
         liquid_water_input_for_enthalpy_m=np.float32(0.0),
+        rainfall_lookup_table=DEFAULT_TEST_LUT,
     )
 
     assert updated_enthalpy_without_new_input_J_per_m2 == initial_enthalpy_J_per_m2
@@ -485,6 +494,7 @@ def test_infiltration() -> None:
         solid_heat_capacity_top_layer_J_per_m2_K=np.float32(100000.0),
         rain_temperature_C=np.float32(0.0),
         liquid_water_input_for_enthalpy_m=np.float32(0.0),
+        rainfall_lookup_table=DEFAULT_TEST_LUT,
     )
 
     # No infiltration on sealed areas; remaining topwater becomes direct runoff.
@@ -531,6 +541,7 @@ def test_infiltration() -> None:
         solid_heat_capacity_top_layer_J_per_m2_K=np.float32(100000.0),
         rain_temperature_C=np.float32(0.0),
         liquid_water_input_for_enthalpy_m=np.float32(0.0),
+        rainfall_lookup_table=DEFAULT_TEST_LUT,
     )
 
     # No infiltration possible
@@ -579,6 +590,7 @@ def test_infiltration() -> None:
         solid_heat_capacity_top_layer_J_per_m2_K=np.float32(100000.0),
         rain_temperature_C=np.float32(0.0),
         liquid_water_input_for_enthalpy_m=np.float32(0.0),
+        rainfall_lookup_table=DEFAULT_TEST_LUT,
     )
 
     # No infiltration on open water; remaining topwater becomes direct runoff.
@@ -625,6 +637,7 @@ def test_infiltration() -> None:
         solid_heat_capacity_top_layer_J_per_m2_K=np.float32(100000.0),
         rain_temperature_C=np.float32(0.0),
         liquid_water_input_for_enthalpy_m=np.float32(0.0),
+        rainfall_lookup_table=DEFAULT_TEST_LUT,
     )
 
     # Should infiltrate up to capacity, then pond up to 0.05m before runoff
@@ -677,6 +690,7 @@ def test_infiltration() -> None:
         solid_heat_capacity_top_layer_J_per_m2_K=np.float32(100000.0),
         rain_temperature_C=np.float32(0.0),
         liquid_water_input_for_enthalpy_m=np.float32(0.0),
+        rainfall_lookup_table=DEFAULT_TEST_LUT,
     )
 
     # Infiltration should happen into lower unsaturated layers
@@ -744,6 +758,7 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
         np.float32(100000.0),
         np.float32(0.0),
         np.float32(0.0),
+        rainfall_lookup_table=DEFAULT_TEST_LUT,
         distribute_rainfall_lognormally=False,
     )
 
@@ -788,6 +803,7 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
         np.float32(100000.0),
         np.float32(0.0),
         np.float32(0.0),
+        rainfall_lookup_table=DEFAULT_TEST_LUT,
         distribute_rainfall_lognormally=False,
     )
     assert infiltration_amount == 0.0
@@ -823,6 +839,7 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
         np.float32(100000.0),
         np.float32(0.0),
         np.float32(0.0),
+        rainfall_lookup_table=DEFAULT_TEST_LUT,
         distribute_rainfall_lognormally=False,
     )
     runoff_high = res_high[1]
@@ -852,6 +869,7 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
         np.float32(100000.0),
         np.float32(0.0),
         np.float32(0.0),
+        rainfall_lookup_table=DEFAULT_TEST_LUT,
     )
     runoff_low = res_low[1]
     recharge_low = res_low[2]
@@ -980,6 +998,7 @@ def test_infiltration_variable_runoff_integration() -> None:
         np.float32(100000.0),
         np.float32(0.0),
         np.float32(0.0),
+        rainfall_lookup_table=DEFAULT_TEST_LUT,
     )
 
     # Variable runoff is enabled, so runoff expected given spatial variability
@@ -1034,6 +1053,7 @@ def test_infiltration_variable_runoff_plot() -> None:
                 np.float32(100000.0),
                 np.float32(0.0),
                 np.float32(0.0),
+                rainfall_lookup_table=DEFAULT_TEST_LUT,
             )
             runoff_results.append(direct_runoff * 1000)  # Convert to mm for plotting
             infiltration_results.append(
@@ -1292,3 +1312,77 @@ def test_pedotransfer_functions_consistency() -> None:
     assert results["Clay"]["thetas_wosten"] > results["Sand"]["thetas_wosten"], (
         "Clay should have higher Thetas than Sand (Wosten)"
     )
+
+
+def test_generate_rainfall_lookup_table() -> None:
+    """Test generating precomputed rainfall lookup table for different sigma values."""
+    # Test shape and normalization
+    table_mswep = generate_rainfall_lookup_table(sigma=0.8, table_size=1024, seed=42)
+    assert table_mswep.shape == (1024, 6)
+    assert table_mswep.dtype == np.float32
+    np.testing.assert_allclose(table_mswep.sum(axis=1), 1.0, rtol=1e-5)
+
+    table_era5 = generate_rainfall_lookup_table(sigma=1.2, table_size=1024, seed=42)
+    assert table_era5.shape == (1024, 6)
+    np.testing.assert_allclose(table_era5.sum(axis=1), 1.0, rtol=1e-5)
+
+    # Test presets
+    assert FORCING_SOURCE_SIGMA_DEFAULTS["MSWEP"] == 0.8
+    assert FORCING_SOURCE_SIGMA_DEFAULTS["ERA5-Land"] == 1.2
+    assert FORCING_SOURCE_SIGMA_DEFAULTS["ECMWF"] == 1.2
+
+    # Higher sigma should produce higher variance across substeps
+    var_mswep = np.var(table_mswep, axis=1).mean()
+    var_era5 = np.var(table_era5, axis=1).mean()
+    assert var_era5 > var_mswep
+
+
+def test_infiltration_with_custom_lookup_table() -> None:
+    """Test that infiltration runs properly with an explicitly supplied lookup table."""
+    ws = np.array([0.45, 0.45, 0.45], dtype=np.float32)
+    wres = np.zeros_like(ws)
+    ksat = np.array([1e-5, 1e-5, 1e-5], dtype=np.float32)
+    w = np.array([0.2, 0.2, 0.2], dtype=np.float32)
+    bub_arr = np.array([0.1, 0.1, 0.1], dtype=np.float32)
+    h_arr = np.array([0.1, 0.1, 0.1], dtype=np.float32)
+    lam_arr = np.array([0.5, 0.5, 0.5], dtype=np.float32)
+
+    table_custom = generate_rainfall_lookup_table(sigma=0.8)
+
+    (
+        topwater,
+        direct_runoff,
+        groundwater_recharge,
+        infiltration_amount,
+        wetting_front,
+        _,
+        _,
+        _,
+        updated_enthalpy,
+    ) = infiltration(
+        np.int64(42),
+        ws,
+        wres,
+        ksat,
+        np.float32(0.0),
+        np.int32(1),
+        w,
+        np.float32(0.01),
+        np.float32(0.0),
+        np.float32(0.0),
+        np.float32(0.1),
+        np.float32(0.1),
+        np.int32(0),
+        np.float32(0.1),
+        bub_arr,
+        h_arr,
+        lam_arr,
+        soil_enthalpy_top_layer_J_per_m2=np.float32(50000.0),
+        solid_heat_capacity_top_layer_J_per_m2_K=np.float32(100000.0),
+        rain_temperature_C=np.float32(15.0),
+        liquid_water_input_for_enthalpy_m=np.float32(0.01),
+        rainfall_lookup_table=table_custom,
+    )
+
+    assert infiltration_amount > 0.0
+    assert abs(infiltration_amount + direct_runoff - 0.01) < 1e-6

@@ -1697,7 +1697,7 @@ def create_riverine_mask(
         ldd.values,
         ftype="d8",
         mask=riverine_mask.values,
-        transform=ldd.rio.transform(recalc=True),
+        transform=np.array(ldd.rio.transform(recalc=True)),
         latlon=True,  # hydrography is specified in latlon
     )
 
@@ -2042,7 +2042,7 @@ class GEBModel(
         ldd_network = pyflwdir.from_array(
             ldd.values,
             ftype="d8",
-            transform=ldd.rio.transform(recalc=True),
+            transform=np.array(ldd.rio.transform(recalc=True)),
             latlon=True,
         )
 
@@ -2213,7 +2213,7 @@ class GEBModel(
         flow_raster: pyflwdir.FlwdirRaster = pyflwdir.from_array(
             ldd.values,
             ftype="d8",
-            transform=ldd.rio.transform(recalc=True),
+            transform=np.array(ldd.rio.transform(recalc=True)),
             latlon=True,
         )
 
@@ -2382,7 +2382,7 @@ class GEBModel(
         flow_raster = pyflwdir.from_array(
             d8_original_data,
             ftype="d8",
-            transform=transform,
+            transform=np.array(transform),
             latlon=True,  # hydrography is specified in latlon
             mask=d8_original_data
             != d8_original.attrs["_FillValue"],  # this mask is True within study area
@@ -2501,6 +2501,24 @@ class GEBModel(
             ValueError: If the start date is not before the end date.
             ValueError: If the start date is before 1960, because of data availability.
         """
+        if not (
+            isinstance(start_date, date)
+            and not isinstance(start_date, datetime)
+            and not isinstance(start_date, str)
+        ):
+            raise ValueError(
+                "Start date must be a datetime.date or datetime.datetime object."
+            )
+
+        if not (
+            isinstance(end_date, date)
+            and not isinstance(end_date, datetime)
+            and not isinstance(end_date, str)
+        ):
+            raise ValueError(
+                "End date must be a datetime.date or datetime.datetime object."
+            )
+
         if not start_date < end_date:
             raise ValueError("Start date must be before end date.")
 

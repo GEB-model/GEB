@@ -4,6 +4,7 @@ import bz2
 import datetime
 import hashlib
 import json
+import logging
 import os
 import platform
 import shutil
@@ -1101,6 +1102,8 @@ class ForcingReader:
     """Zarr forcing reader with chunk-aligned caching."""
 
     array: zarr.Array
+    attrs: dict[str, Any]
+    source: str | None
 
     def __init__(
         self,
@@ -1132,6 +1135,7 @@ class ForcingReader:
         assert isinstance(time_unit, str)
         time_unit, origin = time_unit.split(" since ")
         pandas_time_unit: str = {
+            "nanoseconds": "ns",
             "seconds": "s",
             "minutes": "m",
             "hours": "h",
@@ -1148,6 +1152,8 @@ class ForcingReader:
         array = self.ds[self.variable_name]
         assert isinstance(array, zarr.Array)
         self.array: zarr.Array = array
+        self.attrs: dict[str, Any] = dict(self.array.attrs)
+        self.source: str | None = self.attrs.get("source")
 
         # The on-disk chunk size along the time dimension - we always load full chunks
         # from disk (e.g. 7 * 24 = 168 for weekly hourly data).
@@ -1328,21 +1334,39 @@ class RemoteFile:
     using HTTP Range requests. It includes retry logic for robust downloads.
     """
 
-    def __init__(self, url: str, max_retries: int = 5, base_delay: float = 1.0) -> None:
+    def __init__(
+        self,
+        url: str,
+        logger: logging.Logger,
+        max_retries: int = 20,
+        delay_seconds: float = 5.0,
+        max_delay_seconds: float = 300.0,
+        double_delay: bool = True,
+        base_delay: float | None = None,
+    ) -> None:
         """Initialize the RemoteFile.
 
         Args:
             url: The URL of the remote file.
+            logger: A logging.Logger instance to use for logging retry and error messages.
             max_retries: Maximum number of retries for HTTP requests.
-            base_delay: Base delay in seconds for exponential backoff.
+            delay_seconds: Initial delay in seconds between retries (seconds).
+            max_delay_seconds: Maximum delay in seconds between retries when doubling (seconds).
+            double_delay: If True, exponentially double the delay between retries up to max_delay_seconds.
+            base_delay: Deprecated alias for delay_seconds (seconds).
 
         Raises:
             OSError: If the URL cannot be accessed or does not support range requests.
             HTTP429Error: If the server responds with HTTP 429 Too Many Requests during initialization.
         """
-        self.url_original = url
-        self.max_retries = max_retries
-        self.base_delay = base_delay
+        self.url_original: str = url
+        self.logger: logging.Logger = logger
+        self.max_retries: int = max_retries
+        self.delay_seconds: float = (
+            base_delay if base_delay is not None else delay_seconds
+        )
+        self.max_delay_seconds: float = max_delay_seconds
+        self.double_delay: bool = double_delay
 
         # Resolve redirects and get size
         resp = self._request_with_retry("HEAD", url, allow_redirects=True)
@@ -1408,6 +1432,7 @@ class RemoteFile:
         """
         last_error: str | None = None
         resp: requests.Response | None = None
+        current_delay: float = self.delay_seconds
 
         for attempt in range(self.max_retries + 1):
             try:
@@ -1425,8 +1450,18 @@ class RemoteFile:
                 last_error = str(e)
 
             if attempt < self.max_retries:
-                sleep_time = self.base_delay * (2**attempt)
-                time.sleep(sleep_time)
+                self.logger.warning(
+                    f"Request {method} {url} failed ({last_error}). "
+                    f"Retrying (attempt {attempt + 1}/{self.max_retries}) in {current_delay:.1f}s..."
+                )
+                time.sleep(current_delay)
+                if self.double_delay:
+                    # Exponential backoff capped at max_delay_seconds to prevent spamming
+                    current_delay = min(current_delay * 2, self.max_delay_seconds)
+            else:
+                self.logger.warning(
+                    f"Request {method} {url} failed ({last_error}) after {self.max_retries} retries."
+                )
 
         if resp is not None:
             # Return the last failed response
@@ -1518,10 +1553,12 @@ class RemoteFile:
 def fetch_and_save(
     url: str,
     file_path: Path,
+    logger: logging.Logger,
     overwrite: bool = False,
-    max_retries: int = 3,
-    delay_seconds: float | int = 5,
-    double_delay: bool = False,
+    max_retries: int = 20,
+    delay_seconds: float | int = 5.0,
+    double_delay: bool = True,
+    max_delay_seconds: float | int = 300.0,
     chunk_size: int = 16384,
     session: requests.Session | None = None,
     params: None | dict[str, Any] = None,
@@ -1534,15 +1571,17 @@ def fetch_and_save(
 
     This function supports both S3 and HTTP(S) URLs. It downloads the file to a
     temporary location and then moves it to the final destination to ensure
-    atomicity. It includes retry logic for transient network errors.
+    atomicity. It includes retry logic with exponential backoff for transient network errors.
 
     Args:
         url: The URL to fetch data from (S3 or HTTP/HTTPS).
         file_path: The local path to save the file to.
+        logger: A logging.Logger instance to use for logging status and error messages.
         overwrite: If True, overwrite the file if it already exists.
         max_retries: The maximum number of times to retry a failed download.
-        delay_seconds: The delay in seconds between retries.
-        double_delay: If True, double the delay between retries on each attempt.
+        delay_seconds: The initial delay in seconds between retries (seconds).
+        double_delay: If True, exponentially double the delay between retries on each attempt up to max_delay_seconds.
+        max_delay_seconds: The maximum delay in seconds between retries (seconds).
         chunk_size: The chunk size for streaming downloads.
         session: An optional requests.Session object to use for HTTP requests.
         params: Optional dictionary of query parameters for HTTP requests.
@@ -1591,6 +1630,10 @@ def fetch_and_save(
 
             except Exception as e:
                 # Log the error
+                logger.warning(
+                    f"S3 download failed: {e}. Attempt {attempts + 1} of {max_retries}. "
+                    f"Retrying in {current_delay_seconds:.1f}s..."
+                )
                 if verbose:
                     print(
                         f"S3 download failed: {e}. Attempt {attempts + 1} of {max_retries}"
@@ -1605,7 +1648,9 @@ def fetch_and_save(
                 if attempts < max_retries:
                     time.sleep(current_delay_seconds)
                     if double_delay:
-                        current_delay_seconds *= 2
+                        current_delay_seconds = min(
+                            current_delay_seconds * 2, float(max_delay_seconds)
+                        )
 
         # If all attempts fail, raise an exception
         raise RuntimeError(
@@ -1663,7 +1708,14 @@ def fetch_and_save(
 
             except requests.RequestException as e:
                 # Log the error
-                print(f"Request failed: {e}. Attempt {attempts + 1} of {max_retries}")
+                logger.warning(
+                    f"Request failed: {e}. Attempt {attempts + 1} of {max_retries}. "
+                    f"Retrying in {current_delay_seconds:.1f}s..."
+                )
+                if verbose:
+                    print(
+                        f"Request failed: {e}. Attempt {attempts + 1} of {max_retries}"
+                    )
 
                 # Remove the temporary file if it exists
                 if temp_file is not None and os.path.exists(temp_file.name):
@@ -1674,7 +1726,9 @@ def fetch_and_save(
                 if attempts < max_retries:
                     time.sleep(current_delay_seconds)
                     if double_delay:
-                        current_delay_seconds *= 2
+                        current_delay_seconds = min(
+                            current_delay_seconds * 2, float(max_delay_seconds)
+                        )
 
         # If all attempts fail, raise an exception
         raise RuntimeError(

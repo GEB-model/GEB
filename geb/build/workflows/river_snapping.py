@@ -20,6 +20,7 @@ from geb.workflows.io import get_window
 class RiverSegment(NamedTuple):
     """Container for a river segment."""
 
+    ID: int
     geometry: shapely.geometry.LineString
     hydrography_xy: list[tuple[int, int]]
     uparea_m2: float
@@ -328,6 +329,7 @@ def select_river_segment(
         return None
 
     return RiverSegment(
+        ID=closest_river_segment.iloc[0].name.item(),
         geometry=closest_river_segment.iloc[0].geometry,
         hydrography_xy=closest_river_segment.iloc[0].hydrography_xy,
         uparea_m2=closest_river_segment.iloc[0].uparea_m2,

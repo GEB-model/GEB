@@ -33,7 +33,7 @@ class GMIA(Adapter):
         """
         if not self.is_ready:
             download_path = self.path.with_suffix(".zip")
-            fetch_and_save(url=url, file_path=download_path)
+            fetch_and_save(url=url, file_path=download_path, logger=self.logger)
 
             # unzip the file
             with zipfile.ZipFile(download_path, "r") as zip_ref:
@@ -78,7 +78,9 @@ class FAOSTAT(Adapter):
         """
         if not self.is_ready:
             download_path = self.path.with_suffix(".zip")
-            fetch_and_save(url=url, file_path=download_path, show_progress=True)
+            fetch_and_save(
+                url=url, file_path=download_path, logger=self.logger, show_progress=True
+            )
 
             # unzip the file
             with zipfile.ZipFile(download_path, "r") as zip_ref:

@@ -60,7 +60,9 @@ from .redistribution import (
 )
 from .snow_glaciers import snow_model
 from .water import (
+    FORCING_SOURCE_SIGMA_DEFAULTS,
     add_water_to_topwater_and_evaporate_open_water,
+    generate_rainfall_lookup_table,
     get_bubbling_pressure_m_positive,
     get_pore_size_index_brakensiek,
     get_soil_moisture_at_pressure,
@@ -164,6 +166,7 @@ def land_surface_model(
     interflow_multiplier: np.float32,
     deep_soil_temperature_C: ArrayFloat32,
     leaf_area_index: ArrayFloat32,
+    rainfall_lookup_table: TwoDArrayFloat32,
 ) -> tuple[
     ArrayFloat32,
     ArrayFloat32,
@@ -260,6 +263,7 @@ def land_surface_model(
         interflow_multiplier: Calibration factor for interflow calculation.
         deep_soil_temperature_C: Deep soil temperature in Celsius.
         leaf_area_index: Leaf area index for the cell.
+        rainfall_lookup_table: Precomputed lognormal weights lookup table of shape (table_size, 6).
 
     Returns:
         Tuple of:
@@ -617,6 +621,7 @@ def land_surface_model(
                     ],
                     rain_temperature_C=tas_C,
                     liquid_water_input_for_enthalpy_m=liquid_water_input_for_enthalpy_m,
+                    rainfall_lookup_table=rainfall_lookup_table,
                 )
 
                 runoff_m[i, hour] += direct_runoff_m
@@ -908,6 +913,7 @@ class LandSurfaceInputs(NamedTuple):
     interflow_multiplier: np.float32
     deep_soil_temperature_C: ArrayFloat32
     leaf_area_index: ArrayFloat32
+    rainfall_lookup_table: TwoDArrayFloat32
 
 
 def _pad_hru_arrays(inputs: LandSurfaceInputs) -> LandSurfaceInputs:
@@ -995,6 +1001,19 @@ class LandSurface(Module):
 
         self.HRU = hydrology.HRU
         self.grid = hydrology.grid
+
+        # Precompute rainfall lookup table based on precipitation forcing source preset
+        precip_source: str | None = (
+            self.model.forcing.pr.source
+            if hasattr(self.model, "forcing")
+            and hasattr(self.model.forcing, "pr")
+            and self.model.forcing.pr is not None
+            else None
+        )
+        sigma: float = FORCING_SOURCE_SIGMA_DEFAULTS.get(precip_source or "", 0.8)
+        self.rainfall_lookup_table: TwoDArrayFloat32 = generate_rainfall_lookup_table(
+            sigma
+        )
 
         if self.model.in_spinup:
             self.spinup()
@@ -1143,6 +1162,7 @@ class LandSurface(Module):
             ),
             deep_soil_temperature_C=deep_soil_temperature_C,
             leaf_area_index=leaf_area_index,
+            rainfall_lookup_table=self.rainfall_lookup_table,
         )
 
         return _pad_hru_arrays(unpadded_inputs)
@@ -1187,18 +1207,17 @@ class LandSurface(Module):
             Snapshot of model inputs that reproduces the failure context.
         """
         # isolate the failing cell while keeping original ranks (dimensions)
+        num_cells: int = land_surface_inputs.slope_m_per_m.shape[0]
         sliced_fields = {}
         for field in land_surface_inputs._fields:
             val = getattr(land_surface_inputs, field)
-            if isinstance(val, np.ndarray):
+            if isinstance(val, np.ndarray) and val.shape[0] == num_cells:
                 if val.ndim == 1:
                     sliced_fields[field] = val[index : index + 1]
-                elif val.ndim == 2:
+                else:
                     # Inputs are in cell-major layout [num_cells, N_LAYERS] or
                     # time-major layout [num_cells, 24]; cell axis is 0.
                     sliced_fields[field] = val[index : index + 1, :]
-                else:
-                    sliced_fields[field] = val
             else:
                 sliced_fields[field] = val
 

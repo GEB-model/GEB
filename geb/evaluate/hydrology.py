@@ -15,12 +15,11 @@ import xarray as xr
 from matplotlib import colormaps as mcolormaps
 from matplotlib.collections import LineCollection
 from matplotlib.lines import Line2D
-
-# from scores.continuous import (
-#     kge as calculate_kge,
-#     nse as calculate_nse,
-#     rmse as calculate_rmse,
-# )
+from scores.continuous import (
+    kge as calculate_kge,
+    nse as calculate_nse,
+    rmse as calculate_rmse,
+)
 from tqdm import tqdm
 
 from geb.evaluate.workflows.dashboard import (
@@ -1059,10 +1058,8 @@ def create_validation_df(
             "Observed discharge frequency is not a multiple of simulated discharge frequency. Please ensure the observed discharge frequency is a multiple of the simulated discharge frequency."
         )
 
-    observation_frequency = observed_frequency
-    observation_timestep: pd.Timedelta = observed_timestep
     should_use_local_calendar: bool = (
-        observation_timestep >= pd.Timedelta(days=1) and timezone_utc_offset != 0.0
+        observed_timestep >= pd.Timedelta(days=1) and timezone_utc_offset != 0.0
     )
     simulation_for_aggregation: pd.Series = simulated_discharge.copy()
     if should_use_local_calendar:
@@ -1073,11 +1070,13 @@ def create_validation_df(
             simulation_for_aggregation.index + pd.Timedelta(hours=timezone_utc_offset)
         )
 
-    simulated_discharge = simulation_for_aggregation.resample(
-        observation_frequency,
-        closed="left",
-        label="left",
-    ).mean()
+    if simulated_frequency != observed_frequency:
+        simulated_discharge = simulation_for_aggregation.resample(
+            observation_frequency,
+            closed="left",
+            label="left",
+            offset=observation_frequency / 2,
+        ).mean()
 
     # cut both observed and simulated discharge to the same time range
     start_time = max(observed_discharge.index.min(), simulated_discharge.index.min())
@@ -1948,10 +1947,10 @@ class Hydrology:
                 ).exists()
             )
         ].copy()
-        discharge: pd.DataFrame = read_discharge_per_river(
-            folder=discharge_folder,
+        discharge: pd.DataFrame = get_discharge_per_river(
             rivers=rivers_of_interest,
             all_rivers=all_rivers,
+            folder=discharge_folder,
         )
         for river_id in discharge.columns:
             rivers_of_interest.loc[river_id, "discharge_m3_per_s"] = discharge[
@@ -2162,21 +2161,16 @@ class Hydrology:
                     else 0.0
                 )
 
-                try:
-                    validation_df: pd.DataFrame = create_validation_df(
-                        self.model.output_folder,
-                        run_name,
-                        station_id,
-                        observed_discharge_series,
-                        correct_discharge_observations,
-                        discharge_observations_to_GEB_upstream_area_ratio,
-                        timezone_utc_offset=timezone_utc_offset,
-                    )
-                except FileNotFoundError:
-                    self.model.logger.warning(
-                        "Skipping station %s: no simulation output found.", station_id
-                    )
-                    continue
+                validation_df: pd.DataFrame = create_validation_df(
+                    self.model.output_folder,
+                    run_name,
+                    station_id,
+                    observed_discharge_series,
+                    correct_discharge_observations,
+                    discharge_observations_to_GEB_upstream_area_ratio,
+                    timezone_utc_offset=timezone_utc_offset,
+                )
+
                 validation_df = _filter_validation_df_to_years(
                     validation_df=validation_df,
                     start_year=start_year,
@@ -2185,7 +2179,7 @@ class Hydrology:
 
                 minimum_valid_steps = (
                     minimum_timeseries_length_years
-                    * 365.25
+                    * 365
                     * (24 if frequency_label == "hourly" else 1)
                 )
                 if validation_df.dropna().shape[0] < minimum_valid_steps:

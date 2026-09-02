@@ -75,7 +75,7 @@ class Evaluate:
                 f"Method {method} is not implemented in Evaluate class."
             ) from exc
 
-        self.model.in_spinup = False
+        self.model.in_spinup = self.model.config["general"]["spinup_name"] == run_name
         self.run_name = run_name
 
         # Merge run_name into kwargs to pass all evaluation options as keyword arguments.

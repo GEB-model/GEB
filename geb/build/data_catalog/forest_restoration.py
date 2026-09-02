@@ -35,7 +35,7 @@ class ForestRestorationPotential(Adapter):
             return self
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        fetch_and_save(url=url, file_path=self.path)
+        fetch_and_save(url=url, file_path=self.path, logger=self.logger)
 
         return self
 

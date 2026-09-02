@@ -40,7 +40,7 @@ class GEBCO(Adapter):
         """
         if not self.is_ready:
             download_path: Path = self.root / "gebco.zip"
-            fetch_and_save(url=url, file_path=download_path)
+            fetch_and_save(url=url, file_path=download_path, logger=self.logger)
 
             print("Extracting tiles from zip file...")
             with zipfile.ZipFile(file=download_path, mode="r") as zip_ref:
