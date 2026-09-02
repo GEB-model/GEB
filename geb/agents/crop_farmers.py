@@ -6250,6 +6250,11 @@ class CropFarmers(AgentBaseClass):
 
         Returns:
             DynamicArray: Mean landsurface value per farmer, sized to ``max_n``.
+
+        Raises:
+            ValueError: If the landsurface and land-owner grids do not match,
+                no farmer-owned cells exist, or one or more farmers have no
+                finite landsurface values.
         """
         landsurface_subgrid = read_grid(
             self.model.files["subgrid"][f"landsurface/{landsurface_type}"],
@@ -6257,13 +6262,61 @@ class CropFarmers(AgentBaseClass):
         )
 
         decompressed_land_owners = self.HRU.decompress(self.HRU.var.land_owners)
-        mask = (decompressed_land_owners != -1) & np.isfinite(landsurface_subgrid)
+
+        if landsurface_subgrid.shape != decompressed_land_owners.shape:
+            raise ValueError(
+                f"Shape mismatch for {landsurface_type}: landsurface grid has "
+                f"shape {landsurface_subgrid.shape}, but the decompressed "
+                f"land-owner grid has shape {decompressed_land_owners.shape}"
+            )
+
+        owned_mask = decompressed_land_owners != -1
+
+        if not owned_mask.any():
+            raise ValueError(
+                "Cannot aggregate landsurface values because no "
+                "farmer-owned cells were found"
+            )
+
+        owned_farmer_ids = decompressed_land_owners[owned_mask]
+
+        if np.any(owned_farmer_ids < 0):
+            invalid_owner_ids = np.unique(owned_farmer_ids[owned_farmer_ids < 0])
+            raise ValueError(
+                "Unexpected negative land-owner IDs encountered: "
+                f"{invalid_owner_ids.tolist()}"
+            )
+
+        valid_mask = owned_mask & np.isfinite(landsurface_subgrid)
+        valid_farmer_ids = decompressed_land_owners[valid_mask].astype(
+            np.int64,
+            copy=False,
+        )
+
+        n_farmers = int(owned_farmer_ids.max()) + 1
+
+        counts = np.bincount(
+            valid_farmer_ids,
+            minlength=n_farmers,
+        )
+        weighted_sums = np.bincount(
+            valid_farmer_ids,
+            weights=landsurface_subgrid[valid_mask],
+            minlength=n_farmers,
+        )
+
+        missing_farmer_ids = np.flatnonzero(counts == 0)
+
+        if missing_farmer_ids.size:
+            raise ValueError(
+                f"{missing_farmer_ids.size} farmer(s) have no finite "
+                f"{landsurface_type} cells. First affected farmer IDs: "
+                f"{missing_farmer_ids[:10].tolist()}"
+            )
+
+        mean_landsurface = weighted_sums / counts
 
         return DynamicArray(
-            np.bincount(
-                decompressed_land_owners[mask],
-                weights=landsurface_subgrid[mask],
-            )
-            / np.bincount(decompressed_land_owners[mask]),
+            mean_landsurface,
             max_n=self.var.max_n,
         )

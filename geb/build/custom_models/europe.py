@@ -1,8 +1,11 @@
 """Class to set GEB up for Europe."""
 
 import gc
+import multiprocessing as mp
+import os
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import geopandas as gpd
@@ -723,6 +726,86 @@ def _fix_365_in_crop_calendar(
     return crop_calendar_adjusted
 
 
+def _prepare_mirca_calendar_source_for_parsing(
+    calendar_source: pd.DataFrame,
+    *,
+    mirca_units: list[int] | np.ndarray,
+    source_name: str,
+    logger: Any,
+) -> pd.DataFrame:
+    """Return in-scope MIRCA rows with crop names supported by the parser.
+
+    Some MIRCA-OS calendar tables contain empty trailing or otherwise incomplete
+    records. ``parse_MIRCA_crop_calendar`` creates ``crop_class`` by normalizing
+    and mapping the raw ``Crop`` column, then casts the result to ``np.int64``.
+    Missing or unsupported crop names therefore become NaN and previously raised an
+    opaque ``IntCastingNaNError``. Remove only those unusable in-scope rows before
+    parsing. Rows outside the current model domain are ignored before invalid-crop
+    diagnostics are counted.
+
+    Args:
+        calendar_source: Raw rainfed or irrigated MIRCA-OS calendar table.
+        mirca_units: MIRCA administrative unit codes overlapping the model.
+        source_name: Short source label used in diagnostics.
+        logger: Logger receiving invalid-row warnings.
+
+    Returns:
+        A copy containing only selected units and crop names represented in
+        ``MIRCA_OS_CROP_CLASS_MAP``. The raw schema is otherwise unchanged.
+
+    Raises:
+        TypeError: If ``calendar_source`` is not a DataFrame.
+        ValueError: If a required identifier column is absent.
+    """
+    if not isinstance(calendar_source, pd.DataFrame):
+        raise TypeError(
+            f"{source_name} MIRCA-OS calendar source must be a pandas DataFrame."
+        )
+
+    # ``crop_class`` is deliberately not required here: it is a derived column
+    # created inside parse_MIRCA_crop_calendar from the raw ``Crop`` values.
+    required_columns = {"unit_code", "Crop"}
+    missing_columns = required_columns - set(calendar_source.columns)
+    if missing_columns:
+        raise ValueError(
+            f"{source_name} MIRCA-OS calendar source is missing required "
+            f"column(s): {sorted(missing_columns)}."
+        )
+
+    prepared = calendar_source.loc[
+        calendar_source["unit_code"].isin(mirca_units)
+    ].copy()
+    if prepared.empty:
+        return prepared
+
+    normalized_crop_names = (
+        prepared["Crop"]
+        .astype(str)
+        .str.strip()
+        .str.replace(r"\d+$", "", regex=True)
+        .str.strip()
+    )
+    valid_crop = normalized_crop_names.map(MIRCA_OS_CROP_CLASS_MAP).notna()
+    if (~valid_crop).any():
+        affected_units = prepared.loc[~valid_crop, "unit_code"].dropna().unique()
+        invalid_names = normalized_crop_names.loc[~valid_crop]
+        invalid_names = invalid_names.mask(
+            prepared.loc[~valid_crop, "Crop"].isna(),
+            "<missing>",
+        )
+        logger.warning(
+            "Discarding %s %s MIRCA-OS calendar row(s) in selected unit(s) "
+            "%s because Crop is missing or has no configured MIRCA-OS crop "
+            "mapping. Crop examples: %s.",
+            int(np.count_nonzero(~valid_crop)),
+            source_name,
+            affected_units[:10].tolist(),
+            invalid_names.drop_duplicates().head(10).tolist(),
+        )
+
+    return prepared.loc[valid_crop].copy()
+
+
 def check_crop_calendar(crop_calendar_per_farmer: np.ndarray) -> None:
     """Validate that active crop-calendar rows have unique timing combinations.
 
@@ -783,6 +866,47 @@ def check_crop_calendar(crop_calendar_per_farmer: np.ndarray) -> None:
         )
 
 
+def _replacement_crop_calendar_candidates(
+    crop_calendar_per_farmer: np.ndarray,
+    crop_values: np.ndarray | list[int],
+) -> np.ndarray:
+    """Return replacement calendars in the established frequency order.
+
+    The most frequent crop represented by ``crop_values`` is selected first.
+    Its unique full calendars are then ordered by descending occurrence count,
+    using the same stable tie handling as the original replacement workflow.
+
+    Args:
+        crop_calendar_per_farmer: Calendar array for one HRL year.
+        crop_values: Crop classes eligible to provide replacement calendars.
+
+    Returns:
+        Ordered unique replacement calendars. The first axis has length zero
+        when none of the requested crop classes is represented.
+    """
+    crop_instances = crop_calendar_per_farmer[:, :, 0][
+        np.isin(crop_calendar_per_farmer[:, :, 0], crop_values)
+    ]
+    if crop_instances.size == 0:
+        return np.empty(
+            (0,) + crop_calendar_per_farmer.shape[1:],
+            dtype=crop_calendar_per_farmer.dtype,
+        )
+
+    crops, crop_counts = np.unique(crop_instances, return_counts=True)
+    most_common_crop = crops[np.argmax(crop_counts)]
+    calendars_for_crop = crop_calendar_per_farmer[
+        (crop_calendar_per_farmer[:, :, 0] == most_common_crop).any(axis=1)
+    ]
+    unique_calendars, counts = np.unique(
+        calendars_for_crop,
+        axis=0,
+        return_counts=True,
+    )
+    candidate_order = np.argsort(-counts, kind="stable")
+    return unique_calendars[candidate_order]
+
+
 # Manual replacement of certain crops
 def replace_crop(
     crop_calendar_per_farmer: np.ndarray,
@@ -818,27 +942,12 @@ def replace_crop(
         The updated crop-calendar array. If none of the candidate crops are
         present, the input array is returned unchanged.
     """
-    # Find the most common crop value among the given crop_values
-    crop_instances = crop_calendar_per_farmer[:, :, 0][
-        np.isin(crop_calendar_per_farmer[:, :, 0], crop_values)
-    ]
-
-    # if none of the crops are present, no need to replace anything
-    if crop_instances.size == 0:
+    replacement_candidates = _replacement_crop_calendar_candidates(
+        crop_calendar_per_farmer,
+        crop_values,
+    )
+    if replacement_candidates.shape[0] == 0:
         return crop_calendar_per_farmer
-
-    crops, crop_counts = np.unique(crop_instances, return_counts=True)
-    most_common_crop = crops[np.argmax(crop_counts)]
-
-    # If multiple calendars represent this crop, retain the most common one.
-    new_crop_types = crop_calendar_per_farmer[
-        (crop_calendar_per_farmer[:, :, 0] == most_common_crop).any(axis=1),
-        :,
-        :,
-    ]
-    unique_rows, counts = np.unique(new_crop_types, axis=0, return_counts=True)
-    candidate_order = np.argsort(-counts, kind="stable")
-    replacement_candidates = unique_rows[candidate_order]
     crop_replacement = replacement_candidates[0]
 
     crop_replacement_only_crops = crop_replacement[crop_replacement[:, -1] != -1]
@@ -994,6 +1103,264 @@ def _minimum_planting_days_after_last_harvest(
         has_previous_harvest
     ] - _year_start_day(current_hrl_year)
     return minimum_planting_days
+
+
+def _is_europe_004_model_root(model_root: str | os.PathLike[str]) -> bool:
+    """Return whether a model input path belongs to exactly ``Europe_004``.
+
+    The model input directory is normally nested below the model directory, so
+    all complete path components are inspected. Similar names such as
+    ``Europe_004_backup`` are deliberately excluded.
+
+    Args:
+        model_root: Model input directory or one of its parent directories.
+
+    Returns:
+        True only when an exact path component is named ``Europe_004``.
+    """
+    return any(part == "Europe_004" for part in Path(model_root).parts)
+
+
+def _calendar_rows_as_keys(calendars: np.ndarray) -> np.ndarray:
+    """Return exact byte keys for a two-dimensional collection of calendars.
+
+    Args:
+        calendars: Calendar array with shape ``(farmer, row, variable)``.
+
+    Returns:
+        One exact fixed-width key per farmer calendar.
+
+    Raises:
+        ValueError: If the input does not have three dimensions.
+    """
+    calendars = np.asarray(calendars)
+    if calendars.ndim != 3:
+        raise ValueError(
+            f"calendars must have shape (farmer, row, variable). Got {calendars.shape}."
+        )
+    contiguous = np.ascontiguousarray(calendars)
+    key_width = int(np.prod(contiguous.shape[1:])) * contiguous.dtype.itemsize
+    return (
+        contiguous.reshape(contiguous.shape[0], -1)
+        .view(np.dtype((np.void, key_width)))
+        .reshape(-1)
+    )
+
+
+def _most_common_calendar_sequence_donor(
+    crop_calendar_stack: np.ndarray,
+    candidate_farmer_ids: np.ndarray,
+) -> tuple[int, int]:
+    """Return a deterministic donor for the modal complete calendar sequence.
+
+    Args:
+        crop_calendar_stack: Calendar array with shape
+            ``(year, farmer, row, variable)``.
+        candidate_farmer_ids: Compact farmer IDs eligible to donate a sequence.
+
+    Returns:
+        Donor farmer ID and the number of eligible farmers sharing its sequence.
+
+    Raises:
+        ValueError: If no candidate farmer is provided.
+    """
+    candidate_farmer_ids = np.asarray(candidate_farmer_ids, dtype=np.int32)
+    if candidate_farmer_ids.ndim != 1 or not candidate_farmer_ids.size:
+        raise ValueError("At least one calendar-sequence donor is required.")
+
+    n_years = crop_calendar_stack.shape[0]
+    sequence_codes = np.empty(
+        (candidate_farmer_ids.size, n_years),
+        dtype=np.int32,
+    )
+    for year_index in range(n_years):
+        annual_keys = _calendar_rows_as_keys(
+            crop_calendar_stack[year_index, candidate_farmer_ids]
+        )
+        _, annual_inverse = np.unique(annual_keys, return_inverse=True)
+        sequence_codes[:, year_index] = annual_inverse.astype(
+            np.int32,
+            copy=False,
+        )
+
+    sequence_keys = _calendar_rows_as_keys(sequence_codes[:, :, None])
+    _, first_positions, sequence_counts = np.unique(
+        sequence_keys,
+        return_index=True,
+        return_counts=True,
+    )
+    maximum_count = int(sequence_counts.max())
+    modal_positions = np.flatnonzero(sequence_counts == maximum_count)
+    # A frequency tie is resolved by the smallest farmer ID, which is stable
+    # because candidate_farmer_ids is in ascending compact-ID order.
+    modal_unique_position = int(
+        modal_positions[np.argmin(first_positions[modal_positions])]
+    )
+    donor_position = int(first_positions[modal_unique_position])
+    return int(candidate_farmer_ids[donor_position]), maximum_count
+
+
+def _assert_europe_004_calendar_has_no_rice(
+    crop_calendar_stack: np.ndarray,
+    *,
+    rice_crop_id: int,
+) -> None:
+    """Assert that the final Europe_004 calendar contains no rice crop rows.
+
+    Args:
+        crop_calendar_stack: Calendar array with shape
+            ``(year, farmer, row, variable)``.
+        rice_crop_id: MIRCA crop class used for rice.
+
+    Raises:
+        ValueError: If the calendar stack has an invalid shape.
+        AssertionError: If rice remains in any year, farmer, or calendar row.
+    """
+    crop_calendar_stack = np.asarray(crop_calendar_stack)
+    if crop_calendar_stack.ndim != 4 or crop_calendar_stack.shape[3] < 1:
+        raise ValueError(
+            "crop_calendar_stack must have shape (year, farmer, row, variable). "
+            f"Got {crop_calendar_stack.shape}."
+        )
+    rice_locations = np.argwhere(crop_calendar_stack[:, :, :, 0] == int(rice_crop_id))
+    if rice_locations.size:
+        rice_farmer_ids = np.unique(rice_locations[:, 1])
+        samples = [
+            {
+                "year_index": int(year_index),
+                "farmer_id": int(farmer_id),
+                "calendar_row": int(calendar_row),
+            }
+            for year_index, farmer_id, calendar_row in rice_locations[:10]
+        ]
+        raise AssertionError(
+            "Europe_004 must not contain rice after its rare-rice calendar "
+            f"replacement, but found {rice_locations.shape[0]} rice calendar "
+            f"row(s) for {rice_farmer_ids.size} farmer(s). Examples: {samples}."
+        )
+
+
+def _replace_europe_004_rare_rice_sequence(
+    crop_calendar_stack: np.ndarray,
+    farmer_main_crops_by_year: np.ndarray,
+    farmer_region_ids: np.ndarray,
+    *,
+    rice_crop_id: int,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Replace every Europe_004 rice farmer with a local modal sequence.
+
+    Rice is detected from every crop row of the final calendar stack, matching
+    the data later inspected by crop-price validation. For each affected
+    region, the complete calendar sequence is copied from the modal existing
+    farmer sequence that contains no rice in any year or row. Copying a
+    sequence that already passed the joint selector preserves all year-to-year
+    harvest constraints.
+
+    The final no-rice assertion makes the model-specific price-data assumption
+    explicit and prevents a partially applied replacement from being written.
+
+    Args:
+        crop_calendar_stack: Calendar array with shape
+            ``(year, farmer, row, variable)``. The array is updated in place.
+        farmer_main_crops_by_year: MIRCA crop IDs with shape ``(year, farmer)``.
+        farmer_region_ids: Region ID for each compact farmer.
+        rice_crop_id: MIRCA crop class used for rice.
+
+    Returns:
+        Updated calendar stack and replacement diagnostics by region.
+
+    Raises:
+        ValueError: If arrays are misaligned, more than 5,000 rice farmers are
+            found, or a rice farmer has no rice-free donor in the same region.
+        AssertionError: If any rice calendar row remains after replacement.
+    """
+    crop_calendar_stack = np.asarray(crop_calendar_stack)
+    main_crops = np.asarray(farmer_main_crops_by_year, dtype=np.int32)
+    region_ids = np.asarray(farmer_region_ids, dtype=np.int32)
+    if crop_calendar_stack.ndim != 4:
+        raise ValueError(
+            "crop_calendar_stack must have shape (year, farmer, row, variable). "
+            f"Got {crop_calendar_stack.shape}."
+        )
+    if main_crops.shape != crop_calendar_stack.shape[:2]:
+        raise ValueError(
+            "farmer_main_crops_by_year must match the calendar year/farmer "
+            f"axes. Got {main_crops.shape} and {crop_calendar_stack.shape[:2]}."
+        )
+    _, n_farmers = main_crops.shape
+    if region_ids.ndim != 1 or region_ids.size != n_farmers:
+        raise ValueError(
+            "farmer_region_ids must contain one value per farmer. "
+            f"Got {region_ids.shape} for {n_farmers} farmers."
+        )
+
+    calendar_rice_by_farmer = np.any(
+        crop_calendar_stack[:, :, :, 0] == int(rice_crop_id),
+        axis=(0, 2),
+    )
+    main_crop_rice_by_farmer = np.any(main_crops == int(rice_crop_id), axis=0)
+    rice_by_farmer = calendar_rice_by_farmer | main_crop_rice_by_farmer
+    rice_farmer_ids = np.flatnonzero(rice_by_farmer)
+    if not rice_farmer_ids.size:
+        _assert_europe_004_calendar_has_no_rice(
+            crop_calendar_stack,
+            rice_crop_id=rice_crop_id,
+        )
+        return crop_calendar_stack, {
+            "rice_farmer_count": 0,
+            "rice_calendar_farmer_count": 0,
+            "region_count": 0,
+            "regions": [],
+        }
+    if rice_farmer_ids.size > 5_000:
+        raise ValueError(
+            "The Europe_004 rice exception expects at most 5,000 farmers, "
+            f"but found {rice_farmer_ids.size}. Refusing a broad replacement."
+        )
+
+    regional_replacements: list[dict[str, int]] = []
+    for region_id in np.unique(region_ids[rice_farmer_ids]):
+        region_id = int(region_id)
+        regional_rice_farmer_ids = np.flatnonzero(
+            rice_by_farmer & (region_ids == region_id)
+        ).astype(np.int32, copy=False)
+        donor_farmer_ids = np.flatnonzero(
+            (region_ids == region_id) & ~rice_by_farmer
+        ).astype(np.int32, copy=False)
+        if not donor_farmer_ids.size:
+            raise ValueError(
+                "Europe_004 rice farmers have no rice-free calendar-sequence "
+                f"donor in region {region_id}."
+            )
+
+        donor_farmer_id, modal_sequence_count = _most_common_calendar_sequence_donor(
+            crop_calendar_stack,
+            donor_farmer_ids,
+        )
+        crop_calendar_stack[:, regional_rice_farmer_ids] = crop_calendar_stack[
+            :, donor_farmer_id, None, :, :
+        ]
+        regional_replacements.append(
+            {
+                "region_id": region_id,
+                "rice_farmer_count": int(regional_rice_farmer_ids.size),
+                "donor_farmer_id": donor_farmer_id,
+                "modal_sequence_count": modal_sequence_count,
+                "candidate_farmer_count": int(donor_farmer_ids.size),
+            }
+        )
+
+    _assert_europe_004_calendar_has_no_rice(
+        crop_calendar_stack,
+        rice_crop_id=rice_crop_id,
+    )
+
+    return crop_calendar_stack, {
+        "rice_farmer_count": int(rice_farmer_ids.size),
+        "rice_calendar_farmer_count": int(np.count_nonzero(calendar_rice_by_farmer)),
+        "region_count": len(regional_replacements),
+        "regions": regional_replacements,
+    }
 
 
 def check_crop_calendar_sequence(
@@ -1374,6 +1741,16 @@ class _MIRCACalendarCandidatePool:
 
 
 @dataclass(frozen=True, slots=True)
+class _MIRCACalendarPoolTierMetadata:
+    """Reusable fallback-tier indices for one cached candidate pool."""
+
+    minimum_tier: int
+    available_tiers: tuple[int, ...]
+    tier_indices: tuple[np.ndarray, ...]
+    eligible_indices: tuple[np.ndarray, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class _MIRCACalendarIndex:
     """One-pass lookup index used by all farmer calendar states."""
 
@@ -1558,17 +1935,90 @@ def _weighted_candidate_ranks(
     lookup_unit: int,
     main_crop: int,
     is_irrigated: bool,
+    ranks: np.ndarray | None = None,
+    maximum_fallback_tier: int | None = None,
+    tier_indices_by_tier: tuple[np.ndarray, ...] | None = None,
 ) -> np.ndarray:
-    """Return deterministic area-weighted preference ranks within each tier.
+    """Fill deterministic area-weighted preference ranks within requested tiers.
 
     Each tier restarts the legacy farmer-state random stream. Therefore the
     first-ranked candidate in the first available tier matches the original
     single-year ``rng.choice`` result when no sequence constraint intervenes.
+
+    Joint path selection normally succeeds using only the first available
+    fallback tier. Ranking later, often much larger, cross-unit tiers eagerly
+    was therefore wasted work for nearly every farmer-state. ``ranks`` permits
+    those tiers to be filled lazily as the path solver broadens its search.
+    Existing filled tiers are retained, and omitting both optional arguments
+    preserves the former behavior of returning a complete preference order.
+
+    Args:
+        pool: Cached calendar candidates and area probabilities.
+        random_seed: Base seed for reproducible farmer selection.
+        farmer_id: Compact farmer identifier included in the RNG seed.
+        lookup_unit: MIRCA-OS unit used for calendar lookup.
+        main_crop: MIRCA crop class used for calendar lookup.
+        is_irrigated: Whether irrigated calendars are preferred.
+        ranks: Optional existing rank array to extend in place.
+        maximum_fallback_tier: Highest fallback tier to rank. All tiers are
+            ranked when omitted.
+        tier_indices_by_tier: Optional precomputed candidate indices for each
+            fallback tier.
+
+    Returns:
+        Integer rank per candidate. Unrequested tiers retain rank ``-1``.
+
+    Raises:
+        ValueError: If an optional rank or tier-index array is invalid.
+        AssertionError: If a requested tier is partially ranked or remains
+            unranked after processing.
     """
-    ranks = np.full(pool.probabilities.size, -1, dtype=np.int32)
-    for fallback_tier in range(len(_CALENDAR_FALLBACK_NAMES)):
-        tier_indices = np.flatnonzero(pool.fallback_tiers == fallback_tier)
+    if ranks is None:
+        ranks = np.full(pool.probabilities.size, -1, dtype=np.int32)
+    else:
+        ranks = np.asarray(ranks)
+        if ranks.shape != pool.probabilities.shape or ranks.dtype != np.int32:
+            raise ValueError(
+                "ranks must be an int32 array aligned with pool probabilities."
+            )
+
+    maximum_tier = (
+        len(_CALENDAR_FALLBACK_NAMES) - 1
+        if maximum_fallback_tier is None
+        else int(maximum_fallback_tier)
+    )
+    if not 0 <= maximum_tier < len(_CALENDAR_FALLBACK_NAMES):
+        raise ValueError(
+            "maximum_fallback_tier must identify a configured fallback tier."
+        )
+
+    if tier_indices_by_tier is not None and len(tier_indices_by_tier) != len(
+        _CALENDAR_FALLBACK_NAMES
+    ):
+        raise ValueError(
+            "tier_indices_by_tier must contain one array per fallback tier."
+        )
+
+    for fallback_tier in range(maximum_tier + 1):
+        tier_indices = (
+            np.flatnonzero(pool.fallback_tiers == fallback_tier)
+            if tier_indices_by_tier is None
+            else tier_indices_by_tier[fallback_tier]
+        )
         if not tier_indices.size:
+            continue
+        tier_ranks = ranks[tier_indices]
+        if np.all(tier_ranks >= 0):
+            continue
+        if np.any(tier_ranks >= 0):
+            raise AssertionError("A fallback tier has only partially filled ranks.")
+
+        # A one-candidate tier has a deterministic order and needs no Generator.
+        # For larger tiers, the final remaining candidate is also deterministic.
+        # Skipping that last rng.choice call cannot affect any rank because every
+        # tier deliberately starts a fresh legacy random stream.
+        if tier_indices.size == 1:
+            ranks[tier_indices[0]] = 0
             continue
         rng = np.random.default_rng(
             np.random.SeedSequence(
@@ -1582,21 +2032,163 @@ def _weighted_candidate_ranks(
             )
         )
         remaining = tier_indices.copy()
-        for rank in range(tier_indices.size):
-            weights = pool.probabilities[remaining]
+        remaining_size = int(tier_indices.size)
+        # A scalar ``Generator.choice(..., p=...)`` consumes one uniform draw
+        # and selects with the normalized cumulative distribution. Drawing the
+        # uniforms in one call preserves that exact PCG64 stream while avoiding
+        # one Python-to-NumPy RNG call per rank.
+        uniform_draws = rng.random(remaining_size - 1)
+        for rank, uniform_draw in enumerate(uniform_draws):
+            active_indices = remaining[:remaining_size]
+            weights = pool.probabilities[active_indices]
             weight_sum = float(weights.sum())
             draw_probabilities = (
                 weights / weight_sum
                 if weight_sum > 0.0
-                else np.full(remaining.size, 1.0 / remaining.size)
+                else np.full(remaining_size, 1.0 / remaining_size)
             )
-            draw_position = int(rng.choice(remaining.size, p=draw_probabilities))
+            # This is the probability path used internally by NumPy's weighted
+            # ``choice``. Keep both normalizations because their floating-point
+            # rounding is part of the established seeded result.
+            cumulative_probabilities = np.cumsum(draw_probabilities)
+            cumulative_probabilities /= cumulative_probabilities[-1]
+            draw_position = int(
+                np.searchsorted(
+                    cumulative_probabilities,
+                    uniform_draw,
+                    side="right",
+                )
+            )
             selected_index = int(remaining[draw_position])
             ranks[selected_index] = rank
-            remaining = np.delete(remaining, draw_position)
-    if np.any(ranks < 0):
-        raise AssertionError("Not all MIRCA calendar candidates received a rank.")
+            # Preserve the ascending remaining-index order used by np.delete,
+            # but compact in place to avoid allocating a new array per draw.
+            remaining[draw_position : remaining_size - 1] = remaining[
+                draw_position + 1 : remaining_size
+            ]
+            remaining_size -= 1
+        ranks[int(remaining[0])] = int(tier_indices.size - 1)
+
+    requested = pool.fallback_tiers <= maximum_tier
+    if np.any(ranks[requested] < 0):
+        raise AssertionError("Not all requested MIRCA candidates received a rank.")
     return ranks
+
+
+def _weighted_candidate_rank_zero(
+    pool: _MIRCACalendarCandidatePool,
+    *,
+    random_seed: int,
+    farmer_id: int,
+    lookup_unit: int,
+    main_crop: int,
+    is_irrigated: bool,
+    fallback_tier: int,
+    tier_indices: np.ndarray | None = None,
+) -> int:
+    """Return only the first candidate in the legacy weighted tier order.
+
+    The first draw is byte-for-byte the same RNG operation used by
+    :func:`_weighted_candidate_ranks`. Most farmer sequences are feasible with
+    this independently preferred candidate in every year, so constructing the
+    rest of a potentially very large cross-unit order would not affect the
+    selected calendars. The complete order is still built if that preferred
+    path is temporally infeasible.
+
+    Args:
+        pool: Cached calendar candidates and area probabilities.
+        random_seed: Base seed for reproducible farmer selection.
+        farmer_id: Compact farmer identifier included in the RNG seed.
+        lookup_unit: MIRCA-OS unit used for calendar lookup.
+        main_crop: MIRCA crop class used for calendar lookup.
+        is_irrigated: Whether irrigated calendars are preferred.
+        fallback_tier: Tier from which to draw the first candidate.
+        tier_indices: Optional precomputed indices belonging to that tier.
+
+    Returns:
+        Pool index of the first candidate in the weighted preference order.
+
+    Raises:
+        ValueError: If the requested tier contains no candidates.
+    """
+    if tier_indices is None:
+        tier_indices = np.flatnonzero(pool.fallback_tiers == fallback_tier)
+    else:
+        tier_indices = np.asarray(tier_indices)
+    if not tier_indices.size:
+        raise ValueError("Cannot draw a preferred candidate from an empty tier.")
+    if tier_indices.size == 1:
+        return int(tier_indices[0])
+
+    rng = np.random.default_rng(
+        np.random.SeedSequence(
+            [
+                random_seed,
+                farmer_id,
+                lookup_unit,
+                main_crop,
+                int(is_irrigated),
+            ]
+        )
+    )
+    weights = pool.probabilities[tier_indices]
+    weight_sum = float(weights.sum())
+    draw_probabilities = (
+        weights / weight_sum
+        if weight_sum > 0.0
+        else np.full(tier_indices.size, 1.0 / tier_indices.size)
+    )
+    cumulative_probabilities = np.cumsum(draw_probabilities)
+    cumulative_probabilities /= cumulative_probabilities[-1]
+    draw_position = int(
+        np.searchsorted(
+            cumulative_probabilities,
+            rng.random(),
+            side="right",
+        )
+    )
+    return int(tier_indices[draw_position])
+
+
+def _mirca_calendar_pool_tier_metadata(
+    pool: _MIRCACalendarCandidatePool,
+) -> _MIRCACalendarPoolTierMetadata:
+    """Build tier and cumulative eligible indices once for a shared pool.
+
+    Args:
+        pool: Shared MIRCA calendar candidate pool.
+
+    Returns:
+        Reusable tier indices, eligible indices, and tier bounds.
+
+    Raises:
+        ValueError: If the candidate pool is empty.
+    """
+    tier_indices = tuple(
+        np.flatnonzero(pool.fallback_tiers == tier).astype(
+            np.int32,
+            copy=False,
+        )
+        for tier in range(len(_CALENDAR_FALLBACK_NAMES))
+    )
+    available_tiers = tuple(
+        tier for tier, indices in enumerate(tier_indices) if indices.size
+    )
+    if not available_tiers:
+        raise ValueError("Cannot build tier metadata for an empty candidate pool.")
+    eligible_indices = tuple(
+        np.flatnonzero(pool.fallback_tiers <= maximum_tier).astype(
+            np.int32,
+            copy=False,
+        )
+        for maximum_tier in range(len(_CALENDAR_FALLBACK_NAMES))
+    )
+    return _MIRCACalendarPoolTierMetadata(
+        minimum_tier=available_tiers[0],
+        available_tiers=available_tiers,
+        tier_indices=tier_indices,
+        eligible_indices=eligible_indices,
+    )
 
 
 def _best_lexicographic_index(
@@ -1666,6 +2258,139 @@ def _calendar_failure_diagnostic(
     }
 
 
+def _lexicographic_prefix_best_predecessors(
+    *,
+    sorted_previous_positions: np.ndarray,
+    maximum_tier: np.ndarray,
+    tier_sum: np.ndarray,
+    rank_sum: np.ndarray,
+    candidate_tier: int,
+) -> np.ndarray:
+    """Return the cheapest predecessor in every harvest-sorted prefix.
+
+    For a current candidate, temporal feasibility is a one-dimensional cutoff:
+    every predecessor harvested no later than its planting day is feasible.
+    Keeping the lexicographic prefix minimum lets all current candidates in one
+    fallback tier obtain their best predecessor with one ``searchsorted`` call,
+    rather than materializing a candidate-by-predecessor Boolean matrix and
+    running ``lexsort`` separately for every current candidate.
+
+    The predecessor position is the final tie-breaker. This exactly matches the
+    former stable selection from ascending ``flatnonzero`` positions.
+    """
+    sorted_previous_positions = np.asarray(
+        sorted_previous_positions,
+        dtype=np.int32,
+    )
+    prefix_best = np.empty(sorted_previous_positions.size, dtype=np.int32)
+    best_position = -1
+    best_cost: tuple[int, int, int, int] | None = None
+
+    for prefix_position, predecessor_position_value in enumerate(
+        sorted_previous_positions
+    ):
+        predecessor_position = int(predecessor_position_value)
+        cost = (
+            max(int(maximum_tier[predecessor_position]), int(candidate_tier)),
+            int(tier_sum[predecessor_position]),
+            int(rank_sum[predecessor_position]),
+            predecessor_position,
+        )
+        if best_cost is None or cost < best_cost:
+            best_cost = cost
+            best_position = predecessor_position
+        prefix_best[prefix_position] = best_position
+
+    return prefix_best
+
+
+def _preferred_mirca_calendar_path_if_feasible(
+    *,
+    farmer_pools: list[_MIRCACalendarCandidatePool],
+    farmer_ranks: list[np.ndarray],
+    active_year_indices: np.ndarray,
+    years: np.ndarray,
+    preferred_indices: np.ndarray | None = None,
+    year_start_days: np.ndarray | None = None,
+) -> tuple[np.ndarray | None, int]:
+    """Return the independently preferred path when it is temporally feasible.
+
+    For every active year, the rank-zero candidate in the lowest available tier
+    has the smallest possible contribution to all three lexicographic costs.
+    If those independently optimal candidates already form a feasible temporal
+    sequence, no dynamic-programming search can improve on that path. This is
+    the common unconstrained case and needs only one transition check per pair
+    of active years.
+
+    Args:
+        farmer_pools: Candidate pool for every active farmer year.
+        farmer_ranks: Candidate ranks for every active year. These are used
+            only when ``preferred_indices`` is omitted.
+        active_year_indices: Positions of active crops in the HRL year array.
+        years: Strictly increasing HRL years.
+        preferred_indices: Optional precomputed preferred pool index for every
+            active year.
+        year_start_days: Optional NumPy day ordinal for 1 January of each HRL
+            year.
+
+    Returns:
+        Preferred candidate indices when the path is feasible, otherwise
+        ``None``, plus the number of temporal transition checks.
+
+    Raises:
+        ValueError: If optional precomputed arrays do not align with the years.
+        AssertionError: If ranks do not identify exactly one preferred
+            candidate in a lowest available tier.
+    """
+    if preferred_indices is None:
+        selected_indices = np.empty(active_year_indices.size, dtype=np.int32)
+        for active_position, pool in enumerate(farmer_pools):
+            minimum_tier = int(pool.fallback_tiers.min())
+            preferred = np.flatnonzero(
+                (pool.fallback_tiers == minimum_tier)
+                & (farmer_ranks[active_position] == 0)
+            )
+            if preferred.size != 1:
+                raise AssertionError(
+                    "Every lowest fallback tier must have exactly one rank-zero "
+                    "calendar candidate."
+                )
+            selected_indices[active_position] = int(preferred[0])
+    else:
+        selected_indices = np.asarray(preferred_indices, dtype=np.int32)
+        if selected_indices.shape != active_year_indices.shape:
+            raise ValueError(
+                "preferred_indices must contain one candidate per active year."
+            )
+
+    if year_start_days is None:
+        year_start_days = np.asarray(
+            [_year_start_day(int(year)) for year in years],
+            dtype=np.int64,
+        )
+    else:
+        year_start_days = np.asarray(year_start_days, dtype=np.int64)
+        if year_start_days.shape != years.shape:
+            raise ValueError("year_start_days must align with years.")
+
+    transition_checks = max(int(active_year_indices.size) - 1, 0)
+    for active_position in range(1, active_year_indices.size):
+        previous_year_index = int(active_year_indices[active_position - 1])
+        current_year_index = int(active_year_indices[active_position])
+        previous_candidate = int(selected_indices[active_position - 1])
+        current_candidate = int(selected_indices[active_position])
+        previous_harvest_absolute = int(year_start_days[previous_year_index]) + int(
+            farmer_pools[active_position - 1].latest_harvest[previous_candidate]
+        )
+        current_planting_absolute = int(year_start_days[current_year_index]) + int(
+            farmer_pools[active_position].earliest_planting[current_candidate]
+        )
+        if current_planting_absolute < previous_harvest_absolute:
+            return None, transition_checks
+
+    return selected_indices, transition_checks
+
+
 def _solve_mirca_calendar_path(
     *,
     farmer_pools: list[_MIRCACalendarCandidatePool],
@@ -1673,17 +2398,51 @@ def _solve_mirca_calendar_path(
     active_year_indices: np.ndarray,
     years: np.ndarray,
     maximum_allowed_tier: int,
+    eligible_indices: list[np.ndarray] | None = None,
+    year_start_days: np.ndarray | None = None,
 ) -> tuple[np.ndarray | None, int | None, np.ndarray | None, int]:
     """Solve one farmer path using candidates up to one fallback tier.
 
     Trying increasingly broad maximum tiers keeps the common local-only case
     small and fast. The first successful call also minimizes the worst fallback
     tier before the dynamic-programming cost compares tier and preference sums.
+
+    Args:
+        farmer_pools: Candidate pool for every active farmer year.
+        farmer_ranks: Complete candidate ranks through the allowed tier.
+        active_year_indices: Positions of active crops in the HRL year array.
+        years: Strictly increasing HRL years.
+        maximum_allowed_tier: Highest fallback tier included in the path.
+        eligible_indices: Optional precomputed eligible pool indices for every
+            active year.
+        year_start_days: Optional NumPy day ordinal for 1 January of each HRL
+            year.
+
+    Returns:
+        Selected candidate indices when a path exists; otherwise the failed
+        active position and reachable previous harvest days. The final integer
+        is the number of candidate transition edges represented by the search.
+
+    Raises:
+        ValueError: If optional precomputed arrays are misaligned.
+        AssertionError: If an eligible candidate has no preference rank.
     """
-    eligible_indices = [
-        np.flatnonzero(pool.fallback_tiers <= maximum_allowed_tier)
-        for pool in farmer_pools
-    ]
+    if eligible_indices is None:
+        eligible_indices = [
+            np.flatnonzero(pool.fallback_tiers <= maximum_allowed_tier)
+            for pool in farmer_pools
+        ]
+    elif len(eligible_indices) != len(farmer_pools):
+        raise ValueError("eligible_indices must contain one array per active year.")
+    if year_start_days is None:
+        year_start_days = np.asarray(
+            [_year_start_day(int(year)) for year in years],
+            dtype=np.int64,
+        )
+    else:
+        year_start_days = np.asarray(year_start_days, dtype=np.int64)
+        if year_start_days.shape != years.shape:
+            raise ValueError("year_start_days must align with years.")
     for active_position, indices in enumerate(eligible_indices):
         if not indices.size:
             return None, active_position, None, 0
@@ -1693,6 +2452,8 @@ def _solve_mirca_calendar_path(
     maximum_tier = first_pool.fallback_tiers[first_indices].astype(np.int16)
     tier_sum = first_pool.fallback_tiers[first_indices].astype(np.int32)
     rank_sum = farmer_ranks[0][first_indices].astype(np.int32)
+    if np.any(rank_sum < 0):
+        raise AssertionError("Eligible first-year candidates have no preference rank.")
     backpointers: list[np.ndarray] = [np.full(first_indices.size, -1, dtype=np.int32)]
     transitions_evaluated = 0
 
@@ -1704,18 +2465,14 @@ def _solve_mirca_calendar_path(
         previous_year_index = int(active_year_indices[active_position - 1])
         current_year_index = int(active_year_indices[active_position])
         previous_harvest_absolute = (
-            _year_start_day(int(years[previous_year_index]))
+            int(year_start_days[previous_year_index])
             + previous_pool.latest_harvest[previous_indices]
         )
         current_planting_absolute = (
-            _year_start_day(int(years[current_year_index]))
+            int(year_start_days[current_year_index])
             + current_pool.earliest_planting[current_indices]
         )
-        feasible_edges = (
-            current_planting_absolute[:, np.newaxis]
-            >= previous_harvest_absolute[np.newaxis, :]
-        )
-        transitions_evaluated += int(feasible_edges.size)
+        transitions_evaluated += int(current_indices.size * previous_indices.size)
 
         n_current_candidates = current_indices.size
         unreachable_tier = np.iinfo(np.int16).max
@@ -1740,31 +2497,65 @@ def _solve_mirca_calendar_path(
             dtype=np.int32,
         )
         reachable_previous = maximum_tier != unreachable_tier
+        reachable_positions = np.flatnonzero(reachable_previous).astype(
+            np.int32,
+            copy=False,
+        )
+        if reachable_positions.size:
+            harvest_order = np.argsort(
+                previous_harvest_absolute[reachable_positions],
+                kind="stable",
+            )
+            sorted_previous_positions = reachable_positions[harvest_order]
+            sorted_previous_harvest = previous_harvest_absolute[
+                sorted_previous_positions
+            ]
+            current_tiers = current_pool.fallback_tiers[current_indices]
+            current_ranks = farmer_ranks[active_position][current_indices]
+            if np.any(current_ranks < 0):
+                raise AssertionError(
+                    "Eligible current-year candidates have no preference rank."
+                )
 
-        for current_position, candidate_index in enumerate(current_indices):
-            predecessor_positions = np.flatnonzero(
-                feasible_edges[current_position] & reachable_previous
-            )
-            if not predecessor_positions.size:
-                continue
-            candidate_tier = int(current_pool.fallback_tiers[candidate_index])
-            candidate_rank = int(farmer_ranks[active_position][candidate_index])
-            candidate_maximum_tier = np.maximum(
-                maximum_tier[predecessor_positions],
-                candidate_tier,
-            )
-            candidate_tier_sum = tier_sum[predecessor_positions] + candidate_tier
-            candidate_rank_sum = rank_sum[predecessor_positions] + candidate_rank
-            local_best = _best_lexicographic_index(
-                candidate_maximum_tier,
-                candidate_tier_sum,
-                candidate_rank_sum,
-            )
-            predecessor_position = int(predecessor_positions[local_best])
-            next_maximum_tier[current_position] = candidate_maximum_tier[local_best]
-            next_tier_sum[current_position] = candidate_tier_sum[local_best]
-            next_rank_sum[current_position] = candidate_rank_sum[local_best]
-            current_backpointer[current_position] = predecessor_position
+            for candidate_tier_value in np.unique(current_tiers):
+                candidate_tier = int(candidate_tier_value)
+                current_positions = np.flatnonzero(
+                    current_tiers == candidate_tier_value
+                )
+                feasible_prefix_end = (
+                    np.searchsorted(
+                        sorted_previous_harvest,
+                        current_planting_absolute[current_positions],
+                        side="right",
+                    )
+                    - 1
+                )
+                feasible_current = feasible_prefix_end >= 0
+                if not np.any(feasible_current):
+                    continue
+
+                prefix_best = _lexicographic_prefix_best_predecessors(
+                    sorted_previous_positions=sorted_previous_positions,
+                    maximum_tier=maximum_tier,
+                    tier_sum=tier_sum,
+                    rank_sum=rank_sum,
+                    candidate_tier=candidate_tier,
+                )
+                feasible_positions = current_positions[feasible_current]
+                predecessor_positions = prefix_best[
+                    feasible_prefix_end[feasible_current]
+                ]
+                current_backpointer[feasible_positions] = predecessor_positions
+                next_maximum_tier[feasible_positions] = np.maximum(
+                    maximum_tier[predecessor_positions],
+                    candidate_tier,
+                )
+                next_tier_sum[feasible_positions] = (
+                    tier_sum[predecessor_positions] + candidate_tier
+                )
+                next_rank_sum[feasible_positions] = (
+                    rank_sum[predecessor_positions] + current_ranks[feasible_positions]
+                )
 
         if not np.any(current_backpointer >= 0):
             return (
@@ -1802,7 +2593,7 @@ def _solve_mirca_calendar_path(
     return selected_indices, None, None, transitions_evaluated
 
 
-def _select_mirca_calendar_sequences_for_farmers(
+def _select_mirca_calendar_sequences_for_farmers_serial(
     crop_calendar: dict[int, list[tuple[float, TwoDArrayInt32]]],
     *,
     farmer_mirca_units: np.ndarray,
@@ -1814,6 +2605,15 @@ def _select_mirca_calendar_sequences_for_farmers(
     candidate_pool_cache: dict[
         tuple[int, int, bool],
         _MIRCACalendarCandidatePool,
+    ]
+    | None = None,
+    logger: Any | None = None,
+    progress_interval: int = 100_000,
+    farmer_id_offset: int = 0,
+    calendar_index: _MIRCACalendarIndex | None = None,
+    candidate_pool_tier_cache: dict[
+        tuple[int, int, bool],
+        _MIRCACalendarPoolTierMetadata,
     ]
     | None = None,
 ) -> tuple[np.ndarray, list[dict[str, Any]], dict[str, Any]]:
@@ -1829,6 +2629,31 @@ def _select_mirca_calendar_sequences_for_farmers(
     Fallow years are omitted from the path but retained in the output. Their
     omission deliberately preserves the last active harvest constraint across
     one or more fallow years.
+
+    Args:
+        crop_calendar: Parsed MIRCA-OS calendar entries by administrative unit.
+        farmer_mirca_units: MIRCA-OS unit per compact farmer.
+        farmer_main_crops_by_year: MIRCA crop class by HRL year and farmer.
+        farmer_is_irrigated_by_year: Irrigation state by HRL year and farmer.
+        hrl_years: Strictly increasing HRL years represented by axis zero.
+        replace_crop_calendar_unit_code: Optional MIRCA unit replacements.
+        random_seed: Base seed for reproducible weighted candidate ordering.
+        candidate_pool_cache: Optional shared candidate pools keyed by farmer
+            calendar state.
+        logger: Optional logger for periodic throughput and memory diagnostics.
+        progress_interval: Farmers processed between progress messages.
+        farmer_id_offset: Global ID of the first farmer in this input slice.
+        calendar_index: Optional prebuilt MIRCA calendar lookup index.
+        candidate_pool_tier_cache: Optional prebuilt fallback-tier metadata.
+
+    Returns:
+        Calendar stack, aggregated farmer failure records, and selector
+        statistics. The calendar stack has shape
+        ``(year, farmer, calendar_row, calendar_variable)``.
+
+    Raises:
+        ValueError: If input arrays, years, or progress settings are invalid.
+        AssertionError: If an internal path or rank invariant is violated.
     """
     farmer_mirca_units = np.asarray(farmer_mirca_units, dtype=np.int32)
     crops = np.asarray(farmer_main_crops_by_year, dtype=np.int32)
@@ -1846,9 +2671,18 @@ def _select_mirca_calendar_sequences_for_farmers(
         raise ValueError("farmer_mirca_units must contain one value per farmer.")
     if years.size > 1 and np.any(np.diff(years) <= 0):
         raise ValueError("hrl_years must be strictly increasing.")
+    if progress_interval < 1:
+        raise ValueError("progress_interval must be at least 1.")
+    if farmer_id_offset < 0:
+        raise ValueError("farmer_id_offset must be non-negative.")
     if candidate_pool_cache is None:
         candidate_pool_cache = {}
-    calendar_index = _index_mirca_calendars(crop_calendar)
+    if calendar_index is None:
+        calendar_index = _index_mirca_calendars(crop_calendar)
+    year_start_days = np.asarray(
+        [_year_start_day(int(year)) for year in years],
+        dtype=np.int64,
+    )
 
     n_years, n_farmers = crops.shape
     calendar_stack = np.full(
@@ -1865,9 +2699,68 @@ def _select_mirca_calendar_sequences_for_farmers(
     farmers_using_fallback = 0
     farmers_reconsidering_earlier_choice = 0
     transitions_evaluated = 0
-    preference_cache: dict[tuple[int, int, int, bool], np.ndarray] = {}
+    preferred_path_transition_checks = 0
+    preferred_path_fast_path_farmers = 0
+    preference_candidates_ranked = 0
+    preference_candidates_available = 0
+    preference_order_count = 0
+    full_preference_orders_built = 0
+    peak_farmer_preference_cache_count = 0
+    if candidate_pool_tier_cache is None:
+        candidate_pool_tier_cache = {}
+    starting_tier_farmer_counts = np.zeros(
+        len(_CALENDAR_FALLBACK_NAMES),
+        dtype=np.int64,
+    )
+    rank_order_seconds = 0.0
+    dynamic_programming_seconds = 0.0
+    selector_started = time.perf_counter()
+    farmer_lookup_units = farmer_mirca_units.copy()
+    for original_unit, replacement_unit in replace_crop_calendar_unit_code.items():
+        farmer_lookup_units[farmer_mirca_units == int(original_unit)] = int(
+            replacement_unit
+        )
 
+    def log_selector_progress(processed_farmers: int) -> None:
+        if logger is None:
+            return
+        elapsed = time.perf_counter() - selector_started
+        rate = processed_farmers / elapsed if elapsed > 0.0 else 0.0
+        rss_mib, hwm_mib = _process_memory_mib()
+        logger.info(
+            "Joint HRL calendar selection progress: %s/%s farmers (%.1f%%) "
+            "in %.1f s (%.0f farmers/s); preferred fast paths=%s; full "
+            "preference orders=%s; ranked candidates=%s/%s; DP edges=%s; "
+            "rank/DP time=%.1f/%.1f s; failures=%s; starting tiers=%s; "
+            "RSS=%s MiB; HWM=%s MiB.",
+            processed_farmers,
+            n_farmers,
+            processed_farmers / n_farmers * 100.0 if n_farmers else 100.0,
+            elapsed,
+            rate,
+            preferred_path_fast_path_farmers,
+            full_preference_orders_built,
+            preference_candidates_ranked,
+            preference_candidates_available,
+            transitions_evaluated,
+            rank_order_seconds,
+            dynamic_programming_seconds,
+            len(failures),
+            {
+                name: int(starting_tier_farmer_counts[index])
+                for index, name in enumerate(_CALENDAR_FALLBACK_NAMES)
+            },
+            "n/a" if rss_mib is None else f"{rss_mib:.1f}",
+            "n/a" if hwm_mib is None else f"{hwm_mib:.1f}",
+        )
+
+    next_progress = progress_interval
     for farmer_id in range(n_farmers):
+        if farmer_id == next_progress:
+            log_selector_progress(farmer_id)
+            next_progress += progress_interval
+
+        global_farmer_id = farmer_id_offset + farmer_id
         active_year_indices = np.flatnonzero(crops[:, farmer_id] != -1)
         if not active_year_indices.size:
             continue
@@ -1875,14 +2768,25 @@ def _select_mirca_calendar_sequences_for_farmers(
         farmer_pools: list[_MIRCACalendarCandidatePool] = []
         farmer_ranks: list[np.ndarray] = []
         farmer_states: list[tuple[int, int, bool]] = []
+        farmer_tier_metadata: list[_MIRCACalendarPoolTierMetadata] = []
+        farmer_unique_states: list[tuple[int, int, bool]] = []
+        farmer_pool_by_state: dict[
+            tuple[int, int, bool],
+            _MIRCACalendarCandidatePool,
+        ] = {}
+        farmer_metadata_by_state: dict[
+            tuple[int, int, bool],
+            _MIRCACalendarPoolTierMetadata,
+        ] = {}
+        farmer_preferred_index_by_state: dict[tuple[int, int, bool], int] = {}
+        farmer_full_ranks_by_state: dict[tuple[int, int, bool], np.ndarray] = {}
+        farmer_minimum_tiers: list[int] = []
+        farmer_available_tiers: set[int] = set()
         missing_pool = False
+        lookup_unit = int(farmer_lookup_units[farmer_id])
         for year_index in active_year_indices:
             main_crop = int(crops[year_index, farmer_id])
             is_irrigated = bool(irrigation[year_index, farmer_id])
-            original_unit = int(farmer_mirca_units[farmer_id])
-            lookup_unit = int(
-                replace_crop_calendar_unit_code.get(original_unit, original_unit)
-            )
             state_key = (lookup_unit, main_crop, is_irrigated)
             pool = candidate_pool_cache.get(state_key)
             if pool is None:
@@ -1897,7 +2801,7 @@ def _select_mirca_calendar_sequences_for_farmers(
             if not pool.calendars.shape[0]:
                 failures.append(
                     _calendar_failure_diagnostic(
-                        farmer_id=farmer_id,
+                        farmer_id=global_farmer_id,
                         failed_year=int(years[year_index]),
                         previous_active_year=None,
                         lookup_unit=lookup_unit,
@@ -1909,38 +2813,113 @@ def _select_mirca_calendar_sequences_for_farmers(
                 )
                 missing_pool = True
                 break
-            preference_key = (farmer_id, lookup_unit, main_crop, is_irrigated)
-            ranks = preference_cache.get(preference_key)
-            if ranks is None:
-                ranks = _weighted_candidate_ranks(
+            tier_metadata = candidate_pool_tier_cache.get(state_key)
+            if tier_metadata is None:
+                tier_metadata = _mirca_calendar_pool_tier_metadata(pool)
+                candidate_pool_tier_cache[state_key] = tier_metadata
+            farmer_minimum_tiers.append(tier_metadata.minimum_tier)
+            farmer_available_tiers.update(tier_metadata.available_tiers)
+
+            if state_key not in farmer_preferred_index_by_state:
+                preferred_index = _weighted_candidate_rank_zero(
                     pool,
                     random_seed=random_seed,
-                    farmer_id=farmer_id,
+                    farmer_id=global_farmer_id,
                     lookup_unit=lookup_unit,
                     main_crop=main_crop,
                     is_irrigated=is_irrigated,
+                    fallback_tier=tier_metadata.minimum_tier,
+                    tier_indices=tier_metadata.tier_indices[tier_metadata.minimum_tier],
                 )
-                preference_cache[preference_key] = ranks
+                farmer_unique_states.append(state_key)
+                farmer_pool_by_state[state_key] = pool
+                farmer_metadata_by_state[state_key] = tier_metadata
+                farmer_preferred_index_by_state[state_key] = preferred_index
+                preference_order_count += 1
+                preference_candidates_available += int(pool.probabilities.size)
+                preference_candidates_ranked += 1
             farmer_pools.append(pool)
-            farmer_ranks.append(ranks)
             farmer_states.append(state_key)
+            farmer_tier_metadata.append(tier_metadata)
+        peak_farmer_preference_cache_count = max(
+            peak_farmer_preference_cache_count,
+            len(farmer_unique_states),
+        )
         if missing_pool:
             continue
 
-        starting_tier = max(int(pool.fallback_tiers.min()) for pool in farmer_pools)
+        starting_tier = max(farmer_minimum_tiers)
+        starting_tier_farmer_counts[starting_tier] += 1
         tiers_to_try = sorted(
-            {
-                int(tier)
-                for pool in farmer_pools
-                for tier in np.unique(pool.fallback_tiers)
-                if int(tier) >= starting_tier
-            }
+            tier for tier in farmer_available_tiers if tier >= starting_tier
         )
         selected_indices: np.ndarray | None = None
         failure_position: int | None = None
         reachable_previous_harvest: np.ndarray | None = None
         for maximum_allowed_tier in tiers_to_try:
             maximum_tier_attempt_counts[maximum_allowed_tier] += 1
+            if maximum_allowed_tier == starting_tier:
+                preferred_indices = np.asarray(
+                    [farmer_preferred_index_by_state[state] for state in farmer_states],
+                    dtype=np.int32,
+                )
+                (
+                    preferred_indices,
+                    preferred_checks,
+                ) = _preferred_mirca_calendar_path_if_feasible(
+                    farmer_pools=farmer_pools,
+                    farmer_ranks=[],
+                    active_year_indices=active_year_indices,
+                    years=years,
+                    preferred_indices=preferred_indices,
+                    year_start_days=year_start_days,
+                )
+                preferred_path_transition_checks += preferred_checks
+                if preferred_indices is not None:
+                    selected_indices = preferred_indices
+                    preferred_path_fast_path_farmers += 1
+                    break
+
+            # The independently preferred path conflicted. Build exactly the
+            # same complete weighted orders as before, but retain them only for
+            # this farmer. A wider fallback attempt extends these local orders.
+            ranking_started = time.perf_counter()
+            for state in farmer_unique_states:
+                pool = farmer_pool_by_state[state]
+                tier_metadata = farmer_metadata_by_state[state]
+                ranks = farmer_full_ranks_by_state.get(state)
+                first_full_order = ranks is None
+                if ranks is None:
+                    ranks = np.full(pool.probabilities.size, -1, dtype=np.int32)
+                    farmer_full_ranks_by_state[state] = ranks
+                    full_preference_orders_built += 1
+                ranked_before = int(np.count_nonzero(ranks >= 0))
+                state_lookup_unit, main_crop, is_irrigated = state
+                _weighted_candidate_ranks(
+                    pool,
+                    random_seed=random_seed,
+                    farmer_id=global_farmer_id,
+                    lookup_unit=state_lookup_unit,
+                    main_crop=main_crop,
+                    is_irrigated=is_irrigated,
+                    ranks=ranks,
+                    maximum_fallback_tier=maximum_allowed_tier,
+                    tier_indices_by_tier=tier_metadata.tier_indices,
+                )
+                newly_ranked = int(np.count_nonzero(ranks >= 0)) - ranked_before
+                # The rank-zero candidate was already counted when the exact
+                # fast-path draw was made. A full order recomputes that draw to
+                # preserve the legacy RNG stream, but it is still one logical
+                # candidate preference rather than an additional candidate.
+                preference_candidates_ranked += max(
+                    newly_ranked - int(first_full_order),
+                    0,
+                )
+            rank_order_seconds += time.perf_counter() - ranking_started
+            farmer_ranks = [
+                farmer_full_ranks_by_state[state] for state in farmer_states
+            ]
+            dynamic_programming_started = time.perf_counter()
             (
                 selected_indices,
                 failure_position,
@@ -1952,6 +2931,14 @@ def _select_mirca_calendar_sequences_for_farmers(
                 active_year_indices=active_year_indices,
                 years=years,
                 maximum_allowed_tier=maximum_allowed_tier,
+                eligible_indices=[
+                    metadata.eligible_indices[maximum_allowed_tier]
+                    for metadata in farmer_tier_metadata
+                ],
+                year_start_days=year_start_days,
+            )
+            dynamic_programming_seconds += (
+                time.perf_counter() - dynamic_programming_started
             )
             transitions_evaluated += evaluated_edges
             if selected_indices is not None:
@@ -1969,7 +2956,7 @@ def _select_mirca_calendar_sequences_for_farmers(
             lookup_unit, main_crop, is_irrigated = farmer_states[failure_position]
             failures.append(
                 _calendar_failure_diagnostic(
-                    farmer_id=farmer_id,
+                    farmer_id=global_farmer_id,
                     failed_year=int(years[current_year_index]),
                     previous_active_year=(
                         None
@@ -1997,17 +2984,32 @@ def _select_mirca_calendar_sequences_for_farmers(
             used_fallback |= selected_tier > 0
             if active_position < active_year_indices.size - 1:
                 minimum_available_tier = int(pool.fallback_tiers.min())
+                selected_rank = (
+                    int(farmer_ranks[active_position][candidate_index])
+                    if farmer_ranks
+                    else 0
+                )
                 reconsidered_earlier |= (
-                    selected_tier > minimum_available_tier
-                    or int(farmer_ranks[active_position][candidate_index]) > 0
+                    selected_tier > minimum_available_tier or selected_rank > 0
                 )
         farmers_using_fallback += int(used_fallback)
         farmers_reconsidering_earlier_choice += int(reconsidered_earlier)
 
+    if n_farmers:
+        log_selector_progress(n_farmers)
+
     statistics: dict[str, Any] = {
         "candidate_pool_count": len(candidate_pool_cache),
-        "preference_cache_count": len(preference_cache),
+        "preference_cache_count": preference_order_count,
+        "peak_farmer_preference_cache_count": peak_farmer_preference_cache_count,
+        "full_preference_orders_built": full_preference_orders_built,
+        "preference_candidates_ranked": preference_candidates_ranked,
+        "preference_candidates_available": preference_candidates_available,
+        "rank_order_seconds": rank_order_seconds,
+        "dynamic_programming_seconds": dynamic_programming_seconds,
         "transitions_evaluated": transitions_evaluated,
+        "preferred_path_transition_checks": preferred_path_transition_checks,
+        "preferred_path_fast_path_farmers": preferred_path_fast_path_farmers,
         "farmers_using_fallback": farmers_using_fallback,
         "farmers_reconsidering_earlier_choice": (farmers_reconsidering_earlier_choice),
         "selected_tier_counts": {
@@ -2018,8 +3020,557 @@ def _select_mirca_calendar_sequences_for_farmers(
             name: int(maximum_tier_attempt_counts[index])
             for index, name in enumerate(_CALENDAR_FALLBACK_NAMES)
         },
+        "starting_tier_farmer_counts": {
+            name: int(starting_tier_farmer_counts[index])
+            for index, name in enumerate(_CALENDAR_FALLBACK_NAMES)
+        },
     }
     return calendar_stack, failures, statistics
+
+
+@dataclass(slots=True)
+class _MIRCACalendarSequenceWorkerContext:
+    """Read-only selector inputs inherited by forked farmer workers."""
+
+    crop_calendar: dict[int, list[tuple[float, TwoDArrayInt32]]]
+    farmer_mirca_units: np.ndarray
+    crops: np.ndarray
+    irrigation: np.ndarray
+    years: np.ndarray
+    replace_crop_calendar_unit_code: dict[int, int]
+    random_seed: int
+    candidate_pool_cache: dict[
+        tuple[int, int, bool],
+        _MIRCACalendarCandidatePool,
+    ]
+    calendar_index: _MIRCACalendarIndex
+    candidate_pool_tier_cache: dict[
+        tuple[int, int, bool],
+        _MIRCACalendarPoolTierMetadata,
+    ]
+
+
+_MIRCA_CALENDAR_SEQUENCE_WORKER_CONTEXT: _MIRCACalendarSequenceWorkerContext | None = (
+    None
+)
+
+
+def _default_mirca_calendar_sequence_workers() -> int:
+    """Return a conservative worker count from the current Slurm allocation.
+
+    ``GEB_HRL_CALENDAR_WORKERS`` can explicitly override the automatically
+    detected ``SLURM_CPUS_PER_TASK`` value. Outside Slurm the selector remains
+    serial unless the override is set. At most eight workers are selected
+    automatically to limit memory-bandwidth contention.
+
+    Returns:
+        Number of worker processes to use.
+
+    Raises:
+        ValueError: If an explicit worker override is not a positive integer.
+    """
+    explicit_workers = os.environ.get("GEB_HRL_CALENDAR_WORKERS")
+    if explicit_workers is not None:
+        try:
+            worker_count = int(explicit_workers)
+        except ValueError as error:
+            raise ValueError(
+                "GEB_HRL_CALENDAR_WORKERS must be a positive integer."
+            ) from error
+        if worker_count < 1:
+            raise ValueError("GEB_HRL_CALENDAR_WORKERS must be a positive integer.")
+        return worker_count
+
+    slurm_cpus = os.environ.get("SLURM_CPUS_PER_TASK")
+    if slurm_cpus is None:
+        return 1
+    try:
+        allocated_cpus = int(slurm_cpus)
+    except ValueError:
+        return 1
+    return min(max(allocated_cpus, 1), 8)
+
+
+def _mirca_calendar_sequence_state_keys(
+    *,
+    farmer_lookup_units: np.ndarray,
+    crops: np.ndarray,
+    irrigation: np.ndarray,
+    farmer_chunk_size: int = 500_000,
+) -> set[tuple[int, int, bool]]:
+    """Collect unique farmer calendar states with bounded temporary memory.
+
+    Args:
+        farmer_lookup_units: Final MIRCA-OS lookup unit per farmer.
+        crops: MIRCA crop class by HRL year and farmer.
+        irrigation: Irrigation state by HRL year and farmer.
+        farmer_chunk_size: Farmers scanned per temporary integer-key chunk.
+
+    Returns:
+        Unique ``(unit, crop, irrigation)`` states used by active farmer years.
+
+    Raises:
+        ValueError: If arrays are misaligned or the chunk size is invalid.
+    """
+    farmer_lookup_units = np.asarray(farmer_lookup_units, dtype=np.int32)
+    crops = np.asarray(crops, dtype=np.int32)
+    irrigation = np.asarray(irrigation, dtype=bool)
+    if crops.ndim != 2 or irrigation.shape != crops.shape:
+        raise ValueError("Crop and irrigation arrays must have equal 2-D shapes.")
+    if farmer_lookup_units.shape != (crops.shape[1],):
+        raise ValueError("farmer_lookup_units must contain one value per farmer.")
+    if farmer_chunk_size < 1:
+        raise ValueError("farmer_chunk_size must be at least 1.")
+
+    minimum_active_crop: int | None = None
+    maximum_active_crop: int | None = None
+    for year_index in range(crops.shape[0]):
+        year_crops = crops[year_index]
+        active = year_crops != -1
+        if not np.any(active):
+            continue
+        active_year_crops = year_crops[active]
+        year_minimum_crop = int(active_year_crops.min())
+        year_maximum_crop = int(active_year_crops.max())
+        minimum_active_crop = (
+            year_minimum_crop
+            if minimum_active_crop is None
+            else min(minimum_active_crop, year_minimum_crop)
+        )
+        maximum_active_crop = (
+            year_maximum_crop
+            if maximum_active_crop is None
+            else max(maximum_active_crop, year_maximum_crop)
+        )
+    crop_offset = 0 if minimum_active_crop is None else -minimum_active_crop
+    crop_span = (
+        1
+        if maximum_active_crop is None or minimum_active_crop is None
+        else maximum_active_crop - minimum_active_crop + 1
+    )
+    state_keys: set[tuple[int, int, bool]] = set()
+    n_farmers = crops.shape[1]
+    for farmer_start in range(0, n_farmers, farmer_chunk_size):
+        farmer_stop = min(farmer_start + farmer_chunk_size, n_farmers)
+        unit_chunk = farmer_lookup_units[farmer_start:farmer_stop].astype(
+            np.int64,
+            copy=False,
+        )
+        for year_index in range(crops.shape[0]):
+            crop_chunk = crops[year_index, farmer_start:farmer_stop]
+            active = crop_chunk != -1
+            if not np.any(active):
+                continue
+            encoded_states = (
+                unit_chunk[active] * crop_span
+                + crop_chunk[active].astype(np.int64, copy=False)
+                + crop_offset
+            ) * 2 + irrigation[year_index, farmer_start:farmer_stop][active]
+            for encoded_state_value in np.unique(encoded_states):
+                encoded_state = int(encoded_state_value)
+                irrigated = bool(encoded_state % 2)
+                unit_crop_key = encoded_state // 2
+                state_keys.add(
+                    (
+                        unit_crop_key // crop_span,
+                        unit_crop_key % crop_span - crop_offset,
+                        irrigated,
+                    )
+                )
+    return state_keys
+
+
+def _run_mirca_calendar_sequence_worker(
+    farmer_bounds: tuple[int, int],
+) -> tuple[
+    int,
+    int,
+    np.ndarray,
+    list[dict[str, Any]],
+    dict[str, Any],
+]:
+    """Select calendars for one disjoint farmer range in a forked worker.
+
+    Args:
+        farmer_bounds: Inclusive start and exclusive stop farmer IDs.
+
+    Returns:
+        Farmer bounds, calendar chunk, failure records, and additive statistics.
+
+    Raises:
+        RuntimeError: If the worker was started without inherited context.
+    """
+    context = _MIRCA_CALENDAR_SEQUENCE_WORKER_CONTEXT
+    if context is None:
+        raise RuntimeError("MIRCA calendar worker context was not initialized.")
+    farmer_start, farmer_stop = farmer_bounds
+    calendar_stack, failures, statistics = (
+        _select_mirca_calendar_sequences_for_farmers_serial(
+            context.crop_calendar,
+            farmer_mirca_units=context.farmer_mirca_units[farmer_start:farmer_stop],
+            farmer_main_crops_by_year=context.crops[:, farmer_start:farmer_stop],
+            farmer_is_irrigated_by_year=context.irrigation[:, farmer_start:farmer_stop],
+            hrl_years=context.years,
+            replace_crop_calendar_unit_code=(context.replace_crop_calendar_unit_code),
+            random_seed=context.random_seed,
+            candidate_pool_cache=context.candidate_pool_cache,
+            logger=None,
+            progress_interval=max(farmer_stop - farmer_start + 1, 1),
+            farmer_id_offset=farmer_start,
+            calendar_index=context.calendar_index,
+            candidate_pool_tier_cache=context.candidate_pool_tier_cache,
+        )
+    )
+    return farmer_start, farmer_stop, calendar_stack, failures, statistics
+
+
+def _initialize_mirca_calendar_sequence_worker() -> None:
+    """Disable cyclic GC in a dedicated fork worker to protect shared pages.
+
+    Farmer-chunk temporaries are acyclic and are released by reference counting.
+    Disabling cyclic collection prevents a child from scanning and dirtying
+    inherited parent objects, which would otherwise increase copy-on-write RAM.
+    """
+    gc.disable()
+
+
+def _empty_mirca_calendar_sequence_statistics(
+    *,
+    candidate_pool_count: int,
+) -> dict[str, Any]:
+    """Create the additive statistics structure used by parallel reduction.
+
+    Args:
+        candidate_pool_count: Number of shared candidate pools.
+
+    Returns:
+        Zero-initialized selector statistics.
+    """
+    tier_counts = {name: 0 for name in _CALENDAR_FALLBACK_NAMES}
+    return {
+        "candidate_pool_count": candidate_pool_count,
+        "preference_cache_count": 0,
+        "peak_farmer_preference_cache_count": 0,
+        "full_preference_orders_built": 0,
+        "preference_candidates_ranked": 0,
+        "preference_candidates_available": 0,
+        "rank_order_seconds": 0.0,
+        "dynamic_programming_seconds": 0.0,
+        "transitions_evaluated": 0,
+        "preferred_path_transition_checks": 0,
+        "preferred_path_fast_path_farmers": 0,
+        "farmers_using_fallback": 0,
+        "farmers_reconsidering_earlier_choice": 0,
+        "selected_tier_counts": tier_counts.copy(),
+        "maximum_tier_attempt_counts": tier_counts.copy(),
+        "starting_tier_farmer_counts": tier_counts.copy(),
+    }
+
+
+def _merge_mirca_calendar_sequence_statistics(
+    aggregate: dict[str, Any],
+    chunk: dict[str, Any],
+) -> None:
+    """Add one worker's selector statistics to an aggregate in place.
+
+    Args:
+        aggregate: Mutable accumulated selector statistics.
+        chunk: Statistics returned by one disjoint farmer chunk.
+    """
+    additive_keys = (
+        "preference_cache_count",
+        "full_preference_orders_built",
+        "preference_candidates_ranked",
+        "preference_candidates_available",
+        "rank_order_seconds",
+        "dynamic_programming_seconds",
+        "transitions_evaluated",
+        "preferred_path_transition_checks",
+        "preferred_path_fast_path_farmers",
+        "farmers_using_fallback",
+        "farmers_reconsidering_earlier_choice",
+    )
+    for key in additive_keys:
+        aggregate[key] += chunk[key]
+    aggregate["peak_farmer_preference_cache_count"] = max(
+        aggregate["peak_farmer_preference_cache_count"],
+        chunk["peak_farmer_preference_cache_count"],
+    )
+    for tier_key in (
+        "selected_tier_counts",
+        "maximum_tier_attempt_counts",
+        "starting_tier_farmer_counts",
+    ):
+        for tier_name in _CALENDAR_FALLBACK_NAMES:
+            aggregate[tier_key][tier_name] += chunk[tier_key][tier_name]
+
+
+def _select_mirca_calendar_sequences_for_farmers(
+    crop_calendar: dict[int, list[tuple[float, TwoDArrayInt32]]],
+    *,
+    farmer_mirca_units: np.ndarray,
+    farmer_main_crops_by_year: np.ndarray,
+    farmer_is_irrigated_by_year: np.ndarray,
+    hrl_years: np.ndarray | tuple[int, ...],
+    replace_crop_calendar_unit_code: dict[int, int],
+    random_seed: int,
+    candidate_pool_cache: dict[
+        tuple[int, int, bool],
+        _MIRCACalendarCandidatePool,
+    ]
+    | None = None,
+    logger: Any | None = None,
+    progress_interval: int = 100_000,
+    n_workers: int | None = None,
+    farmer_chunk_size: int = 25_000,
+) -> tuple[np.ndarray, list[dict[str, Any]], dict[str, Any]]:
+    """Select joint farmer calendars serially or in deterministic chunks.
+
+    Each farmer is independent and every random stream is keyed by the global
+    farmer ID. Forked workers can therefore process disjoint farmer slices
+    without changing any calendar selection. Candidate pools and large input
+    arrays are prepared before forking and inherited read-only, while calendar
+    chunks are returned in bounded batches and written to their original IDs.
+
+    Args:
+        crop_calendar: Parsed MIRCA-OS calendar entries by administrative unit.
+        farmer_mirca_units: MIRCA-OS unit per compact farmer.
+        farmer_main_crops_by_year: MIRCA crop class by HRL year and farmer.
+        farmer_is_irrigated_by_year: Irrigation state by HRL year and farmer.
+        hrl_years: Strictly increasing HRL years represented by axis zero.
+        replace_crop_calendar_unit_code: Optional MIRCA unit replacements.
+        random_seed: Base seed for reproducible weighted candidate ordering.
+        candidate_pool_cache: Optional shared candidate pools.
+        logger: Optional progress logger.
+        progress_interval: Farmers completed between progress messages.
+        n_workers: Worker processes. When omitted, use the Slurm allocation,
+            capped at eight, or one worker outside Slurm.
+        farmer_chunk_size: Farmers returned by one worker task.
+
+    Returns:
+        Calendar stack, farmer failure records in ascending farmer-ID order,
+        and aggregated selector statistics.
+
+    Raises:
+        ValueError: If arrays, worker settings, or years are invalid.
+    """
+    farmer_mirca_units = np.asarray(farmer_mirca_units, dtype=np.int32)
+    crops = np.asarray(farmer_main_crops_by_year, dtype=np.int32)
+    irrigation = np.asarray(farmer_is_irrigated_by_year, dtype=bool)
+    years = np.asarray(hrl_years, dtype=np.int32)
+    if crops.ndim != 2:
+        raise ValueError("farmer_main_crops_by_year must have shape (year, farmer).")
+    if irrigation.shape != crops.shape:
+        raise ValueError(
+            "farmer_is_irrigated_by_year must match farmer_main_crops_by_year."
+        )
+    if years.ndim != 1 or years.size != crops.shape[0]:
+        raise ValueError("hrl_years must match the first crop-calendar axis.")
+    if farmer_mirca_units.shape != (crops.shape[1],):
+        raise ValueError("farmer_mirca_units must contain one value per farmer.")
+    if years.size > 1 and np.any(np.diff(years) <= 0):
+        raise ValueError("hrl_years must be strictly increasing.")
+    if progress_interval < 1:
+        raise ValueError("progress_interval must be at least 1.")
+    if farmer_chunk_size < 1:
+        raise ValueError("farmer_chunk_size must be at least 1.")
+    worker_count = (
+        _default_mirca_calendar_sequence_workers()
+        if n_workers is None
+        else int(n_workers)
+    )
+    if worker_count < 1:
+        raise ValueError("n_workers must be at least 1.")
+
+    if worker_count == 1 or crops.shape[1] <= farmer_chunk_size:
+        calendar_stack, failures, statistics = (
+            _select_mirca_calendar_sequences_for_farmers_serial(
+                crop_calendar,
+                farmer_mirca_units=farmer_mirca_units,
+                farmer_main_crops_by_year=crops,
+                farmer_is_irrigated_by_year=irrigation,
+                hrl_years=years,
+                replace_crop_calendar_unit_code=(replace_crop_calendar_unit_code),
+                random_seed=random_seed,
+                candidate_pool_cache=candidate_pool_cache,
+                logger=logger,
+                progress_interval=progress_interval,
+            )
+        )
+        statistics["worker_count"] = 1
+        statistics["farmer_chunk_size"] = int(crops.shape[1])
+        return calendar_stack, failures, statistics
+
+    if "fork" not in mp.get_all_start_methods():
+        if logger is not None:
+            logger.warning(
+                "Parallel joint HRL calendar selection requires the POSIX fork "
+                "start method; falling back to one worker."
+            )
+        return _select_mirca_calendar_sequences_for_farmers(
+            crop_calendar,
+            farmer_mirca_units=farmer_mirca_units,
+            farmer_main_crops_by_year=crops,
+            farmer_is_irrigated_by_year=irrigation,
+            hrl_years=years,
+            replace_crop_calendar_unit_code=replace_crop_calendar_unit_code,
+            random_seed=random_seed,
+            candidate_pool_cache=candidate_pool_cache,
+            logger=logger,
+            progress_interval=progress_interval,
+            n_workers=1,
+            farmer_chunk_size=farmer_chunk_size,
+        )
+
+    if candidate_pool_cache is None:
+        candidate_pool_cache = {}
+    calendar_index = _index_mirca_calendars(crop_calendar)
+    farmer_lookup_units = farmer_mirca_units.copy()
+    for original_unit, replacement_unit in replace_crop_calendar_unit_code.items():
+        farmer_lookup_units[farmer_mirca_units == int(original_unit)] = int(
+            replacement_unit
+        )
+    state_keys = _mirca_calendar_sequence_state_keys(
+        farmer_lookup_units=farmer_lookup_units,
+        crops=crops,
+        irrigation=irrigation,
+    )
+    candidate_pool_tier_cache: dict[
+        tuple[int, int, bool],
+        _MIRCACalendarPoolTierMetadata,
+    ] = {}
+    pool_preparation_started = time.perf_counter()
+    for state_key in sorted(state_keys):
+        lookup_unit, main_crop, is_irrigated = state_key
+        candidate_pool = candidate_pool_cache.get(state_key)
+        if candidate_pool is None:
+            candidate_pool = _build_mirca_calendar_candidate_pool(
+                crop_calendar,
+                lookup_unit=lookup_unit,
+                main_crop=main_crop,
+                is_irrigated=is_irrigated,
+                calendar_index=calendar_index,
+            )
+            candidate_pool_cache[state_key] = candidate_pool
+        if candidate_pool.calendars.shape[0]:
+            candidate_pool_tier_cache[state_key] = _mirca_calendar_pool_tier_metadata(
+                candidate_pool
+            )
+    if logger is not None:
+        logger.info(
+            "Joint HRL calendar selection prepared %s candidate state(s) and "
+            "%s pool(s) in %.2f s; starting %s forked worker(s) with chunks "
+            "of at most %s farmers.",
+            len(state_keys),
+            len(candidate_pool_cache),
+            time.perf_counter() - pool_preparation_started,
+            min(
+                worker_count,
+                (crops.shape[1] + farmer_chunk_size - 1) // farmer_chunk_size,
+            ),
+            farmer_chunk_size,
+        )
+
+    farmer_ranges = [
+        (farmer_start, min(farmer_start + farmer_chunk_size, crops.shape[1]))
+        for farmer_start in range(0, crops.shape[1], farmer_chunk_size)
+    ]
+    worker_count = min(worker_count, len(farmer_ranges))
+    worker_context = _MIRCACalendarSequenceWorkerContext(
+        crop_calendar=crop_calendar,
+        farmer_mirca_units=farmer_mirca_units,
+        crops=crops,
+        irrigation=irrigation,
+        years=years,
+        replace_crop_calendar_unit_code=replace_crop_calendar_unit_code,
+        random_seed=random_seed,
+        candidate_pool_cache=candidate_pool_cache,
+        calendar_index=calendar_index,
+        candidate_pool_tier_cache=candidate_pool_tier_cache,
+    )
+    global _MIRCA_CALENDAR_SEQUENCE_WORKER_CONTEXT
+    _MIRCA_CALENDAR_SEQUENCE_WORKER_CONTEXT = worker_context
+
+    n_years, n_farmers = crops.shape
+    aggregated_statistics = _empty_mirca_calendar_sequence_statistics(
+        candidate_pool_count=len(candidate_pool_cache),
+    )
+    failures: list[dict[str, Any]] = []
+    processed_farmers = 0
+    next_progress = progress_interval
+    selector_started = time.perf_counter()
+    fork_context = mp.get_context("fork")
+    try:
+        # Start workers before allocating the multi-gigabyte output so they do
+        # not inherit its page table. Input arrays and candidate pools remain
+        # shared copy-on-write.
+        with fork_context.Pool(
+            processes=worker_count,
+            initializer=_initialize_mirca_calendar_sequence_worker,
+        ) as process_pool:
+            calendar_stack = np.full(
+                (n_years, n_farmers, 3, 4),
+                -1,
+                dtype=np.int32,
+            )
+            results = process_pool.imap_unordered(
+                _run_mirca_calendar_sequence_worker,
+                farmer_ranges,
+                chunksize=1,
+            )
+            for (
+                farmer_start,
+                farmer_stop,
+                calendar_chunk,
+                chunk_failures,
+                chunk_statistics,
+            ) in results:
+                calendar_stack[:, farmer_start:farmer_stop] = calendar_chunk
+                failures.extend(chunk_failures)
+                _merge_mirca_calendar_sequence_statistics(
+                    aggregated_statistics,
+                    chunk_statistics,
+                )
+                processed_farmers += farmer_stop - farmer_start
+                if logger is not None and (
+                    processed_farmers >= next_progress or processed_farmers == n_farmers
+                ):
+                    elapsed = time.perf_counter() - selector_started
+                    rss_mib, hwm_mib = _process_memory_mib()
+                    logger.info(
+                        "Joint HRL parallel calendar progress: %s/%s farmers "
+                        "(%.1f%%) in %.1f s (%.0f farmers/s, %s workers); "
+                        "preferred fast paths=%s; full orders=%s; ranked "
+                        "candidates=%s/%s; DP edges=%s; cumulative worker "
+                        "rank/DP time=%.1f/%.1f s; failures=%s; RSS=%s MiB; "
+                        "HWM=%s MiB.",
+                        processed_farmers,
+                        n_farmers,
+                        processed_farmers / n_farmers * 100.0,
+                        elapsed,
+                        processed_farmers / elapsed if elapsed > 0.0 else 0.0,
+                        worker_count,
+                        aggregated_statistics["preferred_path_fast_path_farmers"],
+                        aggregated_statistics["full_preference_orders_built"],
+                        aggregated_statistics["preference_candidates_ranked"],
+                        aggregated_statistics["preference_candidates_available"],
+                        aggregated_statistics["transitions_evaluated"],
+                        aggregated_statistics["rank_order_seconds"],
+                        aggregated_statistics["dynamic_programming_seconds"],
+                        len(failures),
+                        "n/a" if rss_mib is None else f"{rss_mib:.1f}",
+                        "n/a" if hwm_mib is None else f"{hwm_mib:.1f}",
+                    )
+                    while next_progress <= processed_farmers:
+                        next_progress += progress_interval
+    finally:
+        _MIRCA_CALENDAR_SEQUENCE_WORKER_CONTEXT = None
+
+    failures.sort(key=lambda failure: int(failure["farmer_id"]))
+    aggregated_statistics["candidate_pool_count"] = len(candidate_pool_cache)
+    aggregated_statistics["worker_count"] = worker_count
+    aggregated_statistics["farmer_chunk_size"] = farmer_chunk_size
+    return calendar_stack, failures, aggregated_statistics
 
 
 def _sample_grid_values_at_farmers(
@@ -2296,57 +3847,90 @@ def _assign_irrigation_by_area_targets(
         target_surface_water_area = target_irrigated_area * surface_water_fraction
         target_groundwater_area = target_irrigated_area - target_surface_water_area
 
-        surface_sorted = group.sort_values(
-            ["hand_m", "farmer_id"],
-            ascending=[True, True],
+        # Select the same sorted farm prefixes as the former DataFrame sorts and
+        # Python row loops, but do the ordering and cumulative-area cutoff in
+        # NumPy. With around one million farmers this runs for thousands of
+        # groups in every HRL year, so avoiding two temporary DataFrames plus
+        # ``itertuples`` per group is material.
+        group_farmer_ids = group["farmer_id"].to_numpy(dtype=np.int32)
+        group_areas_m2 = group["area_m2"].to_numpy(dtype=np.float64)
+        group_hand_m = group["hand_m"].to_numpy(dtype=np.float64)
+        group_groundwater_depth_m = group["groundwater_depth_m"].to_numpy(
+            dtype=np.float64
         )
 
-        assigned_surface_area = 0.0
-        surface_farmer_ids: list[int] = []
+        surface_order = np.lexsort((group_farmer_ids, group_hand_m))
+        if target_surface_water_area > 0.0 and surface_order.size:
+            surface_cumulative_area = np.cumsum(
+                group_areas_m2[surface_order],
+                dtype=np.float64,
+            )
+            surface_count = min(
+                int(
+                    np.searchsorted(
+                        surface_cumulative_area,
+                        target_surface_water_area,
+                        side="left",
+                    )
+                )
+                + 1,
+                surface_order.size,
+            )
+            surface_positions = surface_order[:surface_count]
+            assigned_surface_area = float(surface_cumulative_area[surface_count - 1])
+        else:
+            surface_positions = np.empty(0, dtype=np.int64)
+            assigned_surface_area = 0.0
 
-        for row in surface_sorted.itertuples(index=False):
-            if assigned_surface_area >= target_surface_water_area:
-                break
-
-            farmer_id = int(row.farmer_id)
-            surface_farmer_ids.append(farmer_id)
-            assigned_surface_area += float(row.area_m2)
-
-        if surface_farmer_ids:
-            surface_farmer_ids_array = np.asarray(surface_farmer_ids, dtype=np.int32)
+        surface_farmer_ids = group_farmer_ids[surface_positions]
+        if surface_farmer_ids.size:
             adaptations[
-                surface_farmer_ids_array,
+                surface_farmer_ids,
                 SURFACE_IRRIGATION_EQUIPMENT,
             ] = True
-            is_irrigated[surface_farmer_ids_array] = True
+            is_irrigated[surface_farmer_ids] = True
 
-        remaining = group.loc[~group["farmer_id"].isin(surface_farmer_ids)]
-        groundwater_sorted = remaining.sort_values(
-            ["groundwater_depth_m", "farmer_id"],
-            ascending=[True, True],
-        )
-
-        assigned_groundwater_area = 0.0
-        groundwater_farmer_ids: list[int] = []
-
-        for row in groundwater_sorted.itertuples(index=False):
-            if assigned_groundwater_area >= target_groundwater_area:
-                break
-
-            farmer_id = int(row.farmer_id)
-            groundwater_farmer_ids.append(farmer_id)
-            assigned_groundwater_area += float(row.area_m2)
-
-        if groundwater_farmer_ids:
-            groundwater_farmer_ids_array = np.asarray(
-                groundwater_farmer_ids,
-                dtype=np.int32,
+        remaining_mask = np.ones(group_farmer_ids.size, dtype=bool)
+        remaining_mask[surface_positions] = False
+        remaining_positions = np.flatnonzero(remaining_mask)
+        groundwater_order_within_remaining = np.lexsort(
+            (
+                group_farmer_ids[remaining_positions],
+                group_groundwater_depth_m[remaining_positions],
             )
+        )
+        groundwater_order = remaining_positions[groundwater_order_within_remaining]
+        if target_groundwater_area > 0.0 and groundwater_order.size:
+            groundwater_cumulative_area = np.cumsum(
+                group_areas_m2[groundwater_order],
+                dtype=np.float64,
+            )
+            groundwater_count = min(
+                int(
+                    np.searchsorted(
+                        groundwater_cumulative_area,
+                        target_groundwater_area,
+                        side="left",
+                    )
+                )
+                + 1,
+                groundwater_order.size,
+            )
+            groundwater_positions = groundwater_order[:groundwater_count]
+            assigned_groundwater_area = float(
+                groundwater_cumulative_area[groundwater_count - 1]
+            )
+        else:
+            groundwater_positions = np.empty(0, dtype=np.int64)
+            assigned_groundwater_area = 0.0
+
+        groundwater_farmer_ids = group_farmer_ids[groundwater_positions]
+        if groundwater_farmer_ids.size:
             adaptations[
-                groundwater_farmer_ids_array,
+                groundwater_farmer_ids,
                 WELL_ADAPTATION,
             ] = True
-            is_irrigated[groundwater_farmer_ids_array] = True
+            is_irrigated[groundwater_farmer_ids] = True
 
         if (
             target_irrigated_area > 0
@@ -4900,7 +6484,16 @@ class Europe(GEBModel):
         minimum_area_ratio: float = 0.01,
         replace_crop_calendar_unit_code: dict[int, int] | None = None,
         multiple_years: bool = False,
-        hrl_years: tuple[int, ...] = (2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024),
+        hrl_years: tuple[int, ...] = (
+            2017,
+            2018,
+            2019,
+            2020,
+            2021,
+            2022,
+            2023,
+            2024,
+        ),
         reduce_crops: bool = False,
         random_seed: int = 42,
     ) -> None:
@@ -4960,7 +6553,9 @@ class Europe(GEBModel):
                 ``hrl_years`` and accumulate irrigation adaptations only for farmers
                 with missing crop histories in previous years.
             hrl_years: HRL years processed when ``multiple_years`` is True.
-            reduce_crops: Replace rice by a different crop in region 4.
+            reduce_crops: Deprecated compatibility argument. Broad crop
+                replacement is no longer performed; Europe_004's rice calendars
+                are handled automatically and specifically.
             random_seed: Base seed for reproducible area-weighted MIRCA-OS calendar
                 selection.
 
@@ -4984,6 +6579,15 @@ class Europe(GEBModel):
             raise ValueError(
                 "hrl_years must be strictly increasing for sequential crop-calendar "
                 f"assignment. Got {list(years_to_process)}."
+            )
+
+        is_europe_004_model = _is_europe_004_model_root(self.root)
+        if reduce_crops:
+            self.logger.warning(
+                "setup_farmer_crop_calendar_from_HRL.reduce_crops is deprecated "
+                "and no longer enables general crop replacement. The argument "
+                "is accepted for configuration compatibility; only the automatic "
+                "rice-free calendar exception for Europe_004 can change calendars."
             )
 
         n_farmers = self.array["agents/farmers/region_id"].size
@@ -5064,12 +6668,18 @@ class Europe(GEBModel):
 
         phase_timer = time.perf_counter()
         mirca_units = mirca_unit_geom["unit_code"].astype(np.int64).tolist()
-        rainfed_calendar_source = rainfed_calendar_source.loc[
-            rainfed_calendar_source["unit_code"].isin(mirca_units)
-        ]
-        irrigated_calendar_source = irrigated_calendar_source.loc[
-            irrigated_calendar_source["unit_code"].isin(mirca_units)
-        ]
+        rainfed_calendar_source = _prepare_mirca_calendar_source_for_parsing(
+            rainfed_calendar_source,
+            mirca_units=mirca_units,
+            source_name="rainfed",
+            logger=self.logger,
+        )
+        irrigated_calendar_source = _prepare_mirca_calendar_source_for_parsing(
+            irrigated_calendar_source,
+            mirca_units=mirca_units,
+            source_name="irrigated",
+            logger=self.logger,
+        )
 
         crop_calendar: dict[int, list[tuple[float, TwoDArrayInt32]]] = {}
         crop_calendar = parse_MIRCA_crop_calendar(
@@ -5245,12 +6855,6 @@ class Europe(GEBModel):
 
         if multiple_years:
             years_array = np.asarray(years_to_process, dtype=np.int32)
-
-            crop_calendar_stack = np.full(
-                (years_array.size, n_farmers, 3, 4),
-                -1,
-                dtype=np.int32,
-            )
 
             # Persistent irrigation is stored only once. Later years may add farmers
             # only if their earlier HRL years did not contain a valid crop.
@@ -5447,21 +7051,32 @@ class Europe(GEBModel):
                 check_crop_calendar(crop_calendar_per_farmer)
                 validation_seconds = time.perf_counter() - phase_timer
 
-                # For region 4 there are a few instances of rice cultivation but
-                # no prices.
-                if reduce_crops:
-                    replaced_value = [MIRCA_OS_CROP_CLASS_MAP["Rice"]]
-                    most_common_check = [
-                        crop_value
-                        for crop_value in MIRCA_OS_CROP_CLASS_MAP.values()
-                        if crop_value not in replaced_value
-                    ]
-                    crop_calendar_per_farmer = replace_crop(
-                        crop_calendar_per_farmer,
-                        most_common_check,
-                        replaced_value,
+                if is_europe_004_model:
+                    single_year_stack, replacement_statistics = (
+                        _replace_europe_004_rare_rice_sequence(
+                            crop_calendar_per_farmer[None, :, :, :],
+                            farmer_main_crops[None, :],
+                            farmer_region_ids,
+                            rice_crop_id=MIRCA_OS_CROP_CLASS_MAP["Rice"],
+                        )
                     )
+                    crop_calendar_per_farmer = single_year_stack[0]
+                    for regional_replacement in replacement_statistics["regions"]:
+                        self.logger.info(
+                            "Europe_004 rare-rice exception replaced %s farmer(s) "
+                            "in region %s with its most common rice-free calendar, "
+                            "copied from farmer %s (%s of %s eligible farmers).",
+                            regional_replacement["rice_farmer_count"],
+                            regional_replacement["region_id"],
+                            regional_replacement["donor_farmer_id"],
+                            regional_replacement["modal_sequence_count"],
+                            regional_replacement["candidate_farmer_count"],
+                        )
                     check_crop_calendar(crop_calendar_per_farmer)
+                    _assert_europe_004_calendar_has_no_rice(
+                        single_year_stack,
+                        rice_crop_id=MIRCA_OS_CROP_CLASS_MAP["Rice"],
+                    )
 
             year_seconds = time.perf_counter() - year_timer
             timing_rows.append(
@@ -5525,17 +7140,31 @@ class Europe(GEBModel):
                 replace_crop_calendar_unit_code=replace_crop_calendar_unit_code,
                 random_seed=random_seed,
                 candidate_pool_cache=sequence_candidate_pool_cache,
+                logger=self.logger,
             )
             sequence_selection_seconds = time.perf_counter() - sequence_timer
             self.logger.info(
-                "Joint HRL calendar selection evaluated %s candidate transition "
-                "edges for %s farmer(s) in %.2f s; candidate pools=%s; farmer "
-                "preference orders=%s.",
+                "Joint HRL calendar selection evaluated %s dynamic-programming "
+                "candidate transition edges plus %s preferred-path checks for "
+                "%s farmer(s) in %.2f s; preferred-path fast paths=%s; "
+                "candidate pools=%s; farmer preference orders=%s; lazily "
+                "ranked candidates=%s/%s; complete orders built=%s; peak "
+                "per-farmer preference cache=%s; workers=%s; cumulative "
+                "worker rank/DP time=%.1f/%.1f s.",
                 sequence_statistics["transitions_evaluated"],
+                sequence_statistics["preferred_path_transition_checks"],
                 n_farmers,
                 sequence_selection_seconds,
+                sequence_statistics["preferred_path_fast_path_farmers"],
                 sequence_statistics["candidate_pool_count"],
                 sequence_statistics["preference_cache_count"],
+                sequence_statistics["preference_candidates_ranked"],
+                sequence_statistics["preference_candidates_available"],
+                sequence_statistics["full_preference_orders_built"],
+                sequence_statistics["peak_farmer_preference_cache_count"],
+                sequence_statistics["worker_count"],
+                sequence_statistics["rank_order_seconds"],
+                sequence_statistics["dynamic_programming_seconds"],
             )
             self.logger.info(
                 "Joint HRL calendar fallback use by selected farmer-year: %s; "
@@ -5606,44 +7235,44 @@ class Europe(GEBModel):
             for year_index in range(years_array.size):
                 check_crop_calendar(crop_calendar_stack[year_index])
 
-            # Preserve the existing optional rice-replacement behavior while
-            # applying it sequentially so replacements also respect prior harvests.
-            if reduce_crops:
-                replaced_value = [MIRCA_OS_CROP_CLASS_MAP["Rice"]]
-                most_common_check = [
-                    crop_value
-                    for crop_value in MIRCA_OS_CROP_CLASS_MAP.values()
-                    if crop_value not in replaced_value
-                ]
-                replacement_last_harvest = np.full(
-                    n_farmers,
-                    _NO_HARVEST_DAY,
-                    dtype=np.int64,
+            if is_europe_004_model:
+                crop_calendar_stack, replacement_statistics = (
+                    _replace_europe_004_rare_rice_sequence(
+                        crop_calendar_stack,
+                        farmer_main_crops_by_year,
+                        farmer_region_ids,
+                        rice_crop_id=MIRCA_OS_CROP_CLASS_MAP["Rice"],
+                    )
                 )
-                for year_index, current_hrl_year in enumerate(years_array):
-                    minimum_planting_days = _minimum_planting_days_after_last_harvest(
-                        replacement_last_harvest,
-                        current_hrl_year=int(current_hrl_year),
+                for regional_replacement in replacement_statistics["regions"]:
+                    self.logger.info(
+                        "Europe_004 rare-rice exception replaced %s farmer(s)' "
+                        "complete calendar sequences in region %s with its most "
+                        "common rice-free sequence, copied from farmer %s (%s "
+                        "of %s eligible farmers).",
+                        regional_replacement["rice_farmer_count"],
+                        regional_replacement["region_id"],
+                        regional_replacement["donor_farmer_id"],
+                        regional_replacement["modal_sequence_count"],
+                        regional_replacement["candidate_farmer_count"],
                     )
-                    crop_calendar_stack[year_index] = replace_crop(
-                        crop_calendar_stack[year_index],
-                        most_common_check,
-                        replaced_value,
-                        minimum_planting_days=minimum_planting_days,
-                    )
-                    check_crop_calendar(crop_calendar_stack[year_index])
-                    has_active, _, latest_harvest = _calendar_timing_offsets(
-                        crop_calendar_stack[year_index]
-                    )
-                    replacement_last_harvest[has_active] = (
-                        _year_start_day(int(current_hrl_year))
-                        + latest_harvest[has_active]
-                    )
+                if replacement_statistics["rice_farmer_count"]:
+                    for year_index in range(years_array.size):
+                        check_crop_calendar(crop_calendar_stack[year_index])
 
             final_sequence_summary = check_crop_calendar_sequence(
                 crop_calendar_stack,
                 years_array,
             )
+            if is_europe_004_model:
+                _assert_europe_004_calendar_has_no_rice(
+                    crop_calendar_stack,
+                    rice_crop_id=MIRCA_OS_CROP_CLASS_MAP["Rice"],
+                )
+                self.logger.info(
+                    "Europe_004 final crop-calendar check passed: no rice "
+                    "calendar rows remain."
+                )
             self.logger.info(
                 "Final HRL crop-calendar sequence validation passed: %s "
                 "transitions checked; %s same-day harvest/plant transitions; "
@@ -5693,7 +7322,7 @@ class Europe(GEBModel):
                 "HRL farmer crop-calendar timing by year:\n%s",
                 timing_table.round(2).to_string(index=False),
             )
-        final_selection_cache_size = (
+        final_preference_order_count = (
             int(sequence_statistics["preference_cache_count"])
             if multiple_years
             else len(calendar_selection_cache)
@@ -5705,12 +7334,12 @@ class Europe(GEBModel):
         )
         self.logger.info(
             "HRL farmer crop-calendar setup finished for %s farmer(s) and %s year(s) "
-            "in %.2f s; final selection cache=%s farmer-state entries; candidate "
+            "in %.2f s; farmer-state preference orders=%s; candidate "
             "pool cache=%s shared states.",
             n_farmers,
             len(years_to_process),
             total_seconds,
-            final_selection_cache_size,
+            final_preference_order_count,
             final_candidate_pool_cache_size,
         )
 

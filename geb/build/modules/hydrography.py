@@ -48,6 +48,7 @@ from geb.workflows.raster import (
     calculate_height_m,
     calculate_width_m,
     full_like,
+    interpolate_na_2d,
     rasterize_like,
     snap_to_grid,
 )
@@ -492,14 +493,25 @@ class Hydrography(BuildModelBase):
 
             The resulting Manning's coefficient is then set as the `routing/mannings` attribute of the grid using the
             `set_grid()` method.
+        Raises:
+            ValueError: If subgrid values remain invalid after interpolation.
         """
         subgrid_elevation: xr.DataArray = self.subgrid["landsurface/elevation"]
+        subgrid_elevation_data = subgrid_elevation.values
+
+        valid_elevation = xr.DataArray(
+            np.isfinite(subgrid_elevation_data),
+            coords=subgrid_elevation.coords,
+            dims=subgrid_elevation.dims,
+        )
+
         slope_high_res: npt.NDArray[np.float64] = pyflwdir.dem.slope(
-            subgrid_elevation.values,
+            subgrid_elevation_data,
             nodata=np.nan,
             latlon=True,
             transform=subgrid_elevation.rio.transform(recalc=True),
         )
+
         slope_high_res_grid = xr.DataArray(
             slope_high_res,
             coords=subgrid_elevation.coords,
@@ -507,22 +519,50 @@ class Hydrography(BuildModelBase):
             name="landsurface/slope",
         )
 
+        # Treat non-finite slope values as missing and retain nodata outside
+        # the valid elevation domain.
+        slope_high_res_grid = slope_high_res_grid.where(
+            valid_elevation & np.isfinite(slope_high_res_grid)
+        )
+        slope_high_res_grid.attrs["_FillValue"] = np.nan
+
+        missing_slope_before = int(
+            (valid_elevation & slope_high_res_grid.isnull()).sum().item()
+        )
+
+        if missing_slope_before:
+            slope_high_res_grid = interpolate_na_2d(
+                slope_high_res_grid,
+                mask=valid_elevation,
+            )
+            self.logger.warning(
+                "Interpolated %d missing subgrid slope cell(s)",
+                missing_slope_before,
+            )
+
+        remaining_missing_slope = int(
+            (valid_elevation & ~np.isfinite(slope_high_res_grid)).sum().item()
+        )
+
+        if remaining_missing_slope:
+            raise ValueError(
+                f"{remaining_missing_slope} subgrid slope cell(s) remain invalid "
+                "where elevation is finite after interpolation"
+            )
+
         if subgrid_elevation.rio.crs is not None:
             slope_high_res_grid = slope_high_res_grid.rio.write_crs(
                 subgrid_elevation.rio.crs
             )
 
-        slope_high_res_grid.attrs["_FillValue"] = np.nan
-
         self.set_subgrid(
             slope_high_res_grid,
             name="landsurface/slope",
         )
-        surface_area_ratio_high_res = xr.DataArray(
-            np.sqrt(1 + slope_high_res**2),
-            coords=subgrid_elevation.coords,
-            dims=subgrid_elevation.dims,
-        )
+
+        # Use the interpolated slope so surface-area ratio and farmer slope
+        # aggregation are based on the same data.
+        surface_area_ratio_high_res: xr.DataArray = np.sqrt(1 + slope_high_res_grid**2)
 
         surface_area_ratio: xr.DataArray = surface_area_ratio_high_res.coarsen(
             x=self.subgrid_factor,
@@ -532,34 +572,49 @@ class Hydrography(BuildModelBase):
         ).mean()  # ty:ignore[unresolved-attribute]
         surface_area_ratio.attrs["_FillValue"] = np.nan
 
-        surface_area_ratio: xr.DataArray = snap_to_grid(
-            surface_area_ratio, self.grid["mask"], relative_tolerance=0.03
+        surface_area_ratio = snap_to_grid(
+            surface_area_ratio,
+            self.grid["mask"],
+            relative_tolerance=0.03,
         )
 
-        self.set_grid(surface_area_ratio, name="landsurface/surface_area_ratio")
+        self.set_grid(
+            surface_area_ratio,
+            name="landsurface/surface_area_ratio",
+        )
 
         a: xr.DataArray = (2 * self.grid["cell_area"]) / self.grid[
             "routing/upstream_area_m2"
         ]
-        a: xr.DataArray = xr.where(a < 1, a, 1, keep_attrs=True)
+        a = xr.where(a < 1, a, 1, keep_attrs=True)
+
         b: xr.DataArray = self.grid["landsurface/elevation_min_m"] / 2000
-        b: xr.DataArray = xr.where(b < 1, b, 1, keep_attrs=True)
+        b = xr.where(b < 1, b, 1, keep_attrs=True)
 
         mannings: xr.DataArray = 0.025 + 0.015 * a + 0.030 * b
         mannings.attrs["_FillValue"] = np.nan
 
-        self.set_grid(mannings, "routing/mannings")
+        self.set_grid(
+            mannings,
+            name="routing/mannings",
+        )
 
-        drainage_density = (
+        drainage_density: xr.DataArray = (
             self.grid["drainage/streams_length_m"] / self.grid["cell_area"]
         )
 
-        hillslope_length = 1 / (2 * drainage_density)
+        hillslope_length: xr.DataArray = 1 / (2 * drainage_density)
         hillslope_length = xr.where(
-            hillslope_length < 1000, hillslope_length, 1000
-        )  # cap hill slope length at 1000 m
+            hillslope_length < 1000,
+            hillslope_length,
+            1000,
+        )
         hillslope_length.attrs["_FillValue"] = np.nan
-        self.set_grid(hillslope_length, name="drainage/hillslope_length_m")
+
+        self.set_grid(
+            hillslope_length,
+            name="drainage/hillslope_length_m",
+        )
 
     @build_method(required=False)
     def setup_mannings(self) -> None:

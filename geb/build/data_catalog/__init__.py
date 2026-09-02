@@ -56,6 +56,7 @@ from .sword import Sword
 from .undp import HumanDevelopmentIndex
 from .copernicus_hrl import CopernicusDataSpace
 from .why_map import WhyMap
+from .world_bank_pink_sheet import WorldBankPinkSheetData
 from .world_bank import WorldBankData
 from .worldfloods import WorldFloodsV2
 
@@ -763,6 +764,34 @@ data_catalog: dict[str, dict[str, Any]] = {
             "author": "The World Bank",
             "license": "CC BY 4.0",
             "url": "https://data.worldbank.org/indicator/PA.NUS.FCRF",
+        },
+    },
+    "world_bank_wholesale_price_index": {
+        "adapter": WorldBankData(
+            folder="world_bank_wholesale_price_index",
+            local_version=1,
+            filename="wb_wholesale_price_index.csv",
+            cache="global",
+        ),
+        "url": "https://api.worldbank.org/v2/en/indicator/FP.WPI.TOTL?downloadformat=csv",
+    },
+    "world_bank_commodity_prices": {
+        "adapter": WorldBankPinkSheetData(
+            folder="world_bank_commodity_prices",
+            local_version=1,
+            filename="world_bank_commodity_prices.xlsx",
+            cache="global",
+        ),
+        "url": (
+            "https://thedocs.worldbank.org/en/doc/"
+            "74e8be41ceb20fa0da750cda2f6b9e4e-0050012026/"
+            "related/CMO-Historical-Data-Annual.xlsx"
+        ),
+        "source": {
+            "name": "World Bank Commodity Price Data (Pink Sheet)",
+            "author": "The World Bank",
+            "license": "CC BY 4.0",
+            "url": "https://www.worldbank.org/en/research/commodity-markets",
         },
     },
     "un_hdi": {
