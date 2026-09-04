@@ -932,6 +932,7 @@ def create_validation_df(
     apply_upstream_area_correction: bool,
     upstream_area_ratio: float,
     timezone_utc_offset: float = 0.0,
+    daily_discharge_start_hour_local: float = 0.0,
 ) -> pd.DataFrame:
     """Align observed and simulated discharge for one gauging station.
 
@@ -949,14 +950,19 @@ def create_validation_df(
             aggregation. Sub-daily observations are not shifted because their
             timestamp convention is not defined by the GRDC daily product.
             Defaults to 0 (UTC).
+        daily_discharge_start_hour_local: Start of the labelled observation
+            day in fixed local standard time (hours after midnight). UK NRFA
+            daily flows normally use 9, representing 09:00 GMT through 08:59
+            GMT the following day. Defaults to 0 (local calendar day); null
+            values in legacy merged inputs are also interpreted as 0.
 
     Returns:
         Aligned observed and simulated discharge (m3/s).
 
     Raises:
         FileNotFoundError: If the hydrology routing directory does not exist.
-        ValueError: If the GEB discharge data contain NaN values or the fixed UTC
-            offset is non-finite or outside the valid range from UTC-12 to UTC+14.
+        ValueError: If the GEB discharge data contain NaN values, the fixed UTC
+            offset is invalid, or the daily-window start is outside 0 to 24 hours.
     """
     report_folder: Path = output_folder / "report"
     routing_dir: Path = report_folder / "hydrology.routing"
@@ -1004,6 +1010,15 @@ def create_validation_df(
         raise ValueError(
             "Station UTC offset must be finite and between UTC-12 and UTC+14 hours."
         )
+    if pd.isna(daily_discharge_start_hour_local):
+        daily_discharge_start_hour_local = 0.0
+    if not np.isfinite(daily_discharge_start_hour_local) or not (
+        0.0 <= daily_discharge_start_hour_local < 24.0
+    ):
+        raise ValueError(
+            "Daily discharge window start must be finite and between 0 "
+            "(inclusive) and 24 (exclusive) hours."
+        )
 
     observed_frequency: Any = observed_index.freq
     simulated_timestep: pd.Timedelta = simulated_index[1] - simulated_index[0]
@@ -1016,12 +1031,15 @@ def create_validation_df(
             "Observed discharge timestep must be a multiple of the simulated timestep."
         )
 
-    if observed_timestep >= pd.Timedelta(days=1) and timezone_utc_offset != 0.0:
-        # GRDC daily values represent fixed-offset local calendar days. For
-        # UTC+3, adding three hours makes the bin labelled January 1 span
-        # December 31 21:00 UTC through January 1 20:59 UTC.
+    daily_index_shift_hours: float = (
+        timezone_utc_offset - daily_discharge_start_hour_local
+    )
+    if observed_timestep >= pd.Timedelta(days=1) and daily_index_shift_hours != 0.0:
+        # First express timestamps in fixed local standard time, then move the
+        # source-specific daily boundary to midnight for pandas resampling.
+        # UK NRFA's 09:00 GMT boundary therefore becomes a -9 hour shift.
         simulated_discharge.index = simulated_discharge.index + pd.Timedelta(
-            hours=timezone_utc_offset
+            hours=daily_index_shift_hours
         )
 
     simulated_discharge = simulated_discharge.resample(
@@ -1903,8 +1921,21 @@ class Hydrology:
             for frequency in DISCHARGE_OBSERVATION_FREQUENCIES
         }
 
-        snapped_locations = read_geom(
+        snapped_locations: gpd.GeoDataFrame = read_geom(
             self.model.files["geom"]["discharge/discharge_snapped_locations"]
+        )
+        discharge_time_metadata_columns: list[str] = [
+            "timezone_utc_offset",
+            "daily_discharge_start_hour_local",
+        ]
+        # A merged model can combine newly built regions with legacy regions
+        # whose added metadata columns are absent or null.
+        snapped_locations[discharge_time_metadata_columns] = (
+            snapped_locations.reindex(
+                columns=discharge_time_metadata_columns, fill_value=0.0
+            )
+            .fillna(0.0)
+            .astype(float)
         )
 
         run_output_folder: Path = (
@@ -1945,6 +1976,12 @@ class Hydrology:
                 station_coordinates: tuple[float, float] = (
                     station.discharge_observations_station_coords
                 )
+                snapped_grid_coordinates: tuple[float, float] = tuple(
+                    station.snapped_grid_pixel_lonlat
+                )
+                closest_river_coordinates: tuple[float, float] = tuple(
+                    station.closest_point_coords
+                )
                 upstream_area_ratio: float = float(
                     station.discharge_observations_to_GEB_upstream_area_ratio
                 )
@@ -1954,10 +1991,9 @@ class Hydrology:
                     # errors, so the default benchmark excludes them from summary scores.
                     continue
 
-                timezone_utc_offset: float = float(
-                    station.timezone_utc_offset
-                    if "timezone_utc_offset" in snapped_locations.columns
-                    else 0.0
+                timezone_utc_offset: float = float(station["timezone_utc_offset"])
+                daily_discharge_start_hour_local: float = float(
+                    station["daily_discharge_start_hour_local"]
                 )
 
                 try:
@@ -1968,6 +2004,7 @@ class Hydrology:
                         correct_discharge_observations,
                         upstream_area_ratio,
                         timezone_utc_offset=timezone_utc_offset,
+                        daily_discharge_start_hour_local=daily_discharge_start_hour_local,
                     )
                 except FileNotFoundError:
                     self.model.logger.warning(
@@ -2032,6 +2069,8 @@ class Hydrology:
                                 validation_df=validation_df,
                                 station_name=station_name,
                                 upstream_area_ratio=upstream_area_ratio,
+                                timezone_utc_offset=timezone_utc_offset,
+                                daily_discharge_start_hour_local=daily_discharge_start_hour_local,
                                 metrics=discharge_metric_values,
                                 frequency=frequency_label,
                             ),
@@ -2043,9 +2082,26 @@ class Hydrology:
                     "station_name": station_name,
                     "station_longitude": station_coordinates[0],
                     "station_latitude": station_coordinates[1],
+                    "snapped_grid_longitude": snapped_grid_coordinates[0],
+                    "snapped_grid_latitude": snapped_grid_coordinates[1],
+                    "closest_river_longitude": closest_river_coordinates[0],
+                    "closest_river_latitude": closest_river_coordinates[1],
+                    "upstream_area_GRDC": float(
+                        station.discharge_observations_upstream_area_m2
+                    ),
+                    "upstream_area_GEB_subgrid": float(
+                        station.GEB_upstream_area_from_subgrid
+                    ),
+                    "snapping_distance_degrees": float(
+                        station.snapping_distance_degrees
+                    ),
                     "discharge_observations_to_GEB_upstream_area_ratio": upstream_area_ratio,
                     "upstream_area_GEB": geb_upstream_area_m2,
                     "timezone_utc_offset": timezone_utc_offset,
+                    "daily_discharge_start_hour_local": daily_discharge_start_hour_local,
+                    "discharge_observations_country_code": station.get(
+                        "discharge_observations_country_code", ""
+                    ),
                     **{
                         f"{metric_name}_{frequency_label}": metric_value
                         for metric_name, metric_value in discharge_metric_values.items()
@@ -2341,6 +2397,19 @@ class Hydrology:
             )
 
         evaluation_gdf: gpd.GeoDataFrame = gpd.read_parquet(metrics_path)
+        discharge_time_metadata_columns: list[str] = [
+            "timezone_utc_offset",
+            "daily_discharge_start_hour_local",
+        ]
+        # Keep dashboards made from older metrics files compatible with the
+        # explicit daily-window metadata.
+        evaluation_gdf[discharge_time_metadata_columns] = (
+            evaluation_gdf.reindex(
+                columns=discharge_time_metadata_columns, fill_value=0.0
+            )
+            .fillna(0.0)
+            .astype(float)
+        )
         n_stations: int = len(evaluation_gdf)
         if evaluation_gdf.empty:
             self.model.logger.warning(
@@ -2488,8 +2557,9 @@ class Hydrology:
                     observed_discharge_series.columns = ["Q"]
                 observed_discharge_series.name = "Q"
 
-                timezone_utc_offset: float = float(
-                    station_row.get("timezone_utc_offset", 0.0) or 0.0
+                timezone_utc_offset: float = float(station_row["timezone_utc_offset"])
+                daily_discharge_start_hour_local: float = float(
+                    station_row["daily_discharge_start_hour_local"]
                 )
                 try:
                     validation_df: pd.DataFrame = create_validation_df(
@@ -2499,6 +2569,7 @@ class Hydrology:
                         apply_upstream_area_correction=correct_discharge_observations,
                         upstream_area_ratio=upstream_area_ratio,
                         timezone_utc_offset=timezone_utc_offset,
+                        daily_discharge_start_hour_local=daily_discharge_start_hour_local,
                     )
                     metrics: dict[str, float] = {
                         metric_name: float(
@@ -2515,6 +2586,8 @@ class Hydrology:
                                 validation_df=validation_df,
                                 station_name=str(station_row["station_name"]),
                                 upstream_area_ratio=upstream_area_ratio,
+                                timezone_utc_offset=timezone_utc_offset,
+                                daily_discharge_start_hour_local=daily_discharge_start_hour_local,
                                 metrics=metrics,
                                 frequency=frequency_label,
                             ),

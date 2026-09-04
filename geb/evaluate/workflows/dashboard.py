@@ -430,8 +430,10 @@ def build_discharge_dashboard_chart_data(
     validation_df: pd.DataFrame,
     station_name: str,
     upstream_area_ratio: float,
+    timezone_utc_offset: float,
     metrics: dict[str, float],
     frequency: str,
+    daily_discharge_start_hour_local: float = 0.0,
 ) -> dict[str, Any]:
     """Build compact interactive chart data for one discharge dashboard popup.
 
@@ -439,9 +441,14 @@ def build_discharge_dashboard_chart_data(
         validation_df: Observed/simulated discharge dataframe (m3/s).
         station_name: Human-readable station name.
         upstream_area_ratio: Observed-to-model upstream-area ratio (dimensionless).
+        timezone_utc_offset: Fixed GRDC UTC offset used to construct local
+            calendar days (hours). The source offset does not vary for daylight
+            saving time.
         metrics: Discharge skill metrics such as ``KGE``, ``NSE``, and ``R2``
             (dimensionless).
         frequency: Data frequency label, for example ``"daily"`` or ``"hourly"``.
+        daily_discharge_start_hour_local: Start of the labelled observation day
+            in fixed local standard time (hours after midnight).
 
     Returns:
         Compact chart payload with discharge values (m3/s).
@@ -465,6 +472,10 @@ def build_discharge_dashboard_chart_data(
             "RMSE": _as_finite_float(metrics.get("RMSE")),
             "RRMSE": _as_finite_float(metrics.get("RRMSE")),
             "upstreamAreaRatio": _as_finite_float(upstream_area_ratio),
+            "timezoneUtcOffset": _as_finite_float(timezone_utc_offset),
+            "dailyWindowStartHourLocal": _as_finite_float(
+                daily_discharge_start_hour_local
+            ),
         },
         "timeseries": _build_timeseries_payload(validation_df),
         "returnPeriods": {
@@ -698,7 +709,9 @@ def _inject_popup_chart_script(
       metricHtml('r', metrics.KGE_correlation) + metricHtml('β', metrics.KGE_bias_ratio) +
       metricHtml('α', metrics.KGE_variability_ratio) + metricHtml('NSE', metrics.NSE) +
       metricHtml('r²', metrics.R2) + metricHtml('RMSE', metrics.RMSE) +
-      metricHtml('RRMSE', metrics.RRMSE) + metricHtml('Area ratio', metrics.upstreamAreaRatio) + '</div>' +
+      metricHtml('RRMSE', metrics.RRMSE) + metricHtml('Area ratio', metrics.upstreamAreaRatio) +
+      metricHtml('Fixed UTC offset (h)', metrics.timezoneUtcOffset) +
+      metricHtml('Daily window start, local standard time (h)', metrics.dailyWindowStartHourLocal) + '</div>' +
       '<div class="geb-popup__chart-title">Return periods</div>' + makeChartDiv('geb-return-' + safeStationId) +
       '<div class="geb-popup__chart-title">Discharge time series</div>' + makeChartDiv('geb-time-' + safeStationId);
     ensurePlotly(function(loaded) {
@@ -1253,6 +1266,186 @@ def _add_waterbody_layers(
         waterbody_layer.add_to(discharge_map)
 
 
+def format_fixed_utc_offset(offset_hours: float) -> str:
+    """Format a fixed UTC offset for dashboard labels.
+
+    Args:
+        offset_hours: Fixed offset from UTC (hours).
+
+    Returns:
+        Label such as ``UTC+02:00`` or ``UTC-03:30``.
+
+    Raises:
+        ValueError: If the offset is non-finite or outside UTC-12 to UTC+14.
+    """
+    if not np.isfinite(offset_hours) or not -12.0 <= offset_hours <= 14.0:
+        raise ValueError("UTC offset must be finite and between UTC-12 and UTC+14.")
+    absolute_minutes: int = round(abs(offset_hours) * 60.0)
+    whole_hours, minutes = divmod(absolute_minutes, 60)
+    sign: str = "+" if offset_hours >= 0.0 else "-"
+    return f"UTC{sign}{whole_hours:02d}:{minutes:02d}"
+
+
+def _haversine_distance_km(
+    first_longitude: float,
+    first_latitude: float,
+    second_longitude: float,
+    second_latitude: float,
+) -> float:
+    """Calculate great-circle distance between two coordinates.
+
+    Args:
+        first_longitude: First longitude (degrees east).
+        first_latitude: First latitude (degrees north).
+        second_longitude: Second longitude (degrees east).
+        second_latitude: Second latitude (degrees north).
+
+    Returns:
+        Great-circle distance (km).
+    """
+    earth_radius_km: float = 6371.0088
+    first_lon_rad: float = math.radians(first_longitude)
+    first_lat_rad: float = math.radians(first_latitude)
+    second_lon_rad: float = math.radians(second_longitude)
+    second_lat_rad: float = math.radians(second_latitude)
+    longitude_difference: float = second_lon_rad - first_lon_rad
+    latitude_difference: float = second_lat_rad - first_lat_rad
+    haversine_value: float = (
+        math.sin(latitude_difference / 2.0) ** 2
+        + math.cos(first_lat_rad)
+        * math.cos(second_lat_rad)
+        * math.sin(longitude_difference / 2.0) ** 2
+    )
+    return earth_radius_km * 2.0 * math.asin(math.sqrt(min(1.0, haversine_value)))
+
+
+def _add_snapping_qc_station(
+    layer: folium.FeatureGroup,
+    station_id: str,
+    station_name: str,
+    row: pd.Series,
+) -> None:
+    """Add gauge, river, grid-cell, and diagnostic snapping features.
+
+    A green status means that the final model-grid upstream area is within 30%
+    of the reported GRDC area and the grid-cell centre is no more than 10 km
+    from the gauge. This is a visual screening rule, not proof that the station
+    metadata or model river topology are correct.
+
+    Args:
+        layer: Folium feature group receiving the snapping features.
+        station_id: GRDC station identifier.
+        station_name: Human-readable station name.
+        row: Evaluation row containing gauge, river, grid, area, and timezone
+            metadata.
+    """
+    gauge_longitude: float = float(row["station_longitude"])
+    gauge_latitude: float = float(row["station_latitude"])
+    river_longitude: float = float(row["closest_river_longitude"])
+    river_latitude: float = float(row["closest_river_latitude"])
+    grid_longitude: float = float(row["snapped_grid_longitude"])
+    grid_latitude: float = float(row["snapped_grid_latitude"])
+    grdc_area_km2: float = float(row["upstream_area_GRDC"]) / 1_000_000.0
+    grid_area_km2: float = float(row["upstream_area_GEB"]) / 1_000_000.0
+    subgrid_area_km2: float = float(row["upstream_area_GEB_subgrid"]) / 1_000_000.0
+    grid_area_ratio: float = grid_area_km2 / grdc_area_km2
+    grid_distance_km: float = _haversine_distance_km(
+        gauge_longitude,
+        gauge_latitude,
+        grid_longitude,
+        grid_latitude,
+    )
+    river_distance_km_approx: float = float(row["snapping_distance_degrees"]) * 111.2
+    timezone_label: str = format_fixed_utc_offset(float(row["timezone_utc_offset"]))
+    raw_daily_window_start_hour_local: Any = row.get(
+        "daily_discharge_start_hour_local", 0.0
+    )
+    daily_window_start_hour_local: float = (
+        float(raw_daily_window_start_hour_local)
+        if pd.notna(raw_daily_window_start_hour_local)
+        else 0.0
+    )
+    daily_window_start_label: str = f"{daily_window_start_hour_local:02.0f}:00"
+    qc_passed: bool = 0.7 <= grid_area_ratio <= 1.3 and grid_distance_km <= 10.0
+    status_label: str = "PASS" if qc_passed else "REVIEW"
+    status_color: str = "#16A34A" if qc_passed else "#EA580C"
+    escaped_name: str = html.escape(station_name)
+    escaped_id: str = html.escape(station_id)
+    popup_html: str = (
+        f"<b>{escaped_name}</b> ({escaped_id})<br>"
+        f"<b>Snapping QC: <span style='color:{status_color}'>{status_label}</span></b><br>"
+        f"GRDC gauge: {gauge_latitude:.5f}, {gauge_longitude:.5f}<br>"
+        f"Closest river: {river_latitude:.5f}, {river_longitude:.5f}<br>"
+        f"Model grid cell: {grid_latitude:.5f}, {grid_longitude:.5f}<br>"
+        f"Gauge–grid distance: {grid_distance_km:.2f} km<br>"
+        f"Gauge–river distance: ~{river_distance_km_approx:.2f} km<br>"
+        f"GRDC area: {grdc_area_km2:,.1f} km²<br>"
+        f"GEB subgrid area: {subgrid_area_km2:,.1f} km²<br>"
+        f"GEB grid area: {grid_area_km2:,.1f} km²<br>"
+        f"Grid/GRDC area ratio: {grid_area_ratio:.3f}<br>"
+        f"Daily aggregation offset: {timezone_label} (fixed; no DST)<br>"
+        f"Observation day: {daily_window_start_label}–{daily_window_start_label} "
+        "fixed local standard time<br>"
+        "PASS thresholds: area ratio 0.70–1.30 and gauge–grid distance ≤10 km."
+    )
+    tooltip: str = (
+        f"{station_id}: {station_name}<br>Snapping QC: {status_label}"
+        f"<br>Grid/GRDC area: {grid_area_ratio:.3f}"
+        f"<br>Gauge–grid: {grid_distance_km:.2f} km"
+        f"<br>{timezone_label} fixed"
+        f"<br>Daily window: {daily_window_start_label}–{daily_window_start_label}"
+    )
+    line_locations: list[list[float]] = [
+        [gauge_latitude, gauge_longitude],
+        [river_latitude, river_longitude],
+        [grid_latitude, grid_longitude],
+    ]
+    folium.PolyLine(
+        locations=line_locations,
+        color=status_color,
+        weight=3,
+        opacity=0.85,
+        dash_array="6 4",
+        tooltip=tooltip,
+        popup=folium.Popup(popup_html, max_width=440),
+    ).add_to(layer)
+    folium.CircleMarker(
+        location=[gauge_latitude, gauge_longitude],
+        radius=6,
+        color="#991B1B",
+        weight=2,
+        fill=True,
+        fill_color="#EF4444",
+        fill_opacity=0.95,
+        tooltip=f"GRDC gauge · {tooltip}",
+        popup=folium.Popup(popup_html, max_width=440),
+    ).add_to(layer)
+    folium.CircleMarker(
+        location=[river_latitude, river_longitude],
+        radius=4,
+        color="#111827",
+        weight=1,
+        fill=True,
+        fill_color="#111827",
+        fill_opacity=0.95,
+        tooltip=f"Closest river point · {tooltip}",
+        popup=folium.Popup(popup_html, max_width=440),
+    ).add_to(layer)
+    folium.RegularPolygonMarker(
+        location=[grid_latitude, grid_longitude],
+        number_of_sides=4,
+        rotation=45,
+        radius=7,
+        color="#1D4ED8",
+        weight=2,
+        fill=True,
+        fill_color="#3B82F6",
+        fill_opacity=0.95,
+        tooltip=f"GEB grid cell · {tooltip}",
+        popup=folium.Popup(popup_html, max_width=440),
+    ).add_to(layer)
+
+
 def create_discharge_folium_map(
     evaluation_gdf: gpd.GeoDataFrame,
     output_path: Path,
@@ -1272,7 +1465,9 @@ def create_discharge_folium_map(
     popup is opened. Reservoirs are rendered as dot markers when ``waterbodies``
     is provided; lakes are skipped because they make large dashboards slow.
     GRDC-Caravan characteristics are optional station layers on the same map,
-    together with a separate data-availability layer.
+    together with a separate data-availability layer. A snapping-QC layer shows
+    the original gauge, closest river point, selected model cell, connecting
+    line, upstream-area agreement, distance, and fixed UTC offset.
 
     Args:
         evaluation_gdf: Per-station GeoDataFrame with discharge metric columns,
@@ -1403,6 +1598,24 @@ def create_discharge_folium_map(
 
     popup_width: int = 800
     station_marker_index: list[StationMarkerIndex] = []
+    snapping_qc_layer: folium.FeatureGroup = folium.FeatureGroup(
+        name="Station snapping QC (gauge → river → grid)",
+        show=False,
+    )
+    snapping_columns: set[str] = {
+        "station_longitude",
+        "station_latitude",
+        "snapped_grid_longitude",
+        "snapped_grid_latitude",
+        "closest_river_longitude",
+        "closest_river_latitude",
+        "upstream_area_GRDC",
+        "upstream_area_GEB",
+        "upstream_area_GEB_subgrid",
+        "snapping_distance_degrees",
+        "timezone_utc_offset",
+    }
+    snapping_qc_available: bool = snapping_columns.issubset(evaluation_gdf.columns)
 
     for station_id, row in evaluation_gdf.iterrows():
         coords: list[float] = [row.geometry.y, row.geometry.x]
@@ -1417,7 +1630,21 @@ def create_discharge_folium_map(
             f"<div class='geb-popup' data-station-id='{escaped_station_id}' "
             f"style='width:{popup_width}px;'>Loading interactive charts...</div>"
         )
-        tooltip: str = f"{station_id_str}: {station_name}"
+        timezone_tooltip: str = (
+            f"<br>{format_fixed_utc_offset(float(row['timezone_utc_offset']))} fixed"
+            if "timezone_utc_offset" in row.index
+            and pd.notna(row["timezone_utc_offset"])
+            else ""
+        )
+        tooltip: str = f"{station_id_str}: {station_name}{timezone_tooltip}"
+
+        if snapping_qc_available:
+            _add_snapping_qc_station(
+                layer=snapping_qc_layer,
+                station_id=station_id_str,
+                station_name=station_name,
+                row=row,
+            )
 
         # Scale circle radius by upstream area (range 5–10 px).
         circle_radius: float = (
@@ -1483,6 +1710,8 @@ def create_discharge_folium_map(
         characteristic_layer.add_to(discharge_map)
     if availability_layer is not None:
         availability_layer.add_to(discharge_map)
+    if snapping_qc_available:
+        snapping_qc_layer.add_to(discharge_map)
 
     _inject_station_layer_legend_script(
         discharge_map=discharge_map,

@@ -19,6 +19,39 @@ from geb.workflows.timeseries import regularize_discharge_timeseries
 from .base import BuildModelBase
 
 
+def parse_grdc_utc_offset_hours(raw_offset: float) -> float:
+    """Convert a GRDC clock-style UTC offset to decimal hours.
+
+    GRDC stores offsets using an ``HH.MM`` representation, as indicated by the
+    NetCDF variable unit ``00:00``. For example, ``6.3`` represents 06:30 and
+    must become 6.5 decimal hours before it is passed to pandas.
+
+    Args:
+        raw_offset: GRDC UTC offset in clock-style hours and minutes (HH.MM).
+
+    Returns:
+        UTC offset in decimal hours.
+
+    Raises:
+        ValueError: If the offset is non-finite, contains invalid minutes, or
+            lies outside the UTC-12 to UTC+14 range.
+    """
+    if not np.isfinite(raw_offset):
+        raise ValueError("GRDC UTC offset must be finite.")
+
+    whole_hours: int = int(raw_offset)
+    clock_minutes: int = round((raw_offset - whole_hours) * 100.0)
+    if abs(clock_minutes) >= 60:
+        raise ValueError(
+            f"GRDC UTC offset {raw_offset} contains invalid clock minutes."
+        )
+
+    decimal_offset_hours: float = whole_hours + clock_minutes / 60.0
+    if not -12.0 <= decimal_offset_hours <= 14.0:
+        raise ValueError(f"GRDC UTC offset {raw_offset} is outside UTC-12 to UTC+14.")
+    return decimal_offset_hours
+
+
 def process_station_data(Q_station: pd.DataFrame, station_path: Path) -> pd.DataFrame:
     """Parse and preprocess a station CSV read into a DataFrame.
 
@@ -129,6 +162,7 @@ class Observations(BuildModelBase):
                 "discharge_observations_upstream_area_m2": discharge_observations.area.values
                 * 1e6,  # convert km2 to m2
                 "discharge_observations_river_name": discharge_observations.river_name.values,
+                "discharge_observations_country_code": discharge_observations.country.values,
             },
             geometry=gpd.points_from_xy(
                 discharge_observations.x.values, discharge_observations.y.values
@@ -248,13 +282,32 @@ class Observations(BuildModelBase):
 
         # GRDC provides a fixed UTC offset relative to the national capital.
         # Custom stations are absent from this metadata and therefore default to UTC.
-        timezone_utc_offsets: pd.Series = discharge_observations.timezone.to_pandas()
+        raw_timezone_utc_offsets: pd.Series = (
+            discharge_observations.timezone.to_pandas()
+        )
+        timezone_utc_offsets: pd.Series = (
+            raw_timezone_utc_offsets.fillna(0.0)
+            .astype(float)
+            .map(parse_grdc_utc_offset_hours)
+        )
         obs_metadata = obs_metadata.copy()
         obs_metadata["timezone_utc_offset"] = (
             obs_metadata["discharge_observations_station_ID"]
             .map(timezone_utc_offsets)
             .fillna(0.0)
             .astype(float)
+        )
+        normalized_country_codes: pd.Series = (
+            obs_metadata["discharge_observations_country_code"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .str.upper()
+        )
+        # NRFA daily flows use a fixed 09:00 GMT water-day. GRDC records from
+        # other countries retain the local calendar-day assumption.
+        obs_metadata["daily_discharge_start_hour_local"] = np.where(
+            normalized_country_codes.eq("GB"), 9.0, 0.0
         )
 
         if obs_metadata.empty:
@@ -268,6 +321,7 @@ class Observations(BuildModelBase):
                 "discharge_observations_source",
                 "discharge_observations_station_ID",
                 "discharge_observations_river_name",
+                "discharge_observations_country_code",
                 "discharge_observations_upstream_area_m2",
                 "discharge_observations_station_coords",
                 "closest_point_coords",
@@ -279,6 +333,7 @@ class Observations(BuildModelBase):
                 "discharge_observations_to_GEB_upstream_area_ratio",
                 "snapping_distance_degrees",
                 "timezone_utc_offset",
+                "daily_discharge_start_hour_local",
             ]
             discharge_snapping_df = pd.DataFrame(columns=np.array(empty_cols))
             discharge_snapping_df.to_excel(
@@ -351,6 +406,9 @@ class Observations(BuildModelBase):
                     "discharge_observations_source": station_source,
                     "discharge_observations_station_ID": station_id,
                     "discharge_observations_river_name": discharge_observations_rivername,
+                    "discharge_observations_country_code": station_row.get(
+                        "discharge_observations_country_code", ""
+                    ),
                     "discharge_observations_upstream_area_m2": discharge_observations_uparea_m2,
                     "discharge_observations_station_coords": station_coords,
                     "closest_point_coords": closest_point_coords,
@@ -368,6 +426,9 @@ class Observations(BuildModelBase):
                     ),
                     "snapping_distance_degrees": snap_results.distance_degrees,
                     "timezone_utc_offset": float(station_row["timezone_utc_offset"]),
+                    "daily_discharge_start_hour_local": float(
+                        station_row["daily_discharge_start_hour_local"]
+                    ),
                 }
             )
 
