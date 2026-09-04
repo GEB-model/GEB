@@ -3,6 +3,7 @@
 import hashlib
 import html
 import json
+import logging
 import math
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
@@ -15,6 +16,10 @@ import pandas as pd
 from folium import MacroElement, TileLayer
 from jinja2 import Template
 
+from geb.evaluate.workflows.discharge_characteristics import (
+    DASHBOARD_CHARACTERISTICS,
+    Characteristic,
+)
 from geb.workflows.extreme_value_analysis import ReturnPeriodModel
 from geb.workflows.io import read_geom
 
@@ -38,6 +43,21 @@ RESERVOIR_WATERBODY_TYPE: int = 2
 _WATERBODY_STYLE: dict[int, dict[str, str]] = {
     RESERVOIR_WATERBODY_TYPE: {"color": "#FF8A65", "label": "Reservoir"},
 }
+_CHARACTERISTIC_COLORS: list[str] = [
+    "#440154",
+    "#414487",
+    "#2A788E",
+    "#22A884",
+    "#7AD151",
+    "#FDE725",
+]
+_CARAVAN_AVAILABLE_COLOR: str = "#1B9E77"
+_CARAVAN_UNAVAILABLE_COLOR: str = "#9CA3AF"
+_CHARACTERISTIC_COLORMAP: cm.LinearColormap = cm.LinearColormap(
+    colors=_CHARACTERISTIC_COLORS,
+    vmin=0.0,
+    vmax=100.0,
+)
 
 
 class DischargeDashboardGeometries(NamedTuple):
@@ -178,6 +198,143 @@ def _as_finite_float(value: float | int | np.floating | None) -> float | None:
     return float_value if np.isfinite(float_value) else None
 
 
+def _prepare_characteristic_values(
+    values: pd.Series,
+) -> tuple[dict[str, int | list[float]], pd.Series] | None:
+    """Prepare legend values and percentile ranks for one characteristic.
+
+    Map colours use empirical percentile ranks rather than raw-value intervals,
+    so skewed variables retain spatial contrast. Zero is a valid observed value
+    and is ranked consistently with every other finite value.
+
+    Args:
+        values: Characteristic values in display units.
+
+    Returns:
+        Legend statistics and aligned percentile ranks, or `None` when fewer
+        than two distinct finite values are available.
+    """
+    numeric_values: pd.Series = pd.to_numeric(values, errors="coerce")
+    finite_values: pd.Series = numeric_values.where(np.isfinite(numeric_values))
+    valid_values: pd.Series = finite_values.dropna()
+    if len(valid_values) < 2 or valid_values.nunique() < 2:
+        return None
+
+    reference_values: np.ndarray = np.nanpercentile(
+        valid_values.to_numpy(dtype=float), [0.0, 25.0, 50.0, 75.0, 100.0]
+    )
+    percentile_ranks: pd.Series = pd.Series(np.nan, index=values.index, dtype=float)
+    average_ranks: pd.Series = valid_values.rank(method="average")
+    percentile_ranks.loc[valid_values.index] = (
+        (average_ranks - 1.0) / (len(valid_values) - 1.0) * 100.0
+    )
+    statistics: dict[str, int | list[float]] = {
+        "reference_values": reference_values.astype(float).tolist(),
+        "missing_count": int(len(numeric_values) - len(valid_values)),
+        "ranked_count": int(len(valid_values)),
+    }
+    return statistics, percentile_ranks
+
+
+def _build_characteristic_layer_payload(
+    evaluation_gdf: gpd.GeoDataFrame,
+    characteristic_df: pd.DataFrame,
+) -> dict[str, Any]:
+    """Build characteristic-layer metadata aligned to evaluated stations.
+
+    Args:
+        evaluation_gdf: Evaluated stations indexed by station identifier.
+        characteristic_df: Curated GRDC-Caravan values in display units, with
+            a unique ``station_ID`` column.
+
+    Returns:
+        Characteristic configuration and compact per-station values.
+
+    Raises:
+        ValueError: If station identifiers or usable characteristic data are
+            unavailable.
+    """
+    if "station_ID" not in characteristic_df.columns:
+        raise ValueError("Dashboard characteristics have no station_ID column.")
+    if "grdc_caravan_matched" not in characteristic_df.columns:
+        raise ValueError("Dashboard characteristics have no GRDC-Caravan match status.")
+    if characteristic_df["station_ID"].duplicated().any():
+        raise ValueError("Dashboard characteristics contain duplicate station IDs.")
+    if evaluation_gdf.index.astype(str).duplicated().any():
+        raise ValueError("Dashboard evaluation contains duplicate station IDs.")
+
+    characteristic_index: pd.DataFrame = characteristic_df.copy()
+    characteristic_index["station_ID"] = characteristic_index["station_ID"].astype(str)
+    characteristic_index = characteristic_index.set_index("station_ID")
+    evaluation_station_ids: pd.Index = pd.Index(
+        evaluation_gdf.index.astype(str), name="station_ID"
+    )
+    # Restrict distributions to displayed stations so percentile colours and
+    # legend counts describe exactly the points visible on the dashboard.
+    characteristic_index = characteristic_index.reindex(evaluation_station_ids)
+    characteristic_configs: list[dict[str, Any]] = []
+    percentile_by_characteristic: dict[str, pd.Series] = {}
+    usable_characteristics: list[Characteristic] = []
+    for characteristic in DASHBOARD_CHARACTERISTICS:
+        if characteristic.column not in characteristic_index.columns:
+            continue
+        prepared_values: tuple[dict[str, int | list[float]], pd.Series] | None = (
+            _prepare_characteristic_values(characteristic_index[characteristic.column])
+        )
+        if prepared_values is None:
+            continue
+        statistics, percentile_ranks = prepared_values
+        percentile_by_characteristic[characteristic.column] = percentile_ranks
+        characteristic_configs.append(
+            {
+                "column": characteristic.column,
+                "label": characteristic.label,
+                **statistics,
+            }
+        )
+        usable_characteristics.append(characteristic)
+    if not usable_characteristics:
+        raise ValueError("No usable GRDC-Caravan dashboard characteristics found.")
+
+    station_records: list[dict[str, Any]] = []
+    for station_id in evaluation_gdf.index:
+        station_id_string: str = str(station_id)
+        characteristic_row: pd.Series | None = (
+            characteristic_index.loc[station_id_string]
+            if station_id_string in characteristic_index.index
+            else None
+        )
+        values: dict[str, float | None] = {}
+        percentiles: dict[str, float | None] = {}
+        for characteristic in usable_characteristics:
+            values[characteristic.column] = _as_finite_float(
+                characteristic_row[characteristic.column]
+                if characteristic_row is not None
+                else None
+            )
+            percentile_series: pd.Series = percentile_by_characteristic[
+                characteristic.column
+            ]
+            percentiles[characteristic.column] = _as_finite_float(
+                percentile_series.get(station_id_string)
+            )
+        station_records.append(
+            {
+                "id": station_id_string,
+                "caravan_available": bool(characteristic_row["grdc_caravan_matched"])
+                if characteristic_row is not None
+                and pd.notna(characteristic_row["grdc_caravan_matched"])
+                else False,
+                "values": values,
+                "percentiles": percentiles,
+            }
+        )
+    return {
+        "characteristics": characteristic_configs,
+        "stations": station_records,
+    }
+
+
 def _timestamp_to_isoformat(timestamp: Any) -> str:
     """Convert a dashboard timestamp to an ISO-formatted string.
 
@@ -244,7 +401,7 @@ def _build_return_period_payload(
         Returns empty lists if the fit fails or the series is too short.
     """
     try:
-        model = ReturnPeriodModel(
+        model: ReturnPeriodModel = ReturnPeriodModel(
             series=series,
             return_periods=return_periods_years,
             fixed_shape=0.0,
@@ -260,7 +417,12 @@ def _build_return_period_payload(
                 for value in model.rl_table["GPD_POT_RL"].to_numpy(dtype=float)
             ],
         }
-    except Exception:
+    except Exception as error:
+        # A failed extreme-value fit should not remove otherwise valid station
+        # charts, but it must remain visible to users diagnosing the output.
+        logging.getLogger(__name__).warning(
+            "Could not fit dashboard return periods: %s", error
+        )
         return {"returnPeriod": [], "discharge": []}
 
 
@@ -268,8 +430,10 @@ def build_discharge_dashboard_chart_data(
     validation_df: pd.DataFrame,
     station_name: str,
     upstream_area_ratio: float,
+    timezone_utc_offset: float,
     metrics: dict[str, float],
     frequency: str,
+    daily_discharge_start_hour_local: float = 0.0,
 ) -> dict[str, Any]:
     """Build compact interactive chart data for one discharge dashboard popup.
 
@@ -277,9 +441,14 @@ def build_discharge_dashboard_chart_data(
         validation_df: Observed/simulated discharge dataframe (m3/s).
         station_name: Human-readable station name.
         upstream_area_ratio: Observed-to-model upstream-area ratio (dimensionless).
+        timezone_utc_offset: Fixed GRDC UTC offset used to construct local
+            calendar days (hours). The source offset does not vary for daylight
+            saving time.
         metrics: Discharge skill metrics such as ``KGE``, ``NSE``, and ``R2``
             (dimensionless).
         frequency: Data frequency label, for example ``"daily"`` or ``"hourly"``.
+        daily_discharge_start_hour_local: Start of the labelled observation day
+            in fixed local standard time (hours after midnight).
 
     Returns:
         Compact chart payload with discharge values (m3/s).
@@ -303,6 +472,10 @@ def build_discharge_dashboard_chart_data(
             "RMSE": _as_finite_float(metrics.get("RMSE")),
             "RRMSE": _as_finite_float(metrics.get("RRMSE")),
             "upstreamAreaRatio": _as_finite_float(upstream_area_ratio),
+            "timezoneUtcOffset": _as_finite_float(timezone_utc_offset),
+            "dailyWindowStartHourLocal": _as_finite_float(
+                daily_discharge_start_hour_local
+            ),
         },
         "timeseries": _build_timeseries_payload(validation_df),
         "returnPeriods": {
@@ -536,7 +709,9 @@ def _inject_popup_chart_script(
       metricHtml('r', metrics.KGE_correlation) + metricHtml('β', metrics.KGE_bias_ratio) +
       metricHtml('α', metrics.KGE_variability_ratio) + metricHtml('NSE', metrics.NSE) +
       metricHtml('r²', metrics.R2) + metricHtml('RMSE', metrics.RMSE) +
-      metricHtml('RRMSE', metrics.RRMSE) + metricHtml('Area ratio', metrics.upstreamAreaRatio) + '</div>' +
+      metricHtml('RRMSE', metrics.RRMSE) + metricHtml('Area ratio', metrics.upstreamAreaRatio) +
+      metricHtml('Fixed UTC offset (h)', metrics.timezoneUtcOffset) +
+      metricHtml('Daily window start, local standard time (h)', metrics.dailyWindowStartHourLocal) + '</div>' +
       '<div class="geb-popup__chart-title">Return periods</div>' + makeChartDiv('geb-return-' + safeStationId) +
       '<div class="geb-popup__chart-title">Discharge time series</div>' + makeChartDiv('geb-time-' + safeStationId);
     ensurePlotly(function(loaded) {
@@ -675,6 +850,181 @@ def _inject_station_search_script(
     ).add_to(m)
 
 
+def _inject_station_layer_legend_script(
+    discharge_map: folium.Map,
+    metric_layers: list[tuple[folium.FeatureGroup, cm.LinearColormap, str]],
+    upstream_layer: folium.FeatureGroup | None,
+    characteristic_layers: list[tuple[folium.FeatureGroup, dict[str, Any]]],
+    availability_layer: folium.FeatureGroup | None,
+    caravan_available_count: int,
+    station_count: int,
+) -> None:
+    """Add one dynamic legend and enforce one active station-value layer.
+
+    Args:
+        discharge_map: Performance map receiving the legend control.
+        metric_layers: Metric feature groups, colormaps, and source columns.
+        upstream_layer: Optional upstream-area-ratio feature group.
+        characteristic_layers: GRDC-Caravan feature groups and metadata.
+        availability_layer: Optional GRDC-Caravan coverage feature group.
+        caravan_available_count: Stations matched to GRDC-Caravan.
+        station_count: Total evaluated stations.
+    """
+    configs_by_column: dict[str, dict[str, Any]] = {
+        str(config["col"]): config for config in _METRIC_LAYER_CONFIGS
+    }
+    legend_configs: list[dict[str, Any]] = []
+    for layer, _, column in metric_layers:
+        config: dict[str, Any] = configs_by_column[column]
+        legend_configs.append(
+            {
+                "layer": layer.get_name(),
+                "kind": "continuous",
+                "name": config["name"],
+                "colors": config["colors"],
+                "minimum": config["vmin"],
+                "maximum": config["vmax"],
+                "show": config["show"],
+            }
+        )
+    if upstream_layer is not None:
+        legend_configs.append(
+            {
+                "layer": upstream_layer.get_name(),
+                "kind": "continuous",
+                "name": "Upstream Area Ratio",
+                "colors": ["red", "orange", "yellow", "blue", "green"],
+                "minimum": 0.5,
+                "maximum": 2.0,
+                "show": False,
+            }
+        )
+    for layer, characteristic in characteristic_layers:
+        legend_configs.append(
+            {
+                "layer": layer.get_name(),
+                "kind": "characteristic",
+                "name": characteristic["label"],
+                "colors": _CHARACTERISTIC_COLORS,
+                "minimum": 0.0,
+                "maximum": 100.0,
+                "reference_values": characteristic["reference_values"],
+                "ranked_count": characteristic["ranked_count"],
+                "missing_count": characteristic["missing_count"],
+                "show": False,
+            }
+        )
+    if availability_layer is not None:
+        legend_configs.append(
+            {
+                "layer": availability_layer.get_name(),
+                "kind": "availability",
+                "name": "GRDC-Caravan data availability",
+                "available_count": caravan_available_count,
+                "unavailable_count": station_count - caravan_available_count,
+                "available_color": _CARAVAN_AVAILABLE_COLOR,
+                "unavailable_color": _CARAVAN_UNAVAILABLE_COLOR,
+                "show": False,
+            }
+        )
+    config_json: str = json.dumps(legend_configs, separators=(",", ":"))
+    _JavascriptMacro(
+        "var gebMetricLegendConfigs="
+        + config_json
+        + ";\n"
+        + r"""
+(function(){
+  var map = {{this._parent.get_name()}};
+  var configByLayer = {};
+  var layerByName = {};
+  var activeConfig = null;
+  gebMetricLegendConfigs.forEach(function(config) {
+    var layer = null;
+    try { layer = window[config.layer] || eval(config.layer); } catch(error) { layer = null; }
+    if (!layer) return;
+    configByLayer[L.stamp(layer)] = config;
+    layerByName[config.layer] = layer;
+    if (config.show) activeConfig = config;
+  });
+
+  var legendControl = L.control({position: 'bottomleft'});
+  legendControl.onAdd = function() {
+    var element = L.DomUtil.create('div', 'geb-metric-legend');
+    L.DomEvent.disableClickPropagation(element);
+    return element;
+  };
+  legendControl.addTo(map);
+  var legendRoot = map.getContainer().querySelector('.geb-metric-legend');
+
+  function formatTick(value) {
+    var numericValue = Number(value);
+    var absoluteValue = Math.abs(numericValue);
+    if (numericValue === 0) return '0';
+    if (absoluteValue < 0.01) return numericValue.toExponential(1);
+    var digits = absoluteValue >= 1000 ? 0 : absoluteValue >= 100 ? 1 : absoluteValue >= 10 ? 1 : absoluteValue >= 1 ? 2 : 3;
+    return numericValue.toLocaleString(undefined, {maximumFractionDigits: digits});
+  }
+
+  function renderLegend(config) {
+    if (!config) {
+      legendRoot.style.display = 'none';
+      return;
+    }
+    legendRoot.style.display = '';
+    if (config.kind === 'availability') {
+      legendRoot.innerHTML = '<b>' + config.name + '</b>' +
+        '<div class="geb-categorical-key"><i style="background:' + config.available_color + '"></i>' +
+        'Available (n=' + config.available_count + ')</div>' +
+        '<div class="geb-categorical-key"><i style="background:' + config.unavailable_color + '"></i>' +
+        'Not available (n=' + config.unavailable_count + ')</div>';
+      return;
+    }
+    var ticks = [];
+    for (var index = 0; index < 5; index += 1) {
+      ticks.push(config.minimum + (config.maximum - config.minimum) * index / 4);
+    }
+    var detail = '';
+    if (config.kind === 'characteristic') {
+      ticks = config.reference_values;
+      detail = '<div class="geb-metric-note">Colour shows empirical percentile rank (n=' +
+        config.ranked_count + '); ticks are values at ranks 0 / 25 / 50 / 75 / 100.</div>' +
+        '<div class="geb-metric-note">Missing value: n=' + config.missing_count + '</div>';
+    }
+    legendRoot.innerHTML = '<b>' + config.name + '</b>' +
+      '<div class="geb-metric-gradient" style="background:linear-gradient(90deg,' +
+      config.colors.join(',') + ')"></div><div class="geb-metric-ticks">' +
+      ticks.map(function(value) { return '<span>' + formatTick(value) + '</span>'; }).join('') +
+      '</div>' + detail;
+  }
+
+  map.on('overlayadd', function(event) {
+    var config = configByLayer[L.stamp(event.layer)];
+    if (!config) return;
+    gebMetricLegendConfigs.forEach(function(otherConfig) {
+      if (otherConfig.layer === config.layer) return;
+      var otherLayer = layerByName[otherConfig.layer];
+      if (otherLayer && map.hasLayer(otherLayer)) map.removeLayer(otherLayer);
+    });
+    activeConfig = config;
+    renderLegend(activeConfig);
+  });
+  map.on('overlayremove', function(event) {
+    var config = configByLayer[L.stamp(event.layer)];
+    if (config && activeConfig && config.layer === activeConfig.layer) {
+      activeConfig = null;
+      renderLegend(null);
+    }
+  });
+
+  var style = document.createElement('style');
+  style.textContent = '.geb-metric-legend{background:rgba(255,255,255,.96);border:1px solid #d8dee8;border-radius:8px;box-shadow:0 6px 20px rgba(15,23,42,.18);font-family:Inter,system-ui,sans-serif;margin-bottom:22px!important;padding:9px 10px;width:240px}.geb-metric-legend>b{color:#111827;display:block;font-size:11px;margin-bottom:6px}.geb-metric-gradient{border-radius:2px;height:9px}.geb-metric-ticks{color:#475569;display:flex;font-size:9px;justify-content:space-between;margin-top:3px}.geb-metric-note{color:#64748b;font-size:9px;line-height:1.3;margin-top:5px}.geb-categorical-key{align-items:center;color:#475569;display:flex;font-size:9px;gap:6px;margin-top:5px}.geb-categorical-key i{border:1px solid #fff;border-radius:50%;height:9px;width:9px}';
+  document.head.appendChild(style);
+  renderLegend(activeConfig);
+})();
+"""
+    ).add_to(discharge_map)
+
+
 def _add_station_marker(
     layer: folium.FeatureGroup,
     coords: list[float],
@@ -754,6 +1104,105 @@ def _add_metric_station_markers(
     return marker_names
 
 
+def _format_characteristic_value(value: float) -> str:
+    """Format a catchment-characteristic value for a map tooltip.
+
+    Args:
+        value: Characteristic value in the display unit stated by its label.
+
+    Returns:
+        Compact locale-independent value string.
+    """
+    absolute_value: float = abs(value)
+    decimal_places: int = (
+        0
+        if absolute_value >= 1000.0
+        else 1
+        if absolute_value >= 100.0
+        else 2
+        if absolute_value >= 10.0
+        else 3
+    )
+    return f"{value:,.{decimal_places}f}"
+
+
+def _add_characteristic_station_markers(
+    station_record: dict[str, Any],
+    characteristic_layers: list[tuple[folium.FeatureGroup, dict[str, Any]]],
+    availability_layer: folium.FeatureGroup,
+    coords: list[float],
+    circle_radius: float,
+    popup_html: str,
+    popup_width: int,
+    station_tooltip: str,
+) -> list[str]:
+    """Add GRDC-Caravan availability and characteristic markers for a station.
+
+    Characteristic layers contain only stations with a finite value. The
+    availability layer contains every evaluated station, making absent
+    GRDC-Caravan coverage explicit without treating it as a numeric zero.
+
+    Args:
+        station_record: JSON-safe station characteristic record.
+        characteristic_layers: Feature groups and their characteristic metadata.
+        availability_layer: Feature group showing GRDC-Caravan match status.
+        coords: Marker coordinates as ``[latitude, longitude]`` (degrees).
+        circle_radius: Marker radius (pixels).
+        popup_html: Popup placeholder HTML.
+        popup_width: Popup width (pixels).
+        station_tooltip: Station identifier and name.
+
+    Returns:
+        Folium JavaScript variable names for the created markers.
+    """
+    marker_names: list[str] = []
+    caravan_available: bool = bool(station_record["caravan_available"])
+    availability_label: str = "available" if caravan_available else "not available"
+    marker_names.append(
+        _add_station_marker(
+            layer=availability_layer,
+            coords=coords,
+            radius=circle_radius,
+            fill_color=(
+                _CARAVAN_AVAILABLE_COLOR
+                if caravan_available
+                else _CARAVAN_UNAVAILABLE_COLOR
+            ),
+            popup_html=popup_html,
+            popup_width=popup_width,
+            tooltip=f"{station_tooltip}<br>GRDC-Caravan data: {availability_label}",
+        )
+    )
+
+    for layer, characteristic in characteristic_layers:
+        value: float | None = station_record["values"][characteristic["column"]]
+        if value is None:
+            continue
+        percentile: float | None = station_record["percentiles"][
+            characteristic["column"]
+        ]
+        assert percentile is not None, (
+            f"Finite characteristic {characteristic['column']} has no rank."
+        )
+        fill_color: str = _CHARACTERISTIC_COLORMAP(percentile)
+        rank_text: str = f"percentile rank {percentile:.0f}"
+        marker_names.append(
+            _add_station_marker(
+                layer=layer,
+                coords=coords,
+                radius=circle_radius,
+                fill_color=fill_color,
+                popup_html=popup_html,
+                popup_width=popup_width,
+                tooltip=(
+                    f"{station_tooltip}<br>{characteristic['label']}: "
+                    f"{_format_characteristic_value(value)} ({rank_text})"
+                ),
+            )
+        )
+    return marker_names
+
+
 def _add_waterbody_layers(
     discharge_map: folium.Map,
     waterbodies: gpd.GeoDataFrame,
@@ -817,6 +1266,186 @@ def _add_waterbody_layers(
         waterbody_layer.add_to(discharge_map)
 
 
+def format_fixed_utc_offset(offset_hours: float) -> str:
+    """Format a fixed UTC offset for dashboard labels.
+
+    Args:
+        offset_hours: Fixed offset from UTC (hours).
+
+    Returns:
+        Label such as ``UTC+02:00`` or ``UTC-03:30``.
+
+    Raises:
+        ValueError: If the offset is non-finite or outside UTC-12 to UTC+14.
+    """
+    if not np.isfinite(offset_hours) or not -12.0 <= offset_hours <= 14.0:
+        raise ValueError("UTC offset must be finite and between UTC-12 and UTC+14.")
+    absolute_minutes: int = round(abs(offset_hours) * 60.0)
+    whole_hours, minutes = divmod(absolute_minutes, 60)
+    sign: str = "+" if offset_hours >= 0.0 else "-"
+    return f"UTC{sign}{whole_hours:02d}:{minutes:02d}"
+
+
+def _haversine_distance_km(
+    first_longitude: float,
+    first_latitude: float,
+    second_longitude: float,
+    second_latitude: float,
+) -> float:
+    """Calculate great-circle distance between two coordinates.
+
+    Args:
+        first_longitude: First longitude (degrees east).
+        first_latitude: First latitude (degrees north).
+        second_longitude: Second longitude (degrees east).
+        second_latitude: Second latitude (degrees north).
+
+    Returns:
+        Great-circle distance (km).
+    """
+    earth_radius_km: float = 6371.0088
+    first_lon_rad: float = math.radians(first_longitude)
+    first_lat_rad: float = math.radians(first_latitude)
+    second_lon_rad: float = math.radians(second_longitude)
+    second_lat_rad: float = math.radians(second_latitude)
+    longitude_difference: float = second_lon_rad - first_lon_rad
+    latitude_difference: float = second_lat_rad - first_lat_rad
+    haversine_value: float = (
+        math.sin(latitude_difference / 2.0) ** 2
+        + math.cos(first_lat_rad)
+        * math.cos(second_lat_rad)
+        * math.sin(longitude_difference / 2.0) ** 2
+    )
+    return earth_radius_km * 2.0 * math.asin(math.sqrt(min(1.0, haversine_value)))
+
+
+def _add_snapping_qc_station(
+    layer: folium.FeatureGroup,
+    station_id: str,
+    station_name: str,
+    row: pd.Series,
+) -> None:
+    """Add gauge, river, grid-cell, and diagnostic snapping features.
+
+    A green status means that the final model-grid upstream area is within 30%
+    of the reported GRDC area and the grid-cell centre is no more than 10 km
+    from the gauge. This is a visual screening rule, not proof that the station
+    metadata or model river topology are correct.
+
+    Args:
+        layer: Folium feature group receiving the snapping features.
+        station_id: GRDC station identifier.
+        station_name: Human-readable station name.
+        row: Evaluation row containing gauge, river, grid, area, and timezone
+            metadata.
+    """
+    gauge_longitude: float = float(row["station_longitude"])
+    gauge_latitude: float = float(row["station_latitude"])
+    river_longitude: float = float(row["closest_river_longitude"])
+    river_latitude: float = float(row["closest_river_latitude"])
+    grid_longitude: float = float(row["snapped_grid_longitude"])
+    grid_latitude: float = float(row["snapped_grid_latitude"])
+    grdc_area_km2: float = float(row["upstream_area_GRDC"]) / 1_000_000.0
+    grid_area_km2: float = float(row["upstream_area_GEB"]) / 1_000_000.0
+    subgrid_area_km2: float = float(row["upstream_area_GEB_subgrid"]) / 1_000_000.0
+    grid_area_ratio: float = grid_area_km2 / grdc_area_km2
+    grid_distance_km: float = _haversine_distance_km(
+        gauge_longitude,
+        gauge_latitude,
+        grid_longitude,
+        grid_latitude,
+    )
+    river_distance_km_approx: float = float(row["snapping_distance_degrees"]) * 111.2
+    timezone_label: str = format_fixed_utc_offset(float(row["timezone_utc_offset"]))
+    raw_daily_window_start_hour_local: Any = row.get(
+        "daily_discharge_start_hour_local", 0.0
+    )
+    daily_window_start_hour_local: float = (
+        float(raw_daily_window_start_hour_local)
+        if pd.notna(raw_daily_window_start_hour_local)
+        else 0.0
+    )
+    daily_window_start_label: str = f"{daily_window_start_hour_local:02.0f}:00"
+    qc_passed: bool = 0.7 <= grid_area_ratio <= 1.3 and grid_distance_km <= 10.0
+    status_label: str = "PASS" if qc_passed else "REVIEW"
+    status_color: str = "#16A34A" if qc_passed else "#EA580C"
+    escaped_name: str = html.escape(station_name)
+    escaped_id: str = html.escape(station_id)
+    popup_html: str = (
+        f"<b>{escaped_name}</b> ({escaped_id})<br>"
+        f"<b>Snapping QC: <span style='color:{status_color}'>{status_label}</span></b><br>"
+        f"GRDC gauge: {gauge_latitude:.5f}, {gauge_longitude:.5f}<br>"
+        f"Closest river: {river_latitude:.5f}, {river_longitude:.5f}<br>"
+        f"Model grid cell: {grid_latitude:.5f}, {grid_longitude:.5f}<br>"
+        f"Gauge–grid distance: {grid_distance_km:.2f} km<br>"
+        f"Gauge–river distance: ~{river_distance_km_approx:.2f} km<br>"
+        f"GRDC area: {grdc_area_km2:,.1f} km²<br>"
+        f"GEB subgrid area: {subgrid_area_km2:,.1f} km²<br>"
+        f"GEB grid area: {grid_area_km2:,.1f} km²<br>"
+        f"Grid/GRDC area ratio: {grid_area_ratio:.3f}<br>"
+        f"Daily aggregation offset: {timezone_label} (fixed; no DST)<br>"
+        f"Observation day: {daily_window_start_label}–{daily_window_start_label} "
+        "fixed local standard time<br>"
+        "PASS thresholds: area ratio 0.70–1.30 and gauge–grid distance ≤10 km."
+    )
+    tooltip: str = (
+        f"{station_id}: {station_name}<br>Snapping QC: {status_label}"
+        f"<br>Grid/GRDC area: {grid_area_ratio:.3f}"
+        f"<br>Gauge–grid: {grid_distance_km:.2f} km"
+        f"<br>{timezone_label} fixed"
+        f"<br>Daily window: {daily_window_start_label}–{daily_window_start_label}"
+    )
+    line_locations: list[list[float]] = [
+        [gauge_latitude, gauge_longitude],
+        [river_latitude, river_longitude],
+        [grid_latitude, grid_longitude],
+    ]
+    folium.PolyLine(
+        locations=line_locations,
+        color=status_color,
+        weight=3,
+        opacity=0.85,
+        dash_array="6 4",
+        tooltip=tooltip,
+        popup=folium.Popup(popup_html, max_width=440),
+    ).add_to(layer)
+    folium.CircleMarker(
+        location=[gauge_latitude, gauge_longitude],
+        radius=6,
+        color="#991B1B",
+        weight=2,
+        fill=True,
+        fill_color="#EF4444",
+        fill_opacity=0.95,
+        tooltip=f"GRDC gauge · {tooltip}",
+        popup=folium.Popup(popup_html, max_width=440),
+    ).add_to(layer)
+    folium.CircleMarker(
+        location=[river_latitude, river_longitude],
+        radius=4,
+        color="#111827",
+        weight=1,
+        fill=True,
+        fill_color="#111827",
+        fill_opacity=0.95,
+        tooltip=f"Closest river point · {tooltip}",
+        popup=folium.Popup(popup_html, max_width=440),
+    ).add_to(layer)
+    folium.RegularPolygonMarker(
+        location=[grid_latitude, grid_longitude],
+        number_of_sides=4,
+        rotation=45,
+        radius=7,
+        color="#1D4ED8",
+        weight=2,
+        fill=True,
+        fill_color="#3B82F6",
+        fill_opacity=0.95,
+        tooltip=f"GEB grid cell · {tooltip}",
+        popup=folium.Popup(popup_html, max_width=440),
+    ).add_to(layer)
+
+
 def create_discharge_folium_map(
     evaluation_gdf: gpd.GeoDataFrame,
     output_path: Path,
@@ -824,6 +1453,7 @@ def create_discharge_folium_map(
     rivers: gpd.GeoDataFrame,
     station_chart_files: dict[str, str],
     waterbodies: gpd.GeoDataFrame | None = None,
+    characteristic_df: pd.DataFrame | None = None,
     minimum_river_upstream_area_km2: float = 5000.0,
 ) -> folium.Map:
     """Create an interactive Folium discharge evaluation map.
@@ -834,6 +1464,10 @@ def create_discharge_folium_map(
     available.  Station popup charts are lazy-rendered with Plotly when the
     popup is opened. Reservoirs are rendered as dot markers when ``waterbodies``
     is provided; lakes are skipped because they make large dashboards slow.
+    GRDC-Caravan characteristics are optional station layers on the same map,
+    together with a separate data-availability layer. A snapping-QC layer shows
+    the original gauge, closest river point, selected model cell, connecting
+    line, upstream-area agreement, distance, and fixed UTC offset.
 
     Args:
         evaluation_gdf: Per-station GeoDataFrame with discharge metric columns,
@@ -851,6 +1485,8 @@ def create_discharge_folium_map(
         waterbodies: Optional GeoDataFrame with columns ``waterbody_type``
             (2 = reservoir) and polygon geometries. Centroids are used for dot
             placement.
+        characteristic_df: Optional station table containing ``station_ID`` and
+            the curated GRDC-Caravan characteristics in display units.
         minimum_river_upstream_area_km2: Minimum upstream area (km²) for
             rivers shown on the map. Larger values reduce file size.  Rivers
             with an ``uparea_m2`` column smaller than this threshold are
@@ -861,20 +1497,21 @@ def create_discharge_folium_map(
     """
     min_lon, min_lat, max_lon, max_lat = region_geom.total_bounds
     map_center: list[float] = [(min_lat + max_lat) / 2, (min_lon + max_lon) / 2]
-    discharge_map = folium.Map(
-        location=map_center,
-        tiles=TileLayer(
-            tiles=_ESRI_TOPO_TILES,
-            attr=_ESRI_TOPO_ATTR,
-            name="Topographic Map",
-        ),
-    )
+    discharge_map = folium.Map(location=map_center, tiles=None)
+    TileLayer(
+        tiles=_ESRI_TOPO_TILES,
+        attr=_ESRI_TOPO_ATTR,
+        name="Topographic Map",
+    ).add_to(discharge_map)
     discharge_map.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]], padding=(30, 30))
-
     folium.GeoJson(
         region_geom,
         name="Catchment",
-        style_function=lambda x: {"fillColor": "none", "color": "black", "weight": 2},
+        style_function=lambda _feature: {
+            "fillColor": "none",
+            "color": "black",
+            "weight": 2,
+        },
         z_index=1,
     ).add_to(discharge_map)
 
@@ -886,7 +1523,11 @@ def create_discharge_folium_map(
     folium.GeoJson(
         rivers_for_map[["geometry"]].to_json(),
         name="Rivers",
-        style_function=lambda x: {"color": "#4A90D9", "weight": 1.0, "opacity": 0.6},
+        style_function=lambda _feature: {
+            "color": "#4A90D9",
+            "weight": 1.0,
+            "opacity": 0.6,
+        },
         z_index=2,
     ).add_to(discharge_map)
 
@@ -919,12 +1560,62 @@ def create_discharge_folium_map(
         )
         layer_upstream = folium.FeatureGroup(name="Upstream Area Ratio", show=False)
 
+    characteristic_layers: list[tuple[folium.FeatureGroup, dict[str, Any]]] = []
+    availability_layer: folium.FeatureGroup | None = None
+    characteristic_records: dict[str, dict[str, Any]] = {}
+    caravan_available_count: int = 0
+    if characteristic_df is not None:
+        characteristic_payload: dict[str, Any] = _build_characteristic_layer_payload(
+            evaluation_gdf=evaluation_gdf,
+            characteristic_df=characteristic_df,
+        )
+        characteristic_layers = [
+            (
+                folium.FeatureGroup(
+                    name=f"GRDC-Caravan · {characteristic['label']}",
+                    show=False,
+                ),
+                characteristic,
+            )
+            for characteristic in characteristic_payload["characteristics"]
+        ]
+        availability_layer = folium.FeatureGroup(
+            name="GRDC-Caravan · Data availability",
+            show=False,
+        )
+        characteristic_records = {
+            str(station["id"]): station
+            for station in characteristic_payload["stations"]
+        }
+        caravan_available_count = sum(
+            bool(station["caravan_available"])
+            for station in characteristic_payload["stations"]
+        )
+
     largest_upstream_area_sqrt: float = math.sqrt(
         evaluation_gdf["upstream_area_GEB"].max()
     )
 
-    popup_width = 800
+    popup_width: int = 800
     station_marker_index: list[StationMarkerIndex] = []
+    snapping_qc_layer: folium.FeatureGroup = folium.FeatureGroup(
+        name="Station snapping QC (gauge → river → grid)",
+        show=False,
+    )
+    snapping_columns: set[str] = {
+        "station_longitude",
+        "station_latitude",
+        "snapped_grid_longitude",
+        "snapped_grid_latitude",
+        "closest_river_longitude",
+        "closest_river_latitude",
+        "upstream_area_GRDC",
+        "upstream_area_GEB",
+        "upstream_area_GEB_subgrid",
+        "snapping_distance_degrees",
+        "timezone_utc_offset",
+    }
+    snapping_qc_available: bool = snapping_columns.issubset(evaluation_gdf.columns)
 
     for station_id, row in evaluation_gdf.iterrows():
         coords: list[float] = [row.geometry.y, row.geometry.x]
@@ -935,11 +1626,25 @@ def create_discharge_folium_map(
             else station_id_str
         )
         escaped_station_id: str = html.escape(station_id_str, quote=True)
-        popup_html = (
+        popup_html: str = (
             f"<div class='geb-popup' data-station-id='{escaped_station_id}' "
             f"style='width:{popup_width}px;'>Loading interactive charts...</div>"
         )
-        tooltip = f"{station_id_str}: {station_name}"
+        timezone_tooltip: str = (
+            f"<br>{format_fixed_utc_offset(float(row['timezone_utc_offset']))} fixed"
+            if "timezone_utc_offset" in row.index
+            and pd.notna(row["timezone_utc_offset"])
+            else ""
+        )
+        tooltip: str = f"{station_id_str}: {station_name}{timezone_tooltip}"
+
+        if snapping_qc_available:
+            _add_snapping_qc_station(
+                layer=snapping_qc_layer,
+                station_id=station_id_str,
+                station_name=station_name,
+                row=row,
+            )
 
         # Scale circle radius by upstream area (range 5–10 px).
         circle_radius: float = (
@@ -956,7 +1661,7 @@ def create_discharge_folium_map(
         )
 
         if layer_upstream is not None and colormap_upstream is not None:
-            color_upstream = colormap_upstream(
+            color_upstream: str | tuple[int, int, int, int] = colormap_upstream(
                 float(row["discharge_observations_to_GEB_upstream_area_ratio"])
             )
             if isinstance(color_upstream, str) and color_upstream != "nan":
@@ -972,6 +1677,21 @@ def create_discharge_folium_map(
                     )
                 )
 
+        if availability_layer is not None:
+            station_record: dict[str, Any] = characteristic_records[station_id_str]
+            station_marker_names.extend(
+                _add_characteristic_station_markers(
+                    station_record=station_record,
+                    characteristic_layers=characteristic_layers,
+                    availability_layer=availability_layer,
+                    coords=coords,
+                    circle_radius=circle_radius,
+                    popup_html=popup_html,
+                    popup_width=popup_width,
+                    station_tooltip=tooltip,
+                )
+            )
+
         station_marker_index.append(
             {
                 "id": station_id_str,
@@ -980,13 +1700,28 @@ def create_discharge_folium_map(
             }
         )
 
-    for layer, colormap, _ in metric_layers:
-        colormap.add_to(discharge_map)
+    for layer, _, _ in metric_layers:
         layer.add_to(discharge_map)
 
     if layer_upstream is not None and colormap_upstream is not None:
-        colormap_upstream.add_to(discharge_map)
         layer_upstream.add_to(discharge_map)
+
+    for characteristic_layer, _ in characteristic_layers:
+        characteristic_layer.add_to(discharge_map)
+    if availability_layer is not None:
+        availability_layer.add_to(discharge_map)
+    if snapping_qc_available:
+        snapping_qc_layer.add_to(discharge_map)
+
+    _inject_station_layer_legend_script(
+        discharge_map=discharge_map,
+        metric_layers=metric_layers,
+        upstream_layer=layer_upstream,
+        characteristic_layers=characteristic_layers,
+        availability_layer=availability_layer,
+        caravan_available_count=caravan_available_count,
+        station_count=len(evaluation_gdf),
+    )
 
     _inject_popup_chart_script(discharge_map, station_chart_files)
     _inject_station_search_script(discharge_map, station_marker_index)
@@ -996,6 +1731,7 @@ def create_discharge_folium_map(
         _add_waterbody_layers(discharge_map, waterbodies)
 
     folium.LayerControl(collapsed=False).add_to(discharge_map)
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     discharge_map.save(str(output_path))
     return discharge_map

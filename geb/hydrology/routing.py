@@ -1883,11 +1883,12 @@ class Routing(Module):
             self.default_missing_channel_width,  # Default value for missing values
         )
 
-        # Channel gradient (fraction, dy/dx)
-        minimum_river_slope = 0.0001
-        river_slope = np.maximum(
+        # A positive floor avoids division by zero while allowing experiments
+        # with slower routing through very flat river reaches.
+        minimum_river_slope_m_per_m: float = self.config["minimum_river_slope_m_per_m"]
+        river_slope_m_per_m: ArrayFloat32 = np.maximum(
             self.grid.load2d(self.model.files["grid"]["routing/river_slope_m_per_m"]),
-            minimum_river_slope,
+            minimum_river_slope_m_per_m,
         )
 
         # river_storage_alpha for kinematic wave storage calculation
@@ -1902,7 +1903,7 @@ class Routing(Module):
         self.grid.var.river_storage_alpha = (
             self.grid.var.river_mannings
             * river_wetted_perimeter ** (2 / 3)
-            / np.sqrt(river_slope)
+            / np.sqrt(river_slope_m_per_m)
         ) ** self.grid.var.river_storage_beta
 
         # For dynamic river width, we need the average discharge. Therefore,

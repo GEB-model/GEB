@@ -220,6 +220,13 @@ class RoutingConfig(BaseModel):
         "kinematic_wave",
         description="Routing algorithm: 'accuflux' or 'kinematic_wave'.",
     )
+    minimum_river_slope_m_per_m: float = Field(
+        1e-4,
+        gt=0.0,
+        description=(
+            "Minimum channel slope used to parameterize kinematic-wave routing (m/m)."
+        ),
+    )
     retention_basin_release_threshold_factor: float = Field(
         0.9,
         description="Factor to multiply the activation threshold by to get the release threshold.",
@@ -241,13 +248,9 @@ class DischargeEvaluationConfig(BaseModel):
         description="Minimum modeled upstream area for stations included in discharge evaluation (km2).",
     )
     minimum_timeseries_length_years: float = Field(
-        10.0,
+        5.0,
         ge=0.0,
-        description="Minimum paired observation-simulation timeseries length for stations included in discharge evaluation (years).",
-    )
-    external_evaluation_folder: str | None = Field(
-        None,
-        description="Optional folder with external discharge evaluation CSV files. Relative paths are resolved from the model folder.",
+        description="Minimum total paired observation-simulation data for stations included in discharge evaluation (years; continuity is not required).",
     )
 
 
