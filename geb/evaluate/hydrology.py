@@ -137,31 +137,49 @@ def _calculate_discharge_validation_metrics(
     simulated_discharge_values: np.ndarray = valid_pairs_df[
         "discharge_simulations"
     ].to_numpy(dtype=float)
-    observed_discharge_array: xr.DataArray = xr.DataArray(
-        observed_discharge_values, dims=["time"]
-    )
-    simulated_discharge_array: xr.DataArray = xr.DataArray(
-        simulated_discharge_values, dims=["time"]
-    )
 
     observed_discharge_mean: float = float(np.mean(observed_discharge_values))
     simulated_discharge_mean: float = float(np.mean(simulated_discharge_values))
     observed_discharge_std: float = float(np.std(observed_discharge_values))
     simulated_discharge_std: float = float(np.std(simulated_discharge_values))
 
-    # KGE and its original Gupta et al. components are available from `scores`.
-    kge_result: xr.DataArray | xr.Dataset = calculate_kge(
-        simulated_discharge_array,
-        observed_discharge_array,
-        include_components=True,
+    # KGE follows Gupta et al. (2009): r is Pearson correlation, beta is the
+    # mean-flow ratio, and alpha is the population standard-deviation ratio.
+    if observed_discharge_std == 0.0 or simulated_discharge_std == 0.0:
+        kge_correlation: float = float("nan")
+    else:
+        observed_discharge_anomaly: np.ndarray = (
+            observed_discharge_values - observed_discharge_mean
+        )
+        simulated_discharge_anomaly: np.ndarray = (
+            simulated_discharge_values - simulated_discharge_mean
+        )
+        discharge_covariance: float = float(
+            np.mean(observed_discharge_anomaly * simulated_discharge_anomaly)
+        )
+        kge_correlation = discharge_covariance / (
+            observed_discharge_std * simulated_discharge_std
+        )
+    kge_bias_ratio: float = (
+        float("nan")
+        if observed_discharge_mean == 0.0
+        else simulated_discharge_mean / observed_discharge_mean
     )
-    kge: float = float(kge_result["kge"].item())
-    kge_correlation: float = float(kge_result["rho"].item())
-    kge_bias_ratio: float = float(kge_result["beta"].item())
-    kge_variability_ratio: float = float(kge_result["alpha"].item())
+    kge_variability_ratio: float = (
+        float("nan")
+        if observed_discharge_std == 0.0
+        else simulated_discharge_std / observed_discharge_std
+    )
+    kge: float = 1.0 - float(
+        np.sqrt(
+            (kge_correlation - 1.0) ** 2
+            + (kge_bias_ratio - 1.0) ** 2
+            + (kge_variability_ratio - 1.0) ** 2
+        )
+    )
 
-    # Modified KGE uses the coefficient-of-variation ratio gamma, which is not
-    # included by `scores`, so calculate it directly from the original formula.
+    # Modified KGE follows Kling et al. (2012), replacing alpha with gamma: the
+    # ratio between simulated and observed coefficients of variation.
     observed_discharge_variation: float = (
         float("nan")
         if observed_discharge_mean == 0.0
@@ -186,12 +204,21 @@ def _calculate_discharge_validation_metrics(
     )
 
     # Remaining skill scores and error metrics use the same filtered time steps.
-    nse: float = float(
-        calculate_nse(simulated_discharge_array, observed_discharge_array).item()
+    residual_sum_of_squares: float = float(
+        np.sum((simulated_discharge_values - observed_discharge_values) ** 2)
     )
-    rmse: float = float(
-        calculate_rmse(simulated_discharge_array, observed_discharge_array).item()
+    observed_sum_of_squares: float = float(
+        np.sum((observed_discharge_values - observed_discharge_mean) ** 2)
     )
+    nse: float = (
+        float("nan")
+        if observed_sum_of_squares == 0.0
+        else 1.0 - residual_sum_of_squares / observed_sum_of_squares
+    )
+    mean_squared_error: float = float(
+        np.mean((simulated_discharge_values - observed_discharge_values) ** 2)
+    )
+    rmse: float = float(np.sqrt(mean_squared_error))
     rrmse: float = (
         float("nan") if observed_discharge_std == 0.0 else rmse / observed_discharge_std
     )

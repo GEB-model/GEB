@@ -123,7 +123,7 @@ def calculate_hit_rate(simulations: xr.DataArray, observations: xr.DataArray) ->
 
 
 def parse_flood_forecast_initialisation(
-    filename: str,
+    filename: Path,
 ) -> tuple[str | None, str | None, str, str, str]:
     """Parse flood map filename to extract components.
 
@@ -140,10 +140,11 @@ def parse_flood_forecast_initialisation(
 
     """
     # Remove .zarr extension
-    name_without_ext = filename.replace(".zarr", "")
+    name_without_ext = filename.stem
 
     # Split by ' - ' to get components
     parts = name_without_ext.split(" - ")
+    print(f"Parsing parts: {parts}")
 
     if len(parts) >= 4:
         # Handle case with forecasts included
@@ -205,6 +206,7 @@ def calculate_performance_metrics(
     Raises:
         ValueError: If visualization_type is unknown.
     """
+    observation = observation.rio.write_crs("EPSG:4326")
     simulated = simulated.rio.reproject_match(observation)
 
     rivers: gpd.GeoDataFrame = read_geom(
@@ -313,7 +315,7 @@ def calculate_performance_metrics(
         misses_masked = misses.where(misses == 1)
 
         if visualization_type == "OSM":
-            margin = 3000
+            margin = 0.5
             fig, ax = plt.subplots(figsize=(10, 10))
 
             # Set plot extent including margin
@@ -1230,7 +1232,7 @@ class Hydrodynamics:
                         f"Observation file for event {event_name} not found at {obs_file}. Please check the path in the config file and ensure setup_flood_observations was run correctly."
                     )
 
-                flood_map_path = flood_maps_folder / f"{event_name}_final.zarr"
+                flood_map_path = flood_maps_folder / f"{event_name}_max.zarr"
 
                 if not flood_map_path.exists():
                     raise FileNotFoundError(
@@ -1301,7 +1303,7 @@ class Hydrodynamics:
         flood_maps_folder = self.model.output_folder / "flood_maps"
         # Calculate performance metrics for every event in config file
         for event in self.config["floods"]["events"]:
-            event_name = f"{event['start_time'].strftime('%Y%m%dT%H%M%S')} - {event['end_time'].strftime('%Y%m%dT%H%M%S')}"
+            event_name = f"{event['start_time'].strftime('%Y%m%dT%H%M%S')} - {event['end_time'].strftime('%Y%m%dT%H%M%S')}_max"
             self.model.logger.info(f"event: {event_name}")
 
             # Create event-specific folder
@@ -1348,168 +1350,182 @@ class Hydrodynamics:
                         "Flood observation file is not in the correct format. Please provide a .zarr file."
                     )
 
-            # Find all flood maps corresponding to the event
-            # Use recursive glob to handle both forecast and non-forecast folder structures
-            all_flood_map_files = list(flood_maps_folder.glob("**/*.zarr"))
+                # Find all flood maps corresponding to the event
+                # Use recursive glob to handle both forecast and non-forecast folder structures
+                all_flood_map_files = list(flood_maps_folder.glob("**/*.zarr"))
 
-            # Filter flood_map_files for the current event only
-            flood_map_files = []
-            for flood_map_path in all_flood_map_files:
-                parsed = parse_flood_forecast_initialisation(flood_map_path)
+                # Filter flood_map_files for the current event only
+                flood_map_files = []
+                for flood_map_path in all_flood_map_files:
+                    parsed = parse_flood_forecast_initialisation(flood_map_path)
 
-                # Skip files that do not match the expected format
-                if parsed is None:
-                    continue
+                    # Skip files that do not match the expected format
+                    if parsed is None:
+                        continue
 
-                file_forecast_init, _, _, _, parsed_event_name = parsed
-                # Check if file matches current event
-                if parsed_event_name == event_name:
-                    flood_map_files.append(flood_map_path)
+                    file_forecast_init, _, _, _, parsed_event_name = parsed
+                    # Check if file matches current event
+                    if parsed_event_name == event_name:
+                        flood_map_files.append(flood_map_path)
 
-            self.model.logger.info(
-                f"Found {len(flood_map_files)} flood map files for event {event_name}"
-            )
-
-            if len(flood_map_files) == 1:
                 self.model.logger.info(
-                    "Only one flood map found, assuming no forecasts were included in the simulation."
-                )
-                flood_map_name = f"{event['start_time'].strftime('%Y%m%dT%H%M%S')} - {event['end_time'].strftime('%Y%m%dT%H%M%S')}.zarr"
-                flood_map_path = (
-                    Path(self.model.output_folder) / "flood_maps" / flood_map_name
-                )
-                calculate_performance_metrics(
-                    observation=read_zarr(obs_file),
-                    simulated=read_zarr(flood_map_path),
-                    output_folder=event_folder,
-                    run_name=run_name,
-                    minimum_flood_depth=self.config["floods"]["minimum_flood_depth"],
-                    elevation_data=read_zarr(self.model.files["other"]["DEM/fabdem"]),
-                    visualization_type="OSM",
-                    name=flood_map_path.stem,
-                )
-                print(f"Successfully evaluated: {flood_map_path.name}")
-
-            elif len(flood_map_files) == 0:
-                raise FileNotFoundError(
-                    "No flood map files found for this event. Did you run the hydrodynamic model?"
+                    f"Found {len(flood_map_files)} flood map files for event {event_name}"
                 )
 
-            else:
-                print(
-                    f"Multiple flood maps found ({len(flood_map_files)}), processing each."
-                )
-                unique_forecast_inits = set()
-                performance_metrics_list = []
-
-                # Identify unique forecast initializations
-                for flood_map_name in flood_map_files:
-                    # Parse the flood map filename to extract components
-                    print(f"flood_map_name: {flood_map_name}")
-                    forecast_init, member, event_start, event_end, parsed_event_name = (
-                        parse_flood_forecast_initialisation(flood_map_name)
+                if len(flood_map_files) == 1:
+                    self.model.logger.info(
+                        "Only one flood map found, assuming no forecasts were included in the simulation."
                     )
-                    unique_forecast_inits.add(forecast_init)
+                    flood_map_name = f"{event['start_time'].strftime('%Y%m%dT%H%M%S')} - {event['end_time'].strftime('%Y%m%dT%H%M%S')}_max.zarr"
+                    flood_map_path = (
+                        Path(self.model.output_folder) / "flood_maps" / flood_map_name
+                    )
+                    calculate_performance_metrics(
+                        observation=read_zarr(obs_file),
+                        simulated=read_zarr(flood_map_path),
+                        output_folder=event_folder,
+                        run_name=run_name,
+                        minimum_flood_depth=self.config["floods"][
+                            "minimum_flood_depth"
+                        ],
+                        elevation_data=read_zarr(
+                            self.model.files["other"]["DEM/fabdem"]
+                        ),
+                        visualization_type="Hillshade",
+                        name=obs_file.stem,
+                    )
+                    print(f"Successfully evaluated: {flood_map_path.name}")
 
-                # Convert to sorted list for consistent processing order
-                unique_forecast_inits_list = sorted(
-                    [init for init in unique_forecast_inits if init is not None]
-                )
-                print(
-                    f"Found {len(unique_forecast_inits_list)} unique forecast initializations: {unique_forecast_inits_list}"
-                )
+                elif len(flood_map_files) == 0:
+                    raise FileNotFoundError(
+                        "No flood map files found for this event. Did you run the hydrodynamic model?"
+                    )
 
-                # Process each unique forecast initialization
-                for forecast_init in unique_forecast_inits_list:
-                    print(f"Processing forecast initialization: {forecast_init}")
-
-                    # Create forecast initialization folder
-                    forecast_folder = event_folder / forecast_init
-                    forecast_folder.mkdir(parents=True, exist_ok=True)
-
-                    matching_flood_maps = []
-                    for flood_map_path in flood_map_files:
-                        parsed = parse_flood_forecast_initialisation(flood_map_path)
-
-                        # Skip files that do not match the expected format
-                        if parsed is None:
-                            continue
-
-                        file_forecast_init, _, _, _, parsed_event_name = parsed
-
-                        # Only include files that match current forecast init and event
-                        if (
-                            file_forecast_init == forecast_init
-                            and parsed_event_name == event_name
-                        ):
-                            matching_flood_maps.append(flood_map_path)
-
+                else:
                     print(
-                        f"Found {len(matching_flood_maps)} flood maps for forecast initialization {forecast_init}"
+                        f"Multiple flood maps found ({len(flood_map_files)}), processing each."
                     )
-                    # Evaluate each matching flood map
-                    forecast_metrics_list = []
+                    unique_forecast_inits = set()
+                    performance_metrics_list = []
 
-                    for flood_map_path in matching_flood_maps:
-                        print(f"   Evaluating: {flood_map_path.name}")
+                    # Identify unique forecast initializations
+                    for flood_map_name in flood_map_files:
+                        # Parse the flood map filename to extract components
+                        print(f"flood_map_name: {flood_map_name}")
+                        (
+                            forecast_init,
+                            member,
+                            event_start,
+                            event_end,
+                            parsed_event_name,
+                        ) = parse_flood_forecast_initialisation(flood_map_name)
+                        unique_forecast_inits.add(forecast_init)
 
-                        elevation_path = self.config["floods"].get(
-                            "elevation_data", self.model.files["other"]["DEM/fabdem"]
-                        )
-                        metrics = calculate_performance_metrics(
-                            observation=read_zarr(obs_file),
-                            simulated=read_zarr(flood_map_path),
-                            visualization_type="OSM",
-                            output_folder=forecast_folder,
-                            run_name=run_name,
-                            minimum_flood_depth=self.config["floods"][
-                                "minimum_flood_depth"
-                            ],
-                            elevation_data=read_zarr(elevation_path),
-                            name=flood_map_path.stem,
-                        )
-                        if metrics is None:
-                            continue
-                        print("   Flood map evaluation complete.")
-                        # Add metadata to metrics
-                        forecast_init_parsed, member, _, _, _ = (
-                            parse_flood_forecast_initialisation(flood_map_path.name)
-                        )
-                        metrics_with_metadata = {
-                            "forecast_init": forecast_init_parsed,
-                            "member": member,
-                            "filename": flood_map_path.name,
-                            **metrics,
-                        }
+                    # Convert to sorted list for consistent processing order
+                    unique_forecast_inits_list = sorted(
+                        [init for init in unique_forecast_inits if init is not None]
+                    )
+                    print(
+                        f"Found {len(unique_forecast_inits_list)} unique forecast initializations: {unique_forecast_inits_list}"
+                    )
 
-                        performance_metrics_list.append(metrics_with_metadata)
-                        forecast_metrics_list.append(metrics)
-                        all_performance_metrics.append(metrics)
+                    # Process each unique forecast initialization
+                    for forecast_init in unique_forecast_inits_list:
+                        print(f"Processing forecast initialization: {forecast_init}")
+
+                        # Create forecast initialization folder
+                        forecast_folder = event_folder / forecast_init
+                        forecast_folder.mkdir(parents=True, exist_ok=True)
+
+                        matching_flood_maps = []
+                        for flood_map_path in flood_map_files:
+                            parsed = parse_flood_forecast_initialisation(flood_map_path)
+
+                            # Skip files that do not match the expected format
+                            if parsed is None:
+                                continue
+
+                            file_forecast_init, _, _, _, parsed_event_name = parsed
+
+                            # Only include files that match current forecast init and event
+                            if (
+                                file_forecast_init == forecast_init
+                                and parsed_event_name == event_name
+                            ):
+                                matching_flood_maps.append(flood_map_path)
+
                         print(
-                            "   Successfully evaluated: "
-                            f"{flood_map_path.name} vs {obs_file.name}"
+                            f"Found {len(matching_flood_maps)} flood maps for forecast initialization {forecast_init}"
+                        )
+                        # Evaluate each matching flood map
+                        forecast_metrics_list = []
+
+                        for flood_map_path in matching_flood_maps:
+                            print(f"   Evaluating: {flood_map_path.name}")
+
+                            elevation_path = self.config["floods"].get(
+                                "elevation_data",
+                                self.model.files["other"]["DEM/fabdem"],
+                            )
+                            metrics = calculate_performance_metrics(
+                                observation=read_zarr(obs_file),
+                                simulated=read_zarr(flood_map_path),
+                                visualization_type="Hillshade",
+                                output_folder=forecast_folder,
+                                run_name=run_name,
+                                minimum_flood_depth=self.config["floods"][
+                                    "minimum_flood_depth"
+                                ],
+                                elevation_data=read_zarr(elevation_path),
+                                name=flood_map_path.stem,
+                            )
+                            if metrics is None:
+                                continue
+                            print("   Flood map evaluation complete.")
+                            # Add metadata to metrics
+                            forecast_init_parsed, member, _, _, _ = (
+                                parse_flood_forecast_initialisation(flood_map_path.name)
+                            )
+                            metrics_with_metadata = {
+                                "forecast_init": forecast_init_parsed,
+                                "member": member,
+                                "filename": flood_map_path.name,
+                                **metrics,
+                            }
+
+                            performance_metrics_list.append(metrics_with_metadata)
+                            forecast_metrics_list.append(metrics)
+                            all_performance_metrics.append(metrics)
+                            print(
+                                "   Successfully evaluated: "
+                                f"{flood_map_path.name} vs {obs_file.name}"
+                            )
+
+                    if performance_metrics_list:
+                        performance_df = pd.DataFrame(performance_metrics_list)
+
+                        # Create forecast performance plots
+                        create_forecast_performance_plots(
+                            performance_df, event_name, event_folder
                         )
 
-                if performance_metrics_list:
-                    performance_df = pd.DataFrame(performance_metrics_list)
+                        # Save detailed performance metrics
+                        detailed_filename = f"{event_name.replace(':', '_')}_detailed_performance_metrics.csv"
+                        performance_df.to_csv(
+                            event_folder / detailed_filename, index=False
+                        )
+                        print(
+                            f"Detailed performance metrics saved as: {event_folder / detailed_filename}"
+                        )
 
-                    # Create forecast performance plots
-                    create_forecast_performance_plots(
-                        performance_df, event_name, event_folder
-                    )
-
-                    # Save detailed performance metrics
-                    detailed_filename = f"{event_name.replace(':', '_')}_detailed_performance_metrics.csv"
-                    performance_df.to_csv(event_folder / detailed_filename, index=False)
-                    print(
-                        f"Detailed performance metrics saved as: {event_folder / detailed_filename}"
-                    )
-
-            print(f"Completed processing event: {event_name}\n")
+                print(
+                    f"Completed processing event: {event_name}, observation file: {obs_file.name}\n"
+                )
 
         print("Flood map performance metrics calculated for all events.")
 
         if not all_performance_metrics:
+            print("No performance metrics available.")
             return {
                 "hit_rate": None,
                 "false_alarm_rate": None,

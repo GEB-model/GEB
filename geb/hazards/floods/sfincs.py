@@ -266,6 +266,8 @@ class SFINCSRootModel:
             ValueError: if depth_calculation_method is not 'manning' or 'power_law',
             ValueError: if grid_size_multiplier is not a positive integer.
             ValueError: if resolution of DEM is not square pixels.
+            KeyError: if hydromt river interpolation fails and the underlying call raises an
+                unexpected index error unrelated to the known forecast fallback case.
         """
         # if overwrite is True, always rebuild the model
         if overwrite is True:
@@ -375,7 +377,9 @@ class SFINCSRootModel:
         DEMs: list[dict[str, str | Path | xr.DataArray | xr.Dataset]] = [
             DEM.copy() for DEM in DEMs
         ]
-
+        catchment_boundary = gpd.read_parquet(
+            "/scistor/ivm/rpo100/GEB/models/meuse_improved/forecast_runs/catchment_boundary.geoparquet"
+        )
         # Remove unnecessary keys (to avoid warnings) and set reproj_method to bilinear for all DEMs
         DEMs_in_area_of_interest = []
         for DEM in DEMs:
@@ -403,17 +407,31 @@ class SFINCSRootModel:
             DEM["reproj_method"] = "bilinear"
             time_start = time.perf_counter()
             self.logger.info("Setting up SFINCS model dep (DEMs)...")
+            # DEM["elevation"].chunk({"x": 500, "y": 500}).to_zarr(
+            #     self.path / f"dem_raw.zarr", mode="w"
+            # )
 
             DEM["elevation"] = clip_with_geometry(
                 DEM["elevation"]["elevation"],
                 gpd.GeoDataFrame(
-                    [self.subbasins.union_all().buffer(0.1)],
+                    [self.subbasins.union_all().buffer(0.3)],
                     columns=["geometry"],
                     crs=self.subbasins.crs,
                 ),
                 all_touched=True,
                 drop=True,
             ).to_dataset(name="elevation")
+            DEM["elevation"] = clip_with_geometry(
+                DEM["elevation"]["elevation"],
+                catchment_boundary.to_crs(DEM["elevation"].rio.crs),
+                all_touched=True,
+                drop=True,
+            ).to_dataset(name="elevation")
+            DEM["elevation"] = DEM["elevation"].chunk({"x": 500, "y": 500})
+            DEM["elevation"].to_zarr(
+                self.path / f"dem_clipped_catchment.zarr", mode="w"
+            )
+
             DEMs_in_area_of_interest.append(DEM)
 
         if not DEMs_in_area_of_interest:
@@ -438,12 +456,26 @@ class SFINCSRootModel:
             .to_crs(self.crs)
             .copy()  # copy to remove subset in memory
         )
+        missing_downstream_ids = sorted(
+            set(self.rivers["downstream_ID"]) - {-1} - set(self.rivers.index)
+        )
+        self.logger.debug(
+            "SFINCS root %s: received %d rivers, retained %d after grid filtering; "
+            "missing downstream IDs=%s.",
+            self.name,
+            len(rivers),
+            len(self.rivers),
+            missing_downstream_ids,
+        )
+        write_geom(self.rivers, self.path / "debug_rivers_after_filter.geoparquet")
         del rivers
 
         flood_plain: gpd.GeoDataFrame = self.get_flood_plain()
         time_start = time.perf_counter()
         self.logger.info("Setting up SFINCS model mask...")
         sf.mask.create_active(include_polygon=flood_plain, reset_mask=True)
+        mask_debug: xr.DataArray = self.mask
+        mask_debug.to_zarr(self.path / "debug_mask.zarr", mode="w")
         time_setup_mask = time.perf_counter() - time_start
         self.logger.info(f"SFINCS model mask setup took {time_setup_mask:.2f} seconds")
 
@@ -599,7 +631,6 @@ class SFINCSRootModel:
                         rivers_to_burn.crs
                     ).union_all(),
                 )
-
                 # The downstream rivers are in principle not included in the hydrological simulations.
                 # They only may be if a subset of subbasins is requested for simulation. However, such further
                 # downstream rivers may have significant discharge missing because other inflowing rivers may not
@@ -719,6 +750,12 @@ class SFINCSRootModel:
         # if sfincs is run with subgrid, we set up the subgrid, with burned in rivers and mannings
         # roughness within the subgrid. If not, we burn the rivers directly into the main grid,
         # including mannings roughness.
+        self.logger.info(
+            f"Rivers: {len(rivers_to_burn)}, have columns {rivers_to_burn.columns.tolist()}."
+        )
+        self.logger.info(
+            f"Missing value for columns: {rivers_to_burn[['width', 'depth', 'manning']].isnull().sum().to_dict()}"
+        )
         if subgrid:
             self.logger.info(
                 f"Setting up SFINCS subgrid with {grid_size_multiplier} subgrid pixels..."
@@ -775,27 +812,29 @@ class SFINCSRootModel:
                 sf.elevation.data["dep"] = burned_elv
                 sf.roughness.data["manning"] = burned_manning
 
-        sf.write()
-
         write_geom(self.rivers, self.path / "rivers.geoparquet")
         write_geom(self.subbasins, self.path / "subbasins.geoparquet")
 
         cross_sections = gpd.read_file(
-            "/scistor/ivm/rpo100/GEB/models/Meuse/base/meuse_crosssections.gpkg"
+            "/scistor/ivm/rpo100/GEB/models/meuse_improved/base/meuse_crosssections.gpkg"
         )
 
         obs_points = gpd.read_file(
-            "/scistor/ivm/rpo100/GEB/models/Meuse/base/meuse_observation_points.gpkg"
+            "/scistor/ivm/rpo100/GEB/models/meuse_improved/base/meuse_observation_points.gpkg"
         )
 
         obs_points = obs_points.explode(index_parts=False).reset_index(
             drop=True
         )  # <-- MultiPoint -> Point
-
+        self.logger.info(f"Number of observation points: {len(obs_points)}")
+        self.logger.info(f"Number of cross sections: {len(cross_sections)}")
+        self.logger.info(f"Cross-section names: {cross_sections['name'].tolist()[:10]}")
         sf.cross_sections.create(cross_sections, merge=False)
         sf.observation_points.create(obs_points, merge=False)
         sf.cross_sections.write()
         sf.observation_points.write()
+        self.logger.info("Crossections and observation points build complete.")
+        sf.write()
 
         self.subbasins.to_parquet(self.path / "subbasins.geoparquet")
         self.rivers.to_parquet(self.path / "rivers.geoparquet")
@@ -808,9 +847,8 @@ class SFINCSRootModel:
 
         if write_figures:
             # Use relative path to avoid duplicate folder creation by hydromt_sfincs
-            relative_fig_path = self.figures_path.relative_to(self.path)
             fig, _ = sf.plot_basemap(
-                fn_out=str(relative_fig_path / "basemap.png"),
+                fn_out=str(self.figures_path / "basemap.png"),
             )
             plt.close(fig)
 
@@ -984,6 +1022,7 @@ class SFINCSRootModel:
         Raises:
             ValueError: if the calculated outflow point is not a single point.
             ValueError: if the calculated outflow point is outside of the model grid.
+            KeyError: if a river references a downstream river missing from the SFINCS river table.
         """
 
         def export_diagnostics(
@@ -1083,6 +1122,23 @@ class SFINCSRootModel:
                 # extend the river geometry to include all downstream segments
                 # up to coastal outflow
                 while downstream_river_idx != -1:
+                    if downstream_river_idx not in self.rivers.index:
+                        self.logger.error(
+                            "SFINCS root %s: river %s references missing downstream river %s. "
+                            "Available river count=%d.",
+                            self.name,
+                            river_idx,
+                            downstream_river_idx,
+                            len(self.rivers),
+                        )
+                        write_geom(
+                            self.rivers,
+                            self.path / "debug_rivers_missing_downstream.geoparquet",
+                        )
+                        raise KeyError(
+                            f"River {river_idx} references missing downstream river "
+                            f"{downstream_river_idx}."
+                        )
                     downstream_river = self.rivers.loc[downstream_river_idx]
                     # combine the geometries to ensure intersection is found
                     river = LineString(
@@ -1205,7 +1261,7 @@ class SFINCSRootModel:
             self.mask.values[outflow_mask] = SFINCS_WATER_LEVEL_BOUNDARY
 
     def get_flood_plain(
-        self, maximum_height_above_nearest_drainage_m: float = 10.0
+        self, maximum_height_above_nearest_drainage_m: float = 30.0
     ) -> gpd.GeoDataFrame:
         """Returns the flood plain grid of the SFINCS model.
 
@@ -1231,6 +1287,8 @@ class SFINCSRootModel:
             burn_value=1,
             all_touched=True,
         ).astype(bool)
+        subbasins_raster_write = subbasins_raster.chunk({"x": 500, "y": 500})
+        subbasins_raster_write.to_zarr(self.path / "subbasins_raster.zarr", mode="w")
 
         # get a raster of all drainage cells (i.e., 0 HAND). We do so
         # by burning the rivers into a raster
@@ -1322,6 +1380,10 @@ class SFINCSRootModel:
             ],
             ignore_index=True,
         )  # ty:ignore[invalid-assignment]
+        self.logger.info(
+            f"Flood plain area: {flood_plain_geom.geometry.area.sum():,.2f} m²"
+        )
+        flood_plain_geom.to_parquet(self.path / "flood_plain.geoparquet")
         return flood_plain_geom
 
     @property
@@ -2109,13 +2171,12 @@ class SFINCSSimulation:
 
         if self.write_figures:
             # Use relative paths to avoid duplicate folder creation by hydromt_sfincs
-            relative_fig_path = self.figures_path.relative_to(self.root_path)
             fig, _ = self.sfincs_model.plot_forcing(
-                fn_out=str(relative_fig_path / "forcing.png")
+                fn_out=str(self.figures_path / "forcing.png")
             )
             plt.close(fig)
             fig, _ = self.sfincs_model.plot_basemap(
-                fn_out=str(relative_fig_path / "basemap.png"),
+                fn_out=str(self.figures_path / "basemap.png"),
             )
             plt.close(fig)
 
@@ -2240,13 +2301,12 @@ class SFINCSSimulation:
 
         if self.write_figures:
             # Use relative paths to avoid duplicate folder creation by hydromt_sfincs
-            relative_fig_path = self.figures_path.relative_to(self.root_path)
             fig, _ = self.sfincs_model.plot_basemap(
-                fn_out=str(relative_fig_path / "src_points_check.png"),
+                fn_out=str(self.figures_path / "src_points_check.png"),
             )
             plt.close(fig)
             fig, _ = self.sfincs_model.plot_forcing(
-                fn_out=str(relative_fig_path / "forcing.png")
+                fn_out=str(self.figures_path / "forcing.png")
             )
             plt.close(fig)
 

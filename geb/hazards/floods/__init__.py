@@ -467,13 +467,22 @@ class Floods(Module):
         active_rivers: gpd.GeoDataFrame = (
             self.model.hydrology.routing.get_active_rivers()
         )
+        active_rivers.to_parquet("active_rivers_for_event.geoparquet")
 
         # but also include downstream outflows
         rivers: gpd.GeoDataFrame = self.model.hydrology.routing.var.rivers.copy()
         simulation_rivers: gpd.GeoDataFrame = pd.concat(
             [active_rivers, rivers[rivers["is_downstream_outflow"]]]
         )
+        self.model.logger.debug(
+            "Flood event %s: %d active rivers, %d simulation rivers, %d total rivers.",
+            event.name,
+            len(active_rivers),
+            len(simulation_rivers),
+            len(rivers),
+        )
         discharge_by_river_run = self.discharge_by_river()
+        discharge_by_river_run.to_parquet("discharge_by_river_for_event.parquet")
 
         subbasins_of_interest: Literal["all"] | Literal["auto"] | list[int] = deepcopy(
             self.config["subbasins"]
@@ -495,6 +504,45 @@ class Floods(Module):
                     max_discharge_per_river_during_event.loc[active_rivers.index]
                     > active_rivers["return_period_2_years_daily_m3_per_s"]
                 )
+                # COMIDs uit discharge dataframe staan in de KOLOMMEN
+                discharge_comids = pd.Index(discharge_by_river_run.columns).astype(str)
+
+                # COMIDs uit active_rivers staan in de INDEX
+                active_comids = pd.Index(active_rivers.index).astype(str)
+
+                # Maak dataframe met alle COMIDs die in één van beide voorkomen
+                all_comids = discharge_comids.union(active_comids)
+
+                debug_subbasins = pd.DataFrame(index=all_comids)
+                debug_subbasins.index.name = "COMID"
+
+                # ------------------------------------------------------------
+                # 1. Max discharge tijdens het event
+                # ------------------------------------------------------------
+
+                max_discharge = discharge_by_river_run.loc[
+                    event.start_time : event.end_time
+                ].max(axis=0)
+
+                # Zorg dat index dezelfde COMID-representatie heeft
+                max_discharge.index = max_discharge.index.astype(str)
+
+                debug_subbasins["max_discharge_event_m3_s"] = max_discharge
+
+                # ------------------------------------------------------------
+                # 2. Bankfull / 2-year return period
+                # ------------------------------------------------------------
+
+                bankfull = active_rivers["return_period_2_years_daily_m3_per_s"].copy()
+
+                bankfull.index = bankfull.index.astype(str)
+
+                debug_subbasins["bankfull_2yr_m3_s"] = bankfull
+                debug_subbasins["exceeds_bankfull"] = (
+                    debug_subbasins["max_discharge_event_m3_s"]
+                    > debug_subbasins["bankfull_2yr_m3_s"]
+                )
+                debug_subbasins.to_parquet(f"debug_subbasins_for_event.parquet")
 
                 # select those basins and their downstream basins for simulation
                 river_graph = create_river_graph(simulation_rivers)
@@ -550,7 +598,9 @@ class Floods(Module):
                 & rivers["is_further_downstream_outflow"],
                 "is_further_downstream_outflow",
             ] = False
-
+            print(
+                f"number of subbasins to simulate: {len(included_subbasins)} of {len(subbasins)}"
+            )
             grouped_subbasins = {0: list(included_subbasins.index)}
         elif subbasins_of_interest == "all":
             river_graph = create_river_graph(simulation_rivers)
@@ -573,8 +623,13 @@ class Floods(Module):
             subbasins_group = subbasins[subbasins.index.isin(group)]
 
             if not subbasins_group.empty:
+                sfincs_model_name = f"group_{group_id}"
+                if self.model.multiverse_name is not None:
+                    sfincs_model_name = (
+                        f"{self.model.multiverse_name}/{sfincs_model_name}"
+                    )
                 sfincs_root_model: SFINCSRootModel = self.build(
-                    f"group_{group_id}",
+                    sfincs_model_name,
                     all_rivers=rivers,
                     subbasins=subbasins_group,
                 )  # build or read the model

@@ -11,6 +11,11 @@ class ForecastsConfig(BaseModel):
 
     use: bool = Field(False, description="Whether to use forecasts.")
     provider: str = Field("ECMWF", description="The forecast provider.")
+    processing: str = Field("merged_control_ensemble", description="The forecast processing method.")
+    overwrite: bool | Literal["auto"] = Field(
+        "auto",
+        description="Whether to overwrite existing forecast member results. True, False, or 'auto'. If 'auto', it will skip members that have already been completed successfully.",
+    )
 
 
 class RegionConfig(BaseModel):

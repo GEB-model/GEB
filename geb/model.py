@@ -3,7 +3,6 @@
 import copy
 import datetime
 import logging
-import shutil
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -240,9 +239,8 @@ class GEBModel(Module):
         )  # create a temporary folder for the multiverse
         self.store.save(store_location)  # save the current state of the model
 
-        original_report_folder: Path = (
-            self.reporter.report_folder
-        )  # remember where the main run writes its output
+        original_reporter: Reporter = self.reporter
+        original_report_folder: Path = original_reporter.report_folder
 
         if return_mean_discharge:
             mean_discharge: dict[
@@ -299,87 +297,141 @@ class GEBModel(Module):
             forecast_end_day - self.simulation_start.date()
         ).days  # set the number of timesteps to the end of the forecast
 
-        # Flush the main run report so member runs can clone a complete history
-        # up to (but excluding) the forecast issue timestep.
-        self.reporter.finalize()
+        # # Flush the main run report so member runs can clone a complete history
+        # # up to (but excluding) the forecast issue timestep.
+        # self.reporter.finalize()
 
-        for member in forecast_members:  # loop over all forecast members
-            self.multiverse_name: str = f"forecast_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}/member_{member}"  # set the multiverse name to the member name
+        # Get the overwrite setting from config
+        overwrite: bool | str = self.config["general"]["forecasts"]["overwrite"]
 
-            # redirect the reporter to a per-member subfolder so outputs do not
-            # overwrite the main-run zarrs or each other
-            member_variables = self.reporter.clone_variables()
-            saved_runtime_state, saved_variables = (
-                self.reporter._save_and_clear_runtime_state()
-            )  # snapshot and clear all open zarr handles / indices
-            member_report_folder: Path = (
-                original_report_folder / self.multiverse_name
-            )  # one dedicated output folder per forecast member
-            self.reporter.report_folder = member_report_folder
-            self.reporter.variables = member_variables
-            member_report_folder.mkdir(parents=True, exist_ok=True)
+        # Check if entire forecast is already complete (all members done)
+        if overwrite == "auto":
+            # Count how many members are already complete
+            completed_members: list[str] = [
+                member
+                for member in forecast_members
+                if self._is_forecast_member_complete(forecast_issue_datetime, member)
+            ]
 
-            # Clone the base run report snapshot into the member folder so
-            # forecast outputs contain the full model history from simulation
-            # start up to the current timestep.
-            for source_item in original_report_folder.iterdir():
-                if source_item.name.startswith("forecast_"):
-                    continue
-
-                target_item = member_report_folder / source_item.name
-                if source_item.is_dir():
-                    shutil.copytree(
-                        source_item,
-                        target_item,
-                        dirs_exist_ok=True,
-                        ignore=shutil.ignore_patterns("*.csv"),
-                    )
-                else:
-                    if source_item.suffix != ".csv":
-                        shutil.copy2(source_item, target_item)
-
-            # Tell the reporter to resume writing from the current model index
-            # when opening pre-existing zarr files in the member folder.
-            self._report_resume_from_timestep = store_timestep
-
-            try:
-                for loader_name, loader in self.forcing.loaders.items():
-                    if loader.supports_forecast and loader_name in forecast_data:
-                        loader.set_forecast(
-                            forecast_issue_datetime=forecast_issue_datetime,
-                            da=forecast_data[loader_name].sel(member=member),
-                        )
-
-                self.logger.info(f"Running forecast member {member}")
-                self.step_to_end()  # steps to end of forecast period as defined in self.n_timesteps
-
-                if return_mean_discharge:
-                    mean_discharge[member] = (
-                        self.hydrology.routing.grid.var.discharge_m3_s.mean()
-                    ).item()  # calculate the mean discharge for the member
-
-                self.reporter.finalize()  # flush all buffered member outputs to member_report_folder
-
-                # restore the model to the state before the forecast for the next member
-                # so the n_timesteps is restored to the number of timesteps at
-                # the end of the forecast period
+            if len(completed_members) == len(forecast_members):
+                self.logger.info(
+                    f"Forecast {forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')} is already complete "
+                    f"(all {len(forecast_members)} members done). Skipping entire forecast."
+                )
+                # Restore the model state and return early
                 self.restore(
                     store_location=store_location,
                     timestep=store_timestep,
-                    n_timesteps=self.n_timesteps,
-                    reporter=self.reporter,  # just set the old reporter
-                    config=self.config,  # just the old config
-                )  # restore the initial state of the multiverse
-            finally:
-                # discard any partially-written member state and restore the
-                # main-run reporter regardless of whether the member succeeded
-                if hasattr(self, "_report_resume_from_timestep"):
-                    delattr(self, "_report_resume_from_timestep")
-                self.reporter._save_and_clear_runtime_state()
-                self.reporter._restore_runtime_state(
-                    saved_runtime_state, saved_variables
+                    n_timesteps=store_n_timesteps,
+                    reporter=self.reporter,
+                    config=self.config,
                 )
-                self.reporter.report_folder = original_report_folder
+                if return_mean_discharge:
+                    self.logger.warning(
+                        "Cannot retrieve mean discharge for already completed forecast. "
+                        "Set overwrite=True in config to recalculate."
+                    )
+                    return {}  # Return empty dict for consistency
+                return None
+            elif len(completed_members) > 0:
+                self.logger.info(
+                    f"Forecast {forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}: "
+                    f"{len(completed_members)}/{len(forecast_members)} members already completed. "
+                    f"Will resume from member {sorted([m for m in forecast_members if m not in completed_members])[0]}."
+                )
+
+        for member in forecast_members:  # loop over all forecast members
+            # Check if we should skip this member based on overwrite setting
+            if overwrite == "auto":
+                if self._is_forecast_member_complete(forecast_issue_datetime, member):
+                    self.logger.info(
+                        f"Skipping forecast member {member} - already completed"
+                    )
+                    # If we're collecting mean discharge, read it from existing output if possible
+                    # Otherwise just skip
+                    if return_mean_discharge:
+                        # We can't easily reconstruct the mean discharge, so just skip this member
+                        # User should set overwrite to True if they need to recalculate mean discharge
+                        self.logger.warning(
+                            f"Cannot retrieve mean discharge for existing member {member}. "
+                            f"Set overwrite=True in config to recalculate."
+                        )
+                    continue
+            elif not overwrite:
+                # If overwrite is explicitly False, check if member exists and skip or warn
+                if self._is_forecast_member_complete(forecast_issue_datetime, member):
+                    self.logger.warning(
+                        f"Forecast member {member} already exists and overwrite=False. Skipping."
+                    )
+                    continue
+
+            self.multiverse_name: str = f"forecast_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}/member_{member}"  # set the multiverse name to the member name
+
+            member_report_folder: Path = original_report_folder / self.multiverse_name
+            self.reporter = Reporter(self, member_report_folder, clean=True)
+
+            # # Clone the base run report snapshot into the member folder so
+            # # forecast outputs contain the full model history from simulation
+            # # start up to the current timestep.
+            # for source_item in original_report_folder.iterdir():
+            #     if source_item.name.startswith("forecast_"):
+            #         continue
+
+            #     target_item = member_report_folder / source_item.name
+            #     if source_item.is_dir():
+            #         shutil.copytree(
+            #             source_item,
+            #             target_item,
+            #             dirs_exist_ok=True,
+            #             ignore=shutil.ignore_patterns("*.csv"),
+            #         )
+            #     else:
+            #         if source_item.suffix != ".csv":
+            #             shutil.copy2(source_item, target_item)
+
+            # # Tell the reporter to resume writing from the current model index
+            # # when opening pre-existing zarr files in the member folder.
+            # self._report_resume_from_timestep = store_timestep
+
+            # try:
+            for loader_name, loader in self.forcing.loaders.items():
+                if loader.supports_forecast and loader_name in forecast_data:
+                    loader.set_forecast(
+                        forecast_issue_datetime=forecast_issue_datetime,
+                        da=forecast_data[loader_name].sel(member=member),
+                    )
+
+            self.logger.info(f"Running forecast member {member}")
+            self.step_to_end()  # steps to end of forecast period as defined in self.n_timesteps
+            self.reporter.finalize()
+
+            if return_mean_discharge:
+                mean_discharge[member] = (
+                    self.hydrology.routing.grid.var.discharge_m3_s.mean()
+                ).item()  # calculate the mean discharge for the member
+
+            # self.reporter.finalize()  # flush all buffered member outputs to member_report_folder
+
+            # restore the model to the state before the forecast for the next member
+            # so the n_timesteps is restored to the number of timesteps at
+            # the end of the forecast period
+            self.restore(
+                store_location=store_location,
+                timestep=store_timestep,
+                n_timesteps=self.n_timesteps,
+                reporter=original_reporter,
+                config=self.config,  # just the old config
+            )  # restore the initial state of the multiverse
+            # finally:
+            #     # discard any partially-written member state and restore the
+            #     # main-run reporter regardless of whether the member succeeded
+            #     if hasattr(self, "_report_resume_from_timestep"):
+            #         delattr(self, "_report_resume_from_timestep")
+            #     self.reporter._save_and_clear_runtime_state()
+            #     self.reporter._restore_runtime_state(
+            #         saved_runtime_state, saved_variables
+            #     )
+            #     self.reporter.report_folder = original_report_folder
 
         self.logger.info("Forecast finished, restoring all conditions...")
 
@@ -403,6 +455,66 @@ class GEBModel(Module):
             return mean_discharge  # return the mean discharge for each member
         else:
             return None  # nothing to return
+
+    def _is_forecast_member_complete(
+        self,
+        forecast_issue_datetime: datetime.datetime,
+        member: str,
+    ) -> bool:
+        """Check if a forecast member has already been completed successfully.
+
+        A member is considered complete if:
+        1. The member output folder exists
+        2. All expected flood event outputs exist (based on the config)
+
+        Args:
+            forecast_issue_datetime: Datetime that the forecast was issued.
+            member: The member identifier (e.g., "0", "1", etc.).
+
+        Returns:
+            True if the member is complete, False otherwise.
+        """
+        # Check if floods are being simulated
+        if not self.config["hazards"]["floods"]["simulate"]:
+            # If no floods are simulated, we cannot check completion reliably
+            # so we return False to be safe (i.e., rerun the member)
+            return False
+
+        # Construct the path to the member's output folder
+        member_folder: Path = (
+            self.output_folder
+            / "flood_maps"
+            / f"forecast_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}"
+            / f"member_{member}"
+        )
+
+        # If the folder doesn't exist, the member is not complete
+        if not member_folder.exists():
+            return False
+
+        # Check if flood events are configured
+        flood_events: list[dict] = self.config["hazards"]["floods"].get("events", [])
+        if not flood_events:
+            # No specific events configured, assume complete if folder exists
+            # This is a conservative check
+            return True
+
+        # Check if all expected event output files exist
+        for event in flood_events:
+            start_time: str = event["start_time"].strftime("%Y%m%dT%H%M%S")
+            end_time: str = event["end_time"].strftime("%Y%m%dT%H%M%S")
+
+            # Check for both _max and _final outputs (depending on config)
+            # At least one should exist
+            max_file: Path = member_folder / f"{start_time} - {end_time}_max.zarr"
+            final_file: Path = member_folder / f"{start_time} - {end_time}_final.zarr"
+
+            # If neither file exists, the member is incomplete
+            if not max_file.exists() and not final_file.exists():
+                return False
+
+        # If all checks passed, the member is complete
+        return True
 
     @overload
     def alternate_universe(
@@ -498,7 +610,7 @@ class GEBModel(Module):
         for the current timestep, using forecast data if available.
 
         Raises:
-            RuntimeError: If forecast file for the current timestep is not found when forecasts are enabled in the config.
+            ValueError: If an unknown warning type is selected in the config.
         """
         # only if forecasts is used, and if we are not already in multiverse (avoiding infinite recursion)
         # and if the current date is in the list of forecast days
@@ -578,10 +690,10 @@ class GEBModel(Module):
                         dt, datetime.time(0)
                     )  # Convert date back to datetime for the multiverse method
 
-                    # self.multiverse_forecasts(
-                    #     forecast_issue_datetime=forecast_datetime,
-                    #     return_mean_discharge=True,
-                    # )  # run the multiverse for the current timestep
+                    self.multiverse_forecasts(
+                        forecast_issue_datetime=forecast_datetime,
+                        return_mean_discharge=True,
+                    )  # run the multiverse for the current timestep
 
                     # after the multiverse has run all members for one day, if warning response is enabled, run the warning system
                     if self.config["agent_settings"]["households"]["warning_response"]:

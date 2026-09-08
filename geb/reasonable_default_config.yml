@@ -18,6 +18,7 @@ general:
     use: false
     provider: ECMWF
     processing: merged_control_ensemble  # options: merged_control_ensemble, control_forecast, probabilistic_forecast
+    overwrite: True  # whether to overwrite existing forecast member results. True, False, "auto". If "auto", it will skip members that have already been completed successfully.
 
 hazards:
   floods:

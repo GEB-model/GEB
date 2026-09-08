@@ -1561,7 +1561,9 @@ class Reporter:
         assert isinstance(zarr_array, zarr.Array)
         model = getattr(self, "model", None)
         is_forecast_member_write = (
-            hasattr(model, "_report_resume_from_timestep") if model is not None else False
+            hasattr(model, "_report_resume_from_timestep")
+            if model is not None
+            else False
         )
         chunk_size = zarr_array.chunks[axis]
 
@@ -1700,7 +1702,9 @@ class Reporter:
         store = zarr.storage.LocalStore(zarr_path, read_only=False)
         config["_store"] = store
 
-        resume_enabled = hasattr(self.model, "_report_resume_from_timestep") and zarr_path.exists()
+        resume_enabled = (
+            hasattr(self.model, "_report_resume_from_timestep") and zarr_path.exists()
+        )
         if not resume_enabled:
             root_group = zarr.open_group(store, mode="w")
             config["_root_group"] = root_group
@@ -1720,7 +1724,9 @@ class Reporter:
                     f"Expected 3-D zarr array for {module_name}.{name}, got {zarr_array.ndim}-D."
                 )
             resume_index = self._get_resume_index(root_group, substeps=substeps)
-            self._reset_existing_time_range(zarr_array, axis=2, start_index=resume_index)
+            self._reset_existing_time_range(
+                zarr_array, axis=2, start_index=resume_index
+            )
             config["_chunk_data"] = self._create_chunk_buffer_from_array(
                 zarr_array,
                 axis=2,
@@ -1737,7 +1743,9 @@ class Reporter:
                     f"Expected 1-D or 2-D zarr array for {module_name}.{name}, got {zarr_array.ndim}-D."
                 )
             resume_index = self._get_resume_index(root_group, substeps=1)
-            self._reset_existing_time_range(zarr_array, axis=0, start_index=resume_index)
+            self._reset_existing_time_range(
+                zarr_array, axis=0, start_index=resume_index
+            )
             config["_chunk_data"] = self._create_chunk_buffer_from_array(
                 zarr_array,
                 axis=0,
@@ -1901,8 +1909,8 @@ class Reporter:
                 saved_state[module_name][var_name] = {
                     k: config.pop(k) for k in self._RUNTIME_KEYS if k in config
                 }
-        saved_variables = self.variables
-        self.variables = {}
+        saved_variables = self.variables_to_report
+        self.variables_to_report = {}
         return saved_state, saved_variables
 
     def clone_variables(self) -> dict[str, Any]:
@@ -1911,7 +1919,7 @@ class Reporter:
         Returns:
             Deep copy of the current in-memory report variables.
         """
-        return copy.deepcopy(self.variables)
+        return copy.deepcopy(self.variables_to_report)
 
     def _restore_runtime_state(
         self,
@@ -1931,4 +1939,4 @@ class Reporter:
         for module_name, var_states in saved_state.items():
             for var_name, state in var_states.items():
                 self.model.config["report"][module_name][var_name].update(state)
-        self.variables = saved_variables
+        self.variables_to_report = saved_variables
