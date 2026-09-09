@@ -864,7 +864,7 @@ data_catalog: dict[str, dict[str, Any]] = {
     },
     "merit_hydro_dir": {
         "adapter": MeritHydroDir(
-            folder="merit_hydro_dir",
+            folder="merit_hydro_dir_temp",
             local_version=1,
             filename="tiles",
             cache="global",
@@ -879,7 +879,7 @@ data_catalog: dict[str, dict[str, Any]] = {
     },
     "merit_hydro_elv": {
         "adapter": MeritHydroElv(
-            folder="merit_hydro_elv",
+            folder="merit_hydro_elv_temp",
             local_version=1,
             filename="tiles",
             cache="global",
@@ -947,7 +947,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             filename="placeholder.txt",
             cache="global",
         ),
-        "url": "https://huggingface.co/datasets/links-ads/fabdem-v12/raw/main/stac_catalog/catalog.json",
+        "url": "https://huggingface.co/datasets/links-ads/fabdem-v12/raw/main/collection.json",
         "source": {
             "name": "FABDEM",
             "author": "Hawker et al. (2022)",

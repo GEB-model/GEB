@@ -10,9 +10,12 @@ from typing import TYPE_CHECKING
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import xarray as xr
+from scipy.signal import fftconvolve
 
 from geb.hydrology.landcovers import FOREST
 from geb.workflows.io import read_geom, read_zarr
+from geb.workflows.raster import calculate_height_m, calculate_width_m
 
 from .general import AgentBaseClass
 
@@ -122,6 +125,70 @@ class Government(AgentBaseClass):
                 < irrigation_limit["min"]
             ] = irrigation_limit["min"]
 
+    def provide_risk_communication(self, seed: int | None = None) -> None:
+        """Communicate risk to households based on the configuration.
+
+        Raises:
+            ValueError: If risk_communication.frequency is not "yearly" or "always".
+            ValueError: If risk_communication.selected_households is not "all" or "random_share".
+        """
+        # Skip risk communication during spinup
+        if self.model.in_spinup:
+            return None
+
+        # Skip if config is missing or disabled (for all timesteps)
+        if "risk_communication" not in self.config or not self.config[
+            "risk_communication"
+        ].get("enabled", True):
+            if self.model.current_timestep == 0:
+                self.model.logger.warning(
+                    "Risk communication is disabled or not configured; no risk communication will be provided."
+                )
+            return None
+
+        risk_communication_config = self.config["risk_communication"]
+        frequency = risk_communication_config.get("frequency", "yearly")
+        if frequency == "yearly":
+            self.model.logger.info("Providing yearly risk communication to households.")
+            if not (
+                self.model.current_time.day == 1 and self.model.current_time.month == 1
+            ):  # provide risk communication on the first day of the year
+                return None
+        elif frequency != "always":
+            raise ValueError(
+                "risk_communication.frequency must be 'yearly' or 'always'"
+            )
+
+        selected_households = risk_communication_config.get(
+            "selected_households", "all"
+        )
+        n_households = self.agents.households.n
+        if selected_households == "all":
+            self.model.logger.info("Providing risk communication to all households.")
+            eligible_mask = np.ones(n_households, dtype=bool)
+        elif selected_households == "random_share":
+            self.model.logger.info(
+                "Providing risk communication to a random share of households."
+            )
+            share = float(risk_communication_config.get("share", 1.0))
+            share = min(max(share, 0.0), 1.0)
+            actual_seed = (
+                seed if seed is not None else risk_communication_config.get("seed", 42)
+            )
+            rng = np.random.default_rng(actual_seed)
+            eligible_mask = rng.random(n_households) < share
+        else:
+            raise ValueError(
+                "risk_communication.selected_households must be 'all' or 'random_share'"
+            )
+        percentage_increase_risk_perception = float(
+            risk_communication_config.get("percentage_increase_risk_perception", 0.0)
+        )
+        self.agents.households.apply_risk_communication(
+            percentage_increase=percentage_increase_risk_perception,
+            household_mask=eligible_mask,
+        )
+
     def step(self) -> None:
         """This function is run each timestep."""
         adaptation_enabled = self.config["adaptation"]["enabled"]
@@ -146,15 +213,19 @@ class Government(AgentBaseClass):
         """Plant forest: update soil properties in memory and remove displaced farmers.
 
         Loads the forest restoration potential at grid scale, applies a threshold
-        to identify suitable HRUs, copies mean soil property values from existing forest
-        HRUs to suitable HRUs, saves a figure, and removes farmers from converted areas.
-        The threshold is read from the config key ``forest_restoration_potential_threshold``
-        and defaults to 0.5.
+        to identify suitable HRUs, blends soil property values from existing forest
+        HRUs into suitable HRUs, saves a figure, and removes farmers from fully
+        converted areas. The threshold is read from the config key
+        ``forest_restoration_potential_threshold`` and defaults to 0.5.
 
-        When adaptation is enabled, the model automatically determines how much area to plant based on the available budget and reforestation costs. Suitable HRUs are sorted by area ascending, so cheapest HRUs to covert are chosen first; those already classified as FOREST (from previous years
-        or the initial state) are skipped, and HRUs are planted until there is no more affordable area for that year. Calling the function again
-        the following year therefore plants the next batch automatically — compatible
-        with the annual adaptation pathway that calls this on every January 1st.
+        When adaptation is enabled, it is determined how much area to
+        plant based on the available budget and reforestation costs. Since the area of a
+        single HRU is often larger than what is affordable in one year, HRUs can also be partly converted.
+        This is tracked by the self.forest_fraction. When reforestation is the chosen adaptation strategy, partly converted HRUs are first completed with forest
+        before a new HRU is forested with the remaining budget. Once the HRU is fully converted, the land_use_type becomes
+        FOREST and farmers are removed from it.
+
+        When adaptation is disabled, all suitable HRUs are converted to forest in one go.
 
         Returns:
             converted area in m2
@@ -175,13 +246,39 @@ class Government(AgentBaseClass):
 
         suitability_grid = forest_potential >= threshold
         suitable_HRU = hydrology.to_HRU(data=suitability_grid).astype(bool)
+        potential_HRU: np.ndarray = hydrology.to_HRU(data=forest_potential)
 
         area_per_hru_m2: np.ndarray = hydrology.HRU.var.cell_area
         suitable_area_m2 = float(area_per_hru_m2[suitable_HRU].sum())
 
         adaptation_enabled = self.config.get("adaptation", {}).get("enabled", False)
 
-        # select final_HRU (budget driven or all at once)
+        # Per-HRU conversion progress (0 = untouched, 1 = fully forested).
+        if not hasattr(self, "forest_fraction"):
+            self.forest_fraction = np.where(
+                hydrology.HRU.var.land_use_type == FOREST, 1.0, 0.0
+            ).astype(np.float64)
+        forest_fraction = self.forest_fraction
+
+        soil_properties = (
+            "water_content_saturated_m",
+            "water_content_field_capacity_m",
+            "water_content_wilting_point_m",
+            "water_content_residual_m",
+            "saturated_hydraulic_conductivity_m_per_s",
+            "bubbling_pressure_m_positive",
+            "lambda_pore_size_distribution",
+            "solid_heat_capacity_J_per_m2_K",
+        )
+        # save the original soil properties so we can calculate the change in soil properties due to reforestation, also when partial conversion of HRU happens.
+        if not hasattr(self, "_reforestation_soil_baseline"):
+            self._reforestation_soil_baseline = {
+                prop: getattr(hydrology.HRU.var, prop).copy()
+                for prop in soil_properties
+            }
+        baseline = self._reforestation_soil_baseline
+
+        # incremental planting when adaptation is enabled.
 
         if adaptation_enabled:
             reforestation_cost_per_m2 = self.config["adaptation_costs"].get(
@@ -194,10 +291,12 @@ class Government(AgentBaseClass):
                 else 0.0
             )
 
-            print(f"Suitable area for reforestation: {suitable_area_m2:.2f} m2")
-            print(f"Affordable area for reforestation: {affordable_area_m2:.2f} m2")
-
-            # incremental planting when adaptation is enabled.
+            self.model.logger.info(
+                "Suitable area for reforestation: %.2f m2", suitable_area_m2
+            )
+            self.model.logger.info(
+                "Affordable area for reforestation: %.2f m2", affordable_area_m2
+            )
 
             suitable_indices = np.where(suitable_HRU)[0]
 
@@ -207,8 +306,8 @@ class Government(AgentBaseClass):
                 )
                 return 0.0
 
-            already_forest = hydrology.HRU.var.land_use_type == FOREST
-            remaining = suitable_indices[~already_forest[suitable_indices]]
+            remaining_capacity = 1.0 - forest_fraction[suitable_indices]
+            remaining = suitable_indices[remaining_capacity > 1e-9]
 
             if len(remaining) == 0:
                 self.model.logger.warning(
@@ -216,17 +315,38 @@ class Government(AgentBaseClass):
                 )
                 return 0.0
 
-            # sort ascending by area so the most HRUs are converted, also ties in with easiest options first.
-            remaining = remaining[np.argsort(area_per_hru_m2[remaining])]
+            # Finish HRUs already partly converted in a previous year first, then spend any leftover budget on new HRUs,
+            # highest restoration potential first (smallest area as a tiebreak among equally-suitable HRUs).
+            already_started = forest_fraction[remaining] > 0.0
+            order = np.lexsort(
+                (
+                    area_per_hru_m2[remaining],
+                    -potential_HRU[remaining],
+                    ~already_started,
+                )
+            )
+            remaining = remaining[order]
 
             remaining_budget = affordable_area_m2
             chunk_indices = []
+            newly_full_indices = []
+            converted_area_m2 = 0.0
 
             for idx in remaining:
-                area = area_per_hru_m2[idx]
-                if area <= remaining_budget:
-                    chunk_indices.append(idx)
-                    remaining_budget -= area
+                if remaining_budget <= 0.0:
+                    break
+                area = float(area_per_hru_m2[idx])
+                capacity_area = area * (1.0 - forest_fraction[idx])
+                if capacity_area <= remaining_budget:
+                    add_area = capacity_area
+                    forest_fraction[idx] = 1.0
+                    newly_full_indices.append(idx)
+                else:
+                    add_area = remaining_budget
+                    forest_fraction[idx] += add_area / area
+                remaining_budget -= add_area
+                converted_area_m2 += add_area
+                chunk_indices.append(idx)
 
             if len(chunk_indices) == 0:
                 self.model.logger.info(
@@ -237,14 +357,22 @@ class Government(AgentBaseClass):
             final_HRU = np.zeros_like(suitable_HRU, dtype=bool)
             final_HRU[chunk_indices] = True
 
+            fully_converted_HRU = np.zeros_like(suitable_HRU, dtype=bool)
+            fully_converted_HRU[newly_full_indices] = True
+
             self.model.logger.info(
-                "Incremental reforestation: planting %d HRUs (%.2f m2).",
+                "Incremental reforestation: converted %d HRUs (%.2f m2), %d fully forested.",
                 len(chunk_indices),
-                float(area_per_hru_m2[final_HRU].sum()),
+                converted_area_m2,
+                len(newly_full_indices),
             )
 
         else:
+            # all at once reforestation when adaptation is disabled.
             final_HRU = suitable_HRU
+            fully_converted_HRU = suitable_HRU
+            forest_fraction[final_HRU] = 1.0
+            converted_area_m2 = float(area_per_hru_m2[final_HRU].sum())
 
             self.model.logger.info(
                 "Reforestation (all at once): planting %d HRUs (threshold %.2f).",
@@ -255,22 +383,17 @@ class Government(AgentBaseClass):
         # modification for both incremental and all at once reforestation
         land_use_type_before = hydrology.HRU.var.land_use_type.copy()
 
-        converted_area_m2: float = float(area_per_hru_m2[final_HRU].sum())
-
+        # forest_mean is computed from HRUs that were already fully FOREST
         forest_mask = hydrology.HRU.var.land_use_type == FOREST
-        for prop in (
-            "water_content_saturated_m",
-            "water_content_field_capacity_m",
-            "water_content_wilting_point_m",
-            "water_content_residual_m",
-            "saturated_hydraulic_conductivity_m_per_s",
-            "bubbling_pressure_m_positive",
-            "lambda_pore_size_distribution",
-            "solid_heat_capacity_J_per_m2_K",
-        ):
+        touched_fraction = forest_fraction[final_HRU]
+
+        for prop in soil_properties:
             arr = getattr(hydrology.HRU.var, prop)
             forest_mean = arr[:, forest_mask].mean(axis=1)
-            arr[:, final_HRU] = forest_mean[:, np.newaxis]
+            base = baseline[prop][:, final_HRU]
+            arr[:, final_HRU] = (
+                1.0 - touched_fraction
+            ) * base + touched_fraction * forest_mean[:, np.newaxis]
 
         water_sat = hydrology.HRU.var.water_content_saturated_m
         water_res = hydrology.HRU.var.water_content_residual_m
@@ -288,17 +411,17 @@ class Government(AgentBaseClass):
         drawn = np.minimum(deficit.sum(axis=0), topwater)
         hydrology.HRU.var.topwater_m[final_HRU] -= drawn
 
-        self.remove_farmers_from_converted_forest_areas(final_HRU)
+        self.remove_farmers_from_converted_forest_areas(fully_converted_HRU)
 
-        # Explicitly mark all planted HRUs as FOREST so that future calls to
-        # prepare_modified_soil_maps_for_forest can detect them via the
-        # already_forest check and advance to the next increment.
-        hydrology.HRU.var.land_use_type[final_HRU] = FOREST
+        # Explicitly mark fully-converted HRUs as FOREST so that future calls to
+        # prepare_modified_soil_maps_for_forest can detect them via forest_fraction
+        # and remove_farmers
+        hydrology.HRU.var.land_use_type[fully_converted_HRU] = FOREST
 
         output_folder = self.model.output_folder / "forest_planting"
         output_folder.mkdir(parents=True, exist_ok=True)
         self._save_forest_planting_figure(
-            land_use_type_before, final_HRU, output_folder, threshold
+            land_use_type_before, fully_converted_HRU, output_folder, threshold
         )
 
         return converted_area_m2
@@ -407,7 +530,7 @@ class Government(AgentBaseClass):
         land_owners = crop_farmers.HRU.var.land_owners[converted_HRU_indices]
         farmer_indices = land_owners[land_owners != -1]
         if len(farmer_indices) == 0:
-            print("No farmers found in suitable areas, none removed")
+            self.model.logger.info("No farmers found in suitable areas, none removed.")
             return
 
         unique_farmer_indices = np.unique(farmer_indices)
@@ -416,44 +539,61 @@ class Government(AgentBaseClass):
             farmer_indices=unique_farmer_indices,
             new_land_use_type=FOREST,
         )
-        print(
-            f"Farmers removed: {len(unique_farmer_indices):,} ({farmers_before:,} → {crop_farmers.n:,})"
+        self.model.logger.info(
+            "Farmers removed: %d (%d → %d)",
+            len(unique_farmer_indices),
+            farmers_before,
+            crop_farmers.n,
         )
 
-    # decision making logic for adaptation as implemented by the government agent
-    # this function is the basis from which other functions are called that together make up the logic for adaptation
     def adaptation(self) -> None:
         """From this function all steps for the adaptation implementation are called.
 
         Checks if adaptation is enabled and if it is January 1st, then calculates EAD,
-        equity, and ecosystem indicators. Then a mental simulation of all possible adaptation measures is done to see which one has the biggest improvement
-        based on the sum of the normalised indicators. This one is then implemented.
+        equity, and ecosystem indicators. Consequently, a mental simulation of all possible adaptation measures in an 'alternate universe' is done to see which one has the biggest improvement over X years
+        based on the sum of the normalised indicators (the IPV). This measure is then implemented. As this is done yearly, an adaptation pathway forms that optimises this IPV.
 
         """
         if not self.config["adaptation"].get("enabled", True):
             return  # exits because adaptation is not enabled in the config file
+        if getattr(self.model, "multiverse_name", None) is not None:
+            return  # exits because we are inside an alternate universe hypothetical run
         if not (
             self.model.current_time.month == 1 and self.model.current_time.day == 1
         ):
             return  # exits because it is not the first of January
         if self.model.in_spinup:
-            return  # exits because the model is in spinup, we do not want adaptation during spinup
+            return  # exits because the model is in spinup, no adaptation during spinup
 
         budget = self.config["adaptation_costs"].get("initial_budget")
 
-        EAD: float = self.calculate_risk_reduction_indicator()
-        exposure_inequality: float = self.calculate_equity_indicator()
-        ecosystem_health: float = self.calculate_ecosystem_indicator()
-
-        current_IPV = self.calculate_IPV(EAD, exposure_inequality, ecosystem_health)
-
-        # do a mental simulation of the improvement (based on indicators) the implementation of all measures would generate. This will help the government to decide which
-        # adaptation measure should be implemented. The one with the biggest improvement will get implemented. We should save the model, then do a mental simulation
-        # so a hypothetical implementation of all measures, then calculate the indicators again, and see which one has the biggest improvement compared to the current state. This is the one that gets implemented in reality.
-
-        adaptation_measure_to_implement: str | None = self.hypothetical_implementation(
-            budget, current_IPV
+        EAD: float
+        raw_EAD: float
+        ead_per_household: np.ndarray
+        EAD, raw_EAD, ead_per_household = self.calculate_risk_reduction_indicator()
+        equity_indicator: float
+        raw_flood_damage_burden: float
+        raw_forest_access_low_income: float
+        equity_indicator, raw_flood_damage_burden, raw_forest_access_low_income = (
+            self.calculate_equity_indicator(ead_per_household)
         )
+        ecosystem_health: float = self.calculate_ecosystem_indicator()
+        # TEMP: capture now, before select_adaptation_measure_to_implement's hypothetical
+        # evaluations below overwrite self._raw_ecosystem_health with their own values
+        raw_ecosystem_health = self._raw_ecosystem_health
+
+        # equal-weighted, for reporting/comparison across runs -- see calculate_IPV
+        current_IPV = self.calculate_IPV(EAD, equity_indicator, ecosystem_health)
+        # weighted by this run's priority_weights, to drive adaptation selection below
+        current_weighted_IPV = self.calculate_weighted_IPV(
+            EAD, equity_indicator, ecosystem_health
+        )
+
+        # do a mental simulationin an alternate universeof the improvement (based on indicators) the implementation of all measures would generate. This will help the government to decide which
+        adaptation_measure_to_implement = "reforestation"
+        # adaptation_measure_to_implement = self.select_adaptation_measure_to_implement(
+        #     budget, current_weighted_IPV
+        # )
 
         # implement the adaptation measure that is selected
         self.apply_adaptation(budget, adaptation_measure_to_implement)
@@ -461,34 +601,42 @@ class Government(AgentBaseClass):
         # we want to save these things yearly so we can plot them
         self.save_adaptation_record(
             EAD,
-            exposure_inequality,
+            equity_indicator,
             ecosystem_health,
             current_IPV,
             adaptation_measure_to_implement,
+            raw_EAD,
+            raw_ecosystem_health,
+            raw_flood_damage_burden,
+            raw_forest_access_low_income,
         )
 
-    # def available_budget(self) -> float:
-    #     """Calculate the available budget for adaptation measures based on the configuration.
-
-    #     Returns:
-    #         The available budget for adaptation measures in euros, or None if not defined.
-    #     """
-    #     # increase the initial budget with correction for the amount of years that have passed
-    #     budget = self.config["adaptation_costs"].get("initial_budget") * (
-    #         (1 + (self.config["adaptation_costs"].get("budget_yearly_increase") / 100))
-    #         ** (self.model.current_time.year - self.model.run_start.year)
-    #     )
-
-    #     return budget
-
-    # made into a function so it can also be used in the hypothetical implementation
     def calculate_IPV(
-        self, EAD: float, exposure_inequality: float, ecosystem_health: float
+        self, EAD: float, equity_indicator: float, ecosystem_health: float
     ) -> float:
-        """Calculate the Integrated Performance Score based on the sum of the normalised indicators.
+        """Calculate the Integrated Performance Value: the equal-weighted mean of the normalised indicators.
+
+        Always uses equal (1/3) weights, regardless of this run's priority_weights,
+        so the IPV is comparable across runs with different priorities. Adaptation
+        *selection* is driven separately by calculate_weighted_IPV, which does
+        use this run's own priority_weights.
 
         Returns:
             The IPV.
+        """
+        return (EAD + equity_indicator + ecosystem_health) / 3
+
+    # made into a function so it can also be used in the hypothetical implementation
+    def calculate_weighted_IPV(
+        self, EAD: float, equity_indicator: float, ecosystem_health: float
+    ) -> float:
+        """Calculate the weighted sum of the normalised indicators, using this run's priority_weights.
+
+        Used to drive which adaptation measure select_adaptation_measure_to_implement
+        picks. Not used for the reported IPV -- see calculate_IPV.
+
+        Returns:
+            The weighted IPV.
         """
         risk_reduction_weight: float = self.config["priority_weights"].get(
             "risk_reduction"
@@ -498,208 +646,576 @@ class Government(AgentBaseClass):
             "ecosystem_health"
         )
 
-        IPV = sum(
+        weighted_IPV = sum(
             [
                 (risk_reduction_weight * EAD),
-                (equity_weight * exposure_inequality),
+                (equity_weight * equity_indicator),
                 (ecosystem_weight * ecosystem_health),
             ]
         )
-        return IPV
+        return weighted_IPV
 
     def hypothetical_implementation(
-        self, budget: float, current_IPV: float
-    ) -> str | None:
-        """Calculate the improvement in IPV for each potential adaptation measure.
+        self, budget: float, measure: str, n_timesteps: int
+    ) -> float:
+        """Implement a hypothetical implementation of the adaptation measure to see what the improvement in priority score would be in an alternate universe.
 
-        The adaptation measure that generates the biggest improvement in IPV during
-        the hypothetical implementation will actually be implemented.
+        Args:
+            budget: the available budget for adaptation.
+            measure: the adaptation measure to implement.
+            n_timesteps: the number of timesteps to simulate for the hypothetical implementation.
+
+        Returns:
+        the hypothetical weighted IPV after the implementation of the adaptation measure.
+        """
+
+        def do_function() -> None:
+            self.apply_adaptation(budget, measure)
+
+        def collect_function() -> dict[str, Any]:
+            hypothetical_EAD, _hypothetical_raw_EAD, hyp_ead_per_household = (
+                self.calculate_risk_reduction_indicator()
+            )
+            hypothetical_equity_indicator, _, _ = self.calculate_equity_indicator(
+                hyp_ead_per_household
+            )
+            hypothetical_ecosystem_health = self.calculate_ecosystem_indicator()
+            hypothetical_weighted_IPV = self.calculate_weighted_IPV(
+                hypothetical_EAD,
+                hypothetical_equity_indicator,
+                hypothetical_ecosystem_health,
+            )
+            return {
+                "EAD": hypothetical_EAD,
+                "equity_indicator": hypothetical_equity_indicator,
+                "ecosystem_health": hypothetical_ecosystem_health,
+                "weighted_IPV": hypothetical_weighted_IPV,
+            }
+
+        self.model.logger.info("Starting hypothetical simulation for '%s'.", measure)
+
+        # alternate_universe() saves/restores proper model state (e.g.
+        # hydrology.HRU.var.land_use_type), but cumulative_reforested_area_m2
+        # is not part of that state, so needs to be saved/restored manually to prevent
+        # hypothetical reforestation to affect the running total.
+        cumulative_reforested_area_m2_before_hypothetical = getattr(
+            self, "cumulative_reforested_area_m2", 0.0
+        )
+
+        # same for forest_fraction (per-HRU reforestation progress, see
+        # prepare_modified_soil_maps_for_forest)
+        forest_fraction_before_hypothetical = getattr(self, "forest_fraction", None)
+        if forest_fraction_before_hypothetical is not None:
+            forest_fraction_before_hypothetical = (
+                forest_fraction_before_hypothetical.copy()
+            )
+
+        # same for households.buildings (especially 'flood_proofed' column and the
+        # two damage-curve tables).
+        households = self.agents.households
+        buildings_before_hypothetical = households.buildings.copy()
+        buildings_structure_curve_before_hypothetical = (
+            households.buildings_structure_curve.copy()
+        )
+        buildings_content_curve_before_hypothetical = (
+            households.buildings_content_curve.copy()
+        )
+
+        result_hypothetical_implementation = self.model.alternate_universe(
+            name="",
+            n_timesteps=n_timesteps,
+            do_function=do_function,
+            collect_function=collect_function,
+        )
+
+        self.cumulative_reforested_area_m2 = (
+            cumulative_reforested_area_m2_before_hypothetical
+        )
+
+        if forest_fraction_before_hypothetical is None:
+            if hasattr(self, "forest_fraction"):
+                del self.forest_fraction
+        else:
+            self.forest_fraction = forest_fraction_before_hypothetical
+
+        households.buildings = buildings_before_hypothetical
+        households.buildings_structure_curve = (
+            buildings_structure_curve_before_hypothetical
+        )
+        households.buildings_content_curve = buildings_content_curve_before_hypothetical
+
+        self.model.logger.info(
+            "[%d] Hypothetical '%s': EAD=%.4f, equity=%.4f, ecosystem=%.4f, weighted_IPV=%.4f",
+            self.model.current_time.year,
+            measure,
+            result_hypothetical_implementation["EAD"],
+            result_hypothetical_implementation["equity_indicator"],
+            result_hypothetical_implementation["ecosystem_health"],
+            result_hypothetical_implementation["weighted_IPV"],
+        )
+
+        return result_hypothetical_implementation["weighted_IPV"]
+
+    def select_adaptation_measure_to_implement(
+        self, budget: float, current_weighted_IPV: float
+    ) -> str | None:
+        """Calculate the improvement in weighted IPV for each potential adaptation measure.
+
+        The adaptation measure that generates the biggest improvement in weighted
+        IPV (using this run's priority_weights) during the hypothetical
+        implementation will actually be implemented.
 
         Returns:
             The adaptation measure to implement.
         """
-        # save the state
-        # implement reforestation in the hypothetical simulation
-        self.apply_adaptation(budget, "reforestation")
-        hypothetical_EAD = self.calculate_risk_reduction_indicator()
-        hypothetical_exposure_inequality = self.calculate_equity_indicator()
-        hypothetical_ecosystem_health = self.calculate_ecosystem_indicator()
+        measures = ["floodproofing", "risk_communication", "reforestation"]
 
-        delta_reforestation = (
-            self.calculate_IPV(
-                hypothetical_EAD,
-                hypothetical_exposure_inequality,
-                hypothetical_ecosystem_health,
+        # Clamp the look-ahead so the alternate-universe rollout never simulates
+        # past the model's configured end time. Yearly-indexed market data (e.g.
+        # inflation rates) is only prepared up to run_end, so a hypothetical
+        # evaluation started in the final years of the run would otherwise index
+        # past the end of that data.
+        remaining_timesteps = (self.model.run_end - self.model.current_time).days
+        n_timesteps = max(min(1095, remaining_timesteps), 0)
+
+        deltas = {}
+        for measure in measures:
+            hypothetical_weighted_IPV = self.hypothetical_implementation(
+                budget=budget, measure=measure, n_timesteps=n_timesteps
             )
-            - current_IPV
-        )
-        # reset the state
+            # select the adaptation measure with the biggest improvement and make that the adaptation that is to be implemented
+            deltas[measure] = hypothetical_weighted_IPV - current_weighted_IPV
 
-        # implement floodproofing and calculate the indicators and IPV, save the IPV
-        self.apply_adaptation(budget, "floodproofing")
-        hypothetical_EAD = self.calculate_risk_reduction_indicator()
-        hypothetical_exposure_inequality = self.calculate_equity_indicator()
-        hypothetical_ecosystem_health = self.calculate_ecosystem_indicator()
-        delta_floodproofing = (
-            self.calculate_IPV(
-                hypothetical_EAD,
-                hypothetical_exposure_inequality,
-                hypothetical_ecosystem_health,
+            self.model.logger.info(
+                "[%d] Delta weighted_IPV for '%s': hypothetical=%.4f, current=%.4f, delta=%.4f",
+                self.model.current_time.year,
+                measure,
+                hypothetical_weighted_IPV,
+                current_weighted_IPV,
+                deltas[measure],
             )
-            - current_IPV
-        )
-        # reset the state
 
-        # implement subsidies/risk communication and calculate the indicators, save IPV
-        self.apply_adaptation(budget, "risk_communication")
-        hypothetical_EAD = self.calculate_risk_reduction_indicator()
-        hypothetical_exposure_inequality = self.calculate_equity_indicator()
-        hypothetical_ecosystem_health = self.calculate_ecosystem_indicator()
-        delta_risk_communication = (
-            self.calculate_IPV(
-                hypothetical_EAD,
-                hypothetical_exposure_inequality,
-                hypothetical_ecosystem_health,
-            )
-            - current_IPV
-        )
-
-        # select the adaptation measure with the biggest improvement and make that the adaptation that is to be implemented
-        deltas = {
-            "reforestation": delta_reforestation,
-            "floodproofing": delta_floodproofing,
-            "risk_communication": delta_risk_communication,
-        }
         adaptation_measure_to_implement = max(deltas, key=deltas.get)
+
+        self.model.logger.info(
+            "[%d] Selected adaptation measure: '%s' (delta=%.4f)",
+            self.model.current_time.year,
+            adaptation_measure_to_implement,
+            deltas[adaptation_measure_to_implement],
+        )
 
         return adaptation_measure_to_implement
 
-    def calculate_risk_reduction_indicator(self) -> float:
+    def normalise_indicator(self, indicator: str, raw_value: float) -> float:
+        """Normalise an indicator value on a 0-1 scale, where 0 is the worst value and 1 is the best value.
+
+        the best and the worst value are computed based on the reference runs for the catchment. Using
+        a run with no adaptation measures implemented and a run with all adaptation measures implemented.
+        The values are specified in the config file.
+
+        Args:
+            indicator: The indicator name to normalise.
+            raw_value: The raw indicator value to normalise.
+
+        Returns:
+            The normalised indicator value on a 0-1 scale.
+        """
+        if indicator == "ead":
+            best_value = self.config["normalisation_values"]["ead_best_value"]
+            worst_value = self.config["normalisation_values"]["ead_worst_value"]
+            normalised_ead = (raw_value - worst_value) / (best_value - worst_value)
+            return normalised_ead
+
+        if indicator == "flood_damage_burden":
+            best_value = self.config["normalisation_values"][
+                "flooddamageburden_best_value"
+            ]
+            worst_value = self.config["normalisation_values"][
+                "flooddamageburden_worst_value"
+            ]
+            normalised_flooddamageburden = (raw_value - worst_value) / (
+                best_value - worst_value
+            )
+            return normalised_flooddamageburden
+
+        if indicator == "forest_access_low_income":
+            # Higher raw forest fraction is better, so best_value is
+            # expected to be the *larger* number and worst_value the
+            # *smaller* one -- the formula below still works either way
+            # since it's just a fractional position between the two
+            # anchors, not an assumption about which direction is better.
+            best_value = self.config["normalisation_values"][
+                "forestaccesslowincome_best_value"
+            ]
+            worst_value = self.config["normalisation_values"][
+                "forestaccesslowincome_worst_value"
+            ]
+            normalised_forestaccesslowincome = (raw_value - worst_value) / (
+                best_value - worst_value
+            )
+            return normalised_forestaccesslowincome
+
+        if indicator == "ecosystem_health":
+            best_value = self.config["normalisation_values"][
+                "ecosystemhealth_best_value"
+            ]
+            worst_value = self.config["normalisation_values"][
+                "ecosystemhealth_worst_value"
+            ]
+            normalised_ecosystemhealth = (raw_value - worst_value) / (
+                best_value - worst_value
+            )
+            return normalised_ecosystemhealth
+
+    def calculate_risk_reduction_indicator(self) -> tuple[float, float, np.ndarray]:
         """Calculate the expected annual damage (EAD) for the current year.
 
         EAD is computed by integrating total flood damage over the exceedance
-        probability curve (trapezoid rule across return periods). The EAD is normalised using the EAD from the first timestep as this is the
-        theoretical max, since the EAD will go down over the years as adaptation is inplemented.
+        probability curve (trapezoid rule across return periods). Uses the same
+        method as the flood risk module, but with the reforestation-aware per-household damages, to account
+        for reforestation effects on flood depths and damages, as it is impleemented.
 
         Returns:
-         the expected annual damage in euros, which is calculated as the product of the probability of a hazard occurring and the potential damage caused by that hazard.
-
-        Raises:
-            RuntimeError: If the household flood risk module is not available.
+           The normalised EAD, the raw EAD in EUR/year, and the per-household EAD array.
         """
-        households = self.agents.households
-        return_periods = np.array(
-            self.model.config["hazards"]["floods"]["return_periods"], dtype=float
+        fr = self.agents.households.flood_risk_module
+
+        ead_per_household = self.calculate_reforestation_aware_ead_per_household()
+        fr.load_flood_maps()  # restore the static baseline maps for other code
+
+        raw_EAD = float(ead_per_household.sum())
+        normalised_EAD = self.normalise_indicator("ead", raw_EAD)
+
+        return normalised_EAD, raw_EAD, ead_per_household
+
+    def reforestation_scenario_bracket(self) -> tuple[str, str, float] | None:
+        """Bracketing reforestation flood-map scenarios for the current cumulative reforested area.
+
+        The equity indicator is built from per-household damages, which (unlike
+        the aggregate EAD) need real spatially explicit flood depths to respond
+        to reforestation at all -- a single scaling factor cancels out in the
+        low-income/total EAD ratio. The reforestation extent sweep already
+        produced real SFINCS flood maps per scenario (see
+        compute_reforestation_ead.py); this identifies the two scenarios that
+        bracket the current reforested area, and a weight between them, so
+        the per-household damages under each can be interpolated (see
+        :meth:`calculate_reforestation_aware_ead_per_household`).
+
+        Returns:
+            (lower_folder, upper_folder, weight): output subfolder names
+            (e.g. "reforestation_50%") of the bracketing scenarios, and the
+            fraction of the way from lower to upper (0 = exactly at lower,
+            1 = exactly at upper). lower_folder == upper_folder with
+            weight == 0.0 at or beyond either end of the sweep. None if no
+            lookup table is configured (household damages then fall back to
+            the static baseline maps).
+        """
+        lookup_table_path = self.config.get("reforestation_ead_lookup_table")
+        if not lookup_table_path:
+            return None
+
+        lookup_table = pd.read_csv(lookup_table_path).sort_values("reforested_area_m2")
+        areas = lookup_table["reforested_area_m2"].to_numpy(dtype=float)
+        pcts = lookup_table["reforested_pct"].to_numpy(dtype=int)
+
+        current_area_m2 = getattr(self, "cumulative_reforested_area_m2", 0.0)
+        clipped_area_m2 = min(max(current_area_m2, areas[0]), areas[-1])
+
+        upper_idx = int(np.searchsorted(areas, clipped_area_m2))
+        upper_idx = min(max(upper_idx, 1), len(areas) - 1)
+        lower_idx = upper_idx - 1
+
+        area_lower, area_upper = areas[lower_idx], areas[upper_idx]
+        weight = (
+            0.0
+            if area_upper == area_lower
+            else (clipped_area_m2 - area_lower) / (area_upper - area_lower)
         )
 
-        if not hasattr(households, "flood_risk_module"):
-            raise RuntimeError("Household flood risk module is not available.")
+        return (
+            f"reforestation_{pcts[lower_idx]}%",
+            f"reforestation_{pcts[upper_idx]}%",
+            float(weight),
+        )
 
-        fr = households.flood_risk_module
-        # Ensure damage curves and maximum-damage values are loaded (idempotent)
-        fr.load_damage_curves()
-        fr.load_max_damage_values()
-        # Load flood maps so downstream code can sample them
-        fr.load_flood_maps()
+    def load_household_flood_maps_for_scenario(self, scenario_folder: str) -> None:
+        """Load per-household flood maps from a specific precomputed reforestation scenario.
 
-        # Ensure the `flooded` building attribute exists. If not, compute it
-        # using the households helper that populates building attributes.
-        if "flooded" not in households.buildings.columns:
-            if hasattr(households, "update_building_attributes"):
-                households.update_building_attributes()
-            else:
-                self.model.logger.warning(
-                    "Missing 'flooded' column and no update_building_attributes() available."
-                )
+        Points ``households.flood_maps`` at real flood depth maps for one of
+        the precomputed reforestation-extent scenarios (see
+        `reforestation_scenario_bracket`), instead of the static spinup
+        baseline that ``FloodRiskModule.load_flood_maps()`` always loads.
 
-        total_damage_per_rp = np.zeros(len(return_periods), dtype=np.float64)
+        Callers must call ``fr.load_flood_maps()`` afterwards to restore the
+        baseline maps once the scenario-conditioned damages have been used,
+        so other code relying on ``households.flood_maps`` is not affected.
 
-        for i, return_period in enumerate(return_periods):
+        Args:
+            scenario_folder: Output subfolder to load flood maps from (e.g.
+                "reforestation_50%").
+        """
+        households = self.agents.households
+        flood_maps = {}
+        for return_period in households.return_periods:
             file_path = (
-                Path(self.model.config["general"]["output_folder"])
+                self.model.output_folder.parent
+                / scenario_folder
                 / "flood_maps"
-                / f"{int(return_period)}.zarr"
+                / f"{return_period}.zarr"
             )
-            flood_map = read_zarr(file_path)
-            total_damage_per_rp[i] = households.flood_risk_module.flood(flood_map)
+            flood_maps[return_period] = read_zarr(file_path)
+        households.flood_maps = flood_maps
 
-        exceedance_probabilities = 1.0 / return_periods
+    def calculate_reforestation_aware_ead_per_household(self) -> np.ndarray:
+        """Per-household EAD, interpolated between the bracketing reforestation scenarios.
 
-        sort_idx = np.argsort(exceedance_probabilities)
-
-        EAD = np.trapezoid(
-            total_damage_per_rp[sort_idx], x=exceedance_probabilities[sort_idx]
-        )
-
-        # we also need to normalise the EAD and use it in the decision making process for adaptation. Finding the maxium damage could be difficult, so we can use max_damage = initial damage (store in cache) since adaptation will lower the ead so it is a defensible max
-        if not hasattr(self, "max_EAD"):
-            self.max_EAD = EAD
-
-        normalised_EAD = EAD / self.max_EAD
-        print(f"Calculated EAD: {normalised_EAD}")
-        return normalised_EAD
-
-    def calculate_equity_indicator(self) -> float:
-        """Calculate the exposure inequality for the current year.
-
-        Equity indicator: proportion of low-income households NOT exposed to flooding.
-        1.0 = no low-income households flooded (best equity)
-        0.0 = all low-income households flooded (worst equity)
+        This computes the real per-household EAD under each bracketing scenario's own flood maps, then linearly
+        interpolates those two already-resolved damage vectors.
 
         Returns:
-            the equity indicator value.
+            1-D array of expected annual damage per household, reflecting the
+            current cumulative reforested area.
         """
-        # this is defined by the exposure inequalty
         households = self.agents.households
-
-        # we define the low-income households based on EU standard definition of at-risk-of-poverty threshold, which is 60% of the median income (https://ec.europa.eu/eurostat/statistics-explained/index.php?title=Glossary:At-risk-of-poverty_threshold)
-        # as done in the UK (https://www.gov.uk/government/publications/how-low-income-is-measured/text-only-how-low-income-is-measured)
-        # high income is 200% of the median income (https://ec.europa.eu/eurostat/documents/3888793/7882117/KS-TC-16-027-EN-N.pdf/42d637e3-1386-40e1-845c-9aadad4ad2a1)
-        # netherlands also (https://www.cbs.nl/en-gb/visualisations/monitor-of-wellbeing-caribbean-netherlands/indicator-descriptions)
-        median_income = np.median(households.var.income.data)
-        low_income_threshold = 0.6 * median_income
-        low_income_households_mask = households.var.income.data <= low_income_threshold
-        high_income_threshold = 2 * median_income
-        high_income_households_mask = (
-            households.var.income.data >= high_income_threshold
-        )
+        fr = households.flood_risk_module
 
         if "flooded" not in households.buildings.columns:
             households.update_building_attributes()
 
-        flooded_buildings_mask = set(
-            households.buildings.loc[
-                households.buildings["flooded"] == True, "id"
-            ].astype(int)
-        )
-        # figure out which households are in these flooded buildings
-        households_in_flooded_buildings = np.where(
-            pd.Series(households.var.building_id_of_household.data).isin(
-                flooded_buildings_mask
+        bracket = self.reforestation_scenario_bracket()
+        if bracket is None:
+            damages_do_not_adapt, damages_adapt = fr.calculate_building_flood_damages(
+                dynamic=True
             )
-        )[0]
+            return fr.calculate_ead(
+                damages_do_not_adapt, damages_adapt, households.var.adapted.data
+            )
 
-        # the low income households that are exposed to flooding are the ones that are in the flooded buildings and are low income
-        exposure_low_income_households = np.intersect1d(
-            households_in_flooded_buildings, np.where(low_income_households_mask)[0]
-        ).size
+        lower_folder, upper_folder, weight = bracket
 
-        exposure_high_income_households = np.intersect1d(
-            households_in_flooded_buildings, np.where(high_income_households_mask)[0]
-        ).size
-
-        exposure_share_low = exposure_low_income_households / len(
-            households_in_flooded_buildings
+        self.load_household_flood_maps_for_scenario(lower_folder)
+        damages_do_not_adapt, damages_adapt = fr.calculate_building_flood_damages(
+            dynamic=True
         )
-        exposure_share_high = exposure_high_income_households / len(
-            households_in_flooded_buildings
+        ead_lower = fr.calculate_ead(
+            damages_do_not_adapt, damages_adapt, households.var.adapted.data
         )
 
-        exposure_inequality = exposure_share_low / exposure_share_high
+        if weight == 0.0 or upper_folder == lower_folder:
+            return ead_lower
 
-        equity_indicator = 1 / (1 + (np.log(exposure_inequality)))
-        print(f"Calculated equity indicator: {equity_indicator}")
-        return equity_indicator
+        self.load_household_flood_maps_for_scenario(upper_folder)
+        damages_do_not_adapt, damages_adapt = fr.calculate_building_flood_damages(
+            dynamic=True
+        )
+        ead_upper = fr.calculate_ead(
+            damages_do_not_adapt, damages_adapt, households.var.adapted.data
+        )
+
+        return ead_lower + weight * (ead_upper - ead_lower)
+
+    def calculate_equity_indicator(
+        self, ead_per_household: np.ndarray
+    ) -> tuple[float, float, float]:
+        """Calculate the equity indicator for the current year.
+
+        The equity indicator consists of 2 subindicators: the flood damage burden, the share of the ead borne by low-income households,
+        and the forest access, the local forest fraction (within 1km) around low-income households. The two subindicators are normalised and averaged to get the final equity indicator.
+
+        Args:
+            ead_per_household: 1-D array of expected annual damage per household.
+
+        Returns:
+            the normalised equity indicator value, the raw flood damage
+            burden, and the raw forest access (low-income) value.
+        """
+        households = self.agents.households
+
+        # EU at-risk-of-poverty threshold: 60% of median income
+        # https://ec.europa.eu/eurostat/statistics-explained/index.php?title=Glossary:At-risk-of-poverty_threshold
+        median_income = np.median(households.var.income.data)
+        low_income_mask = households.var.income.data <= 0.6 * median_income
+
+        # flood_damage_burden subindicator
+        income = households.var.income.data
+        relative_ead_low_income = (
+            ead_per_household[low_income_mask] / income[low_income_mask]
+        )
+        relative_ead_all = ead_per_household / income
+
+        flood_damage_burden = 1 - (
+            relative_ead_low_income.sum() / relative_ead_all.sum()
+        )
+
+        normalised_flood_damage_burden = self.normalise_indicator(
+            "flood_damage_burden", flood_damage_burden
+        )
+
+        # Forest-access sub-indicator: the raw average local forest
+        # fraction (fraction of land within 1km that is forest low-income households have
+        # around them
+
+        forest_access_low_income = self.calculate_forest_access_indicator(
+            low_income_mask=low_income_mask
+        )
+        normalised_forest_access = self.normalise_indicator(
+            "forest_access_low_income", forest_access_low_income
+        )
+
+        # Combine the two sub-indicators into a single equity indicator.
+        normalised_equity_indicator = (
+            normalised_flood_damage_burden + normalised_forest_access
+        ) / 2
+
+        self.model.logger.info(
+            "Calculated equity indicator: %s", normalised_equity_indicator
+        )
+        return (
+            normalised_equity_indicator,
+            flood_damage_burden,
+            forest_access_low_income,
+        )
+
+    def calculate_household_forest_fraction(
+        self, radius_m: float = 1000.0
+    ) -> np.ndarray:
+        """Calculate the fraction of forest within radius_m of each household.
+
+        This tracks local forest cover around each household, which turns
+        this into a reforestation-attributable signal by comparing against
+        the baseline value captured before any reforestation happened.
+
+        Within the disk, the fraction is computed over in-catchment cells
+        only (cells outside the modelled domain are excluded from both the
+        forest count and the denominator), so households near the
+        catchment boundary aren't penalised for their neighbourhood disk
+        spilling outside the domain.
+
+        Args:
+            radius_m: radius, in meters, of the neighbourhood around each
+                household within which forest cover is averaged.
+
+        Returns:
+            1-D array (one value per household), each in [0, 1]: the
+            fraction of the household's radius_m neighbourhood, among
+            in-catchment cells only, that is forest.
+        """
+        hydrology = self.model.hydrology
+
+        # Loaded only as a raster template (shape, coordinates, affine
+        # transform) matching the HRU grid.
+        zpath = self.model.files["subgrid"]["landcover/classification"]
+        template_da = read_zarr(zpath)
+
+        n_hrus = hydrology.HRU.var.land_use_type.size
+        hru_index_1d = np.arange(n_hrus, dtype=np.int32)
+        hru_index_2d = hydrology.HRU.decompress(hru_index_1d)
+        valid_mask = hru_index_2d >= 0
+        forest_hru_mask = hydrology.HRU.var.land_use_type == FOREST
+        forest_mask = np.zeros(template_da.shape, dtype=np.float64)
+        forest_mask[valid_mask] = forest_hru_mask[hru_index_2d[valid_mask]]
+
+        height, width = forest_mask.shape
+        transform = template_da.rio.transform()
+        height_m = float(calculate_height_m(transform, height, width)[0, 0])
+        width_m = float(calculate_width_m(transform, height, width)[height // 2, 0])
+
+        # build a circle-shaped kernel (1s inside radius_m, 0s outside). we don't use
+        # scipy's uniform_filter here since it only does square windows, and a square
+        # reaching radius_m in every direction covers ~27% more area than the circle
+        # we actually want.
+        radius_px_y = max(1, int(round(radius_m / height_m)))
+        radius_px_x = max(1, int(round(radius_m / width_m)))
+        yy, xx = np.ogrid[
+            -radius_px_y : radius_px_y + 1, -radius_px_x : radius_px_x + 1
+        ]
+        disk_kernel = (
+            (yy * height_m) ** 2 + (xx * width_m) ** 2 <= radius_m**2
+        ).astype(np.float64)
+
+        forest_count = fftconvolve(forest_mask, disk_kernel, mode="same")
+        valid_count = fftconvolve(
+            valid_mask.astype(np.float64), disk_kernel, mode="same"
+        )
+
+        # build a circular kernal, where a cell is 1 if it is within 1km of the kernels centre, 0 otherwise
+        forest_fraction = np.full(valid_count.shape, np.nan)
+        has_coverage = valid_count > 1e-9
+        forest_fraction[has_coverage] = (
+            forest_count[has_coverage] / valid_count[has_coverage]
+        )
+        # only count in-catchment cells, so households near the catchment boundary aren't penalised for their neighbourhood disk spilling outside the domain.
+        np.clip(forest_fraction, 0.0, 1.0, out=forest_fraction)
+
+        fraction_da = xr.DataArray(
+            forest_fraction, coords=template_da.coords, dims=template_da.dims
+        )
+
+        households = self.agents.households
+        household_points = households.var.household_points.to_crs(template_da.rio.crs)
+        x_coords = household_points.geometry.x.values
+        y_coords = household_points.geometry.y.values
+
+        x_dim = template_da.rio.x_dim
+        y_dim = template_da.rio.y_dim
+        sampled_fraction = fraction_da.interp(
+            {x_dim: ("points", x_coords), y_dim: ("points", y_coords)},
+            method="nearest",
+        )
+
+        return sampled_fraction.values
+
+    def calculate_forest_access_indicator(
+        self,
+        forest_fraction: np.ndarray | None = None,
+        low_income_mask: np.ndarray | None = None,
+    ) -> float:
+        """Calculate the forest-access indicator for the current year.
+
+        the average amount of forest low-income households have within their
+        local neighbourhood.
+
+        Args:
+            forest_fraction: 1-D array of each household's local forest
+                fraction (fraction of land within radius_m that is forest,
+                see calculate_household_forest_fraction()), in [0, 1].
+                Computed via calculate_household_forest_fraction() if not
+                given.
+            low_income_mask: 1-D boolean array marking low-income households.
+                Computed the same way as in calculate_equity_indicator if not
+                given.
+
+        Returns:
+            the raw average local forest fraction for low-income
+            households, in [0, 1] (higher = better).
+        """
+        households = self.agents.households
+        if forest_fraction is None:
+            forest_fraction = self.calculate_household_forest_fraction()
+
+        if low_income_mask is None:
+            # EU at-risk-of-poverty threshold: 60% of median income
+            median_income = np.median(households.var.income.data)
+            low_income_mask = households.var.income.data <= 0.6 * median_income
+
+        n_outside_domain = np.isnan(forest_fraction).sum()
+        if n_outside_domain:
+            # A handful of households sit right at the edge of the landcover
+            # raster's domain, nanmean so the edge cases
+            # don't propagate to NaN for the whole group average.
+            self.model.logger.debug(
+                "Forest access: %d/%d households outside the landcover raster domain, excluded from the average.",
+                n_outside_domain,
+                forest_fraction.size,
+            )
+
+        avg_forest_fraction_low_income = np.nanmean(forest_fraction[low_income_mask])
+
+        self.model.logger.info(
+            "Forest access: avg local forest fraction low-income=%.4f",
+            avg_forest_fraction_low_income,
+        )
+        return avg_forest_fraction_low_income
 
     def calculate_ecosystem_indicator(self) -> float:
         """Calculate the ecosystem health for the current year.
@@ -713,17 +1229,11 @@ class Government(AgentBaseClass):
         zpath = self.model.files["subgrid"]["landcover/classification"]
 
         values_per_esa_land_use_type = {
-            10: 1.0,  # tree cover
-            20: 0.26,  # shrubland
-            30: 0.79,  # grassland
-            40: 0.21,  # cropland
-            50: 0.04,  # built-up
-            60: 0.18,  # bare / sparse vegetation
-            70: 0.37,  # snow and ice
-            80: 0.32,  # permanent water bodies
-            90: 0.5,  # herbaceous wetland
-            95: 0.21,  # mangroves
-            100: 0.58,  # moss and lichen
+            10: 0.74,  # tree cover
+            30: 0.31,  # grassland
+            40: 0.26,  # cropland
+            50: 0.01,  # built-up
+            80: 0.26,  # permanent water bodies
         }
 
         # extract the ESA landcover codes
@@ -764,6 +1274,19 @@ class Government(AgentBaseClass):
             sum_score_per_hru[nonzero_mask] / count_per_hru[nonzero_mask]
         )
 
+        # Blend in the live reforestation state for HRUs converted (fully or
+        # partially) via reforestation — the ESA zarr is static and won't reflect
+        # those changes. Uses forest_fraction (continuous, 0-1) rather than a binary
+        # land_use_type check so partially-converted HRUs get proportional credit,
+        # consistent with the EAD/equity indicator which is also area-continuous.
+        forest_score = values_per_esa_land_use_type[10]  # tree cover = 1.0
+        forest_fraction = getattr(self, "forest_fraction", None)
+        if forest_fraction is None:
+            forest_fraction = (hydrology.HRU.var.land_use_type == FOREST).astype(float)
+        mean_score_per_hru = (
+            1.0 - forest_fraction
+        ) * mean_score_per_hru + forest_fraction * forest_score
+
         # land use type and area per HRU
         area_per_HRU = self.model.hydrology.HRU.var.cell_area.astype(float)
 
@@ -771,9 +1294,16 @@ class Government(AgentBaseClass):
         weighted_sum = float((mean_score_per_hru * area_per_HRU).sum())
 
         # divide by total area to get the area-weighted mean score as the ecosystem indicator
-        ecosystem_indicator = weighted_sum / (area_per_HRU.sum())
-        print(f"Calculated ecosystem indicator: {ecosystem_indicator}")
-        return ecosystem_indicator
+        ecosystem_health = weighted_sum / (area_per_HRU.sum())
+        self.model.logger.debug("Calculated ecosystem health: %s", ecosystem_health)
+        # TEMP: stash raw value for reporting, to help recalibrate normalisation bounds
+        self._raw_ecosystem_health = ecosystem_health
+
+        normalised_ecosystem_health = self.normalise_indicator(
+            "ecosystem_health", ecosystem_health
+        )
+
+        return normalised_ecosystem_health
 
     def apply_adaptation(
         self, budget: float, adaptation_measure_to_implement: str | None
@@ -788,12 +1318,11 @@ class Government(AgentBaseClass):
             "floodproofing_cost_per_household"
         )
 
-        subsidies_cost_per_household = self.config["adaptation_costs"].get(
-            "subsidies_cost_per_household"
+        communication_cost_per_household = self.config["adaptation_costs"].get(
+            "communication_cost_per_household"
         )
 
         if adaptation_measure_to_implement == "floodproofing":
-            # the government decides which measure to apply based on what triggered the need for adaptation
             # apply updating the building structure but this takes the number of households that are adapting as input so we fist need to define that
 
             # figure out which buildings are marked as flooded in this year
@@ -821,57 +1350,107 @@ class Government(AgentBaseClass):
             ]
 
             if len(eligible_households) == 0:
-                print(
-                    "No eligible households for government floodproofing "
-                    "(all flooded households already adapted)."
+                self.model.logger.info(
+                    "No eligible households for government floodproofing (all flooded households already adapted)."
                 )
                 return
 
-            # the government decides who of those are adapting, we only pick a fraction as specified in the config file
+            # the government decides who of those are adapting
             # the number to adapt should actually be based on the available budget, but if the eligible households are less than budget allows, we can only adapt that numnber.
             potential_to_adapt = int(budget / floodproofing_cost_per_household)
             n_to_adapt = min(potential_to_adapt, len(eligible_households))
             if n_to_adapt == 0:
-                print("No households selected for government floodproofing this year ")
+                self.model.logger.info(
+                    "No households selected for government floodproofing this year."
+                )
                 return
             # randomly select the households that are adapted based on the number of households that can be adapted.
-            adapting_households_sample = np.random.choice(
+            # Seeded (year-varying, like risk_communication's rng below) so hypothetical
+            # evaluations of 'floodproofing' are reproducible instead of depending on
+            # whatever the global numpy RNG state happens to be at this point in the run.
+            base_seed = self.config.get("floodproofing", {}).get("seed", 42)
+            rng = np.random.default_rng(base_seed + self.model.current_time.year)
+            adapting_households_sample = rng.choice(
                 eligible_households, size=n_to_adapt, replace=False
             )
             # update the households that are adapted so they are not eligible for adaptation again.
             households.var.adapted[adapting_households_sample] = 1
 
             # use the function to floodproof the buildings of the households who are selected to adapt.
-            households.update_building_adaptation_status(adapting_households_sample)
+            # pass the full accumulated adapted set (not just this year's
+            # sample), since update_building_adaptation_status() overwrites
+            # flood_proofed for every building based only on what is passed in
+            households.update_building_adaptation_status(
+                np.where(households.var.adapted.data == 1)[0]
+            )
             fr = households.flood_risk_module
             fr.load_damage_curves()  # ensure damage curves are loaded before altering them
             fr.alter_damage_curves_for_flood_proofed_buildings()
 
-            print(
-                f"the government adapted {n_to_adapt} of the "
-                f"{len(eligible_households)} eligible households in the floodzone by floodproofing their buildings"
+            self.model.logger.info(
+                "Government floodproofed %d of %d eligible households in the flood zone.",
+                n_to_adapt,
+                len(eligible_households),
             )
 
-        # if adaptation_measure_to_implement == "risk_communication":
-        #     # apply subsidies" --> maybe we can change who the subsidies are applied to but idk if that would make it better
-        #     # this piece of code is still in Veerle's branch so can be uncommented when merged
-        #      print ("the government adapted by providing subsidies to the most vulnerable households to reduce inequality")
-        #     self.provide_subsidies()
+        if adaptation_measure_to_implement == "risk_communication":
+            n_affordable = int(budget / communication_cost_per_household)
+            share = min(n_affordable / self.agents.households.n, 1.0)
+            base_seed = self.config.get("risk_communication", {}).get("seed", 42)
+
+            rc_config = self.config.get("risk_communication", {})
+            risk_perception_increase = float(
+                rc_config.get("risk_perception_increase", 0.0)
+            )
+
+            rng = np.random.default_rng(base_seed + self.model.current_time.year)
+            eligible_mask = rng.random(self.agents.households.n) < share
+
+            # Uses the decay-aware variant so the boost survives until the
+            # household's next decision moment and fades out over subsequent
+            # years, instead of apply_risk_communication()'s direct overwrite
+            # of risk_perception (which gets wiped by that year's
+            # update_risk_perceptions() call before it is ever read).
+            self.agents.households.apply_risk_communication_with_decay(
+                percentage_increase=risk_perception_increase,
+                household_mask=eligible_mask,
+            )
+
+            self.model.logger.info(
+                "Government applied risk communication to %d of %d households (%.1f%%).",
+                eligible_mask.sum(),
+                self.agents.households.n,
+                100.0 * eligible_mask.mean(),
+            )
 
         if adaptation_measure_to_implement == "reforestation":
             # apply reforestation, the reforestation limited by budget is already implemented in the prepare_modified_soil_maps_for_forest_function.
             converted_area_m2 = self.prepare_modified_soil_maps_for_forest()
-            print(
-                f"the government adapted by planting {converted_area_m2} m2 of forest in the most suitable areas to improve the ecosystem health"
+            self.model.logger.info(
+                "Government planted %.2f m2 of forest in suitable areas.",
+                converted_area_m2,
             )
+            # track the running total so calculate_risk_reduction_indicator()
+            # can pick the bracketing precomputed flood-map scenarios for the
+            # current level of reforestation (see reforestation_scenario_bracket())
+            if not hasattr(self, "cumulative_reforested_area_m2"):
+                self.cumulative_reforested_area_m2 = 0.0
+            self.cumulative_reforested_area_m2 += converted_area_m2
 
     def save_adaptation_record(
         self,
         EAD: float | None,
-        exposure_inequality: float | None,
+        equity_indicator: float | None,
         ecosystem_health: float | None,
         current_IPV: float | None = None,
         adaptation_measure_to_implement: str | None = None,
+        raw_EAD: float | None = None,
+        raw_ecosystem_health: float
+        | None = None,  # TEMP: for recalibrating normalisation bounds
+        raw_flood_damage_burden: float
+        | None = None,  # TEMP: for recalibrating normalisation bounds
+        raw_forest_access_low_income: float
+        | None = None,  # TEMP: for recalibrating normalisation bounds
     ) -> None:
         (
             """Save the values for the indicators, the IPV as well as the adaptation measure that is implemented each year to a csv."""
@@ -893,8 +1472,12 @@ class Government(AgentBaseClass):
                 fieldnames=[
                     "year",
                     "EAD",
-                    "exposure_inequality",
+                    "EAD_raw_eur",
+                    "equity_indicator",
                     "ecosystem_health",
+                    "ecosystem_health_raw",  # for calibrating normalisation bounds
+                    "flood_damage_burden_raw",  # for calibrating normalisation bounds
+                    "forest_access_low_income_raw",  # for calibrating normalisation bounds
                     "IPV",
                     "Implemented_measure",
                 ],
@@ -906,8 +1489,12 @@ class Government(AgentBaseClass):
                 {
                     "year": self.model.current_time.year,
                     "EAD": EAD,
-                    "exposure_inequality": exposure_inequality,
+                    "EAD_raw_eur": raw_EAD,
+                    "equity_indicator": equity_indicator,
                     "ecosystem_health": ecosystem_health,
+                    "ecosystem_health_raw": raw_ecosystem_health,
+                    "flood_damage_burden_raw": raw_flood_damage_burden,
+                    "forest_access_low_income_raw": raw_forest_access_low_income,
                     "IPV": current_IPV,
                     "Implemented_measure": adaptation_measure_to_implement,
                 }
@@ -922,22 +1509,22 @@ class Government(AgentBaseClass):
         df = pd.read_csv(csv_file)
 
         fig, (ax1, ax2, ax3) = plt.subplots(3)
-        fig.suptitle("evaluation criteria over time")
+        fig.suptitle("Normalised Evaluation Criteria Over Time")
 
         ax1.plot(df["year"], df["EAD"], label="EAD")
-        ax1.set_ylabel("EAD (millions of €)")
+        ax1.set_ylabel("Normalised EAD")
         ax1.set_xlabel("Year")
-        ax1.set_title("Expected Annual Damage (€) over time")
+        ax1.set_title("Normalised Expected Annual Damage over time")
 
-        ax2.plot(df["year"], df["exposure_inequality"], label="Exposure Inequality")
-        ax2.set_ylabel("Exposure Inequality")
+        ax2.plot(df["year"], df["equity_indicator"], label="Exposure Inequality")
+        ax2.set_ylabel("Normalised Equity Indicator")
         ax2.set_xlabel("Year")
-        ax2.set_title("Exposure Inequality over time")
+        ax2.set_title("Normalised Equity Indicator over time")
 
         ax3.plot(df["year"], df["ecosystem_health"], label="Ecosystem Health")
-        ax3.set_ylabel("Ecosystem Health")
+        ax3.set_ylabel("Normalised Ecosystem Health")
         ax3.set_xlabel("Year")
-        ax3.set_title("Ecosystem Health over time")
+        ax3.set_title("Normalised Ecosystem Health over time")
 
         fig.tight_layout()
         output_folder = self.model.output_folder / "adaptation"
@@ -958,19 +1545,19 @@ class Government(AgentBaseClass):
         df = pd.read_csv(csv_file)
 
         colour_map = {
-            "floodproofing": "#5F5E5A",
+            "floodproofing": "#1F77B4",
             "reforestation": "#3B8B2E",
-            "risk_communication": "#C0392B",
+            "risk_communication": "#F1C40F",
         }
 
         fig, ax = plt.subplots(figsize=(10, 5))
 
-        # plot each segment between adjacent years, coloured by measure type
+        # plot each segment between adjacent years -- lines stay black, only
+        # the markers (below) are coloured by the measure implemented that year
         for i in range(len(df) - 1):
             x_seg = [int(df["year"].iloc[i]), int(df["year"].iloc[i + 1])]
             y_seg = [float(df["IPV"].iloc[i]), float(df["IPV"].iloc[i + 1])]
-            colour = colour_map.get(df["Implemented_measure"].iloc[i], "#aaaaaa")
-            ax.plot(x_seg, y_seg, color=colour, linewidth=2.5)
+            ax.plot(x_seg, y_seg, color="black", linewidth=2.5)
 
         # add dots at each year coloured by measure
         for _, row in df.iterrows():
@@ -979,27 +1566,46 @@ class Government(AgentBaseClass):
                 int(row["year"]), float(row["IPV"]), color=colour, s=40, zorder=5
             )
 
-        # legend
+        # legend -- markers now, not lines, since colour lives on the dots
         from matplotlib.lines import Line2D
 
         legend_elements = [
             Line2D(
                 [0],
                 [0],
-                color="#5F5E5A",
-                linewidth=2.5,
+                marker="o",
+                color="none",
+                markerfacecolor="#1F77B4",
+                markersize=8,
                 label="Floodproofing",
             ),
-            Line2D([0], [0], color="#3B8B2E", linewidth=2.5, label="Reforestation"),
             Line2D(
-                [0], [0], color="#C0392B", linewidth=2.5, label="Risk Communication"
+                [0],
+                [0],
+                marker="o",
+                color="none",
+                markerfacecolor="#3B8B2E",
+                markersize=8,
+                label="Reforestation",
+            ),
+            Line2D(
+                [0],
+                [0],
+                marker="o",
+                color="none",
+                markerfacecolor="#F1C40F",
+                markersize=8,
+                label="Risk Communication",
             ),
         ]
         ax.legend(handles=legend_elements, fontsize=10, framealpha=0.3)
 
         ax.set_title("Adaptation pathway", fontsize=13)
         ax.set_xlabel("Year", fontsize=11)
-        ax.set_ylabel("Integrated Performance Value", fontsize=11)
+        ax.set_ylabel(
+            "Integrated Performance Value ( 0 = no adaptation 1 = full adaptation )",
+            fontsize=11,
+        )
 
         # Auto-scale y-axis to show actual variation in scores rather than fixed 0–1 range.
         # This makes small improvements visible without distorting the data.

@@ -210,8 +210,8 @@ class HazardDriver(Module):
                             }
 
                             new_event_yaml = {
-                                "start_time": start_time.strftime("%Y-%m-%d %H:%M:%S"),
-                                "end_time": end_time.strftime("%Y-%m-%d %H:%M:%S"),
+                                "start_time": start_time,
+                                "end_time": end_time,
                             }
 
                             hazards_cfg = self.model.config.setdefault("hazards", {})

@@ -2300,10 +2300,23 @@ class CropFarmers(AgentBaseClass):
             / cumulative_inflation_since_base_year
         )
 
+        # Guard against 0/0 for farmers with no potential income in a given
+        # historical year (e.g. a fallow year, or a newly registered farmer
+        # whose history isn't fully populated yet): treat non-positive
+        # potential income as "no valid baseline" rather than dividing by it.
+        potential_profits_inflation_corrected = np.where(
+            potential_profits_inflation_corrected > 0,
+            potential_profits_inflation_corrected,
+            np.nan,
+        )
         drought_loss_historical[harvesting_farmers_long] = (
             (potential_profits_inflation_corrected - actual_profits_inflation_corrected)
             / potential_profits_inflation_corrected
         ) * 100
+        # NaN here means "no valid potential-income baseline that year" --
+        # treat as no measurable loss, matching drought_loss_historical's own
+        # zero-initialization default for non-harvesting farmers above.
+        drought_loss_historical[np.isnan(drought_loss_historical)] = 0.0
 
         # Calculate the current and past average loss percentages
         drought_loss_latest = drought_loss_historical[:, 0]

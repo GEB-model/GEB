@@ -42,6 +42,8 @@ class HouseholdVariables(Bucket):
     property_value: DynamicArray
     locations: DynamicArray
     years_since_last_flood: DynamicArray
+    years_since_last_communication: DynamicArray
+    communication_risk_fraction: DynamicArray
     risk_perception: DynamicArray
     sizes: DynamicArray
     water_efficiency_per_household: ArrayFloat32
@@ -471,6 +473,16 @@ class Households(AgentBaseClass):
             np.full(self.n, 25, np.int32), max_n=self.max_n
         )
 
+        # initiate arrays tracking the risk communication boost: the fraction
+        # applied at the time of communication, and a timer used to decay it
+        # with the same formula as years_since_last_flood
+        self.var.communication_risk_fraction = DynamicArray(
+            np.zeros(self.n, np.float32), max_n=self.max_n
+        )
+        self.var.years_since_last_communication = DynamicArray(
+            np.zeros(self.n, np.int32), max_n=self.max_n
+        )
+
         # assign income and wealth attributes
         self.assign_household_wealth_and_income()
 
@@ -537,6 +549,77 @@ class Households(AgentBaseClass):
             f"{len(households_with_postal_codes[households_with_postal_codes['postcode'].notnull()])} households assigned to {households_with_postal_codes['postcode'].nunique()} postal codes."
         )
 
+    def apply_risk_communication(
+        self,
+        percentage_increase: float,
+        household_mask: np.ndarray | None = None,
+    ) -> None:
+        """Increase risk perception by a percentage for eligible households.
+
+        Args:
+            percentage_increase: Percentage increase (e.g., 20 for +20%).
+            household_mask: Boolean mask of eligible households. If None, all are eligible.
+
+        Raises:
+            ValueError: If length of household_mask does not match number of households.
+        """
+        n_households = self.n
+        if household_mask is None:
+            household_mask = np.ones(n_households, dtype=bool)
+        if household_mask.shape[0] != n_households:
+            raise ValueError("household_mask length must match number of households")
+
+        percentage_increase = max(
+            0.0, float(percentage_increase / 100)
+        )  # Percentage can't be smaller than 0
+        print(f"Risk perception increases to 1.0 + {percentage_increase}")
+        rp = self.var.risk_perception.data
+        rp[household_mask] = rp[household_mask] * (1.0 + percentage_increase)
+
+        # Cap at max
+        rp[household_mask] = np.minimum(rp[household_mask], self.var.risk_perc_max)
+        self.var.risk_perception.data[:] = (
+            rp  # Assign updated risk perception back to original file
+        )
+
+    def apply_risk_communication_with_decay(
+        self,
+        percentage_increase: float,
+        household_mask: np.ndarray | None = None,
+    ) -> None:
+        """Apply a risk-communication boost that decays over subsequent years.
+
+        Unlike apply_risk_communication(), this does not write to
+        risk_perception directly. It stores the boost as persistent state
+        (communication_risk_fraction, years_since_last_communication), which
+        update_risk_perceptions() reads every year and folds into the
+        household's risk perception, decayed with the same formula used for
+        years_since_last_flood. This way the boost survives until the
+        household's next decision moment instead of being overwritten by that
+        year's recompute before it is ever used, and fades out gradually in
+        later years if not reapplied.
+
+        Args:
+            percentage_increase: Config value (e.g., 20) divided by 100 to give the
+                absolute amount added directly to risk_perception (e.g., +0.20),
+                not a multiplicative percentage.
+            household_mask: Boolean mask of eligible households. If None, all are eligible.
+
+        Raises:
+            ValueError: If length of household_mask does not match number of households.
+        """
+        n_households = self.n
+        if household_mask is None:
+            household_mask = np.ones(n_households, dtype=bool)
+        if household_mask.shape[0] != n_households:
+            raise ValueError("household_mask length must match number of households")
+
+        percentage_increase = max(
+            0.0, float(percentage_increase / 100)
+        )  # Can't be smaller than 0
+        self.var.communication_risk_fraction.data[household_mask] = percentage_increase
+        self.var.years_since_last_communication.data[household_mask] = 0
+
     def update_risk_perceptions(self) -> None:
         """Update the risk perceptions of households based on the latest flood data."""
         # update timer
@@ -551,17 +634,27 @@ class Households(AgentBaseClass):
                 if (
                     self.model.current_time == end + timedelta(days=14)
                 ):  # Households won't start to immediately think about adapting after a flood occurs. For now an assumption, that after 2 weeks they will start adapting
-                    # Open the flood map
-                    flood_map_name: str = f"{event['start_time'].strftime('%Y%m%dT%H%M%S')} - {event['end_time'].strftime('%Y%m%dT%H%M%S')}.zarr"
+                    # Open the flood map. run_single_event() (geb/hazards/floods/__init__.py)
+                    # appends "_max" since every Event in this codebase is built with
+                    # create_max_intensity_map=True (never create_final_intensity_map).
+                    flood_map_name: str = f"{event['start_time'].strftime('%Y%m%dT%H%M%S')} - {event['end_time'].strftime('%Y%m%dT%H%M%S')}_max.zarr"
                     flood_map_path: Path = (
                         self.model.output_folder / "flood_maps" / flood_map_name
                     )
 
                     flood_map: xr.DataArray = read_zarr(flood_map_path)
 
-                    buildings = (
-                        self.buildings.copy()
-                    )  # Make copy of buildings to be safe
+                    # self.buildings is a plain DataFrame with x/y columns, not a
+                    # GeoDataFrame (see load_objects()) -- build one from those
+                    # columns before reprojecting, the same way
+                    # update_building_attributes() does it.
+                    buildings = gpd.GeoDataFrame(
+                        self.buildings.copy(),
+                        geometry=gpd.points_from_xy(
+                            self.buildings["x"], self.buildings["y"]
+                        ),
+                        crs="EPSG:4326",
+                    )
 
                     buildings_proj = buildings.to_crs(
                         flood_map.rio.crs
@@ -611,6 +704,20 @@ class Households(AgentBaseClass):
             self.var.risk_perc_max
             * 1.6 ** (self.var.risk_decr * self.var.years_since_last_flood.data)
             + self.var.risk_perc_min
+        )
+
+        # Apply any risk-communication boost on top, decayed with the same
+        # formula as years_since_last_flood, using the counter value from
+        # before this year's increment so a boost applied this year (by the
+        # government, after this function runs) is at full strength at the
+        # household's next decision moment.
+        communication_fraction_now = self.var.communication_risk_fraction.data * (
+            1.6 ** (self.var.risk_decr * self.var.years_since_last_communication.data)
+        )
+        self.var.years_since_last_communication.data += 1
+        self.var.risk_perception.data = np.minimum(
+            self.var.risk_perception.data + communication_fraction_now,
+            self.var.risk_perc_max,
         )
 
         stats = {
@@ -1704,8 +1811,13 @@ class Households(AgentBaseClass):
         self.var.adapted[household_adapting] = 1
         self.var.time_adapted[household_adapting] += 1
 
-        # update column in buildings
-        self.update_building_adaptation_status(household_adapting)
+        # update column in buildings using the full accumulated set of adapted
+        # households (not just this year's household_adapting), since
+        # update_building_adaptation_status() overwrites flood_proofed for
+        # every building based only on what is passed in -- passing just this
+        # year's set would revert previously-adapted buildings back to
+        # unprotected if their household doesn't happen to re-qualify this year
+        self.update_building_adaptation_status(np.where(self.var.adapted.data == 1)[0])
 
         # print percentage of households that adapted
         print(f"N households that adapted: {len(household_adapting)}")
@@ -1928,7 +2040,18 @@ class Households(AgentBaseClass):
 
     def step(self) -> None:
         """Advance the households by one time step."""
-        if self.config["adapt"]:
+        # Skip household self-adaptation during spinup when the government's
+        # own adaptation pathway is active: otherwise decide_household_strategy()
+        # runs unconstrained for the whole (multi-decade) spinup period and the
+        # household population is already saturated at its self-adaptation
+        # equilibrium before the actual scenario starts, leaving no room for
+        # government measures (e.g. risk communication) to show any effect.
+        government_config = self.model.config["agent_settings"].get("government", {})
+        skip_for_spinup = self.model.in_spinup and government_config.get(
+            "adaptation", {}
+        ).get("enabled", False)
+
+        if self.config["adapt"] and not skip_for_spinup:
             if self.config["adapt_to_actual_floods"]:
                 self.flood_events: list[dict[str, datetime]] = self.model.config[
                     "hazards"
@@ -1971,7 +2094,7 @@ class Households(AgentBaseClass):
                     gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
                         df_all,
                         geometry=gpd.points_from_xy(df_all.x, df_all.y),
-                        crs=self.buildings.crs,
+                        crs="EPSG:4326",
                     )
 
                     out_path: Path = (

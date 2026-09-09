@@ -78,8 +78,9 @@ hydrology:
 
 agent_settings:
   government:
-    plant_forest: 
+    plant_forest:
       forest_restoration_potential_threshold: 0.5
+    reforestation_ead_lookup_table: output/reforestation_ead_summary.csv # optional path to a CSV with columns reforested_area_m2 and ead_eur_per_year(_corrected), used to scale the risk-reduction indicator's EAD by the discharge-driven effect of the cumulative reforested area. If null, no such scaling is applied.
     adaptation:
       enabled: false # default false. Enable (true) for government adaptation policy. 
     priority_weights:
@@ -90,7 +91,7 @@ agent_settings:
       initial_budget: 4560000
       floodproofing_cost_per_household: 2000
       reforestation_cost_per_m2: 10000
-      subsidies_cost_per_household: 10000 
+      communication_cost_per_household: 1000 
   market:
     dynamic_market: false
     price_frequency: yearly
@@ -232,6 +233,7 @@ parameters:
   lake_outflow_multiplier: 1.0
   interflow_multiplier: 1.0
   variable_runoff_shape_beta: 0.0
+  groundwater_hydraulic_conductivity_m_per_day: 1.0
 
 plantFATE:
   spinup_ini_file: data/plantFATE/p_spinup.ini

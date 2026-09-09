@@ -1177,12 +1177,12 @@ class Forcing(BuildModelBase):
             if np.isnan(delta_tas_regridded.values).any():
                 raise ValueError("NaN values found in regridded temperature deltas.")
             delta_pr_regridded = (
-                delta_pr_regridded.resample(time="1H")
+                delta_pr_regridded.resample(time="1h")
                 .ffill()
                 .sel(time=slice(pr_hourly.time.values[0], pr_hourly.time.values[-1]))
             )
             delta_tas_regridded = (
-                delta_tas_regridded.resample(time="1H")
+                delta_tas_regridded.resample(time="1h")
                 .ffill()
                 .sel(time=slice(tas.time.values[0], tas.time.values[-1]))
             )

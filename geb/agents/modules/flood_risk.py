@@ -295,23 +295,6 @@ class FloodRiskModule:
             self.households.buildings_content_curve["damage_ratio"]
         )
 
-        # create another column (curve) in the buildings structure curve for flood-proofed buildings
-        self.households.buildings_structure_curve["building_flood_proofed"] = (
-            self.households.buildings_structure_curve["damage_ratio"]
-        )
-        self.households.buildings_structure_curve.loc[
-            0:1, "building_flood_proofed"
-        ] *= 0.15
-
-        # create another column (curve) in the buildings content curve for flood-proofed buildings
-        self.households.buildings_content_curve["building_flood_proofed"] = (
-            self.households.buildings_content_curve["damage_ratio"]
-        )
-
-        self.households.buildings_content_curve.loc[0:1, "building_flood_proofed"] *= (
-            0.15
-        )
-
         # TODO: Need to adjust the vulnerability curves
         # create another column (curve) in the buildings structure curve for
         # protected buildings with sandbags
@@ -750,11 +733,22 @@ class FloodRiskModule:
         damage_folder: Path = self.households.model.output_folder / "damage_maps"
         damage_folder.mkdir(parents=True, exist_ok=True)
 
-        self.households.buildings_content_curve = (
-            self.households.buildings_content_curve.rename(
-                columns={"damage_ratio": "building_unprotected"}
+        if "building_unprotected" in self.households.buildings_content_curve.columns:
+            # alter_damage_curves_for_flood_proofed_buildings() already copied
+            # damage_ratio into building_unprotected; drop the now-redundant
+            # original instead of renaming into it, which would otherwise
+            # produce two columns both named building_unprotected.
+            self.households.buildings_content_curve = (
+                self.households.buildings_content_curve.drop(
+                    columns="damage_ratio", errors="ignore"
+                )
             )
-        )
+        else:
+            self.households.buildings_content_curve = (
+                self.households.buildings_content_curve.rename(
+                    columns={"damage_ratio": "building_unprotected"}
+                )
+            )
 
         damages_buildings_content = VectorScanner(
             features=buildings_centroid,
@@ -764,23 +758,37 @@ class FloodRiskModule:
 
         total_damages_content = damages_buildings_content.sum()
 
-        # save it to a gpkg file
-        gdf_content = buildings_centroid.copy()
-        gdf_content["damage"] = damages_buildings_content
-        category_name: str = "buildings_content"
-        filename: str = f"damage_map_{category_name}.gpkg"
-        gdf_content.to_file(damage_folder / filename, driver="GPKG")
+        # save it to a gpkg file, but only outside hypothetical/multiverse runs
+        # (adaptation-measure testing, forecast ensemble members): those results
+        # are always discarded, so writing here would just repeatedly overwrite
+        # the same fixed path for no benefit -- and, run often enough back to
+        # back, can intermittently fail with "layer already exists" on some
+        # filesystems.
+        if self.model.multiverse_name is None:
+            gdf_content = buildings_centroid.copy()
+            gdf_content["damage"] = damages_buildings_content
+            category_name: str = "buildings_content"
+            filename: str = f"damage_map_{category_name}.gpkg"
+            gdf_content.to_file(damage_folder / filename, driver="GPKG")
 
         print(f"damages to building content are: {total_damages_content}")
 
         # Compute damages for buildings structure
         buildings = buildings[buildings.geometry.notna()].copy()
 
-        self.households.buildings_structure_curve = (
-            self.households.buildings_structure_curve.rename(
-                columns={"damage_ratio": "building_unprotected"}
+
+        if "building_unprotected" in self.households.buildings_structure_curve.columns:
+            self.households.buildings_structure_curve = (
+                self.households.buildings_structure_curve.drop(
+                    columns="damage_ratio", errors="ignore"
+                )
             )
-        )
+        else:
+            self.households.buildings_structure_curve = (
+                self.households.buildings_structure_curve.rename(
+                    columns={"damage_ratio": "building_unprotected"}
+                )
+            )
 
         damages_buildings_structure: pd.Series = VectorScanner(
             features=buildings.rename(columns={"maximum_damage_m2": "maximum_damage"}),  # ty:ignore[invalid-argument-type]
@@ -792,12 +800,14 @@ class FloodRiskModule:
 
         print(f"damages to building structure are: {total_damage_structure}")
 
-        # save it to a gpkg file
-        gdf_structure = buildings.copy()
-        gdf_structure["damage"] = damages_buildings_structure
-        category_name: str = "buildings_structure"
-        filename: str = f"damage_map_{category_name}.gpkg"
-        gdf_structure.to_file(damage_folder / filename, driver="GPKG")
+        # save it to a gpkg file, but only outside hypothetical/multiverse runs
+        # (see comment on the equivalent buildings_content write above)
+        if self.model.multiverse_name is None:
+            gdf_structure = buildings.copy()
+            gdf_structure["damage"] = damages_buildings_structure
+            category_name: str = "buildings_structure"
+            filename: str = f"damage_map_{category_name}.gpkg"
+            gdf_structure.to_file(damage_folder / filename, driver="GPKG")
 
         print(
             f"Total damages to buildings are: {total_damages_content + total_damage_structure}"

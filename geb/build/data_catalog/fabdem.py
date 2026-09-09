@@ -7,6 +7,7 @@ downloads and merges the corresponding GeoTIFFs.
 
 import re
 from typing import Any
+from urllib.parse import urljoin
 
 import geopandas as gpd
 import numpy as np
@@ -36,31 +37,33 @@ class Fabdem(Adapter):
         """
         super().__init__(*args, **kwargs)
 
-    def _get_item_names_from_catalog(self, catalog_url: str) -> list[str]:
-        """Fetch all STAC item names from the catalog JSON.
+    def _get_items_from_catalog(self, catalog_url: str) -> dict[str, str]:
+        """Fetch all STAC item names and hrefs from the catalog/collection JSON.
 
         Parses only the catalog-level JSON (one HTTP request) to extract item
-        directory names, without loading each individual item document.
+        directory names and their href, without loading each individual item
+        document.
 
         Args:
-            catalog_url: URL of the STAC catalog root JSON
-                (e.g. ``…/stac_catalog/catalog.json``).
+            catalog_url: URL of the STAC catalog or collection JSON that lists
+                the individual items (e.g. ``…/collection.json``).
 
         Returns:
-            List of item names (directory names) found in the catalog.
+            Mapping of item name (directory name) to its href, relative to
+            *catalog_url*, as found in the catalog.
         """
         response = requests.get(catalog_url, timeout=30)
         response.raise_for_status()
         catalog_data: dict = response.json()
 
-        item_names: list[str] = []
+        items: dict[str, str] = {}
         for link in catalog_data.get("links", []):
             if link.get("rel") == "item":
                 href: str = link.get("href", "")
-                # href is relative like "../N00E000_FABDEM_V1-2/N00E000_FABDEM_V1-2.json"
+                # href is relative like "./stac_catalog/N00E000_FABDEM_V1-2/N00E000_FABDEM_V1-2.json"
                 # The second-to-last path segment is the item directory name.
-                item_names.append(href.split("/")[-2])
-        return item_names
+                items[href.split("/")[-2]] = href
+        return items
 
     def _parse_item_bounds(self, item_name: str) -> dict[str, float] | None:
         """Parse the geographic bounding box of a FABDEM tile from its item name.
@@ -88,20 +91,21 @@ class Fabdem(Adapter):
 
     def _filter_items_by_mask(
         self,
-        item_names: list[str],
+        items: dict[str, str],
         mask: BaseGeometry,
-    ) -> list[str]:
-        """Return only those item names whose tiles intersect the mask geometry.
+    ) -> dict[str, str]:
+        """Return only those items whose tiles intersect the mask geometry.
 
         Args:
-            item_names: Full list of STAC item names from the catalog.
+            items: Mapping of item name to href, as returned by
+                `_get_items_from_catalog`.
             mask: The geometry used to filter intersecting tiles.
 
         Returns:
-            Subset of *item_names* whose 1×1-degree bounding boxes intersect *mask*.
+            Subset of *items* whose 1×1-degree bounding boxes intersect *mask*.
         """
-        intersecting: list[str] = []
-        for item_name in item_names:
+        intersecting: dict[str, str] = {}
+        for item_name, href in items.items():
             bounds = self._parse_item_bounds(item_name)
             if bounds is None:
                 continue
@@ -109,12 +113,13 @@ class Fabdem(Adapter):
                 bounds["minx"], bounds["miny"], bounds["maxx"], bounds["maxy"]
             )
             if tile_bbox.intersects(mask):
-                intersecting.append(item_name)
+                intersecting[item_name] = href
         return intersecting
 
     def _open_tile_from_stac_item(
         self,
         item_name: str,
+        href: str,
         catalog_url: str,
     ) -> xr.DataArray:
         """Open a FABDEM tile as a lazy dask DataArray directly from its remote URL.
@@ -125,8 +130,10 @@ class Fabdem(Adapter):
 
         Args:
             item_name: STAC item name such as ``N00W000_FABDEM_V1-2``.
-            catalog_url: URL of the STAC catalog root JSON; used to derive the
-                item JSON URL.
+            href: The item's href as found in the catalog/collection JSON,
+                relative to *catalog_url*.
+            catalog_url: URL of the STAC catalog/collection JSON that *href*
+                is relative to.
 
         Returns:
             Lazy xr.DataArray for the tile, with spatial coordinates in WGS-84
@@ -135,21 +142,13 @@ class Fabdem(Adapter):
         Raises:
             KeyError: If the asset URL cannot be resolved.
         """
-        base_url: str = catalog_url.rsplit("/", 1)[0]
-        item_url: str = f"{base_url}/{item_name}/{item_name}.json"
+        item_url: str = urljoin(catalog_url, href)
         item: pystac.Item = pystac.Item.from_file(href=item_url)
 
         asset = next(iter(item.assets.values()))
         asset_url: str | None = asset.get_absolute_href()
         if asset_url is None:
             raise KeyError(f"Could not resolve asset URL for STAC item '{item_name}'")
-
-        # HuggingFace serves binary LFS files via /resolve/; /raw/ returns the
-        # pointer file, which GDAL cannot parse as a GeoTIFF.
-        asset_url = asset_url.replace(
-            "huggingface.co/datasets/links-ads/fabdem-v12/raw/main/",
-            "huggingface.co/datasets/links-ads/fabdem-v12/resolve/main/",
-        )
 
         # GDAL VSICURL allows rioxarray to stream the remote GeoTIFF lazily;
         # dask chunks avoid loading the entire tile into memory at once.
@@ -208,12 +207,12 @@ class Fabdem(Adapter):
         Raises:
             RuntimeError: If no intersecting tiles can be downloaded.
         """
-        item_names: list[str] = self._get_item_names_from_catalog(self.catalog_url)
-        intersecting_items: list[str] = self._filter_items_by_mask(item_names, mask)
+        items: dict[str, str] = self._get_items_from_catalog(self.catalog_url)
+        intersecting_items: dict[str, str] = self._filter_items_by_mask(items, mask)
 
         tile_das: list[xr.DataArray] = [
-            self._open_tile_from_stac_item(item_name, self.catalog_url)
-            for item_name in intersecting_items
+            self._open_tile_from_stac_item(item_name, href, self.catalog_url)
+            for item_name, href in intersecting_items.items()
         ]
 
         if not tile_das:

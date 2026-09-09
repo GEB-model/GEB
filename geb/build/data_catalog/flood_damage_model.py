@@ -24,7 +24,7 @@ geul_damage_model = {
                     [4.00, 1.00],
                     [5.00, 1.00],
                 ],
-                "maximum_damage": 10.79,
+                "maximum_damage": 0.05,
             },
             "agriculture": {
                 "curve": [
@@ -40,7 +40,7 @@ geul_damage_model = {
                     [4.00, 1.00],
                     [5.00, 1.00],
                 ],
-                "maximum_damage": 1.83,
+                "maximum_damage": 1.06,
             },
         },
         "residential": {
@@ -55,7 +55,7 @@ geul_damage_model = {
                     [2.5, 0.47],
                     [3, 0.5],
                 ],
-                "maximum_damage": 1806,
+                "maximum_damage": 1938,
             },
             "content": {
                 "curve": [
@@ -68,13 +68,87 @@ geul_damage_model = {
                     [2.50, 0.7],
                     [3.00, 0.72],
                 ],
-                "maximum_damage": 78787,
+                "maximum_damage": 81424,
+            },
+            "structure_dryproofing": {
+                "curve": [
+                    [0, 0],
+                    [0.10, 0.00],
+                    [0.50, 0.00],
+                    [1.00, 0.00],
+                    [1.01, 0.41],
+                    [1.50, 0.45],
+                    [2.00, 0.47],
+                    [2.50, 0.50],
+                    [3.00, 0.52],
+                    [3.50, 0.54],
+                    [5.00, 0.60],
+                ],
+                "maximum_damage": 1938,
+            },
+            "content_dryproofing": {
+                "curve": [
+                    [0, 0],
+                    [0.10, 0.00],
+                    [0.50, 0.00],
+                    [1.00, 0.00],
+                    [1.01, 0.70],
+                    [1.50, 0.73],
+                    [2.00, 0.76],
+                    [2.50, 0.80],
+                    [3.00, 0.82],
+                    [3.50, 0.84],
+                    [5.00, 0.90],
+                ],
+                "maximum_damage": 81424,
+            },
+            "structure_wetproofing": {
+                "curve": [
+                    [0, 0],
+                    [0.1, 0.107],
+                    [0.2, 0.127],
+                    [0.3, 0.137],
+                    [0.4, 0.157],
+                    [0.5, 0.167],
+                    [1.0, 0.207],
+                    [1.5, 0.247],
+                    [2.0, 0.267],
+                    [2.5, 0.297],
+                    [3.0, 0.317],
+                    [3.5, 0.337],
+                    [5.0, 0.397],
+                ],
+                "maximum_damage": 1938,
+            },
+            "content_wetproofing": {
+                "curve": [
+                    [0.0, 0.00],
+                    [0.1, 0.198],
+                    [0.2, 0.218],
+                    [0.3, 0.238],
+                    [0.4, 0.248],
+                    [0.5, 0.268],
+                    [1.0, 0.318],
+                    [1.5, 0.348],
+                    [2.0, 0.378],
+                    [2.5, 0.418],
+                    [3.0, 0.438],
+                    [3.5, 0.458],
+                    [5.0, 0.518],
+                ],
+                "maximum_damage": 81424,
             },
         },
         "rail": {
             "main": {
-                "curve": [[0, 0], [0.05, 0.02], [0.20, 0.2], [1.40, 1], [6.00, 1]],
-                "maximum_damage": 7022,
+                "curve": [
+                    [0, 0], 
+                    [0.05, 0.02], 
+                    [0.20, 0.2], 
+                    [1.40, 1], 
+                    [6.00, 1]
+                ],
+                "maximum_damage": 9150,
             }
         },
         "road": {
@@ -87,7 +161,7 @@ geul_damage_model = {
                     [2.00, 0.035],
                     [6.00, 0.05],
                 ],
-                "maximum_damage": 5,
+                "maximum_damage": 6,
             },
             "unclassified": {
                 "curve": [
@@ -98,7 +172,7 @@ geul_damage_model = {
                     [2.00, 0.035],
                     [6.00, 0.05],
                 ],
-                "maximum_damage": 5,
+                "maximum_damage": 6,
             },
             "tertiary": {
                 "curve": [
@@ -109,7 +183,7 @@ geul_damage_model = {
                     [2.00, 0.035],
                     [6.00, 0.05],
                 ],
-                "maximum_damage": 10,
+                "maximum_damage": 13,
             },
             "primary": {
                 "curve": [
@@ -120,7 +194,7 @@ geul_damage_model = {
                     [2.00, 0.035],
                     [6.00, 0.05],
                 ],
-                "maximum_damage": 50,
+                "maximum_damage": 65,
             },
             "secondary": {
                 "curve": [
@@ -131,7 +205,7 @@ geul_damage_model = {
                     [2.00, 0.035],
                     [6.00, 0.05],
                 ],
-                "maximum_damage": 25,
+                "maximum_damage": 32,
             },
             "motorway": {
                 "curve": [
@@ -142,7 +216,7 @@ geul_damage_model = {
                     [2.00, 0.1],
                     [6.00, 0.2],
                 ],
-                "maximum_damage": 4000,
+                "maximum_damage": 5212,
             },
             "motorway_link": {
                 "curve": [
@@ -153,7 +227,7 @@ geul_damage_model = {
                     [2.00, 0.1],
                     [6.00, 0.2],
                 ],
-                "maximum_damage": 4000,
+                "maximum_damage": 5212,
             },
             "trunk": {
                 "curve": [
@@ -164,7 +238,7 @@ geul_damage_model = {
                     [2.00, 0.1],
                     [6.00, 0.2],
                 ],
-                "maximum_damage": 1000,
+                "maximum_damage": 1303,
             },
             "trunk_link": {
                 "curve": [
@@ -175,7 +249,7 @@ geul_damage_model = {
                     [2.00, 0.1],
                     [6.00, 0.2],
                 ],
-                "maximum_damage": 1000,
+                "maximum_damage": 1303,
             },
             "primary_link": {
                 "curve": [
@@ -186,7 +260,7 @@ geul_damage_model = {
                     [2.00, 0.035],
                     [6.00, 0.05],
                 ],
-                "maximum_damage": 50,
+                "maximum_damage": 65,
             },
             "secondary_link": {
                 "curve": [
@@ -197,7 +271,7 @@ geul_damage_model = {
                     [2.00, 0.035],
                     [6.00, 0.05],
                 ],
-                "maximum_damage": 25,
+                "maximum_damage": 32,
             },
             "tertiary_link": {
                 "curve": [
@@ -208,7 +282,7 @@ geul_damage_model = {
                     [2.00, 0.035],
                     [6.00, 0.05],
                 ],
-                "maximum_damage": 25,
+                "maximum_damage": 32,
             },
         },
     }
