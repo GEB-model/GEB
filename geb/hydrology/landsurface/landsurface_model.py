@@ -82,6 +82,37 @@ SOIL_EMISSIVITY = np.float32(0.95)
 # width vector loads and stores with no scalar remainder loop.
 BLOCK_SIZE: int = 16
 
+# Daily agent outputs used to train the crop-choice encoder. During an
+# operational run they are still calculated for the in-memory encoder, but
+# their default daily reporters are disabled to avoid unnecessary output.
+ML_CROP_CHOICE_DAILY_REPORTS = (
+    "soil_temperature_layer_0_C_agents",
+    "topsoil_temperature_C_agents",
+    "profile_soil_temperature_C_agents",
+    "top_soil_frozen_fraction_agents",
+    "deep_soil_temperature_C_agents",
+    "runoff_m_agents",
+    "actual_evapotranspiration_m_agents",
+    "potential_evapotranspiration_m_agents",
+    "transpiration_m_agents",
+    "topsoil_relative_available_water_agents",
+    "profile_relative_available_water_agents",
+    "crop_factor_agents",
+    "root_depth_m_agents",
+    "crop_sub_stage_agents",
+    "interception_capacity_m_agents",
+    "leaf_area_index_agents",
+    "precipitation_m_daily_agents",
+    "tas_2m_C_daily_mean_agents",
+    "tas_2m_C_daily_min_agents",
+    "tas_2m_C_daily_max_agents",
+    "dewpoint_tas_2m_C_agents",
+    "wind_speed_10m_m_per_s_agents",
+    "downward_shortwave_radiation_MJ_m2_daily_agents",
+    "reference_evapotranspiration_grass_m_agents",
+    "actual_irrigation_consumption_m_agents",
+)
+
 if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
 
@@ -1062,6 +1093,21 @@ class LandSurface(Module):
             model: The GEB model instance.
             hydrology: The hydrology module.
         """
+        if not model.in_spinup:
+            report_section = model.config.get("report", {}).get(
+                "hydrology.landsurface", {}
+            )
+            for name in ML_CROP_CHOICE_DAILY_REPORTS:
+                settings = report_section.get(name)
+                if not isinstance(settings, dict):
+                    continue
+                frequency = settings.get("frequency")
+                is_daily = frequency is None or frequency == "daily"
+                if isinstance(frequency, dict):
+                    is_daily = frequency.get("every") in {"day", "daily"}
+                if is_daily:
+                    report_section.pop(name, None)
+
         super().__init__(model)
         self.hydrology = hydrology
 
@@ -1689,8 +1735,10 @@ class LandSurface(Module):
             data=crop_group_number_grassland_like
         )
 
-        # Export static variables
-        # Static agent-level soil variables for ML/reporting.
+        # Export static agent-level soil variables needed by configured reporters.
+        # Spin-up must not depend on a trained ML deployment: if these variables
+        # are used by crop_prediction.py, their reporters are already part of the
+        # spin-up configuration that produced the training data.
         if (
             "profile_soil_depth_m_agents"
             in self.model.config["report"]["hydrology.landsurface"]
@@ -2362,7 +2410,19 @@ class LandSurface(Module):
 
         timer.finish_split("Finalization")
 
-        local_variables_to_report = self.local_variables_to_report
+        # During spin-up, only the configured reporters determine which agent
+        # variables are calculated. The trained model does not exist yet.
+        # During an operational run, CropFarmers/DecisionModuleML additionally
+        # requests only the land-surface channels present in the trained bundle.
+        crop_farmers = self.model.agents.crop_farmers
+        crop_prediction_feature_names = (
+            set()
+            if self.model.in_spinup
+            else set(crop_farmers.crop_prediction_land_surface_feature_names)
+        )
+        local_variables_to_report = set(self.local_variables_to_report) | (
+            crop_prediction_feature_names
+        )
 
         # Export daily agent variables
         topsoil_layers = slice(0, 3)
@@ -2664,6 +2724,25 @@ class LandSurface(Module):
                 self.var.land_owner_ids,
                 self.var.owned_land,
                 self.var.owned_hru_count,
+            )
+
+        if crop_prediction_feature_names:
+            step_local_variables = locals().copy()
+            missing_crop_prediction_features = sorted(
+                name
+                for name in crop_prediction_feature_names
+                if name not in step_local_variables
+            )
+            if missing_crop_prediction_features:
+                raise KeyError(
+                    "LandSurface did not construct required online crop-choice "
+                    f"features: {missing_crop_prediction_features}."
+                )
+            crop_farmers.capture_crop_prediction_daily_features(
+                {
+                    name: np.asarray(step_local_variables[name], dtype=np.float32)
+                    for name in crop_prediction_feature_names
+                }
             )
 
         # HRU variables

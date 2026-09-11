@@ -35,6 +35,7 @@ from ..store import Bucket, DynamicArray
 from ..workflows import balance_check
 from ..workflows.io import read_array
 from .decision_module import DecisionModule
+from .decision_module_ml import DecisionModuleML, ML_FARMER_DAILY_REPORTS
 from .general import AgentBaseClass
 from .workflows.crop_farmers import (
     abstract_water,
@@ -311,6 +312,21 @@ class CropFarmers(AgentBaseClass):
                 the number of agents, e.g. 0.2 means 20% more space is allocated than the number of agents.
 
         """
+        if not model.in_spinup:
+            report_section = model.config.get("report", {}).get(
+                "agents.crop_farmers", {}
+            )
+            for name in ML_FARMER_DAILY_REPORTS:
+                settings = report_section.get(name)
+                if not isinstance(settings, dict):
+                    continue
+                frequency = settings.get("frequency")
+                is_daily = frequency is None or frequency == "daily"
+                if isinstance(frequency, dict):
+                    is_daily = frequency.get("every") in {"day", "daily"}
+                if is_daily:
+                    report_section.pop(name, None)
+
         super().__init__(model)
         self.agents = agents
         self.config = (
@@ -376,10 +392,26 @@ class CropFarmers(AgentBaseClass):
             not self.config["expected_utility"]["crop_switching"]["ruleset"]
             == "no-adaptation"
         )
+        crop_switching_config = self.config["expected_utility"]["crop_switching"]
+        machine_learning_config = crop_switching_config.get("machine_learning", {})
+        self.machine_learning_crop_switching_active = bool(
+            machine_learning_config.get("enabled", False)
+            or crop_switching_config.get("ruleset")
+            in {"machine-learning", "machine_learning"}
+            or crop_switching_config.get("preset_switching")
+            in {"machine-learning", "machine_learning"}
+        )
+        if self.machine_learning_crop_switching_active:
+            # ML is the crop-calendar mechanism, not an additional expected-
+            # utility crop adaptation applied at the hydrological-year boundary.
+            self.crop_switching_adaptation_active = False
+        self.machine_learning_crop_switching_config = machine_learning_config
+        self.decision_module_ml: DecisionModuleML | None = None
         self.preset_crop_switching_active = (
             not self.config["expected_utility"]["crop_switching"]["preset_switching"]
             == "no-adaptation"
         )
+        self.preset_crop_switching_active |= self.machine_learning_crop_switching_active
 
         self.traditional_insurance_adaptation_active = (
             not self.model.config["agent_settings"]["insurers"][
@@ -459,6 +491,9 @@ class CropFarmers(AgentBaseClass):
 
         if self.model.in_spinup:
             self.spinup()
+        # During an operational run the Bucket is restored only after agent
+        # construction. DecisionModuleML must therefore be initialized lazily
+        # on first operational use, not here in CropFarmers.__init__.
 
     @property
     def name(self) -> str:
@@ -468,6 +503,81 @@ class CropFarmers(AgentBaseClass):
             The name of the module.
         """
         return "agents.crop_farmers"
+
+    @property
+    def crop_prediction_land_surface_feature_names(self) -> tuple[str, ...]:
+        """Return land-surface variables required by the loaded encoder.
+
+        Operational agent Buckets are restored after the agent objects themselves
+        are constructed. Calling the initializer here therefore also provides a
+        safe post-restore hook for LandSurface, which can be stepped before
+        CropFarmers on the first simulation day.
+        """
+        self._initialize_decision_module_ml()
+        if self.decision_module_ml is None:
+            return ()
+        return self.decision_module_ml.land_surface_daily_names
+
+    def capture_crop_prediction_daily_features(
+        self,
+        land_surface_values: dict[str, np.ndarray],
+    ) -> None:
+        """Complete and store one day of neural-encoder input variables."""
+        self._initialize_decision_module_ml()
+        if self.decision_module_ml is not None:
+            self.decision_module_ml.capture_daily(
+                self.model.current_time,
+                land_surface_values,
+            )
+
+    def _initialize_decision_module_ml(self) -> None:
+        """Construct the ML decision module once the restored farmer state exists.
+
+        ``AgentBaseClass`` creates an empty :class:`Bucket` while the agent object
+        is constructed. For ``geb run`` the saved spin-up Bucket is restored only
+        afterwards. DecisionModuleML depends on that restored state, so an early
+        call must defer rather than interpreting the empty Bucket as missing model
+        data. The method is intentionally idempotent and is called from both the
+        LandSurface feature hook and CropFarmers.step.
+        """
+        if (
+            self.model.in_spinup
+            or not self.machine_learning_crop_switching_active
+            or self.decision_module_ml is not None
+        ):
+            return
+
+        required_restored_state = (
+            "n",
+            "crop_calendar",
+            "crop_calendar_base_array",
+            "crop_calendar_years",
+            "crop_calendar_active_year_index",
+        )
+        if any(not hasattr(self.var, name) for name in required_restored_state):
+            # Normal during construction of an operational model: GEB has created
+            # the Bucket but has not restored the spin-up state into it yet.
+            return
+
+        self.decision_module_ml = DecisionModuleML(
+            self,
+            self.machine_learning_crop_switching_config,
+        )
+
+    def _run_due_crop_predictions(self) -> None:
+        """Install due ML calendars, but only during the simulation run."""
+        self._initialize_decision_module_ml()
+        if self.decision_module_ml is not None and not self.model.in_spinup:
+            self.decision_module_ml.run_due()
+
+    def farmers_due_for_earliest_subregion_candidate_planting(self) -> np.ndarray:
+        """Expose the farmer selection used for today's ML crop decisions."""
+        self._initialize_decision_module_ml()
+        if self.decision_module_ml is None or self.model.in_spinup:
+            return np.empty(0, dtype=np.int64)
+        return self.decision_module_ml.farmers_due_for_earliest_subregion_candidate_planting(
+            self.model.current_time
+        )
 
     def spinup(self) -> None:
         """Perform any necessary spinup for the crop farmers module.
@@ -2483,15 +2593,20 @@ class CropFarmers(AgentBaseClass):
             self.model.current_time.day,
         )
 
-        active_year_indices = np.asarray(
-            self.var.crop_calendar_active_year_index[farmers],
-            dtype=np.int64,
-        )
-
-        active_years = np.asarray(
-            self.var.crop_calendar_years[active_year_indices],
-            dtype=np.int64,
-        )
+        if self.decision_module_ml is not None:
+            active_years = np.asarray(
+                self.decision_module_ml.calendar_year[farmers],
+                dtype=np.int64,
+            )
+        else:
+            active_year_indices = np.asarray(
+                self.var.crop_calendar_active_year_index[farmers],
+                dtype=np.int64,
+            )
+            active_years = np.asarray(
+                self.var.crop_calendar_years[active_year_indices],
+                dtype=np.int64,
+            )
 
         days_since_start = np.empty(farmers.size, dtype=np.int32)
 
@@ -2564,6 +2679,13 @@ class CropFarmers(AgentBaseClass):
             runtime_calendars == expected_active_calendars,
             axis=(1, 2),
         )
+        if self.decision_module_ml is not None:
+            # Once the simulation run installs an ML calendar, the active
+            # base-array index intentionally remains on the last prescribed
+            # calendar while the runtime calendar is supplied by ML.
+            matching_active_calendar[
+                self.decision_module_ml.calendar_is_predicted[deciding_farmers]
+            ] = True
         if not np.all(matching_active_calendar):
             invalid_farmers = deciding_farmers[~matching_active_calendar][:20]
             invalid_indices = active_year_indices[~matching_active_calendar][:20]
@@ -2712,6 +2834,11 @@ class CropFarmers(AgentBaseClass):
 
         self.var.crop_decision_active_year_index[deciding_farmers] = active_year_indices
         self.var.crop_decision_yield_ratio[deciding_farmers] = latest_yield_ratio
+        if self.decision_module_ml is not None:
+            self.decision_module_ml.note_completed_yield(
+                deciding_farmers,
+                latest_yield_ratio,
+            )
 
         if not np.array_equal(
             np.asarray(
@@ -2811,6 +2938,20 @@ class CropFarmers(AgentBaseClass):
             if farmers_to_advance.size == 0:
                 return
 
+            completed_was_fallow = np.all(
+                np.asarray(self.var.crop_calendar[farmers_to_advance]) == -1,
+                axis=(1, 2),
+            )
+            if self.decision_module_ml is not None and np.any(completed_was_fallow):
+                self.decision_module_ml.note_completed_yield(
+                    farmers_to_advance[completed_was_fallow],
+                    np.full(
+                        np.count_nonzero(completed_was_fallow),
+                        np.nan,
+                        dtype=np.float32,
+                    ),
+                )
+
             rotation_years = np.asarray(
                 self.var.crop_calendar_rotation_years[farmers_to_advance],
                 dtype=np.int32,
@@ -2835,72 +2976,97 @@ class CropFarmers(AgentBaseClass):
                 next_active_year_index < self.var.crop_calendar_base_array.shape[0]
             )
 
-            farmers_to_update = farmers_to_advance[has_next_hrl_year]
-            next_active_year_index = next_active_year_index[has_next_hrl_year]
+            # Prescribed 2017--2024 HRL calendars remain authoritative during
+            # spin-up. Once `geb run` starts, this single condition routes every
+            # completed calendar to the prepared ML decision instead.
+            use_preset = has_next_hrl_year & (
+                self.decision_module_ml is None or self.model.in_spinup
+            )
+            farmers_to_update = farmers_to_advance[use_preset]
+            preset_next_indices = next_active_year_index[use_preset]
+            farmers_for_ml = (
+                farmers_to_advance[~use_preset]
+                if self.decision_module_ml is not None
+                else np.empty(0, dtype=np.int64)
+            )
 
-            if farmers_to_update.size == 0:
-                self.model.logger.debug(
-                    "Advanced crop-rotation year for %s farmer(s), but no next HRL "
-                    "crop-calendar year was available. Reason: %s.",
-                    farmers_to_advance.size,
-                    reason,
+            if farmers_to_update.size:
+                self.var.crop_calendar[farmers_to_update] = (
+                    self.var.crop_calendar_base_array[
+                        preset_next_indices,
+                        farmers_to_update,
+                        :,
+                        :,
+                    ]
                 )
-                return
 
-            self.var.crop_calendar[farmers_to_update] = (
-                self.var.crop_calendar_base_array[
-                    next_active_year_index,
+                self.var.crop_calendar_active_year_index[farmers_to_update] = (
+                    preset_next_indices
+                )
+                if self.decision_module_ml is not None:
+                    self.decision_module_ml.note_observed_calendar_advance(
+                        farmers_to_update,
+                        preset_next_indices,
+                    )
+
+                updated_indices = np.asarray(
+                    self.var.crop_calendar_active_year_index[farmers_to_update],
+                    dtype=np.int32,
+                )
+                if not np.array_equal(updated_indices, preset_next_indices):
+                    raise AssertionError(
+                        "crop_calendar_active_year_index did not advance to the "
+                        "expected next base-calendar index."
+                    )
+                updated_calendars = np.asarray(
+                    self.var.crop_calendar[farmers_to_update]
+                )
+                expected_calendars = self.var.crop_calendar_base_array[
+                    preset_next_indices,
                     farmers_to_update,
                     :,
                     :,
                 ]
-            )
-
-            self.var.crop_calendar_active_year_index[farmers_to_update] = (
-                next_active_year_index
-            )
-
-            updated_indices = np.asarray(
-                self.var.crop_calendar_active_year_index[farmers_to_update],
-                dtype=np.int32,
-            )
-            if not np.array_equal(updated_indices, next_active_year_index):
-                raise AssertionError(
-                    "crop_calendar_active_year_index did not advance to the "
-                    "expected next base-calendar index."
+                matching_updated_calendar = np.all(
+                    updated_calendars == expected_calendars,
+                    axis=(1, 2),
                 )
-            updated_calendars = np.asarray(self.var.crop_calendar[farmers_to_update])
-            expected_calendars = self.var.crop_calendar_base_array[
-                next_active_year_index,
-                farmers_to_update,
-                :,
-                :,
-            ]
-            matching_updated_calendar = np.all(
-                updated_calendars == expected_calendars,
-                axis=(1, 2),
-            )
-            if not np.all(matching_updated_calendar):
-                invalid_farmers = farmers_to_update[~matching_updated_calendar][:20]
-                raise AssertionError(
-                    "The runtime crop calendar does not equal the base calendar "
-                    "after advancement for farmers "
-                    f"{invalid_farmers.tolist()}."
+                if not np.all(matching_updated_calendar):
+                    invalid_farmers = farmers_to_update[~matching_updated_calendar][:20]
+                    raise AssertionError(
+                        "The runtime crop calendar does not equal the base calendar "
+                        "after advancement for farmers "
+                        f"{invalid_farmers.tolist()}."
+                    )
+
+                updated_hrl_years = self.var.crop_calendar_years[preset_next_indices]
+
+                self.model.logger.info(
+                    "Updated crop calendars for %s farmer(s) to prescribed HRL "
+                    "year range %s-%s. Reason: %s.",
+                    farmers_to_update.size,
+                    int(updated_hrl_years.min()),
+                    int(updated_hrl_years.max()),
+                    reason,
                 )
 
-            updated_hrl_years = self.var.crop_calendar_years[next_active_year_index]
-
-            self.model.logger.info(
-                "Updated crop calendars for %s farmer(s) to HRL year range %s-%s. "
-                "Reason: %s.",
-                farmers_to_update.size,
-                int(updated_hrl_years.min()),
-                int(updated_hrl_years.max()),
-                reason,
-            )
+            if farmers_for_ml.size:
+                self.decision_module_ml.schedule(
+                    farmers_for_ml,
+                    activate=True,
+                )
+            elif not farmers_to_update.size:
+                self.model.logger.debug(
+                    "No next prescribed crop-calendar year was available for %s "
+                    "farmer(s). Reason: %s.",
+                    farmers_to_advance.size,
+                    reason,
+                )
 
         harvest_day_tolerance = 1
-        has_active_crop = self._farmers_with_active_crops()
+        # Full-population mask. Subset it explicitly whenever the surrounding
+        # logic operates on a farmer subset.
+        has_active_crop_all = self._farmers_with_active_crops()
 
         # 1. Normal case: farmers harvested today and may have completed their
         # active crop-calendar year.
@@ -2923,7 +3089,7 @@ class CropFarmers(AgentBaseClass):
                     days_since_calendar_start
                     >= last_expected_harvest_offset - harvest_day_tolerance
                 )
-                & (~has_active_crop[harvesting_farmers])
+                & (~has_active_crop_all[harvesting_farmers])
             )
 
             # Record the values of the decision day parameters
@@ -2942,7 +3108,18 @@ class CropFarmers(AgentBaseClass):
         if self.model.current_time.day != 1:
             return
 
-        farmers = np.arange(self.var.n, dtype=np.int64)
+        if self.decision_module_ml is not None:
+            # Only activated decisions hold an all--1 placeholder to prevent the
+            # completed calendar from being replanted. A prepared future stream
+            # is not a fallow year and remains eligible for ordinary checks.
+            farmers = np.flatnonzero(~self.decision_module_ml.awaiting_decision).astype(
+                np.int64
+            )
+        else:
+            farmers = np.arange(self.var.n, dtype=np.int64)
+
+        if farmers.size == 0:
+            return
 
         (
             is_fallow_calendar,
@@ -2952,19 +3129,30 @@ class CropFarmers(AgentBaseClass):
 
         days_since_calendar_start = self._days_since_active_crop_calendar_start(farmers)
 
-        active_year_indices = np.asarray(
-            self.var.crop_calendar_active_year_index[farmers],
-            dtype=np.int64,
-        )
-        active_years = np.asarray(
-            self.var.crop_calendar_years[active_year_indices],
-            dtype=np.int64,
-        )
+        if self.decision_module_ml is not None:
+            active_years = np.asarray(
+                self.decision_module_ml.calendar_year[farmers],
+                dtype=np.int64,
+            )
+        else:
+            active_year_indices = np.asarray(
+                self.var.crop_calendar_active_year_index[farmers],
+                dtype=np.int64,
+            )
+            active_years = np.asarray(
+                self.var.crop_calendar_years[active_year_indices],
+                dtype=np.int64,
+            )
 
         is_leap_year = (active_years % 4 == 0) & (
             (active_years % 100 != 0) | (active_years % 400 == 0)
         )
         days_in_active_year = 365 + is_leap_year.astype(np.int32)
+
+        # Everything below is defined on the filtered ``farmers`` subset.
+        # ``_farmers_with_active_crops`` returns a full-population mask, so align
+        # it to the same subset before combining boolean arrays.
+        has_active_crop = has_active_crop_all[farmers]
 
         # Valid all--1 fallow year: no crop was scheduled, so no harvest is expected.
         completed_fallow_year = (
@@ -2990,8 +3178,12 @@ class CropFarmers(AgentBaseClass):
             & (~has_active_crop)
         )
 
-        latest_potential_income = np.asarray(self.var.yearly_potential_income[:, 0])
-        latest_actual_income = np.asarray(self.var.yearly_income[:, 0])
+        # The monthly diagnostics also operate only on ``farmers``. Keeping this
+        # subset-aligned avoids mixing the legacy full-population arrays with the
+        # ML-filtered farmer set.
+        latest_potential_income = np.asarray(
+            self.var.yearly_potential_income.data[farmers, 0]
+        )
 
         # A harvest is considered recorded when potential income is positive.
         # This includes both successful harvests and failed harvests:
@@ -3007,12 +3199,9 @@ class CropFarmers(AgentBaseClass):
             suspicious_farmers = farmers[suspicious_missing_harvest]
             sample_farmers = suspicious_farmers[:20]
 
-            sample_active_year_indices = self.var.crop_calendar_active_year_index[
-                sample_farmers
-            ]
-            sample_active_years = self.var.crop_calendar_years[
-                sample_active_year_indices
-            ]
+            # ``active_years`` is already subset-aligned and, during operational
+            # ML runs, comes from DecisionModuleML rather than the final HRL index.
+            sample_active_years = active_years[suspicious_missing_harvest][:20]
 
             # raise RuntimeError
             print(
@@ -3503,24 +3692,56 @@ class CropFarmers(AgentBaseClass):
         self.var.all_loans_annual_cost.data[:, -1, 0] += annual_cost_water_energy
 
     def update_daily_crop_decision_spei(self) -> None:
-        """Sample current SPEI once for every farmer on every model day.
+        """Refresh monthly SPEI when needed and expose its current daily value.
 
-        This array is a continuous daily predictor. It is intentionally kept
-        independent of crop-calendar advancement events so an ML sample can be
-        anchored to any admissible pre-planting decision date. Harvest-time SPEI
-        reuses this same sample to avoid a second map lookup on harvest days.
+        The gridded SPEI input is monthly. GEB therefore samples farmers only
+        when the nearest-month timestamp changes, stores that farmer vector in
+        a compact circular monthly cache, and reuses it on intervening days.
+        Harvest-time SPEI uses the same exposed value.
         """
         if self.var.n == 0:
             return
 
-        current_spei = np.asarray(
-            sample_from_map(
-                array=self.model.hydrology.grid.spei_uncompressed,
-                coords=self.var.locations.data,
-                gt=self.grid.gt,
-            ),
-            dtype=np.float32,
-        ).reshape(-1)
+        current_time = self.model.current_time
+        if current_time.day <= 15:
+            spei_time = current_time.replace(day=1)
+        elif current_time.month == 12:
+            spei_time = current_time.replace(
+                year=current_time.year + 1,
+                month=1,
+                day=1,
+            )
+        else:
+            spei_time = current_time.replace(month=current_time.month + 1, day=1)
+        if (
+            np.datetime64(spei_time, "ns")
+            > self.model.forcing["SPEI"].reader.datetime_index[-1]
+        ):
+            spei_time = current_time.replace(day=1)
+
+        spei_month_ordinal = spei_time.year * 12 + spei_time.month - 1
+        runtime = self.decision_module_ml
+        if runtime is None or runtime.latest_spei_month_ordinal != spei_month_ordinal:
+            current_spei = np.asarray(
+                sample_from_map(
+                    array=self.model.hydrology.grid.spei_uncompressed,
+                    coords=self.var.locations.data,
+                    gt=self.grid.gt,
+                ),
+                dtype=np.float32,
+            ).reshape(-1)
+            if runtime is not None:
+                runtime.spei_month_values[
+                    :, spei_month_ordinal % runtime.spei_month_capacity
+                ] = current_spei
+                runtime.latest_spei_month_ordinal = spei_month_ordinal
+        else:
+            current_spei = np.asarray(
+                runtime.spei_month_values[
+                    :, spei_month_ordinal % runtime.spei_month_capacity
+                ],
+                dtype=np.float32,
+            )
 
         if current_spei.shape != (self.var.n,):
             raise AssertionError(
@@ -5803,6 +6024,11 @@ class CropFarmers(AgentBaseClass):
         if not self.model.simulate_hydrology:
             return
 
+        # For ``geb run`` the restored CropFarmers Bucket is available by the
+        # first timestep. Initialize the ML module here as a second post-restore
+        # hook in case LandSurface has not requested its feature names yet.
+        self._initialize_decision_module_ml()
+
         timer = TimingModule("crop_farmers")
 
         self.update_daily_crop_decision_spei()
@@ -5810,6 +6036,12 @@ class CropFarmers(AgentBaseClass):
 
         self.harvest()
         timer.finish_split("harvest")
+
+        # Harvest may have scheduled a same-day candidate decision. Running
+        # here preserves the training contract: the daily neural window ends
+        # yesterday, while today's final-harvest yield is already available.
+        self._run_due_crop_predictions()
+        timer.finish_split("ML crop decisions")
 
         self.water_abstraction_sum()
         timer.finish_split("water abstraction calculation")
