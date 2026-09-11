@@ -1,4 +1,8 @@
 # dev
+- Snap GRDC gauges to an original-resolution river pixel within 1.5 km and ±10% upstream area. Exclude failed matches and duplicate observations; warn when routing and original areas differ by more than 10%.
+- Show every GRDC gauge, exclusion reason, and MERIT river ID on the dashboard. Aggregate hourly simulations into local calendar days using fixed GRDC UTC offsets.
+
+- Added optional GRDC-Caravan catchment characteristics and made the minimum river slope configurable.
 - Implemented the `early_warning.py` module outside of `households.py`, launching the latest GEB-IbF system, including options for: area and building based warnings; warning communication weighted by socio-economic factor; time-dependent damage reduction.
 - Users need to run `setup_warning_communication_weights` to enable the warning communication efficiency based on socioeconomic factors.
 - Parameterization of settings in the `model.yml`. Increased overall efficiency and usability of the early warning system.
@@ -511,4 +515,3 @@ To support this version:
 To support this version:
 
 - Re-run `setup_forcing` and `setup_spei`
-

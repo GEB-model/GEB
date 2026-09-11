@@ -1477,7 +1477,7 @@ http = [
 
 [[package]]
 name = "geb"
-version = "1.0.0b30"
+version = "1.0.0b31"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp-retry" },

@@ -1,22 +1,61 @@
 """This module contains the classes and functions processing observational data during model building."""
 
 from pathlib import Path
+from typing import Any
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 import shapely
+import xarray as xr
 from tqdm import tqdm
 
 from geb.build.methods import build_method
-from geb.build.workflows.river_snapping import (
-    SnappingResults,
-    plot_snapping,
-    snap_point_to_river_network,
+from geb.build.workflows.discharge_observations import (
+    find_duplicate_discharge_stations,
+)
+from geb.build.workflows.discharge_snapping import (
+    DischargeSnappingResults,
+    group_routing_pixels,
+    plot_discharge_snapping,
+    snap_discharge_station,
 )
 from geb.workflows.timeseries import regularize_discharge_timeseries
 
 from .base import BuildModelBase
+
+
+def parse_grdc_utc_offset_hours(raw_offset: float) -> float:
+    """Convert a GRDC clock-style UTC offset to decimal hours.
+
+    GRDC stores offsets using an ``HH.MM`` representation, as indicated by the
+    NetCDF variable unit ``00:00``. For example, ``6.3`` represents 06:30 and
+    must become 6.5 decimal hours before it is passed to pandas.
+
+    Args:
+        raw_offset: GRDC UTC offset in clock-style hours and minutes (HH.MM).
+
+    Returns:
+        UTC offset in decimal hours.
+
+    Raises:
+        ValueError: If the offset is non-finite, contains invalid minutes, or
+            lies outside the UTC-12 to UTC+14 range.
+    """
+    if not np.isfinite(raw_offset):
+        raise ValueError("GRDC UTC offset must be finite.")
+
+    whole_hours: int = int(raw_offset)
+    clock_minutes: int = round((raw_offset - whole_hours) * 100.0)
+    if abs(clock_minutes) >= 60:
+        raise ValueError(
+            f"GRDC UTC offset {raw_offset} contains invalid clock minutes."
+        )
+
+    decimal_offset_hours: float = whole_hours + clock_minutes / 60.0
+    if not -12.0 <= decimal_offset_hours <= 14.0:
+        raise ValueError(f"GRDC UTC offset {raw_offset} is outside UTC-12 to UTC+14.")
+    return decimal_offset_hours
 
 
 def process_station_data(Q_station: pd.DataFrame, station_path: Path) -> pd.DataFrame:
@@ -76,36 +115,35 @@ class Observations(BuildModelBase):
     @build_method(depends_on=["setup_hydrography"], required=False)
     def setup_discharge_observations(
         self,
-        max_uparea_difference_ratio: float = 0.3,
-        max_spatial_difference_degrees: float = 0.1,
         custom_river_stations: str | None = None,
         create_plots: bool = False,
     ) -> None:
-        """setup_discharge_observations is responsible for setting up discharge observations from the discharge observations dataset.
+        """Prepare and snap discharge observations.
 
-        It clips discharge observations to the basin area, and snaps the discharge observations locations to the locations of the GEB discharge simulations, using upstream area estimates recorded in the discharge observations.
-        It also saves necessary input data for the model in the input folder, and some additional information in the output folder (e.g snapping plots).
-        Additional stations can be added from a custom folder containing station files in either CSV or Parquet format.
-        Custom station filenames must follow the format ``lon_lat+station_name.ext``, where ``lon`` and ``lat`` are the station coordinates in degrees and ``ext`` is either ``.csv`` or ``.parquet``.
-        CSV files must contain a datetime index column and a ``Q`` discharge column. Parquet files must contain a ``datetime`` column and a ``Q`` discharge column.
+        Stations are matched to an original-resolution river pixel using distance, upstream
+        area, and river ID. The matching routing pixel has the same river ID.
 
         Args:
-            max_uparea_difference_ratio: The maximum allowed difference in upstream area between the discharge observations station and the GEB river segment, as a ratio of the discharge observations upstream area. Default is 0.3 (30%).
-            max_spatial_difference_degrees: The maximum allowed spatial difference in degrees between the discharge observations station and the GEB river segment. Default is 0.1 degrees.
-            custom_river_stations: Path to a folder containing custom river station files in ``.csv`` or ``.parquet`` format. Coordinates and station name are read from the filename using the ``lon_lat+station_name.ext`` convention. Default is None, which means no custom stations are used.
-            create_plots: Whether to create plots of the snapping results for each station. Default is False.
+            custom_river_stations: Folder with CSV or Parquet files named
+                ``lon_lat+station_name.ext`` (coordinates in degrees), containing
+                a datetime index and a ``Q`` discharge column (m³/s).
+            create_plots: Whether to plot each station match.
 
         Raises:
-            ValueError: If a custom station file has an unsupported format or contains discharge data with an unsupported time step.
+            ValueError: If custom station data are invalid.
         """
         # load data
-        upstream_area_grid = self.grid[
+        routing_upstream_area: xr.DataArray = self.grid[
             "routing/upstream_area_m2"
         ].compute()  # we need to use this one many times, so we compute it once
-        upstream_area_subgrid = self.other[
+        original_upstream_area: xr.DataArray = self.other[
             "drainage/original_d8_upstream_area_m2"
-        ].compute()
-        rivers = self.geom["routing/rivers"]
+        ]
+        original_river_ids: xr.DataArray = self.other["drainage/original_river_ids"]
+        routing_river_ids: xr.DataArray = self.grid["routing/river_ids"].compute()
+        routing_pixels_by_river_id: dict[int, tuple[np.ndarray, ...]] = (
+            group_routing_pixels(routing_river_ids)
+        )
         region_mask = self.geom["mask"]
 
         # Load discharge observations dataset
@@ -123,11 +161,13 @@ class Observations(BuildModelBase):
             {
                 "discharge_observations_station_ID": discharge_observations.id.values,
                 "discharge_observations_station_name": discharge_observations.station_name.values,
+                "discharge_observations_source": "GRDC",
                 "x": discharge_observations.x.values,
                 "y": discharge_observations.y.values,
                 "discharge_observations_upstream_area_m2": discharge_observations.area.values
                 * 1e6,  # convert km2 to m2
                 "discharge_observations_river_name": discharge_observations.river_name.values,
+                "discharge_observations_country_code": discharge_observations.country.values,
             },
             geometry=gpd.points_from_xy(
                 discharge_observations.x.values, discharge_observations.y.values
@@ -149,9 +189,8 @@ class Observations(BuildModelBase):
         obs_daily = (
             discharge_observations.runoff_mean.sel(id=needed_ids)
             .astype(np.float32)
-            .to_dataframe()
-            .reset_index()
-            .pivot(index="time", columns="id", values="runoff_mean")
+            .transpose("time", "id")
+            .to_pandas()
         )
         obs_daily.index.name = "time"
         # Replace -999 with NaN in GRDC data
@@ -213,6 +252,7 @@ class Observations(BuildModelBase):
                             {
                                 "discharge_observations_station_ID": station_id,
                                 "discharge_observations_station_name": station_name,
+                                "discharge_observations_source": f"custom:{station_path.name}",
                                 "x": lon_lat[0],
                                 "y": lon_lat[1],
                                 "discharge_observations_upstream_area_m2": np.nan,  # Not provided in basic CSV
@@ -246,7 +286,14 @@ class Observations(BuildModelBase):
 
         # GRDC provides a fixed UTC offset relative to the national capital.
         # Custom stations are absent from this metadata and therefore default to UTC.
-        timezone_utc_offsets: pd.Series = discharge_observations.timezone.to_pandas()
+        raw_timezone_utc_offsets: pd.Series = (
+            discharge_observations.timezone.to_pandas()
+        )
+        timezone_utc_offsets: pd.Series = (
+            raw_timezone_utc_offsets.fillna(0.0)
+            .astype(float)
+            .map(parse_grdc_utc_offset_hours)
+        )
         obs_metadata = obs_metadata.copy()
         obs_metadata["timezone_utc_offset"] = (
             obs_metadata["discharge_observations_station_ID"]
@@ -254,6 +301,65 @@ class Observations(BuildModelBase):
             .fillna(0.0)
             .astype(float)
         )
+        regional_station_ids: set[Any] = set(
+            obs_metadata["discharge_observations_station_ID"]
+        )
+        duplicate_stations: dict[Any, list[Any]] = find_duplicate_discharge_stations(
+            obs_daily.reindex(
+                columns=[
+                    station_id
+                    for station_id in obs_daily.columns
+                    if station_id in regional_station_ids
+                ]
+            )
+        )
+        daily_ids.difference_update(duplicate_stations)
+        obs_metadata["evaluation_exclusion_reason"] = (
+            obs_metadata["discharge_observations_station_ID"]
+            .map(
+                {
+                    station_id: "Duplicate observations shared with station(s) "
+                    + ", ".join(str(value) for value in matching_ids)
+                    + " for at least 5 years; the correct location is unknown."
+                    for station_id, matching_ids in duplicate_stations.items()
+                }
+            )
+            .fillna("")
+        )
+        if duplicate_stations:
+            self.logger.info(
+                "Excluded %d stations with at least 5 years of duplicate observations.",
+                len(duplicate_stations),
+            )
+        # Keep the station inventory independent of snapping and record-length filters.
+        self.set_geom(
+            gpd.GeoDataFrame(
+                obs_metadata.set_index("discharge_observations_station_ID"),
+                geometry="geometry",
+                crs=obs_metadata.crs,
+            ),
+            name="discharge/station_locations",
+        )
+
+        empty_cols: list[str] = [
+            "discharge_observations_station_name",
+            "discharge_observations_source",
+            "discharge_observations_station_ID",
+            "discharge_observations_river_name",
+            "discharge_observations_country_code",
+            "discharge_observations_upstream_area_m2",
+            "discharge_observations_station_coords",
+            "original_pixel_lonlat",
+            "snapped_grid_pixel_lonlat",
+            "snapped_grid_pixel_xy",
+            "GEB_upstream_area_from_original",
+            "GEB_upstream_area_from_grid",
+            "discharge_observations_to_GEB_upstream_area_ratio",
+            "station_to_original_distance_m",
+            "snapped_river_id",
+            "snapping_method",
+            "timezone_utc_offset",
+        ]
 
         if obs_metadata.empty:
             # No stations found - create empty files
@@ -261,22 +367,6 @@ class Observations(BuildModelBase):
                 "No discharge stations found in the region. Creating empty files"
             )
             # Create empty snapping results Excel file with proper columns
-            empty_cols = [
-                "discharge_observations_station_name",
-                "discharge_observations_station_ID",
-                "discharge_observations_river_name",
-                "discharge_observations_upstream_area_m2",
-                "discharge_observations_station_coords",
-                "closest_point_coords",
-                "subgrid_pixel_coords",
-                "snapped_grid_pixel_lonlat",
-                "snapped_grid_pixel_xy",
-                "GEB_upstream_area_from_subgrid",
-                "GEB_upstream_area_from_grid",
-                "discharge_observations_to_GEB_upstream_area_ratio",
-                "snapping_distance_degrees",
-                "timezone_utc_offset",
-            ]
             discharge_snapping_df = pd.DataFrame(columns=np.array(empty_cols))
             discharge_snapping_df.to_excel(
                 discharge_snapping_folder / "discharge_snapping.xlsx",
@@ -304,86 +394,81 @@ class Observations(BuildModelBase):
 
             return
 
-        # Snapping to river
-        discharge_snapping_results = []
+        # Snap stations directly to original-resolution river pixels.
+        discharge_snapping_results: list[dict[str, Any]] = []
 
         for _, station_row in tqdm(obs_metadata.iterrows(), total=len(obs_metadata)):
             station_id = station_row["discharge_observations_station_ID"]
             station_name = station_row["discharge_observations_station_name"]
-            station_coords: tuple[float, float] = (station_row["x"], station_row["y"])
+            station_source = station_row["discharge_observations_source"]
+            station_lonlat: tuple[float, float] = (
+                station_row["x"],
+                station_row["y"],
+            )
 
-            discharge_observations_uparea_m2 = station_row[
+            station_upstream_area_m2: float = station_row[
                 "discharge_observations_upstream_area_m2"
             ]
-            discharge_observations_rivername = station_row[
-                "discharge_observations_river_name"
-            ]
+            station_river_name: str = station_row["discharge_observations_river_name"]
 
-            # Snap station to river network
-            snap_results: SnappingResults | None = snap_point_to_river_network(
-                point=shapely.geometry.Point(station_coords),
-                rivers=rivers,
-                upstream_area_grid=upstream_area_grid,
-                upstream_area_subgrid=upstream_area_subgrid,
-                upstream_area_m2=discharge_observations_uparea_m2,
-                max_uparea_difference_ratio=max_uparea_difference_ratio,
-                max_spatial_difference_degrees=max_spatial_difference_degrees,
+            snap_results: DischargeSnappingResults | None = snap_discharge_station(
+                station_location=shapely.geometry.Point(station_lonlat),
+                station_upstream_area_m2=station_upstream_area_m2,
+                original_upstream_area=original_upstream_area,
+                original_river_ids=original_river_ids,
+                routing_upstream_area=routing_upstream_area,
+                routing_pixels_by_river_id=routing_pixels_by_river_id,
             )
 
             if snap_results is None:
                 self.logger.warning(
-                    f"No river segment found within criteria for station {station_name} with upstream area {discharge_observations_uparea_m2} m2. Skipping this station."
+                    "No valid original river pixel found for station %s. Skipping station.",
+                    station_name,
                 )
                 continue
-
-            # Extract results
-            closest_point_coords = snap_results.closest_point_coords
-            grid_pixel_coords = snap_results.snapped_grid_pixel_lonlat
-            closest_river_segment = snap_results.closest_river_segment
 
             discharge_snapping_results.append(
                 {
                     "discharge_observations_station_name": station_name,
+                    "discharge_observations_source": station_source,
                     "discharge_observations_station_ID": station_id,
-                    "discharge_observations_river_name": discharge_observations_rivername,
-                    "discharge_observations_upstream_area_m2": discharge_observations_uparea_m2,
-                    "discharge_observations_station_coords": station_coords,
-                    "closest_point_coords": closest_point_coords,
-                    "subgrid_pixel_coords": snap_results.subgrid_pixel_coords,
-                    "snapped_grid_pixel_lonlat": grid_pixel_coords,
-                    "snapped_grid_pixel_xy": snap_results.snapped_grid_pixel_xy,
-                    "GEB_upstream_area_from_subgrid": snap_results.geb_uparea_subgrid,
-                    "GEB_upstream_area_from_grid": snap_results.geb_uparea_grid,
-                    "discharge_observations_to_GEB_upstream_area_ratio": (
-                        snap_results.geb_uparea_subgrid
-                        / discharge_observations_uparea_m2
-                        if snap_results.geb_uparea_subgrid is not None
-                        and not np.isnan(discharge_observations_uparea_m2)
-                        else np.nan
+                    "discharge_observations_river_name": station_river_name,
+                    "discharge_observations_country_code": station_row.get(
+                        "discharge_observations_country_code", ""
                     ),
-                    "snapping_distance_degrees": snap_results.distance_degrees,
+                    "discharge_observations_upstream_area_m2": station_upstream_area_m2,
+                    "discharge_observations_station_coords": station_lonlat,
+                    "original_pixel_lonlat": snap_results.original_pixel_lonlat,
+                    "snapped_grid_pixel_lonlat": snap_results.routing_pixel_lonlat,
+                    "snapped_grid_pixel_xy": snap_results.routing_pixel_xy,
+                    "GEB_upstream_area_from_original": snap_results.original_upstream_area_m2,
+                    "GEB_upstream_area_from_grid": snap_results.routing_upstream_area_m2,
+                    "discharge_observations_to_GEB_upstream_area_ratio": (
+                        station_upstream_area_m2 / snap_results.routing_upstream_area_m2
+                    ),
+                    "station_to_original_distance_m": (
+                        snap_results.station_to_original_distance_m
+                    ),
+                    "snapped_river_id": snap_results.river_id,
+                    "snapping_method": "original_pixel_v1",
                     "timezone_utc_offset": float(station_row["timezone_utc_offset"]),
                 }
             )
 
             if create_plots:
-                plot_snapping(
-                    point_id=station_id,
+                plot_discharge_snapping(
+                    station_id=station_id,
                     output_folder=discharge_snapping_folder,
-                    rivers=rivers,
-                    upstream_area=upstream_area_grid,
-                    original_coords=station_coords,
-                    closest_point_coords=closest_point_coords,
-                    closest_river_segment=closest_river_segment,
-                    grid_pixel_xy=snap_results.snapped_grid_pixel_xy,
-                    filename_prefix="discharge_snapping",
-                    point_label="Original gauge",
-                    title=f"Upstream area grid and gauge snapping for {station_id}",
+                    station_lonlat=station_lonlat,
+                    snapping_result=snap_results,
+                    original_upstream_area=original_upstream_area,
                 )
 
         self.logger.info("Discharge snapping done for all stations")
 
-        discharge_snapping_df = pd.DataFrame(discharge_snapping_results)
+        discharge_snapping_df = pd.DataFrame(
+            discharge_snapping_results, columns=empty_cols
+        )
 
         # save to excel and parquet files
         discharge_snapping_df.to_excel(
