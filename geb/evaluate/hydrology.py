@@ -32,6 +32,10 @@ from geb.evaluate.workflows.dashboard import (
     load_discharge_dashboard_geometries,
     write_discharge_dashboard_chart_data,
 )
+from geb.evaluate.workflows.discharge_station_checks import (
+    complete_dashboard_stations,
+    excluded_station_locations,
+)
 from geb.evaluate.workflows.hydrology_plot_engine import (
     OBSERVATIONS_COLOR,
     SIMULATIONS_DEFAULT_COLOR,
@@ -147,30 +151,6 @@ def _add_daily_discharge_metric_columns(evaluation_df: pd.DataFrame) -> None:
         daily_column: str = f"{metric_name}_daily"
         if daily_column in evaluation_df.columns:
             evaluation_df[metric_name] = evaluation_df[daily_column]
-
-
-def _drop_all_missing_evaluation_columns(
-    evaluation_df: pd.DataFrame,
-) -> pd.DataFrame:
-    """Remove evaluation columns containing no values.
-
-    Empty evaluation tables retain their declared schema so downstream code can
-    still construct a valid, empty spatial output. For populated tables, columns
-    are removed only when every station has a missing value.
-
-    Args:
-        evaluation_df: Per-station discharge evaluation table.
-
-    Returns:
-        Copy of the evaluation table without entirely missing columns.
-    """
-    if evaluation_df.empty:
-        return evaluation_df.copy()
-
-    all_missing_columns: list[str] = [
-        column for column in evaluation_df.columns if evaluation_df[column].isna().all()
-    ]
-    return evaluation_df.drop(columns=all_missing_columns)
 
 
 def _calculate_discharge_validation_metrics(
@@ -932,7 +912,6 @@ def create_validation_df(
     apply_upstream_area_correction: bool,
     upstream_area_ratio: float,
     timezone_utc_offset: float = 0.0,
-    daily_discharge_start_hour_local: float = 0.0,
 ) -> pd.DataFrame:
     """Align observed and simulated discharge for one gauging station.
 
@@ -950,19 +929,13 @@ def create_validation_df(
             aggregation. Sub-daily observations are not shifted because their
             timestamp convention is not defined by the GRDC daily product.
             Defaults to 0 (UTC).
-        daily_discharge_start_hour_local: Start of the labelled observation
-            day in fixed local standard time (hours after midnight). UK NRFA
-            daily flows normally use 9, representing 09:00 GMT through 08:59
-            GMT the following day. Defaults to 0 (local calendar day); null
-            values in legacy merged inputs are also interpreted as 0.
-
     Returns:
         Aligned observed and simulated discharge (m3/s).
 
     Raises:
         FileNotFoundError: If the hydrology routing directory does not exist.
-        ValueError: If the GEB discharge data contain NaN values, the fixed UTC
-            offset is invalid, or the daily-window start is outside 0 to 24 hours.
+        ValueError: If the GEB discharge data contain NaN values or the fixed
+            UTC offset is invalid.
     """
     report_folder: Path = output_folder / "report"
     routing_dir: Path = report_folder / "hydrology.routing"
@@ -1010,16 +983,6 @@ def create_validation_df(
         raise ValueError(
             "Station UTC offset must be finite and between UTC-12 and UTC+14 hours."
         )
-    if pd.isna(daily_discharge_start_hour_local):
-        daily_discharge_start_hour_local = 0.0
-    if not np.isfinite(daily_discharge_start_hour_local) or not (
-        0.0 <= daily_discharge_start_hour_local < 24.0
-    ):
-        raise ValueError(
-            "Daily discharge window start must be finite and between 0 "
-            "(inclusive) and 24 (exclusive) hours."
-        )
-
     observed_frequency: Any = observed_index.freq
     simulated_timestep: pd.Timedelta = simulated_index[1] - simulated_index[0]
     observed_timestep: pd.Timedelta = observed_index[1] - observed_index[0]
@@ -1031,15 +994,10 @@ def create_validation_df(
             "Observed discharge timestep must be a multiple of the simulated timestep."
         )
 
-    daily_index_shift_hours: float = (
-        timezone_utc_offset - daily_discharge_start_hour_local
-    )
-    if observed_timestep >= pd.Timedelta(days=1) and daily_index_shift_hours != 0.0:
-        # First express timestamps in fixed local standard time, then move the
-        # source-specific daily boundary to midnight for pandas resampling.
-        # UK NRFA's 09:00 GMT boundary therefore becomes a -9 hour shift.
+    if observed_timestep >= pd.Timedelta(days=1) and timezone_utc_offset != 0.0:
+        # GRDC daily observations represent local calendar days.
         simulated_discharge.index = simulated_discharge.index + pd.Timedelta(
-            hours=daily_index_shift_hours
+            hours=timezone_utc_offset
         )
 
     simulated_discharge = simulated_discharge.resample(
@@ -1803,7 +1761,7 @@ class Hydrology:
         )
         if outflow_plot_count > 0:
             self.model.logger.info(
-                f"Created {outflow_plot_count} outflow discharge plots."
+                "Created %d outflow discharge plots.", outflow_plot_count
             )
 
     def evaluate_discharge(
@@ -1832,17 +1790,19 @@ class Hydrology:
             Daily KGE is also calculated for the meteorological seasons winter
             (December-February), spring (March-May), summer (June-August), and
             autumn (September-November).
+            Excluded stations are saved separately in ``diagnostic_metrics`` for
+            dashboard inspection and never contribute to summary scores.
 
         Args:
             run_name: Name of the simulation run to evaluate. Must correspond to an
                 existing run directory in the model output folder.
             include_yearly_plots: Whether to save one discharge PNG per station
                 and calendar year.
-            correct_discharge_observations: Whether to correct the discharge observations discharge timeseries for the difference
-                in upstream area between the discharge observations station and the discharge from GEB.
+            correct_discharge_observations: Whether to multiply simulated discharge by the GRDC upstream
+                area divided by the low-resolution GEB routing upstream area.
             create_plots: Whether to create evaluation plots. Set to False to only calculate the evaluation metrics and save the results without plotting.
             include_return_period_plots: Whether to fit extreme-value models and
-                create detailed station return-period plots. Defaults to `False`
+                create station and dashboard return-period plots. Defaults to `False`
                 because these plots are expensive for large station collections.
             minimum_upstream_area_km2: Optional minimum modeled upstream area threshold for station evaluation (km2).
                 If omitted, `hydrology.evaluation.discharge.minimum_upstream_area_km2` is used.
@@ -1924,19 +1884,21 @@ class Hydrology:
         snapped_locations: gpd.GeoDataFrame = read_geom(
             self.model.files["geom"]["discharge/discharge_snapped_locations"]
         )
-        discharge_time_metadata_columns: list[str] = [
-            "timezone_utc_offset",
-            "daily_discharge_start_hour_local",
-        ]
-        # A merged model can combine newly built regions with legacy regions
-        # whose added metadata columns are absent or null.
-        snapped_locations[discharge_time_metadata_columns] = (
-            snapped_locations.reindex(
-                columns=discharge_time_metadata_columns, fill_value=0.0
+        if (
+            "snapping_method" not in snapped_locations.columns
+            or not (snapped_locations["snapping_method"] == "original_pixel_v1").all()
+        ):
+            raise ValueError(
+                "Discharge snaps use an older method. Re-run setup_hydrography and "
+                "setup_discharge_observations, then rerun discharge reporting and evaluation."
             )
-            .fillna(0.0)
-            .astype(float)
+        # Custom stations and older inputs without an offset use UTC.
+        snapped_locations["timezone_utc_offset"] = snapped_locations.get(
+            "timezone_utc_offset", 0.0
         )
+        snapped_locations["timezone_utc_offset"] = snapped_locations[
+            "timezone_utc_offset"
+        ].fillna(0.0)
 
         run_output_folder: Path = (
             Path(self.model.config["general"]["output_folder"]) / run_name
@@ -1952,6 +1914,23 @@ class Hydrology:
             report_folder,
         )
 
+        period_start: pd.Timestamp | None = (
+            cast(pd.Timestamp, pd.Timestamp(year=start_year, month=1, day=1))
+            if start_year is not None
+            else None
+        )
+        period_end: pd.Timestamp | None = (
+            cast(
+                pd.Timestamp,
+                pd.Timestamp(year=end_year + 1, month=1, day=1) - pd.Timedelta("1ns"),
+            )
+            if end_year is not None
+            else None
+        )
+        minimum_upstream_area_m2: float = minimum_upstream_area_km2 * 1_000_000.0
+        excluded_stations: gpd.GeoDataFrame = excluded_station_locations(
+            snapped_locations, report_folder
+        )
         evaluation_per_station: list[dict[str, Any]] = []
         station_dashboard_chart_files: dict[str, str] = {}
 
@@ -1964,6 +1943,11 @@ class Hydrology:
                 continue
             discharge_observations_df = discharge_observations_df.asfreq(
                 DISCHARGE_OBSERVATION_FREQUENCIES[frequency_label]
+            )
+            minimum_valid_steps: float = (
+                minimum_timeseries_length_years
+                * 365.25
+                * (24 if frequency_label == "hourly" else 1)
             )
             for station_id in tqdm(discharge_observations_df.columns):
                 observed_discharge_series = discharge_observations_df[station_id]
@@ -1979,22 +1963,19 @@ class Hydrology:
                 snapped_grid_coordinates: tuple[float, float] = tuple(
                     station.snapped_grid_pixel_lonlat
                 )
-                closest_river_coordinates: tuple[float, float] = tuple(
-                    station.closest_point_coords
+                original_pixel_lonlat: tuple[float, float] = tuple(
+                    station.original_pixel_lonlat
                 )
                 upstream_area_ratio: float = float(
                     station.discharge_observations_to_GEB_upstream_area_ratio
                 )
                 geb_upstream_area_m2: float = float(station.GEB_upstream_area_from_grid)
-                if geb_upstream_area_m2 < minimum_upstream_area_km2 * 1_000_000.0:
+                if geb_upstream_area_m2 < minimum_upstream_area_m2:
                     # Smaller catchments tend to be dominated by local timing and snapping
                     # errors, so the default benchmark excludes them from summary scores.
                     continue
 
                 timezone_utc_offset: float = float(station["timezone_utc_offset"])
-                daily_discharge_start_hour_local: float = float(
-                    station["daily_discharge_start_hour_local"]
-                )
 
                 try:
                     validation_df: pd.DataFrame = create_validation_df(
@@ -2004,39 +1985,16 @@ class Hydrology:
                         correct_discharge_observations,
                         upstream_area_ratio,
                         timezone_utc_offset=timezone_utc_offset,
-                        daily_discharge_start_hour_local=daily_discharge_start_hour_local,
                     )
                 except FileNotFoundError:
                     self.model.logger.warning(
                         "Skipping station %s: no simulation output found.", station_id
                     )
                     continue
-                if start_year is not None or end_year is not None:
+                if period_start is not None or period_end is not None:
                     # Keep complete calendar years and include the final instant.
-                    period_start: pd.Timestamp | None = (
-                        cast(
-                            pd.Timestamp,
-                            pd.Timestamp(year=start_year, month=1, day=1),
-                        )
-                        if start_year is not None
-                        else None
-                    )
-                    period_end: pd.Timestamp | None = (
-                        cast(
-                            pd.Timestamp,
-                            pd.Timestamp(year=end_year + 1, month=1, day=1)
-                            - pd.Timedelta("1ns"),
-                        )
-                        if end_year is not None
-                        else None
-                    )
                     validation_df = validation_df.loc[period_start:period_end]
 
-                minimum_valid_steps = (
-                    minimum_timeseries_length_years
-                    * 365.25
-                    * (24 if frequency_label == "hourly" else 1)
-                )
                 if validation_df.dropna().shape[0] < minimum_valid_steps:
                     continue
 
@@ -2070,9 +2028,9 @@ class Hydrology:
                                 station_name=station_name,
                                 upstream_area_ratio=upstream_area_ratio,
                                 timezone_utc_offset=timezone_utc_offset,
-                                daily_discharge_start_hour_local=daily_discharge_start_hour_local,
                                 metrics=discharge_metric_values,
                                 frequency=frequency_label,
+                                include_return_period_plots=include_return_period_plots,
                             ),
                         )
                     )
@@ -2084,21 +2042,22 @@ class Hydrology:
                     "station_latitude": station_coordinates[1],
                     "snapped_grid_longitude": snapped_grid_coordinates[0],
                     "snapped_grid_latitude": snapped_grid_coordinates[1],
-                    "closest_river_longitude": closest_river_coordinates[0],
-                    "closest_river_latitude": closest_river_coordinates[1],
+                    "original_longitude": original_pixel_lonlat[0],
+                    "original_latitude": original_pixel_lonlat[1],
                     "upstream_area_GRDC": float(
                         station.discharge_observations_upstream_area_m2
                     ),
-                    "upstream_area_GEB_subgrid": float(
-                        station.GEB_upstream_area_from_subgrid
+                    "upstream_area_GEB_original": float(
+                        station.GEB_upstream_area_from_original
                     ),
-                    "snapping_distance_degrees": float(
-                        station.snapping_distance_degrees
+                    "station_to_original_distance_m": float(
+                        station.station_to_original_distance_m
                     ),
+                    "snapped_river_id": int(station.snapped_river_id),
+                    "snapping_method": station.snapping_method,
                     "discharge_observations_to_GEB_upstream_area_ratio": upstream_area_ratio,
                     "upstream_area_GEB": geb_upstream_area_m2,
                     "timezone_utc_offset": timezone_utc_offset,
-                    "daily_discharge_start_hour_local": daily_discharge_start_hour_local,
                     "discharge_observations_country_code": station.get(
                         "discharge_observations_country_code", ""
                     ),
@@ -2194,9 +2153,38 @@ class Hydrology:
         else:
             evaluation_df = pd.DataFrame(evaluation_per_station).set_index("station_ID")
 
-        output_evaluation_df: pd.DataFrame = _drop_all_missing_evaluation_columns(
-            evaluation_df
+        diagnostic_df: pd.DataFrame = evaluation_df.loc[
+            evaluation_df.index.isin(excluded_stations.index)
+        ].copy()
+        diagnostic_df["exclusion_reason"] = (
+            excluded_stations["exclusion_reason"].reindex(diagnostic_df.index)
+            if not excluded_stations.empty
+            else ""
         )
+        diagnostic_gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
+            diagnostic_df,
+            geometry=gpd.points_from_xy(
+                diagnostic_df["station_longitude"], diagnostic_df["station_latitude"]
+            ),
+            crs="EPSG:4326",
+        )
+        diagnostic_gdf.to_parquet(
+            evaluation_paths.geoparquet.with_name(
+                f"diagnostic_metrics{evaluation_paths.suffix}.geoparquet"
+            )
+        )
+        evaluation_df = evaluation_df.loc[
+            ~evaluation_df.index.isin(excluded_stations.index)
+        ]
+        if evaluation_df.empty:
+            output_evaluation_df: pd.DataFrame = evaluation_df.copy()
+        else:
+            all_missing_columns: list[str] = [
+                column
+                for column in evaluation_df.columns
+                if evaluation_df[column].isna().all()
+            ]
+            output_evaluation_df = evaluation_df.drop(columns=all_missing_columns)
         output_evaluation_df.to_excel(
             evaluation_paths.xlsx,
             index=True,
@@ -2219,36 +2207,72 @@ class Hydrology:
             evaluation_paths.geoparquet,
         )
 
+        excluded_stations = complete_dashboard_stations(
+            gpd.GeoDataFrame(
+                pd.concat([evaluation_gdf, diagnostic_gdf]),
+                geometry="geometry",
+                crs=evaluation_gdf.crs,
+            ),
+            excluded_stations,
+            snapped_locations,
+            Path(self.model.files["geom"]["discharge/discharge_snapped_locations"]),
+            minimum_upstream_area_km2,
+        )
+        excluded_stations.to_parquet(
+            evaluation_paths.geoparquet.with_name(
+                f"excluded_stations{evaluation_paths.suffix}.geoparquet"
+            )
+        )
+        score_columns: list[str] = [
+            f"{metric_name}_{frequency}"
+            for frequency in ("hourly", "daily", "monthly")
+            for metric_name in DischargeMetrics._fields
+        ]
+        for season_name in METEOROLOGICAL_SEASONS:
+            for metric_name in (
+                "KGE",
+                "KGE_correlation",
+                "KGE_bias_ratio",
+                "KGE_variability_ratio",
+            ):
+                score_columns.append(f"{metric_name}_daily_{season_name}")
+        scores: dict[str, float | None] = {
+            metric_column: None for metric_column in score_columns
+        }
+        if create_plots:
+            dashboard_geometries: DischargeDashboardGeometries = (
+                load_discharge_dashboard_geometries(self.model)
+            )
+            dashboard_evaluation_gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
+                pd.concat([evaluation_gdf, diagnostic_gdf]),
+                geometry="geometry",
+                crs=evaluation_gdf.crs,
+            )
+            _add_daily_discharge_metric_columns(dashboard_evaluation_gdf)
+            dashboard_characteristics: pd.DataFrame | None = (
+                _load_discharge_dashboard_characteristics(
+                    evaluation_gdf=dashboard_evaluation_gdf,
+                    logger=self.model.logger,
+                )
+                if not dashboard_evaluation_gdf.empty
+                else None
+            )
+            create_discharge_folium_map(
+                evaluation_gdf=dashboard_evaluation_gdf,
+                output_path=dashboard_path,
+                region_geom=dashboard_geometries.region,
+                rivers=dashboard_geometries.rivers,
+                station_chart_files=station_dashboard_chart_files,
+                waterbodies=dashboard_geometries.waterbodies,
+                characteristic_df=dashboard_characteristics,
+                excluded_stations=excluded_stations,
+            )
+            self.model.logger.info(
+                "Discharge dashboard created. Keep its HTML and charts folder together."
+            )
+
         if not evaluation_df.empty:
             if create_plots:
-                dashboard_geometries: DischargeDashboardGeometries = (
-                    load_discharge_dashboard_geometries(self.model)
-                )
-
-                dashboard_evaluation_gdf: gpd.GeoDataFrame = evaluation_gdf.copy()
-                _add_daily_discharge_metric_columns(dashboard_evaluation_gdf)
-                dashboard_characteristics: pd.DataFrame | None = (
-                    _load_discharge_dashboard_characteristics(
-                        evaluation_gdf=dashboard_evaluation_gdf,
-                        logger=self.model.logger,
-                    )
-                )
-                create_discharge_folium_map(
-                    evaluation_gdf=dashboard_evaluation_gdf,
-                    output_path=dashboard_path,
-                    region_geom=dashboard_geometries.region,
-                    rivers=dashboard_geometries.rivers,
-                    station_chart_files=station_dashboard_chart_files,
-                    waterbodies=dashboard_geometries.waterbodies,
-                    characteristic_df=dashboard_characteristics,
-                )
-
-                self.model.logger.info("Discharge evaluation dashboard created.")
-                self.model.logger.info(
-                    "Tip: If station charts do not appear, download the dashboard "
-                    "HTML and its charts folder to the same local directory."
-                )
-
                 self.plot_skill_score_boxplots(
                     export=True,
                     start_year=start_year,
@@ -2260,53 +2284,15 @@ class Hydrology:
                     end_year=end_year,
                 )
 
-            scores: dict[str, float | None] = {}
-            for frequency in ("hourly", "daily", "monthly"):
-                for metric_name in DischargeMetrics._fields:
-                    metric_column: str = f"{metric_name}_{frequency}"
-                    scores[metric_column] = (
-                        float(evaluation_df[metric_column].median())
-                        if metric_column in evaluation_df.columns
-                        else None
-                    )
-            scores.update(
-                {
-                    f"{metric_name}_daily_{season_name}": float(
-                        evaluation_df[f"{metric_name}_daily_{season_name}"].median()
-                    )
-                    for season_name in METEOROLOGICAL_SEASONS
-                    for metric_name in (
-                        "KGE",
-                        "KGE_correlation",
-                        "KGE_bias_ratio",
-                        "KGE_variability_ratio",
-                    )
-                }
-            )
+            for metric_column in scores:
+                if metric_column in evaluation_df.columns:
+                    scores[metric_column] = float(evaluation_df[metric_column].median())
         else:
             self.model.logger.warning(
                 "No discharge stations found for evaluation. Returning None for all metrics."
             )
 
-            scores: dict[str, float | None] = {
-                f"{metric_name}_{frequency}": None
-                for frequency in ("hourly", "daily", "monthly")
-                for metric_name in DischargeMetrics._fields
-            }
-            scores.update(
-                {
-                    f"{metric_name}_daily_{season_name}": None
-                    for season_name in METEOROLOGICAL_SEASONS
-                    for metric_name in (
-                        "KGE",
-                        "KGE_correlation",
-                        "KGE_bias_ratio",
-                        "KGE_variability_ratio",
-                    )
-                }
-            )
-
-        self.model.logger.info(f"Discharge evaluation completed. Scores: {scores}")
+        self.model.logger.info("Discharge evaluation completed. Scores: %s", scores)
 
         return scores
 
@@ -2340,9 +2326,9 @@ class Hydrology:
             evaluation_metrics_xlsx=(
                 self.evaluate_discharge_output_folder / "evaluation_metrics.xlsx"
             ),
-            snapped_locations=snapped_locations,
             output_folder=publication_folder,
             run_name=run_name,
+            snapped_locations=snapped_locations,
         )
         self.model.logger.info(
             "Created discharge publication folder at %s.", publication_folder
@@ -2354,6 +2340,7 @@ class Hydrology:
         run_name: str = "default",
         correct_discharge_observations: bool = False,
         output_filename: str = "discharge_evaluation_map.html",
+        include_return_period_plots: bool = False,
     ) -> dict[str, str]:
         """Create only the discharge evaluation dashboard.
 
@@ -2361,6 +2348,7 @@ class Hydrology:
         ``evaluate_discharge`` run. Interactive Plotly chart payloads are
         rebuilt from the reported discharge time series. Static station plots
         and skill-score plots are not regenerated.
+        Excluded stations retain diagnostic KGE and time series with a warning.
 
         Args:
             run_name: Name of the simulation run to use for river and station
@@ -2370,13 +2358,16 @@ class Hydrology:
                 the option in ``evaluate_discharge``.
             output_filename: Dashboard HTML filename written inside the discharge
                 evaluation output folder.
+            include_return_period_plots: Whether to calculate and plot return-period
+                curves in station popups. Defaults to False to speed up creation.
 
         Returns:
             Dictionary with the created dashboard path.
 
         Raises:
             FileNotFoundError: If saved discharge evaluation metrics do not exist.
-            ValueError: If ``output_filename`` is empty or is an absolute path.
+            ValueError: If ``output_filename`` is empty, is an absolute path, or
+                saved metrics use obsolete snapping.
         """
         if not output_filename:
             raise ValueError("output_filename must not be empty.")
@@ -2397,24 +2388,62 @@ class Hydrology:
             )
 
         evaluation_gdf: gpd.GeoDataFrame = gpd.read_parquet(metrics_path)
-        discharge_time_metadata_columns: list[str] = [
-            "timezone_utc_offset",
-            "daily_discharge_start_hour_local",
-        ]
-        # Keep dashboards made from older metrics files compatible with the
-        # explicit daily-window metadata.
-        evaluation_gdf[discharge_time_metadata_columns] = (
-            evaluation_gdf.reindex(
-                columns=discharge_time_metadata_columns, fill_value=0.0
+        snapped_locations: gpd.GeoDataFrame = read_geom(
+            self.model.files["geom"]["discharge/discharge_snapped_locations"]
+        )
+        excluded_stations: gpd.GeoDataFrame = excluded_station_locations(
+            snapped_locations,
+            Path(self.model.config["general"]["output_folder"]) / run_name / "report",
+        )
+        if not excluded_stations.empty:
+            evaluation_gdf["exclusion_reason"] = excluded_stations[
+                "exclusion_reason"
+            ].reindex(evaluation_gdf.index)
+        diagnostic_path: Path = metrics_path.with_name("diagnostic_metrics.geoparquet")
+        if diagnostic_path.exists():
+            diagnostic_gdf: gpd.GeoDataFrame = gpd.read_parquet(diagnostic_path)
+            evaluation_gdf = gpd.GeoDataFrame(
+                pd.concat(
+                    [
+                        evaluation_gdf,
+                        diagnostic_gdf.loc[
+                            ~diagnostic_gdf.index.isin(evaluation_gdf.index)
+                        ],
+                    ]
+                ),
+                geometry="geometry",
+                crs=evaluation_gdf.crs,
             )
-            .fillna(0.0)
-            .astype(float)
+        if not evaluation_gdf.empty and (
+            "snapping_method" not in evaluation_gdf.columns
+            or not (evaluation_gdf["snapping_method"] == "original_pixel_v1").all()
+        ):
+            raise ValueError(
+                "Saved discharge metrics predate original-pixel snapping. Rebuild hydrography "
+                "and discharge observations, rerun station discharge reporting and "
+                "hydrology.evaluate_discharge before creating the dashboard."
+            )
+        evaluation_gdf["timezone_utc_offset"] = evaluation_gdf.get(
+            "timezone_utc_offset", 0.0
+        )
+        evaluation_gdf["timezone_utc_offset"] = evaluation_gdf[
+            "timezone_utc_offset"
+        ].fillna(0.0)
+        excluded_stations = complete_dashboard_stations(
+            evaluation_gdf,
+            excluded_stations,
+            snapped_locations,
+            Path(self.model.files["geom"]["discharge/discharge_snapped_locations"]),
+            self.model.config.get("hydrology", {})
+            .get("evaluation", {})
+            .get("discharge", {})
+            .get("minimum_upstream_area_km2", 0.0),
         )
         n_stations: int = len(evaluation_gdf)
         if evaluation_gdf.empty:
             self.model.logger.warning(
                 "No discharge stations found in saved evaluation metrics. "
-                "Creating an empty dashboard."
+                "Showing excluded stations only."
             )
         else:
             self.model.logger.info(
@@ -2446,6 +2475,7 @@ class Hydrology:
                 run_output_folder=run_output_folder,
                 correct_discharge_observations=correct_discharge_observations,
                 dashboard_path=dashboard_path,
+                include_return_period_plots=include_return_period_plots,
             )
         )
 
@@ -2458,6 +2488,7 @@ class Hydrology:
             station_chart_files=station_dashboard_chart_files,
             waterbodies=dashboard_geometries.waterbodies,
             characteristic_df=dashboard_characteristics,
+            excluded_stations=excluded_stations,
         )
         self.model.logger.info(
             "Discharge evaluation dashboard created: %s", dashboard_path
@@ -2474,6 +2505,7 @@ class Hydrology:
         run_output_folder: Path,
         correct_discharge_observations: bool,
         dashboard_path: Path,
+        include_return_period_plots: bool = False,
     ) -> dict[str, str]:
         """Write interactive chart payloads for saved evaluation stations.
 
@@ -2483,6 +2515,8 @@ class Hydrology:
             correct_discharge_observations: Whether to correct simulated discharge
                 by the observed-to-GEB upstream-area ratio (dimensionless).
             dashboard_path: Output path of the dashboard HTML file.
+            include_return_period_plots: Whether to fit and include return-period
+                curves. Defaults to False to avoid expensive extreme-value fits.
 
         Returns:
             Mapping from station ID to exact chart payload file.
@@ -2490,6 +2524,8 @@ class Hydrology:
         Raises:
             ValueError: If saved metrics are missing required station columns.
         """
+        if evaluation_gdf.empty:
+            return {}
         required_columns: set[str] = {
             "station_name",
             "discharge_observations_to_GEB_upstream_area_ratio",
@@ -2527,8 +2563,7 @@ class Hydrology:
             if not df.empty
         )
         self.model.logger.info(
-            "Processing %d station-frequency combinations "
-            "(includes return-period fits — may take several minutes)...",
+            "Processing %d station-frequency combinations...",
             total_work,
         )
 
@@ -2558,9 +2593,6 @@ class Hydrology:
                 observed_discharge_series.name = "Q"
 
                 timezone_utc_offset: float = float(station_row["timezone_utc_offset"])
-                daily_discharge_start_hour_local: float = float(
-                    station_row["daily_discharge_start_hour_local"]
-                )
                 try:
                     validation_df: pd.DataFrame = create_validation_df(
                         output_folder=run_output_folder,
@@ -2569,7 +2601,6 @@ class Hydrology:
                         apply_upstream_area_correction=correct_discharge_observations,
                         upstream_area_ratio=upstream_area_ratio,
                         timezone_utc_offset=timezone_utc_offset,
-                        daily_discharge_start_hour_local=daily_discharge_start_hour_local,
                     )
                     metrics: dict[str, float] = {
                         metric_name: float(
@@ -2587,9 +2618,9 @@ class Hydrology:
                                 station_name=str(station_row["station_name"]),
                                 upstream_area_ratio=upstream_area_ratio,
                                 timezone_utc_offset=timezone_utc_offset,
-                                daily_discharge_start_hour_local=daily_discharge_start_hour_local,
                                 metrics=metrics,
                                 frequency=frequency_label,
+                                include_return_period_plots=include_return_period_plots,
                             ),
                         )
                     )

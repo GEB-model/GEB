@@ -1,9 +1,7 @@
 # dev
-- Add fixed GRDC UTC offsets and an interactive gauge-to-river-to-grid snapping QC layer with distance and upstream-area diagnostics to the discharge evaluation dashboard.
-- Correctly parse GRDC clock-style fractional UTC offsets (for example, `6.3` means UTC+06:30) when preparing local-calendar-day discharge evaluation inputs.
-- Align UK GRDC/NRFA daily discharge with its 09:00-08:59 GMT water-day and expose the observation-day boundary in evaluation outputs and dashboards.
-- Treat missing daily-window metadata from partially rebuilt merged regions as the default 00:00 local calendar-day boundary.
-- Simplified discharge evaluation with in-project metrics, seasonal scores, publication exports, improved visualizations, and a five-year default paired record.
+- Snap GRDC gauges to an original-resolution river pixel within 1.5 km and ±10% upstream area. Exclude failed matches and duplicate observations; warn when routing and original areas differ by more than 10%.
+- Show every GRDC gauge, exclusion reason, and MERIT river ID on the dashboard. Aggregate hourly simulations into local calendar days using fixed GRDC UTC offsets.
+
 - Added optional GRDC-Caravan catchment characteristics and made the minimum river slope configurable.
 - Implemented the `early_warning.py` module outside of `households.py`, launching the latest GEB-IbF system, including options for: area and building based warnings; warning communication weighted by socio-economic factor; time-dependent damage reduction.
 - Users need to run `setup_warning_communication_weights` to enable the warning communication efficiency based on socioeconomic factors.

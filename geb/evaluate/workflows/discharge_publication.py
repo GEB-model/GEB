@@ -7,6 +7,30 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 
+PUBLICATION_README_TEMPLATE: str = """# GEB station discharge simulations
+
+This folder contains raw GEB simulated discharge for {station_count} gauging
+stations from run `{run_name}`.
+
+## Contents
+
+- `station_catalog.csv`: station identity and source, original gauge location,
+  and the exact snapped model-cell location.
+- `simulations/*.parquet`: the original hourly GEB reporter file for each
+  station. Files are named `discharge_hourly_m3_per_s_<station_id>.parquet` and
+  contain a `discharge_hourly_m3_per_s_<station_id>` column and datetime index.
+- `evaluation_metrics.xlsx`: derived station-level evaluation results.
+
+Observed discharge is deliberately excluded. GRDC does not permit downloaded
+observations to be redistributed to third parties or via the internet.
+Authorized observations are available directly from the GRDC Data Portal:
+https://grdc.bafg.de/data/data_portal/.
+
+Coordinates use WGS 84 longitude/latitude (`EPSG:4326`). Discharge is in cubic
+metres per second (`m3 s-1`). Simulations are unmodified reporter values: no
+observation-based upstream-area correction or temporal resampling is applied.
+"""
+
 
 def _station_id_text(station_id: object) -> str:
     """Return a stable text representation of a station identifier.
@@ -51,40 +75,6 @@ def _coordinate_pair(value: object, field_name: str) -> tuple[float, float]:
     if len(coordinates) != 2 or not np.isfinite(coordinates).all():
         raise ValueError(f"{field_name} must contain two finite coordinates.")
     return float(coordinates[0]), float(coordinates[1])
-
-
-def _write_readme(output_path: Path, station_count: int, run_name: str) -> None:
-    """Document the contents and data-use constraints of the export.
-
-    Args:
-        output_path: README file to create.
-        station_count: Number of exported stations.
-        run_name: GEB simulation run name.
-    """
-    readme_text: str = f"""# GEB station discharge simulations
-
-This folder contains raw GEB simulated discharge for {station_count} gauging
-stations from run `{run_name}`.
-
-## Contents
-
-- `station_catalog.csv`: station identity and source, original gauge location,
-  and the exact snapped model-cell location.
-- `simulations/*.parquet`: the original hourly GEB reporter file for each
-  station. Files are named `discharge_hourly_m3_per_s_<station_id>.parquet` and
-  contain a `discharge_hourly_m3_per_s_<station_id>` column and datetime index.
-- `evaluation_metrics.xlsx`: derived station-level evaluation results.
-
-Observed discharge is deliberately excluded. GRDC does not permit downloaded
-observations to be redistributed to third parties or via the internet.
-Authorized observations are available directly from the GRDC Data Portal:
-https://grdc.bafg.de/data/data_portal/.
-
-Coordinates use WGS 84 longitude/latitude (`EPSG:4326`). Discharge is in cubic
-metres per second (`m3 s-1`). Simulations are unmodified reporter values: no
-observation-based upstream-area correction or temporal resampling is applied.
-"""
-    output_path.write_text(readme_text, encoding="utf-8")
 
 
 def create_discharge_publication_package(
@@ -185,7 +175,12 @@ def create_discharge_publication_package(
         staging_folder / "station_catalog.csv", index=False
     )
     shutil.copy2(evaluation_metrics_xlsx, staging_folder / "evaluation_metrics.xlsx")
-    _write_readme(staging_folder / "README.md", len(station_ids), run_name)
+    (staging_folder / "README.md").write_text(
+        PUBLICATION_README_TEMPLATE.format(
+            station_count=len(station_ids), run_name=run_name
+        ),
+        encoding="utf-8",
+    )
 
     if output_folder.exists():
         shutil.rmtree(output_folder)

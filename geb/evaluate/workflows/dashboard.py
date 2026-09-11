@@ -13,6 +13,7 @@ import folium
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+from branca.element import Figure
 from folium import MacroElement, TileLayer
 from jinja2 import Template
 
@@ -71,27 +72,22 @@ class DischargeDashboardGeometries(NamedTuple):
 def load_discharge_dashboard_geometries(
     model: GEBModel,
 ) -> DischargeDashboardGeometries:
-    """Load and filter geometries used by the discharge dashboard.
+    """Load the geometries used by the discharge dashboard.
 
     Args:
         model: GEB model containing the geometry file registry.
 
     Returns:
-        Region boundary, dashboard river network, and waterbody geometries.
+        Region boundary, river network, and waterbodies.
     """
     region_geom: gpd.GeoDataFrame = read_geom(model.files["geom"]["mask"])
     all_rivers: gpd.GeoDataFrame = read_geom(model.files["geom"]["routing/rivers"])
-    excluded_rivers: pd.Series = (
-        all_rivers["is_downstream_outflow"]
-        | all_rivers["is_upstream_of_downstream_basin"]
-        | all_rivers["is_further_downstream_outflow"]
-    )
     waterbodies: gpd.GeoDataFrame = read_geom(
         model.files["geom"]["waterbodies/waterbody_data"]
     )
     return DischargeDashboardGeometries(
         region=region_geom,
-        rivers=all_rivers.loc[~excluded_rivers].copy(),
+        rivers=all_rivers,
         waterbodies=waterbodies,
     )
 
@@ -297,33 +293,21 @@ def _build_characteristic_layer_payload(
         raise ValueError("No usable GRDC-Caravan dashboard characteristics found.")
 
     station_records: list[dict[str, Any]] = []
-    for station_id in evaluation_gdf.index:
-        station_id_string: str = str(station_id)
-        characteristic_row: pd.Series | None = (
-            characteristic_index.loc[station_id_string]
-            if station_id_string in characteristic_index.index
-            else None
-        )
+    for station_id, characteristic_row in characteristic_index.iterrows():
         values: dict[str, float | None] = {}
         percentiles: dict[str, float | None] = {}
         for characteristic in usable_characteristics:
             values[characteristic.column] = _as_finite_float(
                 characteristic_row[characteristic.column]
-                if characteristic_row is not None
-                else None
             )
-            percentile_series: pd.Series = percentile_by_characteristic[
-                characteristic.column
-            ]
             percentiles[characteristic.column] = _as_finite_float(
-                percentile_series.get(station_id_string)
+                percentile_by_characteristic[characteristic.column].loc[station_id]
             )
         station_records.append(
             {
-                "id": station_id_string,
+                "id": str(station_id),
                 "caravan_available": bool(characteristic_row["grdc_caravan_matched"])
-                if characteristic_row is not None
-                and pd.notna(characteristic_row["grdc_caravan_matched"])
+                if pd.notna(characteristic_row["grdc_caravan_matched"])
                 else False,
                 "values": values,
                 "percentiles": percentiles,
@@ -433,7 +417,7 @@ def build_discharge_dashboard_chart_data(
     timezone_utc_offset: float,
     metrics: dict[str, float],
     frequency: str,
-    daily_discharge_start_hour_local: float = 0.0,
+    include_return_period_plots: bool = False,
 ) -> dict[str, Any]:
     """Build compact interactive chart data for one discharge dashboard popup.
 
@@ -447,16 +431,19 @@ def build_discharge_dashboard_chart_data(
         metrics: Discharge skill metrics such as ``KGE``, ``NSE``, and ``R2``
             (dimensionless).
         frequency: Data frequency label, for example ``"daily"`` or ``"hourly"``.
-        daily_discharge_start_hour_local: Start of the labelled observation day
-            in fixed local standard time (hours after midnight).
+        include_return_period_plots: Whether to fit and include return-period
+            curves. Defaults to False to avoid expensive extreme-value fits.
 
     Returns:
         Compact chart payload with discharge values (m3/s).
+
+    Raises:
+        ValueError: If validation_df does not use a DateTimeIndex.
     """
-    return_periods_years: list[int | float] = [2, 5, 10, 25, 50, 100]
-    simulated_series: pd.Series = validation_df["discharge_simulations"].copy()
-    simulated_series[validation_df["discharge_observations"].isna()] = np.nan
-    return {
+    if not isinstance(validation_df.index, pd.DatetimeIndex):
+        raise ValueError("validation_df must use a DateTimeIndex for dashboard charts.")
+
+    chart_data: dict[str, Any] = {
         "stationName": station_name,
         "frequency": frequency,
         "metrics": {
@@ -473,20 +460,23 @@ def build_discharge_dashboard_chart_data(
             "RRMSE": _as_finite_float(metrics.get("RRMSE")),
             "upstreamAreaRatio": _as_finite_float(upstream_area_ratio),
             "timezoneUtcOffset": _as_finite_float(timezone_utc_offset),
-            "dailyWindowStartHourLocal": _as_finite_float(
-                daily_discharge_start_hour_local
-            ),
         },
         "timeseries": _build_timeseries_payload(validation_df),
-        "returnPeriods": {
+    }
+    if include_return_period_plots:
+        # Fit only on request: fitting every station dominates dashboard creation.
+        return_periods_years: list[int | float] = [2, 5, 10, 25, 50, 100]
+        simulated_series: pd.Series = validation_df["discharge_simulations"].copy()
+        simulated_series[validation_df["discharge_observations"].isna()] = np.nan
+        chart_data["returnPeriods"] = {
             "observed": _build_return_period_payload(
                 validation_df["discharge_observations"], return_periods_years
             ),
             "simulated": _build_return_period_payload(
                 simulated_series, return_periods_years
             ),
-        },
-    }
+        }
+    return chart_data
 
 
 def write_discharge_dashboard_chart_data(
@@ -674,23 +664,25 @@ def _inject_popup_chart_script(
       };
     }
     var timeRange = dateRange(data.timeseries.time);
-    var observedReturnPeriodRange = linearRange(data.returnPeriods.observed.returnPeriod);
-    var simulatedReturnPeriodRange = linearRange(data.returnPeriods.simulated.returnPeriod);
-    var returnPeriodValues = [];
-    if (observedReturnPeriodRange) returnPeriodValues = returnPeriodValues.concat(observedReturnPeriodRange);
-    if (simulatedReturnPeriodRange) returnPeriodValues = returnPeriodValues.concat(simulatedReturnPeriodRange);
-    var returnPeriodRange = logRange(returnPeriodValues);
-    var returnPeriodTicks = sortedUniqueNumbers(
-      data.returnPeriods.observed.returnPeriod.concat(data.returnPeriods.simulated.returnPeriod)
-    );
     Plotly.newPlot('geb-time-' + safeStationId, [
       trace('Observed', data.timeseries.time, data.timeseries.observed, timeseriesTraceType, 'lines', '%{x|%b %Y}<br>%{y:,.0f} m3/s<extra>Observed</extra>'),
       trace('Simulated', data.timeseries.time, data.timeseries.simulated, timeseriesTraceType, 'lines', '%{x|%b %Y}<br>%{y:,.0f} m3/s<extra>Simulated</extra>')
     ], Object.assign({}, layoutBase, {hovermode: 'x unified', xaxis: Object.assign({}, layoutBase.xaxis, {type: 'date', range: timeRange}), yaxis: Object.assign({}, layoutBase.yaxis, {title: 'Discharge (m3/s)'})}), common);
-    Plotly.newPlot('geb-return-' + safeStationId, [
-      trace('Observed', data.returnPeriods.observed.returnPeriod, data.returnPeriods.observed.discharge, 'scatter', 'lines+markers', '%{x:g}-year<br>%{y:,.0f} m3/s<extra>Observed</extra>'),
-      trace('Simulated', data.returnPeriods.simulated.returnPeriod, data.returnPeriods.simulated.discharge, 'scatter', 'lines+markers', '%{x:g}-year<br>%{y:,.0f} m3/s<extra>Simulated</extra>')
-    ], Object.assign({}, layoutBase, {hovermode: 'x unified', xaxis: Object.assign({}, layoutBase.xaxis, {type: 'log', range: returnPeriodRange, tickmode: 'array', tickvals: returnPeriodTicks, ticktext: returnPeriodTicks.map(formatTick), title: 'Return period (years)'}), yaxis: Object.assign({}, layoutBase.yaxis, {title: 'Discharge (m3/s)'})}), common);
+    if (data.returnPeriods) {
+      var observedReturnPeriodRange = linearRange(data.returnPeriods.observed.returnPeriod);
+      var simulatedReturnPeriodRange = linearRange(data.returnPeriods.simulated.returnPeriod);
+      var returnPeriodValues = [];
+      if (observedReturnPeriodRange) returnPeriodValues = returnPeriodValues.concat(observedReturnPeriodRange);
+      if (simulatedReturnPeriodRange) returnPeriodValues = returnPeriodValues.concat(simulatedReturnPeriodRange);
+      var returnPeriodRange = logRange(returnPeriodValues);
+      var returnPeriodTicks = sortedUniqueNumbers(
+        data.returnPeriods.observed.returnPeriod.concat(data.returnPeriods.simulated.returnPeriod)
+      );
+      Plotly.newPlot('geb-return-' + safeStationId, [
+        trace('Observed', data.returnPeriods.observed.returnPeriod, data.returnPeriods.observed.discharge, 'scatter', 'lines+markers', '%{x:g}-year<br>%{y:,.0f} m3/s<extra>Observed</extra>'),
+        trace('Simulated', data.returnPeriods.simulated.returnPeriod, data.returnPeriods.simulated.discharge, 'scatter', 'lines+markers', '%{x:g}-year<br>%{y:,.0f} m3/s<extra>Simulated</extra>')
+      ], Object.assign({}, layoutBase, {hovermode: 'x unified', xaxis: Object.assign({}, layoutBase.xaxis, {type: 'log', range: returnPeriodRange, tickmode: 'array', tickvals: returnPeriodTicks, ticktext: returnPeriodTicks.map(formatTick), title: 'Return period (years)'}), yaxis: Object.assign({}, layoutBase.yaxis, {title: 'Discharge (m3/s)'})}), common);
+    }
   }
 
   function renderStation(el, stationId) {
@@ -710,9 +702,8 @@ def _inject_popup_chart_script(
       metricHtml('α', metrics.KGE_variability_ratio) + metricHtml('NSE', metrics.NSE) +
       metricHtml('r²', metrics.R2) + metricHtml('RMSE', metrics.RMSE) +
       metricHtml('RRMSE', metrics.RRMSE) + metricHtml('Area ratio', metrics.upstreamAreaRatio) +
-      metricHtml('Fixed UTC offset (h)', metrics.timezoneUtcOffset) +
-      metricHtml('Daily window start, local standard time (h)', metrics.dailyWindowStartHourLocal) + '</div>' +
-      '<div class="geb-popup__chart-title">Return periods</div>' + makeChartDiv('geb-return-' + safeStationId) +
+      metricHtml('Fixed UTC offset (h)', metrics.timezoneUtcOffset) + '</div>' +
+      (data.returnPeriods ? '<div class="geb-popup__chart-title">Return periods</div>' + makeChartDiv('geb-return-' + safeStationId) : '') +
       '<div class="geb-popup__chart-title">Discharge time series</div>' + makeChartDiv('geb-time-' + safeStationId);
     ensurePlotly(function(loaded) {
       if (loaded === false) {
@@ -1104,28 +1095,6 @@ def _add_metric_station_markers(
     return marker_names
 
 
-def _format_characteristic_value(value: float) -> str:
-    """Format a catchment-characteristic value for a map tooltip.
-
-    Args:
-        value: Characteristic value in the display unit stated by its label.
-
-    Returns:
-        Compact locale-independent value string.
-    """
-    absolute_value: float = abs(value)
-    decimal_places: int = (
-        0
-        if absolute_value >= 1000.0
-        else 1
-        if absolute_value >= 100.0
-        else 2
-        if absolute_value >= 10.0
-        else 3
-    )
-    return f"{value:,.{decimal_places}f}"
-
-
 def _add_characteristic_station_markers(
     station_record: dict[str, Any],
     characteristic_layers: list[tuple[folium.FeatureGroup, dict[str, Any]]],
@@ -1184,6 +1153,17 @@ def _add_characteristic_station_markers(
         assert percentile is not None, (
             f"Finite characteristic {characteristic['column']} has no rank."
         )
+        absolute_value: float = abs(value)
+        decimal_places: int = (
+            0
+            if absolute_value >= 1000.0
+            else 1
+            if absolute_value >= 100.0
+            else 2
+            if absolute_value >= 10.0
+            else 3
+        )
+        formatted_value: str = f"{value:,.{decimal_places}f}"
         fill_color: str = _CHARACTERISTIC_COLORMAP(percentile)
         rank_text: str = f"percentile rank {percentile:.0f}"
         marker_names.append(
@@ -1196,7 +1176,7 @@ def _add_characteristic_station_markers(
                 popup_width=popup_width,
                 tooltip=(
                     f"{station_tooltip}<br>{characteristic['label']}: "
-                    f"{_format_characteristic_value(value)} ({rank_text})"
+                    f"{formatted_value} ({rank_text})"
                 ),
             )
         )
@@ -1319,131 +1299,469 @@ def _haversine_distance_km(
     return earth_radius_km * 2.0 * math.asin(math.sqrt(min(1.0, haversine_value)))
 
 
-def _add_snapping_qc_station(
-    layer: folium.FeatureGroup,
+def _build_snapping_qc_station(
     station_id: str,
     station_name: str,
     row: pd.Series,
-) -> None:
-    """Add gauge, river, grid-cell, and diagnostic snapping features.
+) -> dict[str, Any]:
+    """Build one compact station record for on-demand snapping visualization.
 
-    A green status means that the final model-grid upstream area is within 30%
-    of the reported GRDC area and the grid-cell centre is no more than 10 km
-    from the gauge. This is a visual screening rule, not proof that the station
-    metadata or model river topology are correct.
+    Excluded stations show the reason alongside their snapping diagnostics.
 
     Args:
-        layer: Folium feature group receiving the snapping features.
         station_id: GRDC station identifier.
         station_name: Human-readable station name.
-        row: Evaluation row containing gauge, river, grid, area, and timezone
-            metadata.
+        row: Evaluation row with snapping metadata.
+
+    Returns:
+        Coordinates, tooltip, status color, and popup text.
+
+    Raises:
+        ValueError: If a coordinate is invalid or a fixed UTC offset is invalid.
     """
     gauge_longitude: float = float(row["station_longitude"])
     gauge_latitude: float = float(row["station_latitude"])
-    river_longitude: float = float(row["closest_river_longitude"])
-    river_latitude: float = float(row["closest_river_latitude"])
-    grid_longitude: float = float(row["snapped_grid_longitude"])
-    grid_latitude: float = float(row["snapped_grid_latitude"])
+    if any(
+        pd.isna(row.get(column))
+        for column in (
+            "original_longitude",
+            "original_latitude",
+            "snapped_grid_longitude",
+            "snapped_grid_latitude",
+        )
+    ):
+        reason: str = html.escape(
+            str(row.get("exclusion_reason", "No valid river match."))
+        )
+        station_label: str = f"{html.escape(station_name)} ({html.escape(station_id)})"
+        area_m2: float = float(row.get("upstream_area_GRDC", np.nan))
+        area_label: str = (
+            f"{area_m2 / 1e6:,.1f} km²"
+            if np.isfinite(area_m2) and area_m2 > 0
+            else "missing"
+        )
+        return {
+            "id": station_id,
+            "locations": [[gauge_latitude, gauge_longitude]],
+            "color": "#DC2626",
+            "tooltip": f"{station_label}<br>EXCLUDED: {reason}",
+            "popup": f"<b>{station_label}</b><br><b>EXCLUDED</b><br>{reason}<br>GRDC area: {area_label}<br>Gauge: {gauge_latitude:.5f}, {gauge_longitude:.5f}",
+        }
+    original_longitude: float = float(row["original_longitude"])
+    original_latitude: float = float(row["original_latitude"])
+    routing_longitude: float = float(row["snapped_grid_longitude"])
+    routing_latitude: float = float(row["snapped_grid_latitude"])
     grdc_area_km2: float = float(row["upstream_area_GRDC"]) / 1_000_000.0
-    grid_area_km2: float = float(row["upstream_area_GEB"]) / 1_000_000.0
-    subgrid_area_km2: float = float(row["upstream_area_GEB_subgrid"]) / 1_000_000.0
-    grid_area_ratio: float = grid_area_km2 / grdc_area_km2
-    grid_distance_km: float = _haversine_distance_km(
+    routing_area_km2: float = float(row["upstream_area_GEB"]) / 1_000_000.0
+    original_area_km2: float = float(row["upstream_area_GEB_original"]) / 1_000_000.0
+    station_to_routing_distance_km: float = _haversine_distance_km(
         gauge_longitude,
         gauge_latitude,
-        grid_longitude,
-        grid_latitude,
+        routing_longitude,
+        routing_latitude,
     )
-    river_distance_km_approx: float = float(row["snapping_distance_degrees"]) * 111.2
+    station_to_original_distance_km: float = (
+        float(row["station_to_original_distance_m"]) / 1000.0
+    )
+    original_to_routing_distance_km: float = _haversine_distance_km(
+        original_longitude,
+        original_latitude,
+        routing_longitude,
+        routing_latitude,
+    )
+    grdc_routing_area_ratio: float = (
+        grdc_area_km2 / routing_area_km2 if routing_area_km2 > 0 else float("nan")
+    )
+    original_grdc_area_ratio: float = (
+        original_area_km2 / grdc_area_km2 if grdc_area_km2 > 0 else float("nan")
+    )
+    routing_original_area_ratio: float = (
+        routing_area_km2 / original_area_km2 if original_area_km2 > 0 else float("nan")
+    )
     timezone_label: str = format_fixed_utc_offset(float(row["timezone_utc_offset"]))
-    raw_daily_window_start_hour_local: Any = row.get(
-        "daily_discharge_start_hour_local", 0.0
+    area_warning: bool = not 0.9 <= routing_original_area_ratio <= 1.1
+    status_label: str = "ROUTING AREA WARNING" if area_warning else "PASS"
+    status_color: str = "#EA580C" if area_warning else "#16A34A"
+    exclusion_reason: str = (
+        str(row.get("exclusion_reason", ""))
+        if pd.notna(row.get("exclusion_reason", ""))
+        else ""
     )
-    daily_window_start_hour_local: float = (
-        float(raw_daily_window_start_hour_local)
-        if pd.notna(raw_daily_window_start_hour_local)
-        else 0.0
-    )
-    daily_window_start_label: str = f"{daily_window_start_hour_local:02.0f}:00"
-    qc_passed: bool = 0.7 <= grid_area_ratio <= 1.3 and grid_distance_km <= 10.0
-    status_label: str = "PASS" if qc_passed else "REVIEW"
-    status_color: str = "#16A34A" if qc_passed else "#EA580C"
+    if exclusion_reason:
+        status_label = "EXCLUDED"
+        status_color = "#DC2626"
     escaped_name: str = html.escape(station_name)
     escaped_id: str = html.escape(station_id)
     popup_html: str = (
         f"<b>{escaped_name}</b> ({escaped_id})<br>"
         f"<b>Snapping QC: <span style='color:{status_color}'>{status_label}</span></b><br>"
         f"GRDC gauge: {gauge_latitude:.5f}, {gauge_longitude:.5f}<br>"
-        f"Closest river: {river_latitude:.5f}, {river_longitude:.5f}<br>"
-        f"Model grid cell: {grid_latitude:.5f}, {grid_longitude:.5f}<br>"
-        f"Gauge–grid distance: {grid_distance_km:.2f} km<br>"
-        f"Gauge–river distance: ~{river_distance_km_approx:.2f} km<br>"
+        f"Selected original pixel: {original_latitude:.5f}, {original_longitude:.5f}<br>"
+        f"Routing pixel: {routing_latitude:.5f}, {routing_longitude:.5f}<br>"
+        f"River ID: {int(row['snapped_river_id'])}<br>"
+        f"Gauge–routing distance: {station_to_routing_distance_km:.2f} km<br>"
+        f"Gauge–original distance: {station_to_original_distance_km:.3f} km<br>"
+        f"Original–routing distance: {original_to_routing_distance_km:.3f} km<br>"
         f"GRDC area: {grdc_area_km2:,.1f} km²<br>"
-        f"GEB subgrid area: {subgrid_area_km2:,.1f} km²<br>"
-        f"GEB grid area: {grid_area_km2:,.1f} km²<br>"
-        f"Grid/GRDC area ratio: {grid_area_ratio:.3f}<br>"
+        f"Original area: {original_area_km2:,.1f} km²<br>"
+        f"Routing area: {routing_area_km2:,.1f} km²<br>"
+        f"Original/GRDC area ratio: {original_grdc_area_ratio:.3f}<br>"
+        f"Routing/original area ratio: {routing_original_area_ratio:.3f}<br>"
+        f"GRDC/routing area ratio: {grdc_routing_area_ratio:.3f}<br>"
         f"Daily aggregation offset: {timezone_label} (fixed; no DST)<br>"
-        f"Observation day: {daily_window_start_label}–{daily_window_start_label} "
-        "fixed local standard time<br>"
-        "PASS thresholds: area ratio 0.70–1.30 and gauge–grid distance ≤10 km."
+        "Observation day: local midnight to midnight<br>"
+        f"{html.escape(exclusion_reason)}"
     )
     tooltip: str = (
-        f"{station_id}: {station_name}<br>Snapping QC: {status_label}"
-        f"<br>Grid/GRDC area: {grid_area_ratio:.3f}"
-        f"<br>Gauge–grid: {grid_distance_km:.2f} km"
+        f"{escaped_id}: {escaped_name}<br>Snapping QC: {status_label}"
+        f"<br>Original/GRDC area: {original_grdc_area_ratio:.3f}; "
+        f"routing/original: {routing_original_area_ratio:.3f}"
+        f"<br>Gauge–routing: {station_to_routing_distance_km:.2f} km"
         f"<br>{timezone_label} fixed"
-        f"<br>Daily window: {daily_window_start_label}–{daily_window_start_label}"
+        "<br>Daily window: local midnight to midnight"
     )
     line_locations: list[list[float]] = [
         [gauge_latitude, gauge_longitude],
-        [river_latitude, river_longitude],
-        [grid_latitude, grid_longitude],
+        [original_latitude, original_longitude],
+        [routing_latitude, routing_longitude],
     ]
-    folium.PolyLine(
-        locations=line_locations,
-        color=status_color,
-        weight=3,
-        opacity=0.85,
-        dash_array="6 4",
-        tooltip=tooltip,
-        popup=folium.Popup(popup_html, max_width=440),
-    ).add_to(layer)
-    folium.CircleMarker(
-        location=[gauge_latitude, gauge_longitude],
-        radius=6,
-        color="#991B1B",
-        weight=2,
-        fill=True,
-        fill_color="#EF4444",
-        fill_opacity=0.95,
-        tooltip=f"GRDC gauge · {tooltip}",
-        popup=folium.Popup(popup_html, max_width=440),
-    ).add_to(layer)
-    folium.CircleMarker(
-        location=[river_latitude, river_longitude],
-        radius=4,
-        color="#111827",
-        weight=1,
-        fill=True,
-        fill_color="#111827",
-        fill_opacity=0.95,
-        tooltip=f"Closest river point · {tooltip}",
-        popup=folium.Popup(popup_html, max_width=440),
-    ).add_to(layer)
-    folium.RegularPolygonMarker(
-        location=[grid_latitude, grid_longitude],
-        number_of_sides=4,
-        rotation=45,
-        radius=7,
-        color="#1D4ED8",
-        weight=2,
-        fill=True,
-        fill_color="#3B82F6",
-        fill_opacity=0.95,
-        tooltip=f"GEB grid cell · {tooltip}",
-        popup=folium.Popup(popup_html, max_width=440),
-    ).add_to(layer)
+    if any(
+        not np.isfinite(latitude)
+        or not np.isfinite(longitude)
+        or not -90 <= latitude <= 90
+        or not -180 <= longitude <= 180
+        for latitude, longitude in line_locations
+    ):
+        raise ValueError("Snapping coordinates must be finite geographic coordinates.")
+    return {
+        "id": escaped_id,
+        "locations": line_locations,
+        "color": status_color,
+        "tooltip": tooltip,
+        "popup": popup_html,
+    }
+
+
+def _inject_snapping_qc_script(
+    discharge_map: folium.Map,
+    layer: folium.FeatureGroup,
+    stations: list[dict[str, Any]],
+) -> None:
+    """Render snapping features lazily and only around the visible map extent.
+
+    Args:
+        discharge_map: Map receiving the snapping interaction and legend.
+        layer: Initially empty, disabled overlay shown in the layer control.
+        stations: Compact station records with coordinates in degrees and HTML
+            diagnostics from _build_snapping_qc_station.
+
+    Notes:
+        Overview points and connectors share a canvas renderer. Numbered markers
+        are limited to 150 visible stations at zoom 9 or higher, or one selected
+        station in overview mode. Permanent labels are created only from zoom 11.
+        The inactive overlay has no station layers or popup objects.
+    """
+    script: str = r"""
+(function() {
+  var map = GEB_SNAPPING_MAP;
+  var layer = GEB_SNAPPING_LAYER;
+  var stations = GEB_SNAPPING_STATIONS;
+  var visibleLayers = new Map();
+  var renderer = null;
+  var selectedLayer = null;
+  var selectedIndex = null;
+  var currentMode = '';
+  var updateTimer = null;
+  var popup = null;
+  var markerStyles = [
+    ['1', 'Original gauge', '#BE123C', '50%'],
+    ['2', 'Selected original pixel', '#92400E', '3px'],
+    ['3', 'Snapped model cell', '#1D4ED8', '0']
+  ];
+  var control = L.control({position: 'bottomright'});
+  control.onAdd = function() {
+    var box = L.DomUtil.create('div', 'geb-snapping-legend');
+    box.style.display = 'none';
+    box.innerHTML = '<b>Station snapping: 1 → 2 → 3</b>' +
+      '<div><i style="background:#BE123C;border-radius:50%">1</i> Original gauge (observations)</div>' +
+      '<div><i style="background:#92400E;border-radius:3px">2</i> Selected original pixel</div>' +
+      '<div><i style="background:#1D4ED8">3</i> Snapped model-cell centre (simulation)</div>' +
+      '<small>Overview dots: green = PASS, orange = area warning, red = excluded.<br>' +
+      'Click a dot for its three snapping steps, or zoom in.<br>' +
+      'Dashed lines connect the three locations.<br>' +
+      'Coincident symbols can overlap; each popup lists all coordinates.</small>' +
+      '<small class="geb-snapping-status"></small>';
+    L.DomEvent.disableClickPropagation(box);
+    L.DomEvent.disableScrollPropagation(box);
+    return box;
+  };
+  control.addTo(map);
+  var style = document.createElement('style');
+  style.textContent = '.geb-snapping-legend{background:white;color:#111827;padding:12px;border-radius:8px;box-shadow:0 2px 10px #0004;font:12px system-ui;max-width:310px}' +
+    '.geb-snapping-legend div{margin-top:6px;display:flex;align-items:center;gap:8px}' +
+    '.geb-snapping-legend i{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;color:white;font-style:normal;font-weight:bold}' +
+    '.geb-snapping-legend small{display:block;margin-top:8px;line-height:1.5}';
+  document.head.appendChild(style);
+
+  function openPopup(station, heading, location) {
+    if (!popup) popup = L.popup({maxWidth: 440});
+    popup.setLatLng(location).setContent(heading + station.popup).openOn(map);
+  }
+  function detail(index, labels) {
+    var station = stations[index];
+    var group = L.featureGroup();
+    var connector = L.polyline(station.locations, {
+      renderer: renderer, color: station.color, weight: 3, opacity: 0.85, dashArray: '6 4'
+    }).addTo(group);
+    connector.on('click', function(event) {openPopup(station, '', event.latlng);});
+    station.locations.forEach(function(coordinates, position) {
+      var spec = markerStyles[position];
+      var marker = L.marker(coordinates, {icon: L.divIcon({
+        iconSize: [26, 26], iconAnchor: [13, 13], className: 'geb-snapping-icon',
+        html: '<span style="display:flex;align-items:center;justify-content:center;width:26px;height:26px;box-sizing:border-box;background:' + spec[2] +
+          ';border:2px solid white;border-radius:' + spec[3] + ';color:white;font:bold 14px system-ui;box-shadow:0 1px 5px #0008;">' + spec[0] + '</span>'
+      })}).addTo(group);
+      marker.bindTooltip(spec[0] + '. ' + spec[1] + ' · ' + station.id, {
+        permanent: labels, direction: position === 0 ? 'left' : 'right', className: 'geb-snapping-label'
+      });
+      marker.on('click', function() {
+        openPopup(station, '<h4>' + spec[0] + '. ' + spec[1] + '</h4>', coordinates);
+      });
+    });
+    return group;
+  }
+  function overview(index) {
+    var station = stations[index];
+    var dot = L.circleMarker(station.locations[0], {
+      renderer: renderer, radius: 5, color: station.color, fillColor: station.color,
+      fillOpacity: 0.85, weight: 1
+    });
+    dot.bindTooltip(station.tooltip);
+    dot.on('click', function() {
+      if (selectedLayer) layer.removeLayer(selectedLayer);
+      selectedIndex = index;
+      selectedLayer = detail(index, map.getZoom() >= 11).addTo(layer);
+      openPopup(station, '', station.locations[0]);
+    });
+    return dot;
+  }
+  function clear() {
+    layer.clearLayers();
+    visibleLayers.clear();
+    selectedLayer = null;
+    selectedIndex = null;
+    currentMode = '';
+    if (popup) map.closePopup(popup);
+  }
+  function update() {
+    updateTimer = null;
+    if (!map.hasLayer(layer)) return;
+    if (!renderer) renderer = L.canvas({padding: 0.2});
+    var bounds = map.getBounds().pad(0.1);
+    var visible = [];
+    stations.forEach(function(station, index) {
+      // Include a connector crossing the viewport even if its gauge is outside.
+      if (bounds.intersects(L.latLngBounds(station.locations))) visible.push(index);
+    });
+    var detailed = map.getZoom() >= 9 && visible.length <= 150;
+    var labels = map.getZoom() >= 11;
+    var mode = detailed ? (labels ? 'labelled' : 'detailed') : 'overview';
+    var previousSelection = selectedIndex;
+    if (mode !== currentMode) {clear(); currentMode = mode; selectedIndex = previousSelection;}
+    var wanted = new Set(visible);
+    visibleLayers.forEach(function(feature, index) {
+      if (!wanted.has(index)) {layer.removeLayer(feature); visibleLayers.delete(index);}
+    });
+    visible.forEach(function(index) {
+      if (!visibleLayers.has(index)) {
+        visibleLayers.set(index, (detailed ? detail(index, labels) : overview(index)).addTo(layer));
+      }
+    });
+    if (selectedLayer && !wanted.has(selectedIndex)) {
+      layer.removeLayer(selectedLayer); selectedLayer = null; selectedIndex = null;
+      if (popup) map.closePopup(popup);
+    }
+    control.getContainer().querySelector('.geb-snapping-status').textContent =
+      visible.length + ' stations in view. ' + (detailed ? (labels ? 'Numbered steps and labels shown.' : 'Zoom further for labels.') :
+        'Zoom in for all steps (up to 150 stations), or click a dot.');
+  }
+  function schedule() {
+    // Coalesce zoomend/moveend without waiting for an animation frame.
+    if (map.hasLayer(layer) && updateTimer === null) updateTimer = setTimeout(update, 50);
+  }
+  function overlayChanged(event) {
+    if (event.layer !== layer) return;
+    var enabled = map.hasLayer(layer);
+    control.getContainer().style.display = enabled ? '' : 'none';
+    if (enabled) schedule();
+    else {
+      if (updateTimer !== null) clearTimeout(updateTimer);
+      updateTimer = null;
+      clear();
+      if (renderer && map.hasLayer(renderer)) map.removeLayer(renderer);
+    }
+  }
+  map.on('overlayadd overlayremove', overlayChanged);
+  map.on('moveend zoomend', schedule);
+})();
+"""
+    script = script.replace("GEB_SNAPPING_MAP", discharge_map.get_name()).replace(
+        "GEB_SNAPPING_LAYER", layer.get_name()
+    )
+    # Folium renders nested templates more than once. Escape template openers
+    # inside station strings as well as script-closing HTML characters.
+    station_json: str = (
+        json.dumps(stations, separators=(",", ":"), ensure_ascii=True)
+        .replace("<", "\\u003c")
+        .replace("{{", "\\u007b\\u007b")
+        .replace("{%", "\\u007b%")
+        .replace("{#", "\\u007b#")
+    )
+    script = script.replace("GEB_SNAPPING_STATIONS", station_json)
+    _JavascriptMacro(script).add_to(discharge_map)
+
+
+def _add_river_layers(
+    discharge_map: folium.Map,
+    rivers: gpd.GeoDataFrame,
+    overview_minimum_area_km2: float,
+    detailed_minimum_zoom: int,
+) -> None:
+    """Add overview and zoomed MERIT river layers with river ID tooltips.
+
+    Args:
+        discharge_map: Map receiving the river layers.
+        rivers: MERIT river segments in WGS84, indexed by river ID.
+        overview_minimum_area_km2: Minimum upstream area shown below the detailed
+            zoom level (km²).
+        detailed_minimum_zoom: First zoom level showing every river segment.
+
+    Raises:
+        ValueError: If the detailed zoom level is outside the Leaflet range.
+    """
+    if not 0 <= detailed_minimum_zoom <= 22:
+        raise ValueError("detailed_minimum_zoom must be between 0 and 22.")
+    if rivers.empty:
+        return
+
+    valid_rivers: gpd.GeoDataFrame = rivers.loc[
+        rivers.geometry.notna() & ~rivers.geometry.is_empty
+    ].copy()
+    overview_exclusions: list[str] = [
+        name
+        for name in (
+            "is_downstream_outflow",
+            "is_upstream_of_downstream_basin",
+            "is_further_downstream_outflow",
+        )
+        if name in valid_rivers.columns
+    ]
+    overview_rivers: gpd.GeoDataFrame = valid_rivers
+    if overview_exclusions:
+        overview_rivers = overview_rivers.loc[
+            ~overview_rivers[overview_exclusions].any(axis=1)
+        ]
+    if overview_minimum_area_km2 > 0 and "uparea_m2" in overview_rivers.columns:
+        overview_rivers = overview_rivers.loc[
+            overview_rivers["uparea_m2"] >= overview_minimum_area_km2 * 1e6
+        ]
+
+    def display_data(selected: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+        """Keep only compact river properties needed by the browser.
+
+        Args:
+            selected: River segments to convert.
+
+        Returns:
+            River IDs, upstream areas (km²), and geometries.
+        """
+        upstream_area_km2: pd.Series = (
+            selected["uparea_m2"] / 1e6
+            if "uparea_m2" in selected.columns
+            else pd.Series(np.nan, index=selected.index)
+        )
+        return gpd.GeoDataFrame(
+            {
+                "river_id": selected.index.astype(str),
+                "upstream_area_km2": upstream_area_km2.to_numpy(),
+            },
+            geometry=selected.geometry.to_numpy(),
+            crs=selected.crs,
+        )
+
+    def river_tooltip() -> folium.GeoJsonTooltip:
+        """Create a tooltip owned by one GeoJSON layer.
+
+        Returns:
+            Tooltip showing the MERIT river ID and upstream area (km²).
+        """
+        return folium.GeoJsonTooltip(
+            fields=["river_id", "upstream_area_km2"],
+            aliases=["River ID:", "Upstream area (km²):"],
+            localize=True,
+            sticky=True,
+        )
+
+    overview_layer: folium.FeatureGroup = folium.FeatureGroup(
+        name="Major rivers overview", show=True
+    )
+    folium.GeoJson(
+        display_data(overview_rivers).to_json(drop_id=True),
+        style_function=lambda _feature: {
+            "color": "#4A90D9",
+            "weight": 1.2,
+            "opacity": 0.65,
+        },
+        tooltip=river_tooltip(),
+        highlight_function=lambda _feature: {"weight": 4, "opacity": 1},
+    ).add_to(overview_layer)
+    overview_layer.add_to(discharge_map)
+
+    # A small visual simplification keeps the complete network responsive.
+    detailed_rivers: gpd.GeoDataFrame = valid_rivers.copy()
+    detailed_rivers.geometry = detailed_rivers.geometry.simplify(
+        0.0004, preserve_topology=False
+    )
+    detailed_layer: folium.FeatureGroup = folium.FeatureGroup(
+        name=f"MERIT river network (zoom {detailed_minimum_zoom}+)", show=False
+    )
+    folium.GeoJson(
+        display_data(detailed_rivers).to_json(drop_id=True),
+        style_function=lambda _feature: {
+            "color": "#2563EB",
+            "weight": 1.5,
+            "opacity": 0.8,
+        },
+        tooltip=river_tooltip(),
+        highlight_function=lambda _feature: {"weight": 5, "opacity": 1},
+        smooth_factor=1.0,
+    ).add_to(detailed_layer)
+    detailed_layer.add_to(discharge_map)
+
+    script: str = """
+(function() {
+  var map = GEB_RIVER_MAP;
+  var overview = GEB_RIVER_OVERVIEW;
+  var detailed = GEB_RIVER_DETAILED;
+  var minimumZoom = GEB_RIVER_MINIMUM_ZOOM;
+  function updateRivers() {
+    if (map.getZoom() >= minimumZoom) {
+      if (map.hasLayer(overview)) map.removeLayer(overview);
+      if (!map.hasLayer(detailed)) map.addLayer(detailed);
+    } else {
+      if (map.hasLayer(detailed)) map.removeLayer(detailed);
+      if (!map.hasLayer(overview)) map.addLayer(overview);
+    }
+  }
+  map.on('zoomend', updateRivers);
+  updateRivers();
+})();
+"""
+    script = script.replace("GEB_RIVER_MAP", discharge_map.get_name())
+    script = script.replace("GEB_RIVER_OVERVIEW", overview_layer.get_name())
+    script = script.replace("GEB_RIVER_DETAILED", detailed_layer.get_name())
+    script = script.replace("GEB_RIVER_MINIMUM_ZOOM", str(detailed_minimum_zoom))
+    _JavascriptMacro(script).add_to(discharge_map)
 
 
 def create_discharge_folium_map(
@@ -1455,6 +1773,8 @@ def create_discharge_folium_map(
     waterbodies: gpd.GeoDataFrame | None = None,
     characteristic_df: pd.DataFrame | None = None,
     minimum_river_upstream_area_km2: float = 5000.0,
+    detailed_river_minimum_zoom: int = 8,
+    excluded_stations: gpd.GeoDataFrame | None = None,
 ) -> folium.Map:
     """Create an interactive Folium discharge evaluation map.
 
@@ -1466,8 +1786,11 @@ def create_discharge_folium_map(
     is provided; lakes are skipped because they make large dashboards slow.
     GRDC-Caravan characteristics are optional station layers on the same map,
     together with a separate data-availability layer. A snapping-QC layer shows
-    the original gauge, closest river point, selected model cell, connecting
+    the original gauge, selected original pixel, routing pixel, connecting
     line, upstream-area agreement, distance, and fixed UTC offset.
+    Topographic and satellite backgrounds are selectable in the layer control.
+    Snapping features load only when enabled: canvas overview dots at regional
+    scales and numbered steps for at most 150 visible stations when zoomed in.
 
     Args:
         evaluation_gdf: Per-station GeoDataFrame with discharge metric columns,
@@ -1478,8 +1801,7 @@ def create_discharge_folium_map(
             saved.
         region_geom: Basin/region boundary GeoDataFrame used to fit the map
             extent and render the catchment outline.
-        rivers: River network GeoDataFrame (geometry only; rivers are rendered
-            at uniform width).
+        rivers: WGS84 river network shown on the map.
         station_chart_files: Exact interactive chart payload files keyed by
             station ID string.
         waterbodies: Optional GeoDataFrame with columns ``waterbody_type``
@@ -1487,21 +1809,37 @@ def create_discharge_folium_map(
             placement.
         characteristic_df: Optional station table containing ``station_ID`` and
             the curated GRDC-Caravan characteristics in display units.
-        minimum_river_upstream_area_km2: Minimum upstream area (km²) for
-            rivers shown on the map. Larger values reduce file size.  Rivers
-            with an ``uparea_m2`` column smaller than this threshold are
-            dropped before rendering.  Set to ``0`` to include all rivers.
-
+        excluded_stations: Stations omitted from summary scores, with an exclusion
+            reason. Available charts remain accessible for diagnostic use.
+        minimum_river_upstream_area_km2: Minimum upstream area (km²) for the
+            river overview shown at regional zoom levels.
+        detailed_river_minimum_zoom: Zoom level at which the complete MERIT
+            river network replaces the overview.
     Returns:
         The Folium map object (already saved to ``output_path``).
     """
     min_lon, min_lat, max_lon, max_lat = region_geom.total_bounds
+    if excluded_stations is not None and not excluded_stations.empty:
+        evaluation_gdf = evaluation_gdf.copy()
+        # Apply current exclusion reasons when displaying previously saved scores.
+        excluded_ids: pd.Index = evaluation_gdf.index.intersection(
+            excluded_stations.index
+        )
+        evaluation_gdf.loc[excluded_ids, "exclusion_reason"] = excluded_stations.loc[
+            excluded_ids, "exclusion_reason"
+        ]
     map_center: list[float] = [(min_lat + max_lat) / 2, (min_lon + max_lon) / 2]
-    discharge_map = folium.Map(location=map_center, tiles=None)
+    discharge_map = folium.Map(location=map_center, tiles=None, prefer_canvas=True)
     TileLayer(
         tiles=_ESRI_TOPO_TILES,
         attr=_ESRI_TOPO_ATTR,
         name="Topographic Map",
+    ).add_to(discharge_map)
+    TileLayer(
+        tiles="Esri.WorldImagery",
+        name="Satellite imagery",
+        show=False,
+        max_zoom=19,
     ).add_to(discharge_map)
     discharge_map.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]], padding=(30, 30))
     folium.GeoJson(
@@ -1515,21 +1853,12 @@ def create_discharge_folium_map(
         z_index=1,
     ).add_to(discharge_map)
 
-    rivers_for_map: gpd.GeoDataFrame = rivers
-    if minimum_river_upstream_area_km2 > 0 and "uparea_m2" in rivers_for_map.columns:
-        rivers_for_map = rivers_for_map[
-            rivers_for_map["uparea_m2"] >= minimum_river_upstream_area_km2 * 1e6
-        ]
-    folium.GeoJson(
-        rivers_for_map[["geometry"]].to_json(),
-        name="Rivers",
-        style_function=lambda _feature: {
-            "color": "#4A90D9",
-            "weight": 1.0,
-            "opacity": 0.6,
-        },
-        z_index=2,
-    ).add_to(discharge_map)
+    _add_river_layers(
+        discharge_map,
+        rivers,
+        minimum_river_upstream_area_km2,
+        detailed_river_minimum_zoom,
+    )
 
     metric_layers: list[tuple[folium.FeatureGroup, cm.LinearColormap, str]] = [
         (
@@ -1556,9 +1885,11 @@ def create_discharge_folium_map(
             colors=["red", "orange", "yellow", "blue", "green"],
             vmin=0.5,
             vmax=2.0,
-            caption="Upstream Area Ratio",
+            caption="GRDC / routing upstream area",
         )
-        layer_upstream = folium.FeatureGroup(name="Upstream Area Ratio", show=False)
+        layer_upstream = folium.FeatureGroup(
+            name="GRDC / routing upstream area", show=False
+        )
 
     characteristic_layers: list[tuple[folium.FeatureGroup, dict[str, Any]]] = []
     availability_layer: folium.FeatureGroup | None = None
@@ -1599,7 +1930,7 @@ def create_discharge_folium_map(
     popup_width: int = 800
     station_marker_index: list[StationMarkerIndex] = []
     snapping_qc_layer: folium.FeatureGroup = folium.FeatureGroup(
-        name="Station snapping QC (gauge → river → grid)",
+        name="Station snapping QC (gauge → original pixel → routing grid)",
         show=False,
     )
     snapping_columns: set[str] = {
@@ -1607,15 +1938,18 @@ def create_discharge_folium_map(
         "station_latitude",
         "snapped_grid_longitude",
         "snapped_grid_latitude",
-        "closest_river_longitude",
-        "closest_river_latitude",
+        "original_longitude",
+        "original_latitude",
         "upstream_area_GRDC",
         "upstream_area_GEB",
-        "upstream_area_GEB_subgrid",
-        "snapping_distance_degrees",
+        "upstream_area_GEB_original",
+        "station_to_original_distance_m",
+        "snapped_river_id",
+        "snapping_method",
         "timezone_utc_offset",
     }
     snapping_qc_available: bool = snapping_columns.issubset(evaluation_gdf.columns)
+    snapping_stations: list[dict[str, Any]] = []
 
     for station_id, row in evaluation_gdf.iterrows():
         coords: list[float] = [row.geometry.y, row.geometry.x]
@@ -1630,6 +1964,13 @@ def create_discharge_folium_map(
             f"<div class='geb-popup' data-station-id='{escaped_station_id}' "
             f"style='width:{popup_width}px;'>Loading interactive charts...</div>"
         )
+        if pd.notna(row.get("exclusion_reason")):
+            popup_html = (
+                "<div style='color:#b91c1c;padding:8px'><b>Diagnostic only — excluded from evaluation.</b><br>"
+                + html.escape(str(row["exclusion_reason"]))
+                + "</div>"
+                + popup_html
+            )
         timezone_tooltip: str = (
             f"<br>{format_fixed_utc_offset(float(row['timezone_utc_offset']))} fixed"
             if "timezone_utc_offset" in row.index
@@ -1637,14 +1978,16 @@ def create_discharge_folium_map(
             else ""
         )
         tooltip: str = f"{station_id_str}: {station_name}{timezone_tooltip}"
+        if pd.notna(row.get("exclusion_reason")):
+            tooltip += "<br>Diagnostic only — excluded from evaluation"
 
         if snapping_qc_available:
-            _add_snapping_qc_station(
-                layer=snapping_qc_layer,
+            snapping_record: dict[str, Any] = _build_snapping_qc_station(
                 station_id=station_id_str,
                 station_name=station_name,
                 row=row,
             )
+            snapping_stations.append(snapping_record)
 
         # Scale circle radius by upstream area (range 5–10 px).
         circle_radius: float = (
@@ -1710,8 +2053,78 @@ def create_discharge_folium_map(
         characteristic_layer.add_to(discharge_map)
     if availability_layer is not None:
         availability_layer.add_to(discharge_map)
-    if snapping_qc_available:
+    if excluded_stations is not None and not excluded_stations.empty:
+        area_distance_count: int = 0
+        excluded_layer: folium.FeatureGroup = folium.FeatureGroup(
+            name=f"Excluded stations ({len(excluded_stations)})", show=False
+        )
+        for station_id, row in excluded_stations.iterrows():
+            record: dict[str, Any] = _build_snapping_qc_station(
+                str(station_id), str(row["station_name"]), row
+            )
+            area_distance_failure: bool = str(row["exclusion_reason"]).startswith(
+                (
+                    "Missing GRDC",
+                    "Missing upstream",
+                    "Routing upstream",
+                    "Routing pixel",
+                    "No valid river",
+                )
+            )
+            area_distance_count += int(area_distance_failure)
+            record["color"] = "#DC2626" if area_distance_failure else "#D97706"
+            if station_id not in evaluation_gdf.index and len(record["locations"]) == 3:
+                snapping_stations.append(record)
+            excluded_popup: str = record["popup"]
+            if str(station_id) in station_chart_files:
+                excluded_popup += (
+                    "<hr><b>Diagnostic only — excluded from evaluation.</b>"
+                    f"<div class='geb-popup' data-station-id='{html.escape(str(station_id), quote=True)}'>"
+                    "Loading interactive charts...</div>"
+                )
+            marker: folium.CircleMarker = folium.CircleMarker(
+                location=record["locations"][0],
+                radius=7 if area_distance_failure else 5,
+                color=record["color"],
+                fill=True,
+                fill_opacity=0.8,
+                tooltip=record["tooltip"],
+                popup=folium.Popup(excluded_popup, max_width=850),
+            )
+            marker.add_to(excluded_layer)
+            station_marker_index.append(
+                {
+                    "id": str(station_id),
+                    "name": str(row["station_name"]),
+                    "markers": [marker.get_name()],
+                }
+            )
+        excluded_layer.add_to(discharge_map)
+        station_count: int = len(evaluation_gdf.index.union(excluded_stations.index))
+        cast(Figure, discharge_map.get_root()).html.add_child(
+            folium.Element(
+                f"<div id='{excluded_layer.get_name()}_legend' style='display:none;position:fixed;top:12px;left:55px;z-index:1000;background:white;padding:8px;border:1px solid #ccc'>"
+                f"<b>{station_count} stations shown</b><br>"
+                f"<span style='color:#DC2626'>● Area / distance exclusions: {area_distance_count}</span><br>"
+                f"<span style='color:#D97706'>● Other exclusions: {len(excluded_stations) - area_distance_count}</span>"
+                "<br>Hover or click a station for its exclusion reason.</div>"
+            )
+        )
+        _JavascriptMacro(f"""
+(function() {{
+  var map = {discharge_map.get_name()};
+  var layer = {excluded_layer.get_name()};
+  var legend = document.getElementById('{excluded_layer.get_name()}_legend');
+  function updateExclusionLegend() {{
+    legend.style.display = map.hasLayer(layer) ? '' : 'none';
+  }}
+  layer.on('add remove', updateExclusionLegend);
+  updateExclusionLegend();
+}})();
+""").add_to(discharge_map)
+    if snapping_stations:
         snapping_qc_layer.add_to(discharge_map)
+        _inject_snapping_qc_script(discharge_map, snapping_qc_layer, snapping_stations)
 
     _inject_station_layer_legend_script(
         discharge_map=discharge_map,
@@ -1731,6 +2144,17 @@ def create_discharge_folium_map(
         _add_waterbody_layers(discharge_map, waterbodies)
 
     folium.LayerControl(collapsed=False).add_to(discharge_map)
+    if (
+        "exclusion_reason" in evaluation_gdf
+        and evaluation_gdf["exclusion_reason"].notna().any()
+    ):
+        cast(Figure, discharge_map.get_root()).html.add_child(
+            folium.Element(
+                "<div style='position:fixed;bottom:25px;left:15px;z-index:1000;background:white;padding:10px;max-width:350px'>"
+                "<b>Diagnostic scores included</b><br>Excluded stations retain KGE and time series for inspection. "
+                "They do not contribute to evaluation summaries. See station warnings.</div>"
+            )
+        )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     discharge_map.save(str(output_path))

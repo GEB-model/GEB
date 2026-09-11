@@ -8,13 +8,13 @@ The hydrology evaluation module provides comprehensive tools to assess model per
 
 | Method | Purpose | Output |
 | --- | --- | --- |
-| `evaluate_discharge` | Compare simulated vs observed discharge at gauging stations | Performance metrics (KGE, NSE, R), timeseries plots, interactive maps |
+| `evaluate_discharge` | Compare simulated vs observed discharge at gauging stations | Performance metrics (KGE, NSE, Pearson r²), timeseries plots, interactive maps |
 | `export_discharge_publication_data` | Collect observation-free station simulations for publication | Raw station Parquet files, station catalogue, evaluation spreadsheet, README |
 | `plot_discharge_characteristics` | Relate KGE and its components to catchment characteristics from GRDC-Caravan | Combined heatmap–scatterplot figure, 32-characteristic scatterplot figure, and association table |
 | `plot_discharge` | Visualize spatial patterns of mean discharge | Spatial maps showing discharge distribution |
-| `skill_score_graphs` | Summarize performance across all stations in the model domain | Boxplots of KGE, NSE, R distributions |
-| `water_circle` | Visualize water balance as flow diagram | Interactive Sankey diagram of water fluxes |
-| `water_balance` | Analyze detailed water balance components | Yearly water balance tables and plots |
+| `plot_skill_score_boxplots` | Summarize performance across all stations in the model domain | Boxplots of KGE, NSE, and Pearson r² distributions |
+| `plot_water_circle` | Visualize water balance as flow diagram | Interactive Sankey diagram of water fluxes |
+| `plot_water_balance` | Analyze detailed water balance components | Yearly water balance tables and plots |
 
 To use these for the evaluation, you can run them using geb evaluate. Below, you see an example for the evaluate_discharge methodology: 
 
@@ -30,7 +30,10 @@ For more control, use additional options:
 | `--include-yearly-plots` | Create plots for each year | `True` |
 | `--correct-discharge-observations` | Correct simulated discharge for upstream-area differences | `False` |
 | `--create-plots` | Create station, dashboard, and skill-score plots | `True` |
-| `--include-return-period-plots` | Create detailed return-period plots | `False` |
+| `--include-return-period-plots` | Calculate and plot station and dashboard return periods | `False` |
+
+`hydrology.create_discharge_dashboard` reuses saved scores. Both methods accept
+`--include-return-period-plots true`; these slower plots are off by default.
 
 ## Discharge evaluation
 
@@ -48,6 +51,8 @@ The evaluation process:
 6. Saves evaluation metrics to Excel and GeoParquet files
 
 ### Performance metrics
+
+Daily evaluation uses local midnight-to-midnight days with fixed GRDC UTC offsets. Optional discharge correction multiplies simulations by GRDC area / routing area.
 
 The main metrics calculated for each station are:
 
@@ -78,9 +83,6 @@ The discharge evaluation results are saved to
 **Outflow-only plots** (`plots/outflow/`):
 - `river_outflow_hourly_m3_per_s_{river_id}.png`: Line plot of simulated river outflow discharge (m3/s) for each exported outflow location
 - `river_outflow_hourly_m3_per_s_{river_id}_return_period.png`: GPD-POT return-period plot for each exported outflow location
-
-The evaluation creates an interactive dashboard showing performance metrics across all stations (INSERT IMAGE). 
-
 ### Required input data
 
 For discharge evaluation, your model must have been built and run. The following files must be available:

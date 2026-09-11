@@ -44,24 +44,6 @@ ARCHIVE_METRIC_FILES: dict[str, str] = {
 ARCHIVE_LEAD_TIME_COLUMN: str = "0"
 
 
-def _get_external_evaluation_folder(input_folder: Path) -> Path:
-    """Get the external score folder for ordinary and merged model layouts.
-
-    Args:
-        input_folder: Model input folder.
-
-    Returns:
-        Folder containing optional external evaluation data.
-    """
-    resolved_input_folder: Path = input_folder.resolve()
-    model_folder: Path = resolved_input_folder.parent
-    if model_folder.name == "base":
-        # Merged models use <models>/<merged name>/base/input, while ordinary
-        # models keep external data directly beside their input folder.
-        model_folder = model_folder.parents[1]
-    return model_folder / EXTERNAL_EVALUATION_FOLDER_NAME
-
-
 @dataclass(frozen=True)
 class MatchedSkillScores:
     """GEB and external scores aligned to the same gauging stations.
@@ -191,7 +173,12 @@ def load_external_skill_scores(
     Returns:
         External skill-score tables keyed by model label.
     """
-    external_evaluation_folder: Path = _get_external_evaluation_folder(input_folder)
+    model_folder: Path = input_folder.resolve().parent
+    if model_folder.name == "base":
+        # Merged models use <models>/<merged name>/base/input, while ordinary
+        # models keep external data directly beside their input folder.
+        model_folder = model_folder.parents[1]
+    external_evaluation_folder: Path = model_folder / EXTERNAL_EVALUATION_FOLDER_NAME
     if not external_evaluation_folder.is_dir():
         logger.info(
             "No optional external evaluation folder found at %s; showing GEB only.",
@@ -357,11 +344,12 @@ def match_external_skill_scores(
         return matched_scores
 
     keyed_evaluation_df: pd.DataFrame = _add_match_keys(evaluation_df)
+    eligible_geb_df: pd.DataFrame = keyed_evaluation_df[
+        keyed_evaluation_df["upstream_area_GEB"]
+        >= minimum_upstream_area_km2 * 1_000_000.0
+    ].copy()
+    output_folder.mkdir(parents=True, exist_ok=True)
     for model_name, external_model_df in external_models.items():
-        eligible_geb_df: pd.DataFrame = keyed_evaluation_df[
-            keyed_evaluation_df["upstream_area_GEB"]
-            >= minimum_upstream_area_km2 * 1_000_000.0
-        ].copy()
         external_station_keys: set[str] = set(external_model_df.index.str.upper())
         matched_geb_df: pd.DataFrame = eligible_geb_df[
             eligible_geb_df["station_name_key"].isin(external_station_keys)

@@ -22,15 +22,6 @@ class GRDCCaravan(Adapter):
         "attributes/grdc/attributes_hydroatlas_grdc.csv",
     )
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        """Initialize the GRDC-Caravan adapter.
-
-        Args:
-            *args: Positional arguments passed to the base adapter.
-            **kwargs: Keyword arguments passed to the base adapter.
-        """
-        super().__init__(*args, **kwargs)
-
     def fetch(self, url: str) -> GRDCCaravan:
         """Fetch and cache the GRDC-Caravan catchment attributes.
 

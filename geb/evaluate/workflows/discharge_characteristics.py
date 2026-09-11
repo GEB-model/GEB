@@ -986,31 +986,6 @@ def plot_kge_characteristic_heatmaps(
     return figure
 
 
-def _alphabetic_panel_label(panel_index: int) -> str:
-    """Convert a zero-based panel index to an alphabetic label.
-
-    Args:
-        panel_index: Zero-based non-negative panel index.
-
-    Returns:
-        Label such as ``a)`` or ``aa)``.
-
-    Raises:
-        ValueError: If ``panel_index`` is negative.
-    """
-    if panel_index < 0:
-        raise ValueError("Panel index cannot be negative.")
-    label: str = ""
-    remaining_index: int = panel_index
-    while True:
-        remaining_index, remainder = divmod(remaining_index, 26)
-        label = chr(ord("a") + remainder) + label
-        if remaining_index == 0:
-            break
-        remaining_index -= 1
-    return f"{label})"
-
-
 def plot_all_kge_characteristic_scatterplots(
     analysis_df: pd.DataFrame,
     association_df: pd.DataFrame,
@@ -1111,9 +1086,14 @@ def plot_all_kge_characteristic_scatterplots(
             axis.set_xscale("log")
         axis.set_xlim(displayed_evaluation_x[0], displayed_evaluation_x[-1])
         axis.set_ylim(kge_axis_limits)
+        # Spreadsheet-style labels continue with aa after z.
+        panel_number: int = panel_index + 1
+        panel_label: str = ""
+        while panel_number:
+            panel_number, remainder = divmod(panel_number - 1, 26)
+            panel_label = chr(ord("a") + remainder) + panel_label
         axis.set_title(
-            f"{_alphabetic_panel_label(panel_index)} {characteristic.label}\n"
-            f"Spearman ρ = {rho:+.2f}",
+            f"{panel_label}) {characteristic.label}\nSpearman ρ = {rho:+.2f}",
             loc="left",
             fontsize=8.0,
             fontweight="bold",
