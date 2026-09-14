@@ -52,11 +52,11 @@ The evaluation process:
 
 ### Performance metrics
 
-Daily evaluation uses local midnight-to-midnight days with fixed GRDC UTC offsets. Incomplete simulation days at the report boundaries are excluded. Monthly means use the same paired observation and simulation timestamps. Optional discharge correction multiplies simulations by GRDC area / routing area.
+Daily evaluation uses local midnight-to-midnight days with fixed GRDC UTC offsets. Optional discharge correction multiplies simulations by GRDC area / routing area.
 
 Stations need five years of paired data by default; gaps are allowed. Configure this with `hydrology.evaluation.discharge.minimum_timeseries_length_years`, or override it with `--minimum-timeseries-length-years`. When both `--start-year` and `--end-year` are supplied, the minimum-length filter is disabled unless explicitly passed. Period-specific files receive a year suffix and plots go into a `period_<start>_<end>/` subfolder.
 
-GRDC stations must match an original-resolution river pixel within 1.5 km and ±10% upstream area. Custom stations without area metadata use the nearest river pixel within 1.5 km, and their simulations are not area-corrected. Stations whose original and routing pixels are more than 1.5 km apart, or whose reports use an outdated location, are excluded from summary scores.
+GRDC stations must match an subgrid river pixel within 1.5 km and ±10% upstream area. 
 
 The main metrics calculated for each station are:
 
@@ -78,7 +78,7 @@ The discharge evaluation results are saved to
 - `timeseries/timeseries_plot_<station_id>.png`: full station time series, with yearly variants when enabled.
 - `skill_score_maps/`, `skill_score_boxplots/`, and `skill_score_explanations/`: spatial, distribution, and catchment-characteristic plots.
 
-Return-period plots are optional. Outflow-only plots are generated separately by `plot_discharge` under `hydrology/discharge/outflow/`.
+Return-period plots and outflow plots are optional.
 
 ### Required input data
 
@@ -111,7 +111,7 @@ mean-flow ratio `beta`, variability ratio `alpha`, and the original KGE.
 ### Publication-ready station simulations
 
 After running discharge evaluation, create a self-contained folder for a later
-Zenodo deposition:
+Zenodo publication:
 
 ```bash
 geb evaluate hydrology.export_discharge_publication_data --run-name default
@@ -124,21 +124,9 @@ evaluation spreadsheet, and a README. Simulations are raw GEB reporter values
 in m3/s: no observation-based upstream-area correction or daily resampling is
 applied.
 
-Observed discharge is intentionally excluded because source-specific licences
+Observed discharge is intentionally excluded because specific licences
 can restrict redistribution. For GRDC stations, users should obtain the
 observations from the GRDC Data Portal.
-
-### External skill-score comparisons
-
-External daily-discharge comparisons are optional and use local files only. Put
-either or both of the following fixed filenames in `external_evaluation_data/`
-inside the top-level model folder. For merged multi-model evaluations, this
-folder is alongside the `merged/` and individual cluster folders:
-
-- `Utrecht_1KM_daily_discharge.csv`, downloaded from [Zenodo record 6390219](https://zenodo.org/records/6390219).
-- `google_streamflow_metrics.tgz`, downloaded as `metrics.tgz` from [Zenodo record 10397664](https://zenodo.org/records/10397664) and renamed. GEB reads both Google Streamflow and GloFAS scores from this archive.
-
-GEB reads these local files directly and does not download external evaluation data automatically. Other filenames in this folder are ignored.
 
 ## Water balance
 

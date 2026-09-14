@@ -714,37 +714,39 @@ class Hydrography(BuildModelBase):
             ],  # this mask is True within study area
         )
 
-        upstream_area_high_res = self.full_like(
+        original_d8_upstream_area_m2 = self.full_like(
             original_d8_elevation, fill_value=np.nan, nodata=np.nan, dtype=np.float32
         )
-        upstream_area_high_res_data = flow_raster_original.upstream_area(
+        original_d8_upstream_area_m2_data = flow_raster_original.upstream_area(
             unit="m2"
         ).astype(np.float32)
-        upstream_area_high_res_data[upstream_area_high_res_data == -9999.0] = np.nan
-        upstream_area_high_res.data = upstream_area_high_res_data
+        original_d8_upstream_area_m2_data[
+            original_d8_upstream_area_m2_data == -9999.0
+        ] = np.nan
+        original_d8_upstream_area_m2.data = original_d8_upstream_area_m2_data
         self.set_other(
-            upstream_area_high_res, name="drainage/original_d8_upstream_area_m2"
+            original_d8_upstream_area_m2, name="drainage/original_d8_upstream_area_m2"
         )
 
-        streams_length_high_res = calculate_stream_length(
-            original_d8_ldd, upstream_area_high_res, threshold_m2=1_000_000
+        original_d8_streams_length = calculate_stream_length(
+            original_d8_ldd, original_d8_upstream_area_m2, threshold_m2=1_000_000
         )
 
-        streams_length_low_res = streams_length_high_res.coarsen(
+        routing_streams_length = original_d8_streams_length.coarsen(
             x=self.ldd_scale_factor,
             y=self.ldd_scale_factor,
             boundary="exact",
             coord_func="mean",
         ).sum()  # ty:ignore[unresolved-attribute]
 
-        streams_length_low_res.attrs["_FillValue"] = np.nan
-        streams_length_low_res = snap_to_grid(streams_length_low_res, self.grid["mask"])
-        streams_length_low_res = np.maximum(
-            streams_length_low_res,
+        routing_streams_length.attrs["_FillValue"] = np.nan
+        routing_streams_length = snap_to_grid(routing_streams_length, self.grid["mask"])
+        routing_streams_length = np.maximum(
+            routing_streams_length,
             np.sqrt(self.grid["cell_area"])
             * 0.5,  # stream length should be at least half of the cell length
         )
-        self.set_grid(streams_length_low_res, name="drainage/streams_length_m")
+        self.set_grid(routing_streams_length, name="drainage/streams_length_m")
 
         elevation_coarsened = original_d8_elevation.coarsen(
             x=self.ldd_scale_factor,
@@ -942,7 +944,7 @@ class Hydrography(BuildModelBase):
                     raise AssertionError("River xy not found, but should be found.")
 
             (ys, xs) = xy_per_river_segment[river_ID]
-            upstream_area: ArrayFloat32 = upstream_area_high_res_data[ys, xs]
+            upstream_area: ArrayFloat32 = original_d8_upstream_area_m2_data[ys, xs]
             nan_mask: ArrayBool = np.isnan(upstream_area)
 
             if nan_mask.all():
@@ -970,8 +972,8 @@ class Hydrography(BuildModelBase):
             ys: ArrayInt64 = ys[up_to_downstream_ids]
             xs: ArrayInt64 = xs[up_to_downstream_ids]
 
-            lats: ArrayFloat32 = upstream_area_high_res.y.values[ys]
-            lons: ArrayFloat32 = upstream_area_high_res.x.values[xs]
+            lats: ArrayFloat32 = original_d8_upstream_area_m2.y.values[ys]
+            lons: ArrayFloat32 = original_d8_upstream_area_m2.x.values[xs]
 
             assert ys.size > 0, "No xy coordinates found for river segment"
             rivers.at[river_ID, "hydrography_high_res_lons_lats"] = list(
