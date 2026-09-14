@@ -1498,13 +1498,13 @@ class Hydrology:
     def plot_discharge(
         self,
         run_name: str = "default",
+        include_outflow_plots: bool = False,
     ) -> None:
-        """Plot the mean discharge map and all exported outflow time series.
+        """Plot the mean discharge map, optionally including outflow diagnostics.
 
         Creates a spatial visualization of mean discharge values over time from
-        the GEB model simulation results. If outflow-point reporter files are
-        available, the method also creates one time-series plot per outflow
-        point in the hydrology evaluation output folder.
+        the GEB model simulation results. Outflow diagnostics include full-period,
+        yearly, and return-period plots for each exported outflow location.
 
         Notes:
             The discharge data must exist in the report directory structure. If the discharge
@@ -1514,18 +1514,22 @@ class Hydrology:
         Args:
             run_name: Name of the simulation run to plot. Must correspond to an existing
                 run directory in the model output folder.
+            include_outflow_plots: Whether to write per-outflow diagnostics.
+                Defaults to False to avoid creating many files for large regions.
         """
         if self.discharge_output_folder.exists():
             shutil.rmtree(self.discharge_output_folder)
         self.discharge_output_folder.mkdir(parents=True, exist_ok=True)
 
+        rivers_of_interest: gpd.GeoDataFrame
+        discharge: pd.DataFrame
         rivers_of_interest, discharge = self.get_discharge_per_river(run_name)
         for river_id in discharge.columns:
             rivers_of_interest.loc[river_id, "discharge_m3_per_s"] = discharge[
                 river_id
             ].mean()
 
-        ax = rivers_of_interest.plot(
+        ax: plt.Axes = rivers_of_interest.plot(
             column="discharge_m3_per_s",
             cmap="Blues",
             legend=True,
@@ -1539,18 +1543,19 @@ class Hydrology:
         )
         plt.close()
 
-        run_output_folder: Path = (
-            Path(self.model.config["general"]["output_folder"]) / run_name
-        )
-        outflow_plot_count: int = save_outflow_discharge_plots(
-            model=self.model,
-            output_folder=run_output_folder,
-            eval_plot_folder=self.discharge_output_folder,
-        )
-        if outflow_plot_count > 0:
-            self.model.logger.info(
-                "Created %d outflow discharge plots.", outflow_plot_count
+        if include_outflow_plots:
+            run_output_folder: Path = (
+                Path(self.model.config["general"]["output_folder"]) / run_name
             )
+            outflow_plot_count: int = save_outflow_discharge_plots(
+                model=self.model,
+                output_folder=run_output_folder,
+                eval_plot_folder=self.discharge_output_folder,
+            )
+            if outflow_plot_count > 0:
+                self.model.logger.info(
+                    "Created %d outflow discharge plots.", outflow_plot_count
+                )
 
     def _load_discharge_observations(self) -> dict[str, pd.DataFrame]:
         """Read station discharge observations on regular hourly and daily indices.

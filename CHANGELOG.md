@@ -1,4 +1,5 @@
 # dev
+- Outflow discharge plots are now optional to reduce # files on disk. To include them, use `hydrology.plot_discharge --include-outflow-plots true` 
 - Move discharge metric calculations and score schemas into the discharge_metrics workflow, and dashboard characteristic loading into the dashboard workflow.
 - Clarify names throughout discharge evaluation, distinguish plotting commands from figure helpers, and share observation loading and score-column definitions. Existing CLI command names remain unchanged.
 - Restructure the dashboard code by putting the dashboard assets in workflows/assets/discharge_dashboard
