@@ -1,4 +1,11 @@
-"""Relate discharge KGE and its components to GRDC-Caravan attributes."""
+"""Relate discharge KGE and its components to GRDC-Caravan attributes.
+
+``plot_discharge_characteristics`` runs the complete analysis: join attributes,
+convert units, calculate associations, and draw/export the three figures.
+Both relationship figures use the same panel renderer and LOWESS fit; only the
+four summary panels add bootstrap intervals. Dashboard preparation retains
+unmatched stations and is deliberately separate from this matched-only analysis.
+"""
 
 import logging
 from dataclasses import dataclass
@@ -50,21 +57,6 @@ class KGEComponentTarget:
 
     column: str
     label: str
-
-
-@dataclass(frozen=True)
-class KGERelationshipPanel:
-    """Metadata for one relationship panel linked to the heatmap.
-
-    Args:
-        column: Prepared characteristic column.
-        title: Panel title including its alphabetic label.
-        x_label: Horizontal-axis label including units.
-    """
-
-    column: str
-    title: str
-    x_label: str
 
 
 # These 32 attributes cover climate, topography, land cover, soils, hydrology,
@@ -154,30 +146,102 @@ KGE_COMPONENT_TARGETS: tuple[KGEComponentTarget, ...] = (
 
 # The selected panels represent distinct topographic, subsurface, channel, and
 # climate relationships while avoiding redundant variants of the same signal.
-KGE_RELATIONSHIP_PANELS: tuple[KGERelationshipPanel, ...] = (
-    KGERelationshipPanel("ele_mt_sav", "b) Elevation", "Elevation (m)"),
-    KGERelationshipPanel(
-        "gwt_cm_sav",
-        "c) Groundwater-table depth",
-        "Groundwater-table depth (cm)",
-    ),
-    KGERelationshipPanel(
-        "sgr_dk_sav",
-        "d) Stream gradient",
-        "Stream gradient (dm/km)",
-    ),
-    KGERelationshipPanel(
-        "low_prec_freq",
-        "e) Low-precipitation-day frequency",
-        "Low-precipitation-day frequency (%)",
-    ),
-)
+KGE_RELATIONSHIP_PANELS: dict[str, str] = {
+    "ele_mt_sav": "b) Elevation",
+    "gwt_cm_sav": "c) Groundwater-table depth",
+    "sgr_dk_sav": "d) Stream gradient",
+    "low_prec_freq": "e) Low-precipitation-day frequency",
+}
 
 # These tones are sampled from the positive half of ColorBrewer's BrBG scale
 # so the relationship panels and signed-correlation heatmap read as one design.
 STATION_COLOR: str = "#35978F"
 LOWESS_COLOR: str = "#01665E"
 LOWESS_INTERVAL_COLOR: str = "#80CDC1"
+
+
+def plot_discharge_characteristics(
+    station_scores: pd.DataFrame,
+    catchment_attributes: pd.DataFrame,
+    output_folder: Path,
+    logger: logging.Logger,
+    output_name_suffix: str = "",
+    export: bool = True,
+) -> None:
+    """Join, analyze, and plot discharge scores against catchment attributes.
+
+    Args:
+        station_scores: Filtered station scores, with upstream area in m².
+        catchment_attributes: GRDC-Caravan attributes keyed by gauge_id.
+        output_folder: Directory receiving the association CSV and three figures.
+        logger: Logger for matching and export messages.
+        output_name_suffix: Evaluation-period suffix for output filenames.
+        export: Whether to write files; figures are always closed after drawing.
+
+    Returns:
+        None. Stations without attribute matches are logged and skipped.
+
+    Raises:
+        ValueError: If required score or attribute columns are missing, or
+            catchment gauge identifiers are duplicated.
+    """  # noqa: DOC202, DOC502
+    scores_with_characteristics: pd.DataFrame = enrich_discharge_evaluation(
+        station_scores=station_scores,
+        catchment_attributes=catchment_attributes,
+    )
+    if export:
+        output_folder.mkdir(parents=True, exist_ok=True)
+
+    logger.info(
+        "Matched %d/%d evaluated stations to GRDC-Caravan attributes.",
+        int(scores_with_characteristics["grdc_caravan_matched"].sum()),
+        len(scores_with_characteristics),
+    )
+
+    if not scores_with_characteristics["grdc_caravan_matched"].any():
+        logger.warning(
+            "No discharge evaluation stations match GRDC-Caravan after "
+            "upstream-area filtering. Skipping discharge characteristic plots."
+        )
+        return
+
+    characteristic_analysis: pd.DataFrame = prepare_kge_characteristic_analysis(
+        scores_with_characteristics
+    )
+    characteristic_associations: pd.DataFrame = calculate_kge_component_associations(
+        characteristic_analysis
+    )
+    if export:
+        association_path: Path = output_folder / (
+            f"discharge_kge_component_associations{output_name_suffix}.csv"
+        )
+        characteristic_associations.to_csv(association_path, index=False)
+        logger.info(
+            "Saved discharge characteristic associations to %s.", association_path
+        )
+
+    correlation_figure: plt.Figure = create_characteristic_correlation_matrix(
+        characteristic_analysis=characteristic_analysis,
+        output_folder=output_folder,
+        logger=logger,
+        output_name_suffix=output_name_suffix,
+        export=export,
+    )
+    plt.close(correlation_figure)
+
+    for create_figure in (
+        create_kge_characteristic_summary,
+        create_kge_characteristic_scatterplots,
+    ):
+        figure: plt.Figure = create_figure(
+            characteristic_analysis,
+            characteristic_associations,
+            output_folder,
+            logger,
+            output_name_suffix,
+            export,
+        )
+        plt.close(figure)
 
 
 def enrich_discharge_evaluation(
@@ -515,162 +579,115 @@ def _fit_lowess_to_grid(
     return np.interp(evaluation_x, fitted_x, fitted_values[unique_indices, 1])
 
 
-def _calculate_lowess_interval(
-    x_values: np.ndarray,
-    y_values: np.ndarray,
-    evaluation_x: np.ndarray,
-    random_generator: np.random.Generator,
-    bootstrap_repetitions: int = 150,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Calculate robust LOWESS and a station-bootstrap confidence interval.
-
-    Args:
-        x_values: Finite characteristic values, optionally log-transformed.
-        y_values: Corresponding dimensionless KGE values.
-        evaluation_x: Grid receiving the smooth and interval.
-        random_generator: Generator for reproducible station resampling.
-        bootstrap_repetitions: Number of station bootstrap samples.
-
-    Returns:
-        LOWESS estimate and lower and upper 95% confidence limits.
-
-    Raises:
-        ValueError: If fewer than ten paired stations are available or the
-            number of bootstrap repetitions is not positive.
-    """
-    station_count: int = len(x_values)
-    if station_count < 10:
-        raise ValueError("A LOWESS interval needs at least ten paired stations.")
-    if bootstrap_repetitions < 1:
-        raise ValueError("bootstrap_repetitions must be positive.")
-    central_curve: np.ndarray = _fit_lowess_to_grid(
-        x_values, y_values, evaluation_x, robust_iterations=2
-    )
-    bootstrap_curves: np.ndarray = np.empty(
-        (bootstrap_repetitions, len(evaluation_x)), dtype=float
-    )
-    for repetition in range(bootstrap_repetitions):
-        sample_indices: np.ndarray = random_generator.integers(
-            0, station_count, size=station_count
-        )
-        if np.unique(x_values[sample_indices]).size < 2:
-            # Resampling sparse attributes can draw only one distinct value.
-            bootstrap_curves[repetition] = y_values[sample_indices].mean()
-            continue
-        bootstrap_curves[repetition] = _fit_lowess_to_grid(
-            x_values[sample_indices],
-            y_values[sample_indices],
-            evaluation_x,
-            robust_iterations=1,
-        )
-    lower_limit, upper_limit = np.quantile(bootstrap_curves, [0.025, 0.975], axis=0)
-    return central_curve, lower_limit, upper_limit
-
-
-def _relationship_data(
+def _plot_relationship_panel(
+    axis: plt.Axes,
     characteristic_analysis: pd.DataFrame,
     characteristic: Characteristic,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Prepare station values and the central LOWESS evaluation grid.
+    rho: float,
+    kge_axis_limits: tuple[float, float],
+    random_generator: np.random.Generator | None = None,
+) -> bool:
+    """Draw station values and LOWESS, optionally with a bootstrap interval.
 
-    The plotted range is limited to the 1st–99th characteristic percentiles so
-    isolated extremes do not compress the scientifically relevant pattern.
+    The curve spans the 1st–99th x percentiles. A supplied generator enables
+    the summary's 150 station-bootstrap samples; the atlas fits only one curve.
 
     Args:
-        characteristic_analysis: Prepared station-level analysis table.
-        characteristic: Characteristic metadata and x-axis transformation.
+        axis: Axis receiving the relationship.
+        characteristic_analysis: Matched station values in display units.
+        characteristic: Column metadata, display units, and x transformation.
+        rho: Dimensionless Spearman correlation, or NaN for unavailable pairs.
+        kge_axis_limits: Shared dimensionless KGE limits.
+        random_generator: Reproducible resampling generator for summary panels.
 
     Returns:
-        Displayed x-values, KGE values, model-space x-values, and evaluation grid.
+        Whether enough valid station pairs were available to draw the panel.
 
     Raises:
-        ValueError: If fewer than ten valid pairs or two distinct x-values remain.
-    """
+        KeyError: If the characteristic or daily KGE column is missing.
+    """  # noqa: DOC502
     pair_table: pd.DataFrame = characteristic_analysis[
         [characteristic.column, "KGE_daily"]
     ].dropna()
     if characteristic.logarithmic_x:
         pair_table = pair_table.loc[pair_table[characteristic.column] > 0.0]
-    if len(pair_table) < 10:
-        raise ValueError(
-            f"Characteristic {characteristic.column} has fewer than ten KGE pairs."
-        )
+    if np.isnan(rho) or len(pair_table) < 10:
+        axis.set_axis_off()
+        return False
 
     displayed_x: np.ndarray = pair_table[characteristic.column].to_numpy(dtype=float)
     kge_values: np.ndarray = pair_table["KGE_daily"].to_numpy(dtype=float)
     model_x: np.ndarray = (
         np.log10(displayed_x) if characteristic.logarithmic_x else displayed_x
     )
+    lower_x: float
+    upper_x: float
     lower_x, upper_x = np.quantile(model_x, [0.01, 0.99])
     if not upper_x > lower_x:
-        raise ValueError(
-            f"Characteristic {characteristic.column} needs two distinct x-values."
-        )
+        axis.set_axis_off()
+        return False
     evaluation_x: np.ndarray = np.linspace(lower_x, upper_x, 180)
-    return displayed_x, kge_values, model_x, evaluation_x
-
-
-def _plot_relationship_panel(
-    axis: plt.Axes,
-    characteristic_analysis: pd.DataFrame,
-    characteristic_associations: pd.DataFrame,
-    characteristic: Characteristic,
-    title: str,
-    x_label: str,
-    random_generator: np.random.Generator,
-    kge_axis_limits: tuple[float, float],
-) -> None:
-    """Plot one station-level KGE relationship with uncertainty.
-
-    Args:
-        axis: Matplotlib axis receiving the panel.
-        characteristic_analysis: Prepared matched-station analysis table.
-        characteristic_associations: KGE-component Spearman association table.
-        characteristic: Characteristic metadata.
-        title: Panel title.
-        x_label: Horizontal-axis label including units.
-        random_generator: Generator for reproducible bootstrap resampling.
-        kge_axis_limits: Shared lower and upper dimensionless KGE limits.
-
-    """
-    association_rows: pd.DataFrame = characteristic_associations.loc[
-        (characteristic_associations["variable"] == characteristic.column)
-        & (characteristic_associations["target"] == "KGE_daily")
-    ]
-    if association_rows.empty or pd.isna(association_rows.iloc[0]["spearman_rho"]):
-        axis.set_axis_off()
-        return
-
-    try:
-        displayed_x, kge_values, model_x, evaluation_x = _relationship_data(
-            characteristic_analysis, characteristic
-        )
-    except ValueError:
-        # A correlation can exist with too few stations for a fitted curve.
-        axis.set_axis_off()
-        return
-    central_curve, lower_limit, upper_limit = _calculate_lowess_interval(
-        model_x, kge_values, evaluation_x, random_generator
+    central_curve: np.ndarray = _fit_lowess_to_grid(
+        model_x, kge_values, evaluation_x, robust_iterations=2
     )
     displayed_evaluation_x: np.ndarray = (
         np.power(10.0, evaluation_x) if characteristic.logarithmic_x else evaluation_x
     )
+    summary: bool = random_generator is not None
+    if random_generator is not None:
+        bootstrap_curves: np.ndarray = np.empty((150, len(evaluation_x)), dtype=float)
+        for repetition in range(150):
+            sample_indices: np.ndarray = random_generator.integers(
+                0, len(model_x), size=len(model_x)
+            )
+            if np.unique(model_x[sample_indices]).size < 2:
+                # Sparse attributes can yield a bootstrap sample with one value.
+                bootstrap_curves[repetition] = kge_values[sample_indices].mean()
+            else:
+                bootstrap_curves[repetition] = _fit_lowess_to_grid(
+                    model_x[sample_indices],
+                    kge_values[sample_indices],
+                    evaluation_x,
+                    robust_iterations=1,
+                )
+        lower_limit: np.ndarray
+        upper_limit: np.ndarray
+        lower_limit, upper_limit = np.quantile(bootstrap_curves, [0.025, 0.975], axis=0)
+        axis.fill_between(
+            displayed_evaluation_x,
+            lower_limit,
+            upper_limit,
+            color=LOWESS_INTERVAL_COLOR,
+            alpha=0.20,
+            linewidth=0.0,
+            zorder=1,
+        )
+        axis.text(
+            0.025,
+            0.94,
+            f"Spearman ρ = {rho:+.2f}",
+            transform=axis.transAxes,
+            ha="left",
+            va="top",
+            fontsize=8.0,
+            color="#202020",
+            zorder=5,
+            bbox={
+                "boxstyle": "round,pad=0.22",
+                "facecolor": "#E8E8E8",
+                "edgecolor": "none",
+                "alpha": 0.60,
+            },
+        )
+        axis.set_xlabel(characteristic.label, fontsize=8.5)
+        axis.set_ylabel("KGE (–)", fontsize=8.5)
 
-    axis.fill_between(
-        displayed_evaluation_x,
-        lower_limit,
-        upper_limit,
-        color=LOWESS_INTERVAL_COLOR,
-        alpha=0.20,
-        linewidth=0.0,
-        zorder=1,
-    )
     axis.scatter(
         displayed_x,
         kge_values,
-        s=9,
-        color=STATION_COLOR,
-        alpha=0.27,
+        s=9 if summary else 7,
+        color=STATION_COLOR if summary else "#315F70",
+        alpha=0.27 if summary else 0.20,
         linewidths=0.0,
         rasterized=True,
         zorder=2,
@@ -678,75 +695,25 @@ def _plot_relationship_panel(
     axis.plot(
         displayed_evaluation_x,
         central_curve,
-        color=LOWESS_COLOR,
-        linewidth=2.3,
+        color=LOWESS_COLOR if summary else "#0C526C",
+        linewidth=2.3 if summary else 1.8,
         zorder=4,
     )
-    rho: float = float(association_rows.iloc[0]["spearman_rho"])
-    axis.text(
-        0.025,
-        0.94,
-        f"Spearman ρ = {rho:+.2f}",
-        transform=axis.transAxes,
-        ha="left",
-        va="top",
-        fontsize=8.0,
-        color="#202020",
-        zorder=5,
-        bbox={
-            "boxstyle": "round,pad=0.22",
-            "facecolor": "#E8E8E8",
-            "edgecolor": "none",
-            "alpha": 0.60,
-        },
-    )
-
     if characteristic.logarithmic_x:
         axis.set_xscale("log")
     axis.set_xlim(displayed_evaluation_x[0], displayed_evaluation_x[-1])
     axis.set_ylim(kge_axis_limits)
-    axis.set_xlabel(x_label, fontsize=8.5)
-    axis.set_ylabel("KGE (–)", fontsize=8.5)
-    axis.set_title(title, loc="left", fontsize=10.0, fontweight="bold", pad=7)
-    axis.grid(axis="y", color="#D9D9D9", linewidth=0.6)
+    axis.grid(
+        axis="y",
+        color="#D9D9D9" if summary else "#DDDDDD",
+        linewidth=0.6 if summary else 0.55,
+    )
     axis.set_axisbelow(True)
-    axis.tick_params(axis="x", labelsize=7.4, pad=3)
-    axis.tick_params(axis="y", labelsize=7.4)
+    axis.tick_params(axis="both", labelsize=7.4 if summary else 6.7)
+    if summary:
+        axis.tick_params(axis="x", pad=3)
     axis.spines[["top", "right"]].set_visible(False)
-
-
-def _relationship_legend_handles() -> list[Line2D | Patch]:
-    """Create the shared station, LOWESS, and confidence-interval legend.
-
-    Returns:
-        Matplotlib legend handles shared by both retained figures.
-    """
-    return [
-        Line2D(
-            [0],
-            [0],
-            marker="o",
-            linestyle="none",
-            markerfacecolor=STATION_COLOR,
-            markeredgecolor="none",
-            markersize=6.0,
-            alpha=0.5,
-            label="Station",
-        ),
-        Line2D(
-            [0],
-            [0],
-            color=LOWESS_COLOR,
-            linewidth=2.8,
-            label="Local regression (LOWESS)",
-        ),
-        Patch(
-            facecolor=LOWESS_INTERVAL_COLOR,
-            edgecolor="none",
-            alpha=0.18,
-            label="95% bootstrap CI",
-        ),
-    ]
+    return True
 
 
 def create_kge_characteristic_summary(
@@ -782,12 +749,9 @@ def create_kge_characteristic_summary(
     labels_by_column: dict[str, str] = {
         item.column: item.label for item in SCREENING_CHARACTERISTICS
     }
-    characteristics_by_column: dict[str, Characteristic] = {
-        item.column: item for item in SCREENING_CHARACTERISTICS
-    }
     target_columns: list[str] = [target.column for target in KGE_COMPONENT_TARGETS]
-    required_variables: list[str] = list(characteristics_by_column)
-    selected_variables: set[str] = {panel.column for panel in KGE_RELATIONSHIP_PANELS}
+    required_variables: list[str] = list(_SCREENING_CHARACTERISTICS_BY_COLUMN)
+    selected_variables: set[str] = set(KGE_RELATIONSHIP_PANELS)
     if not {"KGE_daily", *selected_variables}.issubset(characteristic_analysis.columns):
         raise ValueError("KGE relationship-panel inputs are incomplete.")
 
@@ -894,22 +858,28 @@ def create_kge_characteristic_summary(
     random_generator: np.random.Generator = np.random.default_rng(42)
     lower_kge, upper_kge = characteristic_analysis["KGE_daily"].quantile([0.10, 0.90])
     kge_axis_limits: tuple[float, float] = (float(lower_kge), float(upper_kge))
-    for correlation_axis, panel in zip(
+    for correlation_axis, column in zip(
         correlation_axes, KGE_RELATIONSHIP_PANELS, strict=True
     ):
-        characteristic: Characteristic = characteristics_by_column[panel.column]
+        characteristic: Characteristic = _SCREENING_CHARACTERISTICS_BY_COLUMN[column]
         _plot_relationship_panel(
             axis=correlation_axis,
             characteristic_analysis=characteristic_analysis,
-            characteristic_associations=characteristic_associations,
             characteristic=characteristic,
-            title=panel.title,
-            x_label=panel.x_label,
+            rho=float(association_matrix.loc[column, "KGE_daily"]),
             random_generator=random_generator,
             kge_axis_limits=kge_axis_limits,
         )
-        if pd.notna(association_matrix.loc[panel.column, "KGE_daily"]):
-            characteristic_row: int = variable_order.index(panel.column)
+        if correlation_axis.axison:
+            correlation_axis.set_title(
+                KGE_RELATIONSHIP_PANELS[column],
+                loc="left",
+                fontsize=10.0,
+                fontweight="bold",
+                pad=7,
+            )
+        if pd.notna(association_matrix.loc[column, "KGE_daily"]):
+            characteristic_row: int = variable_order.index(column)
             association_axis.add_patch(
                 Rectangle(
                     (
@@ -931,10 +901,10 @@ def create_kge_characteristic_summary(
 
     figure.subplots_adjust(left=0.255, right=0.985, top=0.96, bottom=0.09)
     figure.canvas.draw()
-    for correlation_axis, panel in zip(
+    for correlation_axis, column in zip(
         correlation_axes, KGE_RELATIONSHIP_PANELS, strict=True
     ):
-        characteristic_row = variable_order.index(panel.column)
+        characteristic_row = variable_order.index(column)
         start_display: np.ndarray = association_axis.transData.transform(
             (len(target_columns) - 0.48, characteristic_row)
         )
@@ -945,9 +915,7 @@ def create_kge_characteristic_summary(
             correlation_axis.get_position().x0 - 0.008,
             correlation_axis.get_position().y1,
         )
-        overall_kge_rho: float = float(
-            association_matrix.loc[panel.column, "KGE_daily"]
-        )
+        overall_kge_rho: float = float(association_matrix.loc[column, "KGE_daily"])
         if np.isnan(overall_kge_rho):
             continue
         normalized_rho: np.ndarray = np.asarray(
@@ -980,7 +948,32 @@ def create_kge_characteristic_summary(
         colorbar_position.y0 + colorbar_position.height / 2.0
     )
     figure.legend(
-        handles=_relationship_legend_handles(),
+        handles=[
+            Line2D(
+                [0],
+                [0],
+                marker="o",
+                linestyle="none",
+                markerfacecolor=STATION_COLOR,
+                markeredgecolor="none",
+                markersize=6.0,
+                alpha=0.5,
+                label="Station",
+            ),
+            Line2D(
+                [0],
+                [0],
+                color=LOWESS_COLOR,
+                linewidth=2.8,
+                label="Local regression (LOWESS)",
+            ),
+            Patch(
+                facecolor=LOWESS_INTERVAL_COLOR,
+                edgecolor="none",
+                alpha=0.18,
+                label="95% bootstrap CI",
+            ),
+        ],
         loc="center right",
         bbox_to_anchor=(0.985, colorbar_center_y),
         bbox_transform=figure.transFigure,
@@ -1038,12 +1031,8 @@ def create_kge_characteristic_scatterplots(
         .sort_values(ascending=False, kind="stable", na_position="last")
         .index.tolist()
     )
-    characteristics_by_column: dict[str, Characteristic] = {
-        characteristic.column: characteristic
-        for characteristic in SCREENING_CHARACTERISTICS
-    }
     ordered_characteristics: list[Characteristic] = [
-        characteristics_by_column[column] for column in variable_order
+        _SCREENING_CHARACTERISTICS_BY_COLUMN[column] for column in variable_order
     ]
 
     column_count: int = 4
@@ -1067,45 +1056,10 @@ def create_kge_characteristic_scatterplots(
         rho: float = float(
             overall_associations.loc[characteristic.column, "spearman_rho"]
         )
-        if np.isnan(rho):
-            axis.set_axis_off()
+        if not _plot_relationship_panel(
+            axis, characteristic_analysis, characteristic, rho, kge_axis_limits
+        ):
             continue
-        try:
-            displayed_x, kge_values, model_x, evaluation_x = _relationship_data(
-                characteristic_analysis, characteristic
-            )
-        except ValueError:
-            axis.set_axis_off()
-            continue
-        central_curve: np.ndarray = _fit_lowess_to_grid(
-            model_x, kge_values, evaluation_x, robust_iterations=2
-        )
-        displayed_evaluation_x: np.ndarray = (
-            np.power(10.0, evaluation_x)
-            if characteristic.logarithmic_x
-            else evaluation_x
-        )
-        axis.scatter(
-            displayed_x,
-            kge_values,
-            s=7,
-            color="#315F70",
-            alpha=0.20,
-            linewidths=0.0,
-            rasterized=True,
-            zorder=2,
-        )
-        axis.plot(
-            displayed_evaluation_x,
-            central_curve,
-            color="#0C526C",
-            linewidth=1.8,
-            zorder=4,
-        )
-        if characteristic.logarithmic_x:
-            axis.set_xscale("log")
-        axis.set_xlim(displayed_evaluation_x[0], displayed_evaluation_x[-1])
-        axis.set_ylim(kge_axis_limits)
         # Spreadsheet-style labels continue with aa after z.
         panel_number: int = panel_index + 1
         panel_label: str = ""
@@ -1119,10 +1073,6 @@ def create_kge_characteristic_scatterplots(
             fontweight="bold",
             pad=4,
         )
-        axis.grid(axis="y", color="#DDDDDD", linewidth=0.55)
-        axis.set_axisbelow(True)
-        axis.tick_params(axis="both", labelsize=6.7)
-        axis.spines[["top", "right"]].set_visible(False)
 
     for axis in axes[:, 0]:
         axis.set_ylabel("KGE (–)", fontsize=7.6)

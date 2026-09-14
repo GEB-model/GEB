@@ -2790,83 +2790,14 @@ class Hydrology:
 
         data_catalog: DataCatalog = DataCatalog(logger=self.model.logger)
         catchment_attributes: pd.DataFrame = data_catalog.fetch("GRDC_Caravan").read()
-        scores_with_characteristics: pd.DataFrame = (
-            discharge_characteristics.enrich_discharge_evaluation(
-                station_scores=mapped_station_scores,
-                catchment_attributes=catchment_attributes,
-            )
+        discharge_characteristics.plot_discharge_characteristics(
+            station_scores=mapped_station_scores,
+            catchment_attributes=catchment_attributes,
+            output_folder=evaluation_paths.plot_folder / "skill_score_explanations",
+            logger=self.model.logger,
+            output_name_suffix=evaluation_paths.suffix,
+            export=export,
         )
-        explanation_folder: Path = (
-            evaluation_paths.plot_folder / "skill_score_explanations"
-        )
-        if export:
-            explanation_folder.mkdir(parents=True, exist_ok=True)
-
-        self.model.logger.info(
-            "Matched %d/%d evaluated stations to GRDC-Caravan attributes.",
-            int(scores_with_characteristics["grdc_caravan_matched"].sum()),
-            len(scores_with_characteristics),
-        )
-
-        if not scores_with_characteristics["grdc_caravan_matched"].any():
-            self.model.logger.warning(
-                "No discharge evaluation stations match GRDC-Caravan after "
-                "upstream-area filtering. Skipping discharge characteristic plots."
-            )
-            return
-
-        characteristic_analysis: pd.DataFrame = (
-            discharge_characteristics.prepare_kge_characteristic_analysis(
-                scores_with_characteristics
-            )
-        )
-        characteristic_associations: pd.DataFrame = (
-            discharge_characteristics.calculate_kge_component_associations(
-                characteristic_analysis
-            )
-        )
-        if export:
-            association_path: Path = explanation_folder / (
-                f"discharge_kge_component_associations{evaluation_paths.suffix}.csv"
-            )
-            characteristic_associations.to_csv(association_path, index=False)
-            self.model.logger.info(
-                "Saved discharge characteristic associations to %s.", association_path
-            )
-
-        correlation_figure: plt.Figure = (
-            discharge_characteristics.create_characteristic_correlation_matrix(
-                characteristic_analysis=characteristic_analysis,
-                output_folder=explanation_folder,
-                logger=self.model.logger,
-                output_name_suffix=evaluation_paths.suffix,
-                export=export,
-            )
-        )
-        plt.close(correlation_figure)
-
-        heatmap_figure: plt.Figure = (
-            discharge_characteristics.create_kge_characteristic_summary(
-                characteristic_analysis=characteristic_analysis,
-                characteristic_associations=characteristic_associations,
-                output_folder=explanation_folder,
-                logger=self.model.logger,
-                output_name_suffix=evaluation_paths.suffix,
-                export=export,
-            )
-        )
-        plt.close(heatmap_figure)
-        atlas_figure: plt.Figure = (
-            discharge_characteristics.create_kge_characteristic_scatterplots(
-                characteristic_analysis=characteristic_analysis,
-                characteristic_associations=characteristic_associations,
-                output_folder=explanation_folder,
-                logger=self.model.logger,
-                output_name_suffix=evaluation_paths.suffix,
-                export=export,
-            )
-        )
-        plt.close(atlas_figure)
 
     def plot_discharge_skill_scores(
         self,
