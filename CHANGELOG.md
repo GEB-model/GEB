@@ -1,4 +1,7 @@
 # dev
+- Move discharge metric calculations and score schemas into the discharge_metrics workflow, and dashboard characteristic loading into the dashboard workflow.
+- Clarify names throughout discharge evaluation, distinguish plotting commands from figure helpers, and share observation loading and score-column definitions. Existing CLI command names remain unchanged.
+- Restructure the dashboard code by putting the dashboard assets in workflows/assets/discharge_dashboard
 - Snap GRDC gauges to an original-resolution river pixel within 1.5 km and ±10% upstream area. Exclude failed matches and duplicate observations; warn when routing and original areas differ by more than 10%.
 - Show every GRDC gauge, exclusion reason, and MERIT river ID on the dashboard. Aggregate hourly simulations into local calendar days using fixed GRDC UTC offsets.
 

@@ -1,4 +1,8 @@
-"""Functions for creating interactive Folium discharge evaluation maps."""
+"""Build discharge dashboard data and Folium map layers.
+
+Browser interactions live in assets/discharge_dashboard. Those scripts are
+embedded in each exported HTML file, alongside the generated map.
+"""
 
 import hashlib
 import html
@@ -15,11 +19,15 @@ import numpy as np
 import pandas as pd
 from branca.element import Figure
 from folium import MacroElement, TileLayer
-from jinja2 import Template
+from jinja2 import Environment
+from jinja2.utils import htmlsafe_json_dumps
 
+from geb.build.data_catalog import DataCatalog
 from geb.evaluate.workflows.discharge_characteristics import (
     DASHBOARD_CHARACTERISTICS,
     Characteristic,
+    enrich_discharge_evaluation,
+    prepare_dashboard_characteristics,
 )
 from geb.workflows.extreme_value_analysis import ReturnPeriodModel
 from geb.workflows.io import read_geom
@@ -92,6 +100,39 @@ def load_discharge_dashboard_geometries(
     )
 
 
+def load_dashboard_characteristics(
+    mapped_station_scores: gpd.GeoDataFrame,
+    logger: logging.Logger,
+) -> pd.DataFrame | None:
+    """Load and prepare GRDC-Caravan attributes for the discharge dashboard.
+
+    Args:
+        mapped_station_scores: Evaluated station metrics and geometries.
+        logger: Logger used by the shared GEB data catalog.
+
+    Returns:
+        Station table containing the curated dashboard characteristics in
+        display units, or `None` when the optional data cannot be downloaded.
+    """
+    data_catalog: DataCatalog = DataCatalog(logger=logger)
+    try:
+        catchment_attributes: pd.DataFrame = data_catalog.fetch("GRDC_Caravan").read()
+    except RuntimeError as error:
+        # Catchment attributes enrich the dashboard but must not make the core
+        # discharge evaluation depend on network access.
+        logger.warning(
+            "GRDC-Caravan attributes are unavailable; creating the discharge "
+            "dashboard without catchment-characteristic layers: %s",
+            error,
+        )
+        return None
+    scores_with_characteristics: pd.DataFrame = enrich_discharge_evaluation(
+        station_scores=mapped_station_scores,
+        catchment_attributes=catchment_attributes,
+    )
+    return prepare_dashboard_characteristics(scores_with_characteristics)
+
+
 _METRIC_LAYER_CONFIGS: list[dict] = [
     {
         "col": "KGE",
@@ -160,22 +201,47 @@ _METRIC_LAYER_CONFIGS: list[dict] = [
 ]
 
 
-class _JavascriptMacro(MacroElement):
-    """Small Folium macro wrapper for dashboard JavaScript.
+def _script_json(value: Any) -> str:
+    """Serialize script data without HTML or Jinja template delimiters.
 
     Args:
-        script: JavaScript inserted in Folium's script block.
-    """
+        value: JSON-compatible dashboard data.
 
-    def __init__(self, script: str) -> None:
-        """Create a Folium macro from a script string.
+    Returns:
+        JSON safe to embed in Folium's repeatedly rendered script blocks.
+    """
+    return (
+        str(htmlsafe_json_dumps(value))
+        .replace("{{", "\\u007b\\u007b")
+        .replace("{%", "\\u007b%")
+        .replace("{#", "\\u007b#")
+    )
+
+
+class _JavascriptMacro(MacroElement):
+    """Embed a packaged dashboard script and its data in the exported HTML."""
+
+    def __init__(self, filename: str, data: Any) -> None:
+        """Load a dashboard script with data available to its Jinja template.
 
         Args:
-            script: JavaScript inserted in Folium's script block.
+            filename: JavaScript filename in assets/discharge_dashboard.
+            data: Script data serialized for safe embedding in Folium templates.
+
         """
         super().__init__()
-        self._template = Template(
-            "{%- macro script(this, kwargs) -%}\n" + script + "\n{%- endmacro -%}"
+        self.data: Any = data
+        script_path: Path = (
+            Path(__file__).parent / "assets" / "discharge_dashboard" / filename
+        )
+        # Folium renders scripts twice; escape data on the first pass so the
+        # second pass cannot interpret station text as a template.
+        environment: Environment = Environment()
+        environment.filters["script_json"] = _script_json
+        self._template = environment.from_string(
+            "{%- macro script(this, kwargs) -%}\n"
+            + script_path.read_text(encoding="utf-8")
+            + "\n{%- endmacro -%}"
         )
 
 
@@ -233,14 +299,14 @@ def _prepare_characteristic_values(
 
 
 def _build_characteristic_layer_payload(
-    evaluation_gdf: gpd.GeoDataFrame,
-    characteristic_df: pd.DataFrame,
+    mapped_station_scores: gpd.GeoDataFrame,
+    station_characteristics: pd.DataFrame,
 ) -> dict[str, Any]:
     """Build characteristic-layer metadata aligned to evaluated stations.
 
     Args:
-        evaluation_gdf: Evaluated stations indexed by station identifier.
-        characteristic_df: Curated GRDC-Caravan values in display units, with
+        mapped_station_scores: Evaluated stations indexed by station identifier.
+        station_characteristics: Curated GRDC-Caravan values in display units, with
             a unique ``station_ID`` column.
 
     Returns:
@@ -250,32 +316,38 @@ def _build_characteristic_layer_payload(
         ValueError: If station identifiers or usable characteristic data are
             unavailable.
     """
-    if "station_ID" not in characteristic_df.columns:
+    if "station_ID" not in station_characteristics.columns:
         raise ValueError("Dashboard characteristics have no station_ID column.")
-    if "grdc_caravan_matched" not in characteristic_df.columns:
+    if "grdc_caravan_matched" not in station_characteristics.columns:
         raise ValueError("Dashboard characteristics have no GRDC-Caravan match status.")
-    if characteristic_df["station_ID"].duplicated().any():
+    if station_characteristics["station_ID"].duplicated().any():
         raise ValueError("Dashboard characteristics contain duplicate station IDs.")
-    if evaluation_gdf.index.astype(str).duplicated().any():
+    if mapped_station_scores.index.astype(str).duplicated().any():
         raise ValueError("Dashboard evaluation contains duplicate station IDs.")
 
-    characteristic_index: pd.DataFrame = characteristic_df.copy()
-    characteristic_index["station_ID"] = characteristic_index["station_ID"].astype(str)
-    characteristic_index = characteristic_index.set_index("station_ID")
+    characteristics_by_station: pd.DataFrame = station_characteristics.copy()
+    characteristics_by_station["station_ID"] = characteristics_by_station[
+        "station_ID"
+    ].astype(str)
+    characteristics_by_station = characteristics_by_station.set_index("station_ID")
     evaluation_station_ids: pd.Index = pd.Index(
-        evaluation_gdf.index.astype(str), name="station_ID"
+        mapped_station_scores.index.astype(str), name="station_ID"
     )
     # Restrict distributions to displayed stations so percentile colours and
     # legend counts describe exactly the points visible on the dashboard.
-    characteristic_index = characteristic_index.reindex(evaluation_station_ids)
+    characteristics_by_station = characteristics_by_station.reindex(
+        evaluation_station_ids
+    )
     characteristic_configs: list[dict[str, Any]] = []
     percentile_by_characteristic: dict[str, pd.Series] = {}
     usable_characteristics: list[Characteristic] = []
     for characteristic in DASHBOARD_CHARACTERISTICS:
-        if characteristic.column not in characteristic_index.columns:
+        if characteristic.column not in characteristics_by_station.columns:
             continue
         prepared_values: tuple[dict[str, int | list[float]], pd.Series] | None = (
-            _prepare_characteristic_values(characteristic_index[characteristic.column])
+            _prepare_characteristic_values(
+                characteristics_by_station[characteristic.column]
+            )
         )
         if prepared_values is None:
             continue
@@ -289,11 +361,8 @@ def _build_characteristic_layer_payload(
             }
         )
         usable_characteristics.append(characteristic)
-    if not usable_characteristics:
-        raise ValueError("No usable GRDC-Caravan dashboard characteristics found.")
-
     station_records: list[dict[str, Any]] = []
-    for station_id, characteristic_row in characteristic_index.iterrows():
+    for station_id, characteristic_row in characteristics_by_station.iterrows():
         values: dict[str, float | None] = {}
         percentiles: dict[str, float | None] = {}
         for characteristic in usable_characteristics:
@@ -339,33 +408,35 @@ def _timestamp_to_isoformat(timestamp: Any) -> str:
 
 
 def _build_timeseries_payload(
-    validation_df: pd.DataFrame,
+    discharge_comparison: pd.DataFrame,
 ) -> dict[str, list[str] | list[float | None]]:
     """Build the popup payload for one discharge time-series chart.
 
     Args:
-        validation_df: Observed/simulated discharge dataframe (m3/s).
+        discharge_comparison: Observed/simulated discharge dataframe (m3/s).
     Returns:
         Dictionary with ISO timestamps and discharge values (m3/s).
 
     Raises:
-        ValueError: If ``validation_df`` is not indexed by timestamps.
+        ValueError: If ``discharge_comparison`` is not indexed by timestamps.
     """
-    if not isinstance(validation_df.index, pd.DatetimeIndex):
-        raise ValueError("validation_df must use a DateTimeIndex for dashboard charts.")
+    if not isinstance(discharge_comparison.index, pd.DatetimeIndex):
+        raise ValueError(
+            "discharge_comparison must use a DateTimeIndex for dashboard charts."
+        )
 
     return {
         "time": [
             _timestamp_to_isoformat(timestamp)
-            for timestamp in pd.DatetimeIndex(validation_df.index)
+            for timestamp in pd.DatetimeIndex(discharge_comparison.index)
         ],
         "observed": [
             _as_finite_float(value)
-            for value in validation_df["discharge_observations"].to_numpy()
+            for value in discharge_comparison["discharge_observations"].to_numpy()
         ],
         "simulated": [
             _as_finite_float(value)
-            for value in validation_df["discharge_simulations"].to_numpy()
+            for value in discharge_comparison["discharge_simulations"].to_numpy()
         ],
     }
 
@@ -410,8 +481,8 @@ def _build_return_period_payload(
         return {"returnPeriod": [], "discharge": []}
 
 
-def build_discharge_dashboard_chart_data(
-    validation_df: pd.DataFrame,
+def build_station_chart_data(
+    discharge_comparison: pd.DataFrame,
     station_name: str,
     upstream_area_ratio: float,
     timezone_utc_offset: float,
@@ -422,7 +493,7 @@ def build_discharge_dashboard_chart_data(
     """Build compact interactive chart data for one discharge dashboard popup.
 
     Args:
-        validation_df: Observed/simulated discharge dataframe (m3/s).
+        discharge_comparison: Observed/simulated discharge dataframe (m3/s).
         station_name: Human-readable station name.
         upstream_area_ratio: Observed-to-model upstream-area ratio (dimensionless).
         timezone_utc_offset: Fixed GRDC UTC offset used to construct local
@@ -438,10 +509,12 @@ def build_discharge_dashboard_chart_data(
         Compact chart payload with discharge values (m3/s).
 
     Raises:
-        ValueError: If validation_df does not use a DateTimeIndex.
+        ValueError: If discharge_comparison does not use a DateTimeIndex.
     """
-    if not isinstance(validation_df.index, pd.DatetimeIndex):
-        raise ValueError("validation_df must use a DateTimeIndex for dashboard charts.")
+    if not isinstance(discharge_comparison.index, pd.DatetimeIndex):
+        raise ValueError(
+            "discharge_comparison must use a DateTimeIndex for dashboard charts."
+        )
 
     chart_data: dict[str, Any] = {
         "stationName": station_name,
@@ -461,16 +534,18 @@ def build_discharge_dashboard_chart_data(
             "upstreamAreaRatio": _as_finite_float(upstream_area_ratio),
             "timezoneUtcOffset": _as_finite_float(timezone_utc_offset),
         },
-        "timeseries": _build_timeseries_payload(validation_df),
+        "timeseries": _build_timeseries_payload(discharge_comparison),
     }
     if include_return_period_plots:
         # Fit only on request: fitting every station dominates dashboard creation.
         return_periods_years: list[int | float] = [2, 5, 10, 25, 50, 100]
-        simulated_series: pd.Series = validation_df["discharge_simulations"].copy()
-        simulated_series[validation_df["discharge_observations"].isna()] = np.nan
+        simulated_series: pd.Series = discharge_comparison[
+            "discharge_simulations"
+        ].copy()
+        simulated_series[discharge_comparison["discharge_observations"].isna()] = np.nan
         chart_data["returnPeriods"] = {
             "observed": _build_return_period_payload(
-                validation_df["discharge_observations"], return_periods_years
+                discharge_comparison["discharge_observations"], return_periods_years
             ),
             "simulated": _build_return_period_payload(
                 simulated_series, return_periods_years
@@ -479,7 +554,7 @@ def build_discharge_dashboard_chart_data(
     return chart_data
 
 
-def write_discharge_dashboard_chart_data(
+def write_station_chart_data(
     dashboard_path: Path,
     station_id: str,
     chart_data: dict[str, Any],
@@ -519,217 +594,7 @@ def _inject_popup_chart_script(
             relative to the dashboard HTML.
 
     """
-    chart_files_json: str = json.dumps(station_chart_files, separators=(",", ":"))
-    _JavascriptMacro(
-        "window._stationChartFiles=" + chart_files_json + ";\n" + """
-(function(){
-  var plotlyUrl = 'https://cdn.plot.ly/plotly-2.35.2.min.js';
-  var colors = { observed: '#facc15', simulated: '#38bdf8' };
-  var stationChartCache = {};
-  var layoutBase = {
-    autosize: true,
-    height: 260,
-    margin: {l: 50, r: 18, t: 18, b: 42},
-    paper_bgcolor: '#020617',
-    plot_bgcolor: '#020617',
-    font: {color: '#e2e8f0', size: 11},
-    legend: {orientation: 'h', x: 0, y: 1.15},
-    xaxis: {gridcolor: '#1f2937', zerolinecolor: '#334155'},
-    yaxis: {gridcolor: '#1f2937', zerolinecolor: '#334155', rangemode: 'tozero'}
-  };
-
-  function ensurePlotly(callback) {
-    if (window.Plotly) { callback(); return; }
-    var script = document.createElement('script');
-    script.src = plotlyUrl;
-    script.onload = callback;
-    script.onerror = function() { callback(false); };
-    document.head.appendChild(script);
-  }
-
-  function escapeHtml(value) {
-    return String(value).replace(/[&<>"']/g, function(character) {
-      return ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'})[character];
-    });
-  }
-
-  function formatNumber(value) {
-    return Number.isFinite(value) ? value.toFixed(2) : 'n/a';
-  }
-
-  function metricHtml(label, value) {
-    return '<span><b>' + label + '</b> ' + formatNumber(value) + '</span>';
-  }
-
-  function makeChartDiv(id) {
-    return '<div id="' + id + '" class="geb-popup__chart"></div>';
-  }
-
-  function loadStationData(stationId, callback) {
-    if (stationChartCache[stationId]) {
-      callback(stationChartCache[stationId]);
-      return;
-    }
-    var chartFile = window._stationChartFiles[stationId];
-    if (!chartFile) {
-      callback(null);
-      return;
-    }
-    var script = document.createElement('script');
-    script.src = chartFile;
-    script.onload = function() {
-      var data = window._gebStationChartPayload;
-      delete window._gebStationChartPayload;
-      if (data) stationChartCache[stationId] = data;
-      script.remove();
-      callback(data || null);
-    };
-    script.onerror = function() {
-      script.remove();
-      callback(null);
-    };
-    document.head.appendChild(script);
-  }
-
-  function finiteNumbers(values, minimumValue) {
-    return (values || []).map(Number).filter(function(value) {
-      return Number.isFinite(value) && (minimumValue === undefined || value >= minimumValue);
-    });
-  }
-
-  function linearRange(values) {
-    var numbers = finiteNumbers(values);
-    if (!numbers.length) return undefined;
-    var minimum = Math.min.apply(null, numbers);
-    var maximum = Math.max.apply(null, numbers);
-    if (minimum === maximum) {
-      var padding = Math.max(Math.abs(minimum) * 0.05, 1);
-      return [minimum - padding, maximum + padding];
-    }
-    return [minimum, maximum];
-  }
-
-  function logRange(values) {
-    var numbers = finiteNumbers(values, Number.MIN_VALUE);
-    if (!numbers.length) return undefined;
-    var minimum = Math.min.apply(null, numbers);
-    var maximum = Math.max.apply(null, numbers);
-    if (minimum === maximum) {
-      return [Math.log10(minimum) - 0.05, Math.log10(maximum) + 0.05];
-    }
-    return [Math.log10(minimum), Math.log10(maximum)];
-  }
-
-  function dateRange(values) {
-    var times = (values || []).map(function(value) {
-      return new Date(value).getTime();
-    }).filter(Number.isFinite);
-    if (!times.length) return undefined;
-    return [new Date(Math.min.apply(null, times)), new Date(Math.max.apply(null, times))];
-  }
-
-  function sortedUniqueNumbers(values) {
-    var seen = {};
-    return finiteNumbers(values).filter(function(value) {
-      var key = String(value);
-      if (seen[key]) return false;
-      seen[key] = true;
-      return true;
-    }).sort(function(firstValue, secondValue) {
-      return firstValue - secondValue;
-    });
-  }
-
-  function formatTick(value) {
-    return Number.isInteger(value) ? String(value) : value.toPrecision(3);
-  }
-
-  function renderCharts(stationId, data) {
-    var safeStationId = encodeURIComponent(stationId);
-    var common = {responsive: true, displaylogo: false, modeBarButtonsToRemove: ['select2d', 'lasso2d']};
-    // SVG is reliable for daily series; WebGL keeps full-resolution hourly
-    // series responsive without changing the underlying scientific data.
-    var timeseriesTraceType = data.frequency === 'hourly' ? 'scattergl' : 'scatter';
-    function trace(name, x, y, kind, mode, hoverTemplate) {
-      return {
-        x: x,
-        y: y,
-        name: name,
-        type: kind,
-        mode: mode,
-        connectgaps: false,
-        hovertemplate: hoverTemplate,
-        line: {color: colors[name.toLowerCase()], width: 1.5},
-        marker: {color: colors[name.toLowerCase()], size: 5}
-      };
-    }
-    var timeRange = dateRange(data.timeseries.time);
-    Plotly.newPlot('geb-time-' + safeStationId, [
-      trace('Observed', data.timeseries.time, data.timeseries.observed, timeseriesTraceType, 'lines', '%{x|%b %Y}<br>%{y:,.0f} m3/s<extra>Observed</extra>'),
-      trace('Simulated', data.timeseries.time, data.timeseries.simulated, timeseriesTraceType, 'lines', '%{x|%b %Y}<br>%{y:,.0f} m3/s<extra>Simulated</extra>')
-    ], Object.assign({}, layoutBase, {hovermode: 'x unified', xaxis: Object.assign({}, layoutBase.xaxis, {type: 'date', range: timeRange}), yaxis: Object.assign({}, layoutBase.yaxis, {title: 'Discharge (m3/s)'})}), common);
-    if (data.returnPeriods) {
-      var observedReturnPeriodRange = linearRange(data.returnPeriods.observed.returnPeriod);
-      var simulatedReturnPeriodRange = linearRange(data.returnPeriods.simulated.returnPeriod);
-      var returnPeriodValues = [];
-      if (observedReturnPeriodRange) returnPeriodValues = returnPeriodValues.concat(observedReturnPeriodRange);
-      if (simulatedReturnPeriodRange) returnPeriodValues = returnPeriodValues.concat(simulatedReturnPeriodRange);
-      var returnPeriodRange = logRange(returnPeriodValues);
-      var returnPeriodTicks = sortedUniqueNumbers(
-        data.returnPeriods.observed.returnPeriod.concat(data.returnPeriods.simulated.returnPeriod)
-      );
-      Plotly.newPlot('geb-return-' + safeStationId, [
-        trace('Observed', data.returnPeriods.observed.returnPeriod, data.returnPeriods.observed.discharge, 'scatter', 'lines+markers', '%{x:g}-year<br>%{y:,.0f} m3/s<extra>Observed</extra>'),
-        trace('Simulated', data.returnPeriods.simulated.returnPeriod, data.returnPeriods.simulated.discharge, 'scatter', 'lines+markers', '%{x:g}-year<br>%{y:,.0f} m3/s<extra>Simulated</extra>')
-      ], Object.assign({}, layoutBase, {hovermode: 'x unified', xaxis: Object.assign({}, layoutBase.xaxis, {type: 'log', range: returnPeriodRange, tickmode: 'array', tickvals: returnPeriodTicks, ticktext: returnPeriodTicks.map(formatTick), title: 'Return period (years)'}), yaxis: Object.assign({}, layoutBase.yaxis, {title: 'Discharge (m3/s)'})}), common);
-    }
-  }
-
-  function renderStation(el, stationId) {
-    if (el.dataset.rendered === 'true') return;
-    el.dataset.rendered = 'true';
-    loadStationData(stationId, function(data) {
-      if (!data) {
-        el.innerHTML = '<div class="geb-popup__error">No interactive chart data is available.</div>';
-        return;
-      }
-    var metrics = data.metrics || {};
-    var safeStationId = encodeURIComponent(stationId);
-    el.innerHTML = '<div class="geb-popup__title">' + escapeHtml(data.stationName || stationId) + '</div>' +
-      '<div class="geb-popup__subtitle">Station ' + escapeHtml(stationId) + ' · ' + escapeHtml(data.frequency || 'discharge') + '</div>' +
-      '<div class="geb-popup__metrics">' + metricHtml('KGE', metrics.KGE) + metricHtml('mKGE', metrics.KGE_modified) +
-      metricHtml('r', metrics.KGE_correlation) + metricHtml('β', metrics.KGE_bias_ratio) +
-      metricHtml('α', metrics.KGE_variability_ratio) + metricHtml('NSE', metrics.NSE) +
-      metricHtml('r²', metrics.R2) + metricHtml('RMSE', metrics.RMSE) +
-      metricHtml('RRMSE', metrics.RRMSE) + metricHtml('Area ratio', metrics.upstreamAreaRatio) +
-      metricHtml('Fixed UTC offset (h)', metrics.timezoneUtcOffset) + '</div>' +
-      (data.returnPeriods ? '<div class="geb-popup__chart-title">Return periods</div>' + makeChartDiv('geb-return-' + safeStationId) : '') +
-      '<div class="geb-popup__chart-title">Discharge time series</div>' + makeChartDiv('geb-time-' + safeStationId);
-    ensurePlotly(function(loaded) {
-      if (loaded === false) {
-        el.innerHTML = '<div class="geb-popup__error">Interactive charts require access to cdn.plot.ly.</div>';
-        return;
-      }
-      renderCharts(stationId, data);
-    });
-    });
-  }
-
-  var style = document.createElement('style');
-  style.textContent = '.geb-popup{width:820px;max-width:86vw;color:#0f172a;font-family:Inter,system-ui,sans-serif}.geb-popup__title{color:#0f172a;font-size:18px;font-weight:750}.geb-popup__subtitle{color:#475569;font-size:12px;margin-bottom:8px}.geb-popup__metrics{display:flex;gap:12px;flex-wrap:wrap;margin:6px 0 10px}.geb-popup__metrics span{background:#111827;border:1px solid #263244;border-radius:6px;color:#e2e8f0;padding:5px 8px}.geb-popup__chart{height:260px;background:#020617;border:1px solid #263244;border-radius:8px;margin-bottom:10px}.geb-popup__chart-title{color:#334155;font-weight:700;font-size:13px;margin:10px 0 4px}.geb-popup__error{color:#b91c1c;padding:18px}.geb-popup img{width:100%;height:auto;display:block}';
-  document.head.appendChild(style);
-
-"""
-        "{{this._parent.get_name()}}.on('popupopen', function(e) {\n"
-        "  var content = e.popup.getContent();\n"
-        "  if (!content || !content.querySelector) return;\n"
-        "  var el = content.querySelector('[data-station-id]');\n"
-        "  if (!el) return;\n"
-        "  var sid = el.getAttribute('data-station-id');\n"
-        "  renderStation(el, sid);\n"
-        "});\n"
-        "})();\n"
-    ).add_to(m)
+    _JavascriptMacro("charts.js", station_chart_files).add_to(m)
 
 
 def _inject_station_search_script(
@@ -742,103 +607,7 @@ def _inject_station_search_script(
         m: Folium map receiving the search control.
         station_markers: Station metadata and Folium marker variable names.
     """
-    marker_index_js = json.dumps(station_markers, separators=(",", ":"))
-    _JavascriptMacro(
-        "var gebStationIndex="
-        + marker_index_js
-        + ";\n"
-        + """
-(function(){
-  var map = {{this._parent.get_name()}};
-
-  function resolveMarkers(station) {
-    if (station._markers) return station._markers;
-    station._markers = station.markers.map(function(name) {
-      try { return window[name] || eval(name); } catch(error) { return null; }
-    }).filter(Boolean);
-    return station._markers;
-  }
-
-  function setStationVisible(station, visible) {
-    resolveMarkers(station).forEach(function(marker) {
-      marker.setStyle({
-        opacity: visible ? 1 : 0,
-        fillOpacity: visible ? 0.9 : 0
-      });
-      marker.options.interactive = visible;
-      if (marker.getElement()) {
-        marker.getElement().style.pointerEvents = visible ? '' : 'none';
-      }
-    });
-  }
-
-  function applySearch(query) {
-    var normalizedQuery = query.trim().toLowerCase();
-    var matches = [];
-    gebStationIndex.forEach(function(station) {
-      var haystack = (station.id + ' ' + station.name).toLowerCase();
-      var visible = !normalizedQuery || haystack.indexOf(normalizedQuery) !== -1;
-      if (visible) matches.push(station);
-      setStationVisible(station, visible);
-    });
-    updateStatus(normalizedQuery, matches);
-    return matches;
-  }
-
-  function updateStatus(query, matches) {
-    var text = query ? matches.length + ' matching stations' : gebStationIndex.length + ' stations';
-    if (query && matches.length) {
-      text += ' · Enter opens first match';
-    }
-    status.textContent = text;
-  }
-
-  function openFirstMatch(matches) {
-    if (!matches.length) return;
-    var marker = resolveMarkers(matches[0])[0];
-    if (!marker) return;
-    map.setView(marker.getLatLng(), Math.max(map.getZoom(), 8));
-    marker.openPopup();
-  }
-
-  var control = L.control({position: 'topright'});
-  control.onAdd = function() {
-    var root = L.DomUtil.create('div', 'geb-station-search');
-    root.innerHTML = '<label for="geb-station-search-input">Station search</label>' +
-      '<div class="geb-station-search__row"><input id="geb-station-search-input" type="search" placeholder="ID or name">' +
-      '<button type="button" title="Clear station search">Clear</button></div>' +
-      '<div class="geb-station-search__status"></div>';
-    L.DomEvent.disableClickPropagation(root);
-    L.DomEvent.disableScrollPropagation(root);
-    return root;
-  };
-  control.addTo(map);
-
-  var root = document.querySelector('.geb-station-search');
-  var input = root.querySelector('input');
-  var button = root.querySelector('button');
-  var status = root.querySelector('.geb-station-search__status');
-
-  input.addEventListener('input', function() { applySearch(input.value); });
-  input.addEventListener('keydown', function(event) {
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      openFirstMatch(applySearch(input.value));
-    }
-  });
-  button.addEventListener('click', function() {
-    input.value = '';
-    input.focus();
-    applySearch('');
-  });
-
-  var style = document.createElement('style');
-  style.textContent = '.geb-station-search{background:#020617;color:#e2e8f0;border:1px solid #263244;border-radius:8px;padding:10px;width:250px;box-shadow:0 12px 30px rgba(0,0,0,.35);font-family:Inter,system-ui,sans-serif}.geb-station-search label{display:block;font-size:12px;font-weight:750;margin-bottom:6px}.geb-station-search__row{display:flex;gap:6px}.geb-station-search input{min-width:0;flex:1;background:#111827;color:#f8fafc;border:1px solid #334155;border-radius:6px;padding:6px 8px}.geb-station-search button{background:#1f2937;color:#f8fafc;border:1px solid #475569;border-radius:6px;padding:6px 8px;cursor:pointer}.geb-station-search__status{color:#94a3b8;font-size:11px;margin-top:6px}';
-  document.head.appendChild(style);
-  updateStatus('', gebStationIndex);
-})();
-"""
-    ).add_to(m)
+    _JavascriptMacro("search.js", station_markers).add_to(m)
 
 
 def _inject_station_layer_legend_script(
@@ -918,102 +687,7 @@ def _inject_station_layer_legend_script(
                 "show": False,
             }
         )
-    config_json: str = json.dumps(legend_configs, separators=(",", ":"))
-    _JavascriptMacro(
-        "var gebMetricLegendConfigs="
-        + config_json
-        + ";\n"
-        + r"""
-(function(){
-  var map = {{this._parent.get_name()}};
-  var configByLayer = {};
-  var layerByName = {};
-  var activeConfig = null;
-  gebMetricLegendConfigs.forEach(function(config) {
-    var layer = null;
-    try { layer = window[config.layer] || eval(config.layer); } catch(error) { layer = null; }
-    if (!layer) return;
-    configByLayer[L.stamp(layer)] = config;
-    layerByName[config.layer] = layer;
-    if (config.show) activeConfig = config;
-  });
-
-  var legendControl = L.control({position: 'bottomleft'});
-  legendControl.onAdd = function() {
-    var element = L.DomUtil.create('div', 'geb-metric-legend');
-    L.DomEvent.disableClickPropagation(element);
-    return element;
-  };
-  legendControl.addTo(map);
-  var legendRoot = map.getContainer().querySelector('.geb-metric-legend');
-
-  function formatTick(value) {
-    var numericValue = Number(value);
-    var absoluteValue = Math.abs(numericValue);
-    if (numericValue === 0) return '0';
-    if (absoluteValue < 0.01) return numericValue.toExponential(1);
-    var digits = absoluteValue >= 1000 ? 0 : absoluteValue >= 100 ? 1 : absoluteValue >= 10 ? 1 : absoluteValue >= 1 ? 2 : 3;
-    return numericValue.toLocaleString(undefined, {maximumFractionDigits: digits});
-  }
-
-  function renderLegend(config) {
-    if (!config) {
-      legendRoot.style.display = 'none';
-      return;
-    }
-    legendRoot.style.display = '';
-    if (config.kind === 'availability') {
-      legendRoot.innerHTML = '<b>' + config.name + '</b>' +
-        '<div class="geb-categorical-key"><i style="background:' + config.available_color + '"></i>' +
-        'Available (n=' + config.available_count + ')</div>' +
-        '<div class="geb-categorical-key"><i style="background:' + config.unavailable_color + '"></i>' +
-        'Not available (n=' + config.unavailable_count + ')</div>';
-      return;
-    }
-    var ticks = [];
-    for (var index = 0; index < 5; index += 1) {
-      ticks.push(config.minimum + (config.maximum - config.minimum) * index / 4);
-    }
-    var detail = '';
-    if (config.kind === 'characteristic') {
-      ticks = config.reference_values;
-      detail = '<div class="geb-metric-note">Colour shows empirical percentile rank (n=' +
-        config.ranked_count + '); ticks are values at ranks 0 / 25 / 50 / 75 / 100.</div>' +
-        '<div class="geb-metric-note">Missing value: n=' + config.missing_count + '</div>';
-    }
-    legendRoot.innerHTML = '<b>' + config.name + '</b>' +
-      '<div class="geb-metric-gradient" style="background:linear-gradient(90deg,' +
-      config.colors.join(',') + ')"></div><div class="geb-metric-ticks">' +
-      ticks.map(function(value) { return '<span>' + formatTick(value) + '</span>'; }).join('') +
-      '</div>' + detail;
-  }
-
-  map.on('overlayadd', function(event) {
-    var config = configByLayer[L.stamp(event.layer)];
-    if (!config) return;
-    gebMetricLegendConfigs.forEach(function(otherConfig) {
-      if (otherConfig.layer === config.layer) return;
-      var otherLayer = layerByName[otherConfig.layer];
-      if (otherLayer && map.hasLayer(otherLayer)) map.removeLayer(otherLayer);
-    });
-    activeConfig = config;
-    renderLegend(activeConfig);
-  });
-  map.on('overlayremove', function(event) {
-    var config = configByLayer[L.stamp(event.layer)];
-    if (config && activeConfig && config.layer === activeConfig.layer) {
-      activeConfig = null;
-      renderLegend(null);
-    }
-  });
-
-  var style = document.createElement('style');
-  style.textContent = '.geb-metric-legend{background:rgba(255,255,255,.96);border:1px solid #d8dee8;border-radius:8px;box-shadow:0 6px 20px rgba(15,23,42,.18);font-family:Inter,system-ui,sans-serif;margin-bottom:22px!important;padding:9px 10px;width:240px}.geb-metric-legend>b{color:#111827;display:block;font-size:11px;margin-bottom:6px}.geb-metric-gradient{border-radius:2px;height:9px}.geb-metric-ticks{color:#475569;display:flex;font-size:9px;justify-content:space-between;margin-top:3px}.geb-metric-note{color:#64748b;font-size:9px;line-height:1.3;margin-top:5px}.geb-categorical-key{align-items:center;color:#475569;display:flex;font-size:9px;gap:6px;margin-top:5px}.geb-categorical-key i{border:1px solid #fff;border-radius:50%;height:9px;width:9px}';
-  document.head.appendChild(style);
-  renderLegend(activeConfig);
-})();
-"""
-    ).add_to(discharge_map)
+    _JavascriptMacro("legend.js", legend_configs).add_to(discharge_map)
 
 
 def _add_station_marker(
@@ -1079,7 +753,7 @@ def _add_metric_station_markers(
     """
     marker_names: list[str] = []
     for layer, colormap, metric_name in metric_layers:
-        metric_value: float = row[metric_name]
+        metric_value: float = row.get(metric_name, np.nan)
         fill_color: str = colormap(metric_value) if pd.notna(metric_value) else "gray"
         marker_names.append(
             _add_station_marker(
@@ -1461,164 +1135,9 @@ def _inject_snapping_qc_script(
         station in overview mode. Permanent labels are created only from zoom 11.
         The inactive overlay has no station layers or popup objects.
     """
-    script: str = r"""
-(function() {
-  var map = GEB_SNAPPING_MAP;
-  var layer = GEB_SNAPPING_LAYER;
-  var stations = GEB_SNAPPING_STATIONS;
-  var visibleLayers = new Map();
-  var renderer = null;
-  var selectedLayer = null;
-  var selectedIndex = null;
-  var currentMode = '';
-  var updateTimer = null;
-  var popup = null;
-  var markerStyles = [
-    ['1', 'Original gauge', '#BE123C', '50%'],
-    ['2', 'Selected original pixel', '#92400E', '3px'],
-    ['3', 'Snapped model cell', '#1D4ED8', '0']
-  ];
-  var control = L.control({position: 'bottomright'});
-  control.onAdd = function() {
-    var box = L.DomUtil.create('div', 'geb-snapping-legend');
-    box.style.display = 'none';
-    box.innerHTML = '<b>Station snapping: 1 → 2 → 3</b>' +
-      '<div><i style="background:#BE123C;border-radius:50%">1</i> Original gauge (observations)</div>' +
-      '<div><i style="background:#92400E;border-radius:3px">2</i> Selected original pixel</div>' +
-      '<div><i style="background:#1D4ED8">3</i> Snapped model-cell centre (simulation)</div>' +
-      '<small>Overview dots: green = PASS, orange = area warning, red = excluded.<br>' +
-      'Click a dot for its three snapping steps, or zoom in.<br>' +
-      'Dashed lines connect the three locations.<br>' +
-      'Coincident symbols can overlap; each popup lists all coordinates.</small>' +
-      '<small class="geb-snapping-status"></small>';
-    L.DomEvent.disableClickPropagation(box);
-    L.DomEvent.disableScrollPropagation(box);
-    return box;
-  };
-  control.addTo(map);
-  var style = document.createElement('style');
-  style.textContent = '.geb-snapping-legend{background:white;color:#111827;padding:12px;border-radius:8px;box-shadow:0 2px 10px #0004;font:12px system-ui;max-width:310px}' +
-    '.geb-snapping-legend div{margin-top:6px;display:flex;align-items:center;gap:8px}' +
-    '.geb-snapping-legend i{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;color:white;font-style:normal;font-weight:bold}' +
-    '.geb-snapping-legend small{display:block;margin-top:8px;line-height:1.5}';
-  document.head.appendChild(style);
-
-  function openPopup(station, heading, location) {
-    if (!popup) popup = L.popup({maxWidth: 440});
-    popup.setLatLng(location).setContent(heading + station.popup).openOn(map);
-  }
-  function detail(index, labels) {
-    var station = stations[index];
-    var group = L.featureGroup();
-    var connector = L.polyline(station.locations, {
-      renderer: renderer, color: station.color, weight: 3, opacity: 0.85, dashArray: '6 4'
-    }).addTo(group);
-    connector.on('click', function(event) {openPopup(station, '', event.latlng);});
-    station.locations.forEach(function(coordinates, position) {
-      var spec = markerStyles[position];
-      var marker = L.marker(coordinates, {icon: L.divIcon({
-        iconSize: [26, 26], iconAnchor: [13, 13], className: 'geb-snapping-icon',
-        html: '<span style="display:flex;align-items:center;justify-content:center;width:26px;height:26px;box-sizing:border-box;background:' + spec[2] +
-          ';border:2px solid white;border-radius:' + spec[3] + ';color:white;font:bold 14px system-ui;box-shadow:0 1px 5px #0008;">' + spec[0] + '</span>'
-      })}).addTo(group);
-      marker.bindTooltip(spec[0] + '. ' + spec[1] + ' · ' + station.id, {
-        permanent: labels, direction: position === 0 ? 'left' : 'right', className: 'geb-snapping-label'
-      });
-      marker.on('click', function() {
-        openPopup(station, '<h4>' + spec[0] + '. ' + spec[1] + '</h4>', coordinates);
-      });
-    });
-    return group;
-  }
-  function overview(index) {
-    var station = stations[index];
-    var dot = L.circleMarker(station.locations[0], {
-      renderer: renderer, radius: 5, color: station.color, fillColor: station.color,
-      fillOpacity: 0.85, weight: 1
-    });
-    dot.bindTooltip(station.tooltip);
-    dot.on('click', function() {
-      if (selectedLayer) layer.removeLayer(selectedLayer);
-      selectedIndex = index;
-      selectedLayer = detail(index, map.getZoom() >= 11).addTo(layer);
-      openPopup(station, '', station.locations[0]);
-    });
-    return dot;
-  }
-  function clear() {
-    layer.clearLayers();
-    visibleLayers.clear();
-    selectedLayer = null;
-    selectedIndex = null;
-    currentMode = '';
-    if (popup) map.closePopup(popup);
-  }
-  function update() {
-    updateTimer = null;
-    if (!map.hasLayer(layer)) return;
-    if (!renderer) renderer = L.canvas({padding: 0.2});
-    var bounds = map.getBounds().pad(0.1);
-    var visible = [];
-    stations.forEach(function(station, index) {
-      // Include a connector crossing the viewport even if its gauge is outside.
-      if (bounds.intersects(L.latLngBounds(station.locations))) visible.push(index);
-    });
-    var detailed = map.getZoom() >= 9 && visible.length <= 150;
-    var labels = map.getZoom() >= 11;
-    var mode = detailed ? (labels ? 'labelled' : 'detailed') : 'overview';
-    var previousSelection = selectedIndex;
-    if (mode !== currentMode) {clear(); currentMode = mode; selectedIndex = previousSelection;}
-    var wanted = new Set(visible);
-    visibleLayers.forEach(function(feature, index) {
-      if (!wanted.has(index)) {layer.removeLayer(feature); visibleLayers.delete(index);}
-    });
-    visible.forEach(function(index) {
-      if (!visibleLayers.has(index)) {
-        visibleLayers.set(index, (detailed ? detail(index, labels) : overview(index)).addTo(layer));
-      }
-    });
-    if (selectedLayer && !wanted.has(selectedIndex)) {
-      layer.removeLayer(selectedLayer); selectedLayer = null; selectedIndex = null;
-      if (popup) map.closePopup(popup);
-    }
-    control.getContainer().querySelector('.geb-snapping-status').textContent =
-      visible.length + ' stations in view. ' + (detailed ? (labels ? 'Numbered steps and labels shown.' : 'Zoom further for labels.') :
-        'Zoom in for all steps (up to 150 stations), or click a dot.');
-  }
-  function schedule() {
-    // Coalesce zoomend/moveend without waiting for an animation frame.
-    if (map.hasLayer(layer) && updateTimer === null) updateTimer = setTimeout(update, 50);
-  }
-  function overlayChanged(event) {
-    if (event.layer !== layer) return;
-    var enabled = map.hasLayer(layer);
-    control.getContainer().style.display = enabled ? '' : 'none';
-    if (enabled) schedule();
-    else {
-      if (updateTimer !== null) clearTimeout(updateTimer);
-      updateTimer = null;
-      clear();
-      if (renderer && map.hasLayer(renderer)) map.removeLayer(renderer);
-    }
-  }
-  map.on('overlayadd overlayremove', overlayChanged);
-  map.on('moveend zoomend', schedule);
-})();
-"""
-    script = script.replace("GEB_SNAPPING_MAP", discharge_map.get_name()).replace(
-        "GEB_SNAPPING_LAYER", layer.get_name()
-    )
-    # Folium renders nested templates more than once. Escape template openers
-    # inside station strings as well as script-closing HTML characters.
-    station_json: str = (
-        json.dumps(stations, separators=(",", ":"), ensure_ascii=True)
-        .replace("<", "\\u003c")
-        .replace("{{", "\\u007b\\u007b")
-        .replace("{%", "\\u007b%")
-        .replace("{#", "\\u007b#")
-    )
-    script = script.replace("GEB_SNAPPING_STATIONS", station_json)
-    _JavascriptMacro(script).add_to(discharge_map)
+    _JavascriptMacro(
+        "snapping.js", {"layer": layer.get_name(), "stations": stations}
+    ).add_to(discharge_map)
 
 
 def _add_river_layers(
@@ -1738,40 +1257,24 @@ def _add_river_layers(
     ).add_to(detailed_layer)
     detailed_layer.add_to(discharge_map)
 
-    script: str = """
-(function() {
-  var map = GEB_RIVER_MAP;
-  var overview = GEB_RIVER_OVERVIEW;
-  var detailed = GEB_RIVER_DETAILED;
-  var minimumZoom = GEB_RIVER_MINIMUM_ZOOM;
-  function updateRivers() {
-    if (map.getZoom() >= minimumZoom) {
-      if (map.hasLayer(overview)) map.removeLayer(overview);
-      if (!map.hasLayer(detailed)) map.addLayer(detailed);
-    } else {
-      if (map.hasLayer(detailed)) map.removeLayer(detailed);
-      if (!map.hasLayer(overview)) map.addLayer(overview);
-    }
-  }
-  map.on('zoomend', updateRivers);
-  updateRivers();
-})();
-"""
-    script = script.replace("GEB_RIVER_MAP", discharge_map.get_name())
-    script = script.replace("GEB_RIVER_OVERVIEW", overview_layer.get_name())
-    script = script.replace("GEB_RIVER_DETAILED", detailed_layer.get_name())
-    script = script.replace("GEB_RIVER_MINIMUM_ZOOM", str(detailed_minimum_zoom))
-    _JavascriptMacro(script).add_to(discharge_map)
+    _JavascriptMacro(
+        "rivers.js",
+        {
+            "overview": overview_layer.get_name(),
+            "detailed": detailed_layer.get_name(),
+            "minimum_zoom": detailed_minimum_zoom,
+        },
+    ).add_to(discharge_map)
 
 
-def create_discharge_folium_map(
-    evaluation_gdf: gpd.GeoDataFrame,
+def write_discharge_dashboard(
+    mapped_station_scores: gpd.GeoDataFrame,
     output_path: Path,
     region_geom: gpd.GeoDataFrame,
     rivers: gpd.GeoDataFrame,
     station_chart_files: dict[str, str],
     waterbodies: gpd.GeoDataFrame | None = None,
-    characteristic_df: pd.DataFrame | None = None,
+    station_characteristics: pd.DataFrame | None = None,
     minimum_river_upstream_area_km2: float = 5000.0,
     detailed_river_minimum_zoom: int = 8,
     excluded_stations: gpd.GeoDataFrame | None = None,
@@ -1793,7 +1296,7 @@ def create_discharge_folium_map(
     scales and numbered steps for at most 150 visible stations when zoomed in.
 
     Args:
-        evaluation_gdf: Per-station GeoDataFrame with discharge metric columns,
+        mapped_station_scores: Per-station GeoDataFrame with discharge metric columns,
             ``upstream_area_GEB``,
             ``discharge_observations_to_GEB_upstream_area_ratio``, and a
             point geometry.
@@ -1807,7 +1310,7 @@ def create_discharge_folium_map(
         waterbodies: Optional GeoDataFrame with columns ``waterbody_type``
             (2 = reservoir) and polygon geometries. Centroids are used for dot
             placement.
-        characteristic_df: Optional station table containing ``station_ID`` and
+        station_characteristics: Optional station table containing ``station_ID`` and
             the curated GRDC-Caravan characteristics in display units.
         excluded_stations: Stations omitted from summary scores, with an exclusion
             reason. Available charts remain accessible for diagnostic use.
@@ -1820,14 +1323,14 @@ def create_discharge_folium_map(
     """
     min_lon, min_lat, max_lon, max_lat = region_geom.total_bounds
     if excluded_stations is not None and not excluded_stations.empty:
-        evaluation_gdf = evaluation_gdf.copy()
+        mapped_station_scores = mapped_station_scores.copy()
         # Apply current exclusion reasons when displaying previously saved scores.
-        excluded_ids: pd.Index = evaluation_gdf.index.intersection(
+        excluded_ids: pd.Index = mapped_station_scores.index.intersection(
             excluded_stations.index
         )
-        evaluation_gdf.loc[excluded_ids, "exclusion_reason"] = excluded_stations.loc[
-            excluded_ids, "exclusion_reason"
-        ]
+        mapped_station_scores.loc[excluded_ids, "exclusion_reason"] = (
+            excluded_stations.loc[excluded_ids, "exclusion_reason"]
+        )
     map_center: list[float] = [(min_lat + max_lat) / 2, (min_lon + max_lon) / 2]
     discharge_map = folium.Map(location=map_center, tiles=None, prefer_canvas=True)
     TileLayer(
@@ -1877,7 +1380,7 @@ def create_discharge_folium_map(
     layer_upstream: folium.FeatureGroup | None = None
     colormap_upstream: cm.LinearColormap | None = None
     if (
-        not evaluation_gdf["discharge_observations_to_GEB_upstream_area_ratio"]
+        not mapped_station_scores["discharge_observations_to_GEB_upstream_area_ratio"]
         .isna()
         .any()
     ):
@@ -1895,10 +1398,10 @@ def create_discharge_folium_map(
     availability_layer: folium.FeatureGroup | None = None
     characteristic_records: dict[str, dict[str, Any]] = {}
     caravan_available_count: int = 0
-    if characteristic_df is not None:
+    if station_characteristics is not None:
         characteristic_payload: dict[str, Any] = _build_characteristic_layer_payload(
-            evaluation_gdf=evaluation_gdf,
-            characteristic_df=characteristic_df,
+            mapped_station_scores=mapped_station_scores,
+            station_characteristics=station_characteristics,
         )
         characteristic_layers = [
             (
@@ -1924,7 +1427,7 @@ def create_discharge_folium_map(
         )
 
     largest_upstream_area_sqrt: float = math.sqrt(
-        evaluation_gdf["upstream_area_GEB"].max()
+        mapped_station_scores["upstream_area_GEB"].max()
     )
 
     popup_width: int = 800
@@ -1948,10 +1451,12 @@ def create_discharge_folium_map(
         "snapping_method",
         "timezone_utc_offset",
     }
-    snapping_qc_available: bool = snapping_columns.issubset(evaluation_gdf.columns)
+    snapping_qc_available: bool = snapping_columns.issubset(
+        mapped_station_scores.columns
+    )
     snapping_stations: list[dict[str, Any]] = []
 
-    for station_id, row in evaluation_gdf.iterrows():
+    for station_id, row in mapped_station_scores.iterrows():
         coords: list[float] = [row.geometry.y, row.geometry.x]
         station_id_str: str = str(station_id)
         station_name: str = (
@@ -2073,7 +1578,10 @@ def create_discharge_folium_map(
             )
             area_distance_count += int(area_distance_failure)
             record["color"] = "#DC2626" if area_distance_failure else "#D97706"
-            if station_id not in evaluation_gdf.index and len(record["locations"]) == 3:
+            if (
+                station_id not in mapped_station_scores.index
+                and len(record["locations"]) == 3
+            ):
                 snapping_stations.append(record)
             excluded_popup: str = record["popup"]
             if str(station_id) in station_chart_files:
@@ -2100,7 +1608,9 @@ def create_discharge_folium_map(
                 }
             )
         excluded_layer.add_to(discharge_map)
-        station_count: int = len(evaluation_gdf.index.union(excluded_stations.index))
+        station_count: int = len(
+            mapped_station_scores.index.union(excluded_stations.index)
+        )
         cast(Figure, discharge_map.get_root()).html.add_child(
             folium.Element(
                 f"<div id='{excluded_layer.get_name()}_legend' style='display:none;position:fixed;top:12px;left:55px;z-index:1000;background:white;padding:8px;border:1px solid #ccc'>"
@@ -2110,18 +1620,9 @@ def create_discharge_folium_map(
                 "<br>Hover or click a station for its exclusion reason.</div>"
             )
         )
-        _JavascriptMacro(f"""
-(function() {{
-  var map = {discharge_map.get_name()};
-  var layer = {excluded_layer.get_name()};
-  var legend = document.getElementById('{excluded_layer.get_name()}_legend');
-  function updateExclusionLegend() {{
-    legend.style.display = map.hasLayer(layer) ? '' : 'none';
-  }}
-  layer.on('add remove', updateExclusionLegend);
-  updateExclusionLegend();
-}})();
-""").add_to(discharge_map)
+        _JavascriptMacro("exclusions.js", excluded_layer.get_name()).add_to(
+            discharge_map
+        )
     if snapping_stations:
         snapping_qc_layer.add_to(discharge_map)
         _inject_snapping_qc_script(discharge_map, snapping_qc_layer, snapping_stations)
@@ -2133,7 +1634,7 @@ def create_discharge_folium_map(
         characteristic_layers=characteristic_layers,
         availability_layer=availability_layer,
         caravan_available_count=caravan_available_count,
-        station_count=len(evaluation_gdf),
+        station_count=len(mapped_station_scores),
     )
 
     _inject_popup_chart_script(discharge_map, station_chart_files)
@@ -2145,8 +1646,8 @@ def create_discharge_folium_map(
 
     folium.LayerControl(collapsed=False).add_to(discharge_map)
     if (
-        "exclusion_reason" in evaluation_gdf
-        and evaluation_gdf["exclusion_reason"].notna().any()
+        "exclusion_reason" in mapped_station_scores
+        and mapped_station_scores["exclusion_reason"].notna().any()
     ):
         cast(Figure, discharge_map.get_root()).html.add_child(
             folium.Element(

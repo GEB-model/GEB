@@ -24,13 +24,13 @@ def find_duplicate_discharge_stations(
     """
     if not isinstance(observations.index, pd.DatetimeIndex):
         raise ValueError("Discharge observations must use a DatetimeIndex.")
-    if minimum_years <= 0:
-        raise ValueError("minimum_years must be positive.")
+    if not np.isfinite(minimum_years) or minimum_years <= 0:
+        raise ValueError("minimum_years must be finite and positive.")
     if observations.empty:
         return {}
 
     daily: pd.DataFrame = observations.resample("D").mean()
-    minimum_days: int = int(minimum_years * 365.25)
+    minimum_days: int = int(np.ceil(minimum_years * 365.25))
     station_ids: list[Any] = list(daily.columns)
     # Store each station contiguously because every comparison reads its full record.
     values: np.ndarray = np.ascontiguousarray(daily.to_numpy().T)

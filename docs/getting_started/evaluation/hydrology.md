@@ -46,13 +46,17 @@ The evaluation process:
 1. Loads observed discharge from gauging stations
 2. Extracts simulated discharge at station locations
 3. Calculates performance metrics for each station
-4. Creates timeseries and scatter plots comparing observed vs simulated
+4. Creates timeseries plots comparing observed vs simulated
 5. Generates an interactive map showing station performance
 6. Saves evaluation metrics to Excel and GeoParquet files
 
 ### Performance metrics
 
-Daily evaluation uses local midnight-to-midnight days with fixed GRDC UTC offsets. Optional discharge correction multiplies simulations by GRDC area / routing area.
+Daily evaluation uses local midnight-to-midnight days with fixed GRDC UTC offsets. Incomplete simulation days at the report boundaries are excluded. Monthly means use the same paired observation and simulation timestamps. Optional discharge correction multiplies simulations by GRDC area / routing area.
+
+Stations need five years of paired data by default; gaps are allowed. Configure this with `hydrology.evaluation.discharge.minimum_timeseries_length_years`, or override it with `--minimum-timeseries-length-years`. When both `--start-year` and `--end-year` are supplied, the minimum-length filter is disabled unless explicitly passed. Period-specific files receive a year suffix and plots go into a `period_<start>_<end>/` subfolder.
+
+GRDC stations must match an original-resolution river pixel within 1.5 km and ±10% upstream area. Custom stations without area metadata use the nearest river pixel within 1.5 km, and their simulations are not area-corrected. Stations whose original and routing pixels are more than 1.5 km apart, or whose reports use an outdated location, are excluded from summary scores.
 
 The main metrics calculated for each station are:
 
@@ -67,27 +71,20 @@ The main metrics calculated for each station are:
 The discharge evaluation results are saved to
 `output/<run_name>/evaluate/hydrology/evaluate_discharge/`:
 
-**Overall evaluation results** (`evaluation_results/`):
-- `evaluation_metrics.xlsx`: Performance metrics for all stations.
-- `evaluation_metrics.geoparquet`: Same metrics in geospatial format for GIS analysis
-- `discharge_evaluation_metrics.png`: Map showing spatial distribution of metrics
-- `discharge_evaluation_map.html`: Interactive Folium map to explore station performance
+- `evaluation_metrics.xlsx` and `evaluation_metrics.geoparquet`: accepted station scores.
+- `diagnostic_metrics.geoparquet`: available scores for stations rejected by routing or report-location checks.
+- `excluded_stations.geoparquet`: excluded station locations and reasons.
+- `discharge_evaluation_map.html` and `discharge_evaluation_map_charts/`: interactive dashboard and station chart data. Keep these together when copying the dashboard.
+- `timeseries/timeseries_plot_<station_id>.png`: full station time series, with yearly variants when enabled.
+- `skill_score_maps/`, `skill_score_boxplots/`, and `skill_score_explanations/`: spatial, distribution, and catchment-characteristic plots.
 
-**Station specific plots** (`plots/`):
-- `timeseries_plot_{station_id}.png`: Time series comparing observed vs simulated discharge
-- `scatter_plot_{station_id}.png`: Scatter plots showing correlation between observed and simulated
-- `return_period_plot_{station_id}.png`: GPD-POT return-period comparison (observed vs simulated)
-- `shape_metrics_plot_{station_id}.png`: Skewness and kurtosis comparison (observed vs simulated)
-- Yearly plots are created when `--include-yearly-plots` is enabled
+Return-period plots are optional. Outflow-only plots are generated separately by `plot_discharge` under `hydrology/discharge/outflow/`.
 
-**Outflow-only plots** (`plots/outflow/`):
-- `river_outflow_hourly_m3_per_s_{river_id}.png`: Line plot of simulated river outflow discharge (m3/s) for each exported outflow location
-- `river_outflow_hourly_m3_per_s_{river_id}_return_period.png`: GPD-POT return-period plot for each exported outflow location
 ### Required input data
 
 For discharge evaluation, your model must have been built and run. The following files must be available:
 
-- Observed discharge data in the data catalog (`discharge/Q_obs`)
+- Observed discharge data in the data catalog (`discharge/discharge_observations_daily` and `discharge/discharge_observations_hourly`)
 - Gauging station locations snapped to river network (`discharge/discharge_snapped_locations`)
 - Per-station simulated discharge reports from the model run
   (`output/<run_name>/report/hydrology.routing/discharge_hourly_m3_per_s_<station_id>.parquet`)

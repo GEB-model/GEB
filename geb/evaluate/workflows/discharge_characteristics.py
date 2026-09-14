@@ -181,8 +181,8 @@ LOWESS_INTERVAL_COLOR: str = "#80CDC1"
 
 
 def enrich_discharge_evaluation(
-    evaluation_df: pd.DataFrame,
-    attribute_df: pd.DataFrame,
+    station_scores: pd.DataFrame,
+    catchment_attributes: pd.DataFrame,
 ) -> pd.DataFrame:
     """Add GRDC-Caravan catchment attributes to GEB discharge scores.
 
@@ -190,8 +190,8 @@ def enrich_discharge_evaluation(
     GRDC-Caravan subset.
 
     Args:
-        evaluation_df: Per-station GEB discharge metrics.
-        attribute_df: GRDC-Caravan attributes keyed by ``gauge_id``.
+        station_scores: Per-station GEB discharge metrics.
+        catchment_attributes: GRDC-Caravan attributes keyed by ``gauge_id``.
 
     Returns:
         Evaluation table with catchment attributes and a match indicator.
@@ -199,22 +199,22 @@ def enrich_discharge_evaluation(
     Raises:
         ValueError: If either station identifier is missing or duplicated.
     """
-    evaluation_table: pd.DataFrame = evaluation_df.copy()
+    evaluation_table: pd.DataFrame = station_scores.copy()
     if "station_ID" not in evaluation_table.columns:
         if evaluation_table.index.name == "station_ID":
             evaluation_table = evaluation_table.reset_index()
         else:
             raise ValueError("Evaluation metrics have no station_ID column.")
-    if "gauge_id" not in attribute_df.columns:
+    if "gauge_id" not in catchment_attributes.columns:
         raise ValueError("GRDC-Caravan attributes have no gauge_id column.")
-    if attribute_df["gauge_id"].duplicated().any():
+    if catchment_attributes["gauge_id"].duplicated().any():
         raise ValueError("GRDC-Caravan attributes contain duplicate gauge_id values.")
 
     evaluation_table["gauge_id"] = evaluation_table["station_ID"].map(
         format_grdc_station_key
     )
     enriched_table: pd.DataFrame = evaluation_table.merge(
-        attribute_df,
+        catchment_attributes,
         on="gauge_id",
         how="left",
         validate="many_to_one",
@@ -227,7 +227,7 @@ def enrich_discharge_evaluation(
 
 
 def prepare_kge_characteristic_analysis(
-    evaluation_df: pd.DataFrame,
+    station_scores: pd.DataFrame,
 ) -> pd.DataFrame:
     """Prepare matched stations for KGE-characteristic analysis.
 
@@ -236,7 +236,7 @@ def prepare_kge_characteristic_analysis(
     direction are preserved.
 
     Args:
-        evaluation_df: Discharge metrics enriched with GRDC-Caravan attributes.
+        station_scores: Discharge metrics enriched with GRDC-Caravan attributes.
 
     Returns:
         Matched station table in display units.
@@ -249,14 +249,14 @@ def prepare_kge_characteristic_analysis(
         *(target.column for target in KGE_COMPONENT_TARGETS),
         *(item.column for item in SCREENING_CHARACTERISTICS),
     }
-    missing_columns: set[str] = required_columns - set(evaluation_df.columns)
+    missing_columns: set[str] = required_columns - set(station_scores.columns)
     if missing_columns:
         raise ValueError(
             f"Enriched discharge metrics are missing columns: {sorted(missing_columns)}"
         )
 
-    analysis_table: pd.DataFrame = evaluation_df.loc[
-        evaluation_df["grdc_caravan_matched"]
+    analysis_table: pd.DataFrame = station_scores.loc[
+        station_scores["grdc_caravan_matched"]
     ].copy()
     if analysis_table.empty:
         raise ValueError("No evaluated stations match GRDC-Caravan attributes.")
@@ -273,7 +273,7 @@ def prepare_kge_characteristic_analysis(
 
 
 def prepare_dashboard_characteristics(
-    enriched_evaluation_df: pd.DataFrame,
+    scores_with_characteristics: pd.DataFrame,
 ) -> pd.DataFrame:
     """Prepare the curated GRDC-Caravan attributes for the spatial dashboard.
 
@@ -283,7 +283,7 @@ def prepare_dashboard_characteristics(
     :data:`DASHBOARD_CHARACTERISTICS`.
 
     Args:
-        enriched_evaluation_df: Discharge evaluation enriched with
+        scores_with_characteristics: Discharge evaluation enriched with
             GRDC-Caravan attributes and a ``grdc_caravan_matched`` indicator.
 
     Returns:
@@ -298,16 +298,18 @@ def prepare_dashboard_characteristics(
         "grdc_caravan_matched",
         *(item.column for item in DASHBOARD_CHARACTERISTICS),
     }
-    missing_columns: set[str] = required_columns - set(enriched_evaluation_df.columns)
+    missing_columns: set[str] = required_columns - set(
+        scores_with_characteristics.columns
+    )
     if missing_columns:
         raise ValueError(
             "Enriched discharge metrics are missing dashboard columns: "
             f"{sorted(missing_columns)}"
         )
-    if enriched_evaluation_df["station_ID"].duplicated().any():
+    if scores_with_characteristics["station_ID"].duplicated().any():
         raise ValueError("Dashboard discharge metrics contain duplicate station IDs.")
 
-    dashboard_table: pd.DataFrame = enriched_evaluation_df.copy()
+    dashboard_table: pd.DataFrame = scores_with_characteristics.copy()
     matched_stations: pd.Series = (
         dashboard_table["grdc_caravan_matched"].fillna(False).astype(bool)
     )
@@ -324,12 +326,12 @@ def prepare_dashboard_characteristics(
 
 
 def calculate_kge_component_associations(
-    analysis_df: pd.DataFrame,
+    characteristic_analysis: pd.DataFrame,
 ) -> pd.DataFrame:
     """Calculate Spearman associations with KGE and its three components.
 
     Args:
-        analysis_df: Output from :func:`prepare_kge_characteristic_analysis`.
+        characteristic_analysis: Output from :func:`prepare_kge_characteristic_analysis`.
 
     Returns:
         Long table containing sample sizes, Spearman correlations, and p-values.
@@ -337,7 +339,7 @@ def calculate_kge_component_associations(
     association_rows: list[dict[str, float | int | str]] = []
     for characteristic in SCREENING_CHARACTERISTICS:
         for target in KGE_COMPONENT_TARGETS:
-            pair_table: pd.DataFrame = analysis_df[
+            pair_table: pd.DataFrame = characteristic_analysis[
                 [characteristic.column, target.column]
             ].dropna()
             rho: float = np.nan
@@ -392,8 +394,8 @@ def _save_figure(
         logger.info("Saved discharge characteristic figure to %s.", output_path)
 
 
-def plot_characteristic_correlation_matrix(
-    analysis_df: pd.DataFrame,
+def create_characteristic_correlation_matrix(
+    characteristic_analysis: pd.DataFrame,
     output_folder: Path,
     logger: logging.Logger,
     output_name_suffix: str = "",
@@ -402,7 +404,7 @@ def plot_characteristic_correlation_matrix(
     """Plot correlations among GRDC-Caravan catchment characteristics.
 
     Args:
-        analysis_df: Prepared matched-station analysis table.
+        characteristic_analysis: Prepared matched-station analysis table.
         output_folder: Folder receiving the PNG output.
         logger: Logger used for export messages.
         output_name_suffix: Optional evaluation-period filename suffix.
@@ -414,9 +416,9 @@ def plot_characteristic_correlation_matrix(
     characteristic_columns: list[str] = [
         characteristic.column for characteristic in SCREENING_CHARACTERISTICS
     ]
-    correlation_matrix: pd.DataFrame = analysis_df[characteristic_columns].corr(
-        method="spearman", min_periods=3
-    )
+    correlation_matrix: pd.DataFrame = characteristic_analysis[
+        characteristic_columns
+    ].corr(method="spearman", min_periods=3)
     characteristic_labels: list[str] = [
         characteristic.label for characteristic in SCREENING_CHARACTERISTICS
     ]
@@ -533,11 +535,14 @@ def _calculate_lowess_interval(
         LOWESS estimate and lower and upper 95% confidence limits.
 
     Raises:
-        ValueError: If fewer than ten paired stations are available.
+        ValueError: If fewer than ten paired stations are available or the
+            number of bootstrap repetitions is not positive.
     """
     station_count: int = len(x_values)
     if station_count < 10:
         raise ValueError("A LOWESS interval needs at least ten paired stations.")
+    if bootstrap_repetitions < 1:
+        raise ValueError("bootstrap_repetitions must be positive.")
     central_curve: np.ndarray = _fit_lowess_to_grid(
         x_values, y_values, evaluation_x, robust_iterations=2
     )
@@ -548,6 +553,10 @@ def _calculate_lowess_interval(
         sample_indices: np.ndarray = random_generator.integers(
             0, station_count, size=station_count
         )
+        if np.unique(x_values[sample_indices]).size < 2:
+            # Resampling sparse attributes can draw only one distinct value.
+            bootstrap_curves[repetition] = y_values[sample_indices].mean()
+            continue
         bootstrap_curves[repetition] = _fit_lowess_to_grid(
             x_values[sample_indices],
             y_values[sample_indices],
@@ -559,7 +568,7 @@ def _calculate_lowess_interval(
 
 
 def _relationship_data(
-    analysis_df: pd.DataFrame,
+    characteristic_analysis: pd.DataFrame,
     characteristic: Characteristic,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Prepare station values and the central LOWESS evaluation grid.
@@ -568,7 +577,7 @@ def _relationship_data(
     isolated extremes do not compress the scientifically relevant pattern.
 
     Args:
-        analysis_df: Prepared station-level analysis table.
+        characteristic_analysis: Prepared station-level analysis table.
         characteristic: Characteristic metadata and x-axis transformation.
 
     Returns:
@@ -577,7 +586,7 @@ def _relationship_data(
     Raises:
         ValueError: If fewer than ten valid pairs or two distinct x-values remain.
     """
-    pair_table: pd.DataFrame = analysis_df[
+    pair_table: pd.DataFrame = characteristic_analysis[
         [characteristic.column, "KGE_daily"]
     ].dropna()
     if characteristic.logarithmic_x:
@@ -603,8 +612,8 @@ def _relationship_data(
 
 def _plot_relationship_panel(
     axis: plt.Axes,
-    analysis_df: pd.DataFrame,
-    association_df: pd.DataFrame,
+    characteristic_analysis: pd.DataFrame,
+    characteristic_associations: pd.DataFrame,
     characteristic: Characteristic,
     title: str,
     x_label: str,
@@ -615,8 +624,8 @@ def _plot_relationship_panel(
 
     Args:
         axis: Matplotlib axis receiving the panel.
-        analysis_df: Prepared matched-station analysis table.
-        association_df: KGE-component Spearman association table.
+        characteristic_analysis: Prepared matched-station analysis table.
+        characteristic_associations: KGE-component Spearman association table.
         characteristic: Characteristic metadata.
         title: Panel title.
         x_label: Horizontal-axis label including units.
@@ -624,17 +633,22 @@ def _plot_relationship_panel(
         kge_axis_limits: Shared lower and upper dimensionless KGE limits.
 
     """
-    association_rows: pd.DataFrame = association_df.loc[
-        (association_df["variable"] == characteristic.column)
-        & (association_df["target"] == "KGE_daily")
+    association_rows: pd.DataFrame = characteristic_associations.loc[
+        (characteristic_associations["variable"] == characteristic.column)
+        & (characteristic_associations["target"] == "KGE_daily")
     ]
     if association_rows.empty or pd.isna(association_rows.iloc[0]["spearman_rho"]):
         axis.set_axis_off()
         return
 
-    displayed_x, kge_values, model_x, evaluation_x = _relationship_data(
-        analysis_df, characteristic
-    )
+    try:
+        displayed_x, kge_values, model_x, evaluation_x = _relationship_data(
+            characteristic_analysis, characteristic
+        )
+    except ValueError:
+        # A correlation can exist with too few stations for a fitted curve.
+        axis.set_axis_off()
+        return
     central_curve, lower_limit, upper_limit = _calculate_lowess_interval(
         model_x, kge_values, evaluation_x, random_generator
     )
@@ -735,9 +749,9 @@ def _relationship_legend_handles() -> list[Line2D | Patch]:
     ]
 
 
-def plot_kge_characteristic_heatmaps(
-    analysis_df: pd.DataFrame,
-    association_df: pd.DataFrame,
+def create_kge_characteristic_summary(
+    characteristic_analysis: pd.DataFrame,
+    characteristic_associations: pd.DataFrame,
     output_folder: Path,
     logger: logging.Logger,
     output_name_suffix: str = "",
@@ -746,8 +760,8 @@ def plot_kge_characteristic_heatmaps(
     """Plot the KGE-component heatmap and four linked relationships.
 
     Args:
-        analysis_df: Prepared matched-station analysis table.
-        association_df: KGE-component association table.
+        characteristic_analysis: Prepared matched-station analysis table.
+        characteristic_associations: KGE-component association table.
         output_folder: Folder receiving SVG, PDF, and PNG outputs.
         logger: Logger used for export messages.
         output_name_suffix: Optional evaluation-period filename suffix.
@@ -759,10 +773,10 @@ def plot_kge_characteristic_heatmaps(
     Raises:
         ValueError: If selected relationship-panel inputs are incomplete.
     """
-    association_matrix: pd.DataFrame = association_df.pivot(
+    association_matrix: pd.DataFrame = characteristic_associations.pivot(
         index="variable", columns="target", values="spearman_rho"
     )
-    significance_matrix: pd.DataFrame = association_df.pivot(
+    significance_matrix: pd.DataFrame = characteristic_associations.pivot(
         index="variable", columns="target", values="p_value"
     )
     labels_by_column: dict[str, str] = {
@@ -774,7 +788,7 @@ def plot_kge_characteristic_heatmaps(
     target_columns: list[str] = [target.column for target in KGE_COMPONENT_TARGETS]
     required_variables: list[str] = list(characteristics_by_column)
     selected_variables: set[str] = {panel.column for panel in KGE_RELATIONSHIP_PANELS}
-    if not {"KGE_daily", *selected_variables}.issubset(analysis_df.columns):
+    if not {"KGE_daily", *selected_variables}.issubset(characteristic_analysis.columns):
         raise ValueError("KGE relationship-panel inputs are incomplete.")
 
     association_matrix = association_matrix.reindex(
@@ -878,7 +892,7 @@ def plot_kge_characteristic_heatmaps(
     )
 
     random_generator: np.random.Generator = np.random.default_rng(42)
-    lower_kge, upper_kge = analysis_df["KGE_daily"].quantile([0.10, 0.90])
+    lower_kge, upper_kge = characteristic_analysis["KGE_daily"].quantile([0.10, 0.90])
     kge_axis_limits: tuple[float, float] = (float(lower_kge), float(upper_kge))
     for correlation_axis, panel in zip(
         correlation_axes, KGE_RELATIONSHIP_PANELS, strict=True
@@ -886,8 +900,8 @@ def plot_kge_characteristic_heatmaps(
         characteristic: Characteristic = characteristics_by_column[panel.column]
         _plot_relationship_panel(
             axis=correlation_axis,
-            analysis_df=analysis_df,
-            association_df=association_df,
+            characteristic_analysis=characteristic_analysis,
+            characteristic_associations=characteristic_associations,
             characteristic=characteristic,
             title=panel.title,
             x_label=panel.x_label,
@@ -986,9 +1000,9 @@ def plot_kge_characteristic_heatmaps(
     return figure
 
 
-def plot_all_kge_characteristic_scatterplots(
-    analysis_df: pd.DataFrame,
-    association_df: pd.DataFrame,
+def create_kge_characteristic_scatterplots(
+    characteristic_analysis: pd.DataFrame,
+    characteristic_associations: pd.DataFrame,
     output_folder: Path,
     logger: logging.Logger,
     output_name_suffix: str = "",
@@ -1001,8 +1015,8 @@ def plot_all_kge_characteristic_scatterplots(
     remains in its original displayed units.
 
     Args:
-        analysis_df: Prepared matched-station analysis table.
-        association_df: KGE-component association table.
+        characteristic_analysis: Prepared matched-station analysis table.
+        characteristic_associations: KGE-component association table.
         output_folder: Folder receiving SVG, PDF, and PNG outputs.
         logger: Logger used for export messages.
         output_name_suffix: Optional evaluation-period filename suffix.
@@ -1011,8 +1025,8 @@ def plot_all_kge_characteristic_scatterplots(
     Returns:
         Four-column atlas containing all 32 continuous KGE relationships.
     """
-    overall_associations: pd.DataFrame = association_df.loc[
-        association_df["target"] == "KGE_daily"
+    overall_associations: pd.DataFrame = characteristic_associations.loc[
+        characteristic_associations["target"] == "KGE_daily"
     ].set_index("variable")
     required_variables: list[str] = [
         characteristic.column for characteristic in SCREENING_CHARACTERISTICS
@@ -1034,7 +1048,9 @@ def plot_all_kge_characteristic_scatterplots(
 
     column_count: int = 4
     row_count: int = int(np.ceil(len(ordered_characteristics) / column_count))
-    kge_lower_limit, kge_upper_limit = analysis_df["KGE_daily"].quantile([0.10, 0.90])
+    kge_lower_limit, kge_upper_limit = characteristic_analysis["KGE_daily"].quantile(
+        [0.10, 0.90]
+    )
     kge_axis_limits: tuple[float, float] = (
         float(kge_lower_limit),
         float(kge_upper_limit),
@@ -1054,9 +1070,13 @@ def plot_all_kge_characteristic_scatterplots(
         if np.isnan(rho):
             axis.set_axis_off()
             continue
-        displayed_x, kge_values, model_x, evaluation_x = _relationship_data(
-            analysis_df, characteristic
-        )
+        try:
+            displayed_x, kge_values, model_x, evaluation_x = _relationship_data(
+                characteristic_analysis, characteristic
+            )
+        except ValueError:
+            axis.set_axis_off()
+            continue
         central_curve: np.ndarray = _fit_lowess_to_grid(
             model_x, kge_values, evaluation_x, robust_iterations=2
         )

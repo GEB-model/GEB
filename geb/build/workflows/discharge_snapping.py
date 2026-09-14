@@ -53,7 +53,7 @@ class DischargeSnappingResults(NamedTuple):
 
 def snap_discharge_station(
     station_location: Point,
-    station_upstream_area_m2: float,
+    station_upstream_area_m2: float | None,
     original_upstream_area: xr.DataArray,
     original_river_ids: xr.DataArray,
     routing_upstream_area: xr.DataArray,
@@ -61,20 +61,21 @@ def snap_discharge_station(
 ) -> DischargeSnappingResults | None:
     """Snap a GRDC station to an original-resolution and routing pixel.
 
-    The original pixel must be within 1,500 m, have an area within 10% of
-    the GRDC area, and have a river ID. The routing pixel is the closest valid
-    pixel with the same river ID. An original-to-routing area difference above 10%
-    produces a warning but does not change the selected routing pixel.
+    Select the nearest original river pixel within 1.5 km and 10% of the gauge
+    area, then the nearest routing pixel on the same river. Custom stations
+    without an area use distance only. Warn if the routing and original areas
+    differ by more than 10%, without changing the selected pixel.
 
     Args:
         station_location: GRDC station longitude and latitude (degrees, WGS84).
-        station_upstream_area_m2: Reported GRDC upstream area (m²).
+        station_upstream_area_m2: Gauge upstream area (m²), or None for custom
+            stations without area metadata.
         original_upstream_area: Original-resolution upstream areas (m²), with
             WGS84 x/y axes.
         original_river_ids: Aligned original-resolution river IDs; NaN and
             negative IDs are missing.
         routing_upstream_area: Routing upstream areas (m²), with WGS84 x/y axes.
-        routing_pixels_by_river_id: Routing pixel indices keyed by river ID.
+        routing_pixels_by_river_id: Routing row and column indices keyed by river ID.
 
     Returns:
         Selected pixels, or None if no valid match is found.
@@ -83,21 +84,21 @@ def snap_discharge_station(
         ValueError: If coordinates are invalid or original rasters do not align.
     """
     if station_location.is_empty or not (
-        np.isfinite(station_location.x)
-        and np.isfinite(station_location.y)
-        and -180 <= station_location.x <= 180
-        and -90 <= station_location.y <= 90
+        -180 <= station_location.x <= 180 and -90 <= station_location.y <= 90
     ):
         raise ValueError("Gauge coordinates must be finite WGS84 coordinates.")
-    if not np.isfinite(station_upstream_area_m2) or station_upstream_area_m2 <= 0:
+    if station_upstream_area_m2 is not None and (
+        not np.isfinite(station_upstream_area_m2) or station_upstream_area_m2 <= 0
+    ):
         return None
     if (
         original_upstream_area.dims != ("y", "x")
         or original_river_ids.dims != ("y", "x")
-        or original_upstream_area.shape != original_river_ids.shape
+        or not original_upstream_area.x.equals(original_river_ids.x)
+        or not original_upstream_area.y.equals(original_river_ids.y)
     ):
         raise ValueError(
-            "Original area and river ID rasters must have the same y, x shape."
+            "Original area and river ID rasters must have matching y, x coordinates."
         )
 
     # 1. Read the original-resolution window within 1.5 km of the station.
@@ -132,13 +133,15 @@ def snap_discharge_station(
     # 2. Keep original pixels with a river ID and area within 10% of GRDC.
     valid_original_pixels: np.ndarray = (
         np.isfinite(local_original_area_values)
-        & (
-            np.abs(local_original_area_values - station_upstream_area_m2)
-            <= MAX_AREA_DIFFERENCE_FRACTION * station_upstream_area_m2
-        )
+        & (local_original_area_values > 0)
         & np.isfinite(local_original_river_id_values)
         & (local_original_river_id_values >= 0)
     )
+    if station_upstream_area_m2 is not None:
+        valid_original_pixels &= (
+            np.abs(local_original_area_values - station_upstream_area_m2)
+            <= MAX_AREA_DIFFERENCE_FRACTION * station_upstream_area_m2
+        )
     candidate_original_rows: np.ndarray
     candidate_original_columns: np.ndarray
     candidate_original_rows, candidate_original_columns = np.nonzero(

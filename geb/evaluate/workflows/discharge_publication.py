@@ -98,7 +98,8 @@ def create_discharge_publication_package(
 
     Raises:
         FileNotFoundError: If a required metric or simulation file is missing.
-        ValueError: If station identifiers or snapping metadata are invalid.
+        ValueError: If there are no evaluated stations, or station identifiers
+            or snapping metadata are invalid.
     """
     if not evaluation_metrics_xlsx.exists():
         raise FileNotFoundError(
@@ -107,10 +108,12 @@ def create_discharge_publication_package(
     if not routing_folder.exists():
         raise FileNotFoundError(f"Missing routing report folder: {routing_folder}")
 
-    evaluation_df: pd.DataFrame = pd.read_excel(evaluation_metrics_xlsx)
-    if "station_ID" not in evaluation_df.columns:
+    station_scores: pd.DataFrame = pd.read_excel(evaluation_metrics_xlsx)
+    if "station_ID" not in station_scores.columns:
         raise ValueError("Evaluation metrics contain no station_ID column.")
-    station_ids: list[str] = evaluation_df["station_ID"].map(_station_id_text).tolist()
+    if station_scores.empty:
+        raise ValueError("No evaluated stations are available for publication.")
+    station_ids: list[str] = station_scores["station_ID"].map(_station_id_text).tolist()
     if len(station_ids) != len(set(station_ids)):
         raise ValueError("Evaluation metrics contain duplicate station IDs.")
 

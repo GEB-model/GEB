@@ -24,9 +24,9 @@ from geb.evaluate.workflows.external_skill_scores import (
 )
 
 OBSERVATIONS_COLOR: str = "#E6900A"
-SIMULATIONS_DEFAULT_COLOR: str = "#278DD9"
-BEST_POSSIBLE_LINE_WIDTH: float = 1.3
-BEST_POSSIBLE_LINE_COLOR: str = "#111111"
+SIMULATIONS_COLOR: str = "#278DD9"
+LINE_WIDTH: float = 1.3
+LINE_COLOR: str = "#111111"
 
 _EXTERNAL_MODEL_PLOT_ORDER: dict[str, int] = {
     UTRECHT_MODEL_NAME: 0,
@@ -41,7 +41,7 @@ _EXTERNAL_MODEL_DISPLAY_NAMES: dict[str, str] = {
 
 
 def _create_discharge_timeseries_figure(
-    validation_df: pd.DataFrame,
+    discharge_comparison: pd.DataFrame,
     upstream_area_ratio: float,
     metrics: Mapping[str, float],
     include_mean: bool,
@@ -49,7 +49,7 @@ def _create_discharge_timeseries_figure(
     """Create a discharge comparison figure.
 
     Args:
-        validation_df: Observed and simulated discharge time series (m3/s).
+        discharge_comparison: Observed and simulated discharge time series (m3/s).
         upstream_area_ratio: Observed-to-modeled upstream-area ratio
             (dimensionless).
         metrics: Discharge validation metrics keyed by metric name.
@@ -60,12 +60,12 @@ def _create_discharge_timeseries_figure(
     """
     figure, axis = plt.subplots(figsize=(13, 4))
     for column_name, label, color in (
-        ("discharge_simulations", "Simulated", SIMULATIONS_DEFAULT_COLOR),
+        ("discharge_simulations", "Simulated", SIMULATIONS_COLOR),
         ("discharge_observations", "Observed", OBSERVATIONS_COLOR),
     ):
         axis.plot(
-            validation_df.index,
-            validation_df[column_name],
+            discharge_comparison.index,
+            discharge_comparison[column_name],
             label=label,
             linewidth=0.5,
             color=color,
@@ -73,7 +73,7 @@ def _create_discharge_timeseries_figure(
     axis.set(
         xlabel="Time",
         ylabel="Discharge [m3/s]",
-        xlim=(validation_df.index.min(), validation_df.index.max()),
+        xlim=(discharge_comparison.index.min(), discharge_comparison.index.max()),
         ylim=(0, None),
     )
     axis.legend(loc="upper right", fontsize=10)
@@ -90,7 +90,7 @@ def _create_discharge_timeseries_figure(
     )
     if include_mean:
         metric_labels.append(
-            f"Mean={validation_df['discharge_simulations'].mean():.2f}"
+            f"Mean={discharge_comparison['discharge_simulations'].mean():.2f}"
         )
     metric_labels.append(f"upstream area ratio: {upstream_area_ratio:.2f}")
     for row, label in enumerate(metric_labels):
@@ -106,7 +106,7 @@ def _create_discharge_timeseries_figure(
 
 def save_discharge_timeseries_plots(
     station_id: Any,
-    validation_df: pd.DataFrame,
+    discharge_comparison: pd.DataFrame,
     upstream_area_ratio: float,
     metrics: Mapping[str, float],
     plot_folder: Path,
@@ -116,7 +116,7 @@ def save_discharge_timeseries_plots(
 
     Args:
         station_id: Station identifier used in output filenames.
-        validation_df: Observed and simulated discharge time series (m3/s).
+        discharge_comparison: Observed and simulated discharge time series (m3/s).
         upstream_area_ratio: Observed-to-modeled upstream-area ratio
             (dimensionless).
         metrics: Discharge validation metrics keyed by metric name.
@@ -126,7 +126,7 @@ def save_discharge_timeseries_plots(
     timeseries_folder: Path = plot_folder / "timeseries"
     timeseries_folder.mkdir(parents=True, exist_ok=True)
     figure: plt.Figure = _create_discharge_timeseries_figure(
-        validation_df=validation_df,
+        discharge_comparison=discharge_comparison,
         upstream_area_ratio=upstream_area_ratio,
         metrics=metrics,
         include_mean=True,
@@ -135,11 +135,13 @@ def save_discharge_timeseries_plots(
     plt.close(figure)
 
     if include_yearly_plots:
-        yearly_groups: Any = validation_df.groupby(validation_df.index.year)  # ty:ignore[unresolved-attribute]
-        for year, yearly_df in yearly_groups:
+        yearly_groups: Any = discharge_comparison.groupby(
+            discharge_comparison.index.to_series().dt.year.to_numpy()
+        )
+        for year, yearly_discharge_comparison in yearly_groups:
             year_value: int = int(year)
             yearly_figure: plt.Figure = _create_discharge_timeseries_figure(
-                validation_df=yearly_df,
+                discharge_comparison=yearly_discharge_comparison,
                 upstream_area_ratio=upstream_area_ratio,
                 metrics=metrics,
                 include_mean=False,
@@ -214,8 +216,45 @@ _SKILL_SCORE_CONFIG_BY_COLUMN: dict[str, dict[str, object]] = {
 }
 
 
-def _plot_skill_score_map_single(
-    evaluation_gdf: gpd.GeoDataFrame,
+def _add_map_scale_bar(axis: plt.Axes) -> None:
+    """Add the shared scale bar to a projected discharge map.
+
+    Args:
+        axis: Map axis with coordinates in meters (EPSG:3857).
+    """
+    # Scale bar: round ~15% of the map width to a nice number (e.g. 152 km → 200 km)
+    x_min, x_max = axis.get_xlim()
+    y_min, y_max = axis.get_ylim()
+    map_width_m: float = x_max - x_min
+    map_height_m: float = y_max - y_min
+    bar_m: float = round(
+        map_width_m * 0.15 / 10 ** np.floor(np.log10(map_width_m * 0.15))
+    ) * 10 ** np.floor(np.log10(map_width_m * 0.15))
+    bar_label: str = f"{int(bar_m / 1_000)} km" if bar_m >= 1_000 else f"{int(bar_m)} m"
+    bar_x0: float = x_min + map_width_m * 0.03
+    bar_y: float = y_min + map_height_m * 0.03
+    axis.plot(
+        [bar_x0, bar_x0 + bar_m],
+        [bar_y, bar_y],
+        color="white",
+        linewidth=3,
+        solid_capstyle="butt",
+        zorder=5,
+    )
+    axis.text(
+        bar_x0 + bar_m / 2,
+        bar_y + map_height_m * 0.012,
+        bar_label,
+        color="white",
+        fontsize=14,
+        ha="center",
+        va="bottom",
+        zorder=5,
+    )
+
+
+def _draw_station_score_map(
+    mapped_station_scores: gpd.GeoDataFrame,
     metric_col: str,
     metric_label: str,
     cmap_name: str,
@@ -227,7 +266,7 @@ def _plot_skill_score_map_single(
     """Plot gauging stations coloured by a single skill score on a satellite basemap.
 
     Args:
-        evaluation_gdf: Per-station metrics with point geometry in any CRS.
+        mapped_station_scores: Per-station metrics with point geometry in any CRS.
         metric_col: Column name of the metric to plot (e.g. ``"KGE"``).
         metric_label: Short colorbar label (e.g. ``"KGE"``).
         cmap_name: Matplotlib colormap name.
@@ -237,7 +276,7 @@ def _plot_skill_score_map_single(
         region_geom: Basin/region boundary overlaid on the map.
     """
     # Reproject to Web Mercator for the contextily basemap
-    gdf_3857: gpd.GeoDataFrame = evaluation_gdf.to_crs("EPSG:3857")
+    gdf_3857: gpd.GeoDataFrame = mapped_station_scores.to_crs("EPSG:3857")
     region_3857: gpd.GeoDataFrame = region_geom.to_crs("EPSG:3857")
 
     norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
@@ -306,35 +345,7 @@ def _plot_skill_score_map_single(
     cbar.ax.yaxis.set_tick_params(color="black", labelcolor="black")
     cbar.outline.set_edgecolor("0.3")  # ty:ignore[call-non-callable]
 
-    # Scale bar: round ~15% of the map width to a nice number (e.g. 152 km → 200 km)
-    x_min, x_max = ax.get_xlim()
-    y_min, y_max = ax.get_ylim()
-    map_width_m: float = x_max - x_min
-    map_height_m: float = y_max - y_min
-    bar_m: float = round(
-        map_width_m * 0.15 / 10 ** np.floor(np.log10(map_width_m * 0.15))
-    ) * 10 ** np.floor(np.log10(map_width_m * 0.15))
-    bar_label: str = f"{int(bar_m / 1_000)} km" if bar_m >= 1_000 else f"{int(bar_m)} m"
-    bar_x0: float = x_min + map_width_m * 0.03
-    bar_y: float = y_min + map_height_m * 0.03
-    ax.plot(
-        [bar_x0, bar_x0 + bar_m],
-        [bar_y, bar_y],
-        color="white",
-        linewidth=3,
-        solid_capstyle="butt",
-        zorder=5,
-    )
-    ax.text(
-        bar_x0 + bar_m / 2,
-        bar_y + map_height_m * 0.012,
-        bar_label,
-        color="white",
-        fontsize=14,
-        ha="center",
-        va="bottom",
-        zorder=5,
-    )
+    _add_map_scale_bar(ax)
 
     ax.tick_params(labelbottom=False, labelleft=False, bottom=False, left=False)
     for spine in ax.spines.values():
@@ -345,8 +356,8 @@ def _plot_skill_score_map_single(
     plt.close(fig)
 
 
-def _plot_kge_component_maps(
-    evaluation_gdf: gpd.GeoDataFrame,
+def _draw_kge_component_maps(
+    mapped_station_scores: gpd.GeoDataFrame,
     metric_configs: tuple[dict[str, object], ...],
     output_path: Path,
     region_geom: gpd.GeoDataFrame,
@@ -357,14 +368,14 @@ def _plot_kge_component_maps(
     range from -1 to 1, while the bias and variability ratios use 0 to 2.
 
     Args:
-        evaluation_gdf: Per-station metrics with point geometry in any CRS.
+        mapped_station_scores: Per-station metrics with point geometry in any CRS.
         metric_configs: Four metric configuration dictionaries in display order:
             KGE, KGE correlation, KGE bias ratio, and KGE variability ratio.
         output_path: Output path stem (no extension); ``.svg`` and ``.png`` are saved.
         region_geom: Basin/region boundary overlaid on each map.
 
     Raises:
-        KeyError: If a configured metric is absent from ``evaluation_gdf``.
+        KeyError: If a configured metric is absent from ``mapped_station_scores``.
         ValueError: If there are not exactly four metric configurations or a
             metric configuration has no finite color scale.
     """
@@ -373,7 +384,7 @@ def _plot_kge_component_maps(
 
     for metric_config in metric_configs:
         configured_column: str = str(metric_config["col"])
-        if configured_column not in evaluation_gdf.columns:
+        if configured_column not in mapped_station_scores.columns:
             raise KeyError(
                 f"Metric '{configured_column}' is missing from evaluation data."
             )
@@ -382,7 +393,7 @@ def _plot_kge_component_maps(
                 f"Metric '{configured_column}' requires finite vmin and vmax values."
             )
 
-    gdf_3857: gpd.GeoDataFrame = evaluation_gdf.to_crs("EPSG:3857")
+    gdf_3857: gpd.GeoDataFrame = mapped_station_scores.to_crs("EPSG:3857")
     region_3857: gpd.GeoDataFrame = region_geom.to_crs("EPSG:3857")
 
     fig: plt.Figure = plt.figure(figsize=(15, 12))
@@ -523,43 +534,15 @@ def _plot_kge_component_maps(
             va="bottom",
         )
 
-    # One orientation aid is enough because all panels have identical extents.
-    lower_right_axis: plt.Axes = map_axes[3]
-    x_min, x_max = lower_right_axis.get_xlim()
-    y_min, y_max = lower_right_axis.get_ylim()
-    map_width_m: float = x_max - x_min
-    map_height_m: float = y_max - y_min
-    bar_m: float = round(
-        map_width_m * 0.15 / 10 ** np.floor(np.log10(map_width_m * 0.15))
-    ) * 10 ** np.floor(np.log10(map_width_m * 0.15))
-    bar_label: str = f"{int(bar_m / 1_000)} km" if bar_m >= 1_000 else f"{int(bar_m)} m"
-    bar_x0: float = x_min + map_width_m * 0.03
-    bar_y: float = y_min + map_height_m * 0.03
-    lower_right_axis.plot(
-        [bar_x0, bar_x0 + bar_m],
-        [bar_y, bar_y],
-        color="white",
-        linewidth=3,
-        solid_capstyle="butt",
-        zorder=5,
-    )
-    lower_right_axis.text(
-        bar_x0 + bar_m / 2,
-        bar_y + map_height_m * 0.012,
-        bar_label,
-        color="white",
-        fontsize=14,
-        ha="center",
-        va="bottom",
-        zorder=5,
-    )
+    # All panels share an extent, so one scale bar is sufficient.
+    _add_map_scale_bar(map_axes[3])
     for extension in ("svg", "png"):
         fig.savefig(f"{output_path}.{extension}", dpi=300)
     plt.close(fig)
 
 
-def plot_skill_score_maps(
-    evaluation_gdf: gpd.GeoDataFrame,
+def create_discharge_score_maps(
+    mapped_station_scores: gpd.GeoDataFrame,
     region_geom: gpd.GeoDataFrame,
     output_folder: Path,
     logger: logging.Logger,
@@ -570,7 +553,7 @@ def plot_skill_score_maps(
     Saves SVG and PNG files under ``output_folder/skill_score_maps/``.
 
     Args:
-        evaluation_gdf: Per-station metrics with point geometry in any CRS.
+        mapped_station_scores: Per-station metrics with point geometry in any CRS.
         region_geom: Basin/region boundary overlaid on each map.
         output_folder: Root folder under which ``skill_score_maps/`` is created.
         logger: Logger to use for progress messages.
@@ -586,13 +569,16 @@ def plot_skill_score_maps(
         "KGE_bias_ratio",
         "KGE_variability_ratio",
     )
-    if all(column_name in evaluation_gdf.columns for column_name in kge_metric_columns):
+    if all(
+        column_name in mapped_station_scores.columns
+        for column_name in kge_metric_columns
+    ):
         kge_metric_configs: tuple[dict[str, object], ...] = tuple(
             _SKILL_SCORE_CONFIG_BY_COLUMN[column_name]
             for column_name in kge_metric_columns
         )
-        _plot_kge_component_maps(
-            evaluation_gdf=evaluation_gdf,
+        _draw_kge_component_maps(
+            mapped_station_scores=mapped_station_scores,
             metric_configs=kge_metric_configs,
             output_path=maps_folder / "skill_score_map_kge_components",
             region_geom=region_geom,
@@ -601,12 +587,12 @@ def plot_skill_score_maps(
 
     for cfg in _DISPLAYED_SKILL_SCORE_CONFIGS:
         col: str = str(cfg["col"])
-        if col not in evaluation_gdf.columns:
+        if col not in mapped_station_scores.columns:
             logger.info("Metric '%s' not in evaluation data, skipping.", col)
             continue
 
         metric_values: np.ndarray = pd.to_numeric(
-            evaluation_gdf[col], errors="coerce"
+            mapped_station_scores[col], errors="coerce"
         ).to_numpy(dtype=float)
         valid_values: np.ndarray = metric_values[np.isfinite(metric_values)]
         if valid_values.size == 0:
@@ -618,8 +604,8 @@ def plot_skill_score_maps(
             if cfg["vmax"] is None
             else float(cast(float, cfg["vmax"]))
         )
-        _plot_skill_score_map_single(
-            evaluation_gdf=evaluation_gdf,
+        _draw_station_score_map(
+            mapped_station_scores=mapped_station_scores,
             metric_col=col,
             metric_label=str(cfg["label"]),
             cmap_name=str(cfg["cmap"]),
@@ -648,9 +634,11 @@ def plot_skill_score_maps(
                 crs="EPSG:4326",
             )
         unmatched_difference_df: gpd.GeoDataFrame = gpd.GeoDataFrame(
-            evaluation_gdf.loc[~evaluation_gdf.index.isin(difference_df.index)].copy(),
+            mapped_station_scores.loc[
+                ~mapped_station_scores.index.isin(difference_df.index)
+            ].copy(),
             geometry="geometry",
-            crs=evaluation_gdf.crs,
+            crs=mapped_station_scores.crs,
         )
         unmatched_difference_df["KGE_difference"] = np.nan
         matched_station_count: int = len(difference_df)
@@ -682,8 +670,8 @@ def plot_skill_score_maps(
             continue
         visible_limit: float = max(float(np.nanpercentile(abs(valid_values), 95)), 0.05)
         output_suffix: str = re.sub(r"[^a-z0-9]+", "_", model_name.lower()).strip("_")
-        _plot_skill_score_map_single(
-            evaluation_gdf=difference_gdf,
+        _draw_station_score_map(
+            mapped_station_scores=difference_gdf,
             metric_col="KGE_difference",
             metric_label="KGE difference (-)",
             cmap_name="RdBu",
@@ -767,8 +755,8 @@ def _draw_violin_box(
     )
 
 
-def plot_seasonal_kge(
-    evaluation_df: pd.DataFrame,
+def create_seasonal_kge_distributions(
+    station_scores: pd.DataFrame,
     output_folder: Path,
     logger: logging.Logger,
     export: bool = True,
@@ -776,7 +764,7 @@ def plot_seasonal_kge(
     """Plot seasonal distributions of KGE and its three components.
 
     Args:
-        evaluation_df: Per-station discharge evaluation metrics containing the
+        station_scores: Per-station discharge evaluation metrics containing the
             seasonal daily KGE, correlation, bias-ratio, and variability-ratio
             columns.
         output_folder: Root discharge evaluation output folder.
@@ -819,7 +807,7 @@ def plot_seasonal_kge(
         str(metric_config["column"])
         for metric_config in metric_configs
         if any(
-            f"{metric_config['column']}_daily_{season_name}" in evaluation_df.columns
+            f"{metric_config['column']}_daily_{season_name}" in station_scores.columns
             for season_name in season_names
         )
     }
@@ -840,11 +828,11 @@ def plot_seasonal_kge(
             zip(season_names, season_colors, strict=True), start=1
         ):
             column_name: str = f"{metric_name}_daily_{season_name}"
-            if column_name not in evaluation_df.columns:
+            if column_name not in station_scores.columns:
                 logger.info("Seasonal KGE column '%s' is unavailable.", column_name)
                 continue
             values: np.ndarray = pd.to_numeric(
-                evaluation_df[column_name], errors="coerce"
+                station_scores[column_name], errors="coerce"
             ).to_numpy(dtype=float)
             finite_values: np.ndarray = values[np.isfinite(values)]
             if finite_values.size == 0:
@@ -915,8 +903,8 @@ def plot_seasonal_kge(
     plt.close(figure)
 
 
-def plot_skill_score_boxplots(
-    evaluation_df: pd.DataFrame,
+def create_discharge_score_distributions(
+    station_scores: pd.DataFrame,
     external_models: dict[str, pd.DataFrame],
     output_folder: Path,
     logger: logging.Logger,
@@ -930,7 +918,7 @@ def plot_skill_score_boxplots(
     """Create skill score violin+boxplot graphs for each evaluation metric.
 
     Args:
-        evaluation_df: GEB evaluation metrics.
+        station_scores: GEB evaluation metrics.
         external_models: External model metrics keyed by model name.
         output_folder: Folder where output figures are saved.
         logger: Logger to use for progress messages.
@@ -942,7 +930,7 @@ def plot_skill_score_boxplots(
             plotted GEB stations (km2).
         station_count: Number of plotted GEB stations.
     """
-    if include_geb and evaluation_df.empty:
+    if include_geb and station_scores.empty:
         logger.info(
             "No discharge stations found for evaluation. Skipping skill score graphs."
         )
@@ -975,20 +963,21 @@ def plot_skill_score_boxplots(
     geb_only: bool = include_geb and not external_models
 
     if matched_only and include_geb and len(external_models) == 1:
-        paired_model_df: pd.DataFrame = next(iter(external_models.values()))
+        paired_model_scores: pd.DataFrame = next(iter(external_models.values()))
         available_metrics: tuple[str, ...] = tuple(
             metric_col
             for metric_col in metric_order
-            if metric_col in evaluation_df.columns
-            and metric_col in paired_model_df.columns
+            if metric_col in station_scores.columns
+            and metric_col in paired_model_scores.columns
         )
     else:
         available_metrics = tuple(
             metric_col
             for metric_col in metric_order
-            if (include_geb and metric_col in evaluation_df.columns)
+            if (include_geb and metric_col in station_scores.columns)
             or any(
-                metric_col in model_df.columns for model_df in external_models.values()
+                metric_col in model_scores.columns
+                for model_scores in external_models.values()
             )
         )
     if not available_metrics:
@@ -1024,7 +1013,7 @@ def plot_skill_score_boxplots(
             metric_grid[row_index, grid_column_start : grid_column_start + 2]
         )
     displayed_station_count: int | None = (
-        station_count if station_count is not None else len(evaluation_df)
+        station_count if station_count is not None else len(station_scores)
     )
 
     component_titles: dict[str, str] = {
@@ -1036,13 +1025,16 @@ def plot_skill_score_boxplots(
         config: dict[str, object] = _SKILL_SCORE_CONFIG_BY_COLUMN[metric_col]
         axis = axes_by_metric[str(config["col"])]
         if matched_only and include_geb and len(external_models) == 1:
-            model_name, model_df = next(iter(external_models.items()))
-            if metric_col in evaluation_df.columns and metric_col in model_df.columns:
+            model_name, model_scores = next(iter(external_models.items()))
+            if (
+                metric_col in station_scores.columns
+                and metric_col in model_scores.columns
+            ):
                 geb_values: np.ndarray = pd.to_numeric(
-                    evaluation_df[metric_col], errors="coerce"
+                    station_scores[metric_col], errors="coerce"
                 ).to_numpy(dtype=float)
                 model_values: np.ndarray = pd.to_numeric(
-                    model_df[metric_col], errors="coerce"
+                    model_scores[metric_col], errors="coerce"
                 ).to_numpy(dtype=float)
                 valid_pairs: np.ndarray = np.isfinite(geb_values) & np.isfinite(
                     model_values
@@ -1055,19 +1047,19 @@ def plot_skill_score_boxplots(
                 geb_metric_values = np.array([], dtype=float)
                 external_metric_values = {}
         else:
-            if include_geb and metric_col in evaluation_df.columns:
+            if include_geb and metric_col in station_scores.columns:
                 geb_metric_values = pd.to_numeric(
-                    evaluation_df[metric_col], errors="coerce"
+                    station_scores[metric_col], errors="coerce"
                 ).to_numpy(dtype=float)
                 geb_metric_values = geb_metric_values[np.isfinite(geb_metric_values)]
             else:
                 geb_metric_values = np.array([], dtype=float)
             external_metric_values = {}
-            for model_name, model_df in external_models.items():
-                if metric_col not in model_df.columns:
+            for model_name, model_scores in external_models.items():
+                if metric_col not in model_scores.columns:
                     continue
                 metric_values: np.ndarray = pd.to_numeric(
-                    model_df[metric_col], errors="coerce"
+                    model_scores[metric_col], errors="coerce"
                 ).to_numpy(dtype=float)
                 metric_values = metric_values[np.isfinite(metric_values)]
                 if metric_values.size > 0:
@@ -1162,8 +1154,8 @@ def plot_skill_score_boxplots(
         best_possible_value: float = 0.0 if metric_col == "RRMSE" else 1.0
         axis.axhline(
             best_possible_value,
-            color=BEST_POSSIBLE_LINE_COLOR,
-            linewidth=BEST_POSSIBLE_LINE_WIDTH,
+            color=LINE_COLOR,
+            linewidth=LINE_WIDTH,
             linestyle="--",
             zorder=1,
         )
@@ -1216,8 +1208,8 @@ def plot_skill_score_boxplots(
         Line2D(
             [0],
             [0],
-            color=BEST_POSSIBLE_LINE_COLOR,
-            linewidth=BEST_POSSIBLE_LINE_WIDTH,
+            color=LINE_COLOR,
+            linewidth=LINE_WIDTH,
             linestyle="--",
             label="Best-possible value (1; RRMSE: 0)",
         )
@@ -1279,7 +1271,7 @@ def plot_skill_score_boxplots(
     logger.info("Skill score plots created.")
 
 
-def plot_kge_external_model_comparison(
+def create_external_kge_comparison(
     model_kge_values: dict[str, tuple[np.ndarray, np.ndarray, int, float | None]],
     output_folder: Path,
     logger: logging.Logger,
@@ -1432,26 +1424,27 @@ def plot_kge_external_model_comparison(
     plt.close(fig)
 
 
-def plot_skill_scores_vs_upstream_area(
-    evaluation_df: pd.DataFrame,
+def create_upstream_area_score_plots(
+    station_scores: pd.DataFrame,
     output_folder: Path,
     logger: logging.Logger,
 ) -> None:
     """Plot upstream area against discharge skill scores.
 
     Args:
-        evaluation_df: Per-station evaluation metrics with `upstream_area_GEB` (m2).
+        station_scores: Per-station evaluation metrics with `upstream_area_GEB` (m2).
         output_folder: Root folder where the scatterplot is saved.
         logger: Logger to use for progress messages.
 
     Raises:
         ValueError: If `upstream_area_GEB` is missing from the evaluation metrics.
     """
-    if "upstream_area_GEB" not in evaluation_df.columns:
+    if "upstream_area_GEB" not in station_scores.columns:
         raise ValueError("`upstream_area_GEB` is missing from evaluation metrics.")
 
     upstream_area_km2: pd.Series = (
-        pd.to_numeric(evaluation_df["upstream_area_GEB"], errors="coerce") / 1_000_000.0
+        pd.to_numeric(station_scores["upstream_area_GEB"], errors="coerce")
+        / 1_000_000.0
     )
 
     metric_order: tuple[str, ...] = (
@@ -1480,13 +1473,13 @@ def plot_skill_scores_vs_upstream_area(
     for metric_col in metric_order:
         cfg: dict[str, object] = _SKILL_SCORE_CONFIG_BY_COLUMN[metric_col]
         axis: plt.Axes = axes_by_metric[str(cfg["col"])]
-        if metric_col not in evaluation_df.columns:
+        if metric_col not in station_scores.columns:
             logger.info("Metric '%s' not in evaluation data, skipping.", metric_col)
             axis.set_visible(False)
             continue
 
         metric_values: pd.Series = pd.to_numeric(
-            evaluation_df[metric_col], errors="coerce"
+            station_scores[metric_col], errors="coerce"
         )
         valid_mask: pd.Series = upstream_area_km2.gt(0) & metric_values.notna()
         if not valid_mask.any():

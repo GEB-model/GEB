@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import Any
 
 import geopandas as gpd
 import numpy as np
@@ -18,7 +19,7 @@ DASHBOARD_COLUMNS: dict[str, str] = {
 }
 
 
-def station_exclusion_reason(
+def get_station_exclusion_reason(
     station: pd.Series,
     report_path: Path,
     report_station: pd.Series | None = None,
@@ -40,6 +41,7 @@ def station_exclusion_reason(
         not np.isfinite(original_area)
         or original_area <= 0
         or not np.isfinite(routing_area)
+        or routing_area <= 0
     ):
         return "Missing upstream area."
     original_pixel: np.ndarray = np.asarray(station["original_pixel_lonlat"])
@@ -84,7 +86,7 @@ def station_exclusion_reason(
     return ""
 
 
-def excluded_station_locations(
+def find_excluded_stations(
     stations: gpd.GeoDataFrame, report_folder: Path
 ) -> gpd.GeoDataFrame:
     """Build dashboard records for stations that fail routing or report checks.
@@ -107,7 +109,7 @@ def excluded_station_locations(
     )
     reasons: pd.Series = pd.Series("", index=stations.index)
     for station_id, station in stations.iterrows():
-        reasons.loc[station_id] = station_exclusion_reason(
+        reasons.loc[station_id] = get_station_exclusion_reason(
             station,
             report_folder
             / "hydrology.routing"
@@ -144,7 +146,7 @@ def excluded_station_locations(
     return excluded
 
 
-def complete_dashboard_stations(
+def collect_dashboard_exclusions(
     evaluated: gpd.GeoDataFrame,
     excluded: gpd.GeoDataFrame,
     snapped: gpd.GeoDataFrame,

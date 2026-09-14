@@ -49,13 +49,13 @@ class MatchedSkillScores:
     """GEB and external scores aligned to the same gauging stations.
 
     Args:
-        geb: Filtered GEB skill-score table.
-        external: External skill-score table in the same station order.
+        geb_scores: Filtered GEB skill-score table.
+        external_scores: External skill-score table in the same station order.
         minimum_upstream_area_km2: Effective GEB upstream-area threshold (km2).
     """
 
-    geb: pd.DataFrame
-    external: pd.DataFrame
+    geb_scores: pd.DataFrame
+    external_scores: pd.DataFrame
     minimum_upstream_area_km2: float
 
 
@@ -76,7 +76,9 @@ def format_grdc_station_key(station_id: object) -> str | None:
     if station_id_text.startswith("GRDC_"):
         return station_id_text
     try:
-        station_id_text = str(int(float(station_id_text)))
+        numeric_id: float = float(station_id_text)
+        if numeric_id.is_integer():
+            station_id_text = str(int(numeric_id))
     except ValueError:
         pass
     return f"GRDC_{station_id_text}"
@@ -99,6 +101,8 @@ def _add_match_keys(table: pd.DataFrame) -> pd.DataFrame:
         )
     else:
         keyed_table["station_name_key"] = ""
+    if "station_ID" not in keyed_table.columns and table.index.name == "station_ID":
+        keyed_table["station_ID"] = table.index
     if "station_ID" in keyed_table.columns:
         keyed_table["station_id_key"] = (
             keyed_table["station_ID"].map(format_grdc_station_key).fillna("")
@@ -152,10 +156,10 @@ def _read_model_metrics_from_archive(
         values.name = metric_name
         metric_series[metric_name] = values
 
-    model_df: pd.DataFrame = pd.concat(metric_series.values(), axis=1)
-    model_df.index = model_df.index.map(str).str.strip().str.upper()
-    model_df["R2"] = model_df["KGE_correlation"] ** 2
-    return model_df.dropna(how="all")
+    model_scores: pd.DataFrame = pd.concat(metric_series.values(), axis=1)
+    model_scores.index = model_scores.index.map(str).str.strip().str.upper()
+    model_scores["R2"] = model_scores["KGE_correlation"] ** 2
+    return model_scores.dropna(how="all")
 
 
 def load_external_skill_scores(
@@ -222,8 +226,8 @@ def load_external_skill_scores(
         )
         return external_models
 
-    for model_name, model_df in external_models.items():
-        duplicate_count: int = int(model_df.index.duplicated(keep="first").sum())
+    for model_name, model_scores in external_models.items():
+        duplicate_count: int = int(model_scores.index.duplicated(keep="first").sum())
         if duplicate_count:
             logger.info(
                 "External model '%s': keeping the first row for %d duplicate "
@@ -231,12 +235,14 @@ def load_external_skill_scores(
                 model_name,
                 duplicate_count,
             )
-            model_df = model_df[~model_df.index.duplicated(keep="first")].copy()
-            external_models[model_name] = model_df
+            model_scores = model_scores[
+                ~model_scores.index.duplicated(keep="first")
+            ].copy()
+            external_models[model_name] = model_scores
         logger.info(
             "Loaded external model '%s' metrics for %d stations.",
             model_name,
-            len(model_df),
+            len(model_scores),
         )
     return external_models
 
@@ -261,21 +267,21 @@ def filter_external_skill_scores(
     matched_external_models: dict[str, pd.DataFrame] = {}
     output_folder.mkdir(parents=True, exist_ok=True)
     station_keys_upper: set[str] = {station_key.upper() for station_key in station_keys}
-    for model_name, all_stations_df in external_models.items():
-        matched_df: pd.DataFrame = all_stations_df[
-            all_stations_df.index.isin(station_keys_upper)
+    for model_name, all_station_scores in external_models.items():
+        matched_scores: pd.DataFrame = all_station_scores[
+            all_station_scores.index.isin(station_keys_upper)
         ].copy()
         logger.info(
             "External model '%s': %d/%d external stations matched.",
             model_name,
-            len(matched_df),
-            len(all_stations_df),
+            len(matched_scores),
+            len(all_station_scores),
         )
-        matched_df.to_excel(
+        matched_scores.to_excel(
             output_folder / f"external_evaluation_filtered_{model_name}.xlsx"
         )
-        if not matched_df.empty:
-            matched_external_models[model_name] = matched_df
+        if not matched_scores.empty:
+            matched_external_models[model_name] = matched_scores
     return matched_external_models
 
 
@@ -293,11 +299,11 @@ def load_geb_station_keys(
         Uppercase station-name and GRDC-style station ID keys.
     """
     if evaluation_metrics_path.exists():
-        evaluation_df: pd.DataFrame = pd.read_excel(evaluation_metrics_path)
-        if not evaluation_df.empty:
-            keyed_evaluation_df: pd.DataFrame = _add_match_keys(evaluation_df)
-            station_keys: set[str] = set(keyed_evaluation_df["station_name_key"])
-            station_keys.update(keyed_evaluation_df["station_id_key"])
+        station_scores: pd.DataFrame = pd.read_excel(evaluation_metrics_path)
+        if not station_scores.empty:
+            station_scores_with_keys: pd.DataFrame = _add_match_keys(station_scores)
+            station_keys: set[str] = set(station_scores_with_keys["station_name_key"])
+            station_keys.update(station_scores_with_keys["station_id_key"])
             station_keys.discard("")
             return station_keys
 
@@ -321,7 +327,7 @@ def load_geb_station_keys(
 
 
 def match_external_skill_scores(
-    evaluation_df: pd.DataFrame,
+    station_scores: pd.DataFrame,
     external_models: dict[str, pd.DataFrame],
     output_folder: Path,
     logger: logging.Logger,
@@ -330,7 +336,7 @@ def match_external_skill_scores(
     """Prepare matched GEB-vs-external scores for each external model.
 
     Args:
-        evaluation_df: Loaded and upstream-area-filtered GEB metrics.
+        station_scores: Loaded and upstream-area-filtered GEB metrics.
         external_models: Loaded external metrics keyed by model name.
         output_folder: Folder where matched external tables are saved.
         logger: Logger used for diagnostics.
@@ -340,53 +346,58 @@ def match_external_skill_scores(
         Plot inputs keyed by external model label.
     """
     matched_scores: dict[str, MatchedSkillScores] = {}
-    if evaluation_df.empty or not external_models:
+    if station_scores.empty or not external_models:
         return matched_scores
 
-    keyed_evaluation_df: pd.DataFrame = _add_match_keys(evaluation_df)
-    eligible_geb_df: pd.DataFrame = keyed_evaluation_df[
-        keyed_evaluation_df["upstream_area_GEB"]
+    station_scores_with_keys: pd.DataFrame = _add_match_keys(station_scores)
+    eligible_geb_scores: pd.DataFrame = station_scores_with_keys[
+        station_scores_with_keys["upstream_area_GEB"]
         >= minimum_upstream_area_km2 * 1_000_000.0
     ].copy()
     output_folder.mkdir(parents=True, exist_ok=True)
-    for model_name, external_model_df in external_models.items():
-        external_station_keys: set[str] = set(external_model_df.index.str.upper())
-        matched_geb_df: pd.DataFrame = eligible_geb_df[
-            eligible_geb_df["station_name_key"].isin(external_station_keys)
-            | eligible_geb_df["station_id_key"].isin(external_station_keys)
+    for model_name, external_model_scores in external_models.items():
+        external_station_keys: set[str] = set(external_model_scores.index.str.upper())
+        matched_geb_scores: pd.DataFrame = eligible_geb_scores[
+            eligible_geb_scores["station_name_key"].isin(external_station_keys)
+            | eligible_geb_scores["station_id_key"].isin(external_station_keys)
         ].copy()
-        if matched_geb_df.empty:
+        if matched_geb_scores.empty:
             continue
 
-        matched_external_keys: pd.Series = matched_geb_df["station_name_key"].where(
-            matched_geb_df["station_name_key"].isin(external_station_keys),
-            matched_geb_df["station_id_key"],
+        matched_external_keys: pd.Series = matched_geb_scores["station_id_key"].where(
+            matched_geb_scores["station_id_key"].isin(external_station_keys),
+            matched_geb_scores["station_name_key"],
         )
-        matched_external_df: pd.DataFrame = external_model_df.reindex(
+        matched_external_scores: pd.DataFrame = external_model_scores.reindex(
             matched_external_keys
         ).copy()
-        matched_external_df.index = matched_geb_df.index
+        matched_external_scores.index = matched_geb_scores.index
 
-        if "KGE" in matched_geb_df.columns and "KGE" in matched_external_df.columns:
-            matched_geb_df["KGE_difference"] = (
-                pd.to_numeric(matched_geb_df["KGE"], errors="coerce").to_numpy()
-                - pd.to_numeric(matched_external_df["KGE"], errors="coerce").to_numpy()
+        if (
+            "KGE" in matched_geb_scores.columns
+            and "KGE" in matched_external_scores.columns
+        ):
+            matched_geb_scores["KGE_difference"] = (
+                pd.to_numeric(matched_geb_scores["KGE"], errors="coerce").to_numpy()
+                - pd.to_numeric(
+                    matched_external_scores["KGE"], errors="coerce"
+                ).to_numpy()
             )
 
-        matched_external_df.to_excel(
+        matched_external_scores.to_excel(
             output_folder / f"external_evaluation_filtered_{model_name}.xlsx"
         )
         logger.info(
             "Pairwise external model '%s': %d matched stations.",
             model_name,
-            len(matched_geb_df),
+            len(matched_geb_scores),
         )
 
         matched_scores[model_name] = MatchedSkillScores(
-            geb=matched_geb_df.drop(
+            geb_scores=matched_geb_scores.drop(
                 columns=["station_name_key", "station_id_key"], errors="ignore"
             ),
-            external=matched_external_df,
+            external_scores=matched_external_scores,
             minimum_upstream_area_km2=minimum_upstream_area_km2,
         )
     return matched_scores

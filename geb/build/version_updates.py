@@ -16,7 +16,7 @@ VERSION_UPDATES: dict[str, list[str]] = {
     "1.0.0b31": [
         "[update-method;setup_hydrography]",
         "[update-method;setup_discharge_observations]",
-        "[manual] Rerun evaluation",
+        "[manual] Rerun the simulation to report discharge at the rebuilt station locations, then rerun evaluation.",
     ],
     "1.0.0b30": [
         "[update-method;setup_retention_basins]",

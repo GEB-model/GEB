@@ -286,9 +286,9 @@ class Observations(BuildModelBase):
 
         # GRDC provides a fixed UTC offset relative to the national capital.
         # Custom stations are absent from this metadata and therefore default to UTC.
-        raw_timezone_utc_offsets: pd.Series = (
-            discharge_observations.timezone.to_pandas()
-        )
+        raw_timezone_utc_offsets: pd.Series = discharge_observations.timezone.sel(
+            id=needed_ids
+        ).to_pandas()
         timezone_utc_offsets: pd.Series = (
             raw_timezone_utc_offsets.fillna(0.0)
             .astype(float)
@@ -361,39 +361,6 @@ class Observations(BuildModelBase):
             "timezone_utc_offset",
         ]
 
-        if obs_metadata.empty:
-            # No stations found - create empty files
-            self.logger.warning(
-                "No discharge stations found in the region. Creating empty files"
-            )
-            # Create empty snapping results Excel file with proper columns
-            discharge_snapping_df = pd.DataFrame(columns=np.array(empty_cols))
-            discharge_snapping_df.to_excel(
-                discharge_snapping_folder / "discharge_snapping.xlsx",
-                index=False,
-            )
-
-            # Create empty discharge table
-            empty_discharge_df = pd.DataFrame()
-            self.set_table(
-                empty_discharge_df, name="discharge/discharge_observations_hourly"
-            )
-            self.set_table(
-                empty_discharge_df, name="discharge/discharge_observations_daily"
-            )
-
-            # Create empty snapped locations geometry
-            empty_geom: gpd.GeoDataFrame = gpd.GeoDataFrame(
-                discharge_snapping_df,
-                geometry=gpd.GeoSeries([], crs="EPSG:4326"),
-                crs="EPSG:4326",
-            ).set_index(pd.Index([], name="discharge_observations_station_ID"))  # ty:ignore[invalid-assignment]
-            self.set_geom(empty_geom, name="discharge/discharge_snapped_locations")
-
-            self.logger.info("Empty discharge datasets created")
-
-            return
-
         # Snap stations directly to original-resolution river pixels.
         discharge_snapping_results: list[dict[str, Any]] = []
 
@@ -413,7 +380,11 @@ class Observations(BuildModelBase):
 
             snap_results: DischargeSnappingResults | None = snap_discharge_station(
                 station_location=shapely.geometry.Point(station_lonlat),
-                station_upstream_area_m2=station_upstream_area_m2,
+                station_upstream_area_m2=(
+                    None
+                    if station_source.startswith("custom:")
+                    else station_upstream_area_m2
+                ),
                 original_upstream_area=original_upstream_area,
                 original_river_ids=original_river_ids,
                 routing_upstream_area=routing_upstream_area,
@@ -445,6 +416,8 @@ class Observations(BuildModelBase):
                     "GEB_upstream_area_from_grid": snap_results.routing_upstream_area_m2,
                     "discharge_observations_to_GEB_upstream_area_ratio": (
                         station_upstream_area_m2 / snap_results.routing_upstream_area_m2
+                        if np.isfinite(station_upstream_area_m2)
+                        else 1.0
                     ),
                     "station_to_original_distance_m": (
                         snap_results.station_to_original_distance_m
