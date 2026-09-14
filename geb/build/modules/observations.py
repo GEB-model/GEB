@@ -314,16 +314,16 @@ class Observations(BuildModelBase):
             )
         )
         daily_ids.difference_update(duplicate_stations)
+        exclusion_reasons: dict[Any, str] = {}
+        for station_id, matching_ids in duplicate_stations.items():
+            matching_station_ids: str = ", ".join(str(value) for value in matching_ids)
+            exclusion_reasons[station_id] = (
+                f"Duplicate observations shared with station(s) {matching_station_ids} "
+                "for at least 5 years; the correct location is unknown."
+            )
         obs_metadata["evaluation_exclusion_reason"] = (
             obs_metadata["discharge_observations_station_ID"]
-            .map(
-                {
-                    station_id: "Duplicate observations shared with station(s) "
-                    + ", ".join(str(value) for value in matching_ids)
-                    + " for at least 5 years; the correct location is unknown."
-                    for station_id, matching_ids in duplicate_stations.items()
-                }
-            )
+            .map(exclusion_reasons)
             .fillna("")
         )
         if duplicate_stations:
