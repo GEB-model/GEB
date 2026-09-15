@@ -35,7 +35,7 @@ from ..store import Bucket, DynamicArray
 from ..workflows import balance_check
 from ..workflows.io import read_array
 from .decision_module import DecisionModule
-from .decision_module_ml import DecisionModuleML, ML_FARMER_DAILY_REPORTS
+from .decision_module_ml import ML_FARMER_DAILY_REPORTS, DecisionModuleML
 from .general import AgentBaseClass
 from .workflows.crop_farmers import (
     abstract_water,
@@ -571,7 +571,11 @@ class CropFarmers(AgentBaseClass):
             self.decision_module_ml.run_due()
 
     def farmers_due_for_earliest_subregion_candidate_planting(self) -> np.ndarray:
-        """Expose the farmer selection used for today's ML crop decisions."""
+        """Expose the farmer selection used for today's ML crop decisions.
+
+        Returns:
+            Farmer indices whose crop decisions are due today.
+        """
         self._initialize_decision_module_ml()
         if self.decision_module_ml is None or self.model.in_spinup:
             return np.empty(0, dtype=np.int64)
@@ -586,6 +590,9 @@ class CropFarmers(AgentBaseClass):
         location, crop rotation, loans etc. Furthermore, it creates empty
         AgentArrays to store information about agents.
 
+        Raises:
+            ValueError: If the configured crop-calendar data has an unsupported
+                dimensionality or a multi-year calendar is missing its year array.
         """
         self.var.crop_data_type, self.var.crop_data = load_crop_data(self.model.files)
         self.var.crop_ids = self.var.crop_data["name"].to_dict()
@@ -669,7 +676,7 @@ class CropFarmers(AgentBaseClass):
         self.HRU.var.crop_age_days_map = np.full_like(self.HRU.var.land_owners, -1)
         self.HRU.var.crop_harvest_age_days = np.full_like(self.HRU.var.land_owners, -1)
 
-        """Calls functions to initialize all agent attributes, including their locations. Then, crops are initially planted."""
+        # Initialize all agent attributes and plant the initial crops.
         # If initial conditions based on spinup period need to be loaded, load them. Otherwise, generate them.
 
         farms = self.model.hydrology.farms
@@ -2312,6 +2319,10 @@ class CropFarmers(AgentBaseClass):
 
         Note:
             The function also updates the drought risk perception and tracks disposable income.
+
+        Raises:
+            AssertionError: If harvested crop, yield, price, income, or decision-state
+                consistency checks fail.
         """
         # Reset only the sparse decision reporters. crop_decision_spei is a
         # continuous daily state and is updated once at the start of step().
@@ -2617,7 +2628,14 @@ class CropFarmers(AgentBaseClass):
         return days_since_start
 
     def _handle_crop_decision_structure_problem(self, message: str) -> None:
-        """Log an invalid decision structure and raise unless explicitly disabled."""
+        """Log an invalid decision structure and raise unless explicitly disabled.
+
+        Args:
+            message: Description of the invalid crop-decision structure.
+
+        Raises:
+            AssertionError: If strict crop-decision checks are enabled.
+        """
         self.model.logger.error(message)
         strict_checks = self.model.config["agent_settings"]["farmers"].get(
             "strict_crop_decision_checks",
@@ -2636,6 +2654,10 @@ class CropFarmers(AgentBaseClass):
         reporter time coordinate provides the exact event timestamp. SPEI is
         deliberately not written here: ``crop_decision_spei`` is now sampled
         daily and later re-anchored to the selected ML predictor timestamp.
+
+        Raises:
+            AssertionError: If farmer indices, calendar state, or decision reporters
+                are inconsistent with the expected decision event.
         """
         deciding_farmers = np.asarray(deciding_farmers, dtype=np.int64)
 
@@ -2932,7 +2954,11 @@ class CropFarmers(AgentBaseClass):
             )
 
         def advance_farmers(farmers_to_advance: np.ndarray, reason: str) -> None:
-            """Advance crop-rotation year and HRL crop-calendar year for farmers."""
+            """Advance crop-rotation year and HRL crop-calendar year for farmers.
+
+            Raises:
+                AssertionError: If rotation years or calendar advancement are invalid.
+            """
             farmers_to_advance = np.asarray(farmers_to_advance, dtype=np.int64)
 
             if farmers_to_advance.size == 0:
@@ -3698,6 +3724,9 @@ class CropFarmers(AgentBaseClass):
         when the nearest-month timestamp changes, stores that farmer vector in
         a compact circular monthly cache, and reuses it on intervening days.
         Harvest-time SPEI uses the same exposed value.
+
+        Raises:
+            AssertionError: If sampled daily SPEI has an unexpected farmer dimension.
         """
         if self.var.n == 0:
             return
