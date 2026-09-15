@@ -1,23 +1,19 @@
 """Module implementing hydrology evaluation functions for the GEB model."""
 
-import re
 import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast
 
 import geopandas as gpd
 import matplotlib as mpl
-import matplotlib.colors as mcolors
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib import colormaps as mcolormaps
-from matplotlib.collections import LineCollection
 from matplotlib.lines import Line2D
 from tqdm import tqdm
 
-from geb.build.data_catalog import DataCatalog
 from geb.evaluate.workflows import (
     discharge_characteristics,
     discharge_plots,
@@ -27,7 +23,6 @@ from geb.evaluate.workflows import (
 from geb.evaluate.workflows.dashboard import (
     DischargeDashboardGeometries,
     build_station_chart_data,
-    load_dashboard_characteristics,
     load_discharge_dashboard_geometries,
     write_discharge_dashboard,
     write_station_chart_data,
@@ -38,10 +33,7 @@ from geb.evaluate.workflows.discharge_metrics import (
     DischargeMetrics,
     calculate_discharge_metrics,
     calculate_seasonal_discharge_metrics,
-)
-from geb.evaluate.workflows.discharge_plots import (
-    OBSERVATIONS_COLOR,
-    SIMULATIONS_COLOR,
+    use_daily_discharge_scores,
 )
 from geb.evaluate.workflows.discharge_station_checks import (
     collect_dashboard_exclusions,
@@ -55,9 +47,6 @@ if TYPE_CHECKING:
     from geb.evaluate import Evaluate
     from geb.model import GEBModel
 
-from geb.workflows.extreme_value_analysis import (
-    ReturnPeriodModel,
-)
 from geb.workflows.io import read_geom, read_table
 
 DISCHARGE_OBSERVATION_FREQUENCIES: dict[str, str] = {
@@ -91,600 +80,54 @@ class DischargeEvaluationPaths(NamedTuple):
     metrics_geoparquet: Path
 
 
-# Discharge metrics
+# Water-balance axis formatting
 
 
-def _use_daily_scores_for_plotting(station_scores: pd.DataFrame) -> None:
-    """Add unsuffixed plotting columns from available daily metrics.
-
-    Args:
-        station_scores: Discharge evaluation table modified in place.
-    """
-    for metric_name in DischargeMetrics._fields:
-        daily_column: str = f"{metric_name}_daily"
-        if daily_column in station_scores.columns:
-            station_scores[metric_name] = station_scores[daily_column]
-
-
-# Discharge and outflow plots
-
-
-def save_station_return_period_plots(
-    discharge_comparison: pd.DataFrame,
-    station_id: Any,
-    eval_plot_folder: Path,
-) -> None:
-    """Plot overlaid GPD-POT return-period curves and save a simplified version for popups.
-
-    Args:
-        discharge_comparison: Validation dataframe containing `discharge_observations` and `discharge_simulations` (m3/s).
-        station_id: Station identifier used in output file names.
-        eval_plot_folder: Output directory for generated plots.
-
-    """
-    return_periods_years: list[int | float] = [2, 5, 10, 25, 50, 100]
-
-    # Use first_significant strategy for consistent evaluation
-    strategy = "first_significant"
-    fixed_shape = 0.0  # 0.0 is Gumbel distribution for better stability in validation
-
-    obs_model = ReturnPeriodModel(
-        series=discharge_comparison["discharge_observations"],
-        return_periods=return_periods_years,
-        fixed_shape=fixed_shape,
-        selection_strategy=strategy,
-    )
-
-    # For the simulated series, we want to ensure that we only
-    # include values where there are corresponding observed values
-    simulated_series: pd.Series = discharge_comparison["discharge_simulations"].copy()
-    simulated_series[discharge_comparison["discharge_observations"].isna()] = np.nan
-
-    sim_model = ReturnPeriodModel(
-        series=simulated_series,
-        return_periods=return_periods_years,
-        fixed_shape=fixed_shape,
-        selection_strategy=strategy,
-    )
-
-    # 1. Simplified Fit for Popups
-    fig_simple, ax_fit_simple = plt.subplots(figsize=(14, 4))
-    obs_model.plot_fit(
-        ax=ax_fit_simple, label_prefix="Observed", color=OBSERVATIONS_COLOR
-    )
-    sim_model.plot_fit(
-        ax=ax_fit_simple, label_prefix="Simulated", color=SIMULATIONS_COLOR
-    )
-    return_periods_folder: Path = eval_plot_folder / "return_periods"
-    return_periods_folder.mkdir(parents=True, exist_ok=True)
-    plt.savefig(
-        return_periods_folder / f"return_period_fit_{station_id}.png",
-        bbox_inches="tight",
-        dpi=300,
-    )
-    plt.close(fig_simple)
-
-    # 2. Large composite figure for detailed reports
-    # Top row: Combined return level fit (wide)
-    # Below: Two columns of diagnostics (Obs on left, Sim on right)
-    fig = plt.figure(figsize=(24, 20))
-    gs = fig.add_gridspec(5, 2)
-
-    # Combined Fit (Top)
-    ax_fit = fig.add_subplot(gs[0, :])
-    obs_model.plot_fit(ax=ax_fit, label_prefix="Observed", color=OBSERVATIONS_COLOR)
-    sim_model.plot_fit(ax=ax_fit, label_prefix="Simulated", color=SIMULATIONS_COLOR)
-    # Obs Diagnostics (Column 1)
-    gs_obs = gs[1:, 0].subgridspec(4, 2)
-    obs_axes_gof = [
-        fig.add_subplot(gs_obs[0, 0]),
-        fig.add_subplot(gs_obs[0, 1]),
-        fig.add_subplot(gs_obs[1, 0]),
-    ]
-    obs_model.plot_gof(axes=obs_axes_gof)
-    for ax in obs_axes_gof:
-        ax.set_title(f"Obs: {ax.get_title()}", fontsize=10)
-
-    obs_axes_sel = [
-        fig.add_subplot(gs_obs[1, 1]),
-        fig.add_subplot(gs_obs[2, 0]),
-        fig.add_subplot(gs_obs[2, 1]),
-        fig.add_subplot(gs_obs[3, 0]),
-    ]
-    obs_model.plot_selection_diagnostics(axes=obs_axes_sel)
-
-    # Sim Diagnostics (Column 2)
-    gs_sim = gs[1:, 1].subgridspec(4, 2)
-    sim_axes_gof = [
-        fig.add_subplot(gs_sim[0, 0]),
-        fig.add_subplot(gs_sim[0, 1]),
-        fig.add_subplot(gs_sim[1, 0]),
-    ]
-    sim_model.plot_gof(axes=sim_axes_gof)
-    for ax in sim_axes_gof:
-        ax.set_title(f"Sim: {ax.get_title()}", fontsize=10)
-
-    sim_axes_sel = [
-        fig.add_subplot(gs_sim[1, 1]),
-        fig.add_subplot(gs_sim[2, 0]),
-        fig.add_subplot(gs_sim[2, 1]),
-        fig.add_subplot(gs_sim[3, 0]),
-    ]
-    sim_model.plot_selection_diagnostics(axes=sim_axes_sel)
-
-    plt.tight_layout()
-    plt.savefig(
-        return_periods_folder / f"return_period_validation_{station_id}.svg",
-        bbox_inches="tight",
-    )
-    plt.close()
-
-
-def save_outflow_return_period_plot(
-    outflow_series_m3_per_s: pd.Series,
-    outlet_id: str,
-    outflow_plot_folder: Path,
-    outflow_file_stem: str,
-    frequency: str,
-) -> None:
-    """Plot complete GPD-POT diagnostics for one outflow time series.
-
-    Args:
-        outflow_series_m3_per_s: Outflow discharge time series (m3/s).
-        outlet_id: Outflow outlet identifier.
-        outflow_plot_folder: Output directory for outflow plots.
-        outflow_file_stem: Base filename stem used to save the figure.
-        frequency: Data frequency string for plot titles (e.g., "daily", "hourly").
-    """
-    return_periods_years: list[int | float] = [2, 5, 10, 25, 50, 100]
-    model = ReturnPeriodModel(
-        series=outflow_series_m3_per_s,
-        return_periods=return_periods_years,
-        fixed_shape=0.0,
-        selection_strategy="best_fit",
-    )
-
-    fig = model.plot_diagnostics(figsize=(18, 14))
-    fig.suptitle(
-        f"Outflow Diagnostics ({frequency}): {outlet_id}",
-        fontsize=16,
-        fontweight="bold",
-    )
-
-    plt.savefig(
-        outflow_plot_folder / f"{outflow_file_stem}_return_period.svg",
-        bbox_inches="tight",
-    )
-    plt.close()
-
-
-def _draw_outflow_with_frozen_soil_fraction(
+def _format_timeseries_axis(
     axis: plt.Axes,
-    time_index: pd.DatetimeIndex,
-    outflow_series_m3_per_s: pd.Series,
-    frozen_fraction_percent: pd.Series,
-    frozen_fraction_cmap: mcolors.Colormap,
-    linewidth: float,
-    bucket_count: int = 10,
-) -> LineCollection | None:
-    """Plot an outflow line colored by the top-soil frozen fraction.
-
-    Args:
-        axis: Axis receiving the colored line.
-        time_index: Timestamps shown on the x-axis.
-        outflow_series_m3_per_s: Outflow series aligned to `time_index` (m3/s).
-        frozen_fraction_percent: Basin-mean top-soil frozen fraction (%).
-        frozen_fraction_cmap: Colormap where blue maps to 0% and white to 100%.
-        linewidth: Line width for the colored outflow path.
-        bucket_count: Number of discrete color buckets used for the line.
-
-    Returns:
-        The matplotlib line collection, or `None` if there are too few points.
-    """
-    if len(time_index) < 2:
-        axis.plot(
-            time_index,
-            outflow_series_m3_per_s.to_numpy(dtype=float),
-            color="#1f77b4",
-            linewidth=linewidth,
-            zorder=2,
-        )
-        return None
-
-    time_values = mdates.date2num(time_index.to_numpy())
-    outflow_values = outflow_series_m3_per_s.to_numpy(dtype=float)
-    line_points = np.column_stack([time_values, outflow_values])
-    frozen_values_percent = frozen_fraction_percent.to_numpy(dtype=float)
-    segment_context_percent = (
-        frozen_values_percent[:-1] + frozen_values_percent[1:]
-    ) / 2.0
-    # A small number of color buckets prevents thousands of tiny line segments.
-    clipped_context_percent: np.ndarray = np.clip(segment_context_percent, 0.0, 100.0)
-    bucket_edges_percent: np.ndarray = np.linspace(0.0, 100.0, bucket_count + 1)
-    bucket_indices: np.ndarray = np.digitize(
-        clipped_context_percent,
-        bucket_edges_percent[1:-1],
-        right=False,
-    )
-    bucket_centers_percent: np.ndarray = (
-        bucket_edges_percent[:-1] + bucket_edges_percent[1:]
-    ) / 2.0
-    context_bucket_values_percent: np.ndarray = bucket_centers_percent[bucket_indices]
-    discrete_cmap = mcolors.ListedColormap(
-        frozen_fraction_cmap(np.linspace(0.0, 1.0, bucket_count))
-    )
-    discrete_norm = mcolors.BoundaryNorm(bucket_edges_percent, discrete_cmap.N)
-
-    line_segments: list[np.ndarray[Any, Any]] = []
-    merged_bucket_values_percent: list[float] = []
-    run_start_idx = 0
-    for segment_idx in range(1, len(bucket_indices)):
-        if bucket_indices[segment_idx] != bucket_indices[run_start_idx]:
-            line_segments.append(line_points[run_start_idx : segment_idx + 1])
-            merged_bucket_values_percent.append(
-                context_bucket_values_percent[run_start_idx]
-            )
-            run_start_idx = segment_idx
-    line_segments.append(line_points[run_start_idx:])
-    merged_bucket_values_percent.append(context_bucket_values_percent[run_start_idx])
-
-    line_collection = LineCollection(
-        line_segments,
-        cmap=discrete_cmap,
-        norm=discrete_norm,
-        linewidth=linewidth,
-        zorder=2,
-    )
-    line_collection.set_array(np.asarray(merged_bucket_values_percent, dtype=float))
-    axis.add_collection(line_collection)
-    axis.update_datalim(line_points)
-    axis.autoscale_view()
-    axis.set_xlim(time_index[0], time_index[-1])
-    return line_collection
-
-
-def _format_full_timeseries_axis(
-    axis: plt.Axes,
-    time_index: pd.DatetimeIndex,
     title: str,
     y_label: str,
+    time_index: pd.DatetimeIndex | None = None,
+    year: int | None = None,
     draw_zero_line: bool = False,
 ) -> None:
-    """Apply shared formatting to a full-run time-series axis.
+    """Format a full-period or calendar-year water-balance axis.
 
     Args:
-        axis: Axis to format.
-        time_index: Full time index shown on the axis.
+        axis: Axis receiving date ticks, labels, and a grid.
         title: Axis title.
-        y_label: Y-axis label.
-        draw_zero_line: Whether to add a horizontal zero reference line.
-    """
-    if draw_zero_line:
-        axis.axhline(0, color="0.4", linewidth=0.8, linestyle="--")
-    axis.set_title(title)
-    axis.set_ylabel(y_label)
-    axis.set_xlabel("Time")
-    axis.set_xlim(time_index.min(), time_index.max())
-    axis.margins(x=0)
-    axis.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=6, maxticks=10))
-    axis.xaxis.set_major_formatter(
-        mdates.ConciseDateFormatter(axis.xaxis.get_major_locator())
-    )
-    axis.grid(True, alpha=0.5, color="0.8")
-
-
-def _format_yearly_timeseries_axis(
-    axis: plt.Axes,
-    year: int,
-    title: str,
-    y_label: str,
-    draw_zero_line: bool = False,
-) -> None:
-    """Apply shared formatting to a single-year time-series axis.
-
-    Args:
-        axis: Axis to format.
-        year: Calendar year shown on the axis.
-        title: Axis title.
-        y_label: Y-axis label.
-        draw_zero_line: Whether to add a horizontal zero reference line.
-    """
-    year_start: pd.Timestamp = pd.Timestamp(year=year, month=1, day=1)  # ty:ignore[invalid-assignment]
-    year_end: pd.Timestamp = pd.Timestamp(year=year, month=12, day=31, hour=23)  # ty:ignore[invalid-assignment]
-    if draw_zero_line:
-        axis.axhline(0, color="0.4", linewidth=0.8, linestyle="--")
-    axis.set_xlim(mdates.date2num(year_start), mdates.date2num(year_end))
-    axis.margins(x=0)
-    axis.xaxis.set_major_locator(mdates.MonthLocator())
-    axis.xaxis.set_major_formatter(mdates.DateFormatter("%b"))
-    axis.set_title(title)
-    axis.set_ylabel(y_label)
-    axis.grid(True, alpha=0.5, color="0.8")
-
-
-def _add_timeseries_legend(
-    axis: plt.Axes,
-    loc: Literal[
-        "best",
-        "upper right",
-        "upper left",
-        "lower left",
-        "lower right",
-        "right",
-        "center left",
-        "center right",
-        "lower center",
-        "upper center",
-        "center",
-    ],
-    ncol: int,
-    fontsize: float,
-    bbox_to_anchor: tuple[float, float] | None = None,
-) -> None:
-    """Add a legend with consistent styling.
-
-    Args:
-        axis: Axis receiving the legend.
-        loc: Matplotlib legend location.
-        ncol: Number of legend columns.
-        fontsize: Legend font size.
-        bbox_to_anchor: Optional anchor tuple for legends outside the axis.
-    """
-    axis.legend(
-        loc=loc,
-        bbox_to_anchor=bbox_to_anchor,
-        ncol=ncol,
-        fontsize=fontsize,
-        frameon=False,
-    )
-
-
-def _set_outflow_axis_limits(
-    axis: plt.Axes,
-    outflow_series_m3_per_s: pd.Series,
-) -> None:
-    """Set a non-clipping y-limit for an outflow discharge axis.
-
-    Args:
-        axis: Axis receiving the y-limit.
-        outflow_series_m3_per_s: Discharge series used to derive the upper limit (m3/s).
-    """
-    finite_values = outflow_series_m3_per_s.to_numpy(dtype=float)
-    finite_values = finite_values[np.isfinite(finite_values)]
-    if finite_values.size == 0:
-        axis.set_ylim(0.0, 1.0)
-        return
-
-    peak_discharge_m3_per_s: float = float(np.max(finite_values))
-    upper_limit_m3_per_s: float = max(peak_discharge_m3_per_s * 1.05, 1.0)
-    axis.set_ylim(0.0, upper_limit_m3_per_s)
-
-
-def save_outflow_discharge_plots(
-    model: Any,
-    output_folder: Path,
-    eval_plot_folder: Path,
-) -> int:
-    """Plot modeled outflow discharge time series without validation overlays.
-
-    This helper reads exported outflow time series from the reporter output
-    (`river_outflow_hourly_m3_per_s_*.csv`) and creates one line plot per outflow
-    location using simulated discharge only.
-
-    Args:
-        model: Model-like object used to derive the total basin area.
-        output_folder: Path to the model output folder.
-        eval_plot_folder: Evaluation plot output directory.
+        y_label: Y-axis label including units.
+        time_index: Full-period timestamps when year is omitted.
+        year: Calendar year for monthly ticks and full-year limits.
+        draw_zero_line: Whether to draw a dashed zero reference.
 
     Returns:
-        Number of outflow plots created (dimensionless).
-    """
-    report_folder: Path = output_folder / "report"
-    routing_dir: Path = report_folder / "hydrology.routing"
-    if not routing_dir.exists():
-        model.logger.info(
-            f"No hydrology routing directory found at {routing_dir}. Skipping outflow plots."
+        None. Updates the axis in place.
+
+    Raises:
+        ValueError: If neither a year nor a time index is provided.
+    """  # noqa: DOC202
+    if year is None and time_index is None:
+        raise ValueError("Provide a year or a time index for the axis.")
+    if draw_zero_line:
+        axis.axhline(0, color="0.4", linewidth=0.8, linestyle="--")
+    axis.set(title=title, ylabel=y_label)
+    axis.margins(x=0)
+    axis.grid(True, alpha=0.5, color="0.8")
+    if year is not None:
+        axis.set_xlim(
+            mdates.date2num(pd.Timestamp(year=year, month=1, day=1)),
+            mdates.date2num(pd.Timestamp(year=year, month=12, day=31, hour=23)),
         )
-        return 0
-
-    outflow_files: list[Path] = sorted(
-        routing_dir.glob("river_outflow_hourly_m3_per_s_*.parquet")
-    )
-    if not outflow_files:
-        model.logger.info(
-            "No exported outflow time series found. Skipping outflow plots."
+        axis.xaxis.set_major_locator(mdates.MonthLocator())
+        axis.xaxis.set_major_formatter(mdates.DateFormatter("%b"))
+    else:
+        assert time_index is not None
+        axis.set(xlabel="Time", xlim=(time_index.min(), time_index.max()))
+        axis.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=6, maxticks=10))
+        axis.xaxis.set_major_formatter(
+            mdates.ConciseDateFormatter(axis.xaxis.get_major_locator())
         )
-        return 0
-
-    outflow_plot_folder: Path = eval_plot_folder / "outflow"
-    outflow_plot_folder.mkdir(parents=True, exist_ok=True)
-    total_area_m2: float = _get_total_model_area_m2(model)
-    frozen_fraction_series_name: str = "_top_soil_frozen_fraction"
-    frozen_fraction_series: pd.Series | None = None
-    frozen_fraction_path: Path = (
-        report_folder / "hydrology.landsurface" / frozen_fraction_series_name
-    ).with_suffix(".parquet")
-    if frozen_fraction_path.exists():
-        frozen_fraction_series = _read_evaluation_series_with_date_index(
-            report_folder,
-            "hydrology.landsurface",
-            frozen_fraction_series_name,
-        )
-        frozen_fraction_series = frozen_fraction_series.sort_index()
-        frozen_fraction_series = frozen_fraction_series.loc[
-            ~frozen_fraction_series.index.duplicated(keep="last")
-        ]
-
-    frozen_fraction_cmap: mcolors.Colormap = mcolors.LinearSegmentedColormap.from_list(
-        "top_soil_frozen_fraction",
-        ["#1f77b4", "#ffffff"],
-    )
-
-    plots_created: int = 0
-    for outflow_file in outflow_files:
-        outflow_series: pd.Series = pd.read_parquet(outflow_file).iloc[:, 0]
-
-        if np.isnan(outflow_series.values).all():
-            model.logger.info(
-                f"Outflow file {outflow_file.name} contains only NaN values."
-            )
-            continue
-
-        outlet_id: str = outflow_file.stem.replace(
-            "river_outflow_hourly_m3_per_s_",
-            "",
-        )
-        aligned_frozen_fraction_percent: pd.Series | None = None
-        if frozen_fraction_series is not None:
-            # Repeat the latest daily context value across the hourly outflow data.
-            aligned_frozen_fraction_percent = frozen_fraction_series.reindex(
-                pd.DatetimeIndex(outflow_series.index), method="ffill"
-            )
-            aligned_frozen_fraction_percent = (
-                aligned_frozen_fraction_percent.bfill() * 100.0
-            )
-
-        fig, ax = plt.subplots(figsize=(7, 4))
-        if aligned_frozen_fraction_percent is not None:
-            _draw_outflow_with_frozen_soil_fraction(
-                axis=ax,
-                time_index=pd.DatetimeIndex(outflow_series.index),
-                outflow_series_m3_per_s=outflow_series,
-                frozen_fraction_percent=aligned_frozen_fraction_percent,
-                frozen_fraction_cmap=frozen_fraction_cmap,
-                linewidth=1.1,
-            )
-        else:
-            ax.plot(
-                outflow_series.index,
-                outflow_series.values,
-                linewidth=0.9,
-                color=SIMULATIONS_COLOR,
-                zorder=2,
-            )
-        ax.set_ylabel("Discharge [m3/s]")
-        ax.set_xlabel("Time")
-        _set_outflow_axis_limits(ax, outflow_series)
-        ax.legend(
-            handles=[Line2D([0], [0], color=SIMULATIONS_COLOR, linewidth=1.1)],
-            labels=["GEB outflow simulation (blue = unfrozen, grey = fully frozen)"],
-        )
-        ax.set_title(
-            f"GEB river outflow for outlet {outlet_id}, mean: {outflow_series.mean():.2f} m3/s"
-        )
-
-        plt.savefig(
-            outflow_plot_folder / f"{outflow_file.stem}.svg",
-            bbox_inches="tight",
-            facecolor=fig.get_facecolor(),
-            edgecolor="none",
-        )
-        plt.show()
-        plt.close(fig)
-
-        outflow_time_index: pd.DatetimeIndex = pd.DatetimeIndex(outflow_series.index)
-        timestep_seconds: float = float(
-            pd.Timedelta(
-                pd.tseries.frequencies.to_offset(str(outflow_time_index.inferred_freq))
-            ).total_seconds()
-        )
-        outflow_year_values: np.ndarray = pd.Series(
-            outflow_time_index
-        ).dt.year.to_numpy(dtype=int)
-        outflow_years: list[int] = sorted(np.unique(outflow_year_values).tolist())
-        yearly_figure, yearly_axes = plt.subplots(
-            len(outflow_years),
-            1,
-            figsize=(10, max(3.2 * len(outflow_years), 4.5)),
-            sharey=True,
-        )
-        if len(outflow_years) == 1:
-            yearly_axes = [yearly_axes]
-
-        for axis, year in zip(yearly_axes, outflow_years, strict=True):
-            yearly_mask: np.ndarray = outflow_year_values == year
-            yearly_outflow_series: pd.Series = outflow_series.loc[yearly_mask]
-            yearly_frozen_fraction_percent: pd.Series | None = None
-            if aligned_frozen_fraction_percent is not None:
-                yearly_frozen_fraction_percent = aligned_frozen_fraction_percent.loc[
-                    yearly_mask
-                ]
-            if yearly_frozen_fraction_percent is not None:
-                _draw_outflow_with_frozen_soil_fraction(
-                    axis=axis,
-                    time_index=pd.DatetimeIndex(yearly_outflow_series.index),
-                    outflow_series_m3_per_s=yearly_outflow_series,
-                    frozen_fraction_percent=yearly_frozen_fraction_percent,
-                    frozen_fraction_cmap=frozen_fraction_cmap,
-                    linewidth=1.0,
-                )
-            else:
-                axis.plot(
-                    yearly_outflow_series.index,
-                    yearly_outflow_series.values,
-                    color="#1f77b4",
-                    linewidth=0.9,
-                    zorder=2,
-                )
-            axis.set_title(
-                f"GEB river outflow for outlet {outlet_id} - {year}. Mean: {yearly_outflow_series.mean():.2f} m3/s"
-            )
-            axis.set_ylabel("Discharge [m3/s]")
-            _set_outflow_axis_limits(axis, yearly_outflow_series)
-            axis.grid(True, alpha=0.5, color="0.8")
-            axis.margins(x=0)
-            axis.xaxis.set_major_locator(mdates.MonthLocator())
-            axis.xaxis.set_major_formatter(mdates.DateFormatter("%b"))
-            axis.set_xlim(
-                pd.Timestamp(year=year, month=1, day=1),
-                pd.Timestamp(year=year, month=12, day=31, hour=23),
-            )
-            total_outflow_m3: float = float(
-                yearly_outflow_series.sum() * timestep_seconds
-            )
-            total_outflow_mm: float = total_outflow_m3 * 1000.0 / total_area_m2
-            axis.text(
-                0.01,
-                -0.22,
-                f"total river outflow at point: {total_outflow_m3:,.0f} m3 "
-                f"({total_outflow_mm:.2f} mm basin-equivalent)",
-                transform=axis.transAxes,
-                fontsize=7,
-                va="top",
-                ha="left",
-                clip_on=False,
-            )
-
-        yearly_axes[-1].set_xlabel("Time")
-        yearly_figure.subplots_adjust(
-            left=0.08,
-            right=0.98,
-            top=0.95,
-            bottom=0.1,
-            hspace=0.55,
-        )
-        plt.savefig(
-            outflow_plot_folder / f"{outflow_file.stem}_yearly.svg",
-            bbox_inches="tight",
-            facecolor=yearly_figure.get_facecolor(),
-            edgecolor="none",
-        )
-        plt.show()
-        plt.close(yearly_figure)
-
-        outflow_series.index.freq = outflow_series.index.inferred_freq  # ty:ignore[unresolved-attribute]
-
-        save_outflow_return_period_plot(
-            outflow_series_m3_per_s=outflow_series,
-            outlet_id=outlet_id,
-            outflow_plot_folder=outflow_plot_folder,
-            outflow_file_stem=outflow_file.stem,
-            frequency="hourly",
-        )
-
-        plots_created += 1
-
-    return plots_created
 
 
 def load_station_discharge_comparison(
@@ -1547,10 +990,38 @@ class Hydrology:
             run_output_folder: Path = (
                 Path(self.model.config["general"]["output_folder"]) / run_name
             )
-            outflow_plot_count: int = save_outflow_discharge_plots(
-                model=self.model,
-                output_folder=run_output_folder,
-                eval_plot_folder=self.discharge_output_folder,
+            report_folder: Path = run_output_folder / "report"
+            routing_folder: Path = report_folder / "hydrology.routing"
+            if not routing_folder.exists():
+                self.model.logger.info(
+                    "No hydrology routing directory found at %s. Skipping outflow plots.",
+                    routing_folder,
+                )
+                return
+            outflow_files: list[Path] = sorted(
+                routing_folder.glob("river_outflow_hourly_m3_per_s_*.parquet")
+            )
+            if not outflow_files:
+                self.model.logger.info(
+                    "No exported outflow time series found. Skipping outflow plots."
+                )
+                return
+            frozen_fraction_path: Path = (
+                report_folder
+                / "hydrology.landsurface"
+                / "_top_soil_frozen_fraction.parquet"
+            )
+            frozen_fraction: pd.Series | None = (
+                pd.read_parquet(frozen_fraction_path)["_top_soil_frozen_fraction"]
+                if frozen_fraction_path.exists()
+                else None
+            )
+            outflow_plot_count: int = discharge_plots.save_outflow_discharge_plots(
+                outflow_files=outflow_files,
+                total_area_m2=_get_total_model_area_m2(self.model),
+                outflow_plot_folder=self.discharge_output_folder / "outflow",
+                logger=self.model.logger,
+                frozen_fraction_series=frozen_fraction,
             )
             if outflow_plot_count > 0:
                 self.model.logger.info(
@@ -1828,7 +1299,7 @@ class Hydrology:
                         include_yearly_plots=include_yearly_plots,
                     )
                     if include_return_period_plots:
-                        save_station_return_period_plots(
+                        discharge_plots.save_station_return_period_plots(
                             discharge_comparison=discharge_comparison,
                             station_id=station_id,
                             eval_plot_folder=evaluation_paths.plot_folder,
@@ -2017,9 +1488,9 @@ class Hydrology:
             dashboard_geometries: DischargeDashboardGeometries = (
                 load_discharge_dashboard_geometries(self.model)
             )
-            _use_daily_scores_for_plotting(dashboard_station_scores)
+            use_daily_discharge_scores(dashboard_station_scores)
             dashboard_characteristics: pd.DataFrame | None = (
-                load_dashboard_characteristics(
+                discharge_characteristics.load_dashboard_characteristics(
                     mapped_station_scores=dashboard_station_scores,
                     logger=self.model.logger,
                 )
@@ -2116,7 +1587,7 @@ class Hydrology:
         """Create only the discharge evaluation dashboard.
 
         This reuses ``evaluation_metrics.geoparquet`` from a previous
-        ``evaluate_discharge`` run. Interactive Plotly chart payloads are
+        ``evaluate_discharge`` run. Data for the interactive Plotly charts are
         rebuilt from the reported discharge time series. Static station plots
         and skill-score plots are not regenerated.
         Excluded stations retain diagnostic KGE and time series with a warning.
@@ -2226,12 +1697,14 @@ class Hydrology:
             )
 
         dashboard_station_scores: gpd.GeoDataFrame = mapped_station_scores.copy()
-        _use_daily_scores_for_plotting(dashboard_station_scores)
+        use_daily_discharge_scores(dashboard_station_scores)
         dashboard_characteristics: pd.DataFrame | None = None
         if not dashboard_station_scores.empty:
-            dashboard_characteristics = load_dashboard_characteristics(
-                mapped_station_scores=dashboard_station_scores,
-                logger=self.model.logger,
+            dashboard_characteristics = (
+                discharge_characteristics.load_dashboard_characteristics(
+                    mapped_station_scores=dashboard_station_scores,
+                    logger=self.model.logger,
+                )
             )
 
         self.model.logger.info("Loading dashboard geometries...")
@@ -2243,7 +1716,7 @@ class Hydrology:
         run_output_folder: Path = (
             Path(self.model.config["general"]["output_folder"]) / run_name
         )
-        self.model.logger.info("Building interactive chart payloads...")
+        self.model.logger.info("Preparing interactive chart data...")
         station_dashboard_chart_files: dict[str, str] = (
             self._write_dashboard_charts_from_saved_scores(
                 mapped_station_scores=mapped_station_scores,
@@ -2254,7 +1727,7 @@ class Hydrology:
             )
         )
 
-        self.model.logger.info("Rendering Folium map HTML...")
+        self.model.logger.info("Creating the dashboard HTML file...")
         write_discharge_dashboard(
             mapped_station_scores=dashboard_station_scores,
             output_path=dashboard_path,
@@ -2282,7 +1755,7 @@ class Hydrology:
         dashboard_path: Path,
         include_return_period_plots: bool = False,
     ) -> dict[str, str]:
-        """Write interactive chart payloads for saved evaluation stations.
+        """Save interactive chart data for stations with saved evaluation scores.
 
         Args:
             mapped_station_scores: Saved per-station discharge evaluation metrics.
@@ -2294,7 +1767,7 @@ class Hydrology:
                 curves. Defaults to False to avoid expensive extreme-value fits.
 
         Returns:
-            Mapping from station ID to exact chart payload file.
+            Mapping from station ID to chart data file.
 
         Raises:
             ValueError: If saved metrics are missing required station columns.
@@ -2421,9 +1894,9 @@ class Hydrology:
     ) -> dict[str, pd.DataFrame]:
         """Export external scores for all stations present in this model.
 
-        This is a standalone export command. Skill-score plots perform their
-        own pairwise matching because they also apply model-specific upstream
-        area thresholds.
+        This command exports external scores separately. The plotting functions
+        match stations again because they also filter by the upstream area
+        required for each model.
 
         Notes:
             Station names are matched case-insensitively. Falls back to
@@ -2554,7 +2027,7 @@ class Hydrology:
         if export:
             region_geom: gpd.GeoDataFrame = read_geom(self.model.files["geom"]["mask"])
             mapped_plot_scores: gpd.GeoDataFrame = mapped_station_scores.copy()
-            _use_daily_scores_for_plotting(mapped_plot_scores)
+            use_daily_discharge_scores(mapped_plot_scores)
             matched_scores_by_model: dict[
                 str, external_skill_scores.MatchedSkillScores
             ] = external_skill_scores.match_external_skill_scores(
@@ -2590,7 +2063,7 @@ class Hydrology:
         """Create skill score violin+boxplot graphs for each evaluation metric.
 
         Produces a GEB-only violin/box plot across gauging stations and one
-        pairwise matched-station comparison plot per external model.
+        comparison plot using matched stations for each external model.
 
         Args:
             export: Save the figure to disk.
@@ -2617,7 +2090,7 @@ class Hydrology:
         if station_scores is None:
             return
 
-        _use_daily_scores_for_plotting(station_scores)
+        use_daily_discharge_scores(station_scores)
         external_models: dict[str, pd.DataFrame] = (
             external_skill_scores.load_external_skill_scores(
                 input_folder=self.model.input_folder,
@@ -2625,75 +2098,12 @@ class Hydrology:
             )
         )
 
-        discharge_plots.create_discharge_score_distributions(
+        discharge_plots.create_discharge_distribution_plots(
             station_scores=station_scores,
-            external_models={},
+            external_models=external_models,
             output_folder=evaluation_paths.plot_folder,
             logger=self.model.logger,
-            export=export,
-            include_geb=True,
-            matched_only=False,
             minimum_upstream_area_km2=minimum_upstream_area_km2,
-            station_count=len(station_scores),
-        )
-        discharge_plots.create_seasonal_kge_distributions(
-            station_scores=station_scores,
-            output_folder=evaluation_paths.plot_folder,
-            logger=self.model.logger,
-            export=export,
-        )
-
-        matched_scores_by_model: dict[str, external_skill_scores.MatchedSkillScores] = (
-            external_skill_scores.match_external_skill_scores(
-                station_scores=station_scores,
-                external_models=external_models,
-                output_folder=evaluation_paths.plot_folder,
-                logger=self.model.logger,
-                minimum_upstream_area_km2=minimum_upstream_area_km2,
-            )
-        )
-        kge_comparison_values: dict[
-            str, tuple[np.ndarray, np.ndarray, int, float | None]
-        ] = {}
-        for model_name, matched_scores in matched_scores_by_model.items():
-            model_name_suffix: str = re.sub(
-                r"[^a-z0-9]+", "_", model_name.lower()
-            ).strip("_")
-            discharge_plots.create_discharge_score_distributions(
-                station_scores=matched_scores.geb_scores,
-                external_models={model_name: matched_scores.external_scores},
-                output_folder=evaluation_paths.plot_folder,
-                logger=self.model.logger,
-                export=export,
-                include_geb=True,
-                matched_only=True,
-                output_name_suffix=f"_matched_{model_name_suffix}",
-                minimum_upstream_area_km2=matched_scores.minimum_upstream_area_km2,
-                station_count=len(matched_scores.geb_scores),
-            )
-            if (
-                "KGE" in matched_scores.geb_scores.columns
-                and "KGE" in matched_scores.external_scores.columns
-            ):
-                geb_kge: np.ndarray = pd.to_numeric(
-                    matched_scores.geb_scores["KGE"], errors="coerce"
-                ).to_numpy(dtype=float)
-                external_kge: np.ndarray = pd.to_numeric(
-                    matched_scores.external_scores["KGE"], errors="coerce"
-                ).to_numpy(dtype=float)
-                valid_kge: np.ndarray = np.isfinite(geb_kge) & np.isfinite(external_kge)
-                if valid_kge.any():
-                    kge_comparison_values[model_name] = (
-                        geb_kge[valid_kge],
-                        external_kge[valid_kge],
-                        int(valid_kge.sum()),
-                        matched_scores.minimum_upstream_area_km2,
-                    )
-
-        discharge_plots.create_external_kge_comparison(
-            model_kge_values=kge_comparison_values,
-            output_folder=evaluation_paths.plot_folder,
-            logger=self.model.logger,
             export=export,
         )
 
@@ -2737,7 +2147,7 @@ class Hydrology:
             return
 
         if export:
-            _use_daily_scores_for_plotting(station_scores)
+            use_daily_discharge_scores(station_scores)
             discharge_plots.create_upstream_area_score_plots(
                 station_scores=station_scores,
                 output_folder=evaluation_paths.plot_folder,
@@ -2752,25 +2162,24 @@ class Hydrology:
         end_year: int | None = None,
         **kwargs: Any,
     ) -> None:
-        """Explain daily KGE and its components using catchment characteristics.
-
-        GRDC-Caravan attributes are fetched lazily from Zenodo and cached in the
-        global GEB data catalog. The original discharge metrics remain unchanged;
-        all explanation outputs are written to a dedicated subfolder.
+        """Select discharge scores and run the catchment-characteristic analysis.
 
         Args:
             export: Whether to save the correlation matrix, combined figure,
-                and 32-panel atlas.
+                and figure with 32 panels.
             minimum_upstream_area_km2: Minimum modeled upstream area (km2). If
                 omitted, the discharge-evaluation configuration value is used.
             start_year: Optional first calendar year of the evaluation metrics.
             end_year: Optional final calendar year of the evaluation metrics.
             **kwargs: Ignored CLI compatibility options.
 
-        Notes:
-            If the discharge evaluation or matched GRDC-Caravan stations are
-            unavailable, the method logs a warning and returns without plotting.
-        """
+        Returns:
+            None. Logs and skips missing scores or unmatched stations.
+
+        Raises:
+            ValueError: If the evaluation period or station attributes are invalid.
+            RuntimeError: If GRDC-Caravan attributes cannot be loaded.
+        """  # noqa: DOC202, DOC502
         if minimum_upstream_area_km2 is None:
             minimum_upstream_area_km2 = self.model.config["hydrology"]["evaluation"][
                 "discharge"
@@ -2788,11 +2197,8 @@ class Hydrology:
         if mapped_station_scores is None:
             return
 
-        data_catalog: DataCatalog = DataCatalog(logger=self.model.logger)
-        catchment_attributes: pd.DataFrame = data_catalog.fetch("GRDC_Caravan").read()
-        discharge_characteristics.plot_discharge_characteristics(
+        discharge_characteristics.analyze_discharge_characteristics(
             station_scores=mapped_station_scores,
-            catchment_attributes=catchment_attributes,
             output_folder=evaluation_paths.plot_folder / "skill_score_explanations",
             logger=self.model.logger,
             output_name_suffix=evaluation_paths.suffix,
@@ -3243,15 +2649,15 @@ class Hydrology:
                 alpha=0.9,
             )
 
-        _format_full_timeseries_axis(
+        _format_timeseries_axis(
             full_axis,
-            time_index,
-            f"Water Balance Over Time - {run_name}",
-            f"mm/{timestep_label}",
+            title=f"Water Balance Over Time - {run_name}",
+            y_label=f"mm/{timestep_label}",
+            time_index=time_index,
             draw_zero_line=True,
         )
-        _add_timeseries_legend(
-            full_axis,
+        full_axis.legend(
+            frameon=False,
             loc="upper center",
             bbox_to_anchor=(0.5, -0.18),
             ncol=min(3, len(component_columns)),
@@ -3293,11 +2699,11 @@ class Hydrology:
                     alpha=0.9,
                 )
 
-            _format_yearly_timeseries_axis(
+            _format_timeseries_axis(
                 axis,
-                year,
-                f"Water Balance Over Time - {year}",
-                f"mm/{timestep_label}",
+                title=f"Water Balance Over Time - {year}",
+                y_label=f"mm/{timestep_label}",
+                year=year,
                 draw_zero_line=True,
             )
             if yearly_totals_mm is not None:
@@ -3504,15 +2910,15 @@ class Hydrology:
                 zorder=3,
             )
 
-        _format_full_timeseries_axis(
+        _format_timeseries_axis(
             top_soil_full_axis,
-            top_soil_time_index,
-            f"Top-Soil Water Balance Over Time - {run_name}",
-            f"mm/{top_soil_timestep_label}",
+            title=f"Top-Soil Water Balance Over Time - {run_name}",
+            y_label=f"mm/{top_soil_timestep_label}",
+            time_index=top_soil_time_index,
             draw_zero_line=True,
         )
-        _add_timeseries_legend(
-            top_soil_full_axis,
+        top_soil_full_axis.legend(
+            frameon=False,
             loc="upper right",
             ncol=min(
                 3,
@@ -3575,11 +2981,11 @@ class Hydrology:
                     ),
                 )
 
-            _format_yearly_timeseries_axis(
+            _format_timeseries_axis(
                 axis,
-                year,
-                f"Top-Soil Water Balance Over Time - {year}",
-                f"mm/{top_soil_timestep_label}",
+                title=f"Top-Soil Water Balance Over Time - {year}",
+                y_label=f"mm/{top_soil_timestep_label}",
+                year=year,
                 draw_zero_line=True,
             )
             if top_soil_yearly_totals_mm is not None:
@@ -3593,8 +2999,8 @@ class Hydrology:
                 )
 
             if axis_index == 0:
-                _add_timeseries_legend(
-                    axis,
+                axis.legend(
+                    frameon=False,
                     loc="upper right",
                     ncol=min(
                         3,
@@ -3698,14 +3104,14 @@ class Hydrology:
                 linewidth=1.6,
             )
 
-        _format_full_timeseries_axis(
+        _format_timeseries_axis(
             full_axis,
-            time_index,
-            f"Water Storage Over Time - {run_name}",
-            "m",
+            title=f"Water Storage Over Time - {run_name}",
+            y_label="m",
+            time_index=time_index,
         )
-        _add_timeseries_legend(
-            full_axis,
+        full_axis.legend(
+            frameon=False,
             loc="upper right",
             ncol=min(2, len(component_columns)),
             fontsize=9,
@@ -3735,16 +3141,13 @@ class Hydrology:
                     label=component_labels[column_name] if axis_index == 0 else None,
                 )
 
-            _format_yearly_timeseries_axis(
-                axis,
-                year,
-                f"Water Storage Over Time - {year}",
-                "m",
+            _format_timeseries_axis(
+                axis, title=f"Water Storage Over Time - {year}", y_label="m", year=year
             )
 
             if axis_index == 0:
-                _add_timeseries_legend(
-                    axis,
+                axis.legend(
+                    frameon=False,
                     loc="upper right",
                     ncol=min(2, len(component_columns)),
                     fontsize=8.5,

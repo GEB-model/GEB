@@ -1,4 +1,9 @@
-"""Reusable plot helpers for hydrology evaluation outputs."""
+"""Draw discharge time series, return periods, maps, and score distributions.
+
+This module contains time-series plots, maps, and score-distribution plots.
+The hydrology module supplies the model data. Plots of catchment attributes
+are in discharge_characteristics.
+"""
 
 import logging
 import re
@@ -9,23 +14,31 @@ from typing import Any, cast
 import contextily as ctx
 import geopandas as gpd
 import matplotlib.colors as mcolors
+import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.collections import LineCollection
 from matplotlib.colorbar import Colorbar
+from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
 from matplotlib.lines import Line2D
 from scipy.stats import spearmanr
 from statsmodels.nonparametric.smoothers_lowess import lowess
 
+from geb.evaluate.workflows import external_skill_scores
 from geb.evaluate.workflows.external_skill_scores import (
     GLOFAS_MODEL_NAME,
     GOOGLE_MODEL_NAME,
     UTRECHT_MODEL_NAME,
 )
+from geb.workflows.extreme_value_analysis import ReturnPeriodModel
 
 OBSERVATIONS_COLOR: str = "#E6900A"
+
 SIMULATIONS_COLOR: str = "#278DD9"
+
 LINE_WIDTH: float = 1.3
+
 LINE_COLOR: str = "#111111"
 
 _EXTERNAL_MODEL_PLOT_ORDER: dict[str, int] = {
@@ -33,11 +46,127 @@ _EXTERNAL_MODEL_PLOT_ORDER: dict[str, int] = {
     GOOGLE_MODEL_NAME: 1,
     GLOFAS_MODEL_NAME: 2,
 }
+
 _EXTERNAL_MODEL_DISPLAY_NAMES: dict[str, str] = {
     UTRECHT_MODEL_NAME: "PCR-GLOBWB",
     GOOGLE_MODEL_NAME: "Google LSTM",
     GLOFAS_MODEL_NAME: "GloFAS v4.0",
 }
+
+_DISPLAYED_SKILL_SCORE_CONFIGS: tuple[dict[str, object], ...] = (
+    {
+        "col": "KGE",
+        "label": "KGE",
+        "ylim": (-1.0, 1.0),
+        "cmap": "RdYlGn",
+        "vmin": -1.0,
+        "vmax": 1.0,
+    },
+    {
+        "col": "KGE_correlation",
+        "label": "KGE correlation (r)",
+        "ylim": (-1.0, 1.0),
+        "cmap": "RdYlGn",
+        "vmin": -1.0,
+        "vmax": 1.0,
+    },
+    {
+        "col": "KGE_bias_ratio",
+        "label": "KGE bias ratio (β)",
+        "ylim": (0.0, 2.0),
+        "cmap": "viridis",
+        "vmin": 0.0,
+        "vmax": 2.0,
+    },
+    {
+        "col": "KGE_variability_ratio",
+        "label": "KGE variability ratio (α)",
+        "ylim": (0.0, 2.0),
+        "cmap": "viridis",
+        "vmin": 0.0,
+        "vmax": 2.0,
+    },
+    {
+        "col": "NSE",
+        "label": "NSE",
+        "ylim": (-1.0, 1.0),
+        "cmap": "RdYlGn",
+        "vmin": -1.0,
+        "vmax": 1.0,
+    },
+    {
+        "col": "R2",
+        "label": "Pearson r²",
+        "ylim": (0.0, 1.0),
+        "cmap": "YlGn",
+        "vmin": 0.0,
+        "vmax": 1.0,
+    },
+    {
+        "col": "RRMSE",
+        "label": "RRMSE",
+        "ylim": None,
+        "cmap": "YlOrRd",
+        "vmin": 0.0,
+        "vmax": None,
+    },
+)
+
+_SKILL_SCORE_CONFIG_BY_COLUMN: dict[str, dict[str, object]] = {
+    str(config["col"]): config for config in _DISPLAYED_SKILL_SCORE_CONFIGS
+}
+
+
+# Station time series and return periods.
+
+
+def save_discharge_timeseries_plots(
+    station_id: Any,
+    discharge_comparison: pd.DataFrame,
+    upstream_area_ratio: float,
+    metrics: Mapping[str, float],
+    plot_folder: Path,
+    include_yearly_plots: bool,
+) -> None:
+    """Save full-period and optional yearly station discharge plots.
+
+    Args:
+        station_id: Station identifier used in output filenames.
+        discharge_comparison: Observed and simulated discharge time series (m3/s).
+        upstream_area_ratio: Observed-to-modeled upstream-area ratio
+            (dimensionless).
+        metrics: Discharge validation metrics keyed by metric name.
+        plot_folder: Evaluation plot output folder.
+        include_yearly_plots: Whether to save one PNG for each calendar year.
+    """
+    timeseries_folder: Path = plot_folder / "timeseries"
+    timeseries_folder.mkdir(parents=True, exist_ok=True)
+    figure: plt.Figure = _create_discharge_timeseries_figure(
+        discharge_comparison=discharge_comparison,
+        upstream_area_ratio=upstream_area_ratio,
+        metrics=metrics,
+        include_mean=True,
+    )
+    figure.savefig(timeseries_folder / f"timeseries_plot_{station_id}.png", dpi=300)
+    plt.close(figure)
+
+    if include_yearly_plots:
+        yearly_groups: Any = discharge_comparison.groupby(
+            discharge_comparison.index.to_series().dt.year.to_numpy()
+        )
+        for year, yearly_discharge_comparison in yearly_groups:
+            year_value: int = int(year)
+            yearly_figure: plt.Figure = _create_discharge_timeseries_figure(
+                discharge_comparison=yearly_discharge_comparison,
+                upstream_area_ratio=upstream_area_ratio,
+                metrics=metrics,
+                include_mean=False,
+            )
+            yearly_figure.savefig(
+                timeseries_folder / f"timeseries_plot_{station_id}_{year_value}.png",
+                dpi=300,
+            )
+            plt.close(yearly_figure)
 
 
 def _create_discharge_timeseries_figure(
@@ -104,153 +233,534 @@ def _create_discharge_timeseries_figure(
     return figure
 
 
-def save_discharge_timeseries_plots(
-    station_id: Any,
+def save_station_return_period_plots(
     discharge_comparison: pd.DataFrame,
-    upstream_area_ratio: float,
-    metrics: Mapping[str, float],
-    plot_folder: Path,
-    include_yearly_plots: bool,
+    station_id: str | int,
+    eval_plot_folder: Path,
 ) -> None:
-    """Save full-period and optional yearly station discharge plots.
+    """Save station return-level curves and observed/simulated fit diagnostics.
 
     Args:
-        station_id: Station identifier used in output filenames.
-        discharge_comparison: Observed and simulated discharge time series (m3/s).
-        upstream_area_ratio: Observed-to-modeled upstream-area ratio
-            (dimensionless).
-        metrics: Discharge validation metrics keyed by metric name.
-        plot_folder: Evaluation plot output folder.
-        include_yearly_plots: Whether to save one PNG for each calendar year.
-    """
-    timeseries_folder: Path = plot_folder / "timeseries"
-    timeseries_folder.mkdir(parents=True, exist_ok=True)
-    figure: plt.Figure = _create_discharge_timeseries_figure(
-        discharge_comparison=discharge_comparison,
-        upstream_area_ratio=upstream_area_ratio,
-        metrics=metrics,
-        include_mean=True,
+        discharge_comparison: Observed and simulated discharge columns (m³/s).
+        station_id: Station identifier for filenames.
+        eval_plot_folder: Root output directory; files go in return_periods.
+
+    Returns:
+        None. Saves a PNG fit and an SVG diagnostic figure.
+
+    Raises:
+        ValueError: If an extreme-value model cannot be fitted.
+    """  # noqa: DOC202, DOC502
+    # Compare extremes only over observed intervals. Fixing shape at zero
+    # stabilizes the fits for short evaluation records.
+    simulated: pd.Series = discharge_comparison["discharge_simulations"].where(
+        discharge_comparison["discharge_observations"].notna()
     )
-    figure.savefig(timeseries_folder / f"timeseries_plot_{station_id}.png", dpi=300)
+    models: list[tuple[ReturnPeriodModel, str, str]] = [
+        (
+            ReturnPeriodModel(
+                series=series,
+                return_periods=[2, 5, 10, 25, 50, 100],
+                fixed_shape=0.0,
+                selection_strategy="first_significant",
+            ),
+            label,
+            color,
+        )
+        for series, label, color in (
+            (
+                discharge_comparison["discharge_observations"],
+                "Observed",
+                OBSERVATIONS_COLOR,
+            ),
+            (simulated, "Simulated", SIMULATIONS_COLOR),
+        )
+    ]
+    return_periods_folder: Path = eval_plot_folder / "return_periods"
+    return_periods_folder.mkdir(parents=True, exist_ok=True)
+    simple_figure: plt.Figure
+    fit_axis: plt.Axes
+    simple_figure, fit_axis = plt.subplots(figsize=(14, 4))
+    for model, label, color in models:
+        model.plot_fit(ax=fit_axis, label_prefix=label, color=color)
+    simple_figure.savefig(
+        return_periods_folder / f"return_period_fit_{station_id}.png",
+        bbox_inches="tight",
+        dpi=300,
+    )
+    plt.close(simple_figure)
+
+    figure: plt.Figure = plt.figure(figsize=(24, 20))
+    grid: GridSpec = figure.add_gridspec(5, 2)
+    fit_axis = figure.add_subplot(grid[0, :])
+    for model, label, color in models:
+        model.plot_fit(ax=fit_axis, label_prefix=label, color=color)
+    for column, (model, label, _) in enumerate(models):
+        diagnostics_grid: GridSpecFromSubplotSpec = grid[1:, column].subgridspec(4, 2)
+        goodness_axes: list[plt.Axes] = [
+            figure.add_subplot(diagnostics_grid[row, col])
+            for row, col in ((0, 0), (0, 1), (1, 0))
+        ]
+        model.plot_gof(axes=goodness_axes)
+        for axis in goodness_axes:
+            axis.set_title(f"{label[:3]}: {axis.get_title()}", fontsize=10)
+        selection_axes: list[plt.Axes] = [
+            figure.add_subplot(diagnostics_grid[row, col])
+            for row, col in ((1, 1), (2, 0), (2, 1), (3, 0))
+        ]
+        model.plot_selection_diagnostics(axes=selection_axes)
+    figure.tight_layout()
+    figure.savefig(
+        return_periods_folder / f"return_period_validation_{station_id}.svg",
+        bbox_inches="tight",
+    )
     plt.close(figure)
 
-    if include_yearly_plots:
-        yearly_groups: Any = discharge_comparison.groupby(
-            discharge_comparison.index.to_series().dt.year.to_numpy()
-        )
-        for year, yearly_discharge_comparison in yearly_groups:
-            year_value: int = int(year)
-            yearly_figure: plt.Figure = _create_discharge_timeseries_figure(
-                discharge_comparison=yearly_discharge_comparison,
-                upstream_area_ratio=upstream_area_ratio,
-                metrics=metrics,
-                include_mean=False,
-            )
-            yearly_figure.savefig(
-                timeseries_folder / f"timeseries_plot_{station_id}_{year_value}.png",
-                dpi=300,
-            )
-            plt.close(yearly_figure)
+
+# Outlet time series and return periods.
 
 
-_DISPLAYED_SKILL_SCORE_CONFIGS: tuple[dict[str, object], ...] = (
-    {
-        "col": "KGE",
-        "label": "KGE",
-        "ylim": (-1.0, 1.0),
-        "cmap": "RdYlGn",
-        "vmin": -1.0,
-        "vmax": 1.0,
-    },
-    {
-        "col": "KGE_correlation",
-        "label": "KGE correlation (r)",
-        "ylim": (-1.0, 1.0),
-        "cmap": "RdYlGn",
-        "vmin": -1.0,
-        "vmax": 1.0,
-    },
-    {
-        "col": "KGE_bias_ratio",
-        "label": "KGE bias ratio (β)",
-        "ylim": (0.0, 2.0),
-        "cmap": "viridis",
-        "vmin": 0.0,
-        "vmax": 2.0,
-    },
-    {
-        "col": "KGE_variability_ratio",
-        "label": "KGE variability ratio (α)",
-        "ylim": (0.0, 2.0),
-        "cmap": "viridis",
-        "vmin": 0.0,
-        "vmax": 2.0,
-    },
-    {
-        "col": "NSE",
-        "label": "NSE",
-        "ylim": (-1.0, 1.0),
-        "cmap": "RdYlGn",
-        "vmin": -1.0,
-        "vmax": 1.0,
-    },
-    {
-        "col": "R2",
-        "label": "Pearson r²",
-        "ylim": (0.0, 1.0),
-        "cmap": "YlGn",
-        "vmin": 0.0,
-        "vmax": 1.0,
-    },
-    {
-        "col": "RRMSE",
-        "label": "RRMSE",
-        "ylim": None,
-        "cmap": "YlOrRd",
-        "vmin": 0.0,
-        "vmax": None,
-    },
-)
-_SKILL_SCORE_CONFIG_BY_COLUMN: dict[str, dict[str, object]] = {
-    str(config["col"]): config for config in _DISPLAYED_SKILL_SCORE_CONFIGS
-}
-
-
-def _add_map_scale_bar(axis: plt.Axes) -> None:
-    """Add the shared scale bar to a projected discharge map.
+def save_outflow_discharge_plots(
+    outflow_files: list[Path],
+    total_area_m2: float,
+    outflow_plot_folder: Path,
+    logger: logging.Logger,
+    frozen_fraction_series: pd.Series | None = None,
+) -> int:
+    """Save full-period, yearly, and return-period plots for river outlets.
 
     Args:
-        axis: Map axis with coordinates in meters (EPSG:3857).
+        outflow_files: Hourly discharge Parquet files (m³/s).
+        total_area_m2: Basin area used for equivalent outflow depth (m²).
+        outflow_plot_folder: Directory receiving outlet figures.
+        logger: Logger for skipped empty reports.
+        frozen_fraction_series: Optional time-indexed basin frozen fraction (0–1).
+
+    Returns:
+        Number of outlets plotted; all-NaN discharge reports are skipped.
+
+    Raises:
+        ValueError: If basin area is not positive and finite.
     """
-    # Scale bar: round ~15% of the map width to a nice number (e.g. 152 km → 200 km)
-    x_min, x_max = axis.get_xlim()
-    y_min, y_max = axis.get_ylim()
-    map_width_m: float = x_max - x_min
-    map_height_m: float = y_max - y_min
-    bar_m: float = round(
-        map_width_m * 0.15 / 10 ** np.floor(np.log10(map_width_m * 0.15))
-    ) * 10 ** np.floor(np.log10(map_width_m * 0.15))
-    bar_label: str = f"{int(bar_m / 1_000)} km" if bar_m >= 1_000 else f"{int(bar_m)} m"
-    bar_x0: float = x_min + map_width_m * 0.03
-    bar_y: float = y_min + map_height_m * 0.03
-    axis.plot(
-        [bar_x0, bar_x0 + bar_m],
-        [bar_y, bar_y],
-        color="white",
-        linewidth=3,
-        solid_capstyle="butt",
-        zorder=5,
+    if not np.isfinite(total_area_m2) or total_area_m2 <= 0:
+        raise ValueError("Basin area must be finite and positive.")
+    outflow_plot_folder.mkdir(parents=True, exist_ok=True)
+    if frozen_fraction_series is not None:
+        frozen_fraction_series = frozen_fraction_series.sort_index()
+        frozen_fraction_series = frozen_fraction_series.loc[
+            ~frozen_fraction_series.index.duplicated(keep="last")
+        ]
+    frozen_fraction_cmap: mcolors.Colormap = mcolors.LinearSegmentedColormap.from_list(
+        "top_soil_frozen_fraction",
+        ["#1f77b4", "#ffffff"],
     )
-    axis.text(
-        bar_x0 + bar_m / 2,
-        bar_y + map_height_m * 0.012,
-        bar_label,
-        color="white",
-        fontsize=14,
-        ha="center",
-        va="bottom",
-        zorder=5,
+
+    plots_created: int = 0
+    for outflow_file in outflow_files:
+        outflow_series: pd.Series = pd.read_parquet(outflow_file).iloc[:, 0]
+
+        if np.isnan(outflow_series.values).all():
+            logger.info(f"Outflow file {outflow_file.name} contains only NaN values.")
+            continue
+
+        outlet_id: str = outflow_file.stem.replace(
+            "river_outflow_hourly_m3_per_s_",
+            "",
+        )
+        aligned_frozen_fraction_percent: pd.Series | None = None
+        if frozen_fraction_series is not None:
+            # Repeat the latest daily context value across the hourly outflow data.
+            aligned_frozen_fraction_percent = frozen_fraction_series.reindex(
+                pd.DatetimeIndex(outflow_series.index), method="ffill"
+            )
+            aligned_frozen_fraction_percent = (
+                aligned_frozen_fraction_percent.bfill() * 100.0
+            )
+
+        fig, ax = plt.subplots(figsize=(7, 4))
+        _draw_outflow_series(
+            ax,
+            outflow_series,
+            aligned_frozen_fraction_percent,
+            frozen_fraction_cmap,
+            linewidth=1.1,
+            color=SIMULATIONS_COLOR,
+        )
+        ax.set_ylabel("Discharge [m3/s]")
+        ax.set_xlabel("Time")
+        ax.legend(
+            handles=[Line2D([0], [0], color=SIMULATIONS_COLOR, linewidth=1.1)],
+            labels=["GEB outflow simulation (blue = unfrozen, grey = fully frozen)"],
+        )
+        ax.set_title(
+            f"GEB river outflow for outlet {outlet_id}, mean: {outflow_series.mean():.2f} m3/s"
+        )
+
+        plt.savefig(
+            outflow_plot_folder / f"{outflow_file.stem}.svg",
+            bbox_inches="tight",
+            facecolor=fig.get_facecolor(),
+            edgecolor="none",
+        )
+        plt.show()
+        plt.close(fig)
+
+        outflow_time_index: pd.DatetimeIndex = pd.DatetimeIndex(outflow_series.index)
+        timestep_seconds: float = float(
+            pd.Timedelta(
+                pd.tseries.frequencies.to_offset(str(outflow_time_index.inferred_freq))
+            ).total_seconds()
+        )
+        outflow_year_values: np.ndarray = pd.Series(
+            outflow_time_index
+        ).dt.year.to_numpy(dtype=int)
+        outflow_years: list[int] = sorted(np.unique(outflow_year_values).tolist())
+        yearly_figure, yearly_axes = plt.subplots(
+            len(outflow_years),
+            1,
+            figsize=(10, max(3.2 * len(outflow_years), 4.5)),
+            sharey=True,
+        )
+        if len(outflow_years) == 1:
+            yearly_axes = [yearly_axes]
+
+        for axis, year in zip(yearly_axes, outflow_years, strict=True):
+            yearly_mask: np.ndarray = outflow_year_values == year
+            yearly_outflow_series: pd.Series = outflow_series.loc[yearly_mask]
+            yearly_frozen_fraction_percent: pd.Series | None = None
+            if aligned_frozen_fraction_percent is not None:
+                yearly_frozen_fraction_percent = aligned_frozen_fraction_percent.loc[
+                    yearly_mask
+                ]
+            _draw_outflow_series(
+                axis,
+                yearly_outflow_series,
+                yearly_frozen_fraction_percent,
+                frozen_fraction_cmap,
+                linewidth=1.0,
+                color="#1f77b4",
+            )
+            axis.set_title(
+                f"GEB river outflow for outlet {outlet_id} - {year}. Mean: {yearly_outflow_series.mean():.2f} m3/s"
+            )
+            axis.set_ylabel("Discharge [m3/s]")
+            axis.grid(True, alpha=0.5, color="0.8")
+            axis.margins(x=0)
+            axis.xaxis.set_major_locator(mdates.MonthLocator())
+            axis.xaxis.set_major_formatter(mdates.DateFormatter("%b"))
+            axis.set_xlim(
+                pd.Timestamp(year=year, month=1, day=1),
+                pd.Timestamp(year=year, month=12, day=31, hour=23),
+            )
+            total_outflow_m3: float = float(
+                yearly_outflow_series.sum() * timestep_seconds
+            )
+            total_outflow_mm: float = total_outflow_m3 * 1000.0 / total_area_m2
+            axis.text(
+                0.01,
+                -0.22,
+                f"total river outflow at point: {total_outflow_m3:,.0f} m3 "
+                f"({total_outflow_mm:.2f} mm basin-equivalent)",
+                transform=axis.transAxes,
+                fontsize=7,
+                va="top",
+                ha="left",
+                clip_on=False,
+            )
+
+        yearly_axes[-1].set_xlabel("Time")
+        yearly_figure.subplots_adjust(
+            left=0.08,
+            right=0.98,
+            top=0.95,
+            bottom=0.1,
+            hspace=0.55,
+        )
+        plt.savefig(
+            outflow_plot_folder / f"{outflow_file.stem}_yearly.svg",
+            bbox_inches="tight",
+            facecolor=yearly_figure.get_facecolor(),
+            edgecolor="none",
+        )
+        plt.show()
+        plt.close(yearly_figure)
+
+        outflow_series.index.freq = outflow_series.index.inferred_freq  # ty:ignore[unresolved-attribute]
+
+        return_period_model: ReturnPeriodModel = ReturnPeriodModel(
+            series=outflow_series,
+            return_periods=[2, 5, 10, 25, 50, 100],
+            fixed_shape=0.0,
+            selection_strategy="best_fit",
+        )
+        diagnostics: plt.Figure = return_period_model.plot_diagnostics(figsize=(18, 14))
+        diagnostics.suptitle(
+            f"Outflow Diagnostics (hourly): {outlet_id}", fontsize=16, fontweight="bold"
+        )
+        diagnostics.savefig(
+            outflow_plot_folder / f"{outflow_file.stem}_return_period.svg",
+            bbox_inches="tight",
+        )
+        plt.close(diagnostics)
+
+        plots_created += 1
+
+    return plots_created
+
+
+def _draw_outflow_series(
+    axis: plt.Axes,
+    outflow_series_m3_per_s: pd.Series,
+    frozen_fraction_percent: pd.Series | None,
+    frozen_fraction_cmap: mcolors.Colormap,
+    linewidth: float,
+    color: str,
+    bucket_count: int = 10,
+) -> LineCollection | None:
+    """Draw outflow, optionally colored by frozen-soil fraction, with safe limits.
+
+    Args:
+        axis: Axis receiving the line.
+        outflow_series_m3_per_s: Time-indexed discharge (m³/s).
+        frozen_fraction_percent: Aligned frozen-soil fraction (%), or None.
+        frozen_fraction_cmap: Colormap from unfrozen to fully frozen.
+        linewidth: Width of a line colored by frozen fraction (points).
+        color: Color for plain discharge lines.
+        bucket_count: Number of frozen-fraction color buckets.
+
+    Returns:
+        Colored line collection, or None for a plain or single-point line.
+
+    Raises:
+        ValueError: If bucket_count is not positive.
+    """
+    if bucket_count < 1:
+        raise ValueError("bucket_count must be positive.")
+    time_index: pd.DatetimeIndex = pd.DatetimeIndex(outflow_series_m3_per_s.index)
+    finite_values: np.ndarray = outflow_series_m3_per_s.to_numpy(dtype=float)
+    finite_values = finite_values[np.isfinite(finite_values)]
+    upper_limit: float = (
+        max(float(finite_values.max()) * 1.05, 1.0) if finite_values.size else 1.0
     )
+    axis.set_ylim(0.0, upper_limit)
+    if frozen_fraction_percent is None:
+        axis.plot(
+            time_index,
+            outflow_series_m3_per_s.values,
+            color=color,
+            linewidth=0.9,
+            zorder=2,
+        )
+        return None
+    if len(time_index) < 2:
+        axis.plot(
+            time_index,
+            outflow_series_m3_per_s.to_numpy(dtype=float),
+            color="#1f77b4",
+            linewidth=linewidth,
+            zorder=2,
+        )
+        return None
+
+    time_values: np.ndarray = mdates.date2num(time_index.to_numpy())
+    outflow_values: np.ndarray = outflow_series_m3_per_s.to_numpy(dtype=float)
+    line_points: np.ndarray = np.column_stack([time_values, outflow_values])
+    frozen_values_percent: np.ndarray = frozen_fraction_percent.to_numpy(dtype=float)
+    segment_context_percent: np.ndarray = (
+        frozen_values_percent[:-1] + frozen_values_percent[1:]
+    ) / 2.0
+    # A small number of color buckets prevents thousands of tiny line segments.
+    clipped_context_percent: np.ndarray = np.clip(segment_context_percent, 0.0, 100.0)
+    bucket_edges_percent: np.ndarray = np.linspace(0.0, 100.0, bucket_count + 1)
+    bucket_indices: np.ndarray = np.digitize(
+        clipped_context_percent,
+        bucket_edges_percent[1:-1],
+        right=False,
+    )
+    bucket_centers_percent: np.ndarray = (
+        bucket_edges_percent[:-1] + bucket_edges_percent[1:]
+    ) / 2.0
+    context_bucket_values_percent: np.ndarray = bucket_centers_percent[bucket_indices]
+    discrete_cmap: mcolors.ListedColormap = mcolors.ListedColormap(
+        frozen_fraction_cmap(np.linspace(0.0, 1.0, bucket_count))
+    )
+    discrete_norm: mcolors.BoundaryNorm = mcolors.BoundaryNorm(
+        bucket_edges_percent, discrete_cmap.N
+    )
+
+    line_segments: list[np.ndarray[Any, Any]] = []
+    merged_bucket_values_percent: list[float] = []
+    run_start_idx: int = 0
+    for segment_idx in range(1, len(bucket_indices)):
+        if bucket_indices[segment_idx] != bucket_indices[run_start_idx]:
+            line_segments.append(line_points[run_start_idx : segment_idx + 1])
+            merged_bucket_values_percent.append(
+                context_bucket_values_percent[run_start_idx]
+            )
+            run_start_idx = segment_idx
+    line_segments.append(line_points[run_start_idx:])
+    merged_bucket_values_percent.append(context_bucket_values_percent[run_start_idx])
+
+    line_collection: LineCollection = LineCollection(
+        line_segments,
+        cmap=discrete_cmap,
+        norm=discrete_norm,
+        linewidth=linewidth,
+        zorder=2,
+    )
+    line_collection.set_array(np.asarray(merged_bucket_values_percent, dtype=float))
+    axis.add_collection(line_collection)
+    axis.update_datalim(line_points)
+    axis.autoscale_view()
+    axis.set_xlim(time_index[0], time_index[-1])
+    return line_collection
+
+
+# Skill-score maps.
+
+
+def create_discharge_score_maps(
+    mapped_station_scores: gpd.GeoDataFrame,
+    region_geom: gpd.GeoDataFrame,
+    output_folder: Path,
+    logger: logging.Logger,
+    difference_gdfs: dict[str, pd.DataFrame] | None = None,
+) -> None:
+    """Plot per-station skill scores on a satellite basemap, one map per metric.
+
+    Saves SVG and PNG files under ``output_folder/skill_score_maps/``.
+
+    Args:
+        mapped_station_scores: Per-station metrics with point geometry in any CRS.
+        region_geom: Basin/region boundary overlaid on each map.
+        output_folder: Root folder under which ``skill_score_maps/`` is created.
+        logger: Logger to use for progress messages.
+        difference_gdfs: Optional matched GEB-vs-external station tables with
+            ``KGE_difference`` values (dimensionless).
+    """
+    maps_folder = output_folder / "skill_score_maps"
+    maps_folder.mkdir(parents=True, exist_ok=True)
+
+    kge_metric_columns: tuple[str, ...] = (
+        "KGE",
+        "KGE_correlation",
+        "KGE_bias_ratio",
+        "KGE_variability_ratio",
+    )
+    if all(
+        column_name in mapped_station_scores.columns
+        for column_name in kge_metric_columns
+    ):
+        kge_metric_configs: tuple[dict[str, object], ...] = tuple(
+            _SKILL_SCORE_CONFIG_BY_COLUMN[column_name]
+            for column_name in kge_metric_columns
+        )
+        _draw_kge_component_maps(
+            mapped_station_scores=mapped_station_scores,
+            metric_configs=kge_metric_configs,
+            output_path=maps_folder / "skill_score_map_kge_components",
+            region_geom=region_geom,
+        )
+        logger.info("Saved KGE component skill score map.")
+
+    for cfg in _DISPLAYED_SKILL_SCORE_CONFIGS:
+        col: str = str(cfg["col"])
+        if col not in mapped_station_scores.columns:
+            logger.info("Metric '%s' not in evaluation data, skipping.", col)
+            continue
+
+        metric_values: np.ndarray = pd.to_numeric(
+            mapped_station_scores[col], errors="coerce"
+        ).to_numpy(dtype=float)
+        valid_values: np.ndarray = metric_values[np.isfinite(metric_values)]
+        if valid_values.size == 0:
+            logger.info("No valid values for metric '%s', skipping.", col)
+            continue
+
+        vmax: float = (
+            float(np.nanpercentile(valid_values, 95))
+            if cfg["vmax"] is None
+            else float(cast(float, cfg["vmax"]))
+        )
+        _draw_station_score_map(
+            mapped_station_scores=mapped_station_scores,
+            metric_col=col,
+            metric_label=str(cfg["label"]),
+            cmap_name=str(cfg["cmap"]),
+            vmin=float(cast(float, cfg["vmin"])),
+            vmax=vmax,
+            output_path=maps_folder / f"skill_score_map_{col.lower()}",
+            region_geom=region_geom,
+        )
+        logger.info("Saved skill score map for %s.", col)
+
+    for model_name, difference_df in (difference_gdfs or {}).items():
+        if "KGE_difference" not in difference_df:
+            continue
+        has_geometry: bool = "geometry" in difference_df
+        coordinate_columns: set[str] = {"station_longitude", "station_latitude"}
+        if not has_geometry and not coordinate_columns.issubset(difference_df):
+            logger.info("No station geometry found for %s difference map.", model_name)
+            continue
+        if not has_geometry:
+            difference_df = gpd.GeoDataFrame(
+                difference_df,
+                geometry=gpd.points_from_xy(
+                    difference_df["station_longitude"],
+                    difference_df["station_latitude"],
+                ),
+                crs="EPSG:4326",
+            )
+        unmatched_difference_df: gpd.GeoDataFrame = gpd.GeoDataFrame(
+            mapped_station_scores.loc[
+                ~mapped_station_scores.index.isin(difference_df.index)
+            ].copy(),
+            geometry="geometry",
+            crs=mapped_station_scores.crs,
+        )
+        unmatched_difference_df["KGE_difference"] = np.nan
+        matched_station_count: int = len(difference_df)
+        if not unmatched_difference_df.empty:
+            # Difference maps otherwise hide whole regions where the external
+            # source has no station match, which can look like a plotting error.
+            difference_df = pd.concat(
+                [difference_df, unmatched_difference_df],
+                axis=0,
+                copy=False,
+            )
+            logger.info(
+                "%s difference map shows %d matched stations and %d unmatched "
+                "eligible GEB stations.",
+                model_name,
+                matched_station_count,
+                len(unmatched_difference_df),
+            )
+        difference_gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
+            difference_df,
+            geometry="geometry",
+            crs=getattr(difference_df, "crs", None),
+        )
+        difference_values: np.ndarray = pd.to_numeric(
+            difference_gdf["KGE_difference"], errors="coerce"
+        ).to_numpy(dtype=float)
+        valid_values: np.ndarray = difference_values[np.isfinite(difference_values)]
+        if valid_values.size == 0:
+            continue
+        visible_limit: float = max(float(np.nanpercentile(abs(valid_values), 95)), 0.05)
+        output_suffix: str = re.sub(r"[^a-z0-9]+", "_", model_name.lower()).strip("_")
+        _draw_station_score_map(
+            mapped_station_scores=difference_gdf,
+            metric_col="KGE_difference",
+            metric_label="KGE difference (-)",
+            cmap_name="RdBu",
+            vmin=-visible_limit,
+            vmax=visible_limit,
+            output_path=maps_folder / f"skill_score_difference_map_{output_suffix}",
+            region_geom=region_geom,
+        )
+        logger.info("Saved skill score difference map for %s.", model_name)
+
+    logger.info("All skill score maps saved to: %s", maps_folder)
 
 
 def _draw_station_score_map(
@@ -503,7 +1013,7 @@ def _draw_kge_component_maps(
         )
 
     # Fixed-aspect map axes move within their grid cells. Positioning each
-    # colorbar from the rendered map edge keeps it directly beside the map.
+    # colorbar from the final map edge keeps it directly beside the map.
     fig.canvas.draw()
     for ax, cfg, scalar_mappable in zip(
         map_axes, metric_configs, scalar_mappables, strict=True
@@ -541,366 +1051,141 @@ def _draw_kge_component_maps(
     plt.close(fig)
 
 
-def create_discharge_score_maps(
-    mapped_station_scores: gpd.GeoDataFrame,
-    region_geom: gpd.GeoDataFrame,
-    output_folder: Path,
-    logger: logging.Logger,
-    difference_gdfs: dict[str, pd.DataFrame] | None = None,
-) -> None:
-    """Plot per-station skill scores on a satellite basemap, one map per metric.
-
-    Saves SVG and PNG files under ``output_folder/skill_score_maps/``.
+def _add_map_scale_bar(axis: plt.Axes) -> None:
+    """Add a scale bar to a projected discharge map.
 
     Args:
-        mapped_station_scores: Per-station metrics with point geometry in any CRS.
-        region_geom: Basin/region boundary overlaid on each map.
-        output_folder: Root folder under which ``skill_score_maps/`` is created.
-        logger: Logger to use for progress messages.
-        difference_gdfs: Optional matched GEB-vs-external station tables with
-            ``KGE_difference`` values (dimensionless).
+        axis: Map axis with coordinates in meters (EPSG:3857).
     """
-    maps_folder = output_folder / "skill_score_maps"
-    maps_folder.mkdir(parents=True, exist_ok=True)
-
-    kge_metric_columns: tuple[str, ...] = (
-        "KGE",
-        "KGE_correlation",
-        "KGE_bias_ratio",
-        "KGE_variability_ratio",
+    # Scale bar: round ~15% of the map width to a nice number (e.g. 152 km → 200 km)
+    x_min, x_max = axis.get_xlim()
+    y_min, y_max = axis.get_ylim()
+    map_width_m: float = x_max - x_min
+    map_height_m: float = y_max - y_min
+    bar_m: float = round(
+        map_width_m * 0.15 / 10 ** np.floor(np.log10(map_width_m * 0.15))
+    ) * 10 ** np.floor(np.log10(map_width_m * 0.15))
+    bar_label: str = f"{int(bar_m / 1_000)} km" if bar_m >= 1_000 else f"{int(bar_m)} m"
+    bar_x0: float = x_min + map_width_m * 0.03
+    bar_y: float = y_min + map_height_m * 0.03
+    axis.plot(
+        [bar_x0, bar_x0 + bar_m],
+        [bar_y, bar_y],
+        color="white",
+        linewidth=3,
+        solid_capstyle="butt",
+        zorder=5,
     )
-    if all(
-        column_name in mapped_station_scores.columns
-        for column_name in kge_metric_columns
-    ):
-        kge_metric_configs: tuple[dict[str, object], ...] = tuple(
-            _SKILL_SCORE_CONFIG_BY_COLUMN[column_name]
-            for column_name in kge_metric_columns
-        )
-        _draw_kge_component_maps(
-            mapped_station_scores=mapped_station_scores,
-            metric_configs=kge_metric_configs,
-            output_path=maps_folder / "skill_score_map_kge_components",
-            region_geom=region_geom,
-        )
-        logger.info("Saved KGE component skill score map.")
-
-    for cfg in _DISPLAYED_SKILL_SCORE_CONFIGS:
-        col: str = str(cfg["col"])
-        if col not in mapped_station_scores.columns:
-            logger.info("Metric '%s' not in evaluation data, skipping.", col)
-            continue
-
-        metric_values: np.ndarray = pd.to_numeric(
-            mapped_station_scores[col], errors="coerce"
-        ).to_numpy(dtype=float)
-        valid_values: np.ndarray = metric_values[np.isfinite(metric_values)]
-        if valid_values.size == 0:
-            logger.info("No valid values for metric '%s', skipping.", col)
-            continue
-
-        vmax: float = (
-            float(np.nanpercentile(valid_values, 95))
-            if cfg["vmax"] is None
-            else float(cast(float, cfg["vmax"]))
-        )
-        _draw_station_score_map(
-            mapped_station_scores=mapped_station_scores,
-            metric_col=col,
-            metric_label=str(cfg["label"]),
-            cmap_name=str(cfg["cmap"]),
-            vmin=float(cast(float, cfg["vmin"])),
-            vmax=vmax,
-            output_path=maps_folder / f"skill_score_map_{col.lower()}",
-            region_geom=region_geom,
-        )
-        logger.info("Saved skill score map for %s.", col)
-
-    for model_name, difference_df in (difference_gdfs or {}).items():
-        if "KGE_difference" not in difference_df:
-            continue
-        has_geometry: bool = "geometry" in difference_df
-        coordinate_columns: set[str] = {"station_longitude", "station_latitude"}
-        if not has_geometry and not coordinate_columns.issubset(difference_df):
-            logger.info("No station geometry found for %s difference map.", model_name)
-            continue
-        if not has_geometry:
-            difference_df = gpd.GeoDataFrame(
-                difference_df,
-                geometry=gpd.points_from_xy(
-                    difference_df["station_longitude"],
-                    difference_df["station_latitude"],
-                ),
-                crs="EPSG:4326",
-            )
-        unmatched_difference_df: gpd.GeoDataFrame = gpd.GeoDataFrame(
-            mapped_station_scores.loc[
-                ~mapped_station_scores.index.isin(difference_df.index)
-            ].copy(),
-            geometry="geometry",
-            crs=mapped_station_scores.crs,
-        )
-        unmatched_difference_df["KGE_difference"] = np.nan
-        matched_station_count: int = len(difference_df)
-        if not unmatched_difference_df.empty:
-            # Difference maps otherwise hide whole regions where the external
-            # source has no station match, which can look like a plotting error.
-            difference_df = pd.concat(
-                [difference_df, unmatched_difference_df],
-                axis=0,
-                copy=False,
-            )
-            logger.info(
-                "%s difference map shows %d matched stations and %d unmatched "
-                "eligible GEB stations.",
-                model_name,
-                matched_station_count,
-                len(unmatched_difference_df),
-            )
-        difference_gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
-            difference_df,
-            geometry="geometry",
-            crs=getattr(difference_df, "crs", None),
-        )
-        difference_values: np.ndarray = pd.to_numeric(
-            difference_gdf["KGE_difference"], errors="coerce"
-        ).to_numpy(dtype=float)
-        valid_values: np.ndarray = difference_values[np.isfinite(difference_values)]
-        if valid_values.size == 0:
-            continue
-        visible_limit: float = max(float(np.nanpercentile(abs(valid_values), 95)), 0.05)
-        output_suffix: str = re.sub(r"[^a-z0-9]+", "_", model_name.lower()).strip("_")
-        _draw_station_score_map(
-            mapped_station_scores=difference_gdf,
-            metric_col="KGE_difference",
-            metric_label="KGE difference (-)",
-            cmap_name="RdBu",
-            vmin=-visible_limit,
-            vmax=visible_limit,
-            output_path=maps_folder / f"skill_score_difference_map_{output_suffix}",
-            region_geom=region_geom,
-        )
-        logger.info("Saved skill score difference map for %s.", model_name)
-
-    logger.info("All skill score maps saved to: %s", maps_folder)
-
-
-def _draw_violin_box(
-    axis: plt.Axes,
-    values: np.ndarray,
-    position: float,
-    bar_color: str,
-    violin_width: float = 0.35,
-    violin_limits: tuple[float, float] | None = None,
-) -> None:
-    """Draw a violin and boxplot for one model metric distribution.
-
-    Args:
-        axis: Axis receiving the distribution.
-        values: Metric values for one model.
-        position: X-axis position of the distribution.
-        bar_color: Color used for the violin and box.
-        violin_width: Width of the violin plot.
-        violin_limits: Optional visible y-axis limits. Values outside these
-            limits are excluded from the violin density but retained when
-            calculating the boxplot statistics.
-    """
-    finite_values: np.ndarray = values[np.isfinite(values)]
-    if finite_values.size == 0:
-        return
-
-    density_values: np.ndarray = finite_values
-    if violin_limits is not None:
-        lower_limit, upper_limit = violin_limits
-        density_values = density_values[
-            (density_values >= lower_limit) & (density_values <= upper_limit)
-        ]
-    if len(density_values) >= 3:
-        parts = axis.violinplot(
-            density_values,
-            positions=[position],
-            showmedians=False,
-            showextrema=False,
-            widths=violin_width,
-            bw_method=0.15,
-        )
-        for body in cast(list, parts["bodies"]):
-            body.set_facecolor(bar_color)
-            body.set_edgecolor(bar_color)
-            body.set_linewidth(0.8)
-            body.set_alpha(0.35)
-            body.set_zorder(3)
-
-    axis.boxplot(
-        finite_values,
-        positions=[position],
-        widths=violin_width * 0.35,
-        patch_artist=True,
-        medianprops={"color": "black", "linewidth": 1.8, "zorder": 5},
-        boxprops={
-            "facecolor": bar_color,
-            "alpha": 0.82,
-            "linewidth": 0.8,
-            "edgecolor": bar_color,
-        },
-        whiskerprops={"color": bar_color, "linewidth": 1.0},
-        capprops={"color": bar_color, "linewidth": 1.0},
-        flierprops={
-            "marker": "o",
-            "markerfacecolor": bar_color,
-            "markeredgecolor": "none",
-            "markersize": 2.5,
-            "alpha": 0.25,
-        },
+    axis.text(
+        bar_x0 + bar_m / 2,
+        bar_y + map_height_m * 0.012,
+        bar_label,
+        color="white",
+        fontsize=14,
+        ha="center",
+        va="bottom",
+        zorder=5,
     )
 
 
-def create_seasonal_kge_distributions(
+# Skill-score distributions and external comparisons.
+
+
+def create_discharge_distribution_plots(
     station_scores: pd.DataFrame,
+    external_models: dict[str, pd.DataFrame],
     output_folder: Path,
     logger: logging.Logger,
+    minimum_upstream_area_km2: float,
     export: bool = True,
 ) -> None:
-    """Plot seasonal distributions of KGE and its three components.
+    """Plot score distributions for GEB, seasons, and matched external models.
 
     Args:
-        station_scores: Per-station discharge evaluation metrics containing the
-            seasonal daily KGE, correlation, bias-ratio, and variability-ratio
-            columns.
-        output_folder: Root discharge evaluation output folder.
-        logger: Logger used for output messages.
-        export: Whether to save PDF, SVG, and PNG versions of the figure.
-    """
-    season_names: tuple[str, ...] = ("winter", "spring", "summer", "autumn")
-    season_colors: tuple[str, ...] = ("#4C78A8", "#59A14F", "#F2A541", "#B2794C")
-    metric_configs: tuple[dict[str, object], ...] = (
-        {
-            "column": "KGE",
-            "title": "KGE",
-            "ylabel": "KGE",
-            "ylim": (-1.0, 1.0),
-            "reference": 0.0,
-        },
-        {
-            "column": "KGE_correlation",
-            "title": "KGE correlation ($r$)",
-            "ylabel": "Correlation, r",
-            "ylim": (-1.0, 1.0),
-            "reference": 0.0,
-        },
-        {
-            "column": "KGE_bias_ratio",
-            "title": "KGE bias ratio ($\\beta$)",
-            "ylabel": "Bias ratio, β",
-            "ylim": (0.0, 2.0),
-            "reference": 1.0,
-        },
-        {
-            "column": "KGE_variability_ratio",
-            "title": "KGE variability ratio ($\\alpha$)",
-            "ylabel": "Variability ratio, α",
-            "ylim": (0.0, 2.0),
-            "reference": 1.0,
-        },
+        station_scores: Filtered station scores with daily plotting columns.
+        external_models: External scores keyed by model name.
+        output_folder: Directory for matched score tables and figures.
+        logger: Logger for matching and figure exports.
+        minimum_upstream_area_km2: Minimum modeled upstream area (km²).
+        export: Whether to save figures. Matched tables are always exported.
+
+    Returns:
+        None. Produces distributions and the combined KGE comparison.
+
+    Raises:
+        ValueError: If score tables cannot be matched or plotted.
+    """  # noqa: DOC202, DOC502
+    create_discharge_score_distributions(
+        station_scores=station_scores,
+        external_models={},
+        output_folder=output_folder,
+        logger=logger,
+        export=export,
+        include_geb=True,
+        matched_only=False,
+        minimum_upstream_area_km2=minimum_upstream_area_km2,
+        station_count=len(station_scores),
     )
-    available_metric_columns: set[str] = {
-        str(metric_config["column"])
-        for metric_config in metric_configs
-        if any(
-            f"{metric_config['column']}_daily_{season_name}" in station_scores.columns
-            for season_name in season_names
-        )
-    }
-    if not available_metric_columns:
-        logger.info("No seasonal KGE metrics available; skipping seasonal figure.")
-        return
+    create_seasonal_kge_distributions(
+        station_scores=station_scores,
+        output_folder=output_folder,
+        logger=logger,
+        export=export,
+    )
 
-    figure, axes = plt.subplots(2, 2, figsize=(10.0, 7.2))
-    for axis, metric_config in zip(axes.flat, metric_configs, strict=True):
-        metric_name: str = str(metric_config["column"])
-        if metric_name not in available_metric_columns:
-            axis.set_visible(False)
-            continue
-        y_limits: tuple[float, float] = cast(tuple[float, float], metric_config["ylim"])
-        plotted_positions: list[int] = []
-        plotted_seasons: list[str] = []
-        for position, (season_name, season_color) in enumerate(
-            zip(season_names, season_colors, strict=True), start=1
+    matched_scores_by_model: dict[str, external_skill_scores.MatchedSkillScores] = (
+        external_skill_scores.match_external_skill_scores(
+            station_scores=station_scores,
+            external_models=external_models,
+            output_folder=output_folder,
+            logger=logger,
+            minimum_upstream_area_km2=minimum_upstream_area_km2,
+        )
+    )
+    kge_comparison_values: dict[
+        str, tuple[np.ndarray, np.ndarray, int, float | None]
+    ] = {}
+    for model_name, matched_scores in matched_scores_by_model.items():
+        model_name_suffix: str = re.sub(r"[^a-z0-9]+", "_", model_name.lower()).strip(
+            "_"
+        )
+        create_discharge_score_distributions(
+            station_scores=matched_scores.geb_scores,
+            external_models={model_name: matched_scores.external_scores},
+            output_folder=output_folder,
+            logger=logger,
+            export=export,
+            include_geb=True,
+            matched_only=True,
+            output_name_suffix=f"_matched_{model_name_suffix}",
+            minimum_upstream_area_km2=matched_scores.minimum_upstream_area_km2,
+            station_count=len(matched_scores.geb_scores),
+        )
+        if (
+            "KGE" in matched_scores.geb_scores.columns
+            and "KGE" in matched_scores.external_scores.columns
         ):
-            column_name: str = f"{metric_name}_daily_{season_name}"
-            if column_name not in station_scores.columns:
-                logger.info("Seasonal KGE column '%s' is unavailable.", column_name)
-                continue
-            values: np.ndarray = pd.to_numeric(
-                station_scores[column_name], errors="coerce"
+            geb_kge: np.ndarray = pd.to_numeric(
+                matched_scores.geb_scores["KGE"], errors="coerce"
             ).to_numpy(dtype=float)
-            finite_values: np.ndarray = values[np.isfinite(values)]
-            if finite_values.size == 0:
-                continue
-            plotted_positions.append(position)
-            plotted_seasons.append(season_name)
-            _draw_violin_box(
-                axis=axis,
-                values=finite_values,
-                position=float(position),
-                bar_color=season_color,
-                violin_width=0.7,
-                violin_limits=y_limits,
-            )
-            annotation_y: float = y_limits[0] + 0.03 * (y_limits[1] - y_limits[0])
-            axis.text(
-                position,
-                annotation_y,
-                f"med={float(np.median(finite_values)):.2f}",
-                ha="center",
-                va="bottom",
-                fontsize=6.5,
-                color="0.25",
-                bbox={
-                    "boxstyle": "round,pad=0.12",
-                    "facecolor": "white",
-                    "edgecolor": "none",
-                    "alpha": 0.75,
-                },
-            )
-        if not plotted_positions:
-            axis.set_visible(False)
-            continue
-        axis.axhline(
-            float(cast(float, metric_config["reference"])),
-            color="0.55",
-            linewidth=0.8,
-            linestyle="--",
-            zorder=0,
-        )
-        axis.set(
-            title=str(metric_config["title"]),
-            ylabel=str(metric_config["ylabel"]),
-            xticks=plotted_positions,
-            xticklabels=[season_name.title() for season_name in plotted_seasons],
-            xlim=(0.5, 4.5),
-            ylim=y_limits,
-        )
-        axis.spines["top"].set_visible(False)
-        axis.spines["right"].set_visible(False)
-        axis.grid(axis="y", color="0.88", linewidth=0.7)
-    figure.tight_layout()
+            external_kge: np.ndarray = pd.to_numeric(
+                matched_scores.external_scores["KGE"], errors="coerce"
+            ).to_numpy(dtype=float)
+            valid_kge: np.ndarray = np.isfinite(geb_kge) & np.isfinite(external_kge)
+            if valid_kge.any():
+                kge_comparison_values[model_name] = (
+                    geb_kge[valid_kge],
+                    external_kge[valid_kge],
+                    int(valid_kge.sum()),
+                    matched_scores.minimum_upstream_area_km2,
+                )
 
-    if export:
-        boxplots_folder: Path = output_folder / "skill_score_boxplots"
-        boxplots_folder.mkdir(parents=True, exist_ok=True)
-        for extension in ("pdf", "svg", "png"):
-            output_path: Path = (
-                boxplots_folder / f"evaluation_skill_scores_kge_seasonal.{extension}"
-            )
-            figure.savefig(
-                output_path,
-                bbox_inches="tight",
-                dpi=300 if extension == "png" else None,
-            )
-            logger.info("Seasonal KGE plot saved to: %s", output_path)
-
-    plt.close(figure)
+    create_external_kge_comparison(
+        model_kge_values=kge_comparison_values,
+        output_folder=output_folder,
+        logger=logger,
+        export=export,
+    )
 
 
 def create_discharge_score_distributions(
@@ -1271,6 +1556,154 @@ def create_discharge_score_distributions(
     logger.info("Skill score plots created.")
 
 
+def create_seasonal_kge_distributions(
+    station_scores: pd.DataFrame,
+    output_folder: Path,
+    logger: logging.Logger,
+    export: bool = True,
+) -> None:
+    """Plot seasonal distributions of KGE and its three components.
+
+    Args:
+        station_scores: Per-station discharge evaluation metrics containing the
+            seasonal daily KGE, correlation, bias-ratio, and variability-ratio
+            columns.
+        output_folder: Root discharge evaluation output folder.
+        logger: Logger used for output messages.
+        export: Whether to save PDF, SVG, and PNG versions of the figure.
+    """
+    season_names: tuple[str, ...] = ("winter", "spring", "summer", "autumn")
+    season_colors: tuple[str, ...] = ("#4C78A8", "#59A14F", "#F2A541", "#B2794C")
+    metric_configs: tuple[dict[str, object], ...] = (
+        {
+            "column": "KGE",
+            "title": "KGE",
+            "ylabel": "KGE",
+            "ylim": (-1.0, 1.0),
+            "reference": 0.0,
+        },
+        {
+            "column": "KGE_correlation",
+            "title": "KGE correlation ($r$)",
+            "ylabel": "Correlation, r",
+            "ylim": (-1.0, 1.0),
+            "reference": 0.0,
+        },
+        {
+            "column": "KGE_bias_ratio",
+            "title": "KGE bias ratio ($\\beta$)",
+            "ylabel": "Bias ratio, β",
+            "ylim": (0.0, 2.0),
+            "reference": 1.0,
+        },
+        {
+            "column": "KGE_variability_ratio",
+            "title": "KGE variability ratio ($\\alpha$)",
+            "ylabel": "Variability ratio, α",
+            "ylim": (0.0, 2.0),
+            "reference": 1.0,
+        },
+    )
+    available_metric_columns: set[str] = {
+        str(metric_config["column"])
+        for metric_config in metric_configs
+        if any(
+            f"{metric_config['column']}_daily_{season_name}" in station_scores.columns
+            for season_name in season_names
+        )
+    }
+    if not available_metric_columns:
+        logger.info("No seasonal KGE metrics available; skipping seasonal figure.")
+        return
+
+    figure, axes = plt.subplots(2, 2, figsize=(10.0, 7.2))
+    for axis, metric_config in zip(axes.flat, metric_configs, strict=True):
+        metric_name: str = str(metric_config["column"])
+        if metric_name not in available_metric_columns:
+            axis.set_visible(False)
+            continue
+        y_limits: tuple[float, float] = cast(tuple[float, float], metric_config["ylim"])
+        plotted_positions: list[int] = []
+        plotted_seasons: list[str] = []
+        for position, (season_name, season_color) in enumerate(
+            zip(season_names, season_colors, strict=True), start=1
+        ):
+            column_name: str = f"{metric_name}_daily_{season_name}"
+            if column_name not in station_scores.columns:
+                logger.info("Seasonal KGE column '%s' is unavailable.", column_name)
+                continue
+            values: np.ndarray = pd.to_numeric(
+                station_scores[column_name], errors="coerce"
+            ).to_numpy(dtype=float)
+            finite_values: np.ndarray = values[np.isfinite(values)]
+            if finite_values.size == 0:
+                continue
+            plotted_positions.append(position)
+            plotted_seasons.append(season_name)
+            _draw_violin_box(
+                axis=axis,
+                values=finite_values,
+                position=float(position),
+                bar_color=season_color,
+                violin_width=0.7,
+                violin_limits=y_limits,
+            )
+            annotation_y: float = y_limits[0] + 0.03 * (y_limits[1] - y_limits[0])
+            axis.text(
+                position,
+                annotation_y,
+                f"med={float(np.median(finite_values)):.2f}",
+                ha="center",
+                va="bottom",
+                fontsize=6.5,
+                color="0.25",
+                bbox={
+                    "boxstyle": "round,pad=0.12",
+                    "facecolor": "white",
+                    "edgecolor": "none",
+                    "alpha": 0.75,
+                },
+            )
+        if not plotted_positions:
+            axis.set_visible(False)
+            continue
+        axis.axhline(
+            float(cast(float, metric_config["reference"])),
+            color="0.55",
+            linewidth=0.8,
+            linestyle="--",
+            zorder=0,
+        )
+        axis.set(
+            title=str(metric_config["title"]),
+            ylabel=str(metric_config["ylabel"]),
+            xticks=plotted_positions,
+            xticklabels=[season_name.title() for season_name in plotted_seasons],
+            xlim=(0.5, 4.5),
+            ylim=y_limits,
+        )
+        axis.spines["top"].set_visible(False)
+        axis.spines["right"].set_visible(False)
+        axis.grid(axis="y", color="0.88", linewidth=0.7)
+    figure.tight_layout()
+
+    if export:
+        boxplots_folder: Path = output_folder / "skill_score_boxplots"
+        boxplots_folder.mkdir(parents=True, exist_ok=True)
+        for extension in ("pdf", "svg", "png"):
+            output_path: Path = (
+                boxplots_folder / f"evaluation_skill_scores_kge_seasonal.{extension}"
+            )
+            figure.savefig(
+                output_path,
+                bbox_inches="tight",
+                dpi=300 if extension == "png" else None,
+            )
+            logger.info("Seasonal KGE plot saved to: %s", output_path)
+
+    plt.close(figure)
+
+
 def create_external_kge_comparison(
     model_kge_values: dict[str, tuple[np.ndarray, np.ndarray, int, float | None]],
     output_folder: Path,
@@ -1422,6 +1855,79 @@ def create_external_kge_comparison(
 
     plt.show()
     plt.close(fig)
+
+
+def _draw_violin_box(
+    axis: plt.Axes,
+    values: np.ndarray,
+    position: float,
+    bar_color: str,
+    violin_width: float = 0.35,
+    violin_limits: tuple[float, float] | None = None,
+) -> None:
+    """Draw a violin and boxplot for one model metric distribution.
+
+    Args:
+        axis: Axis receiving the distribution.
+        values: Metric values for one model.
+        position: X-axis position of the distribution.
+        bar_color: Color used for the violin and box.
+        violin_width: Width of the violin plot.
+        violin_limits: Optional visible y-axis limits. Values outside these
+            limits are excluded from the violin density but retained when
+            calculating the boxplot statistics.
+    """
+    finite_values: np.ndarray = values[np.isfinite(values)]
+    if finite_values.size == 0:
+        return
+
+    density_values: np.ndarray = finite_values
+    if violin_limits is not None:
+        lower_limit, upper_limit = violin_limits
+        density_values = density_values[
+            (density_values >= lower_limit) & (density_values <= upper_limit)
+        ]
+    if len(density_values) >= 3:
+        parts = axis.violinplot(
+            density_values,
+            positions=[position],
+            showmedians=False,
+            showextrema=False,
+            widths=violin_width,
+            bw_method=0.15,
+        )
+        for body in cast(list, parts["bodies"]):
+            body.set_facecolor(bar_color)
+            body.set_edgecolor(bar_color)
+            body.set_linewidth(0.8)
+            body.set_alpha(0.35)
+            body.set_zorder(3)
+
+    axis.boxplot(
+        finite_values,
+        positions=[position],
+        widths=violin_width * 0.35,
+        patch_artist=True,
+        medianprops={"color": "black", "linewidth": 1.8, "zorder": 5},
+        boxprops={
+            "facecolor": bar_color,
+            "alpha": 0.82,
+            "linewidth": 0.8,
+            "edgecolor": bar_color,
+        },
+        whiskerprops={"color": bar_color, "linewidth": 1.0},
+        capprops={"color": bar_color, "linewidth": 1.0},
+        flierprops={
+            "marker": "o",
+            "markerfacecolor": bar_color,
+            "markeredgecolor": "none",
+            "markersize": 2.5,
+            "alpha": 0.25,
+        },
+    )
+
+
+# Skill scores versus upstream area.
 
 
 def create_upstream_area_score_plots(

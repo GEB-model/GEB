@@ -1,6 +1,6 @@
 """Calculate discharge skill scores from paired observations and simulations.
 
-This module owns the metric definitions, seasonal grouping, and output columns.
+This module contains the metric definitions, seasonal grouping, and output columns.
 It does not load model files or create plots.
 """
 
@@ -173,3 +173,15 @@ def calculate_seasonal_discharge_metrics(
         )
         seasonal_metrics[season_name] = metrics
     return seasonal_metrics
+
+
+def use_daily_discharge_scores(station_scores: pd.DataFrame) -> None:
+    """Copy daily scores to the unsuffixed columns used by plots.
+
+    Args:
+        station_scores: Discharge evaluation table modified in place.
+    """
+    for metric_name in DischargeMetrics._fields:
+        daily_column: str = f"{metric_name}_daily"
+        if daily_column in station_scores.columns:
+            station_scores[metric_name] = station_scores[daily_column]

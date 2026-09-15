@@ -1,14 +1,12 @@
-"""Relate discharge KGE and its components to GRDC-Caravan attributes.
+"""Analyze discharge skill against GRDC-Caravan catchment attributes.
 
-``plot_discharge_characteristics`` runs the complete analysis: join attributes,
-convert units, calculate associations, and draw/export the three figures.
-Both relationship figures use the same panel renderer and LOWESS fit; only the
-four summary panels add bootstrap intervals. Dashboard preparation retains
-unmatched stations and is deliberately separate from this matched-only analysis.
+This module contains catchment attribute definitions, data preparation,
+statistics, and data plotting for the figures and dashboard.
 """
 
 import logging
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -26,18 +24,19 @@ from matplotlib.transforms import Bbox
 from scipy.stats import spearmanr
 from statsmodels.nonparametric.smoothers_lowess import lowess
 
+from geb.build.data_catalog import DataCatalog
 from geb.evaluate.workflows.external_skill_scores import format_grdc_station_key
 
 
 @dataclass(frozen=True)
 class Characteristic:
-    """Metadata for one GRDC-Caravan catchment characteristic.
+    """Attribute column, axis label, and conversion to display units.
 
     Args:
         column: Column in the enriched discharge-evaluation table.
         label: Publication label including units.
         scale: Factor converting stored values to displayed units.
-        logarithmic_x: Whether the 32-panel atlas uses a base-10 x-axis.
+        logarithmic_x: Whether relationship plots use a base-10 x-axis.
     """
 
     column: str
@@ -48,7 +47,7 @@ class Characteristic:
 
 @dataclass(frozen=True)
 class KGEComponentTarget:
-    """One KGE quantity displayed in the association heatmap.
+    """Score column and label for the association heatmap.
 
     Args:
         column: Column in the discharge-evaluation table.
@@ -111,20 +110,12 @@ _SCREENING_CHARACTERISTICS_BY_COLUMN: dict[str, Characteristic] = {
 
 # The dashboard subset prioritizes distinct, actionable hydrological mechanisms.
 # Keeping this list short makes spatial comparison substantially easier than a
-# layer menu containing every variable in the exploratory 32-panel atlas.
+# layer menu containing all 32 variables.
 DASHBOARD_CHARACTERISTICS: tuple[Characteristic, ...] = (
-    tuple(
-        _SCREENING_CHARACTERISTICS_BY_COLUMN[column]
-        for column in ("sgr_dk_sav", "ele_mt_sav")
-    )
-    + (
-        Characteristic(
-            "area",
-            "GRDC-Caravan catchment area (km²)",
-            logarithmic_x=True,
-        ),
-    )
-    + tuple(
+    _SCREENING_CHARACTERISTICS_BY_COLUMN["sgr_dk_sav"],
+    _SCREENING_CHARACTERISTICS_BY_COLUMN["ele_mt_sav"],
+    Characteristic("area", "GRDC-Caravan catchment area (km²)", logarithmic_x=True),
+    *(
         _SCREENING_CHARACTERISTICS_BY_COLUMN[column]
         for column in (
             "gwt_cm_sav",
@@ -134,7 +125,7 @@ DASHBOARD_CHARACTERISTICS: tuple[Characteristic, ...] = (
             "dor_pc_pva",
             "lka_pc_sse",
         )
-    )
+    ),
 )
 
 KGE_COMPONENT_TARGETS: tuple[KGEComponentTarget, ...] = (
@@ -160,98 +151,173 @@ LOWESS_COLOR: str = "#01665E"
 LOWESS_INTERVAL_COLOR: str = "#80CDC1"
 
 
-def plot_discharge_characteristics(
+# Analysis and dashboard functions.
+
+
+def analyze_discharge_characteristics(
     station_scores: pd.DataFrame,
-    catchment_attributes: pd.DataFrame,
     output_folder: Path,
     logger: logging.Logger,
     output_name_suffix: str = "",
     export: bool = True,
+    catchment_attributes: pd.DataFrame | None = None,
 ) -> None:
-    """Join, analyze, and plot discharge scores against catchment attributes.
+    """Load attributes, calculate associations, and draw the three figures.
 
     Args:
-        station_scores: Filtered station scores, with upstream area in m².
-        catchment_attributes: GRDC-Caravan attributes keyed by gauge_id.
-        output_folder: Directory receiving the association CSV and three figures.
-        logger: Logger for matching and export messages.
-        output_name_suffix: Evaluation-period suffix for output filenames.
-        export: Whether to write files; figures are always closed after drawing.
+        station_scores: Filtered station scores; upstream area is in m².
+        output_folder: Directory for the association CSV and figures.
+        logger: Logger for data loading, matching, and exports.
+        output_name_suffix: Evaluation-period suffix for filenames.
+        export: Whether to save files. Figures are closed in either mode.
+        catchment_attributes: Attributes keyed by gauge_id, or None to load
+            GRDC-Caravan from the cached GEB data catalog.
 
     Returns:
-        None. Stations without attribute matches are logged and skipped.
+        None. Logs and skips stations without attribute matches.
 
     Raises:
-        ValueError: If required score or attribute columns are missing, or
-            catchment gauge identifiers are duplicated.
+        ValueError: If required columns are missing or gauge IDs are duplicated.
+        RuntimeError: If GRDC-Caravan attributes cannot be loaded.
     """  # noqa: DOC202, DOC502
-    scores_with_characteristics: pd.DataFrame = enrich_discharge_evaluation(
-        station_scores=station_scores,
-        catchment_attributes=catchment_attributes,
+    if catchment_attributes is None:
+        catchment_attributes = DataCatalog(logger=logger).fetch("GRDC_Caravan").read()
+    enriched_scores: pd.DataFrame = enrich_discharge_evaluation(
+        station_scores, catchment_attributes
     )
     if export:
         output_folder.mkdir(parents=True, exist_ok=True)
-
+    matched_count: int = int(enriched_scores["grdc_caravan_matched"].sum())
     logger.info(
         "Matched %d/%d evaluated stations to GRDC-Caravan attributes.",
-        int(scores_with_characteristics["grdc_caravan_matched"].sum()),
-        len(scores_with_characteristics),
+        matched_count,
+        len(enriched_scores),
     )
-
-    if not scores_with_characteristics["grdc_caravan_matched"].any():
+    if matched_count == 0:
         logger.warning(
             "No discharge evaluation stations match GRDC-Caravan after "
             "upstream-area filtering. Skipping discharge characteristic plots."
         )
         return
 
-    characteristic_analysis: pd.DataFrame = prepare_kge_characteristic_analysis(
-        scores_with_characteristics
-    )
-    characteristic_associations: pd.DataFrame = calculate_kge_component_associations(
-        characteristic_analysis
-    )
+    analysis: pd.DataFrame = prepare_kge_characteristic_analysis(enriched_scores)
+    associations: pd.DataFrame = calculate_kge_component_associations(analysis)
     if export:
         association_path: Path = output_folder / (
             f"discharge_kge_component_associations{output_name_suffix}.csv"
         )
-        characteristic_associations.to_csv(association_path, index=False)
+        associations.to_csv(association_path, index=False)
         logger.info(
             "Saved discharge characteristic associations to %s.", association_path
         )
 
-    correlation_figure: plt.Figure = create_characteristic_correlation_matrix(
-        characteristic_analysis=characteristic_analysis,
-        output_folder=output_folder,
-        logger=logger,
-        output_name_suffix=output_name_suffix,
-        export=export,
-    )
-    plt.close(correlation_figure)
-
-    for create_figure in (
-        create_kge_characteristic_summary,
-        create_kge_characteristic_scatterplots,
+    # Draw, save, and close one figure at a time to limit memory use.
+    for stem, draw_figure, extensions in (
+        (
+            "discharge_characteristic_correlation_matrix",
+            partial(create_characteristic_correlation_matrix, analysis),
+            ("png",),
+        ),
+        (
+            "discharge_kge_characteristic_heatmaps",
+            partial(create_kge_characteristic_summary, analysis, associations),
+            ("svg", "pdf", "png"),
+        ),
+        (
+            "discharge_kge_all_characteristic_scatterplots",
+            partial(create_kge_characteristic_scatterplots, analysis, associations),
+            ("svg", "pdf", "png"),
+        ),
     ):
-        figure: plt.Figure = create_figure(
-            characteristic_analysis,
-            characteristic_associations,
-            output_folder,
-            logger,
-            output_name_suffix,
-            export,
+        figure: plt.Figure = draw_figure()
+        try:
+            if export:
+                for extension in extensions:
+                    output_path: Path = (
+                        output_folder / f"{stem}{output_name_suffix}.{extension}"
+                    )
+                    figure.savefig(
+                        output_path,
+                        dpi=300 if extension == "png" else None,
+                        bbox_inches="tight",
+                    )
+                    logger.info(
+                        "Saved discharge characteristic figure to %s.", output_path
+                    )
+        finally:
+            plt.close(figure)
+
+
+def load_dashboard_characteristics(
+    mapped_station_scores: pd.DataFrame,
+    logger: logging.Logger,
+) -> pd.DataFrame | None:
+    """Load and prepare GRDC-Caravan attributes for the discharge dashboard.
+
+    Args:
+        mapped_station_scores: Evaluated station metrics and geometries.
+        logger: Logger used by the GEB data catalog.
+
+    Returns:
+        Stations with nine attributes in display units. Unmatched stations have
+        missing values; returns None when the optional data is unavailable.
+
+    Raises:
+        ValueError: If required columns are missing or station IDs are duplicated.
+    """
+    try:
+        catchment_attributes: pd.DataFrame = (
+            DataCatalog(logger=logger).fetch("GRDC_Caravan").read()
         )
-        plt.close(figure)
+    except RuntimeError as error:
+        # Catchment attributes enrich the dashboard but must not make the core
+        # discharge evaluation depend on network access.
+        logger.warning(
+            "GRDC-Caravan attributes are unavailable; creating the discharge "
+            "dashboard without catchment-characteristic layers: %s",
+            error,
+        )
+        return None
+    dashboard_table: pd.DataFrame = enrich_discharge_evaluation(
+        mapped_station_scores, catchment_attributes
+    )
+    required_columns: set[str] = {
+        "station_ID",
+        "grdc_caravan_matched",
+        *(item.column for item in DASHBOARD_CHARACTERISTICS),
+    }
+    missing_columns: set[str] = required_columns - set(dashboard_table.columns)
+    if missing_columns:
+        raise ValueError(
+            "Enriched discharge metrics are missing dashboard columns: "
+            f"{sorted(missing_columns)}"
+        )
+    if dashboard_table["station_ID"].duplicated().any():
+        raise ValueError("Dashboard discharge metrics contain duplicate station IDs.")
+
+    matched_stations: pd.Series = (
+        dashboard_table["grdc_caravan_matched"].fillna(False).astype(bool)
+    )
+    for characteristic in DASHBOARD_CHARACTERISTICS:
+        numeric_values: pd.Series = pd.to_numeric(
+            dashboard_table[characteristic.column], errors="coerce"
+        )
+        # Mask every selected field explicitly so unmatched rows can never be
+        # mistaken for valid zero-valued GRDC-Caravan observations.
+        dashboard_table[characteristic.column] = (
+            numeric_values.where(matched_stations) * characteristic.scale
+        )
+    return dashboard_table
+
+
+# Station matching, unit conversion, and statistics.
 
 
 def enrich_discharge_evaluation(
     station_scores: pd.DataFrame,
     catchment_attributes: pd.DataFrame,
 ) -> pd.DataFrame:
-    """Add GRDC-Caravan catchment attributes to GEB discharge scores.
-
-    The left join retains evaluated stations absent from the openly licensed
-    GRDC-Caravan subset.
+    """Join attributes by station ID, retaining unmatched stations.
 
     Args:
         station_scores: Per-station GEB discharge metrics.
@@ -261,7 +327,7 @@ def enrich_discharge_evaluation(
         Evaluation table with catchment attributes and a match indicator.
 
     Raises:
-        ValueError: If either station identifier is missing or duplicated.
+        ValueError: If identifier columns are missing or gauge IDs are duplicated.
     """
     evaluation_table: pd.DataFrame = station_scores.copy()
     if "station_ID" not in evaluation_table.columns:
@@ -293,11 +359,9 @@ def enrich_discharge_evaluation(
 def prepare_kge_characteristic_analysis(
     station_scores: pd.DataFrame,
 ) -> pd.DataFrame:
-    """Prepare matched stations for KGE-characteristic analysis.
+    """Select matched stations and convert attributes to display units.
 
-    Characteristics are converted once to their displayed units. KGE and its
-    three original components remain untransformed so that bias and variability
-    direction are preserved.
+    KGE and its components retain their original values and direction.
 
     Args:
         station_scores: Discharge metrics enriched with GRDC-Caravan attributes.
@@ -336,66 +400,13 @@ def prepare_kge_characteristic_analysis(
     return analysis_table
 
 
-def prepare_dashboard_characteristics(
-    scores_with_characteristics: pd.DataFrame,
-) -> pd.DataFrame:
-    """Prepare the curated GRDC-Caravan attributes for the spatial dashboard.
-
-    Unlike the publication-figure preparation, this function retains stations
-    without a GRDC-Caravan match so they can be shown as missing on the map.
-    Values are converted to the human-readable units defined by
-    :data:`DASHBOARD_CHARACTERISTICS`.
-
-    Args:
-        scores_with_characteristics: Discharge evaluation enriched with
-            GRDC-Caravan attributes and a ``grdc_caravan_matched`` indicator.
-
-    Returns:
-        Evaluation table with dashboard characteristics in display units.
-
-    Raises:
-        ValueError: If station identifiers, match status, or selected
-            characteristic columns are unavailable.
-    """
-    required_columns: set[str] = {
-        "station_ID",
-        "grdc_caravan_matched",
-        *(item.column for item in DASHBOARD_CHARACTERISTICS),
-    }
-    missing_columns: set[str] = required_columns - set(
-        scores_with_characteristics.columns
-    )
-    if missing_columns:
-        raise ValueError(
-            "Enriched discharge metrics are missing dashboard columns: "
-            f"{sorted(missing_columns)}"
-        )
-    if scores_with_characteristics["station_ID"].duplicated().any():
-        raise ValueError("Dashboard discharge metrics contain duplicate station IDs.")
-
-    dashboard_table: pd.DataFrame = scores_with_characteristics.copy()
-    matched_stations: pd.Series = (
-        dashboard_table["grdc_caravan_matched"].fillna(False).astype(bool)
-    )
-    for characteristic in DASHBOARD_CHARACTERISTICS:
-        numeric_values: pd.Series = pd.to_numeric(
-            dashboard_table[characteristic.column], errors="coerce"
-        )
-        # Mask every selected field explicitly so unmatched rows can never be
-        # mistaken for valid zero-valued GRDC-Caravan observations.
-        dashboard_table[characteristic.column] = (
-            numeric_values.where(matched_stations) * characteristic.scale
-        )
-    return dashboard_table
-
-
 def calculate_kge_component_associations(
-    characteristic_analysis: pd.DataFrame,
+    analysis: pd.DataFrame,
 ) -> pd.DataFrame:
     """Calculate Spearman associations with KGE and its three components.
 
     Args:
-        characteristic_analysis: Output from :func:`prepare_kge_characteristic_analysis`.
+        analysis: Output from :func:`prepare_kge_characteristic_analysis`.
 
     Returns:
         Long table containing sample sizes, Spearman correlations, and p-values.
@@ -403,7 +414,7 @@ def calculate_kge_component_associations(
     association_rows: list[dict[str, float | int | str]] = []
     for characteristic in SCREENING_CHARACTERISTICS:
         for target in KGE_COMPONENT_TARGETS:
-            pair_table: pd.DataFrame = characteristic_analysis[
+            pair_table: pd.DataFrame = analysis[
                 [characteristic.column, target.column]
             ].dropna()
             rho: float = np.nan
@@ -433,46 +444,16 @@ def calculate_kge_component_associations(
     return pd.DataFrame(association_rows)
 
 
-def _save_figure(
-    figure: plt.Figure,
-    output_folder: Path,
-    output_stem: str,
-    logger: logging.Logger,
-) -> None:
-    """Save a figure as editable vector files and a 300-dpi PNG.
-
-    Args:
-        figure: Matplotlib figure to save.
-        output_folder: Figure output directory.
-        output_stem: Filename without extension.
-        logger: Logger used for export messages.
-    """
-    output_folder.mkdir(parents=True, exist_ok=True)
-    for extension in ("svg", "pdf", "png"):
-        output_path: Path = output_folder / f"{output_stem}.{extension}"
-        figure.savefig(
-            output_path,
-            dpi=300 if extension == "png" else None,
-            bbox_inches="tight",
-        )
-        logger.info("Saved discharge characteristic figure to %s.", output_path)
+# Figure layouts.
 
 
 def create_characteristic_correlation_matrix(
-    characteristic_analysis: pd.DataFrame,
-    output_folder: Path,
-    logger: logging.Logger,
-    output_name_suffix: str = "",
-    export: bool = True,
+    analysis: pd.DataFrame,
 ) -> plt.Figure:
     """Plot correlations among GRDC-Caravan catchment characteristics.
 
     Args:
-        characteristic_analysis: Prepared matched-station analysis table.
-        output_folder: Folder receiving the PNG output.
-        logger: Logger used for export messages.
-        output_name_suffix: Optional evaluation-period filename suffix.
-        export: Whether to save the figure.
+        analysis: Prepared matched-station analysis table.
 
     Returns:
         Lower-triangular characteristic correlation heatmap.
@@ -480,9 +461,9 @@ def create_characteristic_correlation_matrix(
     characteristic_columns: list[str] = [
         characteristic.column for characteristic in SCREENING_CHARACTERISTICS
     ]
-    correlation_matrix: pd.DataFrame = characteristic_analysis[
-        characteristic_columns
-    ].corr(method="spearman", min_periods=3)
+    correlation_matrix: pd.DataFrame = analysis[characteristic_columns].corr(
+        method="spearman", min_periods=3
+    )
     characteristic_labels: list[str] = [
         characteristic.label for characteristic in SCREENING_CHARACTERISTICS
     ]
@@ -517,71 +498,379 @@ def create_characteristic_correlation_matrix(
         pad=16,
     )
     figure.subplots_adjust(left=0.31, right=0.91, top=0.93, bottom=0.285)
-    if export:
-        output_path: Path = output_folder / (
-            f"discharge_characteristic_correlation_matrix{output_name_suffix}.png"
-        )
-        figure.savefig(output_path, dpi=300, bbox_inches="tight")
-        logger.info("Saved characteristic correlation matrix to %s.", output_path)
     return figure
 
 
-def _fit_lowess_to_grid(
-    x_values: np.ndarray,
-    y_values: np.ndarray,
-    evaluation_x: np.ndarray,
-    robust_iterations: int,
-) -> np.ndarray:
-    """Fit LOWESS and interpolate fitted values to a common grid.
+def create_kge_characteristic_summary(
+    analysis: pd.DataFrame,
+    associations: pd.DataFrame,
+) -> plt.Figure:
+    """Plot the KGE-component heatmap and four linked relationships.
 
     Args:
-        x_values: Finite characteristic values, optionally log-transformed.
-        y_values: Corresponding dimensionless KGE values.
-        evaluation_x: Grid in the same units as ``x_values``.
-        robust_iterations: Number of LOWESS residual-reweighting iterations.
+        analysis: Prepared matched-station analysis table.
+        associations: KGE-component association table.
 
     Returns:
-        Interpolated LOWESS values on ``evaluation_x``.
+        Figure containing the heatmap and four continuous relationship panels.
 
     Raises:
-        ValueError: If fewer than two distinct x-values are available.
+        ValueError: If selected relationship-panel inputs are incomplete.
     """
-    unique_x: np.ndarray = np.unique(x_values)
-    if len(unique_x) < 2:
-        raise ValueError("A LOWESS curve needs two distinct characteristic values.")
-
-    stable_x_values: np.ndarray = x_values.copy()
-    if len(unique_x) < len(x_values):
-        minimum_gap: float = float(np.min(np.diff(unique_x)))
-        jitter_width: float = minimum_gap * 1e-6
-        for tied_value in unique_x:
-            tied_indices: np.ndarray = np.flatnonzero(x_values == tied_value)
-            if len(tied_indices) > 1:
-                # This sub-pixel separation prevents division by zero while
-                # retaining the full statistical weight of zero-heavy data.
-                stable_x_values[tied_indices] += np.linspace(
-                    -0.5 * jitter_width,
-                    0.5 * jitter_width,
-                    len(tied_indices),
-                )
-
-    fitted_values: np.ndarray = np.asarray(
-        lowess(
-            y_values,
-            stable_x_values,
-            frac=0.35,
-            it=robust_iterations,
-            return_sorted=True,
-        ),
-        dtype=float,
+    association_matrix: pd.DataFrame = associations.pivot(
+        index="variable", columns="target", values="spearman_rho"
     )
-    fitted_x, unique_indices = np.unique(fitted_values[:, 0], return_index=True)
-    return np.interp(evaluation_x, fitted_x, fitted_values[unique_indices, 1])
+    significance_matrix: pd.DataFrame = associations.pivot(
+        index="variable", columns="target", values="p_value"
+    )
+    labels_by_column: dict[str, str] = {
+        item.column: item.label for item in SCREENING_CHARACTERISTICS
+    }
+    target_columns: list[str] = [target.column for target in KGE_COMPONENT_TARGETS]
+    required_variables: list[str] = list(_SCREENING_CHARACTERISTICS_BY_COLUMN)
+    selected_variables: set[str] = set(KGE_RELATIONSHIP_PANELS)
+    if not {"KGE_daily", *selected_variables}.issubset(analysis.columns):
+        raise ValueError("KGE relationship-panel inputs are incomplete.")
+
+    association_matrix = association_matrix.reindex(
+        index=required_variables, columns=target_columns
+    )
+    significance_matrix = significance_matrix.reindex(
+        index=required_variables, columns=target_columns
+    )
+    variable_order: list[str] = (
+        association_matrix["KGE_daily"]
+        .abs()
+        .sort_values(ascending=False, kind="stable", na_position="last")
+        .index.tolist()
+    )
+    association_matrix = association_matrix.loc[variable_order]
+    significance_matrix = significance_matrix.loc[variable_order]
+
+    figure: plt.Figure = plt.figure(figsize=(14.8, 11.8))
+    outer_grid: GridSpec = figure.add_gridspec(
+        1, 2, width_ratios=(1.12, 1.10), wspace=0.30
+    )
+    association_axis: plt.Axes = figure.add_subplot(outer_grid[0, 0])
+    correlation_grid: GridSpecFromSubplotSpec = outer_grid[0, 1].subgridspec(
+        5,
+        1,
+        height_ratios=(1.0, 1.0, 1.0, 1.0, 0.005),
+        hspace=0.52,
+    )
+    correlation_axes: list[plt.Axes] = [
+        figure.add_subplot(correlation_grid[row_index, 0])
+        for row_index in range(len(KGE_RELATIONSHIP_PANELS))
+    ]
+
+    association_image: AxesImage = association_axis.imshow(
+        association_matrix.to_numpy(dtype=float),
+        cmap="BrBG",
+        norm=TwoSlopeNorm(vmin=-0.5, vcenter=0.0, vmax=0.5),
+        aspect="auto",
+    )
+    association_axis.set_xticks(
+        np.arange(len(target_columns)),
+        [target.label for target in KGE_COMPONENT_TARGETS],
+    )
+    association_axis.set_yticks(
+        np.arange(len(variable_order)),
+        [labels_by_column[variable] for variable in variable_order],
+    )
+    for row_index in range(len(variable_order)):
+        for column_index in range(len(target_columns)):
+            rho: float = float(association_matrix.iloc[row_index, column_index])
+            p_value: float = float(significance_matrix.iloc[row_index, column_index])
+            if np.isnan(rho):
+                continue
+            significance_marker: str = "*" if p_value < 0.05 else ""
+            rho_text: str = "0.00" if abs(rho) < 0.005 else f"{rho:+.2f}"
+            text_color: str = "white" if abs(rho) >= 0.34 else "#222222"
+            association_axis.text(
+                column_index,
+                row_index,
+                f"{rho_text}{significance_marker}",
+                ha="center",
+                va="center",
+                fontsize=7.2,
+                color=text_color,
+            )
+    association_axis.set_title(
+        "a) Spearman correlations of catchment characteristics\n"
+        "with KGE and its components",
+        loc="left",
+        fontsize=10.5,
+        fontweight="bold",
+        pad=30,
+    )
+    association_axis.tick_params(
+        axis="x",
+        labelsize=8.2,
+        length=0,
+        top=True,
+        labeltop=True,
+        bottom=False,
+        labelbottom=False,
+        pad=4,
+    )
+    association_axis.get_xticklabels()[-1].set_fontweight("bold")
+    association_axis.tick_params(axis="y", labelsize=7.3, length=0)
+    association_axis.set_xticks(np.arange(-0.5, 4.0, 1.0), minor=True)
+    association_axis.set_yticks(np.arange(-0.5, len(variable_order), 1.0), minor=True)
+    association_axis.grid(which="minor", color="white", linewidth=0.8)
+    association_axis.tick_params(which="minor", bottom=False, left=False)
+    association_colorbar: Colorbar = figure.colorbar(
+        association_image,
+        ax=association_axis,
+        orientation="horizontal",
+        pad=0.035,
+        fraction=0.032,
+    )
+    association_colorbar.set_ticks([-0.5, -0.25, 0.0, 0.25, 0.5])
+    association_colorbar.ax.tick_params(labelsize=7.4, length=3.0)
+    association_colorbar.set_label(
+        "Spearman rank correlation, ρ  (* p-value < 0.05)", fontsize=8.5
+    )
+
+    random_generator: np.random.Generator = np.random.default_rng(42)
+    lower_kge, upper_kge = analysis["KGE_daily"].quantile([0.10, 0.90])
+    kge_axis_limits: tuple[float, float] = (float(lower_kge), float(upper_kge))
+    for correlation_axis, column in zip(
+        correlation_axes, KGE_RELATIONSHIP_PANELS, strict=True
+    ):
+        characteristic: Characteristic = _SCREENING_CHARACTERISTICS_BY_COLUMN[column]
+        _plot_relationship_panel(
+            axis=correlation_axis,
+            analysis=analysis,
+            characteristic=characteristic,
+            rho=float(association_matrix.loc[column, "KGE_daily"]),
+            random_generator=random_generator,
+            kge_axis_limits=kge_axis_limits,
+        )
+        if correlation_axis.axison:
+            correlation_axis.set_title(
+                KGE_RELATIONSHIP_PANELS[column],
+                loc="left",
+                fontsize=10.0,
+                fontweight="bold",
+                pad=7,
+            )
+        if pd.notna(association_matrix.loc[column, "KGE_daily"]):
+            characteristic_row: int = variable_order.index(column)
+            association_axis.add_patch(
+                Rectangle(
+                    (
+                        target_columns.index("KGE_daily") - 0.5,
+                        characteristic_row - 0.5,
+                    ),
+                    1.0,
+                    1.0,
+                    fill=False,
+                    edgecolor="#111111",
+                    linewidth=2.2,
+                    zorder=7,
+                    clip_on=False,
+                )
+            )
+            association_axis.get_yticklabels()[characteristic_row].set_fontweight(
+                "bold"
+            )
+
+    figure.subplots_adjust(left=0.255, right=0.985, top=0.96, bottom=0.09)
+    figure.canvas.draw()
+    for correlation_axis, column in zip(
+        correlation_axes, KGE_RELATIONSHIP_PANELS, strict=True
+    ):
+        characteristic_row = variable_order.index(column)
+        start_display: np.ndarray = association_axis.transData.transform(
+            (len(target_columns) - 0.48, characteristic_row)
+        )
+        start_figure: np.ndarray = figure.transFigure.inverted().transform(
+            start_display
+        )
+        end_figure: tuple[float, float] = (
+            correlation_axis.get_position().x0 - 0.008,
+            correlation_axis.get_position().y1,
+        )
+        overall_kge_rho: float = float(association_matrix.loc[column, "KGE_daily"])
+        if np.isnan(overall_kge_rho):
+            continue
+        normalized_rho: float = float(
+            np.asarray(association_image.norm(np.asarray(overall_kge_rho)))
+        )
+        connector: Line2D = Line2D(
+            [float(start_figure[0]), end_figure[0]],
+            [float(start_figure[1]), end_figure[1]],
+            transform=figure.transFigure,
+            color=association_image.cmap(normalized_rho),
+            linewidth=1.5,
+            alpha=0.9,
+            solid_capstyle="round",
+            zorder=6,
+        )
+        figure.add_artist(connector)
+
+    colorbar_position: Bbox = association_colorbar.ax.get_position()
+    colorbar_center_y: float = float(
+        colorbar_position.y0 + colorbar_position.height / 2.0
+    )
+    figure.legend(
+        handles=[
+            Line2D(
+                [0],
+                [0],
+                marker="o",
+                linestyle="none",
+                markerfacecolor=STATION_COLOR,
+                markeredgecolor="none",
+                markersize=6.0,
+                alpha=0.5,
+                label="Station",
+            ),
+            Line2D(
+                [0],
+                [0],
+                color=LOWESS_COLOR,
+                linewidth=2.8,
+                label="Local regression (LOWESS)",
+            ),
+            Patch(
+                facecolor=LOWESS_INTERVAL_COLOR,
+                edgecolor="none",
+                alpha=0.18,
+                label="95% bootstrap CI",
+            ),
+        ],
+        loc="center right",
+        bbox_to_anchor=(0.985, colorbar_center_y),
+        bbox_transform=figure.transFigure,
+        ncols=3,
+        frameon=False,
+        fontsize=9.0,
+        columnspacing=1.2,
+        handlelength=2.6,
+    )
+    return figure
+
+
+def create_kge_characteristic_scatterplots(
+    analysis: pd.DataFrame,
+    associations: pd.DataFrame,
+) -> plt.Figure:
+    """Draw 32 KGE relationships, ranked by absolute Spearman correlation.
+
+    Catchment area uses a log x-axis; other attributes use display units.
+
+    Args:
+        analysis: Prepared matched-station analysis table.
+        associations: KGE-component association table.
+
+    Returns:
+        Figure with four columns showing KGE against all 32 catchment attributes.
+    """
+    overall_associations: pd.DataFrame = associations.loc[
+        associations["target"] == "KGE_daily"
+    ].set_index("variable")
+    required_variables: list[str] = [
+        characteristic.column for characteristic in SCREENING_CHARACTERISTICS
+    ]
+    overall_associations = overall_associations.reindex(required_variables)
+    variable_order: list[str] = (
+        overall_associations["spearman_rho"]
+        .abs()
+        .sort_values(ascending=False, kind="stable", na_position="last")
+        .index.tolist()
+    )
+    ordered_characteristics: list[Characteristic] = [
+        _SCREENING_CHARACTERISTICS_BY_COLUMN[column] for column in variable_order
+    ]
+
+    column_count: int = 4
+    row_count: int = int(np.ceil(len(ordered_characteristics) / column_count))
+    kge_lower_limit, kge_upper_limit = analysis["KGE_daily"].quantile([0.10, 0.90])
+    kge_axis_limits: tuple[float, float] = (
+        float(kge_lower_limit),
+        float(kge_upper_limit),
+    )
+    figure, axes = plt.subplots(
+        row_count,
+        column_count,
+        figsize=(13.6, 1.68 * row_count),
+        sharey=True,
+    )
+    for panel_index, (axis, characteristic) in enumerate(
+        zip(axes.flat, ordered_characteristics, strict=True)
+    ):
+        rho: float = float(
+            overall_associations.loc[characteristic.column, "spearman_rho"]
+        )
+        if not _plot_relationship_panel(
+            axis, analysis, characteristic, rho, kge_axis_limits
+        ):
+            continue
+        # Spreadsheet-style labels continue with aa after z.
+        panel_number: int = panel_index + 1
+        panel_label: str = ""
+        while panel_number:
+            panel_number, remainder = divmod(panel_number - 1, 26)
+            panel_label = chr(ord("a") + remainder) + panel_label
+        axis.set_title(
+            f"{panel_label}) {characteristic.label}\nSpearman ρ = {rho:+.2f}",
+            loc="left",
+            fontsize=8.0,
+            fontweight="bold",
+            pad=4,
+        )
+
+    for axis in axes[:, 0]:
+        axis.set_ylabel("KGE (–)", fontsize=7.6)
+    atlas_legend_handles: list[Line2D] = [
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            linestyle="none",
+            markerfacecolor="#315F70",
+            markeredgecolor="none",
+            markersize=5.5,
+            alpha=0.5,
+            label="Station",
+        ),
+        Line2D(
+            [0],
+            [0],
+            color="#0C526C",
+            linewidth=2.2,
+            label="Local regression (LOWESS)",
+        ),
+    ]
+    figure.legend(
+        handles=atlas_legend_handles,
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.008),
+        ncols=2,
+        frameon=False,
+        fontsize=9.2,
+        columnspacing=1.8,
+        handlelength=2.5,
+    )
+    figure.subplots_adjust(
+        left=0.06,
+        right=0.99,
+        top=0.985,
+        bottom=0.06,
+        wspace=0.22,
+        hspace=0.48,
+    )
+    return figure
+
+
+# Data plotting and LOWESS fitting.
 
 
 def _plot_relationship_panel(
     axis: plt.Axes,
-    characteristic_analysis: pd.DataFrame,
+    analysis: pd.DataFrame,
     characteristic: Characteristic,
     rho: float,
     kge_axis_limits: tuple[float, float],
@@ -590,11 +879,11 @@ def _plot_relationship_panel(
     """Draw station values and LOWESS, optionally with a bootstrap interval.
 
     The curve spans the 1st–99th x percentiles. A supplied generator enables
-    the summary's 150 station-bootstrap samples; the atlas fits only one curve.
+    150 bootstrap samples for the summary figure; the 32-panel figure uses one curve.
 
     Args:
         axis: Axis receiving the relationship.
-        characteristic_analysis: Matched station values in display units.
+        analysis: Matched station values in display units.
         characteristic: Column metadata, display units, and x transformation.
         rho: Dimensionless Spearman correlation, or NaN for unavailable pairs.
         kge_axis_limits: Shared dimensionless KGE limits.
@@ -606,9 +895,7 @@ def _plot_relationship_panel(
     Raises:
         KeyError: If the characteristic or daily KGE column is missing.
     """  # noqa: DOC502
-    pair_table: pd.DataFrame = characteristic_analysis[
-        [characteristic.column, "KGE_daily"]
-    ].dropna()
+    pair_table: pd.DataFrame = analysis[[characteristic.column, "KGE_daily"]].dropna()
     if characteristic.logarithmic_x:
         pair_table = pair_table.loc[pair_table[characteristic.column] > 0.0]
     if np.isnan(rho) or len(pair_table) < 10:
@@ -716,409 +1003,54 @@ def _plot_relationship_panel(
     return True
 
 
-def create_kge_characteristic_summary(
-    characteristic_analysis: pd.DataFrame,
-    characteristic_associations: pd.DataFrame,
-    output_folder: Path,
-    logger: logging.Logger,
-    output_name_suffix: str = "",
-    export: bool = True,
-) -> plt.Figure:
-    """Plot the KGE-component heatmap and four linked relationships.
+def _fit_lowess_to_grid(
+    x_values: np.ndarray,
+    y_values: np.ndarray,
+    evaluation_x: np.ndarray,
+    robust_iterations: int,
+) -> np.ndarray:
+    """Fit LOWESS and interpolate fitted values to a common grid.
 
     Args:
-        characteristic_analysis: Prepared matched-station analysis table.
-        characteristic_associations: KGE-component association table.
-        output_folder: Folder receiving SVG, PDF, and PNG outputs.
-        logger: Logger used for export messages.
-        output_name_suffix: Optional evaluation-period filename suffix.
-        export: Whether to save the figure.
+        x_values: Finite characteristic values, optionally log-transformed.
+        y_values: Corresponding dimensionless KGE values.
+        evaluation_x: Grid in the same units as ``x_values``.
+        robust_iterations: Number of LOWESS residual-reweighting iterations.
 
     Returns:
-        Figure containing the heatmap and four continuous relationship panels.
+        Interpolated LOWESS values on ``evaluation_x``.
 
     Raises:
-        ValueError: If selected relationship-panel inputs are incomplete.
+        ValueError: If fewer than two distinct x-values are available.
     """
-    association_matrix: pd.DataFrame = characteristic_associations.pivot(
-        index="variable", columns="target", values="spearman_rho"
-    )
-    significance_matrix: pd.DataFrame = characteristic_associations.pivot(
-        index="variable", columns="target", values="p_value"
-    )
-    labels_by_column: dict[str, str] = {
-        item.column: item.label for item in SCREENING_CHARACTERISTICS
-    }
-    target_columns: list[str] = [target.column for target in KGE_COMPONENT_TARGETS]
-    required_variables: list[str] = list(_SCREENING_CHARACTERISTICS_BY_COLUMN)
-    selected_variables: set[str] = set(KGE_RELATIONSHIP_PANELS)
-    if not {"KGE_daily", *selected_variables}.issubset(characteristic_analysis.columns):
-        raise ValueError("KGE relationship-panel inputs are incomplete.")
+    unique_x: np.ndarray = np.unique(x_values)
+    if len(unique_x) < 2:
+        raise ValueError("A LOWESS curve needs two distinct characteristic values.")
 
-    association_matrix = association_matrix.reindex(
-        index=required_variables, columns=target_columns
-    )
-    significance_matrix = significance_matrix.reindex(
-        index=required_variables, columns=target_columns
-    )
-    variable_order: list[str] = (
-        association_matrix["KGE_daily"]
-        .abs()
-        .sort_values(ascending=False, kind="stable", na_position="last")
-        .index.tolist()
-    )
-    association_matrix = association_matrix.loc[variable_order]
-    significance_matrix = significance_matrix.loc[variable_order]
-
-    figure: plt.Figure = plt.figure(figsize=(14.8, 11.8))
-    outer_grid: GridSpec = figure.add_gridspec(
-        1, 2, width_ratios=(1.12, 1.10), wspace=0.30
-    )
-    association_axis: plt.Axes = figure.add_subplot(outer_grid[0, 0])
-    correlation_grid: GridSpecFromSubplotSpec = outer_grid[0, 1].subgridspec(
-        5,
-        1,
-        height_ratios=(1.0, 1.0, 1.0, 1.0, 0.005),
-        hspace=0.52,
-    )
-    correlation_axes: list[plt.Axes] = [
-        figure.add_subplot(correlation_grid[row_index, 0])
-        for row_index in range(len(KGE_RELATIONSHIP_PANELS))
-    ]
-
-    association_image: AxesImage = association_axis.imshow(
-        association_matrix.to_numpy(dtype=float),
-        cmap="BrBG",
-        norm=TwoSlopeNorm(vmin=-0.5, vcenter=0.0, vmax=0.5),
-        aspect="auto",
-    )
-    association_axis.set_xticks(
-        np.arange(len(target_columns)),
-        [target.label for target in KGE_COMPONENT_TARGETS],
-    )
-    association_axis.set_yticks(
-        np.arange(len(variable_order)),
-        [labels_by_column[variable] for variable in variable_order],
-    )
-    for row_index in range(len(variable_order)):
-        for column_index in range(len(target_columns)):
-            rho: float = float(association_matrix.iloc[row_index, column_index])
-            p_value: float = float(significance_matrix.iloc[row_index, column_index])
-            if np.isnan(rho):
-                continue
-            significance_marker: str = "*" if p_value < 0.05 else ""
-            rho_text: str = "0.00" if abs(rho) < 0.005 else f"{rho:+.2f}"
-            text_color: str = "white" if abs(rho) >= 0.34 else "#222222"
-            association_axis.text(
-                column_index,
-                row_index,
-                f"{rho_text}{significance_marker}",
-                ha="center",
-                va="center",
-                fontsize=7.2,
-                color=text_color,
-            )
-    association_axis.set_title(
-        "a) Spearman correlations of catchment characteristics\n"
-        "with KGE and its components",
-        loc="left",
-        fontsize=10.5,
-        fontweight="bold",
-        pad=30,
-    )
-    association_axis.tick_params(
-        axis="x",
-        labelsize=8.2,
-        length=0,
-        top=True,
-        labeltop=True,
-        bottom=False,
-        labelbottom=False,
-        pad=4,
-    )
-    association_axis.get_xticklabels()[-1].set_fontweight("bold")
-    association_axis.tick_params(axis="y", labelsize=7.3, length=0)
-    association_axis.set_xticks(np.arange(-0.5, 4.0, 1.0), minor=True)
-    association_axis.set_yticks(np.arange(-0.5, len(variable_order), 1.0), minor=True)
-    association_axis.grid(which="minor", color="white", linewidth=0.8)
-    association_axis.tick_params(which="minor", bottom=False, left=False)
-    association_colorbar: Colorbar = figure.colorbar(
-        association_image,
-        ax=association_axis,
-        orientation="horizontal",
-        pad=0.035,
-        fraction=0.032,
-    )
-    association_colorbar.set_ticks([-0.5, -0.25, 0.0, 0.25, 0.5])
-    association_colorbar.ax.tick_params(labelsize=7.4, length=3.0)
-    association_colorbar.set_label(
-        "Spearman rank correlation, ρ  (* p-value < 0.05)", fontsize=8.5
-    )
-
-    random_generator: np.random.Generator = np.random.default_rng(42)
-    lower_kge, upper_kge = characteristic_analysis["KGE_daily"].quantile([0.10, 0.90])
-    kge_axis_limits: tuple[float, float] = (float(lower_kge), float(upper_kge))
-    for correlation_axis, column in zip(
-        correlation_axes, KGE_RELATIONSHIP_PANELS, strict=True
-    ):
-        characteristic: Characteristic = _SCREENING_CHARACTERISTICS_BY_COLUMN[column]
-        _plot_relationship_panel(
-            axis=correlation_axis,
-            characteristic_analysis=characteristic_analysis,
-            characteristic=characteristic,
-            rho=float(association_matrix.loc[column, "KGE_daily"]),
-            random_generator=random_generator,
-            kge_axis_limits=kge_axis_limits,
-        )
-        if correlation_axis.axison:
-            correlation_axis.set_title(
-                KGE_RELATIONSHIP_PANELS[column],
-                loc="left",
-                fontsize=10.0,
-                fontweight="bold",
-                pad=7,
-            )
-        if pd.notna(association_matrix.loc[column, "KGE_daily"]):
-            characteristic_row: int = variable_order.index(column)
-            association_axis.add_patch(
-                Rectangle(
-                    (
-                        target_columns.index("KGE_daily") - 0.5,
-                        characteristic_row - 0.5,
-                    ),
-                    1.0,
-                    1.0,
-                    fill=False,
-                    edgecolor="#111111",
-                    linewidth=2.2,
-                    zorder=7,
-                    clip_on=False,
+    stable_x_values: np.ndarray = x_values.copy()
+    if len(unique_x) < len(x_values):
+        minimum_gap: float = float(np.min(np.diff(unique_x)))
+        jitter_width: float = minimum_gap * 1e-6
+        for tied_value in unique_x:
+            tied_indices: np.ndarray = np.flatnonzero(x_values == tied_value)
+            if len(tied_indices) > 1:
+                # This sub-pixel separation prevents division by zero while
+                # retaining the full statistical weight of zero-heavy data.
+                stable_x_values[tied_indices] += np.linspace(
+                    -0.5 * jitter_width,
+                    0.5 * jitter_width,
+                    len(tied_indices),
                 )
-            )
-            association_axis.get_yticklabels()[characteristic_row].set_fontweight(
-                "bold"
-            )
 
-    figure.subplots_adjust(left=0.255, right=0.985, top=0.96, bottom=0.09)
-    figure.canvas.draw()
-    for correlation_axis, column in zip(
-        correlation_axes, KGE_RELATIONSHIP_PANELS, strict=True
-    ):
-        characteristic_row = variable_order.index(column)
-        start_display: np.ndarray = association_axis.transData.transform(
-            (len(target_columns) - 0.48, characteristic_row)
-        )
-        start_figure: np.ndarray = figure.transFigure.inverted().transform(
-            start_display
-        )
-        end_figure: tuple[float, float] = (
-            correlation_axis.get_position().x0 - 0.008,
-            correlation_axis.get_position().y1,
-        )
-        overall_kge_rho: float = float(association_matrix.loc[column, "KGE_daily"])
-        if np.isnan(overall_kge_rho):
-            continue
-        normalized_rho: np.ndarray = np.asarray(
-            association_image.norm(np.asarray([overall_kge_rho], dtype=float)),
-            dtype=float,
-        )
-        connector_rgba: np.ndarray = np.asarray(
-            association_image.cmap(normalized_rho[0]), dtype=float
-        )
-        connector_color: tuple[float, float, float, float] = (
-            float(connector_rgba[0]),
-            float(connector_rgba[1]),
-            float(connector_rgba[2]),
-            float(connector_rgba[3]),
-        )
-        connector: Line2D = Line2D(
-            [float(start_figure[0]), end_figure[0]],
-            [float(start_figure[1]), end_figure[1]],
-            transform=figure.transFigure,
-            color=connector_color,
-            linewidth=1.5,
-            alpha=0.9,
-            solid_capstyle="round",
-            zorder=6,
-        )
-        figure.add_artist(connector)
-
-    colorbar_position: Bbox = association_colorbar.ax.get_position()
-    colorbar_center_y: float = float(
-        colorbar_position.y0 + colorbar_position.height / 2.0
-    )
-    figure.legend(
-        handles=[
-            Line2D(
-                [0],
-                [0],
-                marker="o",
-                linestyle="none",
-                markerfacecolor=STATION_COLOR,
-                markeredgecolor="none",
-                markersize=6.0,
-                alpha=0.5,
-                label="Station",
-            ),
-            Line2D(
-                [0],
-                [0],
-                color=LOWESS_COLOR,
-                linewidth=2.8,
-                label="Local regression (LOWESS)",
-            ),
-            Patch(
-                facecolor=LOWESS_INTERVAL_COLOR,
-                edgecolor="none",
-                alpha=0.18,
-                label="95% bootstrap CI",
-            ),
-        ],
-        loc="center right",
-        bbox_to_anchor=(0.985, colorbar_center_y),
-        bbox_transform=figure.transFigure,
-        ncols=3,
-        frameon=False,
-        fontsize=9.0,
-        columnspacing=1.2,
-        handlelength=2.6,
-    )
-    if export:
-        _save_figure(
-            figure,
-            output_folder,
-            f"discharge_kge_characteristic_heatmaps{output_name_suffix}",
-            logger,
-        )
-    return figure
-
-
-def create_kge_characteristic_scatterplots(
-    characteristic_analysis: pd.DataFrame,
-    characteristic_associations: pd.DataFrame,
-    output_folder: Path,
-    logger: logging.Logger,
-    output_name_suffix: str = "",
-    export: bool = True,
-) -> plt.Figure:
-    """Plot station-level KGE relationships for all 32 characteristics.
-
-    Panels are ranked by absolute Spearman association with overall KGE. The
-    x-axis is logarithmic only for catchment area; every other characteristic
-    remains in its original displayed units.
-
-    Args:
-        characteristic_analysis: Prepared matched-station analysis table.
-        characteristic_associations: KGE-component association table.
-        output_folder: Folder receiving SVG, PDF, and PNG outputs.
-        logger: Logger used for export messages.
-        output_name_suffix: Optional evaluation-period filename suffix.
-        export: Whether to save the figure.
-
-    Returns:
-        Four-column atlas containing all 32 continuous KGE relationships.
-    """
-    overall_associations: pd.DataFrame = characteristic_associations.loc[
-        characteristic_associations["target"] == "KGE_daily"
-    ].set_index("variable")
-    required_variables: list[str] = [
-        characteristic.column for characteristic in SCREENING_CHARACTERISTICS
-    ]
-    overall_associations = overall_associations.reindex(required_variables)
-    variable_order: list[str] = (
-        overall_associations["spearman_rho"]
-        .abs()
-        .sort_values(ascending=False, kind="stable", na_position="last")
-        .index.tolist()
-    )
-    ordered_characteristics: list[Characteristic] = [
-        _SCREENING_CHARACTERISTICS_BY_COLUMN[column] for column in variable_order
-    ]
-
-    column_count: int = 4
-    row_count: int = int(np.ceil(len(ordered_characteristics) / column_count))
-    kge_lower_limit, kge_upper_limit = characteristic_analysis["KGE_daily"].quantile(
-        [0.10, 0.90]
-    )
-    kge_axis_limits: tuple[float, float] = (
-        float(kge_lower_limit),
-        float(kge_upper_limit),
-    )
-    figure, axes = plt.subplots(
-        row_count,
-        column_count,
-        figsize=(13.6, 1.68 * row_count),
-        sharey=True,
-    )
-    for panel_index, (axis, characteristic) in enumerate(
-        zip(axes.flat, ordered_characteristics, strict=True)
-    ):
-        rho: float = float(
-            overall_associations.loc[characteristic.column, "spearman_rho"]
-        )
-        if not _plot_relationship_panel(
-            axis, characteristic_analysis, characteristic, rho, kge_axis_limits
-        ):
-            continue
-        # Spreadsheet-style labels continue with aa after z.
-        panel_number: int = panel_index + 1
-        panel_label: str = ""
-        while panel_number:
-            panel_number, remainder = divmod(panel_number - 1, 26)
-            panel_label = chr(ord("a") + remainder) + panel_label
-        axis.set_title(
-            f"{panel_label}) {characteristic.label}\nSpearman ρ = {rho:+.2f}",
-            loc="left",
-            fontsize=8.0,
-            fontweight="bold",
-            pad=4,
-        )
-
-    for axis in axes[:, 0]:
-        axis.set_ylabel("KGE (–)", fontsize=7.6)
-    atlas_legend_handles: list[Line2D] = [
-        Line2D(
-            [0],
-            [0],
-            marker="o",
-            linestyle="none",
-            markerfacecolor="#315F70",
-            markeredgecolor="none",
-            markersize=5.5,
-            alpha=0.5,
-            label="Station",
+    fitted_values: np.ndarray = np.asarray(
+        lowess(
+            y_values,
+            stable_x_values,
+            frac=0.35,
+            it=robust_iterations,
+            return_sorted=True,
         ),
-        Line2D(
-            [0],
-            [0],
-            color="#0C526C",
-            linewidth=2.2,
-            label="Local regression (LOWESS)",
-        ),
-    ]
-    figure.legend(
-        handles=atlas_legend_handles,
-        loc="lower center",
-        bbox_to_anchor=(0.5, 0.008),
-        ncols=2,
-        frameon=False,
-        fontsize=9.2,
-        columnspacing=1.8,
-        handlelength=2.5,
+        dtype=float,
     )
-    figure.subplots_adjust(
-        left=0.06,
-        right=0.99,
-        top=0.985,
-        bottom=0.06,
-        wspace=0.22,
-        hspace=0.48,
-    )
-    if export:
-        _save_figure(
-            figure,
-            output_folder,
-            f"discharge_kge_all_characteristic_scatterplots{output_name_suffix}",
-            logger,
-        )
-    return figure
+    fitted_x, unique_indices = np.unique(fitted_values[:, 0], return_index=True)
+    return np.interp(evaluation_x, fitted_x, fitted_values[unique_indices, 1])

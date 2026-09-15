@@ -1,9 +1,10 @@
 # dev
-- Simplify discharge-characteristic analysis with one workflow entry point and shared relationship plotting, preserving statistics, bootstrap settings, display units, and exported figures. No input or configuration migration is required.
+- Group discharge time-series, return-period, and score-comparison plotting in discharge_plots; organize dashboard helpers by purpose and share water-balance axis formatting. Preserve CLI options, statistical calculations, and output filenames.
+- Simplify discharge-characteristic analysis by grouping data loading and preparation, reusing data plotting functions, and saving figures in one place. Statistics, bootstrap settings, display units, and output figures stay the same. No changes to input files or configuration are needed.
 - Outflow discharge plots are now optional to reduce # files on disk. To include them, use `hydrology.plot_discharge --include-outflow-plots true` 
-- Move discharge metric calculations and score schemas into the discharge_metrics workflow, and dashboard characteristic loading into the dashboard workflow.
+- Move discharge metric calculations and output column names into discharge_metrics. Load dashboard catchment attributes with the other catchment attribute functions.
 - Clarify names throughout discharge evaluation, distinguish plotting commands from figure helpers, and share observation loading and score-column definitions. Existing CLI command names remain unchanged.
-- Restructure the dashboard code by putting the dashboard assets in workflows/assets/discharge_dashboard
+- Move the dashboard JavaScript files to workflows/assets/discharge_dashboard.
 - Snap GRDC gauges to an original-resolution river pixel within 1.5 km and ±10% upstream area. Exclude failed matches and duplicate observations; warn when routing and original areas differ by more than 10%.
 - Show every GRDC gauge, exclusion reason, and MERIT river ID on the dashboard. Aggregate hourly simulations into local calendar days using fixed GRDC UTC offsets.
 

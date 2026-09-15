@@ -1,9 +1,8 @@
 """Helpers used by GEB's evaluation commands.
 
-Hydrology's plot_* commands load scores and select comparisons; discharge_plots
-create_* functions draw figures from prepared tables. discharge_metrics owns
-metric calculations and their output schema; dashboard owns map preparation.
-Across the workflows, load_* reads data, calculate_* computes metrics, build_*
-prepares chart data, and write_* saves dashboard output. Browser assets are
-packaged with the module.
+The hydrology plotting commands load scores and select the data to compare.
+The discharge_plots module contains plotting functions. The discharge_metrics
+module contains metric calculations and output column names. The dashboard
+module contains functions for preparing and saving the interactive map.
+JavaScript files for the dashboard are included in the assets folder.
 """

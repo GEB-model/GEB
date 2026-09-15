@@ -1,8 +1,8 @@
 """Load external discharge scores and align them with GEB stations.
 
-Standalone exports filter external tables to all known GEB station keys.
-Scientific comparison plots use pairwise matching after applying upstream-area
-thresholds, so every plotted GEB value has an aligned external value.
+The export command selects external scores for known GEB stations.
+Comparison plots first filter by upstream area, then match stations, so each
+GEB score is compared with an external score for the same station.
 """
 
 import logging
