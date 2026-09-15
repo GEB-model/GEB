@@ -24,8 +24,8 @@ from jinja2 import Environment
 from jinja2.utils import htmlsafe_json_dumps
 
 from geb.evaluate.workflows.discharge_characteristics import (
-    DASHBOARD_CHARACTERISTICS,
-    Characteristic,
+    DASHBOARD_CATCHMENT_CHARACTERISTICS,
+    CatchmentCharacteristic,
 )
 from geb.workflows.extreme_value_analysis import ReturnPeriodModel
 from geb.workflows.io import read_geom
@@ -835,8 +835,8 @@ def _build_characteristic_layer_payload(
     )
     characteristic_configs: list[dict[str, Any]] = []
     percentile_by_characteristic: dict[str, pd.Series] = {}
-    usable_characteristics: list[Characteristic] = []
-    for characteristic in DASHBOARD_CHARACTERISTICS:
+    usable_characteristics: list[CatchmentCharacteristic] = []
+    for characteristic in DASHBOARD_CATCHMENT_CHARACTERISTICS:
         if characteristic.column not in characteristics_by_station.columns:
             continue
         prepared_values: tuple[dict[str, int | list[float]], pd.Series] | None = (
@@ -893,7 +893,7 @@ def _prepare_characteristic_values(
     and is ranked consistently with every other finite value.
 
     Args:
-        values: Characteristic values in display units.
+        values: Catchment characteristic values in display units.
 
     Returns:
         Legend statistics and aligned percentile ranks, or `None` when fewer
@@ -1012,7 +1012,7 @@ def _add_characteristic_station_markers(
 ) -> list[str]:
     """Add GRDC-Caravan availability and characteristic markers for a station.
 
-    Characteristic layers contain only stations with a finite value. The
+    Catchment characteristic layers contain only stations with a finite value. The
     availability layer contains every evaluated station, making absent
     GRDC-Caravan coverage explicit without treating it as a numeric zero.
 

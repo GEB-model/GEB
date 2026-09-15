@@ -1,4 +1,4 @@
-"""Create a publication-ready folder of simulated station discharge."""
+"""Create a publication-ready folder of simulated station discharge (first draft version)."""
 
 import shutil
 from pathlib import Path
@@ -23,7 +23,7 @@ stations from run `{run_name}`.
 
 Observed discharge is deliberately excluded. GRDC does not permit downloaded
 observations to be redistributed to third parties or via the internet.
-Authorized observations are available directly from the GRDC Data Portal:
+Observations are available directly from the GRDC Data Portal:
 https://grdc.bafg.de/data/data_portal/.
 
 Coordinates use WGS 84 longitude/latitude (`EPSG:4326`). Discharge is in cubic

@@ -1490,7 +1490,7 @@ class Hydrology:
             )
             use_daily_discharge_scores(dashboard_station_scores)
             dashboard_characteristics: pd.DataFrame | None = (
-                discharge_characteristics.load_dashboard_characteristics(
+                discharge_characteristics.load_dashboard_catchment_characteristics(
                     mapped_station_scores=dashboard_station_scores,
                     logger=self.model.logger,
                 )
@@ -1701,7 +1701,7 @@ class Hydrology:
         dashboard_characteristics: pd.DataFrame | None = None
         if not dashboard_station_scores.empty:
             dashboard_characteristics = (
-                discharge_characteristics.load_dashboard_characteristics(
+                discharge_characteristics.load_dashboard_catchment_characteristics(
                     mapped_station_scores=dashboard_station_scores,
                     logger=self.model.logger,
                 )
