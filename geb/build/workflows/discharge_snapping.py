@@ -165,7 +165,6 @@ def snap_discharge_station(
 
     # 3. Select the closest original pixel and reject distances above 1.5 km.
     selected_original_index: int = int(station_to_original_distances_m.argmin())
-    # Micrometer rounding prevents geodesic roundoff rejecting the exact boundary.
     station_to_original_distance_m: float = round(
         float(station_to_original_distances_m[selected_original_index]), 6
     )
@@ -211,6 +210,11 @@ def snap_discharge_station(
     selected_routing_index: int = int(original_to_routing_distances_m.argmin())
     routing_column: int = int(routing_columns[selected_routing_index])
     routing_row: int = int(routing_rows[selected_routing_index])
+    routing_pixel_xy: tuple[int, int] = (routing_column, routing_row)
+    routing_pixel_lonlat: tuple[float, float] = (
+        float(routing_longitudes[selected_routing_index]),
+        float(routing_latitudes[selected_routing_index]),
+    )
     routing_upstream_area_m2: float = float(
         routing_area_values[routing_row, routing_column]
     )
@@ -230,11 +234,8 @@ def snap_discharge_station(
         )
     return DischargeSnappingResults(
         original_pixel_lonlat=original_pixel_lonlat,
-        routing_pixel_lonlat=(
-            float(routing_longitudes[selected_routing_index]),
-            float(routing_latitudes[selected_routing_index]),
-        ),
-        routing_pixel_xy=(routing_column, routing_row),
+        routing_pixel_lonlat=routing_pixel_lonlat,
+        routing_pixel_xy=routing_pixel_xy,
         original_upstream_area_m2=original_upstream_area_m2,
         routing_upstream_area_m2=routing_upstream_area_m2,
         station_to_original_distance_m=station_to_original_distance_m,
@@ -249,7 +250,7 @@ def plot_discharge_snapping(
     snapping_result: DischargeSnappingResults,
     original_upstream_area: xr.DataArray,
 ) -> None:
-    """Save a gauge-to-original-to-routing plot without river centerlines.
+    """Save a gauge-to-original-to-routing plot.
 
     Args:
         station_id: Station identifier used in the filename.
