@@ -50,6 +50,71 @@ DISCHARGE_SCORE_COLUMNS: tuple[str, ...] = tuple(
 )
 
 
+# Shared display metadata keeps score labels and limits consistent across figures.
+SKILL_SCORE_PLOT_CONFIGS: tuple[dict[str, object], ...] = (
+    {
+        "col": "KGE",
+        "label": "KGE",
+        "ylim": (-1.0, 1.0),
+        "cmap": "RdYlGn",
+        "vmin": -1.0,
+        "vmax": 1.0,
+    },
+    {
+        "col": "KGE_correlation",
+        "label": "KGE correlation (r)",
+        "ylim": (-1.0, 1.0),
+        "cmap": "RdYlGn",
+        "vmin": -1.0,
+        "vmax": 1.0,
+    },
+    {
+        "col": "KGE_bias_ratio",
+        "label": "KGE bias ratio (β)",
+        "ylim": (0.0, 2.0),
+        "cmap": "viridis",
+        "vmin": 0.0,
+        "vmax": 2.0,
+    },
+    {
+        "col": "KGE_variability_ratio",
+        "label": "KGE variability ratio (α)",
+        "ylim": (0.0, 2.0),
+        "cmap": "viridis",
+        "vmin": 0.0,
+        "vmax": 2.0,
+    },
+    {
+        "col": "NSE",
+        "label": "NSE",
+        "ylim": (-1.0, 1.0),
+        "cmap": "RdYlGn",
+        "vmin": -1.0,
+        "vmax": 1.0,
+    },
+    {
+        "col": "R2",
+        "label": "Pearson r²",
+        "ylim": (0.0, 1.0),
+        "cmap": "YlGn",
+        "vmin": 0.0,
+        "vmax": 1.0,
+    },
+    {
+        "col": "RRMSE",
+        "label": "RRMSE",
+        "ylim": None,
+        "cmap": "YlOrRd",
+        "vmin": 0.0,
+        "vmax": None,
+    },
+)
+
+SKILL_SCORE_PLOT_CONFIG_BY_COLUMN: dict[str, dict[str, object]] = {
+    str(config["col"]): config for config in SKILL_SCORE_PLOT_CONFIGS
+}
+
+
 def calculate_discharge_metrics(
     discharge_comparison: pd.DataFrame,
 ) -> DischargeMetrics:

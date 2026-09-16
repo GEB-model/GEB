@@ -735,7 +735,10 @@ def evaluate(
         try:
             sub_name, method_name = method.split(".")
             sub_cls = Evaluate.SUB_EVALUATOR_CLASSES[sub_name]
-            method_func = getattr(sub_cls, method_name)
+            method_func: Any = inspect.getattr_static(sub_cls, method_name)
+            # Partial-method aliases share the underlying command's documentation.
+            if isinstance(method_func, functools.partialmethod):
+                method_func = method_func.func
             click.echo(f"\nHelp for method '{method}':\n")
             if method_func.__doc__:
                 click.echo(method_func.__doc__)

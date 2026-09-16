@@ -23,15 +23,27 @@ from folium import MacroElement, TileLayer
 from jinja2 import Environment
 from jinja2.utils import htmlsafe_json_dumps
 
+from geb.evaluate.workflows import discharge_characteristics, discharge_helpers
 from geb.evaluate.workflows.discharge_characteristics import (
     DASHBOARD_CATCHMENT_CHARACTERISTICS,
     CatchmentCharacteristic,
+)
+from geb.evaluate.workflows.discharge_helpers import load_station_discharge_comparison
+from geb.evaluate.workflows.discharge_metrics import (
+    DischargeMetrics,
+    use_daily_discharge_scores,
+)
+from geb.evaluate.workflows.discharge_station_checks import (
+    collect_dashboard_exclusions,
+    find_excluded_stations,
 )
 from geb.workflows.extreme_value_analysis import ReturnPeriodModel
 from geb.workflows.io import read_geom
 
 if TYPE_CHECKING:
+    from geb.evaluate.hydrology import Hydrology
     from geb.model import GEBModel
+
 
 _ESRI_TOPO_TILES = (
     "https://server.arcgisonline.com/ArcGIS/rest/services/"
@@ -176,7 +188,173 @@ class _JavascriptMacro(MacroElement):
         )
 
 
-# Map assembly and geometry loading.
+# Dashboard command
+def create_discharge_dashboard(
+    self: Hydrology,
+    run_name: str = "default",
+    correct_discharge_observations: bool = False,
+    output_filename: str = "discharge_evaluation_map.html",
+    include_return_period_plots: bool = False,
+) -> dict[str, str]:
+    """Create only the discharge evaluation dashboard.
+
+    This reuses ``evaluation_metrics.geoparquet`` from a previous
+    ``evaluate_discharge`` run. Data for the interactive Plotly charts are
+    rebuilt from the reported discharge time series. Static station plots
+    and skill-score plots are not regenerated.
+    Excluded stations retain diagnostic KGE and time series with a warning.
+
+    Args:
+        self: Hydrology evaluator providing model settings and output paths.
+        run_name: Name of the simulation run to use for river and station
+            discharge time series.
+        correct_discharge_observations: Whether to correct simulated discharge
+            by the observed-to-GEB upstream-area ratio (dimensionless), matching
+            the option in ``evaluate_discharge``.
+        output_filename: Dashboard HTML filename written inside the discharge
+            evaluation output folder.
+        include_return_period_plots: Whether to calculate and plot return-period
+            curves in station popups. Defaults to False to speed up creation.
+
+    Returns:
+        Dictionary with the created dashboard path.
+
+    Raises:
+        FileNotFoundError: If saved discharge evaluation metrics do not exist.
+        ValueError: If ``output_filename`` is empty, is an absolute path, or
+            saved metrics use obsolete snapping.
+    """
+    if not output_filename:
+        raise ValueError("output_filename must not be empty.")
+    output_path: Path = Path(output_filename)
+    if output_path.is_absolute():
+        raise ValueError("output_filename must be a filename, not an absolute path.")
+
+    metrics_path: Path = (
+        self.evaluate_discharge_output_folder / "evaluation_metrics.geoparquet"
+    )
+    if not metrics_path.exists():
+        raise FileNotFoundError(
+            "No discharge evaluation metrics found. Run "
+            "`geb evaluate hydrology.evaluate_discharge` once before creating "
+            "only the dashboard."
+        )
+
+    mapped_station_scores: gpd.GeoDataFrame = gpd.read_parquet(metrics_path)
+    snapped_locations: gpd.GeoDataFrame = read_geom(
+        self.model.files["geom"]["discharge/discharge_snapped_locations"]
+    )
+    excluded_stations: gpd.GeoDataFrame = find_excluded_stations(
+        snapped_locations,
+        Path(self.model.config["general"]["output_folder"]) / run_name / "report",
+    )
+    if not excluded_stations.empty:
+        mapped_station_scores["exclusion_reason"] = excluded_stations[
+            "exclusion_reason"
+        ].reindex(mapped_station_scores.index)
+    diagnostic_path: Path = metrics_path.with_name("diagnostic_metrics.geoparquet")
+    if diagnostic_path.exists():
+        mapped_excluded_scores: gpd.GeoDataFrame = gpd.read_parquet(diagnostic_path)
+        mapped_station_scores = gpd.GeoDataFrame(
+            pd.concat(
+                [
+                    mapped_station_scores,
+                    mapped_excluded_scores.loc[
+                        ~mapped_excluded_scores.index.isin(mapped_station_scores.index)
+                    ],
+                ]
+            ),
+            geometry="geometry",
+            crs=mapped_station_scores.crs,
+        )
+    if not mapped_station_scores.empty and (
+        "snapping_method" not in mapped_station_scores.columns
+        or not (mapped_station_scores["snapping_method"] == "original_pixel_v1").all()
+    ):
+        raise ValueError(
+            "Saved discharge metrics predate original-pixel snapping. Rebuild hydrography "
+            "and discharge observations, rerun station discharge reporting and "
+            "hydrology.evaluate_discharge before creating the dashboard."
+        )
+    mapped_station_scores["timezone_utc_offset"] = mapped_station_scores.get(
+        "timezone_utc_offset", 0.0
+    )
+    mapped_station_scores["timezone_utc_offset"] = mapped_station_scores[
+        "timezone_utc_offset"
+    ].fillna(0.0)
+    excluded_stations = collect_dashboard_exclusions(
+        mapped_station_scores,
+        excluded_stations,
+        snapped_locations,
+        Path(self.model.files["geom"]["discharge/discharge_snapped_locations"]),
+        self.model.config.get("hydrology", {})
+        .get("evaluation", {})
+        .get("discharge", {})
+        .get("minimum_upstream_area_km2", 0.0),
+    )
+    n_stations: int = len(mapped_station_scores)
+    if mapped_station_scores.empty:
+        self.model.logger.warning(
+            "No discharge stations found in saved evaluation metrics. "
+            "Showing excluded stations only."
+        )
+    else:
+        self.model.logger.info(
+            "Creating discharge dashboard for %d stations.", n_stations
+        )
+
+    dashboard_station_scores: gpd.GeoDataFrame = mapped_station_scores.copy()
+    use_daily_discharge_scores(dashboard_station_scores)
+    dashboard_characteristics: pd.DataFrame | None = None
+    if not dashboard_station_scores.empty:
+        dashboard_characteristics = (
+            discharge_characteristics.load_dashboard_catchment_characteristics(
+                mapped_station_scores=dashboard_station_scores,
+                logger=self.model.logger,
+            )
+        )
+
+    self.model.logger.info("Loading dashboard geometries...")
+    dashboard_geometries: DischargeDashboardGeometries = (
+        load_discharge_dashboard_geometries(self.model)
+    )
+
+    dashboard_path: Path = self.evaluate_discharge_output_folder / output_path
+    run_output_folder: Path = (
+        Path(self.model.config["general"]["output_folder"]) / run_name
+    )
+    self.model.logger.info("Preparing interactive chart data...")
+    station_dashboard_chart_files: dict[str, str] = (
+        _write_dashboard_charts_from_saved_scores(
+            self,
+            mapped_station_scores=mapped_station_scores,
+            run_output_folder=run_output_folder,
+            correct_discharge_observations=correct_discharge_observations,
+            dashboard_path=dashboard_path,
+            include_return_period_plots=include_return_period_plots,
+        )
+    )
+
+    self.model.logger.info("Creating the dashboard HTML file...")
+    write_discharge_dashboard(
+        mapped_station_scores=dashboard_station_scores,
+        output_path=dashboard_path,
+        region_geom=dashboard_geometries.region,
+        rivers=dashboard_geometries.rivers,
+        station_chart_files=station_dashboard_chart_files,
+        waterbodies=dashboard_geometries.waterbodies,
+        station_characteristics=dashboard_characteristics,
+        excluded_stations=excluded_stations,
+    )
+    self.model.logger.info("Discharge evaluation dashboard created: %s", dashboard_path)
+    self.model.logger.info(
+        "Tip: If station charts do not appear, download the dashboard HTML "
+        "and its charts folder to the same local directory."
+    )
+    return {"dashboard": str(dashboard_path)}
+
+
+# Map assembly and geometry loading
 
 
 def write_discharge_dashboard(
@@ -594,6 +772,143 @@ def load_discharge_dashboard_geometries(
 
 
 # Station chart files.
+def _write_dashboard_charts_from_saved_scores(
+    self: Hydrology,
+    mapped_station_scores: gpd.GeoDataFrame,
+    run_output_folder: Path,
+    correct_discharge_observations: bool,
+    dashboard_path: Path,
+    include_return_period_plots: bool = False,
+) -> dict[str, str]:
+    """Save interactive chart data for stations with saved evaluation scores.
+
+    Args:
+        self: Hydrology evaluator providing model settings and output paths.
+        mapped_station_scores: Saved per-station discharge evaluation metrics.
+        run_output_folder: Model output folder for the selected run.
+        correct_discharge_observations: Whether to correct simulated discharge
+            by the observed-to-GEB upstream-area ratio (dimensionless).
+        dashboard_path: Output path of the dashboard HTML file.
+        include_return_period_plots: Whether to fit and include return-period
+            curves. Defaults to False to avoid expensive extreme-value fits.
+
+    Returns:
+        Mapping from station ID to chart data file.
+
+    Raises:
+        ValueError: If saved metrics are missing required station columns.
+    """
+    if mapped_station_scores.empty:
+        return {}
+    required_columns: set[str] = {
+        "station_name",
+        "discharge_observations_to_GEB_upstream_area_ratio",
+    }
+    missing_columns: set[str] = required_columns.difference(
+        mapped_station_scores.columns
+    )
+    if missing_columns:
+        raise ValueError(
+            "Saved discharge evaluation metrics are missing columns: "
+            + ", ".join(sorted(missing_columns))
+        )
+
+    observations_by_frequency: dict[str, pd.DataFrame] = (
+        discharge_helpers.load_discharge_observations(self)
+    )
+    saved_scores_by_station_id: dict[str, pd.Series] = {
+        str(station_id): station_row
+        for station_id, station_row in mapped_station_scores.iterrows()
+    }
+
+    # Count total work up front for progress reporting.
+    total_work: int = sum(
+        sum(
+            str(station_id) in saved_scores_by_station_id
+            for station_id in observations.columns
+        )
+        for observations in observations_by_frequency.values()
+        if not observations.empty
+    )
+    self.model.logger.info(
+        "Processing %d station-frequency combinations...",
+        total_work,
+    )
+
+    station_dashboard_chart_files: dict[str, str] = {}
+    skipped: int = 0
+    processed: int = 0
+    for (
+        frequency_label,
+        observations_by_station,
+    ) in observations_by_frequency.items():
+        if observations_by_station.empty:
+            continue
+        for station_id in observations_by_station.columns:
+            station_id_text: str = str(station_id)
+            if station_id_text not in saved_scores_by_station_id:
+                continue
+
+            station_row: pd.Series = saved_scores_by_station_id[station_id_text]
+            upstream_area_ratio: float = float(
+                station_row["discharge_observations_to_GEB_upstream_area_ratio"]
+            )
+            observed_discharge_series: pd.Series = observations_by_station[station_id]
+
+            timezone_utc_offset: float = float(station_row["timezone_utc_offset"])
+            try:
+                discharge_comparison: pd.DataFrame = load_station_discharge_comparison(
+                    output_folder=run_output_folder,
+                    station_id=station_id,
+                    observed_discharge=observed_discharge_series,
+                    apply_upstream_area_correction=correct_discharge_observations,
+                    upstream_area_ratio=upstream_area_ratio,
+                    timezone_utc_offset=timezone_utc_offset,
+                )
+                metrics: dict[str, float] = {
+                    metric_name: float(station_row[f"{metric_name}_{frequency_label}"])
+                    for metric_name in DischargeMetrics._fields
+                    if f"{metric_name}_{frequency_label}" in station_row.index
+                }
+                station_dashboard_chart_files[station_id_text] = (
+                    write_station_chart_data(
+                        dashboard_path=dashboard_path,
+                        station_id=station_id_text,
+                        chart_data=build_station_chart_data(
+                            discharge_comparison=discharge_comparison,
+                            station_name=str(station_row["station_name"]),
+                            upstream_area_ratio=upstream_area_ratio,
+                            timezone_utc_offset=timezone_utc_offset,
+                            metrics=metrics,
+                            frequency=frequency_label,
+                            include_return_period_plots=include_return_period_plots,
+                        ),
+                    )
+                )
+            except Exception as exc:
+                self.model.logger.warning(
+                    "Skipping chart data for station %s (%s): %s",
+                    station_id_text,
+                    frequency_label,
+                    exc,
+                )
+                skipped += 1
+
+            processed += 1
+            if processed % 100 == 0:
+                self.model.logger.info(
+                    "  %d / %d processed (%d skipped)...",
+                    processed,
+                    total_work,
+                    skipped,
+                )
+
+    self.model.logger.info(
+        "Chart data built: %d stations, %d skipped.",
+        len(station_dashboard_chart_files),
+        skipped,
+    )
+    return station_dashboard_chart_files
 
 
 def write_station_chart_data(

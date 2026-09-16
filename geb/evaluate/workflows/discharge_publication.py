@@ -2,10 +2,17 @@
 
 import shutil
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+
+from geb.workflows.io import read_geom
+
+if TYPE_CHECKING:
+    from geb.evaluate.hydrology import Hydrology
+
 
 PUBLICATION_README_TEMPLATE: str = """# GEB station discharge simulations
 
@@ -75,6 +82,47 @@ def _coordinate_pair(value: object, field_name: str) -> tuple[float, float]:
     if len(coordinates) != 2 or not np.isfinite(coordinates).all():
         raise ValueError(f"{field_name} must contain two finite coordinates.")
     return float(coordinates[0]), float(coordinates[1])
+
+
+def export_discharge_publication_data(
+    self: Hydrology,
+    run_name: str = "default",
+) -> Path:
+    """Export raw station simulations and metadata for data deposition.
+
+    The package deliberately excludes observed discharge, which may be
+    subject to redistribution restrictions. Run ``evaluate_discharge``
+    before calling this method.
+
+    Args:
+        self: Hydrology evaluator providing model settings and output paths.
+        run_name: Name of the GEB simulation run.
+
+    Returns:
+        Path to the completed publication-data folder.
+    """
+    snapped_locations: gpd.GeoDataFrame = read_geom(
+        self.model.files["geom"]["discharge/discharge_snapped_locations"]
+    )
+    publication_folder: Path = (
+        self.evaluate_discharge_output_folder / "publication_data"
+    )
+    run_output_folder: Path = (
+        Path(self.model.config["general"]["output_folder"]) / run_name
+    )
+    create_discharge_publication_package(
+        routing_folder=run_output_folder / "report" / "hydrology.routing",
+        evaluation_metrics_xlsx=(
+            self.evaluate_discharge_output_folder / "evaluation_metrics.xlsx"
+        ),
+        output_folder=publication_folder,
+        run_name=run_name,
+        snapped_locations=snapped_locations,
+    )
+    self.model.logger.info(
+        "Created discharge publication folder at %s.", publication_folder
+    )
+    return publication_folder
 
 
 def create_discharge_publication_package(

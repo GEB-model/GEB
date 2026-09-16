@@ -1,7 +1,7 @@
 """Analyze discharge skill against GRDC-Caravan catchment attributes.
 
 This module contains catchment attribute definitions, data preparation,
-statistics, and data plotting for the figures and dashboard.
+statistics, and plotting, including skill scores versus upstream area.
 """
 
 import logging
@@ -9,7 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -26,7 +26,8 @@ from scipy.stats import spearmanr
 from statsmodels.nonparametric.smoothers_lowess import lowess
 
 from geb.build.data_catalog import DataCatalog
-from geb.evaluate.workflows.external_skill_scores import format_grdc_station_key
+from geb.evaluate.workflows.discharge_metrics import SKILL_SCORE_PLOT_CONFIG_BY_COLUMN
+from geb.evaluate.workflows.external_skill_scores import format_grdc_station_id
 
 
 @dataclass(frozen=True)
@@ -36,7 +37,8 @@ class CatchmentCharacteristic:
     Args:
         column: Column in the enriched discharge-evaluation table.
         label: Publication label including units.
-        scale: Factor converting stored values to displayed units.
+        scale: Multiplier applied once to raw source values to obtain display
+            units. The data-catalog adapter preserves the original CSV units.
         logarithmic_x: Whether relationship plots use a base-10 x-axis.
     """
 
@@ -65,6 +67,9 @@ class KGEMetric:
     heatmap_label: str
 
 
+# HydroATLAS stores temperature, terrain slope, and human footprint at 10×
+# their display values (BasinATLAS v1 catalogue, C03/P02/A06). Caravan climate
+# frequencies are fractions; percentage of coverage already use percent.
 # These 32 attributes cover climate, topography, land cover, soils, hydrology,
 # and human influence without pre-selecting variables by model performance.
 SCREENING_CATCHMENT_CHARACTERISTICS: tuple[CatchmentCharacteristic, ...] = (
@@ -110,39 +115,35 @@ SCREENING_CATCHMENT_CHARACTERISTICS: tuple[CatchmentCharacteristic, ...] = (
     CatchmentCharacteristic("cly_pc_sav", "Soil clay fraction (%)"),
     CatchmentCharacteristic("snd_pc_sav", "Soil sand fraction (%)"),
     CatchmentCharacteristic("swc_pc_syr", "Annual soil-water content (%)"),
-    CatchmentCharacteristic(
-        "hft_ix_s09", "Human-footprint index, 2009 (–)", scale=0.01
-    ),
+    CatchmentCharacteristic("hft_ix_s09", "Human-footprint index, 2009 (–)", scale=0.1),
     CatchmentCharacteristic("ppd_pk_sav", "Population density (people/km²)"),
     CatchmentCharacteristic("rdd_mk_sav", "Road density (m/km²)"),
 )
 
-_SCREENING_CATCHMENT_CHARACTERISTICS_BY_COLUMN: dict[str, CatchmentCharacteristic] = {
+_CATCHMENT_CHARACTERISTICS_BY_COLUMN: dict[str, CatchmentCharacteristic] = {
     catchment_characteristic.column: catchment_characteristic
     for catchment_characteristic in SCREENING_CATCHMENT_CHARACTERISTICS
 }
+_CATCHMENT_CHARACTERISTICS_BY_COLUMN["area"] = CatchmentCharacteristic(
+    "area", "GRDC-Caravan catchment area (km²)", logarithmic_x=True
+)
 
 
-# The dashboard subset prioritizes distinct, actionable hydrological mechanisms.
-# Keeping this list short makes spatial comparison substantially easier than a
-# layer menu containing all 32 variables.
-DASHBOARD_CATCHMENT_CHARACTERISTICS: tuple[CatchmentCharacteristic, ...] = (
-    _SCREENING_CATCHMENT_CHARACTERISTICS_BY_COLUMN["sgr_dk_sav"],
-    _SCREENING_CATCHMENT_CHARACTERISTICS_BY_COLUMN["ele_mt_sav"],
-    CatchmentCharacteristic(
-        "area", "GRDC-Caravan catchment area (km²)", logarithmic_x=True
-    ),
-    *(
-        _SCREENING_CATCHMENT_CHARACTERISTICS_BY_COLUMN[column]
-        for column in (
-            "gwt_cm_sav",
-            "low_prec_freq",
-            "frac_snow",
-            "aridity_FAO_PM",
-            "dor_pc_pva",
-            "lka_pc_sse",
-        )
-    ),
+# characteristics to show on dashboard (keep this selection short to avoid slow dashboard)
+DASHBOARD_CATCHMENT_COLUMNS: tuple[str, ...] = (
+    "sgr_dk_sav",
+    "ele_mt_sav",
+    "area",
+    "gwt_cm_sav",
+    "low_prec_freq",
+    "frac_snow",
+    "aridity_FAO_PM",
+    "dor_pc_pva",
+    "lka_pc_sse",
+)
+DASHBOARD_CATCHMENT_CHARACTERISTICS: tuple[CatchmentCharacteristic, ...] = tuple(
+    _CATCHMENT_CHARACTERISTICS_BY_COLUMN[column]
+    for column in DASHBOARD_CATCHMENT_COLUMNS
 )
 
 KGE_METRICS: tuple[KGEMetric, ...] = (
@@ -152,8 +153,6 @@ KGE_METRICS: tuple[KGEMetric, ...] = (
     KGEMetric("KGE_daily", "ρ (KGE)"),
 )
 
-# The selected panels represent distinct topographic, subsurface, channel, and
-# climate relationships while avoiding redundant variants of the same signal.
 KGE_RELATIONSHIP_PANELS: dict[str, str] = {
     "ele_mt_sav": "b) Elevation",
     "gwt_cm_sav": "c) Groundwater-table depth",
@@ -161,16 +160,12 @@ KGE_RELATIONSHIP_PANELS: dict[str, str] = {
     "low_prec_freq": "e) Low-precipitation-day frequency",
 }
 
-# These tones are sampled from the positive half of ColorBrewer's BrBG scale
-# so the relationship panels and signed-correlation heatmap read as one design.
 STATION_COLOR: str = "#35978F"
 LOWESS_COLOR: str = "#01665E"
 LOWESS_INTERVAL_COLOR: str = "#80CDC1"
 
 
 # Analysis and dashboard functions.
-
-
 def analyze_discharge_characteristics(
     station_scores: pd.DataFrame,
     output_folder: Path,
@@ -349,13 +344,11 @@ def load_dashboard_catchment_characteristics(
 
 
 # Station matching, unit conversion, and statistics.
-
-
 def enrich_discharge_evaluation(
     station_scores: pd.DataFrame,
     catchment_attributes: pd.DataFrame,
 ) -> pd.DataFrame:
-    """Join attributes by station ID, retaining unmatched stations.
+    """Join attributes by station ID, while keeping unmatched stations.
 
     Args:
         station_scores: Per-station GEB discharge metrics.
@@ -379,7 +372,7 @@ def enrich_discharge_evaluation(
         raise ValueError("GRDC-Caravan attributes contain duplicate gauge_id values.")
 
     evaluation_table["gauge_id"] = evaluation_table["station_ID"].map(
-        format_grdc_station_key
+        format_grdc_station_id
     )
     enriched_table: pd.DataFrame = evaluation_table.merge(
         catchment_attributes,
@@ -399,7 +392,7 @@ def prepare_kge_characteristic_analysis(
 ) -> pd.DataFrame:
     """Select matched stations and convert attributes to display units.
 
-    KGE and its components retain their original values and direction.
+    KGE and its components keep their original values and direction.
 
     Args:
         station_scores: Discharge metrics enriched with GRDC-Caravan attributes.
@@ -503,6 +496,210 @@ def calculate_kge_component_associations(
     return pd.DataFrame(correlation_records)
 
 
+# Skill scores versus upstream area.
+
+
+def plot_skill_scores_vs_upstream_area(
+    station_scores: pd.DataFrame,
+    output_folder: Path,
+    logger: logging.Logger,
+) -> None:
+    """Plot upstream area against discharge skill scores.
+
+    Args:
+        station_scores: Per-station evaluation metrics with `upstream_area_GEB` (m2).
+        output_folder: Root folder where the scatterplot is saved.
+        logger: Logger to use for progress messages.
+
+    Returns:
+        None. Saves SVG and PNG figures if finite positive areas and scores exist.
+
+    Raises:
+        ValueError: If `upstream_area_GEB` is missing from the evaluation metrics.
+    """  # noqa: DOC202
+    if "upstream_area_GEB" not in station_scores.columns:
+        raise ValueError("`upstream_area_GEB` is missing from evaluation metrics.")
+
+    upstream_area_km2: pd.Series = (
+        pd.to_numeric(station_scores["upstream_area_GEB"], errors="coerce")
+        / 1_000_000.0
+    )
+
+    metric_order: tuple[str, ...] = (
+        "KGE",
+        "KGE_correlation",
+        "KGE_bias_ratio",
+        "KGE_variability_ratio",
+        "NSE",
+        "RRMSE",
+    )
+    fig: plt.Figure = plt.figure(figsize=(13.5, 7.2), constrained_layout=True)
+    # 6-column grid: KGE spans 3 cols (half width), each KGE component 1 col.
+    # NSE and RRMSE each span 3 cols in the bottom row.
+    grid: GridSpec = fig.add_gridspec(2, 6)
+    axes_by_metric: dict[str, plt.Axes] = {
+        "KGE": fig.add_subplot(grid[0, 0:3]),
+        "KGE_correlation": fig.add_subplot(grid[0, 3]),
+        "KGE_bias_ratio": fig.add_subplot(grid[0, 4]),
+        "KGE_variability_ratio": fig.add_subplot(grid[0, 5]),
+        "NSE": fig.add_subplot(grid[1, 0:3]),
+        "RRMSE": fig.add_subplot(grid[1, 3:6]),
+    }
+    has_values: bool = False
+    plot_color: str = "#1f77b4"
+    regression_color: str = "#D55E00"
+    for metric_col in metric_order:
+        metric_config: dict[str, object] = SKILL_SCORE_PLOT_CONFIG_BY_COLUMN[metric_col]
+        axis: plt.Axes = axes_by_metric[str(metric_config["col"])]
+        if metric_col not in station_scores.columns:
+            logger.info("Metric '%s' not in evaluation data, skipping.", metric_col)
+            axis.set_visible(False)
+            continue
+
+        metric_values: pd.Series = pd.to_numeric(
+            station_scores[metric_col], errors="coerce"
+        )
+        valid_mask: pd.Series = (
+            upstream_area_km2.gt(0)
+            & np.isfinite(upstream_area_km2)
+            & np.isfinite(metric_values)
+        )
+        if not valid_mask.any():
+            logger.info("No valid values for metric '%s', skipping.", metric_col)
+            axis.set_visible(False)
+            continue
+
+        has_values = True
+        y_limits: tuple[float, float] = (
+            cast(tuple[float, float], metric_config["ylim"])
+            if metric_config["ylim"] is not None
+            else (
+                0.0,
+                max(float(np.percentile(metric_values[valid_mask], 98)) * 1.1, 1.0),
+            )
+        )
+        axis.scatter(
+            upstream_area_km2[valid_mask],
+            metric_values[valid_mask],
+            s=14,
+            alpha=0.55,
+            color=plot_color,
+            edgecolors="none",
+        )
+        trend_mask: pd.Series = valid_mask & metric_values.between(
+            y_limits[0], y_limits[1]
+        )
+        if trend_mask.sum() >= 10 and upstream_area_km2[trend_mask].nunique() > 1:
+            log_area: np.ndarray = np.log10(
+                upstream_area_km2[trend_mask].to_numpy(dtype=float)
+            )
+            trend_values: np.ndarray = metric_values[trend_mask].to_numpy(dtype=float)
+            fitted_values: np.ndarray = np.asarray(
+                lowess(
+                    trend_values,
+                    log_area,
+                    frac=0.35,
+                    it=2,
+                    return_sorted=True,
+                ),
+                dtype=float,
+            )
+            fitted_log_area: np.ndarray
+            unique_indices: np.ndarray
+            fitted_log_area, unique_indices = np.unique(
+                fitted_values[:, 0], return_index=True
+            )
+            trend_x: np.ndarray = np.logspace(
+                fitted_log_area.min(), fitted_log_area.max(), 180
+            )
+            trend_y: np.ndarray = np.interp(
+                np.log10(trend_x),
+                fitted_log_area,
+                fitted_values[unique_indices, 1],
+            )
+            axis.plot(
+                trend_x,
+                trend_y,
+                color=regression_color,
+                linewidth=2.1,
+                zorder=3,
+            )
+            association: Any = spearmanr(log_area, trend_values)
+            rho: float = float(association.statistic)
+            p_value: float = float(association.pvalue)
+            axis.text(
+                0.04,
+                0.92,
+                f"Spearman $\\rho$ = {rho:+.2f}\n"
+                f"{'p<0.001' if p_value < 0.001 else f'p={p_value:.3f}'}",
+                transform=axis.transAxes,
+                ha="left",
+                va="top",
+                color="black",
+                fontsize=8,
+                bbox={
+                    "boxstyle": "round,pad=0.2",
+                    "facecolor": "0.9",
+                    "edgecolor": "none",
+                    "alpha": 0.75,
+                },
+            )
+        axis.set_xscale("log")
+        axis.set_ylim(*y_limits)
+        axis.grid(True, color="0.85", linewidth=0.5)
+        axis.set_title(str(metric_config["label"]), color=plot_color, fontweight="bold")
+        for spine in axis.spines.values():
+            spine.set_edgecolor("0.7")
+
+    if not has_values:
+        logger.warning("No valid skill scores found for upstream-area scatterplot.")
+        plt.close(fig)
+        return
+
+    for axis in axes_by_metric.values():
+        axis.set_xlabel("Upstream area (km²)")
+
+    lowess_legend_handles: list[Line2D] = [
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            linestyle="none",
+            markerfacecolor=plot_color,
+            markeredgecolor="none",
+            markersize=5.5,
+            alpha=0.55,
+            label="Station",
+        ),
+        Line2D(
+            [0],
+            [0],
+            color=regression_color,
+            linewidth=2.1,
+            label="Local regression (LOWESS)",
+        ),
+    ]
+    fig.legend(
+        handles=lowess_legend_handles,
+        loc="lower center",
+        bbox_to_anchor=(0.5, -0.04),
+        ncols=2,
+        frameon=False,
+        fontsize=9,
+        columnspacing=1.8,
+        handlelength=2.4,
+    )
+
+    explanations_folder: Path = output_folder / "skill_score_explanations"
+    explanations_folder.mkdir(parents=True, exist_ok=True)
+    output_path: Path = explanations_folder / "skill_scores_vs_upstream_area"
+    ext: str
+    for ext in ("svg", "png"):
+        fig.savefig(f"{output_path}.{ext}", bbox_inches="tight", dpi=300)
+    plt.close(fig)
+    logger.info("Saved skill score upstream-area scatterplot to: %s", output_path)
+
+
 # Figure layouts.
 
 
@@ -598,9 +795,9 @@ def create_kge_characteristic_summary(
     kge_metric_columns: list[str] = [
         kge_metric.score_column for kge_metric in KGE_METRICS
     ]
-    required_catchment_columns: list[str] = list(
-        _SCREENING_CATCHMENT_CHARACTERISTICS_BY_COLUMN
-    )
+    required_catchment_columns: list[str] = [
+        characteristic.column for characteristic in SCREENING_CATCHMENT_CHARACTERISTICS
+    ]
     panel_catchment_columns: set[str] = set(KGE_RELATIONSHIP_PANELS)
     if not {"KGE_daily", *panel_catchment_columns}.issubset(
         station_analysis_table.columns
@@ -736,7 +933,7 @@ def create_kge_characteristic_summary(
         relationship_axes, KGE_RELATIONSHIP_PANELS, strict=True
     ):
         catchment_characteristic: CatchmentCharacteristic = (
-            _SCREENING_CATCHMENT_CHARACTERISTICS_BY_COLUMN[column]
+            _CATCHMENT_CHARACTERISTICS_BY_COLUMN[column]
         )
         _plot_relationship_panel(
             axis=relationship_axis,
@@ -895,7 +1092,7 @@ def create_kge_characteristic_scatterplots(
         .index.tolist()
     )
     ordered_characteristics: list[CatchmentCharacteristic] = [
-        _SCREENING_CATCHMENT_CHARACTERISTICS_BY_COLUMN[column]
+        _CATCHMENT_CHARACTERISTICS_BY_COLUMN[column]
         for column in ranked_catchment_columns
     ]
 

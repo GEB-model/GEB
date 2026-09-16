@@ -96,6 +96,8 @@ class GRDCCaravan(Adapter):
             **kwargs: Optional arguments passed to ``pandas.read_parquet``.
 
         Returns:
-            Combined GRDC-Caravan station attributes.
+            Combined GRDC-Caravan station attributes in original CSV units.
+            HydroATLAS storage multipliers are retained; display-unit conversion
+            is performed by the evaluation workflows.
         """
         return pd.read_parquet(self.path, **kwargs)

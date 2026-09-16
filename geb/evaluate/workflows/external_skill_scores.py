@@ -1,7 +1,7 @@
 """Load external discharge scores and align them with GEB stations.
 
 The export command selects external scores for known GEB stations.
-Comparison plots first filter by upstream area, then match stations, so each
+The plotting workflow filters GEB stations by upstream area before matching, so each
 GEB score is compared with an external score for the same station.
 """
 
@@ -9,19 +9,24 @@ import logging
 import tarfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
 from geb.workflows.io import read_geom
+
+if TYPE_CHECKING:
+    from geb.evaluate.hydrology import Hydrology
+
 
 # Download manually from https://zenodo.org/records/6390219.
 EXTERNAL_EVALUATION_FOLDER_NAME: str = "external_evaluation_data"
 UTRECHT_EVALUATION_FILE_NAME: str = "Utrecht_1KM_daily_discharge.csv"
 # Download metrics.tgz manually from https://zenodo.org/records/10397664 and
 # save it under this fixed name in the external evaluation folder.
-EXTERNAL_METRICS_ARCHIVE_FILE_NAME: str = "google_streamflow_metrics.tgz"
+GOOGLE_STREAMFLOW_FILE_NAME: str = "google_streamflow_metrics.tgz"
 GOOGLE_MODEL_NAME: str = "Google Streamflow"
-GLOFAS_MODEL_NAME: str = "GloFAS"
+GLOFAS_MODEL_NAME: str = "GloFAS"  # part of Google streamflow paper/archive
 UTRECHT_MODEL_NAME: str = "Utrecht"
 GOOGLE_METRIC_ROOT: Path = Path(
     "metrics/hydrograph_metrics/per_metric/google/2014/dual_lstm/"
@@ -51,22 +56,25 @@ class MatchedSkillScores:
     Args:
         geb_scores: Filtered GEB skill-score table.
         external_scores: External skill-score table in the same station order.
-        minimum_upstream_area_km2: Effective GEB upstream-area threshold (km2).
     """
 
     geb_scores: pd.DataFrame
     external_scores: pd.DataFrame
-    minimum_upstream_area_km2: float
 
 
-def format_grdc_station_key(station_id: object) -> str | None:
-    """Format one station ID as a GRDC-style key.
+def format_grdc_station_id(station_id: object) -> str | None:
+    """Express a station ID in the ``GRDC_<ID>`` format used by Caravan.
+
+    For example, 6340100 and 6340100.0 both become ``GRDC_6340100``.
+    Existing GRDC prefixes are retained and text is stripped and uppercased.
+    This formats an identifier; it does not verify membership in GRDC.
 
     Args:
-        station_id: Raw station ID value.
+        station_id: Station identifier from a GEB score table or GRDC metadata.
+            This is an ID, not a station name or river ID.
 
     Returns:
-        Uppercase key such as ``"GRDC_1234567"``, or `None` for missing values.
+        Uppercase identifier such as ``"GRDC_1234567"``, or `None` for missing values.
     """
     if pd.isna(station_id):
         return None
@@ -84,32 +92,36 @@ def format_grdc_station_key(station_id: object) -> str | None:
     return f"GRDC_{station_id_text}"
 
 
-def _add_match_keys(table: pd.DataFrame) -> pd.DataFrame:
-    """Add station-name and GRDC keys used for matching.
+def _add_station_matching_columns(table: pd.DataFrame) -> pd.DataFrame:
+    """Add normalized station names and GRDC IDs for external-score joins.
+
+    External datasets can identify stations by name (such as Utrecht) or
+    by GRDC ID (such as Google and GloFAS). Keep both alternatives separate;
+    matching prefers a GRDC ID and falls back to the name.
 
     Args:
         table: Skill-score table with optional ``station_name`` and
             ``station_ID`` columns.
 
     Returns:
-        Copy of the table with ``station_name_key`` and ``station_id_key``.
+        Copy of the table with ``station_name_for_matching`` and ``grdc_id_for_matching``.
     """
-    keyed_table: pd.DataFrame = table.copy()
-    if "station_name" in keyed_table.columns:
-        keyed_table["station_name_key"] = (
-            keyed_table["station_name"].fillna("").astype(str).str.strip().str.upper()
+    station_table: pd.DataFrame = table.copy()
+    if "station_name" in station_table.columns:
+        station_table["station_name_for_matching"] = (
+            station_table["station_name"].fillna("").astype(str).str.strip().str.upper()
         )
     else:
-        keyed_table["station_name_key"] = ""
-    if "station_ID" not in keyed_table.columns and table.index.name == "station_ID":
-        keyed_table["station_ID"] = table.index
-    if "station_ID" in keyed_table.columns:
-        keyed_table["station_id_key"] = (
-            keyed_table["station_ID"].map(format_grdc_station_key).fillna("")
+        station_table["station_name_for_matching"] = ""
+    if "station_ID" not in station_table.columns and table.index.name == "station_ID":
+        station_table["station_ID"] = table.index
+    if "station_ID" in station_table.columns:
+        station_table["grdc_id_for_matching"] = (
+            station_table["station_ID"].map(format_grdc_station_id).fillna("")
         )
     else:
-        keyed_table["station_id_key"] = ""
-    return keyed_table
+        station_table["grdc_id_for_matching"] = ""
+    return station_table
 
 
 def _read_model_metrics_from_archive(
@@ -197,12 +209,14 @@ def load_external_skill_scores(
     external_models: dict[str, pd.DataFrame] = {}
     utrecht_path: Path = external_evaluation_folder / UTRECHT_EVALUATION_FILE_NAME
     if utrecht_path.exists():
-        utrecht_df: pd.DataFrame = pd.read_csv(utrecht_path, index_col=0)
+        utrecht_df: pd.DataFrame = pd.read_csv(
+            filepath_or_buffer=utrecht_path, index_col=0
+        )
         utrecht_df.index = utrecht_df.index.map(str).str.strip().str.upper()
         external_models[UTRECHT_MODEL_NAME] = utrecht_df
 
     metrics_archive_path: Path = (
-        external_evaluation_folder / EXTERNAL_METRICS_ARCHIVE_FILE_NAME
+        external_evaluation_folder / GOOGLE_STREAMFLOW_FILE_NAME
     )
     if metrics_archive_path.exists():
         with tarfile.open(metrics_archive_path, mode="r:gz") as archive:
@@ -222,7 +236,7 @@ def load_external_skill_scores(
             "No external evaluation data found in %s; expected %s and/or %s.",
             external_evaluation_folder,
             UTRECHT_EVALUATION_FILE_NAME,
-            EXTERNAL_METRICS_ARCHIVE_FILE_NAME,
+            GOOGLE_STREAMFLOW_FILE_NAME,
         )
         return external_models
 
@@ -247,9 +261,57 @@ def load_external_skill_scores(
     return external_models
 
 
+def export_external_skill_scores(
+    self: Hydrology,
+    **kwargs: Any,
+) -> dict[str, pd.DataFrame]:
+    """Export external scores for all stations present in this model.
+
+    This optional table export does not create plots and is not required before
+    plotting. Discharge score plotting loads and matches external data itself,
+    using the selected evaluation period and upstream-area threshold.
+
+    Notes:
+        Station names are matched case-insensitively. Falls back to
+        ``discharge_snapped_locations.geoparquet`` when
+        ``evaluation_metrics.xlsx`` does not yet exist.
+
+    Args:
+        self: Hydrology evaluator providing model settings and output paths.
+        **kwargs: Ignored (CLI compatibility).
+
+    Returns:
+        Mapping from model label to matched-stations DataFrame.
+    """
+    external_models: dict[str, pd.DataFrame] = load_external_skill_scores(
+        input_folder=self.model.input_folder,
+        logger=self.model.logger,
+    )
+    if not external_models:
+        self.model.logger.info("No external evaluation data found, skipping.")
+        return {}
+
+    evaluation_metrics_path: Path = (
+        self.evaluate_discharge_output_folder / "evaluation_metrics.xlsx"
+    )
+    geb_station_identifiers: set[str] = load_geb_station_identifiers(
+        evaluation_metrics_path=evaluation_metrics_path,
+        snapped_locations_path=self.model.files["geom"][
+            "discharge/discharge_snapped_locations"
+        ],
+    )
+
+    return filter_external_skill_scores(
+        external_models=external_models,
+        geb_station_identifiers=geb_station_identifiers,
+        output_folder=self.evaluate_discharge_output_folder,
+        logger=self.model.logger,
+    )
+
+
 def filter_external_skill_scores(
     external_models: dict[str, pd.DataFrame],
-    station_keys: set[str],
+    geb_station_identifiers: set[str],
     output_folder: Path,
     logger: logging.Logger,
 ) -> dict[str, pd.DataFrame]:
@@ -257,7 +319,8 @@ def filter_external_skill_scores(
 
     Args:
         external_models: External model skill-score tables keyed by model label.
-        station_keys: Uppercase station-name or GRDC keys from GEB.
+        geb_station_identifiers: Normalized GEB station names and GRDC IDs,
+            e.g. a station name or ``GRDC_6340100``; not river IDs.
         output_folder: Folder where matched external tables are saved.
         logger: Logger used for diagnostics.
 
@@ -266,10 +329,12 @@ def filter_external_skill_scores(
     """
     matched_external_models: dict[str, pd.DataFrame] = {}
     output_folder.mkdir(parents=True, exist_ok=True)
-    station_keys_upper: set[str] = {station_key.upper() for station_key in station_keys}
+    normalized_geb_identifiers: set[str] = {
+        station_key.upper() for station_key in geb_station_identifiers
+    }
     for model_name, all_station_scores in external_models.items():
         matched_scores: pd.DataFrame = all_station_scores[
-            all_station_scores.index.isin(station_keys_upper)
+            all_station_scores.index.isin(normalized_geb_identifiers)
         ].copy()
         logger.info(
             "External model '%s': %d/%d external stations matched.",
@@ -285,45 +350,52 @@ def filter_external_skill_scores(
     return matched_external_models
 
 
-def load_geb_station_keys(
+def load_geb_station_identifiers(
     evaluation_metrics_path: Path,
     snapped_locations_path: Path,
 ) -> set[str]:
-    """Get GEB station keys for matching external skill-score tables.
+    """Collect GEB station names and GRDC IDs accepted by external datasets.
 
     Args:
         evaluation_metrics_path: Path to `evaluation_metrics.xlsx`.
         snapped_locations_path: Path to discharge snapped-locations geometry.
 
     Returns:
-        Uppercase station-name and GRDC-style station ID keys.
+        Uppercase station names and GRDC-style station IDs. This is a set
+        of alternative identifiers for matching, not a list of unique stations.
     """
     if evaluation_metrics_path.exists():
         station_scores: pd.DataFrame = pd.read_excel(evaluation_metrics_path)
         if not station_scores.empty:
-            station_scores_with_keys: pd.DataFrame = _add_match_keys(station_scores)
-            station_keys: set[str] = set(station_scores_with_keys["station_name_key"])
-            station_keys.update(station_scores_with_keys["station_id_key"])
-            station_keys.discard("")
-            return station_keys
+            station_scores_with_identifiers: pd.DataFrame = (
+                _add_station_matching_columns(station_scores)
+            )
+            geb_station_identifiers: set[str] = set(
+                station_scores_with_identifiers["station_name_for_matching"]
+            )
+            geb_station_identifiers.update(
+                station_scores_with_identifiers["grdc_id_for_matching"]
+            )
+            geb_station_identifiers.discard("")
+            return geb_station_identifiers
 
     snapped_locations = read_geom(snapped_locations_path)
-    station_keys: set[str] = set(
+    geb_station_identifiers: set[str] = set(
         snapped_locations["discharge_observations_station_name"]
         .dropna()
         .astype(str)
         .str.strip()
         .str.upper()
     )
-    station_keys.update(
+    geb_station_identifiers.update(
         station_key
         for station_key in snapped_locations.index.to_series().map(
-            format_grdc_station_key
+            format_grdc_station_id
         )
         if station_key is not None
     )
-    station_keys.discard("")
-    return station_keys
+    geb_station_identifiers.discard("")
+    return geb_station_identifiers
 
 
 def match_external_skill_scores(
@@ -331,16 +403,18 @@ def match_external_skill_scores(
     external_models: dict[str, pd.DataFrame],
     output_folder: Path,
     logger: logging.Logger,
-    minimum_upstream_area_km2: float,
 ) -> dict[str, MatchedSkillScores]:
-    """Prepare matched GEB-vs-external scores for each external model.
+    """Pair already-selected GEB stations with each external model by ID or name.
+
+    The caller applies the GEB upstream-area threshold once. This function
+    only takes the station intersection and aligns rows; external datasets'
+    own inclusion criteria do not replace GEB's station selection.
 
     Args:
         station_scores: Loaded and upstream-area-filtered GEB metrics.
         external_models: Loaded external metrics keyed by model name.
         output_folder: Folder where matched external tables are saved.
         logger: Logger used for diagnostics.
-        minimum_upstream_area_km2: Minimum modeled upstream-area threshold (km2).
 
     Returns:
         Plot inputs keyed by external model label.
@@ -349,27 +423,35 @@ def match_external_skill_scores(
     if station_scores.empty or not external_models:
         return matched_scores
 
-    station_scores_with_keys: pd.DataFrame = _add_match_keys(station_scores)
-    eligible_geb_scores: pd.DataFrame = station_scores_with_keys[
-        station_scores_with_keys["upstream_area_GEB"]
-        >= minimum_upstream_area_km2 * 1_000_000.0
-    ].copy()
+    station_scores_with_identifiers: pd.DataFrame = _add_station_matching_columns(
+        station_scores
+    )
     output_folder.mkdir(parents=True, exist_ok=True)
     for model_name, external_model_scores in external_models.items():
-        external_station_keys: set[str] = set(external_model_scores.index.str.upper())
-        matched_geb_scores: pd.DataFrame = eligible_geb_scores[
-            eligible_geb_scores["station_name_key"].isin(external_station_keys)
-            | eligible_geb_scores["station_id_key"].isin(external_station_keys)
+        external_station_identifiers: set[str] = set(
+            external_model_scores.index.str.upper()
+        )
+        matched_geb_scores: pd.DataFrame = station_scores_with_identifiers[
+            station_scores_with_identifiers["station_name_for_matching"].isin(
+                external_station_identifiers
+            )
+            | station_scores_with_identifiers["grdc_id_for_matching"].isin(
+                external_station_identifiers
+            )
         ].copy()
         if matched_geb_scores.empty:
             continue
 
-        matched_external_keys: pd.Series = matched_geb_scores["station_id_key"].where(
-            matched_geb_scores["station_id_key"].isin(external_station_keys),
-            matched_geb_scores["station_name_key"],
+        matched_external_identifiers: pd.Series = matched_geb_scores[
+            "grdc_id_for_matching"
+        ].where(
+            matched_geb_scores["grdc_id_for_matching"].isin(
+                external_station_identifiers
+            ),
+            matched_geb_scores["station_name_for_matching"],
         )
         matched_external_scores: pd.DataFrame = external_model_scores.reindex(
-            matched_external_keys
+            matched_external_identifiers
         ).copy()
         matched_external_scores.index = matched_geb_scores.index
 
@@ -395,9 +477,9 @@ def match_external_skill_scores(
 
         matched_scores[model_name] = MatchedSkillScores(
             geb_scores=matched_geb_scores.drop(
-                columns=["station_name_key", "station_id_key"], errors="ignore"
+                columns=["station_name_for_matching", "grdc_id_for_matching"],
+                errors="ignore",
             ),
             external_scores=matched_external_scores,
-            minimum_upstream_area_km2=minimum_upstream_area_km2,
         )
     return matched_scores
