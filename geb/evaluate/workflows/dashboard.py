@@ -520,12 +520,12 @@ def write_discharge_dashboard(
         "station_latitude",
         "snapped_grid_longitude",
         "snapped_grid_latitude",
-        "original_longitude",
-        "original_latitude",
+        "original_subgrid_longitude",
+        "original_subgrid_latitude",
         "upstream_area_GRDC",
         "upstream_area_GEB",
-        "upstream_area_GEB_original",
-        "station_to_original_distance_m",
+        "upstream_area_GEB_original_subgrid",
+        "station_to_original_subgrid_distance_m",
         "snapped_river_id",
         "snapping_method",
         "timezone_utc_offset",
@@ -1701,8 +1701,8 @@ def _build_snapping_qc_station(
     if any(
         pd.isna(row.get(column))
         for column in (
-            "original_longitude",
-            "original_latitude",
+            "original_subgrid_longitude",
+            "original_subgrid_latitude",
             "snapped_grid_longitude",
             "snapped_grid_latitude",
         )
@@ -1724,13 +1724,15 @@ def _build_snapping_qc_station(
             "tooltip": f"{station_label}<br>EXCLUDED: {reason}",
             "popup": f"<b>{station_label}</b><br><b>EXCLUDED</b><br>{reason}<br>GRDC area: {area_label}<br>Gauge: {gauge_latitude:.5f}, {gauge_longitude:.5f}",
         }
-    original_longitude: float = float(row["original_longitude"])
-    original_latitude: float = float(row["original_latitude"])
+    original_subgrid_longitude: float = float(row["original_subgrid_longitude"])
+    original_subgrid_latitude: float = float(row["original_subgrid_latitude"])
     routing_longitude: float = float(row["snapped_grid_longitude"])
     routing_latitude: float = float(row["snapped_grid_latitude"])
     grdc_area_km2: float = float(row["upstream_area_GRDC"]) / 1_000_000.0
     routing_area_km2: float = float(row["upstream_area_GEB"]) / 1_000_000.0
-    original_area_km2: float = float(row["upstream_area_GEB_original"]) / 1_000_000.0
+    original_area_km2: float = (
+        float(row["upstream_area_GEB_original_subgrid"]) / 1_000_000.0
+    )
     station_to_routing_distance_km: float = _haversine_distance_km(
         gauge_longitude,
         gauge_latitude,
@@ -1741,8 +1743,8 @@ def _build_snapping_qc_station(
         float(row["station_to_original_distance_m"]) / 1000.0
     )
     original_to_routing_distance_km: float = _haversine_distance_km(
-        original_longitude,
-        original_latitude,
+        original_subgrid_longitude,
+        original_subgrid_latitude,
         routing_longitude,
         routing_latitude,
     )
@@ -1773,7 +1775,7 @@ def _build_snapping_qc_station(
         f"<b>{escaped_name}</b> ({escaped_id})<br>"
         f"<b>Snapping QC: <span style='color:{status_color}'>{status_label}</span></b><br>"
         f"GRDC gauge: {gauge_latitude:.5f}, {gauge_longitude:.5f}<br>"
-        f"Selected original pixel: {original_latitude:.5f}, {original_longitude:.5f}<br>"
+        f"Selected original subgrid: {original_subgrid_latitude:.5f}, {original_subgrid_longitude:.5f}<br>"
         f"Routing pixel: {routing_latitude:.5f}, {routing_longitude:.5f}<br>"
         f"River ID: {int(row['snapped_river_id'])}<br>"
         f"Gauge–routing distance: {station_to_routing_distance_km:.2f} km<br>"
@@ -1799,7 +1801,7 @@ def _build_snapping_qc_station(
     )
     line_locations: list[list[float]] = [
         [gauge_latitude, gauge_longitude],
-        [original_latitude, original_longitude],
+        [original_subgrid_latitude, original_subgrid_longitude],
         [routing_latitude, routing_longitude],
     ]
     if any(

@@ -1,12 +1,14 @@
 """Create a publication-ready folder of simulated station discharge (first draft version)."""
 
+import json
 import shutil
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 
 from geb.workflows.io import read_geom
 
@@ -17,7 +19,7 @@ if TYPE_CHECKING:
 PUBLICATION_README_TEMPLATE: str = """# GEB station discharge simulations
 
 This folder contains raw GEB simulated discharge for {station_count} gauging
-stations from run `{run_name}`.
+stations included in the discharge evaluation for run `{run_name}`.
 
 ## Contents
 
@@ -134,6 +136,9 @@ def create_discharge_publication_package(
 ) -> Path:
     """Collect raw station simulations and identifying metadata for publication.
 
+    Report locations and saved evaluation locations must match the current
+    snapping metadata before any publication files are replaced.
+
     Args:
         routing_folder: Folder containing raw station discharge reports.
         evaluation_metrics_xlsx: Station evaluation spreadsheet to include.
@@ -147,7 +152,8 @@ def create_discharge_publication_package(
     Raises:
         FileNotFoundError: If a required metric or simulation file is missing.
         ValueError: If there are no evaluated stations, or station identifiers
-            or snapping metadata are invalid.
+            or snapping metadata are invalid, or report/evaluation locations
+            do not match the current snapping metadata.
     """
     if not evaluation_metrics_xlsx.exists():
         raise FileNotFoundError(
@@ -174,6 +180,65 @@ def create_discharge_publication_package(
         raise ValueError(
             "Snapping metadata are missing "
             f"{len(missing_station_ids)} evaluated stations."
+        )
+
+    selected_stations: gpd.GeoDataFrame = snapping_df.loc[station_ids]
+    for station_id in station_ids:
+        report_path: Path = (
+            routing_folder / f"discharge_hourly_m3_per_s_{station_id}.parquet"
+        )
+        if not report_path.exists():
+            raise FileNotFoundError(f"Missing simulated discharge: {report_path}")
+        report_metadata: dict[bytes, bytes] = pq.read_schema(report_path).metadata or {}
+        report_location: dict[str, Any] = (
+            json.loads(report_metadata.get(b"pandas", b"{}"))
+            .get("attributes", {})
+            .get("station_location", {})
+        )
+        station: pd.Series = selected_stations.loc[station_id]
+        if (
+            not report_location
+            or report_location.get("pixel_xy") != list(station["snapped_grid_pixel_xy"])
+            or not np.allclose(
+                report_location.get("longitude_latitude", [np.nan, np.nan]),
+                station["snapped_grid_pixel_lonlat"],
+                rtol=0,
+                atol=1e-8,
+            )
+            or not np.isclose(
+                report_location.get("upstream_area_m2", np.nan),
+                station["GEB_upstream_area_from_grid"],
+                rtol=1e-6,
+            )
+        ):
+            raise ValueError(
+                f"Report location for station {station_id} does not match current "
+                "snapping metadata. Rerun the simulation and discharge evaluation."
+            )
+    location_columns: list[str] = [
+        "snapped_grid_longitude",
+        "snapped_grid_latitude",
+        "upstream_area_GEB",
+    ]
+    if not set(location_columns).issubset(station_scores.columns):
+        raise ValueError(
+            "Evaluation locations are missing. Rerun discharge evaluation."
+        )
+    if not np.allclose(
+        station_scores[location_columns[:2]].to_numpy(dtype=float),
+        np.asarray(
+            selected_stations["snapped_grid_pixel_lonlat"].tolist(), dtype=float
+        ),
+        rtol=0,
+        atol=1e-8,
+    ) or not np.allclose(
+        station_scores["upstream_area_GEB"].to_numpy(dtype=float),
+        selected_stations["GEB_upstream_area_from_grid"].to_numpy(dtype=float),
+        rtol=1e-6,
+    ):
+        raise ValueError(
+            "Evaluation locations differ from current snapping metadata. "
+            "Rerun discharge evaluation."
         )
 
     staging_folder: Path = output_folder.with_name(f".{output_folder.name}.building")

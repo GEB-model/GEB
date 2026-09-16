@@ -27,10 +27,18 @@ For more control, use additional options:
 | Option | Description | Default |
 | --- | --- | --- |
 | `--run-name` | Name of the simulation run to evaluate | `default` |
-| `--include-yearly-plots` | Create plots for each year | `True` |
+| `--include-timeseries-plots` | Save static station time-series images | `True` |
+| `--include-yearly-plots` | Add yearly images when station time-series images are enabled | `True` |
 | `--correct-discharge-observations` | Correct simulated discharge for upstream-area differences | `False` |
 | `--create-plots` | Create station, dashboard, and skill-score plots | `True` |
 | `--include-return-period-plots` | Calculate and plot station and dashboard return periods | `False` |
+
+To calculate scores and create the dashboard and skill-score plots without
+station time-series images:
+
+```bash
+geb evaluate hydrology.evaluate_discharge --create-plots true --include-timeseries-plots false
+```
 
 `hydrology.create_discharge_dashboard` reuses saved scores. Both methods accept
 `--include-return-period-plots true`; these slower plots are off by default.
@@ -118,9 +126,9 @@ geb evaluate hydrology.export_discharge_publication_data --run-name default
 ```
 
 The resulting `evaluate_discharge/publication_data/` folder contains one raw
-hourly reporter Parquet file per evaluated station, a CSV station catalogue
-with the station identity and source plus original and snapped coordinates, the
-evaluation spreadsheet, and a README. Simulations are raw GEB reporter values
+hourly reporter Parquet file per station included in the discharge evaluation,
+a CSV station catalogue with station identity, source, original and snapped
+coordinates, the evaluation spreadsheet, and a README. Simulations are raw GEB reporter values
 in m3/s: no observation-based upstream-area correction or daily resampling is
 applied.
 

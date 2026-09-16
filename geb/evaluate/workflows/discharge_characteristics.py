@@ -59,7 +59,7 @@ class KGEMetric:
         score_column: Station-score column containing overall KGE, correlation,
             bias ratio, or variability ratio (all dimensionless).
         heatmap_label: Heatmap label for the Spearman correlation between this metric
-            and a catchment attribute. The symbol ρ denotes that association,
+            and a catchment attribute. The symbol ρₛ denotes that association,
             rather than the value of the KGE component itself.
     """
 
@@ -147,10 +147,10 @@ DASHBOARD_CATCHMENT_CHARACTERISTICS: tuple[CatchmentCharacteristic, ...] = tuple
 )
 
 KGE_METRICS: tuple[KGEMetric, ...] = (
-    KGEMetric("KGE_correlation_daily", "ρ (correlation)"),
-    KGEMetric("KGE_bias_ratio_daily", "ρ (bias ratio)"),
-    KGEMetric("KGE_variability_ratio_daily", "ρ (variability ratio)"),
-    KGEMetric("KGE_daily", "ρ (KGE)"),
+    KGEMetric("KGE_correlation_daily", "ρₛ (correlation)"),
+    KGEMetric("KGE_bias_ratio_daily", "ρₛ (bias ratio)"),
+    KGEMetric("KGE_variability_ratio_daily", "ρₛ (variability ratio)"),
+    KGEMetric("KGE_daily", "ρₛ (KGE)"),
 )
 
 KGE_RELATIONSHIP_PANELS: dict[str, str] = {
@@ -630,7 +630,7 @@ def plot_skill_scores_vs_upstream_area(
             axis.text(
                 0.04,
                 0.92,
-                f"Spearman $\\rho$ = {rho:+.2f}\n"
+                f"Spearman $\\rho_s$ = {rho:+.2f}\n"
                 f"{'p<0.001' if p_value < 0.001 else f'p={p_value:.3f}'}",
                 transform=axis.transAxes,
                 ha="left",
@@ -746,7 +746,7 @@ def create_characteristic_correlation_matrix(
         annot_kws={"fontsize": 6.1},
         linewidths=0.35,
         linecolor="white",
-        cbar_kws={"label": "Spearman rank correlation, ρ", "shrink": 0.74},
+        cbar_kws={"label": "Spearman rank correlation, ρₛ", "shrink": 0.74},
     )
     axis.tick_params(axis="both", labelsize=7.3, length=0)
     axis.set_xticklabels(axis.get_xticklabels(), rotation=52, ha="right")
@@ -916,7 +916,7 @@ def create_kge_characteristic_summary(
     association_colorbar.set_ticks([-0.5, -0.25, 0.0, 0.25, 0.5])
     association_colorbar.ax.tick_params(labelsize=7.4, length=3.0)
     association_colorbar.set_label(
-        "Spearman rank correlation, ρ  (* p-value < 0.05)", fontsize=8.5
+        "Spearman rank correlation, ρₛ  (* p-value < 0.05)", fontsize=8.5
     )
 
     random_generator: np.random.Generator = np.random.default_rng(42)
@@ -1139,7 +1139,7 @@ def create_kge_characteristic_scatterplots(
             panel_number, remainder = divmod(panel_number - 1, 26)
             panel_label = chr(ord("a") + remainder) + panel_label
         axis.set_title(
-            f"{panel_label}) {catchment_characteristic.label}\nSpearman ρ = {spearman_correlation:+.2f}",
+            f"{panel_label}) {catchment_characteristic.label}\nSpearman ρₛ = {spearman_correlation:+.2f}",
             loc="left",
             fontsize=8.0,
             fontweight="bold",
@@ -1298,7 +1298,7 @@ def _plot_relationship_panel(
         axis.text(
             0.025,
             0.94,
-            f"Spearman ρ = {spearman_correlation:+.2f}",
+            f"Spearman ρₛ = {spearman_correlation:+.2f}",
             transform=axis.transAxes,
             ha="left",
             va="top",

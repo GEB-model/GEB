@@ -56,6 +56,7 @@ def evaluate_discharge(
     start_year: int | None = None,
     end_year: int | None = None,
     clean_output: bool = False,
+    include_timeseries_plots: bool = True,
 ) -> dict[str, float | None]:
     """Evaluate the discharge grid from GEB against observations from the discharge observations database.
 
@@ -78,7 +79,7 @@ def evaluate_discharge(
         run_name: Name of the simulation run to evaluate. Must correspond to an
             existing run directory in the model output folder.
         include_yearly_plots: Whether to save one discharge PNG per station
-            and calendar year.
+            and calendar year when `include_timeseries_plots` is True.
         correct_discharge_observations: Whether to multiply simulated discharge by the GRDC upstream
             area divided by the low-resolution GEB routing upstream area.
         create_plots: Whether to create evaluation plots. Set to False to only calculate the evaluation metrics and save the results without plotting.
@@ -96,6 +97,10 @@ def evaluate_discharge(
         clean_output: Whether to remove the existing discharge evaluation
             output folder before writing new files. Defaults to `False` so
             period-specific evaluations do not delete full-period outputs.
+        include_timeseries_plots: Whether to save static station time-series
+            images, including yearly variants. Set to False to keep the dashboard
+            and skill-score plots without writing station time-series images.
+            Only applies when `create_plots` is True.
 
     Returns:
         Dictionary containing median frequency-specific discharge skill
@@ -287,14 +292,15 @@ def evaluate_discharge(
             station_metrics: dict[str, float] = discharge_metrics._asdict()
 
             if create_plots:
-                discharge_plots.save_discharge_timeseries_plots(
-                    station_id=station_id,
-                    discharge_comparison=discharge_comparison,
-                    upstream_area_ratio=upstream_area_ratio,
-                    metrics=station_metrics,
-                    plot_folder=evaluation_paths.plot_folder,
-                    include_yearly_plots=include_yearly_plots,
-                )
+                if include_timeseries_plots:
+                    discharge_plots.save_discharge_timeseries_plots(
+                        station_id=station_id,
+                        discharge_comparison=discharge_comparison,
+                        upstream_area_ratio=upstream_area_ratio,
+                        metrics=station_metrics,
+                        plot_folder=evaluation_paths.plot_folder,
+                        include_yearly_plots=include_yearly_plots,
+                    )
                 if include_return_period_plots:
                     discharge_plots.save_station_return_period_plots(
                         discharge_comparison=discharge_comparison,
@@ -325,15 +331,15 @@ def evaluate_discharge(
                 "station_latitude": station_coordinates[1],
                 "snapped_grid_longitude": snapped_grid_coordinates[0],
                 "snapped_grid_latitude": snapped_grid_coordinates[1],
-                "original_longitude": original_pixel_coordinates[0],
-                "original_latitude": original_pixel_coordinates[1],
+                "original_subgrid_longitude": original_pixel_coordinates[0],
+                "original_subgrid_latitude": original_pixel_coordinates[1],
                 "upstream_area_GRDC": float(
                     station_metadata.discharge_observations_upstream_area_m2
                 ),
-                "upstream_area_GEB_original": float(
+                "upstream_area_GEB_original_subgrid": float(
                     station_metadata.GEB_upstream_area_from_original
                 ),
-                "station_to_original_distance_m": float(
+                "station_to_original_subgrid_distance_m": float(
                     station_metadata.station_to_original_distance_m
                 ),
                 "snapped_river_id": int(station_metadata.snapped_river_id),
