@@ -1026,6 +1026,9 @@ def _draw_score_maps(
 ) -> None:
     """Draw station scores on satellite maps using one or four panels.
 
+    Each panel reserves separate space for its map and colorbar so fixed map
+    aspect ratios cannot collapse the four-panel layout.
+
     Args:
         mapped_station_scores: Dimensionless station scores with point geometry.
         metric_configs: One or four column, label, colormap, and color-limit settings.
@@ -1044,19 +1047,27 @@ def _draw_score_maps(
     stations: gpd.GeoDataFrame = mapped_station_scores.to_crs("EPSG:3857")
     region: gpd.GeoDataFrame = region_geom.to_crs("EPSG:3857")
     multiple: bool = len(metric_configs) == 4
-    figure: plt.Figure
-    axes: np.ndarray
-    figure, axes = plt.subplots(
+    figure: plt.Figure = plt.figure(figsize=(15, 12) if multiple else (10, 9))
+    grid: GridSpec = figure.add_gridspec(
         2 if multiple else 1,
         2 if multiple else 1,
-        figsize=(15, 12) if multiple else (10, 9),
-        squeeze=False,
-        layout="constrained",
+        left=0.03,
+        right=0.94,
+        bottom=0.03,
+        top=0.95,
+        wspace=0.25,
+        hspace=0.12,
     )
     axis: plt.Axes
     config: dict[str, object]
+    panel_index: int
     try:
-        for axis, config in zip(axes.flat, metric_configs, strict=True):
+        for panel_index, config in enumerate(metric_configs):
+            panel_grid: GridSpecFromSubplotSpec = grid[panel_index].subgridspec(
+                1, 2, width_ratios=(1, 0.035), wspace=0.04
+            )
+            axis = figure.add_subplot(panel_grid[0, 0])
+            colorbar_axis: plt.Axes = figure.add_subplot(panel_grid[0, 1])
             values: pd.Series = pd.to_numeric(
                 stations[str(config["col"])], errors="coerce"
             )
@@ -1107,19 +1118,38 @@ def _draw_score_maps(
             )
             colorbar: Colorbar = figure.colorbar(
                 plt.cm.ScalarMappable(norm=norm, cmap=cmap),
-                ax=axis,
-                fraction=0.03,
-                pad=0.02,
-                aspect=30,
+                cax=colorbar_axis,
             )
             colorbar.set_label(str(config["label"]), fontsize=10)
             axis.tick_params(
                 labelbottom=False, labelleft=False, bottom=False, left=False
             )
             if multiple:
-                axis.set_title(str(config["label"]), fontweight="bold")
+                # Automatic title positioning can become infinite on basemap axes,
+                # which also makes tight export cropping omit entire map panels.
+                axis.set_title(str(config["label"]), fontweight="bold", y=1.02)
+                axis.text(
+                    0.01,
+                    0.99,
+                    f"{chr(ord('a') + panel_index)})",
+                    transform=axis.transAxes,
+                    va="top",
+                    fontweight="bold",
+                    bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.8},
+                    zorder=6,
+                )
+            # Match the colorbar height to the map after enforcing its aspect ratio.
+            figure.canvas.draw()
+            colorbar_axis.set_position(
+                [
+                    colorbar_axis.get_position().x0,
+                    axis.get_position().y0,
+                    colorbar_axis.get_position().width,
+                    axis.get_position().height,
+                ]
+            )
         # All panels share an extent, so one scale bar is sufficient.
-        _add_map_scale_bar(axes.flat[-1])
+        _add_map_scale_bar(axis)
         extension: str
         for extension in ("svg", "png"):
             figure.savefig(f"{output_path}.{extension}", bbox_inches="tight", dpi=300)
@@ -1216,7 +1246,9 @@ def plot_skill_score_boxplots(
     """Plot score, seasonal, or external-model violin/boxplots with one layout.
 
     Box statistics use all finite scores; violin densities use only the visible
-    score range. Empty panels are skipped, and figures are closed after use.
+    score range. GEB-only panels omit group labels; comparison panels retain them.
+    A shared legend identifies the best-possible score reference lines.
+    Empty panels are skipped, and figures are closed after use.
 
     Args:
         panels: Metric name, title, and station-by-group table per panel.
@@ -1338,10 +1370,27 @@ def plot_skill_score_boxplots(
                 yticks=np.linspace(*limits, 5),
             )
             axis.tick_params(labelsize=8)
+            if list(group_scores.columns) == ["GEB"]:
+                axis.set_xticks([])
             axis.spines[["top", "right", "bottom"]].set_visible(False)
             axis.grid(axis="y", color="0.88", linewidth=0.6)
             axis.set_axisbelow(True)
-        figure.tight_layout()
+        figure.legend(
+            handles=[
+                Line2D(
+                    [],
+                    [],
+                    color=LINE_COLOR,
+                    linewidth=LINE_WIDTH,
+                    linestyle="--",
+                    label="Best-possible value (1; RRMSE: 0)",
+                )
+            ],
+            loc="lower center",
+            fontsize=9,
+            frameon=True,
+        )
+        figure.tight_layout(rect=(0, 0.06, 1, 1))
         if export:
             output_path.parent.mkdir(parents=True, exist_ok=True)
             extension: str

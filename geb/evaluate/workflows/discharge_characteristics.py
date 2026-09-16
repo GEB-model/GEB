@@ -176,6 +176,9 @@ def analyze_discharge_characteristics(
 ) -> None:
     """Load attributes, calculate associations, and draw the three figures.
 
+    Analysis and plotting require more than 100 evaluated stations matched to
+    GRDC-Caravan attributes.
+
     Args:
         station_scores: Filtered station scores; upstream area is in m².
         output_folder: Directory for the association CSV and figures.
@@ -186,7 +189,7 @@ def analyze_discharge_characteristics(
             GRDC-Caravan from the cached GEB data catalog.
 
     Returns:
-        None. Logs and skips stations without attribute matches.
+        None. Logs and skips analysis when 100 or fewer stations match.
 
     Raises:
         ValueError: If required columns are missing or gauge IDs are duplicated.
@@ -197,20 +200,22 @@ def analyze_discharge_characteristics(
     enriched_scores: pd.DataFrame = enrich_discharge_evaluation(
         station_scores, catchment_attributes
     )
-    if export:
-        output_folder.mkdir(parents=True, exist_ok=True)
     matched_station_count: int = int(enriched_scores["grdc_caravan_matched"].sum())
     logger.info(
         "Matched %d/%d evaluated stations to GRDC-Caravan attributes.",
         matched_station_count,
         len(enriched_scores),
     )
-    if matched_station_count == 0:
-        logger.warning(
-            "No discharge evaluation stations match GRDC-Caravan after "
-            "upstream-area filtering. Skipping discharge characteristic plots."
+    if matched_station_count <= 100:
+        logger.info(
+            "Skipping discharge characteristic analysis and plots: more than "
+            "100 matched GRDC-Caravan stations are required (found %d).",
+            matched_station_count,
         )
         return
+
+    if export:
+        output_folder.mkdir(parents=True, exist_ok=True)
 
     station_analysis_table: pd.DataFrame = prepare_kge_characteristic_analysis(
         enriched_scores
