@@ -136,12 +136,13 @@ class Observations(BuildModelBase):
         routing_upstream_area: xr.DataArray = self.grid[
             "routing/upstream_area_m2"
         ].compute()  # we need to use this one many times, so we compute it once
+        # Load once to avoid decompressing the same raster chunks for every station.
         original_subgrid_upstream_area: xr.DataArray = self.other[
             "drainage/original_d8_upstream_area_m2"
-        ]
+        ].compute()
         original_subgrid_river_ids: xr.DataArray = self.other[
             "drainage/original_river_ids"
-        ]
+        ].compute()
         routing_river_ids: xr.DataArray = self.grid["routing/river_ids"].compute()
         routing_pixels_by_river_id: dict[int, tuple[np.ndarray, ...]] = (
             group_routing_pixels(routing_river_ids)
