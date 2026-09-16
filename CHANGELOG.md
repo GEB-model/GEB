@@ -1,14 +1,13 @@
 # dev
-- Group discharge time-series, return-period, and score-comparison plotting in discharge_plots; organize dashboard helpers by purpose and share water-balance axis formatting. Preserve CLI options, statistical calculations, and output filenames.
-- Simplify discharge-characteristic analysis by grouping data loading and preparation, reusing data plotting functions, and saving figures in one place. Statistics, bootstrap settings, display units, and output figures stay the same. No changes to input files or configuration are needed.
-- Outflow discharge plots are now optional to reduce # files on disk. To include them, use `hydrology.plot_discharge --include-outflow-plots true` 
-- Move discharge metric calculations and output column names into discharge_metrics. Load dashboard catchment attributes with the other catchment attribute functions.
-- Clarify names throughout discharge evaluation, distinguish plotting commands from figure helpers, and share observation loading and score-column definitions. Existing CLI command names remain unchanged.
-- Move the dashboard JavaScript files to workflows/assets/discharge_dashboard.
-- Snap GRDC gauges to an original-resolution river pixel within 1.5 km and ±10% upstream area. Exclude failed matches and duplicate observations; warn when routing and original areas differ by more than 10%.
-- Show every GRDC gauge, exclusion reason, and MERIT river ID on the dashboard. Aggregate hourly simulations into local calendar days using fixed GRDC UTC offsets.
-
-- Added optional GRDC-Caravan catchment characteristics and made the minimum river slope configurable.
+- Major re-organization of the hydrological evaluation code. This considerably shortened `evaluate/hydrology.py`, and all of its former contents are now distributed in various workflow scripts. 
+- Changed discharge skill score calculation, from package-calculated skill scores to the raw skill score formulas.
+- Added the calculation of seasonal discharge metrics
+- Improved how GRDC stations are matched (in `build/workflows/discharge_snapping.py`) 
+- Implemented a GRDC timezone correction, as GRDC data represents the local timezone. 
+- Integrated GRDC-Caravan dataset to get more insight into the relationship between catchment properties and skill score. 
+- The discharge dashboard is considerably improved. For example, a) it now shows stations NOT included in the hydrological evaluation, including the exclusion reason b) it visualizes the discharge station snapping procedure and c) it shows the GRDC caravan catchment attributes.
+- River slope is now configurable using `minimum_river_slope_m_per_m`.
+- Added an option to create a data package for scientific publication, which can be uploaded at Zenodo (includes station metadata, raw simulaton files and skill scores) 
 - Implemented the `early_warning.py` module outside of `households.py`, launching the latest GEB-IbF system, including options for: area and building based warnings; warning communication weighted by socio-economic factor; time-dependent damage reduction.
 - Users need to run `setup_warning_communication_weights` to enable the warning communication efficiency based on socioeconomic factors.
 - Parameterization of settings in the `model.yml`. Increased overall efficiency and usability of the early warning system.

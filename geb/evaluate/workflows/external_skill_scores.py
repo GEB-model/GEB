@@ -1,8 +1,6 @@
-"""Load external discharge scores and align them with GEB stations.
+"""Load external discharge scores, align them with GEB stations and export the matched skill scores.
 
-The export command selects external scores for known GEB stations.
-The plotting workflow filters GEB stations by upstream area before matching, so each
-GEB score is compared with an external score for the same station.
+The export function selects external scores for known GEB stations.
 """
 
 import logging
