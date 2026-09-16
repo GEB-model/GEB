@@ -11,7 +11,7 @@
   var popup = null;
   var markerStyles = [
     ['1', 'Original gauge', '#BE123C', '50%'],
-    ['2', 'Selected original pixel', '#92400E', '3px'],
+    ['2', 'Selected original subgrid pixel', '#92400E', '3px'],
     ['3', 'Snapped model cell', '#1D4ED8', '0']
   ];
   var control = L.control({position: 'bottomright'});
@@ -20,7 +20,7 @@
     box.style.display = 'none';
     box.innerHTML = '<b>Station snapping: 1 → 2 → 3</b>' +
       '<div><i style="background:#BE123C;border-radius:50%">1</i> Original gauge (observations)</div>' +
-      '<div><i style="background:#92400E;border-radius:3px">2</i> Selected original pixel</div>' +
+      '<div><i style="background:#92400E;border-radius:3px">2</i> Selected original subgrid pixel</div>' +
       '<div><i style="background:#1D4ED8">3</i> Snapped model-cell centre (simulation)</div>' +
       '<small>Overview dots: green = PASS, orange = area warning, red = excluded.<br>' +
       'Click a dot for its three snapping steps, or zoom in.<br>' +

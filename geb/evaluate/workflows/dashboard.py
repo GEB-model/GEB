@@ -269,10 +269,12 @@ def create_discharge_dashboard(
         )
     if not mapped_station_scores.empty and (
         "snapping_method" not in mapped_station_scores.columns
-        or not (mapped_station_scores["snapping_method"] == "original_pixel_v1").all()
+        or not (
+            mapped_station_scores["snapping_method"] == "original_subgrid_pixel_v1"
+        ).all()
     ):
         raise ValueError(
-            "Saved discharge metrics predate original-pixel snapping. Rebuild hydrography "
+            "Saved discharge metrics predate original-subgrid-pixel snapping. Rebuild hydrography "
             "and discharge observations, rerun station discharge reporting and "
             "hydrology.evaluate_discharge before creating the dashboard."
         )
@@ -512,14 +514,14 @@ def write_discharge_dashboard(
     popup_width: int = 800
     station_marker_index: list[StationMarkerIndex] = []
     snapping_qc_layer: folium.FeatureGroup = folium.FeatureGroup(
-        name="Station snapping QC (gauge → original pixel → routing grid)",
+        name="Station snapping QC (gauge → original subgrid pixel → routing grid)",
         show=False,
     )
     snapping_columns: set[str] = {
         "station_longitude",
         "station_latitude",
-        "snapped_grid_longitude",
-        "snapped_grid_latitude",
+        "routing_grid_longitude",
+        "routing_grid_latitude",
         "original_subgrid_longitude",
         "original_subgrid_latitude",
         "upstream_area_GRDC",
@@ -1703,8 +1705,8 @@ def _build_snapping_qc_station(
         for column in (
             "original_subgrid_longitude",
             "original_subgrid_latitude",
-            "snapped_grid_longitude",
-            "snapped_grid_latitude",
+            "routing_grid_longitude",
+            "routing_grid_latitude",
         )
     ):
         reason: str = html.escape(
@@ -1726,11 +1728,11 @@ def _build_snapping_qc_station(
         }
     original_subgrid_longitude: float = float(row["original_subgrid_longitude"])
     original_subgrid_latitude: float = float(row["original_subgrid_latitude"])
-    routing_longitude: float = float(row["snapped_grid_longitude"])
-    routing_latitude: float = float(row["snapped_grid_latitude"])
+    routing_longitude: float = float(row["routing_grid_longitude"])
+    routing_latitude: float = float(row["routing_grid_latitude"])
     grdc_area_km2: float = float(row["upstream_area_GRDC"]) / 1_000_000.0
     routing_area_km2: float = float(row["upstream_area_GEB"]) / 1_000_000.0
-    original_area_km2: float = (
+    original_subgrid_area_km2: float = (
         float(row["upstream_area_GEB_original_subgrid"]) / 1_000_000.0
     )
     station_to_routing_distance_km: float = _haversine_distance_km(
@@ -1739,10 +1741,10 @@ def _build_snapping_qc_station(
         routing_longitude,
         routing_latitude,
     )
-    station_to_original_distance_km: float = (
-        float(row["station_to_original_distance_m"]) / 1000.0
+    station_to_original_subgrid_distance_km: float = (
+        float(row["station_to_original_subgrid_distance_m"]) / 1000.0
     )
-    original_to_routing_distance_km: float = _haversine_distance_km(
+    original_subgrid_to_routing_distance_km: float = _haversine_distance_km(
         original_subgrid_longitude,
         original_subgrid_latitude,
         routing_longitude,
@@ -1751,14 +1753,16 @@ def _build_snapping_qc_station(
     grdc_routing_area_ratio: float = (
         grdc_area_km2 / routing_area_km2 if routing_area_km2 > 0 else float("nan")
     )
-    original_grdc_area_ratio: float = (
-        original_area_km2 / grdc_area_km2 if grdc_area_km2 > 0 else float("nan")
+    original_subgrid_grdc_area_ratio: float = (
+        original_subgrid_area_km2 / grdc_area_km2 if grdc_area_km2 > 0 else float("nan")
     )
-    routing_original_area_ratio: float = (
-        routing_area_km2 / original_area_km2 if original_area_km2 > 0 else float("nan")
+    routing_original_subgrid_area_ratio: float = (
+        routing_area_km2 / original_subgrid_area_km2
+        if original_subgrid_area_km2 > 0
+        else float("nan")
     )
     timezone_label: str = format_fixed_utc_offset(float(row["timezone_utc_offset"]))
-    area_warning: bool = not 0.9 <= routing_original_area_ratio <= 1.1
+    area_warning: bool = not 0.9 <= routing_original_subgrid_area_ratio <= 1.1
     status_label: str = "ROUTING AREA WARNING" if area_warning else "PASS"
     status_color: str = "#EA580C" if area_warning else "#16A34A"
     exclusion_reason: str = (
@@ -1779,13 +1783,13 @@ def _build_snapping_qc_station(
         f"Routing pixel: {routing_latitude:.5f}, {routing_longitude:.5f}<br>"
         f"River ID: {int(row['snapped_river_id'])}<br>"
         f"Gauge–routing distance: {station_to_routing_distance_km:.2f} km<br>"
-        f"Gauge–original distance: {station_to_original_distance_km:.3f} km<br>"
-        f"Original–routing distance: {original_to_routing_distance_km:.3f} km<br>"
+        f"Gauge–original subgrid distance: {station_to_original_subgrid_distance_km:.3f} km<br>"
+        f"Original subgrid–routing distance: {original_subgrid_to_routing_distance_km:.3f} km<br>"
         f"GRDC area: {grdc_area_km2:,.1f} km²<br>"
-        f"Original area: {original_area_km2:,.1f} km²<br>"
+        f"Original subgrid area: {original_subgrid_area_km2:,.1f} km²<br>"
         f"Routing area: {routing_area_km2:,.1f} km²<br>"
-        f"Original/GRDC area ratio: {original_grdc_area_ratio:.3f}<br>"
-        f"Routing/original area ratio: {routing_original_area_ratio:.3f}<br>"
+        f"Original subgrid/GRDC area ratio: {original_subgrid_grdc_area_ratio:.3f}<br>"
+        f"Routing/original subgrid area ratio: {routing_original_subgrid_area_ratio:.3f}<br>"
         f"GRDC/routing area ratio: {grdc_routing_area_ratio:.3f}<br>"
         f"Daily aggregation offset: {timezone_label} (fixed; no DST)<br>"
         "Observation day: local midnight to midnight<br>"
@@ -1793,8 +1797,8 @@ def _build_snapping_qc_station(
     )
     tooltip: str = (
         f"{escaped_id}: {escaped_name}<br>Snapping QC: {status_label}"
-        f"<br>Original/GRDC area: {original_grdc_area_ratio:.3f}; "
-        f"routing/original: {routing_original_area_ratio:.3f}"
+        f"<br>Original subgrid/GRDC area: {original_subgrid_grdc_area_ratio:.3f}; "
+        f"routing/original subgrid: {routing_original_subgrid_area_ratio:.3f}"
         f"<br>Gauge–routing: {station_to_routing_distance_km:.2f} km"
         f"<br>{timezone_label} fixed"
         "<br>Daily window: local midnight to midnight"

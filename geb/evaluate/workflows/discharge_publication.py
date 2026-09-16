@@ -216,8 +216,8 @@ def create_discharge_publication_package(
                 "snapping metadata. Rerun the simulation and discharge evaluation."
             )
     location_columns: list[str] = [
-        "snapped_grid_longitude",
-        "snapped_grid_latitude",
+        "routing_grid_longitude",
+        "routing_grid_latitude",
         "upstream_area_GEB",
     ]
     if not set(location_columns).issubset(station_scores.columns):

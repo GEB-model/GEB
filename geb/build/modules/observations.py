@@ -120,7 +120,7 @@ class Observations(BuildModelBase):
     ) -> None:
         """Prepare and snap discharge observations.
 
-        Stations are matched to an original-resolution river pixel using distance, upstream
+        Stations are matched to an original subgrid river pixel using distance, upstream
         area, and river ID. The matching routing pixel has the same river ID.
 
         Args:
@@ -136,10 +136,12 @@ class Observations(BuildModelBase):
         routing_upstream_area: xr.DataArray = self.grid[
             "routing/upstream_area_m2"
         ].compute()  # we need to use this one many times, so we compute it once
-        original_upstream_area: xr.DataArray = self.other[
+        original_subgrid_upstream_area: xr.DataArray = self.other[
             "drainage/original_d8_upstream_area_m2"
         ]
-        original_river_ids: xr.DataArray = self.other["drainage/original_river_ids"]
+        original_subgrid_river_ids: xr.DataArray = self.other[
+            "drainage/original_river_ids"
+        ]
         routing_river_ids: xr.DataArray = self.grid["routing/river_ids"].compute()
         routing_pixels_by_river_id: dict[int, tuple[np.ndarray, ...]] = (
             group_routing_pixels(routing_river_ids)
@@ -349,19 +351,19 @@ class Observations(BuildModelBase):
             "discharge_observations_country_code",
             "discharge_observations_upstream_area_m2",
             "discharge_observations_station_coords",
-            "original_pixel_lonlat",
+            "original_subgrid_pixel_lonlat",
             "snapped_grid_pixel_lonlat",
             "snapped_grid_pixel_xy",
-            "GEB_upstream_area_from_original",
+            "GEB_upstream_area_from_original_subgrid",
             "GEB_upstream_area_from_grid",
             "discharge_observations_to_GEB_upstream_area_ratio",
-            "station_to_original_distance_m",
+            "station_to_original_subgrid_distance_m",
             "snapped_river_id",
             "snapping_method",
             "timezone_utc_offset",
         ]
 
-        # Snap stations directly to original-resolution river pixels.
+        # Snap stations directly to original subgrid river pixels.
         discharge_snapping_results: list[dict[str, Any]] = []
 
         for _, station_row in tqdm(obs_metadata.iterrows(), total=len(obs_metadata)):
@@ -385,15 +387,15 @@ class Observations(BuildModelBase):
                     if station_source.startswith("custom:")
                     else station_upstream_area_m2
                 ),
-                original_upstream_area=original_upstream_area,
-                original_river_ids=original_river_ids,
+                original_subgrid_upstream_area=original_subgrid_upstream_area,
+                original_subgrid_river_ids=original_subgrid_river_ids,
                 routing_upstream_area=routing_upstream_area,
                 routing_pixels_by_river_id=routing_pixels_by_river_id,
             )
 
             if snap_results is None:
                 self.logger.warning(
-                    "No valid original river pixel found for station %s. Skipping station.",
+                    "No valid original subgrid river pixel found for station %s. Skipping station.",
                     station_name,
                 )
                 continue
@@ -409,21 +411,21 @@ class Observations(BuildModelBase):
                     ),
                     "discharge_observations_upstream_area_m2": station_upstream_area_m2,
                     "discharge_observations_station_coords": station_lonlat,
-                    "original_pixel_lonlat": snap_results.original_pixel_lonlat,
+                    "original_subgrid_pixel_lonlat": snap_results.original_subgrid_pixel_lonlat,
                     "snapped_grid_pixel_lonlat": snap_results.routing_pixel_lonlat,
                     "snapped_grid_pixel_xy": snap_results.routing_pixel_xy,
-                    "GEB_upstream_area_from_original": snap_results.original_upstream_area_m2,
+                    "GEB_upstream_area_from_original_subgrid": snap_results.original_subgrid_upstream_area_m2,
                     "GEB_upstream_area_from_grid": snap_results.routing_upstream_area_m2,
                     "discharge_observations_to_GEB_upstream_area_ratio": (
                         station_upstream_area_m2 / snap_results.routing_upstream_area_m2
                         if np.isfinite(station_upstream_area_m2)
                         else 1.0
                     ),
-                    "station_to_original_distance_m": (
-                        snap_results.station_to_original_distance_m
+                    "station_to_original_subgrid_distance_m": (
+                        snap_results.station_to_original_subgrid_distance_m
                     ),
                     "snapped_river_id": snap_results.river_id,
-                    "snapping_method": "original_pixel_v1",
+                    "snapping_method": "original_subgrid_pixel_v1",
                     "timezone_utc_offset": float(station_row["timezone_utc_offset"]),
                 }
             )
@@ -434,7 +436,7 @@ class Observations(BuildModelBase):
                     output_folder=discharge_snapping_folder,
                     station_lonlat=station_lonlat,
                     snapping_result=snap_results,
-                    original_upstream_area=original_upstream_area,
+                    original_subgrid_upstream_area=original_subgrid_upstream_area,
                 )
 
         self.logger.info("Discharge snapping done for all stations")

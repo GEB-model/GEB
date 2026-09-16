@@ -1,7 +1,7 @@
-"""Expose hydrology evaluation commands and their output folders.
+"""Coordinates the hydrology evaluation workflow modules.
 
-Workflow modules own data loading, calculations, dashboards, and plots. This class
-binds those implementations to the existing ``geb evaluate hydrology.*`` commands.
+Workflow modules do the data loading, calculations, dashboards, and plots. Those modules use the hydrology class so
+they can be run using the existing ``geb evaluate hydrology.*`` commands (e.g. ``geb evaluate hydrology.create_discharge_dashboard``).
 """
 
 from functools import partialmethod

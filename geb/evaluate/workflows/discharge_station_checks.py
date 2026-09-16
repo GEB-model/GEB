@@ -14,7 +14,7 @@ GEOD: Geod = Geod(ellps="WGS84")
 DASHBOARD_COLUMNS: dict[str, str] = {
     "discharge_observations_station_name": "station_name",
     "discharge_observations_upstream_area_m2": "upstream_area_GRDC",
-    "GEB_upstream_area_from_original": "upstream_area_GEB_original",
+    "GEB_upstream_area_from_original_subgrid": "upstream_area_GEB_original_subgrid",
     "GEB_upstream_area_from_grid": "upstream_area_GEB",
 }
 
@@ -35,23 +35,29 @@ def get_station_exclusion_reason(
         Exclusion reason. Empty means the distance and report checks pass.
 
     """
-    original_area: float = float(station["GEB_upstream_area_from_original"])
+    original_subgrid_area: float = float(
+        station["GEB_upstream_area_from_original_subgrid"]
+    )
     routing_area: float = float(station["GEB_upstream_area_from_grid"])
     if (
-        not np.isfinite(original_area)
-        or original_area <= 0
+        not np.isfinite(original_subgrid_area)
+        or original_subgrid_area <= 0
         or not np.isfinite(routing_area)
         or routing_area <= 0
     ):
         return "Missing upstream area."
-    original_pixel: np.ndarray = np.asarray(station["original_pixel_lonlat"])
+    original_subgrid_pixel: np.ndarray = np.asarray(
+        station["original_subgrid_pixel_lonlat"]
+    )
     routing_pixel: np.ndarray = np.asarray(station["snapped_grid_pixel_lonlat"])
-    original_to_routing_distance_m: float = GEOD.inv(*original_pixel, *routing_pixel)[2]
+    original_subgrid_to_routing_distance_m: float = GEOD.inv(
+        *original_subgrid_pixel, *routing_pixel
+    )[2]
     if (
-        not np.isfinite(original_to_routing_distance_m)
-        or round(original_to_routing_distance_m, 6) > 1500
+        not np.isfinite(original_subgrid_to_routing_distance_m)
+        or round(original_subgrid_to_routing_distance_m, 6) > 1500
     ):
-        return "Routing pixel is more than 1.5 km from the original pixel."
+        return "Routing pixel is more than 1.5 km from the original subgrid pixel."
     if not report_path.exists():
         return "No simulated discharge report."
     metadata: dict[bytes, bytes] = pq.read_schema(report_path).metadata or {}
@@ -130,14 +136,14 @@ def find_excluded_stations(
     excluded["exclusion_reason"] = reasons
     for target, source in (
         ("station", "discharge_observations_station_coords"),
-        ("original", "original_pixel_lonlat"),
-        ("snapped_grid", "snapped_grid_pixel_lonlat"),
+        ("original_subgrid", "original_subgrid_pixel_lonlat"),
+        ("routing_grid", "snapped_grid_pixel_lonlat"),
     ):
         excluded[[f"{target}_longitude", f"{target}_latitude"]] = np.asarray(
             rejected[source].tolist()
         )
     for column in (
-        "station_to_original_distance_m",
+        "station_to_original_subgrid_distance_m",
         "snapped_river_id",
         "snapping_method",
         "timezone_utc_offset",

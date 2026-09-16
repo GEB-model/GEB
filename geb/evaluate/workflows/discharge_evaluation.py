@@ -170,7 +170,9 @@ def evaluate_discharge(
     )
     if (
         "snapping_method" not in snapped_locations.columns
-        or not (snapped_locations["snapping_method"] == "original_pixel_v1").all()
+        or not (
+            snapped_locations["snapping_method"] == "original_subgrid_pixel_v1"
+        ).all()
     ):
         raise ValueError(
             "Discharge snaps use an older method. Re-run setup_hydrography and "
@@ -244,11 +246,11 @@ def evaluate_discharge(
             station_coordinates: tuple[float, float] = (
                 station_metadata.discharge_observations_station_coords
             )
-            snapped_grid_coordinates: tuple[float, float] = tuple(
+            routing_grid_coordinates: tuple[float, float] = tuple(
                 station_metadata.snapped_grid_pixel_lonlat
             )
-            original_pixel_coordinates: tuple[float, float] = tuple(
-                station_metadata.original_pixel_lonlat
+            original_subgrid_pixel_coordinates: tuple[float, float] = tuple(
+                station_metadata.original_subgrid_pixel_lonlat
             )
             upstream_area_ratio: float = float(
                 station_metadata.discharge_observations_to_GEB_upstream_area_ratio
@@ -329,23 +331,23 @@ def evaluate_discharge(
                 "station_name": station_name,
                 "station_longitude": station_coordinates[0],
                 "station_latitude": station_coordinates[1],
-                "snapped_grid_longitude": snapped_grid_coordinates[0],
-                "snapped_grid_latitude": snapped_grid_coordinates[1],
-                "original_subgrid_longitude": original_pixel_coordinates[0],
-                "original_subgrid_latitude": original_pixel_coordinates[1],
+                "routing_grid_longitude": routing_grid_coordinates[0],
+                "routing_grid_latitude": routing_grid_coordinates[1],
+                "original_subgrid_longitude": original_subgrid_pixel_coordinates[0],
+                "original_subgrid_latitude": original_subgrid_pixel_coordinates[1],
                 "upstream_area_GRDC": float(
                     station_metadata.discharge_observations_upstream_area_m2
                 ),
                 "upstream_area_GEB_original_subgrid": float(
-                    station_metadata.GEB_upstream_area_from_original
+                    station_metadata.GEB_upstream_area_from_original_subgrid
                 ),
+                "upstream_area_GEB": geb_upstream_area_m2,
+                "discharge_observations_to_GEB_upstream_area_ratio": upstream_area_ratio,
                 "station_to_original_subgrid_distance_m": float(
-                    station_metadata.station_to_original_distance_m
+                    station_metadata.station_to_original_subgrid_distance_m
                 ),
                 "snapped_river_id": int(station_metadata.snapped_river_id),
                 "snapping_method": station_metadata.snapping_method,
-                "discharge_observations_to_GEB_upstream_area_ratio": upstream_area_ratio,
-                "upstream_area_GEB": geb_upstream_area_m2,
                 "timezone_utc_offset": timezone_utc_offset,
                 "discharge_observations_country_code": station_metadata.get(
                     "discharge_observations_country_code", ""
@@ -415,8 +417,19 @@ def evaluate_discharge(
                 "station_name",
                 "station_longitude",
                 "station_latitude",
+                "routing_grid_longitude",
+                "routing_grid_latitude",
+                "original_subgrid_longitude",
+                "original_subgrid_latitude",
+                "upstream_area_GRDC",
+                "upstream_area_GEB_original_subgrid",
                 "upstream_area_GEB",
                 "discharge_observations_to_GEB_upstream_area_ratio",
+                "station_to_original_subgrid_distance_m",
+                "snapped_river_id",
+                "snapping_method",
+                "timezone_utc_offset",
+                "discharge_observations_country_code",
                 *DISCHARGE_SCORE_COLUMNS,
             ],
             index=pd.Index([], name="station_ID"),
