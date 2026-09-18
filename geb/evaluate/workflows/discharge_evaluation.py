@@ -35,7 +35,7 @@ from geb.evaluate.workflows.discharge_metrics import (
     use_daily_discharge_scores,
 )
 from geb.evaluate.workflows.discharge_station_checks import (
-    collect_dashboard_exclusions,
+    find_dashboard_excluded_stations,
     find_excluded_stations,
 )
 from geb.workflows.io import read_geom
@@ -50,7 +50,7 @@ def evaluate_discharge(
     include_yearly_plots: bool = True,
     correct_discharge_observations: bool = False,
     create_plots: bool = True,
-    include_return_period_plots: bool = False,
+    include_return_period_plots: bool = True,
     minimum_upstream_area_km2: float | None = None,
     minimum_timeseries_length_years: float | None = None,
     start_year: int | None = None,
@@ -80,12 +80,11 @@ def evaluate_discharge(
             existing run directory in the model output folder.
         include_yearly_plots: Whether to save one discharge PNG per station
             and calendar year when `include_timeseries_plots` is True.
-        correct_discharge_observations: Whether to multiply simulated discharge by the GRDC upstream
+        correct_discharge_observations: Whether to multiply simulated discharge by the station upstream
             area divided by the low-resolution GEB routing upstream area.
         create_plots: Whether to create evaluation plots. Set to False to only calculate the evaluation metrics and save the results without plotting.
         include_return_period_plots: Whether to fit extreme-value models and
-            create station and dashboard return-period plots. Defaults to `False`
-            because these plots are expensive for large station collections.
+            create station and dashboard return-period plots. Defaults to `True`.
         minimum_upstream_area_km2: Optional minimum modeled upstream area threshold for station evaluation (km2).
             If omitted, `hydrology.evaluation.discharge.minimum_upstream_area_km2` is used.
         minimum_timeseries_length_years: Optional minimum paired observation-simulation timeseries length for station evaluation (years).
@@ -162,7 +161,7 @@ def evaluate_discharge(
         raise ValueError("Minimum record length must be finite and non-negative.")
 
     observations_by_frequency: dict[str, pd.DataFrame] = (
-        discharge_helpers.load_discharge_observations(self)
+        discharge_helpers.load_discharge_observations(self.model.files["table"])
     )
 
     snapped_locations: gpd.GeoDataFrame = read_geom(
@@ -321,6 +320,7 @@ def evaluate_discharge(
                             timezone_utc_offset=timezone_utc_offset,
                             metrics=station_metrics,
                             frequency=frequency_label,
+                            logger=self.model.logger,
                             include_return_period_plots=include_return_period_plots,
                         ),
                     )
@@ -488,7 +488,7 @@ def evaluate_discharge(
         geometry="geometry",
         crs=station_scores_with_geometry.crs,
     )
-    excluded_stations = collect_dashboard_exclusions(
+    excluded_stations = find_dashboard_excluded_stations(
         dashboard_station_scores,
         excluded_stations,
         snapped_locations,
@@ -505,7 +505,7 @@ def evaluate_discharge(
     )
     if create_plots:
         dashboard_geometries: DischargeDashboardGeometries = (
-            load_discharge_dashboard_geometries(self.model)
+            load_discharge_dashboard_geometries(self.model.files["geom"])
         )
         use_daily_discharge_scores(dashboard_station_scores)
         dashboard_characteristics: pd.DataFrame | None = (

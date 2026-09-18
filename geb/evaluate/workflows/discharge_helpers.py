@@ -20,9 +20,6 @@ DISCHARGE_OBSERVATION_FREQUENCIES: dict[str, str] = {
 }
 
 
-# Evaluation output paths
-
-
 class DischargeEvaluationPaths(NamedTuple):
     """Output paths for one discharge evaluation period."""
 
@@ -68,9 +65,6 @@ def _get_discharge_evaluation_paths(
         metrics_excel=output_folder / f"evaluation_metrics{suffix}.xlsx",
         metrics_geoparquet=output_folder / f"evaluation_metrics{suffix}.geoparquet",
     )
-
-
-# River discharge
 
 
 def get_discharge_per_river(
@@ -124,14 +118,13 @@ def get_discharge_per_river(
     return rivers_of_interest, discharge
 
 
-# Station observations and simulation alignment
-
-
-def load_discharge_observations(self: Hydrology) -> dict[str, pd.DataFrame]:
+def load_discharge_observations(
+    table_files: dict[str, Path],
+) -> dict[str, pd.DataFrame]:
     """Read station discharge observations on regular hourly and daily indices.
 
     Args:
-        self: Hydrology evaluator providing observation file paths.
+        table_files: Model table file paths keyed by dataset name.
 
     Returns:
         Observation tables (m³/s) keyed by frequency, with station ID columns.
@@ -139,7 +132,7 @@ def load_discharge_observations(self: Hydrology) -> dict[str, pd.DataFrame]:
     observations_by_frequency: dict[str, pd.DataFrame] = {}
     for frequency, timestep in DISCHARGE_OBSERVATION_FREQUENCIES.items():
         observations: pd.DataFrame = read_table(
-            self.model.files["table"][f"discharge/discharge_observations_{frequency}"]
+            table_files[f"discharge/discharge_observations_{frequency}"]
         )
         observations_by_frequency[frequency] = (
             observations.asfreq(timestep) if not observations.empty else observations
@@ -153,7 +146,7 @@ def load_station_discharge_comparison(
     observed_discharge: pd.Series,
     apply_upstream_area_correction: bool,
     upstream_area_ratio: float,
-    timezone_utc_offset: float = 0.0,
+    timezone_utc_offset: float,
 ) -> pd.DataFrame:
     """Align observed and simulated discharge for one gauging station.
 
@@ -164,13 +157,14 @@ def load_station_discharge_comparison(
         apply_upstream_area_correction: Whether to scale simulated discharge to
             the observed station's upstream area.
         upstream_area_ratio: Observed upstream area divided by the modeled
-            upstream area (dimensionless).
+            upstream area (dimensionless). NaN indicates an unknown ratio and
+            uses a correction factor of 1.0, leaving simulated discharge unchanged.
         timezone_utc_offset: Fixed UTC offset for the GRDC station metadata
             (hours). For daily or coarser observations, GEB's hourly UTC
             timestamps are converted to this fixed local offset before
             aggregation. Sub-daily observations are not shifted because their
             timestamp convention is not defined by the GRDC daily product.
-            Defaults to 0 (UTC).
+            Required; the build process sets UTC (0) when no offset is available.
     Returns:
         Aligned observed and simulated discharge (m3/s).
 
@@ -205,9 +199,13 @@ def load_station_discharge_comparison(
         raise ValueError("Simulated discharge must have a regular frequency.")
 
     if apply_upstream_area_correction:
-        if not np.isfinite(upstream_area_ratio) or upstream_area_ratio <= 0:
-            raise ValueError("Upstream area ratio must be finite and positive.")
-        simulated_discharge = simulated_discharge * upstream_area_ratio
+        # Missing area metadata must not imply a measured ratio of one.
+        correction_factor: float = (
+            1.0 if np.isnan(upstream_area_ratio) else upstream_area_ratio
+        )
+        if not np.isfinite(correction_factor) or correction_factor <= 0:
+            raise ValueError("Upstream area ratio must be positive and finite, or NaN.")
+        simulated_discharge = simulated_discharge * correction_factor
 
     observed_index: pd.Index = observed_discharge.index
     if not isinstance(observed_index, pd.DatetimeIndex):

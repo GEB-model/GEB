@@ -69,7 +69,8 @@ class KGEMetric:
 
 # HydroATLAS stores temperature, terrain slope, and human footprint at 10×
 # their display values (BasinATLAS v1 catalogue, C03/P02/A06). Caravan climate
-# frequencies are fractions; percentage of coverage already use percent.
+# event frequencies are fractions (0–1), so multiply by 100 to display percent.
+# Land-cover percentages already use 0–100 and need no conversion.
 # These 32 attributes cover climate, topography, land cover, soils, hydrology,
 # and human influence without pre-selecting variables by model performance.
 SCREENING_CATCHMENT_CHARACTERISTICS: tuple[CatchmentCharacteristic, ...] = (
@@ -165,7 +166,6 @@ LOWESS_COLOR: str = "#01665E"
 LOWESS_INTERVAL_COLOR: str = "#80CDC1"
 
 
-# Analysis and dashboard functions.
 def analyze_discharge_characteristics(
     station_scores: pd.DataFrame,
     output_folder: Path,
@@ -187,14 +187,7 @@ def analyze_discharge_characteristics(
         export: Whether to save files. Figures are closed in either mode.
         catchment_attributes: Attributes keyed by gauge_id, or None to load
             GRDC-Caravan from the cached GEB data catalog.
-
-    Returns:
-        None. Logs and skips analysis when 100 or fewer stations match.
-
-    Raises:
-        ValueError: If required columns are missing or gauge IDs are duplicated.
-        RuntimeError: If GRDC-Caravan attributes cannot be loaded.
-    """  # noqa: DOC202, DOC502
+    """
     if catchment_attributes is None:
         catchment_attributes = DataCatalog(logger=logger).fetch("GRDC_Caravan").read()
     enriched_scores: pd.DataFrame = enrich_discharge_evaluation(
@@ -348,7 +341,6 @@ def load_dashboard_catchment_characteristics(
     return dashboard_table
 
 
-# Station matching, unit conversion, and statistics.
 def enrich_discharge_evaluation(
     station_scores: pd.DataFrame,
     catchment_attributes: pd.DataFrame,
@@ -356,7 +348,7 @@ def enrich_discharge_evaluation(
     """Join attributes by station ID, while keeping unmatched stations.
 
     Args:
-        station_scores: Per-station GEB discharge metrics.
+        station_scores: Station-level GEB discharge metrics.
         catchment_attributes: GRDC-Caravan attributes keyed by ``gauge_id``.
 
     Returns:
@@ -460,10 +452,7 @@ def calculate_kge_component_associations(
         identifies the score column, and ``n`` counts paired stations.
         Correlations and p-values are dimensionless and are NaN when fewer
         than three pairs or fewer than two distinct values are available.
-
-    Raises:
-        KeyError: If a configured catchment attribute or KGE metric is missing.
-    """  # noqa: DOC502
+    """
     catchment_characteristic: CatchmentCharacteristic
     kge_metric: KGEMetric
     correlation_records: list[dict[str, float | int | str]] = []
@@ -501,9 +490,6 @@ def calculate_kge_component_associations(
     return pd.DataFrame(correlation_records)
 
 
-# Skill scores versus upstream area.
-
-
 def plot_skill_scores_vs_upstream_area(
     station_scores: pd.DataFrame,
     output_folder: Path,
@@ -515,9 +501,6 @@ def plot_skill_scores_vs_upstream_area(
         station_scores: Per-station evaluation metrics with `upstream_area_GEB` (m2).
         output_folder: Root folder where the scatterplot is saved.
         logger: Logger to use for progress messages.
-
-    Returns:
-        None. Saves SVG and PNG figures if finite positive areas and scores exist.
 
     Raises:
         ValueError: If `upstream_area_GEB` is missing from the evaluation metrics.
@@ -705,9 +688,6 @@ def plot_skill_scores_vs_upstream_area(
     logger.info("Saved skill score upstream-area scatterplot to: %s", output_path)
 
 
-# Figure layouts.
-
-
 def create_characteristic_correlation_matrix(
     station_analysis_table: pd.DataFrame,
 ) -> plt.Figure:
@@ -718,10 +698,7 @@ def create_characteristic_correlation_matrix(
 
     Returns:
         Lower-triangular heatmap of dimensionless Spearman correlations.
-
-    Raises:
-        KeyError: If a configured catchment attribute column is missing.
-    """  # noqa: DOC502
+    """
     characteristic_columns: list[str] = [
         catchment_characteristic.column
         for catchment_characteristic in SCREENING_CATCHMENT_CHARACTERISTICS
@@ -1073,10 +1050,7 @@ def create_kge_characteristic_scatterplots(
     Returns:
         Figure with four columns showing dimensionless KGE against all 32
         catchment attributes in their documented display units.
-
-    Raises:
-        KeyError: If required catchment, KGE, or association columns are missing.
-    """  # noqa: DOC502
+    """
     axis: plt.Axes
     catchment_characteristic: CatchmentCharacteristic
     panel_index: int
@@ -1194,9 +1168,6 @@ def create_kge_characteristic_scatterplots(
     return figure
 
 
-# Data plotting and LOWESS fitting.
-
-
 def _plot_relationship_panel(
     axis: plt.Axes,
     station_analysis_table: pd.DataFrame,
@@ -1221,10 +1192,7 @@ def _plot_relationship_panel(
 
     Returns:
         Whether enough valid station pairs were available to draw the panel.
-
-    Raises:
-        KeyError: If the characteristic or daily KGE column is missing.
-    """  # noqa: DOC502
+    """
     bootstrap_index: int
     paired_station_values: pd.DataFrame = station_analysis_table[
         [catchment_characteristic.column, "KGE_daily"]

@@ -5,37 +5,7 @@ from typing import Any
 
 import pandas as pd
 
-from geb.workflows.io import read_geom
-
-# Model area
-
-
-def _get_total_model_area_m2(model: Any) -> float:
-    """Derive the total model area used for converting volumes to depths.
-
-    Args:
-        model: Model-like object expected to expose the basin mask geometry.
-
-    Returns:
-        Total model area represented by the evaluation outputs (m2).
-
-    Raises:
-        ValueError: If no positive total area can be derived from the model mask.
-    """
-    files: Any = getattr(model, "files", None)
-    if files is not None:
-        geom_files: Any = files.get("geom") if hasattr(files, "get") else None
-        if geom_files is not None and "mask" in geom_files:
-            total_area_m2: float = float(
-                read_geom(geom_files["mask"]).to_crs("ESRI:54009").area.sum()
-            )
-            if total_area_m2 > 0:
-                return total_area_m2
-
-    raise ValueError("No positive area could be derived from the model mask geometry.")
-
-
-# Report loading
+from geb.workflows.io import read_table
 
 
 def _read_evaluation_series_with_date_index(
@@ -54,15 +24,10 @@ def _read_evaluation_series_with_date_index(
 
     Returns:
         Time-indexed series in the reported units, optionally without its first record.
-
-    Raises:
-        FileNotFoundError: If the requested report file does not exist.
-        KeyError: If the named series is absent from the report file.
-    """  # noqa: DOC502
-    series: pd.Series = pd.read_parquet(
-        (folder / module / name).with_suffix(".parquet"),
-        engine="pyarrow",
-    )[name]
+    """
+    series: pd.Series = read_table((folder / module / name).with_suffix(".parquet"))[
+        name
+    ]
     return series.iloc[1:] if skip_first_day else series
 
 
@@ -239,8 +204,15 @@ def _load_contextual_water_balance_series(folder: Path) -> dict[str, pd.Series]:
         folder: Path to the report folder for one model run.
 
     Returns:
-        Mapping of context series names to their time series.
+        Mapping of context series names to their time series (m3 per timestep),
+        or an empty mapping when potential evapotranspiration was not reported.
     """
+    potential_evapotranspiration_path: Path = (
+        folder / "hydrology.landsurface" / "_potential_evapotranspiration_m.parquet"
+    )
+    if not potential_evapotranspiration_path.is_file():
+        return {}
+
     return _load_named_evaluation_series(
         folder,
         {
@@ -365,9 +337,6 @@ def _load_contextual_top_soil_water_balance_series(
     )
 
 
-# Timestep labels and annual summaries
-
-
 def _get_datetime_index_step_label(time_index: pd.DatetimeIndex) -> str:
     """Infer a compact timestep label from a datetime index.
 
@@ -415,7 +384,6 @@ def _create_yearly_totals_summary_mm(
 
     Returns:
         Dataframe indexed by calendar year with one column per component in mm/year.
-
     """
     annual_totals_m3: pd.DataFrame = water_balance_df_m3_per_timestep.resample(
         "YE"

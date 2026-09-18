@@ -17,7 +17,6 @@ from matplotlib.lines import Line2D
 from geb.evaluate.workflows.water_balance_helpers import (
     _create_yearly_totals_summary_mm,
     _get_datetime_index_step_label,
-    _get_total_model_area_m2,
     _load_contextual_top_soil_water_balance_series,
     _load_contextual_water_balance_series,
     _load_named_evaluation_series,
@@ -47,7 +46,6 @@ mpl.rcParams["savefig.facecolor"] = "white"
 mpl.rcParams["savefig.edgecolor"] = "white"
 
 
-# Water-circle plots
 def plot_water_circle(
     self: Hydrology,
     run_name: str,
@@ -70,7 +68,9 @@ def plot_water_circle(
     Returns:
         A matplotlib Figure object representing the water circle.
     """
-    folder = self.model.output_folder / "report"
+    folder: Path = (
+        Path(self.model.config["general"]["output_folder"]) / run_name / "report"
+    )
 
     # because storage is the storage at the end of the timestep, we need to calculate the change
     # across the entire simulation period. For all other variables we do skip the first day.
@@ -188,7 +188,6 @@ def plot_water_circle(
     return water_circle
 
 
-# Water-balance plots
 def plot_water_balance(
     self: Hydrology,
     run_name: str,
@@ -202,30 +201,48 @@ def plot_water_balance(
         export: Whether to export the water balance plot to a file.
 
     Notes:
-        Potential evapotranspiration is shown as an optional context bar when
+        Potential evapotranspiration is shown as an optional context series when
         the corresponding report output is available. It is not included in
         the actual water balance totals.
 
     Raises:
         ValueError: If the water balance dataframe does not contain any rows.
     """
-    folder = self.model.output_folder / "report"
-    df_m3_per_timestep: pd.DataFrame = _load_water_balance_dataframe(folder)
+    folder: Path = (
+        Path(self.model.config["general"]["output_folder"]) / run_name / "report"
+    )
+    water_balance_df_m3_per_timestep: pd.DataFrame = _load_water_balance_dataframe(
+        folder
+    )
     context_series: dict[str, pd.Series] = _load_contextual_water_balance_series(folder)
-    df_yearly: pd.DataFrame = df_m3_per_timestep.resample("YE").sum()
-    df_yearly.to_csv(folder / "water_balance_yearly.csv")
+
+    if water_balance_df_m3_per_timestep.empty:
+        raise ValueError("No water balance data available for plotting.")
+
+    yearly_totals_df_m3_per_year: pd.DataFrame = (
+        water_balance_df_m3_per_timestep.resample("YE").sum()
+    )
+    yearly_totals_df_m3_per_year.to_csv(folder / "water_balance_yearly.csv")
     self.model.logger.info("Water balance yearly values saved.")
 
-    years: pd.Index = df_yearly.index.year  # ty:ignore[unresolved-attribute]
+    years: pd.Index = yearly_totals_df_m3_per_year.index.year  # ty:ignore[unresolved-attribute]
     n_years: int = len(years)
 
-    fig, axes = plt.subplots(n_years, 1, figsize=(16, 4 * n_years), sharex=True)
+    bar_chart_fig, bar_chart_axes = plt.subplots(
+        n_years, 1, figsize=(16, 4 * n_years), sharex=True
+    )
     if n_years == 1:
-        axes = [axes]
+        bar_chart_axes = [bar_chart_axes]
 
-    inputs_cols = [c for c in df_yearly.columns if c.startswith("in_")]
-    outputs_cols = [c for c in df_yearly.columns if c.startswith("out_")]
-    storage_cols = [c for c in df_yearly.columns if "storage" in c.lower()]
+    inputs_cols = [
+        c for c in yearly_totals_df_m3_per_year.columns if c.startswith("in_")
+    ]
+    outputs_cols = [
+        c for c in yearly_totals_df_m3_per_year.columns if c.startswith("out_")
+    ]
+    storage_cols = [
+        c for c in yearly_totals_df_m3_per_year.columns if "storage" in c.lower()
+    ]
     yearly_context_series: dict[str, pd.Series] = {
         series_name: series.resample("YE").sum()
         for series_name, series in context_series.items()
@@ -260,8 +277,10 @@ def plot_water_balance(
             legend_handles.append(handle)
             legend_labels.append(label)
 
-    for ax, year in zip(axes, years):
-        row = df_yearly.loc[df_yearly.index.year == year].iloc[0]  # ty:ignore[unresolved-attribute]
+    for ax, year in zip(bar_chart_axes, years):
+        row = yearly_totals_df_m3_per_year.loc[
+            yearly_totals_df_m3_per_year.index.year == year
+        ].iloc[0]  # ty:ignore[unresolved-attribute]
 
         bottom = 0
         for col in inputs_cols:
@@ -319,7 +338,7 @@ def plot_water_balance(
         ax.set_title(f"Water Balance – {year}")
         ax.set_ylabel("m3/year")
 
-    fig.legend(
+    bar_chart_fig.legend(
         legend_handles,
         legend_labels,
         loc="lower center",
@@ -327,23 +346,16 @@ def plot_water_balance(
     )
 
     if export:
-        fig_path = (
+        bar_chart_fig_path = (
             self.water_balance_output_folder / "water_balance_yearly_subplots.svg"
         )
-        plt.savefig(fig_path)
-        self.model.logger.info(f"Water balance yearly plot saved as: {fig_path}")
+        plt.savefig(bar_chart_fig_path)
+        self.model.logger.info(
+            f"Water balance yearly plot saved as: {bar_chart_fig_path}"
+        )
 
     plt.show()
-    plt.close(fig)
-
-    folder: Path = self.model.output_folder / "report"
-    water_balance_df_m3_per_timestep: pd.DataFrame = _load_water_balance_dataframe(
-        folder
-    )
-    context_series: dict[str, pd.Series] = _load_contextual_water_balance_series(folder)
-
-    if water_balance_df_m3_per_timestep.empty:
-        raise ValueError("No water balance data available for plotting.")
+    plt.close(bar_chart_fig)
 
     signed_water_balance_df_m3_per_timestep: pd.DataFrame = (
         water_balance_df_m3_per_timestep.copy()
@@ -369,7 +381,7 @@ def plot_water_balance(
         column_name: _format_water_balance_component_label(column_name)
         for column_name in component_columns
     }
-    total_area_m2: float = _get_total_model_area_m2(self.model)
+    total_area_m2: float = self.model.total_area_m2
     conversion_factor_mm_per_m3: float = 1000.0 / total_area_m2
     yearly_context_totals_mm: pd.DataFrame = pd.DataFrame(
         {
@@ -811,7 +823,6 @@ def plot_water_balance(
     plt.close(top_soil_yearly_figure)
 
 
-# Water-storage plots
 def plot_water_storage(
     self: Hydrology,
     run_name: str,
@@ -832,7 +843,9 @@ def plot_water_storage(
     Raises:
         ValueError: If the water storage dataframe does not contain any rows.
     """
-    folder: Path = self.model.output_folder / "report"
+    folder: Path = (
+        Path(self.model.config["general"]["output_folder"]) / run_name / "report"
+    )
     storage_module: str = "hydrology.landsurface"
     storage_specs: dict[str, tuple[str, str]] = {
         reported_name.removeprefix("_").removesuffix("_m"): (
@@ -953,7 +966,6 @@ def plot_water_storage(
     plt.close(yearly_figure)
 
 
-# Shared axis and caption formatting
 def _format_timeseries_axis(
     axis: plt.Axes,
     title: str,

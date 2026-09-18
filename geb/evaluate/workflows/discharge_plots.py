@@ -32,9 +32,8 @@ from geb.evaluate.workflows.discharge_metrics import (
 from geb.evaluate.workflows.external_skill_scores import (
     GLOFAS_MODEL_NAME,
     GOOGLE_MODEL_NAME,
-    UTRECHT_MODEL_NAME,
+    PCRGLOBWB_MODEL_NAME,
 )
-from geb.evaluate.workflows.water_balance_helpers import _get_total_model_area_m2
 from geb.workflows.extreme_value_analysis import ReturnPeriodModel
 from geb.workflows.io import read_geom
 
@@ -50,18 +49,16 @@ LINE_WIDTH: float = 1.3
 LINE_COLOR: str = "#111111"
 
 _EXTERNAL_MODEL_PLOT_ORDER: dict[str, int] = {
-    UTRECHT_MODEL_NAME: 0,
+    PCRGLOBWB_MODEL_NAME: 0,
     GOOGLE_MODEL_NAME: 1,
     GLOFAS_MODEL_NAME: 2,
 }
 
 _EXTERNAL_MODEL_DISPLAY_NAMES: dict[str, str] = {
-    UTRECHT_MODEL_NAME: "PCR-GLOBWB",
+    PCRGLOBWB_MODEL_NAME: "PCR-GLOBWB",
     GOOGLE_MODEL_NAME: "Google LSTM",
     GLOFAS_MODEL_NAME: "GloFAS v4.0",
 }
-
-# Discharge plotting commands and shared score preparation.
 
 
 def plot_discharge(
@@ -86,14 +83,7 @@ def plot_discharge(
             run directory in the model output folder.
         include_outflow_plots: Whether to write per-outflow diagnostics.
             Defaults to False to avoid creating many files for large regions.
-
-    Returns:
-        None. Creates the requested figures or logs missing data.
-
-    Raises:
-        ValueError: If the requested plot inputs are invalid.
-        FileNotFoundError: If required input data is unavailable.
-    """  # noqa: DOC202, DOC502
+    """
     if self.discharge_output_folder.exists():
         shutil.rmtree(self.discharge_output_folder)
     self.discharge_output_folder.mkdir(parents=True, exist_ok=True)
@@ -153,7 +143,7 @@ def plot_discharge(
         )
         outflow_plot_count: int = save_outflow_discharge_plots(
             outflow_files=outflow_files,
-            total_area_m2=_get_total_model_area_m2(self.model),
+            total_area_m2=self.model.total_area_m2,
             outflow_plot_folder=self.discharge_output_folder / "outflow",
             logger=self.model.logger,
             frozen_fraction_series=frozen_fraction,
@@ -196,13 +186,9 @@ def plot_discharge_skill_scores(
             The former name "distributions" is accepted as an alias for "boxplots".
         **kwargs: Ignored CLI compatibility options.
 
-    Returns:
-        None. Logs and skips unavailable or empty score tables.
-
     Raises:
-        ValueError: If a plot group, evaluation period, or score table is invalid.
-        RuntimeError: If requested catchment attributes cannot be loaded.
-    """  # noqa: DOC202, DOC502
+        ValueError: If an unknown plot group is requested.
+    """
     plots = tuple(
         "boxplots" if plot_group == "distributions" else plot_group
         for plot_group in plots
@@ -362,9 +348,6 @@ def plot_discharge_skill_scores(
         )
 
 
-# Station time series and return periods.
-
-
 def save_discharge_timeseries_plots(
     station_id: Any,
     discharge_comparison: pd.DataFrame,
@@ -489,13 +472,7 @@ def save_station_return_period_plots(
         discharge_comparison: Observed and simulated discharge columns (m³/s).
         station_id: Station identifier for filenames.
         eval_plot_folder: Root output directory; files go in return_periods.
-
-    Returns:
-        None. Saves a PNG fit and an SVG diagnostic figure.
-
-    Raises:
-        ValueError: If an extreme-value model cannot be fitted.
-    """  # noqa: DOC202, DOC502
+    """
     # Compare extremes only over observed intervals. Fixing shape at zero
     # stabilizes the fits for short evaluation records.
     simulated: pd.Series = discharge_comparison["discharge_simulations"].where(
@@ -560,9 +537,6 @@ def save_station_return_period_plots(
         bbox_inches="tight",
     )
     plt.close(figure)
-
-
-# Outlet time series and return periods.
 
 
 def save_outflow_discharge_plots(
@@ -861,9 +835,6 @@ def _draw_outflow_series(
     return line_collection
 
 
-# Skill-score maps.
-
-
 def plot_skill_score_maps(
     mapped_station_scores: gpd.GeoDataFrame,
     region_geom: gpd.GeoDataFrame,
@@ -882,13 +853,7 @@ def plot_skill_score_maps(
         logger: Logger to use for progress messages.
         score_differences_by_model: Optional matched GEB-vs-external station tables with
             ``KGE_difference`` values (dimensionless).
-
-    Returns:
-        None. Saves individual, component, and matched-difference maps.
-
-    Raises:
-        ValueError: If station or region geometry has no valid CRS.
-    """  # noqa: DOC202, DOC502
+    """
     maps_folder: Path = output_folder / "skill_score_maps"
     maps_folder.mkdir(parents=True, exist_ok=True)
 
@@ -1035,13 +1000,9 @@ def _draw_score_maps(
         output_path: Output filename without extension; saves SVG and PNG.
         region_geom: Region boundary in any projected or geographic CRS.
 
-    Returns:
-        None. Saves and closes the map figure.
-
     Raises:
-        ValueError: If the number of panels is not one or four.
-        KeyError: If a configured metric or setting is missing.
-    """  # noqa: DOC202, DOC502
+        ValueError: If the number of metrics is not one or four.
+    """
     if len(metric_configs) not in (1, 4):
         raise ValueError("Score maps require one or four metrics.")
     stations: gpd.GeoDataFrame = mapped_station_scores.to_crs("EPSG:3857")
@@ -1141,12 +1102,12 @@ def _draw_score_maps(
             # Match the colorbar height to the map after enforcing its aspect ratio.
             figure.canvas.draw()
             colorbar_axis.set_position(
-                [
+                (
                     colorbar_axis.get_position().x0,
                     axis.get_position().y0,
                     colorbar_axis.get_position().width,
                     axis.get_position().height,
-                ]
+                )
             )
         # All panels share an extent, so one scale bar is sufficient.
         _add_map_scale_bar(axis)
@@ -1194,9 +1155,6 @@ def _add_map_scale_bar(axis: plt.Axes) -> None:
     )
 
 
-# Skill-score boxplots and external comparisons.
-
-
 def _prepare_boxplot_panels(
     tables: dict[str, pd.DataFrame],
     require_matching_stations: bool = False,
@@ -1209,10 +1167,7 @@ def _prepare_boxplot_panels(
 
     Returns:
         Metric name, panel title, and numeric values for each available metric.
-
-    Raises:
-        ValueError: If station indices are duplicated during alignment.
-    """  # noqa: DOC502
+    """
     panels: list[tuple[str, str, pd.DataFrame]] = []
     metric: str
     config: dict[str, object]
@@ -1256,14 +1211,7 @@ def plot_skill_score_boxplots(
         output_path: Output filename without extension.
         export: Whether to save the figure.
         extensions: Figure formats to write.
-
-    Returns:
-        None. Writes the requested boxplot figures.
-
-    Raises:
-        KeyError: If a panel uses an unknown metric.
-        ValueError: If score values cannot be converted to numbers.
-    """  # noqa: DOC202, DOC502
+    """
     if not panels:
         return
     column_count: int = min(4, len(panels))

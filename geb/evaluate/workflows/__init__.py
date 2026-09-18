@@ -1,1 +1,1 @@
-"""Support functions used by GEB's evaluation commands. The hydrological evaluation is restructured so that evaluate/hydrology.py is the main coordinator script, with these workflow scripts as helpers."""
+"""Support functions used by GEB evaluation commands."""

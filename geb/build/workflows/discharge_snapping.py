@@ -59,15 +59,21 @@ def snap_discharge_station(
     routing_upstream_area: xr.DataArray,
     routing_pixels_by_river_id: dict[int, tuple[np.ndarray, ...]],
 ) -> DischargeSnappingResults | None:
-    """Snap a GRDC station to an original subgrid and routing pixel.
+    """Snap a gauging station to an original subgrid and routing pixel.
 
-    Select the nearest original subgrid river pixel within 1.5 km and 10% of the gauge
-    area, then the nearest routing pixel on the same river. Custom stations
-    without an area use distance only. Warn if the routing and original subgrid areas
-    differ by more than 10%, without changing the selected pixel.
+    The snapping is done in 4 steps:
+    1. Read a bounding window around the station to limit raster access.
+    2. Filter the selected subgrid to keep only pixels with a river ID and within the station-GEB upstream area tolerance (MAX_AREA_DIFFERENCE_FRACTION).
+    3. Select the closest original subgrid pixel and reject distances above the snapping distance (MAX_SNAP_DISTANCE_M).
+    4. Select the closest valid routing pixel with the same MERIT river ID.
+
+    The window is rectangular, so step 3 checks the actual geodesic distance
+    against MAX_SNAP_DISTANCE_M. Custom stations without an area use distance only.
+    Area differences between resolutions produce a warning, not a failed snap:
+    selecting a farther routing pixel would change the intended location.
 
     Args:
-        station_location: GRDC station longitude and latitude (degrees, WGS84).
+        station_location: Station longitude and latitude (degrees, WGS84).
         station_upstream_area_m2: Gauge upstream area (m²), or None for custom
             stations without area metadata.
         original_subgrid_upstream_area: Original subgrid upstream areas (m²), with
@@ -81,7 +87,7 @@ def snap_discharge_station(
         Selected pixels, or None if no valid match is found.
 
     Raises:
-        ValueError: If coordinates are invalid or original subgrid rasters do not align.
+        ValueError: If station coordinates are invalid.
     """
     if station_location.is_empty or not (
         -180 <= station_location.x <= 180 and -90 <= station_location.y <= 90
@@ -90,18 +96,9 @@ def snap_discharge_station(
     if station_upstream_area_m2 is not None and (
         not np.isfinite(station_upstream_area_m2) or station_upstream_area_m2 <= 0
     ):
-        return None
-    if (
-        original_subgrid_upstream_area.dims != ("y", "x")
-        or original_subgrid_river_ids.dims != ("y", "x")
-        or not original_subgrid_upstream_area.x.equals(original_subgrid_river_ids.x)
-        or not original_subgrid_upstream_area.y.equals(original_subgrid_river_ids.y)
-    ):
-        raise ValueError(
-            "Original subgrid area and river ID rasters must have matching y, x coordinates."
-        )
+        return None  # Invalid station area; cannot snap to original subgrid
 
-    # 1. Read the original subgrid window within 1.5 km of the station.
+    # 1. Read a bounding window around the station to limit raster access.
     latitude_margin: float = MAX_SNAP_DISTANCE_M / 110_000.0
     furthest_search_latitude: float = min(
         abs(station_location.y) + latitude_margin, 90.0
@@ -122,8 +119,6 @@ def snap_discharge_station(
         np.abs(original_subgrid_upstream_area.y.values - station_location.y)
         <= latitude_margin
     )
-    if not original_subgrid_rows.size or not original_subgrid_columns.size:
-        return None
 
     local_original_subgrid_areas: xr.DataArray = original_subgrid_upstream_area.isel(
         y=original_subgrid_rows, x=original_subgrid_columns
@@ -136,7 +131,7 @@ def snap_discharge_station(
         local_original_subgrid_river_ids.values
     )
 
-    # 2. Keep original subgrid pixels with a river ID and area within 10% of GRDC.
+    # 2. Filter the selected subgrid to keep only pixels with a river ID and within the station-GEB upstream area tolerance (MAX_AREA_DIFFERENCE_FRACTION).
     valid_original_subgrid_pixels: np.ndarray = (
         np.isfinite(local_original_subgrid_area_values)
         & (local_original_subgrid_area_values > 0)
@@ -147,14 +142,14 @@ def snap_discharge_station(
         valid_original_subgrid_pixels &= (
             np.abs(local_original_subgrid_area_values - station_upstream_area_m2)
             <= MAX_AREA_DIFFERENCE_FRACTION * station_upstream_area_m2
-        )
+        )  # Filter pixels by max upstream area difference
     candidate_original_subgrid_rows: np.ndarray
     candidate_original_subgrid_columns: np.ndarray
     candidate_original_subgrid_rows, candidate_original_subgrid_columns = np.nonzero(
         valid_original_subgrid_pixels
     )
     if not candidate_original_subgrid_rows.size:
-        return None
+        return None  # No valid original subgrid pixels within the area tolerance
 
     candidate_original_subgrid_longitudes: np.ndarray = (
         local_original_subgrid_areas.x.values[candidate_original_subgrid_columns]
@@ -162,14 +157,15 @@ def snap_discharge_station(
     candidate_original_subgrid_latitudes: np.ndarray = (
         local_original_subgrid_areas.y.values[candidate_original_subgrid_rows]
     )
+
+    # 3. Select the closest original subgrid pixel and reject distances above the snapping distance (MAX_SNAP_DISTANCE_M).
     station_to_original_subgrid_distances_m: np.ndarray = GEOD.inv(
         np.full(candidate_original_subgrid_longitudes.shape, station_location.x),
         np.full(candidate_original_subgrid_latitudes.shape, station_location.y),
         candidate_original_subgrid_longitudes,
         candidate_original_subgrid_latitudes,
-    )[2]
+    )[2]  # Compute distances from station to candidate original subgrid pixels
 
-    # 3. Select the closest original subgrid pixel and reject distances above 1.5 km.
     selected_original_subgrid_index: int = int(
         station_to_original_subgrid_distances_m.argmin()
     )
@@ -202,7 +198,7 @@ def snap_discharge_station(
 
     # 4. Select the closest valid routing pixel with the same MERIT river ID.
     if river_id not in routing_pixels_by_river_id:
-        return None
+        return None  # No routing pixels for this river ID
     routing_rows: np.ndarray
     routing_columns: np.ndarray
     routing_rows, routing_columns = routing_pixels_by_river_id[river_id]
@@ -233,21 +229,20 @@ def snap_discharge_station(
     routing_upstream_area_m2: float = float(
         routing_area_values[routing_row, routing_column]
     )
-
-    # 5. Keep the closest routing pixel but warn when its area differs by over 10%.
+    # Area differences between resolutions should not change the selected pixel.
     routing_area_difference: float = (
         abs(routing_upstream_area_m2 - original_subgrid_upstream_area_m2)
         / original_subgrid_upstream_area_m2
     )
     if routing_area_difference > MAX_AREA_DIFFERENCE_FRACTION:
         warnings.warn(
-            f"GRDC station at ({station_location.x}, {station_location.y}): "
+            f"Gauging station at ({station_location.x}, {station_location.y}): "
             "routing and original subgrid upstream areas differ by "
             f"{routing_area_difference:.1%}.",
             UserWarning,
             stacklevel=2,
         )
-    return DischargeSnappingResults(
+    result: DischargeSnappingResults = DischargeSnappingResults(
         original_subgrid_pixel_lonlat=original_subgrid_pixel_lonlat,
         routing_pixel_lonlat=routing_pixel_lonlat,
         routing_pixel_xy=routing_pixel_xy,
@@ -256,6 +251,8 @@ def snap_discharge_station(
         station_to_original_subgrid_distance_m=station_to_original_subgrid_distance_m,
         river_id=river_id,
     )
+
+    return result
 
 
 def plot_discharge_snapping(
@@ -322,7 +319,7 @@ def plot_discharge_snapping(
     fig.colorbar(background, ax=ax, label="Original subgrid upstream area (m²)")
     ax.plot(coordinates[:, 0], coordinates[:, 1], "k--", linewidth=1)
     for index, label in enumerate(
-        ("GRDC gauge", "Selected original subgrid pixel", "GEB routing pixel")
+        ("Gauging station", "Selected original subgrid pixel", "GEB routing pixel")
     ):
         ax.scatter(*coordinates[index], label=f"{index + 1}. {label}", zorder=3)
     ax.set_title(

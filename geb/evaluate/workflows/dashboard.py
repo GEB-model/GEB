@@ -11,7 +11,7 @@ import json
 import logging
 import math
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple, cast
+from typing import Any, NamedTuple, cast
 
 import branca.colormap as cm
 import folium
@@ -22,6 +22,7 @@ from branca.element import Figure
 from folium import MacroElement, TileLayer
 from jinja2 import Environment
 from jinja2.utils import htmlsafe_json_dumps
+from pandas.api.typing import NaTType
 
 from geb.evaluate.workflows import discharge_characteristics, discharge_helpers
 from geb.evaluate.workflows.discharge_characteristics import (
@@ -34,16 +35,13 @@ from geb.evaluate.workflows.discharge_metrics import (
     use_daily_discharge_scores,
 )
 from geb.evaluate.workflows.discharge_station_checks import (
-    collect_dashboard_exclusions,
+    GEOD,
+    find_dashboard_excluded_stations,
     find_excluded_stations,
 )
+from geb.hydrology.routing import select_active_rivers
 from geb.workflows.extreme_value_analysis import ReturnPeriodModel
 from geb.workflows.io import read_geom
-
-if TYPE_CHECKING:
-    from geb.evaluate.hydrology import Hydrology
-    from geb.model import GEBModel
-
 
 _ESRI_TOPO_TILES = (
     "https://server.arcgisonline.com/ArcGIS/rest/services/"
@@ -188,13 +186,16 @@ class _JavascriptMacro(MacroElement):
         )
 
 
-# Dashboard command
 def create_discharge_dashboard(
-    self: Hydrology,
-    run_name: str = "default",
+    evaluation_folder: Path,
+    run_output_folder: Path,
+    geometry_files: dict[str, Path],
+    table_files: dict[str, Path],
+    minimum_upstream_area_km2: float,
+    logger: logging.Logger,
     correct_discharge_observations: bool = False,
     output_filename: str = "discharge_evaluation_map.html",
-    include_return_period_plots: bool = False,
+    include_return_period_plots: bool = True,
 ) -> dict[str, str]:
     """Create only the discharge evaluation dashboard.
 
@@ -205,48 +206,49 @@ def create_discharge_dashboard(
     Excluded stations retain diagnostic KGE and time series with a warning.
 
     Args:
-        self: Hydrology evaluator providing model settings and output paths.
-        run_name: Name of the simulation run to use for river and station
-            discharge time series.
+        evaluation_folder: Folder containing saved discharge evaluation metrics.
+        run_output_folder: Output folder of the selected simulation run.
+        geometry_files: Model geometry paths keyed by dataset name.
+        table_files: Model observation table paths keyed by dataset name.
+        minimum_upstream_area_km2: Minimum routing area for evaluation (km²).
+        logger: Model logger for progress and diagnostics.
         correct_discharge_observations: Whether to correct simulated discharge
             by the observed-to-GEB upstream-area ratio (dimensionless), matching
             the option in ``evaluate_discharge``.
         output_filename: Dashboard HTML filename written inside the discharge
-            evaluation output folder.
+            evaluation output folder, or an absolute output path.
         include_return_period_plots: Whether to calculate and plot return-period
-            curves in station popups. Defaults to False to speed up creation.
+            curves in station popups. Defaults to True.
 
     Returns:
         Dictionary with the created dashboard path.
 
     Raises:
         FileNotFoundError: If saved discharge evaluation metrics do not exist.
-        ValueError: If ``output_filename`` is empty, is an absolute path, or
+        ValueError: If ``output_filename`` is empty or
             saved metrics use obsolete snapping.
     """
     if not output_filename:
         raise ValueError("output_filename must not be empty.")
     output_path: Path = Path(output_filename)
-    if output_path.is_absolute():
-        raise ValueError("output_filename must be a filename, not an absolute path.")
 
-    metrics_path: Path = (
-        self.evaluate_discharge_output_folder / "evaluation_metrics.geoparquet"
-    )
+    metrics_path: Path = evaluation_folder / "evaluation_metrics.geoparquet"
     if not metrics_path.exists():
         raise FileNotFoundError(
             "No discharge evaluation metrics found. Run "
-            "`geb evaluate hydrology.evaluate_discharge` once before creating "
+            "`geb evaluate hydrology.evaluate_discharge` before creating "
             "only the dashboard."
         )
 
     mapped_station_scores: gpd.GeoDataFrame = gpd.read_parquet(metrics_path)
     snapped_locations: gpd.GeoDataFrame = read_geom(
-        self.model.files["geom"]["discharge/discharge_snapped_locations"]
+        geometry_files["discharge/discharge_snapped_locations"]
     )
+    # Keep stations that failed snapping or visualization on the dashboard
+    # while excluding them from evaluation summaries.
     excluded_stations: gpd.GeoDataFrame = find_excluded_stations(
         snapped_locations,
-        Path(self.model.config["general"]["output_folder"]) / run_name / "report",
+        run_output_folder / "report",
     )
     if not excluded_stations.empty:
         mapped_station_scores["exclusion_reason"] = excluded_stations[
@@ -267,6 +269,7 @@ def create_discharge_dashboard(
             geometry="geometry",
             crs=mapped_station_scores.crs,
         )
+    # Remove this extra guard in January 2027, after old builds are updated.
     if not mapped_station_scores.empty and (
         "snapping_method" not in mapped_station_scores.columns
         or not (
@@ -278,32 +281,16 @@ def create_discharge_dashboard(
             "and discharge observations, rerun station discharge reporting and "
             "hydrology.evaluate_discharge before creating the dashboard."
         )
-    mapped_station_scores["timezone_utc_offset"] = mapped_station_scores.get(
-        "timezone_utc_offset", 0.0
-    )
-    mapped_station_scores["timezone_utc_offset"] = mapped_station_scores[
-        "timezone_utc_offset"
-    ].fillna(0.0)
-    excluded_stations = collect_dashboard_exclusions(
+    excluded_stations = find_dashboard_excluded_stations(
         mapped_station_scores,
         excluded_stations,
         snapped_locations,
-        Path(self.model.files["geom"]["discharge/discharge_snapped_locations"]),
-        self.model.config.get("hydrology", {})
-        .get("evaluation", {})
-        .get("discharge", {})
-        .get("minimum_upstream_area_km2", 0.0),
+        Path(geometry_files["discharge/discharge_snapped_locations"]),
+        minimum_upstream_area_km2,
     )
     n_stations: int = len(mapped_station_scores)
-    if mapped_station_scores.empty:
-        self.model.logger.warning(
-            "No discharge stations found in saved evaluation metrics. "
-            "Showing excluded stations only."
-        )
-    else:
-        self.model.logger.info(
-            "Creating discharge dashboard for %d stations.", n_stations
-        )
+
+    logger.info("Creating discharge dashboard for %d stations.", n_stations)
 
     dashboard_station_scores: gpd.GeoDataFrame = mapped_station_scores.copy()
     use_daily_discharge_scores(dashboard_station_scores)
@@ -312,23 +299,21 @@ def create_discharge_dashboard(
         dashboard_characteristics = (
             discharge_characteristics.load_dashboard_catchment_characteristics(
                 mapped_station_scores=dashboard_station_scores,
-                logger=self.model.logger,
+                logger=logger,
             )
         )
 
-    self.model.logger.info("Loading dashboard geometries...")
+    logger.info("Loading dashboard geometries...")
     dashboard_geometries: DischargeDashboardGeometries = (
-        load_discharge_dashboard_geometries(self.model)
+        load_discharge_dashboard_geometries(geometry_files)
     )
 
-    dashboard_path: Path = self.evaluate_discharge_output_folder / output_path
-    run_output_folder: Path = (
-        Path(self.model.config["general"]["output_folder"]) / run_name
-    )
-    self.model.logger.info("Preparing interactive chart data...")
+    dashboard_path: Path = evaluation_folder / output_path
+    logger.info("Preparing interactive chart data...")
     station_dashboard_chart_files: dict[str, str] = (
         _write_dashboard_charts_from_saved_scores(
-            self,
+            table_files=table_files,
+            logger=logger,
             mapped_station_scores=mapped_station_scores,
             run_output_folder=run_output_folder,
             correct_discharge_observations=correct_discharge_observations,
@@ -337,7 +322,7 @@ def create_discharge_dashboard(
         )
     )
 
-    self.model.logger.info("Creating the dashboard HTML file...")
+    logger.info("Creating the dashboard HTML file...")
     write_discharge_dashboard(
         mapped_station_scores=dashboard_station_scores,
         output_path=dashboard_path,
@@ -348,15 +333,12 @@ def create_discharge_dashboard(
         station_characteristics=dashboard_characteristics,
         excluded_stations=excluded_stations,
     )
-    self.model.logger.info("Discharge evaluation dashboard created: %s", dashboard_path)
-    self.model.logger.info(
+    logger.info("Discharge evaluation dashboard created: %s", dashboard_path)
+    logger.info(
         "Tip: If station charts do not appear, download the dashboard HTML "
         "and its charts folder to the same local directory."
     )
     return {"dashboard": str(dashboard_path)}
-
-
-# Map assembly and geometry loading
 
 
 def write_discharge_dashboard(
@@ -367,11 +349,9 @@ def write_discharge_dashboard(
     station_chart_files: dict[str, str],
     waterbodies: gpd.GeoDataFrame | None = None,
     station_characteristics: pd.DataFrame | None = None,
-    minimum_river_upstream_area_km2: float = 5000.0,
-    detailed_river_minimum_zoom: int = 8,
     excluded_stations: gpd.GeoDataFrame | None = None,
 ) -> folium.Map:
-    """Save the discharge map with station charts, score layers, and snapping QC.
+    """Save the discharge map with station charts, score layers, and snapping characteristics (e.g., station IDs, upstream areas).
 
     Charts and snapping features load on demand. Station size reflects upstream
     area; score and attribute layers share a dynamic legend.
@@ -395,10 +375,6 @@ def write_discharge_dashboard(
             the selected GRDC-Caravan attributes in display units.
         excluded_stations: Stations omitted from summary scores, with an exclusion
             reason. Available charts remain accessible for diagnostic use.
-        minimum_river_upstream_area_km2: Minimum upstream area (km²) for the
-            river overview shown at regional zoom levels.
-        detailed_river_minimum_zoom: Zoom level at which the complete MERIT
-            river network replaces the overview.
     Returns:
         The Folium map object (already saved to ``output_path``).
     """
@@ -440,8 +416,6 @@ def write_discharge_dashboard(
     _add_river_layers(
         discharge_map,
         rivers,
-        minimum_river_upstream_area_km2,
-        detailed_river_minimum_zoom,
     )
 
     metric_layers: list[tuple[folium.FeatureGroup, cm.LinearColormap, str]] = [
@@ -463,16 +437,16 @@ def write_discharge_dashboard(
     if (
         not mapped_station_scores["discharge_observations_to_GEB_upstream_area_ratio"]
         .isna()
-        .any()
+        .all()
     ):
         colormap_upstream = cm.LinearColormap(
             colors=["red", "orange", "yellow", "blue", "green"],
             vmin=0.5,
             vmax=2.0,
-            caption="GRDC / routing upstream area",
+            caption="Station / routing upstream area",
         )
         layer_upstream = folium.FeatureGroup(
-            name="GRDC / routing upstream area", show=False
+            name="Station / routing upstream area", show=False
         )
 
     characteristic_layers: list[tuple[folium.FeatureGroup, dict[str, Any]]] = []
@@ -480,7 +454,7 @@ def write_discharge_dashboard(
     characteristic_records: dict[str, dict[str, Any]] = {}
     caravan_available_count: int = 0
     if station_characteristics is not None:
-        characteristic_payload: dict[str, Any] = _build_characteristic_layer_payload(
+        characteristic_data: dict[str, Any] = _build_characteristic_layer_data(
             mapped_station_scores=mapped_station_scores,
             station_characteristics=station_characteristics,
         )
@@ -492,19 +466,18 @@ def write_discharge_dashboard(
                 ),
                 characteristic,
             )
-            for characteristic in characteristic_payload["characteristics"]
+            for characteristic in characteristic_data["characteristics"]
         ]
         availability_layer = folium.FeatureGroup(
             name="GRDC-Caravan · Data availability",
             show=False,
         )
         characteristic_records = {
-            str(station["id"]): station
-            for station in characteristic_payload["stations"]
+            str(station["id"]): station for station in characteristic_data["stations"]
         }
         caravan_available_count = sum(
             bool(station["caravan_available"])
-            for station in characteristic_payload["stations"]
+            for station in characteristic_data["stations"]
         )
 
     largest_upstream_area_sqrt: float = math.sqrt(
@@ -513,8 +486,8 @@ def write_discharge_dashboard(
 
     popup_width: int = 800
     station_marker_index: list[StationMarkerIndex] = []
-    snapping_qc_layer: folium.FeatureGroup = folium.FeatureGroup(
-        name="Station snapping QC (gauge → original subgrid pixel → routing grid)",
+    snapping_layer: folium.FeatureGroup = folium.FeatureGroup(
+        name="Station snapping details (gauge → original subgrid pixel → routing grid)",
         show=False,
     )
     snapping_columns: set[str] = {
@@ -532,19 +505,13 @@ def write_discharge_dashboard(
         "snapping_method",
         "timezone_utc_offset",
     }
-    snapping_qc_available: bool = snapping_columns.issubset(
-        mapped_station_scores.columns
-    )
+    snapping_available: bool = snapping_columns.issubset(mapped_station_scores.columns)
     snapping_stations: list[dict[str, Any]] = []
 
     for station_id, row in mapped_station_scores.iterrows():
         coords: list[float] = [row.geometry.y, row.geometry.x]
         station_id_str: str = str(station_id)
-        station_name: str = (
-            str(row["station_name"])
-            if "station_name" in row.index and pd.notna(row["station_name"])
-            else station_id_str
-        )
+        station_name: str = str(row["station_name"])
         escaped_station_id: str = html.escape(station_id_str, quote=True)
         popup_html: str = (
             f"<div class='geb-popup' data-station-id='{escaped_station_id}' "
@@ -558,17 +525,18 @@ def write_discharge_dashboard(
                 + popup_html
             )
         timezone_tooltip: str = (
-            f"<br>{format_fixed_utc_offset(float(row['timezone_utc_offset']))} fixed"
-            if "timezone_utc_offset" in row.index
-            and pd.notna(row["timezone_utc_offset"])
-            else ""
+            "<br><span data-geb-utc-offset-hours="
+            f"'{float(row['timezone_utc_offset'])}'></span> fixed"
         )
-        tooltip: str = f"{station_id_str}: {station_name}{timezone_tooltip}"
+        tooltip: str = (
+            f"{escaped_station_id}: {html.escape(station_name, quote=True)}"
+            f"{timezone_tooltip}"
+        )
         if pd.notna(row.get("exclusion_reason")):
             tooltip += "<br>Diagnostic only — excluded from evaluation"
 
-        if snapping_qc_available:
-            snapping_record: dict[str, Any] = _build_snapping_qc_station(
+        if snapping_available:
+            snapping_record: dict[str, Any] = _build_snapping_station(
                 station_id=station_id_str,
                 station_name=station_name,
                 row=row,
@@ -589,22 +557,28 @@ def write_discharge_dashboard(
             tooltip=tooltip,
         )
 
-        if layer_upstream is not None and colormap_upstream is not None:
+        if (
+            layer_upstream is not None
+            and colormap_upstream is not None
+            and np.isfinite(row["discharge_observations_to_GEB_upstream_area_ratio"])
+        ):
             color_upstream: str | tuple[int, int, int, int] = colormap_upstream(
                 float(row["discharge_observations_to_GEB_upstream_area_ratio"])
             )
             if isinstance(color_upstream, str) and color_upstream != "nan":
-                station_marker_names.append(
-                    _add_station_marker(
-                        layer=layer_upstream,
-                        coords=coords,
-                        radius=10,
-                        fill_color=color_upstream,
-                        popup_html=popup_html,
-                        popup_width=popup_width,
-                        tooltip=tooltip,
-                    )
+                upstream_marker = folium.CircleMarker(
+                    location=coords,
+                    radius=10,
+                    color="black",
+                    fill=True,
+                    fill_color=color_upstream,
+                    fill_opacity=0.9,
+                    popup=folium.Popup(popup_html, max_width=popup_width),
+                    tooltip=tooltip,
+                    z_index=1000,
                 )
+                upstream_marker.add_to(layer_upstream)
+                station_marker_names.append(upstream_marker.get_name())
 
         if availability_layer is not None:
             station_record: dict[str, Any] = characteristic_records[station_id_str]
@@ -645,12 +619,12 @@ def write_discharge_dashboard(
             name=f"Excluded stations ({len(excluded_stations)})", show=False
         )
         for station_id, row in excluded_stations.iterrows():
-            record: dict[str, Any] = _build_snapping_qc_station(
+            record: dict[str, Any] = _build_snapping_station(
                 str(station_id), str(row["station_name"]), row
             )
             area_distance_failure: bool = str(row["exclusion_reason"]).startswith(
                 (
-                    "Missing GRDC",
+                    "Missing station",
                     "Missing upstream",
                     "Routing upstream",
                     "Routing pixel",
@@ -705,12 +679,12 @@ def write_discharge_dashboard(
             discharge_map
         )
     if snapping_stations:
-        snapping_qc_layer.add_to(discharge_map)
+        snapping_layer.add_to(discharge_map)
         # The inactive overlay stays empty; JavaScript creates visible features lazily.
         _JavascriptMacro(
             "snapping.js",
             {
-                "layer": snapping_qc_layer.get_name(),
+                "layer": snapping_layer.get_name(),
                 "stations": snapping_stations,
             },
         ).add_to(discharge_map)
@@ -728,10 +702,10 @@ def write_discharge_dashboard(
     _JavascriptMacro("charts.js", station_chart_files).add_to(discharge_map)
     _JavascriptMacro("search.js", station_marker_index).add_to(discharge_map)
 
-    # Show reservoirs only; adding lakes makes the dashboard too slow.
     if waterbodies is not None and not waterbodies.empty:
-        _add_waterbody_layers(discharge_map, waterbodies)
+        _add_reservoir_layer(discharge_map, waterbodies)
 
+    _JavascriptMacro("units.js", {}).add_to(discharge_map)
     folium.LayerControl(collapsed=False).add_to(discharge_map)
     if (
         "exclusion_reason" in mapped_station_scores
@@ -751,48 +725,49 @@ def write_discharge_dashboard(
 
 
 def load_discharge_dashboard_geometries(
-    model: GEBModel,
+    geometry_files: dict[str, Path],
 ) -> DischargeDashboardGeometries:
     """Load the geometries used by the discharge dashboard.
 
     Args:
-        model: GEB model containing the geometry file registry.
+        geometry_files: Model geometry paths keyed by dataset name.
 
     Returns:
         Region boundary, river network, and waterbodies.
     """
-    region_geom: gpd.GeoDataFrame = read_geom(model.files["geom"]["mask"])
-    all_rivers: gpd.GeoDataFrame = read_geom(model.files["geom"]["routing/rivers"])
+    region_geom: gpd.GeoDataFrame = read_geom(geometry_files["mask"])
+    all_rivers: gpd.GeoDataFrame = read_geom(geometry_files["routing/rivers"])
     waterbodies: gpd.GeoDataFrame = read_geom(
-        model.files["geom"]["waterbodies/waterbody_data"]
+        geometry_files["waterbodies/waterbody_data"]
     )
     return DischargeDashboardGeometries(
         region=region_geom,
-        rivers=all_rivers,
+        rivers=select_active_rivers(all_rivers),
         waterbodies=waterbodies,
     )
 
 
-# Station chart files.
 def _write_dashboard_charts_from_saved_scores(
-    self: Hydrology,
+    table_files: dict[str, Path],
+    logger: logging.Logger,
     mapped_station_scores: gpd.GeoDataFrame,
     run_output_folder: Path,
     correct_discharge_observations: bool,
     dashboard_path: Path,
-    include_return_period_plots: bool = False,
+    include_return_period_plots: bool = True,
 ) -> dict[str, str]:
     """Save interactive chart data for stations with saved evaluation scores.
 
     Args:
-        self: Hydrology evaluator providing model settings and output paths.
+        table_files: Model observation table paths keyed by dataset name.
+        logger: Model logger for progress and diagnostics.
         mapped_station_scores: Saved per-station discharge evaluation metrics.
         run_output_folder: Model output folder for the selected run.
         correct_discharge_observations: Whether to correct simulated discharge
             by the observed-to-GEB upstream-area ratio (dimensionless).
         dashboard_path: Output path of the dashboard HTML file.
         include_return_period_plots: Whether to fit and include return-period
-            curves. Defaults to False to avoid expensive extreme-value fits.
+            curves. Defaults to True.
 
     Returns:
         Mapping from station ID to chart data file.
@@ -816,7 +791,7 @@ def _write_dashboard_charts_from_saved_scores(
         )
 
     observations_by_frequency: dict[str, pd.DataFrame] = (
-        discharge_helpers.load_discharge_observations(self)
+        discharge_helpers.load_discharge_observations(table_files)
     )
     saved_scores_by_station_id: dict[str, pd.Series] = {
         str(station_id): station_row
@@ -832,13 +807,12 @@ def _write_dashboard_charts_from_saved_scores(
         for observations in observations_by_frequency.values()
         if not observations.empty
     )
-    self.model.logger.info(
+    logger.info(
         "Processing %d station-frequency combinations...",
         total_work,
     )
 
     station_dashboard_chart_files: dict[str, str] = {}
-    skipped: int = 0
     processed: int = 0
     for (
         frequency_label,
@@ -858,57 +832,45 @@ def _write_dashboard_charts_from_saved_scores(
             observed_discharge_series: pd.Series = observations_by_station[station_id]
 
             timezone_utc_offset: float = float(station_row["timezone_utc_offset"])
-            try:
-                discharge_comparison: pd.DataFrame = load_station_discharge_comparison(
-                    output_folder=run_output_folder,
-                    station_id=station_id,
-                    observed_discharge=observed_discharge_series,
-                    apply_upstream_area_correction=correct_discharge_observations,
+            discharge_comparison: pd.DataFrame = load_station_discharge_comparison(
+                output_folder=run_output_folder,
+                station_id=station_id,
+                observed_discharge=observed_discharge_series,
+                apply_upstream_area_correction=correct_discharge_observations,
+                upstream_area_ratio=upstream_area_ratio,
+                timezone_utc_offset=timezone_utc_offset,
+            )
+            metrics: dict[str, float] = {
+                metric_name: float(station_row[f"{metric_name}_{frequency_label}"])
+                for metric_name in DischargeMetrics._fields
+                if f"{metric_name}_{frequency_label}" in station_row.index
+            }
+            station_dashboard_chart_files[station_id_text] = write_station_chart_data(
+                dashboard_path=dashboard_path,
+                station_id=station_id_text,
+                chart_data=build_station_chart_data(
+                    discharge_comparison=discharge_comparison,
+                    station_name=str(station_row["station_name"]),
                     upstream_area_ratio=upstream_area_ratio,
                     timezone_utc_offset=timezone_utc_offset,
-                )
-                metrics: dict[str, float] = {
-                    metric_name: float(station_row[f"{metric_name}_{frequency_label}"])
-                    for metric_name in DischargeMetrics._fields
-                    if f"{metric_name}_{frequency_label}" in station_row.index
-                }
-                station_dashboard_chart_files[station_id_text] = (
-                    write_station_chart_data(
-                        dashboard_path=dashboard_path,
-                        station_id=station_id_text,
-                        chart_data=build_station_chart_data(
-                            discharge_comparison=discharge_comparison,
-                            station_name=str(station_row["station_name"]),
-                            upstream_area_ratio=upstream_area_ratio,
-                            timezone_utc_offset=timezone_utc_offset,
-                            metrics=metrics,
-                            frequency=frequency_label,
-                            include_return_period_plots=include_return_period_plots,
-                        ),
-                    )
-                )
-            except Exception as exc:
-                self.model.logger.warning(
-                    "Skipping chart data for station %s (%s): %s",
-                    station_id_text,
-                    frequency_label,
-                    exc,
-                )
-                skipped += 1
+                    metrics=metrics,
+                    frequency=frequency_label,
+                    logger=logger,
+                    include_return_period_plots=include_return_period_plots,
+                ),
+            )
 
             processed += 1
             if processed % 100 == 0:
-                self.model.logger.info(
-                    "  %d / %d processed (%d skipped)...",
+                logger.info(
+                    "  %d / %d processed...",
                     processed,
                     total_work,
-                    skipped,
                 )
 
-    self.model.logger.info(
-        "Chart data built: %d stations, %d skipped.",
+    logger.info(
+        "Chart data built for %d stations.",
         len(station_dashboard_chart_files),
-        skipped,
     )
     return station_dashboard_chart_files
 
@@ -948,7 +910,8 @@ def build_station_chart_data(
     timezone_utc_offset: float,
     metrics: dict[str, float],
     frequency: str,
-    include_return_period_plots: bool = False,
+    logger: logging.Logger,
+    include_return_period_plots: bool = True,
 ) -> dict[str, Any]:
     """Prepare chart data for one station popup in the discharge dashboard.
 
@@ -956,14 +919,15 @@ def build_station_chart_data(
         discharge_comparison: Observed/simulated discharge dataframe (m3/s).
         station_name: Human-readable station name.
         upstream_area_ratio: Observed-to-model upstream-area ratio (dimensionless).
-        timezone_utc_offset: Fixed GRDC UTC offset used to construct local
+        timezone_utc_offset: Fixed station UTC offset used to construct local
             calendar days (hours). The source offset does not vary for daylight
             saving time.
         metrics: Discharge skill metrics such as ``KGE``, ``NSE``, and ``R2``
             (dimensionless).
         frequency: Data frequency label, for example ``"daily"`` or ``"hourly"``.
+        logger: Model logger for return-period fit diagnostics.
         include_return_period_plots: Whether to fit and include return-period
-            curves. Defaults to False to avoid expensive extreme-value fits.
+            curves. Defaults to True.
 
     Returns:
         Chart data with discharge values (m3/s).
@@ -994,7 +958,7 @@ def build_station_chart_data(
             "upstreamAreaRatio": _as_finite_float(upstream_area_ratio),
             "timezoneUtcOffset": _as_finite_float(timezone_utc_offset),
         },
-        "timeseries": _build_timeseries_payload(discharge_comparison),
+        "timeseries": _build_timeseries_data(discharge_comparison),
     }
     if include_return_period_plots:
         # Fit only on request: fitting every station dominates dashboard creation.
@@ -1004,17 +968,19 @@ def build_station_chart_data(
         ].copy()
         simulated_series[discharge_comparison["discharge_observations"].isna()] = np.nan
         chart_data["returnPeriods"] = {
-            "observed": _build_return_period_payload(
-                discharge_comparison["discharge_observations"], return_periods_years
+            "observed": _build_return_period_data(
+                discharge_comparison["discharge_observations"],
+                return_periods_years,
+                logger,
             ),
-            "simulated": _build_return_period_payload(
-                simulated_series, return_periods_years
+            "simulated": _build_return_period_data(
+                simulated_series, return_periods_years, logger
             ),
         }
     return chart_data
 
 
-def _build_timeseries_payload(
+def _build_timeseries_data(
     discharge_comparison: pd.DataFrame,
 ) -> dict[str, list[str] | list[float | None]]:
     """Prepare data for one discharge time-series chart in a popup.
@@ -1048,15 +1014,17 @@ def _build_timeseries_payload(
     }
 
 
-def _build_return_period_payload(
+def _build_return_period_data(
     series: pd.Series,
     return_periods_years: list[int | float],
+    logger: logging.Logger,
 ) -> dict[str, list[float | None]]:
     """Build fitted return-period values for one discharge series.
 
     Args:
         series: Regular discharge time series (m3/s).
         return_periods_years: Return periods to estimate (years).
+        logger: Model logger for fit diagnostics.
 
     Returns:
         Dictionary with return periods (years) and fitted discharge values (m3/s).
@@ -1079,12 +1047,10 @@ def _build_return_period_payload(
                 for value in model.rl_table["GPD_POT_RL"].to_numpy(dtype=float)
             ],
         }
-    except Exception as error:
+    except (ValueError, RuntimeError, FloatingPointError) as error:
         # A failed extreme-value fit should not remove otherwise valid station
         # charts, but it must remain visible to users diagnosing the output.
-        logging.getLogger(__name__).warning(
-            "Could not fit dashboard return periods: %s", error
-        )
+        logger.warning("Could not fit dashboard return periods: %s", error)
         return {"returnPeriod": [], "discharge": []}
 
 
@@ -1101,16 +1067,13 @@ def _timestamp_to_isoformat(timestamp: Any) -> str:
         ValueError: If ``timestamp`` is missing or cannot be represented as a
             timestamp.
     """
-    timestamp_value: pd.Timestamp = cast(pd.Timestamp, pd.Timestamp(timestamp))
-    if pd.isna(timestamp_value):
+    timestamp_value: pd.Timestamp | NaTType = pd.Timestamp(timestamp)
+    if not isinstance(timestamp_value, pd.Timestamp):
         raise ValueError("Dashboard chart timestamps must not contain missing values.")
     return timestamp_value.isoformat()
 
 
-# Station layers and legends.
-
-
-def _build_characteristic_layer_payload(
+def _build_characteristic_layer_data(
     mapped_station_scores: gpd.GeoDataFrame,
     station_characteristics: pd.DataFrame,
 ) -> dict[str, Any]:
@@ -1238,44 +1201,6 @@ def _prepare_characteristic_values(
     return statistics, percentile_ranks
 
 
-def _add_station_marker(
-    layer: folium.FeatureGroup,
-    coords: list[float],
-    radius: float,
-    fill_color: str,
-    popup_html: str,
-    popup_width: int,
-    tooltip: str,
-) -> str:
-    """Add a station marker and return its JavaScript variable name.
-
-    Args:
-        layer: Folium layer receiving the marker.
-        coords: Marker coordinates as ``[latitude, longitude]`` (degrees).
-        radius: Marker radius (pixels).
-        fill_color: Marker fill color.
-        popup_html: Popup placeholder HTML.
-        popup_width: Popup width (pixels).
-        tooltip: Marker tooltip text.
-
-    Returns:
-        Folium JavaScript variable name for the marker.
-    """
-    marker = folium.CircleMarker(
-        location=coords,
-        radius=radius,
-        color="black",
-        fill=True,
-        fill_color=fill_color,
-        fill_opacity=0.9,
-        popup=folium.Popup(popup_html, max_width=popup_width),
-        tooltip=tooltip,
-        z_index=1000,
-    )
-    marker.add_to(layer)
-    return marker.get_name()
-
-
 def _add_metric_station_markers(
     row: pd.Series,
     metric_layers: list[tuple[folium.FeatureGroup, cm.LinearColormap, str]],
@@ -1303,17 +1228,19 @@ def _add_metric_station_markers(
     for layer, colormap, metric_name in metric_layers:
         metric_value: float = row.get(metric_name, np.nan)
         fill_color: str = colormap(metric_value) if pd.notna(metric_value) else "gray"
-        marker_names.append(
-            _add_station_marker(
-                layer=layer,
-                coords=coords,
-                radius=circle_radius,
-                fill_color=fill_color,
-                popup_html=popup_html,
-                popup_width=popup_width,
-                tooltip=tooltip,
-            )
+        marker = folium.CircleMarker(
+            location=coords,
+            radius=circle_radius,
+            color="black",
+            fill=True,
+            fill_color=fill_color,
+            fill_opacity=0.9,
+            popup=folium.Popup(popup_html, max_width=popup_width),
+            tooltip=tooltip,
+            z_index=1000,
         )
+        marker.add_to(layer)
+        marker_names.append(marker.get_name())
     return marker_names
 
 
@@ -1349,21 +1276,23 @@ def _add_characteristic_station_markers(
     marker_names: list[str] = []
     caravan_available: bool = bool(station_record["caravan_available"])
     availability_label: str = "available" if caravan_available else "not available"
-    marker_names.append(
-        _add_station_marker(
-            layer=availability_layer,
-            coords=coords,
-            radius=circle_radius,
-            fill_color=(
-                _CARAVAN_AVAILABLE_COLOR
-                if caravan_available
-                else _CARAVAN_UNAVAILABLE_COLOR
-            ),
-            popup_html=popup_html,
-            popup_width=popup_width,
-            tooltip=f"{station_tooltip}<br>GRDC-Caravan data: {availability_label}",
-        )
+    availability_marker = folium.CircleMarker(
+        location=coords,
+        radius=circle_radius,
+        color="black",
+        fill=True,
+        fill_color=(
+            _CARAVAN_AVAILABLE_COLOR
+            if caravan_available
+            else _CARAVAN_UNAVAILABLE_COLOR
+        ),
+        fill_opacity=0.9,
+        popup=folium.Popup(popup_html, max_width=popup_width),
+        tooltip=f"{station_tooltip}<br>GRDC-Caravan data: {availability_label}",
+        z_index=1000,
     )
+    availability_marker.add_to(availability_layer)
+    marker_names.append(availability_marker.get_name())
 
     for layer, characteristic in characteristic_layers:
         value: float | None = station_record["values"][characteristic["column"]]
@@ -1388,20 +1317,22 @@ def _add_characteristic_station_markers(
         formatted_value: str = f"{value:,.{decimal_places}f}"
         fill_color: str = _CHARACTERISTIC_COLORMAP(percentile)
         rank_text: str = f"percentile rank {percentile:.0f}"
-        marker_names.append(
-            _add_station_marker(
-                layer=layer,
-                coords=coords,
-                radius=circle_radius,
-                fill_color=fill_color,
-                popup_html=popup_html,
-                popup_width=popup_width,
-                tooltip=(
-                    f"{station_tooltip}<br>{characteristic['label']}: "
-                    f"{formatted_value} ({rank_text})"
-                ),
-            )
+        characteristic_marker = folium.CircleMarker(
+            location=coords,
+            radius=circle_radius,
+            color="black",
+            fill=True,
+            fill_color=fill_color,
+            fill_opacity=0.9,
+            popup=folium.Popup(popup_html, max_width=popup_width),
+            tooltip=(
+                f"{station_tooltip}<br>{characteristic['label']}: "
+                f"{formatted_value} ({rank_text})"
+            ),
+            z_index=1000,
         )
+        characteristic_marker.add_to(layer)
+        marker_names.append(characteristic_marker.get_name())
     return marker_names
 
 
@@ -1485,137 +1416,35 @@ def _inject_station_layer_legend_script(
     _JavascriptMacro("legend.js", legend_configs).add_to(discharge_map)
 
 
-# River, waterbody, and snapping layers.
-
-
 def _add_river_layers(
     discharge_map: folium.Map,
     rivers: gpd.GeoDataFrame,
-    overview_minimum_area_km2: float,
-    detailed_minimum_zoom: int,
 ) -> None:
-    """Add overview and zoomed MERIT river layers with river ID tooltips.
+    """Show all active rivers, with upstream areas formatted in the browser.
 
     Args:
-        discharge_map: Map receiving the river layers.
-        rivers: MERIT river segments in WGS84, indexed by river ID.
-        overview_minimum_area_km2: Minimum upstream area shown below the detailed
-            zoom level (km²).
-        detailed_minimum_zoom: First zoom level showing every river segment.
-
-    Raises:
-        ValueError: If the detailed zoom level is outside the Leaflet range.
+        discharge_map: Map receiving the river network.
+        rivers: Active WGS84 river segments indexed by river ID, with areas in m².
     """
-    if not 0 <= detailed_minimum_zoom <= 22:
-        raise ValueError("detailed_minimum_zoom must be between 0 and 22.")
-    if rivers.empty:
-        return
-
-    valid_rivers: gpd.GeoDataFrame = rivers.loc[
-        rivers.geometry.notna() & ~rivers.geometry.is_empty
-    ].copy()
-    overview_exclusions: list[str] = [
-        name
-        for name in (
-            "is_downstream_outflow",
-            "is_upstream_of_downstream_basin",
-            "is_further_downstream_outflow",
-        )
-        if name in valid_rivers.columns
-    ]
-    overview_rivers: gpd.GeoDataFrame = valid_rivers
-    if overview_exclusions:
-        overview_rivers = overview_rivers.loc[
-            ~overview_rivers[overview_exclusions].any(axis=1)
-        ]
-    if overview_minimum_area_km2 > 0 and "uparea_m2" in overview_rivers.columns:
-        overview_rivers = overview_rivers.loc[
-            overview_rivers["uparea_m2"] >= overview_minimum_area_km2 * 1e6
-        ]
-
-    def display_data(selected: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-        """Keep only the river data needed by the browser.
-
-        Args:
-            selected: River segments to convert.
-
-        Returns:
-            River IDs, upstream areas (km²), and geometries.
-        """
-        upstream_area_km2: pd.Series = (
-            selected["uparea_m2"] / 1e6
-            if "uparea_m2" in selected.columns
-            else pd.Series(np.nan, index=selected.index)
-        )
-        return gpd.GeoDataFrame(
-            {
-                "river_id": selected.index.astype(str),
-                "upstream_area_km2": upstream_area_km2.to_numpy(),
-            },
-            geometry=selected.geometry.to_numpy(),
-            crs=selected.crs,
-        )
-
-    def river_tooltip() -> folium.GeoJsonTooltip:
-        """Create a tooltip owned by one GeoJSON layer.
-
-        Returns:
-            Tooltip showing the MERIT river ID and upstream area (km²).
-        """
-        return folium.GeoJsonTooltip(
-            fields=["river_id", "upstream_area_km2"],
-            aliases=["River ID:", "Upstream area (km²):"],
-            localize=True,
-            sticky=True,
-        )
-
-    overview_layer: folium.FeatureGroup = folium.FeatureGroup(
-        name="Major rivers overview", show=True
-    )
-    folium.GeoJson(
-        display_data(overview_rivers).to_json(drop_id=True),
+    river_data: gpd.GeoDataFrame = rivers[["uparea_m2", "geometry"]].copy()
+    river_data["river_id"] = rivers.index.astype(str)
+    river_layer: folium.GeoJson = folium.GeoJson(
+        river_data.to_json(drop_id=True),
+        name="Active rivers",
         style_function=lambda _feature: {
             "color": "#4A90D9",
             "weight": 1.2,
             "opacity": 0.65,
         },
-        tooltip=river_tooltip(),
         highlight_function=lambda _feature: {"weight": 4, "opacity": 1},
-    ).add_to(overview_layer)
-    overview_layer.add_to(discharge_map)
-
-    # A small visual simplification keeps the complete network responsive.
-    detailed_rivers: gpd.GeoDataFrame = valid_rivers.copy()
-    detailed_rivers.geometry = detailed_rivers.geometry.simplify(
-        0.0004, preserve_topology=False
     )
-    detailed_layer: folium.FeatureGroup = folium.FeatureGroup(
-        name=f"MERIT river network (zoom {detailed_minimum_zoom}+)", show=False
+    river_layer.add_to(discharge_map)
+    _JavascriptMacro("rivers.js", {"layer": river_layer.get_name()}).add_to(
+        discharge_map
     )
-    folium.GeoJson(
-        display_data(detailed_rivers).to_json(drop_id=True),
-        style_function=lambda _feature: {
-            "color": "#2563EB",
-            "weight": 1.5,
-            "opacity": 0.8,
-        },
-        tooltip=river_tooltip(),
-        highlight_function=lambda _feature: {"weight": 5, "opacity": 1},
-        smooth_factor=1.0,
-    ).add_to(detailed_layer)
-    detailed_layer.add_to(discharge_map)
-
-    _JavascriptMacro(
-        "rivers.js",
-        {
-            "overview": overview_layer.get_name(),
-            "detailed": detailed_layer.get_name(),
-            "minimum_zoom": detailed_minimum_zoom,
-        },
-    ).add_to(discharge_map)
 
 
-def _add_waterbody_layers(
+def _add_reservoir_layer(
     discharge_map: folium.Map,
     waterbodies: gpd.GeoDataFrame,
 ) -> None:
@@ -1642,13 +1471,13 @@ def _add_waterbody_layers(
         waterbody_style: dict[str, str] = _WATERBODY_STYLE[RESERVOIR_WATERBODY_TYPE]
 
         centroid = waterbody_row.geometry.centroid
-        area_km2: float | None = (
-            float(waterbody_row["average_area"]) / 1e6
+        area_m2: float | None = (
+            float(waterbody_row["average_area"])
             if "average_area" in waterbody_row.index
             else None
         )
-        volume_km3: float | None = (
-            float(waterbody_row["volume_total"]) / 1e9
+        volume_m3: float | None = (
+            float(waterbody_row["volume_total"])
             if "volume_total" in waterbody_row.index
             else None
         )
@@ -1656,10 +1485,14 @@ def _add_waterbody_layers(
             f"<b>{waterbody_style['label']}</b> "
             f"(ID {waterbody_row.get('waterbody_id', '?')})<br>"
         ]
-        if area_km2 is not None:
-            popup_lines.append(f"Area: {area_km2:.1f} km²<br>")
-        if volume_km3 is not None:
-            popup_lines.append(f"Volume: {volume_km3:.3f} km³<br>")
+        if area_m2 is not None:
+            popup_lines.append(
+                f"Area: <span data-geb-area-m2='{area_m2}'></span> km²<br>"
+            )
+        if volume_m3 is not None:
+            popup_lines.append(
+                f"Volume: <span data-geb-volume-m3='{volume_m3}'></span> km³<br>"
+            )
 
         folium.CircleMarker(
             location=[centroid.y, centroid.x],
@@ -1678,7 +1511,7 @@ def _add_waterbody_layers(
         waterbody_layer.add_to(discharge_map)
 
 
-def _build_snapping_qc_station(
+def _build_snapping_station(
     station_id: str,
     station_name: str,
     row: pd.Series,
@@ -1688,15 +1521,12 @@ def _build_snapping_qc_station(
     Excluded stations show the reason alongside their snapping diagnostics.
 
     Args:
-        station_id: GRDC station identifier.
+        station_id: Gauging station identifier.
         station_name: Human-readable station name.
         row: Evaluation row with snapping metadata.
 
     Returns:
         Coordinates, tooltip, status color, and popup text.
-
-    Raises:
-        ValueError: If a coordinate is invalid or a fixed UTC offset is invalid.
     """
     gauge_longitude: float = float(row["station_longitude"])
     gauge_latitude: float = float(row["station_latitude"])
@@ -1715,7 +1545,7 @@ def _build_snapping_qc_station(
         station_label: str = f"{html.escape(station_name)} ({html.escape(station_id)})"
         area_m2: float = float(row.get("upstream_area_GRDC", np.nan))
         area_label: str = (
-            f"{area_m2 / 1e6:,.1f} km²"
+            f"<span data-geb-area-m2='{area_m2}'></span> km²"
             if np.isfinite(area_m2) and area_m2 > 0
             else "missing"
         )
@@ -1724,44 +1554,44 @@ def _build_snapping_qc_station(
             "locations": [[gauge_latitude, gauge_longitude]],
             "color": "#DC2626",
             "tooltip": f"{station_label}<br>EXCLUDED: {reason}",
-            "popup": f"<b>{station_label}</b><br><b>EXCLUDED</b><br>{reason}<br>GRDC area: {area_label}<br>Gauge: {gauge_latitude:.5f}, {gauge_longitude:.5f}",
+            "popup": f"<b>{station_label}</b><br><b>EXCLUDED</b><br>{reason}<br>Station area: {area_label}<br>Gauge: {gauge_latitude:.5f}, {gauge_longitude:.5f}",
         }
     original_subgrid_longitude: float = float(row["original_subgrid_longitude"])
     original_subgrid_latitude: float = float(row["original_subgrid_latitude"])
     routing_longitude: float = float(row["routing_grid_longitude"])
     routing_latitude: float = float(row["routing_grid_latitude"])
-    grdc_area_km2: float = float(row["upstream_area_GRDC"]) / 1_000_000.0
-    routing_area_km2: float = float(row["upstream_area_GEB"]) / 1_000_000.0
-    original_subgrid_area_km2: float = (
-        float(row["upstream_area_GEB_original_subgrid"]) / 1_000_000.0
-    )
-    station_to_routing_distance_km: float = _haversine_distance_km(
+    station_area_m2: float = float(row["upstream_area_GRDC"])
+    routing_area_m2: float = float(row["upstream_area_GEB"])
+    original_subgrid_area_m2: float = float(row["upstream_area_GEB_original_subgrid"])
+    station_to_routing_distance_m: float = GEOD.inv(
         gauge_longitude,
         gauge_latitude,
         routing_longitude,
         routing_latitude,
+    )[2]
+    station_to_original_subgrid_distance_m: float = float(
+        row["station_to_original_subgrid_distance_m"]
     )
-    station_to_original_subgrid_distance_km: float = (
-        float(row["station_to_original_subgrid_distance_m"]) / 1000.0
-    )
-    original_subgrid_to_routing_distance_km: float = _haversine_distance_km(
+    original_subgrid_to_routing_distance_m: float = GEOD.inv(
         original_subgrid_longitude,
         original_subgrid_latitude,
         routing_longitude,
         routing_latitude,
+    )[2]
+    station_routing_area_ratio: float = (
+        station_area_m2 / routing_area_m2 if routing_area_m2 > 0 else float("nan")
     )
-    grdc_routing_area_ratio: float = (
-        grdc_area_km2 / routing_area_km2 if routing_area_km2 > 0 else float("nan")
-    )
-    original_subgrid_grdc_area_ratio: float = (
-        original_subgrid_area_km2 / grdc_area_km2 if grdc_area_km2 > 0 else float("nan")
-    )
-    routing_original_subgrid_area_ratio: float = (
-        routing_area_km2 / original_subgrid_area_km2
-        if original_subgrid_area_km2 > 0
+    original_subgrid_station_area_ratio: float = (
+        original_subgrid_area_m2 / station_area_m2
+        if station_area_m2 > 0
         else float("nan")
     )
-    timezone_label: str = format_fixed_utc_offset(float(row["timezone_utc_offset"]))
+    routing_original_subgrid_area_ratio: float = (
+        routing_area_m2 / original_subgrid_area_m2
+        if original_subgrid_area_m2 > 0
+        else float("nan")
+    )
+    timezone_offset_hours: float = float(row["timezone_utc_offset"])
     area_warning: bool = not 0.9 <= routing_original_subgrid_area_ratio <= 1.1
     status_label: str = "ROUTING AREA WARNING" if area_warning else "PASS"
     status_color: str = "#EA580C" if area_warning else "#16A34A"
@@ -1777,30 +1607,30 @@ def _build_snapping_qc_station(
     escaped_id: str = html.escape(station_id)
     popup_html: str = (
         f"<b>{escaped_name}</b> ({escaped_id})<br>"
-        f"<b>Snapping QC: <span style='color:{status_color}'>{status_label}</span></b><br>"
-        f"GRDC gauge: {gauge_latitude:.5f}, {gauge_longitude:.5f}<br>"
+        f"<b>Snapping details: <span style='color:{status_color}'>{status_label}</span></b><br>"
+        f"Gauging station: {gauge_latitude:.5f}, {gauge_longitude:.5f}<br>"
         f"Selected original subgrid: {original_subgrid_latitude:.5f}, {original_subgrid_longitude:.5f}<br>"
         f"Routing pixel: {routing_latitude:.5f}, {routing_longitude:.5f}<br>"
         f"River ID: {int(row['snapped_river_id'])}<br>"
-        f"Gauge–routing distance: {station_to_routing_distance_km:.2f} km<br>"
-        f"Gauge–original subgrid distance: {station_to_original_subgrid_distance_km:.3f} km<br>"
-        f"Original subgrid–routing distance: {original_subgrid_to_routing_distance_km:.3f} km<br>"
-        f"GRDC area: {grdc_area_km2:,.1f} km²<br>"
-        f"Original subgrid area: {original_subgrid_area_km2:,.1f} km²<br>"
-        f"Routing area: {routing_area_km2:,.1f} km²<br>"
-        f"Original subgrid/GRDC area ratio: {original_subgrid_grdc_area_ratio:.3f}<br>"
+        f"Gauge–routing distance: <span data-geb-distance-m='{station_to_routing_distance_m}'></span> km<br>"
+        f"Gauge–original subgrid distance: <span data-geb-distance-m='{station_to_original_subgrid_distance_m}'></span> km<br>"
+        f"Original subgrid–routing distance: <span data-geb-distance-m='{original_subgrid_to_routing_distance_m}'></span> km<br>"
+        f"Station area: <span data-geb-area-m2='{station_area_m2}'></span> km²<br>"
+        f"Original subgrid area: <span data-geb-area-m2='{original_subgrid_area_m2}'></span> km²<br>"
+        f"Routing area: <span data-geb-area-m2='{routing_area_m2}'></span> km²<br>"
+        f"Original subgrid/station area ratio: {original_subgrid_station_area_ratio:.3f}<br>"
         f"Routing/original subgrid area ratio: {routing_original_subgrid_area_ratio:.3f}<br>"
-        f"GRDC/routing area ratio: {grdc_routing_area_ratio:.3f}<br>"
-        f"Daily aggregation offset: {timezone_label} (fixed; no DST)<br>"
+        f"Station/routing area ratio: {station_routing_area_ratio:.3f}<br>"
+        f"Daily aggregation offset: <span data-geb-utc-offset-hours='{timezone_offset_hours}'></span> (fixed; no DST)<br>"
         "Observation day: local midnight to midnight<br>"
         f"{html.escape(exclusion_reason)}"
     )
     tooltip: str = (
-        f"{escaped_id}: {escaped_name}<br>Snapping QC: {status_label}"
-        f"<br>Original subgrid/GRDC area: {original_subgrid_grdc_area_ratio:.3f}; "
+        f"{escaped_id}: {escaped_name}<br>Snapping details: {status_label}"
+        f"<br>Original subgrid/Station area: {original_subgrid_station_area_ratio:.3f}; "
         f"routing/original subgrid: {routing_original_subgrid_area_ratio:.3f}"
-        f"<br>Gauge–routing: {station_to_routing_distance_km:.2f} km"
-        f"<br>{timezone_label} fixed"
+        f"<br>Gauge–routing: <span data-geb-distance-m='{station_to_routing_distance_m}'></span> km"
+        f"<br><span data-geb-utc-offset-hours='{timezone_offset_hours}'></span> fixed"
         "<br>Daily window: local midnight to midnight"
     )
     line_locations: list[list[float]] = [
@@ -1808,14 +1638,6 @@ def _build_snapping_qc_station(
         [original_subgrid_latitude, original_subgrid_longitude],
         [routing_latitude, routing_longitude],
     ]
-    if any(
-        not np.isfinite(latitude)
-        or not np.isfinite(longitude)
-        or not -90 <= latitude <= 90
-        or not -180 <= longitude <= 180
-        for latitude, longitude in line_locations
-    ):
-        raise ValueError("Snapping coordinates must be finite geographic coordinates.")
     return {
         "id": escaped_id,
         "locations": line_locations,
@@ -1823,42 +1645,6 @@ def _build_snapping_qc_station(
         "tooltip": tooltip,
         "popup": popup_html,
     }
-
-
-def _haversine_distance_km(
-    first_longitude: float,
-    first_latitude: float,
-    second_longitude: float,
-    second_latitude: float,
-) -> float:
-    """Calculate great-circle distance between two coordinates.
-
-    Args:
-        first_longitude: First longitude (degrees east).
-        first_latitude: First latitude (degrees north).
-        second_longitude: Second longitude (degrees east).
-        second_latitude: Second latitude (degrees north).
-
-    Returns:
-        Great-circle distance (km).
-    """
-    earth_radius_km: float = 6371.0088
-    first_lon_rad: float = math.radians(first_longitude)
-    first_lat_rad: float = math.radians(first_latitude)
-    second_lon_rad: float = math.radians(second_longitude)
-    second_lat_rad: float = math.radians(second_latitude)
-    longitude_difference: float = second_lon_rad - first_lon_rad
-    latitude_difference: float = second_lat_rad - first_lat_rad
-    haversine_value: float = (
-        math.sin(latitude_difference / 2.0) ** 2
-        + math.cos(first_lat_rad)
-        * math.cos(second_lat_rad)
-        * math.sin(longitude_difference / 2.0) ** 2
-    )
-    return earth_radius_km * 2.0 * math.asin(math.sqrt(min(1.0, haversine_value)))
-
-
-# JSON and display formatting.
 
 
 def _script_json(value: Any) -> str:
@@ -1887,27 +1673,8 @@ def _as_finite_float(value: float | int | np.floating | None) -> float | None:
     Returns:
         Finite float value, or None for missing, NaN, or infinite values.
     """
+    # JSON has no NaN or infinity literals; null also creates gaps in Plotly charts.
     if value is None:
         return None
     float_value: float = float(value)
     return float_value if np.isfinite(float_value) else None
-
-
-def format_fixed_utc_offset(offset_hours: float) -> str:
-    """Format a fixed UTC offset for dashboard labels.
-
-    Args:
-        offset_hours: Fixed offset from UTC (hours).
-
-    Returns:
-        Label such as ``UTC+02:00`` or ``UTC-03:30``.
-
-    Raises:
-        ValueError: If the offset is non-finite or outside UTC-12 to UTC+14.
-    """
-    if not np.isfinite(offset_hours) or not -12.0 <= offset_hours <= 14.0:
-        raise ValueError("UTC offset must be finite and between UTC-12 and UTC+14.")
-    absolute_minutes: int = round(abs(offset_hours) * 60.0)
-    whole_hours, minutes = divmod(absolute_minutes, 60)
-    sign: str = "+" if offset_hours >= 0.0 else "-"
-    return f"UTC{sign}{whole_hours:02d}:{minutes:02d}"

@@ -396,7 +396,8 @@ class Observations(BuildModelBase):
 
             if snap_results is None:
                 self.logger.warning(
-                    "No valid original subgrid river pixel found for station %s. Skipping station.",
+                    "Station %s (%s) skipped: no valid snapping match found.",
+                    station_id,
                     station_name,
                 )
                 continue
@@ -420,7 +421,7 @@ class Observations(BuildModelBase):
                     "discharge_observations_to_GEB_upstream_area_ratio": (
                         station_upstream_area_m2 / snap_results.routing_upstream_area_m2
                         if np.isfinite(station_upstream_area_m2)
-                        else 1.0
+                        else np.nan
                     ),
                     "station_to_original_subgrid_distance_m": (
                         snap_results.station_to_original_subgrid_distance_m

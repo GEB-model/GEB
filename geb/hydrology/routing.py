@@ -1566,6 +1566,49 @@ class RoutingVariables(Bucket):
     active_rivers: gpd.GeoDataFrame
 
 
+def select_active_rivers(rivers: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """Select river segments simulated inside the model domain.
+
+    Downstream outflow segments are excluded. A segment absent from the routing
+    grid is retained only when it connects to an upstream segment in that grid.
+
+    Note:
+        This is the standalone version of `Routing.get_active_rivers`, which
+        operates on `self.var.rivers`. Use this function directly when no
+        `Routing` instance is available, e.g. when rivers are loaded straight
+        from a geometry file (see `dashboard.py`).
+
+    Args:
+        rivers: Built river network indexed by river ID.
+
+    Returns:
+        Active river geometries and their original attributes.
+    """
+    active_rivers: gpd.GeoDataFrame = rivers[
+        (~rivers["is_downstream_outflow"]) & (~rivers["is_further_downstream_outflow"])
+    ]
+
+    to_remove: set[int] = set()
+    river_id: int
+    for river_id in active_rivers.index[~active_rivers["represented_in_grid"]]:
+        to_search: set[int] = {river_id}
+        upstream_rivers: set[int] = set()
+        while to_search:
+            current_id: int = to_search.pop()
+            upstream_segments: pd.DataFrame = rivers[
+                rivers["downstream_ID"] == current_id
+            ]
+            represented: pd.Series = upstream_segments["represented_in_grid"]
+            upstream_rivers.update(upstream_segments.index[represented])
+            to_search.update(upstream_segments.index[~represented])
+        if not upstream_rivers:
+            to_remove.add(river_id)
+
+    active_rivers = active_rivers[~active_rivers.index.isin(to_remove)]
+
+    return active_rivers.copy()
+
+
 class Routing(Module):
     """Routing module of the hydrological model.
 
@@ -2490,40 +2533,17 @@ class Routing(Module):
         return outflow_rivers
 
     def get_active_rivers(self) -> gpd.GeoDataFrame:
-        """Get the rivers that are simulated (i.e., not downstream of the model region).
+        """Get the rivers simulated inside the model domain.
+
+        Note:
+            Thin wrapper around the standalone `select_active_rivers` function,
+            applied to `self.var.rivers`. Use `select_active_rivers` directly
+            when no `Routing` instance is available.
 
         Returns:
-            A GeoDataFrame containing the active rivers.
+            Active river geometries and attributes.
         """
-        rivers: gpd.GeoDataFrame = self.var.rivers
-        active_rivers = rivers[
-            (~rivers["is_downstream_outflow"])
-            & (~rivers["is_further_downstream_outflow"])
-        ]
-
-        to_remove: set[int] = set()
-        for river in active_rivers.itertuples():
-            if not river.represented_in_grid:
-                to_search: set[int] = {river.Index}
-                upstream_rivers: set[int] = set()
-
-                while to_search:
-                    current_id: int = to_search.pop()
-                    upstream_rivers_of_this_river: pd.DataFrame = rivers[
-                        rivers["downstream_ID"] == current_id
-                    ]
-                    for upstream_river in upstream_rivers_of_this_river.itertuples():
-                        if upstream_river.represented_in_grid:  # ty:ignore[unresolved-attribute]
-                            upstream_rivers.add(upstream_river.Index)  # ty:ignore[unresolved-attribute]
-                        else:
-                            to_search.add(upstream_river.Index)  # ty:ignore[unresolved-attribute]
-
-                if not upstream_rivers:
-                    to_remove.add(river.Index)
-
-        active_rivers = active_rivers[~active_rivers.index.isin(to_remove)]
-
-        return active_rivers.copy()
+        return select_active_rivers(self.var.rivers)
 
     def get_active_and_downstream_outflow_rivers(self) -> gpd.GeoDataFrame:
         """Get the rivers that are simulated (i.e., not downstream of the model region) and the downstream outflow rivers.

@@ -22,14 +22,12 @@ DASHBOARD_COLUMNS: dict[str, str] = {
 def get_station_exclusion_reason(
     station: pd.Series,
     report_path: Path,
-    report_station: pd.Series | None = None,
 ) -> str:
     """Return why a station cannot be scored, or an empty string.
 
     Args:
         station: Built station metadata with areas in m² and coordinates in degrees.
         report_path: Simulated station discharge parquet file.
-        report_station: Optional location saved for a legacy report.
 
     Returns:
         Exclusion reason. Empty means the distance and report checks pass.
@@ -66,12 +64,6 @@ def get_station_exclusion_reason(
         .get("attributes", {})
         .get("station_location", {})
     )
-    if not location and report_station is not None:
-        location = {
-            "pixel_xy": list(report_station["snapped_grid_pixel_xy"]),
-            "longitude_latitude": list(report_station["snapped_grid_pixel_lonlat"]),
-            "upstream_area_m2": float(report_station["GEB_upstream_area_from_grid"]),
-        }
     if not location:
         return "Report location is unknown. Rerun the simulation."
     if (
@@ -95,7 +87,7 @@ def get_station_exclusion_reason(
 def find_excluded_stations(
     stations: gpd.GeoDataFrame, report_folder: Path
 ) -> gpd.GeoDataFrame:
-    """Build dashboard records for stations that fail routing or report checks.
+    """Identify stations excluded from evaluation and prepare their map metadata.
 
     Args:
         stations: Built station locations and upstream areas (m²).
@@ -105,14 +97,6 @@ def find_excluded_stations(
         Excluded stations with dashboard coordinates (degrees) and reasons.
 
     """
-    legacy_locations_path: Path = (
-        report_folder / "hydrology.routing" / "discharge_station_locations.geoparquet"
-    )
-    legacy_locations: gpd.GeoDataFrame = (
-        gpd.read_parquet(legacy_locations_path)
-        if legacy_locations_path.exists()
-        else gpd.GeoDataFrame()
-    )
     reasons: pd.Series = pd.Series("", index=stations.index)
     for station_id, station in stations.iterrows():
         reasons.loc[station_id] = get_station_exclusion_reason(
@@ -120,9 +104,6 @@ def find_excluded_stations(
             report_folder
             / "hydrology.routing"
             / f"discharge_hourly_m3_per_s_{station_id}.parquet",
-            legacy_locations.loc[station_id]
-            if station_id in legacy_locations.index
-            else None,
         )
     rejected: gpd.GeoDataFrame = stations.loc[reasons.ne("")]
     if rejected.empty:
@@ -148,18 +129,18 @@ def find_excluded_stations(
         "snapping_method",
         "timezone_utc_offset",
     ):
-        excluded[column] = rejected.get(column, 0.0)
+        excluded[column] = rejected[column]
     return excluded
 
 
-def collect_dashboard_exclusions(
+def find_dashboard_excluded_stations(
     evaluated: gpd.GeoDataFrame,
     excluded: gpd.GeoDataFrame,
     snapped: gpd.GeoDataFrame,
     snapped_path: Path,
-    minimum_upstream_area_km2: float = 0.0,
+    minimum_upstream_area_km2: float,
 ) -> gpd.GeoDataFrame:
-    """Keep every regional station visible regardless of evaluation filters.
+    """Identify stations omitted by snapping, reporting, or evaluation filters.
 
     Args:
         evaluated: Stations with validated or diagnostic scores.
@@ -172,12 +153,8 @@ def collect_dashboard_exclusions(
         Excluded stations including gauges without a snap or usable time series.
     """
     inventory_path: Path = snapped_path.with_name("station_locations.geoparquet")
-    inventory: gpd.GeoDataFrame = (
-        gpd.read_parquet(inventory_path) if inventory_path.exists() else snapped
-    )
-    saved_reasons: pd.Series = inventory.get(
-        "evaluation_exclusion_reason", pd.Series("", index=inventory.index)
-    ).fillna("")
+    inventory: gpd.GeoDataFrame = gpd.read_parquet(inventory_path)
+    saved_reasons: pd.Series = inventory["evaluation_exclusion_reason"].fillna("")
     saved_reasons = saved_reasons.loc[saved_reasons.ne("")]
     missing_ids: pd.Index = (
         inventory.index.difference(evaluated.index)
@@ -192,7 +169,7 @@ def collect_dashboard_exclusions(
         index=inventory.index,
     )
     area: pd.Series = inventory["discharge_observations_upstream_area_m2"]
-    reasons.loc[~np.isfinite(area) | (area <= 0)] = "Missing GRDC upstream area."
+    reasons.loc[~np.isfinite(area) | (area <= 0)] = "Missing station upstream area."
     reasons.loc[reasons.index.intersection(snapped.index)] = (
         "No paired discharge record meets the evaluation period or record-length requirements."
     )

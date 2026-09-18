@@ -7,25 +7,20 @@ import logging
 import tarfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
 from geb.workflows.io import read_geom
 
-if TYPE_CHECKING:
-    from geb.evaluate.hydrology import Hydrology
-
-
 # Download manually from https://zenodo.org/records/6390219.
 EXTERNAL_EVALUATION_FOLDER_NAME: str = "external_evaluation_data"
-UTRECHT_EVALUATION_FILE_NAME: str = "Utrecht_1KM_daily_discharge.csv"
+PCRGLOBWB_EVALUATION_FILE_NAME: str = "Utrecht_1KM_daily_discharge.csv"
 # Download metrics.tgz manually from https://zenodo.org/records/10397664 and
 # save it under this fixed name in the external evaluation folder.
 GOOGLE_STREAMFLOW_FILE_NAME: str = "google_streamflow_metrics.tgz"
 GOOGLE_MODEL_NAME: str = "Google Streamflow"
 GLOFAS_MODEL_NAME: str = "GloFAS"  # part of Google streamflow paper/archive
-UTRECHT_MODEL_NAME: str = "Utrecht"
+PCRGLOBWB_MODEL_NAME: str = "PCR-GLOBWB"
 GOOGLE_METRIC_ROOT: Path = Path(
     "metrics/hydrograph_metrics/per_metric/google/2014/dual_lstm/"
     "hydrologically_separated"
@@ -93,7 +88,7 @@ def format_grdc_station_id(station_id: object) -> str | None:
 def _add_station_matching_columns(table: pd.DataFrame) -> pd.DataFrame:
     """Add normalized station names and GRDC IDs for external-score joins.
 
-    External datasets can identify stations by name (such as Utrecht) or
+    External datasets can identify stations by name (such as PCR-GLOBWB) or
     by GRDC ID (such as Google and GloFAS). Keep both alternatives separate;
     matching prefers a GRDC ID and falls back to the name.
 
@@ -176,7 +171,7 @@ def load_external_skill_scores(
     input_folder: Path,
     logger: logging.Logger,
 ) -> dict[str, pd.DataFrame]:
-    """Read fixed local Utrecht, Google, and GloFAS skill-score files.
+    """Read fixed local PCR-GLOBWB, Google, and GloFAS skill-score files.
 
     Args:
         input_folder: Model input folder. For a merged model, the shared external
@@ -205,13 +200,13 @@ def load_external_skill_scores(
     )
 
     external_models: dict[str, pd.DataFrame] = {}
-    utrecht_path: Path = external_evaluation_folder / UTRECHT_EVALUATION_FILE_NAME
-    if utrecht_path.exists():
-        utrecht_df: pd.DataFrame = pd.read_csv(
-            filepath_or_buffer=utrecht_path, index_col=0
+    pcrglobwb_path: Path = external_evaluation_folder / PCRGLOBWB_EVALUATION_FILE_NAME
+    if pcrglobwb_path.exists():
+        pcrglobwb_df: pd.DataFrame = pd.read_csv(
+            filepath_or_buffer=pcrglobwb_path, index_col=0
         )
-        utrecht_df.index = utrecht_df.index.map(str).str.strip().str.upper()
-        external_models[UTRECHT_MODEL_NAME] = utrecht_df
+        pcrglobwb_df.index = pcrglobwb_df.index.map(str).str.strip().str.upper()
+        external_models[PCRGLOBWB_MODEL_NAME] = pcrglobwb_df
 
     metrics_archive_path: Path = (
         external_evaluation_folder / GOOGLE_STREAMFLOW_FILE_NAME
@@ -233,7 +228,7 @@ def load_external_skill_scores(
         logger.info(
             "No external evaluation data found in %s; expected %s and/or %s.",
             external_evaluation_folder,
-            UTRECHT_EVALUATION_FILE_NAME,
+            PCRGLOBWB_EVALUATION_FILE_NAME,
             GOOGLE_STREAMFLOW_FILE_NAME,
         )
         return external_models
@@ -260,8 +255,10 @@ def load_external_skill_scores(
 
 
 def export_external_skill_scores(
-    self: Hydrology,
-    **kwargs: Any,
+    input_folder: Path,
+    output_folder: Path,
+    snapped_locations_path: Path,
+    logger: logging.Logger,
 ) -> dict[str, pd.DataFrame]:
     """Export external scores for all stations present in this model.
 
@@ -275,35 +272,33 @@ def export_external_skill_scores(
         ``evaluation_metrics.xlsx`` does not yet exist.
 
     Args:
-        self: Hydrology evaluator providing model settings and output paths.
-        **kwargs: Ignored (CLI compatibility).
+        input_folder: Model input directory containing external score files.
+        output_folder: Discharge evaluation directory.
+        snapped_locations_path: Built station locations file.
+        logger: Model logger for diagnostics.
 
     Returns:
         Mapping from model label to matched-stations DataFrame.
     """
     external_models: dict[str, pd.DataFrame] = load_external_skill_scores(
-        input_folder=self.model.input_folder,
-        logger=self.model.logger,
+        input_folder=input_folder,
+        logger=logger,
     )
     if not external_models:
-        self.model.logger.info("No external evaluation data found, skipping.")
+        logger.info("No external evaluation data found, skipping.")
         return {}
 
-    evaluation_metrics_path: Path = (
-        self.evaluate_discharge_output_folder / "evaluation_metrics.xlsx"
-    )
+    evaluation_metrics_path: Path = output_folder / "evaluation_metrics.xlsx"
     geb_station_identifiers: set[str] = load_geb_station_identifiers(
         evaluation_metrics_path=evaluation_metrics_path,
-        snapped_locations_path=self.model.files["geom"][
-            "discharge/discharge_snapped_locations"
-        ],
+        snapped_locations_path=snapped_locations_path,
     )
 
     return filter_external_skill_scores(
         external_models=external_models,
         geb_station_identifiers=geb_station_identifiers,
-        output_folder=self.evaluate_discharge_output_folder,
-        logger=self.model.logger,
+        output_folder=output_folder,
+        logger=logger,
     )
 
 
