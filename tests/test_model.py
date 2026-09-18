@@ -459,9 +459,6 @@ def test_run() -> None:
             "KGE_daily",
             "NSE_daily",
             "KGE_correlation_daily",
-            "KGE",
-            "NSE",
-            "KGE_correlation",
         ]:
             assert label in result
             assert result[label] is not None

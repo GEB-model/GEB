@@ -905,6 +905,24 @@ class Reporter:
                                     "type": "grid",
                                     "function": f"sample_xy,{xy_grid[0]},{xy_grid[1]}",
                                     "substeps": 24,
+                                    "extra_attributes": {
+                                        "station_location": {
+                                            "pixel_xy": [
+                                                int(value) for value in xy_grid
+                                            ],
+                                            "longitude_latitude": [
+                                                float(value)
+                                                for value in station_info[
+                                                    "snapped_grid_pixel_lonlat"
+                                                ]
+                                            ],
+                                            "upstream_area_m2": float(
+                                                station_info[
+                                                    "GEB_upstream_area_from_grid"
+                                                ]
+                                            ),
+                                        }
+                                    },
                                 }
                             self.variables_to_report = multi_level_merge(
                                 self.variables_to_report,
@@ -1641,6 +1659,7 @@ class Reporter:
                     )
 
                     folder = self.report_folder / module_name
+                    df.attrs.update(config.get("extra_attributes", {}))
                     folder.mkdir(parents=True, exist_ok=True)
 
                     futures.append(
