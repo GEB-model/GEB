@@ -22,107 +22,7 @@
 # --------------------------------------------------------------------------------
 
 import numpy as np
-import numpy.typing as npt
 from numba import njit
-
-from geb.geb_types import Shape
-
-from ..landcovers import (
-    FOREST,
-    GRASSLAND_LIKE,
-    NON_PADDY_IRRIGATED,
-    OPEN_WATER,
-    PADDY_IRRIGATED,
-    SEALED,
-)
-
-
-def leaf_area_index_to_interception_capacity_m(
-    leaf_area_index: np.ndarray[Shape, np.dtype[np.float32]],
-) -> np.ndarray[Shape, np.dtype[np.float32]]:
-    """Convert leaf area index to interception capacity in meters.
-
-    Args:
-        leaf_area_index: Leaf area index (LAI) array.
-
-    Returns:
-        interception_capacity_m: Interception capacity in meters.
-    """
-    interception_capacity_m = (
-        np.float32(0.935)
-        + np.float32(0.498) * leaf_area_index
-        - 0.00575 * (leaf_area_index) ** 2
-    ) / np.float32(1000.0)  # convert from mm to m
-    interception_capacity_m[leaf_area_index <= np.float32(0.1)] = np.float32(0.0)
-    return interception_capacity_m
-
-
-def get_interception_capacity(
-    land_use_type: npt.NDArray[np.int32],
-    interception_capacity_m_forest_HRU: npt.NDArray[np.float32],
-    interception_capacity_m_grassland_HRU: npt.NDArray[np.float32],
-) -> npt.NDArray[np.float32]:
-    """Get interception capacity based on land use type.
-
-    Args:
-        land_use_type: Array of land use types.
-        interception_capacity_m_forest_HRU: Interception capacity for forest land use type.
-        interception_capacity_m_grassland_HRU: Interception capacity for grassland land use type
-
-    Returns:
-        interception_capacity_m: Array of interception capacities corresponding to land use types.
-    """
-    interception_capacity_m = np.full(land_use_type.shape, np.nan, dtype=np.float32)
-    interception_capacity_m[land_use_type == OPEN_WATER] = 0.0
-    interception_capacity_m[land_use_type == SEALED] = 0.0
-    interception_capacity_m[land_use_type == PADDY_IRRIGATED] = 0.001  # 1 mm
-    interception_capacity_m[land_use_type == NON_PADDY_IRRIGATED] = 0.001  # 1 mm
-    interception_capacity_m[land_use_type == FOREST] = (
-        interception_capacity_m_forest_HRU[land_use_type == FOREST]
-    )
-    interception_capacity_m[land_use_type == GRASSLAND_LIKE] = (
-        interception_capacity_m_grassland_HRU[land_use_type == GRASSLAND_LIKE]
-    )
-    assert not np.isnan(interception_capacity_m).any()
-    return interception_capacity_m
-
-
-def get_leaf_area_index(
-    land_use_type: npt.NDArray[np.int32],
-    leaf_area_index_forest_HRU: npt.NDArray[np.float32],
-    leaf_area_index_grassland_HRU: npt.NDArray[np.float32],
-    crop_map: npt.NDArray[np.int32],
-) -> npt.NDArray[np.float32]:
-    """Get Leaf Area Index (LAI) based on land use type.
-
-    Args:
-        land_use_type: Array of land use types.
-        leaf_area_index_forest_HRU: LAI for forest land use type.
-        leaf_area_index_grassland_HRU: LAI for grassland land use type
-        crop_map: Array of crop types for each cell.
-
-    Returns:
-        leaf_area_index: Array of LAI corresponding to land use types.
-    """
-    leaf_area_index = np.zeros(land_use_type.shape, dtype=np.float32)
-
-    mask_forest = land_use_type == FOREST
-    leaf_area_index[mask_forest] = leaf_area_index_forest_HRU[mask_forest]
-
-    mask_grassland = (land_use_type == GRASSLAND_LIKE) & (
-        crop_map == -1
-    )  # Only assign grassland LAI to non-crop grasslands
-    leaf_area_index[mask_grassland] = leaf_area_index_grassland_HRU[mask_grassland]
-
-    mask_cropland = (
-        (land_use_type == GRASSLAND_LIKE)
-        | (land_use_type == PADDY_IRRIGATED)
-        | (land_use_type == NON_PADDY_IRRIGATED)
-    ) & (crop_map != -1)
-    # TODO: refine this
-    leaf_area_index[mask_cropland] = 3.0  # Assign a default LAI for croplands
-
-    return leaf_area_index
 
 
 @njit(cache=True, inline="always")
@@ -133,57 +33,79 @@ def interception(
     potential_interception_evaporation_m: np.float32,
     potential_transpiration_m: np.float32,
     potential_direct_evaporation_m: np.float32,
+    leaf_area_index: np.float32,
 ) -> tuple[np.float32, np.float32, np.float32, np.float32, np.float32]:
-    """Calculate interception storage, throughfall, and evaporation.
+    """Calculate dynamic interception storage, throughfall, and evaporation.
 
-    The potential transpiration and potential direct evaporation are reduced by
-    the amount of evaporation from the interception storage, with priority given
-    to reducing transpiration.
+    Interception capture follows the storage-based dynamic formulation from Aston (1978)
+    and Merriam (1960) as documented in the LISFLOOD model (van der Knijff & de Roo, 2008,
+    Section 2, Eq. 2-6 to 2-8). See: https://publications.jrc.ec.europa.eu/repository/handle/JRC44410
+
+    Evaporation from intercepted water is calculated following CWatM:
+        E_int = min(storage, E_pot_int * (storage / S_max)**(2/3))
 
     Args:
-        rainfall_m: Precipitation (rain) (m).
-        storage_m: Current interception storage (m).
-        capacity_m: Interception capacity of vegetation (m).
-        potential_interception_evaporation_m: Potential evaporation from a wet surface (m).
+        rainfall_m: Precipitation (rain) depth in the time step (m).
+        storage_m: Current interception storage before time step (m).
+        capacity_m: Maximum canopy interception storage capacity (S_max) (m).
+        potential_interception_evaporation_m: Potential evaporation from wet canopy (m).
         potential_transpiration_m: Potential transpiration (m).
         potential_direct_evaporation_m: Potential direct evaporation (soil/water) (m).
+        leaf_area_index: Average Leaf Area Index (LAI) (m2 m-2).
 
     Returns:
-        new_storage: Updated interception storage (m).
+        new_storage: Updated interception storage after evaporation (m).
         throughfall: Water reaching the ground after interception (m).
         evaporation: Evaporation from intercepted water (m).
         potential_transpiration_m: Updated potential transpiration (m).
         potential_direct_evaporation_m: Updated potential direct evaporation (m).
     """
-    # Calculate throughfall
-    throughfall = max(np.float32(0.0), rainfall_m + storage_m - capacity_m)
+    # If no canopy capacity or no vegetated surface, all rainfall and storage pass through
+    if capacity_m <= np.float32(0.0) or leaf_area_index <= np.float32(0.1):
+        throughfall: np.float32 = rainfall_m + storage_m
+        return (
+            np.float32(0.0),
+            throughfall,
+            np.float32(0.0),
+            potential_transpiration_m,
+            potential_direct_evaporation_m,
+        )
 
-    # Update interception storage after throughfall
-    new_storage = storage_m + rainfall_m - throughfall
+    # If initial storage exceeds current capacity (after reduced LAI), drain excess to throughfall
+    excess_storage: np.float32 = max(np.float32(0.0), storage_m - capacity_m)
+    current_storage: np.float32 = storage_m - excess_storage
 
-    # Calculate evaporation from intercepted water
-    evaporation = min(
+    if rainfall_m > np.float32(0.0):
+        k: np.float32 = np.float32(0.046) * leaf_area_index
+        int_captured: np.float32 = capacity_m * (
+            np.float32(1.0) - np.exp(-k * rainfall_m / capacity_m)
+        )
+        # Cannot intercept more water than fell as rain
+        int_captured = min(rainfall_m, int_captured)
+        # Int can never exceed remaining capacity: S_max - Int_cum
+        available_capacity: np.float32 = max(
+            np.float32(0.0), capacity_m - current_storage
+        )
+        int_captured = min(int_captured, available_capacity)
+    else:
+        int_captured = np.float32(0.0)
+
+    throughfall = rainfall_m - int_captured + excess_storage
+    new_storage: np.float32 = current_storage + int_captured
+
+    evaporation: np.float32 = min(
         new_storage,
         potential_interception_evaporation_m
-        * (new_storage / capacity_m) ** np.float32(2.0 / 3.0)
-        if capacity_m > np.float32(0.0)
-        else np.float32(0.0),
+        * (new_storage / capacity_m) ** np.float32(2.0 / 3.0),
     )
-
-    # Update interception storage after evaporation
     new_storage -= evaporation
 
-    # Subtract evaporation from transpiration potential first.
-    evaporation_from_transpiration = min(evaporation, potential_transpiration_m)
-    potential_transpiration_m -= evaporation_from_transpiration
-
-    # Subtract remaining evaporation from direct (soil/water) potential.
-    evaporation_from_direct = max(
-        np.float32(0.0), evaporation - evaporation_from_transpiration
-    )
-    potential_direct_evaporation_m -= evaporation_from_direct
+    # Reduce potential transpiration and direct evaporation, prioritizing transpiration
+    transpiration_reduction: np.float32 = min(potential_transpiration_m, evaporation)
+    potential_transpiration_m -= transpiration_reduction
+    remaining_evap_to_reduce: np.float32 = evaporation - transpiration_reduction
     potential_direct_evaporation_m = max(
-        np.float32(0.0), potential_direct_evaporation_m
+        np.float32(0.0), potential_direct_evaporation_m - remaining_evap_to_reduce
     )
 
     return (

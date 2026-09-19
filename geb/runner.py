@@ -67,6 +67,25 @@ class DetectDuplicateKeysYamlLoader(yaml.SafeLoader):
         ValueError: If a duplicate key is found in the YAML mapping.
     """
 
+    _bool_values = {
+        "true": True,
+        "false": False,
+    }
+
+    def construct_yaml_bool(
+        self, node: yaml.nodes.ScalarNode
+    ) -> bool | float | int | str:
+        """Construct a boolean or scalar from a YAML node.
+
+        Args:
+            node: The YAML node to construct the boolean from.
+
+        Returns:
+            The constructed boolean or scalar.
+        """
+        value = self.construct_scalar(node)
+        return self._bool_values.get(value.lower(), value)
+
     def construct_mapping(
         self, node: yaml.nodes.MappingNode, deep: bool = False
     ) -> dict:
@@ -89,6 +108,12 @@ class DetectDuplicateKeysYamlLoader(yaml.SafeLoader):
                 raise ValueError(f"Duplicate key found: {key}")
             mapping[key] = self.construct_object(value_node, deep=deep)
         return mapping
+
+
+DetectDuplicateKeysYamlLoader.add_constructor(
+    "tag:yaml.org,2002:bool",
+    DetectDuplicateKeysYamlLoader.construct_yaml_bool,
+)
 
 
 def parse_config(

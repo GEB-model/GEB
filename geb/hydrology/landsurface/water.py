@@ -112,6 +112,47 @@ def calculate_spatial_infiltration_excess(
 
 
 @njit(cache=True, inline="always", fastmath=True)
+def calculate_variable_source_area_fraction(
+    effective_soil_saturation: np.float32,
+    shape_parameter_beta: np.float32,
+) -> np.float32:
+    """Calculate the saturated variable source area fraction for Dunne runoff.
+
+    Computes the fraction of the grid cell / catchment area (A_s) that is saturated
+    to the surface based on the near-surface soil moisture state and topographic shape
+    parameter, following the classical Variable Infiltration Capacity (VIC) and
+    Probability Distributed Model (PDM) formulations (Zhao 1992; Liang et al., 1994;
+    Moore 1985).
+
+    Notes:
+        Under the Pareto storage capacity distribution:
+            A_s = 1 - (1 - S_soil)^b
+        where S_soil is the effective saturation of the upper soil column and b is the
+        calibrated topographic shape parameter.
+
+    Args:
+        effective_soil_saturation: Relative saturation of the upper soil column (-),
+            bounded between 0.0 (dry) and 1.0 (fully saturated).
+        shape_parameter_beta: Topographic roughness / infiltration shape parameter (-).
+
+    Returns:
+        Fraction of the cell area that is saturated and generating Dunne runoff (-).
+    """
+    if shape_parameter_beta <= np.float32(
+        0.0
+    ) or effective_soil_saturation <= np.float32(0.0):
+        return np.float32(0.0)
+
+    s_soil: np.float32 = min(effective_soil_saturation, np.float32(1.0))
+    # Calibration scaling factor (0.3) applied to terrain shape parameter
+    b: np.float32 = max(np.float32(0.01), shape_parameter_beta * np.float32(0.3))
+    unsaturated_fraction: np.float32 = np.power(np.float32(1.0) - s_soil, b)
+    saturated_area_fraction: np.float32 = np.float32(1.0) - unsaturated_fraction
+
+    return min(max(saturated_area_fraction, np.float32(0.0)), np.float32(1.0))
+
+
+@njit(cache=True, inline="always", fastmath=True)
 def calculate_green_ampt_time_from_infiltration(
     cumulative_infiltration: np.float32,
     saturated_hydraulic_conductivity_m_per_s: np.float32,
@@ -332,6 +373,58 @@ def get_soil_water_potential_van_genuchten(
 
 
 @njit(cache=True, inline="always")
+def calculate_effective_wetting_front_suction(
+    bubbling_pressure_m_positive: np.float32,
+    lambda_pore_size_distribution: np.float32,
+    effective_saturation: np.float32 = np.float32(0.0),
+) -> np.float32:
+    """Calculate effective wetting front suction head for Green-Ampt infiltration.
+
+    Computes the effective capillary drive across the wetting front (psi_f) based on
+    Brooks-Corey parameters and initial moisture content ahead of the front, using the
+    analytical solution of the hydraulic conductivity integral from Brakensiek (1977)
+    and Rawls, Brakensiek & Miller (1983).
+
+    Notes:
+        The capillary drive across the wetting front is defined by:
+            H_c = integral_0^{psi_i} K_r(psi) dpsi
+        Under the assumption of rectangular piston flow, the effective wetting front
+        suction head psi_f is H_c / 2 (Rawls et al., 1983; Chow et al., 1988):
+            psi_f = (psi_b / 2) * (2 + 3*lambda - S_e^((1 + 3*lambda) / lambda)) / (1 + 3*lambda)
+        where psi_b is the bubbling pressure, lambda is the pore size distribution index,
+        and S_e is the initial effective saturation ahead of the wetting front.
+
+    Args:
+        bubbling_pressure_m_positive: Soil bubbling pressure / air entry potential (meters).
+            Must be positive.
+        lambda_pore_size_distribution: Brooks-Corey pore size distribution index (-).
+        effective_saturation: Effective saturation ahead of the wetting front (-),
+            bounded between 0.0 (dry) and 1.0 (saturated).
+
+    Returns:
+        Effective wetting front suction head (meters).
+    """
+    s_e: np.float32 = min(max(effective_saturation, np.float32(0.0)), np.float32(1.0))
+    lambda_safe: np.float32 = max(lambda_pore_size_distribution, np.float32(1e-4))
+    bubbling_safe: np.float32 = max(bubbling_pressure_m_positive, np.float32(1e-4))
+
+    eta: np.float32 = np.float32(2.0) + np.float32(3.0) * lambda_safe
+    denominator: np.float32 = np.float32(1.0) + np.float32(3.0) * lambda_safe
+    exponent: np.float32 = denominator / lambda_safe
+
+    if s_e > np.float32(0.0):
+        sat_term: np.float32 = s_e**exponent
+    else:
+        sat_term = np.float32(0.0)
+
+    psi_f: np.float32 = (bubbling_safe / np.float32(2.0)) * (
+        (eta - sat_term) / denominator
+    )
+
+    return max(psi_f, np.float32(1e-4))
+
+
+@njit(cache=True, inline="always")
 def get_green_ampt_params(
     wetting_front_depth_m: np.float32,
     soil_layer_height_m: ArrayFloat32,
@@ -354,27 +447,30 @@ def get_green_ampt_params(
         w: Current total water column in each soil layer (meters).
         ws: Saturated water column capacity of each soil layer (meters).
         wres: Residual water column of each soil layer (meters).
-        bubbling_pressure_m_positive: Bubbling pressure parameter for each layer (m).
-        lambda_pore_size_distribution: Pore size distribution index (lambda) for each layer.
+        bubbling_pressure_m_positive: Bubbling pressure parameter for each layer (meters).
+        lambda_pore_size_distribution: Pore size distribution index (lambda) for each layer (-).
 
     Returns:
         A tuple containing:
-            - idx (int): Index of the soil layer containing the wetting front.
-            - psi (float): Wetting front suction head (meters).
-            - delta_theta (float): Moisture deficit at the wetting front (dimensionless, m/m).
+            - idx: Index of the soil layer containing the wetting front.
+            - psi: Effective wetting front suction head (meters).
+            - delta_theta: Moisture deficit at the wetting front (-).
 
     Notes:
         - Assumes piston flow: Soil behind the wetting front is fully saturated.
         - Calculates moisture ahead of the front by subtracting the saturated water volume behind the front
           from the total layer water volume.
-        - Includes heuristics (theta_floor) to prevent numerical instability when layers interact.
+        - Uses effective wetting front suction head rather than matric tension to properly represent
+          capillary drive under Green-Ampt theory (Brakensiek, 1977; Rawls et al., 1983).
     """
     current_depth: np.float32 = np.float32(0.0)
-    n_layers = len(soil_layer_height_m)
+    n_layers: int = len(soil_layer_height_m)
+    idx: int = 0
+    depth_in_layer: np.float32 = np.float32(0.0)
 
     # Find which layer the wetting front is currently in
     for i in range(n_layers):
-        h = soil_layer_height_m[i]
+        h: np.float32 = soil_layer_height_m[i]
         # Use epsilon to handle boundaries
         if wetting_front_depth_m < current_depth + h - np.float32(1e-4):
             idx = i
@@ -386,24 +482,24 @@ def get_green_ampt_params(
         idx = n_layers - 1
         depth_in_layer = soil_layer_height_m[idx]
 
-    layer_h = soil_layer_height_m[idx]
+    layer_h: np.float32 = soil_layer_height_m[idx]
 
     # Reconstruct initial moisture content ahead of the front.
     # w[idx] is the total water column in the layer (meters).
     # Since we assume piston flow, the part of the layer behind the front (depth_in_layer)
     # is saturated using the Green-Ampt assumption.
-    theta_sat = ws[idx] / layer_h
-    remaining_height = layer_h - depth_in_layer
+    theta_sat: np.float32 = ws[idx] / layer_h
+    remaining_height: np.float32 = layer_h - depth_in_layer
 
     if remaining_height > np.float32(1e-4):
         # Mass balance: Total Water = Water_Behind + Water_Ahead
-        water_behind = depth_in_layer * theta_sat
-        water_ahead = max(np.float32(0.0), w[idx] - water_behind)
-        theta_initial = water_ahead / remaining_height
+        water_behind: np.float32 = depth_in_layer * theta_sat
+        water_ahead: np.float32 = max(np.float32(0.0), w[idx] - water_behind)
+        theta_initial: np.float32 = water_ahead / remaining_height
 
         # Clamp to physical limits
         # use a small epsilon as floor
-        theta_floor = np.float32(1e-9)
+        theta_floor: np.float32 = np.float32(1e-9)
 
         theta_initial = max(theta_initial, theta_floor)
         theta_initial = min(theta_initial, theta_sat - np.float32(1e-9))
@@ -411,19 +507,23 @@ def get_green_ampt_params(
         # Layer fully invaded; assume near saturation (small deficit)
         theta_initial = theta_sat - np.float32(1e-3)
 
-    delta_theta = max(theta_sat - theta_initial, np.float32(1e-4))
+    delta_theta: np.float32 = max(theta_sat - theta_initial, np.float32(1e-4))
 
-    # Calculate suction based on the initial moisture
-    w_initial_equiv = theta_initial * layer_h
-    psi = get_soil_water_potential_van_genuchten(
-        w=max(w_initial_equiv, wres[idx]),
-        wres=wres[idx],
-        ws=ws[idx],
-        lambda_pore_size_distribution=lambda_pore_size_distribution[idx],
-        bubbling_pressure_m_positive=bubbling_pressure_m_positive[idx],
+    # Calculate effective wetting front suction based on Brooks-Corey parameters and initial moisture
+    theta_res: np.float32 = wres[idx] / layer_h
+    delta_theta_max: np.float32 = max(theta_sat - theta_res, np.float32(1e-6))
+    effective_saturation: np.float32 = min(
+        max((theta_initial - theta_res) / delta_theta_max, np.float32(0.0)),
+        np.float32(1.0),
     )
 
-    return idx, abs(psi), delta_theta
+    psi: np.float32 = calculate_effective_wetting_front_suction(
+        bubbling_pressure_m_positive=bubbling_pressure_m_positive[idx],
+        lambda_pore_size_distribution=lambda_pore_size_distribution[idx],
+        effective_saturation=effective_saturation,
+    )
+
+    return idx, psi, delta_theta
 
 
 @njit(inline="always")
@@ -451,19 +551,86 @@ TABLE_SIZE: int = 1024
 assert (TABLE_SIZE & (TABLE_SIZE - 1)) == 0, "TABLE_SIZE must be a power of two"
 MASK: np.uint64 = np.uint64(TABLE_SIZE - 1)
 
-_RAINFALL_LOOKUP_TABLE_NON_NORMALIZED: TwoDArrayFloat64 = np.random.default_rng(
-    42
-).lognormal(
-    mean=0,
-    sigma=1.2,
-    size=(TABLE_SIZE, 6),
-)
-# Normalize rows to sum to 1.0
-RAINFALL_LOOKUP_TABLE: TwoDArrayFloat32 = (
-    _RAINFALL_LOOKUP_TABLE_NON_NORMALIZED
-    / _RAINFALL_LOOKUP_TABLE_NON_NORMALIZED.sum(axis=1)[:, np.newaxis]
-).astype(np.float32)
-del _RAINFALL_LOOKUP_TABLE_NON_NORMALIZED  # Free memory
+# Default sigma presets by precipitation forcing source
+FORCING_SOURCE_SIGMA_DEFAULTS: dict[str, float] = {
+    "ERA5-Land": 1.2,
+    "MSWEP": 0.8,
+    "ECMWF": 1.2,
+}
+
+
+def generate_rainfall_lookup_table(
+    sigma: float,
+    table_size: int = TABLE_SIZE,
+    seed: int = 42,
+) -> TwoDArrayFloat32:
+    """Generate precomputed lognormal weights for rainfall distribution across substeps.
+
+    Args:
+        sigma: Lognormal standard deviation shape parameter.
+        table_size: Number of table rows (must be a power of two).
+        seed: Random seed for reproducible table generation.
+
+    Returns:
+        2D array of shape (table_size, 6) with normalized row weights summing to 1.0.
+    """
+    raw: TwoDArrayFloat64 = np.random.default_rng(seed).lognormal(
+        mean=0.0,
+        sigma=sigma,
+        size=(table_size, 6),
+    )
+    table: TwoDArrayFloat32 = (raw / raw.sum(axis=1)[:, np.newaxis]).astype(np.float32)
+
+    return table
+
+
+@njit(cache=True, inline="always", fastmath=True)
+def calculate_depression_spillover_runoff(
+    topwater_m: np.float32,
+    depression_storage_capacity_m: np.float32 = np.float32(0.0025),
+    runoff_shape_parameter: np.float32 = np.float32(1.0),
+) -> tuple[np.float32, np.float32]:
+    """Calculate surface runoff and retained topwater from depression storage spillover.
+
+    Surface hollows and puddles retain ponded surface water up to the depression
+    storage capacity. As topwater accumulates, water progressively connects and spills
+    over into direct surface runoff.
+
+    Args:
+        topwater_m: Total surface water before runoff partitioning (meters).
+        depression_storage_capacity_m: Maximum puddle/depression storage capacity (meters).
+        runoff_shape_parameter: Exponent governing how quickly puddles overflow [-].
+            Higher values retain more water before overflowing; lower values produce earlier runoff.
+
+    Returns:
+        A tuple containing:
+            - retained_topwater_m: Water retained in surface depressions (meters).
+            - direct_runoff_m: Direct surface runoff leaving the cell (meters).
+    """
+    if topwater_m <= np.float32(0.0):
+        return np.float32(0.0), np.float32(0.0)
+
+    if depression_storage_capacity_m <= np.float32(0.0):
+        return np.float32(0.0), topwater_m
+
+    inv_shape_plus_one: np.float32 = np.float32(1.0) / (
+        runoff_shape_parameter + np.float32(1.0)
+    )
+
+    if topwater_m <= depression_storage_capacity_m:
+        relative_storage: np.float32 = topwater_m / depression_storage_capacity_m
+        direct_runoff_m: np.float32 = (
+            topwater_m * inv_shape_plus_one * (relative_storage**runoff_shape_parameter)
+        )
+        retained_topwater_m: np.float32 = topwater_m - direct_runoff_m
+    else:
+        max_retention: np.float32 = depression_storage_capacity_m * (
+            np.float32(1.0) - inv_shape_plus_one
+        )
+        retained_topwater_m = max_retention
+        direct_runoff_m = topwater_m - retained_topwater_m
+
+    return retained_topwater_m, direct_runoff_m
 
 
 @njit(cache=True, inline="always")
@@ -488,8 +655,10 @@ def infiltration(
     soil_enthalpy_top_layer_J_per_m2: np.float32,
     solid_heat_capacity_top_layer_J_per_m2_K: np.float32,
     rain_temperature_C: np.float32,
-    liquid_water_input_for_enthalpy_m: np.float32,
+    new_surface_water_input_m: np.float32,
+    rainfall_lookup_table: TwoDArrayFloat32,
     distribute_rainfall_lognormally: bool = True,
+    slope_m_per_m: np.float32 = np.float32(0.0),
 ) -> tuple[
     np.float32,
     np.float32,
@@ -504,7 +673,7 @@ def infiltration(
     """Simulates vertical transport of water in the soil for a single cell.
 
     Uses an explicit Green-Ampt approximation (Salvucci, 1994) combined with the
-    PDM variable infiltration capacity curve.
+    PDM variable infiltration capacity curve and depression storage spillover runoff.
 
     The function uses `wetting_front_suction_head_m` which is a state variable
     tracking the matric suction at the sharp wetting front. This should be
@@ -532,11 +701,11 @@ def infiltration(
         soil_enthalpy_top_layer_J_per_m2: Top-layer soil enthalpy relative to 0°C liquid water (J/m2).
         solid_heat_capacity_top_layer_J_per_m2_K: Areal heat capacity of the top-layer solid soil fraction (J/m2/K).
         rain_temperature_C: Temperature of liquid water entering the soil surface (C).
-        liquid_water_input_for_enthalpy_m: Newly added liquid water reaching the
-            top-soil thermal control volume during this timestep (m). This should
-            include rain and similar new surface inputs, but exclude pre-existing
-            ponded water so heat advection is not double counted.
+        new_surface_water_input_m: Newly arriving liquid water reaching the surface
+            during this timestep from rain, melt, or irrigation (m).
+        rainfall_lookup_table: Precomputed lognormal weights lookup table of shape (table_size, 6).
         distribute_rainfall_lognormally: Whether to distribute rainfall across substeps using a log-normal distribution to simulate temporal variability. If False, rainfall is distributed evenly.
+        slope_m_per_m: Hillslope slope for modulating depression storage capacity (m/m).
 
     Returns:
         A tuple containing:
@@ -550,16 +719,13 @@ def infiltration(
             - green_ampt_active_layer_idx: Updated active soil layer index.
             - soil_enthalpy_top_layer_J_per_m2: Updated top-layer soil enthalpy (J/m2).
     """
-    no_infiltration_land_use: bool = (
-        land_use_type == SEALED or land_use_type == OPEN_WATER
-    )
-    no_topwater_available: bool = topwater_m == np.float32(0.0)
+    no_infiltration_land_use: bool = land_use_type == OPEN_WATER
+    no_topwater_available: bool = bool(topwater_m <= np.float32(1e-6))
 
     # Early return avoids expensive Green-Ampt substeps when infiltration is impossible:
-    # Sealed surfaces and open water do not allow infiltration,
-    # and if there is no topwater, there is no water to infiltrate.
+    # Open water does not allow infiltration, and if there is no topwater, there is no water to infiltrate.
     if no_infiltration_land_use or no_topwater_available:
-        direct_runoff: np.float32 = topwater_m  # All topwater becomes runoff (only for non-sealed, non-open-water land uses)
+        direct_runoff: np.float32 = topwater_m
         return (
             np.float32(0.0),  # topwater_m
             direct_runoff,  # direct_runoff
@@ -574,8 +740,16 @@ def infiltration(
 
     # Initialize accumulators for the timestep
     total_infiltration_amount: np.float32 = np.float32(0.0)
-    total_direct_runoff: np.float32 = np.float32(0.0)
     groundwater_recharge_m: np.float32 = np.float32(0.0)
+    impervious_direct_runoff_m: np.float32 = np.float32(0.0)
+    total_direct_runoff: np.float32 = np.float32(0.0)
+
+    # Clamp newly arriving water between 0 and total surface water (e.g. after open-water evaporation).
+    # Any excess of topwater_m represents pre-existing depression storage from previous timesteps.
+    new_surface_water_input_m = min(
+        topwater_m, max(np.float32(0.0), new_surface_water_input_m)
+    )
+    current_topwater_m: np.float32 = topwater_m - new_surface_water_input_m
 
     n_substeps: int = 6
     substep_time_s: np.float32 = np.float32(3600.0) / np.float32(n_substeps)
@@ -607,15 +781,73 @@ def infiltration(
     for i in range(green_ampt_active_layer_idx + 1):
         current_layer_depth_limit += soil_layer_height_m[i]
 
+    # Steeper slopes hold less puddle storage before spilling over.
+    # Sealed surfaces have lower storage (0.4 - 1.5 mm) than natural ground (0.8 - 2.5 mm).
+    if land_use_type == PADDY_IRRIGATED:
+        ponding_allowance: np.float32 = np.float32(0.05)
+        depression_storage_m: np.float32 = ponding_allowance
+        runoff_shape_parameter: np.float32 = np.float32(1.0)
+    elif land_use_type == SEALED:
+        ponding_allowance = np.float32(0.0)
+        depression_storage_m = max(
+            np.float32(0.0004),
+            np.float32(0.0015) / (np.float32(1.0) + np.float32(10.0) * slope_m_per_m),
+        )
+        runoff_shape_parameter = max(
+            np.float32(0.4),
+            np.float32(1.0) / (np.float32(1.0) + variable_runoff_shape_beta),
+        )
+    else:
+        ponding_allowance = np.float32(0.0)
+        depression_storage_m = max(
+            np.float32(0.0008),
+            np.float32(0.0025) / (np.float32(1.0) + np.float32(10.0) * slope_m_per_m),
+        )
+        runoff_shape_parameter = max(
+            np.float32(0.4),
+            np.float32(1.0) / (np.float32(1.0) + variable_runoff_shape_beta),
+        )
+
+    # Calculate effective saturation of the upper root-zone soil profile (top 3 layers, ~30 cm)
+    # for variable source area (Dunne saturation-excess) runoff generation.
+    upper_layers_to_consider: int = min(3, len(w))
+    total_water_upper: np.float32 = np.float32(0.0)
+    total_res_upper: np.float32 = np.float32(0.0)
+    total_sat_upper: np.float32 = np.float32(0.0)
+    for i in range(upper_layers_to_consider):
+        total_water_upper += w[i]
+        total_res_upper += wres[i]
+        total_sat_upper += ws[i]
+
+    delta_capacity_upper: np.float32 = max(
+        total_sat_upper - total_res_upper, np.float32(1e-6)
+    )
+    s_soil_effective: np.float32 = min(
+        max(
+            (total_water_upper - total_res_upper) / delta_capacity_upper,
+            np.float32(0.0),
+        ),
+        np.float32(1.0),
+    )
+
+    if land_use_type in (SEALED, PADDY_IRRIGATED, OPEN_WATER):
+        saturated_area_fraction: np.float32 = np.float32(0.0)
+    else:
+        saturated_area_fraction = calculate_variable_source_area_fraction(
+            effective_soil_saturation=s_soil_effective,
+            shape_parameter_beta=variable_runoff_shape_beta,
+        )
+    unsaturated_area_fraction: np.float32 = np.float32(1.0) - saturated_area_fraction
+
     # rainfall is given per 1 hour, but in reality it is more likely to come in bursts. This
     # can lead to uneven infiltration and more runoff. To simulate this, we use a pre-generated lookup table of
     # log-normally distributed rainfall patterns across the 6 substeps. We use the seed to select a random row from the table,
     # which gives us a unique but deterministic rainfall distribution for this cell and timestep.
     # The total rainfall across the substeps is normalized to match the input rainfall for the timestep,
     # so we are not changing the total amount of water, just how it is distributed within the hour.
-    idx: np.uint64 = splitmix64(seed)
+    idx: np.uint64 = splitmix64(np.uint64(seed))
     if distribute_rainfall_lognormally:
-        rainfall_lookup_table_row: ArrayFloat32 = RAINFALL_LOOKUP_TABLE[idx & MASK]
+        rainfall_lookup_table_row: ArrayFloat32 = rainfall_lookup_table[idx & MASK]
     else:
         rainfall_lookup_table_row: ArrayFloat32 = np.full(
             n_substeps, 1.0 / n_substeps, dtype=np.float32
@@ -623,16 +855,29 @@ def infiltration(
     for substep_i in range(n_substeps):
         # Calculate the amount of water available for infiltration in this substep based on the rainfall distribution.
         rainfall_ratio_substep: np.float32 = rainfall_lookup_table_row[substep_i]
-        topwater_step: np.float32 = topwater_m * rainfall_ratio_substep
-        liquid_water_input_for_enthalpy_m_step = (
-            liquid_water_input_for_enthalpy_m * rainfall_ratio_substep
+        water_input_substep_m: np.float32 = (
+            new_surface_water_input_m * rainfall_ratio_substep
         )
+        if land_use_type == SEALED:
+            # Direct impervious fraction for sealed surfaces (e.g., roofs/gutters routed directly to drainage)
+            sealed_impervious_step: np.float32 = water_input_substep_m * np.float32(
+                0.35
+            )
+            impervious_direct_runoff_m += sealed_impervious_step
+            rain_step: np.float32 = water_input_substep_m - sealed_impervious_step
+        else:
+            rain_step = water_input_substep_m
+
+        # Partition incoming rain into Dunne saturation-excess on saturated riparian areas
+        # and precipitation falling on the unsaturated hillslope area.
+        step_sat_excess: np.float32 = rain_step * saturated_area_fraction
+        p_unsat: np.float32 = rain_step * unsaturated_area_fraction
 
         # Add enthalpy from newly reaching rain/irrigation to the top-soil control volume.
         # This water enters at rain_temperature_C and equilibrates with the top layer.
         soil_enthalpy_top_layer_J_per_m2 = apply_rain_heat_advection(
             soil_enthalpy_top_layer_J_per_m2=soil_enthalpy_top_layer_J_per_m2,
-            liquid_water_input_m=liquid_water_input_for_enthalpy_m_step,
+            liquid_water_input_m=water_input_substep_m,
             rain_temperature_C=max(rain_temperature_C, np.float32(0.0)),
         )
 
@@ -641,7 +886,7 @@ def infiltration(
                 enthalpy_J_per_m2=soil_enthalpy_top_layer_J_per_m2,
                 solid_heat_capacity_J_per_m2_K=solid_heat_capacity_top_layer_J_per_m2_K,
                 water_content_m=w[0],
-                topwater_m=liquid_water_input_for_enthalpy_m_step,
+                topwater_m=water_input_substep_m,
             )
         )
         liquid_fraction_top_layer = np.float32(1.0) - np.minimum(
@@ -723,119 +968,95 @@ def infiltration(
         )
 
         # Determine infiltration capacity for this substep
-        infiltration_capacity_m_step = (
-            potential_cumulative_infiltration - current_cumulative_infiltration
+        infiltration_capacity_m_step: np.float32 = max(
+            np.float32(0.0),
+            potential_cumulative_infiltration - current_cumulative_infiltration,
         )
         infiltration_capacity_m_step *= liquid_fraction_top_layer
 
-        # Calculate potential infiltration considering spatial variability of infiltration capacity
-        (
-            potential_topwater_that_can_infiltrate,
-            step_runoff,
-        ) = calculate_spatial_infiltration_excess(
-            infiltration_capacity_mean=max(
-                np.float32(0.0), infiltration_capacity_m_step
-            ),
-            available_water=topwater_step,
-            shape_parameter_beta=variable_runoff_shape_beta,
+        # Available infiltration capacity on the unsaturated portion of the cell
+        f_unsat_step: np.float32 = (
+            infiltration_capacity_m_step * unsaturated_area_fraction
         )
 
         # Determine how deep we can infiltrate:
         # Scan for the first layer with available space starting from active layer.
-        # This allows the wetting front to "jump" through saturated layers (where dL/dI -> inf)
-        # but prevents pre-wetting deep unsaturated layers which would break Green-Ampt physics.
         end_layer_idx = min(len(w), green_ampt_active_layer_idx + 1)
         for i in range(green_ampt_active_layer_idx, len(w)):
             if (ws[i] - w[i]) > np.float32(1e-4):
                 end_layer_idx = i + 1
                 break
-            # If layer is full, we continue to look deeper
             end_layer_idx = i + 1
 
         # Calculate available space up to the target layer
-        space_available = np.float32(0.0)
+        space_available: np.float32 = np.float32(0.0)
         for i in range(end_layer_idx):
             space_available += max(np.float32(0.0), ws[i] - w[i])
 
-        # If the wetting front has reached the bottom of the soil column, we treat
-        # the profile as a pass-through system:
-        # - fill remaining storage if any
-        # - route remaining water to groundwater recharge, capped by the conductivity
-        #   of the groundwater top layer (m/timestep)
-        # - any remaining water becomes direct runoff
-        total_soil_depth = np.sum(soil_layer_height_m)
-        wetting_front_at_bottom = (
+        total_soil_depth: np.float32 = np.sum(soil_layer_height_m)
+        wetting_front_at_bottom: bool = bool(
             wetting_front_depth_m >= total_soil_depth - np.float32(1e-4)
         )
 
-        # Handle direct runoff and groundwater recharge.
-        # Direct runoff removes water from the surface control volume.
-        # Enthalpy for runoff is implicitly handled by not advecting it into the soil.
-        if wetting_front_at_bottom:
-            step_infiltration = min(
-                potential_topwater_that_can_infiltrate, space_available
+        # Infiltrate rain falling on the unsaturated fraction
+        if variable_runoff_shape_beta > np.float32(0.0):
+            pot_infil_rain, step_horton_excess = calculate_spatial_infiltration_excess(
+                infiltration_capacity_mean=f_unsat_step,
+                available_water=p_unsat,
+                shape_parameter_beta=variable_runoff_shape_beta,
             )
-            potential_recharge_m = (
-                potential_topwater_that_can_infiltrate - step_infiltration
-            )
+        else:
+            pot_infil_rain = min(p_unsat, f_unsat_step)
+            step_horton_excess = p_unsat - pot_infil_rain
 
-            recharge_capacity_m_step = (
+        infil_from_rain: np.float32 = min(pot_infil_rain, space_available)
+        step_horton_excess += pot_infil_rain - infil_from_rain
+
+        # Pre-existing ponded surface water can infiltrate if unsaturated soil has spare infiltration capacity
+        spare_capacity: np.float32 = max(
+            np.float32(0.0), f_unsat_step - infil_from_rain
+        )
+        puddle_space: np.float32 = max(
+            np.float32(0.0), space_available - infil_from_rain
+        )
+        puddle_infil: np.float32 = min(
+            current_topwater_m, min(spare_capacity, puddle_space)
+        )
+        current_topwater_m -= puddle_infil
+        step_infiltration: np.float32 = infil_from_rain + puddle_infil
+
+        excess_surface_water: np.float32 = step_sat_excess + step_horton_excess
+        if wetting_front_at_bottom:
+            water_available_for_recharge: np.float32 = (
+                excess_surface_water + current_topwater_m
+            )
+            recharge_capacity_m_step: np.float32 = (
                 max(np.float32(0.0), groundwater_toplayer_conductivity_m_per_s)
                 * substep_time_s
             )
-
-            step_groundwater_recharge_m = min(
-                potential_recharge_m, recharge_capacity_m_step
+            step_groundwater_recharge_m: np.float32 = min(
+                water_available_for_recharge, recharge_capacity_m_step
             )
             step_groundwater_recharge_m *= (
                 capillary_rise_from_groundwater_m <= np.float32(0.0)
             )
             groundwater_recharge_m += step_groundwater_recharge_m
 
-            # Add potential recharge that couldn't infiltrate or recharge GW to runoff
-            step_runoff += potential_recharge_m - step_groundwater_recharge_m
-        else:
-            step_infiltration = min(
-                potential_topwater_that_can_infiltrate,
-                space_available,
+            # Recharging water is drawn first from surface excess, then from current_topwater_m
+            recharge_from_excess: np.float32 = min(
+                excess_surface_water, step_groundwater_recharge_m
             )
-            # Spatial PDM runoff + any infiltration that exceeded available soil space
-            step_runoff += potential_topwater_that_can_infiltrate - step_infiltration
+            recharge_from_topwater: np.float32 = (
+                step_groundwater_recharge_m - recharge_from_excess
+            )
+            current_topwater_m -= recharge_from_topwater
+            step_excess_unabsorbed: np.float32 = (
+                excess_surface_water - recharge_from_excess
+            )
+        else:
+            step_excess_unabsorbed = excess_surface_water
 
         total_infiltration_amount += step_infiltration
-        total_direct_runoff += step_runoff
-
-        # Update enthalpy for water leaving the top-soil control volume.
-        # Runoff leaves the control volume at top-layer temperature.
-        # Only water actually ENTERING the soil (infiltration) or RECHARGING groundwater
-        # from the surface pool needs its enthalpy tracked if it removes energy
-        # from the top-soil control volume.
-        # However, the current model advects ALL rain heat into soil_enthalpy_top_layer_J_per_m2
-        # at the start of the substep. Therefore, any runoff generated MUST remove
-        # the enthalpy it "carried" into the soil earlier in the step.
-        (
-            top_layer_temp_C,
-            _,
-        ) = get_temperature_and_frozen_fraction_from_enthalpy_scalar(
-            enthalpy_J_per_m2=soil_enthalpy_top_layer_J_per_m2,
-            solid_heat_capacity_J_per_m2_K=solid_heat_capacity_top_layer_J_per_m2_K,
-            water_content_m=w[0],
-            topwater_m=topwater_step,
-        )
-        # Only advect sensible heat (T > 0). If frozen, runoff doesn't remove latent heat
-        # from the soil state because runoff is liquid.
-        runoff_advection_temp_C = max(top_layer_temp_C, np.float32(0.0))
-        advected_runoff_enthalpy_J_per_m2 = (
-            step_runoff
-            * np.float32(1000.0)  # RHO_WATER
-            * np.float32(4186.0)  # C_WATER
-            * runoff_advection_temp_C
-        )
-        # Update enthalpy: only subtract runoff enthalpy if we are NOT in a PADDY
-        # land use, as in non-paddy cases runoff actually leaves the system.
-        # In paddy cases, runoff is stored in topwater (handled at end of function).
-        if land_use_type != PADDY_IRRIGATED:
-            soil_enthalpy_top_layer_J_per_m2 -= advected_runoff_enthalpy_J_per_m2
 
         # Update wetting front depth
         # L_new = L_old + Infiltration / DeltaTheta
@@ -843,18 +1064,18 @@ def infiltration(
             0.0
         ) and wetting_front_moisture_deficit > np.float32(1e-6):
             wetting_front_depth_m += step_infiltration / wetting_front_moisture_deficit
-            wetting_front_depth_m: np.float32 = min(
-                wetting_front_depth_m, total_soil_depth
-            )
+            wetting_front_depth_m = min(wetting_front_depth_m, total_soil_depth)
 
         # Update soil layers sequentially from top to bottom
-        remaining_infiltration = step_infiltration
+        remaining_infiltration: np.float32 = step_infiltration
         for i in range(end_layer_idx):
             if remaining_infiltration <= np.float32(1e-9):
                 break
 
-            space_in_layer = max(np.float32(0.0), ws[i] - w[i])
-            infiltration_to_layer = min(remaining_infiltration, space_in_layer)
+            space_in_layer: np.float32 = max(np.float32(0.0), ws[i] - w[i])
+            infiltration_to_layer: np.float32 = min(
+                remaining_infiltration, space_in_layer
+            )
 
             w[i] += infiltration_to_layer
             # Ensure we don't exceed saturation due to float errors
@@ -862,13 +1083,54 @@ def infiltration(
 
             remaining_infiltration -= infiltration_to_layer
 
-    topwater_m: np.float32 = np.float32(0.0)
+        # Unabsorbed surface water generated in this substep (Dunne saturation excess,
+        # Hortonian infiltration excess, and profile saturation excess) adds to the surface puddle pool
+        current_topwater_m += step_excess_unabsorbed
 
-    if land_use_type == PADDY_IRRIGATED:
-        ponding_allowance: np.float32 = np.float32(0.05)
-        ponding = min(total_direct_runoff, ponding_allowance)
-        topwater_m += ponding
-        total_direct_runoff -= ponding
+        # Partition accumulated surface pool into retained puddle storage and spillover direct runoff
+        if land_use_type == PADDY_IRRIGATED:
+            retained_topwater_m: np.float32 = min(current_topwater_m, ponding_allowance)
+            step_direct_runoff: np.float32 = current_topwater_m - retained_topwater_m
+            current_topwater_m = retained_topwater_m
+        elif land_use_type == OPEN_WATER:
+            step_direct_runoff = current_topwater_m
+            current_topwater_m = np.float32(0.0)
+        else:
+            current_topwater_m, step_direct_runoff = (
+                calculate_depression_spillover_runoff(
+                    topwater_m=current_topwater_m,
+                    depression_storage_capacity_m=depression_storage_m,
+                    runoff_shape_parameter=runoff_shape_parameter,
+                )
+            )
+
+        total_direct_runoff += step_direct_runoff
+
+    topwater_m = current_topwater_m
+    total_direct_runoff += impervious_direct_runoff_m
+
+    # Update enthalpy for water leaving the top-soil control volume as direct runoff.
+    if total_direct_runoff > np.float32(0.0) and land_use_type != PADDY_IRRIGATED:
+        # Water content of the top-soil control volume BEFORE direct runoff leaves
+        # includes both the retained topwater and the departing direct runoff.
+        (
+            top_layer_temp_C,
+            _,
+        ) = get_temperature_and_frozen_fraction_from_enthalpy_scalar(
+            enthalpy_J_per_m2=soil_enthalpy_top_layer_J_per_m2,
+            solid_heat_capacity_J_per_m2_K=solid_heat_capacity_top_layer_J_per_m2_K,
+            water_content_m=w[0],
+            topwater_m=topwater_m + total_direct_runoff,
+        )
+        # Only advect sensible heat (T > 0).
+        runoff_advection_temp_C: np.float32 = max(top_layer_temp_C, np.float32(0.0))
+        advected_runoff_enthalpy_J_per_m2: np.float32 = (
+            total_direct_runoff
+            * np.float32(1000.0)  # RHO_WATER
+            * np.float32(4186.0)  # C_WATER
+            * runoff_advection_temp_C
+        )
+        soil_enthalpy_top_layer_J_per_m2 -= advected_runoff_enthalpy_J_per_m2
 
     return (
         topwater_m,

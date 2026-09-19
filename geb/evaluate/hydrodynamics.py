@@ -179,6 +179,7 @@ def calculate_performance_metrics(
     minimum_flood_depth: float,
     visualization_type: Literal["Hillshade", "OSM"] = "Hillshade",
     name: str = "simulation",
+    dpi: int = 300,
 ) -> dict[str, float | int] | None:
     """Calculate performance metrics for flood maps against observations and generate visualizations.
 
@@ -191,6 +192,7 @@ def calculate_performance_metrics(
         elevation_data: Elevation data as an xarray DataArray for hillshade visualization.
         visualization_type: Type of visualization for plotting (default is "Hillshade").
         name: Name of the simulation for filename purposes.
+        dpi: Resolution of the output figure in dots per inch (default is 300).
 
     Returns:
         Dictionary containing performance metrics:
@@ -415,41 +417,59 @@ def calculate_performance_metrics(
             cloud_patch = mpatches.Patch(color="white", label="Clouds")
             invalid_patch = mpatches.Patch(color="grey", alpha=0.5, label="No data")
 
-            legend = ax.legend(
-                handles=[
-                    green_patch,
-                    orange_patch,
-                    red_patch,
-                    cloud_patch,
-                    invalid_patch,
-                    catchment_patch,
+            handles = [
+                green_patch,
+                orange_patch,
+                red_patch,
+                cloud_patch,
+                invalid_patch,
+                catchment_patch,
+            ]
+            # Assuming you have a list of corresponding labels, e.g.:
+            labels = ["Green", "Orange", "Red", "Cloud", "Invalid", "Catchment"]
+
+            import matplotlib.text as mtext
+
+            # Add a separator and the metrics using empty patches
+            text_marker = mtext.Text()
+            handles.extend([text_marker] * 4)  # 1 for spacer, 3 for metrics
+            labels.extend(
+                [
+                    "",  # Empty line separator
+                    f"HR  = {hit_rate_pct:.2f} %",
+                    f"FAR = {false_alarm_ratio_pct:.2f} %",
+                    f"CSI = {csi_pct:.2f} %",
                 ]
             )
+            from matplotlib.artist import Artist
+            from matplotlib.legend import Legend
+            from matplotlib.legend_handler import HandlerBase
+            from matplotlib.transforms import Transform
 
-            # Add a comment about the metrics in the plot
-            legend_bbox = legend.get_window_extent(
-                renderer=fig.canvas.get_renderer()  # ty:ignore[unresolved-attribute]
-            )
-            legend_bbox_ax = legend_bbox.transformed(ax.transAxes.inverted())
+            class TextOnlyHandler(HandlerBase):
+                def create_artists(
+                    self,
+                    legend: Legend,
+                    orig_handle: object,
+                    xdescent: float,
+                    ydescent: float,
+                    width: float,
+                    height: float,
+                    fontsize: float,
+                    trans: Transform,
+                ) -> list[Artist]:
+                    return []
 
-            # Add text below legend using axes coordinates
-            ax.annotate(
-                f"Validation Metrics:\n"
-                f"HR    = {hit_rate_pct:.2f} %\n"
-                f"FAR   = {false_alarm_ratio_pct:.2f} %\n"
-                f"CSI   = {csi_pct:.2f} %",
-                xy=(legend_bbox_ax.x0 + 0.055, legend_bbox_ax.y0 + 0.002),
-                xycoords="axes fraction",
-                fontsize=10,
-                bbox=dict(
-                    facecolor="white",
-                    edgecolor="grey",
-                    boxstyle="round,pad=0.2",
-                    alpha=0.8,
-                ),
-                verticalalignment="top",
-                horizontalalignment="left",
-                zorder=6,
+            # Create a single legend
+            legend = ax.legend(
+                handles=handles,
+                labels=labels,
+                facecolor=(1.0, 1.0, 1.0, 0.8),
+                edgecolor="grey",
+                prop={"family": "monospace", "size": 10},
+                handler_map={
+                    text_marker: TextOnlyHandler()
+                },  # Strips handle width for text rows
             )
 
             ax.annotate(
@@ -470,7 +490,7 @@ def calculate_performance_metrics(
 
             fig.savefig(
                 output_folder / f"{name}_validation_floodextent_plot.png",
-                dpi=600,
+                dpi=dpi,
                 bbox_inches="tight",
             )
             print(
@@ -574,7 +594,9 @@ def calculate_performance_metrics(
 
             plt.legend(handles=handles, labels=labels, loc="upper right", fontsize=16)
 
-            plt.savefig(output_folder / f"{name}_validation_floodextent_plot.png")
+            plt.savefig(
+                output_folder / f"{name}_validation_floodextent_plot.png", dpi=dpi
+            )
             print(
                 f"Figure with {visualization_type} saved as: {output_folder / f'{name}_validation_floodextent_plot.png'}"
             )

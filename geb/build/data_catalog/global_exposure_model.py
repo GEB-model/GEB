@@ -265,6 +265,11 @@ class GlobalExposureModel(Adapter):
                     ):
                         csv_files.append(item["path"])
 
+        if not csv_files:
+            raise ValueError(
+                f"No CSV files found for country '{country}' in the GEM repository. "
+            )
+
     def _download_and_process_csv(
         self, raw_base: str, csv_files: list[str], countries_to_download: list[str]
     ) -> None:
@@ -365,9 +370,9 @@ class GlobalExposureModel(Adapter):
 
         # Query the repository tree for all files in the `main` branch so we
         # can locate country-specific folders without cloning the repo.
-        branch = "main"
+        branch = "2023.1.1"
         tree_url = f"https://api.github.com/repos/gem/global_exposure_model/git/trees/{branch}?recursive=1"
-        resp = requests.get(tree_url)  # , headers=HEADERS)
+        resp = requests.get(tree_url)
         resp.raise_for_status()
         tree = resp.json()["tree"]
         # Base URL for fetching raw file contents by path

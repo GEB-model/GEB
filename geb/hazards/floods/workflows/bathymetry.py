@@ -161,9 +161,7 @@ def _initialize_network_and_nodes(
 
     # Sample a 3x3 window around each node to find the local minimum elevation.
     # This ensures the river starts at the lowest point in its immediate vicinity.
-    dem_grid = (
-        elevation_grid.values[0] if elevation_grid.ndim == 3 else elevation_grid.values
-    )
+    dem_grid = elevation_grid.values
     for river_id, node in node_registry.items():
         c = int(np.floor((node["x"] - transform[2]) / transform[0]))
         r = int(np.floor((node["y"] - transform[5]) / transform[4]))
@@ -246,9 +244,7 @@ def _interpolate_longitudinal_profiles(
     Raises:
         ValueError: If the generated profile goes below sea level.
     """
-    dem_grid = (
-        elevation_grid.values[0] if elevation_grid.ndim == 3 else elevation_grid.values
-    )
+    dem_grid = elevation_grid.values
 
     for idx in ordered_indices:
         river = river_network[idx]
@@ -343,17 +339,18 @@ def _burn(
             - Modified elevation DataArray with rivers burned in (meters).
             - Modified Manning's n DataArray with river roughness values (s/m^(1/3)).
     """
-    # Accommodate both 2D and 3D shapes gracefully
     grid_shape = (shape[-2], shape[-1])
     global_burn_elevation = np.full(grid_shape, fill_value=np.inf, dtype=np.float32)
     global_burn_manning = np.full(grid_shape, fill_value=-np.inf, dtype=np.float32)
+
+    # Extract the elevation values for path-of-least-resistance lookups
+    dem_base = elevation_grid.values
 
     for river in river_network:
         xs_m, ys_m = to_m(river["xs"], river["ys"])
         tree = cKDTree(np.c_[xs_m, ys_m])
 
         effective_width_m = river["width"]
-        # Create a buffer around the river line to represent its width.
         poly = shapely_transform(
             to_deg,
             shapely_transform(to_m, river["geom"]).buffer(
@@ -366,9 +363,57 @@ def _burn(
             out_shape=grid_shape,
             transform=transform,
             fill=0,
+            all_touched=False,
+            dtype=np.uint8,
+        )
+
+        line_mask = rasterize(
+            [(river["geom"], 1)],
+            out_shape=grid_shape,
+            transform=transform,
+            fill=0,
             all_touched=True,
             dtype=np.uint8,
         )
+
+        mask = np.maximum(mask, line_mask)
+
+        # Identify diagonal connectivity gaps in the rasterized river footprint.
+        # A gap occurs when two diagonal cells are set and the orthogonal
+        # neighbors that would connect them are unset.
+        top_left_bottom_right_gap = (
+            (mask[:-1, :-1] == 1)
+            & (mask[1:, 1:] == 1)
+            & (mask[:-1, 1:] == 0)
+            & (mask[1:, :-1] == 0)
+        )
+        top_right_bottom_left_gap = (
+            (mask[:-1, 1:] == 1)
+            & (mask[1:, :-1] == 1)
+            & (mask[:-1, :-1] == 0)
+            & (mask[1:, 1:] == 0)
+        )
+
+        # For each diagonal gap, choose the orthogonal neighbor with the lower
+        # terrain elevation and fill it to preserve 4-connected river continuity.
+        if np.any(top_left_bottom_right_gap):
+            row_indices, col_indices = np.where(top_left_bottom_right_gap)
+            elev_top_right = dem_base[row_indices, col_indices + 1]
+            elev_bottom_left = dem_base[row_indices + 1, col_indices]
+            use_top_right = elev_top_right <= elev_bottom_left
+
+            mask[row_indices[use_top_right], col_indices[use_top_right] + 1] = 1
+            mask[row_indices[~use_top_right] + 1, col_indices[~use_top_right]] = 1
+
+        if np.any(top_right_bottom_left_gap):
+            row_indices, col_indices = np.where(top_right_bottom_left_gap)
+            elev_top_left = dem_base[row_indices, col_indices]
+            elev_bottom_right = dem_base[row_indices + 1, col_indices + 1]
+            use_top_left = elev_top_left <= elev_bottom_right
+
+            mask[row_indices[use_top_left], col_indices[use_top_left]] = 1
+            mask[row_indices[~use_top_left] + 1, col_indices[~use_top_left] + 1] = 1
+
         p_rows, p_cols = np.where(mask == 1)
 
         p_xs_m, p_ys_m = to_m(
@@ -377,27 +422,19 @@ def _burn(
         )
         _, nearest = tree.query(np.c_[p_xs_m, p_ys_m])
 
-        # We use np.fmin to ensure that if multiple rivers overlap, we take the lowest bed.
         global_burn_elevation[p_rows, p_cols] = np.fmin(
             global_burn_elevation[p_rows, p_cols], river["target_z"][nearest]
         )
-        # For roughness, we take the maximum value if they overlap.
         global_burn_manning[p_rows, p_cols] = np.fmax(
             global_burn_manning[p_rows, p_cols], river["manning"]
         )
 
     update_mask = np.isfinite(global_burn_elevation)
 
-    if elevation_grid.ndim == 3:
-        elevation_grid.values[0, update_mask] = global_burn_elevation[update_mask]
-    else:
-        elevation_grid.values[update_mask] = global_burn_elevation[update_mask]
+    elevation_grid.values[update_mask] = global_burn_elevation[update_mask]
 
     out_mannings = manning_grid.copy()
-    if out_mannings.ndim == 3:
-        out_mannings.values[0, update_mask] = global_burn_manning[update_mask]
-    else:
-        out_mannings.values[update_mask] = global_burn_manning[update_mask]
+    out_mannings.values[update_mask] = global_burn_manning[update_mask]
 
     return elevation_grid, out_mannings
 
