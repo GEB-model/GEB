@@ -106,6 +106,7 @@ class GEBModel(Module):
         self.evaluator = Evaluate(self)  # initialize the evaluator
 
         self.plantFATE = []  # Empty list to hold plantFATE models. If forests are not used, this will be empty
+        self._timing_start_time: float | None = None
 
     def verify_build_complete(self) -> None:
         """Verify that the build completed.
@@ -116,12 +117,8 @@ class GEBModel(Module):
         build_complete_path = self.input_folder / "build_complete.txt"
         if not build_complete_path.exists():
             raise RuntimeError(
-                (
-                    f"Build not complete. The file 'build_complete.txt' was not found in the input folder "
-                    f"({self.input_folder.resolve()}). If you created the model with an older version, make "
-                    f"a new file named 'build_complete.txt' in {self.input_folder.resolve()} to indicate that "
-                    "the build is complete, or run a new build with the current version of GEB."
-                )
+                f"Build not complete. The file 'build_complete.txt' was not found in the input folder "
+                f"({self.input_folder.resolve()}). Please run a new build with the current version of GEB."
             )
 
     def check_data_version(self) -> None:
@@ -315,7 +312,7 @@ class GEBModel(Module):
 
             if return_mean_discharge:
                 mean_discharge[member] = (
-                    self.hydrology.routing.grid.var.discharge_m3_s.mean()
+                    self.hydrology.routing.var.discharge_m3_s.mean()
                 ).item()  # calculate the mean discharge for the member
 
             # restore the model to the state before the forecast for the next member
@@ -588,10 +585,42 @@ class GEBModel(Module):
 
         self.report(locals())
 
-        t1 = time()
-        self.logger.info(
-            f"{self.multiverse_name + ' - ' if self.multiverse_name is not None else ''}step {self.current_time.date()} took {round(t1 - t0, 4)}s",
+        t1: float = time()
+        step_duration: float = t1 - t0
+
+        multiverse_prefix: str = (
+            f"{self.multiverse_name} - " if self.multiverse_name is not None else ""
         )
+        base_msg: str = (
+            f"{multiverse_prefix}{self.current_time.date()} - Δt={step_duration:.3f}s"
+        )
+
+        forecasting_enabled: bool = self.config["general"]["forecasts"]["use"]
+        floods_enabled: bool = self.config["hazards"]["floods"]["simulate"]
+
+        if not forecasting_enabled and not floods_enabled and self.n_timesteps > 0:
+            progress_pct: float = ((self.current_timestep + 1) / self.n_timesteps) * 100
+
+            # Ignore the first step because the first step often needs compiling
+            # and other setup.
+            if self._timing_start_time is None:
+                self._timing_start_time = time()
+                self.logger.info(f"{base_msg} ({progress_pct:.2f}%)")
+            else:
+                elapsed_seconds: float = time() - self._timing_start_time
+                avg_step_duration: float = elapsed_seconds / self.current_timestep
+                remaining_timesteps: int = self.n_timesteps - (
+                    self.current_timestep + 1
+                )
+                remaining_seconds: float = remaining_timesteps * avg_step_duration
+                estimated_completion_time: datetime.datetime = (
+                    datetime.datetime.now()
+                    + datetime.timedelta(seconds=remaining_seconds)
+                )
+                etc_str: str = estimated_completion_time.strftime("%m-%d %H:%M")
+                self.logger.info(f"{base_msg} - ETC: {etc_str} ({progress_pct:.2f}%)")
+        else:
+            self.logger.info(base_msg)
 
         self.current_timestep += 1
 
@@ -628,6 +657,7 @@ class GEBModel(Module):
         self.timestep_length = timestep_length
         self.n_timesteps = n_timesteps
         self.current_timestep = 0
+        self._timing_start_time: float | None = None
 
         self.regions: gpd.GeoDataFrame = read_geom(self.files["geom"]["regions"])
 
@@ -670,6 +700,7 @@ class GEBModel(Module):
         Args:
             target_checkpoint_dates: Optional set of datetimes at which to save intermediate checkpoints.
         """
+        self._timing_start_time = None
         self.model.logger.info(
             f"Running from {self.current_time.date()} to {self.simulation_end.date()}"
         )

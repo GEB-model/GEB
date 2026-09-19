@@ -57,7 +57,9 @@ class GLOPOP_SG(Adapter):
             retry_start: float = time.monotonic()
             while True:
                 try:
-                    with zipfile.ZipFile(RemoteFile(url), "r") as zf:
+                    with zipfile.ZipFile(
+                        RemoteFile(url, logger=self.logger), "r"
+                    ) as zf:
                         self._zip_info_cache[url] = {
                             info.filename: info for info in zf.infolist()
                         }
@@ -94,7 +96,7 @@ class GLOPOP_SG(Adapter):
         while True:
             try:
                 buffer = io.BytesIO()
-                with zipfile.ZipFile(RemoteFile(url), "r") as zf:
+                with zipfile.ZipFile(RemoteFile(url, logger=self.logger), "r") as zf:
                     with (
                         zf.open(filename) as source,
                         tqdm(

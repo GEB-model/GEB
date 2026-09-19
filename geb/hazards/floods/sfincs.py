@@ -183,15 +183,49 @@ class SFINCSRootModel:
         if not self.exists():
             raise FileNotFoundError(f"SFINCS model not found in {self.path}")
         self.sfincs_model = SfincsModel(root=str(self.path), mode="r")
-        self.sfincs_model.read()
-
-        self.rivers: gpd.GeoDataFrame = read_geom(self.path / "rivers.geoparquet")
-        self.subbasins: gpd.GeoDataFrame = read_geom(self.path / "subbasins.geoparquet")
-
-        self.area_of_interest = read_zarr(self.path / "area_of_interest.zarr")
+        self.sfincs_model.config.read()
+        self.sfincs_model.grid.read()
 
         self.is_build_from_scratch = False
         return self
+
+    @property
+    def rivers(self) -> gpd.GeoDataFrame:
+        """Gets the rivers GeoDataFrame."""
+        if not hasattr(self, "_rivers"):
+            self._rivers = read_geom(self.path / "rivers.geoparquet")
+        return self._rivers
+
+    @rivers.setter
+    def rivers(self, rivers: gpd.GeoDataFrame) -> None:
+        """Sets the rivers GeoDataFrame."""
+        self._rivers = rivers
+        write_geom(rivers, self.path / "rivers.geoparquet")
+
+    @property
+    def subbasins(self) -> gpd.GeoDataFrame:
+        """Gets the subbasins GeoDataFrame."""
+        if not hasattr(self, "_subbasins"):
+            self._subbasins = read_geom(self.path / "subbasins.geoparquet")
+        return self._subbasins
+
+    @subbasins.setter
+    def subbasins(self, subbasins: gpd.GeoDataFrame) -> None:
+        """Sets the subbasins GeoDataFrame."""
+        self._subbasins = subbasins
+        write_geom(subbasins, self.path / "subbasins.geoparquet")
+
+    @property
+    def area_of_interest(self) -> xr.DataArray:
+        """Gets the area of interest DataArray."""
+        if not hasattr(self, "_area_of_interest"):
+            self._area_of_interest = read_zarr(self.path / "area_of_interest.zarr")
+        return self._area_of_interest
+
+    @area_of_interest.setter
+    def area_of_interest(self, area_of_interest: xr.DataArray) -> None:
+        """Sets the area of interest DataArray."""
+        self._area_of_interest = area_of_interest
 
     def build(
         self,
@@ -214,9 +248,6 @@ class SFINCSRootModel:
         initial_water_level: float | None = 0.0,
         custom_rivers_to_burn: gpd.GeoDataFrame | None = None,
         overwrite: bool | Literal["auto"] = True,
-        p_value_threshold: float = 0.05,
-        selection_strategy: str = "first_significant",
-        fixed_shape: float | None = 0.0,
         write_figures: bool = False,
     ) -> SFINCSRootModel:
         """Build a SFINCS model.
@@ -245,11 +276,6 @@ class SFINCSRootModel:
             custom_rivers_to_burn: A GeoDataFrame of custom rivers to burn into the model grid. If None, uses the provided rivers GeoDataFrame.
                 dataframe must contain 'width' and 'depth' columns.
             overwrite: Whether to overwrite the existing model if it exists. If 'auto', the model is only rebuilt if the input parameters or code have changed.
-            p_value_threshold: Anderson-Darling p-value threshold for threshold selection. Defaults to 0.05.
-            selection_strategy: Strategy for selecting the best threshold.
-                'first_significant': Selects the first threshold (ordered high-to-low) with p_ad > p_value_threshold.
-                'best_fit': Evaluates all thresholds and selects the one with the highest p-value.
-            fixed_shape: Value to fix the shape parameter (xi) of the GPD. Set to 0.0 to force an Exponential (Gumbel) tail, or null to allow it to be fitted. Defaults to 0.0.
             write_figures: Whether to generate and save diagnostic figures.
 
         Returns:
@@ -1200,7 +1226,7 @@ class SFINCSRootModel:
         elevation, d8 = fill_depressions(elevation, nodata=np.nan)
         flow_raster = pyflwdir.from_array(
             d8,
-            transform=self.elevation.rio.transform(),
+            transform=np.array(self.elevation.rio.transform()),
             latlon=self.is_geographic,
         )
 

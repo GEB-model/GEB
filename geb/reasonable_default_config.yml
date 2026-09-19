@@ -68,8 +68,9 @@ hazards:
 
 hydrology:
   routing:
-    algorithm: kinematic_wave  # accuflux or kinematic_wave
-    retention_basin_release_threshold_factor: 0.9
+    retention_basins:
+      release_threshold_factor: 0.2
+      activation_threshold_return_period_years: 2
     river_width:
       parameters:
         default_alpha: 7.2
@@ -79,7 +80,7 @@ hydrology:
   evaluation:
     discharge:
       minimum_upstream_area_km2: 0  # minimum modeled upstream area for discharge evaluation stations (km2)
-      minimum_timeseries_length_years: 10  # minimum paired observation-simulation timeseries length for discharge evaluation stations (years)
+      minimum_timeseries_length_years: 1  # minimum paired observation-simulation timeseries length for discharge evaluation stations (years)
       external_evaluation_folder: null  # optional folder with external discharge evaluation CSV files, relative to the model folder
 
 agent_settings:
@@ -250,12 +251,12 @@ report:
 
 parameters:
   mannings_n_multiplier: 1.0
-  crop_factor_multiplier: 1.5
+  crop_factor_multiplier: 1.0
   saturated_hydraulic_conductivity_multiplier: 1.0
   reservoir_release_factor: 0.1
   lake_outflow_multiplier: 1.0
   interflow_multiplier: 1.0
-  variable_runoff_shape_beta: 0.0
+  variable_runoff_shape_beta: 1.0
 
 plantFATE:
   spinup_ini_file: data/plantFATE/p_spinup.ini

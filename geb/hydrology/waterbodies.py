@@ -288,6 +288,7 @@ def get_lake_outflow(
 class WaterBodyVariables(Bucket):
     """Variables for the Lakes and Reservoirs module."""
 
+    waterbodies: gpd.GeoDataFrame
     storage: ArrayFloat64
     lake_area: ArrayFloat32
     lake_factor: ArrayFloat32
@@ -358,6 +359,19 @@ class WaterBodies(Module):
         waterbody_id_unmapped: np.ndarray = self.grid.load2d(
             self.model.files["grid"]["waterbodies/waterbody_id"]
         )
+
+        waterbody_data_raw: gpd.GeoDataFrame = read_geom(
+            self.model.files["geom"]["waterbodies/waterbody_data"],
+        ).set_index("waterbody_id")  # ty:ignore[invalid-assignment]
+
+        # Identify active waterbodies (filter out OFF waterbodies during loading)
+        active_wb_mask = waterbody_data_raw["waterbody_type"] != OFF
+        active_waterbody_ids = waterbody_data_raw.index[active_wb_mask].values
+
+        # Remove OFF waterbody cells from the unmapped raster
+        is_active_cell = np.isin(waterbody_id_unmapped, active_waterbody_ids)
+        waterbody_id_unmapped[~is_active_cell] = -1
+
         waterbody_outflow_points_original_ids = self.get_outflows(waterbody_id_unmapped)
         order_of_waterbodies_in_grid = waterbody_outflow_points_original_ids[
             waterbody_outflow_points_original_ids != -1
@@ -371,8 +385,8 @@ class WaterBodies(Module):
             waterbody_outflow_points_original_ids
         ]
 
-        # set discharge to NaN for all cells that are part of a water body
-        self.grid.var.discharge_in_rivers_m3_s_substep[
+        # set discharge to NaN for all cells that are part of an active water body
+        self.hydrology.routing.var.discharge_in_rivers_m3_s_substep[
             self.grid.var.waterbody_ids != -1
         ] = np.nan
 
@@ -385,7 +399,14 @@ class WaterBodies(Module):
             == self.grid.var.waterbody_outflow_points
         ).all()
 
-        waterbody_data = self.load_waterbody_data(order_of_waterbodies_in_grid)
+        waterbody_data = waterbody_data_raw.loc[order_of_waterbodies_in_grid]
+        bankfull_river_elev: ArrayFloat32 = self.grid.load2d(
+            self.model.files["grid"]["routing/bankfull_river_elevation_m"]
+        )
+        waterbody_data["elevation"] = bankfull_river_elev[
+            self.var.waterbody_outflow_linear_mapping
+        ].astype(np.float32)
+        self.var.waterbodies = waterbody_data
 
         self.var.waterbody_type = waterbody_data["waterbody_type"].values.copy()
         # change water body type to LAKE if it is a control lake, thus currently modelled as normal lake
@@ -419,7 +440,7 @@ class WaterBodies(Module):
             self.model.config["parameters"]["lake_outflow_multiplier"],
         )
 
-        self.var.storage = np.full_like(self.var.capacity, np.nan, dtype=np.float64)
+        self.var.storage = np.zeros_like(self.var.capacity, dtype=np.float64)
 
         # initialize storage to 50% of the capacity. This is arbitrary, but
         # ok since we use a spinup period
@@ -583,30 +604,16 @@ class WaterBodies(Module):
     def routing_lakes(self, routing_step_length_seconds: int | float) -> ArrayFloat32:
         """Lake routine to calculate lake outflow.
 
+        Lake outflow is calculated dynamically within the local inertial routing substeps.
+        Returns NaN values for lakes so that the routing module computes dynamic outflow.
+
         Args:
-            routing_step_length_seconds: length of the routing step in seconds.
+            routing_step_length_seconds: Length of the routing step in seconds.
 
         Returns:
-            lake_outflow_m3: Outflow from the lakes in m3 per routing step.
-
+            lake_outflow_m3: Array of NaN values with length equal to the number of lakes.
         """
-        is_lake = self.is_lake
-        # check if there are any lakes in the model
-        if is_lake.any():
-            (
-                lake_outflow_m3,
-                _,
-            ) = get_lake_outflow(
-                routing_step_length_seconds,
-                self.var.storage[is_lake],
-                self.var.lake_factor[is_lake],
-                self.var.lake_area[is_lake],
-                self.var.outflow_height[is_lake],
-            )
-        else:
-            lake_outflow_m3 = np.zeros(0, dtype=np.float32)
-
-        return lake_outflow_m3
+        return np.full(self.is_lake.sum(), np.nan, dtype=np.float32)
 
     def routing_reservoirs(
         self, n_routing_substeps: int, current_substep: int
@@ -681,11 +688,14 @@ class WaterBodies(Module):
             command_area_release_m3[self.is_reservoir],
         ) = self.routing_reservoirs(n_routing_substeps, current_substep)
 
-        assert (
-            outflow_to_drainage_network_m3 <= self.var.storage.astype(np.float32)
-        ).all(), (
-            f"Outflow exceeds storage: {outflow_to_drainage_network_m3.max()} > {self.var.storage.max()}"
-        )
+        valid_outflows = ~np.isnan(outflow_to_drainage_network_m3)
+        if valid_outflows.any():
+            assert (
+                outflow_to_drainage_network_m3[valid_outflows]
+                <= self.var.storage[valid_outflows].astype(np.float32)
+            ).all(), (
+                f"Outflow exceeds storage: {outflow_to_drainage_network_m3[valid_outflows].max()} > {self.var.storage[valid_outflows].max()}"
+            )
 
         if __debug__:
             balance_check(
@@ -788,6 +798,63 @@ class WaterBodies(Module):
         return (self.reservoir_storage / self.reservoir_capacity * 100).astype(
             np.float32
         )
+
+    @property
+    def water_depth_from_bottom(self) -> ArrayFloat32:
+        """Returns the water depth of each waterbody above its bottom.
+
+        Returns:
+            Water depth in meters [m].
+        """
+        depth: ArrayFloat32 = (
+            self.var.storage / np.maximum(self.var.lake_area, np.float32(1.0))
+        ).astype(np.float32)
+        return np.maximum(depth, np.float32(0.0))
+
+    def flatten_waterbody_elevations(
+        self, bankfull_river_elevation: ArrayFloat32
+    ) -> ArrayFloat32:
+        """Flattens channel bed elevations within each waterbody to its outflow elevation.
+
+        Ensures that all cells within a lake/reservoir share a uniform horizontal bed datum
+        matching the waterbody outflow outlet elevation, guaranteeing that all upstream inlet
+        reaches have non-negative bed drops into the waterbody and flow remains strictly downward.
+
+        Args:
+            bankfull_river_elevation: Array of channel bed elevations across the compressed grid [m].
+
+        Returns:
+            Bed elevation array with waterbody cells flattened to outflow bed elevations [m].
+        """
+        flattened_elevation: ArrayFloat32 = bankfull_river_elevation.copy()
+        if self.n > 0:
+            for mapped_wb_id in range(self.n):
+                outflow_idx: int = int(
+                    self.var.waterbody_outflow_linear_mapping[mapped_wb_id]
+                )
+                outflow_elevation: np.float32 = bankfull_river_elevation[outflow_idx]
+                wb_cells: ArrayInt32 = np.where(
+                    self.grid.var.waterbody_ids == mapped_wb_id
+                )[0].astype(np.int32)
+                if wb_cells.size > 0:
+                    flattened_elevation[wb_cells] = outflow_elevation
+        return flattened_elevation
+
+    def get_water_stage_m(self, outflow_bed_elevation: ArrayFloat32) -> ArrayFloat32:
+        """Calculate the water surface elevation of each waterbody in meters above datum.
+
+        Args:
+            outflow_bed_elevation: Channel bed elevation at the outflow point of each waterbody [m].
+
+        Returns:
+            Water surface elevation of each waterbody in meters above datum [m].
+        """
+        depth_above_sill: ArrayFloat32 = (
+            self.water_depth_from_bottom - self.var.outflow_height
+        )
+        water_stage: ArrayFloat32 = outflow_bed_elevation + depth_above_sill
+        bottom_elevation: ArrayFloat32 = outflow_bed_elevation - self.var.outflow_height
+        return np.maximum(water_stage, bottom_elevation).astype(np.float32)
 
     @property
     def n(self) -> int:

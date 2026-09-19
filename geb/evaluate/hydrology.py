@@ -15,12 +15,11 @@ import xarray as xr
 from matplotlib import colormaps as mcolormaps
 from matplotlib.collections import LineCollection
 from matplotlib.lines import Line2D
-
-# from scores.continuous import (
-#     kge as calculate_kge,
-#     nse as calculate_nse,
-#     rmse as calculate_rmse,
-# )
+from scores.continuous import (
+    kge as calculate_kge,
+    nse as calculate_nse,
+    rmse as calculate_rmse,
+)
 from tqdm import tqdm
 
 from geb.evaluate.workflows.dashboard import (
@@ -991,6 +990,8 @@ def create_validation_df(
         FileNotFoundError: If the hydrology routing directory does not exist.
         ValueError: If the GEB discharge data contain NaN values or the fixed UTC
             offset is non-finite or outside the valid range from UTC-12 to UTC+14.
+        ValueError: If hourly observed or simulated discharge is not timestamped on the half hour (HH:30:00).
+        ValueError: If daily observed discharge is not timestamped at the middle of the day (12:00:00).
     """
     # Check if the hydrology.routing directory exists
     report_folder: Path = output_folder / "report"
@@ -1059,10 +1060,52 @@ def create_validation_df(
             "Observed discharge frequency is not a multiple of simulated discharge frequency. Please ensure the observed discharge frequency is a multiple of the simulated discharge frequency."
         )
 
-    observation_frequency = observed_frequency
-    observation_timestep: pd.Timedelta = observed_timestep
+    # Validate that hourly observations are timestamped on the half hour (HH:30:00)
+    # and daily observations are timestamped at the middle of the day (12:00:00)
+    obs_time_series: pd.Series = observed_discharge.index.to_series()
+    if observed_timestep == pd.Timedelta(hours=1):
+        invalid_hourly_obs_mask = (
+            (obs_time_series.dt.minute != 30)
+            | (obs_time_series.dt.second != 0)
+            | (obs_time_series.dt.microsecond != 0)
+        )
+        if invalid_hourly_obs_mask.any():
+            first_invalid_obs = obs_time_series[invalid_hourly_obs_mask].iloc[0]
+            raise ValueError(
+                f"Hourly observed discharge for station {station_id} must be timestamped on the half hour (HH:30:00). "
+                f"Found invalid timestamp: {first_invalid_obs}."
+            )
+    elif observed_timestep >= pd.Timedelta(days=1):
+        invalid_daily_obs_mask = (
+            (obs_time_series.dt.hour != 12)
+            | (obs_time_series.dt.minute != 0)
+            | (obs_time_series.dt.second != 0)
+            | (obs_time_series.dt.microsecond != 0)
+        )
+        if invalid_daily_obs_mask.any():
+            first_invalid_daily_obs = obs_time_series[invalid_daily_obs_mask].iloc[0]
+            raise ValueError(
+                f"Daily observed discharge for station {station_id} must be timestamped in the middle of the day (12:00:00). "
+                f"Found invalid timestamp: {first_invalid_daily_obs}."
+            )
+
+    # Validate that hourly simulated discharge is timestamped on the half hour (HH:30:00)
+    sim_time_series: pd.Series = simulated_discharge.index.to_series()
+    if simulated_timestep == pd.Timedelta(hours=1):
+        invalid_sim_hourly_mask = (
+            (sim_time_series.dt.minute != 30)
+            | (sim_time_series.dt.second != 0)
+            | (sim_time_series.dt.microsecond != 0)
+        )
+        if invalid_sim_hourly_mask.any():
+            first_invalid_sim = sim_time_series[invalid_sim_hourly_mask].iloc[0]
+            raise ValueError(
+                f"Hourly simulated discharge for station {station_id} must be timestamped on the half hour (HH:30:00). "
+                f"Found invalid timestamp: {first_invalid_sim}."
+            )
+
     should_use_local_calendar: bool = (
-        observation_timestep >= pd.Timedelta(days=1) and timezone_utc_offset != 0.0
+        observed_timestep >= pd.Timedelta(days=1) and timezone_utc_offset != 0.0
     )
     simulation_for_aggregation: pd.Series = simulated_discharge.copy()
     if should_use_local_calendar:
@@ -1073,11 +1116,15 @@ def create_validation_df(
             simulation_for_aggregation.index + pd.Timedelta(hours=timezone_utc_offset)
         )
 
-    simulated_discharge = simulation_for_aggregation.resample(
-        observation_frequency,
-        closed="left",
-        label="left",
-    ).mean()
+    if simulated_timestep != observed_timestep:
+        simulated_discharge = simulation_for_aggregation.resample(
+            observed_timestep,
+            closed="left",
+            label="left",
+        ).mean()
+        # Offset index to the midpoint of the interval (e.g., 12:00:00 for daily)
+        # to match observed discharge timestamped in the middle of the interval.
+        simulated_discharge.index = simulated_discharge.index + observed_timestep / 2
 
     # cut both observed and simulated discharge to the same time range
     start_time = max(observed_discharge.index.min(), simulated_discharge.index.min())
@@ -1948,10 +1995,10 @@ class Hydrology:
                 ).exists()
             )
         ].copy()
-        discharge: pd.DataFrame = read_discharge_per_river(
-            folder=discharge_folder,
+        discharge: pd.DataFrame = get_discharge_per_river(
             rivers=rivers_of_interest,
             all_rivers=all_rivers,
+            folder=discharge_folder,
         )
         for river_id in discharge.columns:
             rivers_of_interest.loc[river_id, "discharge_m3_per_s"] = discharge[
@@ -1986,7 +2033,7 @@ class Hydrology:
     def evaluate_discharge(
         self,
         run_name: str = "default",
-        include_yearly_plots: bool = True,
+        include_yearly_plots: bool = False,
         correct_discharge_observations: bool = False,
         create_plots: bool = True,
         include_return_period_plots: bool = False,
@@ -2162,21 +2209,16 @@ class Hydrology:
                     else 0.0
                 )
 
-                try:
-                    validation_df: pd.DataFrame = create_validation_df(
-                        self.model.output_folder,
-                        run_name,
-                        station_id,
-                        observed_discharge_series,
-                        correct_discharge_observations,
-                        discharge_observations_to_GEB_upstream_area_ratio,
-                        timezone_utc_offset=timezone_utc_offset,
-                    )
-                except FileNotFoundError:
-                    self.model.logger.warning(
-                        "Skipping station %s: no simulation output found.", station_id
-                    )
-                    continue
+                validation_df: pd.DataFrame = create_validation_df(
+                    self.model.output_folder,
+                    run_name,
+                    station_id,
+                    observed_discharge_series,
+                    correct_discharge_observations,
+                    discharge_observations_to_GEB_upstream_area_ratio,
+                    timezone_utc_offset=timezone_utc_offset,
+                )
+
                 validation_df = _filter_validation_df_to_years(
                     validation_df=validation_df,
                     start_year=start_year,
@@ -2185,7 +2227,7 @@ class Hydrology:
 
                 minimum_valid_steps = (
                     minimum_timeseries_length_years
-                    * 365.25
+                    * 365
                     * (24 if frequency_label == "hourly" else 1)
                 )
                 if validation_df.dropna().shape[0] < minimum_valid_steps:
