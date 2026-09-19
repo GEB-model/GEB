@@ -1,5 +1,6 @@
 """Storage classes for model data."""
 
+import json
 import pickle
 import shutil
 from collections import deque
@@ -1317,20 +1318,26 @@ class Store:
         self.buckets[name] = bucket
         return bucket
 
-    def save(self, path: None | Path = None) -> None:
+    def save(
+        self,
+        path: None | Path = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
         """Save the store data from the model to disk.
 
         Removes any existing data in the target directory before saving.
+        Also writes a `checkpoint.json` metadata file containing timestamp and run info.
 
         Args:
-            path: A Path object representing the directory to load the model data from. Defaults to None.
-                In this case, a default path is used. In most cases this should not be changed, but can
-                be useful for special cases such as forecasting and testing.
+            path: A Path object representing the directory to save the model data to. Defaults to None.
+                In this case, the model checkpoint path is used.
+            metadata: Optional dictionary with custom metadata to save in checkpoint.json.
         """
         if path is None:
-            path: Path = self.path
+            path = self.path
 
         shutil.rmtree(path, ignore_errors=True)
+        path.mkdir(parents=True, exist_ok=True)
         with ThreadPoolExecutor() as executor:
             futures: list[Future] = []
             for name, bucket in self.buckets.items():
@@ -1339,6 +1346,18 @@ class Store:
             for future in as_completed(futures):
                 # re-raise any exception from the worker thread
                 future.result()
+
+        if metadata is None and hasattr(self.model, "current_time"):
+            metadata = {
+                "timestamp": self.model.current_time.isoformat(),
+                "run_name": self.model.run_name,
+                "in_spinup": self.model.in_spinup,
+                "created_at": datetime.now().isoformat(),
+            }
+        if metadata is not None:
+            metadata_file: Path = path / "checkpoint.json"
+            with open(metadata_file, "w") as f:
+                json.dump(metadata, f, indent=2)
 
     def load(self, path: None | Path = None, omit: None | str = None) -> None:
         """Load the store data from disk into the model.
@@ -1355,8 +1374,8 @@ class Store:
             path = self.path
 
         for bucket_folder in path.iterdir():
-            # Mac OS X creates a .DS_Store file in directories, which we ignore
-            if bucket_folder.name == ".DS_Store":
+            # Mac OS X creates a .DS_Store file in directories, and checkpoint.json is metadata
+            if not bucket_folder.is_dir() or bucket_folder.name == ".DS_Store":
                 continue
             elif omit is not None and omit in bucket_folder.name:
                 self.model.logger.info(f"Skipping loading of bucket {bucket_folder}")
@@ -1394,4 +1413,4 @@ class Store:
         Returns:
             A Path object representing the directory for storing model data.
         """
-        return self.model.simulation_root_spinup / "store"
+        return self.model.get_checkpoint_path()
