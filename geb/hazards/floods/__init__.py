@@ -806,8 +806,12 @@ class Floods(Module):
                         all_rivers=region_rivers,
                         coastal=False,
                     )
-                except:
-                    continue
+                except Exception as e:
+                    raise ValueError(
+                        f"Failed to build SFINCS model for inland subbasin {subbasin_id} "
+                        f"with downstream basin {downstream_basin}."
+                    ) from e
+
                 _shape_config = self.config.get("hydrograph_shape", {})
 
                 spinup_name = self.model.config["general"]["spinup_name"]
