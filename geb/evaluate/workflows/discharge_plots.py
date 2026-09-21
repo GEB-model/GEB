@@ -581,19 +581,24 @@ def save_outflow_discharge_plots(
     )
 
     outflow_items: list[tuple[str, str, pd.Series]] = []
+    consolidated_outlet_ids: set[str] = set()
     if consolidated_outflow_file is not None and consolidated_outflow_file.exists():
         consolidated_df: pd.DataFrame = pd.read_parquet(consolidated_outflow_file)
         for col in consolidated_df.columns:
+            outlet_id: str = str(col)
+            consolidated_outlet_ids.add(outlet_id)
             outflow_items.append(
                 (
-                    f"river_outflow_hourly_m3_per_s_{col}",
-                    str(col),
+                    f"river_outflow_hourly_m3_per_s_{outlet_id}",
+                    outlet_id,
                     consolidated_df[col],
                 )
             )
     for outflow_file in outflow_files:
         stem: str = outflow_file.stem
-        outlet_id: str = stem.replace("river_outflow_hourly_m3_per_s_", "")
+        outlet_id = stem.replace("river_outflow_hourly_m3_per_s_", "")
+        if outlet_id in consolidated_outlet_ids:
+            continue
         outflow_items.append(
             (stem, outlet_id, pd.read_parquet(outflow_file).iloc[:, 0])
         )
@@ -713,7 +718,7 @@ def save_outflow_discharge_plots(
             hspace=0.55,
         )
         plt.savefig(
-            outflow_plot_folder / f"{outflow_file.stem}_yearly.svg",
+            outflow_plot_folder / f"{file_stem}_yearly.svg",
             bbox_inches="tight",
             facecolor=yearly_figure.get_facecolor(),
             edgecolor="none",
@@ -734,7 +739,7 @@ def save_outflow_discharge_plots(
             f"Outflow Diagnostics (hourly): {outlet_id}", fontsize=16, fontweight="bold"
         )
         diagnostics.savefig(
-            outflow_plot_folder / f"{outflow_file.stem}_return_period.svg",
+            outflow_plot_folder / f"{file_stem}_return_period.svg",
             bbox_inches="tight",
         )
         plt.close(diagnostics)

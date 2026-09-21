@@ -1603,8 +1603,9 @@ class Reporter:
 
         Raises:
             KeyError: If a grouped variable is missing required '_group_key'.
-            ValueError: If the variable type is not recognized or extra_attributes
-                are combined with _group.
+            ValueError: If the variable type is not recognized, duplicate
+                _group_key is found in a group, or extra_attributes are combined
+                with _group.
         """
         # If no data has been collected, we return
         if self.variables_to_report is None:
@@ -1676,6 +1677,10 @@ class Reporter:
                             )
                         group_name: str = config["_group"]
                         group_key: str = str(config["_group_key"])
+                        if group_key in grouped_variables[(module_name, group_name)]:
+                            raise ValueError(
+                                f"Duplicate _group_key '{group_key}' found in group '{group_name}' for module '{module_name}'."
+                            )
                         grouped_variables[(module_name, group_name)][group_key] = config
                     else:
                         # Convert Unix timestamps (seconds) to datetime
