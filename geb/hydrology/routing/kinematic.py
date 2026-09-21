@@ -39,18 +39,19 @@ def update_node_kinematic(
             - actual_evaporation_m3_s: Actual evaporation rate constrained by available flow (m³/s).
     """
     inv_river_length: np.float32 = np.float32(1.0) / river_length_m
-    evaporation_m3_s_per_m: np.float32 = evaporation_m3_s * inv_river_length
-    lateral_inflow_m3_s_per_m: np.float32 = sideflow_m3_s * inv_river_length
-
-    # Limit evaporation to available flow
-    evaporation_m3_s_per_m = min(
-        evaporation_m3_s_per_m,
-        (inflow_m3_s + previous_discharge_m3_s) * np.float32(0.5)
-        + max(lateral_inflow_m3_s_per_m, np.float32(0.0)),
+    # Limit evaporation to available flow rate (m³/s)
+    available_flow_m3_s: np.float32 = (
+        inflow_m3_s + previous_discharge_m3_s
+    ) * np.float32(0.5) + max(sideflow_m3_s, np.float32(0.0))
+    actual_evaporation_m3_s: np.float32 = min(
+        evaporation_m3_s,
+        max(available_flow_m3_s, np.float32(0.0)),
     )
 
-    lateral_inflow_m3_s_per_m -= evaporation_m3_s_per_m
-    actual_evaporation_m3_s: np.float32 = evaporation_m3_s_per_m * river_length_m
+    evaporation_m3_s_per_m: np.float32 = actual_evaporation_m3_s * inv_river_length
+    lateral_inflow_m3_s_per_m: np.float32 = (
+        sideflow_m3_s * inv_river_length - evaporation_m3_s_per_m
+    )
 
     # Return tiny positive flow if reach is dry
     if (inflow_m3_s + previous_discharge_m3_s + lateral_inflow_m3_s_per_m) < 1e-30:

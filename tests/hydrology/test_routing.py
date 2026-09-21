@@ -231,6 +231,50 @@ def test_update_node_kinematic_no_flow() -> None:
     assert math.isclose(Q_new, 1e-30, abs_tol=1e-12)
 
 
+def test_update_node_kinematic_evaporation_limiter() -> None:
+    """Test evaporation limiter behavior in kinematic routing."""
+    # Case 1: Evaporation exceeds available flow -> capped at available flow.
+    # Available flow = 0.5 * (1.0 + 1.0) + 0.5 = 1.5 m3/s.
+    q_new_1, actual_evap_1 = update_node_kinematic(
+        inflow_m3_s=np.float32(1.0),
+        previous_discharge_m3_s=np.float32(1.0),
+        sideflow_m3_s=np.float32(0.5),
+        evaporation_m3_s=np.float32(5.0),
+        river_storage_alpha=np.float32(1.7),
+        river_storage_beta=np.float32(0.6),
+        timestep_s=np.float32(60.0),
+        river_length_m=np.float32(1000.0),
+    )
+    assert math.isclose(actual_evap_1, 1.5, rel_tol=1e-5)
+
+    # Case 2: Evaporation is less than available flow -> actual evaporation equals potential evaporation.
+    q_new_2, actual_evap_2 = update_node_kinematic(
+        inflow_m3_s=np.float32(1.0),
+        previous_discharge_m3_s=np.float32(1.0),
+        sideflow_m3_s=np.float32(0.5),
+        evaporation_m3_s=np.float32(0.3),
+        river_storage_alpha=np.float32(1.7),
+        river_storage_beta=np.float32(0.6),
+        timestep_s=np.float32(60.0),
+        river_length_m=np.float32(1000.0),
+    )
+    assert math.isclose(actual_evap_2, 0.3, rel_tol=1e-5)
+
+    # Case 3: Negative sideflow (abstraction) does not contribute to available flow for evaporation.
+    # Available flow = 0.5 * (1.0 + 1.0) + max(-0.5, 0.0) = 1.0 m3/s.
+    q_new_3, actual_evap_3 = update_node_kinematic(
+        inflow_m3_s=np.float32(1.0),
+        previous_discharge_m3_s=np.float32(1.0),
+        sideflow_m3_s=np.float32(-0.5),
+        evaporation_m3_s=np.float32(3.0),
+        river_storage_alpha=np.float32(1.7),
+        river_storage_beta=np.float32(0.6),
+        timestep_s=np.float32(60.0),
+        river_length_m=np.float32(1000.0),
+    )
+    assert math.isclose(actual_evap_3, 1.0, rel_tol=1e-5)
+
+
 def test_get_channel_ratio() -> None:
     """Test calculation of channel ratio for routing.
 
