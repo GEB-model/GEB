@@ -23,6 +23,7 @@ from geb.hydrology.routing import (
     RoutingVariables,
     create_river_network,
     get_channel_ratio,
+    select_active_rivers,
 )
 from geb.hydrology.routing.geometry import (
     compute_cfl_area_and_top_width,
@@ -5220,3 +5221,30 @@ def test_router_save_and_restore(tmp_path: Path) -> None:
         assert np.all(np.isfinite(stage_B))
         assert np.all(discharge_B >= 0.0)
         assert np.all(storage_B >= 0.0)
+
+
+def test_select_active_rivers() -> None:
+    """Test selecting active rivers inside the model domain.
+
+    Validates that:
+    1. Outflow segments marked as downstream are excluded.
+    2. Segments represented in grid are retained.
+    3. Segments not represented in grid are kept only if they connect to represented upstream reaches.
+    """
+    rivers: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "is_downstream_outflow": [False, False, True, False, False],
+            "is_further_downstream_outflow": [False, False, False, True, False],
+            "represented_in_grid": [True, False, True, True, False],
+            "downstream_ID": [1, -1, -1, -1, -1],
+        },
+        index=[0, 1, 2, 3, 4],
+    )
+
+    # Reach 0 is active and represented
+    # Reach 1 is not represented, but reach 0 flows into it (downstream_ID of 0 is 1), so reach 1 is kept
+    # Reach 2 is downstream outflow, excluded
+    # Reach 3 is further downstream outflow, excluded
+    # Reach 4 is not represented, and has no upstream represented reach, excluded
+    active: gpd.GeoDataFrame = select_active_rivers(rivers)
+    assert set(active.index) == {0, 1}

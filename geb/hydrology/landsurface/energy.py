@@ -478,7 +478,7 @@ def get_phase_state(
     heat_capacity_liquid_J_per_m2_K: np.float32,
     heat_capacity_frozen_J_per_m2_K: np.float32,
 ) -> tuple[np.float32, np.float32, np.float32, np.float32]:
-    """Diagnose temperature, frozen fraction, and linearization from enthalpy.
+    r"""Diagnose temperature, frozen fraction, and linearization from enthalpy.
 
     This function implements a sharp-freezing (0°C plateau) enthalpy-temperature
     relation. It is used to diagnostically determine the thermal state of a soil layer
@@ -627,7 +627,7 @@ def solve_soil_enthalpy_column(
     snow_temperature_C: np.float32,
     topwater_m: np.float32,
 ) -> tuple[np.float32, np.float32]:
-    """Solve the soil enthalpy profile with an implicit scheme.
+    r"""Solve the soil enthalpy profile with an implicit scheme.
 
     The prognostic state is enthalpy H (J/m2) per layer. Temperature and frozen fraction
     are derived diagnostically each nonlinear iteration using a sharp-freezing enthalpy
