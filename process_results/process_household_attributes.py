@@ -32,7 +32,7 @@ COLORS = {
     "no_adapt": "#D55E00",
 }
 
-N_RUNS_TO_PROCESS = 9
+N_RUNS_TO_PROCESS = 8
 
 
 def _list_household_attribute_files(results_path: str) -> list[str]:
@@ -461,6 +461,7 @@ def read_multirun_results_within_scenario(
     scenario: str,
     run_prefixes: list[str],
     process_adaptation_uptake: bool = True,
+    cluster_folders: list[str] | None = None,
 ) -> dict[str, dict[str, pd.DataFrame]]:
     """Read grouped runs for one scenario and return one dataframe per prefix.
 
@@ -474,6 +475,7 @@ def read_multirun_results_within_scenario(
         run_prefixes: Prefixes used to group runs.
         process_adaptation_uptake: Whether to normalize adaptation uptake by
             exposed households.
+        cluster_folders: List of cluster folders to include in the analysis.
 
     Returns:
         Nested dictionary {run_prefix: {attribute_name: dataframe}}.
@@ -844,6 +846,7 @@ def plot_multirun_results_within_scenario(
     output_path: str | None = None,
     x_axis: Literal["year", "timestep"] = "year",
     show_std_band: bool = False,
+    cluster_folders: list[str] | None = None,
 ) -> None:
     """Plot multirun household attributes for run groups in one scenario.
 
@@ -1514,6 +1517,45 @@ def _cluster_year_summary_records(
     ]
 
 
+def export_cumulative_flood_risks_across_clusters(
+    model_path: str,
+    scenario: str = "rcp8p5_2080",
+    run_prefixes: list[str] | None = None,
+) -> None:
+    """Plot merged cluster household attributes for run prefixes in one scenario.
+
+    Notes:
+        This expects files created by combine_cluster_results under
+        combined_results/<scenario>/report/agents.households/<run_prefix>/.
+
+    Args:
+        model_path: Root model path.
+        scenario: Scenario name to plot.
+        run_prefixes: Optional run prefixes to include.
+    """
+    results: dict[str, dict[str, pd.DataFrame]] = read_combined_cluster_results(
+        model_path=model_path,
+        scenario=scenario,
+        run_prefixes=run_prefixes,
+    )
+
+    for adaptation_scenario in results:
+        ead = results[adaptation_scenario]["expected_annual_damage"]
+        # subset to only include years starting from 2020
+        ead = ead[ead.index.year > 2019]
+        # calculate cumulative EAD over time for each run prefix
+        cumulative_ead = ead.cumsum()
+        # add a column for the total cumulative EAD across all run prefixes
+        cumulative_ead["total_cumulative_ead"] = cumulative_ead.sum(axis=1)
+        # export the cumulative EAD to a CSV file
+        cumulative_ead.to_csv(
+            os.path.join(
+                model_path, f"{scenario}_cumulative_ead_{adaptation_scenario}.csv"
+            ),
+            index=True,
+        )
+
+
 def combine_cluster_results(
     model_path: str,
     scenario: str,
@@ -1772,7 +1814,7 @@ if __name__ == "__main__":
     model_path = os.path.join("..", "..", "models", "models", "mex")
 
     model_name = "no_gov_run_0"
-    scenario = "base"
+    scenario = "rcp8p5_2080"
     scenarios_to_compare = list(SCENARIOS_BASE_FUTURE)
     prefixes = [
         "full",
@@ -1821,7 +1863,7 @@ if __name__ == "__main__":
             "cluster_plots",
             f"{scenario}_cluster_{i:03d}.png",
         )
-        for i in range(23)
+        for i in clusters_to_process
     ]
 
     # 1) Build merged (cluster-summed) results while keeping per-run columns.
@@ -1847,6 +1889,12 @@ if __name__ == "__main__":
         x_axis="year",
         show_std_band=False,
         cluster_folders=cluster_folders,
+    )
+
+    export_cumulative_flood_risks_across_clusters(
+        model_path=model_path,
+        scenario=scenario,
+        run_prefixes=prefixes,
     )
 
     for model_path, output_path in zip(model_paths, output_paths):
