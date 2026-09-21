@@ -4,6 +4,7 @@ import copy
 import datetime
 import json
 import re
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from operator import attrgetter
 from pathlib import Path
@@ -847,12 +848,14 @@ class Reporter:
         For full documentation of the report configuration, see the documentation.
 
         There are also several pre-defined report configurations that can be activated by adding
-        special keys to the report configuration. These are:
+        special keys to the report configuration. Multi-station/entity reporters export to a single consolidated parquet file:
         - _discharge_stations: if set to True, discharge at all discharge stations is reported.
-        - _meteorological_stations: if set to True, meteorological variables at all meteorological stations are reported.
-        - _outflow_points: if set to True, outflow at all outflow points is reported.
+        - _retention_basins: if set to True, discharge and storage for all retention basins are reported as single parquet files.
+        - _meteorological_stations: if set to True, meteorological variables at all meteorological stations are reported as a single parquet file.
+        - _outflow_points: if set to True, outflow at all outflow points is reported as a single parquet file.
         - _water_circle: if set to True, a standard set of variables to monitor the water circle is reported.
         - _water_balance: if set to True, a standard set of variables to monitor the water balance is reported.
+        - _water_storage: if set to True, a standard set of variables to monitor water storage is reported.
         - _energy_balance: if set to True, a standard set of variables to monitor the energy balance is reported.
 
         Args:
@@ -920,9 +923,7 @@ class Reporter:
                             retention_basin_yx = np.where(retention_basins != -1)
                             retentinion_basin_IDs = retention_basins[retention_basin_yx]
 
-                            retention_basin_reporters: dict[
-                                str, dict[str, str | int]
-                            ] = {}
+                            retention_basin_reporters: dict[str, dict[str, Any]] = {}
                             for basin_ID, yx in zip(
                                 retentinion_basin_IDs, zip(*retention_basin_yx)
                             ):
@@ -933,6 +934,8 @@ class Reporter:
                                     "type": "grid",
                                     "function": f"sample_xy,{yx[1]},{yx[0]}",
                                     "substeps": 24,
+                                    "_group": "retention_basin_discharge_m3_per_s",
+                                    "_group_key": str(basin_ID),
                                 }
                                 retention_basin_reporters[
                                     f"retention_basin_storage_m3_{basin_ID}"
@@ -941,6 +944,8 @@ class Reporter:
                                     "type": "grid",
                                     "function": f"sample_xy,{yx[1]},{yx[0]}",
                                     "substeps": 24,
+                                    "_group": "retention_basin_storage_m3",
+                                    "_group_key": str(basin_ID),
                                 }
 
                             self.variables_to_report = multi_level_merge(
@@ -961,12 +966,14 @@ class Reporter:
                                 station_ID,
                                 station_info,
                             ) in meteorological_station_locations.iterrows():
-                                station_reporters: dict[str, dict[str, str | int]] = {
+                                station_reporters: dict[str, dict[str, Any]] = {
                                     f"evapotranspiration_m_per_hour{station_ID}": {
                                         "varname": ".evapotranspiration_m",
                                         "type": "HRU",
                                         "function": f"sample_lonlat,{station_info['geometry'].x},{station_info['geometry'].y}",
                                         "substeps": 24,
+                                        "_group": "evapotranspiration_m_per_hour",
+                                        "_group_key": str(station_ID),
                                     },
                                 }
                                 self.variables_to_report = multi_level_merge(
@@ -996,6 +1003,8 @@ class Reporter:
                                         "type": "grid",
                                         "function": f"sample_xy,{xy[0]},{xy[1]}",
                                         "substeps": 24,
+                                        "_group": "river_outflow_hourly_m3_per_s",
+                                        "_group_key": f"{river_ID}{suffix}",
                                     }
                             self.variables_to_report = multi_level_merge(
                                 self.variables_to_report,
@@ -1627,25 +1636,63 @@ class Reporter:
                         )
 
             # Export all scalar and aggregated variables to parquet files
+            # Grouped variables (single consolidated parquet file) vs individual variables
+            grouped_variables: dict[tuple[str, str], dict[str, dict[str, Any]]] = (
+                defaultdict(dict)
+            )
+
             for module_name, module_configs in self.variables_to_report.items():
                 for name, config in module_configs.items():
                     if "_time_array" not in config or config["_data_array"] is None:
                         continue
-                    # Convert Unix timestamps (seconds) to datetime
-                    time_values: pd.DatetimeIndex = pd.to_datetime(
-                        config["_time_array"], unit="s"
-                    )
-                    df = pd.DataFrame(
-                        {name: config["_data_array"]},
-                        index=pd.Index(time_values, name="time"),
-                    )
+                    if "_group" in config:
+                        if config.get("extra_attributes"):
+                            raise ValueError(
+                                f"Exporting grouped variables to a single parquet file does not support extra_attributes (found on variable {module_name}.{name})."
+                            )
+                        group_name: str = config["_group"]
+                        group_key: str = config.get("_group_key", name)
+                        grouped_variables[(module_name, group_name)][group_key] = config
+                    else:
+                        # Convert Unix timestamps (seconds) to datetime
+                        time_values: pd.DatetimeIndex = pd.to_datetime(
+                            config["_time_array"], unit="s"
+                        )
+                        df = pd.DataFrame(
+                            {name: config["_data_array"]},
+                            index=pd.Index(time_values, name="time"),
+                        )
 
-                    folder = self.report_folder / module_name
-                    folder.mkdir(parents=True, exist_ok=True)
+                        folder = self.report_folder / module_name
+                        df.attrs.update(config.get("extra_attributes", {}))
+                        folder.mkdir(parents=True, exist_ok=True)
 
-                    futures.append(
-                        executor.submit(write_table, df, folder / (name + ".parquet"))
-                    )
+                        futures.append(
+                            executor.submit(
+                                write_table, df, folder / (name + ".parquet")
+                            )
+                        )
+
+            # Export grouped variables to single consolidated parquet files
+            for (module_name, group_name), group_configs in grouped_variables.items():
+                if not group_configs:
+                    continue
+                first_config: dict[str, Any] = next(iter(group_configs.values()))
+                time_values = pd.to_datetime(first_config["_time_array"], unit="s")
+                columns_data: dict[str, Any] = {
+                    key: cfg["_data_array"] for key, cfg in group_configs.items()
+                }
+                df = pd.DataFrame(
+                    columns_data,
+                    index=pd.Index(time_values, name="time"),
+                )
+
+                folder = self.report_folder / module_name
+                folder.mkdir(parents=True, exist_ok=True)
+
+                futures.append(
+                    executor.submit(write_table, df, folder / (group_name + ".parquet"))
+                )
 
             # Wait for all futures to complete before exiting context manager
             for future in as_completed(futures):

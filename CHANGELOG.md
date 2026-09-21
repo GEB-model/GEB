@@ -1,4 +1,16 @@
 # dev
+- Export multi-entity special reporters (such as retention basins, meteorological stations, and outflow points) as single consolidated Parquet files.
+- Disable station time-series and return-period figure exports by default in discharge evaluation; enable them with `--export-timeseries-plots true` and `--export-return-period-plots true`.
+- Major re-organization of the hydrological evaluation code. This considerably shortened `evaluate/hydrology.py`, and all of its former contents are now distributed in various workflow scripts. 
+- Changed discharge skill score calculation, from package-calculated skill scores to the raw skill score formulas.
+- Add `--export-timeseries-plots false` to discharge evaluation to skip static station time-series images while keeping the dashboard and skill-score plots.
+- Added the calculation of seasonal discharge metrics
+- Improved how GRDC stations are matched (in `build/workflows/discharge_snapping.py`) 
+- Implemented a GRDC timezone correction, as GRDC data represents the local timezone. 
+- Integrated GRDC-Caravan dataset to get more insight into the relationship between catchment properties and skill score. 
+- The discharge dashboard is considerably improved. For example, a) it now shows stations NOT included in the hydrological evaluation, including the exclusion reason b) it visualizes the discharge station snapping procedure and c) it shows the GRDC caravan catchment attributes.
+- River slope is now configurable using `minimum_river_slope_m_per_m`.
+- Added an option to create a data package for scientific publication, which can be uploaded at Zenodo (includes station metadata, raw simulaton files and skill scores) 
 - Implemented the `early_warning.py` module outside of `households.py`, launching the latest GEB-IbF system, including options for: area and building based warnings; warning communication weighted by socio-economic factor; time-dependent damage reduction.
 - Users need to run `setup_warning_communication_weights` to enable the warning communication efficiency based on socioeconomic factors.
 - Parameterization of settings in the `model.yml`. Increased overall efficiency and usability of the early warning system.
