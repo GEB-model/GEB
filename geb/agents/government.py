@@ -502,7 +502,7 @@ class Government(AgentBaseClass):
             )
 
     def _apply_cumulative_time_discounting(
-        self, value_to_discount: float, discount_rate: float = 0.1, years: int = 35
+        self, value_to_discount: float, discount_rate: float = 0.1, years: int = 100
     ) -> float:
         """Return the cumulative time discounted value.
 
@@ -533,8 +533,9 @@ class Government(AgentBaseClass):
             indirect_damages: Multiplier for indirect damages (default: 1.6).
             model_removal_flood_protection_standards: Whether to consider model removal of flood protection standards (default: False).
         """
-        # if not self.flood_risk_module.flood_in_last_year:
-        #     return
+        if not hasattr(self, "subbasin_status"):
+            self.subbasin_status = {}
+            self.positive_npv_subbasins = {}
 
         return_periods = self.agents.households.return_periods
         self.flood_risk_module.calculate_building_flood_damages(dynamic=False)
@@ -554,6 +555,11 @@ class Government(AgentBaseClass):
                 not in self.flood_risk_module.flood_protection_standard_subbasins
             ):
                 continue  # Skip subbasins without a defined flood protection standard
+
+            if subbasin not in self.subbasin_status:
+                self.subbasin_status[subbasin] = "not adapted"
+                self.positive_npv_subbasins[subbasin] = True
+
             current_fps = self.flood_risk_module.flood_protection_standard_subbasins[
                 subbasin
             ]
@@ -619,12 +625,12 @@ class Government(AgentBaseClass):
             cost_per_meter = self.config["adaptation"][
                 "dike_elevation_cost_per_meter_usd"
             ]
-            maintenance_cost_per_km_dike = self.config["adaptation"][
+            maintenance_cost_per_m_dike = self.config["adaptation"][
                 "dike_maintenance_cost_per_year_usd"
             ]
             if hasattr(self.model.agents.households, "factor_change"):
                 cost_per_meter *= self.model.agents.households.factor_change
-                maintenance_cost_per_km_dike *= (
+                maintenance_cost_per_m_dike *= (
                     self.model.agents.households.factor_change
                 )
 
@@ -637,10 +643,27 @@ class Government(AgentBaseClass):
             )  # investment cost in euros; segments are roughly 100 meters long, double the cost to account for both sides of the dike
 
             total_cost = total_cost_riverine + total_cost_coastal
-            maintenance_cost_per_year = maintenance_cost_per_km_dike * (
-                riverine_height_difference.size * 100 * 2
-            ) + (coastal_height_difference.size * 100)
-            # maintenance cost per year in euros; segments are roughly 100 meters long, double the cost to account for both sides of the dike
+            maintenance_cost_per_year = maintenance_cost_per_m_dike * (
+                (
+                    riverine_dike_heights_current_fps[
+                        riverine_dike_heights_current_fps > 0
+                    ].size
+                    * 100
+                    * 2
+                )
+                + (
+                    coastal_dike_heights_current_fps[
+                        coastal_dike_heights_current_fps > 0
+                    ].size
+                    * 100
+                )
+            )
+
+            if self.subbasin_status.get(subbasin) == "adapted":
+                self._dike_investment_costs_USD += maintenance_cost_per_year
+
+            if not self.positive_npv_subbasins[subbasin]:
+                continue
 
             if model_removal_flood_protection_standards:
                 ead_no_flood_protection_standard = self.flood_risk_module.calculate_ead(
@@ -664,6 +687,7 @@ class Government(AgentBaseClass):
             maintenance_cost_discounted = self._apply_cumulative_time_discounting(
                 maintenance_cost_per_year
             )
+
             if (
                 self._apply_cumulative_time_discounting(damage_reduction)
                 > total_cost + maintenance_cost_discounted
@@ -676,6 +700,9 @@ class Government(AgentBaseClass):
                     altered_fps,
                 )
                 self._dike_investment_costs_USD += total_cost
+                self.subbasin_status[subbasin] = "adapted"
+            else:
+                self.positive_npv_subbasins[subbasin] = False
 
     def calculate_EAD(self) -> None | float:
         """Calculate the expected annual damage (EAD) for the current year.
