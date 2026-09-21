@@ -22,10 +22,10 @@ GEB supports evaluation of:
 
 ## Basic usage
 
-Run all evaluation methods:
+Run the default discharge evaluation explicitly:
 
 ```bash
-geb evaluate --method hydrology.evaluate_discharge
+geb evaluate hydrology.evaluate_discharge
 ```
 
 This runs the default method: `hydrology.evaluate_discharge`.
@@ -33,7 +33,7 @@ This runs the default method: `hydrology.evaluate_discharge`.
 Run specific methods only:
 
 ```bash
-geb evaluate --method hydrology.plot_discharge
+geb evaluate hydrology.plot_discharge
 ```
 
 ## All available methods
@@ -43,10 +43,10 @@ Below, you can find an overview of all the methods currently supported by the ev
 | --- | --- |
 | `hydrology.plot_discharge` | Creates spatial map of mean discharge |
 | `hydrology.evaluate_discharge` | Compares simulated vs observed discharge at stations |
-| `hydrology.skill_score_graphs` | Creates boxplots of performance metrics |
-| `hydrology.water_circle` | Visualizes water balance components |
-| `hydrology.water_balance` | Calculates detailed water balance |
-| `hydrology.evaluate_hydrodynamics` | Evaluates flood extents against observations |
+| `hydrology.plot_skill_score_boxplots` | Creates boxplots of performance metrics |
+| `hydrology.plot_water_circle` | Visualizes water balance components |
+| `hydrology.plot_water_balance` | Calculates detailed water balance |
+| `hydrodynamics.evaluate_hydrodynamics` | Evaluates flood extents against observations |
 
 ## Command options
 Different options can be appended to the geb evaluate command, such as whether or not to include the hydrological spinup period, or to automatically correct the discharge
@@ -82,4 +82,3 @@ Learn more about specific evaluation types:
 ## Code
 
 ::: geb.evaluate
-

@@ -851,37 +851,39 @@ class Hydrography(BuildModelBase):
             ],  # this mask is True within study area
         )
 
-        upstream_area_high_res = self.full_like(
+        original_d8_upstream_area_m2 = self.full_like(
             original_d8_elevation, fill_value=np.nan, nodata=np.nan, dtype=np.float32
         )
-        upstream_area_high_res_data = flow_raster_original.upstream_area(
+        original_d8_upstream_area_m2_data = flow_raster_original.upstream_area(
             unit="m2"
         ).astype(np.float32)
-        upstream_area_high_res_data[upstream_area_high_res_data == -9999.0] = np.nan
-        upstream_area_high_res.data = upstream_area_high_res_data
+        original_d8_upstream_area_m2_data[
+            original_d8_upstream_area_m2_data == -9999.0
+        ] = np.nan
+        original_d8_upstream_area_m2.data = original_d8_upstream_area_m2_data
         self.set_other(
-            upstream_area_high_res, name="drainage/original_d8_upstream_area_m2"
+            original_d8_upstream_area_m2, name="drainage/original_d8_upstream_area_m2"
         )
 
-        streams_length_high_res = calculate_stream_length(
-            original_d8_ldd, upstream_area_high_res, threshold_m2=1_000_000
+        original_d8_streams_length = calculate_stream_length(
+            original_d8_ldd, original_d8_upstream_area_m2, threshold_m2=1_000_000
         )
 
-        streams_length_low_res = streams_length_high_res.coarsen(
+        routing_streams_length = original_d8_streams_length.coarsen(
             x=self.ldd_scale_factor,
             y=self.ldd_scale_factor,
             boundary="exact",
             coord_func="mean",
         ).sum()  # ty:ignore[unresolved-attribute]
 
-        streams_length_low_res.attrs["_FillValue"] = np.nan
-        streams_length_low_res = snap_to_grid(streams_length_low_res, self.grid["mask"])
-        streams_length_low_res = np.maximum(
-            streams_length_low_res,
+        routing_streams_length.attrs["_FillValue"] = np.nan
+        routing_streams_length = snap_to_grid(routing_streams_length, self.grid["mask"])
+        routing_streams_length = np.maximum(
+            routing_streams_length,
             np.sqrt(self.grid["cell_area"])
             * 0.5,  # stream length should be at least half of the cell length
         )
-        self.set_grid(streams_length_low_res, name="drainage/streams_length_m")
+        self.set_grid(routing_streams_length, name="drainage/streams_length_m")
 
         elevation_coarsened = original_d8_elevation.coarsen(
             x=self.ldd_scale_factor,
@@ -992,10 +994,16 @@ class Hydrography(BuildModelBase):
 
         self.logger.info("Processing river data")
 
-        river_raster_HD: npt.NDArray[np.int32] = create_river_raster_from_river_lines(
-            rivers, original_d8_elevation
+        original_river_raster: npt.NDArray[np.int32] = (
+            create_river_raster_from_river_lines(rivers, original_d8_elevation)
         )
-        river_raster_LR: npt.NDArray[np.int32] = river_raster_HD.ravel()[
+        # Discharge stations are matched directly to these original river pixels.
+        original_river_ids: xr.DataArray = self.full_like(
+            original_d8_elevation, fill_value=-1, nodata=-1, dtype=np.int32
+        )
+        original_river_ids.data = original_river_raster
+        self.set_other(original_river_ids, name="drainage/original_river_ids")
+        routing_river_raster: npt.NDArray[np.int32] = original_river_raster.ravel()[
             self.grid["idxs_outflow"].values.ravel()
         ].reshape(self.grid["idxs_outflow"].shape)
 
@@ -1003,19 +1011,19 @@ class Hydrography(BuildModelBase):
             by="shreve_stream_order",
             ascending=False,
         ).index:
-            river_cells = np.where(river_raster_LR.ravel() == COMID)[0]
+            river_cells = np.where(routing_river_raster.ravel() == COMID)[0]
             if river_cells.size == 0:
                 continue
             upstream_area_river_cells = upstream_area_data.ravel()[river_cells]
             most_upstream_cell = np.argmin(upstream_area_river_cells)
             most_upstream_cell_index = river_cells[most_upstream_cell]
             upstream_river_cells = (flow_raster.idxs_ds == most_upstream_cell_index) & (
-                river_raster_LR.ravel() != -1
+                routing_river_raster.ravel() != -1
             )
             if upstream_river_cells.sum() == 1:
-                river_raster_LR[upstream_river_cells.reshape(river_raster_LR.shape)] = (
-                    COMID
-                )
+                routing_river_raster[
+                    upstream_river_cells.reshape(routing_river_raster.shape)
+                ] = COMID
 
         # Propagate river IDs downstream to fill gaps in the LR river network
         river_raster_LR = propagate_downstream(
@@ -1039,7 +1047,7 @@ class Hydrography(BuildModelBase):
         self.set_grid(floodplain_width, name="routing/floodplain_width_m")
 
         missing_rivers: set[int] = set(rivers.index) - set(
-            np.unique(river_raster_LR[river_raster_LR != -1]).tolist()
+            np.unique(routing_river_raster[routing_river_raster != -1]).tolist()
         )
 
         rivers["represented_in_grid"] = True
@@ -1062,13 +1070,13 @@ class Hydrography(BuildModelBase):
 
         rivers["hydrography_xy"] = [[] for _ in range(len(rivers))]
         rivers["hydrography_upstream_area_m2"] = [[] for _ in range(len(rivers))]
-        xy_per_river_segment = value_indices(river_raster_LR, ignore_value=-1)
+        xy_per_river_segment = value_indices(routing_river_raster, ignore_value=-1)
         for COMID, (ys, xs) in xy_per_river_segment.items():
             upstream_area = upstream_area_data[ys, xs]
             up_to_downstream_ids = np.argsort(upstream_area)
             upstream_area_sorted = upstream_area[up_to_downstream_ids]
 
-            assert (river_raster_LR[ys, xs] == COMID).all(), (
+            assert (routing_river_raster[ys, xs] == COMID).all(), (
                 f"River segment {COMID} has inconsistent raster values"
             )
 
@@ -1084,7 +1092,7 @@ class Hydrography(BuildModelBase):
         rivers["hydrography_high_res_upstream_area_m2"] = [
             [] for _ in range(len(rivers))
         ]
-        xy_per_river_segment = value_indices(river_raster_HD, ignore_value=-1)
+        xy_per_river_segment = value_indices(original_river_raster, ignore_value=-1)
 
         for river_ID, river in rivers.iterrows():
             if river_ID not in xy_per_river_segment:
@@ -1094,7 +1102,7 @@ class Hydrography(BuildModelBase):
                     raise AssertionError("River xy not found, but should be found.")
 
             (ys, xs) = xy_per_river_segment[river_ID]
-            upstream_area: ArrayFloat32 = upstream_area_high_res_data[ys, xs]
+            upstream_area: ArrayFloat32 = original_d8_upstream_area_m2_data[ys, xs]
             nan_mask: ArrayBool = np.isnan(upstream_area)
 
             if nan_mask.all():
@@ -1115,15 +1123,15 @@ class Hydrography(BuildModelBase):
             up_to_downstream_ids = np.argsort(upstream_area)
             upstream_area_sorted = upstream_area[up_to_downstream_ids]
 
-            assert (river_raster_HD[ys, xs] == river_ID).all(), (
+            assert (original_river_raster[ys, xs] == river_ID).all(), (
                 f"River segment {river_ID} has inconsistent raster values"
             )
 
             ys: ArrayInt64 = ys[up_to_downstream_ids]
             xs: ArrayInt64 = xs[up_to_downstream_ids]
 
-            lats: ArrayFloat32 = upstream_area_high_res.y.values[ys]
-            lons: ArrayFloat32 = upstream_area_high_res.x.values[xs]
+            lats: ArrayFloat32 = original_d8_upstream_area_m2.y.values[ys]
+            lons: ArrayFloat32 = original_d8_upstream_area_m2.x.values[xs]
 
             assert ys.size > 0, "No xy coordinates found for river segment"
             rivers.at[river_ID, "hydrography_high_res_lons_lats"] = list(
@@ -1143,7 +1151,7 @@ class Hydrography(BuildModelBase):
         COMID_IDs_raster: xr.DataArray = self.full_like(
             elevation_min, fill_value=-1, nodata=-1, dtype=np.int32
         )
-        COMID_IDs_raster.data = river_raster_LR
+        COMID_IDs_raster.data = routing_river_raster
         self.set_grid(COMID_IDs_raster, name="routing/river_ids")
 
         height_above_nearest_drainage_m = self.full_like(

@@ -1308,6 +1308,17 @@ class GEBModel(Module):
         return Path(self.config["general"]["output_folder"]) / self.model.run_name
 
     @property
+    def total_area_m2(self) -> float:
+        """Return the model mask area for converting volumes to depths.
+
+        Returns:
+            Total model area (m²), calculated in an equal-area projection.
+        """
+        return float(
+            read_geom(self.files["geom"]["mask"]).to_crs("ESRI:54009").area.sum()
+        )
+
+    @property
     def input_folder(self) -> Path:
         """Get the folder where the input files are located.
 

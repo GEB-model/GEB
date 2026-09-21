@@ -803,9 +803,19 @@ def evaluate(
         # If it's method help, show method docstring
 
         try:
+            # "method" might look like: "plots.plot_skill_score_maps"
             sub_name, method_name = method.split(".")
+            # Find the corresponding evaluator class.
             sub_cls = Evaluate.SUB_EVALUATOR_CLASSES[sub_name]
-            method_func = getattr(sub_cls, method_name)
+            # Get the method exactly as it is defined on the class,
+            # without Python automatically binding or modifying it.
+            method_func: Any = inspect.getattr_static(sub_cls, method_name)
+            # Some methods are aliases of another method with preset arguments.
+            # For example, plot_skill_score_maps is really
+            # plot_discharge_skill_scores with plots=("maps",) already filled in.
+            # In this case, use the documentation from the original method.
+            if isinstance(method_func, functools.partialmethod):
+                method_func = method_func.func
             click.echo(f"\nHelp for method '{method}':\n")
             if method_func.__doc__:
                 click.echo(method_func.__doc__)
