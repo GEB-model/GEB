@@ -24,24 +24,34 @@ geb evaluate hydrology.evaluate_discharge --run-name default
 
 For more control, use additional options:
 
+`include` options control interactive dashboard content; `export` options control
+static station figure files. `--enable-plotting` is the overall switch for both.
+
 | Option | Description | Default |
 | --- | --- | --- |
 | `--run-name` | Name of the simulation run to evaluate | `default` |
-| `--include-timeseries-plots` | Save static station time-series images | `True` |
-| `--include-yearly-plots` | Add yearly images when station time-series images are enabled | `True` |
+| `--export-timeseries-plots` | Save static station time-series images | `False` |
+| `--export-yearly-timeseries-plots` | Add yearly images when station time-series images are enabled | `True` |
 | `--correct-discharge-observations` | Correct simulated discharge for upstream-area differences | `False` |
-| `--create-plots` | Create station, dashboard, and skill-score plots | `True` |
-| `--include-return-period-plots` | Calculate and plot station and dashboard return periods | `False` |
+| `--enable-plotting` | Master switch for dashboard and all plots; station exports require their export options | `True` |
+| `--include-return-period-plots` | Include interactive return-period curves in the dashboard | `True` |
+| `--export-return-period-plots` | Save static station return-period PNG and SVG figures | `False` |
 
-To calculate scores and create the dashboard and skill-score plots without
-station time-series images:
+By default, evaluation calculates scores and creates the dashboard and skill-score
+plots, including interactive time-series and return-period curves in the dashboard,
+without exporting station time-series or return-period figures. To enable
+both station figure exports:
 
 ```bash
-geb evaluate hydrology.evaluate_discharge --create-plots true --include-timeseries-plots false
+geb evaluate hydrology.evaluate_discharge --export-timeseries-plots true --export-return-period-plots true
 ```
 
 `hydrology.create_discharge_dashboard` reuses saved scores. Both methods accept
-`--include-return-period-plots true`; these slower plots are off by default.
+`--include-return-period-plots false` to disable dashboard return-period curves.
+In `evaluate_discharge`, static return-period exports are controlled separately by
+`--export-return-period-plots`; existing commands that used
+`--include-return-period-plots true` to export figures must use this new option.
+
 
 ## Discharge evaluation
 

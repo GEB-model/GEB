@@ -47,16 +47,17 @@ if TYPE_CHECKING:
 def evaluate_discharge(
     self: Hydrology,
     run_name: str = "default",
-    include_yearly_plots: bool = True,
+    export_yearly_timeseries_plots: bool = True,
     correct_discharge_observations: bool = False,
-    create_plots: bool = True,
+    enable_plotting: bool = True,
     include_return_period_plots: bool = True,
     minimum_upstream_area_km2: float | None = None,
     minimum_timeseries_length_years: float | None = None,
     start_year: int | None = None,
     end_year: int | None = None,
     clean_output: bool = False,
-    include_timeseries_plots: bool = True,
+    export_timeseries_plots: bool = False,
+    export_return_period_plots: bool = False,
 ) -> dict[str, float | None]:
     """Evaluate the discharge grid from GEB against observations from the discharge observations database.
 
@@ -78,13 +79,16 @@ def evaluate_discharge(
         self: Hydrology evaluator providing model settings and output paths.
         run_name: Name of the simulation run to evaluate. Must correspond to an
             existing run directory in the model output folder.
-        include_yearly_plots: Whether to save one discharge PNG per station
-            and calendar year when `include_timeseries_plots` is True.
+        export_yearly_timeseries_plots: Whether to save one discharge PNG per station
+            and calendar year when `export_timeseries_plots` is True.
         correct_discharge_observations: Whether to multiply simulated discharge by the station upstream
             area divided by the low-resolution GEB routing upstream area.
-        create_plots: Whether to create evaluation plots. Set to False to only calculate the evaluation metrics and save the results without plotting.
-        include_return_period_plots: Whether to fit extreme-value models and
-            create station and dashboard return-period plots. Defaults to `True`.
+        enable_plotting: The overall switch for the dashboard and all evaluation plots.
+            Defaults to True. Station figure exports also require their respective
+            export options. Set to False to save only evaluation metrics.
+        include_return_period_plots: Whether to include interactive return-period
+            curves in the dashboard. Defaults to True. Only applies when
+            `enable_plotting` is True; independent of static figure exports.
         minimum_upstream_area_km2: Optional minimum modeled upstream area threshold for station evaluation (km2).
             If omitted, `hydrology.evaluation.discharge.minimum_upstream_area_km2` is used.
         minimum_timeseries_length_years: Optional minimum paired observation-simulation timeseries length for station evaluation (years).
@@ -96,10 +100,13 @@ def evaluate_discharge(
         clean_output: Whether to remove the existing discharge evaluation
             output folder before writing new files. Defaults to `False` so
             period-specific evaluations do not delete full-period outputs.
-        include_timeseries_plots: Whether to save static station time-series
+        export_timeseries_plots: Whether to save static station time-series
             images, including yearly variants. Set to False to keep the dashboard
             and skill-score plots without writing station time-series images.
-            Only applies when `create_plots` is True.
+            Defaults to False. Only applies when `enable_plotting` is True.
+        export_return_period_plots: Whether to save static station return-period
+            PNG and SVG figures. Defaults to False. Only applies when
+            `enable_plotting` is True; independent of dashboard curves.
 
     Returns:
         Dictionary containing median frequency-specific discharge skill
@@ -202,7 +209,7 @@ def evaluate_discharge(
     if clean_output and output_folder.exists():
         shutil.rmtree(output_folder)
     output_folder.mkdir(parents=True, exist_ok=True)
-    if create_plots:
+    if enable_plotting:
         evaluation_paths.plot_folder.mkdir(parents=True, exist_ok=True)
 
     period_start: pd.Timestamp | None = (
@@ -292,17 +299,17 @@ def evaluate_discharge(
             )
             station_metrics: dict[str, float] = discharge_metrics._asdict()
 
-            if create_plots:
-                if include_timeseries_plots:
+            if enable_plotting:
+                if export_timeseries_plots:
                     discharge_plots.save_discharge_timeseries_plots(
                         station_id=station_id,
                         discharge_comparison=discharge_comparison,
                         upstream_area_ratio=upstream_area_ratio,
                         metrics=station_metrics,
                         plot_folder=evaluation_paths.plot_folder,
-                        include_yearly_plots=include_yearly_plots,
+                        export_yearly_timeseries_plots=export_yearly_timeseries_plots,
                     )
-                if include_return_period_plots:
+                if export_return_period_plots:
                     discharge_plots.save_station_return_period_plots(
                         discharge_comparison=discharge_comparison,
                         station_id=station_id,
@@ -503,7 +510,7 @@ def evaluate_discharge(
     median_skill_scores: dict[str, float | None] = dict.fromkeys(
         DISCHARGE_SCORE_COLUMNS
     )
-    if create_plots:
+    if enable_plotting:
         dashboard_geometries: DischargeDashboardGeometries = (
             load_discharge_dashboard_geometries(self.model.files["geom"])
         )
@@ -531,7 +538,7 @@ def evaluate_discharge(
         )
 
     if not station_scores.empty:
-        if create_plots:
+        if enable_plotting:
             self.plot_discharge_skill_scores(
                 export=True,
                 start_year=start_year,

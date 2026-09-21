@@ -51,7 +51,7 @@ Below, you can find an overview of all the methods currently supported by the ev
 ## Command options
 Different options can be appended to the geb evaluate command, such as whether or not to include the hydrological spinup period, or to automatically correct the discharge
 ```bash
-geb evaluate --run-name default --spinup-name spinup --include-spinup --include-yearly-plots
+geb evaluate hydrology.evaluate_discharge --run-name default --export-timeseries-plots true --export-yearly-timeseries-plots true
 ```
 
 | Option | Description | Default |
@@ -60,7 +60,7 @@ geb evaluate --run-name default --spinup-name spinup --include-spinup --include-
 | `--run-name` | Name of the simulation run to evaluate | `default` |
 | `--spinup-name` | Name of the spinup run | `spinup` |
 | `--include-spinup` | Include spinup period in evaluation | `False` |
-| `--include-yearly-plots` | Create plots for each year | `False` |
+| `--export-yearly-timeseries-plots` | Add yearly station images when `--export-timeseries-plots true` is set | `True` |
 | `--correct-q-obs` | Correct observed discharge for area differences | `False` |
 
 ## Output location
