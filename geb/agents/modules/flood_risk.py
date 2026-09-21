@@ -36,7 +36,6 @@ class FloodRiskModule:
         self.load_damage_curves()
         self.alter_damage_curves_based_on_actions()
         self.load_max_damage_values()
-<<<<<<< HEAD
         if (
             self.model.config["hazards"]["floods"]["flood_risk"]
             or self.model.config["agent_settings"]["households"]["adapt"]
@@ -121,11 +120,6 @@ class FloodRiskModule:
         else:
             raise ValueError(f"Invalid flood protection standard mode: {mode}")
 
-=======
-        if self.model.config["hazards"]["floods"]["flood_risk"]:
-            self.load_return_period_flood_maps()
-
->>>>>>> a0b65a00 (Early Warning Module (#882))
     def load_return_period_flood_maps(self) -> None:
         """Load flood maps for different return periods. This might be quite ineffecient for RAM, but faster then loading them each timestep for now."""
         self.households.return_periods = np.array(
@@ -762,6 +756,7 @@ class FloodRiskModule:
             adapted: Boolean array indicating which households have adapted.
             altered_flood_protection_standard: If provided, set damages to 0 for return periods
                 below this threshold (damages protected against by higher standard).
+            update_gdl_ead: If True, also update the expected annual damages per GDL region.
 
         Returns:
             1D array of annual expected damages (USD) for each household.
@@ -1239,13 +1234,15 @@ class FloodRiskModule:
         return self._adjust_damages_for_flood_protection(self._damages_adapt)
 
     def _calculate_dike_heights(
-        self, dikes, floodmap_template
+        self, dikes: pd.DataFrame, floodmap_template: xr.DataArray
     ) -> dict[int, dict[int, np.ndarray]]:
         """Calculate dike heights for each river and return period.
 
         This is done by sampling the flood maps along the river geometries and extracting the flood depths at those points.
         These dike heights are then stored in a dictionary for later use by the government agent to determine the required dike height for each river and return period.
-
+        Args:
+            dikes: A GeoDataFrame containing the geometries of the dikes (rivers or coastlines).
+            floodmap_template: A DataArray representing the flood map for a specific return period, used to determine the bounds for sampling the dike geometries.
         Returns:
             dict[int, dict[int, np.ndarray]]: A nested dictionary where the first key is the return period, the second key is the river ID, and the value is an array of dike heights (flood depths) along the river.
         """

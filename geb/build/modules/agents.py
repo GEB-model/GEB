@@ -1663,7 +1663,6 @@ class Agents(BuildModelBase):
         buildings = self.setup_building_reconstruction_costs(buildings)
         buildings = self.assign_subbasins_to_buildings(buildings)
         buildings = self.calculate_distance_parameters(buildings)
-=======
         buildings = self.assign_subbasins_to_buildings(buildings)
         # reset id column to avoid issues with duplicate ids
         buildings["id"] = np.arange(len(buildings))

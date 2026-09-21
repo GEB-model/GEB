@@ -19,22 +19,30 @@ class IIASA_SSP(Adapter):
     This class provides methods to download, extract, and process the IISa SSP data.
     """
 
-    def __init__(self, *args: Any, **kwargs: Any):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Initialize the IISaSSPData class.
 
         Args:
-            url (str): The URL to download the IISa SSP data from.
-            local_path (str): The local path to store the downloaded data.
+            args: Additional positional arguments to pass to the Adapter class.
+            kwargs: Additional keyword arguments to pass to the Adapter class.
         """
         super().__init__(*args, **kwargs)
 
     def fetch(self, url: str) -> IIASA_SSP:
-        """Download the IISa SSP data from the specified URL."""
+        """Download the IISa SSP data from the specified URL.
+
+        Args:
+            url (str): The URL to download the IISa SSP data from.
+        Returns:
+            IIASA_SSP: The instance of the IISaSSPData class after downloading the data.
+        """
         # Implementation for downloading the data goes here
         # by default, you receive the latest SSP projections (2024 release)
         return self
 
-    def read(self, country="Mexico", ssp="SSP5", reference_year=2020) -> pd.DataFrame:
+    def read(
+        self, country: str = "Mexico", ssp: str = "SSP5", reference_year: int = 2020
+    ) -> pd.DataFrame:
         """Process the extracted IISa SSP data and return it as a DataFrame.
 
         Args:

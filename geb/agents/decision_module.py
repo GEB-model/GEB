@@ -797,6 +797,9 @@ class DecisionModule:
             T: array containing the decision horizon of each agent
             r: time discounting factor for each agent
             sigma: risk aversion setting for each agent
+            GDP_i_t: GDP change factor of the household at time t compared to t=0
+            distance_to_building_m: array containing the distance to each sampled building for each agent
+            kwargs: additional keyword arguments
 
         Returns:
             tuple: A tuple containing the index of the best building for each agent and the time discounted subjective utility of relocating for each agent.
