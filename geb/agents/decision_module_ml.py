@@ -217,7 +217,7 @@ class DecisionModuleML:
     only for farmers whose decision is due.
     """
 
-    FINAL_BUNDLE_FORMAT_VERSION = 5
+    FINAL_BUNDLE_FORMAT_VERSION = 6
     FINAL_MEMORY_HALF_LIFE_DAYS = 200.0
 
     def __init__(self, farmers: CropFarmers, config: dict[str, Any]) -> None:
@@ -351,20 +351,47 @@ class DecisionModuleML:
             str(
                 config.get(
                     "prediction_model",
-                    self.bundle.get("default_prediction_model", "random_forest"),
+                    self.bundle.get(
+                        "default_prediction_model", "hierarchical_random_forest"
+                    ),
                 )
             )
             .strip()
             .lower()
         )
+        # The format-6 deployment bundle contains a crop-first hierarchical RF.
+        # Keep the old configuration names as aliases so existing GEB configs do not
+        # need to change solely because the training artifact became hierarchical.
+        prediction_model_aliases = {
+            "random_forest": "hierarchical_random_forest",
+            "random_forest_switch_gate": "hierarchical_random_forest_switch_gate",
+        }
+        self.prediction_model = prediction_model_aliases.get(
+            self.prediction_model, self.prediction_model
+        )
         if self.prediction_model not in {
-            "random_forest",
-            "random_forest_switch_gate",
+            "hierarchical_random_forest",
+            "hierarchical_random_forest_switch_gate",
         }:
             raise ValueError(
-                "machine_learning.prediction_model must be 'random_forest' or "
-                f"'random_forest_switch_gate', found {self.prediction_model!r}."
+                "machine_learning.prediction_model must be "
+                "'hierarchical_random_forest' or "
+                "'hierarchical_random_forest_switch_gate', found "
+                f"{self.prediction_model!r}."
             )
+
+        self.selection_mode = (
+            str(config.get("selection_mode", "argmax")).strip().lower()
+        )
+        if self.selection_mode not in {"argmax", "stochastic"}:
+            raise ValueError(
+                "machine_learning.selection_mode must be 'argmax' or 'stochastic', "
+                f"found {self.selection_mode!r}."
+            )
+        self.selection_random_seed = int(
+            config.get("random_seed", self.bundle.get("model_random_seed", 44))
+        )
+        self.selection_rng = np.random.default_rng(self.selection_random_seed)
 
         self.variable_config = self.bundle["variable_config"]
         if not isinstance(self.variable_config, Mapping):
@@ -559,7 +586,44 @@ class DecisionModuleML:
                 "Daily standardizer moments must be finite and scales positive."
             )
 
-        self.random_forest = self.bundle["random_forest"]
+        hierarchical_state = self.bundle.get("hierarchical_random_forest")
+        if not isinstance(hierarchical_state, Mapping):
+            raise TypeError(
+                "The format-6 deployment bundle must contain a "
+                "hierarchical_random_forest mapping."
+            )
+        required_hierarchical_keys = {
+            "crop_forest",
+            "conditional_forests",
+            "conditional_class_ids",
+            "crop_values",
+            "class_crop_values",
+            "n_calendar_classes",
+        }
+        missing_hierarchical_keys = sorted(
+            required_hierarchical_keys.difference(hierarchical_state)
+        )
+        if missing_hierarchical_keys:
+            raise KeyError(
+                "The deployed hierarchical RF is missing keys: "
+                f"{missing_hierarchical_keys}."
+            )
+        self.crop_forest = hierarchical_state["crop_forest"]
+        self.conditional_forests = {
+            int(crop): forest
+            for crop, forest in hierarchical_state["conditional_forests"].items()
+        }
+        self.conditional_class_ids = {
+            int(crop): np.asarray(class_ids, dtype=np.int64)
+            for crop, class_ids in hierarchical_state["conditional_class_ids"].items()
+        }
+        self.hierarchical_crop_values = np.asarray(
+            hierarchical_state["crop_values"], dtype=np.int64
+        ).reshape(-1)
+        self.class_crop_values = np.asarray(
+            hierarchical_state["class_crop_values"], dtype=np.int64
+        ).reshape(-1)
+        self.n_calendar_classes = int(hierarchical_state["n_calendar_classes"])
         self.tabular_imputer = self.bundle["tabular_imputer"]
         target_columns = tuple(self.bundle.get("target_columns", ()))
         expected_target_columns = ("crop_1", "crop_1_start_date", "crop_1_duration")
@@ -578,6 +642,50 @@ class DecisionModuleML:
         self.target_classes = np.rint(raw_target_classes).astype(np.int32)
         if np.unique(self.target_classes, axis=0).shape[0] != len(self.target_classes):
             raise ValueError("Target calendar classes contain duplicate rows.")
+        if self.n_calendar_classes != len(self.target_classes):
+            raise ValueError(
+                "Hierarchical RF calendar-class count disagrees with target vocabulary."
+            )
+        if self.class_crop_values.shape != (len(self.target_classes),):
+            raise ValueError(
+                "Hierarchical RF class_crop_values must contain one crop per calendar class."
+            )
+        if not np.array_equal(
+            self.class_crop_values, self.target_classes[:, 0].astype(np.int64)
+        ):
+            raise ValueError(
+                "Hierarchical RF class_crop_values disagree with target calendar crops."
+            )
+        if (
+            self.hierarchical_crop_values.ndim != 1
+            or self.hierarchical_crop_values.size == 0
+        ):
+            raise ValueError(
+                "Hierarchical RF crop_values must be a non-empty 1D array."
+            )
+        if (
+            np.unique(self.hierarchical_crop_values).size
+            != self.hierarchical_crop_values.size
+        ):
+            raise ValueError("Hierarchical RF crop_values contain duplicates.")
+        for crop in self.hierarchical_crop_values:
+            crop = int(crop)
+            if (
+                crop not in self.conditional_forests
+                or crop not in self.conditional_class_ids
+            ):
+                raise KeyError(
+                    f"Hierarchical RF is missing conditional state for crop {crop}."
+                )
+            expected_class_ids = np.flatnonzero(self.class_crop_values == crop).astype(
+                np.int64
+            )
+            if not np.array_equal(
+                np.sort(self.conditional_class_ids[crop]), expected_class_ids
+            ):
+                raise ValueError(
+                    f"Conditional calendar-class IDs disagree for crop {crop}."
+                )
 
         imputer_input_width = getattr(self.tabular_imputer, "n_features_in_", None)
         if imputer_input_width is not None and int(imputer_input_width) != len(
@@ -905,24 +1013,51 @@ class DecisionModuleML:
             )
         rf_tabular_feature_names = list(self.bundle["rf_tabular_feature_names"])
         expected_rf_width = latent_dim + len(rf_tabular_feature_names)
-        rf_input_width = getattr(self.random_forest, "n_features_in_", None)
-        if rf_input_width is None or int(rf_input_width) != expected_rf_width:
+        crop_rf_input_width = getattr(self.crop_forest, "n_features_in_", None)
+        if crop_rf_input_width is None or int(crop_rf_input_width) != expected_rf_width:
             raise ValueError(
-                "Random-forest input width disagrees with latent/tabular contract: "
-                f"forest={rf_input_width}, expected={expected_rf_width}."
+                "Crop-stage RF input width disagrees with latent/tabular contract: "
+                f"forest={crop_rf_input_width}, expected={expected_rf_width}."
             )
-        rf_classes = np.asarray(getattr(self.random_forest, "classes_", []))
-        if rf_classes.ndim != 1 or rf_classes.size == 0:
+        crop_rf_classes = np.asarray(getattr(self.crop_forest, "classes_", []))
+        if crop_rf_classes.ndim != 1 or crop_rf_classes.size == 0:
             raise ValueError(
-                "The deployed random forest has no one-dimensional classes_."
+                "The deployed crop-stage RF has no one-dimensional classes_."
             )
-        if not np.all(np.isfinite(rf_classes)) or not np.all(
-            np.isclose(rf_classes, np.rint(rf_classes))
+        if not np.all(np.isfinite(crop_rf_classes)) or not np.all(
+            np.isclose(crop_rf_classes, np.rint(crop_rf_classes))
         ):
-            raise ValueError("Random-forest class labels must be finite integers.")
-        rf_classes = np.rint(rf_classes).astype(np.int64)
-        if np.any(rf_classes < 0) or np.any(rf_classes >= len(self.target_classes)):
-            raise ValueError("Random-forest class labels fall outside target classes.")
+            raise ValueError("Crop-stage RF class labels must be finite integers.")
+        crop_rf_classes = np.rint(crop_rf_classes).astype(np.int64)
+        if not np.all(np.isin(crop_rf_classes, self.hierarchical_crop_values)):
+            raise ValueError("Crop-stage RF classes fall outside saved crop_values.")
+        for crop, conditional_forest in self.conditional_forests.items():
+            class_ids = self.conditional_class_ids[crop]
+            if conditional_forest is None:
+                if class_ids.size != 1:
+                    raise ValueError(
+                        f"Crop {crop} has no conditional forest but {class_ids.size} "
+                        "calendar classes."
+                    )
+                continue
+            conditional_width = getattr(conditional_forest, "n_features_in_", None)
+            if conditional_width is None or int(conditional_width) != expected_rf_width:
+                raise ValueError(
+                    f"Conditional RF for crop {crop} has feature width "
+                    f"{conditional_width}; expected {expected_rf_width}."
+                )
+            conditional_classes = np.asarray(
+                getattr(conditional_forest, "classes_", []), dtype=np.int64
+            )
+            if conditional_classes.ndim != 1 or conditional_classes.size == 0:
+                raise ValueError(
+                    f"Conditional RF for crop {crop} has invalid classes_."
+                )
+            if not np.all(np.isin(conditional_classes, class_ids)):
+                raise ValueError(
+                    f"Conditional RF classes for crop {crop} fall outside its saved "
+                    "calendar-class IDs."
+                )
         self.model.logger.info(
             "DecisionModuleML timing: checkpoint validation and encoder load=%.2f s.",
             time.perf_counter() - encoder_timer,
@@ -1137,13 +1272,14 @@ class DecisionModuleML:
         self.model.logger.info(
             "Loaded final online crop-choice model from %s: persistent state=%sx%s, "
             "decision-history channels=%s, memory half-life=%g days, prediction=%s, "
-            "selection=argmax.",
+            "selection=%s.",
             self.model_directory,
             self.gru_num_layers,
             self.gru_hidden_dim,
             self.decision_history_input_channels,
             self.memory_half_life_days,
             self.prediction_model,
+            self.selection_mode,
         )
         self.model.logger.info(
             "DecisionModuleML timing: total initialization=%.2f s.",
@@ -3337,19 +3473,146 @@ class DecisionModuleML:
             feasible[rows] = class_mask
         return feasible
 
+    def _hierarchical_calendar_probabilities(
+        self,
+        rf_input: TwoDArrayFloat32,
+    ) -> TwoDArrayFloat64:
+        """Reconstruct joint calendar probabilities from the crop-first RF hierarchy.
+
+        This mirrors ``HierarchicalRandomForestModel.predict_proba`` in training:
+        ``P(calendar) = P(crop_1) * P(calendar | crop_1)``.
+        """
+        features = np.asarray(rf_input, dtype=np.float32)
+        if features.ndim != 2:
+            raise ValueError("Hierarchical RF input must be two-dimensional.")
+
+        local_crop_probabilities = np.asarray(
+            self.crop_forest.predict_proba(features), dtype=np.float64
+        )
+        crop_forest_classes = np.asarray(self.crop_forest.classes_, dtype=np.int64)
+        if local_crop_probabilities.shape != (
+            features.shape[0],
+            crop_forest_classes.size,
+        ):
+            raise ValueError(
+                "Crop-stage RF probability output has an unexpected shape."
+            )
+        crop_lookup = {
+            int(crop): position
+            for position, crop in enumerate(self.hierarchical_crop_values)
+        }
+        crop_probabilities = np.zeros(
+            (features.shape[0], self.hierarchical_crop_values.size), dtype=np.float64
+        )
+        for local_index, crop in enumerate(crop_forest_classes):
+            crop_probabilities[:, crop_lookup[int(crop)]] = local_crop_probabilities[
+                :, local_index
+            ]
+
+        probabilities = np.zeros(
+            (features.shape[0], self.n_calendar_classes), dtype=np.float64
+        )
+        for crop_position, crop_value in enumerate(self.hierarchical_crop_values):
+            crop = int(crop_value)
+            class_ids = self.conditional_class_ids[crop]
+            crop_mass = crop_probabilities[:, crop_position]
+            conditional_forest = self.conditional_forests[crop]
+
+            if conditional_forest is None:
+                probabilities[:, int(class_ids[0])] = crop_mass
+                continue
+
+            local = np.asarray(
+                conditional_forest.predict_proba(features), dtype=np.float64
+            )
+            local_classes = np.asarray(conditional_forest.classes_, dtype=np.int64)
+            if local.shape != (features.shape[0], local_classes.size):
+                raise ValueError(
+                    f"Conditional RF probability output for crop {crop} has an "
+                    "unexpected shape."
+                )
+            for local_index, class_id in enumerate(local_classes):
+                probabilities[:, int(class_id)] = crop_mass * local[:, local_index]
+
+        if np.any(~np.isfinite(probabilities)) or np.any(probabilities < 0.0):
+            raise ValueError(
+                "Hierarchical RF probabilities must be finite and non-negative."
+            )
+        row_sums = probabilities.sum(axis=1)
+        if np.any(~np.isfinite(row_sums)) or np.any(row_sums <= 0.0):
+            raise RuntimeError("Hierarchical RF produced a zero-probability row.")
+        probabilities /= row_sums[:, None]
+        return probabilities
+
+    def _apply_crop_persistence_gate(
+        self,
+        probabilities: TwoDArrayFloat64,
+        current_crop_ids: ArrayInt32,
+        feasible_classes: TwoDArrayBool,
+    ) -> TwoDArrayFloat64:
+        """Apply the calibrated persistence gate to first-stage crop probability mass."""
+        if self.prediction_model != "hierarchical_random_forest_switch_gate":
+            return probabilities
+
+        switch_gate = self.bundle.get("switch_gate")
+        if not switch_gate or not switch_gate.get("enabled", False):
+            raise ValueError(
+                "hierarchical_random_forest_switch_gate was requested, but no enabled "
+                "crop gate is stored in the deployment bundle."
+            )
+        if switch_gate.get("gate_definition") not in {None, "first_stage_crop_1"}:
+            raise ValueError("The deployment bundle contains an unsupported crop gate.")
+
+        threshold = float(switch_gate["selected_threshold"])
+        if not np.isfinite(threshold) or not 0.0 <= threshold <= 1.0:
+            raise ValueError("Switch-gate threshold must be between zero and one.")
+
+        gated = np.asarray(probabilities, dtype=np.float64).copy()
+        current_crop_ids = np.asarray(current_crop_ids, dtype=np.int64).reshape(-1)
+        if current_crop_ids.shape != (gated.shape[0],):
+            raise ValueError(
+                "current_crop_ids must contain one crop per probability row."
+            )
+        if feasible_classes.shape != gated.shape:
+            raise ValueError("feasible_classes must match calendar probability shape.")
+
+        # Match training: the gate is available only for a currently cultivated crop.
+        # Operationally, do not enforce persistence when no same-crop calendar remains
+        # feasible at today's absolute decision date.
+        for row_index, crop_id in enumerate(current_crop_ids):
+            if crop_id < 0:
+                continue
+            same_crop = self.class_crop_values == int(crop_id)
+            if not np.any(same_crop):
+                continue
+            same_probability = float(gated[row_index, same_crop].sum())
+            switch_probability = float(np.clip(1.0 - same_probability, 0.0, 1.0))
+            same_crop_feasible_mass = float(
+                gated[row_index, same_crop & feasible_classes[row_index]].sum()
+            )
+            if switch_probability < threshold and same_crop_feasible_mass > 0.0:
+                gated[row_index, ~same_crop] = 0.0
+                total = float(gated[row_index].sum())
+                if not np.isfinite(total) or total <= 0.0:
+                    raise RuntimeError(
+                        "The crop persistence gate removed all calendar probability mass."
+                    )
+                gated[row_index] /= total
+        return gated
+
     def _select_calendar_classes(
         self,
         probabilities: TwoDArrayFloat64,
         predictor_timestamp: datetime,
         target_years: ArrayInt32,
     ) -> tuple[ArrayInt64, ArrayFloat32]:
-        """Select the highest-probability feasible calendar, with stable ties.
+        """Select feasible calendars using hierarchical argmax or stochastic draws.
 
-        Probabilities have already passed through the optional switch gate. Feasibility
-        is evaluated with absolute planting dates in each farmer's pending target year;
-        ties select the lowest vocabulary index, as NumPy/sklearn argmax does. The
-        returned probability is the selected class probability before feasibility
-        renormalization, matching the previous runtime diagnostic semantics.
+        ``argmax`` preserves the trained hierarchy: first choose the main crop from
+        marginal crop probability, then choose the highest-probability feasible calendar
+        conditional on that crop. ``stochastic`` draws from the feasible post-gate joint
+        distribution, which is equivalent to drawing a crop from its marginal and then
+        drawing a calendar conditional on that crop.
 
         Args:
             probabilities: Class probabilities with shape ``(batch, n_classes)``.
@@ -3383,15 +3646,44 @@ class DecisionModuleML:
 
         feasible = self._calendar_feasibility_mask(predictor_timestamp, target_years)
         action_probabilities = np.where(feasible, probabilities, 0.0)
-        valid = np.any(action_probabilities > 0.0, axis=1)
+        row_sums = action_probabilities.sum(axis=1)
+        valid = np.isfinite(row_sums) & (row_sums > 0.0)
         if not np.all(valid):
             bad = np.flatnonzero(~valid)[:20]
             raise RuntimeError(
-                "The random forest assigns no positive probability to an absolute-date "
+                "The hierarchical RF assigns no positive probability to an absolute-date "
                 f"feasible calendar on {predictor_timestamp:%Y-%m-%d}; batch rows "
                 f"{bad.tolist()}, target years {target_years[bad].tolist()}."
             )
-        selected = np.argmax(action_probabilities, axis=1).astype(np.int64)
+
+        if self.selection_mode == "stochastic":
+            normalized = action_probabilities / row_sums[:, None]
+            selected = np.empty(probabilities.shape[0], dtype=np.int64)
+            for row_index, row in enumerate(normalized):
+                selected[row_index] = int(
+                    self.selection_rng.choice(len(self.target_classes), p=row)
+                )
+        else:
+            # Crop-first argmax. Marginalize only feasible calendar probability mass so
+            # an operationally impossible crop cannot win the first stage.
+            crop_probabilities = np.column_stack(
+                [
+                    action_probabilities[:, self.class_crop_values == crop].sum(axis=1)
+                    for crop in self.hierarchical_crop_values
+                ]
+            )
+            selected_crops = self.hierarchical_crop_values[
+                np.argmax(crop_probabilities, axis=1)
+            ]
+            selected = np.empty(probabilities.shape[0], dtype=np.int64)
+            for crop in self.hierarchical_crop_values:
+                rows = np.flatnonzero(selected_crops == crop)
+                if rows.size == 0:
+                    continue
+                class_ids = np.flatnonzero(self.class_crop_values == crop)
+                local = action_probabilities[np.ix_(rows, class_ids)]
+                selected[rows] = class_ids[np.argmax(local, axis=1)]
+
         selected_probability = probabilities[np.arange(selected.size), selected]
         return selected, selected_probability.astype(np.float32)
 
@@ -3528,68 +3820,21 @@ class DecisionModuleML:
 
             phase_timer = time.perf_counter()
             rf_input = np.concatenate((latent_np, tabular), axis=1)
-            if rf_input.shape[1] != int(self.random_forest.n_features_in_):
+            if rf_input.shape[1] != int(self.crop_forest.n_features_in_):
                 raise ValueError(
-                    "Online RF feature width differs from training: "
-                    f"{rf_input.shape[1]} versus {self.random_forest.n_features_in_}."
+                    "Online hierarchical RF feature width differs from training: "
+                    f"{rf_input.shape[1]} versus {self.crop_forest.n_features_in_}."
                 )
-            raw_probabilities = np.asarray(
-                self.random_forest.predict_proba(rf_input), dtype=np.float64
+            probabilities = self._hierarchical_calendar_probabilities(rf_input)
+            batch_target_years = self.pending_target_year[batch_farmers]
+            feasible_classes = self._calendar_feasibility_mask(
+                self.model.current_time, batch_target_years
             )
-            rf_classes = np.asarray(self.random_forest.classes_, dtype=np.int64)
-            expected_probability_shape = (batch_farmers.size, rf_classes.size)
-            if raw_probabilities.shape != expected_probability_shape:
-                raise ValueError(
-                    "Random-forest probability output has shape "
-                    f"{raw_probabilities.shape}; expected {expected_probability_shape}."
-                )
-            if np.any(~np.isfinite(raw_probabilities)) or np.any(
-                raw_probabilities < 0.0
-            ):
-                raise ValueError(
-                    "Random-forest probabilities must be finite and non-negative."
-                )
-            row_sums = raw_probabilities.sum(axis=1)
-            if np.any(~np.isfinite(row_sums)) or np.any(row_sums <= 0.0):
-                raise ValueError(
-                    "Random-forest probability rows must have positive mass."
-                )
-            probabilities = np.zeros(
-                (batch_farmers.size, len(self.target_classes)), dtype=np.float64
+            probabilities = self._apply_crop_persistence_gate(
+                probabilities,
+                self.calendar_history[batch_farmers, 0, 0].astype(np.int32),
+                feasible_classes,
             )
-            probabilities[:, rf_classes] = raw_probabilities
-
-            switch_gate = self.bundle.get("switch_gate")
-            if self.prediction_model == "random_forest_switch_gate":
-                if not switch_gate or not switch_gate.get("enabled", False):
-                    raise ValueError(
-                        "random_forest_switch_gate was requested, but no enabled gate "
-                        "is stored in the deployment bundle."
-                    )
-                threshold = float(switch_gate["selected_threshold"])
-                current_crop = self.calendar_history[batch_farmers, 0, 0]
-                batch_target_years = self.pending_target_year[batch_farmers]
-                feasible_classes = self._calendar_feasibility_mask(
-                    self.model.current_time, batch_target_years
-                )
-                for row_index, crop_id in enumerate(current_crop):
-                    same_crop = self.target_classes[:, 0] == int(crop_id)
-                    switch_probability = 1.0 - probabilities[row_index, same_crop].sum()
-                    same_crop_feasible_mass = probabilities[
-                        row_index, same_crop & feasible_classes[row_index]
-                    ].sum()
-                    if (
-                        same_crop.any()
-                        and switch_probability < threshold
-                        and same_crop_feasible_mass > 0.0
-                    ):
-                        probabilities[row_index, ~same_crop] = 0.0
-                        total = probabilities[row_index].sum()
-                        if total <= 0.0 or not np.isfinite(total):
-                            raise RuntimeError(
-                                "The switch gate removed all crop-calendar probability mass."
-                            )
-                        probabilities[row_index] /= total
             forest_seconds += time.perf_counter() - phase_timer
 
             phase_timer = time.perf_counter()
