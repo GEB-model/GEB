@@ -1,7 +1,8 @@
 # dev
+- Disable station time-series and return-period figure exports by default in discharge evaluation; enable them with `--export-timeseries-plots true` and `--export-return-period-plots true`.
 - Major re-organization of the hydrological evaluation code. This considerably shortened `evaluate/hydrology.py`, and all of its former contents are now distributed in various workflow scripts. 
 - Changed discharge skill score calculation, from package-calculated skill scores to the raw skill score formulas.
-- Add `--include-timeseries-plots false` to discharge evaluation to skip static station time-series images while keeping the dashboard and skill-score plots.
+- Add `--export-timeseries-plots false` to discharge evaluation to skip static station time-series images while keeping the dashboard and skill-score plots.
 - Added the calculation of seasonal discharge metrics
 - Improved how GRDC stations are matched (in `build/workflows/discharge_snapping.py`) 
 - Implemented a GRDC timezone correction, as GRDC data represents the local timezone. 
