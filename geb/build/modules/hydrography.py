@@ -151,10 +151,25 @@ def calculate_dem_floodplain_width(
     """Calculate effective floodplain width for each river reach based on DEM HAND scaling and subbasin attribution.
 
     Uses GFPLAIN HAND hydrogeomorphic scaling (Nardi et al. 2018, 2019) to delineate active geomorphic
-    floodplains on the high-resolution DEM, then calculates flood plain width by finding the area of the floodplain
-    per river segment and then distributing the width over the length of the entire river segment.
+    floodplains on the high-resolution DEM, then calculates floodplain width by aggregating floodplain
+    area per river segment and distributing it over the total segment length. All grid cells within the
+    same river segment receive the same uniform floodplain width.
 
-    Thus the entire river segment has the same flood plain width.
+    Steps:
+        1. Delineate high-resolution floodplain:
+           Apply Leopold & Maddock power-law stage threshold scaling h(A) = a * A^b to the high-resolution
+           DEM and contributing area using pyflwdir's floodplain delineation to identify active floodplain pixels.
+        2. Delineate high-resolution subbasins for model river cells:
+           Map each low-resolution river cell to its high-resolution outflow pixel index and delineate its
+           contributing subbasin on the high-resolution grid using the flow direction raster.
+        3. Calculate floodplain area per river reach:
+           Count high-resolution floodplain pixels draining into each low-resolution river cell, and multiply
+           by the high-resolution pixel area (cell_area / ldd_scale_factor²) to obtain reach-level floodplain area (m²).
+        4. Aggregate by river segment and compute uniform width:
+           For each river segment, sum the total floodplain area and total river length
+           across all member cells. Divide total segment floodplain area by total segment
+           length to compute width, clip the resulting width to [0, 100,000] m, and assign
+           this uniform width to all cells in the segment. Non-river cells remain NaN.
 
     Args:
         flow_raster_high_res: High-resolution flow direction raster.
