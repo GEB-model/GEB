@@ -370,6 +370,7 @@ class GlobalExposureModel(Adapter):
 
         # Query the repository tree for all files in the `main` branch so we
         # can locate country-specific folders without cloning the repo.
+        # We should update this at some point to 2026.0.0 but for now, we fix it to the old version.
         branch = "2023.1.1"
         tree_url = f"https://api.github.com/repos/gem/global_exposure_model/git/trees/{branch}?recursive=1"
         resp = requests.get(tree_url)
