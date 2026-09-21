@@ -102,12 +102,28 @@ def get_discharge_per_river(
     ].copy()
 
     # Merged runs can omit files when outflow reporting was disabled for a cluster.
-    has_discharge_output: list[bool] = [
-        (
-            discharge_folder / f"river_outflow_hourly_m3_per_s_{river_id}.parquet"
-        ).exists()
-        for river_id in rivers_of_interest.index
-    ]
+    consolidated_outflow_file: Path = (
+        discharge_folder / "river_outflow_hourly_m3_per_s.parquet"
+    )
+    if consolidated_outflow_file.exists():
+        consolidated_columns: set[str] = set(
+            read_table(consolidated_outflow_file).columns
+        )
+        has_discharge_output: list[bool] = [
+            str(river_id) in consolidated_columns
+            or f"{river_id}_0" in consolidated_columns
+            or (
+                discharge_folder / f"river_outflow_hourly_m3_per_s_{river_id}.parquet"
+            ).exists()
+            for river_id in rivers_of_interest.index
+        ]
+    else:
+        has_discharge_output: list[bool] = [
+            (
+                discharge_folder / f"river_outflow_hourly_m3_per_s_{river_id}.parquet"
+            ).exists()
+            for river_id in rivers_of_interest.index
+        ]
     rivers_of_interest = rivers_of_interest[has_discharge_output].copy()
 
     discharge: pd.DataFrame = hydrology_routing.get_discharge_per_river(

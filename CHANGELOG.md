@@ -1,4 +1,5 @@
 # dev
+- Add retry logic for chunk downloads and limit concurrent connections in Destination Earth ERA5 adapter to prevent connection errors.
 - Export multi-entity special reporters (such as retention basins, meteorological stations, and outflow points) as single consolidated Parquet files.
 - Disable station time-series and return-period figure exports by default in discharge evaluation; enable them with `--export-timeseries-plots true` and `--export-return-period-plots true`.
 - Major re-organization of the hydrological evaluation code. This considerably shortened `evaluate/hydrology.py`, and all of its former contents are now distributed in various workflow scripts. 
