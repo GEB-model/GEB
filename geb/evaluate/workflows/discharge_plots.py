@@ -354,7 +354,7 @@ def save_discharge_timeseries_plots(
     upstream_area_ratio: float,
     metrics: Mapping[str, float],
     plot_folder: Path,
-    include_yearly_plots: bool,
+    export_yearly_timeseries_plots: bool,
 ) -> None:
     """Save full-period and optional yearly station discharge plots.
 
@@ -365,7 +365,7 @@ def save_discharge_timeseries_plots(
             (dimensionless).
         metrics: Discharge validation metrics keyed by metric name.
         plot_folder: Evaluation plot output folder.
-        include_yearly_plots: Whether to save one PNG for each calendar year.
+        export_yearly_timeseries_plots: Whether to save one PNG for each calendar year.
     """
     timeseries_folder: Path = plot_folder / "timeseries"
     timeseries_folder.mkdir(parents=True, exist_ok=True)
@@ -378,7 +378,7 @@ def save_discharge_timeseries_plots(
     figure.savefig(timeseries_folder / f"timeseries_plot_{station_id}.png", dpi=300)
     plt.close(figure)
 
-    if include_yearly_plots:
+    if export_yearly_timeseries_plots:
         yearly_groups: Any = discharge_comparison.groupby(
             discharge_comparison.index.to_series().dt.year.to_numpy()
         )

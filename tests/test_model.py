@@ -448,7 +448,7 @@ def test_run() -> None:
 
         method_args = {
             "method": "hydrology.evaluate_discharge",
-            "include_yearly_plots": False,
+            "export_yearly_timeseries_plots": False,
         }
         args["method_args"] = method_args
         result = run_model_with_method(method="evaluate", **args)
