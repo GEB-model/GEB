@@ -505,7 +505,20 @@ class Routing(Module):
         return rivers, river_ids, river_ids_no_waterbodies_removed
 
     def set_router(self) -> None:
-        """Initialize the local inertial routing algorithm with physically derived river geometry."""
+        """Initialize the local inertial routing algorithm with derived river geometry.
+
+        Derives cross-sectional channel geometry (bankfull width, depth via hydrodynamic Manning
+        inversion, shape exponent, and floodplain width) and instantiates the LocalInertial solver
+        with waterbody and retention basin boundary conditions. Then seeds or synchronizes the
+        solver's internal stage and storage states.
+
+        Notes:
+            Called during model setup after checkpoint loading (self.store.load)
+            and waterbody initialization, but before simulation stepping begins. This ensures
+            that waterbody footprints are flattened and state variables (either synthesized during
+            spinup or restored from checkpoint storage) are available before deriving
+            setting up the local inertial routing solver.
+        """
         is_waterbody_outflow: ArrayBool = self.grid.var.waterbody_outflow_points != -1
         retention_basin_release_threshold_factor: float = self.config[
             "retention_basins"

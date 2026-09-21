@@ -605,7 +605,8 @@ class WaterBodies(Module):
         """Lake routine to calculate lake outflow.
 
         Lake outflow is calculated dynamically within the local inertial routing substeps.
-        Returns NaN values for lakes so that the routing module computes dynamic outflow.
+        Returns NaN values as a flag telling the routing module to calculate dynamic outflow
+        at each substep using the weir rating curve.
 
         Args:
             routing_step_length_seconds: Length of the routing step in seconds.

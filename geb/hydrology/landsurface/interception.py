@@ -35,9 +35,9 @@ def interception(
     potential_direct_evaporation_m: np.float32,
     leaf_area_index: np.float32,
 ) -> tuple[np.float32, np.float32, np.float32, np.float32, np.float32]:
-    """Calculate dynamic interception storage, throughfall, and evaporation.
+    """Calculate interception storage, throughfall, and evaporation.
 
-    Interception capture follows the storage-based dynamic formulation from Aston (1978)
+    Interception capture follows the storage-based formulation from Aston (1978)
     and Merriam (1960) as documented in the LISFLOOD model (van der Knijff & de Roo, 2008,
     Section 2, Eq. 2-6 to 2-8). See: https://publications.jrc.ec.europa.eu/repository/handle/JRC44410
 

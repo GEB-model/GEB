@@ -88,7 +88,10 @@ def _transfer_waterbody_outflows(
         wb_to_kin_wb_id: Source waterbody IDs discharging into kinematic reaches.
         kin_wb_inflow_m3: Waterbody inflow volume buffered per kinematic reach (m³).
     """
-    # Waterbody-to-waterbody transfers
+    # Waterbody-to-waterbody transfers for prescribed releases (e.g., reservoirs).
+    # Natural lakes return NaN from routing_lakes() to request dynamic rating-curve
+    # evaluation at each inertial substep (in _run_inertial_substeps), so NaN > 0
+    # evaluates to False and they are intentionally skipped here.
     for idx in range(len(wb_to_wb_src_wb)):
         src_wb: int = wb_to_wb_src_wb[idx]
         tgt_wb: int = wb_to_wb_tgt_wb[idx]
@@ -99,7 +102,9 @@ def _transfer_waterbody_outflows(
             waterbody_inflow_m3[tgt_wb] += np.float32(outflow_vol)
             inertial_outflow_per_waterbody[src_wb] = np.float32(0.0)
 
-    # Waterbody outflows into receiving kinematic reaches
+    # Waterbody outflows into receiving kinematic reaches for prescribed releases.
+    # As with wb-to-wb transfers, dynamic natural lake outflows drain into inertial
+    # reaches and are calculated within the substepping kernel, not here.
     for idx in range(len(wb_to_kin_target_reach)):
         tgt_reach: int = wb_to_kin_target_reach[idx]
         wb_id_up: int = wb_to_kin_wb_id[idx]
@@ -672,7 +677,10 @@ def _run_inertial_routing_step(
                 total_flow_rate_buf=total_flow_rate_buf,
             )
 
-    # Waterbodies discharging directly out of the domain
+    # Waterbodies discharging directly out of the domain (at pit or boundary cells).
+    # Prescribed releases (e.g. from reservoirs) cannot drain to any downstream
+    # grid cell, so they are deducted from storage and aggregated here to later be
+    # added to domain boundary outflow (outflow_at_pits_m3).
     terminal_wb_outflow_m3: np.float32 = np.float32(0.0)
     for idx in range(len(wb_terminal_wb_ids)):
         wb_id_term: int = wb_terminal_wb_ids[idx]
@@ -2385,6 +2393,8 @@ class LocalInertial:
             dt_s=float(self.dt),
         )
 
+        # Add terminal waterbody releases outside the domain to pit outflows
+        # so total domain boundary loss is conserved in the overall water balance.
         outflow_at_pits_m3: np.float32 = (
             np.float32(np.sum(discharge_perm[self._pit_indices]) * self.dt)
             if len(self._pit_indices) > 0
