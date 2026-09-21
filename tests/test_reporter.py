@@ -1,6 +1,7 @@
 """Tests for the Reporter module utilities in GEB."""
 
 import datetime
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -568,5 +569,40 @@ class TestSpecialExportersSingleFile:
         with pytest.raises(
             ValueError,
             match="Exporting grouped variables to a single parquet file does not support extra_attributes",
+        ):
+            reporter.finalize()
+
+    def test_grouped_variables_missing_group_key_raises(self, tmp_path: Path) -> None:
+        """Verify that a grouped variable without _group_key raises KeyError."""
+        from unittest.mock import MagicMock
+
+        from geb.reporter import Reporter
+
+        report_dir: Path = tmp_path / "report"
+        model: MagicMock = MagicMock()
+        model.config = {
+            "report": {
+                "_config": {"compression_level": 1, "chunk_target_size_bytes": 1000000},
+                "hydrology.routing": {
+                    "test_var": {
+                        "varname": "var.test",
+                        "type": "grid",
+                        "_group": "test_group",
+                    }
+                },
+            }
+        }
+        model.mode = "w"
+        model.simulate_hydrology = False
+        model.files = {}
+
+        reporter: Reporter = Reporter(model, report_dir, clean=True)
+        rep = reporter.variables_to_report["hydrology.routing"]["test_var"]
+        rep["_time_array"] = np.array([1609459200], dtype=np.int64)
+        rep["_data_array"] = np.array([1.0], dtype=np.float32)
+
+        with pytest.raises(
+            KeyError,
+            match="missing required '_group_key'",
         ):
             reporter.finalize()

@@ -1602,7 +1602,9 @@ class Reporter:
         """At the end of the model run, all previously collected data is reported to disk.
 
         Raises:
-            ValueError: If the variable type is not recognized.
+            KeyError: If a grouped variable is missing required '_group_key'.
+            ValueError: If the variable type is not recognized or extra_attributes
+                are combined with _group.
         """
         # If no data has been collected, we return
         if self.variables_to_report is None:
@@ -1668,8 +1670,12 @@ class Reporter:
                             raise ValueError(
                                 f"Exporting grouped variables to a single parquet file does not support extra_attributes (found on variable {module_name}.{name})."
                             )
+                        if "_group_key" not in config:
+                            raise KeyError(
+                                f"Variable {module_name}.{name} specifies '_group' but is missing required '_group_key'."
+                            )
                         group_name: str = config["_group"]
-                        group_key: str = config.get("_group_key", name)
+                        group_key: str = str(config["_group_key"])
                         grouped_variables[(module_name, group_name)][group_key] = config
                     else:
                         # Convert Unix timestamps (seconds) to datetime
