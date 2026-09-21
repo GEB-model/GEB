@@ -11,8 +11,6 @@ from typing import Any
 import pandas as pd
 
 from geb.build.data_catalog.base import Adapter
-import numpy as np
-import scipy
 
 
 class IIASA_SSP(Adapter):
