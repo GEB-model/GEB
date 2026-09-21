@@ -706,13 +706,34 @@ class ReportConfig(BaseModel):
     water_circle: bool = Field(
         False, alias="_water_circle", description="Whether to report water circle."
     )
+    water_balance: bool = Field(
+        False, alias="_water_balance", description="Whether to report water balance."
+    )
+    water_storage: bool = Field(
+        False, alias="_water_storage", description="Whether to report water storage."
+    )
+    energy_balance: bool = Field(
+        False, alias="_energy_balance", description="Whether to report energy balance."
+    )
     discharge_stations: bool = Field(
         True,
         alias="_discharge_stations",
         description="Whether to report discharge stations.",
     )
+    retention_basins: bool = Field(
+        False,
+        alias="_retention_basins",
+        description="Whether to report retention basins.",
+    )
+    meteorological_stations: bool = Field(
+        True,
+        alias="_meteorological_stations",
+        description="Whether to report meteorological stations.",
+    )
     outflow_points: bool = Field(
-        True, alias="_outflow_points", description="Whether to report outflow points."
+        True,
+        alias="_outflow_points",
+        description="Whether to report outflow points.",
     )
 
 
