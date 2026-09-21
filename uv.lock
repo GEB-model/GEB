@@ -1502,11 +1502,7 @@ dependencies = [
     { name = "huggingface-hub" },
     { name = "hydromt-sfincs" },
     { name = "imageio" },
-<<<<<<< HEAD
     { name = "imageio-ffmpeg" },
-=======
-    { name = "ipykernel" },
->>>>>>> a0b65a00 (Early Warning Module (#882))
     { name = "joblib" },
     { name = "matplotlib" },
     { name = "mcp" },
