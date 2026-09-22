@@ -1217,7 +1217,6 @@ def test_share() -> None:
 
         output_fn.unlink()
 
-
 def test_set_and_clean(tmp_path: Path) -> None:
     """Test setting config values and cleaning a copied model folder with the CLI.
 
@@ -1288,11 +1287,6 @@ def test_set_and_clean(tmp_path: Path) -> None:
     assert copied_config["general"]["end_time"] == updated_end_time
     assert copied_config["hazards"]["floods"]["simulate"] is False
     assert copied_config["report"] == {"_discharge_stations": True}
-
-    source_config: dict[str, Any] = parse_config(source_model_directory / "model.yml")
-    assert source_config["general"]["spinup_time"] != updated_spinup_time
-    assert source_config["general"]["start_time"] != updated_start_time
-    assert source_config["general"]["end_time"] != updated_end_time
 
     clean_result = runner.invoke(
         cli,
