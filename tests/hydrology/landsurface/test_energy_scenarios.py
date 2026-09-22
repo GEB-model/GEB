@@ -90,8 +90,8 @@ def run_energy_simulation(
         THERMAL_CONDUCTIVITY_ICE_WATT_PER_MKELVIN**porosity
     )
 
-    # Initial State
-    # Calculate initial enthalpy (Liquid)
+    # Initial state
+    # Calculate initial enthalpy (liquid)
     water_heat_capacity_areal = (
         volumetric_water_content
         * layer_thickness_m
@@ -104,7 +104,7 @@ def run_energy_simulation(
         initial_soil_temp_C
     )
 
-    # Snow State
+    # Snow state
     n_snow_layers = 2
     snow_water_equivalent_m = np.zeros(n_snow_layers, dtype=np.float64)
     snow_water_equivalent_m[0] = initial_swe_m / 2.0
@@ -223,20 +223,20 @@ def test_energy_snow_comparison() -> None:
     air_temp[48 : 48 + 24 * 5] = -20.0  # Cold snap starts day 2
     air_temp[48 + 24 * 5 :] = 2.0  # Slow stable cold
 
-    # Scenario 1: No Snow
+    # Scenario 1: No snow
     res_no_snow = run_energy_simulation(air_temp, initial_swe_m=0.0, title="Bare Soil")
 
-    # Scenario 2: With Snow (0.2m SWE = ~1m snow)
+    # Scenario 2: With snow (0.2m SWE = ~1m snow)
     res_snow = run_energy_simulation(air_temp, initial_swe_m=0.2, title="Snow Covered")
 
-    # Plot results - Comprehensive Comparison
+    # Plot results - comparison
     fig, axes = plt.subplots(3, 2, figsize=(16, 15), sharex=True, sharey="row")
 
     # Titles for columns
     axes[0, 0].set_title("SCENARIO A: BARE SOIL", fontsize=14, fontweight="bold")
     axes[0, 1].set_title("SCENARIO B: SNOW COVERED", fontsize=14, fontweight="bold")
 
-    # 1. Temperature Profiles (Snow and Soil)
+    # 1. Temperature profiles (snow and soil)
     for i, res in enumerate([res_no_snow, res_snow]):
         ax = axes[0, i]
         ax.plot(res.time_hours, res.air_temp_C, "k:", alpha=0.3, label="Air Temp")
@@ -267,7 +267,7 @@ def test_energy_snow_comparison() -> None:
         ax.set_ylabel("Temperature (C)")
         ax.legend(fontsize="small", loc="lower left")
 
-    # 2. Freezing State & Snow Thickness
+    # 2. Freezing state & snow thickness
     for i, res in enumerate([res_no_snow, res_snow]):
         ax = axes[1, i]
         ax.fill_between(
@@ -279,7 +279,7 @@ def test_energy_snow_comparison() -> None:
             color="blue",
             label="Top Soil Frozen Fraction",
         )
-        # Add Snow Thickness if present
+        # Add snow thickness if present
         if np.any(res.snow_depth_m > 0):
             ax_twin = ax.twinx()
             for j in range(res.snow_depth_m.shape[1]):
@@ -297,7 +297,7 @@ def test_energy_snow_comparison() -> None:
         ax.set_ylim(0, 1.05)
         ax.legend(fontsize="small", loc="upper left")
 
-    # 3. Energy Fluxes
+    # 3. Energy fluxes
     for i, res in enumerate([res_no_snow, res_snow]):
         ax = axes[2, i]
         ax.plot(
@@ -347,7 +347,7 @@ def test_energy_shade_comparison() -> None:
             np.pi * (np.arange(24) - 6) / 12
         ).clip(0)
 
-    # Scenario 1: Bare Soil (LAI=0, High SW)
+    # Scenario 1: Bare soil (LAI=0, high SW)
     res_bare = run_energy_simulation(
         air_temp,
         initial_soil_temp_C=20.0,
@@ -356,7 +356,7 @@ def test_energy_shade_comparison() -> None:
         title="Bare Soil Summer",
     )
 
-    # Scenario 2: Shaded Soil (LAI=5, High SW)
+    # Scenario 2: Shaded soil (LAI=5, high SW)
     res_shaded = run_energy_simulation(
         air_temp,
         initial_soil_temp_C=20.0,
@@ -368,7 +368,7 @@ def test_energy_shade_comparison() -> None:
     # Plot results
     fig, axes = plt.subplots(2, 1, figsize=(10, 10), sharex=True)
 
-    # Air Temp & Soil Temps
+    # Air temp & soil temps
     axes[0].plot(
         res_bare.time_hours, res_bare.air_temp_C, "k--", alpha=0.5, label="Air Temp"
     )
@@ -388,7 +388,7 @@ def test_energy_shade_comparison() -> None:
     axes[0].legend()
     axes[0].set_title("Canopy Shading Effect (Summer)")
 
-    # Surface Fluxes
+    # Surface fluxes
     axes[1].plot(
         res_bare.time_hours,
         res_bare.surface_flux_W_per_m2,

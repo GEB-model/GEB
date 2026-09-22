@@ -44,7 +44,7 @@ def test_get_heat_capacity() -> None:
     # Test with bulk density equal to mineral density (solid rock)
     # Bulk density 2.65 g/cm3. phi_s should be 1.0. Heat capacity = C_mineral = 2.13e6.
     # Layer thickness = 2.0 m
-    # Areal Heat Capacity = 2.13e6 * 2.0
+    # Areal heat capacity = 2.13e6 * 2.0
 
     bulk_density_rock = np.array([2.65], dtype=np.float32)
     layer_thickness_rock = np.array([2.0], dtype=np.float32)
@@ -100,7 +100,7 @@ def test_calculate_thermal_conductivity_solid_fraction() -> None:
     Validates against Johansen (1975) parameterization and expected ranges
     for different soil textures.
     """
-    # Pure Sand (100% Sand)
+    # Pure sand (100% sand)
     # Quartz ~ 100% -> q = 1.0
     # lambda_s = 7.7^1.0 * 2.0^0 = 7.7
     res_sand = calculate_thermal_conductivity_solid_fraction_watt_per_meter_kelvin(
@@ -108,7 +108,7 @@ def test_calculate_thermal_conductivity_solid_fraction() -> None:
     )
     assert abs(res_sand - 7.7) < 1e-4
 
-    # Pure Clay (0% Sand)
+    # Pure clay (0% sand)
     # Quartz ~ 0% -> q = 0.0
     # lambda_s = 7.7^0 * 2.0^1 = 2.0
     res_clay = calculate_thermal_conductivity_solid_fraction_watt_per_meter_kelvin(
@@ -116,7 +116,7 @@ def test_calculate_thermal_conductivity_solid_fraction() -> None:
     )
     assert abs(res_clay - 2.0) < 1e-4
 
-    # Loam (40% Sand, 40% Silt, 20% Clay)
+    # Loam (40% sand, 40% silt, 20% clay)
     # Quartz ~ 40% -> q = 0.4
     # lambda_s = 7.7^0.4 * 2.0^0.6
     expected_loam = (7.7**0.4) * (2.0**0.6)
@@ -193,7 +193,7 @@ def test_calculate_soil_thermal_conductivity() -> None:
 
 def test_calculate_sensible_heat_flux() -> None:
     """Test the calculate_sensible_heat_flux function."""
-    # Equilibrium (No transfer)
+    # Equilibrium (no transfer)
     flux, G = calculate_sensible_heat_flux(
         soil_temperature_C=np.float32(20.0),
         air_temperature_K=np.float32(293.15),  # 20C
@@ -264,7 +264,7 @@ def test_apply_rain_heat_advection_reduces_frozen_fraction() -> None:
 
 def test_johansen_thermal_conductivity_functions() -> None:
     """Test dry and saturated thermal conductivity functions from Johansen (1975)."""
-    # 1. Test Dry Conductivity
+    # 1. Test dry conductivity
     bd = np.array([1.3], dtype=np.float32)
     expected_dry = (0.135 * 1300.0 + 64.7) / (2700.0 - 0.947 * 1300.0)
     res_dry = calculate_thermal_conductivity_dry_soil_johansen_watt_per_meter_kelvin(bd)
@@ -272,7 +272,7 @@ def test_johansen_thermal_conductivity_functions() -> None:
         res_dry, np.array([expected_dry], dtype=np.float32), rtol=1e-5
     )
 
-    # 2. Test Saturated Conductivity
+    # 2. Test saturated conductivity
     lambda_s = np.array([2.5], dtype=np.float32)
     porosity = np.array([0.4], dtype=np.float32)
     f_water = np.float32(

@@ -17,6 +17,7 @@ SNOW_EMISSIVITY: np.float32 = np.float32(0.99)  # Emissivity of snow surface
 
 # Densities
 RHO_WATER_KG_PER_M3: np.float32 = np.float32(1000.0)  # kg/m3
+MAX_SNOW_DENSITY_KG_PER_M3: np.float32 = np.float32(917.0)  # kg/m3 (pure ice density)
 
 # Specific heat capacities
 SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K: np.float32 = np.float32(4186.0)

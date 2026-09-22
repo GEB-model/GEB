@@ -396,7 +396,6 @@ def land_surface_model(
             pore_size_index_cell = np.float32(3.0) + (np.float32(2.0) / lambda_)
 
             snow_water_equivalent_top_m_cell = snow_water_equivalent_m[i, 0]
-            # assert not np.isnan(snow_water_equivalent_top_m_cell)
             snow_water_equivalent_bottom_m_cell = snow_water_equivalent_m[i, 1]
             liquid_water_top_m_cell = liquid_water_in_snow_m[i, 0]
             liquid_water_bottom_m_cell = liquid_water_in_snow_m[i, 1]
@@ -423,27 +422,6 @@ def land_surface_model(
                 wind_10m_m_per_s: np.float32 = np.sqrt(
                     wind_u * wind_u + wind_v * wind_v
                 )  # Wind speed at 10m height
-
-                # snow_water_equivalent_top_m_cell_copy = np.float64(
-                #     snow_water_equivalent_top_m_cell
-                # )
-                # liquid_water_top_m_cell_copy = np.float64(liquid_water_top_m_cell)
-                # enthalpy_top_J_per_m2_cell_copy = np.float32(
-                #     snow_enthalpy_top_J_per_m2_cell
-                # )
-                # density_top_kg_per_m3_cell_copy = np.float32(
-                #     snow_density_top_kg_per_m3_cell
-                # )
-                # snow_water_equivalent_bottom_m_cell_copy = np.float64(
-                #     snow_water_equivalent_bottom_m_cell
-                # )
-                # liquid_water_bottom_m_cell_copy = np.float64(liquid_water_bottom_m_cell)
-                # enthalpy_bottom_J_per_m2_cell_copy = np.float32(
-                #     snow_enthalpy_bottom_J_per_m2_cell
-                # )
-                # snow_density_bottom_kg_per_m3_cell_copy = np.float32(
-                #     snow_density_bottom_kg_per_m3_cell
-                # )
 
                 (
                     rain_m_cell,

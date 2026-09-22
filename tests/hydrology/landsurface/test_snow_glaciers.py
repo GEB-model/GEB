@@ -8,6 +8,7 @@ import numpy as np
 from geb.hydrology.landsurface.constants import (
     KELVIN_OFFSET,
     LATENT_HEAT_FUSION_J_PER_KG,
+    MAX_SNOW_DENSITY_KG_PER_M3,
     RHO_WATER_KG_PER_M3,
     SNOW_EMISSIVITY,
     STEFAN_BOLTZMANN_W_PER_M2_K4,
@@ -31,6 +32,7 @@ from geb.hydrology.landsurface.snow_glaciers import (
     get_snow_temperature_from_enthalpy,
     handle_refreezing,
     melt_snow_from_enthalpy,
+    mix_snow_properties,
     promote_snow_to_top_layer,
     split_snow_enthalpy,
     update_snow_mass_and_phase,
@@ -118,7 +120,7 @@ def test_plot_snow_compaction_processes() -> None:
     temperatures = np.array([-10.0, -5.0, -1.0, 0.0], dtype=np.float32)
     pressures = np.array([500.0, 2000.0, 5000.0], dtype=np.float32)
 
-    # Plot Metamorphism
+    # Plot metamorphism.
     plt.figure(figsize=(10, 6))
     for t in temperatures:
         rates = [
@@ -134,7 +136,7 @@ def test_plot_snow_compaction_processes() -> None:
     plt.savefig(output_folder_snow / "snow_metamorphism_compaction.png")
     plt.close()
 
-    # Plot Overburden
+    # Plot overburden.
     plt.figure(figsize=(10, 6))
     for p in pressures:
         for t in [-5.0]:  # Fix temperature to show pressure effect
@@ -419,13 +421,13 @@ def test_update_snow_mass_and_phase_conserves_mass_without_turbulence() -> None:
     assert sublimation_m_per_hour == np.float32(0.0)
     assert enthalpy_top_J_per_m2 == np.float32(0.0)
     assert enthalpy_bottom_J_per_m2 == np.float32(0.0)
-    # The water balance: Initial SWE + Rain = Final (SWE + LW) + Runoff
+    # Water balance: initial SWE + rain = final (SWE + liquid water) + runoff.
     # In this case: 0.05 + 0.01 = 0.06
     # Final state: top_swe (0.05 - 0.02) = 0.03
     # LW content: rain (0.01) + melt (0.02) = 0.03
     # Max LW: 0.03 * 0.1 = 0.003
     # Runoff: 0.03 - 0.003 = 0.027
-    # Final SWE + LW + Runoff = 0.03 + 0.003 + 0.027 = 0.06
+    # Final SWE + liquid water + runoff = 0.03 + 0.003 + 0.027 = 0.06.
     assert math.isclose(
         initial_total_water_m,
         final_total_water_m + np.float64(total_runoff_m),
@@ -823,7 +825,7 @@ def _plot_scenario_results(
     fig, axs = plt.subplots(5, 1, figsize=(15, 20), sharex=True)
     fig.suptitle(f"Snow Model Scenario: {scenario_name}", fontsize=16)
 
-    # Panel 1: Mass balance.
+    # Panel 1: mass balance.
     axs[0].set_title("Snowpack Mass Balance")
     axs[0].plot(timesteps, results["swe_log"], label="SWE (m)", color="blue")
     axs[0].plot(
@@ -848,7 +850,7 @@ def _plot_scenario_results(
     ax_precip.set_ylabel("Precipitation (mm/hr)")
     ax_precip.legend(loc="upper right")
 
-    # Panel 2: Water fluxes.
+    # Panel 2: water fluxes.
     axs[1].set_title("Water Fluxes")
     axs[1].plot(
         timesteps,
@@ -881,7 +883,7 @@ def _plot_scenario_results(
     axs[1].legend()
     axs[1].grid(True)
 
-    # Panel 3: Temperature.
+    # Panel 3: temperature.
     axs[2].set_title("Temperatures")
     axs[2].plot(timesteps, air_temp_C, label="Air Temp (°C)", color="red")
     axs[2].plot(
@@ -896,7 +898,7 @@ def _plot_scenario_results(
     axs[2].legend()
     axs[2].grid(True)
 
-    # Panel 4: Net radiation and sensible/latent heat.
+    # Panel 4: net radiation and sensible/latent heat.
     axs[3].set_title("Energy Fluxes")
     net_lw_log = lw_rad_W_per_m2 - results["upward_lw_log"]
     axs[3].plot(
@@ -938,7 +940,7 @@ def _plot_scenario_results(
     axs[3].legend()
     axs[3].grid(True)
 
-    # Panel 5: Radiation components.
+    # Panel 5: radiation components.
     axs[4].set_title("Radiation Components")
     axs[4].plot(timesteps, sw_rad_W_per_m2, label="Incoming SW (W/m²)", color="orange")
     axs[4].plot(
@@ -1016,7 +1018,7 @@ def _verify_scenario_mass_balance(results: dict[str, np.ndarray]) -> None:
     # Change in storage
     delta_storage_m = final_total_water_m - initial_total_water_m
 
-    # Net flux (Precipitation - Runoff + Sublimation)
+    # Net flux (precipitation - runoff + sublimation).
     # Note: sublimation_log is negative for loss, positive for deposition.
     net_flux_m = total_precipitation_m - total_runoff_m + total_sublimation_m
 
@@ -1435,7 +1437,7 @@ def test_intermittent_snowfall_scenario() -> None:
 
 
 def test_summer_no_deposition() -> None:
-    """Ensure no snow deposition occurs when temperatures are above freezing."""
+    """Test that snow deposition does not occur when temperature is above freezing."""
     n_hours = 48
     timesteps = np.arange(n_hours)
 
@@ -1467,7 +1469,7 @@ def test_summer_no_deposition() -> None:
 
 
 def test_glacier_ice_scenario() -> None:
-    """Deep glacier-like snowpack should show daily melt cycles over 72 h."""
+    """Test melt cycles over 72 hours for a deep snowpack."""
     n_hours = 72
     timesteps = np.arange(n_hours)
 
@@ -1521,3 +1523,412 @@ def test_glacier_ice_scenario() -> None:
         sw_rad_W_per_m2=sw_rad.astype(np.float32),
         lw_rad_W_per_m2=lw_rad.astype(np.float32),
     )
+
+
+def test_thin_snow_pack_complete_melting() -> None:
+    """Test that thin snowpacks melt completely without leaving residual trace snow."""
+    thin_swe_values: list[float] = [1.0e-5, 1.0e-6, 1.0e-7]
+
+    for thin_swe in thin_swe_values:
+        initial_swe_m: np.float64 = np.float64(thin_swe)
+        # Surplus positive enthalpy well exceeding the latent heat needed to melt the thin snow
+        melt_enthalpy_J_per_m2: np.float32 = np.float32(
+            np.float64(thin_swe)
+            * np.float64(RHO_WATER_KG_PER_M3)
+            * np.float64(LATENT_HEAT_FUSION_J_PER_KG)
+            * 2.0
+        )
+
+        (
+            swe_top_m,
+            liquid_water_top_m,
+            enthalpy_top_J_per_m2,
+            density_top_kg_per_m3,
+            swe_bottom_m,
+            liquid_water_bottom_m,
+            enthalpy_bottom_J_per_m2,
+            density_bottom_kg_per_m3,
+            snow_melt_m_per_hour,
+            melt_runoff_m_per_hour,
+            _rainfall_m_per_hour,
+            _sublimation_m_per_hour,
+            _refreezing_m_per_hour,
+        ) = update_snow_mass_and_phase(
+            rainfall_m_per_hour=np.float32(0.0),
+            swe_top_m=initial_swe_m,
+            liquid_water_top_m=np.float64(0.0),
+            enthalpy_top_J_per_m2=melt_enthalpy_J_per_m2,
+            density_top_kg_per_m3=FRESH_SNOW_DENSITY_KG_PER_M3,
+            swe_bottom_m=np.float64(0.0),
+            liquid_water_bottom_m=np.float64(0.0),
+            enthalpy_bottom_J_per_m2=np.float32(0.0),
+            density_bottom_kg_per_m3=FRESH_SNOW_DENSITY_KG_PER_M3,
+            air_temperature_C=np.float32(5.0),
+            vapor_pressure_air_Pa=np.float32(800.0),
+            air_pressure_Pa=np.float32(101325.0),
+            wind_10m_m_per_s=np.float32(0.0),
+            activate_layer_thickness_m=np.float32(0.2),
+        )
+
+        assert swe_top_m == 0.0, (
+            f"Top SWE should be 0.0 for initial SWE {thin_swe}, got {swe_top_m}"
+        )
+        assert swe_bottom_m == 0.0
+        assert liquid_water_top_m == 0.0
+        assert liquid_water_bottom_m == 0.0
+        assert enthalpy_top_J_per_m2 == np.float32(0.0)
+        assert enthalpy_bottom_J_per_m2 == np.float32(0.0)
+        assert density_top_kg_per_m3 == FRESH_SNOW_DENSITY_KG_PER_M3
+        assert density_bottom_kg_per_m3 == FRESH_SNOW_DENSITY_KG_PER_M3
+        assert math.isclose(float(melt_runoff_m_per_hour), thin_swe, abs_tol=1e-12)
+
+
+def test_thin_snow_pack_sublimation_clean_zero() -> None:
+    """Test that thin snow sublimates to zero without negative residual snow water equivalent."""
+    initial_swe_m: np.float64 = np.float64(1.0e-5)
+    enthalpy_initial: np.float32 = get_snow_enthalpy_from_temperature(
+        initial_swe_m, np.float32(-5.0)
+    )
+
+    (
+        swe_top_m,
+        liquid_water_top_m,
+        enthalpy_top_J_per_m2,
+        density_top_kg_per_m3,
+        swe_bottom_m,
+        _liquid_water_bottom_m,
+        _enthalpy_bottom_J_per_m2,
+        _density_bottom_kg_per_m3,
+        _snow_melt_m_per_hour,
+        _melt_runoff_m_per_hour,
+        _rainfall_m_per_hour,
+        applied_sublimation_m_per_hour,
+        _refreezing_m_per_hour,
+    ) = update_snow_mass_and_phase(
+        rainfall_m_per_hour=np.float32(0.0),
+        swe_top_m=initial_swe_m,
+        liquid_water_top_m=np.float64(0.0),
+        enthalpy_top_J_per_m2=enthalpy_initial,
+        density_top_kg_per_m3=FRESH_SNOW_DENSITY_KG_PER_M3,
+        swe_bottom_m=np.float64(0.0),
+        liquid_water_bottom_m=np.float64(0.0),
+        enthalpy_bottom_J_per_m2=np.float32(0.0),
+        density_bottom_kg_per_m3=FRESH_SNOW_DENSITY_KG_PER_M3,
+        air_temperature_C=np.float32(-5.0),
+        vapor_pressure_air_Pa=np.float32(50.0),  # Very dry air driving high sublimation
+        air_pressure_Pa=np.float32(101325.0),
+        wind_10m_m_per_s=np.float32(10.0),  # Strong wind
+        activate_layer_thickness_m=np.float32(0.2),
+    )
+
+    assert swe_top_m == 0.0
+    assert swe_bottom_m == 0.0
+    assert liquid_water_top_m == 0.0
+    assert enthalpy_top_J_per_m2 == np.float32(0.0)
+    assert density_top_kg_per_m3 == FRESH_SNOW_DENSITY_KG_PER_M3
+    assert math.isclose(float(applied_sublimation_m_per_hour), -1.0e-5, abs_tol=1e-12)
+
+
+def test_thin_snow_freeze_thaw_cycling_stability() -> None:
+    """Test freeze-thaw cycling stability for a thin snowpack."""
+    swe_top: np.float64 = np.float64(0.001)
+    lw_top: np.float64 = np.float64(0.0)
+    enthalpy_top: np.float32 = get_snow_enthalpy_from_temperature(
+        swe_top, np.float32(-2.0)
+    )
+    density_top: np.float32 = FRESH_SNOW_DENSITY_KG_PER_M3
+    swe_bottom: np.float64 = np.float64(0.0)
+    lw_bottom: np.float64 = np.float64(0.0)
+    enthalpy_bottom: np.float32 = np.float32(0.0)
+    density_bottom: np.float32 = FRESH_SNOW_DENSITY_KG_PER_M3
+
+    cumulative_runoff_m: np.float64 = np.float64(0.0)
+    cumulative_sublimation_m: np.float64 = np.float64(0.0)
+    initial_total_water: np.float64 = swe_top
+
+    # Run 24 hourly steps alternating air temperature between -3C and +3C
+    for hour in range(24):
+        air_temp: np.float32 = np.float32(3.0 if (hour % 6 < 3) else -3.0)
+        (
+            swe_top,
+            lw_top,
+            enthalpy_top,
+            density_top,
+            swe_bottom,
+            lw_bottom,
+            enthalpy_bottom,
+            density_bottom,
+            _melt,
+            runoff,
+            _rain,
+            sublimation,
+            _refreeze,
+        ) = update_snow_mass_and_phase(
+            rainfall_m_per_hour=np.float32(0.0),
+            swe_top_m=swe_top,
+            liquid_water_top_m=lw_top,
+            enthalpy_top_J_per_m2=enthalpy_top,
+            density_top_kg_per_m3=density_top,
+            swe_bottom_m=swe_bottom,
+            liquid_water_bottom_m=lw_bottom,
+            enthalpy_bottom_J_per_m2=enthalpy_bottom,
+            density_bottom_kg_per_m3=density_bottom,
+            air_temperature_C=air_temp,
+            vapor_pressure_air_Pa=np.float32(400.0),
+            air_pressure_Pa=np.float32(101325.0),
+            wind_10m_m_per_s=np.float32(1.0),
+            activate_layer_thickness_m=np.float32(0.2),
+        )
+        cumulative_runoff_m += np.float64(runoff)
+        cumulative_sublimation_m += np.float64(sublimation)
+
+        assert np.isfinite(swe_top)
+        assert np.isfinite(lw_top)
+        assert np.isfinite(enthalpy_top)
+        assert np.isfinite(density_top)
+        assert swe_top >= 0.0
+        assert lw_top >= 0.0
+
+    current_total_water: np.float64 = (
+        swe_top
+        + lw_top
+        + swe_bottom
+        + lw_bottom
+        + cumulative_runoff_m
+        - cumulative_sublimation_m
+    )
+    assert math.isclose(
+        float(initial_total_water), float(current_total_water), abs_tol=1e-10
+    )
+
+
+def test_two_layer_to_single_layer_to_zero_transition() -> None:
+    """Test transition from two layers to a single layer and complete melt."""
+    swe_top: np.float64 = np.float64(0.05)
+    swe_bottom: np.float64 = np.float64(0.02)
+    lw_top: np.float64 = np.float64(0.002)
+    lw_bottom: np.float64 = np.float64(0.001)
+    enthalpy_top: np.float32 = np.float32(0.0)
+    enthalpy_bottom: np.float32 = np.float32(0.0)
+    density_top: np.float32 = np.float32(200.0)
+    density_bottom: np.float32 = np.float32(250.0)
+
+    initial_total_water: np.float64 = swe_top + swe_bottom + lw_top + lw_bottom
+    cumulative_runoff_m: np.float64 = np.float64(0.0)
+
+    # Step 1: Melt bottom layer partially
+    enthalpy_bottom = np.float32(
+        0.015 * RHO_WATER_KG_PER_M3 * LATENT_HEAT_FUSION_J_PER_KG
+    )
+    (
+        swe_top,
+        lw_top,
+        enthalpy_top,
+        density_top,
+        swe_bottom,
+        lw_bottom,
+        enthalpy_bottom,
+        density_bottom,
+        _melt,
+        runoff,
+        _rain,
+        _sub,
+        _refreeze,
+    ) = update_snow_mass_and_phase(
+        rainfall_m_per_hour=np.float32(0.0),
+        swe_top_m=swe_top,
+        liquid_water_top_m=lw_top,
+        enthalpy_top_J_per_m2=enthalpy_top,
+        density_top_kg_per_m3=density_top,
+        swe_bottom_m=swe_bottom,
+        liquid_water_bottom_m=lw_bottom,
+        enthalpy_bottom_J_per_m2=enthalpy_bottom,
+        density_bottom_kg_per_m3=density_bottom,
+        air_temperature_C=np.float32(5.0),
+        vapor_pressure_air_Pa=np.float32(611.15),
+        air_pressure_Pa=np.float32(101325.0),
+        wind_10m_m_per_s=np.float32(0.0),
+        activate_layer_thickness_m=np.float32(0.2),
+    )
+    cumulative_runoff_m += np.float64(runoff)
+
+    # Step 2: Melt the rest of the bottom layer and thin the top layer
+    enthalpy_top = np.float32(0.03 * RHO_WATER_KG_PER_M3 * LATENT_HEAT_FUSION_J_PER_KG)
+    enthalpy_bottom = np.float32(
+        0.05 * RHO_WATER_KG_PER_M3 * LATENT_HEAT_FUSION_J_PER_KG
+    )
+    (
+        swe_top,
+        lw_top,
+        enthalpy_top,
+        density_top,
+        swe_bottom,
+        lw_bottom,
+        enthalpy_bottom,
+        density_bottom,
+        _melt,
+        runoff,
+        _rain,
+        _sub,
+        _refreeze,
+    ) = update_snow_mass_and_phase(
+        rainfall_m_per_hour=np.float32(0.0),
+        swe_top_m=swe_top,
+        liquid_water_top_m=lw_top,
+        enthalpy_top_J_per_m2=enthalpy_top,
+        density_top_kg_per_m3=density_top,
+        swe_bottom_m=swe_bottom,
+        liquid_water_bottom_m=lw_bottom,
+        enthalpy_bottom_J_per_m2=enthalpy_bottom,
+        density_bottom_kg_per_m3=density_bottom,
+        air_temperature_C=np.float32(5.0),
+        vapor_pressure_air_Pa=np.float32(611.15),
+        air_pressure_Pa=np.float32(101325.0),
+        wind_10m_m_per_s=np.float32(0.0),
+        activate_layer_thickness_m=np.float32(0.2),
+    )
+    cumulative_runoff_m += np.float64(runoff)
+    assert swe_bottom == 0.0
+    assert lw_bottom == 0.0  # Bottom layer must have completely drained
+
+    # Step 3: Melt the remaining top layer completely
+    enthalpy_top = np.float32(0.10 * RHO_WATER_KG_PER_M3 * LATENT_HEAT_FUSION_J_PER_KG)
+    (
+        swe_top,
+        lw_top,
+        enthalpy_top,
+        density_top,
+        swe_bottom,
+        lw_bottom,
+        enthalpy_bottom,
+        density_bottom,
+        _melt,
+        runoff,
+        _rain,
+        _sub,
+        _refreeze,
+    ) = update_snow_mass_and_phase(
+        rainfall_m_per_hour=np.float32(0.0),
+        swe_top_m=swe_top,
+        liquid_water_top_m=lw_top,
+        enthalpy_top_J_per_m2=enthalpy_top,
+        density_top_kg_per_m3=density_top,
+        swe_bottom_m=swe_bottom,
+        liquid_water_bottom_m=lw_bottom,
+        enthalpy_bottom_J_per_m2=enthalpy_bottom,
+        density_bottom_kg_per_m3=density_bottom,
+        air_temperature_C=np.float32(5.0),
+        vapor_pressure_air_Pa=np.float32(611.15),
+        air_pressure_Pa=np.float32(101325.0),
+        wind_10m_m_per_s=np.float32(0.0),
+        activate_layer_thickness_m=np.float32(0.2),
+    )
+    cumulative_runoff_m += np.float64(runoff)
+
+    assert swe_top == 0.0
+    assert lw_top == 0.0
+    assert swe_bottom == 0.0
+    assert lw_bottom == 0.0
+    assert density_top == FRESH_SNOW_DENSITY_KG_PER_M3
+    assert density_bottom == FRESH_SNOW_DENSITY_KG_PER_M3
+    assert math.isclose(
+        float(initial_total_water), float(cumulative_runoff_m), abs_tol=1e-7
+    )
+
+
+def test_deep_snowpack_liquid_water_retention_and_bottom_refreezing() -> None:
+    """Test liquid water retention and refreezing in the bottom snow layer."""
+    swe_top: np.float64 = np.float64(0.05)
+    swe_bottom: np.float64 = np.float64(0.50)  # 500 mm SWE in bottom layer
+    lw_top: np.float64 = np.float64(0.0)
+    lw_bottom: np.float64 = np.float64(0.0)
+
+    # Cold bottom snow at -5C
+    enthalpy_top: np.float32 = np.float32(0.0)
+    enthalpy_bottom: np.float32 = get_snow_enthalpy_from_temperature(
+        swe_bottom, np.float32(-5.0)
+    )
+    density_top: np.float32 = FRESH_SNOW_DENSITY_KG_PER_M3
+    density_bottom: np.float32 = np.float32(300.0)
+
+    # Apply 20 mm of surface melt in top layer
+    enthalpy_top = np.float32(0.020 * RHO_WATER_KG_PER_M3 * LATENT_HEAT_FUSION_J_PER_KG)
+
+    (
+        swe_top,
+        lw_top,
+        _enthalpy_top,
+        _density_top,
+        swe_bottom,
+        lw_bottom,
+        enthalpy_bottom,
+        _density_bottom,
+        snow_melt_m_per_hour,
+        melt_runoff_m_per_hour,
+        _rainfall_m_per_hour,
+        _sublimation_m_per_hour,
+        refreezing_m_per_hour,
+    ) = update_snow_mass_and_phase(
+        rainfall_m_per_hour=np.float32(0.0),
+        swe_top_m=swe_top,
+        liquid_water_top_m=lw_top,
+        enthalpy_top_J_per_m2=enthalpy_top,
+        density_top_kg_per_m3=density_top,
+        swe_bottom_m=swe_bottom,
+        liquid_water_bottom_m=lw_bottom,
+        enthalpy_bottom_J_per_m2=enthalpy_bottom,
+        density_bottom_kg_per_m3=density_bottom,
+        air_temperature_C=np.float32(0.0),
+        vapor_pressure_air_Pa=np.float32(611.15),
+        air_pressure_Pa=np.float32(101325.0),
+        wind_10m_m_per_s=np.float32(0.0),
+        activate_layer_thickness_m=np.float32(0.2),
+    )
+
+    # 1. Melt occurred at surface
+    assert snow_melt_m_per_hour > np.float32(0.0)
+    # 2. Liquid refreezes in the cold bottom layer.
+    assert refreezing_m_per_hour > np.float32(0.0)
+    # 3. Liquid water is retained in the bottom layer
+    assert lw_bottom > 0.0
+    # 4. Bottom layer capacity is not exceeded, so runoff is zero.
+    assert melt_runoff_m_per_hour == np.float32(0.0)
+
+
+def test_snow_density_capped_at_ice_density() -> None:
+    """Test that snow density is capped at maximum ice density (917 kg/m³)."""
+    huge_overburden_Pa: np.float32 = np.float32(100_000.0)
+
+    # Density already at or above cap must be strictly clamped
+    clamped_density: np.float32 = compact_snow_density(
+        np.float32(920.0), np.float32(-1.0), huge_overburden_Pa
+    )
+    assert clamped_density == MAX_SNOW_DENSITY_KG_PER_M3
+
+    # Density at 917 must stay at 917
+    at_cap_density: np.float32 = compact_snow_density(
+        MAX_SNOW_DENSITY_KG_PER_M3, np.float32(-1.0), huge_overburden_Pa
+    )
+    assert at_cap_density == MAX_SNOW_DENSITY_KG_PER_M3
+
+    # Test mix_snow_properties density cap and empty reset
+    total_swe, mixed_density, _ = mix_snow_properties(
+        swe_1_m=np.float64(1.0),
+        density_1_kg_per_m3=np.float32(950.0),
+        liquid_1_m=np.float64(0.0),
+        swe_2_m=np.float64(1.0),
+        density_2_kg_per_m3=np.float32(950.0),
+        liquid_2_m=np.float64(0.0),
+    )
+    assert mixed_density <= MAX_SNOW_DENSITY_KG_PER_M3
+
+    # Reset when total SWE is 0
+    _total_swe, empty_density, _ = mix_snow_properties(
+        swe_1_m=np.float64(0.0),
+        density_1_kg_per_m3=np.float32(800.0),
+        liquid_1_m=np.float64(0.0),
+        swe_2_m=np.float64(0.0),
+        density_2_kg_per_m3=np.float32(800.0),
+        liquid_2_m=np.float64(0.0),
+    )
+    assert empty_density == FRESH_SNOW_DENSITY_KG_PER_M3

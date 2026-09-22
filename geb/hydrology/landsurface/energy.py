@@ -377,7 +377,7 @@ def calculate_net_radiation_flux(
 
     net_flux_W: np.float32 = incoming_W - outgoing_W
 
-    # Calculate Derivative of Outgoing Radiation with respect to T:
+    # Derivative of outgoing radiation with respect to temperature:
     # d(sigma * eps * T^4)/dT = 4 * sigma * eps * T^3
     # Note that the derivate below only includes the temperature-dependent outgoing flux
     # However, because these are assumed to be constant with respect to soil temperature,
@@ -408,17 +408,14 @@ def calculate_aerodynamic_conductance_W_per_m2_K(
     Returns:
         Aerodynamic conductance [W/m2/K].
     """
-    # Physics Constants
     SPECIFIC_HEAT_AIR_J_KG_K: np.float32 = np.float32(1005.0)
     GAS_CONSTANT_AIR_J_KG_K: np.float32 = np.float32(287.058)
     VON_KARMAN_CONSTANT: np.float32 = np.float32(0.41)
 
-    # Assumptions for Aerodynamic Resistance over bare soil/snow
     WIND_MEASUREMENT_HEIGHT_M: np.float32 = np.float32(10.0)
     TEMP_MEASUREMENT_HEIGHT_M: np.float32 = np.float32(2.0)
     ROUGHNESS_LENGTH_M: np.float32 = np.float32(0.001)
 
-    # Calculate Air Density [kg/m3]
     air_density_kg_per_m3: np.float32 = surface_pressure_pa / (
         GAS_CONSTANT_AIR_J_KG_K * air_temperature_K
     )
@@ -437,7 +434,7 @@ def calculate_aerodynamic_conductance_W_per_m2_K(
         log_wind_height_over_roughness * log_temp_height_over_roughness
     ) / (VON_KARMAN_CONSTANT**2 * wind_speed_10m_m_per_s)
 
-    # Calculate Conductance [W/m2/K]
+    # Aerodynamic conductance [W/m2/K]
     return (
         air_density_kg_per_m3 * SPECIFIC_HEAT_AIR_J_KG_K
     ) / aerodynamic_resistance_s_per_m
@@ -469,8 +466,8 @@ def calculate_sensible_heat_flux(
         surface_pressure_pa,
     )
 
-    # Calculate Explicit Sensible Heat Flux [W/m2]
-    # H = Conductance * (Ta - Ts)
+    # Explicit sensible heat flux [W/m2]
+    # H = conductance * (Ta - Ts)
     air_temperature_C: np.float32 = air_temperature_K - KELVIN_OFFSET
     temperature_difference_C: np.float32 = air_temperature_C - soil_temperature_C
 
@@ -734,8 +731,8 @@ def apply_evaporative_cooling(
     )
 
     # Weighted latent heat
-    # If liquid: Vaporization energy
-    # If ice: Sublimation energy (Fusion + Vaporization)
+    # If liquid: vaporization energy
+    # If ice: sublimation energy (fusion + vaporization)
     latent_heat = (
         fraction_unfrozen * LATENT_HEAT_VAPORIZATION_J_PER_KG
         + (np.float32(1.0) - fraction_unfrozen) * LATENT_HEAT_SUBLIMATION_J_PER_KG
@@ -817,11 +814,8 @@ def solve_soil_enthalpy_column(
         1.  Active snow layers (SWE > MIN_ACTIVE_SNOW_SWE_M) are fully coupled
             into the tridiagonal matrix as part of the thermal column.
         2.  Inactive snow layers (trace SWE below the threshold) are excluded
-            from the matrix for numerical stability. However, they are thermally
-            synchronized with the top soil layer (assigned the same temperature).
-            This synchronization prevents "zombie snow" where trace mass is
-            thermally isolated and stuck at 0°C, ensuring it eventually melts or
-            sublimates when the soil warms up.
+            from the matrix for numerical stability. Their enthalpy is synchronized
+            with the top soil layer so they melt or sublimate when the surface warms.
 
     Args:
         soil_enthalpies_J_per_m2: Current layer enthalpies (J/m2).
@@ -872,13 +866,14 @@ def solve_soil_enthalpy_column(
     enthalpies_updated = stack_empty(_N_COUPLED_SURFACE_LAYERS, dtype=np.float32)
 
     n_active_snow_layers = 0
-    for snow_layer_idx in range(N_SNOW_LAYERS):
+    if snow_water_equivalent_m[0] > MIN_ACTIVE_SNOW_SWE_M and snow_density_kg_per_m3[
+        0
+    ] > np.float32(0.0):
+        n_active_snow_layers = 1
         if snow_water_equivalent_m[
-            snow_layer_idx
-        ] > MIN_ACTIVE_SNOW_SWE_M and snow_density_kg_per_m3[
-            snow_layer_idx
-        ] > np.float32(0.0):
-            n_active_snow_layers += 1
+            1
+        ] > MIN_ACTIVE_SNOW_SWE_M and snow_density_kg_per_m3[1] > np.float32(0.0):
+            n_active_snow_layers = 2
 
     n_total_layers: int = n_active_snow_layers + N_SOIL_LAYERS
 
@@ -912,7 +907,9 @@ def solve_soil_enthalpy_column(
         )
 
         if snow_layer_idx == 0:
-            surface_temperature_guess_C: np.float32 = temperature_C
+            surface_temperature_guess_C: np.float32 = min(
+                temperature_C, np.float32(0.0)
+            )
 
     for layer_idx in range(N_SOIL_LAYERS):
         combined_layer_idx = n_active_snow_layers + layer_idx
@@ -1050,7 +1047,7 @@ def solve_soil_enthalpy_column(
         derivative_net_radiation_W_per_m2_K + derivative_sensible_heat_W_per_m2_K
     )
 
-    # Build the tridiagonal system in H
+    # Tridiagonal system matrix and rhs.
     # Top layer
     conductance_to_layer_below = thermal_conductances_between_layer_centers_W_per_m2_K[
         0
@@ -1102,7 +1099,7 @@ def solve_soil_enthalpy_column(
             + conductance_to_layer_below * beta_ip1
         )
 
-    # Bottom layer (Dirichlet)
+    # Bottom layer (Dirichlet boundary).
     last_idx = n_total_layers - 1
     conductance_to_layer_above = thermal_conductances_between_layer_centers_W_per_m2_K[
         last_idx - 1
@@ -1131,7 +1128,7 @@ def solve_soil_enthalpy_column(
         + conductance_to_layer_above * beta_above
     )
 
-    # Thomas forward/back substitution using compact loops.
+    # Thomas algorithm forward sweep and back substitution.
     c_prime = stack_empty(_N_COUPLED_SURFACE_LAYERS, np.float32)
     d_prime = stack_empty(_N_COUPLED_SURFACE_LAYERS, np.float32)
 
@@ -1180,21 +1177,24 @@ def solve_soil_enthalpy_column(
         )
     )
 
-    # Handle inactive snow layers (trace mass below MIN_ACTIVE_SNOW_SWE_M).
-    # We synchronize their enthalpy (and thus temperature) with the top soil layer.
-    # This prevents "zombie snow" where trace amounts of snow never melt because
-    # they are excluded from the thermal column solver and were previously reset to 0°C.
-    # By assigning the soil surface temperature, these trace layers will correctly
-    # melt or sublimate in the subsequent mass-balance step.
+    # Synchronize inactive snow layers (trace mass below MIN_ACTIVE_SNOW_SWE_M)
+    # with the top soil layer enthalpy so they melt or sublimate when the surface warms.
     for snow_layer_idx in range(n_active_snow_layers, N_SNOW_LAYERS):
         swe_m = snow_water_equivalent_m[snow_layer_idx]
         if swe_m > 0:
-            snow_enthalpy_J_per_m2[snow_layer_idx] = (
-                np.float32(swe_m)
-                * RHO_WATER_KG_PER_M3
-                * SPECIFIC_HEAT_CAPACITY_ICE_J_PER_KG_K
-                * surface_temperature_final_C
-            )
+            if surface_temperature_final_C > np.float32(0.0):
+                snow_enthalpy_J_per_m2[snow_layer_idx] = (
+                    np.float32(swe_m)
+                    * RHO_WATER_KG_PER_M3
+                    * LATENT_HEAT_FUSION_J_PER_KG
+                )
+            else:
+                snow_enthalpy_J_per_m2[snow_layer_idx] = (
+                    np.float32(swe_m)
+                    * RHO_WATER_KG_PER_M3
+                    * SPECIFIC_HEAT_CAPACITY_ICE_J_PER_KG_K
+                    * surface_temperature_final_C
+                )
         else:
             snow_enthalpy_J_per_m2[snow_layer_idx] = np.float32(0.0)
 

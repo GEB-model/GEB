@@ -7,7 +7,7 @@ import warnings
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from time import perf_counter, time
+from time import time
 from types import TracebackType
 from typing import Any, cast, overload
 
@@ -708,11 +708,6 @@ class GEBModel(Module):
             if target_checkpoint_dates and self.current_time in target_checkpoint_dates:
                 self.save_checkpoint(self.current_time)
             self.step()
-        t1: float = perf_counter()
-        if t0 is not None:
-            self.logger.debug(
-                f"Model took {round(t1 - t0, 4)}s to run {n_timesteps - 1} steps. Average: {round((t1 - t0) / (n_timesteps - 1), 4)}s per step. The first step is not included in this timing."
-            )
 
     def run(
         self,
