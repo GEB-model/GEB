@@ -60,6 +60,8 @@ setup_buildings:
 
 setup_household_characteristics:
 
+setup_iiasa_ssp:
+
 # setup_warning_communication_weights:
 
 setup_water_demand:

@@ -1158,6 +1158,9 @@ class Forcing(BuildModelBase):
             delta_pr = cmip6_deltas.sel(variable="precipitation_delta")
             delta_tas = cmip6_deltas.sel(variable="near_surface_air_temperature_delta")
 
+            max_delta_pr = delta_pr.max().compute().item()
+            max_delta_tas = delta_tas.max().compute().item()
+
             target_pr_grid = pr_hourly.isel(time=0, drop=True)
             target_tas_grid = tas.isel(time=0, drop=True)
 

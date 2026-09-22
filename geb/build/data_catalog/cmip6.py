@@ -150,11 +150,12 @@ class CMIP6(Adapter):
             if "time_bounds" in ds:
                 ds = ds.drop_vars("time_bounds")
 
-            ds["time"] = xr.cftime_range(
+            ds["time"] = xr.date_range(
                 start=str(ds.time.dt.strftime("%Y-%m-01").values[0]),
                 periods=ds.sizes["time"],
                 freq="MS",
                 calendar=ds.time.dt.calendar,
+                use_cftime=True,
             )
             return ds
 
@@ -166,7 +167,11 @@ class CMIP6(Adapter):
         xr.testing.assert_allclose(historical.lon, future.lon)
 
         # Merge along time and sort by time to ensure proper alignment
-        merged = xr.concat([historical, future], dim="time").sortby("time")
+        merged = xr.concat(
+            [historical, future],
+            dim="time",
+            data_vars="all",
+        ).sortby("time")
 
         # Define periods and compute representative year shift
         shift = representative_forcing_year - end_year  # years
@@ -194,11 +199,22 @@ class CMIP6(Adapter):
                 future_subset[variable_in_netcdf]
                 - historical_subset[variable_in_netcdf]
             )
+            # set any deltas exceeding the 90th percentile to 0 to avoid extreme outliers
+            threshold = np.nanpercentile(delta.values, 90)
+            delta = delta.where(
+                delta <= threshold, 0
+            )  # for temperature, set extreme outliers to 0 (no change)
+
         else:
             delta = (
                 future_subset[variable_in_netcdf]
                 / historical_subset[variable_in_netcdf]
             )
+            # set any deltas exceeding the 90th percentile to 1 to avoid extreme outliers
+            threshold = np.nanpercentile(delta.values, 90)
+            delta = delta.where(
+                delta <= threshold, 1.0
+            )  # for precipitation, set extreme outliers to 1 (no change)
 
         return delta.rio.write_crs("EPSG:4326")  # ensure the deltas have a CRS
 

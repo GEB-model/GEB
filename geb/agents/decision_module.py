@@ -10,6 +10,80 @@ class DecisionModule:
     """This class implements the decision module for drought adaptation."""
 
     @staticmethod
+    def calculate_riverine_amenity(
+        household_distance_to_river_m: float,
+        GDP_i_t: float,
+        phi_i: float = 0.254820579
+        * 1.11,  # scaling factor for riverine amenity based on Tesselaar et al. (2023). Now applied to Mexico (2020) (first converting from EUR to USD). This is a rough estimate, but should be sufficient for now.
+    ) -> float:
+        """This function calculates the riverine amenity value for a given distance to the river.
+
+        The function is based on a piecewise linear function that decreases with distance from the river.
+        based on Tesselaar, M., Botzen, W.J.W., Tiggeloven, T. et al. Flood insurance is a driver of population growth in European floodplains. Nat Commun 14, 7483 (2023). https://doi.org/10.1038/s41467-023-43229-8
+
+        Args:
+            household_distance_to_river_m: Distance to the river (m)
+            GDP_i_t: GDP of the household at time t
+            phi_i: Deviation of average national housing prices from the European average
+
+        Returns:
+            Riverine amenity value
+        """
+        household_distance_to_river_km = household_distance_to_river_m / 1000.0
+        amenity_values = np.full(
+            household_distance_to_river_km.shape, 0.0, dtype=np.float32
+        )
+        amenity_values[household_distance_to_river_km < 10] = (
+            4000
+            - 150 * household_distance_to_river_km[household_distance_to_river_km < 10]
+        )
+        amenity_values[
+            (household_distance_to_river_km >= 10)
+            & (household_distance_to_river_km < 25)
+        ] = 2500 - 100 * (
+            household_distance_to_river_km[
+                (household_distance_to_river_km >= 10)
+                & (household_distance_to_river_km < 25)
+            ]
+            - 10
+        )
+        amenity_values[
+            (household_distance_to_river_km >= 25)
+            & (household_distance_to_river_km < 50)
+        ] = 1000 - 40 * (
+            household_distance_to_river_km[
+                (household_distance_to_river_km >= 25)
+                & (household_distance_to_river_km < 50)
+            ]
+            - 25
+        )
+        amenity_values[household_distance_to_river_km >= 50] = 0
+        return GDP_i_t * phi_i * amenity_values
+
+    @staticmethod
+    def calculate_coastal_amenity(
+        x_j: float, GDP_i_t: float, phi_i: float = 0.254820579 * 1.11
+    ) -> float:
+        """This function calculates the coastal amenity value for a given distance to the coast.
+
+        The function is based on a piecewise linear function that decreases with distance from the coast.
+        based on Tesselaar, M., Botzen, W.J.W., Tiggeloven, T. et al. Flood insurance is a driver of population growth in European floodplains. Nat Commun 14, 7483 (2023). https://doi.org/10.1038/s41467-023-43229-8
+
+        Args:
+            x_j: Distance to the coast (m)
+            GDP_i_t: GDP of the household at time t
+            phi_i: Deviation of average national housing prices from the European average
+
+        Returns:
+            Coastal amenity value
+        """
+        x_arr = np.array([0, 500, 1_000, 9_999, 10_000], dtype=np.float32)
+        y_arr = np.array([0.6, 0.6, 0.1, 0.03, 0], dtype=np.float32)
+        amenity_value = np.interp(x_j, x_arr, y_arr)
+        amenity_value *= 6666.666666666667
+        return GDP_i_t * phi_i * amenity_value
+
+    @staticmethod
     @njit(cache=True)
     def IterateThroughFloods(
         NPV_summed: np.ndarray,
@@ -453,8 +527,8 @@ class DecisionModule:
         wealth: np.ndarray,
         income: np.ndarray,
         expendature_cap: float,
-        amenity_value: np.ndarray,
-        amenity_weight: float | int,
+        household_distance_to_coastline_m: np.ndarray,
+        household_distance_to_river_m: np.ndarray,
         risk_perception: np.ndarray,
         expected_damages_adapt: np.ndarray,
         adaptation_costs: np.ndarray,
@@ -464,6 +538,7 @@ class DecisionModule:
         T: np.ndarray | int | float,
         r: float,
         sigma: float,
+        GDP_i_t: float,
         **kwargs: dict,
     ) -> np.ndarray:
         """This function calculates the time discounted subjective utility of not undertaking any action.
@@ -472,8 +547,12 @@ class DecisionModule:
             EU_do_nothing_array: array containing the time discounted subjective utility of doing nothing for each agent.
         """
         # weigh amenities
-        amenity_value = amenity_value * amenity_weight
-
+        amenity_value = self.calculate_riverine_amenity(
+            household_distance_to_river_m, GDP_i_t=GDP_i_t
+        )
+        amenity_value += self.calculate_coastal_amenity(
+            x_j=household_distance_to_coastline_m, GDP_i_t=GDP_i_t
+        )
         # Ensure p floods is in increasing order
         indices = np.argsort(p_floods)
         expected_damages_adapt = expected_damages_adapt[indices]
@@ -571,8 +650,8 @@ class DecisionModule:
         n_agents: int,
         wealth: np.ndarray,
         income: np.ndarray,
-        amenity_value: np.ndarray,
-        amenity_weight: np.ndarray | float,
+        household_distance_to_coastline_m: np.ndarray,
+        household_distance_to_river_m: np.ndarray,
         risk_perception: np.ndarray,
         expected_damages: np.ndarray,
         adapted: np.ndarray,
@@ -580,6 +659,7 @@ class DecisionModule:
         T: np.ndarray | float | int,
         r: float,
         sigma: float,
+        GDP_i_t: float,
         **kwargs: dict,
     ) -> np.ndarray:
         """This function calculates the time discounted subjective utility of not undertaking any action.
@@ -588,7 +668,12 @@ class DecisionModule:
             EU_do_nothing_array: array containing the time discounted subjective utility of doing nothing for each agent.
         """
         # weigh amenities
-        amenity_value = amenity_value * amenity_weight
+        amenity_value = self.calculate_riverine_amenity(
+            household_distance_to_river_m, GDP_i_t=GDP_i_t
+        )
+        amenity_value += self.calculate_coastal_amenity(
+            x_j=household_distance_to_coastline_m, GDP_i_t=GDP_i_t
+        )
 
         # Ensure p floods is in increasing order
         indices = np.argsort(p_floods)
@@ -658,3 +743,105 @@ class DecisionModule:
         EU_do_nothing_array[np.where(adapted == 1)] = -np.inf
 
         return EU_do_nothing_array
+
+    def calculate_migration_costs(
+        self,
+        distance_to_building_m: np.ndarray,
+        max_migration_cost: float,
+        cost_shape: float = 0.05,
+        phi_i: float = 0.254820579,
+    ) -> np.ndarray:
+        """This function calculates the migration costs for each agent based on their distance to each sampled building.
+
+        Args:
+            distance_to_building_m: array containing the distance to each sampled building for each agent
+            max_migration_cost: maximum migration cost for each agent
+            cost_shape: shape parameter for the logistic function (default: 0.05)
+            phi_i: Deviation of average national housing prices from the European average
+
+        Returns:
+            migration_costs: array containing the migration costs for each agent based on their distance to each sampled building
+        """
+        distance_to_building_m = np.minimum(distance_to_building_m, 5e6)
+        migration_costs = max_migration_cost / (
+            1 + np.exp(-cost_shape * distance_to_building_m * 1e-3)
+        )
+        return migration_costs * phi_i
+
+    def calcEU_relocate(
+        self,
+        geom_id: int | str,
+        n_agents: int,
+        wealth: np.ndarray,
+        income: np.ndarray,
+        distance_to_coastline_m: np.ndarray,
+        distance_to_river_m: np.ndarray,
+        distance_to_building_m: np.ndarray,
+        max_migration_costs: np.ndarray,
+        T: np.ndarray | int | float,
+        r: float,
+        sigma: float,
+        GDP_i_t: float,
+        **kwargs: dict,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """This function calculates the time discounted subjective utility of relocating for each agent.
+
+        Args:
+            geom_id: ID of the current admin unit
+            n_agents: number of agents present in the current floodplain
+            wealth: array containing the wealth of each agent
+            income: array containing the income of each agent
+            distance_to_coastline_m: array containing the distance to the coastline for each agent
+            distance_to_river_m: array containing the distance to the river for each agent
+            max_migration_costs: array containing the maximum migration costs for each agent
+            T: array containing the decision horizon of each agent
+            r: time discounting factor for each agent
+            sigma: risk aversion setting for each agent
+            GDP_i_t: GDP change factor of the household at time t compared to t=0
+            distance_to_building_m: array containing the distance to each sampled building for each agent
+            kwargs: additional keyword arguments
+
+        Returns:
+            tuple: A tuple containing the index of the best building for each agent and the time discounted subjective utility of relocating for each agent.
+        """
+        # First calculate the coastal and riverine amenity values for each sampled building
+        amenity_value = self.calculate_riverine_amenity(
+            distance_to_river_m, GDP_i_t=GDP_i_t
+        )
+        amenity_value += self.calculate_coastal_amenity(
+            x_j=distance_to_coastline_m, GDP_i_t=GDP_i_t
+        )
+
+        # calculate migration costs based on distance to each building
+        migration_costs = self.calculate_migration_costs(
+            distance_to_building_m=distance_to_building_m,
+            max_migration_cost=max_migration_costs,
+        )
+
+        # Relocation utility should be based on the best sampled option for each
+        # agent, while keeping the same economic grounding as the no-action utility.
+        # The model uses float32 throughout, so the safest comparison is to work
+        # on the net amenity value and then scale the total NPV consistently.
+        net_amenity_value = amenity_value - migration_costs
+        building_idx = np.argmax(net_amenity_value, axis=1)
+        max_amenity_value = np.max(net_amenity_value, axis=1)
+
+        # Discount and add the time-0 value using the same pattern as the flood NPV
+        # calculation. This preserves the intended economics without creating a
+        # separate, numerically inconsistent quantity for each agent.
+        t_arr = np.arange(1, int(np.max(T)), dtype=np.float32)
+        discounts = 1 / (1 + r) ** t_arr
+        discount_factor = 1 + np.sum(discounts, dtype=np.float32)
+        NPV_relocate_discounted = discount_factor * (
+            wealth + income + max_amenity_value
+        )
+
+        # Ensure NPVs are at least a small positive number to prevent NaNs.
+        NPV_relocate_discounted = np.maximum(NPV_relocate_discounted, 1)
+
+        # Calculate expected utility.
+        if sigma == 1:
+            EU_relocate = np.log(NPV_relocate_discounted)
+        else:
+            EU_relocate = (NPV_relocate_discounted ** (1 - sigma)) / (1 - sigma)
+        return building_idx, EU_relocate

@@ -343,11 +343,23 @@ def run_yearly(multi: bool, n_runs: int | None, prefix: str, **kwargs: Any) -> N
 
     assert n_runs is not None
     for run_id in range(n_runs):
-        run_model_with_method(
-            method="run_yearly",
-            method_args={"model_name": f"{prefix}run_{run_id}"},
-            **kwargs,
+        wd = kwargs["working_directory"]
+        run_name = f"{prefix}run_{run_id}"
+        output_path_agents = wd / "output" / run_name / "report" / "agents.households"
+        output_path_government = (
+            wd / "output" / run_name / "report" / "agents.government"
         )
+        if output_path_agents.exists() and output_path_government.exists():
+            click.echo(
+                f"Skipping run {run_id} as output already exists at {output_path_agents}.",
+                err=True,
+            )
+        else:
+            run_model_with_method(
+                method="run_yearly",
+                method_args={"model_name": f"{prefix}run_{run_id}"},
+                **kwargs,
+            )
 
 
 @cli.command()

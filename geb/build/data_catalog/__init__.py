@@ -37,6 +37,7 @@ from .grdc_caravan import GRDCCaravan
 from .grow import GROW
 from .gtsm import GTSM, GTSM_timeseries
 from .hydrolakes import HydroLakes
+from .iiasa_ssp import IIASA_SSP
 from .isimip import ISIMIPCO2
 from .lisflood import LISFLOOD
 from .lowder import Lowder
@@ -703,6 +704,15 @@ data_catalog: dict[str, dict[str, Any]] = {
             "url": "https://gps.econ.uni-bonn.de/downloads#dataset",
         },
     },
+    "iiasa_ssp": {
+        "adapter": IIASA_SSP(
+            folder="iiasa_ssp",
+            local_version=1,
+            filename="1721734326790-ssp_basic_drivers_release_3.1_full.csv",
+            cache="global",
+        ),
+        "url": "placeholder",
+    },
     "wb_inflation_rate": {
         "adapter": WorldBankData(
             folder="world_bank_inflation_rate",
@@ -899,7 +909,7 @@ data_catalog: dict[str, dict[str, Any]] = {
     },
     "merit_hydro_dir": {
         "adapter": MeritHydroDir(
-            folder="merit_hydro_dir",
+            folder="merit_hydro_dir_temp",
             local_version=1,
             filename="tiles",
             cache="global",
@@ -914,7 +924,7 @@ data_catalog: dict[str, dict[str, Any]] = {
     },
     "merit_hydro_elv": {
         "adapter": MeritHydroElv(
-            folder="merit_hydro_elv",
+            folder="merit_hydro_elv_temp",
             local_version=1,
             filename="tiles",
             cache="global",

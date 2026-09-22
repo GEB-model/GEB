@@ -41,8 +41,10 @@ class FloodRiskModule:
             or self.model.config["agent_settings"]["households"]["adapt"]
         ):
             self.load_return_period_flood_maps()
-        self.load_flood_protection_standard()
-        self.flood_in_last_year = False
+            self.load_flood_protection_standard()
+            self.flood_in_last_year = False
+        # Seed chosen (out of 1M tested) so historical flood-triggering draws top out near return period 25.
+        self.random_number_generator = np.random.default_rng(787136)
 
     def load_flood_protection_standard(self) -> None:
         """Load flood protection standards for each subbasin.
@@ -523,12 +525,32 @@ class FloodRiskModule:
                         building_multicurve,
                     )
                 )
-                if export_building_damages:
+                if export_building_damages and (
+                    self.model.current_time.year == 2020
+                    or self.model.current_time.year == 2080
+                ):
                     fn_for_export = (
                         self.households.model.output_folder / "building_damages"
                     )
                     fn_for_export.mkdir(parents=True, exist_ok=True)
-                    building_multicurve.to_parquet(
+                    flooded_building_ids = np.array(building_multicurve["id"])
+
+                    building_geometries = read_geom(
+                        self.households.model.files["geom"]["assets/open_building_map"],
+                        filters=[("id", "in", flooded_building_ids)],
+                    )[["id", "geometry"]]
+
+                    building_multicurve_export = building_geometries.merge(
+                        building_multicurve,
+                        on="id",
+                        how="left",
+                    )
+                    building_multicurve_export = building_multicurve_export.merge(
+                        self.model.agents.households.buildings[["id", "flood_proofed"]],
+                        on="id",
+                        how="left",
+                    )
+                    gpd.GeoDataFrame(building_multicurve_export).to_parquet(
                         self.households.model.output_folder
                         / "building_damages"
                         / f"building_damages_rp{return_period}_{self.households.model.current_time.year}.parquet"
@@ -618,7 +640,10 @@ class FloodRiskModule:
             building_multicurve = building_multicurve[
                 ["id", "damages", "damages_flood_proofed"]
             ]
-
+            building_multicurve["damages_t0"] = building_multicurve["damages"].copy()
+            building_multicurve["damages_flood_proofed_t0"] = building_multicurve[
+                "damages_flood_proofed"
+            ].copy()
             if not dynamic:
                 self._building_damages_all_return_periods[return_period] = (
                     building_multicurve
@@ -653,12 +678,71 @@ class FloodRiskModule:
 
         return self.damages_do_not_adapt, self.damages_adapt
 
+    def calculate_ead_per_gdl_region(
+        self,
+        ead_per_household: np.ndarray,
+    ) -> pd.DataFrame:
+        """Calculate and accumulate expected annual damages (EAD) per GDL region.
+
+        The method aggregates household-level EAD values to GDL regions for the
+        current model year, stores the result in a wide dataframe with years as
+        rows and GDL regions as columns, and preserves the final dataframe on
+        the last timestep.
+
+        Args:
+            ead_per_household: Expected annual damages per household (USD per year).
+
+        Returns:
+            A dataframe with years as rows and GDL regions as columns.
+        """
+        # Get gdl region for each household
+        gdl_regions: pd.Series = self.households.buildings.loc[
+            self.households.var.building_id_of_household, "GDLcode"
+        ]
+
+        current_year: int = self.households.model.current_time.year
+
+        # Aggregate household EAD to regions for this timestep and keep a stable
+        # set of columns across the full simulation.
+        ead_per_gdl_region: pd.Series = (
+            pd.DataFrame({"GDLcode": gdl_regions, "EAD": ead_per_household})
+            .groupby("GDLcode", sort=True)["EAD"]
+            .sum()
+        )
+
+        if not hasattr(self, "ead_per_gdl_region") or not isinstance(
+            self.ead_per_gdl_region, pd.DataFrame
+        ):
+            self.ead_per_gdl_region = pd.DataFrame()
+
+        # Keep one column per unique GDL region and one row per model year.
+        all_regions: list[str] = sorted(
+            set(self.ead_per_gdl_region.columns).union(ead_per_gdl_region.index)
+        )
+        self.ead_per_gdl_region = self.ead_per_gdl_region.reindex(columns=all_regions)
+        self.ead_per_gdl_region.loc[current_year, ead_per_gdl_region.index] = (
+            ead_per_gdl_region.astype(np.float32).values
+        )
+        self.ead_per_gdl_region.index.name = "year"
+
+        if (
+            self.households.model.current_timestep
+            == self.households.model.n_timesteps - 1
+        ):
+            self.ead_per_gdl_region = self.ead_per_gdl_region.sort_index()
+            self.ead_per_gdl_region.to_csv(
+                self.households.model.output_folder / "ead_per_gdl_region.csv"
+            )
+
+        return self.ead_per_gdl_region
+
     def calculate_ead(
         self,
         damages_do_not_adapt: np.ndarray,
         damages_adapt: np.ndarray,
         adapted: np.ndarray,
         altered_flood_protection_standard: int | None = None,
+        update_gdl_ead: bool = True,
     ) -> np.ndarray:
         """Calculate expected annual damages (EAD) for each household.
 
@@ -672,6 +756,7 @@ class FloodRiskModule:
             adapted: Boolean array indicating which households have adapted.
             altered_flood_protection_standard: If provided, set damages to 0 for return periods
                 below this threshold (damages protected against by higher standard).
+            update_gdl_ead: If True, also update the expected annual damages per GDL region.
 
         Returns:
             1D array of annual expected damages (USD) for each household.
@@ -699,7 +784,8 @@ class FloodRiskModule:
         ead_usd_per_year = np.trapezoid(
             y=all_damages[sort_idx, :], x=probabilities[sort_idx], axis=0
         )
-
+        if update_gdl_ead:
+            self.calculate_ead_per_gdl_region(ead_usd_per_year)
         return ead_usd_per_year
 
     def flood(self, flood_depth: xr.DataArray) -> float:
@@ -1085,7 +1171,15 @@ class FloodRiskModule:
             Array of indices of flooded households.
         """
         # draw a single random number
-        u = np.random.random()
+        if self.model.current_timestep == 0:
+            return np.array([], dtype=int)
+        # Keep historical flooding reproducible, then use stochastic events from 2021 onward.
+
+        u: float = (
+            self.random_number_generator.random()
+            if self.model.current_time.year < 2021
+            else np.random.random()
+        )
         return_period = 1 / u
         affected_subbasins = [
             subbasin
@@ -1139,41 +1233,35 @@ class FloodRiskModule:
         """Return damages for households that adapt."""
         return self._adjust_damages_for_flood_protection(self._damages_adapt)
 
-    def dike_heights(self) -> dict[int, dict[int, np.ndarray]]:
+    def _calculate_dike_heights(
+        self, dikes: pd.DataFrame, floodmap_template: xr.DataArray
+    ) -> dict[int, dict[int, np.ndarray]]:
         """Calculate dike heights for each river and return period.
 
         This is done by sampling the flood maps along the river geometries and extracting the flood depths at those points.
         These dike heights are then stored in a dictionary for later use by the government agent to determine the required dike height for each river and return period.
-
+        Args:
+            dikes: A GeoDataFrame containing the geometries of the dikes (rivers or coastlines).
+            floodmap_template: A DataArray representing the flood map for a specific return period, used to determine the bounds for sampling the dike geometries.
         Returns:
             dict[int, dict[int, np.ndarray]]: A nested dictionary where the first key is the return period, the second key is the river ID, and the value is an array of dike heights (flood depths) along the river.
         """
-        if hasattr(self, "_dike_heights"):
-            return self._dike_heights
-
         dike_heights = {}
-        # load river network
-        river_network = gpd.read_parquet(
-            Path(self.households.model.files["geom"]["routing/rivers"])
-        )
-        floodmap_template = self.households.flood_maps[
-            self.households.return_periods[0]
-        ]
-        for river in river_network.itertuples():
-            river_geom = river.geometry
+        for coastal_dike in dikes.itertuples():
+            coastal_geom = coastal_dike.geometry
             # check if geom is within bounds of floodmap_template
-            if not box(*floodmap_template.rio.bounds()).contains(river_geom):
+            if not box(*floodmap_template.rio.bounds()).contains(coastal_geom):
                 continue
             # initialize idx_river_points to False to avoid recalculating for each return period
             idx_river_points = False
             # sample every 100 m (TODO: build dike lines in model build with 100 m spacing. For now use interpolation to get points along the river geometry)
             distances = np.arange(
-                0, river_geom.length, 0.0008333
+                0, coastal_geom.length, 0.0008333
             )  # 100 m in degrees (approximate, for WGS84)
 
             # Extract x/y directly without creating intermediate Point objects
-            x = np.array([river_geom.interpolate(d).x for d in distances])
-            y = np.array([river_geom.interpolate(d).y for d in distances])
+            x = np.array([coastal_geom.interpolate(d).x for d in distances])
+            y = np.array([coastal_geom.interpolate(d).y for d in distances])
 
             for rp in self.households.return_periods:
                 flood_map: xr.DataArray = self.households.flood_maps[rp]
@@ -1187,6 +1275,57 @@ class FloodRiskModule:
                     )
                 depths = flood_map_array[(idx_river_points[1], idx_river_points[0])]
                 depths = np.nan_to_num(depths, nan=0.0)
-                dike_heights[rp][river[0]] = depths
-        self._dike_heights = dike_heights
+                dike_heights[rp][coastal_dike[0]] = depths
+
         return dike_heights
+
+    def dike_heights(self) -> dict[int, dict[int, np.ndarray]]:
+        """Calculate dike heights for each river and return period.
+
+        This is done by sampling the flood maps along the river geometries and extracting the flood depths at those points.
+        These dike heights are then stored in a dictionary for later use by the government agent to determine the required dike height for each river and return period.
+
+        Returns:
+            dict[int, dict[int, np.ndarray]]: A nested dictionary where the first key is the return period, the second key is the river ID, and the value is an array of dike heights (flood depths) along the river.
+        """
+        if hasattr(self, "_coastal_dike_heights") and hasattr(
+            self, "_riverine_dike_heights"
+        ):
+            return self._coastal_dike_heights, self._riverine_dike_heights
+        elif hasattr(self, "_coastal_dike_heights"):
+            return self._coastal_dike_heights, {}
+        elif hasattr(self, "_riverine_dike_heights"):
+            return {}, self._riverine_dike_heights
+        # load river network
+        river_network = gpd.read_parquet(
+            Path(self.households.model.files["geom"]["routing/rivers"])
+        )
+        # load the coastline
+        coastline = gpd.read_parquet(
+            Path(self.households.model.files["geom"]["coastal/coastlines"])
+        )
+        # load the subbasins
+        subbasins = gpd.read_parquet(
+            Path(self.households.model.files["geom"]["routing/subbasins"])
+        )
+
+        coastal_dikes = gpd.GeoDataFrame([])
+
+        for subbasin in subbasins.reset_index().itertuples():
+            # clip the coastline to the subbasin geometry
+            coastline_clipped = gpd.clip(coastline, subbasin.geometry.buffer(0.0008333))
+            # assign the clipped coastline to the subbasin
+            coastline_clipped["COMID"] = subbasin.COMID
+            coastal_dikes = pd.concat([coastal_dikes, coastline_clipped])
+        coastal_dikes = coastal_dikes.set_index("COMID", drop=True)
+        floodmap_template = self.households.flood_maps[
+            self.households.return_periods[0]
+        ]
+
+        self._coastal_dike_heights = self._calculate_dike_heights(
+            coastal_dikes, floodmap_template
+        )
+        self._riverine_dike_heights = self._calculate_dike_heights(
+            river_network, floodmap_template
+        )
+        return self._coastal_dike_heights, self._riverine_dike_heights

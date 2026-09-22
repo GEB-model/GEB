@@ -1,4 +1,5 @@
 # Custom
+process_results
 .ruff_cache
 .benchmarks
 .nfs*

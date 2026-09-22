@@ -18,6 +18,7 @@ from geb.build.methods import build_method
 from geb.build.workflows.crop_calendars import donate_and_receive_crop_prices
 from geb.geb_types import TwoDArrayBool, TwoDArrayInt32
 from geb.workflows.io import get_window
+from geb.workflows.methods import get_utm_zone
 from geb.workflows.raster import (
     clip_with_grid,
     pixels_to_coords,
@@ -1524,6 +1525,132 @@ class Agents(BuildModelBase):
         )
         return buildings_with_subbasin
 
+    def calculate_distance_parameters(
+        self, buildings: gpd.GeoDataFrame
+    ) -> gpd.GeoDataFrame:
+        """Calculate distances from buildings to rivers and coastlines.
+
+        Args:
+            buildings: Building geometries used to compute distances.
+        Raises:
+            ValueError: If the specified maximum distances exceed the limits of uint16.
+        Returns:
+            Buildings with distance columns appended (meters).
+        """
+        rivers: gpd.GeoDataFrame = gpd.read_parquet(
+            "input/" + self.files["geom"]["routing/rivers"]
+        )[["geometry"]]
+
+        coastline: gpd.GeoDataFrame = gpd.read_parquet(
+            "input/" + self.files["geom"]["coastal/coastlines"]
+        )[["geometry"]]
+
+        region_centroid = self.region.union_all().centroid
+        utm_zone: str = get_utm_zone(region_centroid.x, region_centroid.y)
+
+        buildings_crs = buildings.crs
+
+        river_max_distance_m: int = 50_000
+        coastline_max_distance_m: int = 10_000
+
+        if (
+            river_max_distance_m >= np.iinfo(np.uint16).max
+            or coastline_max_distance_m >= np.iinfo(np.uint16).max
+        ):
+            raise ValueError(
+                "Max distances must be less than or equal to 65535 meters to fit in uint16."
+            )
+
+        # Project to metric CRS
+        buildings = buildings.to_crs(utm_zone)
+        rivers = rivers.to_crs(utm_zone)
+        coastline = coastline.to_crs(utm_zone)
+
+        # Distance to rivers
+        river_join = buildings.sjoin_nearest(
+            rivers,
+            how="left",
+            max_distance=river_max_distance_m,
+            distance_col="distance_to_river_m",
+        )
+
+        # Handle duplicate nearest matches
+        river_distances = river_join.groupby(level=0)["distance_to_river_m"].min()
+
+        buildings["distance_to_river_m"] = (
+            river_distances.reindex(buildings.index)
+            .fillna(river_max_distance_m)
+            .astype(np.uint16)
+        )
+
+        # Distance to coastline
+        coastline_join = buildings.sjoin_nearest(
+            coastline,
+            how="left",
+            max_distance=coastline_max_distance_m,
+            distance_col="distance_to_coastline_m",
+        )
+
+        coastline_distances = coastline_join.groupby(level=0)[
+            "distance_to_coastline_m"
+        ].min()
+
+        buildings["distance_to_coastline_m"] = (
+            coastline_distances.reindex(buildings.index)
+            .fillna(coastline_max_distance_m)
+            .astype(np.uint16)
+        )
+
+        # Reproject back to original CRS
+        buildings = buildings.to_crs(buildings_crs)
+
+        return buildings
+
+    def assign_subbasins_to_buildings(
+        self, buildings: gpd.GeoDataFrame
+    ) -> gpd.GeoDataFrame:
+        """Assigns sub-basin IDs to buildings based on their spatial location.
+
+        Args:
+            buildings: A GeoDataFrame containing building data within the model domain.
+        Returns:
+            A GeoDataFrame with sub-basin IDs assigned to each building.
+        """
+        subbasins = self.geom["routing/subbasins"].reset_index()
+        buildings_with_subbasin = gpd.sjoin(
+            buildings,
+            subbasins[["COMID", "geometry"]],
+            how="left",
+            predicate="within",
+        ).drop(columns="index_right")
+        buildings_with_subbasin["COMID"] = (
+            buildings_with_subbasin["COMID"].fillna(-1).astype(int)
+        )
+        return buildings_with_subbasin
+
+    def assign_GDL_region_to_buildings(
+        self, buildings: gpd.GeoDataFrame
+    ) -> gpd.GeoDataFrame:
+        """Assigns GDL region IDs to buildings based on their spatial location.
+
+        Args:
+            buildings: A GeoDataFrame containing building data within the model domain.
+        Returns:
+            A GeoDataFrame with GDL region IDs assigned to each building.
+        """
+        # load GDL region within model domain
+        GDL_regions = self.data_catalog.fetch("GDL_regions_v4").read(
+            geom=self.region.union_all(), columns=["GDLcode", "iso_code", "geometry"]
+        )
+        buildings_with_GDL = gpd.sjoin(
+            buildings,
+            GDL_regions[["GDLcode", "geometry"]],
+            how="left",
+            predicate="within",
+        ).drop(columns="index_right")
+        buildings_with_GDL["GDLcode"] = buildings_with_GDL["GDLcode"].fillna("missing")
+        return buildings_with_GDL
+
     @build_method(required=True)
     def setup_buildings(self) -> None:
         """Gets buildings per GDL region within the model domain and assigns grid indices from GLOPOP-S grid."""
@@ -1532,9 +1659,11 @@ class Agents(BuildModelBase):
         buildings = self.data_catalog.fetch("open_building_map").read(
             geom=mask,
         )
+        buildings = self.assign_GDL_region_to_buildings(buildings)
         buildings = self.setup_building_reconstruction_costs(buildings)
         buildings = self.assign_subbasins_to_buildings(buildings)
-
+        buildings = self.calculate_distance_parameters(buildings)
+        buildings = self.assign_subbasins_to_buildings(buildings)
         # reset id column to avoid issues with duplicate ids
         buildings["id"] = np.arange(len(buildings))
 
@@ -1664,6 +1793,22 @@ class Agents(BuildModelBase):
             output[gdl_name] = buildings_gdl
         return output
 
+    @build_method(required=True)
+    def setup_iiasa_ssp(
+        self, country: str = "Mexico", ssp: str = "SSP5", reference_year: int = 2020
+    ) -> None:
+        """Sets up the IIASA SSPs for the model.
+
+        Args:
+            country: The country for which to set up the SSPs. Default is "Mexico".
+            ssp: The SSP scenario to use. Default is "SSP5".
+            reference_year: The reference year for the SSPs. Default is 2020.
+        """
+        iiasa_ssps = self.data_catalog.fetch("iiasa_ssp").read(
+            country=country, ssp=ssp, reference_year=reference_year
+        )
+        self.set_table(iiasa_ssps, name="ssp/iiasa_ssp")
+
     @build_method(
         depends_on=[
             "setup_assets",
@@ -1676,7 +1821,7 @@ class Agents(BuildModelBase):
         self,
         maximum_age: int = 85,
         skip_countries_ISO3: list[str] = [],
-        single_household_per_building: bool = False,
+        single_household_per_building: bool = True,
         redundancy_array_size: int = 20_000_000,
     ) -> None:
         """New method to set up household characteristics for agents using GLOPOP-S data. This method is still under development and may not be fully functional.
