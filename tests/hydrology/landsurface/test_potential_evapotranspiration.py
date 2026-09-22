@@ -401,7 +401,7 @@ def test_get_crop_factors_and_root_depths_and_lai() -> None:
             0.2 + (1.0 - 0.2) * 85 / 100,  # not irrigated, crop 0
             0.2 + (1.0 - 0.2) * 95 / 100,  # not irrigated, crop 0
             2.0,  # forest
-            0.6,  # grassland
+            0.3,  # grassland
             0.0,  # sealed
             0.0,  # open water
         ],
