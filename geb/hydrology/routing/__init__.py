@@ -76,16 +76,30 @@ def get_discharge_per_river(
             ),
         )
 
+    consolidated_table: pd.DataFrame | None = None
+    if source == "file":
+        assert folder is not None
+        consolidated_file: Path = folder / "river_outflow_hourly_m3_per_s.parquet"
+        if consolidated_file.exists():
+            consolidated_table = read_table(consolidated_file)
+
+    def read_outflow_series_from_file(key: int | str) -> pd.Series:
+        assert folder is not None
+        key_str: str = str(key)
+        if consolidated_table is not None and key_str in consolidated_table.columns:
+            return consolidated_table[key_str]
+        # Legacy fallback: individual parquet file
+        return read_table(folder / f"river_outflow_hourly_m3_per_s_{key}.parquet")[
+            f"river_outflow_hourly_m3_per_s_{key}"
+        ]
+
     discharge_data = {}
     for river_id in rivers.index:
         assert isinstance(river_id, int)
         xys: list[tuple[int, int]] = get_river_representative_xys(river_id, all_rivers)
         if len(xys) == 1:
             if source == "file":
-                assert folder is not None
-                discharge_data[river_id] = read_table(
-                    folder / f"river_outflow_hourly_m3_per_s_{river_id}.parquet"
-                )[f"river_outflow_hourly_m3_per_s_{river_id}"]
+                discharge_data[river_id] = read_outflow_series_from_file(river_id)
             else:
                 assert variables_to_report is not None
                 discharge_data[river_id] = create_df_from_report_variable(
@@ -95,10 +109,7 @@ def get_discharge_per_river(
             total_discharge_part = None
             for i in range(len(xys)):
                 if source == "file":
-                    assert folder is not None
-                    discharge_part = read_table(
-                        folder / f"river_outflow_hourly_m3_per_s_{river_id}_{i}.parquet"
-                    )[f"river_outflow_hourly_m3_per_s_{river_id}_{i}"]
+                    discharge_part = read_outflow_series_from_file(f"{river_id}_{i}")
                 else:
                     assert variables_to_report is not None
                     discharge_part = create_df_from_report_variable(

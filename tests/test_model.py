@@ -311,11 +311,12 @@ def test_spinup() -> None:
         routing_report_folder: Path = (
             working_directory / "output" / "spinup" / "report" / "hydrology.routing"
         )
+        outflow_table: pd.DataFrame = read_table(
+            routing_report_folder / "river_outflow_hourly_m3_per_s.parquet"
+        )
 
         for ID, river in outflow_rivers.iterrows():
-            outflow_data: pd.DataFrame = read_table(
-                routing_report_folder / f"river_outflow_hourly_m3_per_s_{ID}.parquet",
-            )[f"river_outflow_hourly_m3_per_s_{ID}"]
+            outflow_data: pd.Series = outflow_table[str(ID)]
 
             outflow_xy = river["hydrography_xy"][-1]
 
