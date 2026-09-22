@@ -58,10 +58,9 @@ def calculate_snow_net_radiation_flux(
     longwave_radiation_W_per_m2: np.float32,
     snow_temperature_C: np.float32,
     total_snow_water_equivalent_m: np.float32,
-    snow_albedo_min: np.float32 = np.float32(0.4),
-    snow_albedo_max: np.float32 = np.float32(0.9),
-    snow_albedo_decay_per_mm: np.float32 = np.float32(0.01),
-    snow_radiation_coefficient: np.float32 = np.float32(1.0),
+    leaf_area_index: np.float32,
+    air_temperature_K: np.float32,
+    soil_albedo: np.float32,
 ) -> tuple[np.float32, np.float32]:
     """Calculate net snow radiation flux and its derivative.
 
@@ -70,28 +69,43 @@ def calculate_snow_net_radiation_flux(
         longwave_radiation_W_per_m2: Incoming longwave radiation (W/m2).
         snow_temperature_C: Snow surface-layer temperature (C).
         total_snow_water_equivalent_m: Total snow water equivalent (m).
-        snow_albedo_min: Minimum snow albedo (-).
-        snow_albedo_max: Maximum snow albedo (-).
-        snow_albedo_decay_per_mm: Snow albedo decay coefficient (per mm SWE).
-        snow_radiation_coefficient: Multiplier applied to net shortwave radiation (-).
+        leaf_area_index: Leaf area index (-).
+        air_temperature_K: Air temperature (K).
+        soil_albedo: Soil albedo (-).
 
     Returns:
         Tuple of:
             - Net radiation flux into snow (W/m2).
             - Derivative of the net radiation with respect to snow temperature (W/m2/K).
     """
-    # Albedo should approach snow_albedo_max as SWE increases,
-    # and approach snow_albedo_min (ground influence) as SWE -> 0.
-    albedo: np.float32 = snow_albedo_max - (snow_albedo_max - snow_albedo_min) * np.exp(
-        -snow_albedo_decay_per_mm
+    SNOW_ALBEDO_MAX: np.float32 = np.float32(0.9)
+    SNOW_ALBEDO_DECAY_PER_MM: np.float32 = np.float32(0.01)
+
+    albedo: np.float32 = SNOW_ALBEDO_MAX - (SNOW_ALBEDO_MAX - soil_albedo) * np.exp(
+        -SNOW_ALBEDO_DECAY_PER_MM
         * min(total_snow_water_equivalent_m, np.float32(10.0))
         * np.float32(1000.0)
     )
 
+    attenuation_factor: np.float32 = get_canopy_radiation_attenuation(leaf_area_index)
+
     absorbed_shortwave_W_per_m2: np.float32 = (
-        (np.float32(1.0) - albedo)
-        * snow_radiation_coefficient
-        * shortwave_radiation_W_per_m2
+        (np.float32(1.0) - albedo) * shortwave_radiation_W_per_m2 * attenuation_factor
+    )
+
+    transmitted_longwave_W: np.float32 = (
+        longwave_radiation_W_per_m2 * attenuation_factor
+    )
+    canopy_longwave_W: np.float32 = (
+        STEFAN_BOLTZMANN_W_PER_M2_K4
+        * (air_temperature_K**4)
+        * (np.float32(1.0) - attenuation_factor)
+    )
+    incoming_longwave_at_snow_surface_W: np.float32 = (
+        transmitted_longwave_W + canopy_longwave_W
+    )
+    absorbed_longwave_W_per_m2: np.float32 = (
+        SNOW_EMISSIVITY * incoming_longwave_at_snow_surface_W
     )
 
     snow_temperature_K: np.float32 = snow_temperature_C + KELVIN_OFFSET
@@ -100,7 +114,7 @@ def calculate_snow_net_radiation_flux(
     )
     net_radiation_flux_W_per_m2: np.float32 = (
         absorbed_shortwave_W_per_m2
-        + longwave_radiation_W_per_m2
+        + absorbed_longwave_W_per_m2
         - outgoing_longwave_W_per_m2
     )
     conductance_W_per_m2_K: np.float32 = (
@@ -891,11 +905,19 @@ def solve_soil_enthalpy_column(
             * RHO_WATER_KG_PER_M3
             * SPECIFIC_HEAT_CAPACITY_ICE_J_PER_KG_K
         )
-        temperature_C: np.float32 = enthalpy_J_per_m2 / heat_capacity_J_per_m2_K
-
         enthalpies_at_start_of_timestep[snow_layer_idx] = enthalpy_J_per_m2
-        dT_dH_linearized[snow_layer_idx] = np.float32(1.0) / heat_capacity_J_per_m2_K
-        beta_linearized[snow_layer_idx] = np.float32(0.0)
+        if enthalpy_J_per_m2 >= np.float32(0.0):
+            temperature_C: np.float32 = np.float32(0.0)
+            dT_dH_linearized[snow_layer_idx] = np.float32(0.0)
+            beta_linearized[snow_layer_idx] = np.float32(0.0)
+        else:
+            temperature_C = min(
+                np.float32(0.0), enthalpy_J_per_m2 / heat_capacity_J_per_m2_K
+            )
+            dT_dH_linearized[snow_layer_idx] = (
+                np.float32(1.0) / heat_capacity_J_per_m2_K
+            )
+            beta_linearized[snow_layer_idx] = np.float32(0.0)
         conductivities_W_per_m_K[snow_layer_idx] = (
             calculate_snow_thermal_conductivity_from_density(density_kg_per_m3)
         )
@@ -1006,6 +1028,9 @@ def solve_soil_enthalpy_column(
                 longwave_radiation_W_per_m2=longwave_radiation_W_per_m2,
                 snow_temperature_C=surface_temperature_guess_C,
                 total_snow_water_equivalent_m=total_snow_water_equivalent_m,
+                leaf_area_index=leaf_area_index,
+                air_temperature_K=air_temperature_K,
+                soil_albedo=soil_albedo,
             )
         )
         sensible_heat_flux_W_per_m2, derivative_sensible_heat_W_per_m2_K = (
@@ -1201,6 +1226,10 @@ def solve_soil_enthalpy_column(
     surface_temperature_for_flux_C: np.float32 = (
         dT_dH_linearized[0] * enthalpies_updated[0] + beta_linearized[0]
     )
+    if n_active_snow_layers > 0:
+        surface_temperature_for_flux_C = min(
+            surface_temperature_for_flux_C, np.float32(0.0)
+        )
     soil_heat_flux_W_per_m2 = (
         flux_star_W_per_m2
         - surface_thermal_conductance_W_per_m2_K * surface_temperature_for_flux_C

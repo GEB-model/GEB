@@ -1040,9 +1040,9 @@ class Hydrography(BuildModelBase):
                     upstream_river_cells.reshape(routing_river_raster.shape)
                 ] = COMID
 
-        # Propagate river IDs downstream to fill gaps in the LR river network
-        river_raster_LR = propagate_downstream(
-            data=river_raster_LR,
+        # Propagate river IDs downstream to fill gaps in the routing river network
+        routing_river_raster = propagate_downstream(
+            data=routing_river_raster,
             idxs_ds=flow_raster.idxs_ds,
             upstream_area=upstream_area_data,
             missing_val=-1,
@@ -1052,9 +1052,9 @@ class Hydrography(BuildModelBase):
         floodplain_width = calculate_dem_floodplain_width(
             flow_raster_high_res=flow_raster_original,
             elevation_high_res=original_d8_elevation,
-            upstream_area_high_res_m2=upstream_area_high_res,
+            upstream_area_high_res_m2=original_d8_upstream_area_m2,
             idxs_outflow_low_res=self.grid["idxs_outflow"],
-            river_raster_low_res=river_raster_LR,
+            river_raster_low_res=routing_river_raster,
             cell_area_low_res=self.grid["cell_area"],
             river_length_low_res=river_length,
             ldd_scale_factor=self.ldd_scale_factor,

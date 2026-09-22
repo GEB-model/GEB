@@ -11,6 +11,7 @@ from .constants import (
     MAX_SNOW_DENSITY_KG_PER_M3,
     RHO_WATER_KG_PER_M3,
     SPECIFIC_HEAT_CAPACITY_ICE_J_PER_KG_K,
+    SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K,
 )
 from .energy import (
     calculate_aerodynamic_conductance_W_per_m2_K,
@@ -791,6 +792,20 @@ def update_snow_mass_and_phase(
             activate_layer_thickness_m,
         )
     )
+
+    # Sensible heat advected by rain on snow.
+    if (
+        rainfall_m_per_hour > np.float32(0.0)
+        and air_temperature_C > np.float32(0.0)
+        and swe_top_m > np.float64(0.0)
+    ):
+        rain_sensible_heat_J_per_m2: np.float32 = (
+            rainfall_m_per_hour
+            * RHO_WATER_KG_PER_M3
+            * SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K
+            * air_temperature_C
+        )
+        enthalpy_top_J_per_m2 += rain_sensible_heat_J_per_m2
 
     melt_top_m, swe_top_m, enthalpy_top_J_per_m2 = melt_snow_from_enthalpy(
         swe_top_m, enthalpy_top_J_per_m2

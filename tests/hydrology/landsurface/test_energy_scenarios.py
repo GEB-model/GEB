@@ -91,18 +91,37 @@ def run_energy_simulation(
     )
 
     # Initial state
-    # Calculate initial enthalpy (liquid)
-    water_heat_capacity_areal = (
-        volumetric_water_content
-        * layer_thickness_m
-        * VOLUMETRIC_HEAT_CAPACITY_WATER_J_PER_M3_K
-    )
-    total_heat_capacity_areal = (
-        solid_heat_capacity_J_per_m2_K + water_heat_capacity_areal
-    )
-    soil_enthalpies_J_per_m2 = total_heat_capacity_areal * np.float32(
-        initial_soil_temp_C
-    )
+    if initial_soil_temp_C >= 0.0:
+        water_heat_capacity_areal = (
+            volumetric_water_content
+            * layer_thickness_m
+            * VOLUMETRIC_HEAT_CAPACITY_WATER_J_PER_M3_K
+        )
+        total_heat_capacity_areal = (
+            solid_heat_capacity_J_per_m2_K + water_heat_capacity_areal
+        )
+        soil_enthalpies_J_per_m2 = total_heat_capacity_areal * np.float32(
+            initial_soil_temp_C
+        )
+    else:
+        water_heat_capacity_areal = (
+            volumetric_water_content
+            * layer_thickness_m
+            * VOLUMETRIC_HEAT_CAPACITY_ICE_J_PER_M3_K
+        )
+        total_heat_capacity_areal = (
+            solid_heat_capacity_J_per_m2_K + water_heat_capacity_areal
+        )
+        latent_heat_deficit_areal = (
+            volumetric_water_content
+            * layer_thickness_m
+            * RHO_WATER_KG_PER_M3
+            * LATENT_HEAT_FUSION_J_PER_KG
+        )
+        soil_enthalpies_J_per_m2 = (
+            total_heat_capacity_areal * np.float32(initial_soil_temp_C)
+            - latent_heat_deficit_areal
+        )
 
     # Snow state
     n_snow_layers = 2

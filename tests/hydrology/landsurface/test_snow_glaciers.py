@@ -11,6 +11,7 @@ from geb.hydrology.landsurface.constants import (
     MAX_SNOW_DENSITY_KG_PER_M3,
     RHO_WATER_KG_PER_M3,
     SNOW_EMISSIVITY,
+    SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K,
     STEFAN_BOLTZMANN_W_PER_M2_K4,
 )
 from geb.hydrology.landsurface.energy import (
@@ -576,6 +577,9 @@ def _run_snow_scenario_step(
             longwave_radiation_W_per_m2=longwave_radiation_W_per_m2,
             snow_temperature_C=snow_surface_temp_C,
             total_snow_water_equivalent_m=np.float32(total_swe_m),
+            leaf_area_index=np.float32(0.0),
+            air_temperature_K=np.float32(air_temperature_C + float(KELVIN_OFFSET)),
+            soil_albedo=np.float32(0.2),
         )
         sensible_heat_W_per_m2, _ = calculate_sensible_heat_flux(
             soil_temperature_C=snow_surface_temp_C,
@@ -1932,3 +1936,95 @@ def test_snow_density_capped_at_ice_density() -> None:
         liquid_2_m=np.float64(0.0),
     )
     assert empty_density == FRESH_SNOW_DENSITY_KG_PER_M3
+
+
+def test_rain_on_snow_thermal_advection() -> None:
+    """Test that warm rain advects sensible heat into snow and induces melt."""
+    swe_top: np.float64 = np.float64(0.05)
+    swe_bottom: np.float64 = np.float64(0.0)
+    lw_top: np.float64 = np.float64(0.0)
+    lw_bottom: np.float64 = np.float64(0.0)
+    enthalpy_top: np.float32 = np.float32(0.0)
+    enthalpy_bottom: np.float32 = np.float32(0.0)
+    density_top: np.float32 = FRESH_SNOW_DENSITY_KG_PER_M3
+    density_bottom: np.float32 = FRESH_SNOW_DENSITY_KG_PER_M3
+
+    # Warm rain at 10 °C, 10 mm/h
+    rain_rate_m_hr: np.float32 = np.float32(0.01)
+    air_temp_C: np.float32 = np.float32(10.0)
+
+    (
+        swe_top,
+        lw_top,
+        _enthalpy_top,
+        _density_top,
+        _swe_bottom,
+        _lw_bottom,
+        _enthalpy_bottom,
+        _density_bottom,
+        snow_melt_m_per_hour,
+        _runoff,
+        _rain,
+        _sublimation,
+        _refreezing,
+    ) = update_snow_mass_and_phase(
+        rainfall_m_per_hour=rain_rate_m_hr,
+        swe_top_m=swe_top,
+        liquid_water_top_m=lw_top,
+        enthalpy_top_J_per_m2=enthalpy_top,
+        density_top_kg_per_m3=density_top,
+        swe_bottom_m=swe_bottom,
+        liquid_water_bottom_m=lw_bottom,
+        enthalpy_bottom_J_per_m2=enthalpy_bottom,
+        density_bottom_kg_per_m3=density_bottom,
+        air_temperature_C=air_temp_C,
+        vapor_pressure_air_Pa=np.float32(611.15),
+        air_pressure_Pa=np.float32(101325.0),
+        wind_10m_m_per_s=np.float32(0.0),
+        activate_layer_thickness_m=np.float32(0.2),
+    )
+
+    # Expected sensible heat: Q = 0.01 m * 1000 kg/m3 * 4186 J/kg/K * 10 K = 418,600 J/m2
+    # Expected melt = Q / (1000 * 334,000) = 0.00125329 m (~1.25 mm)
+    expected_melt_m = float(
+        rain_rate_m_hr
+        * RHO_WATER_KG_PER_M3
+        * SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K
+        * air_temp_C
+        / (RHO_WATER_KG_PER_M3 * LATENT_HEAT_FUSION_J_PER_KG)
+    )
+    assert math.isclose(float(snow_melt_m_per_hour), expected_melt_m, rel_tol=1e-4)
+    assert math.isclose(float(swe_top), 0.05 - expected_melt_m, rel_tol=1e-4)
+
+
+def test_snow_radiation_canopy_shading() -> None:
+    """Test that canopy attenuates solar radiation and adds thermal longwave emission to snow."""
+    sw_in: np.float32 = np.float32(600.0)
+    lw_in: np.float32 = np.float32(300.0)
+    snow_temp_C: np.float32 = np.float32(-5.0)
+    swe_m: np.float32 = np.float32(0.1)
+
+    # Open sky (LAI = 0)
+    net_rad_open, _ = calculate_snow_net_radiation_flux(
+        shortwave_radiation_W_per_m2=sw_in,
+        longwave_radiation_W_per_m2=lw_in,
+        snow_temperature_C=snow_temp_C,
+        total_snow_water_equivalent_m=swe_m,
+        leaf_area_index=np.float32(0.0),
+        air_temperature_K=np.float32(273.15),
+        soil_albedo=np.float32(0.2),
+    )
+
+    # Forest canopy (LAI = 4.0)
+    net_rad_shaded, _ = calculate_snow_net_radiation_flux(
+        shortwave_radiation_W_per_m2=sw_in,
+        longwave_radiation_W_per_m2=lw_in,
+        snow_temperature_C=snow_temp_C,
+        total_snow_water_equivalent_m=swe_m,
+        leaf_area_index=np.float32(4.0),
+        air_temperature_K=np.float32(273.15),
+        soil_albedo=np.float32(0.2),
+    )
+
+    # Shaded snow receives less net radiation during high solar periods
+    assert net_rad_open > net_rad_shaded
