@@ -3481,6 +3481,15 @@ class DecisionModuleML:
 
         This mirrors ``HierarchicalRandomForestModel.predict_proba`` in training:
         ``P(calendar) = P(crop_1) * P(calendar | crop_1)``.
+
+        Returns:
+            Joint calendar-class probabilities with shape ``(n_rows, n_classes)``.
+
+        Raises:
+            ValueError: If the random-forest probability output has an unexpected
+                shape or contains invalid probability values.
+            RuntimeError: If the hierarchical random forest produces a row with no
+                positive probability mass.
         """
         features = np.asarray(rf_input, dtype=np.float32)
         if features.ndim != 2:
@@ -3550,7 +3559,18 @@ class DecisionModuleML:
         current_crop_ids: ArrayInt32,
         feasible_classes: TwoDArrayBool,
     ) -> TwoDArrayFloat64:
-        """Apply the calibrated persistence gate to first-stage crop probability mass."""
+        """Apply the calibrated persistence gate to first-stage crop probability mass.
+
+        Returns:
+            Calendar-class probabilities after applying the persistence gate, or the
+            original probabilities when the gate is not enabled for the prediction mode.
+
+        Raises:
+            ValueError: If the persistence-gate configuration or threshold is invalid,
+                or if input dimensions are inconsistent.
+            RuntimeError: If applying the persistence gate removes all probability mass
+                from a row.
+        """
         if self.prediction_model != "hierarchical_random_forest_switch_gate":
             return probabilities
 
