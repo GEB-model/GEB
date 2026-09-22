@@ -117,9 +117,9 @@ async def get_retry_client(**kwargs: Any) -> RetryClient:
         An instance of RetryClient configured with exponential backoff.
     """
     retry_options = ExponentialRetry(
-        attempts=10,
-        start_timeout=2,
-        max_timeout=60,
+        attempts=100,
+        start_timeout=10,
+        max_timeout=3600,
         factor=2,
         retry_all_server_errors=True,
         exceptions={
