@@ -2372,7 +2372,8 @@ class Routing(Module):
         if not self.model.in_spinup and (
             self.model.current_day_of_year == 1 or self.model.current_timestep == 0
         ):
-            self.update_return_periods()
+            # self.update_return_periods()
+            pass
 
         if __debug__:
             # TODO: make dependent on routing step length
