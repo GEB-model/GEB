@@ -3,7 +3,7 @@
 import os
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import ecmwfapi
 import numpy as np
@@ -49,8 +49,8 @@ def format_date(date_obj: datetime) -> str:
         raise ValueError("Input must be a date or datetime object.")
 
 
-def generate_forecast_steps(forecast_date: datetime) -> str:
-    """Generate ECMWF forecast step string based on the forecast date.
+def generate_forecast_steps(forecast_date: datetime, forecast_horizon: int) -> str:
+    """Generate ECMWF forecast step string based on the forecast date and horizon.
 
     ECMWF does not have a consistent 1h timestep for the entire operational archive. Asking hourly data to the server when it does not exist, will result in an error.
     Therefore, we need to adjust the requested steps based on the available data, which is different before and after 2016-11-23:
@@ -59,6 +59,7 @@ def generate_forecast_steps(forecast_date: datetime) -> str:
 
     Args:
         forecast_date: The forecast initialization date and time.
+        forecast_horizon: The forecast horizon in hours.
 
     Returns:
         ECMWF MARS step string in the format "0/3/6/9/..." with actual step hours.
@@ -77,11 +78,45 @@ def generate_forecast_steps(forecast_date: datetime) -> str:
         steps.extend(range(0, 145, 3))  # 0, 3, 6, 9, ..., 144 (3-hourly)
         steps.extend(range(150, 241, 6))  # 150, 156, 162, ..., 360 (6-hourly from 144h)
     else:  # From 2016-11-23: hourly from 0-90h, 3-hourly from 90-144h, 6-hourly from 144-360h
-        steps.extend(range(0, 91))  # 0, 1, 2, 3, ..., 90 (hourly)
-        steps.extend(range(93, 145, 3))  # 93, 96, 99, ..., 144 (3-hourly from 90h)
-        steps.extend(range(150, 241, 6))  # 150, 156, 162, ..., 360 (6-hourly from 144h)
+        if forecast_horizon <= 90:
+            steps.extend(
+                range(0, forecast_horizon + 1)
+            )  # hourly steps up to forecast_horizon
+        elif forecast_horizon <= 144:
+            steps.extend(range(0, 91))  # hourly steps from 0-90h
+            steps.extend(
+                range(93, forecast_horizon + 1, 3)
+            )  # 3-hourly steps from 90h to forecast_horizon
+        else:
+            steps.extend(range(0, 91))  # 0, 1, 2, 3, ..., 90 (hourly)
+            steps.extend(range(93, 145, 3))  # 93, 96, 99, ..., 144 (3-hourly from 90h)
+            steps.extend(
+                range(150, 241, 6)
+            )  # 150, 156, 162, ..., 360 (6-hourly from 144h)
 
     return "/".join(str(step) for step in steps)  # return step string for MARS request
+
+
+def make_hindcast_dates_for_cycle_date(
+    forecast_cycle_date: pd.Timestamp, n_hindcast_years: int
+) -> str:
+    """Generate a string of hindcast dates for a given forecast cycle date.
+
+    Args:
+        forecast_cycle_date: The forecast cycle date as a pandas Timestamp.
+        n_hindcast_years: The number of hindcast years to request.
+
+    Returns:
+        A string of hindcast dates in the format "YYYY-MM-DD/YYYY-MM-DD/...".
+    """
+    forecast_cycle_date = pd.to_datetime(
+        forecast_cycle_date
+    )  # Ensure input is a Timestamp
+    start_year = forecast_cycle_date.year - n_hindcast_years
+    return "/".join(
+        f"{year}-{forecast_cycle_date.month:02d}-{forecast_cycle_date.day:02d}"
+        for year in range(start_year, forecast_cycle_date.year)
+    )
 
 
 class ECMWFForecasts(Adapter):
@@ -98,11 +133,15 @@ class ECMWFForecasts(Adapter):
         bounds: tuple[float, float, float, float],
         forecast_start: date | datetime,
         forecast_end: date | datetime,
+        hindcast_cycle_start: date | datetime,
+        hindcast_cycle_end: date | datetime,
+        n_hindcast_years: int,
         forecast_model: str,
         forecast_resolution: str,
         forecast_horizon: int,
         forecast_timestep_hours: int,
         n_ensemble_members: int,
+        forecast_product: Literal["forecast", "hindcast"],
     ) -> ECMWFForecasts:
         """Download ECMWF forecasts using the ECMWF web API: https://github.com/ecmwf/ecmwf-api-client.
 
@@ -124,11 +163,15 @@ class ECMWFForecasts(Adapter):
             bounds: The bounding box in the format (min_lon, min_lat, max_lon, max_lat).
             forecast_start: The forecast initialization time (date or datetime).
             forecast_end: The forecast end time (date or datetime).
+            hindcast_cycle_start: The start date of the cycle you want to get the hindcasts for.
+            hindcast_cycle_end: The end date of the cycle you want to get the hindcasts for.
+            n_hindcast_years: The number of years of hindcast data to download before the forecast cycle date. Maximum is 20 years.
             forecast_model: The ECMWF forecast model to use ("probabilistic_forecast", "control_forecast" or "both_control_and_probabilistic").
             forecast_resolution: The spatial resolution of the forecast data (degrees).
             forecast_horizon: The forecast horizon in hours.
             forecast_timestep_hours: The forecast timestep in hours.
             n_ensemble_members: The number of ensemble members to download.
+            forecast_product: The type of forecast product to download ("forecast" or "hindcast").
 
         Returns:
             The ECMWFForecasts instance.
@@ -170,14 +213,37 @@ class ECMWFForecasts(Adapter):
             forecast_start, forecast_end, freq="24h"
         )  # Generate list of forecast dates at 24-hour intervals
         earliest_allowed_date = date(2010, 1, 1)  # Set earliest allowed forecast date
-        for forecast_date in forecast_date_list:  # Loop through all forecast dates
-            if (
-                forecast_date.date() < earliest_allowed_date
-            ):  # Check if date is before allowed range
+
+        if forecast_product == "forecast":
+            for forecast_date in forecast_date_list:  # Loop through all forecast dates
+                if (
+                    forecast_date.date() < earliest_allowed_date
+                ):  # Check if date is before allowed range
+                    raise ValueError(
+                        f"Forecast date {forecast_date.date()} is before 2010-01-01. "
+                        "For historical data before 2010, please use hindcast data instead."
+                    )
+        elif forecast_product == "hindcast":
+            # If downloading hindcast data, check if the forecast start date is less then 20 years apart from the forecast cycle date, otherwise there will be no data available
+            if n_hindcast_years > 20:
                 raise ValueError(
-                    f"Forecast date {forecast_date.date()} is before 2010-01-01. "
-                    "For historical data before 2010, please use hindcast data instead."
+                    "ECMWF hindcast data is only available for up to 20 years before the forecast cycle date. Please adjust the n_hindcast_years parameter in your build.yml file to be 20 or less."
                 )
+
+            HINDCAST_RUN_DAYS = [1, 5, 9, 13, 17, 21, 25, 29]
+            forecast_date_list = [
+                d
+                for d in pd.date_range(
+                    hindcast_cycle_start, hindcast_cycle_end, freq="D"
+                )
+                if d.day in HINDCAST_RUN_DAYS and not (d.month == 2 and d.day > 28)
+            ]
+        else:
+            raise ValueError(
+                f"Unsupported forecast_product: '{forecast_product}'. "
+                "Must be 'forecast' or 'hindcast'."
+            )
+
         # Determine which model types to download based on YAML configuration
         if forecast_model == "both_control_and_probabilistic":
             model_types_to_download = ["control_forecast", "probabilistic_forecast"]
@@ -190,11 +256,11 @@ class ECMWFForecasts(Adapter):
             )
 
         for model_type in model_types_to_download:
-            print(f"Processing {model_type} downloads...")
+            self.logger.info(f"Processing {model_type} downloads...")
             for (
                 forecast_date
             ) in forecast_date_list:  # Loop through each forecast date to download
-                print(
+                self.logger.info(
                     f"Downloading {model_type} for {forecast_date}"
                 )  # Print the current forecast date being processed
 
@@ -210,7 +276,7 @@ class ECMWFForecasts(Adapter):
                     forecast_timestep_hours == 1
                 ):  # Check if hourly timestep is requested
                     mars_step: str = generate_forecast_steps(
-                        forecast_date
+                        forecast_date, forecast_horizon
                     )  # Generate forecast steps based on date using helper function
                 elif (
                     forecast_timestep_hours >= 6
@@ -221,7 +287,10 @@ class ECMWFForecasts(Adapter):
                         f"Forecast timestep {forecast_timestep_hours} is not supported. Please use 1 or >=6."
                     )
 
-                mars_stream: str = "enfo"  # Ensemble forecast stream
+                if forecast_product == "hindcast":
+                    mars_stream = "enfh"  # Ensemble hindcast stream
+                else:
+                    mars_stream: str = "enfo"  # Ensemble forecast stream
                 mars_time: str = forecast_date.strftime(
                     "%H"
                 )  # Extract hour from forecast date for initialization time
@@ -235,25 +304,48 @@ class ECMWFForecasts(Adapter):
                     bounds_str  # Set bounding box area in North/West/South/East format
                 )
 
-                # retrieve steps from mars
-                mars_request: dict[
-                    str, Any
-                ] = {  # Build MARS request dictionary with all parameters
-                    "class": mars_class,
-                    "date": forecast_date.strftime("%Y-%m-%d"),
-                    "expver": mars_expver,
-                    "levtype": mars_levtype,
-                    "param": mars_param,
-                    "step": mars_step,
-                    "stream": mars_stream,
-                    "time": mars_time,
-                    "type": mars_type,
-                    "grid": mars_grid,
-                    "area": mars_area,
-                }
+                if forecast_product == "forecast":
+                    # retrieve steps from mars
+                    mars_request: dict[
+                        str, Any
+                    ] = {  # Build MARS request dictionary with all parameters
+                        "class": mars_class,
+                        "date": forecast_date.strftime("%Y-%m-%d"),
+                        "expver": mars_expver,
+                        "levtype": mars_levtype,
+                        "param": mars_param,
+                        "step": mars_step,
+                        "stream": mars_stream,
+                        "time": mars_time,
+                        "type": mars_type,
+                        "grid": mars_grid,
+                        "area": mars_area,
+                    }
+                elif forecast_product == "hindcast":
+                    # retrieve steps from mars
+                    mars_request: dict[
+                        str, Any
+                    ] = {  # Build MARS request dictionary with all parameters
+                        "class": mars_class,
+                        "hdate": make_hdates_for_cycle_date(
+                            forecast_cycle_date=forecast_date.strftime("%Y-%m-%d"),
+                            n_hindcast_years=n_hindcast_years,
+                        ),
+                        "date": forecast_date.strftime("%Y-%m-%d"),
+                        "expver": mars_expver,
+                        "levtype": mars_levtype,
+                        "param": mars_param,
+                        "step": mars_step,
+                        "stream": mars_stream,
+                        "time": mars_time,
+                        "type": mars_type,
+                        "grid": mars_grid,
+                        "area": mars_area,
+                    }
 
                 output_filename = format_path(
                     self.path,
+                    forecast_product=forecast_product,
                     forecast_date=format_date(forecast_date),
                     forecast_model=model_type,
                     forecast_resolution=forecast_resolution.replace("/", "-"),
@@ -262,7 +354,7 @@ class ECMWFForecasts(Adapter):
                 )
 
                 if output_filename.exists():
-                    print(
+                    self.logger.info(
                         f"Forecast file {output_filename} already exists, skipping download."
                     )
                     continue  # Skip download if file already exists
@@ -276,7 +368,7 @@ class ECMWFForecasts(Adapter):
                         f"1/to/{n_ensemble_members}"  # Add ensemble member numbers to request
                     )
 
-                print(
+                self.logger.info(
                     f"Requesting data from ECMWF MARS server.. {mars_request}"
                 )  # Log the MARS request parameters
 
@@ -297,43 +389,37 @@ class ECMWFForecasts(Adapter):
 
         return self
 
-    def read(
+    def load_and_merge_forecast_files(
         self,
-        bounds: tuple[float, float, float, float],
-        forecast_issue_date: datetime,
         forecast_model: str,
+        forecast_issue_date: pd.Timestamp,
         forecast_resolution: str,
         forecast_horizon: int,
         forecast_timestep_hours: int,
-        reproject_like: xr.DataArray,
+        forecast_product: Literal["forecast", "hindcast"] = "forecast",
     ) -> xr.Dataset:
-        """Process downloaded ECMWF forecast data.
-
-        We process forecasts for each initialization time separately. The forecast file contains all variables needed for GEB.
+        """Load and merge ECMWF forecast files based on the specified model type.
 
         Args:
-            bounds: The bounding box in the format (min_lon, min_lat, max_lon,
-                    max_lat).
-            forecast_issue_date: The forecast initialization time.
-            forecast_model: The ECMWF forecast model from build.yml config ("probabilistic_forecast", "control_forecast" or "both_control_and_probabilistic").
+            forecast_model: Either 'control_forecast', 'probabilistic_forecast', or 'both_control_and_probabilistic'.
+            forecast_issue_date: The forecast initialization date and time.
             forecast_resolution: The spatial resolution of the forecast data (degrees).
             forecast_horizon: The forecast horizon in hours.
-            forecast_timestep_hours: The forecast timestep in hours.
-            reproject_like: An xarray DataArray to use as a template for reprojecting
-                the forecast data.
+            forecast_timestep_hours: The temporal resolution of the forecast data in hours.
+            forecast_product: The forecast product type (e.g., "hindcast" or "forecast").
 
         Returns:
-            da: processed ECMWF forecast data as an xarray Dataset.
+            Merged forecast dataset.
 
         Raises:
-            ValueError: If forecast initialization dates or time dimensions don't match between control and ensemble.
+            ValueError: If the forecast model is not supported.
         """
 
-        def _load_forecast_file(model_type: str) -> xr.Dataset:
+        def _load_forecast_files(forecast_model: str) -> xr.Dataset:
             """Load a single forecast dataset for the specified model type.
 
             Args:
-                model_type: Either 'control_forecast' or 'probabilistic_forecast'.
+                forecast_model: Either 'control_forecast' or 'probabilistic_forecast'.
 
             Returns:
                 Loaded and renamed forecast dataset.
@@ -343,8 +429,9 @@ class ECMWFForecasts(Adapter):
             """
             filename = format_path(
                 self.path,
+                forecast_product=forecast_product,
                 forecast_date=format_date(forecast_issue_date),
-                forecast_model=model_type,
+                forecast_model=forecast_model,
                 forecast_resolution=forecast_resolution.replace("/", "-"),
                 forecast_horizon=forecast_horizon,
                 forecast_timestep_hours=forecast_timestep_hours,
@@ -411,8 +498,8 @@ class ECMWFForecasts(Adapter):
         # Load forecast datasets based on YAML forecast_model parameter
         if forecast_model == "both_control_and_probabilistic":
             # Load both_control_and_probabilistic control and ensemble forecasts for combination
-            control_ds = _load_forecast_file("control_forecast")
-            ensemble_ds = _load_forecast_file("probabilistic_forecast")
+            control_ds = _load_forecast_files("control_forecast")
+            ensemble_ds = _load_forecast_files("probabilistic_forecast")
             # Validate compatibility before merging
             _validate_forecast_compatibility(control_ds, ensemble_ds)
 
@@ -428,7 +515,7 @@ class ECMWFForecasts(Adapter):
             )
         elif forecast_model in ["control_forecast", "probabilistic_forecast"]:
             # Load single forecast type without combining
-            ds = _load_forecast_file(forecast_model)
+            ds = _load_forecast_files(forecast_model)
 
             # Add member dimension to control forecast if not present for consistency
             if forecast_model == "control_forecast" and "member" not in ds.dims:
@@ -440,6 +527,24 @@ class ECMWFForecasts(Adapter):
                 "Must be 'control_forecast', 'probabilistic_forecast', or 'both_control_and_probabilistic'."
             )
 
+        return ds
+
+    def process_forecasts(
+        self,
+        ds: xr.Dataset,
+        bounds: tuple[float, float, float, float],
+        reproject_like: xr.DataArray,
+    ) -> xr.Dataset:
+        """Process ECMWF forecast dataset.
+
+        Args:
+            ds: The xarray Dataset containing the forecast data.
+            bounds: The bounding box in the format (min_lon, min_lat, max_lon, max_lat).
+            reproject_like: An xarray DataArray to use as a template for reprojecting
+                the forecast data.
+        Returns:
+            Processed forecast dataset.
+        """
         # ensure all the timesteps are hourly
         if not (
             ds.step.diff("step").astype(np.int64) == 3600 * 1e9
@@ -630,3 +735,99 @@ class ECMWFForecasts(Adapter):
                 )
 
         return ds
+
+    def read_and_process_forecasts(
+        self,
+        bounds: tuple[float, float, float, float],
+        forecast_issue_date: datetime,
+        forecast_model: str,
+        forecast_resolution: str,
+        forecast_horizon: int,
+        forecast_timestep_hours: int,
+        reproject_like: xr.DataArray,
+    ) -> xr.Dataset:
+        """Process downloaded ECMWF forecast data.
+
+        We process forecasts for each initialization time separately. The forecast file contains all variables needed for GEB.
+
+        Args:
+            bounds: The bounding box in the format (min_lon, min_lat, max_lon,
+                    max_lat).
+            forecast_issue_date: The forecast initialization time.
+            forecast_model: The ECMWF forecast model from build.yml config ("probabilistic_forecast", "control_forecast" or "both_control_and_probabilistic").
+            forecast_resolution: The spatial resolution of the forecast data (degrees).
+            forecast_horizon: The forecast horizon in hours.
+            forecast_timestep_hours: The forecast timestep in hours.
+            reproject_like: An xarray DataArray to use as a template for reprojecting
+                the forecast data.
+
+        Returns:
+            da: processed ECMWF forecast data as an xarray Dataset.
+        """
+        ds = self.load_and_merge_forecast_files(
+            forecast_model=forecast_model,
+            forecast_issue_date=forecast_issue_date,
+            forecast_resolution=forecast_resolution,
+            forecast_horizon=forecast_horizon,
+            forecast_timestep_hours=forecast_timestep_hours,
+            forecast_product="forecast",
+        )
+
+        return self.process_forecasts(ds, bounds, reproject_like)
+
+    def read_and_process_hindcasts(
+        self,
+        bounds: tuple[float, float, float, float],
+        forecast_issue_date: datetime,
+        forecast_model: str,
+        forecast_resolution: str,
+        forecast_horizon: int,
+        forecast_timestep_hours: int,
+        reproject_like: xr.DataArray,
+    ) -> dict[str, xr.Dataset]:
+        """Process downloaded ECMWF hindcast data.
+
+        We process hindcasts for each initialization time separately. The hindcast file contains all variables needed for GEB.
+
+        Args:
+            bounds: The bounding box in the format (min_lon, min_lat, max_lon,
+                    max_lat).
+            forecast_issue_date: The forecast initialization time.
+            forecast_model: The ECMWF forecast model from build.yml config ("probabilistic_forecast", "control_forecast" or "both_control_and_probabilistic").
+            forecast_resolution: The spatial resolution of the hindcast data (degrees).
+            forecast_horizon: The forecast horizon in hours.
+            forecast_timestep_hours: The forecast timestep in hours.
+            reproject_like: An xarray DataArray to use as a template for reprojecting
+                the hindcast data.
+
+        Returns:
+            processed_hindcasts: A dictionary containing the processed hindcast data
+                for each initialization time.
+        """
+        hindcasts = self.load_and_merge_forecast_files(
+            forecast_model=forecast_model,
+            forecast_issue_date=forecast_issue_date,
+            forecast_resolution=forecast_resolution,
+            forecast_horizon=forecast_horizon,
+            forecast_timestep_hours=forecast_timestep_hours,
+            forecast_product="hindcast",
+        )
+
+        processed_hindcasts = {}
+
+        for hindcast_date in hindcasts.time.values:
+            hindcast_date_str = pd.to_datetime(hindcast_date).strftime(
+                "%Y%m%dT%H%M%S"
+            )  # Format date for filenames
+
+            hindcast = hindcasts.sel(
+                time=hindcast_date
+            )  # Select the hindcast for the specific initialization time
+
+            processed_hindcasts[hindcast_date_str] = self.process_forecasts(
+                ds=hindcast,
+                bounds=bounds,
+                reproject_like=reproject_like,
+            )
+
+        return processed_hindcasts

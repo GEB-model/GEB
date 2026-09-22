@@ -27,7 +27,6 @@ from geb.geb_types import (
     T_ArrayNumber,
     T_OneorTwoDArray,
     ThreeDArray,
-    ThreeDArrayFloat32,
     ThreeDArrayWithScalar,
     TwoDArray,
     TwoDArrayBool,
@@ -293,16 +292,16 @@ class GridVariables(Bucket):
     discharge_m3_s: ArrayFloat32
     discharge_in_rivers_m3_s_substep: ArrayFloat32
     waterbody_outflow_points: ArrayInt32
-    interception_capacity_grassland: ThreeDArrayFloat32
-    forest_crop_factor_per_10_days: ThreeDArrayFloat32
     discharge_m3_s_per_substep: TwoDArrayFloat32
-    discharge_m3_s_substep: ArrayFloat32
+    retention_basin_storage_m3_per_substep: TwoDArrayFloat32
     river_width_alpha: ArrayFloat32
     river_width_beta: ArrayFloat32
     overland_flow_buffer: TwoDArrayFloat32
     overland_flow_buffer_weights: ArrayFloat32
-    buffer: TwoDArrayFloat64
     retention_basin_storage_m3: ArrayFloat32
+    river_storage_m3: ArrayFloat64
+    river_slope_m_per_m: ArrayFloat32
+    water_stage_m: ArrayFloat32
 
 
 class Grid(BaseVariables):
@@ -716,8 +715,6 @@ class HRUVariables(Bucket):
     crop_group_number_grassland_like: ArrayFloat32
     leaf_area_index_forest: TwoDArrayFloat32
     leaf_area_index_grassland_like: TwoDArrayFloat32
-    interception_capacity_forest_m: TwoDArrayFloat32
-    interception_capacity_grassland_like_m: TwoDArrayFloat32
     cell_length: ArrayFloat32
     water_depth_in_field: ArrayFloat32
     slope_m_per_m: ArrayFloat32

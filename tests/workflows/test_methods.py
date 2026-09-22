@@ -16,6 +16,21 @@ def test_multi_level_merge() -> None:
     assert merged == {"a": 2, "b": 2, "c": {"d": 4, "e": 4, "f": 5}}
 
 
+def test_multi_level_merge_no_change_original_dicts() -> None:
+    """Test multi-level dictionary merging.
+
+    Verifies that the multi_level_merge function correctly merges
+    two dictionaries, including nested dictionaries.
+    """
+    dict1 = {"a": 1, "b": 2, "c": {"d": 3, "e": 4}}
+    dict2 = {"a": 2, "c": {"d": 4, "f": 5}}
+
+    merged = multi_level_merge(dict1, dict2)
+    assert merged == {"a": 2, "b": 2, "c": {"d": 4, "e": 4, "f": 5}}
+    assert dict1 == {"a": 1, "b": 2, "c": {"d": 3, "e": 4}}
+    assert dict2 == {"a": 2, "c": {"d": 4, "f": 5}}
+
+
 def test_multi_level_merge_empty_dicts() -> None:
     """Test merging two empty dictionaries."""
     dict1 = {}

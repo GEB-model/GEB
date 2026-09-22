@@ -1,7 +1,5 @@
 """Utilities to download and setup the damage model."""
 
-from __future__ import annotations
-
 from typing import Any
 
 import pandas as pd

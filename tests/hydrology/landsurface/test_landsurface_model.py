@@ -60,6 +60,10 @@ def test_land_surface_model_error_cases(error_case_path: Path, asfloat64: bool) 
             THERMAL_CONDUCTIVITY_ICE_WATT_PER_MKELVIN**porosity
         )
     inputs.pop("solid_thermal_conductivity_W_per_m_K", None)
+    if "daily_reference_evapotranspiration_grass_m" not in inputs:
+        inputs["daily_reference_evapotranspiration_grass_m"] = np.full(
+            inputs["root_depth_m"].shape, 0.003, dtype=np.float32
+        )
 
     # Cast inputs if requested
     if asfloat64:

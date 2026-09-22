@@ -1,6 +1,7 @@
 """General utility methods for workflows in GEB."""
 
 import math
+from copy import deepcopy
 from typing import Any
 
 import numpy as np
@@ -19,11 +20,13 @@ def multi_level_merge(dict1: dict, dict2: dict) -> dict:
         dict2 (dict): The second dictionary whose values will be merged into dict1.
 
     Returns:
-        dict: The updated dict1 after merging with dict2.
+        dict: The merged dictionary, which is a combination of dict1 and dict2. The original dict1 and dict2 are not modified.
     """
+    dict1 = deepcopy(dict1)  # Create a deep copy to avoid modifying the original dict1
+    dict2 = deepcopy(dict2)  # Create a deep copy to avoid modifying the original dict2
     for key, value in dict2.items():
         if key in dict1 and isinstance(dict1[key], dict) and isinstance(value, dict):
-            multi_level_merge(dict1[key], value)
+            dict1[key] = multi_level_merge(dict1[key], value)
         else:
             dict1[key] = value
     return dict1

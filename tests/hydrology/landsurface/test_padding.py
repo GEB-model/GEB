@@ -7,8 +7,6 @@ Two checks are performed:
    (float32 only; no threshold assertion, purely diagnostic).
 """
 
-from __future__ import annotations
-
 import time
 from pathlib import Path
 
@@ -107,6 +105,11 @@ def _load_and_tile(npz_path: Path, num_cells: int) -> dict:
                 raw[key] = np.float32(val)
             else:
                 raw[key] = val.astype(np.float32)
+
+    if "daily_reference_evapotranspiration_grass_m" not in raw:
+        raw["daily_reference_evapotranspiration_grass_m"] = np.full(
+            raw["root_depth_m"].shape, 0.003, dtype=np.float32
+        )
 
     if "thermal_conductivity_saturated_unfrozen_W_per_m_K" not in raw:
         porosity = raw["water_content_saturated_m"] / raw["soil_layer_height"]

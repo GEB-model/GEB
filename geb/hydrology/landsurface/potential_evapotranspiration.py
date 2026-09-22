@@ -392,13 +392,13 @@ def get_potential_transpiration(
 @njit(cache=True, inline="always")
 def get_canopy_radiation_attenuation(
     leaf_area_index: np.float32,
-    extinction_coefficient: np.float32 = np.float32(0.5),
+    extinction_coefficient: np.float32 = np.float32(0.7),
 ) -> np.float32:
     """Calculate the radiation attenuation factor through a canopy using Beer's Law.
 
     Args:
         leaf_area_index: Leaf Area Index [-].
-        extinction_coefficient: Extinction coefficient (k) [-]. Default is 0.5.
+        extinction_coefficient: Extinction coefficient (k) [-]. Default is 0.7 following FAO-56 eq. 97.
 
     Returns:
         Attenuation factor (0-1), representing the fraction of radiation transmitted through the canopy.
@@ -463,6 +463,8 @@ def get_crop_factor_from_lai(
 ) -> np.float32:
     """Calculate crop factor from leaf area index using exponential formula.
 
+    See equation 97: https://www.fao.org/4/x0490e/x0490e0f.htm
+
     Args:
         min_kc: Minimum crop factor.
         max_kc: Maximum crop factor.
@@ -475,7 +477,7 @@ def get_crop_factor_from_lai(
 
 
 @njit(cache=True)
-def get_crop_factors_and_root_depths(
+def get_crop_factors_and_root_depths_and_lai(
     land_use_map: npt.NDArray[np.int32],
     leaf_area_index_forest: npt.NDArray[np.float32],
     leaf_area_index_grassland_like: npt.NDArray[np.float32],
@@ -492,66 +494,92 @@ def get_crop_factors_and_root_depths(
     npt.NDArray[np.float32],
     npt.NDArray[np.float32],
     npt.NDArray[np.int8],
+    npt.NDArray[np.float32],
+    npt.NDArray[np.float32],
 ]:
-    """Calculate crop factors and root depths based on land use and crop information.
-
-    Crop factor for forest is calculated based on leaf area index based on:
-
-        Allen, R.G., Pereira, L.S.
-        Estimating crop coefficients from fraction of ground cover and height. Irrig Sci 28, 17–34 (2009).
-        https://doi.org/10.1007/s00271-009-0182-z
+    """Calculate crop factors, root depths, dynamic LAI, and interception capacity.
 
     Args:
-        land_use_map: Map of land use types.
-        leaf_area_index_forest: Leaf area index for forest land use type.
-        leaf_area_index_grassland_like: Leaf area index for grassland land use type.
-        crop_map: Map of crop types, -1 for non-crop land use. Indices refer to crop arrays.
-        crop_age_days_map: Map of crop ages in days, -1 for non-crop land use.
-        crop_harvest_age_days: Array of harvest ages in days for each crop type.
-        crop_stage_lengths: Array of lengths of growth stages for each crop type.
-        crop_sub_stage_lengths: Array of lengths of sub-stages for each crop type.
-        crop_factor_per_crop_stage: Array of crop factors for each growth stage for each crop type.
-        crop_root_depths: Array of root depths for each crop type and irrigation status.
-        crop_init_root_depth: Initial root depth for crops.
-        get_crop_sub_stage: Whether to calculate and return crop sub-stages.
+        land_use_map: Map of land use types per HRU.
+        leaf_area_index_forest: Leaf area index for forest land use type (-).
+        leaf_area_index_grassland_like: Leaf area index for grassland-like land use type (-).
+        crop_map: Map of crop types (-1 for non-crop land use).
+        crop_age_days_map: Current age of crop in days (-1 for non-crop or unplanted/fallow).
+        crop_harvest_age_days: Harvest age in days for each crop type.
+        crop_stage_lengths: Array of lengths (l1, l2, l3, l4) in % for each crop type (summing to 100).
+        crop_sub_stage_lengths: Array of sub-stage lengths (d1, d2a, d2b, d3a, d3b, d4) in % for each crop type.
+        crop_factor_per_crop_stage: Crop factors (kc_initial, kc_mid, kc_end) for each crop type (-).
+        crop_root_depths: Maximum root depths for each crop type under rainfed and irrigated conditions (m).
+        crop_init_root_depth: Initial crop seedling rooting depth (m).
+        get_crop_sub_stage: Whether to compute detailed GAEZ crop sub-stages.
 
     Returns:
-        crop_factor: Array of crop factors for each grid cell.
-        root_depth: Array of root depths for each grid cell.
-        crop_sub_stage: Array of crop sub-stages for each grid cell, -1 if not calculated.
+        crop_factor: Array of crop factors per HRU (-).
+        root_depth: Array of rooting depths per HRU (m).
+        crop_sub_stage: Array of crop sub-stages (0-5, or -1 if not calculated) per HRU.
+        leaf_area_index: Dynamic Leaf Area Index per HRU (-).
+        interception_capacity_m: Dynamic canopy interception capacity in meters (m).
 
+    Raises:
+        ValueError: If an unhandled land use type is encountered.
     """
     crop_factor = np.full_like(crop_map, np.nan, dtype=np.float32)
     root_depth = np.full_like(crop_map, np.nan, dtype=np.float32)
     crop_sub_stage = np.full_like(crop_map, -1, dtype=np.int8)
+    leaf_area_index = np.zeros_like(crop_map, dtype=np.float32)
+    interception_capacity_m = np.zeros_like(crop_map, dtype=np.float32)
 
     for i in range(crop_map.size):
         land_use = land_use_map[i]
         crop = crop_map[i]
+
+        curr_crop_sub_stage = np.int8(-1)
+
+        # All cropland
         if crop != -1:
             age_days = crop_age_days_map[i]
             harvest_day = crop_harvest_age_days[i]
             assert harvest_day > 0
-            crop_progress = age_days * 100 // harvest_day  # for to be integer
+            crop_progress = age_days * 100 // harvest_day  # integer percentage (0-100)
             assert crop_progress <= 100
             l1, l2, l3, l4 = crop_stage_lengths[crop]
             kc1, kc2, kc3 = crop_factor_per_crop_stage[crop]
             assert l1 + l2 + l3 + l4 == 100
-            if crop_progress <= l1:
-                field_kc = kc1
-            elif crop_progress <= l1 + l2:
-                field_kc = kc1 + (crop_progress - l1) * (kc2 - kc1) / l2
-            elif crop_progress <= l1 + l2 + l3:
-                field_kc = kc2
+
+            # Combined stage progression for piecewise linear variables (Kc, LAI)
+            s1_end = l1
+            s2_end = l1 + l2
+            s3_end = s2_end + l3
+
+            if crop_progress <= s1_end:
+                # Stage 1: Initial
+                curr_crop_factor = kc1
+                frac = crop_progress / l1 if l1 > 0 else 1.0
+                curr_lai = 0.1 + frac * (0.5 - 0.1)
+
+            elif crop_progress <= s2_end:
+                # Stage 2: Development
+                frac = (crop_progress - s1_end) / l2 if l2 > 0 else 1.0
+                curr_crop_factor = kc1 + frac * (kc2 - kc1)
+                curr_lai = 0.5 + frac * (3.5 - 0.5)
+
+            elif crop_progress <= s3_end:
+                # Stage 3: Mid-season
+                curr_crop_factor = kc2
+                curr_lai = 3.5
+
             else:
-                assert crop_progress <= l1 + l2 + l3 + l4
-                field_kc = kc2 + (crop_progress - (l1 + l2 + l3)) * (kc3 - kc2) / l4
-            assert not np.isnan(field_kc)
-            crop_factor[i] = field_kc
+                # Stage 4: Late-season
+                assert crop_progress <= 100
+                frac = (crop_progress - s3_end) / l4 if l4 > 0 else 1.0
+                curr_crop_factor = kc2 + frac * (kc3 - kc2)
+                curr_lai = 3.5 - frac * (3.5 - 1.5)
 
+            assert not np.isnan(curr_crop_factor)
+
+            # Rooting depth linear progression from init to maximum
             is_irrigated: int = int(land_use in (PADDY_IRRIGATED, NON_PADDY_IRRIGATED))
-
-            root_depth[i] = (
+            curr_root_depth = (
                 crop_init_root_depth
                 + age_days
                 * max(
@@ -560,51 +588,78 @@ def get_crop_factors_and_root_depths(
                 / harvest_day
             )
 
+            # Sub-stages for yield response models (GAEZ)
             if get_crop_sub_stage:
                 d1, d2a, d2b, d3a, d3b, d4 = crop_sub_stage_lengths[crop]
                 assert d1 + d2a + d2b + d3a + d3b + d4 == 100
 
                 if crop_progress <= d1:
-                    crop_sub_stage[i] = 0
+                    curr_crop_sub_stage = np.int8(0)
                 elif crop_progress <= d1 + d2a:
-                    crop_sub_stage[i] = 1
+                    curr_crop_sub_stage = np.int8(1)
                 elif crop_progress <= d1 + d2a + d2b:
-                    crop_sub_stage[i] = 2
+                    curr_crop_sub_stage = np.int8(2)
                 elif crop_progress <= d1 + d2a + d2b + d3a:
-                    crop_sub_stage[i] = 3
+                    curr_crop_sub_stage = np.int8(3)
                 elif crop_progress <= d1 + d2a + d2b + d3a + d3b:
-                    crop_sub_stage[i] = 4
+                    curr_crop_sub_stage = np.int8(4)
                 else:
                     assert crop_progress <= d1 + d2a + d2b + d3a + d3b + d4
-                    crop_sub_stage[i] = 5
+                    curr_crop_sub_stage = np.int8(5)
 
-        elif land_use == FOREST:
-            root_depth[i] = 2.0  # forest root depth is set to 2m
-            # crop sub stage remains -1
-            crop_factor[i] = get_crop_factor_from_lai(
-                np.float32(0.2), np.float32(1.2), leaf_area_index_forest[i]
+        # Grassland. While unirrigated crops are also classified as grassland-like
+        # they are handled above.
+        elif land_use == GRASSLAND_LIKE:
+            curr_root_depth = 0.3
+            curr_lai = leaf_area_index_grassland_like[i]
+            curr_crop_factor = get_crop_factor_from_lai(
+                np.float32(0.2), np.float32(1.2), curr_lai
             )
 
-        elif land_use == GRASSLAND_LIKE:
-            root_depth[i] = 0.1  # grassland root depth is set to 0.1m
-            # crop sub stage remains -1
-            crop_factor[i] = get_crop_factor_from_lai(
-                np.float32(0.2), np.float32(1.2), leaf_area_index_grassland_like[i]
+        elif land_use == FOREST:
+            curr_root_depth = 2.0
+            curr_lai = leaf_area_index_forest[i]
+            curr_crop_factor = get_crop_factor_from_lai(
+                np.float32(0.2), np.float32(1.2), curr_lai
             )
 
         elif land_use == OPEN_WATER:
-            root_depth[i] = 0.0
-            crop_factor[i] = 0.0
+            curr_root_depth = 0.0
+            curr_crop_factor = 0.0
+            curr_lai = 0.0
 
         elif land_use == SEALED:
-            root_depth[i] = 0.0
-            crop_factor[i] = 0.0
+            curr_root_depth = 0.0
+            curr_crop_factor = 0.0
+            curr_lai = 0.0
 
         else:
-            root_depth[i] = np.nan
-            crop_factor[i] = np.nan
+            raise ValueError("Unhandled land use type")
 
-    return crop_factor, root_depth, crop_sub_stage
+        # Interception capacity (Von Hoyningen-Huene 1981 / LISFLOOD Eq. 2-7)
+        if land_use in (OPEN_WATER, SEALED) or curr_lai <= np.float32(0.1):
+            curr_interception_capacity_m = np.float32(0.0)
+        else:
+            curr_interception_capacity_m = (
+                np.float32(0.935)
+                + np.float32(0.498) * np.float32(curr_lai)
+                - np.float32(0.00575) * np.float32(curr_lai) ** 2
+            ) / np.float32(1000.0)
+
+        # Final array assignments
+        crop_factor[i] = np.float32(curr_crop_factor)
+        root_depth[i] = np.float32(curr_root_depth)
+        crop_sub_stage[i] = curr_crop_sub_stage
+        leaf_area_index[i] = np.float32(curr_lai)
+        interception_capacity_m[i] = curr_interception_capacity_m
+
+    return (
+        crop_factor,
+        root_depth,
+        crop_sub_stage,
+        leaf_area_index,
+        interception_capacity_m,
+    )
 
 
 @njit(cache=True, inline="always")

@@ -1,7 +1,10 @@
 """This module contains the Reporter class, which is used to report data to disk."""
 
+import copy
 import datetime
+import json
 import re
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from operator import attrgetter
 from pathlib import Path
@@ -21,8 +24,13 @@ from zarr.codecs.numcodecs import (
     Shuffle,
 )
 
-from geb.geb_types import ArrayFloat32, ArrayFloat64, ArrayInt64, TwoDArrayInt32
-from geb.hydrology.routing import get_upstream_represented_xys
+from geb.geb_types import (
+    ArrayFloat32,
+    ArrayFloat64,
+    ArrayInt64,
+    TwoDArrayInt32,
+)
+from geb.hydrology.routing import get_river_representative_xys
 from geb.module import Module
 from geb.store import DynamicArray
 from geb.workflows.io import fast_rmtree, read_geom, write_table
@@ -377,6 +385,11 @@ def get_time_chunk_size(
     return max(1, time_chunk_size)
 
 
+# Module-level cache for create_time_array results.  Keys are derived from
+# all function inputs; values are read-only arrays whose views are returned.
+_create_time_array_cache: dict[tuple, ArrayInt64] = {}
+
+
 def create_time_array(
     start: datetime.datetime,
     end: datetime.datetime,
@@ -386,6 +399,20 @@ def create_time_array(
 ) -> ArrayInt64:
     """Create a time array based on the start and end time, the timestep, and the frequency.
 
+    Results are cached: repeated calls with identical arguments return a
+    read-only view of the previously computed array, avoiding redundant work.
+    The cached array itself is marked non-writeable; callers must not attempt
+    to modify the returned view.
+
+    For daily frequency with a ``timedelta`` timestep the result is computed
+    with a vectorised ``np.arange`` over Unix seconds, avoiding a Python loop
+    over every day. For yearly and monthly frequencies the matching calendar
+    dates are enumerated directly.
+
+    Notes:
+        When substeps are requested the timestep must be evenly divisible by
+        the substep count; a ``ValueError`` is raised otherwise.
+
     Args:
         start: The start time.
         end: The end time.
@@ -394,45 +421,136 @@ def create_time_array(
         substeps: The number of substeps per timestep.
 
     Returns:
-        time: The time array.
+        time: A read-only view of the time array as Unix seconds (int64).
 
     Raises:
         ValueError: If the frequency is not recognized.
         ValueError: If substeps are provided for a frequency that does not support them.
+        ValueError: If the timestep is not evenly divisible by substeps.
     """
+    # Build a fully hashable cache key from all inputs.
+    # repr(timestep) is deterministic for both timedelta and relativedelta.
+    # Only the "frequency" entry of conf is used by this function.
+    cache_key: tuple = (
+        start,
+        end,
+        repr(timestep),
+        json.dumps(conf.get("frequency", {"every": "day"}), sort_keys=True),
+        substeps,
+    )
+    if cache_key in _create_time_array_cache:
+        return _create_time_array_cache[cache_key][:]
+
     if "frequency" not in conf:
-        frequency = {"every": "day"}
+        frequency: dict | str = {"every": "day"}
     else:
         frequency = conf["frequency"]
+
+    # `time_array` is set directly by the fast vectorised daily path; all
+    # other paths populate `time` (a list) and convert it below.
+    time_array: ArrayInt64 | None = None
+
     if "every" in frequency:
-        every = frequency["every"]
-        time = []
-        current_time = start
-        while current_time <= end:
-            if every == "year":
-                if substeps is not None:
-                    raise ValueError(
-                        "Substeps not supported for yearly frequency in create_time_array."
+        every: str = frequency["every"]
+
+        if every == "year":
+            if substeps is not None:
+                raise ValueError(
+                    "Substeps not supported for yearly frequency in create_time_array."
+                )
+            # Enumerate matching years directly — O(n_years) instead of O(n_days).
+            target_month: int = frequency["month"]
+            target_day: int = frequency["day"]
+            time: list[datetime.datetime] = []
+            for year in range(start.year, end.year + 1):
+                try:
+                    dt = start.replace(year=year, month=target_month, day=target_day)
+                except ValueError:
+                    # Day does not exist in this year (e.g. Feb 29 in a non-leap year).
+                    continue
+                if start <= dt <= end:
+                    time.append(dt)
+
+        elif every == "month":
+            if substeps is not None:
+                raise ValueError(
+                    "Substeps not supported for monthly frequency in create_time_array."
+                )
+            # Enumerate matching months directly — O(n_months) instead of O(n_days).
+            target_day_of_month: int = frequency["day"]
+            time = []
+            current_year: int = start.year
+            current_month: int = start.month
+            while True:
+                try:
+                    dt = start.replace(
+                        year=current_year, month=current_month, day=target_day_of_month
                     )
-                if (
-                    frequency["month"] == current_time.month
-                    and frequency["day"] == current_time.day
-                ):
-                    time.append(current_time)
-            elif every == "month":
-                if substeps is not None:
-                    raise ValueError(
-                        "Substeps not supported for monthly frequency in create_time_array."
-                    )
-                if frequency["day"] == current_time.day:
-                    time.append(current_time)
-            elif every == "day":
-                if substeps is None:
-                    time.append(current_time)
+                except ValueError:
+                    # Day does not exist in this month (e.g. the 31st of February).
+                    pass
                 else:
-                    for substep in range(substeps):
-                        time.append(current_time + substep * (timestep / substeps))
-            current_time += timestep
+                    if dt > end:
+                        break
+                    if dt >= start:
+                        time.append(dt)
+                # Advance to next month; break early once past the end month.
+                if current_month == 12:
+                    current_year += 1
+                    current_month = 1
+                else:
+                    current_month += 1
+                if datetime.datetime(current_year, current_month, 1) > end:
+                    break
+
+        elif every == "day":
+            if isinstance(timestep, datetime.timedelta):
+                # Fully vectorised path — no Python loop at all.
+                step_s: int = int(timestep.total_seconds())
+                start_s: int = int(np.datetime64(start, "s").astype(np.int64))
+                end_s: int = int(np.datetime64(end, "s").astype(np.int64))
+
+                if substeps is None:
+                    time_array = np.arange(start_s, end_s + 1, step_s, dtype=np.int64)
+                else:
+                    if step_s % substeps != 0:
+                        raise ValueError(
+                            f"Timestep {timestep} is not evenly divisible by substeps={substeps}."
+                        )
+                    substep_s: int = step_s // substeps
+                    # Substeps are timestamped at the midpoint of each interval (e.g., 00:30:00 for 1-hour substeps)
+                    # so that all substeps of day T fall strictly within [00:00:00, 24:00:00) without boundary ambiguity.
+                    substep_offset_s: int = substep_s // 2
+                    last_start_s: int = ((end_s - start_s) // step_s) * step_s + start_s
+                    last_t_s: int = (
+                        last_start_s + (substeps - 1) * substep_s + substep_offset_s
+                    )
+                    time_array = np.arange(
+                        start_s + substep_offset_s,
+                        last_t_s + 1,
+                        substep_s,
+                        dtype=np.int64,
+                    )
+
+            else:
+                # relativedelta timestep: division is not supported, fall back to loop.
+                time = []
+                current_time = start
+                while current_time <= end:
+                    if substeps is None:
+                        time.append(current_time)
+                    else:
+                        substep_delta = timestep / substeps
+                        substep_offset = substep_delta / 2
+                        for substep in range(substeps):
+                            time.append(
+                                current_time + substep * substep_delta + substep_offset
+                            )
+                    current_time += timestep
+
+        else:
+            raise ValueError(f"Frequency 'every: {every}' not recognized.")
+
     elif frequency == "initial":
         if substeps is not None:
             raise ValueError(
@@ -448,10 +566,18 @@ def create_time_array(
     else:
         raise ValueError(f"Frequency {frequency} not recognized.")
 
-    time_array = (
-        np.array(time, dtype="datetime64[ns]").astype("datetime64[s]").astype(np.int64)
-    )
-    return time_array
+    if time_array is None:
+        time_array = (
+            np.array(time, dtype="datetime64[ns]")
+            .astype("datetime64[s]")
+            .astype(np.int64)
+        )
+
+    # Mark the canonical array read-only before caching so no caller can
+    # accidentally mutate shared state through any view.
+    time_array.flags.writeable = False
+    _create_time_array_cache[cache_key] = time_array
+    return time_array[:]
 
 
 def get_filters_and_compressors(
@@ -740,12 +866,14 @@ class Reporter:
         For full documentation of the report configuration, see the documentation.
 
         There are also several pre-defined report configurations that can be activated by adding
-        special keys to the report configuration. These are:
+        special keys to the report configuration. Multi-station/entity reporters export to a single consolidated parquet file:
         - _discharge_stations: if set to True, discharge at all discharge stations is reported.
-        - _meteorological_stations: if set to True, meteorological variables at all meteorological stations are reported.
-        - _outflow_points: if set to True, outflow at all outflow points is reported.
+        - _retention_basins: if set to True, discharge and storage for all retention basins are reported as single parquet files.
+        - _meteorological_stations: if set to True, meteorological variables at all meteorological stations are reported as a single parquet file.
+        - _outflow_points: if set to True, outflow at all outflow points is reported as a single parquet file.
         - _water_circle: if set to True, a standard set of variables to monitor the water circle is reported.
         - _water_balance: if set to True, a standard set of variables to monitor the water balance is reported.
+        - _water_storage: if set to True, a standard set of variables to monitor water storage is reported.
         - _energy_balance: if set to True, a standard set of variables to monitor the energy balance is reported.
 
         Args:
@@ -757,11 +885,10 @@ class Reporter:
             ValueError: If the variable type is not recognized.
         """
         self.model = model
-        if "_config" not in self.model.config["report"]:
-            self.config: dict[str, int] = {}
-        else:
-            self.config: dict[str, int] = self.model.config["report"]["_config"].copy()
-            del self.model.config["report"]["_config"]
+        self.config: dict[str, int] = self.model.config["report"]["_config"].copy()
+
+        self.variables_to_report = copy.deepcopy(self.model.config["report"])
+        del self.variables_to_report["_config"]
 
         if self.model.simulate_hydrology:
             self.hydrology = model.hydrology
@@ -771,20 +898,15 @@ class Reporter:
             fast_rmtree(self.report_folder)
         self.report_folder.mkdir(parents=True, exist_ok=True)
 
-        self.variables = {}
-        self.timesteps = []
-
         if (
             self.model.mode == "w"
             and "report" in self.model.config
-            and self.model.config["report"]
+            and self.variables_to_report
         ):
             self.is_activated = True
 
-            report_config: dict[str, Any] = self.model.config["report"]
-
             to_delete: list[str] = []
-            for module_name, module_values in list(report_config.items()):
+            for module_name, module_values in list(self.variables_to_report.items()):
                 if module_name.startswith("_"):
                     if module_name == "_discharge_stations":
                         if module_values is True:
@@ -800,13 +922,31 @@ class Reporter:
                                 station_reporters[
                                     f"discharge_hourly_m3_per_s_{station_ID}"
                                 ] = {
-                                    "varname": f"grid.var.discharge_m3_s_per_substep",
+                                    "varname": "var.discharge_m3_s_per_substep",
                                     "type": "grid",
                                     "function": f"sample_xy,{xy_grid[0]},{xy_grid[1]}",
                                     "substeps": 24,
+                                    "extra_attributes": {
+                                        "station_location": {
+                                            "pixel_xy": [
+                                                int(value) for value in xy_grid
+                                            ],
+                                            "longitude_latitude": [
+                                                float(value)
+                                                for value in station_info[
+                                                    "snapped_grid_pixel_lonlat"
+                                                ]
+                                            ],
+                                            "upstream_area_m2": float(
+                                                station_info[
+                                                    "GEB_upstream_area_from_grid"
+                                                ]
+                                            ),
+                                        }
+                                    },
                                 }
-                            report_config = multi_level_merge(
-                                report_config,
+                            self.variables_to_report = multi_level_merge(
+                                self.variables_to_report,
                                 {"hydrology.routing": station_reporters},
                             )
                     elif module_name == "_retention_basins":
@@ -819,23 +959,33 @@ class Reporter:
                             retention_basin_yx = np.where(retention_basins != -1)
                             retentinion_basin_IDs = retention_basins[retention_basin_yx]
 
-                            retention_basin_reporters: dict[
-                                str, dict[str, str | int]
-                            ] = {}
+                            retention_basin_reporters: dict[str, dict[str, Any]] = {}
                             for basin_ID, yx in zip(
                                 retentinion_basin_IDs, zip(*retention_basin_yx)
                             ):
                                 retention_basin_reporters[
                                     f"retention_basin_discharge_m3_per_s_{basin_ID}"
                                 ] = {
-                                    "varname": "grid.var.discharge_m3_s_per_substep",
+                                    "varname": "var.discharge_m3_s_per_substep",
                                     "type": "grid",
                                     "function": f"sample_xy,{yx[1]},{yx[0]}",
                                     "substeps": 24,
+                                    "_group": "retention_basin_discharge_m3_per_s",
+                                    "_group_key": str(basin_ID),
+                                }
+                                retention_basin_reporters[
+                                    f"retention_basin_storage_m3_{basin_ID}"
+                                ] = {
+                                    "varname": "var.retention_basin_storage_m3_per_substep",
+                                    "type": "grid",
+                                    "function": f"sample_xy,{yx[1]},{yx[0]}",
+                                    "substeps": 24,
+                                    "_group": "retention_basin_storage_m3",
+                                    "_group_key": str(basin_ID),
                                 }
 
-                            report_config = multi_level_merge(
-                                report_config,
+                            self.variables_to_report = multi_level_merge(
+                                self.variables_to_report,
                                 {"hydrology.routing": retention_basin_reporters},
                             )
 
@@ -852,32 +1002,32 @@ class Reporter:
                                 station_ID,
                                 station_info,
                             ) in meteorological_station_locations.iterrows():
-                                station_reporters: dict[str, dict[str, str | int]] = {
+                                station_reporters: dict[str, dict[str, Any]] = {
                                     f"evapotranspiration_m_per_hour{station_ID}": {
-                                        "varname": f".evapotranspiration_m",
+                                        "varname": ".evapotranspiration_m",
                                         "type": "HRU",
                                         "function": f"sample_lonlat,{station_info['geometry'].x},{station_info['geometry'].y}",
                                         "substeps": 24,
+                                        "_group": "evapotranspiration_m_per_hour",
+                                        "_group_key": str(station_ID),
                                     },
                                 }
-                                report_config = multi_level_merge(
-                                    report_config,
+                                self.variables_to_report = multi_level_merge(
+                                    self.variables_to_report,
                                     {"hydrology.landsurface": station_reporters},
                                 )
                     elif module_name == "_outflow_points":
                         if module_values is True:
                             routing = self.model.hydrology.routing
-                            outflow_rivers = (
-                                routing.get_active_and_downstream_outflow_rivers()
-                            )
-                            all_rivers = routing.rivers
+                            rivers = routing.get_active_rivers()
+                            all_rivers = routing.var.rivers
 
                             outflow_reporters = {}
 
-                            for river_ID, river in outflow_rivers.iterrows():
+                            for river_ID, river in rivers.iterrows():
                                 assert isinstance(river_ID, int)
                                 xys: list[tuple[int, int]] = (
-                                    get_upstream_represented_xys(river_ID, all_rivers)
+                                    get_river_representative_xys(river_ID, all_rivers)
                                 )
                                 for i, xy in enumerate(xys):
                                     # if there are multiple branches, we append a suffix to the name
@@ -885,41 +1035,43 @@ class Reporter:
                                     outflow_reporters[
                                         f"river_outflow_hourly_m3_per_s_{river_ID}{suffix}"
                                     ] = {
-                                        "varname": "grid.var.discharge_m3_s_per_substep",
+                                        "varname": "var.discharge_m3_s_per_substep",
                                         "type": "grid",
                                         "function": f"sample_xy,{xy[0]},{xy[1]}",
                                         "substeps": 24,
+                                        "_group": "river_outflow_hourly_m3_per_s",
+                                        "_group_key": f"{river_ID}{suffix}",
                                     }
-                            report_config = multi_level_merge(
-                                report_config,
+                            self.variables_to_report = multi_level_merge(
+                                self.variables_to_report,
                                 {"hydrology.routing": outflow_reporters},
                             )
-                            report_config = multi_level_merge(
-                                report_config,
+                            self.variables_to_report = multi_level_merge(
+                                self.variables_to_report,
                                 OUTFLOW_PLOT_CONTEXT_REPORT_CONFIG,
                             )
                     elif module_name == "_water_circle":
                         if module_values is True:
-                            report_config = multi_level_merge(
-                                report_config,
+                            self.variables_to_report = multi_level_merge(
+                                self.variables_to_report,
                                 WATER_CIRCLE_REPORT_CONFIG,
                             )
                     elif module_name == "_water_balance":
                         if module_values is True:
-                            report_config = multi_level_merge(
-                                report_config,
+                            self.variables_to_report = multi_level_merge(
+                                self.variables_to_report,
                                 WATER_BALANCE_REPORT_CONFIG,
                             )
                     elif module_name == "_water_storage":
                         if module_values is True:
-                            report_config = multi_level_merge(
-                                report_config,
+                            self.variables_to_report = multi_level_merge(
+                                self.variables_to_report,
                                 WATER_STORAGE_REPORT_CONFIG,
                             )
                     elif module_name == "_energy_balance":
                         if module_values is True:
-                            report_config = multi_level_merge(
-                                report_config,
+                            self.variables_to_report = multi_level_merge(
+                                self.variables_to_report,
                                 ENERGY_BALANCE_REPORT_CONFIG,
                             )
                     else:
@@ -930,60 +1082,15 @@ class Reporter:
                     to_delete.append(module_name)
 
             for module_name in to_delete:
-                del self.model.config["report"][module_name]
+                del self.variables_to_report[module_name]
 
-            for module_name, configs in self.model.config["report"].items():
-                self.variables[module_name] = {}
+            for module_name, configs in self.variables_to_report.items():
                 for name, config in configs.items():
                     assert isinstance(config, dict), (
                         f"Configuration for {module_name}.{name} must be a dictionary, but is {type(config)}."
                     )
-                    self.variables[module_name][name] = self.create_variable(
-                        config, module_name, name
-                    )
         else:
             self.is_activated = False
-
-    def create_variable(self, config: dict, module_name: str, name: str) -> None:
-        """This function creates a variable for the reporter.
-
-        For configurations without an aggregation function, a zarr file is created.
-        For configurations with an aggregation function, both the time array and
-        the data array are lazily created on the first write so that runtime-only
-        information (e.g. substep count) is available when sizing the arrays.
-
-        Args:
-            config: The configuration for the variable (mutated in-place to add
-                pre-allocated time array and tracking structures).
-            module_name: The name of the module to which the variable belongs.
-            name: The name of the variable.
-
-        Returns:
-            None in all cases; data is tracked via the config dict.
-
-        Raises:
-            ValueError: If the variable type is not recognized.
-        """
-        if config["type"] == "scalar":
-            assert "function" not in config or config["function"] is None, (
-                "Scalar variables cannot have a function. "
-            )
-            initialize_tracking_arrays = True
-        elif config["type"] in ("grid", "HRU", "agents"):
-            initialize_tracking_arrays = config["function"] is not None
-        else:
-            raise ValueError(
-                f"Type {config['type']} not recognized. Must be 'scalar', 'grid', 'agents' or 'HRU'."
-            )
-
-        if initialize_tracking_arrays:
-            # Time array and data array are created lazily on first write.
-            # For grid/HRU this allows sizing based on runtime substep count.
-            config["_time_array"] = None
-            config["_data_array"] = None
-            config["_var_index"] = 0
-
-        return None
 
     def maybe_report_value(
         self,
@@ -1111,8 +1218,8 @@ class Reporter:
             else:
                 raster = self.hydrology.grid
 
-            time = create_time_array(
-                start=self.model.simulation_start,
+            time: ArrayInt64 = create_time_array(
+                start=self.model.current_time,
                 end=self.model.simulation_end,
                 timestep=self.model.timestep_length,
                 conf=config,
@@ -1284,8 +1391,8 @@ class Reporter:
                 to track zarr store, index, and buffer).
         """
         if config["_index"] == 0:
-            time = create_time_array(
-                start=self.model.simulation_start,
+            time: ArrayInt64 = create_time_array(
+                start=self.model.current_time,
                 end=self.model.simulation_end,
                 timestep=self.model.timestep_length,
                 conf=config,
@@ -1367,7 +1474,7 @@ class Reporter:
         self,
         module_name: str,
         name: str,
-        value: np.ndarray | np.generic,
+        value: np.ndarray | np.generic | float,
         config: dict,
     ) -> None:
         """Exports an array of values to the export folder.
@@ -1444,17 +1551,17 @@ class Reporter:
             )
 
         # Initialize time and data arrays on the first write.
-        if config["_time_array"] is None:
+        if "_time_array" not in config:
             substeps: int | None = config.get("substeps")
             config["_time_array"] = create_time_array(
-                start=self.model.simulation_start,
+                start=self.model.current_time,
                 end=self.model.simulation_end,
                 timestep=self.model.timestep_length,
                 conf=config,
                 substeps=substeps,
             )
 
-        if config["_data_array"] is None:
+        if "_data_array" not in config:
             n: int = len(config["_time_array"])
             # Use numpy value dtype
             if isinstance(value, np.ndarray):
@@ -1466,6 +1573,7 @@ class Reporter:
                     f"Value for {module_name}.{name} has unsupported type {type(value)}. Must be a numpy array or a scalar of type int, float or bool."
                 )
             config["_data_array"] = np.empty(n, dtype=dtype)
+            config["_var_index"] = 0
 
         if "substeps" in config:
             assert isinstance(value, np.ndarray)
@@ -1512,10 +1620,13 @@ class Reporter:
         """At the end of the model run, all previously collected data is reported to disk.
 
         Raises:
-            ValueError: If the variable type is not recognized.
+            KeyError: If a grouped variable is missing required '_group_key'.
+            ValueError: If the variable type is not recognized, duplicate
+                _group_key is found in a group, or extra_attributes are combined
+                with _group.
         """
         # If no data has been collected, we return
-        if self.model.config["report"] is None:
+        if self.variables_to_report is None:
             self.model.logger.info("No report configuration found. No data to report.")
             return
 
@@ -1524,7 +1635,7 @@ class Reporter:
             futures = []
 
             # Flush any remaining buffers
-            for module_name, configs in self.model.config["report"].items():
+            for module_name, configs in self.variables_to_report.items():
                 for name, config in configs.items():
                     if "function" in config and config["function"] is None:
                         if config["type"] == "agents":
@@ -1564,25 +1675,71 @@ class Reporter:
                         )
 
             # Export all scalar and aggregated variables to parquet files
-            for module_name, module_configs in self.model.config["report"].items():
+            # Grouped variables (single consolidated parquet file) vs individual variables
+            grouped_variables: dict[tuple[str, str], dict[str, dict[str, Any]]] = (
+                defaultdict(dict)
+            )
+
+            for module_name, module_configs in self.variables_to_report.items():
                 for name, config in module_configs.items():
                     if "_time_array" not in config or config["_data_array"] is None:
                         continue
-                    # Convert Unix timestamps (seconds) to datetime
-                    time_values: pd.DatetimeIndex = pd.to_datetime(
-                        config["_time_array"], unit="s"
-                    )
-                    df = pd.DataFrame(
-                        {name: config["_data_array"]},
-                        index=pd.Index(time_values, name="time"),
-                    )
+                    if "_group" in config:
+                        if config.get("extra_attributes"):
+                            raise ValueError(
+                                f"Exporting grouped variables to a single parquet file does not support extra_attributes (found on variable {module_name}.{name})."
+                            )
+                        if "_group_key" not in config:
+                            raise KeyError(
+                                f"Variable {module_name}.{name} specifies '_group' but is missing required '_group_key'."
+                            )
+                        group_name: str = config["_group"]
+                        group_key: str = str(config["_group_key"])
+                        if group_key in grouped_variables[(module_name, group_name)]:
+                            raise ValueError(
+                                f"Duplicate _group_key '{group_key}' found in group '{group_name}' for module '{module_name}'."
+                            )
+                        grouped_variables[(module_name, group_name)][group_key] = config
+                    else:
+                        # Convert Unix timestamps (seconds) to datetime
+                        time_values: pd.DatetimeIndex = pd.to_datetime(
+                            config["_time_array"], unit="s"
+                        )
+                        df = pd.DataFrame(
+                            {name: config["_data_array"]},
+                            index=pd.Index(time_values, name="time"),
+                        )
 
-                    folder = self.report_folder / module_name
-                    folder.mkdir(parents=True, exist_ok=True)
+                        folder = self.report_folder / module_name
+                        df.attrs.update(config.get("extra_attributes", {}))
+                        folder.mkdir(parents=True, exist_ok=True)
 
-                    futures.append(
-                        executor.submit(write_table, df, folder / (name + ".parquet"))
-                    )
+                        futures.append(
+                            executor.submit(
+                                write_table, df, folder / (name + ".parquet")
+                            )
+                        )
+
+            # Export grouped variables to single consolidated parquet files
+            for (module_name, group_name), group_configs in grouped_variables.items():
+                if not group_configs:
+                    continue
+                first_config: dict[str, Any] = next(iter(group_configs.values()))
+                time_values = pd.to_datetime(first_config["_time_array"], unit="s")
+                columns_data: dict[str, Any] = {
+                    key: cfg["_data_array"] for key, cfg in group_configs.items()
+                }
+                df = pd.DataFrame(
+                    columns_data,
+                    index=pd.Index(time_values, name="time"),
+                )
+
+                folder = self.report_folder / module_name
+                folder.mkdir(parents=True, exist_ok=True)
+
+                futures.append(
+                    executor.submit(write_table, df, folder / (group_name + ".parquet"))
+                )
 
             # Wait for all futures to complete before exiting context manager
             for future in as_completed(futures):

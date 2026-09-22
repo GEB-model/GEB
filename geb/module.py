@@ -52,7 +52,7 @@ class Module(ABC):
     @property
     def variables_to_report(self) -> dict[str, Any]:
         """Return a list of variable names to report for this module."""
-        return self.model.config["report"].get(self.name, {})
+        return self.model.reporter.variables_to_report.get(self.name, {})
 
     @property
     def local_variables_to_report(self) -> list[str]:

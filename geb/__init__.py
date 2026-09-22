@@ -1,6 +1,7 @@
 """GEB simulates the environment, the individual behaviour of people, households and organizations - including their interactions - at small and large scale."""
 
 import faulthandler
+import logging
 import os
 import platform
 import warnings
@@ -9,14 +10,14 @@ from importlib.resources import files
 from pathlib import Path
 from typing import cast
 
+import netCDF4  # noqa: F401  # Needed to solve: https://github.com/pydata/xarray/issues/7259
 import numpy as np
 import numpy.typing as npt
-import pandas as pd
+import rioxarray  # noqa: F401  # needed for rioxarray to register itself as an xarray extension
 import xarray as xr
 from dotenv import load_dotenv
 from llvmlite import binding
 from numba import config, njit, prange, threading_layer
-from pandas.errors import SettingWithCopyWarning
 
 from geb.workflows.io import fetch_and_save
 
@@ -35,15 +36,25 @@ if Path("/research/BETA-IVM-HPC/GEB").exists():
     os.environ["GEB_DATA_ROOT"] = "/research/BETA-IVM-HPC/GEB/datacatalog/"
     os.environ["SFINCS_CONTAINER"] = os.getenv(
         "SFINCS_CONTAINER",
-        "/ada-software/containers/sfincs-cpu-v2.3.0-mt-Faber-Release.sif",
+        "/ada-software/containers/sfincs-cpu_v2.4.0-Galibier-Release.sif",
     )
     os.environ["SFINCS_CONTAINER_GPU"] = os.getenv(
         "SFINCS_CONTAINER_GPU",
         "/ada-software/containers/sfincs-gpu.coldeze_combo_ccall.sif",
     )
+elif Path("/gpfs/work5/0/prjs2035/GEB").exists():
+    os.environ["GEB_DATA_ROOT"] = "/gpfs/work5/0/prjs2035/GEB/datacatalog/"
+    os.environ["SFINCS_SIF_CONTAINER"] = os.getenv(
+        "SFINCS_SIF_CONTAINER",
+        "/gpfs/work5/0/prjs2035/GEB/containers/sfincs-cpu_v2.4.0-Galibier-Release.sif",
+    )  # not implemented yet
+    os.environ["SFINCS_SIF_CONTAINER_GPU"] = os.getenv(
+        "SFINCS_SIF_CONTAINER_GPU",
+        "/gpfs/work5/0/prjs2035/GEB/containers/sfincs-gpu.coldeze_combo_ccall.sif",
+    )  # not implemented yet
 else:
     os.environ["SFINCS_SIF_CONTAINER"] = os.getenv(
-        "SFINCS_SIF_CONTAINER", "deltares/sfincs-cpu:sfincs-v2.3.0-mt-Faber-Release"
+        "SFINCS_SIF_CONTAINER", "deltares/sfincs-cpu:sfincs-v2.4.0-Galibier-Release"
     )
     os.environ["SFINCS_SIF_CONTAINER_GPU"] = os.getenv(
         "SFINCS_SIF_CONTAINER_GPU", "mvanormondt/sfincs-gpu:coldeze_combo_ccall"
@@ -94,6 +105,7 @@ def load_numba_threading_layer(version: str = "2022.1.0") -> None:
         fetch_and_save(
             url=tbb_url,
             file_path=tbb_path / tbb_compressed_file,
+            logger=logging.getLogger("geb"),
         )
 
         # uncompress the TBB library
@@ -169,10 +181,6 @@ np.seterr(divide="raise", over="raise", under="ignore", invalid="raise")
 
 # force solving of all warnings as errors, to catch potential issues early on
 warnings.simplefilter(action="error", category=FutureWarning)
-
-# specific warning for pandas
-warnings.simplefilter(action="error", category=SettingWithCopyWarning)
-pd.set_option("future.no_silent_downcasting", True)
 
 # we don't want to miss any runtime warnings, as they can indicate potential issues in the code, so we also raise them as errors
 warnings.simplefilter(action="error", category=RuntimeWarning)

@@ -18,7 +18,7 @@ from geb.hydrology.landsurface.potential_evapotranspiration import (
     adjust_wind_speed_log_profile,
     get_CO2_induced_crop_factor_adustment,
     get_crop_factor_from_lai,
-    get_crop_factors_and_root_depths,
+    get_crop_factors_and_root_depths_and_lai,
     get_net_solar_radiation,
     get_potential_evapotranspiration,
     get_potential_interception_evaporation,
@@ -211,18 +211,17 @@ def test_get_potential_transpiration() -> None:
     assert np.isclose(potential_transpiration_m, expected_transpiration, rtol=1e-6)
     assert np.isclose(potential_evaporation_m, expected_evaporation, rtol=1e-6)
 
-    # Test with LAI such that attenuation is ~0.3678 (LAI=2.0)
+    # Test with LAI=2.0 and extinction_coefficient=0.7 -> k*LAI = 1.4
     potential_transpiration_m, potential_evaporation_m = get_potential_transpiration(
         potential_evapotranspiration_m=np.float32(5.0),
         leaf_area_index=np.float32(2.0),
     )
-    # extinction_coefficient = 0.5, LAI = 2.0 -> k*LAI = 1.0
-    # attenuation = exp(-1) = 0.367879...
-    # (1 - 0.367879...) * 5.0 = 0.632120... * 5.0 = 3.16060...
-    expected_transpiration = (np.float32(1.0) - np.exp(np.float32(-1.0))) * np.float32(
+    # extinction_coefficient = 0.7, LAI = 2.0 -> k*LAI = 1.4
+    # attenuation = exp(-1.4) = 0.2465969...
+    expected_transpiration = (np.float32(1.0) - np.exp(np.float32(-1.4))) * np.float32(
         5.0
     )
-    expected_evaporation = (np.exp(np.float32(-1.0))) * np.float32(5.0)
+    expected_evaporation = (np.exp(np.float32(-1.4))) * np.float32(5.0)
     assert np.isclose(potential_transpiration_m, expected_transpiration, rtol=1e-6)
     assert np.isclose(potential_evaporation_m, expected_evaporation, rtol=1e-6)
 
@@ -316,7 +315,7 @@ def test_get_crop_factor_from_lai() -> None:
     assert math.isclose(kc, expected, rel_tol=1e-6)
 
 
-def test_get_crop_factors_and_root_depths() -> None:
+def test_get_crop_factors_and_root_depths_and_lai() -> None:
     """Test the calculation of crop factors and root depths."""
     land_use_map = np.array(
         [
@@ -370,7 +369,13 @@ def test_get_crop_factors_and_root_depths() -> None:
     )
     crop_init_root_depth = np.float32(0.2)
 
-    crop_factor, root_depth, crop_sub_stage = get_crop_factors_and_root_depths(
+    (
+        crop_factor,
+        root_depth,
+        crop_sub_stage,
+        leaf_area_index,
+        interception_capacity_m,
+    ) = get_crop_factors_and_root_depths_and_lai(
         land_use_map=land_use_map,
         leaf_area_index_forest=leaf_area_index_forest,
         leaf_area_index_grassland_like=leaf_area_index_grassland_like,
@@ -396,7 +401,7 @@ def test_get_crop_factors_and_root_depths() -> None:
             0.2 + (1.0 - 0.2) * 85 / 100,  # not irrigated, crop 0
             0.2 + (1.0 - 0.2) * 95 / 100,  # not irrigated, crop 0
             2.0,  # forest
-            0.1,  # grassland
+            0.3,  # grassland
             0.0,  # sealed
             0.0,  # open water
         ],
@@ -404,6 +409,39 @@ def test_get_crop_factors_and_root_depths() -> None:
     )
     expected_crop_sub_stage_first_call = np.array(
         [-1, -1, -1, -1, -1, -1, -1, -1], dtype=np.int8
+    )
+    # Dynamic LAI follows 4-stage canopy progression for crops, lookup for forest/grassland, 0 for sealed/water
+    expected_leaf_area_index = np.array(
+        [
+            0.3,  # crop 1, initial stage (10%): 0.1 + (0.5 - 0.1) * 10 / 20
+            2.0,  # crop 2, development stage (30%): 0.5 + (3.5 - 0.5) * 20 / 40
+            3.5,  # crop 0, mid-season plateau (85%): 3.5
+            2.5,  # crop 0, late season (95%): 3.5 - (3.5 - 1.5) * 5 / 10
+            2.197,  # forest: leaf_area_index_forest[4]
+            2.3,  # grassland: leaf_area_index_grassland_like[5]
+            0.0,  # sealed
+            0.0,  # open water
+        ],
+        dtype=np.float32,
+    )
+
+    def calc_cap_m(lai: float) -> float:
+        if lai <= 0.1:
+            return 0.0
+        return (0.935 + 0.498 * lai - 0.00575 * (lai**2)) / 1000.0
+
+    expected_interception_capacity_m = np.array(
+        [
+            calc_cap_m(0.3),
+            calc_cap_m(2.0),
+            calc_cap_m(3.5),
+            calc_cap_m(2.5),
+            calc_cap_m(2.197),
+            calc_cap_m(2.3),
+            0.0,
+            0.0,
+        ],
+        dtype=np.float32,
     )
 
     np.testing.assert_allclose(
@@ -422,8 +460,24 @@ def test_get_crop_factors_and_root_depths() -> None:
         crop_sub_stage,
         expected_crop_sub_stage_first_call,
     )
+    np.testing.assert_allclose(
+        leaf_area_index,
+        expected_leaf_area_index,
+        atol=1e-6,
+    )
+    np.testing.assert_allclose(
+        interception_capacity_m,
+        expected_interception_capacity_m,
+        atol=1e-6,
+    )
 
-    crop_factor, root_depth, crop_sub_stage = get_crop_factors_and_root_depths(
+    (
+        crop_factor,
+        root_depth,
+        crop_sub_stage,
+        leaf_area_index,
+        interception_capacity_m,
+    ) = get_crop_factors_and_root_depths_and_lai(
         land_use_map=land_use_map,
         leaf_area_index_forest=leaf_area_index_forest,
         leaf_area_index_grassland_like=leaf_area_index_grassland_like,
@@ -460,6 +514,65 @@ def test_get_crop_factors_and_root_depths() -> None:
         equal_nan=True,
         atol=1e-6,
     )
+    np.testing.assert_allclose(
+        leaf_area_index,
+        expected_leaf_area_index,
+        atol=1e-6,
+    )
+    np.testing.assert_allclose(
+        interception_capacity_m,
+        expected_interception_capacity_m,
+        atol=1e-6,
+    )
+
+
+def test_get_crop_factors_and_root_depths_and_lai_non_cropland() -> None:
+    """Test non-cropland (fallow/unplanted paddy, grassland, forest) LAI and interception capacity."""
+    land_use_map = np.array(
+        [
+            GRASSLAND_LIKE,
+            FOREST,
+        ],
+        dtype=np.int32,
+    )
+    leaf_area_index_forest = np.array([0.0, 10.0], dtype=np.float32)
+    leaf_area_index_grassland_like = np.array([1.8, 0.0], dtype=np.float32)
+    crop_map = np.array([-1, -1], dtype=np.int32)
+    crop_age_days_map = np.array([-1, -1], dtype=np.int32)
+    crop_harvest_age_days = np.array([-1, -1], dtype=np.int32)
+    crop_stage_lengths = np.array([[25, 25, 25, 25]], dtype=np.int32)
+    crop_sub_stage_lengths = np.array([[10, 15, 25, 25, 15, 10]], dtype=np.int32)
+    crop_factor_per_crop_stage = np.array([[0.5, 1.0, 0.7]], dtype=np.float32)
+    crop_root_depths = np.array([[0.8, 1.2]], dtype=np.float32)
+
+    (
+        crop_factor,
+        root_depth,
+        crop_sub_stage,
+        leaf_area_index,
+        interception_capacity_m,
+    ) = get_crop_factors_and_root_depths_and_lai(
+        land_use_map=land_use_map,
+        leaf_area_index_forest=leaf_area_index_forest,
+        leaf_area_index_grassland_like=leaf_area_index_grassland_like,
+        crop_map=crop_map,
+        crop_age_days_map=crop_age_days_map,
+        crop_harvest_age_days=crop_harvest_age_days,
+        crop_stage_lengths=crop_stage_lengths,
+        crop_sub_stage_lengths=crop_sub_stage_lengths,
+        crop_factor_per_crop_stage=crop_factor_per_crop_stage,
+        crop_root_depths=crop_root_depths,
+    )
+
+    # Grassland -> uses grassland LAI (1.8), capacity from Von Hoyningen-Huene formula
+    expected_cap_grass = (0.935 + 0.498 * 1.8 - 0.00575 * (1.8**2)) / 1000.0
+    assert math.isclose(leaf_area_index[0], 1.8, abs_tol=1e-6)
+    assert math.isclose(interception_capacity_m[0], expected_cap_grass, abs_tol=1e-6)
+
+    # Forest with high LAI (10.0) -> capacity from Von Hoyningen-Huene formula
+    expected_cap_forest = (0.935 + 0.498 * 10.0 - 0.00575 * (10.0**2)) / 1000.0
+    assert math.isclose(leaf_area_index[1], 10.0, abs_tol=1e-6)
+    assert math.isclose(interception_capacity_m[1], expected_cap_forest, abs_tol=1e-6)
 
 
 def test_plot_crop_factor_vs_lai() -> None:

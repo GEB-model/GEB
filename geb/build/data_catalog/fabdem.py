@@ -37,17 +37,17 @@ class Fabdem(Adapter):
         super().__init__(*args, **kwargs)
 
     def _get_item_names_from_catalog(self, catalog_url: str) -> list[str]:
-        """Fetch all STAC item names from the catalog JSON.
+        """Fetch all STAC item names from the collection JSON.
 
-        Parses only the catalog-level JSON (one HTTP request) to extract item
+        Parses only the collection-level JSON (one HTTP request) to extract item
         directory names, without loading each individual item document.
 
         Args:
-            catalog_url: URL of the STAC catalog root JSON
-                (e.g. ``…/stac_catalog/catalog.json``).
+            catalog_url: URL of the STAC collection JSON
+                (e.g. ``…/collection.json``).
 
         Returns:
-            List of item names (directory names) found in the catalog.
+            List of item names (directory names) found in the collection.
         """
         response = requests.get(catalog_url, timeout=30)
         response.raise_for_status()
@@ -125,7 +125,7 @@ class Fabdem(Adapter):
 
         Args:
             item_name: STAC item name such as ``N00W000_FABDEM_V1-2``.
-            catalog_url: URL of the STAC catalog root JSON; used to derive the
+            catalog_url: URL of the STAC collection JSON; used to derive the
                 item JSON URL.
 
         Returns:
@@ -136,20 +136,13 @@ class Fabdem(Adapter):
             KeyError: If the asset URL cannot be resolved.
         """
         base_url: str = catalog_url.rsplit("/", 1)[0]
-        item_url: str = f"{base_url}/{item_name}/{item_name}.json"
+        item_url: str = f"{base_url}/stac_catalog/{item_name}/{item_name}.json"
         item: pystac.Item = pystac.Item.from_file(href=item_url)
 
         asset = next(iter(item.assets.values()))
         asset_url: str | None = asset.get_absolute_href()
         if asset_url is None:
             raise KeyError(f"Could not resolve asset URL for STAC item '{item_name}'")
-
-        # HuggingFace serves binary LFS files via /resolve/; /raw/ returns the
-        # pointer file, which GDAL cannot parse as a GeoTIFF.
-        asset_url = asset_url.replace(
-            "huggingface.co/datasets/links-ads/fabdem-v12/raw/main/",
-            "huggingface.co/datasets/links-ads/fabdem-v12/resolve/main/",
-        )
 
         # GDAL VSICURL allows rioxarray to stream the remote GeoTIFF lazily;
         # dask chunks avoid loading the entire tile into memory at once.
@@ -179,10 +172,10 @@ class Fabdem(Adapter):
         return da
 
     def fetch(self, url: str) -> Fabdem:
-        """Store the STAC catalog URL and return the adapter instance.
+        """Store the STAC collection URL and return the adapter instance.
 
         Args:
-            url: URL of the FABDEM STAC catalog root JSON on Hugging Face.
+            url: URL of the FABDEM STAC collection JSON on Hugging Face.
 
         Returns:
             The Fabdem instance (enables method chaining).
@@ -193,7 +186,7 @@ class Fabdem(Adapter):
     def read(self, mask: BaseGeometry) -> xr.DataArray:
         """Read FABDEM elevation data for the area covered by *mask*.
 
-        Queries the STAC catalog to discover which 1×1-degree tiles intersect
+        Queries the STAC collection to discover which 1×1-degree tiles intersect
         *mask*, downloads those tiles, merges them, and clips the result to
         *mask*.
 

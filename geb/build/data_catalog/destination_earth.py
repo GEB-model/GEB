@@ -1,6 +1,8 @@
 """Data adapter for obtaining ERA5 data from the Destination Earth."""
 
+import asyncio
 import base64
+import logging
 import os
 import time
 from datetime import datetime, timedelta
@@ -9,13 +11,125 @@ from typing import Any
 import aiohttp
 import numpy as np
 import xarray as xr
+import zarr.storage
+from aiohttp_retry import ExponentialRetry, RetryClient
+from fsspec.asyn import AsyncFileSystem
+from fsspec.implementations.http import HTTPFileSystem
 
 from geb.workflows.raster import convert_nodata
 
 from .base import Adapter
 
-N_CONNECTION_ATTEMPTS = 3
+N_CONNECTION_ATTEMPTS = 5
 RETRY_DELAY_SECONDS = 5
+
+
+class DestinationEarthFileSystem(HTTPFileSystem):
+    """HTTP filesystem with automatic retry logic for chunk reads.
+
+    Network connections to Destination Earth can drop mid-stream when downloading
+    large compressed chunks, causing aiohttp.ClientPayloadError or related transient
+    connection errors. This filesystem retries _cat_file with exponential backoff.
+    """
+
+    def __init__(
+        self,
+        *args: Any,
+        logger: logging.Logger,
+        **kwargs: Any,
+    ) -> None:
+        """Initialize the DestinationEarthFileSystem.
+
+        Args:
+            *args: Positional arguments passed to HTTPFileSystem.
+            logger: Logger instance to use for logging chunk retries and errors.
+            **kwargs: Keyword arguments passed to HTTPFileSystem.
+        """
+        super().__init__(*args, **kwargs)
+        self.logger: logging.Logger = logger
+
+    async def _cat_file(
+        self,
+        url: str,
+        start: int | None = None,
+        end: int | None = None,
+        **kwargs: Any,
+    ) -> bytes:
+        """Read the contents of a file or byte range with retries for transient errors.
+
+        Args:
+            url: The URL or path to read.
+            start: Start byte index (inclusive), or None to read from beginning.
+            end: End byte index (exclusive), or None to read until end.
+            **kwargs: Additional keyword arguments passed to the underlying HTTP request.
+
+        Returns:
+            The requested bytes content.
+
+        Raises:
+            aiohttp.ClientError: If maximum retry attempts are exhausted due to client/protocol errors.
+            asyncio.TimeoutError: If maximum retry attempts are exhausted due to timeouts.
+            ConnectionResetError: If maximum retry attempts are exhausted due to connection resets.
+            OSError: If maximum retry attempts are exhausted due to OS/network errors.
+        """
+        for attempt in range(N_CONNECTION_ATTEMPTS):
+            try:
+                return await super()._cat_file(url, start=start, end=end, **kwargs)
+            except (
+                aiohttp.ClientError,
+                asyncio.TimeoutError,
+                ConnectionResetError,
+                OSError,
+            ) as error:
+                if attempt == N_CONNECTION_ATTEMPTS - 1:
+                    self.logger.error(
+                        "Failed reading chunk from %s (bytes %s-%s) after %d attempts: %s",
+                        url,
+                        start,
+                        end,
+                        N_CONNECTION_ATTEMPTS,
+                        error,
+                    )
+                    raise
+                retry_delay_seconds: float = RETRY_DELAY_SECONDS * (2**attempt)
+                self.logger.warning(
+                    "Transient error reading chunk from %s (bytes %s-%s): %s. "
+                    "Retrying in %.1fs (attempt %d/%d)...",
+                    url,
+                    start,
+                    end,
+                    error,
+                    retry_delay_seconds,
+                    attempt + 1,
+                    N_CONNECTION_ATTEMPTS,
+                )
+                await asyncio.sleep(retry_delay_seconds)
+        return b""
+
+
+async def get_retry_client(**kwargs: Any) -> RetryClient:
+    """Create a RetryClient with exponential backoff for handling transient errors.
+
+    Args:
+        **kwargs: Additional keyword arguments to pass to the RetryClient constructor.
+
+    Returns:
+        An instance of RetryClient configured with exponential backoff.
+    """
+    retry_options = ExponentialRetry(
+        attempts=100,
+        start_timeout=10,
+        max_timeout=3600,
+        factor=2,
+        retry_all_server_errors=True,
+        exceptions={
+            aiohttp.ClientError,
+            asyncio.TimeoutError,
+            ConnectionResetError,
+            OSError,
+        },
+    )
+    return RetryClient(retry_options=retry_options, **kwargs)
 
 
 class DestinationEarth(Adapter):
@@ -38,7 +152,7 @@ class DestinationEarth(Adapter):
         if DESTINATION_EARTH_KEY is None:
             print("ERROR: DESTINATION_EARTH_KEY environment variable is not set.")
             print(
-                "Please set your Personal Access Token in your .env file or export it in your shell."
+                "Please set your API KEY in your .env file or export it in your shell."
             )
             raise ValueError("DESTINATION_EARTH_KEY environment variable is not set.")
 
@@ -51,16 +165,40 @@ class DestinationEarth(Adapter):
         auth_headers: dict[str, str] = {"Authorization": f"Basic {encoded_auth}"}
         return auth_headers
 
-    def fetch(self, url: str) -> DestinationEarth:
+    def fetch(self, url: None) -> DestinationEarth:
         """Set the URL for the Destination Earth data source.
 
         Args:
             url: The URL of the Destination Earth data source.
+                Must be None, because there are multiple URLs that can be used to access the data, and the correct one is determined automatically.
 
         Returns:
             The current instance of the DestinationEarth adapter.
+
+        Raises:
+            ValueError: If the DESTINATION_EARTH_KEY environment variable is not set or has an invalid format.
         """
-        self.url = url
+        assert url is None, (
+            "URL must be None for Destination Earth, as it is determined automatically."
+        )
+
+        DESTINATION_EARTH_KEY: str | None = os.getenv(key="DESTINATION_EARTH_KEY")
+        if DESTINATION_EARTH_KEY is None:
+            print("ERROR: DESTINATION_EARTH_KEY environment variable is not set.")
+            print(
+                "Please set your API KEY in your .env file or export it in your shell."
+            )
+            raise ValueError("DESTINATION_EARTH_KEY environment variable is not set.")
+
+        if DESTINATION_EARTH_KEY.startswith("edh_pat_"):
+            self.url = "https://data.earthdatahub.destine.eu/era5/reanalysis-era5-land-no-antartica-v0.zarr"
+        elif DESTINATION_EARTH_KEY.startswith("edh_key_"):
+            self.url = "https://api.earthdatahub.destine.eu/era5/reanalysis-era5-land-no-antartica-v0.zarr"
+        else:
+            raise ValueError(
+                "Invalid DESTINATION_EARTH_KEY format. It should start with 'edh_pat_' for Personal Access Tokens or 'edh_key_' for API keys."
+            )
+
         return self
 
     def connect_API(
@@ -86,28 +224,42 @@ class DestinationEarth(Adapter):
         """
         for attempt in range(N_CONNECTION_ATTEMPTS):
             try:
-                da: xr.DataArray = xr.open_dataset(
-                    self.url,
-                    storage_options={"headers": self.get_authentication_header()},
+                fs: AsyncFileSystem = DestinationEarthFileSystem(
+                    headers=self.get_authentication_header(),
+                    get_client=get_retry_client,
+                    asynchronous=True,
+                    client_kwargs={
+                        "trust_env": True,
+                        "raise_for_status": False,  # Let RetryClient and fsspec handle status codes
+                    },
+                    timeout=600,
+                    logger=self.logger,
+                )
+                store = zarr.storage.FsspecStore(path=self.url, fs=fs)
+
+                ds: xr.Dataset = xr.open_dataset(
+                    filename_or_obj=store,  # ty:ignore[invalid-argument-type]
                     chunks={},
                     engine="zarr",
-                )[variable].rename(
-                    {"valid_time": "time", "latitude": "y", "longitude": "x"}
+                    zarr_format=2,
+                    consolidated=True,
                 )
                 break
-            except aiohttp.ClientResponseError:
-                print(
-                    f"Error connecting to Destination Earth API. This could be due to erroneous credentials or a temporary server issue. Retrying ({attempt}/{N_CONNECTION_ATTEMPTS})..."
+
+            except (aiohttp.ClientResponseError, aiohttp.ClientPayloadError) as e:
+                self.logger.warning(
+                    f"Error connecting to Destination Earth API: {e}. Retrying ({attempt + 1}/{N_CONNECTION_ATTEMPTS})..."
                 )
-                time.sleep(RETRY_DELAY_SECONDS)
+                time.sleep(RETRY_DELAY_SECONDS * (2**attempt))
         else:
             raise ConnectionError(
-                "Failed to connect to Destination Earth API after 3 attempts."
+                f"Failed to connect to Destination Earth API after {N_CONNECTION_ATTEMPTS} attempts."
             )
 
-        da: xr.DataArray = da.drop_vars(
-            ["number", "surface", "depthBelowLandLayer"], errors="ignore"
-        )
+        da: xr.DataArray = ds[variable]
+        da: xr.DataArray = da.rename(
+            {"valid_time": "time", "latitude": "y", "longitude": "x"}
+        ).drop_vars(["number", "surface", "depthBelowLandLayer"], errors="ignore")
 
         buffer: float = 0.5
         buffered_bounds: tuple[float, float, float, float] = (

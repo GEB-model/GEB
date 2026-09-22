@@ -50,9 +50,7 @@ class Energy:
                 cannot be found.
         """
         # Define the folder where reports are stored
-        report_dir = (
-            self.model.output_folder / "report" / run_name / "hydrology.landsurface"
-        )
+        report_dir = self.model.output_folder / "report" / "hydrology.landsurface"
 
         if not report_dir.exists():
             raise FileNotFoundError(

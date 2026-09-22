@@ -271,4 +271,3 @@ def test_fetch_HRL_crop_types() -> None:
     assert crop_types_over_time.dims[0] == "year"
     assert list(crop_types_over_time["year"].values) == years
     assert crop_types_over_time.sizes["year"] == len(years)
-    pass

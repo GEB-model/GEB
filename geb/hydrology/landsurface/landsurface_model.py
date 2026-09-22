@@ -20,7 +20,7 @@ from geb.store import Bucket
 from geb.workflows import TimingModule, balance_check
 from geb.workflows.io import read_grid
 
-from ..landcovers import FOREST, GRASSLAND_LIKE, PADDY_IRRIGATED, SEALED
+from ..landcovers import FOREST, GRASSLAND_LIKE, OPEN_WATER, PADDY_IRRIGATED, SEALED
 from .constants import (
     KELVIN_OFFSET,
     N_SNOW_LAYERS,
@@ -46,14 +46,11 @@ from .evapotranspiration import (
     calculate_transpiration,
 )
 from .interception import (
-    get_interception_capacity,
-    get_leaf_area_index,
     interception,
-    leaf_area_index_to_interception_capacity_m,
 )
 from .potential_evapotranspiration import (
     get_CO2_induced_crop_factor_adustment,
-    get_crop_factors_and_root_depths,
+    get_crop_factors_and_root_depths_and_lai,
     get_potential_evapotranspiration,
     get_potential_interception_evaporation,
     get_potential_transpiration,
@@ -68,7 +65,9 @@ from .snow_glaciers import (
     update_snow_mass_and_phase,
 )
 from .water import (
+    FORCING_SOURCE_SIGMA_DEFAULTS,
     add_water_to_topwater_and_evaporate_open_water,
+    generate_rainfall_lookup_table,
     get_bubbling_pressure_m_positive,
     get_pore_size_index_brakensiek,
     get_soil_moisture_at_pressure,
@@ -173,6 +172,8 @@ def land_surface_model(
     interflow_multiplier: np.float32,
     deep_soil_temperature_C: ArrayFloat32,
     leaf_area_index: ArrayFloat32,
+    rainfall_lookup_table: TwoDArrayFloat32,
+    daily_reference_evapotranspiration_grass_m: ArrayFloat32,
 ) -> tuple[
     ArrayFloat32,
     ArrayFloat32,
@@ -270,7 +271,9 @@ def land_surface_model(
         minimum_effective_root_depth_m: Minimum effective root depth in meters.
         interflow_multiplier: Calibration factor for interflow calculation.
         deep_soil_temperature_C: Deep soil temperature in Celsius.
+        daily_reference_evapotranspiration_grass_m: Daily reference evapotranspiration for grass (meters).
         leaf_area_index: Leaf area index for the cell.
+        rainfall_lookup_table: Precomputed lognormal weights lookup table of shape (table_size, 6).
 
     Returns:
         Tuple of:
@@ -592,6 +595,7 @@ def land_surface_model(
                     potential_interception_evaporation_m=potential_interception_evaporation_m,
                     potential_transpiration_m=potential_transpiration_m_cell_hour,
                     potential_direct_evaporation_m=potential_direct_evaporation_m,
+                    leaf_area_index=leaf_area_index[i],
                 )
 
                 interception_evaporation_m[i] += interception_evaporation_m_cell_hour
@@ -666,7 +670,7 @@ def land_surface_model(
                 # Only newly added liquid surface water should advect rain heat here.
                 # Pre-existing ponded water is already part of the top-soil control
                 # volume and must not be reheated every infiltration call.
-                liquid_water_input_for_enthalpy_m: np.float32 = (
+                new_surface_water_input_m: np.float32 = (
                     natural_available_water_infiltration_m
                     + actual_irrigation_consumption_m[i]
                 )
@@ -713,7 +717,9 @@ def land_surface_model(
                         i, 0
                     ],
                     rain_temperature_C=tas_C,
-                    liquid_water_input_for_enthalpy_m=liquid_water_input_for_enthalpy_m,
+                    new_surface_water_input_m=new_surface_water_input_m,
+                    rainfall_lookup_table=rainfall_lookup_table,
+                    slope_m_per_m=slope_m_per_m[i],
                 )
 
                 runoff_m[i, hour] += direct_runoff_m
@@ -747,6 +753,7 @@ def land_surface_model(
                     water_content_m=water_content_m[i, :],
                     water_content_residual_m=water_content_residual_m[i, :],
                     water_content_saturated_m=water_content_saturated_m[i, :],
+                    water_content_field_capacity_m=water_content_field_capacity_m[i, :],
                     soil_enthalpy_J_per_m2=soil_enthalpy_J_per_m2[i, :],
                     solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K[i, :],
                     saturated_hydraulic_conductivity_m_per_s=saturated_hydraulic_conductivity_m_per_s[
@@ -773,6 +780,35 @@ def land_surface_model(
                 )
                 interflow_enthalpy_loss_J_per_m2[i] += interflow_enthalpy_loss_ross
 
+                # Retract the Green-Ampt wetting front if water was removed via lateral interflow.
+                # Mass conservation: Delta L_f = interflow / Delta theta.
+                if (
+                    green_ampt_active_layer_idx[i] >= 0
+                    and wetting_front_depth_m[i] > np.float32(0.0)
+                    and wetting_front_moisture_deficit[i] > np.float32(1e-6)
+                    and total_lateral_outflow_ross > np.float32(0.0)
+                ):
+                    retraction_m: np.float32 = (
+                        total_lateral_outflow_ross / wetting_front_moisture_deficit[i]
+                    )
+                    wetting_front_depth_m[i] = max(
+                        np.float32(0.0), wetting_front_depth_m[i] - retraction_m
+                    )
+                    if wetting_front_depth_m[i] <= np.float32(1e-4):
+                        wetting_front_depth_m[i] = np.float32(0.0)
+                        green_ampt_active_layer_idx[i] = -1
+                        wetting_front_suction_head_m[i] = np.float32(0.0)
+                        wetting_front_moisture_deficit[i] = np.float32(0.0)
+                    else:
+                        accum_depth: np.float32 = np.float32(0.0)
+                        new_active_idx: int = 0
+                        for layer_idx in range(N_SOIL_LAYERS):
+                            accum_depth += soil_layer_height[i, layer_idx]
+                            if wetting_front_depth_m[i] <= accum_depth:
+                                new_active_idx = layer_idx
+                                break
+                        green_ampt_active_layer_idx[i] = new_active_idx
+
                 # In-place copy into the pre-allocated buffer (avoids a heap allocation
                 # per hourly substep that .copy() would trigger).
                 water_content_before_transpiration_m[:] = water_content_m[i, :]
@@ -788,7 +824,9 @@ def land_surface_model(
                     root_depth_m=root_depth_m[i],
                     crop_group_number=crop_group_number[i],
                     potential_transpiration_m=potential_transpiration_m_cell_hour,
-                    reference_evapotranspiration_grass_m_hour=reference_evapotranspiration_grass_m_hour_cell,
+                    daily_reference_evapotranspiration_grass_m=daily_reference_evapotranspiration_grass_m[
+                        i
+                    ],
                     w_m=water_content_m[i, :],
                     topwater_m=topwater_m[i],
                     minimum_effective_root_depth_m=minimum_effective_root_depth_m,
@@ -1012,6 +1050,8 @@ class LandSurfaceInputs(NamedTuple):
     interflow_multiplier: np.float32
     deep_soil_temperature_C: ArrayFloat32
     leaf_area_index: ArrayFloat32
+    rainfall_lookup_table: TwoDArrayFloat32
+    daily_reference_evapotranspiration_grass_m: ArrayFloat32
 
 
 def _pad_hru_arrays(inputs: LandSurfaceInputs) -> LandSurfaceInputs:
@@ -1250,6 +1290,8 @@ class LandSurface(Module):
             ),
             deep_soil_temperature_C=deep_soil_temperature_C,
             leaf_area_index=leaf_area_index,
+            rainfall_lookup_table=self.rainfall_lookup_table,
+            daily_reference_evapotranspiration_grass_m=self.HRU.var.daily_reference_evapotranspiration_grass_m,
         )
 
         return _pad_hru_arrays(unpadded_inputs)
@@ -1296,18 +1338,17 @@ class LandSurface(Module):
             Snapshot of model inputs that reproduces the failure context.
         """
         # isolate the failing cell while keeping original ranks (dimensions)
+        num_cells: int = land_surface_inputs.slope_m_per_m.shape[0]
         sliced_fields = {}
         for field in land_surface_inputs._fields:
             val = getattr(land_surface_inputs, field)
-            if isinstance(val, np.ndarray):
+            if isinstance(val, np.ndarray) and val.shape[0] == num_cells:
                 if val.ndim == 1:
                     sliced_fields[field] = val[index : index + 1]
-                elif val.ndim == 2:
+                else:
                     # Inputs are in cell-major layout [num_cells, N_LAYERS] or
                     # time-major layout [num_cells, 24]; cell axis is 0.
                     sliced_fields[field] = val[index : index + 1, :]
-                else:
-                    sliced_fields[field] = val
             else:
                 sliced_fields[field] = val
 
@@ -1406,6 +1447,9 @@ class LandSurface(Module):
     def spinup(self) -> None:
         """Spinup function for the land surface module."""
         self.HRU.var.topwater_m = self.HRU.full_compressed(0.0, dtype=np.float32)
+        self.HRU.var.daily_reference_evapotranspiration_grass_m = (
+            self.HRU.full_compressed(0.003, dtype=np.float32)
+        )
 
         n_cells: int = self.HRU.var.topwater_m.shape[0]
         self.HRU.var.snow_water_equivalent_m = np.zeros(
@@ -1458,20 +1502,8 @@ class LandSurface(Module):
             data=leaf_area_index_grassland_like
         )
 
-        self.HRU.var.interception_capacity_forest_m = (
-            leaf_area_index_to_interception_capacity_m(
-                self.HRU.var.leaf_area_index_forest
-            )
-        )
-
-        self.HRU.var.interception_capacity_grassland_like_m = (
-            leaf_area_index_to_interception_capacity_m(
-                self.HRU.var.leaf_area_index_grassland_like
-            )
-        )
-
         # Default follows AQUACROP recommendation, see reference manual for AquaCrop v7.1 – Chapter 3
-        self.var.minimum_effective_root_depth_m: np.float32 = np.float32(0.25)
+        self.var.minimum_effective_root_depth_m = np.float32(0.25)
 
         self.setup_soil_properties()
 
@@ -1516,37 +1548,56 @@ class LandSurface(Module):
 
             return output
 
-        self.HRU.var.soil_layer_height_m: TwoDArrayFloat32 = load_soil_layers_to_HRU(
+        self.HRU.var.soil_layer_height_m = load_soil_layers_to_HRU(
             self.model.files["subgrid"]["soil/soil_layer_height_m"]
         )
-        organic_carbon_percentage: TwoDArrayFloat32 = load_soil_layers_to_HRU(
+        organic_carbon_percentage = load_soil_layers_to_HRU(
             self.model.files["subgrid"]["soil/soil_organic_carbon_percentage"],
         )
-        self.HRU.var.bulk_density_kg_per_dm3: TwoDArrayFloat32 = (
-            load_soil_layers_to_HRU(
-                self.model.files["subgrid"]["soil/bulk_density_kg_per_dm3"],
-            )
+        self.HRU.var.bulk_density_kg_per_dm3 = load_soil_layers_to_HRU(
+            self.model.files["subgrid"]["soil/bulk_density_kg_per_dm3"],
         )
-        self.HRU.var.silt_percentage: TwoDArrayFloat32 = load_soil_layers_to_HRU(
+        self.HRU.var.silt_percentage = load_soil_layers_to_HRU(
             self.model.files["subgrid"]["soil/silt_percentage"],
         )
-        self.HRU.var.clay_percentage: TwoDArrayFloat32 = load_soil_layers_to_HRU(
+        self.HRU.var.clay_percentage = load_soil_layers_to_HRU(
             self.model.files["subgrid"]["soil/clay_percentage"],
         )
 
         # calculate sand content based on silt and clay content (together they should sum to 100%)
-        self.HRU.var.sand_percentage: TwoDArrayFloat32 = (
+        self.HRU.var.sand_percentage = (
             100 - self.HRU.var.silt_percentage - self.HRU.var.clay_percentage
         )
 
-        # the top 30 cm is considered as top soil (https://www.fao.org/uploads/media/Harm-World-Soil-DBv7cv_1.pdf)
+        # Identify sealed land use
+        is_sealed: ArrayBool = self.HRU.var.land_use_type == SEALED
+
+        # Prepare soil properties for pedotransfer functions, accounting for compaction in sealed areas
+        # Top 30 cm is considered topsoil for unsealed areas (layers 0, 1, 2)
         is_top_soil: TwoDArrayBool = np.zeros_like(
             self.HRU.var.clay_percentage, dtype=bool
         )
-        is_top_soil[0:3] = True
+        is_top_soil[0:3, :] = True
+        # For sealed surfaces, top layer lacks topsoil organic/root structure
+        is_top_soil[:, is_sealed] = False
+
+        # Compacted top layer (layer 0, 0-5 cm) for sealed surfaces: increase bulk density directly on HRU.var
+        self.HRU.var.bulk_density_kg_per_dm3[0, is_sealed] = np.minimum(
+            np.float32(1.85),
+            np.maximum(
+                np.float32(1.75),
+                self.HRU.var.bulk_density_kg_per_dm3[0, is_sealed] * np.float32(1.3),
+            ),
+        )
+
+        organic_carbon_pedotransfer: TwoDArrayFloat32 = np.copy(
+            organic_carbon_percentage
+        )
+        # Construction/paving reduces top-layer organic matter
+        organic_carbon_pedotransfer[0, is_sealed] = np.float32(0.1)
 
         thetas: TwoDArrayFloat32 = thetas_toth(
-            organic_carbon_percentage=organic_carbon_percentage,
+            organic_carbon_percentage=organic_carbon_pedotransfer,
             bulk_density_kg_per_dm3=self.HRU.var.bulk_density_kg_per_dm3,
             is_top_soil=is_top_soil,
             clay=self.HRU.var.clay_percentage,
@@ -1620,18 +1671,21 @@ class LandSurface(Module):
 
         self.HRU.var.water_content_m = np.asfortranarray(
             np.where(
-                self.HRU.var.land_use_type[np.newaxis, :] < SEALED,
+                self.HRU.var.land_use_type[np.newaxis, :] < OPEN_WATER,
                 (
                     self.HRU.var.water_content_field_capacity_m
                     - self.HRU.var.water_content_wilting_point_m
                 )
-                * np.float32(0.2)
+                * np.float32(0.6)
                 + self.HRU.var.water_content_wilting_point_m,
                 self.HRU.var.water_content_residual_m,
             )
         )
         # for paddy irrigation flooded paddy fields
         self.HRU.var.topwater_m = self.HRU.full_compressed(0, dtype=np.float32)
+        self.HRU.var.daily_reference_evapotranspiration_grass_m = (
+            self.HRU.full_compressed(0.003, dtype=np.float32)
+        )
 
         # self.HRU.var.saturated_hydraulic_conductivity_m_per_s: TwoDArrayFloat32 = (
         #     kv_brakensiek(thetas=thetas, clay=self.HRU.var.clay, sand=self.HRU.var.sand)
@@ -1641,16 +1695,18 @@ class LandSurface(Module):
         #     sand=self.HRU.var.sand, clay=self.HRU.var.clay
         # )
 
-        self.HRU.var.saturated_hydraulic_conductivity_m_per_s: TwoDArrayFloat32 = (
-            np.asfortranarray(
-                kv_wosten(
-                    silt=self.HRU.var.silt_percentage,
-                    clay=self.HRU.var.clay_percentage,
-                    bulk_density_kg_per_dm3=self.HRU.var.bulk_density_kg_per_dm3,
-                    organic_carbon_percentage=organic_carbon_percentage,
-                    is_topsoil=is_top_soil,
-                )
+        self.HRU.var.saturated_hydraulic_conductivity_m_per_s = np.asfortranarray(
+            kv_wosten(
+                silt=self.HRU.var.silt_percentage,
+                clay=self.HRU.var.clay_percentage,
+                bulk_density_kg_per_dm3=self.HRU.var.bulk_density_kg_per_dm3,
+                organic_carbon_percentage=organic_carbon_pedotransfer,
+                is_topsoil=is_top_soil,
             )
+        )
+        # Apply structural compaction multiplier for sealed topsoil (destruction of macropores)
+        self.HRU.var.saturated_hydraulic_conductivity_m_per_s[0, is_sealed] *= (
+            np.float32(0.1)
         )
 
         self.HRU.var.saturated_hydraulic_conductivity_m_per_s *= self.model.config[
@@ -1727,7 +1783,7 @@ class LandSurface(Module):
         crop_group_forest: ArrayFloat32 = self.hydrology.grid.load2d(
             self.model.files["grid"]["vegetation/crop_group_number_forest"]
         )
-        self.HRU.var.crop_group_number_forest: ArrayFloat32 = self.hydrology.to_HRU(
+        self.HRU.var.crop_group_number_forest = self.hydrology.to_HRU(
             data=crop_group_forest
         )
 
@@ -1777,16 +1833,30 @@ class LandSurface(Module):
             AssertionError: If any of the balance checks fail.
         """
         if self.model.current_timestep == 0:
+            sigma: float = FORCING_SOURCE_SIGMA_DEFAULTS[
+                self.model.forcing.forcing_loaders["pr_kg_per_m2_per_s"].source
+            ]
+            self.rainfall_lookup_table: TwoDArrayFloat32 = (
+                generate_rainfall_lookup_table(sigma)
+            )
             surface_area_ratio = self.grid.load2d(
                 self.model.files["grid"]["landsurface/surface_area_ratio"]
             )
-            surface_area_ratio = self.hydrology.to_HRU(surface_area_ratio)
+            surface_area_ratio_hru: ArrayFloat32 = self.hydrology.to_HRU(
+                surface_area_ratio
+            )
 
+            # Scale topographic shape parameter beta with the user-defined calibration scale factor
+            variable_runoff_shape_beta_scale: np.float32 = np.float32(
+                self.model.config["parameters"]["variable_runoff_shape_beta"]
+            )
             self.HRU.var.variable_runoff_shape_beta[:] = (
-                (surface_area_ratio - np.float32(1)) + np.float32(0.2)
-            ) * 5
+                ((surface_area_ratio_hru - np.float32(1.0)) + np.float32(0.2))
+                * np.float32(5.0)
+                * variable_runoff_shape_beta_scale
+            )
             assert not np.isnan(self.HRU.var.variable_runoff_shape_beta).any()
-            assert (self.HRU.var.variable_runoff_shape_beta > 0).all()
+            assert (self.HRU.var.variable_runoff_shape_beta >= 0).all()
 
         timer = TimingModule("Land surface model")
         if __debug__:
@@ -1828,7 +1898,7 @@ class LandSurface(Module):
 
         timer.finish_split("Preprocessing")
 
-        crop_stage_lenghts = np.column_stack(
+        crop_stage_lengths = np.column_stack(
             [
                 self.model.agents.crop_farmers.var.crop_data["l_ini"],
                 self.model.agents.crop_farmers.var.crop_data["l_dev"],
@@ -1873,7 +1943,13 @@ class LandSurface(Module):
 
         dekad: int = map_date_to_dekad(self.model.current_time)
 
-        crop_factor, root_depth_m, crop_sub_stage = get_crop_factors_and_root_depths(
+        (
+            crop_factor,
+            root_depth_m,
+            crop_sub_stage,
+            leaf_area_index,
+            interception_capacity_m,
+        ) = get_crop_factors_and_root_depths_and_lai(
             land_use_map=self.HRU.var.land_use_type,
             leaf_area_index_forest=self.HRU.var.leaf_area_index_forest[dekad],
             leaf_area_index_grassland_like=self.HRU.var.leaf_area_index_grassland_like[
@@ -1882,7 +1958,7 @@ class LandSurface(Module):
             crop_map=self.HRU.var.crop_map,
             crop_age_days_map=self.HRU.var.crop_age_days_map,
             crop_harvest_age_days=self.HRU.var.crop_harvest_age_days,
-            crop_stage_lengths=crop_stage_lenghts,
+            crop_stage_lengths=crop_stage_lengths,
             crop_sub_stage_lengths=crop_sub_stage_lengths,
             crop_factor_per_crop_stage=crop_factor_per_crop_stage,
             crop_root_depths=crop_root_depths,
@@ -1892,25 +1968,6 @@ class LandSurface(Module):
         crop_factor *= self.model.config["parameters"][
             "crop_factor_multiplier"
         ]  # calibration parameter
-
-        interception_capacity_m: ArrayFloat32 = get_interception_capacity(
-            land_use_type=self.HRU.var.land_use_type,
-            interception_capacity_m_forest_HRU=self.HRU.var.interception_capacity_forest_m[
-                dekad
-            ],
-            interception_capacity_m_grassland_HRU=self.HRU.var.interception_capacity_grassland_like_m[
-                dekad
-            ],
-        )
-
-        leaf_area_index: ArrayFloat32 = get_leaf_area_index(
-            land_use_type=self.HRU.var.land_use_type,
-            leaf_area_index_forest_HRU=self.HRU.var.leaf_area_index_forest[dekad],
-            leaf_area_index_grassland_HRU=self.HRU.var.leaf_area_index_grassland_like[
-                dekad
-            ],
-            crop_map=self.HRU.var.crop_map,
-        )
 
         timer.finish_split("Input preparation")
 
@@ -2047,6 +2104,10 @@ class LandSurface(Module):
         # Copy back wetting-front state modified in-place inside the kernel.
         # When inputs were padded, these are new arrays rather than direct
         # model-state references, so an explicit copy-back is always required.
+        np.copyto(
+            self.HRU.var.daily_reference_evapotranspiration_grass_m,
+            reference_evapotranspiration_grass_m,
+        )
         np.copyto(
             self.HRU.var.wetting_front_depth_m,
             land_surface_inputs.wetting_front_depth_m[:_n],

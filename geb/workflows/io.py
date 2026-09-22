@@ -4,6 +4,7 @@ import bz2
 import datetime
 import hashlib
 import json
+import logging
 import os
 import platform
 import shutil
@@ -92,7 +93,11 @@ def write_table(df: pd.DataFrame, fp: Path) -> None:
                 bool_cols.append(name)
             elif pa.types.is_floating(t):
                 float_cols.append(name)
-            elif pa.types.is_string(t) or pa.types.is_binary(t):
+            elif (
+                pa.types.is_string(t)
+                or pa.types.is_large_string(t)
+                or pa.types.is_binary(t)
+            ):
                 dict_cols.append(name)
             else:
                 raise ValueError(f"Unsupported column type {t} for column {name}")
@@ -261,7 +266,7 @@ def read_grid(
 
 def read_grid(
     filepath: Path,
-    ndim: Literal[2, 3],
+    ndim: Literal[2, 3] = 2,
     load: bool = True,
     return_transform_and_crs: bool = False,
 ) -> (
@@ -315,10 +320,10 @@ def read_grid(
         transform: Affine = Affine(
             a=x_diff,
             b=0,
-            c=x[0] - x_diff / 2,  # ty:ignore[invalid-argument-type]
+            c=x[0] - x_diff / 2,  # ty:ignore[invalid-argument-type, unsupported-operator]
             d=0,
             e=y_diff,
-            f=y[0] - y_diff / 2,  # ty:ignore[invalid-argument-type]
+            f=y[0] - y_diff / 2,  # ty:ignore[invalid-argument-type, unsupported-operator]
         )
         crs = data_array.attrs["_CRS"]
         assert isinstance(crs, dict)
@@ -620,7 +625,17 @@ def check_attrs(da1: xr.DataArray, da2: xr.DataArray) -> bool:
         ):
             assert np.isnan(da2.attrs["_FillValue"]), f"attribute {key} is not equal"
         else:
-            assert da1.attrs[key] == da2.attrs[key], f"attribute {key} is not equal"
+            value1 = da1.attrs[key]
+            value2 = da2.attrs[key]
+            if isinstance(value1, dict):
+                assert isinstance(value2, dict), f"attribute {key} is not equal"
+                assert value1.keys() == value2.keys(), f"attribute {key} is not equal"
+                for sub_key in value1.keys():
+                    assert value1[sub_key] == value2[sub_key], (
+                        f"attribute {key} is not equal"
+                    )
+            else:
+                assert da1.attrs[key] == da2.attrs[key], f"attribute {key} is not equal"
 
     return True
 
@@ -870,6 +885,7 @@ def write_zarr(
         array_encoding: dict[str, Any] = {
             "chunks": storage_chunks,
             "filters": filters,
+            "fill_value": da.attrs["_FillValue"],
         }
         if pre_compressor is not None:
             array_encoding["compressors"] = (
@@ -893,7 +909,9 @@ def write_zarr(
 
         if "time" in da.coords:
             # apply delta encoding to time coordinates, which are often more compressible with this encoding
-            maximum_difference = np.abs(np.diff(da.coords["time"])).max().item()
+            maximum_difference: int = (
+                np.abs(np.diff(da.coords["time"])).max().astype(np.int64).item()
+            )
             if maximum_difference > np.iinfo("i4").max:
                 dtype_to_encode_time = "i8"
             elif maximum_difference > np.iinfo("i2").max:
@@ -1084,6 +1102,8 @@ class ForcingReader:
     """Zarr forcing reader with chunk-aligned caching."""
 
     array: zarr.Array
+    attrs: dict[str, Any]
+    source: str
 
     def __init__(
         self,
@@ -1115,6 +1135,7 @@ class ForcingReader:
         assert isinstance(time_unit, str)
         time_unit, origin = time_unit.split(" since ")
         pandas_time_unit: str = {
+            "nanoseconds": "ns",
             "seconds": "s",
             "minutes": "m",
             "hours": "h",
@@ -1131,6 +1152,8 @@ class ForcingReader:
         array = self.ds[self.variable_name]
         assert isinstance(array, zarr.Array)
         self.array: zarr.Array = array
+        self.attrs: dict[str, Any] = dict(self.array.attrs)
+        self.source: str | None = self.attrs.get("source")
 
         # The on-disk chunk size along the time dimension - we always load full chunks
         # from disk (e.g. 7 * 24 = 168 for weekly hourly data).
@@ -1296,6 +1319,14 @@ class WorkingDirectory:
         os.chdir(self._original_path)
 
 
+class HTTP429Error(Exception):
+    """Raised when the server responds with HTTP 429 Too Many Requests.
+
+    Intentionally does not inherit from OSError so that it propagates through
+    file-like wrappers (e.g. zipfile) that broadly catch OSError.
+    """
+
+
 class RemoteFile:
     """A file-like object that reads from a remote URL using HTTP Range headers.
 
@@ -1303,23 +1334,41 @@ class RemoteFile:
     using HTTP Range requests. It includes retry logic for robust downloads.
     """
 
-    def __init__(self, url: str, max_retries: int = 5, base_delay: float = 1.0) -> None:
+    def __init__(
+        self,
+        url: str,
+        logger: logging.Logger,
+        max_retries: int = 20,
+        delay_seconds: float = 5.0,
+        max_delay_seconds: float = 300.0,
+        double_delay: bool = True,
+    ) -> None:
         """Initialize the RemoteFile.
 
         Args:
             url: The URL of the remote file.
+            logger: A logging.Logger instance to use for logging retry and error messages.
             max_retries: Maximum number of retries for HTTP requests.
-            base_delay: Base delay in seconds for exponential backoff.
+            delay_seconds: Initial delay in seconds between retries (seconds).
+            max_delay_seconds: Maximum delay in seconds between retries when doubling (seconds).
+            double_delay: If True, exponentially double the delay between retries up to max_delay_seconds.
 
         Raises:
-            OSError: If the URL cannot be accessed.
+            OSError: If the URL cannot be accessed or does not support range requests.
+            HTTP429Error: If the server responds with HTTP 429 Too Many Requests during initialization.
         """
-        self.url_original = url
-        self.max_retries = max_retries
-        self.base_delay = base_delay
+        self.url_original: str = url
+        self.logger: logging.Logger = logger
+        self.max_retries: int = max_retries
+        self.delay_seconds: float = delay_seconds
+        self.max_delay_seconds: float = max_delay_seconds
+        self.double_delay: bool = double_delay
 
         # Resolve redirects and get size
         resp = self._request_with_retry("HEAD", url, allow_redirects=True)
+        if resp.status_code == 429:
+            resp.close()
+            raise HTTP429Error(f"HTTP 429 Too Many Requests from {url}")
 
         # Confirm range support
         range_supported = (
@@ -1337,6 +1386,9 @@ class RemoteFile:
                 stream=True,
                 allow_redirects=True,
             )
+            if resp.status_code == 429:
+                resp.close()
+                raise HTTP429Error(f"HTTP 429 Too Many Requests from {url}")
             if resp.status_code != 206:
                 resp.close()
                 raise OSError(
@@ -1376,6 +1428,7 @@ class RemoteFile:
         """
         last_error: str | None = None
         resp: requests.Response | None = None
+        current_delay: float = self.delay_seconds
 
         for attempt in range(self.max_retries + 1):
             try:
@@ -1393,8 +1446,18 @@ class RemoteFile:
                 last_error = str(e)
 
             if attempt < self.max_retries:
-                sleep_time = self.base_delay * (2**attempt)
-                time.sleep(sleep_time)
+                self.logger.warning(
+                    f"Request {method} {url} failed ({last_error}). "
+                    f"Retrying (attempt {attempt + 1}/{self.max_retries}) in {current_delay:.1f}s..."
+                )
+                time.sleep(current_delay)
+                if self.double_delay:
+                    # Exponential backoff capped at max_delay_seconds to prevent spamming
+                    current_delay = min(current_delay * 2, self.max_delay_seconds)
+            else:
+                self.logger.warning(
+                    f"Request {method} {url} failed ({last_error}) after {self.max_retries} retries."
+                )
 
         if resp is not None:
             # Return the last failed response
@@ -1437,6 +1500,7 @@ class RemoteFile:
 
         Raises:
             OSError: If reading from the URL fails.
+            HTTP429Error: If the server responds with HTTP 429 Too Many Requests.
         """
         if size == 0:
             return b""
@@ -1468,6 +1532,8 @@ class RemoteFile:
                 f"Server returned 200 OK but 206 Partial Content was expected for range {range_header}"
             )
 
+        if resp.status_code == 429:
+            raise HTTP429Error(f"HTTP 429 Too Many Requests from {self.url}")
         if resp.status_code not in [200, 206]:
             raise OSError(f"Failed to read from {self.url}: {resp.status_code}")
 
@@ -1483,10 +1549,12 @@ class RemoteFile:
 def fetch_and_save(
     url: str,
     file_path: Path,
+    logger: logging.Logger,
     overwrite: bool = False,
-    max_retries: int = 3,
-    delay_seconds: float | int = 5,
-    double_delay: bool = False,
+    max_retries: int = 20,
+    delay_seconds: float | int = 5.0,
+    double_delay: bool = True,
+    max_delay_seconds: float | int = 300.0,
     chunk_size: int = 16384,
     session: requests.Session | None = None,
     params: None | dict[str, Any] = None,
@@ -1499,15 +1567,17 @@ def fetch_and_save(
 
     This function supports both S3 and HTTP(S) URLs. It downloads the file to a
     temporary location and then moves it to the final destination to ensure
-    atomicity. It includes retry logic for transient network errors.
+    atomicity. It includes retry logic with exponential backoff for transient network errors.
 
     Args:
         url: The URL to fetch data from (S3 or HTTP/HTTPS).
         file_path: The local path to save the file to.
+        logger: A logging.Logger instance to use for logging status and error messages.
         overwrite: If True, overwrite the file if it already exists.
         max_retries: The maximum number of times to retry a failed download.
-        delay_seconds: The delay in seconds between retries.
-        double_delay: If True, double the delay between retries on each attempt.
+        delay_seconds: The initial delay in seconds between retries (seconds).
+        double_delay: If True, exponentially double the delay between retries on each attempt up to max_delay_seconds.
+        max_delay_seconds: The maximum delay in seconds between retries (seconds).
         chunk_size: The chunk size for streaming downloads.
         session: An optional requests.Session object to use for HTTP requests.
         params: Optional dictionary of query parameters for HTTP requests.
@@ -1556,6 +1626,10 @@ def fetch_and_save(
 
             except Exception as e:
                 # Log the error
+                logger.warning(
+                    f"S3 download failed: {e}. Attempt {attempts + 1} of {max_retries}. "
+                    f"Retrying in {current_delay_seconds:.1f}s..."
+                )
                 if verbose:
                     print(
                         f"S3 download failed: {e}. Attempt {attempts + 1} of {max_retries}"
@@ -1570,7 +1644,9 @@ def fetch_and_save(
                 if attempts < max_retries:
                     time.sleep(current_delay_seconds)
                     if double_delay:
-                        current_delay_seconds *= 2
+                        current_delay_seconds = min(
+                            current_delay_seconds * 2, float(max_delay_seconds)
+                        )
 
         # If all attempts fail, raise an exception
         raise RuntimeError(
@@ -1628,7 +1704,10 @@ def fetch_and_save(
 
             except requests.RequestException as e:
                 # Log the error
-                print(f"Request failed: {e}. Attempt {attempts + 1} of {max_retries}")
+                logger.warning(
+                    f"Request failed: {e}. Attempt {attempts + 1} of {max_retries}. "
+                    f"Retrying in {current_delay_seconds:.1f}s..."
+                )
 
                 # Remove the temporary file if it exists
                 if temp_file is not None and os.path.exists(temp_file.name):
@@ -1639,7 +1718,9 @@ def fetch_and_save(
                 if attempts < max_retries:
                     time.sleep(current_delay_seconds)
                     if double_delay:
-                        current_delay_seconds *= 2
+                        current_delay_seconds = min(
+                            current_delay_seconds * 2, float(max_delay_seconds)
+                        )
 
         # If all attempts fail, raise an exception
         raise RuntimeError(

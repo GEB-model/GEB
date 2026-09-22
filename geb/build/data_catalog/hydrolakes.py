@@ -39,7 +39,7 @@ class HydroLakes(Adapter):
         """
         if not self.is_ready:
             download_path: Path = self.root / url.split(sep="/")[-1]
-            fetch_and_save(url=url, file_path=download_path)
+            fetch_and_save(url=url, file_path=download_path, logger=self.logger)
 
             uncompressed_file: Path = download_path.with_suffix(suffix="")
             with zipfile.ZipFile(file=download_path, mode="r") as zip_ref:
@@ -56,7 +56,7 @@ class HydroLakes(Adapter):
                     "Lake_area": "average_area",
                     "Lake_type": "waterbody_type",
                 }
-            )
+            )  # ty:ignore[invalid-assignment]
             gdf["average_area"] *= 1e6  # convert from km^2 to m^2
             gdf["volume_total"] *= 1e6
             gdf.to_parquet(

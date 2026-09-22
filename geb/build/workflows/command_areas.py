@@ -1,7 +1,5 @@
 """Workflow helpers for waterbody and command-area setup."""
 
-from __future__ import annotations
-
 import geopandas as gpd
 import networkx as nx
 import numpy as np
