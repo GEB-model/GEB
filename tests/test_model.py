@@ -1217,6 +1217,7 @@ def test_share() -> None:
 
         output_fn.unlink()
 
+
 def test_set_and_clean(tmp_path: Path) -> None:
     """Test setting config values and cleaning a copied model folder with the CLI.
 
