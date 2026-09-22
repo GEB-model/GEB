@@ -104,7 +104,7 @@ def test_get_retry_client_configuration() -> None:
     async def run_test() -> None:
         client: RetryClient = await get_retry_client()
         try:
-            assert client.retry_options.attempts == 10
+            assert client.retry_options.attempts == 100
             assert aiohttp.ClientError in client.retry_options.exceptions
         finally:
             await client.close()
