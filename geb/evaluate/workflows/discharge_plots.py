@@ -123,10 +123,13 @@ def plot_discharge(
                 routing_folder,
             )
             return
+        consolidated_outflow_file: Path = (
+            routing_folder / "river_outflow_hourly_m3_per_s.parquet"
+        )
         outflow_files: list[Path] = sorted(
             routing_folder.glob("river_outflow_hourly_m3_per_s_*.parquet")
         )
-        if not outflow_files:
+        if not outflow_files and not consolidated_outflow_file.exists():
             self.model.logger.info(
                 "No exported outflow time series found. Skipping outflow plots."
             )
@@ -147,6 +150,7 @@ def plot_discharge(
             outflow_plot_folder=self.discharge_output_folder / "outflow",
             logger=self.model.logger,
             frozen_fraction_series=frozen_fraction,
+            consolidated_outflow_file=consolidated_outflow_file,
         )
         if outflow_plot_count > 0:
             self.model.logger.info(
@@ -545,6 +549,7 @@ def save_outflow_discharge_plots(
     outflow_plot_folder: Path,
     logger: logging.Logger,
     frozen_fraction_series: pd.Series | None = None,
+    consolidated_outflow_file: Path | None = None,
 ) -> int:
     """Save full-period, yearly, and return-period plots for river outlets.
 
@@ -554,6 +559,7 @@ def save_outflow_discharge_plots(
         outflow_plot_folder: Directory receiving outlet figures.
         logger: Logger for skipped empty reports.
         frozen_fraction_series: Optional time-indexed basin frozen fraction (0–1).
+        consolidated_outflow_file: Optional consolidated hourly discharge Parquet file (m³/s).
 
     Returns:
         Number of outlets plotted; all-NaN discharge reports are skipped.
@@ -574,18 +580,34 @@ def save_outflow_discharge_plots(
         ["#1f77b4", "#ffffff"],
     )
 
-    plots_created: int = 0
+    outflow_items: list[tuple[str, str, pd.Series]] = []
+    consolidated_outlet_ids: set[str] = set()
+    if consolidated_outflow_file is not None and consolidated_outflow_file.exists():
+        consolidated_df: pd.DataFrame = pd.read_parquet(consolidated_outflow_file)
+        for col in consolidated_df.columns:
+            outlet_id: str = str(col)
+            consolidated_outlet_ids.add(outlet_id)
+            outflow_items.append(
+                (
+                    f"river_outflow_hourly_m3_per_s_{outlet_id}",
+                    outlet_id,
+                    consolidated_df[col],
+                )
+            )
     for outflow_file in outflow_files:
-        outflow_series: pd.Series = pd.read_parquet(outflow_file).iloc[:, 0]
-
-        if np.isnan(outflow_series.values).all():
-            logger.info(f"Outflow file {outflow_file.name} contains only NaN values.")
+        stem: str = outflow_file.stem
+        outlet_id = stem.replace("river_outflow_hourly_m3_per_s_", "")
+        if outlet_id in consolidated_outlet_ids:
             continue
-
-        outlet_id: str = outflow_file.stem.replace(
-            "river_outflow_hourly_m3_per_s_",
-            "",
+        outflow_items.append(
+            (stem, outlet_id, pd.read_parquet(outflow_file).iloc[:, 0])
         )
+
+    plots_created: int = 0
+    for file_stem, outlet_id, outflow_series in outflow_items:
+        if np.isnan(outflow_series.values).all():
+            logger.info(f"Outflow for outlet {outlet_id} contains only NaN values.")
+            continue
         aligned_frozen_fraction_percent: pd.Series | None = None
         if frozen_fraction_series is not None:
             # Repeat the latest daily context value across the hourly outflow data.
@@ -616,7 +638,7 @@ def save_outflow_discharge_plots(
         )
 
         plt.savefig(
-            outflow_plot_folder / f"{outflow_file.stem}.svg",
+            outflow_plot_folder / f"{file_stem}.svg",
             bbox_inches="tight",
             facecolor=fig.get_facecolor(),
             edgecolor="none",
@@ -696,7 +718,7 @@ def save_outflow_discharge_plots(
             hspace=0.55,
         )
         plt.savefig(
-            outflow_plot_folder / f"{outflow_file.stem}_yearly.svg",
+            outflow_plot_folder / f"{file_stem}_yearly.svg",
             bbox_inches="tight",
             facecolor=yearly_figure.get_facecolor(),
             edgecolor="none",
@@ -717,7 +739,7 @@ def save_outflow_discharge_plots(
             f"Outflow Diagnostics (hourly): {outlet_id}", fontsize=16, fontweight="bold"
         )
         diagnostics.savefig(
-            outflow_plot_folder / f"{outflow_file.stem}_return_period.svg",
+            outflow_plot_folder / f"{file_stem}_return_period.svg",
             bbox_inches="tight",
         )
         plt.close(diagnostics)

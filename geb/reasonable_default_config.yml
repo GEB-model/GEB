@@ -68,9 +68,9 @@ hazards:
 
 hydrology:
   routing:
-    algorithm: kinematic_wave  # accuflux or kinematic_wave
-    minimum_river_slope_m_per_m: 0.0001  # minimum channel slope used by kinematic-wave routing (m/m)
-    retention_basin_release_threshold_factor: 0.9
+    retention_basins:
+      release_threshold_factor: 0.2
+      activation_threshold_return_period_years: 2
     river_width:
       parameters:
         default_alpha: 7.2
@@ -250,12 +250,12 @@ report:
 
 parameters:
   mannings_n_multiplier: 1.0
-  crop_factor_multiplier: 1.5
+  crop_factor_multiplier: 1.0
   saturated_hydraulic_conductivity_multiplier: 1.0
   reservoir_release_factor: 0.1
   lake_outflow_multiplier: 1.0
   interflow_multiplier: 1.0
-  variable_runoff_shape_beta: 0.0
+  variable_runoff_shape_beta: 1.0
 
 plantFATE:
   spinup_ini_file: data/plantFATE/p_spinup.ini

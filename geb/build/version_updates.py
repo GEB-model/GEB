@@ -14,7 +14,12 @@ if TYPE_CHECKING:
 
 VERSION_UPDATES: dict[str, list[str]] = {
     "1.0.0b31": [
+        "[update-method;setup_retention_basins]",
         "[update-method;setup_hydrography]",
+        "[update-method;setup_forcing]",
+        "[update-method;setup_SPEI]",
+        "[update-method;setup_geomorphology]",
+        "[update-method;setup_waterbodies]",
         "[update-method;setup_discharge_observations]",
         "[manual] Rerun the simulation to report discharge at the rebuilt station locations, then rerun evaluation.",
     ],

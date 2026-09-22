@@ -44,7 +44,7 @@ class GRDCCaravan(Adapter):
         archive_root: str = "GRDC_Caravan_extension_nc/"
         attribute_tables: list[pd.DataFrame] = []
         try:
-            with ZipFile(RemoteFile(url)) as archive:
+            with ZipFile(RemoteFile(url, logger=self.logger)) as archive:
                 for relative_path in self.ATTRIBUTE_PATHS:
                     member_data: bytes = archive.read(archive_root + relative_path)
                     attribute_table: pd.DataFrame = pd.read_csv(BytesIO(member_data))

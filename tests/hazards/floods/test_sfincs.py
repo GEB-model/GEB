@@ -24,7 +24,6 @@ from geb.hazards.floods.workflows.utils import get_start_point
 from geb.model import GEBModel
 from geb.runner import parse_config, run_model_with_method
 from geb.workflows.io import WorkingDirectory, read_geom, read_zarr
-from geb.workflows.raster import rasterize_like
 
 from ...testconfig import IN_GITHUB_ACTIONS, tmp_folder
 
@@ -133,10 +132,10 @@ def build_sfincs(
             DEMs=DEM_config,
             rivers=rivers,
             river_width_alpha=geb_model.model.hydrology.grid.decompress(
-                geb_model.hydrology.grid.var.river_width_alpha
+                geb_model.hydrology.routing.var.river_width_alpha
             ),
             river_width_beta=geb_model.model.hydrology.grid.decompress(
-                geb_model.hydrology.grid.var.river_width_beta
+                geb_model.hydrology.routing.var.river_width_beta
             ),
             mannings=geb_model.hazard_driver.floods.mannings,
             grid_size_multiplier=10,
@@ -405,16 +404,7 @@ def test_accumulated_runoff(
                 geb_model.files["grid"]["routing/basin_ids"], compress=False
             )
 
-            valid_cells = np.isin(basin_id_grid, sfincs_model.rivers.index)
-            region = sfincs_model.subbasins.to_crs(runoff_m.rio.crs)
-            region_mask = rasterize_like(
-                region,
-                burn_value=1,
-                raster=runoff_m.isel(time=0),
-                dtype=np.int32,
-                nodata=0,
-                all_touched=False,
-            ).astype(bool)
+            valid_cells = np.isin(basin_id_grid, sfincs_model.active_rivers.index)
 
             total_runoff_volume: float = (
                 runoff_rate_m_per_hr

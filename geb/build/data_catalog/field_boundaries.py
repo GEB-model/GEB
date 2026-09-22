@@ -41,6 +41,7 @@ class FieldBoundaries(Adapter):
             fetch_and_save(
                 url=url,
                 file_path=self.path,
+                logger=self.logger,
                 **kwargs,
             )
         return self

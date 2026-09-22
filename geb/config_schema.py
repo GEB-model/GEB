@@ -213,6 +213,19 @@ class RiverDepthConfig(BaseModel):
     )
 
 
+class RetentionBasinsConfig(BaseModel):
+    """Configuration for retention basins in routing."""
+
+    release_threshold_factor: float = Field(
+        0.2,
+        description="Factor to multiply the activation threshold by to get the release threshold.",
+    )
+    activation_threshold_return_period_years: float = Field(
+        2.0,
+        description="Return period in years used to calculate the activation threshold for retention basins.",
+    )
+
+
 class RoutingConfig(BaseModel):
     """Configuration for routing."""
 
@@ -706,13 +719,34 @@ class ReportConfig(BaseModel):
     water_circle: bool = Field(
         False, alias="_water_circle", description="Whether to report water circle."
     )
+    water_balance: bool = Field(
+        False, alias="_water_balance", description="Whether to report water balance."
+    )
+    water_storage: bool = Field(
+        False, alias="_water_storage", description="Whether to report water storage."
+    )
+    energy_balance: bool = Field(
+        False, alias="_energy_balance", description="Whether to report energy balance."
+    )
     discharge_stations: bool = Field(
         True,
         alias="_discharge_stations",
         description="Whether to report discharge stations.",
     )
+    retention_basins: bool = Field(
+        False,
+        alias="_retention_basins",
+        description="Whether to report retention basins.",
+    )
+    meteorological_stations: bool = Field(
+        True,
+        alias="_meteorological_stations",
+        description="Whether to report meteorological stations.",
+    )
     outflow_points: bool = Field(
-        True, alias="_outflow_points", description="Whether to report outflow points."
+        True,
+        alias="_outflow_points",
+        description="Whether to report outflow points.",
     )
 
 
@@ -728,6 +762,10 @@ class ParametersConfig(BaseModel):
         0.1, description="Reservoir release factor."
     )
     lake_outflow_multiplier: float = Field(1.0, description="Lake outflow multiplier.")
+    interflow_multiplier: float = Field(1.0, description="Interflow multiplier.")
+    variable_runoff_shape_beta: float = Field(
+        1.0, description="Scale factor for the variable runoff shape parameter beta."
+    )
 
 
 class PlantFATEConfig(BaseModel):

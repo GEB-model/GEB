@@ -189,7 +189,7 @@ def calculate_transpiration(
     root_depth_m: np.float32,  # [m]
     crop_group_number: np.float32,
     potential_transpiration_m: np.float32,  # [m]
-    reference_evapotranspiration_grass_m_hour: np.float32,  # [m]
+    daily_reference_evapotranspiration_grass_m: np.float32,  # [m]
     w_m: npt.NDArray[np.float32],  # [m]
     topwater_m: np.float32,  # [m]
     minimum_effective_root_depth_m: np.float32,  # [m]
@@ -207,7 +207,7 @@ def calculate_transpiration(
         crop_group_number: Crop group number for this HRU, pre-resolved from land use type
             and crop map (see WOFOST 6.0).
         potential_transpiration_m: Potential transpiration [m].
-        reference_evapotranspiration_grass_m_hour: Reference evapotranspiration for grass [m/hour]. This is an hourly value that will be converted to a daily value for the calculation.
+        daily_reference_evapotranspiration_grass_m: Daily reference evapotranspiration for grass for a full day [m].
         w_m: Soil water content [m], shape (N_SOIL_LAYERS,).
         topwater_m: Topwater [m], which is the water available for evaporation and transpiration for paddy irrigated fields.
         minimum_effective_root_depth_m: Minimum effective root depth [m], used to ensure that the effective root depth is not less than this value. Crops can extract water up to this depth.
@@ -234,8 +234,7 @@ def calculate_transpiration(
         # vegetation-specific factor for easily available soil water
         fraction_easily_available_soil_water: np.float32 = get_fraction_easily_available_soil_water(
             crop_group_number=crop_group_number,
-            reference_evapotranspiration_grass_full_day_m=reference_evapotranspiration_grass_m_hour
-            * np.float32(24.0),
+            reference_evapotranspiration_grass_full_day_m=daily_reference_evapotranspiration_grass_m,
         )
 
         effective_root_depth: np.float32 = np.maximum(

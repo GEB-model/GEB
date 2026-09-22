@@ -260,6 +260,22 @@ def click_run_options() -> Any:
 
         @universal_options
         @click.option(
+            "--save-checkpoint",
+            "save_checkpoints",
+            multiple=True,
+            is_flag=False,
+            flag_value="end",
+            help="Save a checkpoint at the end of the simulation, or at a specific date (YYYY-MM-DD) if provided. Can be repeated.",
+        )
+        @click.option(
+            "--continue-from-checkpoint",
+            "continue_from_checkpoint",
+            is_flag=False,
+            flag_value="latest",
+            default=None,
+            help="Continue simulation from a checkpoint. Defaults to the latest available checkpoint if no date or path is specified.",
+        )
+        @click.option(
             "--skip-done",
             is_flag=True,
             default=SKIP_DONE_DEFAULT,
@@ -285,16 +301,27 @@ def click_run_options() -> Any:
 
 @cli.command()
 @click_run_options()
-def run(**kwargs: Any) -> None:
+def run(
+    save_checkpoints: tuple[str, ...] = (),
+    continue_from_checkpoint: str | None = None,
+    **kwargs: Any,
+) -> None:
     """Run model.
 
     Can be run after model spinup.
 
     Args:
+        save_checkpoints: Checkpoint dates or 'end' to save checkpoints during or after run.
+        continue_from_checkpoint: Checkpoint date, path, or 'latest' to continue from.
         **kwargs: Keyword arguments to pass to the run function.
 
     """
-    run_model_with_method(method="run", **kwargs)
+    method_args: dict[str, Any] = kwargs.pop("method_args", {})
+    if save_checkpoints:
+        method_args["save_checkpoints"] = save_checkpoints
+    if continue_from_checkpoint is not None:
+        method_args["continue_from_checkpoint"] = continue_from_checkpoint
+    run_model_with_method(method="run", method_args=method_args, **kwargs)
 
 
 @cli.command()
@@ -316,7 +343,14 @@ def run(**kwargs: Any) -> None:
     default=None,
     help="Number of yearly runs. Required when --multi is set.",
 )
-def run_yearly(multi: bool, n_runs: int | None, prefix: str, **kwargs: Any) -> None:
+def run_yearly(
+    multi: bool,
+    n_runs: int | None,
+    prefix: str,
+    save_checkpoints: tuple[str, ...] = (),
+    continue_from_checkpoint: str | None = None,
+    **kwargs: Any,
+) -> None:
     """Run model in yearly mode.
 
     Can be run after model spinup.
@@ -325,6 +359,8 @@ def run_yearly(multi: bool, n_runs: int | None, prefix: str, **kwargs: Any) -> N
         multi: If True, run yearly mode multiple times.
         n_runs: Number of runs when ``multi`` is True.
         prefix: Prefix for the output files.
+        save_checkpoints: Checkpoint dates to save.
+        continue_from_checkpoint: Checkpoint date, path, or 'latest' to continue from.
         **kwargs: Keyword arguments to pass to the run_yearly function.
 
     Raises:
@@ -337,31 +373,52 @@ def run_yearly(multi: bool, n_runs: int | None, prefix: str, **kwargs: Any) -> N
     if not multi and n_runs is not None:
         raise click.ClickException("--n-runs can only be used together with --multi.")
 
+    base_method_args: dict[str, Any] = kwargs.pop("method_args", {})
+    if save_checkpoints:
+        base_method_args["save_checkpoints"] = save_checkpoints
+    if continue_from_checkpoint is not None:
+        base_method_args["continue_from_checkpoint"] = continue_from_checkpoint
+
     if not multi:
-        run_model_with_method(method="run_yearly", **kwargs)
+        run_model_with_method(
+            method="run_yearly", method_args=base_method_args, **kwargs
+        )
         return
 
     assert n_runs is not None
     for run_id in range(n_runs):
+        args: dict[str, Any] = base_method_args.copy()
+        args["model_name"] = f"{prefix}run_{run_id}"
         run_model_with_method(
             method="run_yearly",
-            method_args={"model_name": f"{prefix}run_{run_id}"},
+            method_args=args,
             **kwargs,
         )
 
 
 @cli.command()
 @click_run_options()
-def spinup(**kwargs: Any) -> None:
+def spinup(
+    save_checkpoints: tuple[str, ...] = (),
+    continue_from_checkpoint: str | None = None,
+    **kwargs: Any,
+) -> None:
     """Run model spinup.
 
     Can be run after model build.
 
     Args:
+        save_checkpoints: Checkpoint dates to save checkpoints during spinup.
+        continue_from_checkpoint: Checkpoint date, path, or 'latest' to continue from.
         **kwargs: Keyword arguments to pass to the spinup function.
 
     """
-    run_model_with_method(method="spinup", **kwargs)
+    method_args: dict[str, Any] = kwargs.pop("method_args", {})
+    if save_checkpoints:
+        method_args["save_checkpoints"] = save_checkpoints
+    if continue_from_checkpoint is not None:
+        method_args["continue_from_checkpoint"] = continue_from_checkpoint
+    run_model_with_method(method="spinup", method_args=method_args, **kwargs)
 
 
 @cli.command()
@@ -374,18 +431,26 @@ def spinup(**kwargs: Any) -> None:
     help="Argument to pass to the method, as KEY=VALUE. Can be repeated.",
 )
 @click_run_options()
-def exec(method: str, method_args_raw: tuple[str, ...], **kwargs: Any) -> None:
+def exec(
+    method: str,
+    method_args_raw: tuple[str, ...],
+    save_checkpoints: tuple[str, ...] = (),
+    continue_from_checkpoint: str | None = None,
+    **kwargs: Any,
+) -> None:
     """Execute a specific method on the model.
 
     Args:
         method: Method to run on the model.
         method_args_raw: Arguments to pass to the method, as KEY=VALUE strings.
+        save_checkpoints: Checkpoint dates to save.
+        continue_from_checkpoint: Checkpoint date, path, or 'latest' to continue from.
         **kwargs: Keyword arguments to pass to the method.
 
     Raises:
         click.ClickException: If a --method-arg value is not in KEY=VALUE format.
     """
-    method_args: dict[str, str] = {}
+    method_args: dict[str, Any] = kwargs.pop("method_args", {})
     for raw_arg in method_args_raw:
         if "=" not in raw_arg:
             raise click.ClickException(
@@ -393,6 +458,11 @@ def exec(method: str, method_args_raw: tuple[str, ...], **kwargs: Any) -> None:
             )
         key, value = raw_arg.split("=", 1)
         method_args[key] = value
+
+    if save_checkpoints:
+        method_args["save_checkpoints"] = save_checkpoints
+    if continue_from_checkpoint is not None:
+        method_args["continue_from_checkpoint"] = continue_from_checkpoint
 
     run_model_with_method(method=method, method_args=method_args, **kwargs)
 

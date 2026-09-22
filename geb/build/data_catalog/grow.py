@@ -65,7 +65,7 @@ class GROW(Adapter):
             FileNotFoundError: If ``zip_member`` is not found in the archive.
         """
         buffer = io.BytesIO()
-        with zipfile.ZipFile(RemoteFile(url), "r") as zf:
+        with zipfile.ZipFile(RemoteFile(url, logger=self.logger), "r") as zf:
             try:
                 file_info = zf.getinfo(zip_member)
             except KeyError:

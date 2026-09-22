@@ -51,7 +51,7 @@ class FLOPROS(Adapter):
         """
         if not self.is_ready:
             download_path: Path = self.root / url.split(sep="/")[-1]
-            fetch_and_save(url=url, file_path=download_path)
+            fetch_and_save(url=url, file_path=download_path, logger=self.logger)
 
             uncompressed_file: Path = download_path.with_suffix(suffix="")
             with zipfile.ZipFile(file=download_path, mode="r") as zip_ref:
@@ -63,7 +63,7 @@ class FLOPROS(Adapter):
                 / "FLOPROS_shp_V1"
                 / "FLOPROS_shp_V1.shp",
             )[[self.column, "geometry"]]  # only keep relevant columns
-            gdf = gdf.rename(columns={self.column: "flood_protection_standard"})
+            gdf = gdf.rename(columns={self.column: "flood_protection_standard"})  # ty: ignore[invalid-assignment]
             gdf.to_parquet(
                 self.path,
                 engine="pyarrow",
