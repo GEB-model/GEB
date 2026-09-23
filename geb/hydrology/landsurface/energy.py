@@ -79,12 +79,18 @@ def calculate_snow_net_radiation_flux(
             - Derivative of the net radiation with respect to snow temperature (W/m2/K).
     """
     SNOW_ALBEDO_MAX: np.float32 = np.float32(0.9)
-    SNOW_ALBEDO_DECAY_PER_MM: np.float32 = np.float32(0.01)
+    SWE_ALBEDO_EXTINCTION_PER_MM: np.float32 = np.float32(0.01)
 
-    albedo: np.float32 = SNOW_ALBEDO_MAX - (SNOW_ALBEDO_MAX - soil_albedo) * np.exp(
-        -SNOW_ALBEDO_DECAY_PER_MM
-        * min(total_snow_water_equivalent_m, np.float32(10.0))
-        * np.float32(1000.0)
+    # As snow depth (SWE) increases, snow cover becomes optically thick and obscures
+    # the underlying soil, transitioning the effective surface albedo from soil_albedo
+    # to SNOW_ALBEDO_MAX.
+    albedo: np.float32 = soil_albedo + (SNOW_ALBEDO_MAX - soil_albedo) * (
+        np.float32(1.0)
+        - np.exp(
+            -SWE_ALBEDO_EXTINCTION_PER_MM
+            * min(total_snow_water_equivalent_m, np.float32(10.0))
+            * np.float32(1000.0)
+        )
     )
 
     attenuation_factor: np.float32 = get_canopy_radiation_attenuation(leaf_area_index)
