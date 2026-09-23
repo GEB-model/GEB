@@ -124,8 +124,6 @@
   function renderCharts(stationId, data) {
     var safeStationId = encodeURIComponent(stationId);
     var common = {responsive: true, displaylogo: false, modeBarButtonsToRemove: ['select2d', 'lasso2d']};
-    // SVG is reliable for daily series; WebGL keeps full-resolution hourly
-    // series responsive without changing the underlying scientific data.
     function trace(name, x, y, kind, mode, hoverTemplate) {
       return {
         x: x,
