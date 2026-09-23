@@ -1,4 +1,6 @@
 # dev
+- Made the MSWEP_URL environment variable optional when all required MSWEP precipitation data is already available locally.
+- Implement two-layer snowpack.
 - Fixed unit inconsistency in kinematic wave routing evaporation limiter where volumetric flow rates and per-length rates were mixed.
 - Add retry logic for chunk downloads and limit concurrent connections in Destination Earth ERA5 adapter to prevent connection errors.
 - Export multi-entity special reporters (such as retention basins, meteorological stations, and outflow points) as single consolidated Parquet files.
