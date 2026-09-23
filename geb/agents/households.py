@@ -1776,6 +1776,16 @@ class Households(AgentBaseClass):
         )
 
     @property
+    def n_households_exposed_to_flooding(self) -> int:
+        """Return the number of households exposed to flooding.
+
+        Returns:
+            Number of households exposed to flooding.
+        """
+
+        return np.int32(self.households_exposed_to_flooding.size)
+
+    @property
     def household_distance_to_coastline_m(self) -> np.ndarray:
         """Get the distance to the nearest coastline for each household.
 
@@ -1786,3 +1796,37 @@ class Households(AgentBaseClass):
             np.array(self.buildings["distance_to_coastline_m"]),
             self.var.building_id_of_household,
         )
+
+    @property
+    def households_exposed_to_flooding(self) -> np.ndarray:
+        """Get household indices that are located in flooded buildings.
+
+        Returns:
+            Array of household indices exposed to flooding.
+        """
+        # also set index to flooded households
+        flooded_building_ids = self.buildings.loc[
+            self.buildings["flooded"], "id"
+        ].to_numpy()
+        households_exposed_to_flooding = np.where(
+            np.isin(self.var.building_id_of_household.data, flooded_building_ids)
+        )[0]
+        return households_exposed_to_flooding
+
+    @property
+    def total_investment_costs(self) -> np.ndarray:
+        """Get the investment costs for each household.
+
+        Returns:
+            Array of investment costs for each household.
+        """
+        if not hasattr(self, "_total_investment_costs"):
+            self._total_investment_costs = 0
+        investment_costs = self.var.adaptation_costs[self.var.time_adapted == 1].sum()
+        # calculate the investment costs plus interest over the loan duration (20 years)
+        loan_duration = 20
+        interest_rate = 0.03
+        self._total_investment_costs += (
+            investment_costs * (1 + interest_rate) ** loan_duration
+        )
+        return self._total_investment_costs
