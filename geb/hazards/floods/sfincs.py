@@ -266,8 +266,6 @@ class SFINCSRootModel:
             ValueError: if depth_calculation_method is not 'manning' or 'power_law',
             ValueError: if grid_size_multiplier is not a positive integer.
             ValueError: if resolution of DEM is not square pixels.
-            KeyError: if hydromt river interpolation fails and the underlying call raises an
-                unexpected index error unrelated to the known forecast fallback case.
         """
         # if overwrite is True, always rebuild the model
         if overwrite is True:
@@ -418,12 +416,6 @@ class SFINCSRootModel:
                     columns=["geometry"],
                     crs=self.subbasins.crs,
                 ),
-                all_touched=True,
-                drop=True,
-            ).to_dataset(name="elevation")
-            DEM["elevation"] = clip_with_geometry(
-                DEM["elevation"]["elevation"],
-                catchment_boundary.to_crs(DEM["elevation"].rio.crs),
                 all_touched=True,
                 drop=True,
             ).to_dataset(name="elevation")

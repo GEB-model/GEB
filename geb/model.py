@@ -341,6 +341,14 @@ class GEBModel(Module):
                 )
 
         for member in forecast_members:  # loop over all forecast members
+            self.logger.info(
+                "Running member %s of forecast issued at %s",
+                member,
+                forecast_issue_datetime,
+            )
+            # if int(member) < 23:
+            #     self.logger.info("Skipped the member for debugging")
+            #     continue
             # Check if we should skip this member based on overwrite setting
             if overwrite == "auto":
                 if self._is_forecast_member_complete(forecast_issue_datetime, member):
@@ -370,38 +378,12 @@ class GEBModel(Module):
             member_report_folder: Path = original_report_folder / self.multiverse_name
             self.reporter = Reporter(self, member_report_folder, clean=True)
 
-            # # Clone the base run report snapshot into the member folder so
-            # # forecast outputs contain the full model history from simulation
-            # # start up to the current timestep.
-            # for source_item in original_report_folder.iterdir():
-            #     if source_item.name.startswith("forecast_"):
-            #         continue
-
-            #     target_item = member_report_folder / source_item.name
-            #     if source_item.is_dir():
-            #         shutil.copytree(
-            #             source_item,
-            #             target_item,
-            #             dirs_exist_ok=True,
-            #             ignore=shutil.ignore_patterns("*.csv"),
-            #         )
-            #     else:
-            #         if source_item.suffix != ".csv":
-            #             shutil.copy2(source_item, target_item)
-
-            # # Tell the reporter to resume writing from the current model index
-            # # when opening pre-existing zarr files in the member folder.
-            # self._report_resume_from_timestep = store_timestep
-
-            # try:
             for loader_name, loader in self.forcing.loaders.items():
                 if loader.supports_forecast and loader_name in forecast_data:
                     loader.set_forecast(
                         forecast_issue_datetime=forecast_issue_datetime,
                         da=forecast_data[loader_name].sel(member=member),
                     )
-
-            self.logger.info(f"Running forecast member {member}")
             self.step_to_end()  # steps to end of forecast period as defined in self.n_timesteps
             self.reporter.finalize()
 
@@ -409,8 +391,6 @@ class GEBModel(Module):
                 mean_discharge[member] = (
                     self.hydrology.routing.grid.var.discharge_m3_s.mean()
                 ).item()  # calculate the mean discharge for the member
-
-            # self.reporter.finalize()  # flush all buffered member outputs to member_report_folder
 
             # restore the model to the state before the forecast for the next member
             # so the n_timesteps is restored to the number of timesteps at
@@ -422,16 +402,6 @@ class GEBModel(Module):
                 reporter=original_reporter,
                 config=self.config,  # just the old config
             )  # restore the initial state of the multiverse
-            # finally:
-            #     # discard any partially-written member state and restore the
-            #     # main-run reporter regardless of whether the member succeeded
-            #     if hasattr(self, "_report_resume_from_timestep"):
-            #         delattr(self, "_report_resume_from_timestep")
-            #     self.reporter._save_and_clear_runtime_state()
-            #     self.reporter._restore_runtime_state(
-            #         saved_runtime_state, saved_variables
-            #     )
-            #     self.reporter.report_folder = original_report_folder
 
         self.logger.info("Forecast finished, restoring all conditions...")
 

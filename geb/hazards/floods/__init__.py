@@ -622,12 +622,14 @@ class Floods(Module):
             )
             subbasins_group = subbasins[subbasins.index.isin(group)]
 
+            # the model folder (input files) is always built with the member's own name,
+            # regardless of whether SFINCS is actually run, so the folder structure in
+            # simulation_root is consistent across members/events
+            sfincs_model_name = f"group_{group_id}"
+            if self.model.multiverse_name is not None:
+                sfincs_model_name = f"{self.model.multiverse_name}/{sfincs_model_name}"
+
             if not subbasins_group.empty:
-                sfincs_model_name = f"group_{group_id}"
-                if self.model.multiverse_name is not None:
-                    sfincs_model_name = (
-                        f"{self.model.multiverse_name}/{sfincs_model_name}"
-                    )
                 sfincs_root_model: SFINCSRootModel = self.build(
                     sfincs_model_name,
                     all_rivers=rivers,
@@ -671,8 +673,10 @@ class Floods(Module):
                 self.model.logger.warning(
                     "No subbasins exceeded bankfull thresholds. Creating dummy empty flood map."
                 )
+                # SFINCS cannot be built with zero subbasins, so just compute the mask
+                # (without a full build) to create an empty flood depth map with the same shape
                 dummy_sfincs_model = SFINCSRootModel(
-                    self.simulation_root, "dummy", logger=self.model.logger
+                    self.simulation_root, sfincs_model_name, logger=self.model.logger
                 )
                 dummy_mask = dummy_sfincs_model.create_mask(
                     self.DEM_config,
