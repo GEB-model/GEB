@@ -24,7 +24,7 @@ class AQUASTAT(Adapter):
         """
         if not self.is_ready:
             temp_path = self.path.with_suffix(".csv")
-            fetch_and_save(url=url, file_path=temp_path)
+            fetch_and_save(url=url, file_path=temp_path, logger=self.logger)
 
             df = pd.read_csv(temp_path, encoding="ISO-8859-1", low_memory=False)
 

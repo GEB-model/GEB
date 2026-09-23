@@ -27,7 +27,7 @@ class GlobGM(Adapter):
             The GlobGM adapter instance.
         """
         if not self.is_ready:
-            fetch_and_save(url=url, file_path=self.path)
+            fetch_and_save(url=url, file_path=self.path, logger=self.logger)
         return self
 
     def read(self, *args: Any, **kwargs: Any) -> xr.DataArray:
@@ -80,7 +80,7 @@ class GlobGMDEM(GlobGM):
         """
         if not self.is_ready:
             download_path = self.root / url.split("/")[-1]
-            fetch_and_save(url=url, file_path=download_path)
+            fetch_and_save(url=url, file_path=download_path, logger=self.logger)
             ds = xr.open_dataset(download_path)
             da = ds["dem_average"]
             da.to_netcdf(self.path)

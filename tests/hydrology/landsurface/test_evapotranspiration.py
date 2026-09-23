@@ -138,7 +138,7 @@ def test_calculate_transpiration_root_weighted_distribution() -> None:
         root_depth_m=np.float32(2.5),
         crop_group_number=np.float32(5.0),
         potential_transpiration_m=np.float32(0.1),
-        reference_evapotranspiration_grass_m_hour=np.float32(0.0),
+        daily_reference_evapotranspiration_grass_m=np.float32(0.0),
         w_m=w_m,
         topwater_m=np.float32(0.0),
         minimum_effective_root_depth_m=np.float32(0.1),
@@ -162,7 +162,7 @@ def test_calculate_transpiration_water_stress_distribution() -> None:
     wres_m = np.zeros(6, dtype=np.float32)
     soil_layer_height_m = np.full(6, 1.0, dtype=np.float32)
     w_m = np.full(6, 0.16, dtype=np.float32)
-    reference_evapotranspiration_grass_m_hour = np.float32(0.008266666 / 24.0)
+    daily_reference_evapotranspiration_grass_m = np.float32(0.008266666)
 
     transpiration_m, _ = calculate_transpiration(
         soil_is_frozen=False,
@@ -174,7 +174,7 @@ def test_calculate_transpiration_water_stress_distribution() -> None:
         root_depth_m=np.float32(2.5),
         crop_group_number=np.float32(5.0),
         potential_transpiration_m=np.float32(0.1),
-        reference_evapotranspiration_grass_m_hour=reference_evapotranspiration_grass_m_hour,
+        daily_reference_evapotranspiration_grass_m=daily_reference_evapotranspiration_grass_m,
         w_m=w_m,
         topwater_m=np.float32(0.0),
         minimum_effective_root_depth_m=np.float32(0.1),
@@ -295,7 +295,7 @@ def test_calculate_transpiration() -> None:
     crop_group_forest = np.float32(3.0)
     crop_group_grassland_like = np.float32(4.0)
     potential_transpiration = np.float32(0.002)
-    reference_evapotranspiration_grass_m_hour = np.float32(0.003)
+    daily_reference_evapotranspiration_grass_m = np.float32(0.003)
     frost_index = np.float32(0.0)
     crop_group_number_per_group = np.array([3.0, 4.0, 5.0], dtype=np.float32)
     w_cell = np.array(
@@ -323,7 +323,7 @@ def test_calculate_transpiration() -> None:
         root_depth_m=root_depth,
         crop_group_number=crop_group_number,
         potential_transpiration_m=potential_transpiration,
-        reference_evapotranspiration_grass_m_hour=reference_evapotranspiration_grass_m_hour,
+        daily_reference_evapotranspiration_grass_m=daily_reference_evapotranspiration_grass_m,
         w_m=w_cell,
         topwater_m=topwater,
         minimum_effective_root_depth_m=minimum_effective_root_depth,
@@ -441,7 +441,7 @@ def test_calculate_transpiration_frozen_soil() -> None:
         root_depth_m=np.float32(0.3),
         crop_group_number=crop_group_number,
         potential_transpiration_m=np.float32(0.002),
-        reference_evapotranspiration_grass_m_hour=np.float32(0.003),
+        daily_reference_evapotranspiration_grass_m=np.float32(0.003),
         w_m=w.copy(),
         topwater_m=np.float32(0.0),
         minimum_effective_root_depth_m=np.float32(0.1),
@@ -485,7 +485,7 @@ def test_calculate_transpiration_paddy_irrigation() -> None:
         root_depth_m=np.float32(0.3),
         crop_group_number=crop_group_number,
         potential_transpiration_m=np.float32(0.002),
-        reference_evapotranspiration_grass_m_hour=np.float32(0.003),
+        daily_reference_evapotranspiration_grass_m=np.float32(0.003),
         w_m=w.copy(),
         topwater_m=np.float32(0.005),  # Topwater available
         minimum_effective_root_depth_m=np.float32(0.1),

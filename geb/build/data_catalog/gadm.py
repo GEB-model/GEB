@@ -41,7 +41,7 @@ class GADM(Adapter):
         """
         if not self.is_ready:
             download_path: Path = self.root / url.split(sep="/")[-1]
-            fetch_and_save(url=url, file_path=download_path)
+            fetch_and_save(url=url, file_path=download_path, logger=self.logger)
 
             uncompressed_file: Path = download_path.with_suffix(suffix="")
             with zipfile.ZipFile(file=download_path, mode="r") as zip_ref:
@@ -103,7 +103,7 @@ class GADM28(Adapter):
         """
         if not self.is_ready:
             download_path: Path = self.root / url.split(sep="/")[-1]
-            fetch_and_save(url=url, file_path=download_path)
+            fetch_and_save(url=url, file_path=download_path, logger=self.logger)
 
             uncompressed_file: Path = download_path.with_suffix(suffix="")
             with zipfile.ZipFile(file=download_path, mode="r") as zip_ref:

@@ -15,7 +15,7 @@ The hydrodynamics evaluation tools help you:
 Evaluate flood extents against observations:
 
 ```bash
-geb evaluate --method hydrology.evaluate_hydrodynamics --run-name default
+geb evaluate hydrodynamics.evaluate_hydrodynamics --run-name default
 ```
 
 ## Parameters
@@ -76,7 +76,6 @@ For hydrodynamics evaluation, your model must have:
 
 ## Interpreting results 
 A CSI above 0.7 is considered good model performance [@bernhofen2018first]
-
 
 
 

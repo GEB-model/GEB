@@ -283,10 +283,10 @@ class Floods(Module):
             DEMs=self.DEM_config,
             rivers=all_rivers,
             river_width_alpha=self.model.hydrology.grid.decompress(
-                self.model.hydrology.grid.var.river_width_alpha
+                self.model.hydrology.routing.var.river_width_alpha
             ),
             river_width_beta=self.model.hydrology.grid.decompress(
-                self.model.hydrology.grid.var.river_width_beta
+                self.model.hydrology.routing.var.river_width_beta
             ),
             mannings=self.mannings,
             grid_size_multiplier=self.config["grid_size_multiplier"],
@@ -310,9 +310,6 @@ class Floods(Module):
             if "routing/custom_rivers" in self.model.files["geom"]
             else None,
             overwrite=self.config["overwrite"],
-            p_value_threshold=self.config["p_value_threshold"],
-            selection_strategy=self.config["selection_strategy"],
-            fixed_shape=self.config["fixed_shape"],
             write_figures=self.config["write_figures"],
         )
 

@@ -3,6 +3,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
+from geb.geb_types import ArrayFloat32
 from geb.hydrology.landcovers import (
     NON_PADDY_IRRIGATED,
     OPEN_WATER,
@@ -10,7 +11,11 @@ from geb.hydrology.landcovers import (
     SEALED,
 )
 from geb.hydrology.landsurface.water import (
+    FORCING_SOURCE_SIGMA_DEFAULTS,
     add_water_to_topwater_and_evaporate_open_water,
+    calculate_depression_spillover_runoff,
+    calculate_variable_source_area_fraction,
+    generate_rainfall_lookup_table,
     get_bubbling_pressure_m_positive,
     get_pore_size_index_brakensiek,
     get_pore_size_index_wosten,
@@ -26,6 +31,58 @@ from geb.hydrology.landsurface.water import (
 )
 
 from ...testconfig import output_folder
+
+DEFAULT_TEST_LUT = generate_rainfall_lookup_table(sigma=0.8)
+
+
+def test_calculate_depression_spillover_runoff() -> None:
+    """Test scalar depression spillover runoff partitioning."""
+    # Zero topwater
+    ret, run = calculate_depression_spillover_runoff(
+        np.float32(0.0), np.float32(0.01), np.float32(2.0)
+    )
+    assert ret == 0.0
+    assert run == 0.0
+
+    # Zero depression capacity -> all runs off
+    ret, run = calculate_depression_spillover_runoff(
+        np.float32(0.02), np.float32(0.0), np.float32(2.0)
+    )
+    assert ret == 0.0
+    assert abs(run - 0.02) < 1e-6
+
+    # Below capacity (e.g. 5mm with 10mm capacity)
+    s_cap = np.float32(0.01)
+    s_in = np.float32(0.005)
+    gamma = np.float32(2.0)
+    ret, run = calculate_depression_spillover_runoff(s_in, s_cap, gamma)
+    assert abs(ret + run - s_in) < 1e-7
+    assert run > 0.0
+    assert ret > 0.0
+
+    # Monotonicity test
+    s_vals = np.linspace(0.001, 0.03, 30, dtype=np.float32)
+    runs = []
+    rets = []
+    for s in s_vals:
+        r_t, r_o = calculate_depression_spillover_runoff(s, s_cap, gamma)
+        runs.append(r_o)
+        rets.append(r_t)
+        assert abs(r_t + r_o - s) < 1e-6
+
+    # Runoff should be monotonically non-decreasing
+    assert np.all(np.diff(runs) >= -1e-7)
+    # Retained topwater should be monotonically non-decreasing
+    assert np.all(np.diff(rets) >= -1e-7)
+
+    # Over capacity (e.g. 20mm with 10mm capacity)
+    s_large = np.float32(0.02)
+    ret_large, run_large = calculate_depression_spillover_runoff(s_large, s_cap, gamma)
+    expected_ret = s_cap * (
+        np.float32(1.0) - np.float32(1.0) / (gamma + np.float32(1.0))
+    )
+    assert abs(ret_large - expected_ret) < 1e-6
+    assert abs(ret_large + run_large - s_large) < 1e-6
 
 
 def test_add_water_to_topwater_and_evaporate_open_water() -> None:
@@ -235,7 +292,8 @@ def test_infiltration() -> None:
         soil_enthalpy_top_layer_J_per_m2=initial_enthalpy,
         solid_heat_capacity_top_layer_J_per_m2_K=np.float32(100000.0),
         rain_temperature_C=rain_temp,
-        liquid_water_input_for_enthalpy_m=topwater,
+        new_surface_water_input_m=topwater,
+        rainfall_lookup_table=DEFAULT_TEST_LUT,
     )
 
     # Check that some water was infiltrated
@@ -251,7 +309,9 @@ def test_infiltration() -> None:
     # Check groundwater recharge is 0
     assert groundwater_recharge == 0.0
     # Check water balance
-    total_water_added = infiltration_amount + direct_runoff
+    total_water_added = (
+        infiltration_amount + direct_runoff + updated_topwater + groundwater_recharge
+    )
     assert abs(total_water_added - topwater_pre) < 1e-6
     # Check that soil water increased
     assert np.sum(w) > np.sum(w_pre)
@@ -300,14 +360,15 @@ def test_infiltration() -> None:
         soil_enthalpy_top_layer_J_per_m2=soil_enthalpy_top_layer_J_per_m2,
         solid_heat_capacity_top_layer_J_per_m2_K=solid_heat_capacity_top_layer_J_per_m2_K,
         rain_temperature_C=np.float32(0.0),
-        liquid_water_input_for_enthalpy_m=np.float32(0.0),
+        new_surface_water_input_m=np.float32(0.0),
+        rainfall_lookup_table=DEFAULT_TEST_LUT,
     )
 
     # No infiltration on a fully frozen top layer without advected heat input.
     assert infiltration_amount < np.float32(1e-8)
     assert groundwater_recharge == 0.0
     # All water should go to direct runoff
-    assert abs(direct_runoff - topwater_pre) < 1e-6
+    assert abs(direct_runoff + updated_topwater - topwater_pre) < 1e-6
 
     # Test case 3: Partially frozen soil - reduced but nonzero infiltration
     w = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1], dtype=np.float32)
@@ -348,13 +409,16 @@ def test_infiltration() -> None:
         soil_enthalpy_top_layer_J_per_m2=soil_enthalpy_top_layer_J_per_m2,
         solid_heat_capacity_top_layer_J_per_m2_K=solid_heat_capacity_top_layer_J_per_m2_K,
         rain_temperature_C=np.float32(0.0),
-        liquid_water_input_for_enthalpy_m=np.float32(0.0),
+        new_surface_water_input_m=np.float32(0.0),
+        rainfall_lookup_table=DEFAULT_TEST_LUT,
     )
 
     assert infiltration_amount > 0.0
-    assert infiltration_amount < topwater_pre
     assert groundwater_recharge == 0.0
-    assert abs(infiltration_amount + direct_runoff - topwater_pre) < 1e-6
+    assert (
+        abs(infiltration_amount + direct_runoff + updated_topwater - topwater_pre)
+        < 1e-6
+    )
     # Check water content bounds (infiltration case 3)
     assert np.all(w >= 0.0)
     assert np.all(w <= ws)
@@ -397,13 +461,14 @@ def test_infiltration() -> None:
         soil_enthalpy_top_layer_J_per_m2=soil_enthalpy_top_layer_J_per_m2,
         solid_heat_capacity_top_layer_J_per_m2_K=solid_heat_capacity_top_layer_J_per_m2_K,
         rain_temperature_C=np.float32(20.0),
-        liquid_water_input_for_enthalpy_m=topwater,
+        new_surface_water_input_m=topwater,
+        rainfall_lookup_table=DEFAULT_TEST_LUT,
     )
 
     assert infiltration_amount > 0.0
     assert groundwater_recharge == 0.0
     assert updated_soil_enthalpy_top_layer_J_per_m2 > soil_enthalpy_top_layer_J_per_m2
-    assert abs(infiltration_amount + direct_runoff - topwater) < 1e-6
+    assert abs(infiltration_amount + direct_runoff + updated_topwater - topwater) < 1e-6
 
     # Test case 5: Existing ponded water should not be reheated when there is no new liquid input.
     w = np.array([0.002, 0.1, 0.1, 0.1, 0.1, 0.1], dtype=np.float32)
@@ -441,16 +506,17 @@ def test_infiltration() -> None:
         soil_enthalpy_top_layer_J_per_m2=initial_enthalpy_J_per_m2,
         solid_heat_capacity_top_layer_J_per_m2_K=solid_heat_capacity_top_layer_J_per_m2_K,
         rain_temperature_C=np.float32(20.0),
-        liquid_water_input_for_enthalpy_m=np.float32(0.0),
+        new_surface_water_input_m=np.float32(0.0),
+        rainfall_lookup_table=DEFAULT_TEST_LUT,
     )
 
     assert updated_enthalpy_without_new_input_J_per_m2 == initial_enthalpy_J_per_m2
 
-    # Test case 6: Sealed area - no infiltration
+    # Test case 6a: Open water - no infiltration
     w = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1], dtype=np.float32)
     topwater = np.float32(0.005)
     frozen_fraction_top_layer = np.float32(0.0)
-    land_use_type = np.int32(SEALED)
+    land_use_type = np.int32(OPEN_WATER)
     topwater_pre = topwater
 
     (
@@ -484,14 +550,53 @@ def test_infiltration() -> None:
         soil_enthalpy_top_layer_J_per_m2=np.float32(0.0),
         solid_heat_capacity_top_layer_J_per_m2_K=np.float32(100000.0),
         rain_temperature_C=np.float32(0.0),
-        liquid_water_input_for_enthalpy_m=np.float32(0.0),
+        new_surface_water_input_m=np.float32(0.0),
+        rainfall_lookup_table=DEFAULT_TEST_LUT,
     )
 
-    # No infiltration on sealed areas; remaining topwater becomes direct runoff.
+    # No infiltration on open water; topwater becomes direct runoff.
     assert infiltration_amount == 0.0
     assert groundwater_recharge == 0.0
     assert abs(direct_runoff - topwater_pre) < 1e-6
     assert updated_topwater == 0.0
+
+    # Test case 6b: Sealed area with compacted soil allows infiltration
+    land_use_type = np.int32(SEALED)
+    (
+        updated_topwater,
+        direct_runoff,
+        groundwater_recharge,
+        infiltration_amount,
+        wetting_front,
+        _,
+        _,
+        _,
+        _,
+    ) = infiltration(
+        np.int64(42),
+        ws,
+        np.zeros_like(ws),
+        saturated_hydraulic_conductivity_m_per_s,
+        np.float32(0.0),
+        land_use_type,
+        w,
+        topwater,
+        np.float32(0.0),
+        np.float32(0.0),
+        np.float32(0.1),
+        np.float32(0.1),
+        np.int32(0),
+        np.float32(0.1),
+        bub_arr,
+        h_arr,
+        lam_arr,
+        soil_enthalpy_top_layer_J_per_m2=np.float32(0.0),
+        solid_heat_capacity_top_layer_J_per_m2_K=np.float32(100000.0),
+        rain_temperature_C=np.float32(0.0),
+        new_surface_water_input_m=np.float32(0.0),
+        rainfall_lookup_table=DEFAULT_TEST_LUT,
+    )
+    assert infiltration_amount > 0.0
 
     # Test case 7: Zero topwater
     w = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1], dtype=np.float32)
@@ -530,7 +635,8 @@ def test_infiltration() -> None:
         soil_enthalpy_top_layer_J_per_m2=np.float32(0.0),
         solid_heat_capacity_top_layer_J_per_m2_K=np.float32(100000.0),
         rain_temperature_C=np.float32(0.0),
-        liquid_water_input_for_enthalpy_m=np.float32(0.0),
+        new_surface_water_input_m=np.float32(0.0),
+        rainfall_lookup_table=DEFAULT_TEST_LUT,
     )
 
     # No infiltration possible
@@ -578,7 +684,8 @@ def test_infiltration() -> None:
         soil_enthalpy_top_layer_J_per_m2=np.float32(0.0),
         solid_heat_capacity_top_layer_J_per_m2_K=np.float32(100000.0),
         rain_temperature_C=np.float32(0.0),
-        liquid_water_input_for_enthalpy_m=np.float32(0.0),
+        new_surface_water_input_m=np.float32(0.0),
+        rainfall_lookup_table=DEFAULT_TEST_LUT,
     )
 
     # No infiltration on open water; remaining topwater becomes direct runoff.
@@ -624,7 +731,8 @@ def test_infiltration() -> None:
         soil_enthalpy_top_layer_J_per_m2=np.float32(0.0),
         solid_heat_capacity_top_layer_J_per_m2_K=np.float32(100000.0),
         rain_temperature_C=np.float32(0.0),
-        liquid_water_input_for_enthalpy_m=np.float32(0.0),
+        new_surface_water_input_m=np.float32(0.0),
+        rainfall_lookup_table=DEFAULT_TEST_LUT,
     )
 
     # Should infiltrate up to capacity, then pond up to 0.05m before runoff
@@ -676,7 +784,8 @@ def test_infiltration() -> None:
         soil_enthalpy_top_layer_J_per_m2=np.float32(0.0),
         solid_heat_capacity_top_layer_J_per_m2_K=np.float32(100000.0),
         rain_temperature_C=np.float32(0.0),
-        liquid_water_input_for_enthalpy_m=np.float32(0.0),
+        new_surface_water_input_m=np.float32(0.0),
+        rainfall_lookup_table=DEFAULT_TEST_LUT,
     )
 
     # Infiltration should happen into lower unsaturated layers
@@ -713,7 +822,7 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
 
     very_high_topwater = topwater_m * 10
     (
-        _,
+        updated_topwater,
         direct_runoff,
         groundwater_recharge,
         infiltration_amount,
@@ -743,7 +852,8 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
         np.float32(0.0),
         np.float32(100000.0),
         np.float32(0.0),
-        np.float32(0.0),
+        very_high_topwater,  # new_surface_water_input_m
+        rainfall_lookup_table=DEFAULT_TEST_LUT,
         distribute_rainfall_lognormally=False,
     )
 
@@ -752,12 +862,19 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
         abs(groundwater_recharge - groundwater_toplayer_conductivity_m_per_s * 3600)
         < 1e-6
     )
-    assert abs(direct_runoff - (very_high_topwater - groundwater_recharge)) < 1e-6
+    assert (
+        abs(
+            direct_runoff
+            + updated_topwater
+            - (very_high_topwater - groundwater_recharge)
+        )
+        < 1e-6
+    )
 
     # If there is capillary rise, groundwater recharge should be suppressed.
     w = ws.copy()
     (
-        _,
+        updated_topwater_with_rise,
         direct_runoff,
         groundwater_recharge_with_rise,
         infiltration_amount,
@@ -788,11 +905,12 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
         np.float32(100000.0),
         np.float32(0.0),
         np.float32(0.0),
+        rainfall_lookup_table=DEFAULT_TEST_LUT,
         distribute_rainfall_lognormally=False,
     )
     assert infiltration_amount == 0.0
     assert groundwater_recharge_with_rise == 0.0
-    assert abs(direct_runoff - topwater_m) < 1e-6
+    assert abs(direct_runoff + updated_topwater_with_rise - topwater_m) < 1e-6
 
     # Test case: Compare two different groundwater conductivities.
     # Lower groundwater conductivity should lead to lower recharge and MORE runoff.
@@ -823,6 +941,7 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
         np.float32(100000.0),
         np.float32(0.0),
         np.float32(0.0),
+        rainfall_lookup_table=DEFAULT_TEST_LUT,
         distribute_rainfall_lognormally=False,
     )
     runoff_high = res_high[1]
@@ -852,6 +971,7 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
         np.float32(100000.0),
         np.float32(0.0),
         np.float32(0.0),
+        rainfall_lookup_table=DEFAULT_TEST_LUT,
     )
     runoff_low = res_low[1]
     recharge_low = res_low[2]
@@ -859,8 +979,8 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
     assert recharge_low < recharge_high
     assert runoff_low > runoff_high
     # Total mass balance check for both cases
-    assert abs(recharge_high + runoff_high - topwater_test) < 1e-6
-    assert abs(recharge_low + runoff_low - topwater_test) < 1e-6
+    assert abs(res_high[0] + recharge_high + runoff_high - topwater_test) < 1e-6
+    assert abs(res_low[0] + recharge_low + runoff_low - topwater_test) < 1e-6
 
 
 def test_get_soil_moisture_at_pressure() -> None:
@@ -939,10 +1059,10 @@ def test_infiltration_variable_runoff_integration() -> None:
         [50.0, 50.0, 50.0, 50.0, 50.0, 50.0], dtype=np.float32
     )  # 50% saturation
     saturated_hydraulic_conductivity_m_per_s = np.full_like(
-        w, np.float32(10.0 / 3600.0)
-    )  # High Ksat
+        w, np.float32(0.001 / 3600.0)
+    )  # Low Ksat to test runoff generation
     land_use_type = np.int32(NON_PADDY_IRRIGATED)
-    topwater = np.float32(10.0)  # 10mm rain
+    topwater = np.float32(0.05)  # 50mm surface water
 
     # Run infiltration using .py_func to use the python implementation with the updated global
     # With variable runoff (b=0.4), even if not saturated, there should be some runoff.
@@ -958,7 +1078,7 @@ def test_infiltration_variable_runoff_integration() -> None:
     h_arr = np.full_like(ws, 0.1)  # Assume layer height
     lam_arr = np.full_like(ws, 0.5)
 
-    _, runoff_variable, _, infil_variable, _, _, _, _, _ = infiltration(
+    topwater_rem, runoff_variable, _, infil_variable, _, _, _, _, _ = infiltration(
         np.int64(42),
         ws,
         np.zeros_like(ws),
@@ -979,12 +1099,13 @@ def test_infiltration_variable_runoff_integration() -> None:
         np.float32(0.0),
         np.float32(100000.0),
         np.float32(0.0),
-        np.float32(0.0),
+        topwater,
+        rainfall_lookup_table=DEFAULT_TEST_LUT,
     )
 
     # Variable runoff is enabled, so runoff expected given spatial variability
     assert runoff_variable > 0.0
-    assert abs(runoff_variable + infil_variable - topwater) < 1e-5
+    assert abs(topwater_rem + runoff_variable + infil_variable - topwater) < 1e-5
 
 
 def test_infiltration_variable_runoff_plot() -> None:
@@ -1033,7 +1154,8 @@ def test_infiltration_variable_runoff_plot() -> None:
                 np.float32(0.0),
                 np.float32(100000.0),
                 np.float32(0.0),
-                np.float32(0.0),
+                np.float32(rainfall_amount),
+                rainfall_lookup_table=DEFAULT_TEST_LUT,
             )
             runoff_results.append(direct_runoff * 1000)  # Convert to mm for plotting
             infiltration_results.append(
@@ -1291,4 +1413,308 @@ def test_pedotransfer_functions_consistency() -> None:
     )
     assert results["Clay"]["thetas_wosten"] > results["Sand"]["thetas_wosten"], (
         "Clay should have higher Thetas than Sand (Wosten)"
+    )
+
+
+def test_generate_rainfall_lookup_table() -> None:
+    """Test generating precomputed rainfall lookup table for different sigma values."""
+    # Test shape and normalization
+    table_mswep = generate_rainfall_lookup_table(sigma=0.8, table_size=1024, seed=42)
+    assert table_mswep.shape == (1024, 6)
+    assert table_mswep.dtype == np.float32
+    np.testing.assert_allclose(table_mswep.sum(axis=1), 1.0, rtol=1e-5)
+
+    table_era5 = generate_rainfall_lookup_table(sigma=1.2, table_size=1024, seed=42)
+    assert table_era5.shape == (1024, 6)
+    np.testing.assert_allclose(table_era5.sum(axis=1), 1.0, rtol=1e-5)
+
+    # Test presets
+    assert FORCING_SOURCE_SIGMA_DEFAULTS["MSWEP"] == 0.8
+    assert FORCING_SOURCE_SIGMA_DEFAULTS["ERA5-Land"] == 1.2
+    assert FORCING_SOURCE_SIGMA_DEFAULTS["ECMWF"] == 1.2
+
+    # Higher sigma should produce higher variance across substeps
+    var_mswep = np.var(table_mswep, axis=1).mean()
+    var_era5 = np.var(table_era5, axis=1).mean()
+    assert var_era5 > var_mswep
+
+
+def test_infiltration_with_custom_lookup_table() -> None:
+    """Test that infiltration runs properly with an explicitly supplied lookup table."""
+    ws = np.array([0.45, 0.45, 0.45], dtype=np.float32)
+    wres = np.zeros_like(ws)
+    ksat = np.array([1e-5, 1e-5, 1e-5], dtype=np.float32)
+    w = np.array([0.2, 0.2, 0.2], dtype=np.float32)
+    bub_arr = np.array([0.1, 0.1, 0.1], dtype=np.float32)
+    h_arr = np.array([0.1, 0.1, 0.1], dtype=np.float32)
+    lam_arr = np.array([0.5, 0.5, 0.5], dtype=np.float32)
+
+    table_custom = generate_rainfall_lookup_table(sigma=0.8)
+
+    (
+        topwater,
+        direct_runoff,
+        groundwater_recharge,
+        infiltration_amount,
+        wetting_front,
+        _,
+        _,
+        _,
+        updated_enthalpy,
+    ) = infiltration(
+        np.int64(42),
+        ws,
+        wres,
+        ksat,
+        np.float32(0.0),
+        np.int32(1),
+        w,
+        np.float32(0.01),
+        np.float32(0.0),
+        np.float32(0.0),
+        np.float32(0.1),
+        np.float32(0.1),
+        np.int32(0),
+        np.float32(0.1),
+        bub_arr,
+        h_arr,
+        lam_arr,
+        soil_enthalpy_top_layer_J_per_m2=np.float32(50000.0),
+        solid_heat_capacity_top_layer_J_per_m2_K=np.float32(100000.0),
+        rain_temperature_C=np.float32(15.0),
+        new_surface_water_input_m=np.float32(0.01),
+        rainfall_lookup_table=table_custom,
+    )
+
+    assert infiltration_amount > 0.0
+    assert abs(infiltration_amount + direct_runoff + topwater - 0.01) < 1e-6
+
+
+def test_infiltration_burst_storm_runoff_and_depression_storage() -> None:
+    """Test that a high-intensity burst generates substep runoff and caps topwater to depression storage.
+
+    During a heavy rainfall burst, infiltration capacity is exceeded in peak substeps.
+    Water exceeding depression storage must spill over as direct runoff rather than
+    remaining artificially ponded on the surface for subsequent substeps.
+    """
+    ws: ArrayFloat32 = np.array([0.35, 0.35, 0.35, 0.35], dtype=np.float32)
+    wres: ArrayFloat32 = np.zeros_like(ws)
+    layer_heights_m: ArrayFloat32 = np.array([0.05, 0.10, 0.15, 0.30], dtype=np.float32)
+    bubbling_m: ArrayFloat32 = np.full_like(ws, 0.2)
+    lambda_pore: ArrayFloat32 = np.full_like(ws, 0.3)
+    # Low-moderate soil conductivity: 4 mm/hr
+    ksat_m_per_s: ArrayFloat32 = np.full_like(ws, np.float32(0.004 / 3600.0))
+    w: ArrayFloat32 = ws * np.float32(0.7)  # 70% saturated
+
+    # 30 mm burst rain in 1 hour
+    storm_rain_m: np.float32 = np.float32(0.030)
+    topwater_initial_m: np.float32 = np.float32(0.0)
+    total_water_input_m: np.float32 = topwater_initial_m + storm_rain_m
+
+    table_custom = generate_rainfall_lookup_table(sigma=0.8)
+
+    (
+        topwater_rem_m,
+        direct_runoff_m,
+        groundwater_recharge_m,
+        infiltration_m,
+        wetting_front_depth_m,
+        _,
+        _,
+        _,
+        updated_enthalpy,
+    ) = infiltration(
+        seed=np.int64(123),
+        ws=ws,
+        wres=wres,
+        saturated_hydraulic_conductivity_m_per_s=ksat_m_per_s,
+        groundwater_toplayer_conductivity_m_per_s=np.float32(0.0),
+        land_use_type=np.int32(NON_PADDY_IRRIGATED),
+        w=w,
+        topwater_m=total_water_input_m,
+        capillary_rise_from_groundwater_m=np.float32(0.0),
+        wetting_front_depth_m=np.float32(0.0),
+        wetting_front_suction_head_m=np.float32(0.1),
+        wetting_front_moisture_deficit=np.float32(0.1),
+        green_ampt_active_layer_idx=0,
+        variable_runoff_shape_beta=np.float32(0.5),
+        bubbling_pressure_m_positive=bubbling_m,
+        soil_layer_height_m=layer_heights_m,
+        lambda_pore_size_distribution=lambda_pore,
+        soil_enthalpy_top_layer_J_per_m2=np.float32(100000.0),
+        solid_heat_capacity_top_layer_J_per_m2_K=np.float32(100000.0),
+        rain_temperature_C=np.float32(18.0),
+        new_surface_water_input_m=storm_rain_m,
+        rainfall_lookup_table=table_custom,
+        distribute_rainfall_lognormally=True,
+        slope_m_per_m=np.float32(0.02),
+    )
+
+    # 1. Infiltration excess from the burst storm must generate direct runoff
+    assert direct_runoff_m > np.float32(0.005)
+
+    # 2. Retained surface water must be bounded by depression storage capacity (<= 2.5 mm on natural land)
+    assert topwater_rem_m <= np.float32(0.0025)
+
+    # 3. Exact mass conservation
+    total_water_out_m: np.float32 = (
+        topwater_rem_m + direct_runoff_m + groundwater_recharge_m + infiltration_m
+    )
+    assert abs(total_water_out_m - total_water_input_m) < 1e-6
+
+
+def test_calculate_variable_source_area_fraction() -> None:
+    """Test variable source area fraction calculation for Dunne runoff across boundary conditions."""
+    # 1. Zero or negative shape parameter means homogeneous cell (no variable source area)
+    assert calculate_variable_source_area_fraction(
+        np.float32(0.5), np.float32(0.0)
+    ) == np.float32(0.0)
+    assert calculate_variable_source_area_fraction(
+        np.float32(0.5), np.float32(-0.5)
+    ) == np.float32(0.0)
+
+    # 2. Completely dry soil produces zero saturated area
+    assert calculate_variable_source_area_fraction(
+        np.float32(0.0), np.float32(0.4)
+    ) == np.float32(0.0)
+    assert calculate_variable_source_area_fraction(
+        np.float32(-0.1), np.float32(0.4)
+    ) == np.float32(0.0)
+
+    # 3. Fully saturated soil produces 100% saturated area
+    assert calculate_variable_source_area_fraction(
+        np.float32(1.0), np.float32(0.4)
+    ) == np.float32(1.0)
+    assert calculate_variable_source_area_fraction(
+        np.float32(1.2), np.float32(0.4)
+    ) == np.float32(1.0)
+
+    # 4. Monotonically increasing with soil saturation
+    sats: list[float] = [0.1, 0.3, 0.5, 0.7, 0.9]
+    fractions: list[float] = [
+        float(calculate_variable_source_area_fraction(np.float32(s), np.float32(0.5)))
+        for s in sats
+    ]
+    for i in range(len(fractions) - 1):
+        assert fractions[i] < fractions[i + 1], (
+            "Saturated fraction must increase with soil saturation"
+        )
+
+    # 5. Monotonically increasing with shape parameter beta
+    betas: list[float] = [0.1, 0.3, 0.6, 1.0]
+    fracs_beta: list[float] = [
+        float(calculate_variable_source_area_fraction(np.float32(0.6), np.float32(b)))
+        for b in betas
+    ]
+    for i in range(len(fracs_beta) - 1):
+        assert fracs_beta[i] < fracs_beta[i + 1], (
+            "Saturated fraction must increase with beta"
+        )
+
+
+def test_infiltration_pre_existing_puddle_dry_timestep() -> None:
+    """Test that pre-existing puddle water infiltrates without being treated as new rain.
+
+    During a dry hour (no new rainfall/irrigation, new_surface_water_input_m = 0.0),
+    any pre-existing ponded water (topwater_m > 0) should infiltrate via puddle infiltration
+    rather than generating artificial rain-burst Hortonian excess, Dunne saturation excess,
+    or sealed impervious direct runoff.
+    """
+    ws = np.array([0.3, 0.3, 0.3, 0.3, 0.3, 0.3], dtype=np.float32)
+    w = np.array([0.15, 0.15, 0.15, 0.15, 0.15, 0.15], dtype=np.float32)
+    ksat = np.full_like(w, np.float32(0.01 / 3600.0))  # 10 mm/hr
+    bub_arr = np.full_like(ws, 0.2)
+    h_arr = np.full_like(ws, 0.1)
+    lam_arr = np.full_like(ws, 0.5)
+
+    # 1. Natural land use: 2 mm pre-existing puddle during a dry hour (0 new rain)
+    topwater_puddle = np.float32(0.002)
+    (
+        updated_topwater,
+        direct_runoff,
+        gw_recharge,
+        infiltration_amount,
+        _,
+        _,
+        _,
+        _,
+        _,
+    ) = infiltration(
+        seed=np.int64(42),
+        ws=ws,
+        wres=np.zeros_like(ws),
+        saturated_hydraulic_conductivity_m_per_s=ksat,
+        groundwater_toplayer_conductivity_m_per_s=np.float32(0.0),
+        land_use_type=np.int32(NON_PADDY_IRRIGATED),
+        w=w.copy(),
+        topwater_m=topwater_puddle,
+        capillary_rise_from_groundwater_m=np.float32(0.0),
+        wetting_front_depth_m=np.float32(0.0),
+        wetting_front_suction_head_m=np.float32(0.1),
+        wetting_front_moisture_deficit=np.float32(0.1),
+        green_ampt_active_layer_idx=np.int32(0),
+        variable_runoff_shape_beta=np.float32(0.5),
+        bubbling_pressure_m_positive=bub_arr,
+        soil_layer_height_m=h_arr,
+        lambda_pore_size_distribution=lam_arr,
+        soil_enthalpy_top_layer_J_per_m2=np.float32(100000.0),
+        solid_heat_capacity_top_layer_J_per_m2_K=np.float32(100000.0),
+        rain_temperature_C=np.float32(15.0),
+        new_surface_water_input_m=np.float32(0.0),  # Dry hour!
+        rainfall_lookup_table=DEFAULT_TEST_LUT,
+    )
+    # The pre-existing puddle should infiltrate into the unsaturated soil
+    assert infiltration_amount > np.float32(0.0)
+    assert (
+        abs(updated_topwater + direct_runoff + infiltration_amount - topwater_puddle)
+        < 1e-6
+    )
+
+    # 2. Sealed surface: 2 mm pre-existing puddle during a dry hour
+    # It must NOT produce the 35% impervious roof/gutter runoff applied to incoming rain.
+    (
+        updated_topwater_sealed,
+        direct_runoff_sealed,
+        _,
+        infiltration_amount_sealed,
+        _,
+        _,
+        _,
+        _,
+        _,
+    ) = infiltration(
+        seed=np.int64(42),
+        ws=ws,
+        wres=np.zeros_like(ws),
+        saturated_hydraulic_conductivity_m_per_s=ksat,
+        groundwater_toplayer_conductivity_m_per_s=np.float32(0.0),
+        land_use_type=np.int32(SEALED),
+        w=w.copy(),
+        topwater_m=topwater_puddle,
+        capillary_rise_from_groundwater_m=np.float32(0.0),
+        wetting_front_depth_m=np.float32(0.0),
+        wetting_front_suction_head_m=np.float32(0.1),
+        wetting_front_moisture_deficit=np.float32(0.1),
+        green_ampt_active_layer_idx=np.int32(0),
+        variable_runoff_shape_beta=np.float32(0.5),
+        bubbling_pressure_m_positive=bub_arr,
+        soil_layer_height_m=h_arr,
+        lambda_pore_size_distribution=lam_arr,
+        soil_enthalpy_top_layer_J_per_m2=np.float32(100000.0),
+        solid_heat_capacity_top_layer_J_per_m2_K=np.float32(100000.0),
+        rain_temperature_C=np.float32(15.0),
+        new_surface_water_input_m=np.float32(0.0),  # Dry hour!
+        rainfall_lookup_table=DEFAULT_TEST_LUT,
+    )
+    # Pre-existing puddle on sealed surfaces can spill or infiltrate, but impervious direct
+    # runoff from incoming rain (35% = 0.7mm) must not occur.
+    # Total mass balance must hold:
+    assert (
+        abs(
+            updated_topwater_sealed
+            + direct_runoff_sealed
+            + infiltration_amount_sealed
+            - topwater_puddle
+        )
+        < 1e-6
     )

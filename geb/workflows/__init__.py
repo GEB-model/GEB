@@ -135,7 +135,7 @@ def balance_check(
         True if the balance check passes, False otherwise.
 
     Raises:
-        ValueError: If NaN values are found in the balance calculation.
+        ValueError: If NaN values are found in the balance calculation and raise_on_error is True.
         AssertionError: If the balance check fails and raise_on_error is True.
         ValueError: If return_max_imbalance_index is True when using 'sum' method.
     """
@@ -152,19 +152,44 @@ def balance_check(
         balance = influx - outflux + prestorage - poststorage
 
         if np.isnan(balance).any():
+            nan_indices: np.ndarray = np.where(np.isnan(balance))[0]
+            nan_index: int = int(nan_indices[0])
+            nan_msg: str = ""
             for kind, array in zip(
                 ["influx", "outflux", "prestorage", "poststorage"],
                 [influxes, outfluxes, prestorages, poststorages],
             ):
                 for i, component in enumerate(array, start=1):
                     if np.isnan(component).any():
-                        raise ValueError(
+                        nan_msg = (
                             f"NaN values found in {kind} component {i} (1-indexed)."
                         )
+                        break
+                if nan_msg:
+                    break
             else:
-                raise ValueError(
-                    "NaN values found in balance calculation, but could not identify component (shouldn't happen)."
+                nan_msg = (
+                    "NaN values found in balance calculation, but could not identify"
+                    " component (shouldn't happen)."
                 )
+
+            text: str = f"{nan_msg} First NaN at index {nan_index}."
+            if error_identifiers:
+                text += " Error identifiers: " + ", ".join(
+                    f"{key}={value[nan_index]}"
+                    for key, value in error_identifiers.items()
+                )
+            if name:
+                print(name, text)
+            else:
+                print(text)
+
+            if raise_on_error:
+                raise ValueError(text)
+            if return_max_imbalance_index:
+                return False, nan_index
+            else:
+                return False
 
         if balance.size == 0:
             return True
@@ -211,7 +236,14 @@ def balance_check(
 
         balance = abs(income + store - out)
         if np.isnan(balance):
-            raise ValueError("Balance check failed, NaN values found.")
+            text = "Balance check failed, NaN values found."
+            if name:
+                print(name, text)
+            else:
+                print(text)
+            if raise_on_error:
+                raise ValueError(text)
+            return False
         if balance > tolerance:
             text = f"{balance} is larger than tolerance {tolerance}"
             if name:

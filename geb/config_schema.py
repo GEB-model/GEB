@@ -11,7 +11,9 @@ class ForecastsConfig(BaseModel):
 
     use: bool = Field(False, description="Whether to use forecasts.")
     provider: str = Field("ECMWF", description="The forecast provider.")
-    processing: str = Field("merged_control_ensemble", description="The forecast processing method.")
+    processing: str = Field(
+        "merged_control_ensemble", description="The forecast processing method."
+    )
     overwrite: bool | Literal["auto"] = Field(
         "auto",
         description="Whether to overwrite existing forecast member results. True, False, or 'auto'. If 'auto', it will skip members that have already been completed successfully.",
@@ -218,12 +220,32 @@ class RiverDepthConfig(BaseModel):
     )
 
 
+class RetentionBasinsConfig(BaseModel):
+    """Configuration for retention basins in routing."""
+
+    release_threshold_factor: float = Field(
+        0.2,
+        description="Factor to multiply the activation threshold by to get the release threshold.",
+    )
+    activation_threshold_return_period_years: float = Field(
+        2.0,
+        description="Return period in years used to calculate the activation threshold for retention basins.",
+    )
+
+
 class RoutingConfig(BaseModel):
     """Configuration for routing."""
 
     algorithm: Literal["accuflux", "kinematic_wave"] = Field(
         "kinematic_wave",
         description="Routing algorithm: 'accuflux' or 'kinematic_wave'.",
+    )
+    minimum_river_slope_m_per_m: float = Field(
+        1e-4,
+        gt=0.0,
+        description=(
+            "Minimum channel slope used to parameterize kinematic-wave routing (m/m)."
+        ),
     )
     retention_basin_release_threshold_factor: float = Field(
         0.9,
@@ -256,13 +278,9 @@ class DischargeEvaluationConfig(BaseModel):
         description="Minimum modeled upstream area for stations included in discharge evaluation (km2).",
     )
     minimum_timeseries_length_years: float = Field(
-        10.0,
+        5.0,
         ge=0.0,
-        description="Minimum paired observation-simulation timeseries length for stations included in discharge evaluation (years).",
-    )
-    external_evaluation_folder: str | None = Field(
-        None,
-        description="Optional folder with external discharge evaluation CSV files. Relative paths are resolved from the model folder.",
+        description="Minimum total paired observation-simulation data for stations included in discharge evaluation (years; continuity is not required).",
     )
 
 
@@ -718,13 +736,34 @@ class ReportConfig(BaseModel):
     water_circle: bool = Field(
         False, alias="_water_circle", description="Whether to report water circle."
     )
+    water_balance: bool = Field(
+        False, alias="_water_balance", description="Whether to report water balance."
+    )
+    water_storage: bool = Field(
+        False, alias="_water_storage", description="Whether to report water storage."
+    )
+    energy_balance: bool = Field(
+        False, alias="_energy_balance", description="Whether to report energy balance."
+    )
     discharge_stations: bool = Field(
         True,
         alias="_discharge_stations",
         description="Whether to report discharge stations.",
     )
+    retention_basins: bool = Field(
+        False,
+        alias="_retention_basins",
+        description="Whether to report retention basins.",
+    )
+    meteorological_stations: bool = Field(
+        True,
+        alias="_meteorological_stations",
+        description="Whether to report meteorological stations.",
+    )
     outflow_points: bool = Field(
-        True, alias="_outflow_points", description="Whether to report outflow points."
+        True,
+        alias="_outflow_points",
+        description="Whether to report outflow points.",
     )
 
 
@@ -740,9 +779,9 @@ class ParametersConfig(BaseModel):
         0.1, description="Reservoir release factor."
     )
     lake_outflow_multiplier: float = Field(1.0, description="Lake outflow multiplier.")
+    interflow_multiplier: float = Field(1.0, description="Interflow multiplier.")
     variable_runoff_shape_beta: float = Field(
-        0.0,
-        description="Shape parameter for variable infiltration capacity runoff.",
+        1.0, description="Scale factor for the variable runoff shape parameter beta."
     )
 
 

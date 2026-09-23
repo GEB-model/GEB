@@ -2,6 +2,7 @@
 
 import math
 
+import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -26,7 +27,7 @@ def test_get_lake_height_from_bottom() -> None:
     and that the inverse function produces consistent results.
     """
     lake_area = np.array([100]).astype(np.float32)
-    lake_storage = np.linspace(0, 1000, 100).astype(np.float32)
+    lake_storage = np.linspace(0, 1000, 100).astype(np.float64)
 
     lake_height = get_lake_height_from_bottom(
         lake_storage=lake_storage, lake_area=lake_area
@@ -203,3 +204,152 @@ def test_estimate_initial_lake_storage_and_outflow_height() -> None:
     plt.savefig(output_folder / "get_lake_outflow_and_storage.png")
 
     plt.close()
+
+
+def test_waterbodies_depth_and_stage_calculations() -> None:
+    """Test WaterBodies.water_depth_from_bottom and WaterBodies.get_water_stage_m calculations."""
+    from unittest.mock import MagicMock
+
+    from geb.hydrology.waterbodies import WaterBodies
+
+    mock_model = MagicMock()
+    mock_model.in_spinup = False
+    mock_model.config = {
+        "general": {"hydrological_year_start_month": 10},
+        "parameters": {"lake_outflow_multiplier": np.float32(1.0)},
+    }
+    mock_hydrology = MagicMock()
+
+    wb = WaterBodies(model=mock_model, hydrology=mock_hydrology)
+    wb.var.lake_area = np.array([200000.0], dtype=np.float32)
+    wb.var.outflow_height = np.array([5.0], dtype=np.float32)
+    wb.var.storage = np.array([1000000.0], dtype=np.float64)
+
+    outflow_bed_elev = np.array([25.0], dtype=np.float32)
+
+    # 1. Normal lake storage (storage = outflow_height * lake_area)
+    wb.var.storage[0] = float(wb.var.outflow_height[0] * wb.var.lake_area[0])
+    depth = wb.water_depth_from_bottom
+    stage = wb.get_water_stage_m(outflow_bed_elev)
+    assert np.isclose(depth[0], wb.var.outflow_height[0])
+    assert np.isclose(stage[0], outflow_bed_elev[0])
+
+    # 2. Flooded lake storage (storage increased by 200,000 m3 over 200,000 m2 area = +1.0 m)
+    wb.var.storage[0] += 200000.0
+    stage_flooded = wb.get_water_stage_m(outflow_bed_elev)
+    assert np.isclose(stage_flooded[0], outflow_bed_elev[0] + 1.0)
+
+    # 3. Dry lake storage (storage = 0 m3) -> stage should equal bottom elevation
+    wb.var.storage[0] = 0.0
+    stage_dry = wb.get_water_stage_m(outflow_bed_elev)
+    bottom_elev = outflow_bed_elev[0] - wb.var.outflow_height[0]
+    assert np.isclose(stage_dry[0], bottom_elev)
+
+
+def test_flatten_waterbody_elevations() -> None:
+    """Test that flatten_waterbody_elevations flattens all cells within a waterbody to its outlet elevation."""
+    from unittest.mock import MagicMock
+
+    from geb.hydrology.waterbodies import WaterBodies
+
+    mock_model = MagicMock()
+    mock_model.in_spinup = False
+    mock_model.config = {
+        "general": {"hydrological_year_start_month": 10},
+        "parameters": {"lake_outflow_multiplier": np.float32(1.0)},
+    }
+    mock_hydrology = MagicMock()
+    mock_grid = MagicMock()
+    mock_grid.compressed_size = 5
+
+    wb = WaterBodies(model=mock_model, hydrology=mock_hydrology)
+    wb.grid = mock_grid
+
+    # 4 cells: cell 0 and 1 are in waterbody 0; cell 2 is in waterbody 1; cell 3 is a normal river cell (-1)
+    wb.grid.var.waterbody_ids = np.array([0, 0, 1, -1], dtype=np.int32)
+    # Outlet for waterbody 0 is at cell 1; outlet for waterbody 1 is at cell 2
+    wb.grid.var.waterbody_outflow_points = np.array([-1, 0, 1, -1], dtype=np.int32)
+    wb.var.waterbody_outflow_linear_mapping = np.array([1, 2], dtype=np.int32)
+
+    wb.var.waterbodies = gpd.GeoDataFrame({"elevation": [15.0, 80.0]})
+
+    # Initial bed elevations: cell 0 (lake shore) is 300 m, cell 1 (lake outlet) is 15 m
+    raw_elev = np.array([300.0, 15.0, 80.0, 120.0], dtype=np.float32)
+
+    flattened = wb.flatten_waterbody_elevations(raw_elev)
+
+    # Cell 0 must be flattened to match outlet cell 1 (15 m)
+    assert flattened[0] == 15.0
+    assert flattened[1] == 15.0
+    assert flattened[2] == 80.0
+    assert flattened[3] == 120.0
+
+
+def test_off_waterbodies_filtered_out_at_spinup() -> None:
+    """Test that waterbodies with waterbody_type == 0 (OFF) are excluded during spinup."""
+    from unittest.mock import MagicMock
+
+    import geopandas as gpd
+    import pandas as pd
+
+    from geb.hydrology.waterbodies import LAKE, OFF, RESERVOIR, WaterBodies
+
+    mock_model = MagicMock()
+    mock_model.in_spinup = False
+    mock_model.config = {
+        "general": {"hydrological_year_start_month": 10},
+        "parameters": {"lake_outflow_multiplier": np.float32(1.0)},
+    }
+    mock_hydrology = MagicMock()
+    mock_grid = MagicMock()
+    mock_grid.compressed_size = 5
+
+    # Raw grid waterbody_id has 3 waterbodies: 10, 20, 30
+    # 10: LAKE (active), 20: OFF (disabled), 30: RESERVOIR (active)
+    raw_wb_id = np.array([10, 10, 20, 30, -1], dtype=np.int32)
+    mock_grid.load2d.return_value = raw_wb_id
+    mock_hydrology.routing.var.discharge_in_rivers_m3_s_substep = np.zeros(
+        5, dtype=np.float32
+    )
+
+    upstream_area = np.array([100, 200, 50, 300, 400], dtype=np.int32)
+    mock_hydrology.routing.grid.var.upstream_area_n_cells = upstream_area
+
+    wb_data = gpd.GeoDataFrame(
+        {
+            "waterbody_type": [LAKE, OFF, RESERVOIR],
+            "average_area": [1e6, 2e6, 3e6],
+            "volume_total": [5e6, 1e7, 2e7],
+            "average_discharge": [10.0, 20.0, 30.0],
+        },
+        index=pd.Index([10, 20, 30], name="waterbody_id"),
+    )
+
+    wb = WaterBodies(model=mock_model, hydrology=mock_hydrology)
+    wb.grid = mock_grid
+    wb.model.files = {
+        "grid": {
+            "waterbodies/waterbody_id": "dummy_grid_path",
+            "routing/bankfull_river_elevation_m": "dummy_grid_path",
+        },
+        "geom": {"waterbodies/waterbody_data": "dummy_geom_path"},
+    }
+
+    # Patch read_geom to return wb_data
+    import pytest
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(
+            "geb.hydrology.waterbodies.read_geom", lambda path: wb_data.reset_index()
+        )
+        wb.spinup()
+
+    # Active waterbodies should only be 10 (LAKE) and 30 (RESERVOIR) -> mapped to 0 and 1
+    assert len(wb.var.waterbodies) == 2
+    assert set(wb.var.waterbodies.index) == {10, 30}
+    # Cell 2 (originally waterbody 20 which is OFF) must now be -1
+    assert wb.grid.var.waterbody_ids[2] == -1
+    # Cells for waterbody 10 and 30 must have valid mapped IDs (0 and 1)
+    assert wb.grid.var.waterbody_ids[0] != -1
+    assert wb.grid.var.waterbody_ids[1] != -1
+    assert wb.grid.var.waterbody_ids[3] != -1

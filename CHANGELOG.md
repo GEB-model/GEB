@@ -1,4 +1,20 @@
 # dev
+- Made the MSWEP_URL environment variable optional when all required MSWEP precipitation data is already available locally.
+- Implement two-layer snowpack.
+- Fixed unit inconsistency in kinematic wave routing evaporation limiter where volumetric flow rates and per-length rates were mixed.
+- Add retry logic for chunk downloads and limit concurrent connections in Destination Earth ERA5 adapter to prevent connection errors.
+- Export multi-entity special reporters (such as retention basins, meteorological stations, and outflow points) as single consolidated Parquet files.
+- Disable station time-series and return-period figure exports by default in discharge evaluation; enable them with `--export-timeseries-plots true` and `--export-return-period-plots true`.
+- Major re-organization of the hydrological evaluation code. This considerably shortened `evaluate/hydrology.py`, and all of its former contents are now distributed in various workflow scripts. 
+- Changed discharge skill score calculation, from package-calculated skill scores to the raw skill score formulas.
+- Add `--export-timeseries-plots false` to discharge evaluation to skip static station time-series images while keeping the dashboard and skill-score plots.
+- Added the calculation of seasonal discharge metrics
+- Improved how GRDC stations are matched (in `build/workflows/discharge_snapping.py`) 
+- Implemented a GRDC timezone correction, as GRDC data represents the local timezone. 
+- Integrated GRDC-Caravan dataset to get more insight into the relationship between catchment properties and skill score. 
+- The discharge dashboard is considerably improved. For example, a) it now shows stations NOT included in the hydrological evaluation, including the exclusion reason b) it visualizes the discharge station snapping procedure and c) it shows the GRDC caravan catchment attributes.
+- River slope is now configurable using `minimum_river_slope_m_per_m`.
+- Added an option to create a data package for scientific publication, which can be uploaded at Zenodo (includes station metadata, raw simulaton files and skill scores) 
 - Implemented the `early_warning.py` module outside of `households.py`, launching the latest GEB-IbF system, including options for: area and building based warnings; warning communication weighted by socio-economic factor; time-dependent damage reduction.
 - Users need to run `setup_warning_communication_weights` to enable the warning communication efficiency based on socioeconomic factors.
 - Parameterization of settings in the `model.yml`. Increased overall efficiency and usability of the early warning system.
@@ -76,6 +92,7 @@ Important notes:
 # v1.0.0b26
 - Write new model version after each version update in `geb update-version`. This way, when the model is updated multiple versions ahead, and one of the updates fails, the version updates that succeeded are still "saved".
 - Recently, there have been a lot of supply chain effects, where packages contained malicious code or instructions. To avoid most of these issues, but at the same time get relatively new updates (including those with important security updates) we limit any package updates to packages that are at least 3 days old in the uv.lock file. Here we use uv's exclude-newer option.
+- Move to using a two-layer snowpack instead of one.
 - Update routing to include retention basins. By default no retention basins are set (all -1), however a dataset can be passed to set up retention basins. These basins can retain water during flood peaks, and slowly release water during low-flow periods. Set up using `setup_retention_basins`.
 - Fix case where river discharge was 0 in waterbodies (OK), but led to division by zero error in determining alpha for river widths ([#819](https://github.com/GEB-model/GEB/issues/819)).
 - Use MIRCA-OS crop calendars rather than MIRCA2000 ([#813](https://github.com/GEB-model/GEB/issues/813)).
@@ -87,8 +104,8 @@ Important notes:
 
 # v1.0.0b25
 - Fix cases where subgrid elevation could be nan in coastal areas and DEM was not available. This ultimately leads to an error in the land surface model (propagating nans).
+- Remove unused config reading in `geb update-version` that prevented using working directory update version too.
 - Include a delta approach to account for changes in precipitation and temperature under climate change in creating return period maps. To adjust forcing data to future climate, add the `representative_forcing_year` argument to `setup_forcing` in the build.yml to indicate the year for which you want to fast-forward the forcing data.
-- Fix a bug where update-version would not write newly created files to `files.yml`.
 
 # v1.0.0b24
 - Add `mode="off"` option to `setup_waterbodies` to completely disable waterbodies, or `mode: "lakes_only"` or `mode: "reservoirs_only"`.
@@ -511,4 +528,3 @@ To support this version:
 To support this version:
 
 - Re-run `setup_forcing` and `setup_spei`
-

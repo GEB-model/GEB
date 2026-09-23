@@ -45,7 +45,7 @@ def process_soilgrids(
             .compute()
             .chunk({"x": -1, "y": -1})
         )
-
+    da.encoding["_FillValue"] = da.attrs.get("_FillValue", -9999)
     da = convert_nodata(da, np.nan)
     da = interpolate_na_2d(da)
     da = resample_chunked(

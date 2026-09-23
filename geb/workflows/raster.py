@@ -24,6 +24,7 @@ from pyresample.gradient import (
 )
 from pyresample.resampler import resample_blocks
 from rasterio.features import rasterize
+from rioxarray.raster_array import RasterArray
 from scipy.interpolate import griddata
 from shapely.geometry import Polygon
 from shapely.geometry.base import BaseGeometry
@@ -925,40 +926,56 @@ def pad_xy(
     data.
 
     """
-    array_rio = da.rio
+    array_rio: RasterArray = da.rio
 
     left, bottom, right, top = array_rio._internal_bounds()
     resolution_x, resolution_y = array_rio.resolution()
     y_coord: xarray.DataArray | np.ndarray = da[array_rio.y_dim].values
     x_coord: xarray.DataArray | np.ndarray = da[array_rio.x_dim].values
 
-    y_before = y_after = 0
-    x_before = x_after = 0
+    # Bounding box bounds (minx, miny, maxx, maxy) represent cell edges, whereas
+    # coordinates represent cell centroids. We offset by half the cell resolution
+    # to find the target centroid boundaries
+    pad_minx: float = minx - abs(resolution_x) / 2.0
+    pad_miny: float = miny - abs(resolution_y) / 2.0
+    pad_maxx: float = maxx + abs(resolution_x) / 2.0
+    pad_maxy: float = maxy + abs(resolution_y) / 2.0
+
+    y_before: int = 0
+    y_after: int = 0
+    x_before: int = 0
+    x_after: int = 0
 
     # Create new coordinates by extending existing ones
-    if top - resolution_y < maxy:
-        new_top_coords = np.arange(top - resolution_y, maxy, -resolution_y)[::-1]
-        new_y_coord = np.concatenate([new_top_coords, y_coord])
+    if top - resolution_y < pad_maxy:
+        new_top_coords: np.ndarray = np.arange(
+            top - resolution_y, pad_maxy, -resolution_y
+        )[::-1]
+        new_y_coord: np.ndarray = np.concatenate([new_top_coords, y_coord])
         y_before = len(new_y_coord) - len(y_coord)
         y_coord = new_y_coord
         top = y_coord[0]
-    if bottom + resolution_y > miny:
-        new_bottom_coords = np.arange(bottom + resolution_y, miny, resolution_y)
+    if bottom + resolution_y > pad_miny:
+        new_bottom_coords: np.ndarray = np.arange(
+            bottom + resolution_y, pad_miny, resolution_y
+        )
         new_y_coord = np.concatenate([y_coord, new_bottom_coords])
         y_after = len(new_y_coord) - len(y_coord)
         y_coord = new_y_coord
         bottom = y_coord[-1]
 
-    if left - resolution_x > minx:
+    if left - resolution_x > pad_minx:
         new_left_coords: np.ndarray = np.arange(
-            left - resolution_x, minx, -resolution_x
+            left - resolution_x, pad_minx, -resolution_x
         )[::-1]
         new_x_coord = np.concatenate([new_left_coords, x_coord])
         x_before = len(new_x_coord) - len(x_coord)
         x_coord = new_x_coord
         left = x_coord[0]
-    if right + resolution_x < maxx:
-        new_right_coords = np.arange(x_coord[-1] + resolution_x, maxx, resolution_x)
+    if right + resolution_x < pad_maxx:
+        new_right_coords: np.ndarray = np.arange(
+            x_coord[-1] + resolution_x, pad_maxx, resolution_x
+        )
         new_x_coord = np.concatenate([x_coord, new_right_coords])
         x_after = len(new_x_coord) - len(x_coord)
         x_coord = new_x_coord
