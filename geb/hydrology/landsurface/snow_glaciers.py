@@ -401,8 +401,10 @@ def promote_snow_to_top_layer(
             liquid_transfer_m,
         )
 
-        swe_bottom_m -= transfer_m
-        liquid_water_bottom_m -= liquid_transfer_m
+        swe_bottom_m = max(np.float64(0.0), swe_bottom_m - transfer_m)
+        liquid_water_bottom_m = max(
+            np.float64(0.0), liquid_water_bottom_m - liquid_transfer_m
+        )
         if swe_bottom_m <= EPSILON_M:
             swe_top_m += swe_bottom_m
             swe_bottom_m = np.float64(0.0)
@@ -582,7 +584,7 @@ def apply_precipitation_compaction_and_top_layer_transfer(
         )
 
         swe_top_m = np.float64(MAX_TOP_LAYER_SWE_M)
-        liquid_water_top_m -= liquid_trans_m
+        liquid_water_top_m = max(np.float64(0.0), liquid_water_top_m - liquid_trans_m)
         enthalpy_bottom_J_per_m2 += trans_enthalpy_J_per_m2
 
     return (
@@ -836,7 +838,9 @@ def update_snow_mass_and_phase(
     percolation_to_bottom_m: np.float64 = max(
         np.float64(0.0), liquid_water_top_m - max_liquid_top_m
     )
-    liquid_water_top_m -= percolation_to_bottom_m
+    liquid_water_top_m = max(
+        np.float64(0.0), liquid_water_top_m - percolation_to_bottom_m
+    )
 
     # Add top layer percolation to bottom layer liquid water.
     liquid_water_bottom_m += percolation_to_bottom_m
@@ -867,13 +871,15 @@ def update_snow_mass_and_phase(
     runoff_from_bottom_m: np.float64 = max(
         np.float64(0.0), liquid_water_bottom_m - max_liquid_bottom_m
     )
-    liquid_water_bottom_m -= runoff_from_bottom_m
+    liquid_water_bottom_m = max(
+        np.float64(0.0), liquid_water_bottom_m - runoff_from_bottom_m
+    )
 
     # Drain remaining liquid water if bottom layer snow is depleted.
     if swe_bottom_m <= EPSILON_M:
         swe_bottom_m = np.float64(0.0)
         enthalpy_bottom_J_per_m2 = np.float32(0.0)
-        runoff_from_bottom_m += liquid_water_bottom_m
+        runoff_from_bottom_m += max(np.float64(0.0), liquid_water_bottom_m)
         liquid_water_bottom_m = np.float64(0.0)
 
     # Replenish top layer if below target thickness.
@@ -900,7 +906,10 @@ def update_snow_mass_and_phase(
     # Reset state if entire snowpack has ablated.
     if swe_top_m <= EPSILON_M and swe_bottom_m <= EPSILON_M:
         runoff_from_bottom_m += (
-            swe_top_m + swe_bottom_m + liquid_water_top_m + liquid_water_bottom_m
+            max(np.float64(0.0), swe_top_m)
+            + max(np.float64(0.0), swe_bottom_m)
+            + max(np.float64(0.0), liquid_water_top_m)
+            + max(np.float64(0.0), liquid_water_bottom_m)
         )
         swe_top_m = np.float64(0.0)
         swe_bottom_m = np.float64(0.0)
@@ -912,7 +921,10 @@ def update_snow_mass_and_phase(
         liquid_water_bottom_m = np.float64(0.0)
 
     snow_melt_m_per_hour: np.float32 = melt_top_m + melt_bottom_m
-    melt_runoff_m_per_hour: np.float32 = np.float32(runoff_from_bottom_m)
+    runoff_from_bottom_m = max(np.float64(0.0), runoff_from_bottom_m)
+    melt_runoff_m_per_hour: np.float32 = max(
+        np.float32(0.0), np.float32(runoff_from_bottom_m)
+    )
     refreezing_m_per_hour: np.float32 = refreezing_top_m + refreezing_bottom_m
 
     return (
@@ -1074,8 +1086,9 @@ def handle_refreezing(
         snow_water_equivalent_m + actual_refreezing_m_per_hour
     )
 
-    updated_liquid_water_m: np.float64 = (
-        liquid_water_in_snow_m - actual_refreezing_m_per_hour
+    updated_liquid_water_m: np.float64 = max(
+        np.float64(0.0),
+        liquid_water_in_snow_m - np.float64(actual_refreezing_m_per_hour),
     )
     updated_snow_enthalpy_J_per_m2: np.float32 = snow_enthalpy_J_per_m2 + (
         actual_refreezing_m_per_hour * RHO_WATER_KG_PER_M3 * LATENT_HEAT_FUSION_J_PER_KG
@@ -1114,6 +1127,10 @@ def calculate_runoff(
     runoff_rate_m_per_hour: np.float64 = max(
         np.float64(0.0), liquid_water_in_snow_m - max_water_content_m
     )
-    updated_liquid_water_m: np.float64 = liquid_water_in_snow_m - runoff_rate_m_per_hour
-    runoff_rate_m_per_hour: np.float32 = np.float32(runoff_rate_m_per_hour)
+    updated_liquid_water_m: np.float64 = max(
+        np.float64(0.0), liquid_water_in_snow_m - runoff_rate_m_per_hour
+    )
+    runoff_rate_m_per_hour: np.float32 = max(
+        np.float32(0.0), np.float32(runoff_rate_m_per_hour)
+    )
     return runoff_rate_m_per_hour, updated_liquid_water_m
