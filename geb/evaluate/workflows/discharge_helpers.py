@@ -188,6 +188,8 @@ def load_station_discharge_comparison(
         FileNotFoundError: If the hydrology routing directory does not exist.
         ValueError: If discharge values, timestamp frequencies, the upstream-area
             correction, or the fixed UTC offset are invalid.
+        ValueError: If hourly observed or simulated discharge is not timestamped on the half hour (HH:30:00).
+        ValueError: If daily observed discharge is not timestamped at the middle of the day (12:00:00).
     """
     report_folder: Path = output_folder / "report"
     routing_dir: Path = report_folder / "hydrology.routing"
@@ -252,21 +254,71 @@ def load_station_discharge_comparison(
             "Observed discharge timestep must be a multiple of the simulated timestep."
         )
 
+    # Validate that hourly observations are timestamped on the half hour (HH:30:00)
+    # and daily observations are timestamped at the middle of the day (12:00:00)
+    obs_time_series: pd.Series = observed_discharge.index.to_series()
+    if observed_timestep == pd.Timedelta(hours=1):
+        invalid_hourly_obs_mask: pd.Series = (
+            (obs_time_series.dt.minute != 30)
+            | (obs_time_series.dt.second != 0)
+            | (obs_time_series.dt.microsecond != 0)
+        )
+        if invalid_hourly_obs_mask.any():
+            first_invalid_obs: Any = obs_time_series[invalid_hourly_obs_mask].iloc[0]
+            raise ValueError(
+                f"Hourly observed discharge for station {station_id} must be timestamped on the half hour (HH:30:00). "
+                f"Found invalid timestamp: {first_invalid_obs}."
+            )
+    elif observed_timestep >= pd.Timedelta(days=1):
+        invalid_daily_obs_mask: pd.Series = (
+            (obs_time_series.dt.hour != 12)
+            | (obs_time_series.dt.minute != 0)
+            | (obs_time_series.dt.second != 0)
+            | (obs_time_series.dt.microsecond != 0)
+        )
+        if invalid_daily_obs_mask.any():
+            first_invalid_daily_obs: Any = obs_time_series[invalid_daily_obs_mask].iloc[
+                0
+            ]
+            raise ValueError(
+                f"Daily observed discharge for station {station_id} must be timestamped in the middle of the day (12:00:00). "
+                f"Found invalid timestamp: {first_invalid_daily_obs}."
+            )
+
+    # Validate that hourly simulated discharge is timestamped on the half hour (HH:30:00)
+    sim_time_series: pd.Series = simulated_discharge.index.to_series()
+    if simulated_timestep == pd.Timedelta(hours=1):
+        invalid_sim_hourly_mask: pd.Series = (
+            (sim_time_series.dt.minute != 30)
+            | (sim_time_series.dt.second != 0)
+            | (sim_time_series.dt.microsecond != 0)
+        )
+        if invalid_sim_hourly_mask.any():
+            first_invalid_sim: Any = sim_time_series[invalid_sim_hourly_mask].iloc[0]
+            raise ValueError(
+                f"Hourly simulated discharge for station {station_id} must be timestamped on the half hour (HH:30:00). "
+                f"Found invalid timestamp: {first_invalid_sim}."
+            )
+
     if observed_timestep >= pd.Timedelta(days=1) and timezone_utc_offset != 0.0:
         # GRDC daily observations represent local calendar days.
         simulated_discharge.index = simulated_discharge.index + pd.Timedelta(
             hours=timezone_utc_offset
         )
 
-    simulated_resampler: Any = simulated_discharge.resample(
-        observed_frequency, closed="left", label="left"
-    )
-    # Local-time shifts can leave partial days at either end of a report.
-    # Compare observations only with complete simulation intervals.
-    expected_steps: float = observed_timestep / simulated_timestep
-    simulated_discharge = simulated_resampler.mean().where(
-        simulated_resampler.count() == expected_steps
-    )
+    if simulated_timestep != observed_timestep:
+        simulated_resampler: Any = simulated_discharge.resample(
+            observed_frequency, closed="left", label="left"
+        )
+        # Local-time shifts can leave partial days at either end of a report.
+        # Compare observations only with complete simulation intervals.
+        expected_steps: float = observed_timestep / simulated_timestep
+        simulated_discharge = simulated_resampler.mean().where(
+            simulated_resampler.count() == expected_steps
+        )
+        # Offset index to the midpoint of the interval (e.g., 12:00:00 for daily)
+        # to match observed discharge timestamped in the middle of the interval.
+        simulated_discharge.index = simulated_discharge.index + observed_timestep / 2
 
     # cut both observed and simulated discharge to the same time range
     start_time = max(observed_discharge.index.min(), simulated_discharge.index.min())
