@@ -613,6 +613,15 @@ class DecisionModuleML:
             int(crop): forest
             for crop, forest in hierarchical_state["conditional_forests"].items()
         }
+
+        # RF training can use many workers, but operational ABM inference should not.
+        # The fitted trees are unchanged; this only controls prediction parallelism.
+        self.crop_forest.n_jobs = 1
+
+        for forest in self.conditional_forests.values():
+            if forest is not None:
+                forest.n_jobs = 1
+
         self.conditional_class_ids = {
             int(crop): np.asarray(class_ids, dtype=np.int64)
             for crop, class_ids in hierarchical_state["conditional_class_ids"].items()
