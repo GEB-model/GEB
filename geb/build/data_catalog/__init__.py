@@ -8,6 +8,7 @@ from .aquastat import AQUASTAT
 from .base import Adapter
 from .cmip6 import CMIP6
 from .coast_rp import CoastRP
+from .copernicus_hrl import CopernicusDataSpace
 from .cwatm_water_demand import CWATMIndustryWaterDemand, CWATMLivestockWaterDemand
 from .deltadtm import DeltaDTM
 from .destination_earth import DestinationEarth
@@ -54,10 +55,9 @@ from .soilgrids import SoilGridsV1, SoilGridsV2
 from .superwell import GCAMElectricityRates
 from .sword import Sword
 from .undp import HumanDevelopmentIndex
-from .copernicus_hrl import CopernicusDataSpace
 from .why_map import WhyMap
-from .world_bank_pink_sheet import WorldBankPinkSheetData
 from .world_bank import WorldBankData
+from .world_bank_pink_sheet import WorldBankPinkSheetData
 from .worldfloods import WorldFloodsV2
 
 data_catalog: dict[str, dict[str, Any]] = {
@@ -94,7 +94,22 @@ data_catalog: dict[str, dict[str, Any]] = {
     "era5": {
         "adapter": DestinationEarth(),
         "url": None,
-        "source": {"name": "ERA5", "author": "ECMWF", "license": "CC BY 4.0"},
+        "source": {
+            "name": "ERA5",
+            "author": "ECMWF",
+            "license": "CC BY 4.0",
+        },
+    },
+    "destine_climate_dt_ssp370": {
+        "adapter": DestinationEarth(
+            dataset="climate_dt_ssp370",
+        ),
+        "url": None,
+        "source": {
+            "name": "Destination Earth Climate DT IFS-NEMO SSP3-7.0",
+            "author": "ECMWF",
+            "license": "CC BY 4.0",
+        },
     },
     "ecmwf_geopotential": {
         "adapter": ECMWFGeopotential(

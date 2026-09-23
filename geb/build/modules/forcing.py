@@ -1254,25 +1254,493 @@ class Forcing(BuildModelBase):
             name="climate/elevation_forcing",
         )
 
+    def setup_forcing_DestinE(
+        self,
+        transition_date: date = date(2025, 1, 1),
+        reuse_existing_before_transition: bool = False,
+        create_plots: bool = False,
+    ) -> None:
+        """Set up ERA5 forcing followed by DestinE Climate DT forcing.
+
+        ERA5 is used for all timestamps before ``transition_date``. DestinE
+        Climate DT IFS-NEMO SSP3-7.0 is used from ``transition_date`` onwards.
+        DestinE data are regridded to the ERA5 forcing grid before the two time
+        series are concatenated.
+
+        When ``reuse_existing_before_transition`` is False, the ERA5 part is
+        retrieved through exactly the same catalog entry and read path as
+        ``setup_forcing_ERA5``. When it is True, the already stored GEB forcing
+        is retained before the transition date and ERA5 is not downloaded or
+        recreated. Only DestinE forcing from the transition date onwards is
+        retrieved and appended.
+
+        Args:
+            transition_date: First date for which DestinE forcing is used.
+                The default 2025-01-01 retains ERA5 only before 2025 and uses
+                DestinE from the start of 2025 onwards.
+            reuse_existing_before_transition: If True, reuse forcing already
+                present in ``self.other`` before ``transition_date`` instead of
+                retrieving ERA5 again.
+            create_plots: If True, create plots for the forcing data.
+
+        Raises:
+            ValueError: If the transition date lies outside the available
+                Climate DT SSP3-7.0 period, the requested model end date is
+                later than the available Climate DT data, required existing
+                forcing is missing when reuse is requested, or the combined
+                forcing is not continuous at hourly resolution.
+        """
+        model_end_date = (
+            self.end_date.date()
+            if isinstance(self.end_date, datetime)
+            else self.end_date
+        )
+
+        # Climate DT SSP3-7.0 Generation 2 is available from 2015 through 2049.
+        destine_start_date = date(2015, 1, 1)
+        destine_end_date = date(2049, 12, 31)
+
+        if transition_date > model_end_date:
+            if reuse_existing_before_transition:
+                self.logger.info(
+                    "DestinE transition date is after the model end date. "
+                    "Keeping the existing forcing unchanged."
+                )
+                return
+            self.logger.info(
+                "DestinE transition date is after the model end date. "
+                "Using ERA5 forcing only."
+            )
+            self.setup_forcing_ERA5(create_plots=create_plots)
+            return
+
+        if transition_date < destine_start_date:
+            raise ValueError(
+                f"DestinE Climate DT SSP3-7.0 starts on {destine_start_date}, "
+                f"but transition_date is {transition_date}."
+            )
+
+        if model_end_date > destine_end_date:
+            raise ValueError(
+                f"DestinE Climate DT SSP3-7.0 ends on {destine_end_date}, "
+                f"but the requested model end date is {model_end_date}."
+            )
+
+        transition_datetime = datetime.combine(transition_date, datetime.min.time())
+        transition_np = np.datetime64(transition_datetime)
+        bounds = self.grid["mask"].rio.bounds(recalc=True)
+
+        destine_store: Adapter = self.data_catalog.fetch("destine_climate_dt_ssp370")
+        destine_loader: partial = partial(
+            destine_store.read,
+            start_date=transition_datetime,
+            end_date=self.end_date
+            + relativedelta(days=1),  # add one day to include the end date
+            bounds=bounds,
+        )
+
+        def validate_combined_time(combined: xr.DataArray) -> None:
+            """Check for duplicate timestamps and enforce hourly continuity."""
+            time_values = combined.time.values.astype("datetime64[ns]")
+
+            if np.unique(time_values).size != time_values.size:
+                raise ValueError(
+                    "Duplicate timestamps found after combining ERA5 and DestinE forcing."
+                )
+
+            if time_values.size > 1:
+                time_diff = np.diff(time_values)
+                invalid_steps = np.where(time_diff != np.timedelta64(1, "h"))[0]
+                if invalid_steps.size > 0:
+                    index = int(invalid_steps[0])
+                    raise ValueError(
+                        "ERA5/DestinE forcing is not continuous at hourly resolution. "
+                        f"First discontinuity is between {time_values[index]} and "
+                        f"{time_values[index + 1]}."
+                    )
+
+        if reuse_existing_before_transition:
+            forcing_names = [
+                "climate/pr_kg_per_m2_per_s",
+                "climate/tas_2m_K",
+                "climate/dewpoint_tas_2m_K",
+                "climate/rsds_W_per_m2",
+                "climate/rlds_W_per_m2",
+                "climate/ps_pascal",
+                "climate/wind_u10m_m_per_s",
+                "climate/wind_v10m_m_per_s",
+            ]
+            required_existing = [
+                *forcing_names,
+                *(f"{name}_mask" for name in forcing_names),
+                "climate/elevation_forcing",
+            ]
+            missing = [name for name in required_existing if name not in self.other]
+            if missing:
+                raise ValueError(
+                    "reuse_existing_before_transition=True requires existing climate "
+                    "forcing in the model. Missing: " + ", ".join(missing)
+                )
+
+            self.logger.info(
+                "Reusing existing forcing before %s and retrieving only DestinE "
+                "forcing from that date onwards.",
+                transition_date,
+            )
+
+            def append_to_existing(
+                name: str,
+                destine_data: xr.DataArray,
+            ) -> tuple[xr.DataArray, xr.DataArray]:
+                """Append regridded DestinE data to an existing stacked forcing array."""
+                existing = self.other[name]
+                existing_mask = self.other[f"{name}_mask"]
+
+                existing_before = existing.sel(time=existing.time < transition_np)
+                if existing_before.time.size == 0:
+                    raise ValueError(
+                        f"Existing forcing '{name}' contains no data before "
+                        f"{transition_date}."
+                    )
+
+                # Regrid future forcing directly to the already existing forcing
+                # grid. This avoids recreating or downloading any historical ERA5.
+                destine_data = resample_like(
+                    source=destine_data,
+                    target=existing_mask,
+                    method="bilinear",
+                )
+
+                if not np.allclose(destine_data.x.values, existing_mask.x.values):
+                    raise ValueError(
+                        f"DestinE x coordinates for '{name}' do not match the "
+                        "existing forcing grid after regridding."
+                    )
+                if not np.allclose(destine_data.y.values, existing_mask.y.values):
+                    raise ValueError(
+                        f"DestinE y coordinates for '{name}' do not match the "
+                        "existing forcing grid after regridding."
+                    )
+
+                destine_data = destine_data.sel(time=destine_data.time >= transition_np)
+                if destine_data.time.size == 0:
+                    raise ValueError(
+                        f"No DestinE data for '{name}' are available from "
+                        f"{transition_date}."
+                    )
+
+                destine_stacked, destine_mask = _stack_forcing_variable(
+                    destine_data,
+                    existing_mask,
+                )
+
+                if destine_mask.shape != existing_mask.shape or not np.array_equal(
+                    destine_mask.values,
+                    existing_mask.values,
+                ):
+                    raise ValueError(
+                        f"DestinE mask for '{name}' differs from the existing forcing mask."
+                    )
+
+                destine_stacked = destine_stacked.transpose("idxs", "time", ...)
+                existing_before = existing_before.transpose("idxs", "time", ...)
+
+                if existing_before.sizes["idxs"] != destine_stacked.sizes["idxs"]:
+                    raise ValueError(
+                        f"DestinE and existing forcing '{name}' have different "
+                        "numbers of active forcing cells."
+                    )
+
+                combined = xr.concat(
+                    [existing_before, destine_stacked],
+                    dim="time",
+                    coords="minimal",
+                    compat="override",
+                ).sortby("time")
+                validate_combined_time(combined)
+                return combined, existing_mask
+
+            # Precipitation is already kg/m2/s in Climate DT.
+            pr_destine = destine_loader(variable="avg_tprate")
+            pr_destine = xr.where(
+                pr_destine > 0,
+                pr_destine,
+                0,
+                keep_attrs=True,
+            )
+            pr_hourly, pr_mask = append_to_existing(
+                "climate/pr_kg_per_m2_per_s",
+                pr_destine,
+            )
+            self.set_pr_kg_per_m2_per_s(
+                pr_hourly,
+                mask=pr_mask,
+                create_plots=create_plots,
+            )
+
+            tas, tas_mask = append_to_existing(
+                "climate/tas_2m_K",
+                destine_loader("t2m"),
+            )
+            self.set_tas_2m_K(
+                tas,
+                mask=tas_mask,
+                create_plots=create_plots,
+            )
+
+            dew_point_tas, dewpoint_mask = append_to_existing(
+                "climate/dewpoint_tas_2m_K",
+                destine_loader("d2m"),
+            )
+            self.set_dewpoint_tas_2m_K(
+                dew_point_tas,
+                mask=dewpoint_mask,
+                create_plots=create_plots,
+            )
+
+            # Climate DT radiation is already in W/m2, so no ERA5-style
+            # division by 3600 is applied.
+            rsds, rsds_mask = append_to_existing(
+                "climate/rsds_W_per_m2",
+                destine_loader("avg_sdswrf"),
+            )
+            self.set_rsds_W_per_m2(
+                rsds,
+                mask=rsds_mask,
+                create_plots=create_plots,
+            )
+
+            rlds, rlds_mask = append_to_existing(
+                "climate/rlds_W_per_m2",
+                destine_loader("avg_sdlwrf"),
+            )
+            self.set_rlds_W_per_m2(
+                rlds,
+                mask=rlds_mask,
+                create_plots=create_plots,
+            )
+
+            pressure, pressure_mask = append_to_existing(
+                "climate/ps_pascal",
+                destine_loader("sp"),
+            )
+            self.set_ps_pascal(
+                pressure,
+                mask=pressure_mask,
+                create_plots=create_plots,
+            )
+
+            u_wind, u_mask = append_to_existing(
+                "climate/wind_u10m_m_per_s",
+                destine_loader("u10"),
+            )
+            self.set_wind_10m_m_per_s(
+                u_wind,
+                direction="u",
+                mask=u_mask,
+                create_plots=create_plots,
+            )
+
+            v_wind, v_mask = append_to_existing(
+                "climate/wind_v10m_m_per_s",
+                destine_loader("v10"),
+            )
+            self.set_wind_10m_m_per_s(
+                v_wind,
+                direction="v",
+                mask=v_mask,
+                create_plots=create_plots,
+            )
+
+            # Keep the existing elevation_forcing unchanged. DestinE has been
+            # regridded to the same forcing grid, so no new elevation field is needed.
+            return
+
+        # ERA5 is retrieved through exactly the same catalog entry and read
+        # interface as in setup_forcing_ERA5().
+        era5_store: Adapter = self.data_catalog.fetch("era5")
+        era5_loader: partial = partial(
+            era5_store.read,
+            start_date=self.start_date - relativedelta(years=1),
+            end_date=transition_datetime,
+            bounds=bounds,
+        )
+
+        def combine_forcing(
+            era5_data: xr.DataArray,
+            destine_data: xr.DataArray,
+        ) -> xr.DataArray:
+            """Regrid DestinE to the ERA5 grid and concatenate in time."""
+            target_grid = era5_data.isel(time=0, drop=True)
+
+            destine_data = resample_like(
+                source=destine_data,
+                target=target_grid,
+                method="bilinear",
+            )
+
+            if (
+                destine_data.x.size != target_grid.x.size
+                or destine_data.y.size != target_grid.y.size
+            ):
+                raise ValueError(
+                    "DestinE data were not regridded correctly to the ERA5 forcing grid."
+                )
+
+            if not np.allclose(destine_data.x.values, target_grid.x.values):
+                raise ValueError(
+                    "DestinE and ERA5 x coordinates do not match after regridding."
+                )
+            if not np.allclose(destine_data.y.values, target_grid.y.values):
+                raise ValueError(
+                    "DestinE and ERA5 y coordinates do not match after regridding."
+                )
+
+            # ERA5 is authoritative before the transition; DestinE is
+            # authoritative from the transition timestamp onwards.
+            era5_data = era5_data.sel(time=era5_data.time < transition_np)
+            destine_data = destine_data.sel(time=destine_data.time >= transition_np)
+
+            if era5_data.time.size == 0:
+                raise ValueError(
+                    "No ERA5 forcing data are available before the DestinE transition."
+                )
+            if destine_data.time.size == 0:
+                raise ValueError(
+                    "No DestinE forcing data are available from the transition date."
+                )
+
+            combined = xr.concat(
+                [era5_data, destine_data],
+                dim="time",
+                coords="minimal",
+                compat="override",
+            ).sortby("time")
+            validate_combined_time(combined)
+            return combined
+
+        # Precipitation
+        pr_era5: xr.DataArray = era5_loader(variable="tp") * (
+            1000 / 3600
+        )  # ERA5 m/hour -> kg/m2/s
+        pr_destine: xr.DataArray = destine_loader(
+            variable="avg_tprate"
+        )  # Climate DT already kg/m2/s
+        pr_hourly = combine_forcing(pr_era5, pr_destine).chunk({"y": -1, "x": -1})
+        pr_hourly = xr.where(pr_hourly > 0, pr_hourly, 0, keep_attrs=True)
+        self.set_pr_kg_per_m2_per_s(pr_hourly, create_plots=create_plots)
+
+        # 2 m air temperature
+        tas = combine_forcing(
+            era5_loader("t2m"),
+            destine_loader("t2m"),
+        ).chunk({"y": -1, "x": -1})
+        self.set_tas_2m_K(tas, create_plots=create_plots)
+
+        # Keep the existing ERA5-grid geopotential/elevation. DestinE is
+        # regridded to this same forcing grid.
+        climate_grid = self.other["climate/pr_kg_per_m2_per_s_mask"]
+        geopotential = (
+            self.data_catalog.fetch("ecmwf_geopotential")
+            .read()
+            .sel(x=climate_grid.x, y=climate_grid.y, method="nearest", tolerance=0.001)
+        )
+
+        assert geopotential.x.size == climate_grid.x.size
+        assert geopotential.y.size == climate_grid.y.size
+
+        geopotential = snap_to_grid(geopotential, climate_grid).compute()
+        assert (geopotential.x.values == climate_grid.x.values).all()
+        assert (geopotential.y.values == climate_grid.y.values).all()
+
+        # 2 m dewpoint temperature
+        dew_point_tas = combine_forcing(
+            era5_loader("d2m"),
+            destine_loader("d2m"),
+        )
+        self.set_dewpoint_tas_2m_K(dew_point_tas, create_plots=create_plots)
+
+        # Surface downward shortwave radiation
+        rsds_era5: xr.DataArray = (
+            era5_loader("ssrd") / 3600
+        )  # ERA5 J/m2/timestep -> W/m2
+        rsds_destine: xr.DataArray = destine_loader(
+            "avg_sdswrf"
+        )  # Climate DT already W/m2
+        rsds = combine_forcing(rsds_era5, rsds_destine)
+        self.set_rsds_W_per_m2(rsds, create_plots=create_plots)
+
+        # Surface downward longwave radiation
+        rlds_era5: xr.DataArray = (
+            era5_loader("strd") / 3600
+        )  # ERA5 J/m2/timestep -> W/m2
+        rlds_destine: xr.DataArray = destine_loader(
+            "avg_sdlwrf"
+        )  # Climate DT already W/m2
+        rlds = combine_forcing(rlds_era5, rlds_destine).chunk({"time": 7 * 24})
+        self.set_rlds_W_per_m2(rlds, create_plots=create_plots)
+
+        # Surface pressure
+        pressure = combine_forcing(
+            era5_loader("sp"),
+            destine_loader("sp"),
+        )
+        self.set_ps_pascal(pressure, create_plots=create_plots)
+
+        # 10 m wind components
+        u_wind = combine_forcing(
+            era5_loader("u10"),
+            destine_loader("u10"),
+        )
+        self.set_wind_10m_m_per_s(u_wind, direction="u", create_plots=create_plots)
+
+        v_wind = combine_forcing(
+            era5_loader("v10"),
+            destine_loader("v10"),
+        )
+        self.set_wind_10m_m_per_s(v_wind, direction="v", create_plots=create_plots)
+
+        elevation_forcing = (geopotential / 9.81).astype(np.float32)
+        elevation_forcing.attrs = {
+            "long_name": "elevation",
+            "units": "m",
+            "_FillValue": np.nan,
+        }
+        self.set_other(
+            elevation_forcing,
+            name="climate/elevation_forcing",
+        )
+
     @build_method(depends_on=["set_ssp", "set_time_range"], required=True)
     def setup_forcing(
         self,
         forcing: str = "ERA5",
         create_plots: bool = False,
         representative_forcing_year: int | None = None,
+        transition_date: date = date(2025, 1, 1),
+        reuse_existing_before_transition: bool = False,
     ) -> None:
         """Sets up the forcing data for GEB.
 
         Args:
-            forcing: The data source to use for the forcing data. Currently only ERA5 is supported.
+            forcing: The forcing data source. Supported values are ``ERA5`` and
+                ``DestinE``. ``DestinE`` uses ERA5 before ``transition_date`` and
+                DestinE Climate DT afterwards.
             create_plots: If True, create plots for the forcing data.
-            representative_forcing_year: The representative year for which to fetch the CMIP6 deltas. Only used if forcing is 'ERA5' to adjust the historical data to future conditions.
+            representative_forcing_year: Representative year for applying CMIP6
+                deltas to ERA5. This cannot be combined with DestinE forcing.
+            transition_date: First date for which DestinE forcing is used when
+                ``forcing`` is ``DestinE``. Defaults to 2025-01-01.
+            reuse_existing_before_transition: If True with ``DestinE``, reuse
+                the already stored forcing before ``transition_date`` instead of
+                retrieving ERA5 again.
 
         Sets:
-            The resulting forcing data is set as forcing data in the model with names of the form 'forcing/{variable_name}'.
+            The resulting forcing data is set as forcing data in the model with
+            names of the form ``climate/{variable_name}``.
 
         Raises:
-            ValueError: If an unknown data source is specified.
+            ValueError: If an unknown data source or incompatible options are supplied.
         """
         if forcing == "ISIMIP":
             raise NotImplementedError(
@@ -1283,10 +1751,23 @@ class Forcing(BuildModelBase):
                 create_plots=create_plots,
                 representative_forcing_year=representative_forcing_year,
             )
+        elif forcing == "DestinE":
+            if representative_forcing_year is not None:
+                raise ValueError(
+                    "representative_forcing_year cannot be used with DestinE forcing "
+                    "because Climate DT already represents a future climate simulation."
+                )
+            self.setup_forcing_DestinE(
+                transition_date=transition_date,
+                reuse_existing_before_transition=reuse_existing_before_transition,
+                create_plots=create_plots,
+            )
         elif forcing == "CMIP":
             raise NotImplementedError("CMIP forcing data is not yet supported")
         else:
-            raise ValueError(f"Unknown data source: {forcing}, supported are 'ERA5'")
+            raise ValueError(
+                f"Unknown data source: {forcing}, supported are 'ERA5' and 'DestinE'"
+            )
 
     @build_method(depends_on=["setup_forcing"], required=True)
     def setup_SPEI(
@@ -1316,7 +1797,8 @@ class Forcing(BuildModelBase):
             create_plots: If True, create plots for the forcing data.
 
         Raises:
-            ValueError: If the input data do not have the same coordinates.
+            ValueError: If the input data do not have the same coordinates or the
+                calibration period is not covered by the forcing data.
         """
         assert window_months <= 12, (
             "window_months must be less than or equal to 12 (otherwise we run out of climate data)"
