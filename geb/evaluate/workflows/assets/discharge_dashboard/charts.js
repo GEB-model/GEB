@@ -124,9 +124,6 @@
   function renderCharts(stationId, data) {
     var safeStationId = encodeURIComponent(stationId);
     var common = {responsive: true, displaylogo: false, modeBarButtonsToRemove: ['select2d', 'lasso2d']};
-    // SVG is reliable for daily series; WebGL keeps full-resolution hourly
-    // series responsive without changing the underlying scientific data.
-    var timeseriesTraceType = data.frequency === 'hourly' ? 'scattergl' : 'scatter';
     function trace(name, x, y, kind, mode, hoverTemplate) {
       return {
         x: x,
@@ -142,8 +139,8 @@
     }
     var timeRange = dateRange(data.timeseries.time);
     Plotly.newPlot('geb-time-' + safeStationId, [
-      trace('Observed', data.timeseries.time, data.timeseries.observed, timeseriesTraceType, 'lines', '%{x|%b %Y}<br>%{y:,.0f} m3/s<extra>Observed</extra>'),
-      trace('Simulated', data.timeseries.time, data.timeseries.simulated, timeseriesTraceType, 'lines', '%{x|%b %Y}<br>%{y:,.0f} m3/s<extra>Simulated</extra>')
+      trace('Observed', data.timeseries.time, data.timeseries.observed, 'scatter', 'lines', '%{x|%b %Y}<br>%{y:,.0f} m3/s<extra>Observed</extra>'),
+      trace('Simulated', data.timeseries.time, data.timeseries.simulated, 'scatter', 'lines', '%{x|%b %Y}<br>%{y:,.0f} m3/s<extra>Simulated</extra>')
     ], Object.assign({}, layoutBase, {hovermode: 'x unified', xaxis: Object.assign({}, layoutBase.xaxis, {type: 'date', range: timeRange}), yaxis: Object.assign({}, layoutBase.yaxis, {title: 'Discharge (m3/s)'})}), common);
     if (data.returnPeriods) {
       var observedReturnPeriodRange = linearRange(data.returnPeriods.observed.returnPeriod);

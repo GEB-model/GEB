@@ -241,7 +241,7 @@ def evaluate_discharge(
             continue
         minimum_paired_timesteps: float = (
             minimum_timeseries_length_years
-            * 365.25
+            * 365
             * (24 if frequency_label == "hourly" else 1)
         )
         for station_id in tqdm(observations_by_station.columns):
