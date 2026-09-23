@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
+import pandas as pd
 import pytest
 import xarray as xr
 
@@ -14,6 +15,7 @@ from geb.build.data_catalog.mswep import (
     _extract_folder_id,
     _extract_spatial_coords,
 )
+from geb.workflows.io import write_zarr
 
 
 def test_extract_folder_id() -> None:
@@ -109,3 +111,69 @@ def test_extract_spatial_coords() -> None:
     y_da, x_da = _extract_spatial_coords(da)
     np.testing.assert_array_equal(y_da, lats)
     np.testing.assert_array_equal(x_da, lons)
+
+
+def test_mswep_fetch_succeeds_without_url_when_data_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test that fetch succeeds without MSWEP_URL when all required monthly stores exist."""
+    monkeypatch.setenv("GEB_DATA_ROOT", str(tmp_path))
+    monkeypatch.delenv("MSWEP_URL", raising=False)
+
+    adapter = MSWEPPrecipitation(
+        folder="mswep_test",
+        filename="precipitation.zarr",
+        local_version=1,
+        cache="global",
+        folder_id=None,
+    )
+    adapter.logger = logging.getLogger("test_mswep")
+
+    # Create dummy complete zarr for 2025-01 (31 days * 24 hours = 744 hours)
+    expected_hours: int = 31 * 24
+    time_coords: pd.DatetimeIndex = pd.date_range(
+        "2025-01-01 00:00:00", "2025-01-31 23:00:00", freq="1h"
+    )
+    dummy_da: xr.DataArray = xr.DataArray(
+        np.zeros((expected_hours, 2, 2), dtype=np.uint16),
+        dims=("time", "y", "x"),
+        coords={
+            "time": time_coords,
+            "y": [10.0, 11.0],
+            "x": [20.0, 21.0],
+        },
+        attrs={"_FillValue": 65535},
+    )
+    month_path: Path = adapter._month_path(2025, 1)
+    month_path.parent.mkdir(parents=True, exist_ok=True)
+    write_zarr(dummy_da, month_path, crs=4326)
+
+    # precipitation_mask.zarr does not exist and MSWEP_URL is unset
+    assert not adapter.mask_path.exists()
+
+    with patch("geb.build.data_catalog.mswep.load_dotenv"):
+        result = adapter.fetch(start_date="2025-01-01", end_date="2025-01-31")
+        assert result is adapter
+
+
+def test_mswep_read_missing_month_raises_filenotfounderror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test that read raises FileNotFoundError when a monthly store is missing."""
+    monkeypatch.setenv("GEB_DATA_ROOT", str(tmp_path))
+    adapter = MSWEPPrecipitation(
+        folder="mswep_test",
+        filename="precipitation.zarr",
+        local_version=1,
+        cache="global",
+        folder_id=None,
+    )
+    adapter.logger = logging.getLogger("test_mswep")
+
+    with pytest.raises(FileNotFoundError) as exc_info:
+        adapter.read(
+            start_date="2025-01-01",
+            end_date="2025-01-02",
+            bounds=(19.0, 9.0, 22.0, 12.0),
+        )
+    assert "Missing MSWEP precipitation data for 2025-01" in str(exc_info.value)

@@ -613,7 +613,7 @@ class MSWEPPrecipitation(Adapter):
             The Adapter instance.
 
         Raises:
-            ValueError: If start_date is after end_date or before 1979-01-01, or if MSWEP_URL is not set.
+            ValueError: If start_date is after end_date or before 1979-01-01, or if missing data needs to be fetched and MSWEP_URL is not set.
             FileNotFoundError: If a required MSWEP precipitation file is missing from Google Drive.
         """
         start_ts: pd.Timestamp = pd.Timestamp(start_date)  # ty:ignore[invalid-assignment]
@@ -630,22 +630,6 @@ class MSWEPPrecipitation(Adapter):
             raise ValueError(
                 f"MSWEP precipitation data is only available from 1979 onwards. "
                 f"Requested start_date '{start_ts.strftime('%Y-%m-%d %H:%M:%S')}' is before 1979-01-01 01:00:00."
-            )
-
-        if self.folder_id is None:
-            load_dotenv()
-            env_url: str | None = os.getenv("MSWEP_URL")
-            if env_url:
-                self.folder_id = _extract_folder_id(env_url)
-
-        if self.folder_id is None:
-            raise ValueError(
-                "MSWEP_URL environment variable is not set. "
-                "Due to data distribution terms, the MSWEP download URL cannot be published publicly. "
-                "Please visit https://www.gloh2o.org/mswep/ to request access to the dataset. "
-                "Within the Google Drive, navigate to the 'MSWEP_V316_test/Past/Hourly' folder "
-                "and set the MSWEP_URL environment variable in your .env file or environment "
-                "(e.g. MSWEP_URL=https://drive.google.com/drive/folders/<folder_id>)."
             )
 
         creds: Credentials | None = None
@@ -675,7 +659,7 @@ class MSWEPPrecipitation(Adapter):
                 _, last_day = calendar.monthrange(current_year, month)
                 expected_hours: int = last_day * 24
 
-                if month_zarr_path.exists() and self.mask_path.exists():
+                if month_zarr_path.exists():
                     da_existing: xr.DataArray = read_zarr(month_zarr_path)
                     if da_existing.time.size == expected_hours:
                         if not month_plot_path.exists():
@@ -694,6 +678,22 @@ class MSWEPPrecipitation(Adapter):
 
             if not months_to_process:
                 continue
+
+            if self.folder_id is None:
+                load_dotenv()
+                env_url: str | None = os.getenv("MSWEP_URL")
+                if env_url:
+                    self.folder_id = _extract_folder_id(env_url)
+
+            if self.folder_id is None:
+                raise ValueError(
+                    "MSWEP_URL environment variable is not set. "
+                    "Due to data distribution terms, the MSWEP download URL cannot be published publicly. "
+                    "Please visit https://www.gloh2o.org/mswep/ to request access to the dataset. "
+                    "Within the Google Drive, navigate to the 'MSWEP_V316_test/Past/Hourly' folder "
+                    "and set the MSWEP_URL environment variable in your .env file or environment "
+                    "(e.g. MSWEP_URL=https://drive.google.com/drive/folders/<folder_id>)."
+                )
 
             if creds is None:
                 self.logger.debug("Authenticating with Google Drive...")
@@ -987,25 +987,17 @@ class MSWEPPrecipitation(Adapter):
 
         # Check and collect stores for all required months
         stores_to_read: list[tuple[Path, int, int]] = []
-        seen_paths: set[Path] = set()
 
         for yr, mo in required_months:
             month_path: Path = self._month_path(yr, mo)
-            year_path: Path = self.root / f"precipitation_{yr}.zarr"
 
-            if month_path.exists():
-                chosen_path: Path = month_path
-            elif year_path.exists():
-                chosen_path = year_path
-            else:
+            if not month_path.exists():
                 raise FileNotFoundError(
                     f"Missing MSWEP precipitation data for {yr}-{mo:02d}. "
                     f"Expected store at '{month_path}'. Please fetch the dataset before reading."
                 )
 
-            if chosen_path not in seen_paths:
-                seen_paths.add(chosen_path)
-                stores_to_read.append((chosen_path, yr, mo))
+            stores_to_read.append((month_path, yr, mo))
 
         buffer_deg: float = 0.5
         min_x: float = max(-180.0, bounds[0] - buffer_deg)
