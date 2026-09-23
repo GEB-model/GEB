@@ -23,6 +23,7 @@ from geb.workflows.io import read_grid
 from ..landcovers import FOREST, GRASSLAND_LIKE, OPEN_WATER, PADDY_IRRIGATED, SEALED
 from .constants import (
     KELVIN_OFFSET,
+    MIN_ACTIVE_SNOW_SWE_M,
     N_SNOW_LAYERS,
     N_SOIL_LAYERS,
     RHO_WATER_KG_PER_M3,
@@ -445,6 +446,9 @@ def land_surface_model(
                     liquid_water_bottom_m=liquid_water_bottom_m_cell,
                     enthalpy_bottom_J_per_m2=snow_enthalpy_bottom_J_per_m2_cell,
                     density_bottom_kg_per_m3=snow_density_bottom_kg_per_m3_cell,
+                    compaction_timestep_s=(
+                        np.float32(86400.0) if hour == 0 else np.float32(0.0)
+                    ),
                 )
 
                 rain_m[i] += rain_m_cell
@@ -617,7 +621,7 @@ def land_surface_model(
                 if (
                     snow_water_equivalent_top_m_cell
                     + snow_water_equivalent_bottom_m_cell
-                    > np.float64(0.0)
+                    > MIN_ACTIVE_SNOW_SWE_M
                 ):
                     potential_direct_evaporation_m = np.float32(0.0)
                     potential_transpiration_m_cell_hour = np.float32(0.0)
@@ -1061,7 +1065,7 @@ def _pad_hru_arrays(inputs: LandSurfaceInputs) -> LandSurfaceInputs:
     padded_fields: dict = {}
     for field in inputs._fields:
         val = getattr(inputs, field)
-        if isinstance(val, np.ndarray) and val.shape[0] == num_cells:
+        if isinstance(val, np.ndarray) and val.ndim > 0 and val.shape[0] == num_cells:
             if val.ndim == 1:
                 padded: np.ndarray = np.empty(num_cells + pad_size, dtype=val.dtype)
                 padded[:num_cells] = val
@@ -2182,7 +2186,8 @@ class LandSurface(Module):
                     f"Water imbalance detected at index {water_imbalance_index}. Diagnostic data exported to {diag_path}"
                 )
                 # Re-run the model for the failing cell with the isolated inputs to confirm that the error can be reproduced
-                land_surface_model(**error_inputs._asdict())
+                padded_error_inputs = _pad_hru_arrays(error_inputs)
+                land_surface_model(**padded_error_inputs._asdict())
 
                 raise AssertionError(
                     f"Land surface water balance check failed at HRU index {water_imbalance_index}. Land use type: {self.HRU.var.land_use_type[water_imbalance_index]}"

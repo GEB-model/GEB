@@ -19,6 +19,11 @@ SNOW_EMISSIVITY: np.float32 = np.float32(0.99)  # Emissivity of snow surface
 RHO_WATER_KG_PER_M3: np.float32 = np.float32(1000.0)  # kg/m3
 MAX_SNOW_DENSITY_KG_PER_M3: np.float32 = np.float32(917.0)  # kg/m3 (pure ice density)
 
+# Minimum snow water equivalent for an active thermal snow layer in the column solver (m).
+# Snow layers with SWE below this threshold are treated as trace/inactive layers
+# whose temperature is synchronized with the top soil layer for numerical stability.
+MIN_ACTIVE_SNOW_SWE_M: np.float64 = np.float64(0.001)
+
 # Specific heat capacities
 SPECIFIC_HEAT_CAPACITY_WATER_J_PER_KG_K: np.float32 = np.float32(4186.0)
 SPECIFIC_HEAT_CAPACITY_ICE_J_PER_KG_K: np.float32 = np.float32(

@@ -2028,3 +2028,26 @@ def test_snow_radiation_canopy_shading() -> None:
 
     # Shaded snow receives less net radiation during high solar periods
     assert net_rad_open > net_rad_shaded
+
+
+def test_snow_temperature_clamped_below_minus_100() -> None:
+    """Test that extreme negative snow enthalpy clamps to -100°C."""
+    swe_m: np.float64 = np.float64(0.001)
+    # Extremely negative enthalpy that would give -10,000°C
+    very_negative_enthalpy: np.float32 = np.float32(-2.0e7)
+    temp: np.float32 = get_snow_temperature_from_enthalpy(swe_m, very_negative_enthalpy)
+    assert temp == np.float32(-100.0)
+
+
+def test_sublimation_clamped_below_minus_100() -> None:
+    """Test that calculate_latent_heat_flux_and_sublimation clamps when T < -100°C."""
+    for test_temp in [np.float32(-101.0), np.float32(-150.0), np.float32(-5000.0)]:
+        latent_flux, subl_rate = calculate_latent_heat_flux_and_sublimation(
+            air_temperature_C=np.float32(-5.0),
+            snow_surface_temperature_C=test_temp,
+            vapor_pressure_air_Pa=np.float32(300.0),
+            air_pressure_Pa=np.float32(101325.0),
+            wind_10m_m_per_s=np.float32(3.0),
+        )
+        assert np.isfinite(latent_flux)
+        assert np.isfinite(subl_rate)

@@ -12,6 +12,7 @@ from .constants import (
     LATENT_HEAT_FUSION_J_PER_KG,
     LATENT_HEAT_SUBLIMATION_J_PER_KG,
     LATENT_HEAT_VAPORIZATION_J_PER_KG,
+    MIN_ACTIVE_SNOW_SWE_M,
     N_SNOW_LAYERS,
     N_SOIL_LAYERS,
     RHO_MINERAL_KG_PER_M3,
@@ -27,7 +28,6 @@ from .constants import (
 from .potential_evapotranspiration import get_canopy_radiation_attenuation
 
 _N_COUPLED_SURFACE_LAYERS: int = N_SOIL_LAYERS + N_SNOW_LAYERS
-MIN_ACTIVE_SNOW_SWE_M: np.float64 = np.float64(1.0e-6)
 
 
 @njit(cache=True, inline="always")
@@ -906,18 +906,15 @@ def solve_soil_enthalpy_column(
             * SPECIFIC_HEAT_CAPACITY_ICE_J_PER_KG_K
         )
         enthalpies_at_start_of_timestep[snow_layer_idx] = enthalpy_J_per_m2
+        alpha_snow: np.float32 = np.float32(1.0) / max(
+            heat_capacity_J_per_m2_K, np.float32(1.0)
+        )
+        dT_dH_linearized[snow_layer_idx] = alpha_snow
+        beta_linearized[snow_layer_idx] = np.float32(0.0)
         if enthalpy_J_per_m2 >= np.float32(0.0):
             temperature_C: np.float32 = np.float32(0.0)
-            dT_dH_linearized[snow_layer_idx] = np.float32(0.0)
-            beta_linearized[snow_layer_idx] = np.float32(0.0)
         else:
-            temperature_C = min(
-                np.float32(0.0), enthalpy_J_per_m2 / heat_capacity_J_per_m2_K
-            )
-            dT_dH_linearized[snow_layer_idx] = (
-                np.float32(1.0) / heat_capacity_J_per_m2_K
-            )
-            beta_linearized[snow_layer_idx] = np.float32(0.0)
+            temperature_C = min(np.float32(0.0), enthalpy_J_per_m2 * alpha_snow)
         conductivities_W_per_m_K[snow_layer_idx] = (
             calculate_snow_thermal_conductivity_from_density(density_kg_per_m3)
         )

@@ -78,6 +78,8 @@ def get_snow_temperature_from_enthalpy(
     temperature_C: np.float32 = np.float32(
         np.float64(snow_enthalpy_J_per_m2) / snow_heat_capacity_J_per_m2_K
     )
+    if temperature_C < np.float32(-100.0):
+        temperature_C = np.float32(-100.0)
     return min(np.float32(0.0), temperature_C)
 
 
@@ -146,6 +148,7 @@ def compact_snow_density(
     density_kg_per_m3: np.float32,
     snow_temperature_C: np.float32,
     overburden_pressure_Pa: np.float32,
+    timestep_seconds: np.float32 = np.float32(3600.0),
 ) -> np.float32:
     """Compact snow density due to metamorphism and overburden pressure.
 
@@ -153,9 +156,10 @@ def compact_snow_density(
         density_kg_per_m3: Current snow density (kg/m³).
         snow_temperature_C: Bulk snow temperature (°C).
         overburden_pressure_Pa: Pressure from overlying snow layers (Pa).
+        timestep_seconds: Duration over which compaction occurs (seconds).
 
     Returns:
-        Compacted snow density after one hour (kg/m³).
+        Compacted snow density after timestep_seconds (kg/m³).
     """
     metamorphism_rate_per_s: np.float32 = (
         calculate_snow_metamorphism_compaction_rate_per_s(
@@ -172,9 +176,9 @@ def compact_snow_density(
     # Total fractional compaction rate (1/s).
     total_rate_per_s: np.float32 = metamorphism_rate_per_s + overburden_rate_per_s
 
-    # Update density for one hour (3600 seconds), capped at maximum ice density.
+    # Update density for timestep_seconds, capped at maximum ice density.
     compacted_density_kg_per_m3: np.float32 = density_kg_per_m3 * (
-        np.float32(1.0) + total_rate_per_s * np.float32(3600.0)
+        np.float32(1.0) + total_rate_per_s * timestep_seconds
     )
     return min(compacted_density_kg_per_m3, MAX_SNOW_DENSITY_KG_PER_M3)
 
@@ -431,6 +435,7 @@ def apply_precipitation_compaction_and_top_layer_transfer(
     liquid_water_bottom_m: np.float64,
     enthalpy_bottom_J_per_m2: np.float32,
     density_bottom_kg_per_m3: np.float32,
+    compaction_timestep_s: np.float32 = np.float32(3600.0),
 ) -> tuple[
     np.float32,
     np.float32,
@@ -461,6 +466,8 @@ def apply_precipitation_compaction_and_top_layer_transfer(
         liquid_water_bottom_m: Bottom-layer liquid water storage (m).
         enthalpy_bottom_J_per_m2: Bottom-layer snow enthalpy (J/m²).
         density_bottom_kg_per_m3: Bottom-layer snow density (kg/m³).
+        compaction_timestep_s: Duration over which compaction occurs (seconds).
+            If zero or negative, compaction is skipped.
 
     Returns:
         Rainfall, snowfall, and updated snow state ready for the coupled energy solve.
@@ -485,38 +492,46 @@ def apply_precipitation_compaction_and_top_layer_transfer(
         density_bottom_kg_per_m3,
     )
 
-    # Get temperatures for compaction.
-    temperature_top_C: np.float32 = get_snow_temperature_from_enthalpy(
-        swe_top_m, enthalpy_top_J_per_m2
-    )
-    temperature_bottom_C: np.float32 = get_snow_temperature_from_enthalpy(
-        swe_bottom_m, enthalpy_bottom_J_per_m2
-    )
+    # Only execute compaction when scheduled (compaction_timestep_s > 0).
+    if compaction_timestep_s > np.float32(0.0) and (
+        swe_top_m > np.float64(0.0) or swe_bottom_m > np.float64(0.0)
+    ):
+        temperature_top_C: np.float32 = get_snow_temperature_from_enthalpy(
+            swe_top_m, enthalpy_top_J_per_m2
+        )
+        temperature_bottom_C: np.float32 = get_snow_temperature_from_enthalpy(
+            swe_bottom_m, enthalpy_bottom_J_per_m2
+        )
 
-    # Calculate overburden pressure (Pa).
-    # Top layer has 50% of its own weight as overburden (centered pressure).
-    # Bottom layer has 100% of top layer + 50% of its own weight.
-    overburden_top_Pa: np.float32 = (
-        np.float32(0.5) * np.float32(swe_top_m) * RHO_WATER_KG_PER_M3 * GRAVITY_M_PER_S2
-    )
-    overburden_bottom_Pa: np.float32 = (
-        (np.float32(swe_top_m) + np.float32(0.5) * np.float32(swe_bottom_m))
-        * RHO_WATER_KG_PER_M3
-        * GRAVITY_M_PER_S2
-    )
+        # Calculate overburden pressure (Pa).
+        # Top layer has 50% of its own weight as overburden (centered pressure).
+        # Bottom layer has 100% of top layer + 50% of its own weight.
+        overburden_top_Pa: np.float32 = (
+            np.float32(0.5)
+            * np.float32(swe_top_m)
+            * RHO_WATER_KG_PER_M3
+            * GRAVITY_M_PER_S2
+        )
+        overburden_bottom_Pa: np.float32 = (
+            (np.float32(swe_top_m) + np.float32(0.5) * np.float32(swe_bottom_m))
+            * RHO_WATER_KG_PER_M3
+            * GRAVITY_M_PER_S2
+        )
 
-    # Apply compaction.
-    density_top_kg_per_m3: np.float32 = compact_snow_density(
-        density_top_kg_per_m3,
-        temperature_top_C,
-        overburden_top_Pa,
-    )
+        # Apply compaction over the scheduled compaction interval.
+        density_top_kg_per_m3 = compact_snow_density(
+            density_top_kg_per_m3,
+            temperature_top_C,
+            overburden_top_Pa,
+            timestep_seconds=compaction_timestep_s,
+        )
 
-    density_bottom_kg_per_m3: np.float32 = compact_snow_density(
-        density_bottom_kg_per_m3,
-        temperature_bottom_C,
-        overburden_bottom_Pa,
-    )
+        density_bottom_kg_per_m3 = compact_snow_density(
+            density_bottom_kg_per_m3,
+            temperature_bottom_C,
+            overburden_bottom_Pa,
+            timestep_seconds=compaction_timestep_s,
+        )
 
     # Partition precipitation into rain and snow.
     precip_m_hr: np.float32 = pr_kg_per_m2_per_s * np.float32(3.6)
@@ -688,25 +703,28 @@ def update_snow_mass_and_phase(
     Returns:
         Updated snow state (layers 0/1) and diagnostic hourly fluxes (m/hour).
     """
-    (
-        swe_top_m,
-        liquid_water_top_m,
-        enthalpy_top_J_per_m2,
-        density_top_kg_per_m3,
-        swe_bottom_m,
-        liquid_water_bottom_m,
-        enthalpy_bottom_J_per_m2,
-        density_bottom_kg_per_m3,
-    ) = promote_snow_to_top_layer(
-        swe_top_m,
-        liquid_water_top_m,
-        enthalpy_top_J_per_m2,
-        density_top_kg_per_m3,
-        swe_bottom_m,
-        liquid_water_bottom_m,
-        enthalpy_bottom_J_per_m2,
-        density_bottom_kg_per_m3,
-    )
+    # Early return when no snowpack or liquid water exists: rainfall simply runs off directly.
+    if (
+        swe_top_m <= EPSILON_M
+        and swe_bottom_m <= EPSILON_M
+        and liquid_water_top_m <= EPSILON_M
+        and liquid_water_bottom_m <= EPSILON_M
+    ):
+        return (
+            np.float64(0.0),
+            np.float64(0.0),
+            np.float32(0.0),
+            FRESH_SNOW_DENSITY_KG_PER_M3,
+            np.float64(0.0),
+            np.float64(0.0),
+            np.float32(0.0),
+            FRESH_SNOW_DENSITY_KG_PER_M3,
+            np.float32(0.0),
+            np.float32(rainfall_m_per_hour),
+            rainfall_m_per_hour,
+            np.float32(0.0),
+            np.float32(0.0),
+        )
 
     # Sublimation and deposition.
     snow_surface_temperature_C: np.float32 = get_snow_temperature_from_enthalpy(
@@ -950,9 +968,12 @@ def calculate_latent_heat_flux_and_sublimation(
         air_temperature_K, wind_10m_m_per_s, air_pressure_Pa
     )
 
+    if snow_surface_temperature_C < np.float32(-100.0):
+        snow_surface_temperature_C = np.float32(-100.0)
+
     # Saturation vapor pressure over ice (Buck equation).
-    e_surf_denominator = np.float32(272.62) + snow_surface_temperature_C
-    e_surf = np.float32(611.15) * np.exp(
+    e_surf_denominator: np.float32 = np.float32(272.62) + snow_surface_temperature_C
+    e_surf: np.float32 = np.float32(611.15) * np.exp(
         (np.float32(22.46) * snow_surface_temperature_C) / e_surf_denominator
     )
 
