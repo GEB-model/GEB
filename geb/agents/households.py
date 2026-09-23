@@ -166,7 +166,11 @@ class Households(AgentBaseClass):
             "COST_CONTENTS_USD_SQM",
             "COMID",
         ]
-        self.buildings = read_geom(self.model.files["geom"]["assets/open_building_map"])
+        # Skip loading the geometry column to save memory
+        self.buildings = read_table(
+            self.model.files["geom"]["assets/open_building_map"],
+            columns=columns_to_load,
+        )
 
         self.buildings["object_type"] = (
             "building_unprotected"  # before it was "building_structure"
