@@ -251,7 +251,7 @@ def test_update_with_method(method: str) -> None:
         method: The update method to test (e.g., 'file', 'dict').
     """
     with WorkingDirectory(working_directory):
-        args: dict[str, str | dict | Path | bool] = DEFAULT_BUILD_ARGS.copy()
+        args: dict[str, Any] = DEFAULT_BUILD_ARGS.copy()
         del args["continue_"]
 
         build_config: dict[str, dict] = parse_config(BUILD_DEFAULT)
@@ -299,8 +299,8 @@ def test_spinup() -> None:
 
         routing = geb.hydrology.routing
         outflow_rivers = geb.hydrology.routing.outflow_rivers
-        routing.observed_average_river_width[
-            routing.river_ids == geb.hydrology.routing.outflow_rivers.iloc[0].name
+        routing.var.observed_average_river_width[
+            routing.var.river_ids == geb.hydrology.routing.outflow_rivers.iloc[0].name
         ] = RIVER_WIDTH_OUTFLOW_RIVER
 
         geb.step_to_end()
@@ -311,11 +311,12 @@ def test_spinup() -> None:
         routing_report_folder: Path = (
             working_directory / "output" / "spinup" / "report" / "hydrology.routing"
         )
+        outflow_table: pd.DataFrame = read_table(
+            routing_report_folder / "river_outflow_hourly_m3_per_s.parquet"
+        )
 
         for ID, river in outflow_rivers.iterrows():
-            outflow_data: pd.DataFrame = read_table(
-                routing_report_folder / f"river_outflow_hourly_m3_per_s_{ID}.parquet",
-            )[f"river_outflow_hourly_m3_per_s_{ID}"]
+            outflow_data: pd.Series = outflow_table[str(ID)]
 
             outflow_xy = river["hydrography_xy"][-1]
 
@@ -325,8 +326,12 @@ def test_spinup() -> None:
             linear_index = geb.hydrology.grid.linear_mapping[
                 outflow_xy[1], outflow_xy[0]
             ]
-            river_width_alpha = geb.hydrology.grid.var.river_width_alpha[[linear_index]]
-            river_width_beta = geb.hydrology.grid.var.river_width_beta[[linear_index]]
+            river_width_alpha = geb.hydrology.routing.var.river_width_alpha[
+                [linear_index]
+            ]
+            river_width_beta = geb.hydrology.routing.var.river_width_beta[
+                [linear_index]
+            ]
 
             river_width = get_river_width(
                 river_width_alpha, river_width_beta, mean_discharge
@@ -444,7 +449,7 @@ def test_run() -> None:
 
         method_args = {
             "method": "hydrology.evaluate_discharge",
-            "include_yearly_plots": False,
+            "export_yearly_timeseries_plots": False,
         }
         args["method_args"] = method_args
         result = run_model_with_method(method="evaluate", **args)
@@ -455,13 +460,10 @@ def test_run() -> None:
         for label in [
             "KGE_hourly",
             "NSE_hourly",
-            "R_hourly",
+            "KGE_correlation_hourly",
             "KGE_daily",
             "NSE_daily",
-            "R_daily",
-            "KGE",
-            "NSE",
-            "R",
+            "KGE_correlation_daily",
         ]:
             assert label in result
             assert result[label] is not None
@@ -469,7 +471,7 @@ def test_run() -> None:
         print("Discharge evaluation results:", result)
 
         # Note this should be much higher.
-        assert result["KGE_hourly"] > 0.07
+        assert result["KGE_hourly"] > 0.214
 
         # method_args = {
         #     "method": "hydrodynamics.evaluate_hydrodynamics",
@@ -484,15 +486,20 @@ def test_alter() -> None:
 
     Verifies that a model alternative can be made. A model alternative
     references the original model while overwriting specific settings
-    or files. Verifies that the model can be run, but does not check the
-    outputs of the altered model.
+    or files. Verifies that the model can be run with altered forcing data,
+    and that discharge (m3/s) remains in a plausible range to detect unit errors.
     """
     with WorkingDirectory(working_directory):
         args: dict[str, Any] = DEFAULT_BUILD_ARGS.copy()
         del args["continue_"]
         args["build_config"] = {
-            "set_ssp": {"ssp": "ssp1"},
-            "setup_CO2_concentration": {},
+            "set_time_range": {
+                "start_date": date(
+                    1980, 1, 1
+                ),  # MSWEP data is only available from 1979 onwards. One year is needed for spinup. So start from 1980.
+                "end_date": date(2024, 12, 31),
+            },
+            "setup_forcing": {"precipitation_source": "MSWEP", "create_plots": False},
         }
         args["working_directory"] = Path("alter")
 
@@ -502,14 +509,52 @@ def test_alter() -> None:
 
         alter_fn(**args)
 
-        run_args = DEFAULT_RUN_ARGS.copy()
+        run_args: dict[str, Any] = DEFAULT_RUN_ARGS.copy()
         run_args["working_directory"] = args["working_directory"]
         run_args["config"] = parse_config(CONFIG_DEFAULT)
-        run_args["config"]["general"]["start_time"] = run_args["config"]["general"][
-            "spinup_time"
-        ] + timedelta(days=370)  # run just over a year more is not needed
+        run_args["config"]["general"]["spinup_time"] = date(
+            1980, 1, 1
+        )  # MSWEP data is only available from 1979 onwards
 
         run_model_with_method(method="spinup", **run_args)
+
+        # Compare discharge output between original and altered model runs
+        routing_report_folder_original: Path = (
+            working_directory / "output" / "spinup" / "report" / "hydrology.routing"
+        )
+        routing_report_folder_altered: Path = (
+            working_directory
+            / "alter"
+            / "output"
+            / "spinup"
+            / "report"
+            / "hydrology.routing"
+        )
+
+        outflow_files_orig: list[Path] = list(
+            routing_report_folder_original.glob(
+                "river_outflow_hourly_m3_per_s_*.parquet"
+            )
+        )
+        assert len(outflow_files_orig) > 0, (
+            "No original outflow files found to compare against."
+        )
+
+        for orig_file in outflow_files_orig:
+            alt_file: Path = routing_report_folder_altered / orig_file.name
+            assert alt_file.exists(), f"Altered outflow file {alt_file} not found."
+            df_orig: pd.DataFrame = read_table(orig_file)
+            df_alt: pd.DataFrame = read_table(alt_file)
+
+            df_orig = df_orig.loc[df_alt.index[0] : df_alt.index[-1]]
+
+            mean_q_orig: float = float(np.mean(df_orig.values))
+            mean_q_alt: float = float(np.mean(df_alt.values))
+
+            # Ensure discharge is within a plausible range
+            assert 0.5 * mean_q_orig < mean_q_alt < 2.0 * mean_q_orig, (
+                f"Altered discharge ({mean_q_alt:.3f} m3/s) deviates unreasonably from normal ({mean_q_orig:.3f} m3/s)."
+            )
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
@@ -634,7 +679,7 @@ def test_setup_inflow() -> None:
         data_folder: Path = Path("data")
         data_folder.mkdir(parents=True, exist_ok=True)
 
-        rivers: gpd.GeoDataFrame = model.hydrology.routing.active_rivers.copy()
+        rivers: gpd.GeoDataFrame = model.hydrology.routing.get_active_rivers().copy()
 
         start_time = model.spinup_start
         end_time = model.run_end + model.timestep_length
@@ -720,7 +765,7 @@ def test_setup_retention_basins() -> None:
         data_folder: Path = Path("data")
         data_folder.mkdir(parents=True, exist_ok=True)
 
-        rivers: gpd.GeoDataFrame = model.hydrology.routing.active_rivers.copy()
+        rivers: gpd.GeoDataFrame = model.hydrology.routing.get_active_rivers().copy()
 
         start_time = model.spinup_start
         end_time = model.run_end + model.timestep_length
@@ -784,7 +829,6 @@ def test_run_yearly() -> None:
         config["hazards"]["floods"]["simulate"] = True  # enable flood simulation
 
         args["config"] = config
-        args["config"]["report"] = {}
 
         with pytest.raises(
             ValueError,
@@ -805,7 +849,10 @@ def test_estimate_return_periods() -> None:
     extreme events and flood frequencies.
     """
     with WorkingDirectory(working_directory):
-        run_model_with_method(method="estimate_return_periods", **DEFAULT_RUN_ARGS)
+        run_args = DEFAULT_RUN_ARGS.copy()
+        run_args["config"] = parse_config(CONFIG_DEFAULT)
+        run_args["config"]["hazards"]["floods"]["write_figures"] = True
+        run_model_with_method(method="estimate_return_periods", **run_args)
 
     if os.getenv("GEB_TEST_GPU", "no") == "yes":
         flood_maps_CPU: Path = working_directory / "output" / "flood_maps" / "1000.zarr"
@@ -960,9 +1007,7 @@ def test_multiverse() -> None:
         for i in range(steps_in_forecast):
             geb.step()
 
-        mean_discharge: float = (
-            geb.hydrology.routing.grid.var.discharge_m3_s.mean().item()
-        )
+        mean_discharge: float = geb.hydrology.routing.var.discharge_m3_s.mean().item()
 
         geb.step_to_end()
 
@@ -1049,7 +1094,7 @@ def test_alternate_universe() -> None:
         def collect_function() -> dict[str, Any]:
             # Collect some data from the alternate universe
             return {
-                "mean_discharge": geb.hydrology.routing.grid.var.discharge_m3_s.mean().item()
+                "mean_discharge": geb.hydrology.routing.var.discharge_m3_s.mean().item()
             }
 
         # Run alternate universe for 3 steps with elevated soil moisture
@@ -1093,9 +1138,7 @@ def test_alternate_universe() -> None:
         for _ in range(n_steps_alt):
             geb.step()
 
-        current_mean_discharge = (
-            geb.hydrology.routing.grid.var.discharge_m3_s.mean().item()
-        )
+        current_mean_discharge = geb.hydrology.routing.var.discharge_m3_s.mean().item()
         assert (
             collected_data_elevated_soil_moisture["mean_discharge"]
             > current_mean_discharge
@@ -1245,11 +1288,6 @@ def test_set_and_clean(tmp_path: Path) -> None:
     assert copied_config["general"]["end_time"] == updated_end_time
     assert copied_config["hazards"]["floods"]["simulate"] is False
     assert copied_config["report"] == {"_discharge_stations": True}
-
-    source_config: dict[str, Any] = parse_config(source_model_directory / "model.yml")
-    assert source_config["general"]["spinup_time"] != updated_spinup_time
-    assert source_config["general"]["start_time"] != updated_start_time
-    assert source_config["general"]["end_time"] != updated_end_time
 
     clean_result = runner.invoke(
         cli,

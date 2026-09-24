@@ -189,6 +189,25 @@ class Government(AgentBaseClass):
             household_mask=eligible_mask,
         )
 
+    def export_flood_protection_standards(self) -> None:
+        """Export flood protection standards to a geoparquet file."""
+        subbasins = read_geom(self.model.files["geom"]["routing/subbasins"])[
+            ["geometry"]
+        ]
+        subbasins["COMID"] = subbasins.index
+
+        standards = pd.Series(
+            self.flood_protection_standard_subbasins,
+            name="flood_protection_standard",
+        )
+
+        # Align on COMID index
+        subbasins["flood_protection_standard"] = standards.reindex(subbasins.index)
+
+        # export to geoparquet
+        output_path = self.model.output_folder / "flood_protection_standards.parquet"
+        subbasins.to_parquet(output_path, index=False)
+
     def step(self) -> None:
         """This function is run each timestep."""
         adaptation_enabled = self.config["adaptation"]["enabled"]
@@ -198,16 +217,21 @@ class Government(AgentBaseClass):
             and not adaptation_enabled
         ):
             self.prepare_modified_soil_maps_for_forest()
-
-        self.set_irrigation_limit()
-
-        self.adaptation()
-
+        self.adaptation()        
         if self.model.current_time == self.model.run_end and adaptation_enabled:
             self.plot_indicators()
             self.plot_adaptation_pathway()
 
+        self.set_irrigation_limit()
+
         self.report(locals())
+
+        end_time: datetime = datetime.combine(
+            self.model.config["general"]["end_time"], datetime.min.time()
+        )
+
+        if self.model.current_time.year == end_time.year - 1 and adaptation_enabled:
+            self.export_flood_protection_standards()
 
     def prepare_modified_soil_maps_for_forest(self) -> float:
         """Plant forest: update soil properties in memory and remove displaced farmers.
@@ -553,6 +577,8 @@ class Government(AgentBaseClass):
         equity, and ecosystem indicators. Consequently, a mental simulation of all possible adaptation measures in an 'alternate universe' is done to see which one has the biggest improvement over X years
         based on the sum of the normalised indicators (the IPV). This measure is then implemented. As this is done yearly, an adaptation pathway forms that optimises this IPV.
 
+        Raises:
+            ValueError: If an invalid adaptation mode is specified in the configuration.
         """
         if not self.config["adaptation"].get("enabled", True):
             return  # exits because adaptation is not enabled in the config file
@@ -564,6 +590,17 @@ class Government(AgentBaseClass):
             return  # exits because it is not the first of January
         if self.model.in_spinup:
             return  # exits because the model is in spinup, no adaptation during spinup
+        if self.config["adaptation"]["mode"] == "cba":
+            # for easier access to the flood risk module of the households agent, we store it here as well
+            self.flood_risk_module = self.agents.households.flood_risk_module
+            self._cost_benefit_adaptation()
+            return
+
+        elif self.config["adaptation"]["mode"] != "threshold":
+            raise ValueError(
+                f"Invalid adaptation mode: {self.config['adaptation']['mode']}. "
+                "Supported modes are 'cba' and 'threshold'."
+            )
 
         budget = self.config["adaptation_costs"].get("initial_budget")
 
@@ -633,7 +670,7 @@ class Government(AgentBaseClass):
         """Calculate the weighted sum of the normalised indicators, using this run's priority_weights.
 
         Used to drive which adaptation measure select_adaptation_measure_to_implement
-        picks. Not used for the reported IPV -- see calculate_IPV.
+        picks. Not used for the reported IPV --> see calculate_IPV.
 
         Returns:
             The weighted IPV.
@@ -1625,3 +1662,148 @@ class Government(AgentBaseClass):
             bbox_inches="tight",
         )
         plt.close()
+
+    def _apply_cumulative_time_discounting(
+        self, value_to_discount: float, discount_rate: float = 0.1, years: int = 35
+    ) -> float:
+        """Return the cumulative time discounted value.
+
+        Args:
+            value_to_discount: The value to be discounted.
+            discount_rate: The discount rate (as a decimal).
+            years: The number of years into the future.
+
+        Returns:
+            The discounted value.
+        """
+        # Calculate time discounted NPVs
+        t_arr = np.arange(1, years + 1, dtype=np.float32)
+        discounts = 1 / (1 + discount_rate) ** t_arr
+        discounted_value = np.sum(discounts) * value_to_discount
+        return discounted_value
+
+    def _cost_benefit_adaptation(
+        self,
+        indirect_damages: float = 1.6,
+        model_removal_flood_protection_standards: bool = False,
+    ) -> None:
+        """Evaluate flood protection standard upgrade using cost-benefit analysis.
+
+        Compares expected annual damage (EAD) at current and next flood protection
+        standard level. If damage reduction exceeds threshold, upgrades the standard.
+        Args:
+            indirect_damages: Multiplier for indirect damages (default: 1.6).
+            model_removal_flood_protection_standards: Whether to consider model removal of flood protection standards (default: False).
+        """
+        # if not self.flood_risk_module.flood_in_last_year:
+        #     return
+
+        return_periods = self.agents.households.return_periods
+
+        damages_do_not_adapt = self.flood_risk_module.damages_do_not_adapt
+        damages_adapt = self.flood_risk_module.damages_adapt
+        adapted = self.agents.households.var.adapted.data
+
+        # iterate over each subbasin in the model and calculate the EAD for the current and next flood protection standard
+        dike_heights = self.flood_risk_module.dike_heights()
+        for subbasin in dike_heights[
+            next(iter(dike_heights))
+        ]:  # get return period of 10 years
+            if (
+                subbasin
+                not in self.flood_risk_module.flood_protection_standard_subbasins
+            ):
+                continue  # Skip subbasins without a defined flood protection standard
+            current_fps = self.flood_risk_module.flood_protection_standard_subbasins[
+                subbasin
+            ]
+            idx_fps = np.where(return_periods == current_fps)[0]
+
+            if len(idx_fps) == 0 or idx_fps[0] >= len(return_periods) - 1:
+                continue  # Cannot upgrade further
+
+            altered_fps = return_periods[idx_fps[0] + 1]
+            households = np.where(
+                self.agents.households.comid_of_household == subbasin
+            )[0]
+
+            # Calculate EAD at current and higher protection standard
+            current_ead = self.flood_risk_module.calculate_ead(
+                damages_do_not_adapt[:, households],
+                damages_adapt[:, households],
+                adapted[households],
+            ).sum()
+
+            altered_ead = self.flood_risk_module.calculate_ead(
+                damages_do_not_adapt[:, households],
+                damages_adapt[:, households],
+                adapted[households],
+                altered_fps,
+            ).sum()
+
+            # calculate the cost of raising the dike to the next flood protection standard
+            dike_heights_current_fps = dike_heights[current_fps][subbasin]
+            dike_heights_altered_fps = dike_heights[altered_fps][subbasin]
+            damage_reduction = current_ead - altered_ead
+            # account for indirect damages
+            damage_reduction *= indirect_damages
+
+            # get total length and height difference of the dikes that need to be raised
+            height_difference = dike_heights_altered_fps - dike_heights_current_fps
+            if height_difference.sum() == 0:
+                continue
+            cost_per_meter = self.config["adaptation"][
+                "dike_elevation_cost_per_meter_usd"
+            ]
+            maintenance_cost_per_km_dike = self.config["adaptation"][
+                "dike_maintenance_cost_per_year_usd"
+            ]
+            total_cost = (
+                np.sum(height_difference * 100 * cost_per_meter) * 2
+            )  # investment cost in euros; segments are roughly 100 meters long, double the cost to account for both sides of the dike
+
+            maintenance_cost_per_year = (
+                maintenance_cost_per_km_dike * height_difference.size * 100 * 2
+            )  # maintenance cost per year in euros; segments are roughly 100 meters long, double the cost to account for both sides of the dike
+
+            if model_removal_flood_protection_standards:
+                ead_no_flood_protection_standard = self.flood_risk_module.calculate_ead(
+                    damages_do_not_adapt[:, households],
+                    damages_adapt[:, households],
+                    adapted[households],
+                    0,  # set flood protection standard to 0 to calculate EAD without any flood protection
+                ).sum()
+                # also calculate the damage reduction of current fps compared to no fps
+                damage_reduction_no_fps = ead_no_flood_protection_standard - current_ead
+                damage_reduction_no_fps *= indirect_damages
+
+                if maintenance_cost_per_year > damage_reduction_no_fps:
+                    self.model.logger.info(
+                        "Maintenance cost per year for subbasin %s exceeds damage reduction of current flood protection standard. Removing flood protection.",
+                        subbasin,
+                    )
+                    self.flood_protection_standard_subbasins[subbasin] = 0
+                    continue
+
+            if self._apply_cumulative_time_discounting(
+                damage_reduction
+            ) > total_cost + self._apply_cumulative_time_discounting(
+                maintenance_cost_per_year
+            ):
+                self.flood_protection_standard_subbasins[subbasin] = altered_fps
+                self.model.logger.info(
+                    "Upgraded flood protection standard for subbasin %s from %d to %d",
+                    subbasin,
+                    current_fps,
+                    altered_fps,
+                )
+    @property
+    def flood_protection_standard_subbasins(self) -> dict[int, int]:
+        """Get the flood protection standard for each subbasin.
+
+        Returns:
+            A dictionary mapping subbasin IDs to their flood protection standards.
+        """
+        return (
+            self.agents.households.flood_risk_module.flood_protection_standard_subbasins
+        )

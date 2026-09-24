@@ -1,6 +1,7 @@
 """Data catalog for predefined datasets in GEB."""
 
 import logging
+import os
 from typing import Any
 
 from .aquastat import AQUASTAT
@@ -21,6 +22,7 @@ from .flood_damage_model import (
     GeulFloodDamageModel,
     GlobalFloodDamageModel,
 )
+from .flopros import FLOPROS as FLOPROS
 from .fluxnet import Fluxnet
 from .forest_restoration import ForestRestorationPotential
 from .gadm import GADM, GADM28
@@ -32,6 +34,7 @@ from .global_preferences_survey import GlobalPreferencesSurvey
 from .globgm import GlobGM, GlobGMDEM
 from .glopop_sg import GLOPOP_SG
 from .grdc import GRDC
+from .grdc_caravan import GRDCCaravan
 from .grow import GROW
 from .gtsm import GTSM, GTSM_timeseries
 from .hydrolakes import HydroLakes
@@ -45,6 +48,7 @@ from .mirca2000 import MIRCA2000
 from .mirca_os_admin_boundaries import MIRCAOSAdminBoundaries
 from .mirca_os_crop_calendar import MIRCAOSCropCalendar
 from .mirca_os_harvested_grids import MIRCAOSHarvestedGrids
+from .mswep import MSWEPPrecipitation as MSWEPPrecipitation
 from .oecd import OECD
 from .open_building_map import OpenBuildingMap
 from .open_street_map import OpenStreetMap
@@ -59,6 +63,21 @@ from .world_bank import WorldBankData
 from .worldfloods import WorldFloodsV2
 
 data_catalog: dict[str, dict[str, Any]] = {
+    "mswep_precipitation": {
+        "adapter": MSWEPPrecipitation(
+            folder="mswep_precipitation",
+            filename="precipitation.zarr",
+            local_version=1,
+            cache="global",
+        ),
+        "url": os.getenv("MSWEP_URL"),
+        "source": {
+            "name": "MSWEP Precipitation",
+            "author": "GloH2O / Hylke Beck",
+            "license": "CC BY-NC 4.0",
+            "url": "https://www.gloh2o.org/mswep/",
+        },
+    },
     "isimip_co2": {
         "adapter": ISIMIPCO2(),
         "url": "https://files.isimip.org",
@@ -352,6 +371,22 @@ data_catalog: dict[str, dict[str, Any]] = {
             "license": "https://gadm.org/license.html",
         },
     },
+    "flopros": {
+        "adapter": FLOPROS(
+            column="MerL_Riv",
+            folder="flopros",
+            local_version=1,
+            filename="flopros.parquet",
+            cache="global",
+        ),
+        "url": "https://nhess.copernicus.org/articles/16/1049/2016/nhess-16-1049-2016-supplement.zip",
+        "source": {
+            "name": "FLOPROS",
+            "author": "Scussolini et al. (2016)",
+            "license": "CC Attribution 3.0 License",
+            "paper_doi": "doi:10.5194/nhess-16-1049-2016",
+        },
+    },
     "mirca2000_unit_grid": {
         "adapter": MIRCA2000(
             folder="mirca2000",
@@ -418,6 +453,23 @@ data_catalog: dict[str, dict[str, Any]] = {
             "name": "Global Runoff Data Centre",
             "author": "Global Runoff Data Centre",
             "license": "https://grdc.bafg.de/downloads/policy_guidelines.pdf",
+        },
+    },
+    "GRDC_Caravan": {
+        "adapter": GRDCCaravan(
+            folder="grdc/caravan",
+            local_version=1,
+            filename="attributes_v0.6.parquet",
+            cache="global",
+        ),
+        "url": "https://zenodo.org/records/15349031/files/GRDC_Caravan_extension_nc.zip?download=1",
+        "source": {
+            "name": "GRDC-Caravan catchment attributes",
+            "author": "Färber et al. (2025)",
+            "version": "0.6",
+            "license": "CC BY 4.0",
+            "url": "https://doi.org/10.5281/zenodo.15349031",
+            "paper_doi": "10.5194/essd-17-4613-2025",
         },
     },
     "global_irrigation_area_groundwater": {
@@ -947,7 +999,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             filename="placeholder.txt",
             cache="global",
         ),
-        "url": "https://huggingface.co/datasets/links-ads/fabdem-v12/raw/main/collection.json",
+        "url": "https://huggingface.co/buckets/links-ads/fabdem/resolve/collection.json",
         "source": {
             "name": "FABDEM",
             "author": "Hawker et al. (2022)",

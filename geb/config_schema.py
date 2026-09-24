@@ -82,10 +82,27 @@ class ShapeConfig(BaseModel):
     )
 
 
+class FloodProtectionStandardConfig(BaseModel):
+    """Configuration for flood protection standard settings."""
+
+    mode: Literal["auto", "manual"] = Field(
+        "manual",
+        description="Flood protection standard mode: 'auto' (derive from data) or 'manual' (use configured value)",
+    )
+    manual_value: int = Field(
+        10,
+        description="Flood protection standard return period used when mode is 'manual' (years).",
+    )
+
+
 class FloodsConfig(BaseModel):
     """Configuration for flood simulation."""
 
     simulate: bool = Field(False, description="Whether to simulate floods.")
+    subbasins: list[int] | Literal["all"] | Literal["auto"] = Field(
+        "all",
+        description="Subbasin ID, list of subbasin IDs, or 'all' to simulate all subbasins. Only works for flood events currently.",
+    )
     forcing_method: Literal["headwater_points", "accumulated_runoff"] = Field(
         "accumulated_runoff",
         description="Forcing method: 'headwater_points' or 'accumulated_runoff'.",
@@ -113,6 +130,10 @@ class FloodsConfig(BaseModel):
     return_periods: list[int] = Field(
         [2, 5, 10, 25, 50, 100, 250, 500, 1000],
         description="Return periods for flood maps.",
+    )
+    flood_protection_standard: FloodProtectionStandardConfig = Field(
+        default_factory=FloodProtectionStandardConfig,
+        description="Flood protection standard settings.",
     )
     p_value_threshold: float = Field(
         0.05,
@@ -192,12 +213,36 @@ class RiverDepthConfig(BaseModel):
     )
 
 
+class RetentionBasinsConfig(BaseModel):
+    """Configuration for retention basins in routing."""
+
+    release_threshold_factor: float = Field(
+        0.2,
+        description="Factor to multiply the activation threshold by to get the release threshold.",
+    )
+    activation_threshold_return_period_years: float = Field(
+        2.0,
+        description="Return period in years used to calculate the activation threshold for retention basins.",
+    )
+
+
 class RoutingConfig(BaseModel):
     """Configuration for routing."""
 
     algorithm: Literal["accuflux", "kinematic_wave"] = Field(
         "kinematic_wave",
         description="Routing algorithm: 'accuflux' or 'kinematic_wave'.",
+    )
+    minimum_river_slope_m_per_m: float = Field(
+        1e-4,
+        gt=0.0,
+        description=(
+            "Minimum channel slope used to parameterize kinematic-wave routing (m/m)."
+        ),
+    )
+    retention_basin_release_threshold_factor: float = Field(
+        0.9,
+        description="Factor to multiply the activation threshold by to get the release threshold.",
     )
     river_width: RiverWidthConfig = Field(
         default_factory=RiverWidthConfig, description="River width configuration."
@@ -218,11 +263,7 @@ class DischargeEvaluationConfig(BaseModel):
     minimum_timeseries_length_years: float = Field(
         5.0,
         ge=0.0,
-        description="Minimum paired observation-simulation timeseries length for stations included in discharge evaluation (years).",
-    )
-    external_evaluation_folder: str | None = Field(
-        "external_evaluation_data/",
-        description="Folder with external discharge evaluation CSV files. Relative paths are resolved from the model folder.",
+        description="Minimum total paired observation-simulation data for stations included in discharge evaluation (years; continuity is not required).",
     )
 
 
@@ -253,6 +294,55 @@ class MarketConfig(BaseModel):
     dynamic_market: bool = Field(False, description="Whether to use dynamic market.")
     price_frequency: Literal["yearly"] = Field(
         "yearly", description="Frequency of price updates."
+    )
+
+
+class GovernmentAdaptationConfig(BaseModel):
+    """Configuration for government-led adaptation policy."""
+
+    enabled: bool = Field(
+        False, description="Whether to enable government adaptation policy."
+    )
+    mode: Literal["cba", "threshold"] = Field(
+        "cba",
+        description="Adaptation policy mode: 'cba' (cost-benefit analysis) or 'threshold'.",
+    )
+    EAD_threshold: float = Field(
+        1000000.0,
+        description="Expected annual damage threshold that can trigger adaptation action.",
+    )
+    equity_indicator_threshold: float = Field(
+        0.5,
+        description="Equity indicator threshold between 0 and 1.",
+    )
+    ecosystem_indicator_threshold: float = Field(
+        0.5,
+        description="Ecosystem indicator threshold between 0 and 1.",
+    )
+    adaptation_fraction: float = Field(
+        0.1,
+        description="Fraction of households selected for adaptation action.",
+    )
+    dike_elevation_cost_per_meter_usd: float = Field(
+        6800.0,
+        description="Unit cost for raising a dike by 1 meter over 1 meter length (USD/m).",
+    )
+    dike_maintenance_cost_per_year_usd: float = Field(
+        80.0,
+        description="Annual maintenance cost for a dike segment of 1 meter length (USD/year).",
+    )
+
+
+class GovernmentConfig(BaseModel):
+    """Configuration for government agent."""
+
+    plant_forest: bool = Field(
+        False,
+        description="Whether to enable forest-planting policy for reforestation scenarios.",
+    )
+    adaptation: GovernmentAdaptationConfig = Field(
+        default_factory=GovernmentAdaptationConfig,
+        description="Government adaptation policy configuration.",
     )
 
 
@@ -549,6 +639,10 @@ class SensitivityAnalysisConfig(BaseModel):
 class AgentSettingsConfig(BaseModel):
     """Configuration for agents."""
 
+    government: GovernmentConfig = Field(
+        default_factory=GovernmentConfig, description="Government agent configuration."
+    )
+
     market: MarketConfig = Field(
         default_factory=MarketConfig, description="Market agent configuration."
     )
@@ -625,13 +719,34 @@ class ReportConfig(BaseModel):
     water_circle: bool = Field(
         False, alias="_water_circle", description="Whether to report water circle."
     )
+    water_balance: bool = Field(
+        False, alias="_water_balance", description="Whether to report water balance."
+    )
+    water_storage: bool = Field(
+        False, alias="_water_storage", description="Whether to report water storage."
+    )
+    energy_balance: bool = Field(
+        False, alias="_energy_balance", description="Whether to report energy balance."
+    )
     discharge_stations: bool = Field(
         True,
         alias="_discharge_stations",
         description="Whether to report discharge stations.",
     )
+    retention_basins: bool = Field(
+        False,
+        alias="_retention_basins",
+        description="Whether to report retention basins.",
+    )
+    meteorological_stations: bool = Field(
+        True,
+        alias="_meteorological_stations",
+        description="Whether to report meteorological stations.",
+    )
     outflow_points: bool = Field(
-        True, alias="_outflow_points", description="Whether to report outflow points."
+        True,
+        alias="_outflow_points",
+        description="Whether to report outflow points.",
     )
 
 
@@ -647,6 +762,10 @@ class ParametersConfig(BaseModel):
         0.1, description="Reservoir release factor."
     )
     lake_outflow_multiplier: float = Field(1.0, description="Lake outflow multiplier.")
+    interflow_multiplier: float = Field(1.0, description="Interflow multiplier.")
+    variable_runoff_shape_beta: float = Field(
+        1.0, description="Scale factor for the variable runoff shape parameter beta."
+    )
 
 
 class PlantFATEConfig(BaseModel):

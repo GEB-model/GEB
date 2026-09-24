@@ -1,25 +1,110 @@
 """Data adapter for obtaining ERA5 data from the Destination Earth."""
 
+import asyncio
 import base64
+import logging
 import os
 import time
 from datetime import datetime, timedelta
 from typing import Any
 
 import aiohttp
-import fsspec
 import numpy as np
 import xarray as xr
 import zarr.storage
 from aiohttp_retry import ExponentialRetry, RetryClient
 from fsspec.asyn import AsyncFileSystem
+from fsspec.implementations.http import HTTPFileSystem
 
 from geb.workflows.raster import convert_nodata
 
 from .base import Adapter
 
-N_CONNECTION_ATTEMPTS = 3
+N_CONNECTION_ATTEMPTS = 5
 RETRY_DELAY_SECONDS = 5
+
+
+class DestinationEarthFileSystem(HTTPFileSystem):
+    """HTTP filesystem with automatic retry logic for chunk reads.
+
+    Network connections to Destination Earth can drop mid-stream when downloading
+    large compressed chunks, causing aiohttp.ClientPayloadError or related transient
+    connection errors. This filesystem retries _cat_file with exponential backoff.
+    """
+
+    def __init__(
+        self,
+        *args: Any,
+        logger: logging.Logger,
+        **kwargs: Any,
+    ) -> None:
+        """Initialize the DestinationEarthFileSystem.
+
+        Args:
+            *args: Positional arguments passed to HTTPFileSystem.
+            logger: Logger instance to use for logging chunk retries and errors.
+            **kwargs: Keyword arguments passed to HTTPFileSystem.
+        """
+        super().__init__(*args, **kwargs)
+        self.logger: logging.Logger = logger
+
+    async def _cat_file(
+        self,
+        url: str,
+        start: int | None = None,
+        end: int | None = None,
+        **kwargs: Any,
+    ) -> bytes:
+        """Read the contents of a file or byte range with retries for transient errors.
+
+        Args:
+            url: The URL or path to read.
+            start: Start byte index (inclusive), or None to read from beginning.
+            end: End byte index (exclusive), or None to read until end.
+            **kwargs: Additional keyword arguments passed to the underlying HTTP request.
+
+        Returns:
+            The requested bytes content.
+
+        Raises:
+            aiohttp.ClientError: If maximum retry attempts are exhausted due to client/protocol errors.
+            asyncio.TimeoutError: If maximum retry attempts are exhausted due to timeouts.
+            ConnectionResetError: If maximum retry attempts are exhausted due to connection resets.
+            OSError: If maximum retry attempts are exhausted due to OS/network errors.
+        """
+        for attempt in range(N_CONNECTION_ATTEMPTS):
+            try:
+                return await super()._cat_file(url, start=start, end=end, **kwargs)
+            except (
+                aiohttp.ClientError,
+                asyncio.TimeoutError,
+                ConnectionResetError,
+                OSError,
+            ) as error:
+                if attempt == N_CONNECTION_ATTEMPTS - 1:
+                    self.logger.error(
+                        "Failed reading chunk from %s (bytes %s-%s) after %d attempts: %s",
+                        url,
+                        start,
+                        end,
+                        N_CONNECTION_ATTEMPTS,
+                        error,
+                    )
+                    raise
+                retry_delay_seconds: float = RETRY_DELAY_SECONDS * (2**attempt)
+                self.logger.warning(
+                    "Transient error reading chunk from %s (bytes %s-%s): %s. "
+                    "Retrying in %.1fs (attempt %d/%d)...",
+                    url,
+                    start,
+                    end,
+                    error,
+                    retry_delay_seconds,
+                    attempt + 1,
+                    N_CONNECTION_ATTEMPTS,
+                )
+                await asyncio.sleep(retry_delay_seconds)
+        return b""
 
 
 async def get_retry_client(**kwargs: Any) -> RetryClient:
@@ -37,6 +122,12 @@ async def get_retry_client(**kwargs: Any) -> RetryClient:
         max_timeout=3600,
         factor=2,
         retry_all_server_errors=True,
+        exceptions={
+            aiohttp.ClientError,
+            asyncio.TimeoutError,
+            ConnectionResetError,
+            OSError,
+        },
     )
     return RetryClient(retry_options=retry_options, **kwargs)
 
@@ -133,8 +224,7 @@ class DestinationEarth(Adapter):
         """
         for attempt in range(N_CONNECTION_ATTEMPTS):
             try:
-                fs: AsyncFileSystem = fsspec.filesystem(
-                    protocol="https",
+                fs: AsyncFileSystem = DestinationEarthFileSystem(
                     headers=self.get_authentication_header(),
                     get_client=get_retry_client,
                     asynchronous=True,
@@ -143,6 +233,7 @@ class DestinationEarth(Adapter):
                         "raise_for_status": False,  # Let RetryClient and fsspec handle status codes
                     },
                     timeout=600,
+                    logger=self.logger,
                 )
                 store = zarr.storage.FsspecStore(path=self.url, fs=fs)
 
@@ -156,7 +247,7 @@ class DestinationEarth(Adapter):
                 break
 
             except (aiohttp.ClientResponseError, aiohttp.ClientPayloadError) as e:
-                print(
+                self.logger.warning(
                     f"Error connecting to Destination Earth API: {e}. Retrying ({attempt + 1}/{N_CONNECTION_ATTEMPTS})..."
                 )
                 time.sleep(RETRY_DELAY_SECONDS * (2**attempt))

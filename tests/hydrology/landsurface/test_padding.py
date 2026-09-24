@@ -14,16 +14,15 @@ import numpy as np
 import pytest
 
 from geb.hydrology.landcovers import FOREST, GRASSLAND_LIKE
-from geb.hydrology.landsurface.constants import LAMBDA_ICE, LAMBDA_WATER
+from geb.hydrology.landsurface.constants import (
+    THERMAL_CONDUCTIVITY_ICE_WATT_PER_MKELVIN,
+    THERMAL_CONDUCTIVITY_WATER_WATT_PER_MKELVIN,
+)
 from geb.hydrology.landsurface.landsurface_model import (
     LandSurfaceInputs,
     _pad_hru_arrays,
     land_surface_model,
 )
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 _ERROR_CASES_DIR = Path(__file__).parent / "landsurface_error_cases"
 
@@ -107,16 +106,21 @@ def _load_and_tile(npz_path: Path, num_cells: int) -> dict:
             else:
                 raw[key] = val.astype(np.float32)
 
+    if "daily_reference_evapotranspiration_grass_m" not in raw:
+        raw["daily_reference_evapotranspiration_grass_m"] = np.full(
+            raw["root_depth_m"].shape, 0.003, dtype=np.float32
+        )
+
     if "thermal_conductivity_saturated_unfrozen_W_per_m_K" not in raw:
         porosity = raw["water_content_saturated_m"] / raw["soil_layer_height"]
         solid_factor = raw["solid_thermal_conductivity_W_per_m_K"] ** (
             np.float32(1.0) - porosity
         )
         raw["thermal_conductivity_saturated_unfrozen_W_per_m_K"] = solid_factor * (
-            LAMBDA_WATER**porosity
+            THERMAL_CONDUCTIVITY_WATER_WATT_PER_MKELVIN**porosity
         )
         raw["thermal_conductivity_saturated_frozen_W_per_m_K"] = solid_factor * (
-            LAMBDA_ICE**porosity
+            THERMAL_CONDUCTIVITY_ICE_WATT_PER_MKELVIN**porosity
         )
     raw.pop("solid_thermal_conductivity_W_per_m_K", None)
 

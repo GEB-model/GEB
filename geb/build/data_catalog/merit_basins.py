@@ -181,7 +181,10 @@ class MeritBasins(Adapter):
                     )
 
                     download_from_google_drive(
-                        file_id=file_id, file_path=file_path, session=session
+                        file_id=file_id,
+                        file_path=file_path,
+                        logger=self.logger,
+                        session=session,
                     )
 
                     if ext == "shp":
@@ -201,10 +204,12 @@ class MeritBasins(Adapter):
             del gdfs
 
             # MERIT Basins coordinates are distributed in WGS84
-            merged = merged.set_crs("EPSG:4326", allow_override=True)
+            merged: gpd.GeoDataFrame = merged.set_crs("EPSG:4326", allow_override=True)  # ty:ignore[invalid-assignment]
 
             ascending: bool = True
-            merged = merged.sort_values(by="COMID", ascending=ascending)
+            merged: gpd.GeoDataFrame = merged.sort_values(
+                by="COMID", ascending=ascending
+            )  # ty:ignore[invalid-assignment]
 
             # Use a temporary file to avoid partial writes in case of errors
             with tempfile.NamedTemporaryFile(

@@ -1,6 +1,7 @@
 """Tests for storage objects in GEB."""
 
 import shutil
+from pathlib import Path
 
 import numpy as np
 import numpy.typing as npt
@@ -519,3 +520,167 @@ def test_dynamic_array_min_max() -> None:
     res_max = np.maximum(da1, da2)
     assert isinstance(res_max, DynamicArray)
     np.testing.assert_array_equal(res_max.data, np.array([10, 15, 30]))
+
+
+def test_store_checkpoint_metadata() -> None:
+    """Test that Store saves checkpoint.json metadata and loads correctly."""
+    import datetime
+    import json
+
+    from geb.store import Store
+
+    class DummyModel:
+        def __init__(self) -> None:
+            self.current_time = datetime.datetime(1985, 6, 15, 0, 0, 0)
+            self.run_name = "test_run"
+            self.in_spinup = False
+            self.simulate_hydrology = True
+            self.config = {"hazards": {"floods": {"simulate": False}}}
+            self.logger = type(
+                "DummyLogger",
+                (),
+                {"debug": lambda *args: None, "info": lambda *args: None},
+            )()
+
+        def get_checkpoint_path(self, dt: datetime.datetime | None = None) -> Path:
+            if dt is None:
+                dt = self.current_time
+            return tmp_folder / "checkpoints" / dt.strftime("%Y-%m-%d")
+
+    model = DummyModel()
+    from typing import Any, cast
+
+    from geb.model import GEBModel
+
+    store = Store(cast(GEBModel, model))
+    bucket = store.create_bucket("var")
+    bucket.my_val = np.array([10, 20, 30])
+
+    checkpoint_dir = model.get_checkpoint_path()
+    store.save(checkpoint_dir)
+
+    metadata_path = checkpoint_dir / "checkpoint.json"
+    assert metadata_path.exists()
+    with open(metadata_path) as f:
+        meta = json.load(f)
+    assert meta["timestamp"] == "1985-06-15T00:00:00"
+    assert meta["run_name"] == "test_run"
+    assert meta["in_spinup"] is False
+
+    # Load store from checkpoint_dir
+    new_model = DummyModel()
+    new_store = Store(cast(GEBModel, new_model))
+    new_store.load(checkpoint_dir)
+
+    assert hasattr(new_model, "var")
+    var_bucket: Any = getattr(new_model, "var")
+    assert np.array_equal(var_bucket.my_val, np.array([10, 20, 30]))
+
+    shutil.rmtree(checkpoint_dir)
+
+
+def test_model_checkpoint_helpers(tmp_path: Path) -> None:
+    """Test GEBModel checkpoint path generation, listing, and resolution."""
+    import datetime
+    import json
+
+    from geb.model import GEBModel
+
+    # Mock GEBModel minimal configuration
+    config = {
+        "general": {
+            "name": "default",
+            "spinup_name": "spinup",
+            "simulation_root": str(tmp_path / "simulation_root"),
+            "spinup_time": "1970-01-01",
+            "start_time": "1980-01-01",
+            "end_time": "1990-01-01",
+            "hazards": {"floods": {"simulate": False}},
+        }
+    }
+
+    class MockModel:
+        def __init__(self) -> None:
+            self.config = config
+            self.run_name = "default"
+            self.in_spinup = False
+            self.current_time = datetime.datetime(1980, 1, 1, 0, 0, 0)
+            self.timestep_length = datetime.timedelta(days=1)
+            self.logger = type(
+                "DummyLogger",
+                (),
+                {"debug": lambda *args: None, "info": lambda *args: None},
+            )()
+
+        checkpoints_folder = GEBModel.checkpoints_folder
+        spinup_checkpoints_folder = GEBModel.spinup_checkpoints_folder
+        get_checkpoints_folder = GEBModel.get_checkpoints_folder
+        format_timestamp = GEBModel.format_timestamp
+        parse_checkpoint_timestamp = GEBModel.parse_checkpoint_timestamp
+        get_checkpoint_path = GEBModel.get_checkpoint_path
+        list_checkpoints = GEBModel.list_checkpoints
+        get_latest_checkpoint = GEBModel.get_latest_checkpoint
+        _resolve_checkpoint_to_load = GEBModel._resolve_checkpoint_to_load
+
+    m = MockModel()
+
+    # Test format_timestamp
+    assert m.format_timestamp(datetime.datetime(1980, 1, 1)) == "1980-01-01"
+    assert m.format_timestamp(datetime.datetime(1985, 6, 15)) == "1985-06-15"
+
+    # Test get_checkpoint_path
+    dt1 = datetime.datetime(1980, 1, 1)
+    p1 = m.get_checkpoint_path(dt1)
+    assert (
+        p1
+        == Path(config["general"]["simulation_root"])
+        / "default"
+        / "checkpoints"
+        / "1980-01-01"
+    )
+
+    # Test spinup checkpoint path
+    p_spinup = m.get_checkpoint_path(dt1, run_name="spinup")
+    assert (
+        p_spinup
+        == Path(config["general"]["simulation_root"])
+        / "spinup"
+        / "checkpoints"
+        / "1980-01-01"
+    )
+
+    # Create dummy checkpoint folders
+    p1.mkdir(parents=True, exist_ok=True)
+    with open(p1 / "checkpoint.json", "w") as f:
+        json.dump({"timestamp": "1980-01-01T00:00:00", "run_name": "default"}, f)
+
+    dt2 = datetime.datetime(1985, 6, 1)
+    p2 = m.get_checkpoint_path(dt2)
+    p2.mkdir(parents=True, exist_ok=True)
+    with open(p2 / "checkpoint.json", "w") as f:
+        json.dump({"timestamp": "1985-06-01T00:00:00", "run_name": "default"}, f)
+
+    # Test list_checkpoints
+    ckpts = m.list_checkpoints()
+    assert len(ckpts) == 2
+    assert ckpts[0][0] == dt1
+    assert ckpts[1][0] == dt2
+
+    # Test get_latest_checkpoint
+    latest = m.get_latest_checkpoint()
+    assert latest is not None
+    assert latest[0] == dt2
+    assert latest[1] == p2
+
+    # Test _resolve_checkpoint_to_load
+    res_latest_dt, res_latest_path = m._resolve_checkpoint_to_load("latest")
+    assert res_latest_dt == dt2
+    assert res_latest_path == p2
+
+    res_date_dt, res_date_path = m._resolve_checkpoint_to_load("1980-01-01")
+    assert res_date_dt == dt1
+    assert res_date_path == p1
+
+    res_path_dt, res_path_path = m._resolve_checkpoint_to_load(p2)
+    assert res_path_dt == dt2
+    assert res_path_path == p2

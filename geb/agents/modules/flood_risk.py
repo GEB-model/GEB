@@ -7,10 +7,11 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import xarray as xr
+from shapely.geometry import box
 
 from geb.hydrology.landcovers import FOREST
 from geb.workflows.io import read_geom, read_params, read_table, read_zarr
-from geb.workflows.raster import sample_from_map
+from geb.workflows.raster import coords_to_pixels
 
 from ...workflows.damage_scanner import VectorScanner, VectorScannerMultiCurves
 from ..workflows.helpers import from_landuse_raster_to_polygon
@@ -33,11 +34,91 @@ class FloodRiskModule:
         self.model = model
         self.households = households
         self.load_damage_curves()
-        self.alter_damage_curves_for_flood_proofed_buildings()
+        self.alter_damage_curves_based_on_actions()
         self.load_max_damage_values()
-        self.load_flood_maps()
+        if (
+            self.model.config["hazards"]["floods"]["flood_risk"]
+            or self.model.config["agent_settings"]["households"]["adapt"]
+        ):
+            self.load_return_period_flood_maps()
+        self.load_flood_protection_standard()
+        self.flood_in_last_year = False
 
-    def load_flood_maps(self) -> None:
+    def load_flood_protection_standard(self) -> None:
+        """Load flood protection standards for each subbasin.
+
+        Raises:
+            ValueError: If the flood protection standard mode is not 'manual' or 'auto'.
+        """
+        mode = self.model.config["hazards"]["floods"]["flood_protection_standard"][
+            "mode"
+        ]
+        self.flood_protection_standard_subbasins = {}
+        if mode == "manual":
+            manual_value = self.model.config["hazards"]["floods"][
+                "flood_protection_standard"
+            ]["manual_value"]
+            if manual_value is None:
+                raise ValueError(
+                    "Flood protection standard mode is 'manual' but 'manual_value' is null."
+                )
+
+            supported_return_periods = self.model.config["hazards"]["floods"][
+                "return_periods"
+            ]
+            if manual_value not in supported_return_periods:
+                raise ValueError(
+                    f"Manual flood protection standard {manual_value} is not in hazards.floods.return_periods {supported_return_periods}."
+                )
+            self.model.logger.info(
+                f"Flood protection standard set to {manual_value} years for all subbasins."
+            )
+
+            for comid in np.unique(self.households.buildings["COMID"]):
+                self.flood_protection_standard_subbasins[comid] = manual_value
+            return
+        elif mode == "auto":
+            self.model.logger.info(
+                "Flood protection standard set to 'auto'. Flood protection standards will be automatically determined."
+            )
+            flood_protection_standards = pd.read_parquet(
+                self.model.files["table"][
+                    "flood_protection_standards/flood_protection_standards"
+                ]
+            )
+
+            for comid in np.unique(self.households.buildings["COMID"]):
+                if comid not in flood_protection_standards.index:
+                    flood_protection_standard = flood_protection_standards[
+                        "flood_protection_standard"
+                    ].mode()[0]
+                    self.model.logger.warning(
+                        f"COMID {comid} not found in flood protection standards table. Using mode flood protection standard {flood_protection_standard}."
+                    )
+
+                else:
+                    flood_protection_standard = flood_protection_standards.loc[
+                        comid, "flood_protection_standard"
+                    ]
+                if flood_protection_standard == 0:
+                    self.model.logger.warning(
+                        f"COMID {comid} has a flood protection standard of 0. Value might be missing from flood protection standards table."
+                    )
+                    flood_protection_standard = 2
+                # truncate to closest return period if not in return periods
+                if flood_protection_standard not in self.households.return_periods:
+                    closest_return_period = min(
+                        self.households.return_periods,
+                        key=lambda x: abs(x - flood_protection_standard),
+                    )
+                    flood_protection_standard = closest_return_period
+                self.flood_protection_standard_subbasins[comid] = (
+                    flood_protection_standard
+                )
+        else:
+            raise ValueError(f"Invalid flood protection standard mode: {mode}")
+
+    def load_return_period_flood_maps(self) -> None:
         """Load flood maps for different return periods. This might be quite ineffecient for RAM, but faster then loading them each timestep for now."""
         self.households.return_periods = np.array(
             self.model.config["hazards"]["floods"]["return_periods"]
@@ -266,8 +347,11 @@ class FloodRiskModule:
                 columns={"damage_ratio": "rail"}
             )
 
-    def alter_damage_curves_for_flood_proofed_buildings(self) -> None:
+    def alter_damage_curves_based_on_actions(self) -> None:
         """Alter the global damage curves for flood-proofed buildings by applying a reduction factor to the unprotected building curves."""
+        damage_reduction_over_leadtime = self.households.model.config["agent_settings"][
+            "households"
+        ]["warning_system"]["damage_reduction_over_leadtime"]
         # insert a row with depth of 1.01m and damage ratio corresponding to the damage ratio at 1m depth modeling dry flood proofing until 1m depth.
         self.households.buildings_structure_curve.loc[1.01] = (
             self.households.buildings_structure_curve.loc[1]
@@ -350,6 +434,33 @@ class FloodRiskModule:
             self.households.buildings_content_curve["building_unprotected"] * 0.85
         )
 
+        if damage_reduction_over_leadtime:
+            # create timing-based structure curves for elevated possessions - no effect on structure
+            self.households.buildings_structure_curve[
+                "building_elevated_possessions_early"
+            ] = self.households.buildings_structure_curve["building_unprotected"]
+            self.households.buildings_structure_curve[
+                "building_elevated_possessions_medium"
+            ] = self.households.buildings_structure_curve["building_unprotected"]
+            self.households.buildings_structure_curve[
+                "building_elevated_possessions_late"
+            ] = self.households.buildings_structure_curve["building_unprotected"]
+            # create timing-based damage curves for elevated possessions
+            # Early action (>48h lead time): 20% damage (80% reduction)
+            self.households.buildings_content_curve[
+                "building_elevated_possessions_early"
+            ] = self.households.buildings_content_curve["building_unprotected"] * 0.20
+
+            # Medium action (24-48h lead time): 80% damage (20% reduction)
+            self.households.buildings_content_curve[
+                "building_elevated_possessions_medium"
+            ] = self.households.buildings_content_curve["building_unprotected"] * 0.80
+
+            # Late action (<24h lead time): 90% damage (10% reduction)
+            self.households.buildings_content_curve[
+                "building_elevated_possessions_late"
+            ] = self.households.buildings_content_curve["building_unprotected"] * 0.90
+
     def calculate_building_flood_damages(
         self,
         verbose: bool = False,
@@ -364,32 +475,16 @@ class FloodRiskModule:
         Args:
             verbose: Verbosity flag.
             export_building_damages: Whether to export the building damages to parquet files.
-            dynamic: Whether to calculate damages dynamically based on the current flood maps in the model (as opposed to using flood maps at t=0).
+            dynamic: Whether to calculate building damages dynamically based on the current flood maps in the model (as opposed to using flood maps at t=0).
         Returns:
             Tuple[np.ndarray, np.ndarray]: A tuple containing the damage arrays for unprotected and protected buildings.
-        Raises:
-            RuntimeError: If the damage arrays do not match the expected shape based on return periods and number of households.
         """
-        if (
-            not dynamic
-            and hasattr(self, "damages_do_not_adapt")
-            and hasattr(self, "damages_adapt")
-        ):
-            expected_shape = (
-                self.households.return_periods.size,
-                self.households.n,
-            )
-            if (
-                self.damages_do_not_adapt.shape != expected_shape
-                or self.damages_adapt.shape != expected_shape
-            ):
-                raise RuntimeError(
-                    "Damages array shape does not match the expected shape based on return periods and number of households. "
-                    "If household relocation is modeled, damages must be calculated dynamically. "
-                    f"Expected {expected_shape}, got do_not_adapt={self.damages_do_not_adapt.shape}, adapt={self.damages_adapt.shape}."
-                )
-            return self.damages_do_not_adapt, self.damages_adapt
+        # create a pandas data array for assigning damage to the agents:
+        agent_df = pd.DataFrame(
+            {"building_id_of_household": self.households.var.building_id_of_household}
+        )
 
+        # initiate the damage arrays for unprotected and protected buildings
         damages_do_not_adapt = np.zeros(
             (self.households.return_periods.size, self.households.n), np.float32
         )
@@ -397,10 +492,59 @@ class FloodRiskModule:
             (self.households.return_periods.size, self.households.n), np.float32
         )
 
-        # create a pandas data array for assigning damage to the agents:
-        agent_df = pd.DataFrame(
-            {"building_id_of_household": self.households.var.building_id_of_household}
-        )
+        # initiate the dictionary containing the damages for each return period for each building
+        # if not dynamic:
+        if not dynamic and not hasattr(self, "_building_damages_all_return_periods"):
+            self._building_damages_all_return_periods = {}
+        elif not dynamic and self._building_damages_all_return_periods:
+            for i, return_period in enumerate(self.households.return_periods):
+                building_multicurve = self._building_damages_all_return_periods[
+                    return_period
+                ]
+                damages_do_not_adapt[i], damages_adapt[i] = (
+                    self.households.assign_damages_to_agents(
+                        agent_df,
+                        building_multicurve,
+                    )
+                )
+                if export_building_damages:
+                    fn_for_export = (
+                        self.households.model.output_folder / "building_damages"
+                    )
+                    fn_for_export.mkdir(parents=True, exist_ok=True)
+                    building_multicurve.to_parquet(
+                        self.households.model.output_folder
+                        / "building_damages"
+                        / f"building_damages_rp{return_period}_{self.households.model.current_time.year}.parquet"
+                    )
+
+                if verbose:
+                    print(
+                        f"Damages rp{return_period}: {round(damages_do_not_adapt[i].sum() / 1e6)} million"
+                    )
+                    print(
+                        f"Damages adapt rp{return_period}: {round(damages_adapt[i].sum() / 1e6)} million"
+                    )
+            # set attributes
+            self._damages_do_not_adapt = damages_do_not_adapt
+            self._damages_adapt = damages_adapt
+            # return early
+            return self.damages_do_not_adapt, self.damages_adapt
+        # create a dictionary of multi_curves for the VectorScannerMultiCurves
+        multi_curves = {
+            "damages_structure": self.households.buildings_structure_curve[
+                "building_unprotected"
+            ],
+            "damages_content": self.households.buildings_content_curve[
+                "building_unprotected"
+            ],
+            "damages_structure_flood_proofed": self.households.buildings_structure_curve[
+                "building_flood_proofed"
+            ],
+            "damages_content_flood_proofed": self.households.buildings_content_curve[
+                "building_flood_proofed"
+            ],
+        }
 
         # subset building to those exposed to flooding
         buildings = self.households.buildings[
@@ -430,20 +574,6 @@ class FloodRiskModule:
                 if building_multicurve.crs != flood_crs:
                     building_multicurve = building_multicurve.to_crs(flood_crs)
 
-            multi_curves = {
-                "damages_structure": self.households.buildings_structure_curve[
-                    "building_unprotected"
-                ],
-                "damages_content": self.households.buildings_content_curve[
-                    "building_unprotected"
-                ],
-                "damages_structure_flood_proofed": self.households.buildings_structure_curve[
-                    "building_flood_proofed"
-                ],
-                "damages_content_flood_proofed": self.households.buildings_content_curve[
-                    "building_flood_proofed"
-                ],
-            }
             building_multicurve_renamed: gpd.GeoDataFrame = building_multicurve.rename(
                 columns={
                     "COST_STRUCTURAL_USD_SQM": "maximum_damage_structure",
@@ -469,7 +599,22 @@ class FloodRiskModule:
             building_multicurve = pd.concat(
                 [building_multicurve, damage_buildings], axis=1
             )
+            building_multicurve = building_multicurve[
+                ["id", "damages", "damages_flood_proofed"]
+            ]
 
+            if not dynamic:
+                self._building_damages_all_return_periods[return_period] = (
+                    building_multicurve
+                )
+
+            # merged["damage"] is aligned with agents
+            damages_do_not_adapt[i], damages_adapt[i] = (
+                self.households.assign_damages_to_agents(
+                    agent_df,
+                    building_multicurve,
+                )
+            )
             if export_building_damages:
                 fn_for_export = self.households.model.output_folder / "building_damages"
                 fn_for_export.mkdir(parents=True, exist_ok=True)
@@ -478,16 +623,7 @@ class FloodRiskModule:
                     / "building_damages"
                     / f"building_damages_rp{return_period}_{self.households.model.current_time.year}.parquet"
                 )
-            building_multicurve = building_multicurve[
-                ["id", "damages", "damages_flood_proofed"]
-            ]
-            # merged["damage"] is aligned with agents
-            damages_do_not_adapt[i], damages_adapt[i] = (
-                self.households.assign_damages_to_agents(
-                    agent_df,
-                    building_multicurve,
-                )
-            )
+
             if verbose:
                 print(
                     f"Damages rp{return_period}: {round(damages_do_not_adapt[i].sum() / 1e6)} million"
@@ -495,41 +631,58 @@ class FloodRiskModule:
                 print(
                     f"Damages adapt rp{return_period}: {round(damages_adapt[i].sum() / 1e6)} million"
                 )
-        if not dynamic:
-            self.damages_do_not_adapt = damages_do_not_adapt
-            self.damages_adapt = damages_adapt
-        return damages_do_not_adapt, damages_adapt
+        # set attributes
+        self._damages_do_not_adapt = damages_do_not_adapt
+        self._damages_adapt = damages_adapt
+
+        return self.damages_do_not_adapt, self.damages_adapt
 
     def calculate_ead(
         self,
         damages_do_not_adapt: np.ndarray,
         damages_adapt: np.ndarray,
         adapted: np.ndarray,
+        altered_flood_protection_standard: int | None = None,
     ) -> np.ndarray:
-        """Calculate the Expected Annual Damages (EAD) based on the damages for different return periods.
+        """Calculate expected annual damages (EAD) for each household.
+
+        Integrates damages across return periods using trapezoid rule. Handles
+        adapted households differently and can apply an alternative flood protection
+        standard that eliminates damages below a threshold return period.
 
         Args:
-            damages_do_not_adapt: A multi-dimensional numpy array containing damages for different return periods and agents.
-            damages_adapt: A multi-dimensional numpy array containing adapted damages for different return periods and agents.
-            adapted: A boolean numpy array indicating which agents have adapted.
+            damages_do_not_adapt: Damages by return period (rows) and household (columns) for non-adapted.
+            damages_adapt: Damages by return period (rows) and household (columns) for adapted.
+            adapted: Boolean array indicating which households have adapted.
+            altered_flood_protection_standard: If provided, set damages to 0 for return periods
+                below this threshold (damages protected against by higher standard).
+
         Returns:
-            A 1D numpy array containing the EAD for each agent.
+            1D array of annual expected damages (USD) for each household.
         """
-        # Copy baseline damages
+        # Start with baseline (non-adapted) damages
         all_damages = damages_do_not_adapt.copy()
 
-        # Replace adapted households with adapted damages
+        # Use adapted damages for households that have adapted
         adapted_mask = adapted.astype(bool)
         all_damages[:, adapted_mask] = damages_adapt[:, adapted_mask]
-        # Sort probabilities in ascending order for integration
-        probabilities = 1 / self.households.return_periods
+
+        # Apply higher flood protection standard if provided
+        if altered_flood_protection_standard is not None:
+            # Zero out damages for return periods protected by the higher standard
+            protected_mask = (
+                self.households.return_periods < altered_flood_protection_standard
+            )
+            all_damages[protected_mask, :] = 0.0
+
+        # Integrate damages across return periods (exceedance probability integration)
+        probabilities = 1.0 / self.households.return_periods
         sort_idx = np.argsort(probabilities)
 
-        prob_sorted = probabilities[sort_idx]
-        damages_sorted = all_damages[sort_idx, :]
-
-        # Calculate Expected Annual Damage (EAD)
-        ead_usd_per_year = np.trapezoid(y=damages_sorted, x=prob_sorted, axis=0)
+        # Calculate EAD via trapezoid integration
+        ead_usd_per_year = np.trapezoid(
+            y=all_damages[sort_idx, :], x=probabilities[sort_idx], axis=0
+        )
 
         return ead_usd_per_year
 
@@ -542,10 +695,16 @@ class FloodRiskModule:
         Returns:
             The total flood damages for the event for all assets and land use types.
 
+        Raises:
+            NotImplementedError: If the flood function is not implemented for the global damage model.
+            ValueError: If both warning response and adaptation are enabled in the model configuration, as this may lead to unintended consequences.
         """
-        if self.model.config["hazards"]["floods"]["damage_model"] == "global":
+        if (
+            "damage_model/flood/residential/content/maximum_damage"
+            not in self.model.files["dict"]
+        ):
             raise NotImplementedError(
-                "The flood function is not implemented for the global damage model yet."
+                "The model was probably build with the damage_model set to global. This funcion is not yet implemented for the global damage model. Please rebuild the damage model with the local model (geul) instead."
             )
 
         flood_depth: xr.DataArray = flood_depth.compute()
@@ -589,7 +748,7 @@ class FloodRiskModule:
 
         # merge geometry into buildings dataframe
         buildings = self.households.buildings.merge(
-            building_geometries[["id", "geometry"]],
+            building_geometries["id"],
             on="id",
             how="left",
         )
@@ -605,7 +764,17 @@ class FloodRiskModule:
         household_points: gpd.GeoDataFrame = (
             self.households.var.household_points.copy().to_crs(flood_depth.rio.crs)
         )
-
+        if (
+            (
+                self.households.model.config["agent_settings"]["households"][
+                    "warning_response"
+                ]
+            )
+            & (self.households.config["adapt"])
+        ):
+            raise ValueError(
+                "Warning: Both warning response and adaptation are enabled in the model configuration. This may lead to unintended consequences as both mechanisms currently influence the same protective measure of flood-proofing buildings. Please use either adapt or warning response, but not both."
+            )
         if self.households.model.config["agent_settings"]["households"][
             "warning_response"
         ]:
@@ -625,24 +794,19 @@ class FloodRiskModule:
                 np.asarray(self.households.var.actions_taken)[:, 1] == 1, "sandbags"
             ] = True
 
+            # Add lead_time information for timing-based damage reduction
+            household_points["action_lead_time"] = self.households.var.action_lead_time
+
             # spatial join to get household attributes to buildings
             buildings: gpd.GeoDataFrame = gpd.sjoin_nearest(
                 buildings, household_points, how="left", exclusive=True
             )
-
-            # Assign object types for buildings based on protective measures taken
             buildings["object_type"] = "building_unprotected"  # reset
-            buildings.loc[buildings["elevated_possessions"], "object_type"] = (
-                "building_elevated_possessions"
+            # Assign object types for buildings centroid based on protective measures taken
+            buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
+            buildings_centroid["maximum_damage"] = (
+                self.households.var.max_dam_buildings_content
             )
-            buildings.loc[buildings["sandbags"], "object_type"] = (
-                "building_with_sandbags"
-            )
-            buildings.loc[
-                buildings["elevated_possessions"] & buildings["sandbags"], "object_type"
-            ] = "building_all_forecast_based"
-            # TODO: need to move the update of the actions takens by households to outside the flood function
-
             # Save the buildings with actions taken
             output_path = (
                 self.households.model.output_folder
@@ -651,31 +815,91 @@ class FloodRiskModule:
             )
             # Ensure the action_maps directory exists before writing the file
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            buildings.to_parquet(output_path)
+            damage_reduction_over_leadtime = self.households.model.config[
+                "agent_settings"
+            ]["households"]["warning_system"]["damage_reduction_over_leadtime"]
+            if damage_reduction_over_leadtime:
+                elevated_mask = buildings["elevated_possessions"] == True
+                # Early action: >48 hours lead time
+                early_mask = elevated_mask & (buildings["action_lead_time"] > 48)
+                buildings.loc[early_mask, "object_type"] = (
+                    "building_elevated_possessions_early"
+                )
+                print(f"Early action buildings: {early_mask.sum()}")
 
-            # Assign object types for buildings centroid based on protective measures taken
-            buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
-            buildings_centroid["object_type"] = np.select(
-                [
-                    (
-                        buildings_centroid["elevated_possessions"]
-                        & buildings_centroid["sandbags"]
-                    ),
-                    buildings_centroid["elevated_possessions"],
-                    buildings_centroid["sandbags"],
-                ],
-                [
-                    "building_all_forecast_based",
-                    "building_elevated_possessions",
-                    "building_with_sandbags",
-                ],
-                default="building_unprotected",
-            )
-            buildings_centroid["maximum_damage"] = (
-                self.households.var.max_dam_buildings_content
-            )
+                # Medium action: 24-48 hours lead time
+                medium_mask = (
+                    elevated_mask
+                    & (buildings["action_lead_time"] > 24)
+                    & (buildings["action_lead_time"] <= 48)
+                )
+                buildings.loc[medium_mask, "object_type"] = (
+                    "building_elevated_possessions_medium"
+                )
+                print(f"Medium action buildings: {medium_mask.sum()}")
 
-        if self.households.config["adapt"]:
+                # Late action: <24 hours lead time
+                late_mask = elevated_mask & (buildings["action_lead_time"] <= 24)
+                buildings.loc[late_mask, "object_type"] = (
+                    "building_elevated_possessions_late"
+                )
+                print(f"Late action buildings: {late_mask.sum()}")
+
+                # Summary of object types
+                object_type_counts = buildings["object_type"].value_counts()
+                print("Building object type counts:")
+                for obj_type, count in object_type_counts.items():
+                    print(f"  {obj_type}: {count}")
+                buildings.to_parquet(output_path)
+                # Timing-based object type assignment for buildings_centroid
+                buildings_centroid["object_type"] = np.select(
+                    [
+                        (buildings_centroid["elevated_possessions"])
+                        & (buildings_centroid["action_lead_time"] > 48),
+                        (buildings_centroid["elevated_possessions"])
+                        & (buildings_centroid["action_lead_time"] > 24)
+                        & (buildings_centroid["action_lead_time"] <= 48),
+                        (buildings_centroid["elevated_possessions"])
+                        & (buildings_centroid["action_lead_time"] <= 24),
+                    ],
+                    [
+                        "building_elevated_possessions_early",
+                        "building_elevated_possessions_medium",
+                        "building_elevated_possessions_late",
+                    ],
+                    default="building_unprotected",
+                )
+            else:
+                # Assign object types for buildings based on protective measures taken
+                buildings.loc[buildings["elevated_possessions"], "object_type"] = (
+                    "building_elevated_possessions"
+                )
+                buildings.loc[buildings["sandbags"], "object_type"] = (
+                    "building_with_sandbags"
+                )
+                buildings.loc[
+                    buildings["elevated_possessions"] & buildings["sandbags"],
+                    "object_type",
+                ] = "building_all_forecast_based"
+                buildings.to_parquet(output_path)
+
+                buildings_centroid["object_type"] = np.select(
+                    [
+                        (
+                            buildings_centroid["elevated_possessions"]
+                            & buildings_centroid["sandbags"]
+                        ),
+                        buildings_centroid["elevated_possessions"],
+                        buildings_centroid["sandbags"],
+                    ],
+                    [
+                        "building_all_forecast_based",
+                        "building_elevated_possessions",
+                        "building_with_sandbags",
+                    ],
+                    default="building_unprotected",
+                )
+        elif self.households.config["adapt"]:
             household_points["building_id"] = (
                 self.households.var.building_id_of_household
             )  # first assign building id to household points gdf
@@ -882,72 +1106,117 @@ class FloodRiskModule:
 
         return total_flood_damages
 
-    def return_period_flood(self, flood_protection_standard: int = 10) -> np.ndarray:
+    def return_period_flood(self) -> np.ndarray:
         """Simulate a flood event based on return periods and determine which households are flooded.
 
         Returns:
             Array of indices of flooded households.
         """
         # draw a single random number
-        p_random = np.random.random()
-        # Work with a locally sorted copy of return periods to ensure correct event selection
-        return_periods_arr = np.asarray(self.households.return_periods, dtype=float)
-        sort_idx = np.argsort(return_periods_arr)  # ascending order
-        sorted_return_periods = return_periods_arr[sort_idx]
-        probabilities = 1.0 / sorted_return_periods
+        u = np.random.random()
+        return_period = 1 / u
+        affected_subbasins = [
+            subbasin
+            for subbasin, protection in self.flood_protection_standard_subbasins.items()
+            if protection < return_period
+        ]
 
-        if p_random >= probabilities.max() or p_random >= 1 / flood_protection_standard:
+        if len(affected_subbasins) == 0:
+            self.flood_in_last_year = False
             return np.array([], dtype=int)
 
-        # find the event corresponding to the random draw
-        event_idx = np.searchsorted(probabilities[::-1], p_random)
-        event_idx = len(probabilities) - 1 - event_idx
-        event = sorted_return_periods[event_idx]
+        # get the indices of households in the affected subbasins
+        mask = np.isin(self.households.comid_of_household, affected_subbasins)
+        flooded_household_indices = np.nonzero(mask)[0]
+
+        self.flood_in_last_year = len(flooded_household_indices) > 0
         self.model.logger.info(
-            "Return period flood event: %s years (p=%.4f, random draw=%.4f)",
-            event,
-            probabilities[event_idx],
-            p_random,
+            "Flood event with return period %.2f years affected %d households.",
+            return_period,
+            len(flooded_household_indices),
         )
-
-        # get the flood map for this event
-        flood_map: xr.DataArray = self.households.flood_maps[event]
-
-        # cache household coordinates in flood_map CRS (Nx2 numpy array)
-        if not hasattr(self, "_household_xy"):
-            import pyproj
-
-            x, y = (
-                np.array(self.households.buildings.x),
-                np.array(self.households.buildings.y),
-            )
-            transformer = pyproj.Transformer.from_crs(
-                "EPSG:4326", flood_map.rio.crs, always_xy=True
-            )
-            self._building_xy = np.array(transformer.transform(x, y)).T
-
-        # sample flood map using clipped coordinates
-        sampled_values = sample_from_map(
-            array=flood_map.values,
-            coords=self._building_xy,
-            gt=flood_map.rio.transform(recalc=True).to_gdal(),
-            out_of_bounds_value=np.nan,
-        )
-        # Use the same minimum flood depth threshold (0.05 m) as elsewhere in the model
-        minimum_flood_depth_m = 0.05
-        # np.where will return indices of flooded households relative to the original household array
-        flooded_building_indices = np.where(sampled_values > minimum_flood_depth_m)[0]
-
-        # get building IDs of flooded buildings
-        flooded_building_ids = self.households.buildings.loc[
-            flooded_building_indices, "id"
-        ].values.astype(int)
-
-        # get indices of households located in flooded buildings
-        flooded_household_indices = np.where(
-            np.isin(
-                self.households.var.building_id_of_household.data, flooded_building_ids
-            )
-        )[0]
-
         return flooded_household_indices
+
+    def _adjust_damages_for_flood_protection(
+        self,
+        damages: np.ndarray,
+    ) -> np.ndarray:
+        """Return damages with values below the flood protection standard set to 0.
+
+        Args:
+            damages: 2D array of damages by return period (rows) and household (columns).
+        Returns:
+            2D array of damages with values below the flood protection standard set to 0.
+        """
+        comids = self.households.comid_of_household
+
+        household_thresholds = np.fromiter(
+            (self.flood_protection_standard_subbasins.get(int(c), -1) for c in comids),
+            dtype=float,
+            count=comids.size,
+        )
+
+        mask = self.households.return_periods[:, None] >= household_thresholds[None, :]
+        return damages * mask
+
+    @property
+    def damages_do_not_adapt(self) -> np.ndarray:
+        """Return damages for households that do not adapt."""
+        return self._adjust_damages_for_flood_protection(self._damages_do_not_adapt)
+
+    @property
+    def damages_adapt(self) -> np.ndarray:
+        """Return damages for households that adapt."""
+        return self._adjust_damages_for_flood_protection(self._damages_adapt)
+
+    def dike_heights(self) -> dict[int, dict[int, np.ndarray]]:
+        """Calculate dike heights for each river and return period.
+
+        This is done by sampling the flood maps along the river geometries and extracting the flood depths at those points.
+        These dike heights are then stored in a dictionary for later use by the government agent to determine the required dike height for each river and return period.
+
+        Returns:
+            dict[int, dict[int, np.ndarray]]: A nested dictionary where the first key is the return period, the second key is the river ID, and the value is an array of dike heights (flood depths) along the river.
+        """
+        if hasattr(self, "_dike_heights"):
+            return self._dike_heights
+
+        dike_heights = {}
+        # load river network
+        river_network = gpd.read_parquet(
+            Path(self.households.model.files["geom"]["routing/rivers"])
+        )
+        floodmap_template = self.households.flood_maps[
+            self.households.return_periods[0]
+        ]
+        for river in river_network.itertuples():
+            river_geom = river.geometry
+            # check if geom is within bounds of floodmap_template
+            if not box(*floodmap_template.rio.bounds()).contains(river_geom):
+                continue
+            # initialize idx_river_points to False to avoid recalculating for each return period
+            idx_river_points = False
+            # sample every 100 m (TODO: build dike lines in model build with 100 m spacing. For now use interpolation to get points along the river geometry)
+            distances = np.arange(
+                0, river_geom.length, 0.0008333
+            )  # 100 m in degrees (approximate, for WGS84)
+
+            # Extract x/y directly without creating intermediate Point objects
+            x = np.array([river_geom.interpolate(d).x for d in distances])
+            y = np.array([river_geom.interpolate(d).y for d in distances])
+
+            for rp in self.households.return_periods:
+                flood_map: xr.DataArray = self.households.flood_maps[rp]
+                flood_map_array = flood_map.values
+                if rp not in dike_heights:
+                    dike_heights[rp] = {}
+                if not idx_river_points:
+                    idx_river_points = coords_to_pixels(
+                        coords=np.column_stack((x, y)),
+                        gt=flood_map.rio.transform().to_gdal(),
+                    )
+                depths = flood_map_array[(idx_river_points[1], idx_river_points[0])]
+                depths = np.nan_to_num(depths, nan=0.0)
+                dike_heights[rp][river[0]] = depths
+        self._dike_heights = dike_heights
+        return dike_heights

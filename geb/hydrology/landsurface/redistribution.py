@@ -6,7 +6,7 @@ from numba import njit
 from geb.workflows.numba_stack_array import stack_empty
 
 from .constants import (
-    L_FUSION_J_PER_KG,
+    LATENT_HEAT_FUSION_J_PER_KG,
     N_SOIL_LAYERS,
     RHO_WATER_KG_PER_M3,
     SPECIFIC_HEAT_CAPACITY_ICE_J_PER_KG_K,
@@ -22,6 +22,7 @@ def distribute_soil_water_ross(
     water_content_m: np.ndarray,
     water_content_residual_m: np.ndarray,
     water_content_saturated_m: np.ndarray,
+    water_content_field_capacity_m: np.ndarray,
     soil_enthalpy_J_per_m2: np.ndarray,
     solid_heat_capacity_J_per_m2_K: np.ndarray,
     saturated_hydraulic_conductivity_m_per_s: np.ndarray,
@@ -44,6 +45,7 @@ def distribute_soil_water_ross(
         water_content_m: Soil water content in each layer (m).
         water_content_residual_m: Residual soil water content in each layer (m).
         water_content_saturated_m: Saturated soil water content in each layer (m).
+        water_content_field_capacity_m: Field capacity soil water content in each layer (m).
         soil_enthalpy_J_per_m2: Soil enthalpy in each layer (J/m2).
         solid_heat_capacity_J_per_m2_K: Heat capacity of the solid fraction in each layer (J/m2/K).
         saturated_hydraulic_conductivity_m_per_s: Saturated hydraulic conductivity for each layer (m/s).
@@ -104,7 +106,7 @@ def distribute_soil_water_ross(
         topwater_frac_m = topwater_m if i == 0 else np.float32(0.0)
         water_depth_frac_m = water_content_m[i] + topwater_frac_m
         latent_heat_frac_J_per_m2 = (
-            water_depth_frac_m * RHO_WATER_KG_PER_M3 * L_FUSION_J_PER_KG
+            water_depth_frac_m * RHO_WATER_KG_PER_M3 * LATENT_HEAT_FUSION_J_PER_KG
         )
         h_frac = soil_enthalpy_J_per_m2[i]
         if h_frac >= np.float32(0.0):
@@ -116,16 +118,13 @@ def distribute_soil_water_ross(
         liq_frac = np.float32(1.0) - min(
             np.float32(1.0), max(np.float32(0.0), frozen_frac)
         )
-        # If the layer is above the wetting front, it acts as if frozen (no flux).
-        if i < green_ampt_active_layer_idx:
-            liq_frac = np.float32(0.0)
         liquid_fractions[i] = liq_frac
 
-        # When there is an active wetting front, the flux is handled in the infiltration
-        # module, so we set the conductivity to near-zero here to effectively "turn off" the Richards
-        # redistribution for the wetting front layer.
+        # When there is an active wetting front, the vertical flux is handled in the infiltration
+        # module, so we set the vertical conductivity to near-zero here to effectively "turn off" the Richards
+        # vertical redistribution for layers within or above the wetting front.
         sat_cond_s = saturated_hydraulic_conductivity_m_per_s[i]
-        if i < green_ampt_active_layer_idx:
+        if green_ampt_active_layer_idx >= 0 and i < green_ampt_active_layer_idx:
             sat_cond_s = np.float32(1e-25)
 
         # Campbell conductivity function
@@ -153,45 +152,76 @@ def distribute_soil_water_ross(
         dK_dS[i] = pore_size_index[i] * (K[i] / s_eff)
         dphi_dS[i] = phi_exponent_i * (phi[i] / s_eff)
 
-        # Interflow drainage rate coefficient (1/s) for lateral subsurface stormflow.
-        drainable_porosity = (
-            water_content_saturated_m[i] - water_content_residual_m[i]
-        ) / soil_layer_height[i]
-
-        # Assume that lateral conductivity for interflow is 10 times the unsaturated vertical conductivity.
-        lateral_K_m_per_s = K[i] * np.float32(10.0) * interflow_multiplier
-
-        # The drainage rate coefficient has units 1/s. Higher values mean faster drainage.
-        # It depends on the lateral conductivity, hillslope slope and length,
-        # and total porosity (since flow is now allowed across the full range).
-        interflow_drainage_rate_s = (lateral_K_m_per_s * slope_m_per_m) / (
-            max(np.float32(1e-6), drainable_porosity) * hillslope_length_m
+        # Check whether this layer has an active wetting front.
+        in_active_wetting_front: bool = bool(
+            green_ampt_active_layer_idx >= 0 and i <= green_ampt_active_layer_idx
         )
 
-        # This is the initial estimate of interflow flux based on current saturation.
-        # The derivative dq_interflow/dS will be incorporated into the implicit matrix below.
-        # q_interflow = K_lat * slope * (W / L) / drainable_porosity
-        # Since K_lat = 10 * K_sat * S^p and W = S * (W_sat - W_res),
-        # q_interflow = C * S^(p+1)
-        free_water_m = max(
-            np.float32(0.0),
-            water_content_m[i] - water_content_residual_m[i],
-        )
+        if in_active_wetting_front:
+            # Active wetting front (storm quickflow):
+            # Water in the perched transmission zone drains laterally via saturated lateral conductivity
+            # Lateral flow operates on drainable water above field capacity.
+            free_water_m = max(
+                np.float32(0.0),
+                water_content_m[i] - water_content_field_capacity_m[i],
+            )
+            drainable_porosity = max(
+                np.float32(1e-6),
+                (water_content_saturated_m[i] - water_content_field_capacity_m[i])
+                / soil_layer_height[i],
+            )
+            lateral_K_m_per_s = (
+                saturated_hydraulic_conductivity_m_per_s[i]
+                * np.float32(10.0)
+                * interflow_multiplier
+            )
+            interflow_drainage_rate_s = (lateral_K_m_per_s * slope_m_per_m) / (
+                drainable_porosity * hillslope_length_m
+            )
+            q_interflow[i] = (
+                interflow_drainage_rate_s * free_water_m * liquid_fractions[i]
+            )
 
-        q_interflow[i] = interflow_drainage_rate_s * free_water_m * liquid_fractions[i]
+            # Saturated lateral conductivity does not depend on S; derivative is purely dW/dS:
+            if free_water_m > np.float32(0.0):
+                dq_interflow_dS[i] = (
+                    interflow_drainage_rate_s
+                    * (water_content_saturated_m[i] - water_content_residual_m[i])
+                    * liquid_fractions[i]
+                )
+            else:
+                dq_interflow_dS[i] = np.float32(0.0)
+        else:
+            # Inactive wetting front:
+            # Drains more slowly via unsaturated matrix conductivity down to residual storage.
+            free_water_m = max(
+                np.float32(0.0),
+                water_content_m[i] - water_content_residual_m[i],
+            )
+            drainable_porosity = max(
+                np.float32(1e-6),
+                (water_content_saturated_m[i] - water_content_residual_m[i])
+                / soil_layer_height[i],
+            )
+            lateral_K_m_per_s = K[i] * np.float32(10.0) * interflow_multiplier
+            interflow_drainage_rate_s = (lateral_K_m_per_s * slope_m_per_m) / (
+                drainable_porosity * hillslope_length_m
+            )
+            q_interflow[i] = (
+                interflow_drainage_rate_s * free_water_m * liquid_fractions[i]
+            )
 
-        d_lateral_K_dS = dK_dS[i] * np.float32(10.0)
-        d_interflow_drainage_rate_dS = (
-            (d_lateral_K_dS * slope_m_per_m)
-            / (max(np.float32(1e-6), drainable_porosity) * hillslope_length_m)
-        ) * interflow_multiplier
+            d_lateral_K_dS = dK_dS[i] * np.float32(10.0)
+            d_interflow_drainage_rate_dS = (
+                (d_lateral_K_dS * slope_m_per_m)
+                / (drainable_porosity * hillslope_length_m)
+            ) * interflow_multiplier
 
-        # Derivative dq_interflow/dS = d(drainage_rate)/dS * W + drainage_rate * dW/dS
-        dq_interflow_dS[i] = (
-            d_interflow_drainage_rate_dS * free_water_m
-            + interflow_drainage_rate_s
-            * (water_content_saturated_m[i] - water_content_residual_m[i])
-        ) * liquid_fractions[i]
+            dq_interflow_dS[i] = (
+                d_interflow_drainage_rate_dS * free_water_m
+                + interflow_drainage_rate_s
+                * (water_content_saturated_m[i] - water_content_residual_m[i])
+            ) * liquid_fractions[i]
 
     # q holds vertical fluxes at layer interfaces:
     # q[0] is the top boundary (no imposed surface infiltration flux here),
@@ -208,8 +238,14 @@ def distribute_soil_water_ross(
         # and if i+1 is frozen, it cannot pull water from i.
         liquid_fraction_of_interface = liquid_fractions[i] * liquid_fractions[i + 1]
 
-        # Zero out the interface conductivity if either layer is essentially frozen.
-        if liquid_fractions[i] < 1e-4 or liquid_fractions[i + 1] < 1e-4:
+        # Zero out the interface conductivity if either layer is essentially frozen,
+        # or if the interface is within/above the active Green-Ampt wetting front
+        # where vertical flux is governed explicitly by Green-Ampt infiltration.
+        if (
+            liquid_fractions[i] < 1e-4
+            or liquid_fractions[i + 1] < 1e-4
+            or (green_ampt_active_layer_idx >= 0 and i < green_ampt_active_layer_idx)
+        ):
             liquid_fraction_of_interface = np.float32(0.0)
 
         # Compute the Ross (2003) interface blending weight from a dimensionless
@@ -415,7 +451,7 @@ def distribute_soil_water_ross(
 
         src_water_depth_m = water_content_m[source_idx] + source_topwater_m
         src_latent_heat_J_per_m2 = (
-            src_water_depth_m * RHO_WATER_KG_PER_M3 * L_FUSION_J_PER_KG
+            src_water_depth_m * RHO_WATER_KG_PER_M3 * LATENT_HEAT_FUSION_J_PER_KG
         )
         src_heat_capacity_liquid_J_per_m2_K = (
             solid_heat_capacity_J_per_m2_K[source_idx]
@@ -487,11 +523,20 @@ def distribute_soil_water_ross(
     # interflow, and to apply the enthalpy loss from interflow advection.
     for i in range(N_SOIL_LAYERS):
         corrected_q_interflow_m_per_s = q_interflow[i] + (dq_interflow_dS[i] * dS[i])
-        # Interflow is strictly an outflow process. Keep it non-negative and
-        # bounded by currently available liquid water above residual storage.
-        available_for_interflow_m = max(
-            np.float32(0.0), water_content_m[i] - water_content_residual_m[i]
+        in_active_wetting_front_apply: bool = bool(
+            green_ampt_active_layer_idx >= 0 and i <= green_ampt_active_layer_idx
         )
+        if in_active_wetting_front_apply:
+            available_for_interflow_m = max(
+                np.float32(0.0),
+                water_content_m[i] - water_content_field_capacity_m[i],
+            )
+        else:
+            available_for_interflow_m = max(
+                np.float32(0.0),
+                water_content_m[i] - water_content_residual_m[i],
+            )
+
         actual_interflow_m = max(
             np.float32(0.0),
             min(
@@ -509,7 +554,7 @@ def distribute_soil_water_ross(
         topwater_layer_m = topwater_m if i == 0 else np.float32(0.0)
         water_depth_m = water_content_m[i] + topwater_layer_m
         latent_heat_areal_J_per_m2 = (
-            water_depth_m * RHO_WATER_KG_PER_M3 * L_FUSION_J_PER_KG
+            water_depth_m * RHO_WATER_KG_PER_M3 * LATENT_HEAT_FUSION_J_PER_KG
         )
         heat_capacity_liquid_J_per_m2_K = (
             solid_heat_capacity_J_per_m2_K[i]

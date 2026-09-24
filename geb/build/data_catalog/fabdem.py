@@ -7,7 +7,6 @@ downloads and merges the corresponding GeoTIFFs.
 
 import re
 from typing import Any
-from urllib.parse import urljoin
 
 import geopandas as gpd
 import numpy as np
@@ -37,20 +36,18 @@ class Fabdem(Adapter):
         """
         super().__init__(*args, **kwargs)
 
-    def _get_items_from_catalog(self, catalog_url: str) -> dict[str, str]:
-        """Fetch all STAC item names and hrefs from the catalog/collection JSON.
+    def _get_item_names_from_catalog(self, catalog_url: str) -> list[str]:
+        """Fetch all STAC item names from the collection JSON.
 
-        Parses only the catalog-level JSON (one HTTP request) to extract item
-        directory names and their href, without loading each individual item
-        document.
+        Parses only the collection-level JSON (one HTTP request) to extract item
+        directory names, without loading each individual item document.
 
         Args:
-            catalog_url: URL of the STAC catalog or collection JSON that lists
-                the individual items (e.g. ``…/collection.json``).
+            catalog_url: URL of the STAC collection JSON
+                (e.g. ``…/collection.json``).
 
         Returns:
-            Mapping of item name (directory name) to its href, relative to
-            *catalog_url*, as found in the catalog.
+            List of item names (directory names) found in the collection.
         """
         response = requests.get(catalog_url, timeout=30)
         response.raise_for_status()
@@ -130,10 +127,8 @@ class Fabdem(Adapter):
 
         Args:
             item_name: STAC item name such as ``N00W000_FABDEM_V1-2``.
-            href: The item's href as found in the catalog/collection JSON,
-                relative to *catalog_url*.
-            catalog_url: URL of the STAC catalog/collection JSON that *href*
-                is relative to.
+            catalog_url: URL of the STAC collection JSON; used to derive the
+                item JSON URL.
 
         Returns:
             Lazy xr.DataArray for the tile, with spatial coordinates in WGS-84
@@ -142,7 +137,8 @@ class Fabdem(Adapter):
         Raises:
             KeyError: If the asset URL cannot be resolved.
         """
-        item_url: str = urljoin(catalog_url, href)
+        base_url: str = catalog_url.rsplit("/", 1)[0]
+        item_url: str = f"{base_url}/stac_catalog/{item_name}/{item_name}.json"
         item: pystac.Item = pystac.Item.from_file(href=item_url)
 
         asset = next(iter(item.assets.values()))
@@ -178,10 +174,10 @@ class Fabdem(Adapter):
         return da
 
     def fetch(self, url: str) -> Fabdem:
-        """Store the STAC catalog URL and return the adapter instance.
+        """Store the STAC collection URL and return the adapter instance.
 
         Args:
-            url: URL of the FABDEM STAC catalog root JSON on Hugging Face.
+            url: URL of the FABDEM STAC collection JSON on Hugging Face.
 
         Returns:
             The Fabdem instance (enables method chaining).
@@ -192,7 +188,7 @@ class Fabdem(Adapter):
     def read(self, mask: BaseGeometry) -> xr.DataArray:
         """Read FABDEM elevation data for the area covered by *mask*.
 
-        Queries the STAC catalog to discover which 1×1-degree tiles intersect
+        Queries the STAC collection to discover which 1×1-degree tiles intersect
         *mask*, downloads those tiles, merges them, and clips the result to
         *mask*.
 

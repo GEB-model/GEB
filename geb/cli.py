@@ -22,6 +22,7 @@ from geb.runner import (
     OPTIMIZE_DEFAULT,
     PROFILE_RAM_DEFAULT,
     PROFILE_SPEED_DEFAULT,
+    SKIP_DONE_DEFAULT,
     TIMING_DEFAULT,
     UPDATE_DEFAULT,
     WORKING_DIRECTORY_DEFAULT,
@@ -258,6 +259,28 @@ def click_run_options() -> Any:
         """
 
         @universal_options
+        @click.option(
+            "--save-checkpoint",
+            "save_checkpoints",
+            multiple=True,
+            is_flag=False,
+            flag_value="end",
+            help="Save a checkpoint at the end of the simulation, or at a specific date (YYYY-MM-DD) if provided. Can be repeated.",
+        )
+        @click.option(
+            "--continue-from-checkpoint",
+            "continue_from_checkpoint",
+            is_flag=False,
+            flag_value="latest",
+            default=None,
+            help="Continue simulation from a checkpoint. Defaults to the latest available checkpoint if no date or path is specified.",
+        )
+        @click.option(
+            "--skip-done",
+            is_flag=True,
+            default=SKIP_DONE_DEFAULT,
+            help="Only run the method if the model is not already marked as done.",
+        )
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             """Wrapper function for run options.
@@ -278,16 +301,27 @@ def click_run_options() -> Any:
 
 @cli.command()
 @click_run_options()
-def run(**kwargs: Any) -> None:
+def run(
+    save_checkpoints: tuple[str, ...] = (),
+    continue_from_checkpoint: str | None = None,
+    **kwargs: Any,
+) -> None:
     """Run model.
 
     Can be run after model spinup.
 
     Args:
+        save_checkpoints: Checkpoint dates or 'end' to save checkpoints during or after run.
+        continue_from_checkpoint: Checkpoint date, path, or 'latest' to continue from.
         **kwargs: Keyword arguments to pass to the run function.
 
     """
-    run_model_with_method(method="run", **kwargs)
+    method_args: dict[str, Any] = kwargs.pop("method_args", {})
+    if save_checkpoints:
+        method_args["save_checkpoints"] = save_checkpoints
+    if continue_from_checkpoint is not None:
+        method_args["continue_from_checkpoint"] = continue_from_checkpoint
+    run_model_with_method(method="run", method_args=method_args, **kwargs)
 
 
 @cli.command()
@@ -299,12 +333,24 @@ def run(**kwargs: Any) -> None:
     help="Run yearly mode multiple times.",
 )
 @click.option(
+    "--prefix",
+    default="",
+    help="Prefix for the output files.",
+)
+@click.option(
     "--n-runs",
     type=click.IntRange(min=1),
     default=None,
     help="Number of yearly runs. Required when --multi is set.",
 )
-def run_yearly(multi: bool, n_runs: int | None, **kwargs: Any) -> None:
+def run_yearly(
+    multi: bool,
+    n_runs: int | None,
+    prefix: str,
+    save_checkpoints: tuple[str, ...] = (),
+    continue_from_checkpoint: str | None = None,
+    **kwargs: Any,
+) -> None:
     """Run model in yearly mode.
 
     Can be run after model spinup.
@@ -312,6 +358,9 @@ def run_yearly(multi: bool, n_runs: int | None, **kwargs: Any) -> None:
     Args:
         multi: If True, run yearly mode multiple times.
         n_runs: Number of runs when ``multi`` is True.
+        prefix: Prefix for the output files.
+        save_checkpoints: Checkpoint dates to save.
+        continue_from_checkpoint: Checkpoint date, path, or 'latest' to continue from.
         **kwargs: Keyword arguments to pass to the run_yearly function.
 
     Raises:
@@ -324,31 +373,52 @@ def run_yearly(multi: bool, n_runs: int | None, **kwargs: Any) -> None:
     if not multi and n_runs is not None:
         raise click.ClickException("--n-runs can only be used together with --multi.")
 
+    base_method_args: dict[str, Any] = kwargs.pop("method_args", {})
+    if save_checkpoints:
+        base_method_args["save_checkpoints"] = save_checkpoints
+    if continue_from_checkpoint is not None:
+        base_method_args["continue_from_checkpoint"] = continue_from_checkpoint
+
     if not multi:
-        run_model_with_method(method="run_yearly", **kwargs)
+        run_model_with_method(
+            method="run_yearly", method_args=base_method_args, **kwargs
+        )
         return
 
     assert n_runs is not None
     for run_id in range(n_runs):
+        args: dict[str, Any] = base_method_args.copy()
+        args["model_name"] = f"{prefix}run_{run_id}"
         run_model_with_method(
             method="run_yearly",
-            method_args={"model_name": f"run_{run_id}"},
+            method_args=args,
             **kwargs,
         )
 
 
 @cli.command()
 @click_run_options()
-def spinup(**kwargs: Any) -> None:
+def spinup(
+    save_checkpoints: tuple[str, ...] = (),
+    continue_from_checkpoint: str | None = None,
+    **kwargs: Any,
+) -> None:
     """Run model spinup.
 
     Can be run after model build.
 
     Args:
+        save_checkpoints: Checkpoint dates to save checkpoints during spinup.
+        continue_from_checkpoint: Checkpoint date, path, or 'latest' to continue from.
         **kwargs: Keyword arguments to pass to the spinup function.
 
     """
-    run_model_with_method(method="spinup", **kwargs)
+    method_args: dict[str, Any] = kwargs.pop("method_args", {})
+    if save_checkpoints:
+        method_args["save_checkpoints"] = save_checkpoints
+    if continue_from_checkpoint is not None:
+        method_args["continue_from_checkpoint"] = continue_from_checkpoint
+    run_model_with_method(method="spinup", method_args=method_args, **kwargs)
 
 
 @cli.command()
@@ -361,18 +431,26 @@ def spinup(**kwargs: Any) -> None:
     help="Argument to pass to the method, as KEY=VALUE. Can be repeated.",
 )
 @click_run_options()
-def exec(method: str, method_args_raw: tuple[str, ...], **kwargs: Any) -> None:
+def exec(
+    method: str,
+    method_args_raw: tuple[str, ...],
+    save_checkpoints: tuple[str, ...] = (),
+    continue_from_checkpoint: str | None = None,
+    **kwargs: Any,
+) -> None:
     """Execute a specific method on the model.
 
     Args:
         method: Method to run on the model.
         method_args_raw: Arguments to pass to the method, as KEY=VALUE strings.
+        save_checkpoints: Checkpoint dates to save.
+        continue_from_checkpoint: Checkpoint date, path, or 'latest' to continue from.
         **kwargs: Keyword arguments to pass to the method.
 
     Raises:
         click.ClickException: If a --method-arg value is not in KEY=VALUE format.
     """
-    method_args: dict[str, str] = {}
+    method_args: dict[str, Any] = kwargs.pop("method_args", {})
     for raw_arg in method_args_raw:
         if "=" not in raw_arg:
             raise click.ClickException(
@@ -380,6 +458,11 @@ def exec(method: str, method_args_raw: tuple[str, ...], **kwargs: Any) -> None:
             )
         key, value = raw_arg.split("=", 1)
         method_args[key] = value
+
+    if save_checkpoints:
+        method_args["save_checkpoints"] = save_checkpoints
+    if continue_from_checkpoint is not None:
+        method_args["continue_from_checkpoint"] = continue_from_checkpoint
 
     run_model_with_method(method=method, method_args=method_args, **kwargs)
 
@@ -493,7 +576,14 @@ def init(*args: Any, **kwargs: Any) -> None:
 @universal_options
 @click.pass_context
 def set(
-    ctx: click.Context, config: Path, working_directory: Path, **kwargs: Any
+    ctx: click.Context,
+    config: Path,
+    working_directory: Path,
+    profile_speed: bool,
+    profile_ram: bool,
+    optimize: bool,
+    timing: bool,
+    cores: int | None,
 ) -> None:
     """Set model configuration values.
 
@@ -507,8 +597,11 @@ def set(
         ctx: Click context containing extra arguments.
         config: Path to the model configuration file.
         working_directory: Working directory for the model.
-        **kwargs: Universal options.
-
+        profile_speed: Whether to profile speed.
+        profile_ram: Whether to profile RAM.
+        optimize: Whether to optimize.
+        timing: Whether to record timing information.
+        cores: Number of CPU cores to use.
     """
     # Parse extra arguments as key=value pairs
     params = {}
@@ -560,7 +653,16 @@ def set(
                 err=True,
             )
 
-    set_fn(config=config, working_directory=working_directory, **params)
+    set_fn(
+        config=config,
+        working_directory=working_directory,
+        profile_speed=profile_speed,
+        profile_ram=profile_ram,
+        optimize=optimize,
+        timing=timing,
+        cores=cores,
+        **params,
+    )
 
 
 @cli.command()
@@ -701,9 +803,19 @@ def evaluate(
         # If it's method help, show method docstring
 
         try:
+            # "method" might look like: "plots.plot_skill_score_maps"
             sub_name, method_name = method.split(".")
+            # Find the corresponding evaluator class.
             sub_cls = Evaluate.SUB_EVALUATOR_CLASSES[sub_name]
-            method_func = getattr(sub_cls, method_name)
+            # Get the method exactly as it is defined on the class,
+            # without Python automatically binding or modifying it.
+            method_func: Any = inspect.getattr_static(sub_cls, method_name)
+            # Some methods are aliases of another method with preset arguments.
+            # For example, plot_skill_score_maps is really
+            # plot_discharge_skill_scores with plots=("maps",) already filled in.
+            # In this case, use the documentation from the original method.
+            if isinstance(method_func, functools.partialmethod):
+                method_func = method_func.func
             click.echo(f"\nHelp for method '{method}':\n")
             if method_func.__doc__:
                 click.echo(method_func.__doc__)
@@ -1152,6 +1264,8 @@ def rechunk(
 @click.argument(
     "models_dir",
     type=click.Path(exists=True, file_okay=False, path_type=Path),
+    required=False,
+    default=Path(WORKING_DIRECTORY_DEFAULT),
 )
 @click.option(
     "--run-name",
@@ -1186,9 +1300,10 @@ def merge(
 ) -> None:
     """Merge GEB cluster outputs into a single model directory for evaluation.
 
-    Scans MODELS_DIR for cluster subdirectories matching CLUSTER_PREFIX, merges
-    geometry files and discharge observation tables, symlinks report parquets, and
-    writes a model.yml so the result can be passed to ``geb evaluate``.
+    Scans MODELS_DIR, or the current working directory when omitted, for cluster
+    subdirectories matching CLUSTER_PREFIX, merges geometry files and discharge
+    observation tables, symlinks report parquets, and writes a model.yml so the
+    result can be passed to ``geb evaluate``.
     """
     logger = create_logger("merge")
     merge_model_outputs(

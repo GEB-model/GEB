@@ -4,7 +4,8 @@ import os
 import warnings
 from datetime import timedelta
 from pathlib import Path
-from typing import Literal
+from types import CodeType
+from typing import Any, Literal
 
 import geopandas as gpd
 import networkx as nx
@@ -13,9 +14,11 @@ import numpy.typing as npt
 import pandas as pd
 import pyflwdir
 import rasterio.features
+import shapely
 import xarray as xr
 from networkx.classes.digraph import DiGraph
 from pyflwdir import FlwdirRaster
+from rasterio.enums import MergeAlg
 from scipy.ndimage import value_indices
 from shapely.geometry import LineString, shape
 
@@ -24,14 +27,17 @@ from geb.build.data_catalog.gtsm import gtsm_filters
 from geb.build.methods import build_method
 from geb.build.workflows.command_areas import derive_command_areas_from_routing
 from geb.build.workflows.hydrography import (
-    calculate_shreve_stream_order,
+    add_stream_orders,
     get_river_graph,
 )
-from geb.build.workflows.river_snapping import snap_point_to_river_network
+from geb.build.workflows.river_snapping import (
+    SnappingResults,
+    snap_point_to_river_network,
+)
 from geb.geb_types import (
     ArrayBool,
     ArrayFloat32,
-    ArrayInt32,
+    ArrayInt64,
     TwoDArrayFloat64,
     TwoDArrayInt32,
     TwoDArrayInt64,
@@ -127,6 +133,135 @@ def calculate_stream_length(
     stream_length = xr.where(is_stream | np.isnan(stream_length), stream_length, 0)
 
     return stream_length
+
+
+def calculate_dem_floodplain_width(
+    flow_raster_high_res: FlwdirRaster,
+    elevation_high_res: xr.DataArray,
+    upstream_area_high_res_m2: xr.DataArray,
+    idxs_outflow_low_res: xr.DataArray,
+    river_raster_low_res: npt.NDArray[np.int32],
+    cell_area_low_res: xr.DataArray,
+    river_length_low_res: xr.DataArray,
+    ldd_scale_factor: int,
+    a: float = 0.01,
+    b: float = 0.30,
+    stream_threshold_m2: float = 1_000_000.0,
+) -> xr.DataArray:
+    """Calculate effective floodplain width for each river reach based on DEM HAND scaling and subbasin attribution.
+
+    Uses GFPLAIN HAND hydrogeomorphic scaling (Nardi et al. 2018, 2019) to delineate active geomorphic
+    floodplains on the high-resolution DEM, then calculates floodplain width by aggregating floodplain
+    area per river segment and distributing it over the total segment length. All grid cells within the
+    same river segment receive the same uniform floodplain width.
+
+    Steps:
+        1. Delineate high-resolution floodplain:
+           Apply Leopold & Maddock power-law stage threshold scaling h(A) = a * A^b to the high-resolution
+           DEM and contributing area using pyflwdir's floodplain delineation to identify active floodplain pixels.
+        2. Delineate high-resolution subbasins for model river cells:
+           Map each low-resolution river cell to its high-resolution outflow pixel index and delineate its
+           contributing subbasin on the high-resolution grid using the flow direction raster.
+        3. Calculate floodplain area per river reach:
+           Count high-resolution floodplain pixels draining into each low-resolution river cell, and multiply
+           by the high-resolution pixel area (cell_area / ldd_scale_factor²) to obtain reach-level floodplain area (m²).
+        4. Aggregate by river segment and compute uniform width:
+           For each river segment, sum the total floodplain area and total river length
+           across all member cells. Divide total segment floodplain area by total segment
+           length to compute width, clip the resulting width to [0, 100,000] m, and assign
+           this uniform width to all cells in the segment. Non-river cells remain NaN.
+
+    Args:
+        flow_raster_high_res: High-resolution flow direction raster.
+        elevation_high_res: High-resolution digital elevation model (DEM) (m).
+        upstream_area_high_res_m2: Upstream contributing area on high-resolution grid (m²).
+        idxs_outflow_low_res: Low-resolution array mapping each model grid cell to its high-resolution outflow pixel index.
+        river_raster_low_res: Low-resolution 2D array of river IDs (-1 indicates non-river cells).
+        cell_area_low_res: Grid cell area at model resolution (m²).
+        river_length_low_res: River reach length in model grid cell (m).
+        ldd_scale_factor: Coarsening scale factor from high-resolution to model resolution.
+        a: Leopold & Maddock power-law scale factor for stage threshold (m^(1-2b)). Default is 0.01.
+        b: Leopold & Maddock power-law exponent for stage threshold. Default is 0.30.
+        stream_threshold_m2: Minimum upstream area threshold for initiating stream channels (m²).
+
+    Returns:
+        Effective floodplain width for each grid cell in meters (NaN for non-river cells).
+    """
+    # Nardi et al. stage threshold scaling h(A) = a * A^b
+    scale_factor: np.float32 = np.float32(a ** (1.0 / b))
+    scaled_uparea = scale_factor * upstream_area_high_res_m2.values
+    scaled_upa_min: np.float32 = scale_factor * np.float32(stream_threshold_m2)
+
+    floodplain_mask_high_res = flow_raster_high_res.floodplains(
+        elevtn=elevation_high_res.values,
+        uparea=scaled_uparea,
+        upa_min=scaled_upa_min,
+        b=b,
+    )
+
+    # Identify river cells and delineate their high-resolution contributing subbasins
+    river_mask_flat = river_raster_low_res.ravel() != -1
+    river_cell_indices = np.where(river_mask_flat)[0]
+
+    floodplain_width = xr.full_like(
+        river_length_low_res, fill_value=np.nan, dtype=np.float32
+    )
+
+    if river_cell_indices.size == 0:
+        return floodplain_width
+
+    river_outflows_hd = idxs_outflow_low_res.values.ravel()[river_cell_indices]
+    subbasin_ids = np.arange(1, river_cell_indices.size + 1, dtype=np.uint32)
+
+    # Subbasins mapping every high-res pixel to the river reach it drains into
+    subbasins_hd = flow_raster_high_res.basins(idxs=river_outflows_hd, ids=subbasin_ids)
+
+    # Sum high-resolution floodplain pixel counts per river reach
+    flood_plain_pixels = floodplain_mask_high_res.ravel() == 1
+    flood_plain_subbasins = subbasins_hd.ravel()[flood_plain_pixels]
+    flood_plain_pixel_counts = np.bincount(
+        flood_plain_subbasins, minlength=river_cell_indices.size + 1
+    )
+
+    # Compute segment-aggregated floodplain width: W_flood_plain(segment) = sum(A_flood_plain) / sum(L_river)
+    # All grid cells within the same river segment receive the uniform segment-averaged floodplain width.
+    cell_area_flat = cell_area_low_res.values.ravel()[river_cell_indices].astype(
+        np.float32
+    )
+    high_res_pixel_area = cell_area_flat / np.float32(ldd_scale_factor**2)
+
+    reach_flood_plain_areas = (
+        flood_plain_pixel_counts[1 : river_cell_indices.size + 1].astype(np.float32)
+        * high_res_pixel_area
+    )
+
+    river_raster_flat = river_raster_low_res.ravel()
+    unique_segments = np.unique(river_raster_flat[river_mask_flat])
+
+    floodplain_width_data = np.full(river_raster_low_res.size, np.nan, dtype=np.float32)
+
+    for segment_id in unique_segments:
+        segment_mask = river_raster_flat == segment_id
+        total_seg_len = np.sum(
+            river_length_low_res.values.ravel()[segment_mask].astype(np.float32)
+        )
+        seg_reach_mask = river_raster_flat[river_cell_indices] == segment_id
+        total_seg_flood_plain_area = np.sum(reach_flood_plain_areas[seg_reach_mask])
+
+        if total_seg_len > 0:
+            seg_flood_plain_width = np.clip(
+                total_seg_flood_plain_area / total_seg_len,
+                np.float32(0.0),
+                np.float32(100_000.0),  # maximum flood plain width of 100 km
+            ).astype(np.float32)
+        else:
+            seg_flood_plain_width = np.float32(0.0)
+
+        floodplain_width_data[segment_mask] = seg_flood_plain_width
+
+    floodplain_width.data = floodplain_width_data.reshape(river_raster_low_res.shape)
+
+    return floodplain_width
 
 
 def get_all_upstream_subbasin_ids(
@@ -337,21 +472,31 @@ def create_river_raster_from_river_lines(
         ValueError: If both column and index are provided.
 
     """
+    # The rivers touch as the confluence (typically 2 upstream, 1 downstream). Here,
+    # we want to have the upstream area of the downstream river. Because we use the "replace"
+    # merge algorithm, we need to sort the rivers from upstream to downstream,
+    # such that the upstream rivers are rasterized first.
+    rivers_sorted_from_upstream_to_downstream: gpd.GeoDataFrame = rivers.sort_values(
+        by="shreve_stream_order", ascending=True
+    )  # ty:ignore[invalid-assignment]
+
     if column is None and (index is None or index is True):
-        values = rivers.index
+        values = rivers_sorted_from_upstream_to_downstream.index
     elif column is not None:
-        values = rivers[column]
+        values = rivers_sorted_from_upstream_to_downstream[column]
     else:
         raise ValueError(
             "Either column or index must be provided, or both must be None"
         )
+
     river_raster = rasterio.features.rasterize(
-        zip(rivers.geometry, values),
+        zip(rivers_sorted_from_upstream_to_downstream.geometry, values),
         out_shape=target.shape,
         fill=-1,
         dtype=np.int32,
         transform=target.rio.transform(recalc=True),
         all_touched=False,  # because this is a line, Bresenham's line algorithm is used, which is perfect here :-)
+        merge_alg=MergeAlg.replace,
     )
     return river_raster
 
@@ -451,38 +596,74 @@ def get_SWORD_river_widths(
     return SWORD_river_width
 
 
+def propagate_downstream(
+    data: npt.NDArray,
+    idxs_ds: npt.NDArray[np.int64],
+    upstream_area: npt.NDArray[np.float32],
+    missing_val: Any = -1,
+    mask: npt.NDArray[np.bool_] | None = None,
+) -> npt.NDArray:
+    """Propagates values downstream along flow paths ordered from upstream to downstream.
+
+    Args:
+        data: Input 1D or 2D array containing values to propagate.
+        idxs_ds: 1D or 2D array of downstream linear indices.
+        upstream_area: 1D or 2D array of upstream areas used to order traversal.
+        missing_val: Sentinel value representing unassigned/missing data (e.g., -1 or np.nan).
+        mask: Optional boolean mask restricting propagation cells.
+
+    Returns:
+        npt.NDArray with values propagated downstream into missing cells.
+    """
+    flat_data = data.ravel().copy()
+    flat_ds = idxs_ds.ravel()
+    flat_ua = upstream_area.ravel()
+
+    if mask is not None:
+        indices = np.where(mask.ravel())[0]
+    else:
+        indices = np.arange(flat_data.size)
+
+    if indices.size > 0:
+        sorted_indices = indices[np.argsort(flat_ua[indices])]
+        is_nan_val = isinstance(missing_val, float) and np.isnan(missing_val)
+
+        for idx in sorted_indices:
+            ds_idx = flat_ds[idx]
+            if ds_idx != -1 and ds_idx < flat_data.size:
+                if mask is not None and not mask.ravel()[ds_idx]:
+                    continue
+
+                val = flat_data[idx]
+                ds_val = flat_data[ds_idx]
+
+                val_valid = not np.isnan(val) if is_nan_val else val != missing_val
+                ds_missing = np.isnan(ds_val) if is_nan_val else ds_val == missing_val
+
+                if val_valid and ds_missing:
+                    flat_data[ds_idx] = val
+
+    return flat_data.reshape(data.shape)
+
+
 class Hydrography(BuildModelBase):
     """Contains all build methods for the hydrography for GEB."""
 
     def __init__(self) -> None:
         """Initializes the Hydrography class."""
-        pass
 
     @build_method(
         depends_on=["setup_hydrography", "setup_cell_area", "setup_elevation"],
         required=True,
     )
     def setup_geomorphology(self) -> None:
-        """Sets up the Manning's coefficient for the model.
-
-        Notes:
-            This method sets up the Manning's coefficient for the model by calculating the coefficient based on the cell area
-            and topography of the grid. It first calculates the upstream area of each cell in the grid using the
-            `routing/upstream_area` attribute of the grid. It then calculates the coefficient using the formula:
-
-                C = 0.025 + 0.015 * (2 * A / U) + 0.030 * (Z / 2000)
-
-            where C is the Manning's coefficient, A is the cell area, U is the upstream area, and Z is the elevation of the cell.
-
-            The resulting Manning's coefficient is then set as the `routing/mannings` attribute of the grid using the
-            `set_grid()` method.
-        """
+        """Sets up channel roughness, surface area ratio, and hillslope length."""
         subgrid_elevation: xr.DataArray = self.subgrid["landsurface/elevation"]
         slope_high_res: npt.NDArray[np.float64] = pyflwdir.dem.slope(
             subgrid_elevation.values,
             nodata=np.nan,
             latlon=True,
-            transform=subgrid_elevation.rio.transform(recalc=True),
+            transform=np.array(subgrid_elevation.rio.transform(recalc=True)),
         )
 
         surface_area_ratio_high_res = xr.DataArray(
@@ -502,20 +683,7 @@ class Hydrography(BuildModelBase):
         surface_area_ratio: xr.DataArray = snap_to_grid(
             surface_area_ratio, self.grid["mask"], relative_tolerance=0.03
         )
-
         self.set_grid(surface_area_ratio, name="landsurface/surface_area_ratio")
-
-        a: xr.DataArray = (2 * self.grid["cell_area"]) / self.grid[
-            "routing/upstream_area_m2"
-        ]
-        a: xr.DataArray = xr.where(a < 1, a, 1, keep_attrs=True)
-        b: xr.DataArray = self.grid["landsurface/elevation_min_m"] / 2000
-        b: xr.DataArray = xr.where(b < 1, b, 1, keep_attrs=True)
-
-        mannings: xr.DataArray = 0.025 + 0.015 * a + 0.030 * b
-        mannings.attrs["_FillValue"] = np.nan
-
-        self.set_grid(mannings, "routing/mannings")
 
         drainage_density = (
             self.grid["drainage/streams_length_m"] / self.grid["cell_area"]
@@ -690,7 +858,7 @@ class Hydrography(BuildModelBase):
         flow_raster_original = pyflwdir.from_array(
             original_d8_ldd_data,
             ftype="d8",
-            transform=original_d8_ldd.rio.transform(recalc=True),
+            transform=np.array(original_d8_ldd.rio.transform(recalc=True)),
             latlon=True,  # hydrography is specified in latlon
             mask=original_d8_ldd_data
             != original_d8_ldd.attrs[
@@ -698,37 +866,39 @@ class Hydrography(BuildModelBase):
             ],  # this mask is True within study area
         )
 
-        upstream_area_high_res = self.full_like(
+        original_d8_upstream_area_m2 = self.full_like(
             original_d8_elevation, fill_value=np.nan, nodata=np.nan, dtype=np.float32
         )
-        upstream_area_high_res_data = flow_raster_original.upstream_area(
+        original_d8_upstream_area_m2_data = flow_raster_original.upstream_area(
             unit="m2"
         ).astype(np.float32)
-        upstream_area_high_res_data[upstream_area_high_res_data == -9999.0] = np.nan
-        upstream_area_high_res.data = upstream_area_high_res_data
+        original_d8_upstream_area_m2_data[
+            original_d8_upstream_area_m2_data == -9999.0
+        ] = np.nan
+        original_d8_upstream_area_m2.data = original_d8_upstream_area_m2_data
         self.set_other(
-            upstream_area_high_res, name="drainage/original_d8_upstream_area_m2"
+            original_d8_upstream_area_m2, name="drainage/original_d8_upstream_area_m2"
         )
 
-        streams_length_high_res = calculate_stream_length(
-            original_d8_ldd, upstream_area_high_res, threshold_m2=1_000_000
+        original_d8_streams_length = calculate_stream_length(
+            original_d8_ldd, original_d8_upstream_area_m2, threshold_m2=1_000_000
         )
 
-        streams_length_low_res = streams_length_high_res.coarsen(
+        routing_streams_length = original_d8_streams_length.coarsen(
             x=self.ldd_scale_factor,
             y=self.ldd_scale_factor,
             boundary="exact",
             coord_func="mean",
         ).sum()  # ty:ignore[unresolved-attribute]
 
-        streams_length_low_res.attrs["_FillValue"] = np.nan
-        streams_length_low_res = snap_to_grid(streams_length_low_res, self.grid["mask"])
-        streams_length_low_res = np.maximum(
-            streams_length_low_res,
+        routing_streams_length.attrs["_FillValue"] = np.nan
+        routing_streams_length = snap_to_grid(routing_streams_length, self.grid["mask"])
+        routing_streams_length = np.maximum(
+            routing_streams_length,
             np.sqrt(self.grid["cell_area"])
             * 0.5,  # stream length should be at least half of the cell length
         )
-        self.set_grid(streams_length_low_res, name="drainage/streams_length_m")
+        self.set_grid(routing_streams_length, name="drainage/streams_length_m")
 
         elevation_coarsened = original_d8_elevation.coarsen(
             x=self.ldd_scale_factor,
@@ -752,7 +922,7 @@ class Hydrography(BuildModelBase):
             elevation.values,
             nodata=np.nan,
             latlon=True,
-            transform=elevation.rio.transform(recalc=True),
+            transform=np.array(elevation.rio.transform(recalc=True)),
         )
         # set slope to zero on the mask boundary
         slope_data[np.isnan(slope_data) & (~self.grid["mask"].data)] = 0
@@ -763,9 +933,17 @@ class Hydrography(BuildModelBase):
         flow_raster = FlwdirRaster(
             flow_raster_idxs_ds.values.ravel(),
             shape=flow_raster_idxs_ds.shape,
-            transform=flow_raster_idxs_ds.rio.transform(recalc=True),
+            transform=np.array(flow_raster_idxs_ds.rio.transform(recalc=True)),
             ftype="d8",
             latlon=True,
+        )
+
+        bankfull_river_elevation_m = self.full_like(
+            elevation_min, fill_value=np.nan, nodata=np.nan, dtype=np.float32
+        )
+        bankfull_river_elevation_m.data = flow_raster.dem_adjust(elevation_min.values)
+        self.set_grid(
+            bankfull_river_elevation_m, name="routing/bankfull_river_elevation_m"
         )
 
         # flow direction
@@ -804,39 +982,87 @@ class Hydrography(BuildModelBase):
                 self.grid["idxs_outflow"].values, unit="m", direction="down"
             )
         )
+        minimum_river_length = (
+            np.sqrt(self.grid["cell_area"].mean().compute().item()) / 2
+        ).astype(river_length_data.dtype)
+
+        # we smooth the river length, so that the local inertial
+        # calculations do not need to consider very small domains.
+        self.logger.info("Smoothening river length")
+        river_length_data = flow_raster.smooth_rivlen(
+            river_length_data,
+            minimum_river_length,
+            max_window=100,
+            nodata=-9999.0,
+        )
         river_length_data[river_length_data == -9999.0] = np.nan
+        river_length_data[river_length_data < minimum_river_length] = (
+            minimum_river_length
+        )
+        assert np.nanmin(river_length_data.ravel()) >= minimum_river_length
         river_length.data = river_length_data
         self.set_grid(river_length, name="routing/river_length_m")
 
-        # river slope
-        river_slope: xr.DataArray = self.full_like(
-            elevation_min, fill_value=np.nan, nodata=np.nan, dtype=np.float32
-        )
-        river_slope_data: npt.NDArray[np.float32] = flow_raster_original.subgrid_rivslp(
-            self.grid["idxs_outflow"].values, original_d8_elevation
-        )
-        river_slope_data[river_slope_data == -9999.0] = np.nan
-        river_slope.data = river_slope_data
-        self.set_grid(
-            river_slope,
-            name="routing/river_slope_m_per_m",
-        )
-
         self.logger.info("Retrieving river data")
         rivers: gpd.GeoDataFrame = self.geom["routing/rivers"]
-        rivers["shreve_stream_order"] = calculate_shreve_stream_order(rivers)
+        rivers = add_stream_orders(rivers)
 
         self.logger.info("Processing river data")
 
-        river_raster_HD: npt.NDArray[np.int32] = create_river_raster_from_river_lines(
-            rivers, original_d8_elevation
+        original_river_raster: npt.NDArray[np.int32] = (
+            create_river_raster_from_river_lines(rivers, original_d8_elevation)
         )
-        river_raster_LR: npt.NDArray[np.int32] = river_raster_HD.ravel()[
+        # Discharge stations are matched directly to these original river pixels.
+        original_river_ids: xr.DataArray = self.full_like(
+            original_d8_elevation, fill_value=-1, nodata=-1, dtype=np.int32
+        )
+        original_river_ids.data = original_river_raster
+        self.set_other(original_river_ids, name="drainage/original_river_ids")
+        routing_river_raster: npt.NDArray[np.int32] = original_river_raster.ravel()[
             self.grid["idxs_outflow"].values.ravel()
         ].reshape(self.grid["idxs_outflow"].shape)
 
+        for COMID in rivers.sort_values(
+            by="shreve_stream_order",
+            ascending=False,
+        ).index:
+            river_cells = np.where(routing_river_raster.ravel() == COMID)[0]
+            if river_cells.size == 0:
+                continue
+            upstream_area_river_cells = upstream_area_data.ravel()[river_cells]
+            most_upstream_cell = np.argmin(upstream_area_river_cells)
+            most_upstream_cell_index = river_cells[most_upstream_cell]
+            upstream_river_cells = (flow_raster.idxs_ds == most_upstream_cell_index) & (
+                routing_river_raster.ravel() != -1
+            )
+            if upstream_river_cells.sum() == 1:
+                routing_river_raster[
+                    upstream_river_cells.reshape(routing_river_raster.shape)
+                ] = COMID
+
+        # Propagate river IDs downstream to fill gaps in the routing river network
+        routing_river_raster = propagate_downstream(
+            data=routing_river_raster,
+            idxs_ds=flow_raster.idxs_ds,
+            upstream_area=upstream_area_data,
+            missing_val=-1,
+        )
+
+        self.logger.info("Computing basin-attributed floodplain width per river reach")
+        floodplain_width = calculate_dem_floodplain_width(
+            flow_raster_high_res=flow_raster_original,
+            elevation_high_res=original_d8_elevation,
+            upstream_area_high_res_m2=original_d8_upstream_area_m2,
+            idxs_outflow_low_res=self.grid["idxs_outflow"],
+            river_raster_low_res=routing_river_raster,
+            cell_area_low_res=self.grid["cell_area"],
+            river_length_low_res=river_length,
+            ldd_scale_factor=self.ldd_scale_factor,
+        )
+        self.set_grid(floodplain_width, name="routing/floodplain_width_m")
+
         missing_rivers: set[int] = set(rivers.index) - set(
-            np.unique(river_raster_LR[river_raster_LR != -1]).tolist()
+            np.unique(routing_river_raster[routing_river_raster != -1]).tolist()
         )
 
         rivers["represented_in_grid"] = True
@@ -857,17 +1083,15 @@ class Hydrography(BuildModelBase):
             "rasterization of the river lines"
         )
 
-        # Derive the xy coordinates of the river network. Here the coordinates
-        # are the PIXEL coordinates for the coarse drainage network.
         rivers["hydrography_xy"] = [[] for _ in range(len(rivers))]
         rivers["hydrography_upstream_area_m2"] = [[] for _ in range(len(rivers))]
-        xy_per_river_segment = value_indices(river_raster_LR, ignore_value=-1)
+        xy_per_river_segment = value_indices(routing_river_raster, ignore_value=-1)
         for COMID, (ys, xs) in xy_per_river_segment.items():
             upstream_area = upstream_area_data[ys, xs]
             up_to_downstream_ids = np.argsort(upstream_area)
             upstream_area_sorted = upstream_area[up_to_downstream_ids]
 
-            assert (river_raster_LR[ys, xs] == COMID).all(), (
+            assert (routing_river_raster[ys, xs] == COMID).all(), (
                 f"River segment {COMID} has inconsistent raster values"
             )
 
@@ -879,13 +1103,11 @@ class Hydrography(BuildModelBase):
                 upstream_area_sorted.tolist()
             )
 
-        # Derive the xy coordinates of the river network. Here the coordinates
-        # are the PIXEL coordinates for the high-resolution drainage network.
         rivers["hydrography_high_res_lons_lats"] = [[] for _ in range(len(rivers))]
         rivers["hydrography_high_res_upstream_area_m2"] = [
             [] for _ in range(len(rivers))
         ]
-        xy_per_river_segment = value_indices(river_raster_HD, ignore_value=-1)
+        xy_per_river_segment = value_indices(original_river_raster, ignore_value=-1)
 
         for river_ID, river in rivers.iterrows():
             if river_ID not in xy_per_river_segment:
@@ -895,7 +1117,7 @@ class Hydrography(BuildModelBase):
                     raise AssertionError("River xy not found, but should be found.")
 
             (ys, xs) = xy_per_river_segment[river_ID]
-            upstream_area: ArrayFloat32 = upstream_area_high_res_data[ys, xs]
+            upstream_area: ArrayFloat32 = original_d8_upstream_area_m2_data[ys, xs]
             nan_mask: ArrayBool = np.isnan(upstream_area)
 
             if nan_mask.all():
@@ -908,23 +1130,23 @@ class Hydrography(BuildModelBase):
 
             non_nan_mask: ArrayBool = ~nan_mask
             upstream_area = upstream_area[non_nan_mask]
-            ys: ArrayInt32 = ys[non_nan_mask]
-            xs: ArrayInt32 = xs[non_nan_mask]
+            ys: ArrayInt64 = ys[non_nan_mask]
+            xs: ArrayInt64 = xs[non_nan_mask]
 
             assert not np.isnan(upstream_area).any()
 
             up_to_downstream_ids = np.argsort(upstream_area)
             upstream_area_sorted = upstream_area[up_to_downstream_ids]
 
-            assert (river_raster_HD[ys, xs] == river_ID).all(), (
+            assert (original_river_raster[ys, xs] == river_ID).all(), (
                 f"River segment {river_ID} has inconsistent raster values"
             )
 
-            ys: npt.NDArray[np.int64] = ys[up_to_downstream_ids]
-            xs: npt.NDArray[np.int64] = xs[up_to_downstream_ids]
+            ys: ArrayInt64 = ys[up_to_downstream_ids]
+            xs: ArrayInt64 = xs[up_to_downstream_ids]
 
-            lats: ArrayFloat32 = upstream_area_high_res.y.values[ys]
-            lons: ArrayFloat32 = upstream_area_high_res.x.values[xs]
+            lats: ArrayFloat32 = original_d8_upstream_area_m2.y.values[ys]
+            lons: ArrayFloat32 = original_d8_upstream_area_m2.x.values[xs]
 
             assert ys.size > 0, "No xy coordinates found for river segment"
             rivers.at[river_ID, "hydrography_high_res_lons_lats"] = list(
@@ -944,7 +1166,7 @@ class Hydrography(BuildModelBase):
         COMID_IDs_raster: xr.DataArray = self.full_like(
             elevation_min, fill_value=-1, nodata=-1, dtype=np.int32
         )
-        COMID_IDs_raster.data = river_raster_LR
+        COMID_IDs_raster.data = routing_river_raster
         self.set_grid(COMID_IDs_raster, name="routing/river_ids")
 
         height_above_nearest_drainage_m = self.full_like(
@@ -1014,7 +1236,16 @@ class Hydrography(BuildModelBase):
             lambda ID: river_with_mapper.get(ID, np.nan)
         )(COMID_IDs_raster.values).astype(np.float32)
 
-        # check river with is positive where river is present
+        # Propagate missing river width data downstream
+        river_width_data = propagate_downstream(
+            data=river_width_data,
+            idxs_ds=flow_raster.idxs_ds,
+            upstream_area=upstream_area_data,
+            missing_val=np.nan,
+            mask=COMID_IDs_raster.values != -1,
+        )
+
+        # check river width is positive where river is present
         assert ((river_width_data > 0) | np.isnan(river_width_data)).all(), (
             "River width should be positive or nan"
         )
@@ -1211,7 +1442,7 @@ class Hydrography(BuildModelBase):
             name="coastal/low_elevation_coastal_zone_mask",
         )
 
-    @build_method(required=True)
+    @build_method(required=True, depends_on=["setup_hydrography"])
     def setup_waterbodies(
         self,
         mode: Literal["on", "off", "lakes_only", "reservoirs_only"] = "on",
@@ -1299,6 +1530,18 @@ class Hydrography(BuildModelBase):
 
         # only select waterbodies that intersect with the region
         waterbodies = waterbodies[waterbodies.intersects(self.region.union_all())]
+
+        # Sample lake surface elevation directly from original_d8_elevation at representative points
+        if not waterbodies.empty:
+            original_d8_elevation: xr.DataArray = self.other[
+                "drainage/original_d8_elevation"
+            ]
+            rep_points = waterbodies.geometry.representative_point()
+            xs = xr.DataArray(rep_points.x.values, dims="points")
+            ys = xr.DataArray(rep_points.y.values, dims="points")
+            waterbodies["elevation"] = original_d8_elevation.sel(
+                x=xs, y=ys, method="nearest"
+            ).values.astype(np.float32)
 
         waterbodies["volume_flood"] = waterbodies["volume_total"]
 
@@ -1520,7 +1763,7 @@ class Hydrography(BuildModelBase):
         )
 
         # extrapolate to 2100 using nonlinear trend  between 2015-2050 per station
-        last_year = sea_level_rise_df.index.year.max()
+        last_year = sea_level_rise_df.index.year.max()  # ty:ignore[unresolved-attribute]
         future_years = np.arange(last_year + 1, 2101)
         future_dates = pd.to_datetime([f"{year}-01-01" for year in future_years])
         future_data = {}
@@ -1706,7 +1949,12 @@ class Hydrography(BuildModelBase):
         self.set_table(inflow_df_m3_per_s, name="routing/inflow_m3_per_s")
 
     @build_method(required=True, depends_on=["setup_hydrography"])
-    def setup_retention_basins(self, retention_basins: Path | None = None) -> None:
+    def setup_retention_basins(
+        self,
+        retention_basins: Path | None = None,
+        max_storage_m3_to_min_shreve_stream_order_function: str | None = None,
+        create_plots: bool = False,
+    ) -> None:
         """Setup retention basins.
 
         There can only be a maximum of one retention basin per river pixel. When a retention
@@ -1717,6 +1965,10 @@ class Hydrography(BuildModelBase):
             retention_basins: A vector file that can be read by geopandas containing the retention basins,
                 with a point geometry representing the location of the retention basin. If none (default),
                 no retention basins will be set up in the model.
+            max_storage_m3_to_min_shreve_stream_order_function: A string representing a function that takes the maximum storage of a retention basin in m3 and
+                returns the minimum Shreve stream order of the river pixel to which the retention basin can be snapped. If none, all retention basins will be snapped
+                to the nearest river pixel regardless of its Shreve stream order.
+            create_plots: Whether to create plots of the retention basins and their snapped locations on the river network.
 
         Raises:
             ValueError: If a retention basin cannot be snapped to the river network.
@@ -1735,26 +1987,28 @@ class Hydrography(BuildModelBase):
 
         if retention_basins is None:
             self.set_grid(retention_basin_ids, name="routing/retention_basin_ids")
-            retention_basin_df = pd.DataFrame(
+            retention_basin_gdf = gpd.GeoDataFrame(
                 columns=np.array(
-                    [
-                        "ID",
-                        "retention_max_storage_m3",
-                        "controlled_retention",
-                        "retention_activation_threshold_controlled_m3_s",
-                        "retention_activation_threshold_uncontrolled_m3_s",
-                    ]
-                )
+                    ["ID", "retention_max_storage_m3", "controlled_retention", "active"]
+                ),
+                geometry=gpd.GeoSeries([], crs="EPSG:4326"),
             ).astype(
                 {
                     "ID": np.int32,
                     "retention_max_storage_m3": np.float32,
                     "controlled_retention": bool,
-                    "retention_activation_threshold_controlled_m3_s": np.float32,
-                    "retention_activation_threshold_uncontrolled_m3_s": np.float32,
+                    "active": bool,
                 }
             )
+            self.set_geom(retention_basin_gdf, name="routing/retention_basins")
         else:
+            if max_storage_m3_to_min_shreve_stream_order_function is not None:
+                max_storage_m3_to_min_shreve_stream_order_function: CodeType = compile(
+                    max_storage_m3_to_min_shreve_stream_order_function,
+                    "<string>",
+                    "eval",
+                )
+
             # read the retention basins from the provided file
             retention_basins = gpd.read_file(retention_basins).to_crs(
                 self.grid["mask"].rio.crs
@@ -1780,7 +2034,7 @@ class Hydrography(BuildModelBase):
             flow_direction_raster = pyflwdir.from_array(
                 ldd.values,
                 ftype="ldd",
-                transform=ldd.rio.transform(recalc=True),
+                transform=np.array(ldd.rio.transform(recalc=True)),
                 latlon=True,
             )
             downstream_indices = flow_direction_raster.idxs_ds.reshape(ldd.shape)
@@ -1788,19 +2042,37 @@ class Hydrography(BuildModelBase):
             for _, retention_basin in retention_basins.iterrows():
                 centroid = retention_basin.geometry.centroid
 
+                if np.isnan(retention_basin["retention_max_storage_m3"]):
+                    warnings.warn(
+                        f"Retention basin ID {retention_basin['ID']} has missing retention_max_storage_m3 value. Setting it to 0.0."
+                    )
+                    retention_basin["retention_max_storage_m3"] = 0.0
+
                 # the centroid of the retention basin may not fall exactly on the river network,
                 # so we snap it to the nearest river pixel using the snap_point_to_river_network function
-                snapped_data = snap_point_to_river_network(
+                if max_storage_m3_to_min_shreve_stream_order_function is not None:
+                    rivers_with_min_shreve_order = rivers[
+                        rivers["shreve_stream_order"]
+                        >= eval(
+                            max_storage_m3_to_min_shreve_stream_order_function,
+                            {"x": retention_basin["retention_max_storage_m3"]},
+                        )
+                    ]
+                else:
+                    rivers_with_min_shreve_order = rivers
+
+                snapped_data: SnappingResults | None = snap_point_to_river_network(
                     point=centroid,
-                    rivers=rivers,
+                    rivers=rivers_with_min_shreve_order,
                     upstream_area_grid=upstream_area_grid,
                     upstream_area_subgrid=upstream_area_subgrid,
+                    max_spatial_difference_degrees=180,
                 )
                 if snapped_data is None:
                     raise ValueError(
                         f"Could not snap retention basin for basin ID {retention_basin['ID']} to river network. "
                     )
-                snapped_grid_pixel_xy = snapped_data["snapped_grid_pixel_xy"]
+                snapped_grid_pixel_xy = snapped_data.snapped_grid_pixel_xy
 
                 # assign the ID of the retention basin to the corresponding pixel in the retention_basin_ids grid
                 search_steps = 0
@@ -1835,6 +2107,10 @@ class Hydrography(BuildModelBase):
                     snapped_grid_pixel_xy[1], snapped_grid_pixel_xy[0]
                 ] = retention_basin["ID"]
 
+                final_lon = upstream_area_grid.x.values[snapped_grid_pixel_xy[0]].item()
+                final_lat = upstream_area_grid.y.values[snapped_grid_pixel_xy[1]].item()
+                snapped_geom = shapely.geometry.Point(final_lon, final_lat)
+
                 # store the retention basin data in a list to create a table later
                 controlled_flag = (
                     str(retention_basin["controlled_retention"]).lower() == "controlled"
@@ -1846,16 +2122,37 @@ class Hydrography(BuildModelBase):
                             "retention_max_storage_m3"
                         ],
                         "controlled_retention": controlled_flag,
-                        "retention_activation_threshold_controlled_m3_s": retention_basin[
-                            "retention_activation_threshold_controlled_m3_s"
-                        ],
-                        "retention_activation_threshold_uncontrolled_m3_s": retention_basin[
-                            "retention_activation_threshold_uncontrolled_m3_s"
-                        ],
+                        "active": retention_basin["active"],
+                        "river_segment_id": snapped_data.closest_river_segment.ID,
+                        "river_segment_shreve_order": snapped_data.closest_river_segment.shreve_stream_order,
+                        "geometry": snapped_geom,
                     }
                 )
 
-            retention_basin_df = pd.DataFrame(retention_basin_data)
+            retention_basin_gdf = gpd.GeoDataFrame(
+                retention_basin_data, crs="EPSG:4326"
+            )
 
-        self.set_table(retention_basin_df, name="routing/retention_basin_data")
+        self.set_geom(retention_basin_gdf, name="routing/retention_basins")
         self.set_grid(retention_basin_ids, name="routing/retention_basin_ids")
+
+        if create_plots:
+            import matplotlib.pyplot as plt
+
+            # plot maximum storage volume vs shreve order
+            plt.figure(figsize=(10, 6))
+            plt.scatter(
+                retention_basin_gdf["river_segment_shreve_order"],
+                retention_basin_gdf["retention_max_storage_m3"],
+                alpha=0.7,
+            )
+            plt.xscale("log")
+            plt.yscale("log")
+            plt.xlabel("Shreve Order of River Segment")
+            plt.ylabel("Maximum Storage Volume (m³)")
+            plt.title("Retention Basin Maximum Storage Volume vs Shreve Order")
+            plt.grid(True, which="both", ls="--", lw=0.5)
+            plt.savefig(
+                self.report_dir / "retention_basins_shreve_order_vs_storage.svg"
+            )
+            plt.close()

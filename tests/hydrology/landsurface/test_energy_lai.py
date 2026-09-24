@@ -17,7 +17,7 @@ def test_lai_attenuation() -> None:
     SOIL_ALBEDO = np.float32(0.23)
     SOIL_EMISSIVITY = np.float32(0.95)
     STEFAN_BOLTZMANN_CONSTANT = np.float32(5.670374419e-8)
-    EXTINCTION = np.float32(0.5)
+    EXTINCTION = np.float32(0.7)
 
     # Helper function to compute expected manually
     def compute_expected(lai: float) -> np.float32:

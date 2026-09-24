@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 from functools import partial
 from io import BytesIO
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -36,6 +36,7 @@ from geb.workflows.raster import (
     clip_with_grid,
     create_temp_zarr,
     interpolate_na_along_dim,
+    pad_xy,
     resample_like,
     snap_to_grid,
 )
@@ -67,6 +68,46 @@ def _stack_forcing_variable(
     da = da.reset_index("idxs", drop=True)
 
     return da, mask
+
+
+def _unstack_forcing_variable(
+    da: xr.DataArray,
+    mask: xr.DataArray,
+) -> xr.DataArray:
+    """Unstack a 1D (idxs) forcing variable back to a 2D spatial grid (y, x).
+
+    Args:
+        da: Stacked DataArray with dimensions (time, idxs).
+        mask: 2D boolean mask with dimensions (y, x) indicating the kept cells.
+
+    Returns:
+        Unstacked DataArray with dimensions (time, y, x).
+    """
+    assert "idxs" in da.dims, "da must have dimension 'idxs'"
+    assert "time" in da.dims, "da must have dimension 'time'"
+    assert mask.dims == ("y", "x"), "mask must have dimensions ('y', 'x')"
+
+    ny: int = mask.sizes["y"]
+    nx: int = mask.sizes["x"]
+    mask_flat: np.ndarray = mask.values.reshape(-1)
+
+    def _unstack(arr: np.ndarray) -> np.ndarray:
+        out: np.ndarray = np.full((*arr.shape[:-1], ny * nx), np.nan, dtype=arr.dtype)
+        out[..., mask_flat] = arr
+        return out.reshape((*arr.shape[:-1], ny, nx))
+
+    unstacked: xr.DataArray = xr.apply_ufunc(
+        _unstack,
+        da,
+        input_core_dims=[["idxs"]],
+        output_core_dims=[["y", "x"]],
+        dask="parallelized",
+        output_dtypes=[da.dtype],
+        dask_gufunc_kwargs={"output_sizes": {"y": ny, "x": nx}},
+    )
+    unstacked = unstacked.assign_coords(y=mask.y, x=mask.x).rio.write_crs("EPSG:4326")
+    unstacked.attrs["_FillValue"] = np.nan
+    return unstacked
 
 
 def plot_normal_forcing(
@@ -119,9 +160,18 @@ def plot_normal_forcing(
     plt.close(fig)  # close the figure to free memory
 
     # Spatial plot of the mean over time
-    spatial_mean_idxs = da.mean(dim="time").compute()
-    spatial_mean = xr.full_like(grid_mask, np.nan, dtype=float)
+    spatial_mean_idxs: xr.DataArray = da.mean(dim="time").compute()
+    spatial_mean: xr.DataArray = xr.full_like(grid_mask, np.nan, dtype=float)
     spatial_mean.values[grid_mask.values] = spatial_mean_idxs.values
+
+    vmin: float = float(np.nanmin(spatial_mean.values))
+    vmax: float = float(np.nanmax(spatial_mean.values))
+    if vmin == vmax:
+        vmin -= 1.0
+        vmax += 1.0
+
+    cmap: Any = mcolormaps["viridis"].copy()
+    cmap.set_bad(color="lightgrey")
 
     fig, ax = plt.subplots(
         1, 1, figsize=(10, 8), subplot_kw={"projection": ccrs.PlateCarree()}
@@ -131,7 +181,9 @@ def plot_normal_forcing(
         spatial_mean.y,
         spatial_mean,
         shading="auto",
-        cmap="viridis",
+        cmap=cmap,
+        vmin=vmin,
+        vmax=vmax,
         transform=ccrs.PlateCarree(),
     )
     plt.colorbar(im, ax=ax, label=da.attrs.get("units", ""))
@@ -144,7 +196,7 @@ def plot_normal_forcing(
     )
 
     ax.set_title(f"Mean spatial distribution - {name}")
-    spatial_fp = report_dir / (name + "_spatial_mean.png")
+    spatial_fp: Path = report_dir / (name + "_spatial_mean.png")
     plt.savefig(spatial_fp, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
@@ -182,9 +234,7 @@ def plot_forecasts(
     # Timeline plot
     fig, ax_time = plt.subplots(1, 1, figsize=(12, 9))  # Create temporal plot
 
-    colors = plt.cm.viridis(  # ty:ignore[unresolved-attribute]
-        np.linspace(0, 1, n_members)
-    )  # Distinct colors for members
+    colors = plt.cm.viridis(np.linspace(0, 1, n_members))  # Distinct colors for members
 
     spatial_average = (da_plot.mean(dim="idxs")).compute()
 
@@ -204,6 +254,7 @@ def plot_forecasts(
 
     # Calculate ensemble mean and add to plot
     ensemble_mean = sum(ensemble_data) / len(ensemble_data)  # ensemble mean
+    assert isinstance(ensemble_mean, xr.DataArray), "Ensemble mean is not a DataArray"
     ax_time.plot(
         ensemble_mean.time,
         ensemble_mean,
@@ -240,9 +291,7 @@ def plot_forecasts(
         hspace=0.2, wspace=0.2, bottom=0.05, left=0.05, right=0.85
     )  # Tighter spacing
 
-    custom_cmap = (
-        plt.cm.Blues  # ty:ignore[unresolved-attribute]
-    )  # Use simple Blues colormap
+    custom_cmap = plt.cm.Blues  # Use simple Blues colormap
     da_plot_max_over_time = da_plot.max(dim="time")  # max over time for color scale
     for i, member in enumerate(
         da_plot_max_over_time.member
@@ -397,7 +446,7 @@ def create_gif_climate_data_over_time(
             da_plot = da_plot.cumsum(dim="time")  # convert to accumulated precipitation
             ylabel = "mm"  # set y-axis label
             name += "_accumulated"
-            viridis = cm.get_cmap("viridis")
+            viridis = cm.get_cmap("viridis")  # ty:ignore[unresolved-attribute]
             viridis_colors = viridis(
                 np.linspace(0, 1, 25)
             )  # The more colors, the smoother the gradient but more movement in cbar during animation
@@ -446,7 +495,7 @@ def create_gif_climate_data_over_time(
         origin = "upper"
 
     # Generating Animation frames
-    frames = []
+    frames: list[np.ndarray] = []
     times = da_plot["time"].values
 
     for i, t in enumerate(times):
@@ -536,8 +585,8 @@ def create_gif_climate_data_over_time(
         buf.close()
 
     # Saving GIF
-    gif_fp = report_dir / f"{name}_animation.gif"  # File path for GIF
-    imageio.mimsave(gif_fp, frames, fps=5)
+    gif_fp: Path = report_dir / f"{name}_animation.gif"  # File path for GIF
+    imageio.mimsave(gif_fp, frames, fps=5)  # ty:ignore[no-matching-overload]
 
 
 def plot_forcing(
@@ -669,6 +718,7 @@ class Forcing(BuildModelBase):
         max_value: float,
         precision: float,
         offset: float,
+        source: str | None,
         create_plots: bool = False,
         mask: xr.DataArray | None = None,
         **kwargs: Any,
@@ -683,6 +733,7 @@ class Forcing(BuildModelBase):
             max_value: The maximum value for clipping.
             precision: The precision for scaling calculation.
             offset: The offset for scaling calculation.
+            source: The source name of the forcing data (e.g. 'ERA5-Land', 'MSWEP'), or None if not set.
             create_plots: If True, create plots for the forcing data.
             mask: Optional spatial mask for the data. Used if it's already masked (as for SPEI).
             **kwargs: Additional keyword arguments to pass to the set_other method.
@@ -692,8 +743,28 @@ class Forcing(BuildModelBase):
 
         Raises:
             ValueError: If the data is already masked (has idxs dimension) but no mask was provided.
+            ValueError: If hourly forcing data does not start at hour 1 (01:00:00).
         """
+        if source is not None:
+            attrs["source"] = source
+
         da.attrs = attrs
+
+        # Check that hourly forcing data starts at hour 1 (01:00:00) and ends at hour 00 (23:00:00 - 00:00:00)
+        if (da.time[1] - da.time[0]).dt.seconds.item() == 3600:
+            first_hour: int = int(pd.to_datetime(da.time.values[0]).hour)
+            if first_hour != 1:
+                raise ValueError(
+                    f"Hourly forcing data for '{name}' must start at hour 1 (01:00:00), "
+                    f"but found start time {da.time.values[0]} (hour {first_hour})."
+                )
+
+            last_hour: int = int(pd.to_datetime(da.time.values[-1]).hour)
+            if last_hour != 0:
+                raise ValueError(
+                    f"Hourly forcing da ta for '{name}' must end at hour 00 (23:00:00 - 00:00:00), "
+                    f"but found end time {da.time.values[-1]} (hour {last_hour})."
+                )
 
         # check if the data is already masked (has idxs dimension instead of x and y)
         if "idxs" not in da.dims:
@@ -714,7 +785,7 @@ class Forcing(BuildModelBase):
             self.set_other(mask, name=f"{name}_mask")
 
         da = da.clip(min_value, max_value)
-        da = da.transpose("idxs", "time")
+        da = da.transpose("idxs", "time", ...)
 
         scaling_factor, in_dtype, out_dtype = calculate_scaling(
             da, min_value, max_value, offset=offset, precision=precision
@@ -765,10 +836,80 @@ class Forcing(BuildModelBase):
 
         return da
 
+    def setup_deltas_CMIP6(self, representative_forcing_year: int) -> xr.DataArray:
+        """Sets up the CMIP6 deltas for GEB.
+
+        CMIP6 deltas are used to adjust historical forcing data to reflect future climate conditions. This method fetches the CMIP6 deltas from the data catalog for the specified representative year and the spatial bounds of the model grid.
+
+        Args:
+            representative_forcing_year: The representative year for which to fetch the CMIP6 deltas. This is typically a year in the future (e.g., 2050) for which climate projections are available.
+
+        Returns:
+            The CMIP6 deltas as an xarray DataArray, which can be used to adjust the forcing data.
+        """
+        cmip6_deltas: xr.DataArray = self.data_catalog.fetch(
+            "cmip6",
+            bounds=self.grid["mask"].rio.bounds(recalc=True),
+            start_year=self.start_date.year - 1,
+            end_year=self.end_date.year,
+            representative_forcing_year=representative_forcing_year,
+        ).read()
+
+        return cmip6_deltas
+
+    def _apply_cmip6_delta(
+        self,
+        da: xr.DataArray,
+        variable_delta_name: str,
+        operation: Literal["add", "multiply"],
+        representative_forcing_year: int,
+    ) -> xr.DataArray:
+        """Applies CMIP6 deltas to a forcing variable DataArray.
+
+        Args:
+            da: The xarray DataArray containing forcing data to adjust.
+            variable_delta_name: The name of the variable delta in CMIP6 deltas (e.g. 'precipitation_delta' or 'near_surface_air_temperature_delta').
+            operation: The operation to apply ('multiply' for precipitation, 'add' for temperatures).
+            representative_forcing_year: The representative year for which to fetch the CMIP6 deltas.
+
+        Returns:
+            The delta-adjusted xarray DataArray.
+
+        Raises:
+            ValueError: If NaN values are found in the regridded deltas.
+        """
+        all_nans: int = da.isnull().sum().compute().item()
+        cmip6_deltas: xr.DataArray = self.setup_deltas_CMIP6(
+            representative_forcing_year=representative_forcing_year
+        )
+        delta: xr.DataArray = cmip6_deltas.sel(variable=variable_delta_name)
+        target_grid: xr.DataArray = da.isel(time=0, drop=True)
+        delta_regridded: xr.DataArray = resample_like(
+            source=delta, target=target_grid, method="bilinear"
+        )
+        if np.isnan(delta_regridded.values).any():
+            raise ValueError(f"NaN values found in regridded {variable_delta_name}.")
+
+        delta_regridded = (
+            delta_regridded.resample(time="1h")
+            .ffill()
+            .sel(time=slice(da.time.values[0], da.time.values[-1]))
+        )
+
+        if operation == "multiply":
+            da = da * delta_regridded
+        elif operation == "add":
+            da = da + delta_regridded
+
+        assert da.isnull().sum().compute().item() == all_nans
+        return da
+
     def set_pr_kg_per_m2_per_s(
         self,
         da: xr.DataArray,
+        source: str,
         name: str = "climate/pr_kg_per_m2_per_s",
+        representative_forcing_year: int | None = None,
         create_plots: bool = False,
         **kwargs: Any,
     ) -> xr.DataArray:
@@ -778,13 +919,26 @@ class Forcing(BuildModelBase):
 
         Args:
             da: The xarray DataArray containing the precipitation data.
+            source: The source name of the precipitation data (e.g. 'ERA5-Land', 'MSWEP').
             name: The name to assign to the DataArray in the model.
+            representative_forcing_year: The representative year for which to fetch the CMIP6 deltas to adjust historical data to future conditions.
             create_plots: If True, create plots for the forcing data.
             **kwargs: Additional keyword arguments to pass to the set_other method.
 
         Returns:
             The processed xarray DataArray with precipitation data.
         """
+        if representative_forcing_year is not None:
+            da = self._apply_cmip6_delta(
+                da,
+                variable_delta_name="precipitation_delta",
+                operation="multiply",
+                representative_forcing_year=representative_forcing_year,
+            )
+
+        # ensure no negative values for precipitation, which may arise due to float precision or delta adjustment
+        da = xr.where(da > 0, da, 0, keep_attrs=True)
+
         # maximum rainfall in one hour was 304.8 mm in 1956 in Holt, Missouri, USA
         # https://www.guinnessworldrecords.com/world-records/737965-greatest-rainfall-in-one-hour
         # we take a wide margin of 500 mm/h
@@ -807,6 +961,7 @@ class Forcing(BuildModelBase):
             precision=precision,
             offset=0.0,
             create_plots=create_plots,
+            source=source,
             **kwargs,
         )
 
@@ -834,6 +989,7 @@ class Forcing(BuildModelBase):
     def set_rsds_W_per_m2(
         self,
         da: xr.DataArray,
+        source: str,
         name: str = "climate/rsds_W_per_m2",
         create_plots: bool = False,
         **kwargs: Any,
@@ -844,6 +1000,7 @@ class Forcing(BuildModelBase):
 
         Args:
             da: The xarray DataArray containing the shortwave radiation data.
+            source: The source name of the radiation data (e.g. 'ERA5-Land').
             name: The name to assign to the DataArray in the model.
             create_plots: If True, create plots for the forcing data.
             **kwargs: Additional keyword arguments to pass to the set_other method.
@@ -865,12 +1022,14 @@ class Forcing(BuildModelBase):
             precision=0.1,
             offset=0.0,
             create_plots=create_plots,
+            source=source,
             **kwargs,
         )
 
     def set_rlds_W_per_m2(
         self,
         da: xr.DataArray,
+        source: str,
         name: str = "climate/rlds_W_per_m2",
         create_plots: bool = False,
         **kwargs: Any,
@@ -881,6 +1040,7 @@ class Forcing(BuildModelBase):
 
         Args:
             da: The xarray DataArray containing the longwave radiation data.
+            source: The source name of the radiation data (e.g. 'ERA5-Land').
             name: The name to assign to the DataArray in the model.
             create_plots: If True, create plots for the forcing data.
             **kwargs: Additional keyword arguments to pass to the set_other method.
@@ -902,13 +1062,16 @@ class Forcing(BuildModelBase):
             precision=0.1,
             offset=0.0,
             create_plots=create_plots,
+            source=source,
             **kwargs,
         )
 
     def set_tas_2m_K(
         self,
         da: xr.DataArray,
+        source: str,
         name: str = "climate/tas_2m_K",
+        representative_forcing_year: int | None = None,
         create_plots: bool = False,
         **kwargs: Any,
     ) -> xr.DataArray:
@@ -918,13 +1081,23 @@ class Forcing(BuildModelBase):
 
         Args:
             da: The xarray DataArray containing the air temperature data.
+            source: The source name of the air temperature data (e.g. 'ERA5-Land').
             name: The name to assign to the DataArray in the model.
+            representative_forcing_year: The representative year for which to fetch the CMIP6 deltas to adjust historical data to future conditions.
             create_plots: If True, create plots for the forcing data.
             **kwargs: Additional keyword arguments to pass to the set_other method.
 
         Returns:
             The processed xarray DataArray with air temperature data.
         """
+        if representative_forcing_year is not None:
+            da = self._apply_cmip6_delta(
+                da,
+                variable_delta_name="near_surface_air_temperature_delta",
+                operation="add",
+                representative_forcing_year=representative_forcing_year,
+            )
+
         K_to_C = 273.15
         return self._set_forcing_variable(
             da,
@@ -940,13 +1113,16 @@ class Forcing(BuildModelBase):
             precision=0.1,
             offset=-15 - K_to_C,  # average temperature on earth
             create_plots=create_plots,
+            source=source,
             **kwargs,
         )
 
     def set_dewpoint_tas_2m_K(
         self,
         da: xr.DataArray,
+        source: str,
         name: str = "climate/dewpoint_tas_2m_K",
+        representative_forcing_year: int | None = None,
         create_plots: bool = False,
         **kwargs: Any,
     ) -> xr.DataArray:
@@ -956,13 +1132,23 @@ class Forcing(BuildModelBase):
 
         Args:
             da: The xarray DataArray containing the dewpoint temperature data.
+            source: The source name of the dewpoint temperature data (e.g. 'ERA5-Land').
             name: The name to assign to the DataArray in the model.
+            representative_forcing_year: The representative year for which to fetch the CMIP6 deltas to adjust historical data to future conditions.
             create_plots: If True, create plots for the forcing data.
             **kwargs: Additional keyword arguments to pass to the set_other method.
 
         Returns:
             The processed xarray DataArray with dewpoint temperature data.
         """
+        if representative_forcing_year is not None:
+            da = self._apply_cmip6_delta(
+                da,
+                variable_delta_name="near_surface_air_temperature_delta",
+                operation="add",
+                representative_forcing_year=representative_forcing_year,
+            )
+
         K_to_C: float = 273.15
         return self._set_forcing_variable(
             da,
@@ -978,12 +1164,14 @@ class Forcing(BuildModelBase):
             precision=0.1,
             offset=-15 - K_to_C,  # average temperature on earth
             create_plots=create_plots,
+            source=source,
             **kwargs,
         )
 
     def set_ps_pascal(
         self,
         da: xr.DataArray,
+        source: str,
         name: str = "climate/ps_pascal",
         create_plots: bool = False,
         **kwargs: Any,
@@ -994,6 +1182,7 @@ class Forcing(BuildModelBase):
 
         Args:
             da: The xarray DataArray containing the surface air pressure data.
+            source: The source name of the surface pressure data (e.g. 'ERA5-Land').
             name: The name to assign to the DataArray in the model.
             create_plots: If True, create plots for the forcing data.
             **kwargs: Additional keyword arguments to pass to the set_other method.
@@ -1015,6 +1204,7 @@ class Forcing(BuildModelBase):
             precision=10,
             offset=-100_000,
             create_plots=create_plots,
+            source=source,
             **kwargs,
         )
 
@@ -1022,6 +1212,7 @@ class Forcing(BuildModelBase):
         self,
         da: xr.DataArray,
         direction: str,
+        source: str,
         name: str = "climate/wind_{direction}10m_m_per_s",
         create_plots: bool = False,
         **kwargs: Any,
@@ -1033,6 +1224,7 @@ class Forcing(BuildModelBase):
         Args:
             da: The xarray DataArray containing the wind speed data.
             direction: The wind direction component (e.g., 'u' or 'v').
+            source: The source name of the wind speed data (e.g. 'ERA5-Land').
             name: The name to assign to the DataArray in the model.
             create_plots: If True, create plots for the forcing data.
             **kwargs: Additional keyword arguments to pass to the set_other method.
@@ -1055,6 +1247,7 @@ class Forcing(BuildModelBase):
             precision=0.1,
             offset=0,
             create_plots=create_plots,
+            source=source,
             **kwargs,
         )
 
@@ -1064,6 +1257,7 @@ class Forcing(BuildModelBase):
         mask: xr.DataArray | None = None,
         name: str = "climate/SPEI",
         create_plots: bool = False,
+        source: str | None = None,
         **kwargs: Any,
     ) -> xr.DataArray:
         """Sets the Standard Precipitation Evapotranspiration Index (SPEI) DataArray with appropriate attributes and scaling.
@@ -1075,6 +1269,7 @@ class Forcing(BuildModelBase):
             mask: The spatial mask for the SPEI data. If None, the default mask is used.
             name: The name to assign to the DataArray in the model.
             create_plots: If True, create plots for the forcing data.
+            source: The source name of the SPEI data.
             **kwargs: Additional keyword arguments to pass to the set_other method.
 
         Returns:
@@ -1099,42 +1294,45 @@ class Forcing(BuildModelBase):
             offset=0,
             create_plots=create_plots,
             mask=mask,
+            source=source,
             **kwargs,
         )
 
-    def setup_deltas_CMIP6(self, representative_forcing_year: int) -> xr.DataArray:
-        """Sets up the CMIP6 deltas for GEB.
-
-        CMIP6 deltas are used to adjust the historical ERA5 forcing data to reflect future climate conditions. This method fetches the CMIP6 deltas from the data catalog for the specified representative year and the spatial bounds of the model grid.
-        Args:
-            representative_forcing_year: The representative year for which to fetch the CMIP6 deltas. This is typically a year in the future (e.g., 2050) for which climate projections are available.
-        Returns:
-            The CMIP6 deltas as an xarray DataArray, which can be used to adjust the ERA5 forcing data.
-        """
-        cmip6_deltas = self.data_catalog.fetch(
-            "cmip6",
-            bounds=self.grid["mask"].rio.bounds(recalc=True),
-            start_year=self.start_date.year - 1,
-            end_year=self.end_date.year,
-            representative_forcing_year=representative_forcing_year,
-        ).read()
-
-        return cmip6_deltas
-
     def setup_forcing_ERA5(
-        self, create_plots: bool = False, representative_forcing_year: int = None
+        self,
+        create_plots: bool = False,
+        representative_forcing_year: int | None = None,
+        forcing_types: list[
+            Literal[
+                "precipitation",
+                "near_surface_air_temperature",
+                "near_surface_dewpoint_temperature",
+                "surface_solar_radiation_downwards",
+                "surface_thermal_radiation_downwards",
+                "surface_air_pressure",
+                "wind_speed",
+            ]
+        ] = [
+            "precipitation",
+            "near_surface_air_temperature",
+            "near_surface_dewpoint_temperature",
+            "surface_solar_radiation_downwards",
+            "surface_thermal_radiation_downwards",
+            "surface_air_pressure",
+            "wind_speed",
+        ],
+        source: str = "ERA5-Land",
     ) -> None:
         """Sets up the ERA5 forcing data for GEB.
 
         Args:
             create_plots: If True, create plots for the forcing data.
             representative_forcing_year: The representative year for which to fetch the CMIP6 deltas.
+            forcing_types: A list of forcing variable types to set up.
+            source: The source name of the forcing data (default: 'ERA5-Land').
 
         Sets:
             The resulting forcing data is set as forcing data in the model with names of the form 'forcing/{variable_name}'.
-
-        Raises:
-            ValueError: If representative_forcing_year is provided but the CMIP6 deltas cannot be properly applied to the ERA5 data (e.g., due to NaN values in the deltas or issues with regridding).
         """
         era5_store: Adapter = self.data_catalog.fetch("era5")
         era5_loader: partial = partial(
@@ -1145,74 +1343,42 @@ class Forcing(BuildModelBase):
             bounds=self.grid["mask"].rio.bounds(recalc=True),
         )
 
-        pr_hourly: xr.DataArray = era5_loader(variable="tp")
-        tas: xr.DataArray = era5_loader("t2m")
-
-        if representative_forcing_year:
-            cmip6_deltas = self.setup_deltas_CMIP6(
-                representative_forcing_year=representative_forcing_year
-            )
-            # Calculate the number of NaNs in the original ERA5 data before applying deltas.
-            # This allows us to check that the application of the deltas does not introduce any new NaN values.
-            all_nans_tas = tas.isnull().sum().compute().item()
-            all_nans_pr = pr_hourly.isnull().sum().compute().item()
-
-            # Spatial CMIP6 deltas: regrid to the ERA5 grid using xarray interpolation.
-            delta_pr = cmip6_deltas.sel(variable="precipitation_delta")
-            delta_tas = cmip6_deltas.sel(variable="near_surface_air_temperature_delta")
-
-            target_pr_grid = pr_hourly.isel(time=0, drop=True)
-            target_tas_grid = tas.isel(time=0, drop=True)
-
-            delta_pr_regridded = resample_like(
-                source=delta_pr, target=target_pr_grid, method="bilinear"
-            )
-            delta_tas_regridded = resample_like(
-                source=delta_tas, target=target_tas_grid, method="bilinear"
+        if "precipitation" in forcing_types:
+            pr_hourly: xr.DataArray = era5_loader(variable="tp")
+            pr_hourly = pr_hourly.chunk({"y": -1, "x": -1})
+            pr_hourly = pr_hourly * (1000 / 3600)  # convert from m/hr to kg/m2/s
+            self.set_pr_kg_per_m2_per_s(
+                pr_hourly,
+                representative_forcing_year=representative_forcing_year,
+                create_plots=create_plots,
+                source=source,
             )
 
-            # check for NaNs in the regridded deltas, which would indicate a problem with the regridding (e.g., missing weights)
-            if np.isnan(delta_pr_regridded.values).any():
-                raise ValueError("NaN values found in regridded precipitation deltas.")
-            if np.isnan(delta_tas_regridded.values).any():
-                raise ValueError("NaN values found in regridded temperature deltas.")
-            delta_pr_regridded = (
-                delta_pr_regridded.resample(time="1h")
-                .ffill()
-                .sel(time=slice(pr_hourly.time.values[0], pr_hourly.time.values[-1]))
+        if "near_surface_air_temperature" in forcing_types:
+            tas: xr.DataArray = era5_loader("t2m")
+            tas = tas.chunk({"y": -1, "x": -1})
+            self.set_tas_2m_K(
+                tas,
+                representative_forcing_year=representative_forcing_year,
+                create_plots=create_plots,
+                source=source,
             )
-            delta_tas_regridded = (
-                delta_tas_regridded.resample(time="1h")
-                .ffill()
-                .sel(time=slice(tas.time.values[0], tas.time.values[-1]))
+        else:
+            raise NotImplementedError(
+                "ERA5-Land forcing must include near surface air temperature. If air temperature is not included the climate grid is not set correctly. This could be generalized, but just needs to be done when needed."
             )
-            # assert dimensions are equal
-            tas = tas + delta_tas_regridded
-            pr_hourly = pr_hourly * delta_pr_regridded
 
-            # Efficient NaN checks to check no new NaNs are introduced (lazy-friendly)
-            assert tas.isnull().sum().compute().item() == all_nans_tas
-            assert pr_hourly.isnull().sum().compute().item() == all_nans_pr
-
-        tas = tas.chunk({"y": -1, "x": -1})
-        pr_hourly = pr_hourly.chunk({"y": -1, "x": -1})
-        pr_hourly: xr.DataArray = pr_hourly * (
-            1000 / 3600
-        )  # convert from m/hr to kg/m2/s
-
-        # ensure no negative values for precipitation, which may arise due to float precision
-        pr_hourly: xr.DataArray = xr.where(pr_hourly > 0, pr_hourly, 0, keep_attrs=True)
-        pr_hourly: xr.DataArray = self.set_pr_kg_per_m2_per_s(
-            pr_hourly, create_plots=create_plots
-        )
-        self.set_tas_2m_K(tas, create_plots=create_plots)
-
-        climate_grid = self.other["climate/pr_kg_per_m2_per_s_mask"]
-
-        geopotential = (
+        # elevation forcing (used by temperature and pressure for elevation lapse rate / correction)
+        climate_grid: xr.DataArray = self.other["climate/tas_2m_K_mask"]
+        geopotential: xr.DataArray = (
             self.data_catalog.fetch("ecmwf_geopotential")
             .read()
-            .sel(x=climate_grid.x, y=climate_grid.y, method="nearest", tolerance=0.001)
+            .sel(
+                x=climate_grid.x,
+                y=climate_grid.y,
+                method="nearest",
+                tolerance=0.001,
+            )
         )
 
         assert geopotential.x.size == climate_grid.x.size
@@ -1222,30 +1388,7 @@ class Forcing(BuildModelBase):
         assert (geopotential.x.values == climate_grid.x.values).all()
         assert (geopotential.y.values == climate_grid.y.values).all()
 
-        dew_point_tas: xr.DataArray = era5_loader("d2m")
-        self.set_dewpoint_tas_2m_K(dew_point_tas, create_plots=create_plots)
-
-        rsds: xr.DataArray = (
-            era5_loader("ssrd") / 3600  # convert from J/m2/(per timestep) to W/m2
-        )  # surface_solar_radiation_downwards
-        self.set_rsds_W_per_m2(rsds, create_plots=create_plots)
-
-        # surface_thermal_radiation_downwards
-        rlds: xr.DataArray = (era5_loader("strd") / 3600).chunk(
-            {"time": 7 * 24}
-        )  # convert from J/m2/(per timestep) to W/m2
-        self.set_rlds_W_per_m2(rlds, create_plots=create_plots)
-
-        pressure: xr.DataArray = era5_loader("sp")
-        self.set_ps_pascal(pressure, create_plots=create_plots)
-
-        u_wind: xr.DataArray = era5_loader("u10")
-        self.set_wind_10m_m_per_s(u_wind, direction="u", create_plots=create_plots)
-
-        v_wind: xr.DataArray = era5_loader("v10")
-        self.set_wind_10m_m_per_s(v_wind, direction="v", create_plots=create_plots)
-
-        elevation_forcing = (geopotential / 9.81).astype(np.float32)
+        elevation_forcing: xr.DataArray = (geopotential / 9.81).astype(np.float32)
         elevation_forcing.attrs = {
             "long_name": "elevation",
             "units": "m",
@@ -1257,19 +1400,94 @@ class Forcing(BuildModelBase):
             name="climate/elevation_forcing",
         )
 
+        if "near_surface_dewpoint_temperature" in forcing_types:
+            dew_point_tas: xr.DataArray = era5_loader("d2m")
+            self.set_dewpoint_tas_2m_K(
+                dew_point_tas,
+                representative_forcing_year=representative_forcing_year,
+                create_plots=create_plots,
+                source=source,
+            )
+
+        if "surface_solar_radiation_downwards" in forcing_types:
+            rsds: xr.DataArray = (
+                era5_loader("ssrd") / 3600
+            )  # convert from J/m2/(per timestep) to W/m2
+            self.set_rsds_W_per_m2(rsds, create_plots=create_plots, source=source)
+
+        if "surface_thermal_radiation_downwards" in forcing_types:
+            rlds: xr.DataArray = (era5_loader("strd") / 3600).chunk(
+                {"time": 7 * 24}
+            )  # convert from J/m2/(per timestep) to W/m2
+            self.set_rlds_W_per_m2(rlds, create_plots=create_plots, source=source)
+
+        if "surface_air_pressure" in forcing_types:
+            pressure: xr.DataArray = era5_loader("sp")
+            self.set_ps_pascal(pressure, create_plots=create_plots, source=source)
+
+        if "wind_speed" in forcing_types:
+            u_wind: xr.DataArray = era5_loader("u10")
+            self.set_wind_10m_m_per_s(
+                u_wind, direction="u", create_plots=create_plots, source=source
+            )
+
+            v_wind: xr.DataArray = era5_loader("v10")
+            self.set_wind_10m_m_per_s(
+                v_wind, direction="v", create_plots=create_plots, source=source
+            )
+
+    def setup_forcing_MSWEP(
+        self,
+        create_plots: bool = False,
+        representative_forcing_year: int | None = None,
+        source: str = "MSWEP",
+    ) -> None:
+        """Sets up the MSWEP precipitation forcing data for GEB.
+
+        Args:
+            create_plots: If True, create plots for the forcing data.
+            representative_forcing_year: The representative year for which to fetch the CMIP6 deltas to adjust historical data to future conditions.
+            source: The source name of the precipitation forcing data (default: 'MSWEP').
+
+        Sets:
+            The resulting precipitation forcing data is set as forcing data in the model.
+        """
+        mswep_store: Adapter = self.data_catalog.fetch(
+            "mswep_precipitation",
+            start_date=self.start_date - relativedelta(years=1),
+            end_date=self.end_date,
+        )
+        pr_hourly: xr.DataArray = mswep_store.read(
+            start_date=self.start_date - relativedelta(years=1),
+            end_date=self.end_date
+            + relativedelta(days=1),  # add one day to include the end date
+            bounds=self.grid["mask"].rio.bounds(recalc=True),
+        )
+        pr_hourly = pr_hourly.chunk({"y": -1, "x": -1})
+        pr_hourly = pr_hourly * (1000 / 3600)  # convert from m/hr to kg/m2/s
+        self.set_pr_kg_per_m2_per_s(
+            pr_hourly,
+            representative_forcing_year=representative_forcing_year,
+            create_plots=create_plots,
+            source=source,
+        )
+
     @build_method(depends_on=["set_ssp", "set_time_range"], required=True)
     def setup_forcing(
         self,
-        forcing: str = "ERA5",
+        forcing_source: Literal["ERA5-Land"] = "ERA5-Land",
+        precipitation_source: Literal["MSWEP", "ERA5-Land"] | None = None,
         create_plots: bool = False,
-        representative_forcing_year: int = None,
+        representative_forcing_year: int | None = None,
     ) -> None:
         """Sets up the forcing data for GEB.
 
         Args:
-            forcing: The data source to use for the forcing data. Currently only ERA5 is supported.
+            forcing_source: The data source to use for the forcing data. Currently only 'ERA5-Land' is supported.
+            precipitation_source: The data source to use for the precipitation data. Currently only 'MSWEP' and 'ERA5-Land' are supported.
+                If None, precipitation_source will default to forcing_source.
             create_plots: If True, create plots for the forcing data.
-            representative_forcing_year: The representative year for which to fetch the CMIP6 deltas. Only used if forcing is 'ERA5' to adjust the historical data to future conditions.
+            representative_forcing_year: The representative year for which to fetch the CMIP6 deltas to adjust historical data to future conditions.
 
         Sets:
             The resulting forcing data is set as forcing data in the model with names of the form 'forcing/{variable_name}'.
@@ -1277,19 +1495,43 @@ class Forcing(BuildModelBase):
         Raises:
             ValueError: If an unknown data source is specified.
         """
-        if forcing == "ISIMIP":
-            raise NotImplementedError(
-                "ISIMIP forcing is not supported anymore. We switched fully to hourly forcing data."
+        if precipitation_source is None:
+            precipitation_source = forcing_source
+
+        if forcing_source != "ERA5-Land":
+            raise ValueError(
+                f"Unknown forcing_source: '{forcing_source}', supported is 'ERA5-Land'"
             )
-        elif forcing == "ERA5":
+
+        if precipitation_source == "MSWEP":
+            self.setup_forcing_MSWEP(
+                create_plots=create_plots,
+                representative_forcing_year=representative_forcing_year,
+                source=precipitation_source,
+            )
             self.setup_forcing_ERA5(
                 create_plots=create_plots,
                 representative_forcing_year=representative_forcing_year,
+                forcing_types=[
+                    "near_surface_air_temperature",
+                    "near_surface_dewpoint_temperature",
+                    "surface_solar_radiation_downwards",
+                    "surface_thermal_radiation_downwards",
+                    "surface_air_pressure",
+                    "wind_speed",
+                ],
+                source=forcing_source,
             )
-        elif forcing == "CMIP":
-            raise NotImplementedError("CMIP forcing data is not yet supported")
+        elif precipitation_source == "ERA5-Land":
+            self.setup_forcing_ERA5(
+                create_plots=create_plots,
+                representative_forcing_year=representative_forcing_year,
+                source=forcing_source,
+            )
         else:
-            raise ValueError(f"Unknown data source: {forcing}, supported are 'ERA5'")
+            raise ValueError(
+                f"Unknown precipitation_source: '{precipitation_source}', supported are 'MSWEP' and 'ERA5-Land'"
+            )
 
     @build_method(depends_on=["setup_forcing"], required=True)
     def setup_SPEI(
@@ -1392,7 +1634,56 @@ class Forcing(BuildModelBase):
         )  # convert from m/hour to kg/m2/s (assuming liquid water density of 1000 kg/m3)
 
         # ensure input data have the same coordinates
-        pr_kg_per_m2_per_s = self.other["climate/pr_kg_per_m2_per_s"]
+        pr_kg_per_m2_per_s: xr.DataArray = self.other["climate/pr_kg_per_m2_per_s"]
+
+        pr_source: str = pr_kg_per_m2_per_s.attrs["source"]
+        climate_source: str = self.other["climate/tas_2m_K"].attrs["source"]
+
+        # If precipitation is from a different source than the other climatic variables,
+        # interpolate potential evapotranspiration to the resolution of the precipitation.
+        if pr_source != climate_source:
+            self.logger.info(
+                f"Precipitation source ('{pr_source}') differs from climate forcing source "
+                f"('{climate_source}'). Regridding potential evapotranspiration to precipitation grid."
+            )
+            source_mask: xr.DataArray = self.other["climate/tas_2m_K_mask"]
+            target_mask: xr.DataArray = self.other["climate/pr_kg_per_m2_per_s_mask"]
+
+            pet_unstacked: xr.DataArray = _unstack_forcing_variable(
+                potential_evapotranspiration, source_mask
+            )
+
+            # Ensure source grid bounds fully encompass target grid bounds
+            tgt_b = target_mask.rio.bounds()
+            src_b = pet_unstacked.rio.bounds()
+            minx: float = min(tgt_b[0], src_b[0])
+            miny: float = min(tgt_b[1], src_b[1])
+            maxx: float = max(tgt_b[2], src_b[2])
+            maxy: float = max(tgt_b[3], src_b[3])
+
+            pet_padded: xr.DataArray = pad_xy(
+                pet_unstacked,
+                minx=minx,
+                miny=miny,
+                maxx=maxx,
+                maxy=maxy,
+                constant_values=np.nan,
+            ).chunk({"y": -1, "x": -1})
+            pet_padded.attrs["_FillValue"] = np.nan
+
+            # Fill NaN values outside source mask to prevent boundary cell NaN contamination during interpolation
+            pet_filled: xr.DataArray = interpolate_na_along_dim(pet_padded)
+
+            pet_reprojected: xr.DataArray = resample_like(
+                pet_filled, target_mask, method="bilinear"
+            )
+            pet_reprojected.attrs["_FillValue"] = np.nan
+            potential_evapotranspiration, _ = _stack_forcing_variable(
+                pet_reprojected, target_mask
+            )
+            potential_evapotranspiration = potential_evapotranspiration.assign_coords(
+                idxs=pr_kg_per_m2_per_s.idxs
+            )
 
         if (
             not pr_kg_per_m2_per_s.time.min().dt.date <= calibration_period_start
@@ -1471,6 +1762,7 @@ class Forcing(BuildModelBase):
                     SPEI,
                     mask=self.other["climate/pr_kg_per_m2_per_s_mask"],
                     create_plots=create_plots,
+                    source=None,
                 )
 
                 self.logger.info("calculating GEV parameters...")
@@ -1574,19 +1866,27 @@ class Forcing(BuildModelBase):
         forecast_end: date | datetime,
         forecast_provider: str,
         forecast_model: str,
-        forecast_resolution: float,
+        forecast_resolution: str,
         forecast_horizon: int,
         forecast_timestep_hours: int,
         n_ensemble_members: int,
+        forecast_product: Literal["forecast", "hindcast"] = "forecast",
+        hindcast_cycle_start: date | datetime | None = None,
+        hindcast_cycle_end: date | datetime | None = None,
+        n_hindcast_years: int | None = None,
         create_plots: bool = False,
     ) -> None:
         """Sets up forecast data for the model based on configuration.
 
         Args:
+            forecast_product: The forecast product type (e.g., "hindcast" or "forecast").
             forecast_start: The forecast initialization time (date or datetime).
             forecast_end: The forecast end time (date or datetime).
+            hindcast_cycle_start: The start time for hindcast data (date or datetime).
+            hindcast_cycle_end: The end time for hindcast data (date or datetime).
+            n_hindcast_years: The number of years of hindcast data to download.
             forecast_provider: The forecast data provider to use (default: "ECMWF").
-            forecast_model: The ECMWF forecast model to use (probabilistic_forecast or control_forecast).
+            forecast_model: The ECMWF forecast model to use (probabilistic_forecast, control_forecast or both_control_and_probabilistic).
             forecast_resolution: The spatial resolution of the forecast data (degrees).
             forecast_horizon: The forecast horizon in hours.
             forecast_timestep_hours: The forecast timestep in hours.
@@ -1597,13 +1897,17 @@ class Forcing(BuildModelBase):
             forecast_provider == "ECMWF"
         ):  # Check if ECMWF is the selected forecast provider
             self.setup_forecasts_ECMWF(  # Call ECMWF-specific setup method
-                forecast_start,  # Pass forecast start date
-                forecast_end,  # Pass forecast end date
-                forecast_model,  # Pass forecast model type
-                forecast_resolution,  # Pass spatial resolution
-                forecast_horizon,  # Pass forecast horizon in hours
-                forecast_timestep_hours,  # Pass timestep interval
-                n_ensemble_members,  # Pass number of ensemble members
+                forecast_product=forecast_product,  # Pass forecast product type
+                forecast_start=forecast_start,  # Pass forecast start date
+                forecast_end=forecast_end,  # Pass forecast end date
+                hindcast_cycle_start=hindcast_cycle_start,  # Pass hindcast start date
+                hindcast_cycle_end=hindcast_cycle_end,  # Pass hindcast end date
+                n_hindcast_years=n_hindcast_years,  # Pass number of hindcast years
+                forecast_model=forecast_model,  # Pass forecast model type
+                forecast_resolution=forecast_resolution,  # Pass spatial resolution
+                forecast_horizon=forecast_horizon,  # Pass forecast horizon in hours
+                forecast_timestep_hours=forecast_timestep_hours,  # Pass timestep interval
+                n_ensemble_members=n_ensemble_members,  # Pass number of ensemble members,
                 create_plots=create_plots,
             )
 
@@ -1612,24 +1916,114 @@ class Forcing(BuildModelBase):
         forecast_start: date | datetime,
         forecast_end: date | datetime,
         forecast_model: str,
-        forecast_resolution: float,
+        forecast_resolution: str,
         forecast_horizon: int,
         forecast_timestep_hours: int,
         n_ensemble_members: int = 50,
+        forecast_product: Literal["forecast", "hindcast"] = "forecast",
+        hindcast_cycle_start: date | datetime | None = None,
+        hindcast_cycle_end: date | datetime | None = None,
+        n_hindcast_years: int | None = None,
         create_plots: bool = False,
     ) -> None:
         """Sets up the folder structure for ECMWF forecast data.
 
         Args:
+            forecast_product: The forecast product type (e.g., "hindcast" or "forecast").
             forecast_start: The forecast initialization time (date or datetime).
             forecast_end: The forecast end time (date or datetime).
-            forecast_model: The ECMWF forecast model to use (probabilistic_forecast or control_forecast).
+            hindcast_cycle_start: The start time for hindcast data (date or datetime).
+            hindcast_cycle_end: The end time for hindcast data (date or datetime).
+            n_hindcast_years: The number of years of hindcast data to download.
+            forecast_model: The ECMWF forecast model to use (probabilistic_forecast, control_forecast or both_control_and_probabilistic).
             forecast_resolution: The spatial resolution of the forecast data (degrees).
             forecast_horizon: The forecast horizon in hours.
             forecast_timestep_hours: The forecast timestep in hours.
             n_ensemble_members: The number of ensemble members to download (default: 50).
             create_plots: If True, create plots for the forecast data.
+
+        Raises:
+            ValueError: If an invalid forecast product type is provided or if the number of hindcast years exceeds the available data range for ECMWF hindcasts.
         """
+
+        def _get_forecast_model_folder(forecast_model: str) -> str:
+            return (
+                "merged_control_ensemble"
+                if forecast_model == "both_control_and_probabilistic"
+                else forecast_model
+            )
+
+        def _make_base_name(
+            base_folder: str, forecast_product: str, forecast_model: str, date_str: str
+        ) -> str:
+            return f"{base_folder}/ECMWF/{_get_forecast_model_folder(forecast_model)}/{date_str}"
+
+        def _save_ecmwf_forcing(
+            forecast_ds: xr.Dataset,
+            base_name: str,
+            date_str: str,
+            create_plots: bool,
+        ) -> None:
+            pr = forecast_ds["tp"].rename("precipitation")
+            pr = pr.where(pr >= 0, 0)
+            self.set_pr_kg_per_m2_per_s(
+                pr,
+                name=f"{base_name}/pr_kg_per_m2_per_s_{date_str}",
+                create_plots=create_plots,
+                source="ECMWF",
+            )
+
+            self.set_tas_2m_K(
+                forecast_ds["t2m"].rename("tas"),
+                name=f"{base_name}/tas_2m_K_{date_str}",
+                create_plots=create_plots,
+                source="ECMWF",
+            )
+
+            self.set_dewpoint_tas_2m_K(
+                forecast_ds["d2m"].rename("dew_point_tas"),
+                name=f"{base_name}/dewpoint_tas_2m_K_{date_str}",
+                create_plots=create_plots,
+                source="ECMWF",
+            )
+
+            self.set_rsds_W_per_m2(
+                forecast_ds["ssrd"].rename("rsds"),
+                name=f"{base_name}/rsds_W_per_m2_{date_str}",
+                create_plots=create_plots,
+                source="ECMWF",
+            )
+
+            self.set_rlds_W_per_m2(
+                forecast_ds["strd"].rename("rlds"),
+                name=f"{base_name}/rlds_W_per_m2_{date_str}",
+                create_plots=create_plots,
+                source="ECMWF",
+            )
+
+            self.set_ps_pascal(
+                forecast_ds["sp"].rename("ps"),
+                name=f"{base_name}/ps_pascal_{date_str}",
+                create_plots=create_plots,
+                source="ECMWF",
+            )
+
+            self.set_wind_10m_m_per_s(
+                forecast_ds["u10"].rename("u10"),
+                direction="u",
+                name=f"{base_name}/wind_u10m_m_per_s_{date_str}",
+                create_plots=create_plots,
+                source="ECMWF",
+            )
+
+            self.set_wind_10m_m_per_s(
+                forecast_ds["v10"].rename("v10"),
+                direction="v",
+                name=f"{base_name}/wind_v10m_m_per_s_{date_str}",
+                create_plots=create_plots,
+                source="ECMWF",
+            )
+
         MARS_codes: dict[str, float] = {  # Complete set of weather variables
             "tp": 228.128,  # total precipitation
             "t2m": 167.128,  # 2 metre temperature
@@ -1641,13 +2035,36 @@ class Forcing(BuildModelBase):
             "v10": 166.128,  # 10 metre v-component of wind
         }
 
-        forecast_issue_dates = pd.date_range(  # Create pandas date range
-            start=forecast_start,  # Start from forecast start date
-            end=forecast_end,  # End at forecast end date
-            freq="24h",  # Daily frequency (24-hour intervals)
-        )
+        if forecast_product not in ["forecast", "hindcast"]:
+            raise ValueError(
+                "forecast_product must be either 'forecast' or 'hindcast'."
+            )
 
-        self.logger.info(f"Processing {forecast_model} ECMWF forecasts...")
+        if forecast_product == "hindcast":
+            if n_hindcast_years > 20:
+                raise ValueError(
+                    f"ECMWF hindcast data is only available for up to 20 years before the forecast cycle date. Please adjust the n_hindcast_years parameter in build.yml (currently {n_hindcast_years})."
+                )
+            base_folder = "hindcasts"
+
+            HINDCAST_RUN_DAYS = [1, 5, 9, 13, 17, 21, 25, 29]
+            hindcast_cycle_dates = [
+                d
+                for d in pd.date_range(
+                    hindcast_cycle_start, hindcast_cycle_end, freq="24h"
+                )
+                if d.day in HINDCAST_RUN_DAYS and not (d.month == 2 and d.day > 28)
+            ]
+        else:
+            base_folder = "forecasts"
+
+            forecast_issue_dates = pd.date_range(  # Create pandas date range
+                start=forecast_start,  # Start from forecast start date
+                end=forecast_end,  # End at forecast end date
+                freq="24h",  # Daily frequency (24-hour intervals)
+            )
+
+        self.logger.info(f"Requesting {forecast_model} ECMWF {forecast_product}s...")
 
         ECMWF_forecasts_store = self.data_catalog.fetch(
             "ecmwf_forecasts",
@@ -1655,6 +2072,10 @@ class Forcing(BuildModelBase):
             bounds=self.bounds,
             forecast_start=forecast_start,
             forecast_end=forecast_end,
+            forecast_product=forecast_product,
+            hindcast_cycle_start=hindcast_cycle_start,
+            hindcast_cycle_end=hindcast_cycle_end,
+            n_hindcast_years=n_hindcast_years,
             forecast_model=forecast_model,  # Use current model type
             forecast_resolution=forecast_resolution,
             forecast_horizon=forecast_horizon,  # Forecast horizon in hours
@@ -1662,105 +2083,78 @@ class Forcing(BuildModelBase):
             n_ensemble_members=n_ensemble_members,  # Number of ensemble members
         )
 
-        for (
-            forecast_issue_date
-        ) in forecast_issue_dates:  # # Process each forecast issue date separately
+        if forecast_product == "hindcast":
+            forecast_issue_dates = (
+                hindcast_cycle_dates  # Use hindcast cycle dates for hindcast product
+            )
+
+        for forecast_issue_date in (
+            forecast_issue_dates
+        ):  # # Process each forecast issue date/hindcast cycle date separately
             forecast_issue_date_str = forecast_issue_date.strftime(
                 "%Y%m%dT%H%M%S"
             )  # Format date for filenames
-
-            self.logger.info(f"Processing forecast issued at {forecast_issue_date}...")
-
-            ECMWF_forecast = ECMWF_forecasts_store.read(
-                bounds=self.bounds,
-                forecast_issue_date=forecast_issue_date,
-                forecast_model=forecast_model,
-                forecast_resolution=forecast_resolution,
-                forecast_horizon=forecast_horizon,
-                forecast_timestep_hours=forecast_timestep_hours,
-                reproject_like=self.other["climate/pr_kg_per_m2_per_s_mask"],
-            )  # Reproject to grid of other climate data
-
-            if "member" in ECMWF_forecast.dims:
-                ECMWF_forecast = ECMWF_forecast.chunk({"member": 1})
-
-            # Create name based on forecast_model for consistent file structure
-            if forecast_model == "both_control_and_probabilistic":
-                base_name = (
-                    f"forecasts/ECMWF/merged_control_ensemble/{forecast_issue_date_str}"
-                )
-            else:
-                base_name = (
-                    f"forecasts/ECMWF/{forecast_model}/{forecast_issue_date_str}"
+            if forecast_product == "forecast":
+                self.logger.info(
+                    f"Processing ECMWF {forecast_product} issued at {forecast_issue_date}..."
                 )
 
-            # Extract and process hourly precipitation data
-            pr = ECMWF_forecast["tp"].rename(
-                "precipitation"
-            )  # Get total precipitation variable
-            pr = pr.where(
-                pr >= 0, 0
-            )  # Handle negative values (caused by floating-point precision issues) by setting them to zero
-            self.set_pr_kg_per_m2_per_s(
-                pr,
-                name=f"{base_name}/pr_kg_per_m2_per_s_{forecast_issue_date_str}",  # Use date-specific filename
-                create_plots=create_plots,
-            )
+                ECMWF_forecast = ECMWF_forecasts_store.read_and_process_forecasts(
+                    bounds=self.bounds,
+                    forecast_issue_date=forecast_issue_date,
+                    forecast_model=forecast_model,
+                    forecast_resolution=forecast_resolution,
+                    forecast_horizon=forecast_horizon,
+                    forecast_timestep_hours=forecast_timestep_hours,
+                    reproject_like=self.other["climate/pr_kg_per_m2_per_s_mask"],
+                )  # Reproject to grid of other climate data'
 
-            tas = ECMWF_forecast["t2m"].rename("tas")  # Extract 2-meter temperature
-            self.set_tas_2m_K(
-                tas,
-                name=f"{base_name}/tas_2m_K_{forecast_issue_date_str}",
-                create_plots=create_plots,
-            )
+                if "member" in ECMWF_forecast.dims:
+                    ECMWF_forecast = ECMWF_forecast.chunk({"member": 1})
 
-            dew_point_tas = ECMWF_forecast["d2m"].rename(
-                "dew_point_tas"
-            )  # Extract dewpoint temperature
-            self.set_dewpoint_tas_2m_K(
-                dew_point_tas,
-                name=f"{base_name}/dewpoint_tas_2m_K_{forecast_issue_date_str}",
-                create_plots=create_plots,
-            )
+                base_name = _make_base_name(
+                    base_folder=base_folder,
+                    forecast_product=forecast_product,
+                    forecast_model=forecast_model,
+                    date_str=forecast_issue_date_str,
+                )
 
-            rsds = ECMWF_forecast["ssrd"].rename("rsds")  # Extract shortwave radiation
-            self.set_rsds_W_per_m2(
-                rsds,
-                name=f"{base_name}/rsds_W_per_m2_{forecast_issue_date_str}",
-                create_plots=create_plots,
-            )
+                _save_ecmwf_forcing(
+                    forecast_ds=ECMWF_forecast,
+                    base_name=base_name,
+                    date_str=forecast_issue_date_str,
+                    create_plots=create_plots,
+                )
 
-            # Process surface longwave (thermal) radiation downwards
-            rlds = ECMWF_forecast["strd"].rename("rlds")  # Extract longwave radiation
-            self.set_rlds_W_per_m2(
-                rlds,
-                name=f"{base_name}/rlds_W_per_m2_{forecast_issue_date_str}",
-                create_plots=create_plots,
-            )
+            elif forecast_product == "hindcast":
+                self.logger.info(
+                    f"Processing ECMWF {forecast_product} for cycle date {forecast_issue_date}..."
+                )
 
-            pressure = ECMWF_forecast["sp"].rename("ps")  # Extract surface pressure
-            self.set_ps_pascal(
-                pressure,
-                name=f"{base_name}/ps_pascal_{forecast_issue_date_str}",
-                create_plots=create_plots,
-            )
+                ECMWF_hindcast = ECMWF_forecasts_store.read_and_process_hindcasts(
+                    bounds=self.bounds,
+                    forecast_issue_date=forecast_issue_date,
+                    forecast_model=forecast_model,
+                    forecast_resolution=forecast_resolution,
+                    forecast_horizon=forecast_horizon,
+                    forecast_timestep_hours=forecast_timestep_hours,
+                    reproject_like=self.other["climate/pr_kg_per_m2_per_s_mask"],
+                )  # Reproject to grid of other climate data
 
-            u_wind = ECMWF_forecast["u10"].rename(
-                "u10"
-            )  # Extract u-component of wind at 10m
-            self.set_wind_10m_m_per_s(
-                u_wind,
-                direction="u",
-                name=f"{base_name}/wind_u10m_m_per_s_{forecast_issue_date_str}",
-                create_plots=create_plots,
-            )
+                for hindcast_date, hindcast_ds in ECMWF_hindcast.items():
+                    self.logger.info(
+                        f"Processing ECMWF hindcast date {hindcast_date}..."
+                    )
+                    base_name = _make_base_name(
+                        base_folder=base_folder,
+                        forecast_product=forecast_product,
+                        forecast_model=forecast_model,
+                        date_str=hindcast_date,
+                    )
 
-            v_wind = ECMWF_forecast["v10"].rename(
-                "v10"
-            )  # Extract v-component of wind at 10m
-            self.set_wind_10m_m_per_s(
-                v_wind,
-                direction="v",
-                name=f"{base_name}/wind_v10m_m_per_s_{forecast_issue_date_str}",
-                create_plots=create_plots,
-            )
+                    _save_ecmwf_forcing(
+                        forecast_ds=hindcast_ds,
+                        base_name=base_name,
+                        date_str=hindcast_date,
+                        create_plots=create_plots,
+                    )

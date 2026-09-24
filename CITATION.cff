@@ -1,25 +1,53 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
-title: "GEB v0.1: a large-scale agent-based socio-hydrological model -- simulating 10 million individual farming households in a fully distributed hydrological model"
+title: "GEB"
 authors:
   - family-names: "de Bruijn"
-    given-names: "J. A."
-  - family-names: "Smilovic"
-    given-names: "M."
-  - family-names: "Burek"
-    given-names: "P."
-  - family-names: "Guillaumot"
-    given-names: "L."
-  - family-names: "Wada"
-    given-names: "Y."
-  - family-names: "Aerts"
-    given-names: "J. C. J. H."
-version: 0.1
-journal-title: "Geoscientific Model Development"
-year: 2023
-month: 9
-volume: 16
-issue: 9
-page: "2437-2454"
-doi: "10.5194/gmd-16-2437-2023"
-url: "https://gmd.copernicus.org/articles/16/2437/2023/"
+    given-names: "Jens"
+  - family-names: "Kalthof"
+    given-names: "Maurice"
+  - family-names: "Bril"
+    given-names: "Veerle"
+  - family-names: "Tierolf"
+    given-names: "Lars"
+  - family-names: "Sadana"
+    given-names: "Tarun"
+  - family-names: "Stefaniak"
+    given-names: "Elisa"
+  - family-names: "Busker"
+    given-names: "Tim"
+  - family-names: "Oliveira"
+    given-names: "Rafaella"
+  - family-names: "Carral"
+    given-names: "Carolina"
+  - family-names: "Pontman"
+    given-names: "Roy"
+  - family-names: "van Amelsvoort"
+    given-names: "Lisanne"
+  - family-names: "Kiesel"
+    given-names: "Joshua"
+preferred-citation:
+  type: article
+  authors:
+    - family-names: "de Bruijn"
+      given-names: "J. A."
+    - family-names: "Smilovic"
+      given-names: "M."
+    - family-names: "Burek"
+      given-names: "P."
+    - family-names: "Guillaumot"
+      given-names: "L."
+    - family-names: "Wada"
+      given-names: "Y."
+    - family-names: "Aerts"
+      given-names: "J. C. J. H."
+  doi: "10.5194/gmd-16-2437-2023"
+  journal: "Geoscientific Model Development"
+  month: 9
+  start: 2437
+  end: 2454
+  title: "GEB a large-scale agent-based socio-hydrological model -- simulating 10 million individual farming households in a fully distributed hydrological model"
+  issue: 9
+  volume: 16
+  year: 2023
+  url: "https://gmd.copernicus.org/articles/16/2437/2023/"

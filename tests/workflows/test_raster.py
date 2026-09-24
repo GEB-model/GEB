@@ -10,6 +10,7 @@ from scipy.interpolate import RegularGridInterpolator
 from shapely.geometry import Polygon
 
 from geb.workflows.raster import (
+    bounds_are_within,
     clip_with_geometry,
     clip_with_grid,
     compress,
@@ -425,8 +426,8 @@ def test_interpolate_na_2d_chunked_with_buffer() -> None:
         [
             [1.0, 2.0, 3.0, 4.0],
             [5.0, 6.0, 7.0, 8.0],
-            [9.0, 10.0, np.nan, np.nan],
-            [13.0, 14.0, np.nan, np.nan],
+            [9.0, 7.0, np.nan, np.nan],
+            [13.0, 8.0, np.nan, np.nan],
         ],
         dtype=np.float32,
     )
@@ -722,6 +723,7 @@ def test_pad_xy(pad_bounds: tuple[int, int, int, int]) -> None:
 
     # Check bounds
     assert np.allclose(padded_da.rio.bounds(), expected_padded.rio.bounds())
+    assert bounds_are_within(pad_bounds, padded_da.rio.bounds())
 
     # Check x and y coordinates are allclose
     assert np.allclose(padded_da.x.values, expected_padded.x.values)
@@ -757,9 +759,14 @@ def test_pad_xy(pad_bounds: tuple[int, int, int, int]) -> None:
         (5, 0, 15, 50),  # Padding on the bottom
         (5, 40, 15, 55),  # Padding on the top
         (0, 0, 15, 50),  # Padding left and bottom
+        (4.9, 40, 15, 50),  # Padding slightly on the left (sub-pixel)
+        (5, 39.9, 15, 50),  # Padding slightly on the bottom (sub-pixel)
+        (5, 40, 15.1, 50),  # Padding slightly on the right (sub-pixel)
+        (5, 40, 15, 50.1),  # Padding slightly on the top (sub-pixel)
+        (4.5, 39.5, 15.5, 50.5),  # Half-pixel padding on all sides
     ],
 )
-def test_pad_xy_geographical(pad_bounds: tuple[int, int, int, int]) -> None:
+def test_pad_xy_geographical(pad_bounds: tuple[float, float, float, float]) -> None:
     """Test the pad_xy function with geographical coordinates (y descending).
 
     Args:

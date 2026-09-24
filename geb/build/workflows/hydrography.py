@@ -1,20 +1,21 @@
 """Workflows for the hydrography build files."""
 
+import geopandas as gpd
 import networkx
 import pandas as pd
 
 from geb.build.data_catalog import DataCatalog
 
 
-def calculate_shreve_stream_order(rivers: pd.DataFrame) -> pd.Series:
-    """Calculate the Shreve stream order for each river segment.
+def add_stream_orders(rivers: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """Calculate the Shreve and topological stream order for each river segment.
 
     Args:
-        rivers: A DataFrame containing river segments with at least downstream_ID.
-            the river id is expected to be the index of the DataFrame.
+        rivers: A GeoDataFrame containing river segments with at least downstream_ID.
+            the river id is expected to be the index of the GeoDataFrame.
 
     Returns:
-        A Series indexed by river id with the Shreve stream order as values.
+        A GeoDataFrame indexed by river id with the Shreve and topological stream orders as values.
 
     Notes:
         Shreve stream order is calculated by assigning an order of 1 to all sources.
@@ -28,18 +29,22 @@ def calculate_shreve_stream_order(rivers: pd.DataFrame) -> pd.Series:
     river_graph = networkx.DiGraph()
 
     # Filter out terminals (downstream_ID == -1) and add edges
+    assert rivers.index.dtype == "int64" and rivers.downstream_ID.dtype == "int64", (
+        "Expected rivers in DataFrame to have int64 dtype for index and downstream_ID"
+    )
     edges: list[tuple[int, int]] = [
         (idx, row["downstream_ID"])
         for idx, row in rivers.iterrows()
         if row["downstream_ID"] != -1
-    ]
+    ]  # ty:ignore[invalid-assignment]
     river_graph.add_edges_from(edges)
 
     # Add all river IDs as nodes to ensure isolated segments are included
     river_graph.add_nodes_from(rivers.index)
 
-    # Initialize shreve order series
+    # Initialize shreve and topological order series
     shreve_orders: pd.Series = pd.Series(0, index=rivers.index, dtype=int)
+    topological_orders: pd.Series = pd.Series(0, index=rivers.index, dtype=int)
 
     # Perform topological sort to process nodes from headwaters to outlets
     # topological_sort returns a flat list where u comes before v if (u, v) is an edge
@@ -53,11 +58,17 @@ def calculate_shreve_stream_order(rivers: pd.DataFrame) -> pd.Series:
         if not upstream_nodes:
             # Source node (headwater)
             shreve_orders[node] = 1
+            topological_orders[node] = 1
         else:
             # Sum the shreve orders of all upstream contributors
             shreve_orders[node] = shreve_orders[upstream_nodes].sum()
+            # Topological order is the max of upstream orders + 1
+            topological_orders[node] = topological_orders[upstream_nodes].max() + 1
 
-    return shreve_orders
+    rivers["shreve_stream_order"] = shreve_orders
+    rivers["topological_stream_order"] = topological_orders
+
+    return rivers
 
 
 def get_river_graph(data_catalog: DataCatalog) -> networkx.DiGraph:

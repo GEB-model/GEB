@@ -48,9 +48,7 @@ from geb.workflows.raster import (
     clip_with_grid,
     create_temp_zarr,
     full_like,
-    interpolate_na_along_dim as interpolate_na_along_dim,
     repeat_grid,
-    snap_to_grid as snap_to_grid,
 )
 
 from ..workflows.io import (
@@ -71,6 +69,7 @@ from .modules.hydrography import (
     extend_rivers_into_pits_and_set_pit_type,
 )
 from .workflows.hydrography import (
+    add_stream_orders,
     get_river_graph,
 )
 
@@ -88,9 +87,9 @@ INIT_MULTIPLE_EXCLUDED_OUTLET_ISO3_CODES: frozenset[str] = frozenset(
 )  # these are areas that are included in the squared BBOX but that should be excluded
 
 # Set environment options for robustness
-GDAL_HTTP_ENV_OPTS = {
-    "GDAL_HTTP_MAX_RETRY": "10",  # Number of retry attempts
-    "GDAL_HTTP_RETRY_DELAY": "2",  # Delay (seconds) between retries
+GDAL_HTTP_ENV_OPTS: dict[str, str | int] = {
+    "GDAL_HTTP_MAX_RETRY": "288",  # Number of retry attempts
+    "GDAL_HTTP_RETRY_DELAY": "300",  # Delay (seconds) between retries
     "GDAL_HTTP_TIMEOUT": "30",  # Timeout in seconds
     "GDAL_CACHEMAX": 1 * 1024**3,  # 1 GB cache size
     "GDAL_MAX_BAND_COUNT": "200000",  # Increase max band count
@@ -1234,9 +1233,9 @@ def create_cluster_visualization_map(
 
     print(f"Creating cluster visualization map: {output_path}")
     cluster_count: int = len(cluster_outlines)
-    colors = plt.cm.tab20(np.linspace(0, 1, min(cluster_count, 20)))  # type: ignore[attr-defined]  # ty:ignore[unresolved-attribute]
+    colors = plt.cm.tab20(np.linspace(0, 1, min(cluster_count, 20)))  # type: ignore[attr-defined]
     if cluster_count > 20:
-        colors = plt.cm.hsv(np.linspace(0, 1, cluster_count))  # type: ignore[attr-defined]  # ty:ignore[unresolved-attribute]
+        colors = plt.cm.hsv(np.linspace(0, 1, cluster_count))  # type: ignore[attr-defined]
 
     cluster_outlines_mercator: gpd.GeoDataFrame = cluster_outlines.to_crs(epsg=3857)
     fig, ax = plt.subplots(1, 1, figsize=figsize)
@@ -1696,7 +1695,7 @@ def create_riverine_mask(
         ldd.values,
         ftype="d8",
         mask=riverine_mask.values,
-        transform=ldd.rio.transform(recalc=True),
+        transform=np.array(ldd.rio.transform(recalc=True)),
         latlon=True,  # hydrography is specified in latlon
     )
 
@@ -2041,7 +2040,7 @@ class GEBModel(
         ldd_network = pyflwdir.from_array(
             ldd.values,
             ftype="d8",
-            transform=ldd.rio.transform(recalc=True),
+            transform=np.array(ldd.rio.transform(recalc=True)),
             latlon=True,
         )
 
@@ -2212,7 +2211,7 @@ class GEBModel(
         flow_raster: pyflwdir.FlwdirRaster = pyflwdir.from_array(
             ldd.values,
             ftype="d8",
-            transform=ldd.rio.transform(recalc=True),
+            transform=np.array(ldd.rio.transform(recalc=True)),
             latlon=True,
         )
 
@@ -2224,11 +2223,23 @@ class GEBModel(
                 "merit_basins_rivers",
             )
             .read(
-                columns=["COMID", "lengthkm", "uparea", "maxup", "geometry"],
+                columns=[
+                    "COMID",
+                    "lengthkm",
+                    "uparea",
+                    "maxup",
+                    "geometry",
+                    "NextDownID",
+                ],
                 bbox=ldd.rio.bounds(),
             )
             .set_index("COMID")
+        ).rename(
+            columns={
+                "NextDownID": "downstream_ID",
+            }
         )
+
         assert isinstance(rivers, gpd.GeoDataFrame), (
             "Expected rivers to be a GeoDataFrame."
         )
@@ -2239,6 +2250,7 @@ class GEBModel(
             ),
             axis=1,
         )
+        rivers = add_stream_orders(rivers)
 
         river_raster_outflow_type = create_river_raster_from_river_lines(
             rivers, ldd, column="outflow_type"
@@ -2368,7 +2380,7 @@ class GEBModel(
         flow_raster = pyflwdir.from_array(
             d8_original_data,
             ftype="d8",
-            transform=transform,
+            transform=np.array(transform),
             latlon=True,  # hydrography is specified in latlon
             mask=d8_original_data
             != d8_original.attrs["_FillValue"],  # this mask is True within study area
@@ -2487,6 +2499,24 @@ class GEBModel(
             ValueError: If the start date is not before the end date.
             ValueError: If the start date is before 1960, because of data availability.
         """
+        if not (
+            isinstance(start_date, date)
+            and not isinstance(start_date, datetime)
+            and not isinstance(start_date, str)
+        ):
+            raise ValueError(
+                "Start date must be a datetime.date or datetime.datetime object."
+            )
+
+        if not (
+            isinstance(end_date, date)
+            and not isinstance(end_date, datetime)
+            and not isinstance(end_date, str)
+        ):
+            raise ValueError(
+                "End date must be a datetime.date or datetime.datetime object."
+            )
+
         if not start_date < end_date:
             raise ValueError("Start date must be before end date.")
 
