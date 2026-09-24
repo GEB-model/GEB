@@ -269,14 +269,15 @@ def test_get_critical_soil_moisture_content() -> None:
     Verifies that critical soil moisture content is correctly
     calculated based on field capacity, wilting point, and p factor.
     """
-    p = np.array([0.3, 0.7, 1.0, 0.0])
-    wfc = np.array([0.35, 0.35, 0.35, 0.35])  # field capacity
-    wwp = np.array([0.15, 0.15, 0.15, 0.15])  # wilting point
-
-    critical_soil_moisture_content = get_critical_soil_moisture_content(
-        p=p, wfc_m=wfc, wwp_m=wwp
-    )
-    assert np.array_equal(critical_soil_moisture_content, [0.29, 0.21, 0.15, 0.35])
+    test_cases = [
+        (0.3, 0.35, 0.15, 0.29),
+        (0.7, 0.35, 0.15, 0.21),
+        (1.0, 0.35, 0.15, 0.15),
+        (0.0, 0.35, 0.15, 0.35),
+    ]
+    for p, wfc, wwp, expected in test_cases:
+        res = get_critical_soil_moisture_content(p=p, wfc_m=wfc, wwp_m=wwp)
+        assert np.isclose(res, expected)
 
 
 def test_calculate_transpiration() -> None:
@@ -575,18 +576,18 @@ def test_get_transpiration_factor_edge_cases() -> None:
 
 def test_get_critical_soil_moisture_content_bounds() -> None:
     """Test get_critical_soil_moisture_content with boundary p values."""
-    wfc = np.array([0.25, 0.25], dtype=np.float32)
-    wwp = np.array([0.1, 0.1], dtype=np.float32)
+    wfc = 0.25
+    wwp = 0.1
 
     # p = 1: critical = wwp
-    critical_p1 = get_critical_soil_moisture_content(np.array([1.0, 1.0]), wfc, wwp)
-    np.testing.assert_array_almost_equal(critical_p1, wwp)
+    critical_p1 = get_critical_soil_moisture_content(1.0, wfc, wwp)
+    assert np.isclose(critical_p1, wwp)
 
     # p = 0: critical = wfc
-    critical_p0 = get_critical_soil_moisture_content(np.array([0.0, 0.0]), wfc, wwp)
-    np.testing.assert_array_almost_equal(critical_p0, wfc)
+    critical_p0 = get_critical_soil_moisture_content(0.0, wfc, wwp)
+    assert np.isclose(critical_p0, wfc)
 
     # p = 0.5: critical = midpoint
     expected_mid = (wfc + wwp) / 2
-    critical_p0_5 = get_critical_soil_moisture_content(np.array([0.5, 0.5]), wfc, wwp)
-    np.testing.assert_array_almost_equal(critical_p0_5, expected_mid)
+    critical_p0_5 = get_critical_soil_moisture_content(0.5, wfc, wwp)
+    assert np.isclose(critical_p0_5, expected_mid)

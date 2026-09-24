@@ -1,4 +1,6 @@
 # dev
+- Removed the MCP server (`geb server`), documentation, and the `mcp` dependency.
+- Resolved all ty check errors.
 - Made the MSWEP_URL environment variable optional when all required MSWEP precipitation data is already available locally.
 - Implement two-layer snowpack.
 - Fixed unit inconsistency in kinematic wave routing evaporation limiter where volumetric flow rates and per-length rates were mixed.

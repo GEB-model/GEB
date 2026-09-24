@@ -1222,14 +1222,6 @@ def clean(
     )
 
 
-@cli.command()
-def server() -> None:
-    """Run the GEB MCP server."""
-    from geb.mcp_server import mcp
-
-    mcp.run()
-
-
 @cli.group()
 def tool() -> None:
     """Useful tools for GEB."""

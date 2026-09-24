@@ -664,7 +664,7 @@ def get_crop_factors_and_root_depths_and_lai(
 
 @njit(cache=True, inline="always")
 def get_CO2_induced_crop_factor_adustment(
-    CO2_concentration_ppm: float,
+    CO2_concentration_ppm: float | np.floating,
 ) -> float:
     """Calculate the CO2 induced crop factor adjustment.
 
@@ -679,6 +679,9 @@ def get_CO2_induced_crop_factor_adustment(
         The CO2 induced crop factor adjustment [dimensionless]
     """
     base_co2_concentration_ppm: float = 369.41
-    return 1.0 - 0.05 * (CO2_concentration_ppm - base_co2_concentration_ppm) / (
-        550 - base_co2_concentration_ppm
+    return float(
+        1.0
+        - 0.05
+        * (CO2_concentration_ppm - base_co2_concentration_ppm)
+        / (550.0 - base_co2_concentration_ppm)
     )

@@ -4,7 +4,7 @@ import math
 from collections.abc import Generator, Hashable, Mapping
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
-from typing import Any, Literal, cast, overload
+from typing import Any, Literal, Sequence, cast, overload
 
 import dask.array as dask_array
 import geopandas as gpd
@@ -104,7 +104,11 @@ def decompress_with_mask(
 
 
 @njit(cache=True)
-def pixel_to_coord(px: int, py: int, gt: tuple) -> tuple[float, float]:
+def pixel_to_coord(
+    px: int | np.integer,
+    py: int | np.integer,
+    gt: tuple[float, float, float, float, float, float],
+) -> tuple[float, float]:
     """Converts pixel (x, y) to coordinate (lon, lat) for given geotransformation.
 
     Uses the upper left corner of the pixel. To use the center, add 0.5 to input pixel.
@@ -123,7 +127,7 @@ def pixel_to_coord(px: int, py: int, gt: tuple) -> tuple[float, float]:
     if gt[2] + gt[4] == 0:
         lon = px * gt[1] + gt[0]
         lat = py * gt[5] + gt[3]
-        return lon, lat
+        return float(lon), float(lat)
     else:
         raise ValueError("Cannot convert rotated maps")
 
@@ -275,7 +279,9 @@ def write_to_array(
 
 @njit(cache=True)
 def coord_to_pixel(
-    coord: tuple[float, float], gt: tuple[float, float, float, float, float, float]
+    coord: tuple[float | np.floating | np.ndarray, float | np.floating | np.ndarray]
+    | Sequence[Any],
+    gt: tuple[float, float, float, float, float, float],
 ) -> tuple[int, int]:
     """Converts coordinate to pixel (x, y) for given geotransformation.
 

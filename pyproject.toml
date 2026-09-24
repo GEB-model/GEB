@@ -36,7 +36,6 @@ dependencies = [
     "folium>=0.19.6",
     "geopandas>=1.0.1",
     "hydromt-sfincs==2.0.0rc3",
-    "mcp",
     "networkx",
     "numba>=0.67.0",
     "numpy>=2.1",

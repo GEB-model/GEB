@@ -629,9 +629,9 @@ class Agents(BuildModelBase):
             """
             filtered_data = df.loc[df["Country Code"] == ISO3, inflation_rate_columns]
             if len(filtered_data) == 0:
-                return list(
-                    np.full(len(inflation_rate_columns), np.nan, dtype=np.float32)
-                )
+                return np.full(
+                    len(inflation_rate_columns), np.nan, dtype=np.float32
+                ).tolist()
             if convert_percent_to_ratio:
                 return (filtered_data.iloc[0] / 100 + 1).tolist()
             return filtered_data.iloc[0].tolist()

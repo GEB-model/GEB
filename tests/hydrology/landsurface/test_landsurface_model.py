@@ -110,6 +110,7 @@ def test_land_surface_model_error_cases(error_case_path: Path, asfloat64: bool) 
         post_liquid_water_in_snow_m,
         out_sublimation_m,
         post_snow_enthalpy_J_per_m2,
+        post_snow_density_kg_per_m3,
         post_interception_storage_m,
         out_interception_evaporation_m,
         out_open_water_evaporation_m,
@@ -130,6 +131,7 @@ def test_land_surface_model_error_cases(error_case_path: Path, asfloat64: bool) 
         out_top_soil_rise_from_layer_2_m,
         _,
         out_top_soil_transpiration_m,
+        out_evapotranspiration_m,
     ) = results
 
     assert np.all(out_top_soil_rise_from_layer_2_m >= 0.0)

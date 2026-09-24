@@ -93,7 +93,7 @@ def test_green_ampt_darcy_limit_zero_suction() -> None:
 
     cumulative = np.array(
         [
-            calculate_green_ampt_potential_cumulative_infiltration.py_func(
+            calculate_green_ampt_potential_cumulative_infiltration(
                 t,
                 saturated_hydraulic_conductivity_m_per_step,
                 suction_head_m,
@@ -110,7 +110,7 @@ def test_green_ampt_darcy_limit_zero_suction() -> None:
 
     # Inversion should also reduce to t = I / K.
     for infiltration_m in cumulative:
-        t_back = calculate_green_ampt_time_from_infiltration.py_func(
+        t_back = calculate_green_ampt_time_from_infiltration(
             infiltration_m,
             saturated_hydraulic_conductivity_m_per_step,
             suction_head_m,
@@ -132,7 +132,7 @@ def test_green_ampt_time_increases_monotonically_with_infiltration() -> None:
     infiltration_m = np.array([0.0, 1e-6, 1e-5, 5e-5, 1e-4], dtype=np.float32)
     times = np.array(
         [
-            calculate_green_ampt_time_from_infiltration.py_func(
+            calculate_green_ampt_time_from_infiltration(
                 i,
                 saturated_hydraulic_conductivity_m_per_step,
                 suction_head_m,
@@ -163,7 +163,7 @@ def test_green_ampt_salvucci_and_time_inverse_are_self_consistent() -> None:
 
     cumulative = np.array(
         [
-            calculate_green_ampt_potential_cumulative_infiltration.py_func(
+            calculate_green_ampt_potential_cumulative_infiltration(
                 t,
                 saturated_hydraulic_conductivity_m_per_step,
                 suction_head_m,
@@ -177,7 +177,7 @@ def test_green_ampt_salvucci_and_time_inverse_are_self_consistent() -> None:
 
     time_back = np.array(
         [
-            calculate_green_ampt_time_from_infiltration.py_func(
+            calculate_green_ampt_time_from_infiltration(
                 i,
                 saturated_hydraulic_conductivity_m_per_step,
                 suction_head_m,
@@ -208,7 +208,7 @@ def test_green_ampt_infiltration_rate_decelerates_over_time() -> None:
 
     cumulative = np.array(
         [
-            calculate_green_ampt_potential_cumulative_infiltration.py_func(
+            calculate_green_ampt_potential_cumulative_infiltration(
                 t,
                 saturated_hydraulic_conductivity_m_per_step,
                 suction_head_m,
@@ -238,7 +238,7 @@ def test_green_ampt_wetting_front_advance_decelerates_for_constant_dtheta() -> N
 
     cumulative = np.array(
         [
-            calculate_green_ampt_potential_cumulative_infiltration.py_func(
+            calculate_green_ampt_potential_cumulative_infiltration(
                 t,
                 saturated_hydraulic_conductivity_m_per_step,
                 suction_head_m,
@@ -284,14 +284,12 @@ def test_green_ampt_sadeghi_matches_standard_green_ampt_with_coarse_correction()
                         suction_head_m,
                         dtheta,
                     )
-                    i_approx = (
-                        calculate_green_ampt_potential_cumulative_infiltration.py_func(
-                            t,
-                            ks,
-                            suction_head_m,
-                            dtheta,
-                            True,
-                        )
+                    i_approx = calculate_green_ampt_potential_cumulative_infiltration(
+                        t,
+                        ks,
+                        suction_head_m,
+                        dtheta,
+                        True,
                     )
 
                     assert np.isfinite(i_true)
@@ -336,7 +334,7 @@ def test_green_ampt_verification_silty_clay_example() -> None:
 
     for t_hr, expected_f_cm in cases:
         # Calculate using our explicit Sadeghi implementation
-        f_calculated = calculate_green_ampt_potential_cumulative_infiltration.py_func(
+        f_calculated = calculate_green_ampt_potential_cumulative_infiltration(
             t_hr,
             ks_cm_hr,
             psi_cm,
@@ -353,7 +351,7 @@ def test_green_ampt_verification_silty_clay_example() -> None:
         )
 
         # Also verify time inversion
-        t_back = calculate_green_ampt_time_from_infiltration.py_func(
+        t_back = calculate_green_ampt_time_from_infiltration(
             f_calculated,
             ks_cm_hr,
             psi_cm,
@@ -386,13 +384,13 @@ def test_green_ampt_coarse_soil_long_time_correction() -> None:
     i_true = _solve_standard_green_ampt_cumulative_infiltration(t, ks, psi, dtheta)
 
     # Without adjustment
-    i_no_adj = calculate_green_ampt_potential_cumulative_infiltration.py_func(
+    i_no_adj = calculate_green_ampt_potential_cumulative_infiltration(
         t, ks, psi, dtheta, False
     )
     err_no = abs(i_no_adj - i_true) / i_true
 
     # With adjustment
-    i_adj = calculate_green_ampt_potential_cumulative_infiltration.py_func(
+    i_adj = calculate_green_ampt_potential_cumulative_infiltration(
         t, ks, psi, dtheta, True
     )
     err_adj = abs(i_adj - i_true) / i_true
