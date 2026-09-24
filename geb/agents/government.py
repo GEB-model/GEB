@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -217,7 +218,7 @@ class Government(AgentBaseClass):
             and not adaptation_enabled
         ):
             self.prepare_modified_soil_maps_for_forest()
-        self.adaptation()        
+        self.adaptation()
         if self.model.current_time == self.model.run_end and adaptation_enabled:
             self.plot_indicators()
             self.plot_adaptation_pathway()
@@ -1797,6 +1798,7 @@ class Government(AgentBaseClass):
                     current_fps,
                     altered_fps,
                 )
+
     @property
     def flood_protection_standard_subbasins(self) -> dict[int, int]:
         """Get the flood protection standard for each subbasin.

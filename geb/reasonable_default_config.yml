@@ -92,10 +92,15 @@ agent_settings:
       mode: "threshold"  # "cba" for cost-benefit analysis, "threshold" for threshold-based adaptation
       dike_elevation_cost_per_meter_usd: 6800  # "Unit cost for raising a dike by 1 meter over 1 meter length (USD/m).",
       dike_maintenance_cost_per_year_usd: 80  # "Maintenance cost for a dike segment of 1 meter length (USD/year).",
-      EAD_threshold: 1000000  # in euros (currrently arbitrary)
-      equity_indicator_threshold: 0.5  # between 0 and 1, where 1 means perfect equality (currrently arbitrary)
-      ecosystem_indicator_threshold: 0.5  # between 0 and 1, where 1 means healthy ecosystem (currrently arbitrary)
-      adaptation_fraction: 0.1  # default to 10% of households adapting
+    priority_weights:
+      risk_reduction: 0.33
+      equity: 0.33
+      ecosystem_health: 0.33
+    adaptation_costs:
+      initial_budget: 4560000
+      floodproofing_cost_per_household: 2000
+      reforestation_cost_per_m2: 10000
+      communication_cost_per_household: 1000 
   market:
     dynamic_market: false
     price_frequency: yearly
