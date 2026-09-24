@@ -44,15 +44,19 @@ def fit_gpd_lmoments(
         the shape parameter of the fitted GPD.
 
     Raises:
-        ValueError: If fewer than 6 exceedances provided or parameters invalid.
+        ValueError: If fewer than required exceedances provided (6 for unrestricted fit, 1 when shape or scale is fixed) or parameters invalid.
     """
     if fixed_shape is not None and fixed_scale is not None:
         raise ValueError("Cannot fix both shape and scale parameters simultaneously.")
 
     y = np.asarray(exceedances, dtype=float)
-    n = len(y)
-    if n < 6:
-        raise ValueError("Too few exceedances for reliable fit")
+    n: int = len(y)
+    # When shape or scale is fixed, only the 1st L-moment (mean) is estimated, requiring at least 1 exceedance.
+    min_required: int = 1 if (fixed_shape is not None or fixed_scale is not None) else 6
+    if n < min_required:
+        raise ValueError(
+            f"Too few exceedances for reliable fit (found {n}, requires at least {min_required})."
+        )
 
     l1: np.float64
     l2: np.float64
@@ -239,33 +243,76 @@ class ReturnPeriodModel:
         random_seed: int = 42,
         fixed_shape: float | None = None,
         fixed_scale: float | None = None,
+        fixed_quantile: float | None = None,
+        fixed_threshold: float | None = None,
         p_value_threshold: float = 0.10,
         selection_strategy: str = "first_significant",
         min_boot: int = 300,
         p_tol: float = 0.01,
     ) -> None:
-        """Initialize and fit the GPD-POT model.
+        """Initialize and fit the Generalized Pareto Distribution Peaks-Over-Threshold (GPD-POT) model.
+
+        Fits a GPD to declustered peak excesses above a threshold and calculates return levels
+        for the requested return periods using L-moments. The model supports two operational modes
+        for threshold selection:
+
+        Fixed threshold mode:
+            If `fixed_quantile` (e.g. 0.90 for the 90th percentile) or `fixed_threshold` (absolute
+            value) is provided, that threshold is used directly without scanning. Peaks above this
+            threshold are declustered (minimum 7-day separation), and the GPD parameters are fitted
+            analytically via L-moments. All threshold scanning parameters (`quantile_start`,
+            `quantile_end`, `quantile_step`) and bootstrap goodness-of-fit testing (`nboot`,
+            `p_value_threshold`, `selection_strategy`) are bypassed. The bootstrap p-value (`p_ad`)
+            is set to NaN.
+
+        Automated threshold search mode:
+            If neither `fixed_quantile` nor `fixed_threshold` is provided, candidate thresholds are
+            evaluated across a quantile grid from `quantile_end` down to `quantile_start` at intervals
+            of `quantile_step`. For each candidate with at least `min_exceed` peaks, GPD parameters are
+            fitted and a right-tail weighted Anderson-Darling statistic is evaluated using a parametric
+            bootstrap of size `nboot` to obtain a p-value. Under `selection_strategy='first_significant'`,
+            scanning stops at the first (highest) threshold where the p-value exceeds `p_value_threshold`,
+            falling back to the highest p-value if none qualify. Under `selection_strategy='best_fit'`,
+            all candidates are evaluated and the one with the maximum p-value is chosen. Setting `nboot=0`
+            bypasses bootstrap simulations in search mode.
+
+        Distribution constraints:
+            The GPD shape parameter can be fixed via `fixed_shape`. Setting `fixed_shape=0.0` forces an
+            exponential tail (equivalent to a Poisson-Gumbel extreme value model), reducing estimation
+            to only the scale parameter (mean excess). This provides robust return level estimates for
+            short records (e.g. 1-2 years of simulation) or moderate return periods. Alternatively,
+            `fixed_scale` fixes the scale parameter. Both constraints are mutually exclusive.
 
         Args:
-            series: Time series data with DatetimeIndex.
-            return_periods: Array of return periods in years for RL calculation.
-            quantile_start: Starting quantile for threshold scan.
-            quantile_end: Ending quantile for threshold scan.
-            quantile_step: Step size between quantiles.
-            min_exceed: Minimum number of exceedances required for fitting.
-            nboot: Number of bootstrap samples for AD p-value calculation.
-            random_seed: Random seed for reproducibility.
-            fixed_shape: Value to fix the shape parameter (xi). If 0, forces Exponential tail.
-            fixed_scale: Value to fix the scale parameter (sigma).
-            p_value_threshold: Anderson-Darling p-value threshold for early stopping.
-            selection_strategy: Strategy for selecting the best threshold.
-                'first_significant' or 'best_fit'.
-            min_boot: Minimum number of bootstrap samples for p-value stabilization check.
-            p_tol: Tolerance for p-value stabilization early stopping.
+            series: Time series data with regular DatetimeIndex (typically daily discharge in m3/s).
+            return_periods: Return periods in years for return level calculation.
+                Defaults to [2, 5, 10, 25, 50, 100, 200, 250, 500, 1000, 10000].
+            quantile_start: Lower bound quantile for threshold scan in automated mode (dimensionless, 0.0 to 1.0).
+            quantile_end: Upper bound quantile for threshold scan in automated mode (dimensionless, 0.0 to 1.0).
+            quantile_step: Step size between candidate quantiles in automated mode (dimensionless).
+            min_exceed: Minimum number of declustered peaks required above threshold (dimensionless).
+            nboot: Number of bootstrap iterations for Anderson-Darling p-value calculation in automated mode.
+                Set to 0 to bypass bootstrap testing. Ignored if a fixed threshold or quantile is used.
+            random_seed: Random seed for bootstrap reproducibility.
+            fixed_shape: Value to fix the shape parameter xi (dimensionless). Setting 0.0 forces an
+                Exponential tail. Mutually exclusive with fixed_scale.
+            fixed_scale: Value to fix the scale parameter sigma (series units, e.g. m3/s).
+                Mutually exclusive with fixed_shape.
+            fixed_quantile: Fixed quantile threshold (0.0 to 1.0) to use directly (dimensionless).
+                Mutually exclusive with fixed_threshold.
+            fixed_threshold: Fixed absolute threshold to use directly (series units, e.g. m3/s).
+                Mutually exclusive with fixed_quantile.
+            p_value_threshold: Anderson-Darling p-value threshold for early stopping in automated mode.
+            selection_strategy: Strategy for selecting the best threshold in automated mode,
+                either 'first_significant' or 'best_fit'.
+            min_boot: Minimum bootstrap samples before checking for p-value convergence.
+            p_tol: Tolerance for bootstrap p-value convergence early stopping.
 
         Raises:
-            TypeError: If series index is not DatetimeIndex.
-            ValueError: If no valid thresholds found for fitting.
+            TypeError: If series index is not a DatetimeIndex.
+            ValueError: If series is non-monotonic, irregular, has fewer non-NaN values than min_exceed,
+                both fixed_quantile and fixed_threshold are specified, fixed_quantile is outside [0, 1],
+                both fixed_shape and fixed_scale are specified, or no valid thresholds satisfy min_exceed.
         """
         if return_periods is None:
             return_periods = np.array(
@@ -284,6 +331,15 @@ class ReturnPeriodModel:
         if series.index.freq is None:
             raise ValueError(
                 "Series index must have a regular frequency (e.g. hourly, daily)."
+            )
+
+        if fixed_quantile is not None and fixed_threshold is not None:
+            raise ValueError(
+                "Cannot specify both fixed_quantile and fixed_threshold simultaneously."
+            )
+        if fixed_quantile is not None and not (0.0 <= fixed_quantile <= 1.0):
+            raise ValueError(
+                f"fixed_quantile must be between 0.0 and 1.0, got {fixed_quantile}."
             )
 
         self.nanmask = series.isnull()
@@ -306,81 +362,124 @@ class ReturnPeriodModel:
             (self.n_non_nan * self.series.index.freq.nanos) / pd.Timedelta(days=1).value  # ty:ignore[unresolved-attribute]
         ) / 365.2425
 
-        # Create candidate thresholds u based on quantiles
-        # Start from upper quantile, so that we start evaluation with the most extreme thresholds
-        q_grid = np.arange(quantile_end, quantile_start - 1e-9, -quantile_step)
-        u_candidates = np.quantile(self.series[~self.nanmask], q_grid)
+        # Handle fixed threshold vs candidate threshold search
+        if fixed_threshold is not None or fixed_quantile is not None:
+            if fixed_threshold is not None:
+                u: float = float(fixed_threshold)
+            else:
+                assert fixed_quantile is not None
+                u = float(np.quantile(self.series[~self.nanmask], fixed_quantile))
 
-        # Find all independent peaks above the lowest candidate threshold once
-        u_min = u_candidates.min()
-        _, properties_all = find_peaks(
-            self.series.values, height=u_min, distance=n_data_points_per_week
-        )
-        self.all_peaks = properties_all["peak_heights"]
-
-        best_candidate = None
-        candidates_list = []  # store valid fits if none exceed threshold
-
-        for u in u_candidates:
-            peaks_u = self.all_peaks[self.all_peaks > u]
-            n_exc = peaks_u.size
+            # Find independent peaks above the fixed threshold
+            _, properties_fixed = find_peaks(
+                self.series.values, height=u, distance=n_data_points_per_week
+            )
+            self.all_peaks = properties_fixed["peak_heights"]
+            n_exc: int = self.all_peaks.size
 
             if n_exc < min_exceed:
-                # if this is the last candidate (lowest threshold) and we have
-                # still not found a candidate with the minimum exceedances, we raise
-                # an error specifically for that
-                if u == u_candidates[-1]:
-                    raise ValueError(
-                        f"No valid thresholds found with at least {min_exceed} exceedances. "
-                        f"Lowest candidate threshold {u:.2f} has only {n_exc} exceedances."
-                    )
-                continue
+                raise ValueError(
+                    f"Fixed threshold {u:.2f} has only {n_exc} exceedances, "
+                    f"fewer than min_exceed={min_exceed}."
+                )
 
-            # Calculate excesses y.
-            y = peaks_u - u
-
+            y: np.ndarray = self.all_peaks - u
             sigma, xi = fit_gpd_lmoments(
                 y, fixed_shape=fixed_shape, fixed_scale=fixed_scale
             )
-
             u_vals = gpd_cdf(y, sigma, xi)
-            A_R2 = right_tail_ad_from_uniforms(u_vals)
-            p_ad = bootstrap_pvalue_for_ad(
-                A_R2,
-                n_exc,
-                sigma,
-                xi,
-                nboot,
-                random_seed,
-                fixed_shape=fixed_shape,
-                fixed_scale=fixed_scale,
-                min_boot=min_boot,
-                p_tol=p_tol,
-            )
+            A_R2: float = right_tail_ad_from_uniforms(u_vals)
 
-            current_candidate = {
+            best_candidate: dict[str, Any] = {
                 "u": u,
                 "sigma": sigma,
                 "xi": xi,
                 "n_exc": n_exc,
-                "p_ad": p_ad,
+                "p_ad": float(np.nan),
                 "A_R2": A_R2,
             }
-            candidates_list.append(current_candidate)
+            self.candidates_df = pd.DataFrame([best_candidate])
+        else:
+            # Candidate threshold search
+            # Start from upper quantile, so that we start evaluation with the most extreme thresholds
+            q_grid: np.ndarray = np.arange(
+                quantile_end, quantile_start - 1e-9, -quantile_step
+            )
+            u_candidates: np.ndarray = np.quantile(self.series[~self.nanmask], q_grid)
 
-            # Early stopping: if we seek the first significant threshold, we can stop here.
-            # Note: This will truncate the diagnostic plots (threshold stability).
-            if selection_strategy == "first_significant" and p_ad > p_value_threshold:
-                best_candidate = current_candidate
-                break
+            # Find all independent peaks above the lowest candidate threshold once
+            u_min: float = float(u_candidates.min())
+            _, properties_all = find_peaks(
+                self.series.values, height=u_min, distance=n_data_points_per_week
+            )
+            self.all_peaks = properties_all["peak_heights"]
 
-        self.candidates_df = pd.DataFrame(candidates_list)
+            best_candidate_search: dict[str, Any] | None = None
+            candidates_list: list[dict[str, Any]] = []
 
-        if best_candidate is None:
-            if not candidates_list:
-                raise ValueError("No valid thresholds found for GPD-POT fitting.")
-            # If no significant one found, or strategy is best_fit, pick the best p-value
-            best_candidate = max(candidates_list, key=lambda x: x["p_ad"])
+            for u_cand in u_candidates:
+                peaks_u = self.all_peaks[self.all_peaks > u_cand]
+                n_exc_cand: int = peaks_u.size
+
+                if n_exc_cand < min_exceed:
+                    if u_cand == u_candidates[-1]:
+                        raise ValueError(
+                            f"No valid thresholds found with at least {min_exceed} exceedances. "
+                            f"Lowest candidate threshold {u_cand:.2f} has only {n_exc_cand} exceedances."
+                        )
+                    continue
+
+                y_cand: np.ndarray = peaks_u - u_cand
+                sigma_cand, xi_cand = fit_gpd_lmoments(
+                    y_cand, fixed_shape=fixed_shape, fixed_scale=fixed_scale
+                )
+                u_vals_cand = gpd_cdf(y_cand, sigma_cand, xi_cand)
+                A_R2_cand = right_tail_ad_from_uniforms(u_vals_cand)
+
+                if nboot == 0:
+                    p_ad_cand: float = float(np.nan)
+                else:
+                    p_ad_cand = bootstrap_pvalue_for_ad(
+                        A_R2_cand,
+                        n_exc_cand,
+                        sigma_cand,
+                        xi_cand,
+                        nboot,
+                        random_seed,
+                        fixed_shape=fixed_shape,
+                        fixed_scale=fixed_scale,
+                        min_boot=min_boot,
+                        p_tol=p_tol,
+                    )
+
+                current_candidate: dict[str, Any] = {
+                    "u": u_cand,
+                    "sigma": sigma_cand,
+                    "xi": xi_cand,
+                    "n_exc": n_exc_cand,
+                    "p_ad": p_ad_cand,
+                    "A_R2": A_R2_cand,
+                }
+                candidates_list.append(current_candidate)
+
+                if (
+                    selection_strategy == "first_significant"
+                    and p_ad_cand > p_value_threshold
+                ):
+                    best_candidate_search = current_candidate
+                    break
+
+            self.candidates_df = pd.DataFrame(candidates_list)
+
+            if best_candidate_search is None:
+                if not candidates_list:
+                    raise ValueError("No valid thresholds found for GPD-POT fitting.")
+                best_candidate_search = max(
+                    candidates_list,
+                    key=lambda x: x["p_ad"] if np.isfinite(x["p_ad"]) else 0.0,
+                )
+
+            best_candidate = best_candidate_search
 
         self.u = best_candidate["u"]
         self.sigma = best_candidate["sigma"]
@@ -698,7 +797,12 @@ class ReturnPeriodModel:
         )
         ax.set_xlabel("Threshold (u)")
         ax.set_ylabel("AD p-value")
-        ax.set_title(f"Anderson-Darling p-value (chosen p={self.p_ad:.3f})")
+        p_val_label: str = (
+            f"chosen p={self.p_ad:.3f}"
+            if np.isfinite(self.p_ad)
+            else "bootstrap skipped"
+        )
+        ax.set_title(f"Anderson-Darling p-value ({p_val_label})")
         ax.grid(True, alpha=0.3)
         ax.legend(fontsize=8)
 

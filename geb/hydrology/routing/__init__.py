@@ -1509,15 +1509,13 @@ class Routing(Module):
             total=len(active_rivers),
             desc="Return period estimation",
         ):
-            model = ReturnPeriodModel(
+            model: ReturnPeriodModel = ReturnPeriodModel(
                 series=discharge_by_river_daily[idx],
                 return_periods=list(set([2, activation_threshold_return_period_years])),
+                fixed_quantile=0.9,  # use a fixed quantile
                 min_exceed=2,
-                nboot=2000,
                 fixed_shape=0.0,
                 fixed_scale=None,
-                p_value_threshold=0.05,
-                selection_strategy="first_significant",
             )
 
             for return_period, return_water_level in model.rl_table.set_index(
