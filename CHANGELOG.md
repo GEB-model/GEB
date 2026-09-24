@@ -7,6 +7,8 @@
 - Add retry logic for chunk downloads and limit concurrent connections in Destination Earth ERA5 adapter to prevent connection errors.
 - Export multi-entity special reporters (such as retention basins, meteorological stations, and outflow points) as single consolidated Parquet files.
 - Disable station time-series and return-period figure exports by default in discharge evaluation; enable them with `--export-timeseries-plots true` and `--export-return-period-plots true`.
+- Enrich the dam representation with the Global Dam Watch (GDW) dataset alongside HydroLAKES, including construction years, dam purposes, missing reservoir outlines, and classification checks. For example, controlled lakes in HydroLAKES (type 3) classified as dams by GDW are represented as reservoirs. Rerun `setup_waterbodies` to use GDW.
+- Implement dynamic dam construction. Reservoirs are now only routed as reservoirs from their construction year onwards; route water as a river before then. Lakes and reservoirs with unknown years stay active. Reservoir activation preserves river storage and rebuilds the local inertial routing connections. Rerun spinup to apply this.
 - Major re-organization of the hydrological evaluation code. This considerably shortened `evaluate/hydrology.py`, and all of its former contents are now distributed in various workflow scripts. 
 - Changed discharge skill score calculation, from package-calculated skill scores to the raw skill score formulas.
 - Add `--export-timeseries-plots false` to discharge evaluation to skip static station time-series images while keeping the dashboard and skill-score plots.

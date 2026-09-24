@@ -801,13 +801,16 @@ class LocalInertial:
         self.waterbody_ids: ArrayInt32 = waterbody_ids
 
         assert is_waterbody_outflow.shape == self.idxs_up_to_downstream.shape
-        assert (
-            np.bincount(
-                self.waterbody_ids[self.waterbody_ids != -1],
-                weights=is_waterbody_outflow[self.waterbody_ids != -1],
-            )
-            == 1
-        ).all()
+        # Future reservoirs leave gaps in the active waterbody IDs.
+        waterbody_cells: ArrayBool = self.waterbody_ids != -1
+        active_waterbody_ids: ArrayInt32 = self.waterbody_ids[waterbody_cells]
+        outlet_counts: np.ndarray = np.bincount(
+            active_waterbody_ids, weights=is_waterbody_outflow[waterbody_cells]
+        )
+        assert (outlet_counts[np.unique(active_waterbody_ids)] == 1).all()
+        assert (active_waterbody_ids < waterbody_lake_area.size).all(), (
+            "Active waterbody IDs must index the full waterbody parameter arrays."
+        )
 
         self.river_length = river_length
         self.river_width = river_width
@@ -1017,7 +1020,8 @@ class LocalInertial:
             0
         ].astype(np.int32)
 
-        n_wb: int = int(is_waterbody_outflow.sum())
+        # Include future reservoirs to preserve stable IDs in solver buffers.
+        n_wb: int = waterbody_lake_area.size
         self.n_wb: int = n_wb
         n_ret: int = retention_max_storage_m3.size
         assert controlled_retention.size == n_ret, (
@@ -1107,9 +1111,6 @@ class LocalInertial:
         )
         self._wb_outflow_avail_buf: ArrayFloat64 = np.empty(n_wb, dtype=np.float64)
 
-        assert waterbody_lake_area.size == n_wb, (
-            f"waterbody_lake_area size ({waterbody_lake_area.size}) must match number of waterbodies ({n_wb})."
-        )
         assert waterbody_lake_factor.size == n_wb, (
             f"waterbody_lake_factor size ({waterbody_lake_factor.size}) must match number of waterbodies ({n_wb})."
         )

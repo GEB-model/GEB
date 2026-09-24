@@ -287,15 +287,23 @@ def test_flatten_waterbody_elevations() -> None:
 
 def test_off_waterbodies_filtered_out_at_spinup() -> None:
     """Test that waterbodies with waterbody_type == 0 (OFF) are excluded during spinup."""
+    from datetime import datetime
     from unittest.mock import MagicMock
 
     import geopandas as gpd
     import pandas as pd
 
-    from geb.hydrology.waterbodies import LAKE, OFF, RESERVOIR, WaterBodies
+    from geb.hydrology.waterbodies import (
+        LAKE,
+        OFF,
+        RESERVOIR,
+        WaterBodies,
+        WaterBodyVariables,
+    )
 
     mock_model = MagicMock()
     mock_model.in_spinup = False
+    mock_model.current_time = datetime(2000, 1, 1)
     mock_model.config = {
         "general": {"hydrological_year_start_month": 10},
         "parameters": {"lake_outflow_multiplier": np.float32(1.0)},
@@ -327,6 +335,7 @@ def test_off_waterbodies_filtered_out_at_spinup() -> None:
 
     wb = WaterBodies(model=mock_model, hydrology=mock_hydrology)
     wb.grid = mock_grid
+    wb.var = WaterBodyVariables()
     wb.model.files = {
         "grid": {
             "waterbodies/waterbody_id": "dummy_grid_path",

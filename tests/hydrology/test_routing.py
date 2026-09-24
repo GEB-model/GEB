@@ -122,7 +122,11 @@ def _make_local_inertial(
     if river_storage_beta is None:
         river_storage_beta = np.full(n_cells, 0.6, dtype=np.float32)
 
-    n_wb: int = int(is_waterbody_outflow.sum())
+    n_wb: int = (
+        waterbody_lake_area.size
+        if waterbody_lake_area is not None
+        else int(is_waterbody_outflow.sum())
+    )
     if waterbody_lake_area is None:
         waterbody_lake_area = np.ones(n_wb, dtype=np.float32) * np.float32(1e6)
     if waterbody_lake_factor is None:
@@ -3515,7 +3519,7 @@ def test_local_inertial_waterbody_parameters_required(
         router_cls(**incomplete_kwargs)
 
     # 2. Mismatched array length against n_wb should raise AssertionError
-    with pytest.raises(AssertionError, match="waterbody_lake_area size"):
+    with pytest.raises(AssertionError, match="waterbody_lake_factor size"):
         LocalInertial(
             dt=3600,
             river_network=flw,
@@ -3535,7 +3539,7 @@ def test_local_inertial_waterbody_parameters_required(
             shape_exponent=shape_exp,
             bankfull_depth_m=bk_depth,
             floodplain_width_m=fp_width,
-            waterbody_lake_area=np.ones(2, dtype=np.float32),  # n_wb is 0
+            waterbody_lake_area=np.ones(2, dtype=np.float32),  # Two future reservoirs.
             waterbody_lake_factor=np.zeros(0, dtype=np.float32),
             waterbody_outflow_height=np.zeros(0, dtype=np.float32),
             waterbody_outflow_bed_elev=np.zeros(0, dtype=np.float32),

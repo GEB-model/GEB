@@ -515,7 +515,7 @@ class Routing(Module):
         )
         return rivers, river_ids, river_ids_no_waterbodies_removed
 
-    def set_router(self) -> None:
+    def set_router(self, initialize_storage: bool = True) -> None:
         """Initialize the local inertial routing algorithm with derived river geometry.
 
         Derives cross-sectional channel geometry (bankfull width, depth via hydrodynamic Manning
@@ -529,6 +529,10 @@ class Routing(Module):
             that waterbody footprints are flattened and state variables (either synthesized during
             spinup or restored from checkpoint storage) are available before deriving
             setting up the local inertial routing solver.
+
+        Args:
+            initialize_storage: Initialize river storage during spinup. Set False
+                when rebuilding connections after reservoir construction.
         """
         is_waterbody_outflow: ArrayBool = self.grid.var.waterbody_outflow_points != -1
         retention_basin_release_threshold_factor: float = self.config[
@@ -633,7 +637,7 @@ class Routing(Module):
             in_spinup=self.model.in_spinup,
         )
 
-        if self.model.in_spinup:
+        if self.model.in_spinup and initialize_storage:
             # Power-law bankfull storage V_bf = length * (W_bf * h_bf / (r + 1)) (m³)
             bankfull_volume: ArrayFloat64 = self.grid.var.river_length.astype(
                 np.float64
@@ -675,7 +679,7 @@ class Routing(Module):
             water_stage_m=self.var.water_stage_m,
             river_storage_m3=self.var.river_storage_m3,
             waterbody_storage_m3=self.hydrology.waterbodies.var.storage,
-            in_spinup=self.model.in_spinup,
+            in_spinup=self.model.in_spinup and initialize_storage,
         )
 
     def spinup(self) -> None:
@@ -976,6 +980,7 @@ class Routing(Module):
         return_flow_m3_to_waterbodies_per_hour: np.ndarray = np.bincount(
             self.grid.var.waterbody_ids[self.grid.var.waterbody_ids != -1],
             weights=return_flow_m3_per_hour[self.grid.var.waterbody_ids != -1],
+            minlength=self.hydrology.waterbodies.n,
         )
         return_flow_m3_per_hour[self.grid.var.waterbody_ids != -1] = 0.0
 
@@ -1082,6 +1087,7 @@ class Routing(Module):
             self.hydrology.waterbodies.var.storage += np.bincount(
                 self.grid.var.waterbody_ids[self.grid.var.waterbody_ids != -1],
                 weights=total_runoff_m3[self.grid.var.waterbody_ids != -1],
+                minlength=self.hydrology.waterbodies.n,
             )
 
             # after adding the runoff to the water bodies, we set the runoff to zero
@@ -1092,15 +1098,24 @@ class Routing(Module):
                 return_flow_m3_to_waterbodies_per_hour
             )
 
+            evaporation_sum_m: np.ndarray = np.bincount(
+                self.grid.var.waterbody_ids[self.grid.var.waterbody_ids != -1],
+                weights=reference_evapotranspiration_water_m[
+                    hour, self.grid.var.waterbody_ids != -1
+                ],
+                minlength=self.hydrology.waterbodies.n,
+            )
+            waterbody_cell_count: ArrayInt64 = np.bincount(
+                self.grid.var.waterbody_ids[self.grid.var.waterbody_ids != -1],
+                minlength=self.hydrology.waterbodies.n,
+            )
+            # Future reservoirs have no cells or evaporation.
             potential_evaporation_per_waterbody_m3 = (
-                np.bincount(
-                    self.grid.var.waterbody_ids[self.grid.var.waterbody_ids != -1],
-                    weights=reference_evapotranspiration_water_m[
-                        hour, self.grid.var.waterbody_ids != -1
-                    ],
-                )
-                / np.bincount(
-                    self.grid.var.waterbody_ids[self.grid.var.waterbody_ids != -1]
+                np.divide(
+                    evaporation_sum_m,
+                    waterbody_cell_count,
+                    out=np.zeros(self.hydrology.waterbodies.n, dtype=np.float64),
+                    where=waterbody_cell_count > 0,
                 )
                 * self.hydrology.waterbodies.var.lake_area
             )
@@ -1250,9 +1265,19 @@ class Routing(Module):
 
             assert (actual_evaporation_in_rivers_m3_per_hour >= 0.0).all()
 
-            # the reservoir operators need to track the inflow to the reservoirs
+            # Dam operators need past river flows when the reservoir opens.
+            operator_inflow_m3: ArrayFloat32 = waterbody_inflow_m3.copy()
+            future_reservoirs: ArrayBool = ~self.hydrology.waterbodies.is_active
+            operator_inflow_m3[future_reservoirs] = (
+                self.var.discharge_in_rivers_m3_s_substep[
+                    self.hydrology.waterbodies.var.waterbody_outflow_linear_mapping[
+                        future_reservoirs
+                    ]
+                ]
+                * 3600
+            )
             self.model.agents.reservoir_operators.track_inflow(
-                waterbody_inflow_m3[self.model.hydrology.waterbodies.is_reservoir]
+                operator_inflow_m3[self.model.hydrology.waterbodies.is_reservoir]
             )
 
             # ensure that discharge is nan for water bodies
