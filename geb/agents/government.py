@@ -590,10 +590,10 @@ class Government(AgentBaseClass):
         )
 
         # do a mental simulationin an alternate universeof the improvement (based on indicators) the implementation of all measures would generate. This will help the government to decide which
-        adaptation_measure_to_implement = "reforestation"
-        # adaptation_measure_to_implement = self.select_adaptation_measure_to_implement(
-        #     budget, current_weighted_IPV
-        # )
+        # adaptation_measure_to_implement = "floodproofing"
+        adaptation_measure_to_implement = self.select_adaptation_measure_to_implement(
+            budget, current_weighted_IPV
+        )
 
         # implement the adaptation measure that is selected
         self.apply_adaptation(budget, adaptation_measure_to_implement)
@@ -1603,7 +1603,7 @@ class Government(AgentBaseClass):
         ax.set_title("Adaptation pathway", fontsize=13)
         ax.set_xlabel("Year", fontsize=11)
         ax.set_ylabel(
-            "Integrated Performance Value ( 0 = no adaptation 1 = full adaptation )",
+            "Integrated Performance Value",
             fontsize=11,
         )
 
