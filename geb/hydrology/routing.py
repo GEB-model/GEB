@@ -324,14 +324,13 @@ class Router:
         self.waterbody_id = waterbody_id
 
         assert is_waterbody_outflow.shape == self.idxs_up_to_downstream.shape
-        # ensurre each waterbody has one outflow (no more, no less)
-        assert (
-            np.bincount(
-                self.waterbody_id[self.waterbody_id != -1],
-                weights=is_waterbody_outflow[self.waterbody_id != -1],
-            )
-            == 1
-        ).all()
+        # Each active lake or reservoir must have one outlet.
+        waterbody_cells: ArrayBool = self.waterbody_id != -1
+        active_waterbody_ids: ArrayInt32 = self.waterbody_id[waterbody_cells]
+        outlet_counts: np.ndarray = np.bincount(
+            active_waterbody_ids, weights=is_waterbody_outflow[waterbody_cells]
+        )
+        assert (outlet_counts[np.unique(active_waterbody_ids)] == 1).all()
         self.is_waterbody_outflow = is_waterbody_outflow
 
     def get_total_storage(
@@ -2117,6 +2116,7 @@ class Routing(Module):
         return_flow_m3_to_waterbodies_per_hour: np.ndarray = np.bincount(
             self.grid.var.waterbody_ids[self.grid.var.waterbody_ids != -1],
             weights=return_flow_m3_per_hour[self.grid.var.waterbody_ids != -1],
+            minlength=self.hydrology.waterbodies.n,
         )
         return_flow_m3_per_hour[self.grid.var.waterbody_ids != -1] = 0.0
 
@@ -2179,6 +2179,7 @@ class Routing(Module):
             self.hydrology.waterbodies.var.storage += np.bincount(
                 self.grid.var.waterbody_ids[self.grid.var.waterbody_ids != -1],
                 weights=total_runoff_m3[self.grid.var.waterbody_ids != -1],
+                minlength=self.hydrology.waterbodies.n,
             )
 
             # after adding the runoff to the water bodies, we set the runoff to zero
@@ -2190,15 +2191,24 @@ class Routing(Module):
             )
 
             # TODO: This calculation can be optimized by pre-calculating some parts
+            evaporation_sum_m: np.ndarray = np.bincount(
+                self.grid.var.waterbody_ids[self.grid.var.waterbody_ids != -1],
+                weights=reference_evapotranspiration_water_m[
+                    hour, self.grid.var.waterbody_ids != -1
+                ],
+                minlength=self.hydrology.waterbodies.n,
+            )
+            waterbody_cell_count: ArrayInt64 = np.bincount(
+                self.grid.var.waterbody_ids[self.grid.var.waterbody_ids != -1],
+                minlength=self.hydrology.waterbodies.n,
+            )
+            # Future reservoirs have no cells or evaporation.
             potential_evaporation_per_waterbody_m3 = (
-                np.bincount(
-                    self.grid.var.waterbody_ids[self.grid.var.waterbody_ids != -1],
-                    weights=reference_evapotranspiration_water_m[
-                        hour, self.grid.var.waterbody_ids != -1
-                    ],
-                )
-                / np.bincount(
-                    self.grid.var.waterbody_ids[self.grid.var.waterbody_ids != -1]
+                np.divide(
+                    evaporation_sum_m,
+                    waterbody_cell_count,
+                    out=np.zeros(self.hydrology.waterbodies.n, dtype=np.float64),
+                    where=waterbody_cell_count > 0,
                 )
                 * self.hydrology.waterbodies.var.lake_area
             )
@@ -2341,9 +2351,19 @@ class Routing(Module):
 
             assert (actual_evaporation_in_rivers_m3_per_hour >= 0.0).all()
 
-            # the reservoir operators need to track the inflow to the reservoirs
+            # Dam operators need past river flows when the reservoir opens.
+            operator_inflow_m3: ArrayFloat32 = waterbody_inflow_m3.copy()
+            future_reservoirs: ArrayBool = ~self.hydrology.waterbodies.is_active
+            operator_inflow_m3[future_reservoirs] = (
+                self.grid.var.discharge_in_rivers_m3_s_substep[
+                    self.hydrology.waterbodies.var.waterbody_outflow_linear_mapping[
+                        future_reservoirs
+                    ]
+                ]
+                * 3600
+            )
             self.model.agents.reservoir_operators.track_inflow(
-                waterbody_inflow_m3[self.model.hydrology.waterbodies.is_reservoir]
+                operator_inflow_m3[self.model.hydrology.waterbodies.is_reservoir]
             )
 
             # ensure that discharge is nan for water bodies

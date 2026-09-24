@@ -25,6 +25,7 @@ from .flopros import FLOPROS as FLOPROS
 from .fluxnet import Fluxnet
 from .forest_restoration import ForestRestorationPotential
 from .gadm import GADM, GADM28
+from .gdw import GlobalDamWatch
 from .gebco import GEBCO
 from .global_data_lab import GlobalDataLabShapefile
 from .global_exposure_model import GlobalExposureModel
@@ -815,6 +816,30 @@ data_catalog: dict[str, dict[str, Any]] = {
             "name": "ESA WorldCover",
             "author": "European Space Agency (ESA)",
             "version": "v200",
+            "license": "CC BY 4.0",
+        },
+    },
+    "gdw_barriers": {
+        "adapter": GlobalDamWatch(
+            folder="gdw", local_version=1, filename="barriers.parquet", cache="global"
+        ),
+        "url": "https://ndownloader.figshare.com/files/47913742",
+        "source": {
+            "name": "Global Dam Watch",
+            "author": "Lehner et al.",
+            "version": "1.0",
+            "license": "CC BY 4.0",
+        },
+    },
+    "gdw_reservoirs": {
+        "adapter": GlobalDamWatch(
+            folder="gdw", local_version=1, filename="reservoirs.parquet", cache="global"
+        ),
+        "url": "https://ndownloader.figshare.com/files/47913742",
+        "source": {
+            "name": "Global Dam Watch",
+            "author": "Lehner et al.",
+            "version": "1.0",
             "license": "CC BY 4.0",
         },
     },

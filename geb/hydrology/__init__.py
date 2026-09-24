@@ -138,8 +138,6 @@ class Hydrology(Data, Module):
         if not self.model.simulate_hydrology:
             return
 
-        self.dynamic_waterbodies = False
-
         self.landsurface = LandSurface(self.model, self)
         self.groundwater = GroundWater(self.model, self)
         self.routing = Routing(self.model, self)

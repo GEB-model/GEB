@@ -181,6 +181,9 @@ class GEBModel(Module):
         self.n_timesteps = n_timesteps
         self.config = config
 
+        # Rebuild the router using the restored waterbody IDs and outlets.
+        self.hydrology.routing.set_router()
+
         self.reporter = reporter
 
     @overload

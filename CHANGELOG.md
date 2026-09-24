@@ -1,4 +1,6 @@
 # dev
+- Enrich the dam representation in GEB by itnegration of the Global Dam Watch (GDW) dataset, next to the already existing Hydrolakes data. We use the GDW dam data, such as construction year and dam purpose/function. We now also check for differences in GDW and HydroLAKES classifications. For example, if a lake is classifiek as controlled lake in Hydrolakes (type-3), but GDW says its a dam, we represent it as a dam in GEB. Rerun `setup_waterbodies` to use GDW.
+- Implement dynamic dam construction. Reservoirs are now only routed as reservoirs from their construction year onwards; route water as a river before then. Lakes and reservoirs with unknown years stay active. Rerun spinup to apply this.
 - Major re-organization of the hydrological evaluation code. This considerably shortened `evaluate/hydrology.py`, and all of its former contents are now distributed in various workflow scripts. 
 - Changed discharge skill score calculation, from package-calculated skill scores to the raw skill score formulas.
 - Add `--include-timeseries-plots false` to discharge evaluation to skip static station time-series images while keeping the dashboard and skill-score plots.
