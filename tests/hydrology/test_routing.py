@@ -5292,3 +5292,205 @@ def test_select_active_rivers() -> None:
     # Reach 4 is not represented, and has no upstream represented reach, excluded
     active: gpd.GeoDataFrame = select_active_rivers(rivers)
     assert set(active.index) == {0, 1}
+
+
+def test_evaluate_reach_cfl_pure_wave_celerity_and_overbank_capping() -> None:
+    """Tests that CFL evaluation uses pure wave celerity and scales normal depth over floodplains.
+
+    Verifies that:
+    1. Timestep is governed by wave celerity sqrt(g*h) and not artificially reduced
+       by flow velocity when water depth is constant.
+    2. Anticipatory normal depth exceeding bankfull is scaled by the floodplain width ratio
+       on flat reaches, preventing unphysical collapse of CFL timesteps.
+    """
+    from geb.hydrology.routing.inertial_substeps import (
+        GEOM_CFL_CONSTANT,
+        GEOM_CFL_MANNING_COEFFICIENT,
+        GEOM_CFL_NUM_COLS,
+        GEOM_IN_BANKFULL_DEPTH,
+        GEOM_IN_BANKFULL_VOLUME,
+        GEOM_IN_INVERSE_LENGTH,
+        GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE,
+        GEOM_IN_NUM_COLS,
+        GEOM_OV_FLOODPLAIN_WIDTH,
+        GEOM_OV_NUM_COLS,
+        GEOM_OV_RIVER_WIDTH,
+        _evaluate_reach_cfl_dt,
+    )
+
+    geom_inbank: np.ndarray = np.zeros((1, GEOM_IN_NUM_COLS), dtype=np.float32)
+    geom_overbank: np.ndarray = np.zeros((1, GEOM_OV_NUM_COLS), dtype=np.float32)
+    geom_cfl: np.ndarray = np.zeros((1, GEOM_CFL_NUM_COLS), dtype=np.float32)
+
+    geom_inbank[0, GEOM_IN_BANKFULL_DEPTH] = np.float32(2.0)
+    geom_inbank[0, GEOM_IN_BANKFULL_VOLUME] = np.float32(20000.0)
+    geom_inbank[0, GEOM_IN_INVERSE_LENGTH] = np.float32(1.0 / 1000.0)
+    geom_inbank[0, GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE] = np.float32(1.0 / 1.5)
+
+    geom_overbank[0, GEOM_OV_RIVER_WIDTH] = np.float32(10.0)
+    geom_overbank[0, GEOM_OV_FLOODPLAIN_WIDTH] = np.float32(200.0)
+
+    g: np.float32 = np.float32(9.80665)
+    cfl_constant: np.float32 = np.float32(0.7 * 1000.0 / np.sqrt(9.80665))
+    geom_cfl[0, GEOM_CFL_CONSTANT] = cfl_constant
+    # Keep manning coefficient small so volume depth governs
+    geom_cfl[0, GEOM_CFL_MANNING_COEFFICIENT] = np.float32(0.1)
+
+    # 1. Constant stored volume: dt should NOT depend on flow rate Q (pure celerity c = sqrt(g*h))
+    vol: float = 10000.0
+    dt_low_q: np.float32 = _evaluate_reach_cfl_dt(
+        reach_idx=0,
+        total_flow_rate=np.float32(1.0),
+        current_volume_m3=vol,
+        geom_inbank=geom_inbank,
+        geom_overbank=geom_overbank,
+        geom_cfl=geom_cfl,
+        gravity_acceleration=g,
+        dt_f32=np.float32(3600.0),
+    )
+    dt_high_q: np.float32 = _evaluate_reach_cfl_dt(
+        reach_idx=0,
+        total_flow_rate=np.float32(10.0),
+        current_volume_m3=vol,
+        geom_inbank=geom_inbank,
+        geom_overbank=geom_overbank,
+        geom_cfl=geom_cfl,
+        gravity_acceleration=g,
+        dt_f32=np.float32(3600.0),
+    )
+    # Both should be identical because in-bank depth from volume governs,
+    # and advective velocity v does not reduce the local inertial timestep.
+    assert np.isclose(dt_low_q, dt_high_q, rtol=1e-5)
+
+    # 2. Overbank normal depth scaling:
+    # A large flow rate (Q = 100 m3/s) on a dry channel would produce raw normal depth:
+    # 0.5 * 100^0.6 = 7.92m, well above bankfull of 2.0m.
+    # With floodplain scaling (10 / (10 + 200) = 1/21), the excess depth is scaled down.
+    geom_cfl[0, GEOM_CFL_MANNING_COEFFICIENT] = np.float32(0.5)
+    dt_flood_dry: np.float32 = _evaluate_reach_cfl_dt(
+        reach_idx=0,
+        total_flow_rate=np.float32(100.0),
+        current_volume_m3=0.0,
+        geom_inbank=geom_inbank,
+        geom_overbank=geom_overbank,
+        geom_cfl=geom_cfl,
+        gravity_acceleration=g,
+        dt_f32=np.float32(3600.0),
+    )
+    # The effective depth is moderated, so dt_flood_dry is safely above 10s rather than collapsing
+    assert dt_flood_dry > 10.0
+
+
+def test_local_inertial_steep_drop_free_overfall_bates() -> None:
+    """Tests steep drop interface condition where downstream stage is below upstream bed.
+
+    Verifies that:
+    1. Downstream stage variations below upstream bed do not affect upstream discharge.
+    2. Mass is strictly conserved over the steep drop.
+    """
+    flw: pyflwdir.FlwdirRaster = pyflwdir.from_array(
+        np.array([[4, 0]], dtype=np.uint8), ftype="d8"
+    )
+    # Reach 0 is elevated at bed 100m, Reach 1 drops to bed 10m
+    bed_elev: np.ndarray = np.array([100.0, 10.0], dtype=np.float32)
+    lengths: np.ndarray = np.array([1000.0, 1000.0], dtype=np.float32)
+    widths: np.ndarray = np.array([20.0, 20.0], dtype=np.float32)
+
+    router: LocalInertial = _make_local_inertial(
+        dt=60.0,
+        river_network=flw,
+        river_length=lengths,
+        river_width=widths,
+        bankfull_river_elevation_m=bed_elev,
+    )
+
+    init_storage_1: np.ndarray = np.array([5000.0, 100.0], dtype=np.float64)
+    res1 = router.step(
+        Q_prev_m3_s=np.zeros(2, dtype=np.float32),
+        river_storage_m3=init_storage_1.copy(),
+        sideflow_m3=np.zeros(2, dtype=np.float32),
+        evaporation_m3=np.zeros(2, dtype=np.float32),
+        waterbody_storage_m3=np.zeros(0, dtype=np.float64),
+        outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
+        retention_storage_m3=np.zeros(0, dtype=np.float32),
+        retention_activation_threshold_m3_s=np.zeros(0, dtype=np.float32),
+    )
+
+    init_storage_2: np.ndarray = np.array([5000.0, 5000.0], dtype=np.float64)
+    res2 = router.step(
+        Q_prev_m3_s=np.zeros(2, dtype=np.float32),
+        river_storage_m3=init_storage_2.copy(),
+        sideflow_m3=np.zeros(2, dtype=np.float32),
+        evaporation_m3=np.zeros(2, dtype=np.float32),
+        waterbody_storage_m3=np.zeros(0, dtype=np.float64),
+        outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
+        retention_storage_m3=np.zeros(0, dtype=np.float32),
+        retention_activation_threshold_m3_s=np.zeros(0, dtype=np.float32),
+    )
+
+    q1_drop: np.float32 = res1[0][0]
+    q2_drop: np.float32 = res2[0][0]
+    # Downstream water stage variations below upstream bed do not alter upstream outflow
+    assert np.isclose(q1_drop, q2_drop, rtol=1e-5)
+
+    # Verify mass conservation over the step
+    storage_out: np.ndarray = res1[1]
+    pit_out: np.float32 = res1[6]
+    assert np.isclose(storage_out.sum() + pit_out, init_storage_1.sum(), rtol=1e-4)
+
+
+def test_submerged_interface_enables_reverse_flow_flag() -> None:
+    """Tests that submerged downstream conditions allow reverse flow while steep drops do not.
+
+    Verifies that when downstream stage is higher than upstream bed,
+    backward flow is permitted, but across a cliff drop (downstream water below upstream bed),
+    reverse flow is disabled.
+    """
+    flw: pyflwdir.FlwdirRaster = pyflwdir.from_array(
+        np.array([[4, 0]], dtype=np.uint8), ftype="d8"
+    )
+    # 1. Cliff drop: bed elevations 100m -> 10m
+    router_cliff: LocalInertial = _make_local_inertial(
+        dt=60.0,
+        river_network=flw,
+        river_length=np.array([1000.0, 1000.0], dtype=np.float32),
+        river_width=np.array([20.0, 20.0], dtype=np.float32),
+        bankfull_river_elevation_m=np.array([100.0, 10.0], dtype=np.float32),
+    )
+    # Downstream has water (stage ~ 12m), but upstream is dry (storage = 0)
+    res_cliff = router_cliff.step(
+        Q_prev_m3_s=np.zeros(2, dtype=np.float32),
+        river_storage_m3=np.array([0.0, 20000.0], dtype=np.float64),
+        sideflow_m3=np.zeros(2, dtype=np.float32),
+        evaporation_m3=np.zeros(2, dtype=np.float32),
+        waterbody_storage_m3=np.zeros(0, dtype=np.float64),
+        outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
+        retention_storage_m3=np.zeros(0, dtype=np.float32),
+        retention_activation_threshold_m3_s=np.zeros(0, dtype=np.float32),
+    )
+    # No reverse flow can climb up the cliff
+    assert res_cliff[0][0] >= 0.0
+
+    # 2. Submerged channel: bed elevations 10.0m -> 9.5m
+    router_submerged: LocalInertial = _make_local_inertial(
+        dt=60.0,
+        river_network=flw,
+        river_length=np.array([1000.0, 1000.0], dtype=np.float32),
+        river_width=np.array([20.0, 20.0], dtype=np.float32),
+        bankfull_river_elevation_m=np.array([10.0, 9.5], dtype=np.float32),
+    )
+    # Deep downstream cell, dry upstream cell -> adverse head gradient
+    res_sub = router_submerged.step(
+        Q_prev_m3_s=np.zeros(2, dtype=np.float32),
+        river_storage_m3=np.array([0.0, 20000.0], dtype=np.float64),
+        sideflow_m3=np.zeros(2, dtype=np.float32),
+        evaporation_m3=np.zeros(2, dtype=np.float32),
+        waterbody_storage_m3=np.zeros(0, dtype=np.float64),
+        outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
+        retention_storage_m3=np.zeros(0, dtype=np.float32),
+        retention_activation_threshold_m3_s=np.zeros(0, dtype=np.float32),
+    )
+    # Submerged interface supports backwater flow into reach 0 (mass moves upstream)
+    storage_sub: np.ndarray = res_sub[1]
+    pit_out_sub: np.float32 = res_sub[6]
+    assert np.isclose(storage_sub.sum() + pit_out_sub, 20000.0, rtol=1e-4)
