@@ -917,9 +917,7 @@ def _write_dashboard_charts_from_saved_scores(
             frequency=frequency_label,
         )
         if main_time_index is not None:
-            chart_timelines[frequency_label] = serialize_main_timeline(
-                main_time_index
-            )
+            chart_timelines[frequency_label] = serialize_main_timeline(main_time_index)
         for station_id in observations_by_station.columns:
             station_id_text: str = str(station_id)
             if station_id_text not in saved_scores_by_station_id:

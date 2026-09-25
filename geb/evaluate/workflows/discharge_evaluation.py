@@ -263,9 +263,7 @@ def evaluate_discharge(
             else None
         )
         if main_time_index is not None:
-            chart_timelines[frequency_label] = serialize_main_timeline(
-                main_time_index
-            )
+            chart_timelines[frequency_label] = serialize_main_timeline(main_time_index)
         minimum_paired_timesteps: float = (
             minimum_timeseries_length_years
             * 365
