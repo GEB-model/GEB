@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 from matplotlib.axes import Axes
 from scipy.signal import find_peaks
-from scipy.stats import genpareto, lmoment
+from scipy.stats import genpareto
 
 from geb.geb_types import ArrayFloat64
 
@@ -58,22 +58,24 @@ def fit_gpd_lmoments(
             f"Too few exceedances for reliable fit (found {n}, requires at least {min_required})."
         )
 
-    l1: np.float64
-    l2: np.float64
+    l1: float = float(np.mean(y))
+    xi: float
+    sigma: float
     if fixed_shape is not None:
-        (l1,) = lmoment(y, order=[1], standardize=False)
         xi = fixed_shape
         # Use l1 to estimate sigma: sigma = l1 * (1 - xi)
         sigma = l1 * (1.0 - xi)
     elif fixed_scale is not None:
-        (l1,) = lmoment(y, order=[1], standardize=False)
         sigma = fixed_scale
         # Use l1 to estimate xi: l1 = sigma / (1 - xi) -> 1 - xi = sigma / l1 -> xi = 1 - sigma / l1
         if abs(l1) < 1e-12:
             raise ValueError("Mean exceedance is 0, cannot fit with fixed scale.")
         xi = 1.0 - sigma / l1
     else:
-        l1, l2 = lmoment(y, order=[1, 2], standardize=False)
+        y_sorted: np.ndarray = np.sort(y)
+        j: np.ndarray = np.arange(1, n + 1, dtype=float)
+        b1: float = float(np.sum((j - 1.0) / (n - 1.0) * y_sorted) / n)
+        l2: float = 2.0 * b1 - l1
         if abs(l2) < 1e-12:
             # If l2 is extremely small, the data may be nearly constant.
             raise ValueError("L2 moment is (almost) 0, cannot fit GPD.")
@@ -145,15 +147,13 @@ def bootstrap_pvalue_for_ad(
     random_seed: int = 42,
     fixed_shape: float | None = None,
     fixed_scale: float | None = None,
-    min_boot: int = 200,
-    p_tol: float = 0.01,
 ) -> float:
     """Parametric bootstrap p-value for right-tail Anderson-Darling statistic.
 
-    Simulates n exceedances from GPD(sigma_hat, xi_hat) nboot times.
-    To correctly test the composite hypothesis (where parameters are estimated),
-    each bootstrap sample is RE-FITTED using L-moments before calculating
-    the AD statistic.
+    Simulates n exceedances from GPD(sigma_hat, xi_hat) nboot times in a fully
+    vectorized computation. To correctly test the composite hypothesis (where
+    parameters are estimated), each bootstrap sample is re-fitted using L-moments
+    before calculating the right-tail AD statistic.
 
     Args:
         observed_stat: Observed Anderson-Darling statistic (dimensionless).
@@ -164,39 +164,68 @@ def bootstrap_pvalue_for_ad(
         random_seed: Random seed for reproducibility (dimensionless).
         fixed_shape: Fixed shape parameter if used during original fit (dimensionless).
         fixed_scale: Fixed scale parameter if used during original fit (dimensionless).
-        min_boot: Minimum number of bootstrap samples before checking for convergence (dimensionless).
-        p_tol: Tolerance for p-value stabilization. Stopping occurs if the p-value
-            fluctuates by less than this amount over 100 iterations (dimensionless).
 
     Returns:
         Bootstrap p-value as proportion of simulated stats >= observed (dimensionless).
+
+    Raises:
+        ValueError: If nboot is negative.
     """
-    count_exceeds = 0
-    y_sim_all = genpareto.rvs(
+    if nboot < 0:
+        raise ValueError(f"nboot must be non-negative, got {nboot}.")
+    if nboot == 0:
+        return float(np.nan)
+
+    # Simulate n exceedances nboot times from the fitted GPD
+    y: np.ndarray = genpareto.rvs(
         c=xi_hat, scale=sigma_hat, size=(nboot, n), random_state=random_seed
     )
-    prev_p = -1.0
-    i = 0
-    for i in range(nboot):
-        y_sim = np.sort(y_sim_all[i])
-        # Refit on simulated data to get the null distribution of the *fitted* AD statistic.
-        # Using the same constraints (fixed shape/scale) as the original fit.
-        s_s, x_s = fit_gpd_lmoments(
-            y_sim, fixed_shape=fixed_shape, fixed_scale=fixed_scale
-        )
-        u_sim = gpd_cdf(y_sim, s_s, x_s)
-        sim_val = right_tail_ad_from_uniforms(u_sim)
-        if sim_val >= observed_stat:
-            count_exceeds += 1
+    # Sort order statistics in-place along axis 1 for each bootstrap realization
+    y.sort(axis=1)
 
-        # Check for convergence every 100 iterations after min_boot
-        if i >= min_boot and (i + 1) % 100 == 0:
-            current_p = count_exceeds / (i + 1)
-            if prev_p >= 0 and abs(current_p - prev_p) < p_tol:
-                break
-            prev_p = current_p
+    # Refit GPD parameters across all bootstrap realizations using vectorized L-moments
+    l1: np.ndarray = np.mean(y, axis=1)
+    xi: np.ndarray
+    sigma: np.ndarray
 
-    return float(count_exceeds / (i + 1))
+    if fixed_shape is not None:
+        xi = np.full(nboot, fixed_shape, dtype=float)
+        sigma = l1 * (1.0 - fixed_shape)
+    elif fixed_scale is not None:
+        sigma = np.full(nboot, fixed_scale, dtype=float)
+        xi = 1.0 - fixed_scale / l1
+    else:
+        # Probability-weighted moment b1 = (1/n) * sum_{j=1}^n ((j - 1) / (n - 1)) * y_(j)
+        j: np.ndarray = np.arange(1, n + 1, dtype=float)
+        weights_b1: np.ndarray = (j - 1.0) / ((n - 1.0) * n)
+        b1: np.ndarray = np.dot(y, weights_b1)
+        l2: np.ndarray = 2.0 * b1 - l1
+        xi = 2.0 - l1 / l2
+        sigma = l1 * (1.0 - xi)
+
+    # Vectorized GPD CDF computation
+    # Guard against division by zero in -1.0 / xi when xi is near zero (exponential tail)
+    exp_mask: np.ndarray = np.abs(xi) < 1e-12
+    xi_safe: np.ndarray = np.where(exp_mask, 1.0, xi)
+    val: np.ndarray = 1.0 + (xi[:, None] * y) / sigma[:, None]
+    cdf: np.ndarray = 1.0 - np.power(np.maximum(val, 0.0), -1.0 / xi_safe[:, None])
+
+    if np.any(exp_mask):
+        cdf_exp: np.ndarray = 1.0 - np.exp(-np.maximum(y, 0.0) / sigma[:, None])
+        cdf = np.where(exp_mask[:, None], cdf_exp, cdf)
+
+    u_sim: np.ndarray = np.clip(cdf, 0.0, 1.0)
+    u_safe: np.ndarray = np.clip(u_sim, 1e-15, 1.0 - 1e-15)
+
+    # Right-tail weighted Anderson-Darling statistic
+    # Because y is sorted and GPD CDF is monotonic, u_safe is already sorted.
+    # Reversing columns gives u_{n+1-i} directly for the right-tail weighting.
+    weights_ad: np.ndarray = 2.0 * np.arange(1, n + 1, dtype=float) - 1.0
+    log_terms: np.ndarray = np.log(1.0 - u_safe[:, ::-1])
+    s_tail: np.ndarray = np.dot(log_terms, weights_ad)
+    ad_stats: np.ndarray = -n - s_tail / n
+
+    return float(np.mean(ad_stats >= observed_stat))
 
 
 def gpd_return_level(
@@ -247,8 +276,6 @@ class ReturnPeriodModel:
         fixed_threshold: float | None = None,
         p_value_threshold: float = 0.10,
         selection_strategy: str = "first_significant",
-        min_boot: int = 300,
-        p_tol: float = 0.01,
     ) -> None:
         """Initialize and fit the Generalized Pareto Distribution Peaks-Over-Threshold (GPD-POT) model.
 
@@ -305,14 +332,13 @@ class ReturnPeriodModel:
             p_value_threshold: Anderson-Darling p-value threshold for early stopping in automated mode.
             selection_strategy: Strategy for selecting the best threshold in automated mode,
                 either 'first_significant' or 'best_fit'.
-            min_boot: Minimum bootstrap samples before checking for p-value convergence.
-            p_tol: Tolerance for bootstrap p-value convergence early stopping.
 
         Raises:
             TypeError: If series index is not a DatetimeIndex.
-            ValueError: If series is non-monotonic, irregular, has fewer non-NaN values than min_exceed,
-                both fixed_quantile and fixed_threshold are specified, fixed_quantile is outside [0, 1],
-                both fixed_shape and fixed_scale are specified, or no valid thresholds satisfy min_exceed.
+            ValueError: If nboot is negative, series is non-monotonic, irregular,
+                has fewer non-NaN values than min_exceed, both fixed_quantile and fixed_threshold
+                are specified, fixed_quantile is outside [0, 1], both fixed_shape and fixed_scale
+                are specified, or no valid thresholds satisfy min_exceed.
         """
         if return_periods is None:
             return_periods = np.array(
@@ -341,6 +367,8 @@ class ReturnPeriodModel:
             raise ValueError(
                 f"fixed_quantile must be between 0.0 and 1.0, got {fixed_quantile}."
             )
+        if nboot < 0:
+            raise ValueError(f"nboot must be non-negative, got {nboot}.")
 
         self.nanmask = series.isnull()
         self.n_nan = self.nanmask.sum()
@@ -448,8 +476,6 @@ class ReturnPeriodModel:
                         random_seed,
                         fixed_shape=fixed_shape,
                         fixed_scale=fixed_scale,
-                        min_boot=min_boot,
-                        p_tol=p_tol,
                     )
 
                 current_candidate: dict[str, Any] = {
