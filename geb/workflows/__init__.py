@@ -1,5 +1,6 @@
 """Workflow helpers used in the GEB."""
 
+from collections.abc import Sequence
 from time import time
 from typing import Literal, overload
 
@@ -61,14 +62,18 @@ class TimingModule:
 def balance_check(
     name: str,
     how: str = "cellwise",
-    influxes: list[ArrayFloat | np.floating | DynamicArray]
-    | tuple[ArrayFloat | np.floating | DynamicArray] = [],
-    outfluxes: list[ArrayFloat | np.floating | DynamicArray]
-    | tuple[ArrayFloat | np.floating | DynamicArray] = [],
-    prestorages: list[ArrayFloat | np.floating | DynamicArray]
-    | tuple[ArrayFloat | np.floating | DynamicArray] = [],
-    poststorages: list[ArrayFloat | np.floating | DynamicArray]
-    | tuple[ArrayFloat | np.floating | DynamicArray] = [],
+    influxes: Sequence[
+        ArrayFloat | np.floating | DynamicArray | np.ndarray | float
+    ] = (),
+    outfluxes: Sequence[
+        ArrayFloat | np.floating | DynamicArray | np.ndarray | float
+    ] = (),
+    prestorages: Sequence[
+        ArrayFloat | np.floating | DynamicArray | np.ndarray | float
+    ] = (),
+    poststorages: Sequence[
+        ArrayFloat | np.floating | DynamicArray | np.ndarray | float
+    ] = (),
     tolerance: float = 1e-10,
     error_identifiers: dict = {},
     raise_on_error: bool = False,
@@ -80,14 +85,18 @@ def balance_check(
 def balance_check(
     name: str,
     how: str = "cellwise",
-    influxes: list[ArrayFloat | np.floating | DynamicArray]
-    | tuple[ArrayFloat | np.floating | DynamicArray] = [],
-    outfluxes: list[ArrayFloat | np.floating | DynamicArray]
-    | tuple[ArrayFloat | np.floating | DynamicArray] = [],
-    prestorages: list[ArrayFloat | np.floating | DynamicArray]
-    | tuple[ArrayFloat | np.floating | DynamicArray] = [],
-    poststorages: list[ArrayFloat | np.floating | DynamicArray]
-    | tuple[ArrayFloat | np.floating | DynamicArray] = [],
+    influxes: Sequence[
+        ArrayFloat | np.floating | DynamicArray | np.ndarray | float
+    ] = (),
+    outfluxes: Sequence[
+        ArrayFloat | np.floating | DynamicArray | np.ndarray | float
+    ] = (),
+    prestorages: Sequence[
+        ArrayFloat | np.floating | DynamicArray | np.ndarray | float
+    ] = (),
+    poststorages: Sequence[
+        ArrayFloat | np.floating | DynamicArray | np.ndarray | float
+    ] = (),
     tolerance: float = 1e-10,
     error_identifiers: dict = {},
     raise_on_error: bool = False,
@@ -98,14 +107,18 @@ def balance_check(
 def balance_check(
     name: str,
     how: str = "cellwise",
-    influxes: list[ArrayFloat | np.floating | DynamicArray]
-    | tuple[ArrayFloat | np.floating | DynamicArray] = [],
-    outfluxes: list[ArrayFloat | np.floating | DynamicArray]
-    | tuple[ArrayFloat | np.floating | DynamicArray] = [],
-    prestorages: list[ArrayFloat | np.floating | DynamicArray]
-    | tuple[ArrayFloat | np.floating | DynamicArray] = [],
-    poststorages: list[ArrayFloat | np.floating | DynamicArray]
-    | tuple[ArrayFloat | np.floating | DynamicArray] = [],
+    influxes: Sequence[
+        ArrayFloat | np.floating | DynamicArray | np.ndarray | float
+    ] = (),
+    outfluxes: Sequence[
+        ArrayFloat | np.floating | DynamicArray | np.ndarray | float
+    ] = (),
+    prestorages: Sequence[
+        ArrayFloat | np.floating | DynamicArray | np.ndarray | float
+    ] = (),
+    poststorages: Sequence[
+        ArrayFloat | np.floating | DynamicArray | np.ndarray | float
+    ] = (),
     tolerance: float = 1e-10,
     error_identifiers: dict = {},
     raise_on_error: bool = False,
@@ -144,10 +157,10 @@ def balance_check(
     store = 0
 
     if how == "cellwise":
-        influx = np.add.reduce(influxes)
-        outflux = np.add.reduce(outfluxes)
-        prestorage = np.add.reduce(prestorages)
-        poststorage = np.add.reduce(poststorages)
+        influx = np.add.reduce(list(influxes))
+        outflux = np.add.reduce(list(outfluxes))
+        prestorage = np.add.reduce(list(prestorages))
+        poststorage = np.add.reduce(list(poststorages))
 
         balance = influx - outflux + prestorage - poststorage
 
@@ -226,13 +239,13 @@ def balance_check(
             "Error identifiers not supported for 'sum' method."
         )
         for influx in influxes:
-            income += influx.sum()
+            income += float(np.sum(influx))
         for outflux in outfluxes:
-            out += outflux.sum()
+            out += float(np.sum(outflux))
         for prestorage in prestorages:
-            store += prestorage.sum()
+            store += float(np.sum(prestorage))
         for poststorage in poststorages:
-            store -= poststorage.sum()
+            store -= float(np.sum(poststorage))
 
         balance = abs(income + store - out)
         if np.isnan(balance):

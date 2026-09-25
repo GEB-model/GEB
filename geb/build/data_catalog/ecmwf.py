@@ -31,7 +31,7 @@ def format_path(path: Path, **kwargs: str | int) -> Path:
     return path
 
 
-def format_date(date_obj: datetime) -> str:
+def format_date(date_obj: pd.Timestamp | datetime) -> str:
     """Format a date or datetime object to a string in 'YYYYMMDDTHHMMSS' format.
 
     Args:
@@ -43,13 +43,15 @@ def format_date(date_obj: datetime) -> str:
     Raises:
         ValueError: If the input is not a date or datetime object.
     """
-    if isinstance(date_obj, datetime):
+    if isinstance(date_obj, (datetime, pd.Timestamp)):
         return date_obj.strftime("%Y%m%dT%H%M%S")
     else:
         raise ValueError("Input must be a date or datetime object.")
 
 
-def generate_forecast_steps(forecast_date: datetime, forecast_horizon: int) -> str:
+def generate_forecast_steps(
+    forecast_date: pd.Timestamp | datetime, forecast_horizon: int
+) -> str:
     """Generate ECMWF forecast step string based on the forecast date and horizon.
 
     ECMWF does not have a consistent 1h timestep for the entire operational archive. Asking hourly data to the server when it does not exist, will result in an error.
@@ -98,20 +100,17 @@ def generate_forecast_steps(forecast_date: datetime, forecast_horizon: int) -> s
 
 
 def make_hindcast_dates_for_cycle_date(
-    forecast_cycle_date: pd.Timestamp, n_hindcast_years: int
+    forecast_cycle_date: pd.Timestamp | datetime, n_hindcast_years: int
 ) -> str:
     """Generate a string of hindcast dates for a given forecast cycle date.
 
     Args:
-        forecast_cycle_date: The forecast cycle date as a pandas Timestamp.
+        forecast_cycle_date: The forecast cycle date as a pandas Timestamp or datetime.
         n_hindcast_years: The number of hindcast years to request.
 
     Returns:
         A string of hindcast dates in the format "YYYY-MM-DD/YYYY-MM-DD/...".
     """
-    forecast_cycle_date = pd.to_datetime(
-        forecast_cycle_date
-    )  # Ensure input is a Timestamp
     start_year = forecast_cycle_date.year - n_hindcast_years
     return "/".join(
         f"{year}-{forecast_cycle_date.month:02d}-{forecast_cycle_date.day:02d}"
@@ -131,17 +130,17 @@ class ECMWFForecasts(Adapter):
         url: None,
         forecast_variables: list[float],
         bounds: tuple[float, float, float, float],
-        forecast_start: date | datetime,
-        forecast_end: date | datetime,
-        hindcast_cycle_start: date | datetime,
-        hindcast_cycle_end: date | datetime,
-        n_hindcast_years: int,
-        forecast_model: str,
-        forecast_resolution: str,
-        forecast_horizon: int,
-        forecast_timestep_hours: int,
-        n_ensemble_members: int,
-        forecast_product: Literal["forecast", "hindcast"],
+        forecast_start: pd.Timestamp | datetime,
+        forecast_end: pd.Timestamp | datetime,
+        forecast_model: str = "both_control_and_probabilistic",
+        forecast_resolution: str = "0.1",
+        forecast_horizon: int = 240,
+        forecast_timestep_hours: int = 6,
+        n_ensemble_members: int = 50,
+        forecast_product: Literal["forecast", "hindcast"] = "forecast",
+        hindcast_cycle_start: pd.Timestamp | datetime | None = None,
+        hindcast_cycle_end: pd.Timestamp | datetime | None = None,
+        n_hindcast_years: int | None = None,
     ) -> ECMWFForecasts:
         """Download ECMWF forecasts using the ECMWF web API: https://github.com/ecmwf/ecmwf-api-client.
 
@@ -224,7 +223,10 @@ class ECMWFForecasts(Adapter):
                         "For historical data before 2010, please use hindcast data instead."
                     )
         elif forecast_product == "hindcast":
-            # If downloading hindcast data, check if the forecast start date is less then 20 years apart from the forecast cycle date, otherwise there will be no data available
+            if n_hindcast_years is None:
+                raise ValueError(
+                    "n_hindcast_years must be specified when forecast_product is 'hindcast'."
+                )
             if n_hindcast_years > 20:
                 raise ValueError(
                     "ECMWF hindcast data is only available for up to 20 years before the forecast cycle date. Please adjust the n_hindcast_years parameter in your build.yml file to be 20 or less."
@@ -322,13 +324,14 @@ class ECMWFForecasts(Adapter):
                         "area": mars_area,
                     }
                 elif forecast_product == "hindcast":
+                    assert n_hindcast_years is not None
                     # retrieve steps from mars
                     mars_request: dict[
                         str, Any
                     ] = {  # Build MARS request dictionary with all parameters
                         "class": mars_class,
-                        "hdate": make_hdates_for_cycle_date(
-                            forecast_cycle_date=forecast_date.strftime("%Y-%m-%d"),
+                        "hdate": make_hindcast_dates_for_cycle_date(
+                            forecast_cycle_date=forecast_date,
                             n_hindcast_years=n_hindcast_years,
                         ),
                         "date": forecast_date.strftime("%Y-%m-%d"),
@@ -392,7 +395,7 @@ class ECMWFForecasts(Adapter):
     def load_and_merge_forecast_files(
         self,
         forecast_model: str,
-        forecast_issue_date: pd.Timestamp,
+        forecast_issue_date: pd.Timestamp | datetime,
         forecast_resolution: str,
         forecast_horizon: int,
         forecast_timestep_hours: int,
@@ -739,7 +742,7 @@ class ECMWFForecasts(Adapter):
     def read_and_process_forecasts(
         self,
         bounds: tuple[float, float, float, float],
-        forecast_issue_date: datetime,
+        forecast_issue_date: pd.Timestamp | datetime,
         forecast_model: str,
         forecast_resolution: str,
         forecast_horizon: int,
@@ -778,7 +781,7 @@ class ECMWFForecasts(Adapter):
     def read_and_process_hindcasts(
         self,
         bounds: tuple[float, float, float, float],
-        forecast_issue_date: datetime,
+        forecast_issue_date: pd.Timestamp | datetime,
         forecast_model: str,
         forecast_resolution: str,
         forecast_horizon: int,

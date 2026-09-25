@@ -263,13 +263,18 @@ def _evaluate_reach_cfl_dt(
 ) -> np.float32:
     """Calculates Courant-Friedrichs-Lewy (CFL) stable timestep for a single reach.
 
-    The CFL condition requires that numerical information (both shallow-water waves
-    and flowing water) cannot travel across more than one river reach length (dx)
-    within a single sub-step (dt):
-        dt_stable <= CFL * dx / (flow_velocity + wave_celerity)
+    Numerical stability is dictated by shallow-water wave celerity:
+        dt_stable <= CFL * dx / wave_celerity
     where:
         - wave_celerity c = sqrt(g * hydraulic_depth)
-        - flow_velocity v = Q / cross_sectional_area
+
+    Notes:
+        Wave celerity (c) is the propagation speed of a surface wave or disturbance
+        relative to the moving water itself (distinct from the bulk flow velocity
+        v = Q / A). In the local inertial approximation (Bates et al., 2010),
+        the advective acceleration term (v * dv/dx) is omitted from the momentum equation,
+        so information propagation and numerical stability are governed strictly by
+        the gravity wave celerity c = sqrt(g * h).
 
     Args:
         reach_idx: Local inertial reach index.
@@ -284,7 +289,12 @@ def _evaluate_reach_cfl_dt(
     Returns:
         Maximum CFL-stable timestep duration for this reach (seconds).
     """
-    # Hydraulic depth from stored water volume:
+    # A completely dry reach with no oncoming flow cannot propagate waves;
+    # advancing by the full macro-timestep is safe.
+    if current_volume_m3 <= 0.0 and total_flow_rate <= np.float32(0.0):
+        return dt_f32
+
+    # 1. Hydraulic depth from stored water volume:
     # We compute the wetted cross-sectional area (A) and surface top width (W)
     # corresponding to the water volume currently sitting in this reach (V = A * L).
     # The hydraulic depth is h = A / W.
@@ -329,50 +339,52 @@ def _evaluate_reach_cfl_dt(
             water_top_width_m, np.float32(1e-3)
         )
 
-    # Anticipatory depth from oncoming flow (Manning normal depth):
+    # 2. Anticipatory depth from oncoming flow (Manning normal depth):
     # If a nearly dry reach suddenly receives a fast-moving flood wave (Q > 0 while V ~ 0),
-    # depth based on stored volume alone would be zero, which would dangerously underestimate
-    # wave speed and cause instability. We estimate the expected flow depth from Manning:
-    # h_normal proportional to Q^0.6.
+    # depth based on stored volume alone would be zero, which would cause instability.
+    # Therefore, we estimate expected flow depth from Manning normal depth (h_normal ~ Q^0.6).
     hydraulic_depth_from_flow: np.float32 = np.float32(0.0)
     if total_flow_rate > np.float32(0.0):
-        hydraulic_depth_from_flow = geom_cfl[
+        raw_depth_from_flow: np.float32 = geom_cfl[
             reach_idx, GEOM_CFL_MANNING_COEFFICIENT
         ] * (total_flow_rate ** np.float32(0.6))
+        bankfull_depth_m: np.float32 = geom_inbank[reach_idx, GEOM_IN_BANKFULL_DEPTH]
+        if raw_depth_from_flow > bankfull_depth_m and bankfull_depth_m > np.float32(
+            0.0
+        ):
+            # When flow exceeds bankfull, water spills across the much wider floodplain.
+            # Scale the excess depth by the width expansion ratio so low-slope reaches
+            # do not predict absurdly deep narrow-slot depths.
+            extra_depth: np.float32 = raw_depth_from_flow - bankfull_depth_m
+            bf_width: np.float32 = geom_overbank[reach_idx, GEOM_OV_RIVER_WIDTH]
+            fp_width: np.float32 = geom_overbank[reach_idx, GEOM_OV_FLOODPLAIN_WIDTH]
+            width_ratio: np.float32 = bf_width / max(bf_width + fp_width, bf_width)
+            hydraulic_depth_from_flow = bankfull_depth_m + (extra_depth * width_ratio)
+        else:
+            hydraulic_depth_from_flow = raw_depth_from_flow
 
-    # Take the governing (strictest/deepest) hydraulic depth:
+    # 3. Take the governing (strictest/deepest) hydraulic depth:
     hydraulic_depth: np.float32 = max(
         hydraulic_depth_from_volume, hydraulic_depth_from_flow
     )
 
-    # Compute wave celerity, water velocity, and maximum stable timestep:
-    if hydraulic_depth > np.float32(0.0):
-        # Shallow-water wave propagation speed: c = sqrt(g * h)
-        wave_celerity: np.float32 = np.sqrt(gravity_acceleration * hydraulic_depth)
-
-        # Convective bulk flow speed: v = Q / A
-        effective_area: np.float32 = max(
-            wetted_cross_sectional_area_m2,
-            hydraulic_depth
-            * max(
-                geom_overbank[reach_idx, GEOM_OV_RIVER_WIDTH],
-                np.float32(1.0),
-            ),
-        )
-        flow_velocity: np.float32 = total_flow_rate / effective_area
-
-        # Total information propagation speed: v + c
-        total_speed: np.float32 = flow_velocity + wave_celerity
-
-        # dt_max = CFL * dx / total_speed
-        return (
-            geom_cfl[reach_idx, GEOM_CFL_CONSTANT]
-            * np.sqrt(gravity_acceleration)
-            / max(total_speed, np.float32(1e-3))
-        )
-    else:
+    if hydraulic_depth <= np.float32(0.0):
         # Dry channel: no waves can propagate, so full macro timestep is safe
         return dt_f32
+
+    # 4. Compute shallow-water wave celerity and maximum stable timestep:
+    # Wave celerity c = sqrt(g * h) is the speed at which a surface gravity wave disturbance
+    # propagates relative to the water itself (in contrast to flow velocity v = Q / A).
+    # In local inertial routing, this celerity governs how fast pressure/depth signals travel.
+    wave_celerity: np.float32 = np.sqrt(gravity_acceleration * hydraulic_depth)
+
+    # dt_max = CFL * dx / wave_celerity
+    dt_cfl: np.float32 = (
+        geom_cfl[reach_idx, GEOM_CFL_CONSTANT]
+        * np.sqrt(gravity_acceleration)
+        / max(wave_celerity, np.float32(1e-3))
+    )
+    return min(dt_cfl, dt_f32)
 
 
 @njit(cache=True)
@@ -979,6 +991,7 @@ def _run_inertial_substeps(
             effective_depth: np.float32 = np.float32(0.0)
             water_slope: np.float32 = np.float32(0.0)
 
+            reach_can_reverse: bool = False
             if boundary_type == 0 or boundary_type == 2:
                 # Internal reach or lake boundary
                 ds_idx: int = ds_stage_idx[reach_idx]
@@ -986,20 +999,34 @@ def _run_inertial_substeps(
                 max_bed: np.float32 = geom_inbank[
                     reach_idx, GEOM_IN_INTERFACE_BED_ELEVATION_MAX
                 ]
-                # Interface flow depth across adjacent reaches (Bates et al., 2010):
-                # Flow depth is the difference between the maximum free-surface elevation
-                # and the highest bed elevation of the two adjoining cells.
-                effective_stage_node: np.float32 = max(water_stage_node, max_bed)
-                effective_stage_ds: np.float32 = max(water_stage_ds, max_bed)
-                max_stage: np.float32 = max(effective_stage_node, effective_stage_ds)
-                effective_depth = max_stage - max_bed
-                water_slope = (
-                    effective_stage_ds - effective_stage_node
-                ) * inv_interface_len
-            elif boundary_type == 1:
                 bed_elev_node: np.float32 = geom_inbank[
                     reach_idx, GEOM_IN_BED_ELEVATION
                 ]
+                if bed_elev_node >= max_bed and water_stage_ds <= bed_elev_node:
+                    # Steep drop / free overfall where downstream water level is below upstream bed:
+                    # By Bates' formulation, the flow depth is strictly upstream depth,
+                    # water slope is -depth / dx, and reverse flow across the drop is impossible.
+                    effective_depth = max(
+                        water_stage_node - bed_elev_node, np.float32(0.0)
+                    )
+                    water_slope = -effective_depth * inv_interface_len
+                    reach_can_reverse = False
+                else:
+                    # Submerged or backwater interface condition (Bates et al., 2010):
+                    # Flow depth is the difference between the maximum free-surface elevation
+                    # and the highest bed elevation of the two adjoining cells.
+                    effective_stage_node: np.float32 = max(water_stage_node, max_bed)
+                    effective_stage_ds: np.float32 = max(water_stage_ds, max_bed)
+                    max_stage: np.float32 = max(
+                        effective_stage_node, effective_stage_ds
+                    )
+                    effective_depth = max_stage - max_bed
+                    water_slope = (
+                        effective_stage_ds - effective_stage_node
+                    ) * inv_interface_len
+                    reach_can_reverse = ALLOW_REVERSE_FLOW and boundary_type == 0
+            elif boundary_type == 1:
+                bed_elev_node = geom_inbank[reach_idx, GEOM_IN_BED_ELEVATION]
                 effective_depth = max(water_stage_node - bed_elev_node, np.float32(0.0))
                 water_slope = -kin_ds_slope[reach_idx]
             elif boundary_type == 3:
@@ -1028,7 +1055,7 @@ def _run_inertial_substeps(
                 geom_overbank=geom_overbank,
                 g_dt_substep=g_dt_substep,
                 sqrt_gravity=sqrt_gravity,
-                can_reverse=(ALLOW_REVERSE_FLOW and boundary_type == 0),
+                can_reverse=reach_can_reverse,
                 river_storage_m3_inertial=river_storage_m3_inertial,
                 inv_dt_substep=inv_dt_substep,
             )

@@ -198,9 +198,8 @@ class Hydrology(Data, Module):
         """
         river_storage: np.ndarray = self.routing.var.river_storage_m3
         retention_storage: np.ndarray = self.routing.var.retention_basin_storage_m3
-        return (
-            river_storage.astype(np.float64).sum()
-            + retention_storage.astype(np.float64).sum()
+        return river_storage.sum(dtype=np.float64) + retention_storage.sum(
+            dtype=np.float64
         )
 
     def get_waterbodies_storage_m3(self) -> np.float64:
@@ -211,7 +210,7 @@ class Hydrology(Data, Module):
         Returns:
             Total water body storage (m3).
         """
-        return self.waterbodies.var.storage.astype(np.float64).sum()
+        return self.waterbodies.var.storage.sum(dtype=np.float64)
 
     def get_groundwater_storage_m3(self) -> np.float64:
         """Get the current water storage in the groundwater system.
@@ -221,7 +220,7 @@ class Hydrology(Data, Module):
         Returns:
             Total groundwater storage (m3).
         """
-        return self.groundwater.groundwater_content_m3.astype(np.float64).sum()
+        return self.groundwater.groundwater_content_m3.sum(dtype=np.float64)
 
     def get_current_storage(self) -> np.float64:
         """Get the current water storage in the hydrological system.

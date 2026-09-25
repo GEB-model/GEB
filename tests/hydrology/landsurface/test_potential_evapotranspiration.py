@@ -242,7 +242,9 @@ def test_get_potential_evapotranspiration() -> None:
     potential_evapotranspiration_m_elevated_CO2 = get_potential_evapotranspiration(
         reference_evapotranspiration_grass_m=np.float32(5.0),
         crop_factor=np.float32(1.0),
-        CO2_induced_crop_factor_adustment=elevated_CO2_induced_crop_factor_adustment,
+        CO2_induced_crop_factor_adustment=np.float32(
+            elevated_CO2_induced_crop_factor_adustment
+        ),
     )
 
     # elevated CO2 should make stomata more efficient, close more and therefore
@@ -578,12 +580,18 @@ def test_get_crop_factors_and_root_depths_and_lai_non_cropland() -> None:
 def test_plot_crop_factor_vs_lai() -> None:
     """Plot crop factor as a function of leaf area index."""
     lai = np.linspace(0, 10, 100)
-    kc_forest = get_crop_factor_from_lai(
-        min_kc=np.float32(0.2), max_kc=np.float32(1.6), lai=lai
-    )
-    kc_grassland = get_crop_factor_from_lai(
-        min_kc=np.float32(0.2), max_kc=np.float32(1.2), lai=lai
-    )
+    kc_forest = [
+        get_crop_factor_from_lai(
+            min_kc=np.float32(0.2), max_kc=np.float32(1.6), lai=np.float32(x)
+        )
+        for x in lai
+    ]
+    kc_grassland = [
+        get_crop_factor_from_lai(
+            min_kc=np.float32(0.2), max_kc=np.float32(1.2), lai=np.float32(x)
+        )
+        for x in lai
+    ]
 
     plt.figure(figsize=(8, 6))
     plt.plot(lai, kc_forest, label="Forest (min=0.2, max=1.6)", color="green")

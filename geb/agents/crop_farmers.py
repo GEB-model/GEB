@@ -428,6 +428,9 @@ class CropFarmers(AgentBaseClass):
         ]["water_price"]["static"]
 
         # Set water costs
+        self.water_price_data: tuple[DateIndex, dict[int, npt.NDArray[Any]]] | None = (
+            None
+        )
         if self.static_water_price:
             self.water_costs_m3_channel = self.model.config["agent_settings"][
                 "farmers"
@@ -439,7 +442,7 @@ class CropFarmers(AgentBaseClass):
                 "farmers"
             ]["expected_utility"]["water_price"]["water_costs_m3_channel"]
         else:
-            self.water_price = load_economic_data(
+            self.water_price_data = load_economic_data(
                 self.model.files["dict"]["socioeconomics/water_price"]
             )
 
@@ -935,6 +938,13 @@ class CropFarmers(AgentBaseClass):
             p=efficiency_division_array,
         )
 
+        self.var.irrigation_efficiency_group = DynamicArray(
+            n=self.var.n,
+            max_n=self.var.max_n,
+            dtype=np.float32,
+            fill_value=np.nan,
+        )
+
         self.var.adaptations[
             self.var.irrigation_efficiency == self.var.irr_eff_sprinkler,
             IRRIGATION_EFFICIENCY_ADAPTATION_SPRINKLER,
@@ -955,7 +965,7 @@ class CropFarmers(AgentBaseClass):
         )
 
         self.var.mean_irrigation_efficiency = np.mean(self.var.irrigation_efficiency)
-        _, self.var.irrigation_efficiency_group = np.unique(
+        _, self.var.irrigation_efficiency_group[:] = np.unique(
             self.var.irrigation_efficiency, return_inverse=True
         )
 
@@ -1469,10 +1479,11 @@ class CropFarmers(AgentBaseClass):
 
         Taken from observed water markets data.
         """
+        assert self.water_price_data is not None
         water_price_usd_m3 = np.full(
             self.var.n,
             self.get_value_per_farmer_from_region_id(
-                self.water_price, self.model.current_time
+                self.water_price_data, self.model.current_time
             ),
             dtype=np.float32,
         )
@@ -1511,7 +1522,7 @@ class CropFarmers(AgentBaseClass):
         return self.command_area != -1
 
     @property
-    def channel_irrigating(self) -> np.ndarray:
+    def channel_irrigating(self) -> DynamicArray:
         """Farmers that have access to surface irrigation but not to reservoirs."""
         return self.surface_irrigated & (~self.is_in_command_area)
 
@@ -1559,7 +1570,7 @@ class CropFarmers(AgentBaseClass):
         npt.NDArray[np.float32],
         npt.NDArray[np.float32],
         npt.NDArray[np.float32],
-        npt.NDArray[np.float64],
+        npt.NDArray[np.float32],
     ]:
         """Abstract water for per-source irrigation withdrawals.
 
@@ -1981,7 +1992,7 @@ class CropFarmers(AgentBaseClass):
 
     def farmer_to_field(
         self,
-        array: npt.NDArray,
+        array: npt.NDArray | DynamicArray,
         nodata: float | int | bool,
     ) -> npt.NDArray:
         """Expand a per-farmer array to per-field values.
@@ -2025,7 +2036,7 @@ class CropFarmers(AgentBaseClass):
     @staticmethod
     @njit(cache=True)
     def harvest_numba(
-        n: np.ndarray,
+        n: int,
         field_indices_by_farmer: np.ndarray,
         field_indices: np.ndarray,
         crop_map: np.ndarray,
@@ -2486,7 +2497,7 @@ class CropFarmers(AgentBaseClass):
             region_ids_per_farmer=self.var.region_id.data,
             field_indices_by_farmer=self.var.field_indices_by_farmer.data,
             field_indices=self.var.field_indices,
-            field_size_per_farmer=self.field_size_per_farmer.data,
+            field_size_per_farmer=self.field_size_per_farmer,
             all_loans_annual_cost=self.var.all_loans_annual_cost.data,
             loan_tracker=self.var.loan_tracker.data,
             interest_rate=self.var.interest_rate.data,
@@ -2885,7 +2896,7 @@ class CropFarmers(AgentBaseClass):
         self,
         yearly_yield_ratio: DynamicArray | np.ndarray,
         yearly_SPEI_probability: DynamicArray | np.ndarray,
-        unique_group_differentiator: npt.NDArray[np.bool_] = None,
+        unique_group_differentiator: npt.NDArray[np.bool_] | None = None,
         drop_k: int = 2,
     ) -> npt.NDArray[np.floating]:
         """Fit grouped linear yield-SPEI model and return per-farmer parameters.
@@ -3600,7 +3611,7 @@ class CropFarmers(AgentBaseClass):
         adaptation_names: Sequence[str],
         farmer_yield_probability_relation_base: npt.NDArray[np.floating],
         farmer_yield_probability_relations_insured: Sequence[npt.NDArray[np.floating]],
-        premiums: list[DynamicArray],
+        premiums: Sequence[DynamicArray | npt.NDArray[np.floating]],
     ) -> None:
         """Evaluate and adopt insurance options using expected utility (SEUT).
 
@@ -4404,7 +4415,7 @@ class CropFarmers(AgentBaseClass):
 
     def create_unique_groups(
         self,
-        *additional_diffentiators: DynamicArray,
+        *additional_diffentiators: DynamicArray | npt.NDArray[Any],
     ) -> tuple[npt.NDArray[np.int_], int]:
         """Create per-agent group indices from base classes and optional differentiators.
 
@@ -4505,7 +4516,7 @@ class CropFarmers(AgentBaseClass):
         self,
         farmer_yield_probability_relation: npt.NDArray[np.floating],
         adapted: DynamicArray,
-        additional_diffentiator_expiration: DynamicArray,
+        additional_diffentiator_expiration: DynamicArray | npt.NDArray[Any],
         additional_diffentiator_grouping: npt.NDArray[np.integer],
         adaptation_type: npt.NDArray[np.integer] | int,
     ) -> None:
@@ -4551,7 +4562,7 @@ class CropFarmers(AgentBaseClass):
 
     def adaptation_water_cost_difference(
         self,
-        additional_diffentiators: npt.NDArray[np.integer],
+        additional_diffentiators: npt.NDArray[Any] | DynamicArray,
         adapted: DynamicArray,
         energy_cost: npt.NDArray[np.floating],
         water_cost: npt.NDArray[np.floating],
@@ -4955,9 +4966,7 @@ class CropFarmers(AgentBaseClass):
                 self.var.crop_calendar[:, :, :], axis=0, return_inverse=True
             )[1]
 
-            self.blank_additional_differentiator = np.zeros(
-                self.var.n, dtype=np.float32
-            )
+            self.blank_additional_differentiator = np.zeros(self.var.n, dtype=np.int32)
             # These variables can be used to create the different meta groups
             # i.e. farmers with similar precipitation or irrigation get grouped together
             k = 3

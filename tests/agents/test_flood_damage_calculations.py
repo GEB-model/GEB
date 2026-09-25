@@ -30,6 +30,8 @@ class DummyHouseholdAgents:
 class DummyFloodRiskModule(FloodRiskModule):
     """A dummy model class to simulate the household agents object."""
 
+    households: DummyHouseholdAgents
+
     def __init__(self, model: Any) -> None:
         """Initialize the dummy flood risk module with test data."""
         self.households = DummyHouseholdAgents()

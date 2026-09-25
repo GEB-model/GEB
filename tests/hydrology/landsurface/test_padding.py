@@ -98,13 +98,12 @@ def _load_and_tile(npz_path: Path, num_cells: int) -> dict:
     # correct type rather than a 0-dimensional array.
     _FLOAT64_KEYS = {"snow_water_equivalent_m", "liquid_water_in_snow_m"}
     for key, val in raw.items():
-        if key in _FLOAT64_KEYS:
+        if isinstance(val, np.ndarray) and val.ndim == 0:
+            raw[key] = val.item()
+        elif key in _FLOAT64_KEYS:
             continue
-        if isinstance(val, np.ndarray) and np.issubdtype(val.dtype, np.floating):
-            if val.ndim == 0:
-                raw[key] = np.float32(val)
-            else:
-                raw[key] = val.astype(np.float32)
+        elif isinstance(val, np.ndarray) and np.issubdtype(val.dtype, np.floating):
+            raw[key] = val.astype(np.float32)
 
     if "daily_reference_evapotranspiration_grass_m" not in raw:
         raw["daily_reference_evapotranspiration_grass_m"] = np.full(

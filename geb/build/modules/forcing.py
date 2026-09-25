@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 from functools import partial
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -22,11 +22,12 @@ import xclim.indices.stats as xcistats
 from dateutil.relativedelta import relativedelta
 from matplotlib import colormaps as mcolormaps
 from matplotlib.colors import ListedColormap
-from numba import njit
+from numba import njit, prange
 from zarr.abc.codec import ArrayArrayCodec
 from zarr.codecs import CastValue, ScaleOffset
 
 from geb.build.data_catalog.base import Adapter
+from geb.build.data_catalog.ecmwf import ECMWFForecasts
 from geb.build.methods import build_method
 from geb.forcing import generate_bilinear_interpolation_weights
 from geb.hydrology.landsurface.potential_evapotranspiration import (
@@ -1585,21 +1586,25 @@ class Forcing(BuildModelBase):
             wind_v_m_per_s: np.ndarray,
         ) -> np.ndarray:
             # Calculate wind speed from u and v components and PET for each pixel
-            # This function now receives 2D spatial blocks (y, x) per time step/chunk
+            # This function receives 2D spatial blocks (y, x) per time step/chunk
             # while xarray handles the time dimension automatically.
-
-            wind_speed_m_per_s = np.sqrt(wind_u_m_per_s**2 + wind_v_m_per_s**2)
-            res = get_reference_evapotranspiration(
-                temperature_K - np.float32(273.15),
-                dewpoint_temperature_K - np.float32(273.15),
-                surface_pressure_Pa,
-                rlds_W_per_m2,
-                rsds_W_per_m2,
-                wind_speed_m_per_s,
-                np.float32(0.0),
-            )
-            # res[0] is reference ET in (m/h) as per FAO-56 and standard GEB hydrology.
-            reference_et_m_per_h = res[0]
+            ny, nx = temperature_K.shape
+            reference_et_m_per_h = np.empty((ny, nx), dtype=np.float32)
+            for y in prange(ny):  # ty: ignore[not-iterable]
+                for x in range(nx):
+                    wind_speed = np.float32(
+                        np.sqrt(wind_u_m_per_s[y, x] ** 2 + wind_v_m_per_s[y, x] ** 2)
+                    )
+                    res = get_reference_evapotranspiration(
+                        np.float32(temperature_K[y, x] - 273.15),
+                        np.float32(dewpoint_temperature_K[y, x] - 273.15),
+                        np.float32(surface_pressure_Pa[y, x]),
+                        np.float32(rlds_W_per_m2[y, x]),
+                        np.float32(rsds_W_per_m2[y, x]),
+                        wind_speed,
+                        np.float32(0.0),
+                    )
+                    reference_et_m_per_h[y, x] = res[0]
             return reference_et_m_per_h
 
         self.logger.info("Calculating potential evapotranspiration...")
@@ -1862,8 +1867,8 @@ class Forcing(BuildModelBase):
     @build_method(depends_on=["set_ssp", "set_time_range"], required=False)
     def setup_forecasts(
         self,
-        forecast_start: date | datetime,
-        forecast_end: date | datetime,
+        forecast_start: pd.Timestamp | datetime,
+        forecast_end: pd.Timestamp | datetime,
         forecast_provider: str,
         forecast_model: str,
         forecast_resolution: str,
@@ -1871,8 +1876,8 @@ class Forcing(BuildModelBase):
         forecast_timestep_hours: int,
         n_ensemble_members: int,
         forecast_product: Literal["forecast", "hindcast"] = "forecast",
-        hindcast_cycle_start: date | datetime | None = None,
-        hindcast_cycle_end: date | datetime | None = None,
+        hindcast_cycle_start: pd.Timestamp | datetime | None = None,
+        hindcast_cycle_end: pd.Timestamp | datetime | None = None,
         n_hindcast_years: int | None = None,
         create_plots: bool = False,
     ) -> None:
@@ -1913,16 +1918,16 @@ class Forcing(BuildModelBase):
 
     def setup_forecasts_ECMWF(
         self,
-        forecast_start: date | datetime,
-        forecast_end: date | datetime,
+        forecast_start: pd.Timestamp | datetime,
+        forecast_end: pd.Timestamp | datetime,
         forecast_model: str,
         forecast_resolution: str,
         forecast_horizon: int,
         forecast_timestep_hours: int,
         n_ensemble_members: int = 50,
         forecast_product: Literal["forecast", "hindcast"] = "forecast",
-        hindcast_cycle_start: date | datetime | None = None,
-        hindcast_cycle_end: date | datetime | None = None,
+        hindcast_cycle_start: pd.Timestamp | datetime | None = None,
+        hindcast_cycle_end: pd.Timestamp | datetime | None = None,
         n_hindcast_years: int | None = None,
         create_plots: bool = False,
     ) -> None:
@@ -2041,6 +2046,10 @@ class Forcing(BuildModelBase):
             )
 
         if forecast_product == "hindcast":
+            if n_hindcast_years is None:
+                raise ValueError(
+                    "n_hindcast_years must be specified when forecast_product is 'hindcast'."
+                )
             if n_hindcast_years > 20:
                 raise ValueError(
                     f"ECMWF hindcast data is only available for up to 20 years before the forecast cycle date. Please adjust the n_hindcast_years parameter in build.yml (currently {n_hindcast_years})."
@@ -2066,21 +2075,24 @@ class Forcing(BuildModelBase):
 
         self.logger.info(f"Requesting {forecast_model} ECMWF {forecast_product}s...")
 
-        ECMWF_forecasts_store = self.data_catalog.fetch(
-            "ecmwf_forecasts",
-            forecast_variables=list(MARS_codes.values()),
-            bounds=self.bounds,
-            forecast_start=forecast_start,
-            forecast_end=forecast_end,
-            forecast_product=forecast_product,
-            hindcast_cycle_start=hindcast_cycle_start,
-            hindcast_cycle_end=hindcast_cycle_end,
-            n_hindcast_years=n_hindcast_years,
-            forecast_model=forecast_model,  # Use current model type
-            forecast_resolution=forecast_resolution,
-            forecast_horizon=forecast_horizon,  # Forecast horizon in hours
-            forecast_timestep_hours=forecast_timestep_hours,  # Temporal resolution in hours
-            n_ensemble_members=n_ensemble_members,  # Number of ensemble members
+        ECMWF_forecasts_store = cast(
+            ECMWFForecasts,
+            self.data_catalog.fetch(
+                "ecmwf_forecasts",
+                forecast_variables=list(MARS_codes.values()),
+                bounds=self.bounds,
+                forecast_start=forecast_start,
+                forecast_end=forecast_end,
+                forecast_product=forecast_product,
+                hindcast_cycle_start=hindcast_cycle_start,
+                hindcast_cycle_end=hindcast_cycle_end,
+                n_hindcast_years=n_hindcast_years,
+                forecast_model=forecast_model,  # Use current model type
+                forecast_resolution=forecast_resolution,
+                forecast_horizon=forecast_horizon,  # Forecast horizon in hours
+                forecast_timestep_hours=forecast_timestep_hours,  # Temporal resolution in hours
+                n_ensemble_members=n_ensemble_members,  # Number of ensemble members
+            ),
         )
 
         if forecast_product == "hindcast":

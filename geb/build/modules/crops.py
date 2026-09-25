@@ -1942,7 +1942,8 @@ class Crops(BuildModelBase):
                 rotations_with_crop_idx = []
                 for idx, rotation in enumerate(cropping_calenders_crop_rotation):
                     # Get crop IDs in the rotation, excluding -1 entries
-                    crop_ids_in_rotation = rotation[:, 0]
+                    rotation_arr = np.asarray(rotation)
+                    crop_ids_in_rotation = rotation_arr[:, 0]
                     crop_ids_in_rotation = crop_ids_in_rotation[
                         crop_ids_in_rotation != -1
                     ]
@@ -2409,7 +2410,7 @@ class Crops(BuildModelBase):
 
         for linear_index in linear_indices.values.ravel():
             farmers_cell_mask: ArrayBool = farmer_linear_indices == linear_index
-            n_farmer_in_cell: int = farmers_cell_mask.sum()
+            n_farmer_in_cell: int = int(farmers_cell_mask.sum())
             if n_farmer_in_cell == 0:
                 continue  # No farmers in this cell, skip
 

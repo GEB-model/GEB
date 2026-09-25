@@ -104,16 +104,20 @@ def test_calculate_thermal_conductivity_solid_fraction() -> None:
     # Quartz ~ 100% -> q = 1.0
     # lambda_s = 7.7^1.0 * 2.0^0 = 7.7
     res_sand = calculate_thermal_conductivity_solid_fraction_watt_per_meter_kelvin(
-        np.float32(100.0), np.float32(0.0), np.float32(0.0)
-    )
+        np.array([100.0], dtype=np.float32),
+        np.array([0.0], dtype=np.float32),
+        np.array([0.0], dtype=np.float32),
+    )[0]
     assert abs(res_sand - 7.7) < 1e-4
 
     # Pure clay (0% sand)
     # Quartz ~ 0% -> q = 0.0
     # lambda_s = 7.7^0 * 2.0^1 = 2.0
     res_clay = calculate_thermal_conductivity_solid_fraction_watt_per_meter_kelvin(
-        np.float32(0.0), np.float32(0.0), np.float32(100.0)
-    )
+        np.array([0.0], dtype=np.float32),
+        np.array([0.0], dtype=np.float32),
+        np.array([100.0], dtype=np.float32),
+    )[0]
     assert abs(res_clay - 2.0) < 1e-4
 
     # Loam (40% sand, 40% silt, 20% clay)
@@ -121,8 +125,10 @@ def test_calculate_thermal_conductivity_solid_fraction() -> None:
     # lambda_s = 7.7^0.4 * 2.0^0.6
     expected_loam = (7.7**0.4) * (2.0**0.6)
     res_loam = calculate_thermal_conductivity_solid_fraction_watt_per_meter_kelvin(
-        np.float32(40.0), np.float32(40.0), np.float32(20.0)
-    )
+        np.array([40.0], dtype=np.float32),
+        np.array([40.0], dtype=np.float32),
+        np.array([20.0], dtype=np.float32),
+    )[0]
     assert abs(res_loam - expected_loam) < 1e-4
 
     # Plausibility checks for typical soil textures (mostly to avoid unit errors)
@@ -135,8 +141,10 @@ def test_calculate_thermal_conductivity_solid_fraction() -> None:
     ]
     for sand, silt, clay in textures:
         res = calculate_thermal_conductivity_solid_fraction_watt_per_meter_kelvin(
-            np.float32(sand), np.float32(silt), np.float32(clay)
-        )
+            np.array([sand], dtype=np.float32),
+            np.array([silt], dtype=np.float32),
+            np.array([clay], dtype=np.float32),
+        )[0]
         # Literature range for solid particles
         assert 2.0 <= res <= 7.7, (
             f"Conductivity {res} outside common range for {sand}/{silt}/{clay}"

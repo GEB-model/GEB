@@ -1,4 +1,8 @@
 # dev
+- Use np.float64 in accumulation of soil moisture in water balance check. This caused an error if rare cases that was just an accumulation error.
+- Use a fixed 95th percentile threshold for significantly faster return period estimation for bankful discharge estimation.
+- Removed the MCP server (`geb server`), documentation, and the `mcp` dependency.
+- Resolved all ty check errors.
 - Made the MSWEP_URL environment variable optional when all required MSWEP precipitation data is already available locally.
 - Implement two-layer snowpack.
 - Fixed unit inconsistency in kinematic wave routing evaporation limiter where volumetric flow rates and per-length rates were mixed.

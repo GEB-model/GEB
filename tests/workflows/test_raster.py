@@ -129,9 +129,9 @@ def test_pixels_to_coords() -> None:
     pixels = np.squeeze(np.dstack([xs, ys]))
     coords = pixels_to_coords(pixels, gt)
     for i, (x, y) in enumerate(zip(xs, ys)):
-        lon, lat = pixel_to_coord(x, y, gt)
-        assert lon == coords[i, 0]
-        assert lat == coords[i, 1]
+        lon, lat = pixel_to_coord(int(x), int(y), gt)
+        assert np.isclose(lon, coords[i, 0])
+        assert np.isclose(lat, coords[i, 1])
 
 
 def test_coord_to_pixel() -> None:

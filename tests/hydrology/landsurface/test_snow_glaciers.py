@@ -802,7 +802,7 @@ def _run_scenario(
         "latent_log": latent_log,
         "absorbed_sw_log": absorbed_sw_log,
         "upward_lw_log": upward_lw_log,
-        "initial_total_water_m": initial_swe_m,
+        "initial_total_water_m": np.array(initial_swe_m),
     }
 
 
@@ -967,7 +967,7 @@ def _plot_scenario_results(
     axs[4].grid(True)
 
     axs[-1].set_xlabel("Time (hours)")
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    plt.tight_layout(rect=(0.0, 0.03, 1.0, 0.95))
 
     plot_path = (
         output_folder_snow / f"scenario_{scenario_name.replace(' ', '_').lower()}.png"
