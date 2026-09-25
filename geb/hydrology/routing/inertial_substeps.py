@@ -60,7 +60,7 @@ __all__ = [
 ]
 
 # Global option to toggle reverse flow across river reaches
-ALLOW_REVERSE_FLOW: bool = True
+ALLOW_REVERSE_FLOW: bool = False
 
 # Column indices for in-bank channel geometry (geom_inbank)
 GEOM_IN_INVERSE_LENGTH: int = 0
