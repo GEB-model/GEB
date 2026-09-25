@@ -249,6 +249,7 @@ def evaluate_discharge(
     ) in observations_by_frequency.items():
         if observations_by_station.empty:
             continue
+        # main time index is a shared time index for all observations in the dashboard
         main_time_index: pd.DatetimeIndex | None = (
             determine_main_time_index(
                 observations_index=cast(
