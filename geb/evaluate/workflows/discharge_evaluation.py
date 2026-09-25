@@ -56,8 +56,8 @@ def evaluate_discharge(
     start_year: int | None = None,
     end_year: int | None = None,
     clean_output: bool = False,
-    export_timeseries_plots: bool = False,
-    export_return_period_plots: bool = False,
+    export_timeseries_plots: bool = True,
+    export_return_period_plots: bool = True,
 ) -> dict[str, float | None]:
     """Evaluate the discharge grid from GEB against observations from the discharge observations database.
 
