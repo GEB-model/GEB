@@ -952,7 +952,7 @@ class ReturnPeriodModel:
         return axes
 
     def plot_diagnostics(self, figsize: tuple[int, int] = (20, 15)) -> plt.Figure:
-        """Create a master diagnostic figure combining all fit, GOF, and stability plots.
+        """Create a main diagnostic figure combining all fit, GOF, and stability plots.
 
         Returns:
             Matplotlib Figure with 13 panels.
@@ -993,7 +993,7 @@ class ReturnPeriodModel:
         self.plot_threshold_stability(axes=ax_stab)
 
         fig.suptitle(
-            f"Master Diagnostic Plot: {self.n_exc} exceedances above u={self.u:.2f}",
+            f"Main Diagnostic Plot: {self.n_exc} exceedances above u={self.u:.2f}",
             fontsize=16,
             fontweight="bold",
         )

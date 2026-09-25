@@ -5,6 +5,8 @@ JavaScript files in assets/discharge_dashboard control the interactive features.
 _JavascriptMacro adds these scripts and their data to the HTML file.
 """
 
+import base64
+import gzip
 import hashlib
 import html
 import json
@@ -18,6 +20,7 @@ import folium
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import shapely
 from branca.element import Figure
 from folium import MacroElement, TileLayer
 from jinja2 import Environment
@@ -351,7 +354,7 @@ def write_discharge_dashboard(
     waterbodies: gpd.GeoDataFrame | None = None,
     station_characteristics: pd.DataFrame | None = None,
     excluded_stations: gpd.GeoDataFrame | None = None,
-    chart_timeline: list[int] | dict[str, list[int]] | None = None,
+    chart_timeline: list[int] | dict[str, Any] | None = None,
 ) -> folium.Map:
     """Save the discharge map with station charts, score layers, and snapping characteristics (e.g., station IDs, upstream areas).
 
@@ -514,111 +517,50 @@ def write_discharge_dashboard(
     snapping_available: bool = snapping_columns.issubset(mapped_station_scores.columns)
     snapping_stations: list[dict[str, Any]] = []
 
-    for station_id, row in mapped_station_scores.iterrows():
-        coords: list[float] = [row.geometry.y, row.geometry.x]
-        station_id_str: str = str(station_id)
-        station_name: str = str(row["station_name"])
-        escaped_station_id: str = html.escape(station_id_str, quote=True)
-        popup_html: str = (
-            f"<div class='geb-popup' data-station-id='{escaped_station_id}' "
-            f"style='width:{popup_width}px;'>Loading interactive charts...</div>"
-        )
-        if pd.notna(row.get("exclusion_reason")):
-            popup_html = (
-                "<div style='color:#b91c1c;padding:8px'><b>Diagnostic only — excluded from evaluation.</b><br>"
-                + html.escape(str(row["exclusion_reason"]))
-                + "</div>"
-                + popup_html
-            )
-        timezone_tooltip: str = (
-            "<br><span data-geb-utc-offset-hours="
-            f"'{float(row['timezone_utc_offset'])}'></span> fixed"
-        )
-        tooltip: str = (
-            f"{escaped_station_id}: {html.escape(station_name, quote=True)}"
-            f"{timezone_tooltip}"
-        )
-        if pd.notna(row.get("exclusion_reason")):
-            tooltip += "<br>Diagnostic only — excluded from evaluation"
-
-        if snapping_available:
+    if snapping_available:
+        for station_id, row in mapped_station_scores.iterrows():
             snapping_record: dict[str, Any] = _build_snapping_station(
-                station_id=station_id_str,
-                station_name=station_name,
+                station_id=str(station_id),
+                station_name=str(row["station_name"]),
                 row=row,
             )
             snapping_stations.append(snapping_record)
 
-        # Scale circle radius by upstream area (range 5–10 px).
-        circle_radius: float = (
-            5 + math.sqrt(row["upstream_area_GEB"]) / largest_upstream_area_sqrt * 5
-        )
-        station_marker_names: list[str] = _add_metric_station_markers(
-            row=row,
-            metric_layers=metric_layers,
-            coords=coords,
-            circle_radius=circle_radius,
-            popup_html=popup_html,
-            popup_width=popup_width,
-            tooltip=tooltip,
-        )
-
-        if (
-            layer_upstream is not None
-            and colormap_upstream is not None
-            and np.isfinite(row["discharge_observations_to_GEB_upstream_area_ratio"])
-        ):
-            color_upstream: str | tuple[int, int, int, int] = colormap_upstream(
-                float(row["discharge_observations_to_GEB_upstream_area_ratio"])
-            )
-            if isinstance(color_upstream, str) and color_upstream != "nan":
-                upstream_marker = folium.CircleMarker(
-                    location=coords,
-                    radius=10,
-                    color="black",
-                    fill=True,
-                    fill_color=color_upstream,
-                    fill_opacity=0.9,
-                    popup=folium.Popup(popup_html, max_width=popup_width),
-                    tooltip=tooltip,
-                    z_index=1000,
-                )
-                upstream_marker.add_to(layer_upstream)
-                station_marker_names.append(upstream_marker.get_name())
-
-        if availability_layer is not None:
-            station_record: dict[str, Any] = characteristic_records[station_id_str]
-            station_marker_names.extend(
-                _add_characteristic_station_markers(
-                    station_record=station_record,
-                    characteristic_layers=characteristic_layers,
-                    availability_layer=availability_layer,
-                    coords=coords,
-                    circle_radius=circle_radius,
-                    popup_html=popup_html,
-                    popup_width=popup_width,
-                    station_tooltip=tooltip,
-                )
-            )
-
-        station_marker_index.append(
-            {
-                "id": station_id_str,
-                "name": station_name,
-                "markers": station_marker_names,
-            }
-        )
-
     for layer, _, _ in metric_layers:
         layer.add_to(discharge_map)
 
-    if layer_upstream is not None and colormap_upstream is not None:
+    if layer_upstream is not None:
         layer_upstream.add_to(discharge_map)
 
     for characteristic_layer, _ in characteristic_layers:
         characteristic_layer.add_to(discharge_map)
+
     if availability_layer is not None:
         availability_layer.add_to(discharge_map)
+
+    stations_payload: str = _build_station_marker_payload(
+        mapped_station_scores=mapped_station_scores,
+        metric_layers=metric_layers,
+        layer_upstream=layer_upstream,
+        colormap_upstream=colormap_upstream,
+        characteristic_layers=characteristic_layers,
+        availability_layer=availability_layer,
+        characteristic_records=characteristic_records,
+        largest_upstream_area_sqrt=largest_upstream_area_sqrt,
+    )
+    stations_macro_data: dict[str, Any] = {
+        "payload": stations_payload,
+        "upstreamLayer": (
+            layer_upstream.get_name() if layer_upstream is not None else None
+        ),
+        "availabilityLayer": (
+            availability_layer.get_name() if availability_layer is not None else None
+        ),
+        "caravanAvailableColor": _CARAVAN_AVAILABLE_COLOR,
+        "caravanUnavailableColor": _CARAVAN_UNAVAILABLE_COLOR,
+    }
+    _JavascriptMacro("stations.js", stations_macro_data).add_to(discharge_map)
+
     if excluded_stations is not None and not excluded_stations.empty:
         area_distance_count: int = 0
         excluded_layer: folium.FeatureGroup = folium.FeatureGroup(
@@ -686,12 +628,19 @@ def write_discharge_dashboard(
         )
     if snapping_stations:
         snapping_layer.add_to(discharge_map)
+        snapping_json_bytes: bytes = json.dumps(
+            snapping_stations, separators=(",", ":")
+        ).encode("utf-8")
+        compressed_snapping: bytes = gzip.compress(snapping_json_bytes, compresslevel=6)
+        encoded_snapping_payload: str = base64.b64encode(compressed_snapping).decode(
+            "ascii"
+        )
         # The inactive overlay stays empty; JavaScript creates visible features lazily.
         _JavascriptMacro(
             "snapping.js",
             {
                 "layer": snapping_layer.get_name(),
-                "stations": snapping_stations,
+                "payload": encoded_snapping_payload,
             },
         ).add_to(discharge_map)
 
@@ -757,14 +706,45 @@ def load_discharge_dashboard_geometries(
     )
 
 
-def determine_master_time_index(
+def serialize_main_timeline(
+    main_time_index: pd.DatetimeIndex,
+) -> dict[str, int]:
+    """Serialize a regular continuous DatetimeIndex into a compact start/step/count dictionary.
+
+    Args:
+        main_time_index: Continuous regular DatetimeIndex.
+
+    Returns:
+        Dictionary with integer start (epoch ms), step (ms), and count.
+
+    Raises:
+        ValueError: If main_time_index is empty.
+    """
+    if main_time_index.empty:
+        raise ValueError("main_time_index cannot be empty.")
+    start_ms: int = int(
+        main_time_index[0].to_datetime64().astype("datetime64[ms]").astype("int64")
+    )
+    step_ms: int = (
+        int((main_time_index[1] - main_time_index[0]).total_seconds() * 1000)
+        if len(main_time_index) > 1
+        else 0
+    )
+    return {
+        "start": start_ms,
+        "step": step_ms,
+        "count": len(main_time_index),
+    }
+
+
+def determine_main_time_index(
     observations_index: pd.DatetimeIndex,
     simulation_output_folder: Path,
     frequency: str,
     period_start: pd.Timestamp | None = None,
     period_end: pd.Timestamp | None = None,
 ) -> pd.DatetimeIndex | None:
-    """Determine a continuous master time index spanning the evaluation period.
+    """Determine a continuous main time index spanning the evaluation period.
 
     Notes:
         Ensures all station charts share an identical, aligned time grid for a
@@ -779,7 +759,7 @@ def determine_master_time_index(
         period_end: Optional evaluation period end timestamp.
 
     Returns:
-        Continuous master DatetimeIndex, or None if simulation files or
+        Continuous main DatetimeIndex, or None if simulation files or
         observations are unavailable.
 
     Raises:
@@ -919,8 +899,11 @@ def _write_dashboard_charts_from_saved_scores(
         total_work,
     )
 
-    station_dashboard_chart_files: dict[str, str] = {}
-    chart_timelines: dict[str, list[int]] = {}
+    chart_writer: StationChartBundleWriter = StationChartBundleWriter(
+        dashboard_path=dashboard_path,
+        max_stations_per_bundle=50,
+    )
+    chart_timelines: dict[str, Any] = {}
     processed: int = 0
     for (
         frequency_label,
@@ -928,15 +911,15 @@ def _write_dashboard_charts_from_saved_scores(
     ) in observations_by_frequency.items():
         if observations_by_station.empty:
             continue
-        master_time_index: pd.DatetimeIndex | None = determine_master_time_index(
+        main_time_index: pd.DatetimeIndex | None = determine_main_time_index(
             observations_index=cast(pd.DatetimeIndex, observations_by_station.index),
             simulation_output_folder=run_output_folder,
             frequency=frequency_label,
         )
-        if master_time_index is not None:
-            chart_timelines[frequency_label] = (
-                master_time_index.astype("datetime64[ms]").astype("int64")
-            ).tolist()
+        if main_time_index is not None:
+            chart_timelines[frequency_label] = serialize_main_timeline(
+                main_time_index
+            )
         for station_id in observations_by_station.columns:
             station_id_text: str = str(station_id)
             if station_id_text not in saved_scores_by_station_id:
@@ -961,8 +944,7 @@ def _write_dashboard_charts_from_saved_scores(
                 for metric_name in DischargeMetrics._fields
                 if f"{metric_name}_{frequency_label}" in station_row.index
             }
-            station_dashboard_chart_files[station_id_text] = write_station_chart_data(
-                dashboard_path=dashboard_path,
+            chart_writer.add_station(
                 station_id=station_id_text,
                 chart_data=build_station_chart_data(
                     discharge_comparison=discharge_comparison,
@@ -973,7 +955,7 @@ def _write_dashboard_charts_from_saved_scores(
                     frequency=frequency_label,
                     logger=logger,
                     include_return_period_plots=include_return_period_plots,
-                    master_time_index=master_time_index,
+                    main_time_index=main_time_index,
                 ),
             )
 
@@ -985,11 +967,102 @@ def _write_dashboard_charts_from_saved_scores(
                     total_work,
                 )
 
+    station_dashboard_chart_files: dict[str, str] = chart_writer.finish()
     logger.info(
-        "Chart data built for %d stations.",
+        "Chart data built for %d stations in %d bundle file(s).",
         len(station_dashboard_chart_files),
+        len(set(station_dashboard_chart_files.values())),
     )
     return station_dashboard_chart_files, chart_timelines
+
+
+class StationChartBundleWriter:
+    """Accumulates and writes station chart data in compressed JavaScript bundles.
+
+    Notes:
+        Grouping station chart data into bundles of up to max_stations_per_bundle
+        stations avoids creating hundreds of small individual files on disk, greatly
+        reducing inode usage and filesystem metadata operations on network storage
+        while keeping bundle file sizes small enough for fast asynchronous browser
+        loading.
+
+    Args:
+        dashboard_path: Output path of the dashboard HTML file.
+        max_stations_per_bundle: Maximum number of stations to bundle into a
+            single JavaScript file. Defaults to 50.
+    """
+
+    def __init__(
+        self,
+        dashboard_path: Path,
+        max_stations_per_bundle: int = 50,
+    ) -> None:
+        """Initialize the bundle writer and prepare the output folder.
+
+        Args:
+            dashboard_path: Output path of the dashboard HTML file.
+            max_stations_per_bundle: Maximum number of stations to bundle into a
+                single JavaScript file. Defaults to 50.
+        """
+        self.dashboard_path: Path = dashboard_path
+        self.max_stations_per_bundle: int = max_stations_per_bundle
+        self.chart_folder: Path = (
+            dashboard_path.parent / f"{dashboard_path.stem}_charts"
+        )
+        if self.chart_folder.exists():
+            for existing_file in self.chart_folder.glob("bundle_*.js"):
+                try:
+                    existing_file.unlink()
+                except OSError:
+                    pass
+        self.chart_folder.mkdir(parents=True, exist_ok=True)
+        self.station_chart_files: dict[str, str] = {}
+        self._current_bundle: dict[str, Any] = {}
+        self._bundle_index: int = 0
+
+    def add_station(self, station_id: str, chart_data: dict[str, Any]) -> None:
+        """Add chart data for one station and flush to disk if the bundle is full.
+
+        Args:
+            station_id: Station identifier.
+            chart_data: Data for the interactive station charts.
+        """
+        self._current_bundle[station_id] = chart_data
+        if len(self._current_bundle) >= self.max_stations_per_bundle:
+            self._flush_bundle()
+
+    def finish(self) -> dict[str, str]:
+        """Flush any remaining station data and return the station-to-file mapping.
+
+        Returns:
+            Dictionary mapping station identifiers to their relative bundle file path.
+        """
+        if self._current_bundle:
+            self._flush_bundle()
+        return self.station_chart_files
+
+    def _flush_bundle(self) -> None:
+        """Write accumulated stations to a Base64-compressed JavaScript bundle."""
+        if not self._current_bundle:
+            return
+        bundle_filename: str = f"bundle_{self._bundle_index:03d}.js"
+        bundle_path: Path = self.chart_folder / bundle_filename
+        json_bytes: bytes = json.dumps(
+            self._current_bundle, separators=(",", ":")
+        ).encode("utf-8")
+        compressed_bytes: bytes = gzip.compress(json_bytes, compresslevel=6)
+        encoded_payload: str = base64.b64encode(compressed_bytes).decode("ascii")
+        bundle_path.write_text(
+            f'window._gebStationChartBundle="{encoded_payload}";',
+            encoding="utf-8",
+        )
+        relative_path: str = bundle_path.relative_to(
+            self.dashboard_path.parent
+        ).as_posix()
+        for station_id in self._current_bundle:
+            self.station_chart_files[station_id] = relative_path
+        self._current_bundle.clear()
+        self._bundle_index += 1
 
 
 def write_station_chart_data(
@@ -997,7 +1070,13 @@ def write_station_chart_data(
     station_id: str,
     chart_data: dict[str, Any],
 ) -> str:
-    """Save station chart data for the browser to load when the popup opens.
+    """Write compressed chart data for one station to a JS file.
+
+    Notes:
+        Chart data is serialized to JSON, compressed using gzip, and encoded
+        as a Base64 string within a JavaScript assignment. This keeps file sizes
+        minimal while preserving compatibility with direct local file:///
+        browsing without encountering browser CORS restrictions.
 
     Args:
         dashboard_path: Output path of the dashboard HTML file.
@@ -1011,10 +1090,11 @@ def write_station_chart_data(
     chart_folder.mkdir(parents=True, exist_ok=True)
     station_hash: str = hashlib.sha256(station_id.encode()).hexdigest()[:16]
     chart_path: Path = chart_folder / f"{station_hash}.js"
+    json_bytes: bytes = json.dumps(chart_data, separators=(",", ":")).encode("utf-8")
+    compressed_bytes: bytes = gzip.compress(json_bytes, compresslevel=6)
+    encoded_payload: str = base64.b64encode(compressed_bytes).decode("ascii")
     chart_path.write_text(
-        "window._gebStationChartPayload="
-        + json.dumps(chart_data, separators=(",", ":"))
-        + ";",
+        f'window._gebStationChartPayload="{encoded_payload}";',
         encoding="utf-8",
     )
     return chart_path.relative_to(dashboard_path.parent).as_posix()
@@ -1029,7 +1109,7 @@ def build_station_chart_data(
     frequency: str,
     logger: logging.Logger,
     include_return_period_plots: bool = True,
-    master_time_index: pd.DatetimeIndex | None = None,
+    main_time_index: pd.DatetimeIndex | None = None,
 ) -> dict[str, Any]:
     """Prepare chart data for one station popup in the discharge dashboard.
 
@@ -1046,7 +1126,7 @@ def build_station_chart_data(
         logger: Model logger for return-period fit diagnostics.
         include_return_period_plots: Whether to fit and include return-period
             curves. Defaults to True.
-        master_time_index: Optional master DatetimeIndex shared across all stations
+        main_time_index: Optional main DatetimeIndex shared across all stations
             to align time series onto a single dashboard timeline.
 
     Returns:
@@ -1083,7 +1163,7 @@ def build_station_chart_data(
         "metrics": chart_metrics,
         "timeseries": _build_timeseries_data(
             discharge_comparison=discharge_comparison,
-            master_time_index=master_time_index,
+            main_time_index=main_time_index,
         ),
     }
     if include_return_period_plots:
@@ -1153,12 +1233,12 @@ def _to_int_deltas(values: list[int | None]) -> list[int | None]:
 
 def _build_timeseries_data(
     discharge_comparison: pd.DataFrame,
-    master_time_index: pd.DatetimeIndex | None = None,
+    main_time_index: pd.DatetimeIndex | None = None,
 ) -> dict[str, Any]:
     """Prepare data for one discharge time-series chart in a popup.
 
     Notes:
-        If ``master_time_index`` is provided, the dataframe is windowed to the
+        If ``main_time_index`` is provided, the dataframe is windowed to the
         overlapping active period and aligned with the shared dashboard timeline
         using a start index offset, eliminating leading and trailing missing values.
         Missing observation values within the window are represented as ``None``
@@ -1167,7 +1247,7 @@ def _build_timeseries_data(
 
     Args:
         discharge_comparison: Observed/simulated discharge dataframe (m3/s).
-        master_time_index: Optional master DatetimeIndex shared across all stations.
+        main_time_index: Optional main DatetimeIndex shared across all stations.
             When provided, redundant leading/trailing nulls and the "time" array
             are omitted, storing only the start index offset.
 
@@ -1183,17 +1263,22 @@ def _build_timeseries_data(
             "discharge_comparison must use a DateTimeIndex for dashboard charts."
         )
 
-    if master_time_index is not None and not discharge_comparison.empty:
-        common_start: pd.Timestamp = max(
-            discharge_comparison.index[0], master_time_index[0]
-        )
-        common_end: pd.Timestamp = min(
-            discharge_comparison.index[-1], master_time_index[-1]
-        )
+    if main_time_index is not None and not discharge_comparison.empty:
+        obs_col: pd.Series = discharge_comparison["discharge_observations"]
+        valid_obs: pd.Series = obs_col.dropna()
+        if not valid_obs.empty:
+            active_start: pd.Timestamp = valid_obs.index[0]
+            active_end: pd.Timestamp = valid_obs.index[-1]
+        else:
+            active_start = discharge_comparison.index[0]
+            active_end = discharge_comparison.index[-1]
+
+        common_start: pd.Timestamp = max(active_start, main_time_index[0])
+        common_end: pd.Timestamp = min(active_end, main_time_index[-1])
         if common_start <= common_end:
-            start_index: int = int(cast(int, master_time_index.get_loc(common_start)))
-            end_index: int = int(cast(int, master_time_index.get_loc(common_end))) + 1
-            window_slice: pd.DatetimeIndex = master_time_index[start_index:end_index]
+            start_index: int = int(cast(int, main_time_index.get_loc(common_start)))
+            end_index: int = int(cast(int, main_time_index.get_loc(common_end))) + 1
+            window_slice: pd.DatetimeIndex = main_time_index[start_index:end_index]
             comparison: pd.DataFrame = discharge_comparison.reindex(window_slice)
         else:
             comparison = discharge_comparison.iloc[0:0]
@@ -1412,139 +1497,136 @@ def _prepare_characteristic_values(
     return statistics, percentile_ranks
 
 
-def _add_metric_station_markers(
-    row: pd.Series,
+def _build_station_marker_payload(
+    mapped_station_scores: gpd.GeoDataFrame,
     metric_layers: list[tuple[folium.FeatureGroup, cm.LinearColormap, str]],
-    coords: list[float],
-    circle_radius: float,
-    popup_html: str,
-    popup_width: int,
-    tooltip: str,
-) -> list[str]:
-    """Add one station marker to each metric layer.
-
-    Args:
-        row: Evaluation metrics for one station (dimensionless).
-        metric_layers: Layers, colormaps, and metric names to show.
-        coords: Marker coordinates as ``[latitude, longitude]`` (degrees).
-        circle_radius: Marker radius (pixels).
-        popup_html: Popup placeholder HTML.
-        popup_width: Popup width (pixels).
-        tooltip: Marker tooltip text.
-
-    Returns:
-        Folium JavaScript variable names for the created markers.
-    """
-    marker_names: list[str] = []
-    for layer, colormap, metric_name in metric_layers:
-        metric_value: float = row.get(metric_name, np.nan)
-        fill_color: str = colormap(metric_value) if pd.notna(metric_value) else "gray"
-        marker = folium.CircleMarker(
-            location=coords,
-            radius=circle_radius,
-            color="black",
-            fill=True,
-            fill_color=fill_color,
-            fill_opacity=0.9,
-            popup=folium.Popup(popup_html, max_width=popup_width),
-            tooltip=tooltip,
-            z_index=1000,
-        )
-        marker.add_to(layer)
-        marker_names.append(marker.get_name())
-    return marker_names
-
-
-def _add_characteristic_station_markers(
-    station_record: dict[str, Any],
+    layer_upstream: folium.FeatureGroup | None,
+    colormap_upstream: cm.LinearColormap | None,
     characteristic_layers: list[tuple[folium.FeatureGroup, dict[str, Any]]],
-    availability_layer: folium.FeatureGroup,
-    coords: list[float],
-    circle_radius: float,
-    popup_html: str,
-    popup_width: int,
-    station_tooltip: str,
-) -> list[str]:
-    """Add GRDC-Caravan availability and characteristic markers for a station.
+    availability_layer: folium.FeatureGroup | None,
+    characteristic_records: dict[str, dict[str, Any]],
+    largest_upstream_area_sqrt: float,
+) -> str:
+    """Build compressed Base64 Gzip payload of evaluated station markers for the browser.
 
-    Catchment characteristic layers contain only stations with a finite value. The
-    availability layer contains every evaluated station, making absent
-    GRDC-Caravan coverage explicit without treating it as a numeric zero.
+    Notes:
+        Serializing station marker properties to a compact JSON payload and instantiating
+        Leaflet circle markers dynamically on the client eliminates tens of thousands
+        of redundant Folium Python-generated JavaScript CircleMarker lines, reducing
+        HTML dashboard file size by ~10 MB.
 
     Args:
-        station_record: JSON-safe station characteristic record.
-        characteristic_layers: Feature groups and their characteristic metadata.
-        availability_layer: Feature group showing GRDC-Caravan match status.
-        coords: Marker coordinates as ``[latitude, longitude]`` (degrees).
-        circle_radius: Marker radius (pixels).
-        popup_html: Popup placeholder HTML.
-        popup_width: Popup width (pixels).
-        station_tooltip: Station identifier and name.
+        mapped_station_scores: Evaluated station GeoDataFrame.
+        metric_layers: Metric feature groups, colormaps, and source columns.
+        layer_upstream: Optional upstream area ratio feature group.
+        colormap_upstream: Colormap for upstream area ratio.
+        characteristic_layers: GRDC-Caravan characteristic feature groups and metadata.
+        availability_layer: Optional GRDC-Caravan availability feature group.
+        characteristic_records: Characteristic lookup dictionary by station ID.
+        largest_upstream_area_sqrt: Square root of maximum upstream area (meters).
 
     Returns:
-        Folium JavaScript variable names for the created markers.
+        Base64-encoded gzip-compressed JSON payload string.
     """
-    marker_names: list[str] = []
-    caravan_available: bool = bool(station_record["caravan_available"])
-    availability_label: str = "available" if caravan_available else "not available"
-    availability_marker = folium.CircleMarker(
-        location=coords,
-        radius=circle_radius,
-        color="black",
-        fill=True,
-        fill_color=(
-            _CARAVAN_AVAILABLE_COLOR
-            if caravan_available
-            else _CARAVAN_UNAVAILABLE_COLOR
-        ),
-        fill_opacity=0.9,
-        popup=folium.Popup(popup_html, max_width=popup_width),
-        tooltip=f"{station_tooltip}<br>GRDC-Caravan data: {availability_label}",
-        z_index=1000,
-    )
-    availability_marker.add_to(availability_layer)
-    marker_names.append(availability_marker.get_name())
+    stations_data: list[dict[str, Any]] = []
+    has_upstream: bool = layer_upstream is not None and colormap_upstream is not None
 
-    for layer, characteristic in characteristic_layers:
-        value: float | None = station_record["values"][characteristic["column"]]
-        if value is None:
-            continue
-        percentile: float | None = station_record["percentiles"][
-            characteristic["column"]
+    for station_id, row in mapped_station_scores.iterrows():
+        station_id_str: str = str(station_id)
+        station_name: str = str(row["station_name"])
+        upstream_area_geb: float = float(row["upstream_area_GEB"])
+        circle_radius: float = round(
+            5.0 + math.sqrt(upstream_area_geb) / largest_upstream_area_sqrt * 5.0,
+            2,
+        )
+        coords: list[float] = [
+            round(float(row.geometry.y), 5),
+            round(float(row.geometry.x), 5),
         ]
-        assert percentile is not None, (
-            f"Finite characteristic {characteristic['column']} has no rank."
+        tz_offset: float | None = (
+            float(row["timezone_utc_offset"])
+            if "timezone_utc_offset" in row and pd.notna(row["timezone_utc_offset"])
+            else None
         )
-        absolute_value: float = abs(value)
-        decimal_places: int = (
-            0
-            if absolute_value >= 1000.0
-            else 1
-            if absolute_value >= 100.0
-            else 2
-            if absolute_value >= 10.0
-            else 3
+        exclusion_reason: str | None = (
+            str(row["exclusion_reason"])
+            if pd.notna(row.get("exclusion_reason"))
+            else None
         )
-        formatted_value: str = f"{value:,.{decimal_places}f}"
-        fill_color: str = _CHARACTERISTIC_COLORMAP(percentile)
-        rank_text: str = f"percentile rank {percentile:.0f}"
-        characteristic_marker = folium.CircleMarker(
-            location=coords,
-            radius=circle_radius,
-            color="black",
-            fill=True,
-            fill_color=fill_color,
-            fill_opacity=0.9,
-            popup=folium.Popup(popup_html, max_width=popup_width),
-            tooltip=(
-                f"{station_tooltip}<br>{characteristic['label']}: "
-                f"{formatted_value} ({rank_text})"
-            ),
-            z_index=1000,
-        )
-        characteristic_marker.add_to(layer)
-        marker_names.append(characteristic_marker.get_name())
-    return marker_names
+
+        metric_colors: dict[str, str] = {}
+        for layer, colormap, metric_name in metric_layers:
+            metric_val: float = row.get(metric_name, np.nan)
+            color: str = colormap(metric_val) if pd.notna(metric_val) else "gray"
+            metric_colors[layer.get_name()] = str(color)
+
+        if (
+            has_upstream
+            and "discharge_observations_to_GEB_upstream_area_ratio" in row
+            and pd.notna(row["discharge_observations_to_GEB_upstream_area_ratio"])
+        ):
+            ratio_val: float = float(
+                row["discharge_observations_to_GEB_upstream_area_ratio"]
+            )
+            if np.isfinite(ratio_val):
+                assert colormap_upstream is not None
+                assert layer_upstream is not None
+                color_upstream: str | tuple[int, int, int, int] = colormap_upstream(
+                    ratio_val
+                )
+                if isinstance(color_upstream, str) and color_upstream != "nan":
+                    metric_colors[layer_upstream.get_name()] = str(color_upstream)
+
+        av_val: int | None = None
+        char_markers: dict[str, list[str]] = {}
+        if availability_layer is not None and station_id_str in characteristic_records:
+            station_record: dict[str, Any] = characteristic_records[station_id_str]
+            av_val = int(bool(station_record.get("caravan_available", False)))
+            for layer, characteristic in characteristic_layers:
+                col_name: str = str(characteristic["column"])
+                value: float | None = station_record["values"].get(col_name)
+                if value is None:
+                    continue
+                percentile: float | None = station_record["percentiles"].get(col_name)
+                if percentile is None:
+                    continue
+                abs_val: float = abs(value)
+                decimals: int = (
+                    0
+                    if abs_val >= 1000.0
+                    else 1
+                    if abs_val >= 100.0
+                    else 2
+                    if abs_val >= 10.0
+                    else 3
+                )
+                formatted_value: str = f"{value:,.{decimals}f}"
+                fill_color: str = _CHARACTERISTIC_COLORMAP(percentile)
+                rank_text: str = f"percentile rank {percentile:.0f}"
+                tooltip_text: str = (
+                    f"{characteristic['label']}: {formatted_value} ({rank_text})"
+                )
+                char_markers[layer.get_name()] = [fill_color, tooltip_text]
+
+        station_dict: dict[str, Any] = {
+            "id": station_id_str,
+            "name": station_name,
+            "coords": coords,
+            "r": circle_radius,
+            "tz": tz_offset,
+            "ex": exclusion_reason,
+            "m": metric_colors,
+        }
+        if av_val is not None:
+            station_dict["av"] = av_val
+        if char_markers:
+            station_dict["ch"] = char_markers
+
+        stations_data.append(station_dict)
+
+    json_bytes: bytes = json.dumps(stations_data, separators=(",", ":")).encode("utf-8")
+    compressed: bytes = gzip.compress(json_bytes, compresslevel=6)
+    return base64.b64encode(compressed).decode("ascii")
 
 
 def _inject_station_layer_legend_script(
@@ -1633,26 +1715,40 @@ def _add_river_layers(
 ) -> None:
     """Show all active rivers, with upstream areas formatted in the browser.
 
+    Notes:
+        River geometries are simplified to ~10m tolerance and coordinate precision
+        is rounded to ~1m (1e-5 deg) to drop GeoJSON payload size by ~70%. The GeoJSON
+        is gzip-compressed and Base64-encoded to keep the HTML file size minimal. A
+        Folium FeatureGroup is added to the map so Folium's LayerControl retains its
+        layer checkbox, and Leaflet renders the GeoJSON client-side.
+
     Args:
         discharge_map: Map receiving the river network.
         rivers: Active WGS84 river segments indexed by river ID, with areas in m².
     """
     river_data: gpd.GeoDataFrame = rivers[["uparea_m2", "geometry"]].copy()
     river_data["river_id"] = rivers.index.astype(str)
-    river_layer: folium.GeoJson = folium.GeoJson(
-        river_data.to_json(drop_id=True),
+    river_data["uparea_m2"] = river_data["uparea_m2"].round(1)
+    simplified_geom: gpd.GeoSeries = river_data["geometry"].simplify(0.0001)
+    river_data["geometry"] = shapely.set_precision(simplified_geom, grid_size=1e-5)
+    river_geojson: str = river_data.to_json(drop_id=True)
+    compressed_bytes: bytes = gzip.compress(
+        river_geojson.encode("utf-8"), compresslevel=6
+    )
+    encoded_payload: str = base64.b64encode(compressed_bytes).decode("ascii")
+
+    river_layer: folium.FeatureGroup = folium.FeatureGroup(
         name="Active rivers",
-        style_function=lambda _feature: {
-            "color": "#4A90D9",
-            "weight": 1.2,
-            "opacity": 0.65,
-        },
-        highlight_function=lambda _feature: {"weight": 4, "opacity": 1},
+        show=True,
     )
     river_layer.add_to(discharge_map)
-    _JavascriptMacro("rivers.js", {"layer": river_layer.get_name()}).add_to(
-        discharge_map
-    )
+    _JavascriptMacro(
+        "rivers.js",
+        {
+            "layer": river_layer.get_name(),
+            "payload": encoded_payload,
+        },
+    ).add_to(discharge_map)
 
 
 def _add_reservoir_layer(

@@ -1,4 +1,6 @@
 # dev
+- Reduce size of discharge evaluation HTML dashboard. 
+- Vectorized GPD bootstrap goodness-of-fit testing in extreme value analysis, speeding up threshold selection by ~80x and removing early stopping parameters.
 - Use np.float64 in accumulation of soil moisture in water balance check. This caused an error if rare cases that was just an accumulation error.
 - Use a fixed 95th percentile threshold for significantly faster return period estimation for bankful discharge estimation.
 - Removed the MCP server (`geb server`), documentation, and the `mcp` dependency.

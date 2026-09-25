@@ -44,6 +44,38 @@
     return '<div id="' + id + '" class="geb-popup__chart"></div>';
   }
 
+  function unpackStationData(rawPayload, callback) {
+    if (!rawPayload) {
+      callback(null);
+      return;
+    }
+    if (typeof rawPayload === 'object') {
+      callback(rawPayload);
+      return;
+    }
+    try {
+      var binaryStr = atob(rawPayload);
+      var bytes = new Uint8Array(binaryStr.length);
+      for (var i = 0; i < binaryStr.length; i++) {
+        bytes[i] = binaryStr.charCodeAt(i);
+      }
+      var stream = new Response(bytes).body.pipeThrough(new DecompressionStream('gzip'));
+      new Response(stream).text().then(function(decompressedText) {
+        try {
+          callback(JSON.parse(decompressedText));
+        } catch (parseErr) {
+          callback(null);
+        }
+      }).catch(function() {
+        callback(null);
+      });
+    } catch (err) {
+      callback(null);
+    }
+  }
+
+  var pendingBundleCallbacks = {};
+
   function loadStationData(stationId, callback) {
     if (stationChartCache[stationId]) {
       callback(stationChartCache[stationId]);
@@ -54,20 +86,75 @@
       callback(null);
       return;
     }
+    if (pendingBundleCallbacks[chartFile]) {
+      pendingBundleCallbacks[chartFile].push(function() {
+        callback(stationChartCache[stationId] || null);
+      });
+      return;
+    }
+    pendingBundleCallbacks[chartFile] = [function() {
+      callback(stationChartCache[stationId] || null);
+    }];
+
     var script = document.createElement('script');
     script.src = chartFile;
     script.onload = function() {
-      var data = window._gebStationChartPayload;
+      var rawBundle = window._gebStationChartBundle;
+      delete window._gebStationChartBundle;
+      var rawSingle = window._gebStationChartPayload;
       delete window._gebStationChartPayload;
-      if (data) stationChartCache[stationId] = data;
-      script.remove();
-      callback(data || null);
+      if (script.remove) script.remove();
+
+      function notifyPending() {
+        var cbs = pendingBundleCallbacks[chartFile] || [];
+        delete pendingBundleCallbacks[chartFile];
+        cbs.forEach(function(cb) { cb(); });
+      }
+
+      if (rawBundle !== undefined) {
+        unpackStationData(rawBundle, function(bundleData) {
+          if (bundleData && typeof bundleData === 'object') {
+            Object.assign(stationChartCache, bundleData);
+          }
+          notifyPending();
+        });
+      } else if (rawSingle !== undefined) {
+        unpackStationData(rawSingle, function(singleData) {
+          if (singleData && typeof singleData === 'object') {
+            stationChartCache[stationId] = singleData;
+          }
+          notifyPending();
+        });
+      } else {
+        notifyPending();
+      }
     };
     script.onerror = function() {
-      script.remove();
-      callback(null);
+      if (script.remove) script.remove();
+      var cbs = pendingBundleCallbacks[chartFile] || [];
+      delete pendingBundleCallbacks[chartFile];
+      cbs.forEach(function(cb) { cb(); });
     };
     document.head.appendChild(script);
+  }
+
+  function resolveTimeline(spec, startIndex, length) {
+    if (!spec) return [];
+    if (Array.isArray(spec)) {
+      return (startIndex > 0 || length < spec.length)
+        ? spec.slice(startIndex, startIndex + length)
+        : spec;
+    }
+    if (typeof spec === 'object' && typeof spec.start === 'number' && typeof spec.step === 'number') {
+      var count = length || spec.count || 0;
+      var start = spec.start + (startIndex || 0) * spec.step;
+      var arr = new Array(count);
+      for (var i = 0; i < count; i++) {
+        arr[i] = start + i * spec.step;
+      }
+      return arr;
+    }
+    return [];
   }
 
   function unscale(values, scale) {
@@ -176,14 +263,12 @@
       var rawTimeline = (data.timeseries.time)
         ? data.timeseries.time
         : (globalTimeline && globalTimeline[data.frequency] ? globalTimeline[data.frequency] : globalTimeline);
-      if (rawTimeline && rawTimeline.length) {
-        var startIndex = data.timeseries.start || 0;
-        var seriesLength = (data.timeseries.observed && data.timeseries.observed.length)
-          || (data.timeseries.simulated && data.timeseries.simulated.length)
-          || rawTimeline.length;
-        var timeline = (startIndex > 0 || seriesLength < rawTimeline.length)
-          ? rawTimeline.slice(startIndex, startIndex + seriesLength)
-          : rawTimeline;
+      var startIndex = data.timeseries.start || 0;
+      var seriesLength = (data.timeseries.observed && data.timeseries.observed.length)
+        || (data.timeseries.simulated && data.timeseries.simulated.length)
+        || 0;
+      var timeline = resolveTimeline(rawTimeline, startIndex, seriesLength);
+      if (timeline && timeline.length) {
 
         var scale = data.timeseries.scale || 100;
         var isDelta = Boolean(data.timeseries.deltas);
@@ -249,15 +334,25 @@
   }
 
   var style = document.createElement('style');
-  style.textContent = '.geb-popup{width:820px;max-width:86vw;color:#0f172a;font-family:Inter,system-ui,sans-serif}.geb-popup__title{color:#0f172a;font-size:18px;font-weight:750}.geb-popup__subtitle{color:#475569;font-size:12px;margin-bottom:8px}.geb-popup__metrics{display:flex;gap:12px;flex-wrap:wrap;margin:6px 0 10px}.geb-popup__metrics span{background:#111827;border:1px solid #263244;border-radius:6px;color:#e2e8f0;padding:5px 8px}.geb-popup__chart{height:260px;background:#020617;border:1px solid #263244;border-radius:8px;margin-bottom:10px}.geb-popup__chart-title{color:#334155;font-weight:700;font-size:13px;margin:10px 0 4px}.geb-popup__error{color:#b91c1c;padding:18px}.geb-popup img{width:100%;height:auto;display:block}';
+  style.textContent = '.geb-popup{width:820px;max-width:86vw;color:#0f172a;font-family:Inter,system-ui,sans-serif}.geb-popup:empty:before{content:"Loading interactive charts...";display:block;padding:12px;color:#64748b;font-style:italic}.geb-popup__title{color:#0f172a;font-size:18px;font-weight:750}.geb-popup__subtitle{color:#475569;font-size:12px;margin-bottom:8px}.geb-popup__metrics{display:flex;gap:12px;flex-wrap:wrap;margin:6px 0 10px}.geb-popup__metrics span{background:#111827;border:1px solid #263244;border-radius:6px;color:#e2e8f0;padding:5px 8px}.geb-popup__chart{height:260px;background:#020617;border:1px solid #263244;border-radius:8px;margin-bottom:10px}.geb-popup__chart-title{color:#334155;font-weight:700;font-size:13px;margin:10px 0 4px}.geb-popup__error{color:#b91c1c;padding:18px}.geb-popup img{width:100%;height:auto;display:block}';
   document.head.appendChild(style);
 
-{{this._parent.get_name()}}.on('popupopen', function(e) {
-  var content = e.popup.getContent();
-  if (!content || !content.querySelector) return;
-  var el = content.querySelector('[data-station-id]');
-  if (!el) return;
-  var sid = el.getAttribute('data-station-id');
-  renderStation(el, sid);
-});
+  function handlePopupOpen(e) {
+    var container = (e.popup && e.popup.getElement ? e.popup.getElement() : null) ||
+                    (e.popup && e.popup._container) ||
+                    (e.popup && e.popup.getContent && e.popup.getContent().nodeType ? e.popup.getContent() : null) ||
+                    document.querySelector('.leaflet-popup-pane');
+    if (!container) return;
+    var el = container.querySelector('[data-station-id]');
+    if (!el) return;
+    var sid = el.getAttribute('data-station-id');
+    renderStation(el, sid);
+  }
+
+  {{this._parent.get_name()}}.on('popupopen', function(e) {
+    handlePopupOpen(e);
+    if (e.popup && e.popup.on) {
+      e.popup.off('contentupdate', handlePopupOpen).on('contentupdate', handlePopupOpen);
+    }
+  });
 })();
