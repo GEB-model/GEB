@@ -17,6 +17,7 @@ from geb.evaluate.workflows import (
 from geb.evaluate.workflows.dashboard import (
     DischargeDashboardGeometries,
     build_station_chart_data,
+    determine_master_time_index,
     load_discharge_dashboard_geometries,
     write_discharge_dashboard,
     write_station_chart_data,
@@ -231,6 +232,7 @@ def evaluate_discharge(
     )
     station_score_records: list[dict[str, Any]] = []
     station_dashboard_chart_files: dict[str, str] = {}
+    chart_timelines: dict[str, list[int]] = {}
 
     self.model.logger.info("Starting discharge evaluation...")
     for (
@@ -239,6 +241,23 @@ def evaluate_discharge(
     ) in observations_by_frequency.items():
         if observations_by_station.empty:
             continue
+        master_time_index: pd.DatetimeIndex | None = (
+            determine_master_time_index(
+                observations_index=cast(
+                    pd.DatetimeIndex, observations_by_station.index
+                ),
+                simulation_output_folder=run_output_folder,
+                frequency=frequency_label,
+                period_start=period_start,
+                period_end=period_end,
+            )
+            if enable_plotting
+            else None
+        )
+        if master_time_index is not None:
+            chart_timelines[frequency_label] = (
+                master_time_index.astype("datetime64[ms]").astype("int64")
+            ).tolist()
         minimum_paired_timesteps: float = (
             minimum_timeseries_length_years
             * 365
@@ -329,6 +348,7 @@ def evaluate_discharge(
                             frequency=frequency_label,
                             logger=self.model.logger,
                             include_return_period_plots=include_return_period_plots,
+                            master_time_index=master_time_index,
                         ),
                     )
                 )
@@ -532,6 +552,7 @@ def evaluate_discharge(
             waterbodies=dashboard_geometries.waterbodies,
             station_characteristics=dashboard_characteristics,
             excluded_stations=excluded_stations,
+            chart_timeline=chart_timelines,
         )
         self.model.logger.info(
             "Discharge dashboard created. Keep its HTML and charts folder together."

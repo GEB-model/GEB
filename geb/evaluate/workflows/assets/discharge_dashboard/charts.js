@@ -1,5 +1,7 @@
 (function(){
-  var stationChartFiles = {{ this.data | script_json }};
+  var macroData = {{ this.data | script_json }};
+  var stationChartFiles = (macroData && macroData.stations) ? macroData.stations : macroData;
+  var globalTimeline = (macroData && macroData.timeline) ? macroData.timeline : null;
   var plotlyUrl = 'https://cdn.plot.ly/plotly-2.35.2.min.js';
   var colors = { observed: '#facc15', simulated: '#38bdf8' };
   var stationChartCache = {};
@@ -68,6 +70,33 @@
     document.head.appendChild(script);
   }
 
+  function unscale(values, scale) {
+    if (!values) return [];
+    if (!scale || scale === 1) return values;
+    return values.map(function(v) { return v !== null ? v / scale : null; });
+  }
+
+  function decodeDeltas(deltas, scale) {
+    if (!deltas) return [];
+    var s = scale || 100;
+    var out = [];
+    var prev = null;
+    for (var i = 0; i < deltas.length; i++) {
+      var d = deltas[i];
+      if (d === null) {
+        out.push(null);
+        prev = null;
+      } else if (prev === null) {
+        out.push(d / s);
+        prev = d;
+      } else {
+        prev += d;
+        out.push(prev / s);
+      }
+    }
+    return out;
+  }
+
   function finiteNumbers(values, minimumValue) {
     return (values || []).filter(function(value) { return value !== null; }).map(Number).filter(function(value) {
       return Number.isFinite(value) && (minimumValue === undefined || value >= minimumValue);
@@ -98,6 +127,12 @@
   }
 
   function dateRange(values) {
+    if (!values || !values.length) return undefined;
+    var first = new Date(values[0]);
+    var last = new Date(values[values.length - 1]);
+    if (Number.isFinite(first.getTime()) && Number.isFinite(last.getTime())) {
+      return [first, last];
+    }
     var times = (values || []).map(function(value) {
       return new Date(value).getTime();
     }).filter(Number.isFinite);
@@ -137,11 +172,35 @@
         marker: {color: colors[name.toLowerCase()], size: 5}
       };
     }
-    var timeRange = dateRange(data.timeseries.time);
-    Plotly.newPlot('geb-time-' + safeStationId, [
-      trace('Observed', data.timeseries.time, data.timeseries.observed, 'scatter', 'lines', '%{x|%b %Y}<br>%{y:,.0f} m3/s<extra>Observed</extra>'),
-      trace('Simulated', data.timeseries.time, data.timeseries.simulated, 'scatter', 'lines', '%{x|%b %Y}<br>%{y:,.0f} m3/s<extra>Simulated</extra>')
-    ], Object.assign({}, layoutBase, {hovermode: 'x unified', xaxis: Object.assign({}, layoutBase.xaxis, {type: 'date', range: timeRange}), yaxis: Object.assign({}, layoutBase.yaxis, {title: 'Discharge (m3/s)'})}), common);
+    if (data.timeseries) {
+      var rawTimeline = (data.timeseries.time)
+        ? data.timeseries.time
+        : (globalTimeline && globalTimeline[data.frequency] ? globalTimeline[data.frequency] : globalTimeline);
+      if (rawTimeline && rawTimeline.length) {
+        var startIndex = data.timeseries.start || 0;
+        var seriesLength = (data.timeseries.observed && data.timeseries.observed.length)
+          || (data.timeseries.simulated && data.timeseries.simulated.length)
+          || rawTimeline.length;
+        var timeline = (startIndex > 0 || seriesLength < rawTimeline.length)
+          ? rawTimeline.slice(startIndex, startIndex + seriesLength)
+          : rawTimeline;
+
+        var scale = data.timeseries.scale || 100;
+        var isDelta = Boolean(data.timeseries.deltas);
+        var observed = isDelta
+          ? decodeDeltas(data.timeseries.observed, scale)
+          : unscale(data.timeseries.observed, scale);
+        var simulated = isDelta
+          ? decodeDeltas(data.timeseries.simulated, scale)
+          : unscale(data.timeseries.simulated, scale);
+
+        var timeRange = dateRange(timeline);
+        Plotly.newPlot('geb-time-' + safeStationId, [
+          trace('Observed', timeline, observed, 'scatter', 'lines', '%{x|%b %Y}<br>%{y:,.0f} m3/s<extra>Observed</extra>'),
+          trace('Simulated', timeline, simulated, 'scatter', 'lines', '%{x|%b %Y}<br>%{y:,.0f} m3/s<extra>Simulated</extra>')
+        ], Object.assign({}, layoutBase, {hovermode: 'x unified', xaxis: Object.assign({}, layoutBase.xaxis, {type: 'date', range: timeRange}), yaxis: Object.assign({}, layoutBase.yaxis, {title: 'Discharge (m3/s)'})}), common);
+      }
+    }
     if (data.returnPeriods) {
       var observedReturnPeriodRange = linearRange(data.returnPeriods.observed.returnPeriod);
       var simulatedReturnPeriodRange = linearRange(data.returnPeriods.simulated.returnPeriod);
@@ -178,7 +237,7 @@
       metricHtml('RRMSE', metrics.RRMSE) + metricHtml('Area ratio', metrics.upstreamAreaRatio) +
       metricHtml('Fixed UTC offset (h)', metrics.timezoneUtcOffset) + '</div>' +
       (data.returnPeriods ? '<div class="geb-popup__chart-title">Return periods</div>' + makeChartDiv('geb-return-' + safeStationId) : '') +
-      '<div class="geb-popup__chart-title">Discharge time series</div>' + makeChartDiv('geb-time-' + safeStationId);
+      (data.timeseries ? '<div class="geb-popup__chart-title">Discharge time series</div>' + makeChartDiv('geb-time-' + safeStationId) : '');
     ensurePlotly(function(loaded) {
       if (loaded === false) {
         el.innerHTML = '<div class="geb-popup__error">Interactive charts require access to cdn.plot.ly.</div>';

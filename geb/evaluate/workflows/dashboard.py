@@ -310,7 +310,7 @@ def create_discharge_dashboard(
 
     dashboard_path: Path = evaluation_folder / output_path
     logger.info("Preparing interactive chart data...")
-    station_dashboard_chart_files: dict[str, str] = (
+    station_dashboard_chart_files, chart_timelines = (
         _write_dashboard_charts_from_saved_scores(
             table_files=table_files,
             logger=logger,
@@ -332,6 +332,7 @@ def create_discharge_dashboard(
         waterbodies=dashboard_geometries.waterbodies,
         station_characteristics=dashboard_characteristics,
         excluded_stations=excluded_stations,
+        chart_timeline=chart_timelines,
     )
     logger.info("Discharge evaluation dashboard created: %s", dashboard_path)
     logger.info(
@@ -350,6 +351,7 @@ def write_discharge_dashboard(
     waterbodies: gpd.GeoDataFrame | None = None,
     station_characteristics: pd.DataFrame | None = None,
     excluded_stations: gpd.GeoDataFrame | None = None,
+    chart_timeline: list[int] | dict[str, list[int]] | None = None,
 ) -> folium.Map:
     """Save the discharge map with station charts, score layers, and snapping characteristics (e.g., station IDs, upstream areas).
 
@@ -375,6 +377,10 @@ def write_discharge_dashboard(
             the selected GRDC-Caravan attributes in display units.
         excluded_stations: Stations omitted from summary scores, with an exclusion
             reason. Available charts remain accessible for diagnostic use.
+        chart_timeline: Optional shared integer timestamp array (epoch ms) or
+            dictionary of timelines by frequency for popup time-series charts.
+            Defaults to None.
+
     Returns:
         The Folium map object (already saved to ``output_path``).
     """
@@ -699,7 +705,11 @@ def write_discharge_dashboard(
         station_count=len(mapped_station_scores),
     )
 
-    _JavascriptMacro("charts.js", station_chart_files).add_to(discharge_map)
+    chart_macro_data: dict[str, Any] = {
+        "stations": station_chart_files,
+        "timeline": chart_timeline,
+    }
+    _JavascriptMacro("charts.js", chart_macro_data).add_to(discharge_map)
     _JavascriptMacro("search.js", station_marker_index).add_to(discharge_map)
 
     if waterbodies is not None and not waterbodies.empty:
@@ -747,6 +757,103 @@ def load_discharge_dashboard_geometries(
     )
 
 
+def determine_master_time_index(
+    observations_index: pd.DatetimeIndex,
+    simulation_output_folder: Path,
+    frequency: str,
+    period_start: pd.Timestamp | None = None,
+    period_end: pd.Timestamp | None = None,
+) -> pd.DatetimeIndex | None:
+    """Determine a continuous master time index spanning the evaluation period.
+
+    Notes:
+        Ensures all station charts share an identical, aligned time grid for a
+        given frequency (e.g. daily midpoint at 12:00:00, or hourly at half-hour).
+
+    Args:
+        observations_index: DatetimeIndex of the station observations table.
+        simulation_output_folder: Path to model run output folder containing
+            the hydrology routing report files.
+        frequency: Observation frequency label ("daily" or "hourly").
+        period_start: Optional evaluation period start timestamp.
+        period_end: Optional evaluation period end timestamp.
+
+    Returns:
+        Continuous master DatetimeIndex, or None if simulation files or
+        observations are unavailable.
+
+    Raises:
+        ValueError: If frequency is not "daily" or "hourly".
+    """
+    if frequency not in ("daily", "hourly"):
+        raise ValueError(
+            f"Unsupported frequency '{frequency}'. Expected 'daily' or 'hourly'."
+        )
+
+    if observations_index.empty:
+        return None
+
+    routing_dir: Path = simulation_output_folder / "report" / "hydrology.routing"
+    if not routing_dir.exists():
+        return None
+
+    first_parquet_file: Path | None = next(
+        routing_dir.glob("discharge_hourly_m3_per_s_*.parquet"), None
+    )
+    if first_parquet_file is None:
+        return None
+
+    # Read the simulation index from the first available station routing file.
+    simulated_index: pd.Index = pd.read_parquet(first_parquet_file).index
+    if not isinstance(simulated_index, pd.DatetimeIndex) or simulated_index.empty:
+        return None
+
+    if frequency == "daily":
+        # Match GEB daily aggregation: noon (12:00:00) midpoint timestamps.
+        sim_start: pd.Timestamp = simulated_index.min().floor("D") + pd.Timedelta(
+            hours=12
+        )
+        sim_end: pd.Timestamp = simulated_index.max().floor("D") + pd.Timedelta(
+            hours=12
+        )
+        freq_step: str = "D"
+    else:
+        # Match GEB hourly timestamp convention (half-hour HH:30:00).
+        sim_start = simulated_index.min()
+        sim_end = simulated_index.max()
+        freq_step = "h"
+
+    start_timestamp: pd.Timestamp = max(observations_index.min(), sim_start)
+    end_timestamp: pd.Timestamp = min(observations_index.max(), sim_end)
+
+    if period_start is not None:
+        aligned_period_start: pd.Timestamp = (
+            cast(
+                pd.Timestamp,
+                period_start.floor("D") + pd.Timedelta(hours=12),
+            )
+            if frequency == "daily"
+            else period_start
+        )
+        start_timestamp = max(start_timestamp, aligned_period_start)
+
+    if period_end is not None:
+        aligned_period_end: pd.Timestamp = (
+            cast(
+                pd.Timestamp,
+                period_end.floor("D") + pd.Timedelta(hours=12),
+            )
+            if frequency == "daily"
+            else period_end
+        )
+        end_timestamp = min(end_timestamp, aligned_period_end)
+
+    if start_timestamp > end_timestamp:
+        return None
+
+    return pd.date_range(start=start_timestamp, end=end_timestamp, freq=freq_step)
+
+
 def _write_dashboard_charts_from_saved_scores(
     table_files: dict[str, Path],
     logger: logging.Logger,
@@ -755,7 +862,7 @@ def _write_dashboard_charts_from_saved_scores(
     correct_discharge_observations: bool,
     dashboard_path: Path,
     include_return_period_plots: bool = True,
-) -> dict[str, str]:
+) -> tuple[dict[str, str], dict[str, list[int]]]:
     """Save interactive chart data for stations with saved evaluation scores.
 
     Args:
@@ -770,13 +877,13 @@ def _write_dashboard_charts_from_saved_scores(
             curves. Defaults to True.
 
     Returns:
-        Mapping from station ID to chart data file.
+        Tuple of (mapping from station ID to chart data file, mapping from frequency to timeline).
 
     Raises:
         ValueError: If saved metrics are missing required station columns.
     """
     if mapped_station_scores.empty:
-        return {}
+        return {}, {}
     required_columns: set[str] = {
         "station_name",
         "discharge_observations_to_GEB_upstream_area_ratio",
@@ -813,6 +920,7 @@ def _write_dashboard_charts_from_saved_scores(
     )
 
     station_dashboard_chart_files: dict[str, str] = {}
+    chart_timelines: dict[str, list[int]] = {}
     processed: int = 0
     for (
         frequency_label,
@@ -820,11 +928,19 @@ def _write_dashboard_charts_from_saved_scores(
     ) in observations_by_frequency.items():
         if observations_by_station.empty:
             continue
+        master_time_index: pd.DatetimeIndex | None = determine_master_time_index(
+            observations_index=cast(pd.DatetimeIndex, observations_by_station.index),
+            simulation_output_folder=run_output_folder,
+            frequency=frequency_label,
+        )
+        if master_time_index is not None:
+            chart_timelines[frequency_label] = (
+                master_time_index.astype("datetime64[ms]").astype("int64")
+            ).tolist()
         for station_id in observations_by_station.columns:
             station_id_text: str = str(station_id)
             if station_id_text not in saved_scores_by_station_id:
                 continue
-
             station_row: pd.Series = saved_scores_by_station_id[station_id_text]
             upstream_area_ratio: float = float(
                 station_row["discharge_observations_to_GEB_upstream_area_ratio"]
@@ -857,6 +973,7 @@ def _write_dashboard_charts_from_saved_scores(
                     frequency=frequency_label,
                     logger=logger,
                     include_return_period_plots=include_return_period_plots,
+                    master_time_index=master_time_index,
                 ),
             )
 
@@ -872,7 +989,7 @@ def _write_dashboard_charts_from_saved_scores(
         "Chart data built for %d stations.",
         len(station_dashboard_chart_files),
     )
-    return station_dashboard_chart_files
+    return station_dashboard_chart_files, chart_timelines
 
 
 def write_station_chart_data(
@@ -912,6 +1029,7 @@ def build_station_chart_data(
     frequency: str,
     logger: logging.Logger,
     include_return_period_plots: bool = True,
+    master_time_index: pd.DatetimeIndex | None = None,
 ) -> dict[str, Any]:
     """Prepare chart data for one station popup in the discharge dashboard.
 
@@ -928,6 +1046,8 @@ def build_station_chart_data(
         logger: Model logger for return-period fit diagnostics.
         include_return_period_plots: Whether to fit and include return-period
             curves. Defaults to True.
+        master_time_index: Optional master DatetimeIndex shared across all stations
+            to align time series onto a single dashboard timeline.
 
     Returns:
         Chart data with discharge values (m3/s).
@@ -940,25 +1060,31 @@ def build_station_chart_data(
             "discharge_comparison must use a DateTimeIndex for dashboard charts."
         )
 
+    chart_metrics: dict[str, float | None] = {
+        "KGE": _as_finite_float(metrics.get("KGE")),
+        "KGE_modified": _as_finite_float(metrics.get("KGE_modified")),
+        "KGE_correlation": _as_finite_float(metrics.get("KGE_correlation")),
+        "KGE_bias_ratio": _as_finite_float(metrics.get("KGE_bias_ratio")),
+        "KGE_variability_ratio": _as_finite_float(metrics.get("KGE_variability_ratio")),
+        "NSE": _as_finite_float(metrics.get("NSE")),
+        "R2": _as_finite_float(metrics.get("R2")),
+        "RMSE": _as_finite_float(metrics.get("RMSE")),
+        "RRMSE": _as_finite_float(metrics.get("RRMSE")),
+        "upstreamAreaRatio": _as_finite_float(upstream_area_ratio),
+        "timezoneUtcOffset": _as_finite_float(timezone_utc_offset),
+    }
+    for key, value in metrics.items():
+        if key not in chart_metrics:
+            chart_metrics[key] = _as_finite_float(value)
+
     chart_data: dict[str, Any] = {
         "stationName": station_name,
         "frequency": frequency,
-        "metrics": {
-            "KGE": _as_finite_float(metrics.get("KGE")),
-            "KGE_modified": _as_finite_float(metrics.get("KGE_modified")),
-            "KGE_correlation": _as_finite_float(metrics.get("KGE_correlation")),
-            "KGE_bias_ratio": _as_finite_float(metrics.get("KGE_bias_ratio")),
-            "KGE_variability_ratio": _as_finite_float(
-                metrics.get("KGE_variability_ratio")
-            ),
-            "NSE": _as_finite_float(metrics.get("NSE")),
-            "R2": _as_finite_float(metrics.get("R2")),
-            "RMSE": _as_finite_float(metrics.get("RMSE")),
-            "RRMSE": _as_finite_float(metrics.get("RRMSE")),
-            "upstreamAreaRatio": _as_finite_float(upstream_area_ratio),
-            "timezoneUtcOffset": _as_finite_float(timezone_utc_offset),
-        },
-        "timeseries": _build_timeseries_data(discharge_comparison),
+        "metrics": chart_metrics,
+        "timeseries": _build_timeseries_data(
+            discharge_comparison=discharge_comparison,
+            master_time_index=master_time_index,
+        ),
     }
     if include_return_period_plots:
         # Fit only on request: fitting every station dominates dashboard creation.
@@ -980,15 +1106,74 @@ def build_station_chart_data(
     return chart_data
 
 
+def _scale_series_to_int_cents(series: pd.Series) -> list[int | None]:
+    """Scale discharge values to integer cents (100 * m3/s) with None for NaNs.
+
+    Args:
+        series: Discharge series (m3/s).
+
+    Returns:
+        List of scaled integer values, or None for non-finite values.
+    """
+    vals: np.ndarray = series.to_numpy(dtype=float)
+    valid_mask: np.ndarray = np.isfinite(vals)
+    res: np.ndarray = np.full(len(vals), None, dtype=object)
+    res[valid_mask] = np.round(vals[valid_mask] * 100.0).astype(int)
+    return res.tolist()
+
+
+def _to_int_deltas(values: list[int | None]) -> list[int | None]:
+    """Encode integer values as deltas relative to the preceding value.
+
+    Notes:
+        When a value follows a missing value (None) or appears at the start of
+        the series, the absolute value is stored as an anchor. Subsequent finite
+        values store the relative delta (current - previous).
+
+    Args:
+        values: Sequence of integer values (cents, 100 * m3/s) or None for missing data.
+
+    Returns:
+        Delta-encoded sequence with initial absolute values and relative differences.
+    """
+    deltas: list[int | None] = []
+    previous_value: int | None = None
+    for value in values:
+        if value is None:
+            deltas.append(None)
+            previous_value = None
+        elif previous_value is None:
+            deltas.append(value)
+            previous_value = value
+        else:
+            deltas.append(value - previous_value)
+            previous_value = value
+    return deltas
+
+
 def _build_timeseries_data(
     discharge_comparison: pd.DataFrame,
-) -> dict[str, list[str] | list[float | None]]:
+    master_time_index: pd.DatetimeIndex | None = None,
+) -> dict[str, Any]:
     """Prepare data for one discharge time-series chart in a popup.
+
+    Notes:
+        If ``master_time_index`` is provided, the dataframe is windowed to the
+        overlapping active period and aligned with the shared dashboard timeline
+        using a start index offset, eliminating leading and trailing missing values.
+        Missing observation values within the window are represented as ``None``
+        (serialized to JSON ``null``). Discharge values are scaled by 100, stored
+        as integers, and delta-encoded to minimize JSON payload size.
 
     Args:
         discharge_comparison: Observed/simulated discharge dataframe (m3/s).
+        master_time_index: Optional master DatetimeIndex shared across all stations.
+            When provided, redundant leading/trailing nulls and the "time" array
+            are omitted, storing only the start index offset.
+
     Returns:
-        Dictionary with ISO timestamps and discharge values (m3/s).
+        Dictionary with delta-encoded integer observed/simulated values, start index,
+        and scale factor.
 
     Raises:
         ValueError: If ``discharge_comparison`` is not indexed by timestamps.
@@ -998,19 +1183,45 @@ def _build_timeseries_data(
             "discharge_comparison must use a DateTimeIndex for dashboard charts."
         )
 
+    if master_time_index is not None and not discharge_comparison.empty:
+        common_start: pd.Timestamp = max(
+            discharge_comparison.index[0], master_time_index[0]
+        )
+        common_end: pd.Timestamp = min(
+            discharge_comparison.index[-1], master_time_index[-1]
+        )
+        if common_start <= common_end:
+            start_index: int = int(cast(int, master_time_index.get_loc(common_start)))
+            end_index: int = int(cast(int, master_time_index.get_loc(common_end))) + 1
+            window_slice: pd.DatetimeIndex = master_time_index[start_index:end_index]
+            comparison: pd.DataFrame = discharge_comparison.reindex(window_slice)
+        else:
+            comparison = discharge_comparison.iloc[0:0]
+            start_index = 0
+
+        return {
+            "start": start_index,
+            "scale": 100,
+            "deltas": True,
+            "observed": _to_int_deltas(
+                _scale_series_to_int_cents(comparison["discharge_observations"])
+            ),
+            "simulated": _to_int_deltas(
+                _scale_series_to_int_cents(comparison["discharge_simulations"])
+            ),
+        }
+
+    comparison = discharge_comparison
     return {
-        "time": [
-            _timestamp_to_isoformat(timestamp)
-            for timestamp in pd.DatetimeIndex(discharge_comparison.index)
-        ],
-        "observed": [
-            _as_finite_float(value)
-            for value in discharge_comparison["discharge_observations"].to_numpy()
-        ],
-        "simulated": [
-            _as_finite_float(value)
-            for value in discharge_comparison["discharge_simulations"].to_numpy()
-        ],
+        "time": comparison.index.astype("datetime64[ms]").astype("int64").tolist(),
+        "scale": 100,
+        "deltas": True,
+        "observed": _to_int_deltas(
+            _scale_series_to_int_cents(comparison["discharge_observations"])
+        ),
+        "simulated": _to_int_deltas(
+            _scale_series_to_int_cents(comparison["discharge_simulations"])
+        ),
     }
 
 
@@ -1194,7 +1405,7 @@ def _prepare_characteristic_values(
         (average_ranks - 1.0) / (len(valid_values) - 1.0) * 100.0
     )
     statistics: dict[str, int | list[float]] = {
-        "reference_values": reference_values.astype(float).tolist(),
+        "reference_values": [round(float(value), 2) for value in reference_values],
         "missing_count": int(len(numeric_values) - len(valid_values)),
         "ranked_count": int(len(valid_values)),
     }
@@ -1618,17 +1829,17 @@ def _build_snapping_station(
         f"Station area: <span data-geb-area-m2='{station_area_m2}'></span> km²<br>"
         f"Original subgrid area: <span data-geb-area-m2='{original_subgrid_area_m2}'></span> km²<br>"
         f"Routing area: <span data-geb-area-m2='{routing_area_m2}'></span> km²<br>"
-        f"Original subgrid/station area ratio: {original_subgrid_station_area_ratio:.3f}<br>"
-        f"Routing/original subgrid area ratio: {routing_original_subgrid_area_ratio:.3f}<br>"
-        f"Station/routing area ratio: {station_routing_area_ratio:.3f}<br>"
+        f"Original subgrid/station area ratio: {original_subgrid_station_area_ratio:.2f}<br>"
+        f"Routing/original subgrid area ratio: {routing_original_subgrid_area_ratio:.2f}<br>"
+        f"Station/routing area ratio: {station_routing_area_ratio:.2f}<br>"
         f"Daily aggregation offset: <span data-geb-utc-offset-hours='{timezone_offset_hours}'></span> (fixed; no DST)<br>"
         "Observation day: local midnight to midnight<br>"
         f"{html.escape(exclusion_reason)}"
     )
     tooltip: str = (
         f"{escaped_id}: {escaped_name}<br>Snapping details: {status_label}"
-        f"<br>Original subgrid/Station area: {original_subgrid_station_area_ratio:.3f}; "
-        f"routing/original subgrid: {routing_original_subgrid_area_ratio:.3f}"
+        f"<br>Original subgrid/Station area: {original_subgrid_station_area_ratio:.2f}; "
+        f"routing/original subgrid: {routing_original_subgrid_area_ratio:.2f}"
         f"<br>Gauge–routing: <span data-geb-distance-m='{station_to_routing_distance_m}'></span> km"
         f"<br><span data-geb-utc-offset-hours='{timezone_offset_hours}'></span> fixed"
         "<br>Daily window: local midnight to midnight"
@@ -1664,17 +1875,21 @@ def _script_json(value: Any) -> str:
     )
 
 
-def _as_finite_float(value: float | int | np.floating | None) -> float | None:
-    """Convert a numeric value to a finite JSON-friendly float.
+def _as_finite_float(
+    value: float | int | np.floating | None, decimals: int = 2
+) -> float | None:
+    """Convert a numeric value to a rounded finite JSON-friendly float.
 
     Args:
         value: Value to convert (dimensionless unless documented by the caller).
+        decimals: Number of decimal places to round to. Defaults to 2.
 
     Returns:
-        Finite float value, or None for missing, NaN, or infinite values.
+        Finite float value rounded to the specified decimals, or None for missing,
+        NaN, or infinite values.
     """
     # JSON has no NaN or infinity literals; null also creates gaps in Plotly charts.
     if value is None:
         return None
     float_value: float = float(value)
-    return float_value if np.isfinite(float_value) else None
+    return round(float_value, decimals) if np.isfinite(float_value) else None

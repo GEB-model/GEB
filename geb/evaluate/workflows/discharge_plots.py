@@ -1134,7 +1134,7 @@ def _draw_score_maps(
         # All panels share an extent, so one scale bar is sufficient.
         _add_map_scale_bar(axis)
         extension: str
-        for extension in ("svg", "png"):
+        for extension in ("svg", ):
             figure.savefig(f"{output_path}.{extension}", bbox_inches="tight", dpi=300)
     finally:
         plt.close(figure)
