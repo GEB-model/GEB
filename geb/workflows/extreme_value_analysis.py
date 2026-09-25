@@ -188,6 +188,8 @@ def bootstrap_pvalue_for_ad(
     xi: np.ndarray
     sigma: np.ndarray
 
+if fixed_shape is not None and fixed_scale is not None:
+        raise ValueError("Cannot fix both shape and scale parameters simultaneously.")
     if fixed_shape is not None:
         xi = np.full(nboot, fixed_shape, dtype=float)
         sigma = l1 * (1.0 - fixed_shape)
