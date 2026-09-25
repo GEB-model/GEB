@@ -1509,6 +1509,11 @@ class Routing(Module):
             total=len(active_rivers),
             desc="Return period estimation",
         ):
+            # Ideally we want to do "full estimation" of the extreme value distribution,
+            # which includes selection of the ideal threshold. However, this requires
+            # computationally expensive bootstrapping. For the bankful discharge, however,
+            # this is not needed as the RP (currently 2 years) is low, and a good estimate
+            # can be obtained by fixing the quantile and the shape.
             # For 95th quantile, see for example: https://doi.org/10.1002/wrcr.20381
             # For mathematical stability, only 1 exceedance is required because the shape
             # is fixed. However, in practice when a normal spinup is used (>= 10 years)
