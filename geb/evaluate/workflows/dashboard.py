@@ -1507,12 +1507,6 @@ def _build_station_marker_payload(
 ) -> str:
     """Build compressed Base64 Gzip payload of evaluated station markers for the browser.
 
-    Notes:
-        Serializing station marker properties to a compact JSON payload and instantiating
-        Leaflet circle markers dynamically on the client eliminates tens of thousands
-        of redundant Folium Python-generated JavaScript CircleMarker lines, reducing
-        HTML dashboard file size by ~10 MB.
-
     Args:
         mapped_station_scores: Evaluated station GeoDataFrame.
         metric_layers: Metric feature groups, colormaps, and source columns.
