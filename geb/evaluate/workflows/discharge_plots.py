@@ -1019,7 +1019,7 @@ def _draw_score_maps(
     Args:
         mapped_station_scores: Dimensionless station scores with point geometry.
         metric_configs: One or four column, label, colormap, and color-limit settings.
-        output_path: Output filename without extension; saves SVG and PNG.
+        output_path: Output filename without extension; saves SVG.
         region_geom: Region boundary in any projected or geographic CRS.
 
     Raises:
@@ -1218,7 +1218,7 @@ def plot_skill_score_boxplots(
     panels: list[tuple[str, str, pd.DataFrame]],
     output_path: Path,
     export: bool = True,
-    extensions: tuple[str, ...] = ("pdf", "svg", "png"),
+    extensions: tuple[str, ...] = ("svg",),
 ) -> None:
     """Plot score, seasonal, or external-model violin/boxplots with one layout.
 
