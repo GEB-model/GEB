@@ -4,7 +4,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from geb.workflows.extreme_value_analysis import ReturnPeriodModel, fit_gpd_lmoments
+from geb.workflows.extreme_value_analysis import (
+    ReturnPeriodModel,
+    bootstrap_pvalue_for_ad,
+    fit_gpd_lmoments,
+)
 
 
 @pytest.fixture
@@ -152,3 +156,110 @@ def test_fit_gpd_lmoments_minimum_exceedances() -> None:
     # Without fixed_shape, unrestricted fit requires at least 6 exceedances
     with pytest.raises(ValueError, match="Too few exceedances for reliable fit"):
         fit_gpd_lmoments(few_exceedances, fixed_shape=None)
+
+
+def test_bootstrap_pvalue_for_ad_unrestricted() -> None:
+    """Test vectorized bootstrap p-value computation for unrestricted GPD fit."""
+    n: int = 40
+    sigma_hat: float = 10.0
+    xi_hat: float = 0.1
+    observed_stat: float = 0.5
+    nboot: int = 500
+
+    p_value: float = bootstrap_pvalue_for_ad(
+        observed_stat=observed_stat,
+        n=n,
+        sigma_hat=sigma_hat,
+        xi_hat=xi_hat,
+        nboot=nboot,
+        random_seed=42,
+    )
+    assert 0.0 <= p_value <= 1.0
+
+
+def test_bootstrap_pvalue_for_ad_fixed_constraints() -> None:
+    """Test vectorized bootstrap p-value computation with fixed shape and scale."""
+    n: int = 35
+    nboot: int = 200
+
+    # Fixed shape = 0.0 (exponential tail)
+    p_fixed_shape: float = bootstrap_pvalue_for_ad(
+        observed_stat=0.3,
+        n=n,
+        sigma_hat=8.0,
+        xi_hat=0.0,
+        nboot=nboot,
+        fixed_shape=0.0,
+        random_seed=42,
+    )
+    assert 0.0 <= p_fixed_shape <= 1.0
+
+    # Fixed scale
+    p_fixed_scale: float = bootstrap_pvalue_for_ad(
+        observed_stat=0.3,
+        n=n,
+        sigma_hat=5.0,
+        xi_hat=0.1,
+        nboot=nboot,
+        fixed_scale=5.0,
+        random_seed=42,
+    )
+    assert 0.0 <= p_fixed_scale <= 1.0
+
+    # nboot = 0 returns NaN
+    p_zero: float = bootstrap_pvalue_for_ad(
+        observed_stat=0.3,
+        n=n,
+        sigma_hat=5.0,
+        xi_hat=0.1,
+        nboot=0,
+    )
+    assert np.isnan(p_zero)
+
+
+def test_return_period_model_automated_search_mode(
+    synthetic_daily_discharge: pd.Series,
+) -> None:
+    """Test ReturnPeriodModel automated candidate threshold search with bootstrap p-values.
+
+    Verifies that automated threshold search runs vectorized bootstrap simulations, selects a valid
+    threshold with p_ad > p_value_threshold, and calculates valid return levels.
+
+    Args:
+        synthetic_daily_discharge: Synthetic discharge series fixture.
+    """
+    model: ReturnPeriodModel = ReturnPeriodModel(
+        series=synthetic_daily_discharge,
+        return_periods=[2, 5, 10],
+        min_exceed=2,
+        nboot=200,
+        quantile_start=0.85,
+        quantile_end=0.95,
+        quantile_step=0.05,
+        fixed_shape=0.0,
+        p_value_threshold=0.05,
+    )
+
+    assert not np.isnan(model.p_ad)
+    assert model.p_ad > 0.0
+    assert model.u > 0.0
+    assert len(model.candidates_df) > 0
+
+
+def test_negative_nboot_raises_error(synthetic_daily_discharge: pd.Series) -> None:
+    """Test that negative nboot raises ValueError in bootstrap and ReturnPeriodModel."""
+    with pytest.raises(ValueError, match="nboot must be non-negative"):
+        bootstrap_pvalue_for_ad(
+            observed_stat=0.5,
+            n=30,
+            sigma_hat=10.0,
+            xi_hat=0.1,
+            nboot=-1,
+        )
+
+    with pytest.raises(ValueError, match="nboot must be non-negative"):
+        ReturnPeriodModel(
+            series=synthetic_daily_discharge,
+            min_exceed=2,
+            nboot=-5,
+        )

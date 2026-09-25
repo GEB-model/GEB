@@ -16,10 +16,12 @@ from geb.evaluate.workflows import (
 )
 from geb.evaluate.workflows.dashboard import (
     DischargeDashboardGeometries,
+    StationChartBundleWriter,
     build_station_chart_data,
+    determine_main_time_index,
     load_discharge_dashboard_geometries,
+    serialize_main_timeline,
     write_discharge_dashboard,
-    write_station_chart_data,
 )
 from geb.evaluate.workflows.discharge_helpers import (
     DischargeEvaluationPaths,
@@ -230,7 +232,15 @@ def evaluate_discharge(
         snapped_locations, report_folder
     )
     station_score_records: list[dict[str, Any]] = []
-    station_dashboard_chart_files: dict[str, str] = {}
+    chart_writer: StationChartBundleWriter | None = (
+        StationChartBundleWriter(
+            dashboard_path=dashboard_path,
+            max_stations_per_bundle=50,
+        )
+        if enable_plotting
+        else None
+    )
+    chart_timelines: dict[str, Any] = {}
 
     self.model.logger.info("Starting discharge evaluation...")
     for (
@@ -239,6 +249,22 @@ def evaluate_discharge(
     ) in observations_by_frequency.items():
         if observations_by_station.empty:
             continue
+        # main time index is a shared time index for all observations in the dashboard
+        main_time_index: pd.DatetimeIndex | None = (
+            determine_main_time_index(
+                observations_index=cast(
+                    pd.DatetimeIndex, observations_by_station.index
+                ),
+                simulation_output_folder=run_output_folder,
+                frequency=frequency_label,
+                period_start=period_start,
+                period_end=period_end,
+            )
+            if enable_plotting
+            else None
+        )
+        if main_time_index is not None:
+            chart_timelines[frequency_label] = serialize_main_timeline(main_time_index)
         minimum_paired_timesteps: float = (
             minimum_timeseries_length_years
             * 365
@@ -316,21 +342,20 @@ def evaluate_discharge(
                         eval_plot_folder=evaluation_paths.plot_folder,
                     )
                 station_id_text: str = str(station_id)
-                station_dashboard_chart_files[station_id_text] = (
-                    write_station_chart_data(
-                        dashboard_path=dashboard_path,
-                        station_id=station_id_text,
-                        chart_data=build_station_chart_data(
-                            discharge_comparison=discharge_comparison,
-                            station_name=station_name,
-                            upstream_area_ratio=upstream_area_ratio,
-                            timezone_utc_offset=timezone_utc_offset,
-                            metrics=station_metrics,
-                            frequency=frequency_label,
-                            logger=self.model.logger,
-                            include_return_period_plots=include_return_period_plots,
-                        ),
-                    )
+                assert chart_writer is not None
+                chart_writer.add_station(
+                    station_id=station_id_text,
+                    chart_data=build_station_chart_data(
+                        discharge_comparison=discharge_comparison,
+                        station_name=station_name,
+                        upstream_area_ratio=upstream_area_ratio,
+                        timezone_utc_offset=timezone_utc_offset,
+                        metrics=station_metrics,
+                        frequency=frequency_label,
+                        logger=self.model.logger,
+                        include_return_period_plots=include_return_period_plots,
+                        main_time_index=main_time_index,
+                    ),
                 )
 
             station_score_record: dict[str, Any] = {
@@ -416,6 +441,10 @@ def evaluate_discharge(
             )
 
             station_score_records.append(station_score_record)
+
+    station_dashboard_chart_files: dict[str, str] = (
+        chart_writer.finish() if chart_writer is not None else {}
+    )
 
     station_scores: pd.DataFrame
     if not station_score_records:
@@ -532,6 +561,7 @@ def evaluate_discharge(
             waterbodies=dashboard_geometries.waterbodies,
             station_characteristics=dashboard_characteristics,
             excluded_stations=excluded_stations,
+            chart_timeline=chart_timelines,
         )
         self.model.logger.info(
             "Discharge dashboard created. Keep its HTML and charts folder together."
