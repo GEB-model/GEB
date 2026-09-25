@@ -1,4 +1,5 @@
 # dev
+- Use a fixed 95th percentile threshold for significantly faster return period estimation for bankful discharge estimation.
 - Removed the MCP server (`geb server`), documentation, and the `mcp` dependency.
 - Resolved all ty check errors.
 - Made the MSWEP_URL environment variable optional when all required MSWEP precipitation data is already available locally.
