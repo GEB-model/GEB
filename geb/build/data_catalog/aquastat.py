@@ -47,9 +47,10 @@ class AQUASTAT(Adapter):
         Returns:
             The AQUASTAT data as a pandas DataFrame.
         """
-        df = pd.read_parquet(self.path, **kwargs)
+        df: pd.DataFrame = pd.read_parquet(self.path, **kwargs)
         df = (df[df["aquastatElement.1"] == indicator]).copy()
-        df["ISO3"] = df["AREA"].map(AQUASTAT_NAME_TO_ISO3)
+        # Whitespace in source names must not make available countries appear missing.
+        df["ISO3"] = df["AREA"].str.strip().map(AQUASTAT_NAME_TO_ISO3)
         df = (
             df.drop(
                 [

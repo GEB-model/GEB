@@ -1,4 +1,5 @@
 # dev
+- Fix electricity-rate and AQUASTAT country mapping by trimming whitespace. Rerun `setup_well_prices_by_reference_year_global` to replace incorrect donors in existing builds.
 - Include GDW dams without reservoir outlines as single-cell reservoirs using the existing river snapping method. Rerun `setup_waterbodies` and spinup to include them.
 - Raise an error when automatic input version updates fail, allowing workflows to stop before building or running with incomplete updates.
 - Removed the MCP server (`geb server`), documentation, and the `mcp` dependency.
