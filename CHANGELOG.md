@@ -1,7 +1,7 @@
 # dev
-- Added bankfull river depth estimation via hydraulic continuity derived from simulated 2-year flood discharge (Q_2) based on Andreadis et al. 2013. For channels with, the depth is scaled proportionally.
+- Added bankfull river depth estimation via hydraulic continuity derived from simulated 2-year flood discharge (Q_2) based on Andreadis et al. 2013. For channels with too observed width, the depth is scaled inversely with width to conserve volume.
 - For flood simulatons use channel depth and width from the hydrological model directly. Remove options power_law and mannings in flood simulatons.
-- Implemented dynamic upstream water surface slope extrapolation and free-outfall drawdown slope for open boundary conditions (inland boundaries and ocean pits, including reaches downstream of waterbodies) in local inertial routing
+- Improve local inertial boundary conditions.
 - Fixed cascading waterbody-to-waterbody routing transfers in local inertial routing so connected natural lakes dynamically transfer releases each substep.
 - Allow ReturnPeriodModel to work with zero discharge by returning zero for these special cases.
 
