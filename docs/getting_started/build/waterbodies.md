@@ -78,6 +78,7 @@ until spinup is rerun.
 | `multiple_lakes` | The dam touches several lakes, so none was chosen. |
 | `unmatched` | No lake was found by ID or location. |
 | `gdw_polygon` | GEB added a reservoir using its GDW outline. |
+| `gdw_point` | GEB added a reservoir from a dam point, snapped to one river cell. |
 
 `waterbody_id` is the linked lake or added reservoir ID; it is empty for unlinked
 dams. `addition_reason` says whether a reservoir was added or why it was skipped.
@@ -115,9 +116,15 @@ The checks mark the change with `changed_to_reservoir`. Other type-3 lakes retai
 
 ### Reservoirs missing from HydroLAKES
 
-GEB adds a GDW reservoir when it has no HydroLAKES match, a valid outline
-that does not overlap or touch another waterbody, a `Dam` label without a Yes, Maybe, or Enlarged lake-control flag, and positive, finite capacity, area, and discharge. Dam points alone
-cannot show which grid cells belong to the reservoir.
+GEB adds unmatched GDW dams with a `Dam` label, no Yes, Maybe, or Enlarged
+lake-control flag, and positive, finite capacity (m3), area (m2), and discharge
+(m3/s). Available outlines must be valid and must not touch another waterbody.
+
+Without an outline, GEB uses the existing river snapping method to place the dam
+in one river cell. Storage and evaporation use the GDW capacity and area.
+The build raises an error if snapping fails or the cell already has a waterbody.
+This represents storage and releases, but not the flooded footprint.
+Rerun `setup_waterbodies` and spinup to include these dams.
 
 Sources: [GDW v1.0 dataset and technical documentation](https://figshare.com/articles/dataset/25988293)
 and [GDW publication](https://doi.org/10.1038/s41597-024-03752-9). GDW is licensed

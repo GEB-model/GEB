@@ -1,4 +1,5 @@
 # dev
+- Include GDW dams without reservoir outlines as single-cell reservoirs using the existing river snapping method. Rerun `setup_waterbodies` and spinup to include them.
 - Raise an error when automatic input version updates fail, allowing workflows to stop before building or running with incomplete updates.
 - Removed the MCP server (`geb server`), documentation, and the `mcp` dependency.
 - Resolved all ty check errors.

@@ -3,9 +3,15 @@
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import xarray as xr
+from shapely.geometry import Point
 from shapely.geometry.base import BaseGeometry
 
 from geb.build.data_catalog import DataCatalog
+from geb.build.workflows.river_snapping import (
+    SnappingResults,
+    snap_point_to_river_network,
+)
 from geb.hydrology.waterbodies import RESERVOIR
 
 # HydroLAKES v1.0 IDs are below two million. Keep new IDs nearby because routing
@@ -267,8 +273,9 @@ def _add_missing_gdw_reservoirs(
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
     """Add GDW reservoirs missing from HydroLAKES.
 
-    Require an unmatched dam whose outline does not touch another waterbody,
-    with positive, finite area, capacity, and discharge.
+    Require an unmatched dam with positive, finite area, capacity, and discharge.
+    Use its point if no outline is available; snap it during grid setup.
+    Outlines must not touch another waterbody.
     Skip locks and lake-control dams. Record why each skipped dam was left out.
 
     Args:
@@ -293,16 +300,16 @@ def _add_missing_gdw_reservoirs(
     # isna() selects barriers with no linked lake. Adding linked ones would duplicate it.
     for row_index in dam_checks.index[dam_checks["waterbody_id"].isna()]:
         gdw_id: int = int(dam_checks.at[row_index, "gdw_id"])
-        # A point alone cannot tell us which grid cells form the reservoir.
-        if gdw_id not in reservoir_shapes.index:
-            dam_checks.at[row_index, "addition_reason"] = "no_polygon_in_region"
-            continue
-        reservoir_shape: BaseGeometry = reservoir_shapes.geometry.loc[gdw_id]
+        reservoir_shape: BaseGeometry = (
+            reservoir_shapes.geometry.loc[gdw_id]
+            if gdw_id in reservoir_shapes.index
+            else dam_checks.geometry.loc[row_index]
+        )
         if (
             reservoir_shape is None
             or reservoir_shape.is_empty
             or not reservoir_shape.is_valid
-            or reservoir_shape.geom_type not in ("Polygon", "MultiPolygon")
+            or reservoir_shape.geom_type not in ("Point", "Polygon", "MultiPolygon")
         ):
             dam_checks.at[row_index, "addition_reason"] = "invalid_polygon"
             continue
@@ -353,9 +360,57 @@ def _add_missing_gdw_reservoirs(
         )
         used_ids.add(new_id)
         dam_checks.at[row_index, "waterbody_id"] = new_id
-        dam_checks.at[row_index, "match_method"] = "gdw_polygon"
+        dam_checks.at[row_index, "match_method"] = (
+            "gdw_point" if reservoir_shape.geom_type == "Point" else "gdw_polygon"
+        )
         dam_checks.at[row_index, "type_check"] = "no_hydrolakes_record"
         dam_checks.at[row_index, "addition_reason"] = "added"
     waterbodies["waterbody_id"] = waterbodies["waterbody_id"].astype("int32")
     waterbodies["waterbody_type"] = waterbodies["waterbody_type"].astype("int32")
     return waterbodies, dam_checks
+
+
+def snap_waterbody_points(
+    waterbodies: gpd.GeoDataFrame,
+    waterbody_id: xr.DataArray,
+    rivers: gpd.GeoDataFrame,
+    upstream_area_grid: xr.DataArray,
+    upstream_area_subgrid: xr.DataArray,
+) -> None:
+    """Place reservoirs without outlines in single river cells.
+
+    Args:
+        waterbodies: Reservoir data and geometry, updated in place.
+        waterbody_id: Waterbody IDs on the model grid, updated in place.
+        rivers: River segments used by the existing snapping method.
+        upstream_area_grid: Model grid drainage area (m2).
+        upstream_area_subgrid: Original drainage area (m2).
+
+    Raises:
+        ValueError: If snapping fails or the river cell already has a waterbody.
+    """
+    row_index: int
+    reservoir: pd.Series
+    for row_index, reservoir in waterbodies.loc[
+        waterbodies.geometry.geom_type == "Point"
+    ].iterrows():
+        snapped: SnappingResults | None = snap_point_to_river_network(
+            point=reservoir.geometry,
+            rivers=rivers,
+            upstream_area_grid=upstream_area_grid,
+            upstream_area_subgrid=upstream_area_subgrid,
+        )
+        if snapped is None:
+            raise ValueError(f"Could not snap GDW dam {reservoir.gdw_id} to a river.")
+        column: int
+        row: int
+        column, row = snapped.snapped_grid_pixel_xy
+        if waterbody_id.values[row, column] != -1:
+            raise ValueError(
+                f"GDW dam {reservoir.gdw_id} snaps to an occupied waterbody cell."
+            )
+        # The cell locates storage; GDW supplies the actual reservoir area.
+        waterbody_id.values[row, column] = reservoir.waterbody_id
+        waterbodies.at[row_index, "geometry"] = Point(
+            *snapped.snapped_grid_pixel_lonlat
+        )

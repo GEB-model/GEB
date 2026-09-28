@@ -34,7 +34,10 @@ from geb.build.workflows.river_snapping import (
     SnappingResults,
     snap_point_to_river_network,
 )
-from geb.build.workflows.waterbodies_preprocessing import load_and_enrich_waterbodies
+from geb.build.workflows.waterbodies_preprocessing import (
+    load_and_enrich_waterbodies,
+    snap_waterbody_points,
+)
 from geb.geb_types import (
     ArrayBool,
     ArrayFloat32,
@@ -1454,7 +1457,8 @@ class Hydrography(BuildModelBase):
         """Set up waterbodies, reservoirs, and command areas.
 
         Configure waterbodies and their associated command areas for the model grid.
-        GDW adds dam data and missing reservoir outlines, and flags differences
+        GDW adds dam data and missing reservoirs, snapping dams without outlines
+        to single river cells. It flags differences
         between its dam types and HydroLAKES lake/reservoir classifications.
         This includes rasterizing lake and reservoir identifiers, optionally
         assigning command areas from preset data or by deriving them from the river
@@ -1481,6 +1485,7 @@ class Hydrography(BuildModelBase):
             ValueError: If mode is not "on", "off", "lakes_only", or "reservoirs_only".
             ValueError: If command areas are requested but mode is "off" or "lakes_only".
             ValueError: If source waterbody IDs or types are invalid.
+            ValueError: If a dam cannot be snapped or its river cell is occupied.
         """
         if mode not in ["on", "off", "lakes_only", "reservoirs_only"]:
             raise ValueError(
@@ -1534,6 +1539,23 @@ class Hydrography(BuildModelBase):
         # only select waterbodies that intersect with the region
         waterbodies = waterbodies[waterbodies.intersects(self.region.union_all())]
 
+        waterbody_id: xr.DataArray = rasterize_like(
+            gdf=waterbodies[waterbodies.geometry.geom_type != "Point"],
+            column="waterbody_id",
+            raster=self.grid["mask"],
+            nodata=-1,
+            dtype=np.int32,
+            all_touched=True,
+        )
+
+        if (waterbodies.geometry.geom_type == "Point").any():
+            snap_waterbody_points(
+                waterbodies,
+                waterbody_id,
+                self.geom["routing/rivers"],
+                self.grid["routing/upstream_area_m2"],
+                self.other["drainage/original_d8_upstream_area_m2"],
+            )
         # Sample lake surface elevation directly from original_d8_elevation at representative points
         if not waterbodies.empty:
             original_d8_elevation: xr.DataArray = self.other[
@@ -1545,15 +1567,6 @@ class Hydrography(BuildModelBase):
             waterbodies["elevation"] = original_d8_elevation.sel(
                 x=xs, y=ys, method="nearest"
             ).values.astype(np.float32)
-
-        waterbody_id: xr.DataArray = rasterize_like(
-            gdf=waterbodies,
-            column="waterbody_id",
-            raster=self.grid["mask"],
-            nodata=-1,
-            dtype=np.int32,
-            all_touched=True,
-        )
 
         self.set_grid(waterbody_id, name="waterbodies/waterbody_id")
 
