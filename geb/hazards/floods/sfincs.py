@@ -562,6 +562,10 @@ class SFINCSRootModel:
                     raise ValueError(
                         "Custom rivers to burn must have a 'depth' column when using custom rivers"
                     )
+                if "manning" not in rivers_to_burn.columns:
+                    raise ValueError(
+                        "Custom rivers to burn must have a 'manning' column when using custom rivers"
+                    )
             else:
                 active_rivers = self.active_rivers.copy()
                 # iteratively get all outflow rivers from self.rivers
