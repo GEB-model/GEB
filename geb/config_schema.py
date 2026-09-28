@@ -204,12 +204,26 @@ class RiverWidthConfig(BaseModel):
     )
 
 
+class RiverDepthParameters(BaseModel):
+    """Parameters for river depth calculation."""
+
+    c: float = Field(description="Power law coefficient c for depth = c * Q^d.")
+    d: float = Field(description="Power law exponent d for depth = c * Q^d.")
+    velocity_factor: float = Field(
+        gt=0.0,
+        description="Dimensionless velocity calibration factor for continuity depth: h = (W_expected / W_obs) * (h_expected / velocity_factor).",
+    )
+    min_depth_m: float = Field(
+        ge=0.0,
+        description="Minimum allowable bankfull depth (m).",
+    )
+
+
 class RiverDepthConfig(BaseModel):
     """Configuration for river depth."""
 
-    method: Literal["manning", "power_law"] = Field(
-        "manning",
-        description="Method for river depth calculation: 'manning' or 'power_law'. If power law, alpha and beta must be set additionally in the parameters.",
+    parameters: RiverDepthParameters = Field(
+        description="Parameters for river depth calculation.",
     )
 
 
@@ -247,9 +261,7 @@ class RoutingConfig(BaseModel):
     river_width: RiverWidthConfig = Field(
         default_factory=RiverWidthConfig, description="River width configuration."
     )
-    river_depth: RiverDepthConfig = Field(
-        default_factory=RiverDepthConfig, description="River depth configuration."
-    )
+    river_depth: RiverDepthConfig = Field(description="River depth configuration.")
 
 
 class DischargeEvaluationConfig(BaseModel):

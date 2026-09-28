@@ -1324,28 +1324,23 @@ def _build_return_period_data(
         Dictionary with return periods (years) and fitted discharge values (m3/s).
         Returns empty lists if the fit fails or the series is too short.
     """
-    try:
-        model: ReturnPeriodModel = ReturnPeriodModel(
-            series=series,
-            return_periods=return_periods_years,
-            fixed_shape=0.0,
-            selection_strategy="first_significant",
-        )
-        return {
-            "returnPeriod": [
-                _as_finite_float(value)
-                for value in model.rl_table["T_years"].to_numpy(dtype=float)
-            ],
-            "discharge": [
-                _as_finite_float(value)
-                for value in model.rl_table["GPD_POT_RL"].to_numpy(dtype=float)
-            ],
-        }
-    except (ValueError, RuntimeError, FloatingPointError) as error:
-        # A failed extreme-value fit should not remove otherwise valid station
-        # charts, but it must remain visible to users diagnosing the output.
-        logger.warning("Could not fit dashboard return periods: %s", error)
-        return {"returnPeriod": [], "discharge": []}
+    model: ReturnPeriodModel = ReturnPeriodModel(
+        series=series,
+        return_periods=return_periods_years,
+        fixed_shape=0.0,
+        selection_strategy="first_significant",
+        min_exceed=1,
+    )
+    return {
+        "returnPeriod": [
+            _as_finite_float(value)
+            for value in model.rl_table["T_years"].to_numpy(dtype=float)
+        ],
+        "discharge": [
+            _as_finite_float(value)
+            for value in model.rl_table["GPD_POT_RL"].to_numpy(dtype=float)
+        ],
+    }
 
 
 def _timestamp_to_isoformat(timestamp: Any) -> str:
