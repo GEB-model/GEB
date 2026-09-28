@@ -210,9 +210,11 @@ class RiverDepthParameters(BaseModel):
     c: float = Field(description="Power law coefficient c for depth = c * Q^d.")
     d: float = Field(description="Power law exponent d for depth = c * Q^d.")
     velocity_factor: float = Field(
+        gt=0.0,
         description="Dimensionless velocity calibration factor for continuity depth: h = (W_expected / W_obs) * (h_expected / velocity_factor).",
     )
     min_depth_m: float = Field(
+        ge=0.0,
         description="Minimum allowable bankfull depth (m).",
     )
 
