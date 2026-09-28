@@ -1,4 +1,8 @@
-# dev
+# v1.0.0b31
+- Reduce size of discharge evaluation HTML dashboard. 
+- Vectorized GPD bootstrap goodness-of-fit testing in extreme value analysis, speeding up threshold selection by ~80x and removing early stopping parameters.
+- Use np.float64 in accumulation of soil moisture in water balance check. This caused an error if rare cases that was just an accumulation error.
+- Use a fixed 95th percentile threshold for significantly faster return period estimation for bankful discharge estimation.
 - Fix electricity-rate and AQUASTAT country mapping by trimming whitespace. Rerun `setup_well_prices_by_reference_year_global` to replace incorrect donors in existing builds.
 - Include GDW dams without reservoir outlines as single-cell reservoirs using the existing river snapping method. Rerun `setup_waterbodies` and spinup to include them.
 - Raise an error when automatic input version updates fail, allowing workflows to stop before building or running with incomplete updates.
