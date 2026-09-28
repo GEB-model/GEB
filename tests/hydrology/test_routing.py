@@ -1322,8 +1322,8 @@ def test_local_inertial_raises_on_non_finite_inputs() -> None:
         )
 
 
-def test_local_inertial_backflow_into_dry_cell() -> None:
-    """Test that downstream water level rise causes backflow into an initially dry upstream reach."""
+def test_local_inertial_no_backflow_into_dry_cell() -> None:
+    """Test that downstream water level rise does not cause backflow into an initially dry upstream reach."""
     ldd = np.array([[2], [5]], dtype=np.uint8)
     mask = np.ones((2, 1), dtype=bool)
     river_network = create_river_network(ldd, mask, transform=Affine.identity())
@@ -1369,12 +1369,12 @@ def test_local_inertial_backflow_into_dry_cell() -> None:
         retention_activation_threshold_m3_s=np.zeros(2, dtype=np.float32),
     )
 
-    # Upstream cell must receive backflow (negative Q and non-zero storage)
-    assert Q_new[0] < 0.0, (
-        f"Expected backflow (negative discharge), but got Q_new[0] = {Q_new[0]}"
+    # Upstream cell must not receive backflow (negative Q and non-zero storage)
+    assert Q_new[0] == 0.0, (
+        f"Expected no backflow (negative discharge), but got Q_new[0] = {Q_new[0]}"
     )
-    assert river_storage_out[0] > 0.0, (
-        f"Expected upstream cell to receive water, but got {river_storage_out[0]}"
+    assert river_storage_out[0] == 0.0, (
+        f"Expected upstream cell to not receive water, but got {river_storage_out[0]}"
     )
 
 
@@ -1636,9 +1636,9 @@ def test_local_inertial_tributary_junction_multidirectional_scaling() -> None:
         retention_activation_threshold_m3_s=np.zeros(0, dtype=np.float32),
     )
 
-    # Both dry tributaries should receive reverse backflow from the high stage at the junction
-    assert river_storage_out[0] > 0.0
-    assert river_storage_out[1] > 0.0
+    # Because backflow is currently disabled, no water is transferred from the junction to the tributaries
+    assert river_storage_out[0] == 0.0
+    assert river_storage_out[1] == 0.0
     # Mass balance holds exactly
     total_after = float(np.sum(river_storage_out)) + float(outflow_at_pits)
     assert np.isclose(200000.0, total_after, rtol=1e-4)
