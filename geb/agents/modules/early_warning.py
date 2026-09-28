@@ -12,7 +12,6 @@ import tqdm
 import xarray as xr
 from rasterio.features import geometry_mask, rasterize
 from xarray.core.dataarray import DataArray
-from xarray.core.dataset import Dataset
 
 from geb.workflows.io import read_geom, read_params, read_table, read_zarr, write_zarr
 
@@ -228,7 +227,7 @@ class EarlyWarningModule:
         warning_target: str = "residential_buildings",
         exceedance: bool = False,
         asset_type: str | None = None,
-    ) -> xr.Dataset:
+    ) -> xr.DataArray:
         """Creates flood probability maps based on the ensemble of flood maps for different warning modes.
 
         Args:
@@ -264,12 +263,15 @@ class EarlyWarningModule:
             )
         if warning_target not in self.households.var.wlranges_and_measures:
             if warning_target == "critical_infrastructure":
-                warning_target = asset_type
-                if asset_type not in self.households.var.wlranges_and_measures:
+                if (
+                    asset_type is None
+                    or asset_type not in self.households.var.wlranges_and_measures
+                ):
                     raise ValueError(
                         f"Unknown asset type '{asset_type}' for critical infrastructure warning."
                         f"Available asset types: {list(self.households.var.wlranges_and_measures.keys())}"
                     )
+                warning_target = asset_type
             else:
                 raise ValueError(
                     f"Unknown warning target '{warning_target}'. "
@@ -680,7 +682,7 @@ class EarlyWarningModule:
 
         # Create probability maps
         # TODO: Only create flood probability maps if they do not exist yet
-        probability_maps: Dataset = self.create_flood_probability_maps(
+        probability_maps: DataArray = self.create_flood_probability_maps(
             warning_target="residential_buildings",
             date_time=date_time,
             exceedance=exceedance,
@@ -1078,7 +1080,11 @@ class EarlyWarningModule:
                 }
             )
         self.logger.info(f"Total number of households acted: {len(actions_log)}")
-        total_actions = sum(len(entry["actions"]) for entry in actions_log)
+        total_actions = sum(
+            len(entry["actions"])
+            for entry in actions_log
+            if isinstance(entry["actions"], list)
+        )
         self.logger.info(f"Total individual actions taken: {total_actions}")
         self.logger.info(
             f"Households evacuated: {np.sum(self.households.var.evacuated)}"

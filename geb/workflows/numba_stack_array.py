@@ -8,6 +8,7 @@ function since their memory is reclaimed when the stack frame exits.
 from typing import Any, Literal
 
 import numpy as np
+import numpy.typing as npt
 from numba import carray, farray, njit, typeof, types
 from numba.core import cgutils, errors, typing as numba_typing
 from numba.extending import intrinsic
@@ -15,7 +16,7 @@ from numba.extending import intrinsic
 
 @intrinsic
 def _stack_empty_alloc(
-    typingctx: numba_typing.Context, shape: int | tuple[int, ...], dtype: np.dtype
+    typingctx: numba_typing.Context, shape: int | tuple[int, ...], dtype: npt.DTypeLike
 ) -> tuple[types.CPointer, Any]:
     """Intrinsic that emits a stack allocation of the given total element count.
 
@@ -59,7 +60,7 @@ def _stack_empty_alloc(
 
 @njit(inline="always")
 def stack_empty(
-    shape: int | tuple[int, ...], dtype: np.dtype, order: Literal["C", "F"] = "C"
+    shape: int | tuple[int, ...], dtype: npt.DTypeLike, order: Literal["C", "F"] = "C"
 ) -> np.ndarray:
     """Allocate an uninitialised array on the call stack.
 
@@ -84,7 +85,7 @@ def stack_empty(
     Raises:
         ValueError: If order is not ``'C'`` or ``'F'``.
     """
-    arr_ptr = _stack_empty_alloc(shape, dtype)  # ty:ignore[invalid-argument-type, too-many-positional-arguments]
+    arr_ptr = _stack_empty_alloc(shape, dtype)  # ty:ignore[missing-argument, invalid-argument-type]
     if order == "C":
         return carray(arr_ptr, shape)
     elif order == "F":

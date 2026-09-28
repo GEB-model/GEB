@@ -49,7 +49,7 @@ class HouseholdVariables(Bucket):
     risk_perc_max: float
     risk_perc_min: float
     risk_decr: float
-    wlranges_and_measures: dict[int, Any]
+    wlranges_and_measures: dict[str, Any]
     implementation_times: Any
     rail_curve: pd.DataFrame
     warning_trigger: DynamicArray

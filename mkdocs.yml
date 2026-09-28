@@ -102,7 +102,6 @@ nav:
       - Flood evaluation: getting_started/evaluation/flood.md
       - Energy evaluation: getting_started/evaluation/energy.md
     
-    - MCP server: getting_started/mcp_server.md
     - Reporting: getting_started/reporting.md
   - Model:
     - Overview: model/index.md

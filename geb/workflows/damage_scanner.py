@@ -147,6 +147,7 @@ def VectorScannerMultiCurves(
     covs = (c for sub in filtered["coverage"].array for c in sub)
 
     inundation_parts = np.fromiter(vals, dtype=np.float64)
+    assert cell_area_m2 is not None
     coverage_parts = np.fromiter(covs, dtype=np.float64) * cell_area_m2
 
     # Clip hazard values for stable searchsorted

@@ -1509,15 +1509,22 @@ class Routing(Module):
             total=len(active_rivers),
             desc="Return period estimation",
         ):
-            model = ReturnPeriodModel(
+            # Ideally we want to do "full estimation" of the extreme value distribution,
+            # which includes selection of the ideal threshold. However, this requires
+            # computationally expensive bootstrapping. For the bankful discharge, however,
+            # this is not needed as the RP (currently 2 years) is low, and a good estimate
+            # can be obtained by fixing the quantile and the shape.
+            # For 95th quantile, see for example: https://doi.org/10.1002/wrcr.20381
+            # For mathematical stability, only 1 exceedance is required because the shape
+            # is fixed. However, in practice when a normal spinup is used (>= 10 years)
+            # there should be more exceedances and a reliable fit for the low RPs used here.
+            model: ReturnPeriodModel = ReturnPeriodModel(
                 series=discharge_by_river_daily[idx],
                 return_periods=list(set([2, activation_threshold_return_period_years])),
-                min_exceed=2,
-                nboot=2000,
+                fixed_quantile=0.95,  # use a fixed quantile
+                min_exceed=1,
                 fixed_shape=0.0,
                 fixed_scale=None,
-                p_value_threshold=0.05,
-                selection_strategy="first_significant",
             )
 
             for return_period, return_water_level in model.rl_table.set_index(

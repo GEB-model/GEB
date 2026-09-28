@@ -164,6 +164,15 @@ class DecisionModule:
         NPV_summed = np.full((n_events + 3, n_agents), -1, dtype=np.float32)
 
         if mode == "flood":
+            if (
+                wealth is None
+                or income is None
+                or amenity_value is None
+                or expected_damages is None
+            ):
+                raise ValueError(
+                    "Mode 'flood' requires wealth, income, amenity_value, and expected_damages."
+                )
             NPV_summed = self.IterateThroughFloods(
                 NPV_summed=NPV_summed,
                 n_events=n_events,
@@ -176,6 +185,10 @@ class DecisionModule:
             )
 
         elif mode == "drought":
+            if total_profits is None or profits_no_event is None:
+                raise ValueError(
+                    "Mode 'drought' requires total_profits and profits_no_event."
+                )
             NPV_summed = self.IterateThroughDroughts(
                 NPV_summed=NPV_summed,
                 n_events=n_events,
