@@ -263,3 +263,64 @@ def test_negative_nboot_raises_error(synthetic_daily_discharge: pd.Series) -> No
             min_exceed=2,
             nboot=-5,
         )
+
+
+def test_return_period_model_all_zero_series() -> None:
+    """Test ReturnPeriodModel with an all-zero discharge series.
+
+    Verifies that an all-zero series returns consistent zero return levels
+    without raising an error.
+    """
+    dates: pd.DatetimeIndex = pd.date_range("2020-01-01", periods=365 * 3, freq="D")
+    zero_series: pd.Series = pd.Series(0.0, index=dates, name="discharge")
+
+    model: ReturnPeriodModel = ReturnPeriodModel(
+        series=zero_series,
+        return_periods=[2, 5, 10],
+        fixed_quantile=0.95,
+        min_exceed=1,
+    )
+
+    assert model.u == 0.0
+    assert model.sigma == 0.0
+    assert model.xi == 0.0
+    assert model.n_exc == 0
+    assert np.isnan(model.p_ad)
+    assert model.lambda_per_year == 0.0
+    assert (model.rl_table["GPD_POT_RL"] == 0.0).all()
+    assert np.all(model.water_level_for_return_periods == 0.0)
+    assert len(model.candidates_df) == 1
+
+
+def test_return_period_model_zero_threshold_fixed() -> None:
+    """Test ReturnPeriodModel when threshold u is zero for fixed threshold or quantile.
+
+    Verifies that when fixed_threshold=0.0 or fixed_quantile evaluates to 0.0,
+    the model returns consistent zero return levels.
+    """
+    dates: pd.DatetimeIndex = pd.date_range("2020-01-01", periods=365 * 3, freq="D")
+    # Intermittent series: mostly zero with sparse positive runoff peaks
+    flow: np.ndarray = np.zeros(len(dates))
+    flow[30] = 10.0
+    flow[120] = 15.0
+    intermittent_series: pd.Series = pd.Series(flow, index=dates, name="discharge")
+
+    # Explicit fixed_threshold = 0.0
+    model_thresh: ReturnPeriodModel = ReturnPeriodModel(
+        series=intermittent_series,
+        return_periods=[2, 5],
+        fixed_threshold=0.0,
+        min_exceed=1,
+    )
+    assert model_thresh.u == 0.0
+    assert (model_thresh.rl_table["GPD_POT_RL"] == 0.0).all()
+
+    # Fixed quantile where quantile value evaluates to 0.0 (e.g. 0.95 on 99% zero series)
+    model_quant: ReturnPeriodModel = ReturnPeriodModel(
+        series=intermittent_series,
+        return_periods=[2, 5],
+        fixed_quantile=0.95,
+        min_exceed=1,
+    )
+    assert model_quant.u == 0.0
+    assert (model_quant.rl_table["GPD_POT_RL"] == 0.0).all()

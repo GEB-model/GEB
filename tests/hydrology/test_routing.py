@@ -3631,7 +3631,6 @@ def test_inertial_substeps_parallel_and_serial_equivalence() -> None:
             router._ds_inertial_k,
             router._ds_stage_idx,
             router._ds_bed_elevation,
-            router._kin_ds_slope,
             router._inertial_up_offsets,
             router._inertial_up_indices,
             router._inertial_up_reach_idx,
@@ -3645,6 +3644,10 @@ def test_inertial_substeps_parallel_and_serial_equivalence() -> None:
             router._wb_release_volume_substep,
             router._inertial_topo_order,
             router._total_flow_rate_buf,
+            router._wb_to_wb_src_wb,
+            router._wb_to_wb_tgt_wb,
+            router._wb_terminal_wb_ids,
+            router._terminal_wb_outflow_accum_m3,
         ]
 
     state_serial: list[Any] = build_test_state()
@@ -5494,3 +5497,450 @@ def test_submerged_interface_enables_reverse_flow_flag() -> None:
     storage_sub: np.ndarray = res_sub[1]
     pit_out_sub: np.float32 = res_sub[6]
     assert np.isclose(storage_sub.sum() + pit_out_sub, 20000.0, rtol=1e-4)
+
+
+def test_local_inertial_cascading_waterbody_to_waterbody_transfer() -> None:
+    """Tests dynamic substep water transfer across cascading natural lakes (wb-to-wb)."""
+    # Topology: Reach 0 -> Lake 0 (cell 1) -> Lake 1 (cell 2, pit)
+    ldd: np.ndarray = np.array([[2], [2], [5]], dtype=np.uint8)
+    mask: np.ndarray = np.ones((3, 1), dtype=bool)
+    network: pyflwdir.FlwdirRaster = create_river_network(
+        ldd, mask, transform=Affine.identity()
+    )
+    n_cells: int = 3
+
+    waterbody_ids: np.ndarray = np.array([-1, 0, 1], dtype=np.int32)
+    is_waterbody_outflow: np.ndarray = np.array([False, True, True], dtype=bool)
+    river_ids: np.ndarray = np.array([0, -1, -1], dtype=np.int32)
+    use_kinematic: np.ndarray = np.array([False, False, False], dtype=bool)
+    rivers_gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "downstream_ID": np.array([-1], dtype=np.int32),
+            "slope": np.array([0.001], dtype=np.float32),
+        },
+        index=[0],
+    )
+
+    router: LocalInertial = _make_local_inertial(
+        dt=3600,
+        river_network=network,
+        river_length=np.full(n_cells, 1000.0, dtype=np.float32),
+        river_width=np.full(n_cells, 10.0, dtype=np.float32),
+        waterbody_ids=waterbody_ids,
+        river_ids=river_ids,
+        is_waterbody_outflow=is_waterbody_outflow,
+        use_kinematic=use_kinematic,
+        rivers_gdf=rivers_gdf,
+        bankfull_river_elevation_m=np.array([10.0, 5.0, 0.0], dtype=np.float32),
+        waterbody_lake_area=np.array([10000.0, 10000.0], dtype=np.float32),
+        waterbody_lake_factor=np.array([5.0, 5.0], dtype=np.float32),
+        waterbody_outflow_height=np.array([1.0, 1.0], dtype=np.float32),
+        waterbody_outflow_bed_elev=np.array([5.0, 0.0], dtype=np.float32),
+    )
+
+    assert len(router._wb_to_wb_src_wb) == 1
+    assert router._wb_to_wb_src_wb[0] == 0
+    assert router._wb_to_wb_tgt_wb[0] == 1
+
+    # Lake 0 has 50,000 m3 (head above sill = 4 m), Lake 1 starts dry
+    wb_storage_init: np.ndarray = np.array([50000.0, 0.0], dtype=np.float64)
+    outflow_wb: np.ndarray = np.array([np.nan, np.nan], dtype=np.float32)
+    river_storage_init: np.ndarray = np.array([1000.0, 0.0, 0.0], dtype=np.float64)
+    total_initial: float = float(np.sum(wb_storage_init) + np.sum(river_storage_init))
+
+    res = router.step(
+        Q_prev_m3_s=np.zeros(n_cells, dtype=np.float32),
+        river_storage_m3=river_storage_init.copy(),
+        sideflow_m3=np.zeros(n_cells, dtype=np.float32),
+        evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        waterbody_storage_m3=wb_storage_init.copy(),
+        outflow_per_waterbody_m3=outflow_wb,
+        retention_storage_m3=np.zeros(0, dtype=np.float32),
+        retention_activation_threshold_m3_s=np.zeros(0, dtype=np.float32),
+    )
+
+    wb_storage_out: np.ndarray = res[4]
+    outflow_at_pits: float = float(res[6])
+    river_storage_out: np.ndarray = res[1]
+
+    # Lake 0 must have discharged water into Lake 1
+    assert wb_storage_out[0] < wb_storage_init[0]
+    assert wb_storage_out[1] > 0.0
+
+    # Total mass must be conserved exactly across lakes, reach, and terminal pit
+    total_final: float = float(
+        np.sum(wb_storage_out) + np.sum(river_storage_out) + outflow_at_pits
+    )
+    assert np.isclose(total_initial, total_final, atol=1e-3)
+
+
+def test_local_inertial_outflow_boundary_dynamic_slope() -> None:
+    """Test that an outflow boundary reach uses dynamic upstream water surface slope during high flows.
+
+    In a flat river (e.g. bed slope S0 = 1e-4), a flood wave creates a much steeper water surface
+    gradient (dz/dx) than the bed slope. The boundary reach must extrapolate this upstream dynamic
+    slope so that flood peaks evacuate efficiently rather than being dammed by the flat bed slope.
+    """
+    ldd: np.ndarray = np.array([[2], [5]], dtype=np.uint8)
+    mask: np.ndarray = np.ones((2, 1), dtype=bool)
+    river_network = create_river_network(ldd, mask, transform=Affine.identity())
+    n_cells: int = 2
+
+    # Flat channel: 10.0 m -> 9.9 m over 1000 m (bed slope = 1e-4)
+    bed_elevation: np.ndarray = np.array([10.0, 9.9], dtype=np.float32)
+    river_length: np.ndarray = np.array([1000.0, 1000.0], dtype=np.float32)
+    river_width: np.ndarray = np.array([50.0, 50.0], dtype=np.float32)
+    river_ids: np.ndarray = np.array([0, 1], dtype=np.int32)
+    use_kinematic: np.ndarray = np.array([False, False], dtype=bool)
+
+    rivers_gdf = gpd.GeoDataFrame(
+        {
+            "downstream_ID": np.array([1, -1], dtype=np.int32),
+            "slope": np.array([0.0001, 0.0001], dtype=np.float32),
+        },
+        index=river_ids,
+    )
+
+    router: LocalInertial = _make_local_inertial(
+        dt=3600,
+        river_network=river_network,
+        river_length=river_length,
+        river_width=river_width,
+        river_ids=river_ids,
+        use_kinematic=use_kinematic,
+        rivers_gdf=rivers_gdf,
+        bankfull_river_elevation_m=bed_elevation,
+        bankfull_depth_m=10.0,
+    )
+
+    # Reach 0 has high storage (flood surge), Reach 1 has lower storage
+    # High head difference between Reach 0 and Reach 1 creates a dynamic water surface slope >> bed slope
+    init_storage: np.ndarray = np.array([200000.0, 50000.0], dtype=np.float64)
+
+    res = router.step(
+        Q_prev_m3_s=np.array([50.0, 20.0], dtype=np.float32),
+        river_storage_m3=init_storage.copy(),
+        sideflow_m3=np.zeros(n_cells, dtype=np.float32),
+        evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        waterbody_storage_m3=np.zeros(0, dtype=np.float64),
+        outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
+        retention_storage_m3=np.zeros(0, dtype=np.float32),
+        retention_activation_threshold_m3_s=np.zeros(0, dtype=np.float32),
+    )
+
+    q_out: np.ndarray = res[0]
+    storage_out: np.ndarray = res[1]
+    outflow_at_pits: float = float(res[6])
+
+    # With dynamic slope extrapolation, boundary discharge must be robust and evacuating flood water
+    assert q_out[1] > 20.0, f"Expected accelerated boundary discharge, got {q_out[1]}"
+    assert outflow_at_pits > 0.0
+
+    # Exact mass balance conservation
+    total_in: float = float(np.sum(init_storage))
+    total_out: float = float(np.sum(storage_out) + outflow_at_pits)
+    assert np.isclose(total_in, total_out, rtol=1e-4)
+
+
+def test_local_inertial_outflow_boundary_directly_downstream_of_waterbody() -> None:
+    """Test that an outflow reach directly downstream of a waterbody drains with dynamic slope.
+
+    When a boundary/pit reach is directly downstream of a lake (so it has no upstream inertial reach),
+    it must pick up the dynamic water level gradient from the upstream waterbody and the free-outfall
+    drawdown slope (h / L) so that lake releases evacuate freely without being choked by a flat bed slope.
+    """
+    ldd: np.ndarray = np.array([[2], [5]], dtype=np.uint8)
+    mask: np.ndarray = np.ones((2, 1), dtype=bool)
+    river_network = create_river_network(ldd, mask, transform=Affine.identity())
+    n_cells: int = 2
+
+    # Cell 0 is lake (bed 10m), Cell 1 is boundary reach (bed 9.9m, flat S0 = 1e-4)
+    bed_elevation: np.ndarray = np.array([10.0, 9.9], dtype=np.float32)
+    river_length: np.ndarray = np.array([1000.0, 1000.0], dtype=np.float32)
+    river_width: np.ndarray = np.array([50.0, 50.0], dtype=np.float32)
+    river_ids: np.ndarray = np.array([0, 1], dtype=np.int32)
+    use_kinematic: np.ndarray = np.array([False, False], dtype=bool)
+
+    rivers_gdf = gpd.GeoDataFrame(
+        {
+            "downstream_ID": np.array([1, -1], dtype=np.int32),
+            "slope": np.array([0.0001, 0.0001], dtype=np.float32),
+        },
+        index=river_ids,
+    )
+
+    router: LocalInertial = _make_local_inertial(
+        dt=3600,
+        river_network=river_network,
+        river_length=river_length,
+        river_width=river_width,
+        river_ids=river_ids,
+        use_kinematic=use_kinematic,
+        rivers_gdf=rivers_gdf,
+        bankfull_river_elevation_m=bed_elevation,
+        bankfull_depth_m=10.0,
+        waterbody_ids=np.array([0, -1], dtype=np.int32),
+        is_waterbody_outflow=np.array([True, False], dtype=bool),
+        waterbody_lake_area=np.array([100000.0], dtype=np.float32),
+        waterbody_lake_factor=np.array([10.0], dtype=np.float32),
+        waterbody_outflow_height=np.array([2.0], dtype=np.float32),
+        waterbody_outflow_bed_elev=np.array([10.0], dtype=np.float32),
+    )
+
+    # Lake has 500,000 m3 (depth = 5m, head above sill = 3m, stage = 13.0m)
+    wb_storage_init: np.ndarray = np.array([500000.0], dtype=np.float64)
+    river_storage_init: np.ndarray = np.array([0.0, 5000.0], dtype=np.float64)
+    total_initial: float = float(np.sum(wb_storage_init) + np.sum(river_storage_init))
+
+    res = router.step(
+        Q_prev_m3_s=np.array([0.0, 10.0], dtype=np.float32),
+        river_storage_m3=river_storage_init.copy(),
+        sideflow_m3=np.zeros(n_cells, dtype=np.float32),
+        evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        waterbody_storage_m3=wb_storage_init.copy(),
+        outflow_per_waterbody_m3=np.array([np.nan], dtype=np.float32),
+        retention_storage_m3=np.zeros(0, dtype=np.float32),
+        retention_activation_threshold_m3_s=np.zeros(0, dtype=np.float32),
+    )
+
+    q_out: np.ndarray = res[0]
+    river_storage_out: np.ndarray = res[1]
+    wb_storage_out: np.ndarray = res[4]
+    outflow_at_pits: float = float(res[6])
+
+    # Lake must release water and boundary reach must efficiently convey it out
+    assert wb_storage_out[0] < wb_storage_init[0]
+    assert q_out[1] > 0.0
+    assert outflow_at_pits > 0.0
+
+    # Total mass balance must be conserved exactly across lake, reach, and domain pit outflow
+    total_final: float = float(
+        np.sum(wb_storage_out) + np.sum(river_storage_out) + outflow_at_pits
+    )
+    assert np.isclose(total_initial, total_final, rtol=1e-4)
+
+
+def test_routing_andreadis_depth_decoupled_from_slope() -> None:
+    """Test that downstream hydraulic geometry power law depth is decoupled from bed slope.
+
+    Verifies that bankfull depth h_bf = c * Q_bf^d produces realistic alluvial channel depths
+    without exploding on flat slopes (unlike Manning's normal depth inversion).
+    """
+    # Test across channel widths from 10 m to 400 m (Rhine)
+    widths = np.array([10.0, 50.0, 100.0, 400.0], dtype=np.float32)
+    alpha = np.float32(7.2)
+    beta = np.float32(0.5)
+    c = np.float32(0.27)
+    d = np.float32(0.36)
+
+    q_bf = (widths / alpha) ** (1.0 / beta)
+    h_bf = c * (q_bf**d)
+
+    # 10 m stream depth should be ~0.35 m
+    assert 0.2 < h_bf[0] < 0.6, f"Unexpected headwater depth: {h_bf[0]}"
+    # 400 m Rhine depth should be ~4.8 m (not 25 m!)
+    assert 4.0 < h_bf[3] < 6.0, f"Unexpected Rhine bankfull depth: {h_bf[3]}"
+
+    # Verify aspect ratios are strictly realistic (between 25 and 100)
+    aspect_ratios = widths / h_bf
+    assert np.all(aspect_ratios >= 25.0)
+    assert np.all(aspect_ratios <= 100.0)
+
+
+def test_routing_continuity_bankfull_depth_narrow_vs_wide() -> None:
+    """Test bankfull channel depth under hydraulic continuity with Andreadis baseline.
+
+    Verifies that:
+    - When W_obs == W_expected, depth collapses identically to Andreadis power law h_expected.
+    - Narrow constrictions scour deeper (W_obs down -> h_bf up).
+    - Wide reaches spread shallower (W_obs up -> h_bf down).
+    - Velocity factor directly calibrates depth.
+    """
+    # Fixed 2-year bankfull flood (Rhine scale: 3000 m3/s)
+    q2: float = 3000.0
+    alpha: float = 7.2
+    beta: float = 0.5
+    c: float = 0.27
+    d: float = 0.36
+    velocity_factor: float = 1.0
+
+    w_expected: float = alpha * (q2**beta)
+    h_expected: float = c * (q2**d)
+
+    # When W_obs matches W_expected, depth must equal h_expected:
+    h_normal: float = (w_expected / w_expected) * (h_expected / velocity_factor)
+    assert np.isclose(h_normal, h_expected)
+    assert 4.5 < h_normal < 5.5  # lower Rhine depth is ~4.8 m
+
+    # Narrow constriction (half width):
+    w_narrow: float = 0.5 * w_expected
+    h_narrow: float = (w_expected / w_narrow) * (h_expected / velocity_factor)
+    assert np.isclose(h_narrow, 2.0 * h_expected)
+
+    # Wide braided section (double width):
+    w_wide: float = 2.0 * w_expected
+    h_wide: float = (w_expected / w_wide) * (h_expected / velocity_factor)
+    assert np.isclose(h_wide, 0.5 * h_expected)
+
+    assert h_narrow > h_normal > h_wide
+
+
+def test_routing_calculate_bankfull_depth_integration() -> None:
+    """Test Routing.calculate_bankfull_depth with simulated Q2 and cold-start fallback.
+
+    Verifies that:
+    1. When self.var.rivers has 'return_period_2_years_daily_m3_per_s', simulated Q2 is mapped to grid.
+    2. When the column is absent (cold-start spinup), empirical width inversion is used as fallback.
+    3. Method 'power_law' also operates as expected.
+    """
+    from geb.hydrology.routing import Routing
+
+    routing = object.__new__(Routing)
+    routing.config = {
+        "river_depth": {
+            "parameters": {
+                "c": 0.27,
+                "d": 0.36,
+                "velocity_factor": 1.0,
+                "min_depth_m": 0.1,
+            },
+        }
+    }
+    routing.default_missing_channel_width = 10.0
+
+    var: RoutingVariables = RoutingVariables()
+    # 4 cells: cell 0 (overland, river_id -1), cell 1 (river 0), cell 2 (river 1, narrow), cell 3 (river 1, wide)
+    var.river_ids = np.array([-1, 0, 1, 1], dtype=np.int32)
+    var.river_width_alpha = np.full(4, 7.2, dtype=np.float32)
+    var.river_width_beta = np.full(4, 0.5, dtype=np.float32)
+    widths = np.array([10.0, 50.0, 100.0, 200.0], dtype=np.float32)
+    shape_exponent = np.full(4, 0.5, dtype=np.float32)
+
+    # Scenario 1: rivers GeoDataFrame has return_period_2_years_daily_m3_per_s and use_simulated_bankfull_q=True
+    rivers_df: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "return_period_2_years_daily_m3_per_s": [40.0, 200.0],
+            "represented_in_grid": [True, True],
+        },
+        index=[0, 1],
+    )
+    var.rivers = rivers_df
+    routing.var = var
+
+    h_depth_simulated = routing.calculate_bankfull_depth(
+        bankfull_top_width_m=widths,
+        use_simulated_bankfull_q=True,
+    )
+
+    # Cell 2 and Cell 3 both belong to river 1 (Q2 = 200 m3/s).
+    # Cell 2 is width 100 m, Cell 3 is width 200 m:
+    assert h_depth_simulated[2] > h_depth_simulated[3]
+    assert np.isclose(h_depth_simulated[2] / h_depth_simulated[3], 2.0, rtol=1e-3)
+
+    # Scenario 2: Year 1 / spinup cold-start (use_simulated_bankfull_q=False)
+    var.rivers = gpd.GeoDataFrame({}, index=[0, 1])
+    h_depth_fallback = routing.calculate_bankfull_depth(
+        bankfull_top_width_m=widths,
+        use_simulated_bankfull_q=False,
+    )
+    assert np.all(np.isfinite(h_depth_fallback))
+    assert np.all(h_depth_fallback >= 0.1)
+
+    # Scenario 3: Verify strict error handling (never silent fail if use_simulated_bankfull_q=True but Q2 is missing)
+    import pytest
+
+    with pytest.raises(ValueError, match="was not found in self.var.rivers"):
+        routing.calculate_bankfull_depth(
+            bankfull_top_width_m=widths,
+            use_simulated_bankfull_q=True,
+        )
+
+    # Scenario 4: Continuity method respects min_depth_m floor even on zero discharge
+    var.rivers = gpd.GeoDataFrame(
+        {
+            "return_period_2_years_daily_m3_per_s": [0.0, 0.0],
+            "represented_in_grid": [True, True],
+        },
+        index=[0, 1],
+    )
+    h_depth_zero_q = routing.calculate_bankfull_depth(
+        bankfull_top_width_m=widths,
+        use_simulated_bankfull_q=True,
+    )
+    assert np.all(h_depth_zero_q[1:] >= 0.1)
+
+
+def test_routing_updates_rivers_geometry() -> None:
+    """Verify that _update_rivers_geometry syncs grid width, depth, and manning to self.var.rivers."""
+    from geb.hydrology.routing import Routing, RoutingVariables
+
+    routing = Routing.__new__(Routing)
+    routing.var = RoutingVariables()
+
+    rivers = gpd.GeoDataFrame(
+        {
+            "width": [np.nan, np.nan],
+            "depth": [np.nan, np.nan],
+            "manning": [np.nan, np.nan],
+            "represented_in_grid": [True, True],
+        },
+        index=[10, 20],
+    )
+    routing.var.rivers = rivers
+
+    # Grid of 5 cells: cell 0, 1 -> reach 10; cell 2, 3 -> reach 20; cell 4 -> overland (-1)
+    routing.var.river_ids = np.array([10, 10, 20, 20, -1], dtype=np.int32)
+    width_grid = np.array([20.0, 30.0, 100.0, 100.0, 0.5], dtype=np.float32)
+    depth_grid = np.array([2.0, 4.0, 6.0, 8.0, 0.1], dtype=np.float32)
+    manning_grid = np.array([0.03, 0.05, 0.02, 0.04, 0.05], dtype=np.float32)
+
+    routing._update_rivers_geometry(
+        width_grid=width_grid,
+        depth_grid=depth_grid,
+        manning_grid=manning_grid,
+    )
+
+    # Reach 10: mean width (20+30)/2 = 25, mean depth (2+4)/2 = 3, mean manning (0.03+0.05)/2 = 0.04
+    assert np.isclose(routing.var.rivers.loc[10, "width"], 25.0)
+    assert np.isclose(routing.var.rivers.loc[10, "depth"], 3.0)
+    assert np.isclose(routing.var.rivers.loc[10, "manning"], 0.04)
+
+    # Reach 20: mean width 100, mean depth 7, mean manning (0.02+0.04)/2 = 0.03
+    assert np.isclose(routing.var.rivers.loc[20, "width"], 100.0)
+    assert np.isclose(routing.var.rivers.loc[20, "depth"], 7.0)
+    assert np.isclose(routing.var.rivers.loc[20, "manning"], 0.03)
+
+
+def test_routing_updates_rivers_geometry_missing_data_raises() -> None:
+    """Verify that an assertion error is raised when a represented river has missing geometry data."""
+    from geb.hydrology.routing import Routing, RoutingVariables
+
+    routing = Routing.__new__(Routing)
+    routing.var = RoutingVariables()
+
+    rivers = gpd.GeoDataFrame(
+        {
+            "width": [np.nan, np.nan],
+            "depth": [np.nan, np.nan],
+            "manning": [np.nan, np.nan],
+            "represented_in_grid": [True, True],
+        },
+        index=[10, 30],
+    )
+    routing.var.rivers = rivers
+
+    # Only reach 10 is in the grid; reach 30 is missing
+    routing.var.river_ids = np.array([10, 10, -1], dtype=np.int32)
+    width_grid = np.array([20.0, 30.0, 0.5], dtype=np.float32)
+    depth_grid = np.array([2.0, 4.0, 0.1], dtype=np.float32)
+    manning_grid = np.array([0.03, 0.05, 0.05], dtype=np.float32)
+
+    with pytest.raises(
+        AssertionError,
+        match="All rivers represented in the grid must have width, depth, and manning defined",
+    ):
+        routing._update_rivers_geometry(
+            width_grid=width_grid,
+            depth_grid=depth_grid,
+            manning_grid=manning_grid,
+        )

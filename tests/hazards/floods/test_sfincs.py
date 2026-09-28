@@ -140,17 +140,6 @@ def build_sfincs(
             mannings=geb_model.hazard_driver.floods.mannings,
             grid_size_multiplier=10,
             subgrid=subgrid,
-            depth_calculation_method=geb_model.model.config["hydrology"]["routing"][
-                "river_depth"
-            ]["method"],
-            depth_calculation_parameters=geb_model.model.config["hydrology"]["routing"][
-                "river_depth"
-            ]["parameters"]
-            if "parameters"
-            in geb_model.hazard_driver.floods.model.config["hydrology"]["routing"][
-                "river_depth"
-            ]
-            else {},
             setup_river_outflow_boundary=False,
             custom_rivers_to_burn=read_geom(
                 geb_model.files["geom"]["routing/custom_rivers"]
