@@ -1,3 +1,10 @@
+# dev
+- Added bankfull river depth estimation via hydraulic continuity derived from simulated 2-year flood discharge (Q_2) based on Andreadis et al. 2013. For channels with too observed width, the depth is scaled inversely with width to conserve volume.
+- For flood simulatons use channel depth and width from the hydrological model directly. Remove options power_law and mannings in flood simulatons.
+- Improve local inertial boundary conditions.
+- Fixed cascading waterbody-to-waterbody routing transfers in local inertial routing so connected natural lakes dynamically transfer releases each substep.
+- Allow ReturnPeriodModel to work with zero discharge by returning zero for these special cases.
+
 # v1.0.0b31
 - Reduce size of discharge evaluation HTML dashboard. 
 - Vectorized GPD bootstrap goodness-of-fit testing in extreme value analysis, speeding up threshold selection by ~80x and removing early stopping parameters.
@@ -33,7 +40,7 @@
 - Added `setup_flood_protection_standards` build method to process FLOPROS flood protection standards. Subsequently these flood protection standards are used to initialize the flood protection standards for each subbasin in the model domain.
 
 # v1.0.0b30
-- Implement evaporation for retention basins using a constant area based on maximum storage and a depth of 3 meters.
+- Implement evaporation for retention basins using a constant area based on maximum storage and a depth of 3 meters.,
 - Added optional external discharge skill-score comparisons for Google Streamflow, GloFAS, and PCR-GLOBWB/Utrecht.
 - Expanded discharge metrics with original/modified KGE, KGE components, NSE, Pearson r², RMSE, and RRMSE.
 - Added skill-score maps, boxplots, external KGE comparisons, upstream-area diagnostics, and dashboard summaries.

@@ -45,7 +45,6 @@ from geb.geb_types import (
 from geb.hazards.event import Event
 from geb.hazards.floods.workflows.bathymetry import burn_rivers
 from geb.hazards.floods.workflows.utils import get_end_point
-from geb.hydrology.routing import get_river_width
 from geb.workflows.extreme_value_analysis import ReturnPeriodModel
 from geb.workflows.io import (
     create_hash_from_parameters,
@@ -68,7 +67,6 @@ from geb.workflows.raster import (
     rasterize_like,
 )
 
-from .workflows import get_river_depth, get_river_manning
 from .workflows.outflow import create_outflow_in_mask
 from .workflows.utils import (
     create_hourly_hydrograph,
@@ -244,8 +242,6 @@ class SFINCSRootModel:
         mannings: xr.DataArray,
         subgrid: bool,
         grid_size_multiplier: int,
-        depth_calculation_method: str,
-        depth_calculation_parameters: dict[str, float | int] | None = None,
         coastal: bool = False,
         low_elevation_coastal_zone_mask: gpd.GeoDataFrame | None = None,
         coastal_boundary_exclude_mask: gpd.GeoDataFrame | None = None,
@@ -270,9 +266,6 @@ class SFINCSRootModel:
                 if 1, no combining is done.
                 if 2, every 2x2 grid cells are combined into one cell, etc.
             subgrid: Whether to set up subgrid pixels for the model.
-            depth_calculation_method: The method to use for calculating river depth. Can be 'manning' or 'power_law'.
-            depth_calculation_parameters: A dictionary of parameters for the depth calculation method. Only used if
-                depth_calculation_method is 'power_law', in which case it should contain 'c' and 'd' keys.
             coastal: Whether to set up coastal boundary conditions. Defaults to False.
             low_elevation_coastal_zone_mask: A GeoDataFrame defining the low elevation coastal zone to set as active cells.
             coastal_boundary_exclude_mask: A GeoDataFrame defining areas to exclude from the coastal boundary condition cells.
@@ -289,7 +282,6 @@ class SFINCSRootModel:
             The SFINCSRootModel instance with the built model.
 
         Raises:
-            ValueError: if depth_calculation_method is not 'manning' or 'power_law',
             ValueError: if grid_size_multiplier is not a positive integer.
             ValueError: if resolution of DEM is not square pixels.
         """
@@ -337,11 +329,6 @@ class SFINCSRootModel:
             raise ValueError(
                 "Cannot use subgrid pixels when grid_size_multiplier is 1 (no aggregation)"
             )
-
-        assert depth_calculation_method in [
-            "manning",
-            "power_law",
-        ], "Method should be 'manning' or 'power_law'"
 
         self.outflow_boundary_width_m = outflow_boundary_width_m
 
@@ -626,6 +613,10 @@ class SFINCSRootModel:
                     raise ValueError(
                         "Custom rivers to burn must have a 'depth' column when using custom rivers"
                     )
+                if "manning" not in rivers_to_burn.columns:
+                    raise ValueError(
+                        "Custom rivers to burn must have a 'manning' column when using custom rivers"
+                    )
             else:
                 active_rivers = self.active_rivers.copy()
                 # iteratively get all outflow rivers from self.rivers
@@ -710,6 +701,16 @@ class SFINCSRootModel:
                         upstream_rivers.index, "return_period_2_years_daily_m3_per_s"
                     ].mean()
 
+                    rivers_to_burn.loc[river_to_burn_index, "width"] = upstream_rivers[
+                        "width"
+                    ].mean()
+                    rivers_to_burn.loc[river_to_burn_index, "depth"] = upstream_rivers[
+                        "depth"
+                    ].mean()
+                    rivers_to_burn.loc[river_to_burn_index, "manning"] = (
+                        upstream_rivers["manning"].mean()
+                    )
+
                 assert (
                     rivers_to_burn["return_period_2_years_daily_m3_per_s"]
                     .notnull()
@@ -722,28 +723,18 @@ class SFINCSRootModel:
                     "All rivers to burn must have river width parameters for river width estimation"
                 )
 
-                river_width_unknown_mask = rivers_to_burn["width"].isnull()
-
-                rivers_to_burn.loc[river_width_unknown_mask, "width"] = get_river_width(
-                    river_parameters.loc[
-                        river_width_unknown_mask, "river_width_alpha"
-                    ].values,
-                    river_parameters.loc[
-                        river_width_unknown_mask, "river_width_beta"
-                    ].values,
-                    rivers_to_burn.loc[
-                        river_width_unknown_mask, "return_period_2_years_daily_m3_per_s"
-                    ].values,
-                ).astype(np.float64)
-
-                rivers_to_burn["depth"] = get_river_depth(
-                    river_segments=rivers_to_burn,
-                    method=depth_calculation_method,
-                    parameters=depth_calculation_parameters,
-                    bankfull_column="return_period_2_years_daily_m3_per_s",
-                )
-
-            rivers_to_burn["manning"] = get_river_manning(rivers_to_burn)
+                assert (
+                    "width" in rivers_to_burn.columns
+                    and rivers_to_burn["width"].notnull().all()
+                ), "River width must be provided by the hydrological model."
+                assert (
+                    "depth" in rivers_to_burn.columns
+                    and rivers_to_burn["depth"].notnull().all()
+                ), "River depth must be provided by the hydrological model."
+                assert (
+                    "manning" in rivers_to_burn.columns
+                    and rivers_to_burn["manning"].notnull().all()
+                ), "River Manning's n must be provided by the hydrological model."
 
             rivers_to_burn.to_parquet(
                 self.path / "rivers_with_widths_and_depths.geoparquet"
