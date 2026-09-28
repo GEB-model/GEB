@@ -834,11 +834,11 @@ class SFINCSRootModel:
         write_geom(self.subbasins, self.path / "subbasins.geoparquet")
 
         cross_sections = gpd.read_file(
-            "/scistor/ivm/rpo100/GEB/models/meuse_improved/base/meuse_crosssections.gpkg"
+            "/scistor/ivm/rpo100/GEB/models/meuse_improved_routing/base/meuse_crosssections.gpkg"
         )
 
         obs_points = gpd.read_file(
-            "/scistor/ivm/rpo100/GEB/models/meuse_improved/base/meuse_observation_points.gpkg"
+            "/scistor/ivm/rpo100/GEB/models/meuse_improved_routing/base/meuse_observation_points.gpkg"
         )
 
         obs_points = obs_points.explode(index_parts=False).reset_index(

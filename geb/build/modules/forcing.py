@@ -750,8 +750,16 @@ class Forcing(BuildModelBase):
 
         da.attrs = attrs
 
+        # forecasts/hindcasts start at the initialization time (e.g. 00:00:00), which
+        # does not follow the hour-1-to-hour-0 accumulation convention of historical
+        # reanalysis data, so the start/end hour check below does not apply to them.
+        is_forecast_or_hindcast = name.startswith(("forecasts/", "hindcasts/"))
+
         # Check that hourly forcing data starts at hour 1 (01:00:00) and ends at hour 00 (23:00:00 - 00:00:00)
-        if (da.time[1] - da.time[0]).dt.seconds.item() == 3600:
+        if (
+            not is_forecast_or_hindcast
+            and (da.time[1] - da.time[0]).dt.seconds.item() == 3600
+        ):
             first_hour: int = int(pd.to_datetime(da.time.values[0]).hour)
             if first_hour != 1:
                 raise ValueError(
