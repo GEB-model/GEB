@@ -35,6 +35,11 @@ class Hydrology:
         self.model = model
         self.evaluator = evaluator
 
+    def evaluate_discharge_calibration(self, run_name: str, **kwargs) -> None:
+        """Evaluate discharge for a specific simulation run."""
+        scores = discharge_evaluation.evaluate_discharge(self, run_name=run_name)
+        return scores
+
     # Discharge evaluation and data access
     evaluate_discharge = discharge_evaluation.evaluate_discharge
     get_discharge_per_river = discharge_helpers.get_discharge_per_river

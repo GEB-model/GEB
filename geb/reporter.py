@@ -885,10 +885,16 @@ class Reporter:
             ValueError: If the variable type is not recognized.
         """
         self.model = model
-        self.config: dict[str, int] = self.model.config["report"]["_config"].copy()
+        if "_config" not in self.model.config["report"]:
+            self.config: dict[str, int] = {}
+        else:
+            self.config: dict[str, int] = self.model.config["report"]["_config"].copy()
+            del self.model.config["report"]["_config"]
+            
+            self.variables_to_report = copy.deepcopy(self.model.config["report"])
+            # del self.variables_to_report["_config"]
 
-        self.variables_to_report = copy.deepcopy(self.model.config["report"])
-        del self.variables_to_report["_config"]
+        self.variables_to_report = self.model.config["report"]
 
         if self.model.simulate_hydrology:
             self.hydrology = model.hydrology

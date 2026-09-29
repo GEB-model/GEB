@@ -261,7 +261,7 @@ rule set_individual_parameters:
             CALIBRATION_CONFIG["spinup_time"], CALIBRATION_CONFIG["start_time"], CALIBRATION_CONFIG["end_time"]
         )
         
-        cmd = "geb set -c model.yml --working-directory {0} {1} {2} report=null report._discharge_stations+=true".format(
+        cmd = "geb set -c model.yml --working-directory {0} {1} {2}".format(
             run_dir, param_args, datetime_args
         )
         run_command(cmd, log[0], f"Failed to set parameters for {wildcards.gen}_{wildcards.ind}")
