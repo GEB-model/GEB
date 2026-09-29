@@ -1454,9 +1454,10 @@ class Hydrography(BuildModelBase):
         Args:
             crest_height_m: Height to use when the GDW height is missing or invalid (m). Default: 1 m.
         """
-        gdw_points: gpd.GeoDataFrame = self.geom.get(
-            "waterbodies/gdw_checks", gpd.GeoDataFrame()
-        )
+        gdw_points: gpd.GeoDataFrame = gpd.GeoDataFrame()
+        if "waterbodies/gdw_checks" in self.geom:
+            # Bracket access reads the file; .get() only returns its path.
+            gdw_points = self.geom["waterbodies/gdw_checks"]
         waterbody_id: xr.DataArray = self.grid["waterbodies/waterbody_id"]
         valid_river_cells: xr.DataArray = (
             ~self.grid["mask"]
