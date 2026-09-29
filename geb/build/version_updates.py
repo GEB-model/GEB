@@ -13,6 +13,11 @@ if TYPE_CHECKING:
     from geb.build import GEBModel as GEBModelBuild
 
 VERSION_UPDATES: dict[str, list[str]] = {
+    "1.0.0b32": [
+        "[update-method;setup_waterbodies]",
+        "[update-method;setup_weirs]",
+        "[manual] Rerun spinup and the simulation after building weirs. Custom build files must include setup_weirs after setup_waterbodies.",
+    ],
     "1.0.0b31": [
         "[update-method;set_time_range]",
         "[update-method;setup_retention_basins]",

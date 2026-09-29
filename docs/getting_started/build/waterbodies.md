@@ -35,7 +35,8 @@ If you do not provide command areas, the command area rasters are still created 
 
 GEB keeps HydroLAKES outlines and IDs. It first matches GDW's `HYLAK_ID` to the
 HydroLAKES ID. If no lake has that ID, a dam point must lie inside or on the edge of
-a lake. Without an ID match, points outside all lakes are not included. GEB does not use the nearest lake.
+a lake. GEB does not use the nearest lake. Points outside GDW polygons are
+handled by `setup_weirs`.
 
 GEB currently uses HydroLAKES v1.0, while GDW refers to v1.1. The checks mark ID
 matches where the dam lies outside the lake (`point_outside_lake`). They also
@@ -82,6 +83,7 @@ until spinup is rerun.
 
 `waterbody_id` is the linked lake or added reservoir ID; it is empty for unlinked
 dams. `addition_reason` says whether a reservoir was added or why it was skipped.
+`inside_gdw_polygon` records whether the point touches any GDW polygon.
 `gdw_type_conflict` is true only for `lake_control_differs`: GDW identifies
 lake control, but HydroLAKES does not classify the lake as controlled.
 A barrier alone is a reason to review the lake, not a confirmed type conflict.
@@ -178,3 +180,16 @@ setup_waterbodies:
 setup_waterbodies:
   custom_reservoir_capacity: data/custom_reservoir_capacity.csv
 ```
+
+## Weirs
+
+GDW points outside all GDW reservoir outlines are treated as weirs, whatever their
+name or type. Points on an outline's edge count as inside.
+
+We use the GDW height, or **1 m** if it is missing or invalid. We treat this as the height
+above the model river bed. Weirs hold back water until it flows over the top.
+There are no gate opening or closing rules. Points that share a lake, reservoir,
+or weir cell, or cannot be placed on a river, are skipped with a warning.
+
+In `build.yml`, `setup_weirs.crest_height_m` sets the height used when GDW has no valid height.
+Rebuild `setup_waterbodies` and `setup_weirs`, then rerun spinup and the simulation.

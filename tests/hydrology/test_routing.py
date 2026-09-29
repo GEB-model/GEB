@@ -63,6 +63,7 @@ def _make_local_inertial(
     waterbody_outflow_bed_elev: np.ndarray | None = None,
     river_storage_alpha: np.ndarray | None = None,
     river_storage_beta: np.ndarray | None = None,
+    weir_height_m: ArrayFloat32 | None = None,
 ) -> LocalInertial:
     """Helper to instantiate LocalInertial for unit tests with explicit required arrays.
 
@@ -163,6 +164,7 @@ def _make_local_inertial(
         river_storage_alpha=river_storage_alpha,
         river_storage_beta=river_storage_beta,
         in_spinup=True,
+        weir_height_m=weir_height_m,
     )
     router.initialize_stage(
         waterbody_storage_m3=np.zeros(n_wb, dtype=np.float64) if n_wb > 0 else None

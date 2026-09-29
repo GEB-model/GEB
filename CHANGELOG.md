@@ -1,3 +1,6 @@
+# v1.0.0b32
+- Impletemented weirs from the GDW dataset. Weirs are all GDW points that are not in a GDW polygon. Default height is 1m.  Rebuild `setup_waterbodies` and `setup_weirs`, then rerun spinup.
+
 # v1.0.0b31
 - Reduce size of discharge evaluation HTML dashboard. 
 - Vectorized GPD bootstrap goodness-of-fit testing in extreme value analysis, speeding up threshold selection by ~80x and removing early stopping parameters.

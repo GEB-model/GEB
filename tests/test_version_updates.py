@@ -1,7 +1,7 @@
 """Regression tests for automatic input version update failures."""
 
 import logging
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import pytest
 
@@ -44,3 +44,29 @@ def test_version_update_failure_propagates(
         builder.set_version.assert_called_once_with("1.0.0b31")
         builder.set_current_version.assert_called_once_with()
     builder.update.assert_called_once_with(methods)
+
+
+def test_weir_input_migration(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Build the required weir grid when updating b31 inputs.
+
+    Args:
+        monkeypatch: Fixture for fixing the target package version.
+    """
+    monkeypatch.setattr(version_updates, "__version__", "1.0.0b32")
+    builder: Mock = Mock()
+    methods: dict[str, dict[str, list[int]]] = {
+        "setup_waterbodies": {},
+        "setup_weirs": {},
+    }
+    with pytest.raises(RuntimeError, match="Rerun spinup"):
+        version_updates.get_and_maybe_do_version_updates(
+            "1.0.0b31",
+            logging.getLogger(__name__),
+            build_model=builder,
+            methods=methods,
+        )
+    assert builder.update.call_args_list == [
+        call({"setup_waterbodies": {}}),
+        call({"setup_weirs": {}}),
+    ]
+    builder.set_version.assert_called_once_with("1.0.0b32")

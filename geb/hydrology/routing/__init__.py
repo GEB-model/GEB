@@ -352,6 +352,10 @@ class Routing(Module):
             self.model.files["grid"]["routing/ldd"],
         )
 
+        self.weir_height_m: ArrayFloat32 = self.grid.load2d(
+            self.model.files["grid"]["routing/weir_height_m"]
+        )
+
         mask: TwoDArrayBool = ~self.grid.mask
 
         ldd_uncompressed: TwoDArrayUint8 = np.full_like(mask, 255, dtype=self.ldd.dtype)
@@ -635,6 +639,7 @@ class Routing(Module):
             river_storage_alpha=self.var.river_storage_alpha,
             river_storage_beta=self.var.river_storage_beta,
             in_spinup=self.model.in_spinup,
+            weir_height_m=self.weir_height_m,
         )
 
         if self.model.in_spinup and initialize_storage:

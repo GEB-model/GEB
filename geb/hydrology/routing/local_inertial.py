@@ -733,6 +733,7 @@ class LocalInertial:
         river_storage_beta: ArrayFloat32,
         in_spinup: bool,
         min_slope: float = 1e-4,
+        weir_height_m: ArrayFloat32 | None = None,
     ) -> None:
         """Initializes the LocalInertial router object.
 
@@ -763,9 +764,12 @@ class LocalInertial:
             river_storage_beta: Kinematic wave beta parameter per reach (dimensionless).
             min_slope: Minimum allowable slope for ocean/pit boundary boundaries (dimensionless).
             in_spinup: Whether the model is in spinup mode.
+            weir_height_m: Weir heights above the river bed (m), in original cell order.
+                Zero means no weir. A weir needs a river cell on each side.
 
         Raises:
             KeyError: If a local inertial pit reach has a river ID not found in rivers_gdf.
+            ValueError: If weir heights are invalid or select unsupported links.
         """
         assert dt > 0, "dt must be greater than 0"
         self.dt = dt
@@ -1030,6 +1034,28 @@ class LocalInertial:
         )
 
         self._setup_inertial_boundary_arrays()
+        self._weir_height_inertial: ArrayFloat32 = np.zeros(
+            self.n_inertial, dtype=np.float32
+        )
+        if weir_height_m is not None:
+            if (
+                weir_height_m.shape != river_length.shape
+                or not np.isfinite(weir_height_m).all()
+                or (weir_height_m < 0).any()
+            ):
+                raise ValueError(
+                    "Weir heights must match river cells and be finite and non-negative."
+                )
+            sorted_weir_heights_m: ArrayFloat32 = weir_height_m[self.sorted_idxs]
+            self._weir_height_inertial = sorted_weir_heights_m[
+                inertial_start:inertial_end
+            ].copy()
+            if np.count_nonzero(self._weir_height_inertial) != np.count_nonzero(
+                weir_height_m
+            ) or np.any(
+                (self._weir_height_inertial > 0) & (self._ds_boundary_type != 0)
+            ):
+                raise ValueError("Weirs need a river cell on each side.")
         self._compute_static_geometry()
 
         self._f64_global_workspace: np.ndarray = np.empty(
@@ -1654,7 +1680,11 @@ class LocalInertial:
             self._stage_vol_coeff_inertial
         )
         self._geom_inbank[:, GEOM_IN_INTERFACE_BED_ELEVATION_MAX] = (
-            self._interface_bed_elev_max
+            # Raise the sill without changing channel storage.
+            np.maximum(
+                self._interface_bed_elev_max,
+                self._bed_elevation_inertial + self._weir_height_inertial,
+            )
         )
         self._geom_inbank[:, GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH] = (
             self._width_over_sqrt_bankfull_depth_inertial

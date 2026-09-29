@@ -38,6 +38,7 @@ from geb.build.workflows.waterbodies_preprocessing import (
     load_and_enrich_waterbodies,
     snap_waterbody_points,
 )
+from geb.build.workflows.weirs import create_weir_height_grid
 from geb.geb_types import (
     ArrayBool,
     ArrayFloat32,
@@ -1446,6 +1447,49 @@ class Hydrography(BuildModelBase):
             name="coastal/low_elevation_coastal_zone_mask",
         )
 
+    @build_method(required=True, depends_on=["setup_waterbodies"])
+    def setup_weirs(self, crest_height_m: float = 1.0) -> None:
+        """Add GDW points outside reservoir polygons as weirs.
+
+        Args:
+            crest_height_m: Height to use when the GDW height is missing or invalid (m). Default: 1 m.
+        """
+        gdw_points: gpd.GeoDataFrame = self.geom.get(
+            "waterbodies/gdw_checks", gpd.GeoDataFrame()
+        )
+        waterbody_id: xr.DataArray = self.grid["waterbodies/waterbody_id"]
+        valid_river_cells: xr.DataArray = (
+            ~self.grid["mask"]
+            & (self.grid["routing/river_ids"] != -1)
+            & (waterbody_id == -1)
+        )
+        downstream_cells: ArrayInt64 = (
+            self.grid["flow_raster_idxs_ds"].values.ravel().astype(np.int64)
+        )
+        cell_indices: ArrayInt64 = np.arange(downstream_cells.size)
+        # A weir needs a river cell on each side.
+        has_downstream_river: npt.NDArray[np.bool_] = (
+            (downstream_cells >= 0)
+            & (downstream_cells < downstream_cells.size)
+            & (downstream_cells != cell_indices)
+        )
+        has_downstream_river &= np.take(
+            valid_river_cells.values.ravel(), downstream_cells, mode="clip"
+        )
+        valid_river_cells = valid_river_cells & has_downstream_river.reshape(
+            valid_river_cells.shape
+        )
+        weir_height_grid: xr.DataArray = create_weir_height_grid(
+            gdw_points=gdw_points,
+            crest_height_m=crest_height_m,
+            waterbody_id=waterbody_id,
+            rivers=self.geom["routing/rivers"],
+            upstream_area_grid=self.grid["routing/upstream_area_m2"],
+            upstream_area_subgrid=self.other["drainage/original_d8_upstream_area_m2"],
+            valid_river_cells=valid_river_cells,
+        )
+        self.set_grid(weir_height_grid, name="routing/weir_height_m")
+
     @build_method(required=True, depends_on=["setup_hydrography"])
     def setup_waterbodies(
         self,
@@ -1457,8 +1501,8 @@ class Hydrography(BuildModelBase):
         """Set up waterbodies, reservoirs, and command areas.
 
         Configure waterbodies and their associated command areas for the model grid.
-        GDW adds dam data and missing reservoirs, snapping dams without outlines
-        to single river cells. It flags differences
+        GDW adds dam data and missing reservoirs. Points outside GDW polygons
+        are handled by setup_weirs. It flags differences
         between its dam types and HydroLAKES lake/reservoir classifications.
         This includes rasterizing lake and reservoir identifiers, optionally
         assigning command areas from preset data or by deriving them from the river

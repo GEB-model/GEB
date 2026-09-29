@@ -274,7 +274,7 @@ def _add_missing_gdw_reservoirs(
     """Add GDW reservoirs missing from HydroLAKES.
 
     Require an unmatched dam with positive, finite area, capacity, and discharge.
-    Use its point if no outline is available; snap it during grid setup.
+    Points outside GDW outlines are handled as weirs instead.
     Outlines must not touch another waterbody.
     Skip locks and lake-control dams. Record why each skipped dam was left out.
 
@@ -293,12 +293,22 @@ def _add_missing_gdw_reservoirs(
         ValueError: If a new ID is already used or is too large for int32 rasters.
     """
     reservoir_shapes = reservoir_shapes.to_crs(waterbodies.crs)
+    # Check all polygons, including their edges.
+    points_in_polygons: np.ndarray = reservoir_shapes.sindex.query(
+        dam_checks.geometry, predicate="intersects"
+    )[0]
+    inside_polygon: np.ndarray = np.zeros(len(dam_checks), dtype=bool)
+    inside_polygon[points_in_polygons] = True
+    dam_checks["inside_gdw_polygon"] = inside_polygon
     reservoir_shapes.set_index("gdw_id", inplace=True)
     dam_checks["addition_reason"] = "already_matched"
     used_ids: set[int] = set(waterbodies["waterbody_id"])
     row_index: int
     # isna() selects barriers with no linked lake. Adding linked ones would duplicate it.
     for row_index in dam_checks.index[dam_checks["waterbody_id"].isna()]:
+        if not dam_checks.at[row_index, "inside_gdw_polygon"]:
+            dam_checks.at[row_index, "addition_reason"] = "weir"
+            continue
         gdw_id: int = int(dam_checks.at[row_index, "gdw_id"])
         reservoir_shape: BaseGeometry = (
             reservoir_shapes.geometry.loc[gdw_id]

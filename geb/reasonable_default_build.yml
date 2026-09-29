@@ -42,6 +42,9 @@ setup_vegetation:
 
 setup_waterbodies:
 
+setup_weirs:
+  crest_height_m: 1.0 # Used when GDW has no valid height (m).
+
 setup_groundwater:
 
 setup_well_prices_by_reference_year_global:

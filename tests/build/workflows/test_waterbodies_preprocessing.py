@@ -1,4 +1,4 @@
-"""Tests for GDW reservoirs without outlines."""
+"""Tests for GDW reservoir outlines and weir classification."""
 
 import geopandas as gpd
 import numpy as np
@@ -15,10 +15,37 @@ from geb.build.workflows.waterbodies_preprocessing import (
 from geb.hydrology.waterbodies import RESERVOIR
 
 
+@pytest.mark.parametrize("longitude, covered", [(0.5, True), (1.0, True), (2.0, False)])
+def test_gdw_polygon_coverage(longitude: float, covered: bool) -> None:
+    """Use actual coverage, including edges, regardless of polygon ID.
+
+    Args:
+        longitude: Point longitude (degrees).
+        covered: Whether the point should count as inside a polygon.
+    """
+    waterbodies: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {"waterbody_id": [1], "waterbody_type": [1]},
+        geometry=[box(0, 0, 1, 1)],
+        crs=4326,
+    )
+    dams: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {"gdw_id": [42], "waterbody_id": [1]},
+        geometry=[Point(longitude, 0.5)],
+        crs=4326,
+    )
+    outlines: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {"gdw_id": [99]},
+        geometry=[box(0, 0, 1, 1)],
+        crs=4326,
+    )
+    _, checks = _add_missing_gdw_reservoirs(waterbodies, dams, outlines)
+    assert bool(checks.iloc[0].inside_gdw_polygon) == covered
+
+
 @pytest.mark.parametrize("capacity", [1000.0, 0.0])
 @pytest.mark.parametrize("has_polygon", [True, False])
 def test_add_reservoir(capacity: float, has_polygon: bool) -> None:
-    """Add valid reservoirs with or without an outline; skip missing capacity."""
+    """Only add reservoirs covered by GDW polygons with valid capacity."""
     waterbodies: gpd.GeoDataFrame = gpd.GeoDataFrame(
         {"waterbody_id": [1], "waterbody_type": [1]},
         geometry=[box(5, 5, 6, 6)],
@@ -45,7 +72,10 @@ def test_add_reservoir(capacity: float, has_polygon: bool) -> None:
     result: gpd.GeoDataFrame
     checks: gpd.GeoDataFrame
     result, checks = _add_missing_gdw_reservoirs(waterbodies, dams, outlines)
-    if capacity == 0:
+    if not has_polygon:
+        assert len(result) == 1
+        assert checks.iloc[0].addition_reason == "weir"
+    elif capacity == 0:
         assert len(result) == 1
         assert checks.iloc[0].addition_reason == "missing_model_values"
     else:
