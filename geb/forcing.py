@@ -10,8 +10,8 @@ import xarray as xr
 from scipy.sparse import csr_matrix
 
 from geb.geb_types import (
+    ArrayFloat,
     ArrayFloat32,
-    ArrayFloat64,
     ArrayInt32,
     TwoDArrayBool,
     TwoDArrayFloat32,
@@ -26,10 +26,10 @@ if TYPE_CHECKING:
 
 
 def generate_bilinear_interpolation_weights(
-    src_x: ArrayFloat64,
-    src_y: ArrayFloat64,
-    tgt_x: ArrayFloat64,
-    tgt_y: ArrayFloat64,
+    src_x: ArrayFloat,
+    src_y: ArrayFloat,
+    tgt_x: ArrayFloat,
+    tgt_y: ArrayFloat,
     mask: TwoDArrayBool | None = None,
     src_mask: TwoDArrayBool | None = None,
 ) -> tuple[ArrayInt32, ArrayFloat32]:

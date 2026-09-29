@@ -102,7 +102,7 @@ T_TwoDArray = TypeVar("T_TwoDArray", bound=TwoDArray)
 T_ThreeDArray = TypeVar("T_ThreeDArray", bound=ThreeDArray)
 
 DType = TypeVar("DType", bound=DTypeLike)
-T_OneorTwoDArray = TypeVar("T_OneorTwoDArray", bound=Array | TwoDArray)
+T_OneorTwoDArray = TypeVar("T_OneorTwoDArray", bound=np.ndarray)
 T_Scalar = TypeVar("T_Scalar", bound=np.generic)
 T_ArrayNumber = TypeVar("T_ArrayNumber", bound=ArrayFloat | ArrayInt)
 

@@ -263,11 +263,14 @@ def test_find_neighbors_coordinates_plot(plt: Any) -> None:
         agent_neighbors = agent_neighbors[agent_neighbors != 4294967295]
         assert np.unique(agent_neighbors).size == agent_neighbors.size
         geohash_coord = geohash.decode(
-            geohash.encode_precision(*locations[agent], bits), bits
+            geohash.encode_precision(locations[agent, 0], locations[agent, 1], bits),
+            bits,
         )
         shifts = geohash.get_shifts(*geohash_coord, radius, bits)
         neighbor_geohashes = geohash.shift_multiple(
-            geohash.encode_precision(*locations[agent], bits), bits, shifts
+            geohash.encode_precision(locations[agent, 0], locations[agent, 1], bits),
+            bits,
+            shifts,
         )
         neighbor_geohashes = np.sort(neighbor_geohashes)
         for j, neighbor_geohash in enumerate(neighbor_geohashes):
@@ -343,7 +346,13 @@ def test_find_neighbors_meters_plot(plt: Any) -> None:
         assert np.unique(agent_neighbors).size == agent_neighbors.size
         geohash_coord = geohash.decode(
             geohash.encode_precision(
-                *locations[agent], bits, minx=minx, maxx=maxx, miny=miny, maxy=maxy
+                locations[agent, 0],
+                locations[agent, 1],
+                bits,
+                minx=minx,
+                maxx=maxx,
+                miny=miny,
+                maxy=maxy,
             ),
             bits,
         )
@@ -360,7 +369,13 @@ def test_find_neighbors_meters_plot(plt: Any) -> None:
         )
         neighbor_geohashes = geohash.shift_multiple(
             geohash.encode_precision(
-                *locations[agent], bits, minx=minx, maxx=maxx, miny=miny, maxy=maxy
+                locations[agent, 0],
+                locations[agent, 1],
+                bits,
+                minx=minx,
+                maxx=maxx,
+                miny=miny,
+                maxy=maxy,
             ),
             bits,
             shifts,

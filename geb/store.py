@@ -407,11 +407,13 @@ class DynamicArray:
 
     @overload
     def __getitem__(
-        self, key: tuple[slice[None, int | None, int | None], *Any]
+        self, key: tuple[slice[None, int | None, int | None], *tuple[Any, ...]]
     ) -> DynamicArray: ...
 
     @overload
-    def __getitem__(self, key: tuple[slice[int, int, int], *Any]) -> NDArray[Any]: ...
+    def __getitem__(
+        self, key: tuple[slice[int, int, int], *tuple[Any, ...]]
+    ) -> NDArray[Any]: ...
 
     @overload
     def __getitem__(self, key: slice[None, int | None, int | None]) -> DynamicArray: ...

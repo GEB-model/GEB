@@ -1,6 +1,7 @@
 """Soil energy flow functions."""
 
 import numpy as np
+import numpy.typing as npt
 from numba import njit
 
 from geb.geb_types import ArrayFloat32, ArrayFloat64, Shape
@@ -168,7 +169,7 @@ def calculate_thermal_conductivity_solid_fraction_watt_per_meter_kelvin(
     sand_percentage: np.ndarray[Shape, np.dtype[np.float32]],
     silt_percentage: np.ndarray[Shape, np.dtype[np.float32]],
     clay_percentage: np.ndarray[Shape, np.dtype[np.float32]],
-) -> np.ndarray[Shape, np.dtype[np.float32]]:
+) -> npt.NDArray[np.float32]:
     r"""Calculate the thermal conductivity of the solid fraction of soil [W/(m·K)].
 
     Based on: https://apps.dtic.mil/sti/tr/pdf/ADA044002.pdf
@@ -211,7 +212,7 @@ def calculate_thermal_conductivity_solid_fraction_watt_per_meter_kelvin(
 @njit(cache=True)
 def calculate_thermal_conductivity_dry_soil_johansen_watt_per_meter_kelvin(
     bulk_density_kg_per_dm3: np.ndarray[Shape, np.dtype[np.float32]],
-) -> np.ndarray[Shape, np.dtype[np.float32]]:
+) -> npt.NDArray[np.float32]:
     """Calculate the dry thermal conductivity of soil using Johansen (1975) [W/(m·K)].
 
     Formula: lambda_dry = (0.135 * rho_d + 64.7) / (2700 - 0.947 * rho_d)
@@ -235,7 +236,7 @@ def calculate_thermal_conductivity_saturated_soil_johansen_watt_per_meter_kelvin
     thermal_conductivity_solid_fraction: np.ndarray[Shape, np.dtype[np.float32]],
     porosity: np.ndarray[Shape, np.dtype[np.float32]],
     thermal_conductivity_fluid: np.float32,
-) -> np.ndarray[Shape, np.dtype[np.float32]]:
+) -> npt.NDArray[np.float32]:
     """Calculate the saturated thermal conductivity of soil using Johansen (1975).
 
     Formula: lambda = lambda_s^(1-n) * lambda_fluid^n
@@ -505,7 +506,7 @@ def get_temperature_and_frozen_fraction_from_enthalpy(
     solid_heat_capacity_J_per_m2_K: np.ndarray[Shape, np.dtype[np.float32]],
     water_content_m: np.ndarray[Shape, np.dtype[np.float32]],
     topwater_m: np.float32 | np.ndarray[Shape, np.dtype[np.float32]] = np.float32(0.0),
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
     """Convert enthalpy to temperature and frozen fraction.
 
     This applies the sharp-freezing enthalpy formulation (0°C plateau) and
@@ -525,8 +526,12 @@ def get_temperature_and_frozen_fraction_from_enthalpy(
     """
     water_depth_m = water_content_m + topwater_m
 
-    temperature_C: np.ndarray = np.empty_like(enthalpy_J_per_m2, dtype=np.float32)
-    frozen_fraction: np.ndarray = np.empty_like(enthalpy_J_per_m2, dtype=np.float32)
+    temperature_C: npt.NDArray[np.float32] = np.empty_like(
+        enthalpy_J_per_m2, dtype=np.float32
+    )
+    frozen_fraction: npt.NDArray[np.float32] = np.empty_like(
+        enthalpy_J_per_m2, dtype=np.float32
+    )
 
     enthalpy_flat = enthalpy_J_per_m2.ravel()
     solid_heat_capacity_flat = solid_heat_capacity_J_per_m2_K.ravel()
@@ -566,7 +571,7 @@ def get_temperature_from_enthalpy(
     solid_heat_capacity_J_per_m2_K: np.ndarray[Shape, np.dtype[np.float32]],
     water_content_m: np.ndarray[Shape, np.dtype[np.float32]],
     topwater_m: np.float32 | np.ndarray[Shape, np.dtype[np.float32]] = np.float32(0.0),
-) -> np.float32 | np.ndarray[Shape, np.dtype[np.float32]]:
+) -> npt.NDArray[np.float32]:
     """Calculate temperature from enthalpy.
 
     Args:
@@ -594,7 +599,7 @@ def get_frozen_fraction_from_enthalpy(
     solid_heat_capacity_J_per_m2_K: np.ndarray[Shape, np.dtype[np.float32]],
     water_content_m: np.ndarray[Shape, np.dtype[np.float32]],
     topwater_m: np.float32 | np.ndarray[Shape, np.dtype[np.float32]] = np.float32(0.0),
-) -> np.float32 | np.ndarray[Shape, np.dtype[np.float32]]:
+) -> npt.NDArray[np.float32]:
     """Return frozen fraction [0-1] from enthalpy.
 
     Args:

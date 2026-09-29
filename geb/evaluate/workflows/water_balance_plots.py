@@ -279,8 +279,8 @@ def plot_water_balance(
 
     for ax, year in zip(bar_chart_axes, years):
         row = yearly_totals_df_m3_per_year.loc[
-            yearly_totals_df_m3_per_year.index.year == year
-        ].iloc[0]  # ty:ignore[unresolved-attribute]
+            [d.year == year for d in yearly_totals_df_m3_per_year.index]
+        ].iloc[0]
 
         bottom = 0
         for col in inputs_cols:

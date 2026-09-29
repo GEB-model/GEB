@@ -1,20 +1,24 @@
 (function(){
-  var gebStationIndex = {{ this.data | script_json }};
+  var excludedStationIndex = {{ this.data | script_json }};
   var map = {{this._parent.get_name()}};
+  var gebStationIndex = (window._gebStations || []).concat(excludedStationIndex || []);
 
   function resolveMarkers(station) {
     if (station._markers) return station._markers;
-    station._markers = station.markers.map(function(name) {
-      return window[name] || null;
-    }).filter(Boolean);
-    return station._markers;
+    if (station.markers) {
+      station._markers = station.markers.map(function(name) {
+        return window[name] || null;
+      }).filter(Boolean);
+      return station._markers;
+    }
+    return [];
   }
 
   function setStationVisible(station, visible) {
     resolveMarkers(station).forEach(function(marker) {
       marker.setStyle({
         opacity: visible ? 1 : 0,
-        fillOpacity: visible ? 0.9 : 0
+        fillOpacity: visible ? (marker.options.fillOpacity || 0.9) : 0
       });
       marker.options.interactive = visible;
       if (marker.getElement()) {
@@ -46,7 +50,8 @@
 
   function openFirstMatch(matches) {
     if (!matches.length) return;
-    var marker = resolveMarkers(matches[0])[0];
+    var markers = resolveMarkers(matches[0]);
+    var marker = markers[0];
     if (!marker) return;
     map.setView(marker.getLatLng(), Math.max(map.getZoom(), 8));
     marker.openPopup();
@@ -81,6 +86,11 @@
     input.value = '';
     input.focus();
     applySearch('');
+  });
+
+  window.addEventListener('gebStationsReady', function(e) {
+    gebStationIndex = (window._gebStations || []).concat(excludedStationIndex || []);
+    updateStatus(input.value, applySearch(input.value));
   });
 
   var style = document.createElement('style');

@@ -227,9 +227,16 @@ def to_grid(
     cell_start_indices[0] = 0
     cell_start_indices[1:] = grid_to_HRU[:-1]
     if data.ndim == 1:
-        return _to_grid_1d(data, cell_start_indices, grid_to_HRU, land_use_ratio)
+        return _to_grid_1d(
+            cast(ArrayFloat32, data), cell_start_indices, grid_to_HRU, land_use_ratio
+        )
     elif data.ndim == 2:
-        return _to_grid_2d(data, cell_start_indices, grid_to_HRU, land_use_ratio)
+        return _to_grid_2d(
+            cast(TwoDArrayFloat32, data),
+            cell_start_indices,
+            grid_to_HRU,
+            land_use_ratio,
+        )
     else:
         raise NotImplementedError("Only 1D and 2D arrays are supported")
 
@@ -250,7 +257,7 @@ def to_HRU(
     Returns:
         output_data: Data converted to HRUs (1D array of size n_HRUs).
     """
-    return data[HRU_to_grid]  # ty:ignore[invalid-return-type]
+    return data[HRU_to_grid]  # ty:ignore[invalid-argument-type]
 
 
 class BaseVariables:
@@ -670,6 +677,7 @@ class Grid(BaseVariables):
 class HRUVariables(Bucket):
     """This class contains functions to handle variables on the HRU scale."""
 
+    daily_reference_evapotranspiration_grass_m: ArrayFloat32
     variable_runoff_shape_beta: ArrayFloat32
     interception_storage_m: ArrayFloat32
     snow_enthalpy_J_per_m2: TwoDArrayFloat32
@@ -1475,14 +1483,14 @@ class Data:
         """
         assert not isinstance(data, list)
         if data.ndim == 1:
-            output_data = to_HRU(data, self.HRU.var.HRU_to_grid)  # ty:ignore[invalid-argument-type]
+            output_data = to_HRU(data, self.HRU.var.HRU_to_grid)
         elif data.ndim == 2 and how == "first":
             output_data = data[self.HRU.var.HRU_to_grid, :]
         elif data.ndim == 2 and how == "last":
             output_data = data[:, self.HRU.var.HRU_to_grid]
         else:
             raise NotImplementedError
-        return output_data  # ty:ignore[invalid-return-type]
+        return cast(T_OneorTwoDArray, output_data)
 
     def to_grid(self, *, HRU_data: np.ndarray) -> np.ndarray:
         """Convert HRU data to grid scale using a weighted mean.

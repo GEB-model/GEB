@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import numpy.typing as npt
 
-from geb.geb_types import ArrayBool, ArrayFloat32, ArrayFloat64, ArrayInt32
+from geb.geb_types import ArrayBool, ArrayFloat32, ArrayFloat64, ArrayInt8, ArrayInt32
 from geb.store import DynamicArray
 
 from .general import AgentBaseClass
@@ -26,7 +26,7 @@ class ReservoirOperatorVariables:
     reservoir_M_factor: DynamicArray
     storage_year_start: ArrayFloat64
     alpha: ArrayFloat32
-    reservoir_purpose: ArrayInt32
+    reservoir_purpose: ArrayInt8
     multi_year_monthly_total_inflow: npt.NDArray[np.float32]
     multi_year_monthly_total_irrigation_demand_m3: ArrayFloat32
     multi_year_monthly_usable_command_area_release_m3: ArrayFloat32
@@ -208,7 +208,7 @@ class ReservoirOperators(AgentBaseClass):
             self.var.storage_year_start, 0.85, dtype=np.float32
         )
 
-        total_monthly_inflow: ArrayFloat64 = (
+        total_monthly_inflow: ArrayFloat32 = (
             self.model.hydrology.waterbodies.var.average_discharge_m3_per_s
             * 30
             * 24
@@ -511,7 +511,7 @@ class ReservoirOperators(AgentBaseClass):
             long_term_monthly_inflow_m3
             * self.environmental_flow_requirement
             / n_monthly_substeps
-        )
+        ).astype(np.float32)
 
         assert (provisional_reservoir_release_m3 >= 0).all()
         usable_release_m3, environmental_release_m3 = self._release_corrections(

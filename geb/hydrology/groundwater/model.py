@@ -37,12 +37,14 @@ from xmipy import XmiWrapper
 from xmipy.errors import InputError
 
 from geb.geb_types import (
+    ArrayFloat,
     ArrayFloat32,
     ArrayFloat64,
     ArrayWithScalar,
     ThreeDArrayFloat32,
     ThreeDArrayWithScalar,
     TwoDArrayBool,
+    TwoDArrayFloat,
     TwoDArrayFloat32,
     TwoDArrayFloat64,
     TwoDArrayWithScalar,
@@ -63,10 +65,10 @@ MODFLOW_VERSION: str = "6.7.0"
 
 @njit(cache=True)
 def get_water_table_depth(
-    layer_boundary_elevation: TwoDArrayFloat32,
-    head: TwoDArrayFloat64,
-    elevation: ArrayFloat32,
-    min_remaining_layer_storage_m: np.float32,
+    layer_boundary_elevation: TwoDArrayFloat,
+    head: TwoDArrayFloat,
+    elevation: ArrayFloat,
+    min_remaining_layer_storage_m: float | np.floating,
 ) -> ArrayFloat64:
     """Calculate the water table depth.
 
@@ -113,10 +115,10 @@ def get_water_table_depth(
 
 @njit(cache=True)
 def get_groundwater_storage_m(
-    layer_boundary_elevation: TwoDArrayFloat32,
-    head: TwoDArrayFloat64,
-    specific_yield: TwoDArrayFloat32,
-    min_remaining_layer_storage_m: np.float32 = np.float32(0.0),
+    layer_boundary_elevation: TwoDArrayFloat,
+    head: TwoDArrayFloat,
+    specific_yield: TwoDArrayFloat,
+    min_remaining_layer_storage_m: float | np.floating = 0.0,
 ) -> ArrayFloat64:
     """Calculate the groundwater storage in meters.
 
@@ -148,12 +150,12 @@ def get_groundwater_storage_m(
 
 @njit(cache=True)
 def distribute_well_abstraction_m3_per_layer(
-    well_rate: ArrayFloat64,
-    layer_boundary_elevation: TwoDArrayFloat32,
-    heads: TwoDArrayFloat64,
-    specific_yield: TwoDArrayFloat32,
-    area: ArrayFloat32,
-    min_remaining_layer_storage_m: np.float64 = np.float64(0.0),
+    well_rate: ArrayFloat,
+    layer_boundary_elevation: TwoDArrayFloat,
+    heads: TwoDArrayFloat,
+    specific_yield: TwoDArrayFloat,
+    area: ArrayFloat,
+    min_remaining_layer_storage_m: float | np.floating = 0.0,
 ) -> TwoDArrayFloat64:
     """Distribute the well abstraction rate over the layers.
 

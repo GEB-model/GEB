@@ -298,7 +298,7 @@ def read_grid(
     if load:
         data = data_array[:]
         assert isinstance(data, np.ndarray)
-        data: TwoDArray | ThreeDArray = data  # ty:ignore[invalid-assignment]
+        data: TwoDArray | ThreeDArray = data
     else:
         data = data_array
         assert isinstance(data, zarr.Array)
@@ -315,19 +315,19 @@ def read_grid(
         assert isinstance(y_array, zarr.Array)
         y = y_array[:]
         assert isinstance(y, np.ndarray)
-        x_diff: float = np.diff(x[:]).mean().item()  # ty:ignore[invalid-argument-type]
-        y_diff: float = np.diff(y[:]).mean().item()  # ty:ignore[invalid-argument-type]
+        x_diff: float = np.diff(x[:]).mean().item()
+        y_diff: float = np.diff(y[:]).mean().item()
         transform: Affine = Affine(
             a=x_diff,
             b=0,
-            c=x[0] - x_diff / 2,  # ty:ignore[invalid-argument-type, unsupported-operator]
+            c=x[0] - x_diff / 2,
             d=0,
             e=y_diff,
-            f=y[0] - y_diff / 2,  # ty:ignore[invalid-argument-type, unsupported-operator]
+            f=y[0] - y_diff / 2,
         )
         crs = data_array.attrs["_CRS"]
         assert isinstance(crs, dict)
-        wkt: str = crs["wkt"]  # ty:ignore[invalid-argument-type]
+        wkt: str = str(crs["wkt"])
         store.close()
         return data, transform, wkt
     else:
@@ -1186,7 +1186,7 @@ class ForcingReader:
         assert (
             isinstance(data, np.ndarray) and data.dtype == np.float32 and data.ndim == 2
         )
-        return data  # ty:ignore[invalid-return-type]
+        return data
 
     def get_index(self, date: datetime.datetime, n: int = 1) -> int:
         """Get the time index for a given datetime.

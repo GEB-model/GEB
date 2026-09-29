@@ -647,7 +647,7 @@ def infiltration(
     wetting_front_depth_m: np.float32,
     wetting_front_suction_head_m: np.float32,
     wetting_front_moisture_deficit: np.float32,
-    green_ampt_active_layer_idx: int,
+    green_ampt_active_layer_idx: int | np.integer,
     variable_runoff_shape_beta: np.float32,
     bubbling_pressure_m_positive: ArrayFloat32,
     soil_layer_height_m: ArrayFloat32,
@@ -667,7 +667,7 @@ def infiltration(
     np.float32,
     np.float32,
     np.float32,
-    int,
+    int | np.integer,
     np.float32,
 ]:
     """Simulates vertical transport of water in the soil for a single cell.
@@ -1150,7 +1150,7 @@ def infiltration(
     inline="always",
 )
 def get_soil_moisture_at_pressure(
-    pressure_head_m: np.float32,
+    pressure_head_m: float | np.floating | np.ndarray[Shape, np.dtype[np.float32]],
     bubbling_pressure_m_positive: np.ndarray[Shape, np.dtype[np.float32]],
     thetas: np.ndarray[Shape, np.dtype[np.float32]],
     thetar: np.ndarray[Shape, np.dtype[np.float32]],
@@ -1171,7 +1171,7 @@ def get_soil_moisture_at_pressure(
     alpha = np.float32(1) / bubbling_pressure_m_positive
     n = lambda_ + np.float32(1)
     m = np.float32(1) - np.float32(1) / n
-    phi: np.float32 = -pressure_head_m
+    phi = -pressure_head_m
 
     water_retention_curve = (np.float32(1) / (np.float32(1) + (alpha * phi) ** n)) ** m
 

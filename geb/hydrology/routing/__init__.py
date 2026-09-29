@@ -342,6 +342,7 @@ class Routing(Module):
         self.config = model.config["hydrology"]["routing"]
 
         self.default_missing_channel_width: float = 0.5  # 0.5 is based on assumption here, but could be improved: https://pubs.usgs.gov/publication/wri854004
+        self.default_minimum_discharge_m3_per_s: float = 0.01
 
         self.hydrology = hydrology
 
@@ -515,13 +516,149 @@ class Routing(Module):
         )
         return rivers, river_ids, river_ids_no_waterbodies_removed
 
+    def _update_rivers_geometry(
+        self,
+        width_grid: ArrayFloat32,
+        depth_grid: ArrayFloat32,
+        manning_grid: ArrayFloat32,
+    ) -> None:
+        """Update bankfull width, depth, and Manning's n on river reaches GeoDataFrame from routing grid arrays.
+
+        Aggregates bankfull width (meters), depth (meters), and Manning roughness across all grid cells
+        belonging to each river reach, assigning reach-average values directly
+        to self.var.rivers['width'], self.var.rivers['depth'], and self.var.rivers['manning'].
+
+        Args:
+            width_grid: Bankfull channel width per routing grid cell (meters).
+            depth_grid: Bankfull channel depth per routing grid cell (meters).
+            manning_grid: Channel Manning roughness per routing grid cell (s/m^(1/3)).
+        """
+        valid_river_cell_mask: ArrayBool = self.var.river_ids != -1
+        valid_reach_ids: ArrayInt32 = self.var.river_ids[valid_river_cell_mask]
+        valid_widths: ArrayFloat32 = width_grid[valid_river_cell_mask]
+        valid_depths: ArrayFloat32 = depth_grid[valid_river_cell_mask]
+        valid_mannings: ArrayFloat32 = manning_grid[valid_river_cell_mask]
+
+        df_grid: pd.DataFrame = pd.DataFrame(
+            {
+                "river_id": valid_reach_ids,
+                "width": valid_widths,
+                "depth": valid_depths,
+                "manning": valid_mannings,
+            }
+        )
+        reach_means: pd.DataFrame = df_grid.groupby("river_id").mean()
+
+        self.var.rivers.loc[reach_means.index, "width"] = reach_means["width"].astype(
+            np.float64
+        )
+        self.var.rivers.loc[reach_means.index, "depth"] = reach_means["depth"].astype(
+            np.float64
+        )
+        self.var.rivers.loc[reach_means.index, "manning"] = reach_means[
+            "manning"
+        ].astype(np.float64)
+
+        represented_rivers: pd.DataFrame = self.var.rivers[
+            self.var.rivers["represented_in_grid"]
+        ]
+        assert (
+            represented_rivers["width"].notnull().all()
+            and represented_rivers["depth"].notnull().all()
+            and represented_rivers["manning"].notnull().all()
+        ), (
+            "All rivers represented in the grid must have width, depth, and manning defined."
+        )
+
+    def calculate_bankfull_depth(
+        self,
+        bankfull_top_width_m: ArrayFloat32,
+        use_simulated_bankfull_q: bool,
+    ) -> ArrayFloat32:
+        """Calculate bankfull channel depth across the routing grid using hydraulic continuity.
+
+        Derives bankfull depth (meters) using based on Andreadis et al. (2013).
+
+        https://agupubs.onlinelibrary.wiley.com/doi/full/10.1002/wrcr.20440
+
+        When use_simulated_bankfull_q is True, simulated 2-year flood discharge Q_2 (from
+        self.var.rivers['return_period_2_years_daily_m3_per_s']) is mapped to grid cells.
+        When False (e.g. during the first year of simulation or during spinup), empirical
+        width inversion is used.
+
+        Notes:
+            Under continuity, expected channel dimensions follow Andreadis et al. (2013):
+            W_expected = alpha * Q^beta, h_expected = c * Q^d.
+            Bankfull depth is scaled inversely by observed width:
+            h_bf = (W_expected / W_obs) * (h_expected / velocity_factor).
+            This ensures narrow constrictions scour deeper, wide reaches spread shallower,
+            and an average reach reproduces exact Andreadis power-law depth.
+
+        Args:
+            bankfull_top_width_m: Bankfull top channel width per cell (meters).
+            use_simulated_bankfull_q: Whether to use simulated 2-year flood return periods from
+                self.var.rivers. Must be False during the first year of simulation or spinup.
+
+        Returns:
+            Bankfull channel depth per cell (meters).
+
+        Raises:
+            ValueError: If use_simulated_bankfull_q is True but 'return_period_2_years_daily_m3_per_s'
+                is missing from self.var.rivers or contains null values.
+        """
+        # Downstream hydraulic geometry width inversion proxy Q_proxy = (W / alpha)^(1 / beta):
+        width_alpha: ArrayFloat32 = self.var.river_width_alpha
+        width_beta: ArrayFloat32 = self.var.river_width_beta
+        alpha: ArrayFloat32 = np.maximum(width_alpha, np.float32(1.0))
+        beta: ArrayFloat32 = np.maximum(width_beta, np.float32(0.1))
+        if use_simulated_bankfull_q:
+            if "return_period_2_years_daily_m3_per_s" not in self.var.rivers.columns:
+                raise ValueError(
+                    "use_simulated_bankfull_q is True, but 'return_period_2_years_daily_m3_per_s' was not found "
+                    "in self.var.rivers. Return periods must be estimated before transitioning to simulated Q2."
+                )
+            q2_col = self.var.rivers[self.var.rivers["represented_in_grid"]][
+                "return_period_2_years_daily_m3_per_s"
+            ]
+            if q2_col.isnull().any():
+                raise ValueError(
+                    "use_simulated_bankfull_q is True, but 'return_period_2_years_daily_m3_per_s' contains null values in self.var.rivers."
+                )
+
+            bankfull_discharge_m3_s: ArrayFloat32 = q2_col.reindex(
+                self.var.river_ids
+            ).values.astype(np.float32)
+        else:
+            bankfull_discharge_m3_s = (bankfull_top_width_m / alpha) ** (
+                np.float32(1.0) / beta
+            )
+
+        depth_params: dict[str, Any] = self.config["river_depth"]["parameters"]
+        depth_c: np.float32 = np.float32(depth_params["c"])
+        depth_d: np.float32 = np.float32(depth_params["d"])
+        min_depth_m: np.float32 = np.float32(depth_params["min_depth_m"])
+        velocity_factor: np.float32 = np.float32(depth_params["velocity_factor"])
+
+        w_expected: ArrayFloat32 = alpha * (bankfull_discharge_m3_s**beta)
+        h_expected: ArrayFloat32 = depth_c * (bankfull_discharge_m3_s**depth_d)
+
+        # Continuity depth scaled by observed width: h_bf = (W_expected / W_obs) * (h_expected / f_u)
+        depth_continuity: ArrayFloat32 = (
+            w_expected / np.maximum(bankfull_top_width_m, np.float32(1.0))
+        ) * (h_expected / velocity_factor)
+        bankfull_depth_m: ArrayFloat32 = np.maximum(
+            depth_continuity, min_depth_m
+        ).astype(np.float32)
+
+        return bankfull_depth_m
+
     def set_router(self) -> None:
         """Initialize the local inertial routing algorithm with derived river geometry.
 
-        Derives cross-sectional channel geometry (bankfull width, depth via hydrodynamic Manning
-        inversion, shape exponent, and floodplain width) and instantiates the LocalInertial solver
-        with waterbody and retention basin boundary conditions. Then seeds or synchronizes the
-        solver's internal stage and storage states.
+        Derives cross-sectional channel geometry (bankfull width, depth via hydraulic continuity
+        or geomorphic power law, shape exponent, and floodplain width) and instantiates the
+        LocalInertial solver with waterbody and retention basin boundary conditions. Then seeds
+        or synchronizes the solver's internal stage and storage states.
 
         Notes:
             Called during model setup after checkpoint loading (self.store.load)
@@ -547,41 +684,38 @@ class Routing(Module):
         ).astype(np.float32)
         self.var.river_width = bankfull_top_width_m
 
-        # Bankfull depth via hydrodynamic Manning inversion (m):
-        # Invert downstream hydraulic geometry W = alpha * Q^beta -> Q_bf = (W / alpha)^(1/beta),
-        # then invert Manning normal depth h_bf = ((n * Q_bf) / (W * sqrt(S0)))^(3/5) (Bates et al. 2010, Neal et al. 2012).
-        width_alpha: ArrayFloat32 = self.var.river_width_alpha
-        width_beta: ArrayFloat32 = self.var.river_width_beta
-        alpha: ArrayFloat32 = np.maximum(width_alpha, np.float32(1.0))
-        beta: ArrayFloat32 = np.maximum(width_beta, np.float32(0.1))
-        estimated_bankfull_discharge: ArrayFloat32 = (bankfull_top_width_m / alpha) ** (
-            np.float32(1.0) / beta
-        )
-
-        bankfull_depth_m: ArrayFloat32 = np.clip(
-            (
-                (self.grid.var.river_mannings * estimated_bankfull_discharge)
-                / (
-                    bankfull_top_width_m
-                    * np.sqrt(
-                        np.maximum(self.grid.var.river_slope_m_per_m, np.float32(1e-5))
-                    )
-                )
-            )
-            ** np.float32(3.0 / 5.0),
-            np.float32(0.2),
-            np.float32(25.0),
-        ).astype(np.float32)
-
         # Continuous power-law channel shape exponent r (dimensionless):
         # In hydraulic geometry, W(y) = W_bf * (y / h_bf)^r where r = beta / f = beta / (0.6 * (1 - beta)).
         # For typical alluvial channels (beta = 0.5, f = 0.3), r = 0.5 gives a parabolic cross-section (Dingman 2009, Moody & Troutman 2002).
+        width_beta: ArrayFloat32 = self.var.river_width_beta
+        beta: ArrayFloat32 = np.maximum(width_beta, np.float32(0.1))
         shape_exponent: ArrayFloat32 = np.clip(
             beta
             / np.maximum(np.float32(0.6) * (np.float32(1.0) - beta), np.float32(0.1)),
             np.float32(0.2),
             np.float32(1.0),
         ).astype(np.float32)
+
+        # Bankfull channel depth (m):
+        # Use simulated 2-year return period discharge if it has already been estimated;
+        # otherwise, fall back to empirical downstream hydraulic geometry width inversion:
+        use_simulated_bankfull_q: bool = (
+            "return_period_2_years_daily_m3_per_s" in self.var.rivers.columns
+            and not self.var.rivers["return_period_2_years_daily_m3_per_s"]
+            .isnull()
+            .any()
+        )
+        bankfull_depth_m: ArrayFloat32 = self.calculate_bankfull_depth(
+            bankfull_top_width_m=bankfull_top_width_m,
+            use_simulated_bankfull_q=use_simulated_bankfull_q,
+        )
+
+        # Update derived bankfull width and depth to self.var.rivers
+        self._update_rivers_geometry(
+            width_grid=bankfull_top_width_m,
+            depth_grid=bankfull_depth_m,
+            manning_grid=self.grid.var.river_mannings,
+        )
 
         # 4. Floodplain width beyond bankfull channel (m):
         floodplain_width_m: ArrayFloat32 = np.nan_to_num(
@@ -736,7 +870,9 @@ class Routing(Module):
         )
 
         # Channel gradient (fraction, dy/dx) derived dynamically from DEM bed elevation drop
-        minimum_river_slope = np.float32(0.00001)
+        minimum_river_slope: np.float32 = np.float32(
+            self.config["minimum_river_slope_m_per_m"]
+        )
         bankfull_river_elev: ArrayFloat32 = self.grid.load2d(
             self.model.files["grid"]["routing/bankfull_river_elevation_m"]
         )
@@ -1042,32 +1178,22 @@ class Routing(Module):
                     self.var.observed_average_river_width,
                 ).astype(np.float32)
                 self.var.river_width = dynamic_width
-                alpha: ArrayFloat32 = np.maximum(
-                    self.var.river_width_alpha, np.float32(1.0)
+                use_simulated_bankfull_q: bool = (
+                    "return_period_2_years_daily_m3_per_s" in self.var.rivers.columns
+                    and not self.var.rivers["return_period_2_years_daily_m3_per_s"]
+                    .isnull()
+                    .any()
                 )
-                beta: ArrayFloat32 = np.maximum(
-                    self.var.river_width_beta, np.float32(0.1)
+                dynamic_depth_m: ArrayFloat32 = self.calculate_bankfull_depth(
+                    bankfull_top_width_m=dynamic_width,
+                    use_simulated_bankfull_q=use_simulated_bankfull_q,
                 )
-                estimated_bankfull_discharge: ArrayFloat32 = (
-                    dynamic_width / alpha
-                ) ** (np.float32(1.0) / beta)
-                dynamic_depth_m: ArrayFloat32 = np.clip(
-                    (
-                        (self.grid.var.river_mannings * estimated_bankfull_discharge)
-                        / (
-                            dynamic_width
-                            * np.sqrt(
-                                np.maximum(
-                                    self.grid.var.river_slope_m_per_m, np.float32(1e-5)
-                                )
-                            )
-                        )
-                    )
-                    ** np.float32(3.0 / 5.0),
-                    np.float32(0.2),
-                    np.float32(25.0),
-                ).astype(np.float32)
                 self.router.update_channel_width(dynamic_width, dynamic_depth_m)
+                self._update_rivers_geometry(
+                    width_grid=dynamic_width,
+                    depth_grid=dynamic_depth_m,
+                    manning_grid=self.grid.var.river_mannings,
+                )
 
         for hour in range(24):
             # increment inflow index for next hour
@@ -1517,15 +1643,22 @@ class Routing(Module):
             total=len(active_rivers),
             desc="Return period estimation",
         ):
-            model = ReturnPeriodModel(
+            # Ideally we want to do "full estimation" of the extreme value distribution,
+            # which includes selection of the ideal threshold. However, this requires
+            # computationally expensive bootstrapping. For the bankful discharge, however,
+            # this is not needed as the RP (currently 2 years) is low, and a good estimate
+            # can be obtained by fixing the quantile and the shape.
+            # For 95th quantile, see for example: https://doi.org/10.1002/wrcr.20381
+            # For mathematical stability, only 1 exceedance is required because the shape
+            # is fixed. However, in practice when a normal spinup is used (>= 10 years)
+            # there should be more exceedances and a reliable fit for the low RPs used here.
+            model: ReturnPeriodModel = ReturnPeriodModel(
                 series=discharge_by_river_daily[idx],
                 return_periods=list(set([2, activation_threshold_return_period_years])),
-                min_exceed=2,
-                nboot=2000,
+                fixed_quantile=0.95,  # use a fixed quantile
+                min_exceed=1,
                 fixed_shape=0.0,
                 fixed_scale=None,
-                p_value_threshold=0.05,
-                selection_strategy="first_significant",
             )
 
             for return_period, return_water_level in model.rl_table.set_index(
@@ -1533,7 +1666,26 @@ class Routing(Module):
             )["GPD_POT_RL"].items():
                 self.var.rivers.loc[
                     idx, f"return_period_{return_period}_years_daily_m3_per_s"
-                ] = return_water_level
+                ] = max(
+                    float(return_water_level),
+                    self.default_minimum_discharge_m3_per_s,
+                )
+
+        # Dynamically update the local inertial router's bankfull depth in place
+        # using the newly fitted 2-year flood return periods:
+        updated_bankfull_depth: ArrayFloat32 = self.calculate_bankfull_depth(
+            bankfull_top_width_m=self.var.river_width,
+            use_simulated_bankfull_q=True,
+        )
+        self.router.update_channel_width(
+            river_width=self.var.river_width,
+            bankfull_depth_m=updated_bankfull_depth,
+        )
+        self._update_rivers_geometry(
+            width_grid=self.var.river_width,
+            depth_grid=updated_bankfull_depth,
+            manning_grid=self.grid.var.river_mannings,
+        )
 
         for basin_id in range(len(self.retention_basin_data)):
             basin_cells = np.where(self.retention_basin_ids == basin_id)[0]
@@ -1552,8 +1704,9 @@ class Routing(Module):
                     self.retention_activation_threshold_m3_s[basin_id] = np.inf
                 else:
                     return_period_col = f"return_period_{activation_threshold_return_period_years}_years_daily_m3_per_s"
-                    self.retention_activation_threshold_m3_s[basin_id] = (
-                        self.var.rivers.loc[river_id, return_period_col]
+                    self.retention_activation_threshold_m3_s[basin_id] = max(
+                        float(self.var.rivers.loc[river_id, return_period_col]),
+                        self.default_minimum_discharge_m3_per_s,
                     )
 
         return None

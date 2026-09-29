@@ -36,7 +36,6 @@ dependencies = [
     "folium>=0.19.6",
     "geopandas>=1.0.1",
     "hydromt-sfincs==2.0.0rc3",
-    "mcp",
     "networkx",
     "numba>=0.67.0",
     "numpy>=2.1",
@@ -111,6 +110,12 @@ Repository = "https://github.com/GEB-model/GEB"
 Issues = "https://github.com/GEB-model/GEB/issues"
 
 [tool.uv]
+environments = [
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "sys_platform == 'linux' and platform_machine == 'aarch64'",
+    "sys_platform == 'win32' and platform_machine == 'AMD64'",
+    "sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
 required-environments = [
     "sys_platform == 'linux'",
     "sys_platform == 'win32'",
