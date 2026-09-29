@@ -303,9 +303,9 @@ class GovernmentAdaptationConfig(BaseModel):
     enabled: bool = Field(
         False, description="Whether to enable government adaptation policy."
     )
-    mode: Literal["cba", "threshold"] = Field(
+    mode: Literal["cba", "pathway"] = Field(
         "cba",
-        description="Adaptation policy mode: 'cba' (cost-benefit analysis) or 'threshold'.",
+        description="Adaptation policy mode: 'cba' (cost-benefit analysis) or 'pathway'.",
     )
     EAD_threshold: float = Field(
         1000000.0,

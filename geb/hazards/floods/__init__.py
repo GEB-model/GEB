@@ -1068,9 +1068,11 @@ class Floods(Module):
         Raises:
             ValueError: If there is not enough data available for reliable spinup.
         """
-        rivers: gpd.GeoDataFrame = (
-            self.model.hydrology.routing.get_active_and_downstream_outflow_rivers()
-        )
+        # rivers: gpd.GeoDataFrame = (
+        #     self.model.hydrology.routing.get_active_and_downstream_outflow_rivers()
+        # )
+        # only active rivers are reported, so downstream outflow rivers have no discharge files
+        rivers: gpd.GeoDataFrame = self.model.hydrology.routing.get_active_rivers()
         all_rivers = self.model.hydrology.routing.var.rivers
 
         spinup_name = self.model.config["general"]["spinup_name"]
@@ -1085,7 +1087,9 @@ class Floods(Module):
         spinup_discharge = spinup_discharge.loc[start_time:]
         spinup_discharge.index.freq = pd.infer_freq(spinup_discharge.index)
 
-        if (spinup_discharge.index[-1].year - spinup_discharge.index[0].year) < 20:
+        # if (spinup_discharge.index[-1].year - spinup_discharge.index[0].year) < 20:
+        # count years inclusively, so e.g. 1990-2009 counts as 20 years instead of 19
+        if (spinup_discharge.index[-1].year - spinup_discharge.index[0].year + 1) < 20:
             raise ValueError(
                 """Not enough data available for reliable spinup, should be at least 20 years of data left.
                 Please run the model for at least 30 years (10 years of data is discarded)."""

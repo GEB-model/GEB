@@ -53,14 +53,14 @@ class Fabdem(Adapter):
         response.raise_for_status()
         catalog_data: dict = response.json()
 
-        items: dict[str, str] = {}
+        item_names: list[str] = []
         for link in catalog_data.get("links", []):
             if link.get("rel") == "item":
                 href: str = link.get("href", "")
-                # href is relative like "./stac_catalog/N00E000_FABDEM_V1-2/N00E000_FABDEM_V1-2.json"
+                # href is relative like "../N00E000_FABDEM_V1-2/N00E000_FABDEM_V1-2.json"
                 # The second-to-last path segment is the item directory name.
-                items[href.split("/")[-2]] = href
-        return items
+                item_names.append(href.split("/")[-2])
+        return item_names
 
     def _parse_item_bounds(self, item_name: str) -> dict[str, float] | None:
         """Parse the geographic bounding box of a FABDEM tile from its item name.
@@ -88,21 +88,20 @@ class Fabdem(Adapter):
 
     def _filter_items_by_mask(
         self,
-        items: dict[str, str],
+        item_names: list[str],
         mask: BaseGeometry,
-    ) -> dict[str, str]:
-        """Return only those items whose tiles intersect the mask geometry.
+    ) -> list[str]:
+        """Return only those item names whose tiles intersect the mask geometry.
 
         Args:
-            items: Mapping of item name to href, as returned by
-                `_get_items_from_catalog`.
+            item_names: Full list of STAC item names from the catalog.
             mask: The geometry used to filter intersecting tiles.
 
         Returns:
-            Subset of *items* whose 1×1-degree bounding boxes intersect *mask*.
+            Subset of *item_names* whose 1×1-degree bounding boxes intersect *mask*.
         """
-        intersecting: dict[str, str] = {}
-        for item_name, href in items.items():
+        intersecting: list[str] = []
+        for item_name in item_names:
             bounds = self._parse_item_bounds(item_name)
             if bounds is None:
                 continue
@@ -110,13 +109,12 @@ class Fabdem(Adapter):
                 bounds["minx"], bounds["miny"], bounds["maxx"], bounds["maxy"]
             )
             if tile_bbox.intersects(mask):
-                intersecting[item_name] = href
+                intersecting.append(item_name)
         return intersecting
 
     def _open_tile_from_stac_item(
         self,
         item_name: str,
-        href: str,
         catalog_url: str,
     ) -> xr.DataArray:
         """Open a FABDEM tile as a lazy dask DataArray directly from its remote URL.
@@ -203,12 +201,12 @@ class Fabdem(Adapter):
         Raises:
             RuntimeError: If no intersecting tiles can be downloaded.
         """
-        items: dict[str, str] = self._get_items_from_catalog(self.catalog_url)
-        intersecting_items: dict[str, str] = self._filter_items_by_mask(items, mask)
+        item_names: list[str] = self._get_item_names_from_catalog(self.catalog_url)
+        intersecting_items: list[str] = self._filter_items_by_mask(item_names, mask)
 
         tile_das: list[xr.DataArray] = [
-            self._open_tile_from_stac_item(item_name, href, self.catalog_url)
-            for item_name, href in intersecting_items.items()
+            self._open_tile_from_stac_item(item_name, self.catalog_url)
+            for item_name in intersecting_items
         ]
 
         if not tile_das:

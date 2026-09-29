@@ -89,7 +89,7 @@ agent_settings:
     reforestation_ead_lookup_table: output/reforestation_ead_summary.csv # optional path to a CSV with columns reforested_area_m2 and ead_eur_per_year(_corrected), used to scale the risk-reduction indicator's EAD by the discharge-driven effect of the cumulative reforested area. If null, no such scaling is applied.
     adaptation:
       enabled: false # default false. Enable (true) for government adaptation policy. 
-      mode: "threshold"  # "cba" for cost-benefit analysis, "threshold" for threshold-based adaptation
+      mode: "pathway"  # "cba" for cost-benefit analysis, "pathway" for adaptation pathway
       dike_elevation_cost_per_meter_usd: 6800  # "Unit cost for raising a dike by 1 meter over 1 meter length (USD/m).",
       dike_maintenance_cost_per_year_usd: 80  # "Maintenance cost for a dike segment of 1 meter length (USD/year).",
     priority_weights:
@@ -162,7 +162,7 @@ agent_settings:
       interest_rate: 0.2
       loan_duration: 2
       loss_threshold: 25
-    return_fraction: 0.5
+    return_fraction: 0.4842507612277536
     social_network:
       radius: 5000 # m
       size: 10 # nr of neighbors
@@ -224,7 +224,7 @@ agent_settings:
   reservoir_operators:
     ruleset: no-adaptation
     equal_abstraction: false
-    reservoir_M_factor: 0.1
+    reservoir_M_factor: 0.269206612958037
   sensitivity_analysis:
     risk_aversion_factor: 1
     discount_rate_factor: 1
@@ -256,9 +256,9 @@ report:
   _outflow_points: true
 
 parameters:
-  mannings_n_multiplier: 1.0
-  crop_factor_multiplier: 1.0
-  saturated_hydraulic_conductivity_multiplier: 1.0
+  mannings_n_multiplier: 1.3301492077945163
+  crop_factor_multiplier: 1.8165784105807516
+  saturated_hydraulic_conductivity_multiplier: 1.6450687614037252
   reservoir_release_factor: 0.1
   lake_outflow_multiplier: 1.0
   interflow_multiplier: 1.0

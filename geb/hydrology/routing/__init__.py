@@ -1331,8 +1331,16 @@ class Routing(Module):
 
         self.var.discharge_m3_s = self.var.discharge_m3_s_per_substep.mean(axis=0)
 
-        if not self.model.in_spinup and (
-            self.model.current_day_of_year == 1 or self.model.current_timestep == 0
+        # Skip in alternate universes / forecast members: their fresh reporter
+        # holds no discharge from the main run yet (KeyError on '_data_array'),
+        # and the return periods in self.var are restored afterwards anyway.
+        if (
+            not self.model.in_spinup
+            and self.model.multiverse_name is None
+            and (
+                self.model.current_day_of_year == 1
+                or self.model.current_timestep == 0
+            )
         ):
             self.update_return_periods()
 

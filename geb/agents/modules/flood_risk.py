@@ -958,7 +958,7 @@ class FloodRiskModule:
         damage_folder.mkdir(parents=True, exist_ok=True)
 
         if "building_unprotected" in self.households.buildings_content_curve.columns:
-            # alter_damage_curves_for_flood_proofed_buildings() already copied
+            # alter_damage_curves_based_on_actions() already copied
             # damage_ratio into building_unprotected; drop the now-redundant
             # original instead of renaming into it, which would otherwise
             # produce two columns both named building_unprotected.

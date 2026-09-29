@@ -597,10 +597,10 @@ class Government(AgentBaseClass):
             self._cost_benefit_adaptation()
             return
 
-        elif self.config["adaptation"]["mode"] != "threshold":
+        elif self.config["adaptation"]["mode"] != "pathway":
             raise ValueError(
                 f"Invalid adaptation mode: {self.config['adaptation']['mode']}. "
-                "Supported modes are 'cba' and 'threshold'."
+                "Supported modes are 'cba' and 'pathway'."
             )
 
         budget = self.config["adaptation_costs"].get("initial_budget")
@@ -919,7 +919,7 @@ class Government(AgentBaseClass):
         fr = self.agents.households.flood_risk_module
 
         ead_per_household = self.calculate_reforestation_aware_ead_per_household()
-        fr.load_flood_maps()  # restore the static baseline maps for other code
+        fr.load_return_period_flood_maps()  # restore the static baseline maps for other code
 
         raw_EAD = float(ead_per_household.sum())
         normalised_EAD = self.normalise_indicator("ead", raw_EAD)
@@ -982,9 +982,9 @@ class Government(AgentBaseClass):
         Points ``households.flood_maps`` at real flood depth maps for one of
         the precomputed reforestation-extent scenarios (see
         `reforestation_scenario_bracket`), instead of the static spinup
-        baseline that ``FloodRiskModule.load_flood_maps()`` always loads.
+        baseline that ``FloodRiskModule.load_return_period_flood_maps()`` always loads.
 
-        Callers must call ``fr.load_flood_maps()`` afterwards to restore the
+        Callers must call ``fr.load_return_period_flood_maps()`` afterwards to restore the
         baseline maps once the scenario-conditioned damages have been used,
         so other code relying on ``households.flood_maps`` is not affected.
 
@@ -1423,7 +1423,7 @@ class Government(AgentBaseClass):
             )
             fr = households.flood_risk_module
             fr.load_damage_curves()  # ensure damage curves are loaded before altering them
-            fr.alter_damage_curves_for_flood_proofed_buildings()
+            fr.alter_damage_curves_based_on_actions()
 
             self.model.logger.info(
                 "Government floodproofed %d of %d eligible households in the flood zone.",
