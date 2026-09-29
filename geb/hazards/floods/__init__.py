@@ -291,14 +291,6 @@ class Floods(Module):
             mannings=self.mannings,
             grid_size_multiplier=self.config["grid_size_multiplier"],
             subgrid=self.config["subgrid"],
-            depth_calculation_method=self.model.config["hydrology"]["routing"][
-                "river_depth"
-            ]["method"],
-            depth_calculation_parameters=self.model.config["hydrology"]["routing"][
-                "river_depth"
-            ]["parameters"]
-            if "parameters" in self.model.config["hydrology"]["routing"]["river_depth"]
-            else {},
             low_elevation_coastal_zone_mask=low_elevation_coastal_zone_mask,
             coastal_boundary_exclude_mask=coastal_boundary_exclude_mask,
             coastal=coastal,

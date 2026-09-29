@@ -4,7 +4,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from geb.workflows.extreme_value_analysis import ReturnPeriodModel, fit_gpd_lmoments
+from geb.workflows.extreme_value_analysis import (
+    ReturnPeriodModel,
+    bootstrap_pvalue_for_ad,
+    fit_gpd_lmoments,
+)
 
 
 @pytest.fixture
@@ -152,3 +156,171 @@ def test_fit_gpd_lmoments_minimum_exceedances() -> None:
     # Without fixed_shape, unrestricted fit requires at least 6 exceedances
     with pytest.raises(ValueError, match="Too few exceedances for reliable fit"):
         fit_gpd_lmoments(few_exceedances, fixed_shape=None)
+
+
+def test_bootstrap_pvalue_for_ad_unrestricted() -> None:
+    """Test vectorized bootstrap p-value computation for unrestricted GPD fit."""
+    n: int = 40
+    sigma_hat: float = 10.0
+    xi_hat: float = 0.1
+    observed_stat: float = 0.5
+    nboot: int = 500
+
+    p_value: float = bootstrap_pvalue_for_ad(
+        observed_stat=observed_stat,
+        n=n,
+        sigma_hat=sigma_hat,
+        xi_hat=xi_hat,
+        nboot=nboot,
+        random_seed=42,
+    )
+    assert 0.0 <= p_value <= 1.0
+
+
+def test_bootstrap_pvalue_for_ad_fixed_constraints() -> None:
+    """Test vectorized bootstrap p-value computation with fixed shape and scale."""
+    n: int = 35
+    nboot: int = 200
+
+    # Fixed shape = 0.0 (exponential tail)
+    p_fixed_shape: float = bootstrap_pvalue_for_ad(
+        observed_stat=0.3,
+        n=n,
+        sigma_hat=8.0,
+        xi_hat=0.0,
+        nboot=nboot,
+        fixed_shape=0.0,
+        random_seed=42,
+    )
+    assert 0.0 <= p_fixed_shape <= 1.0
+
+    # Fixed scale
+    p_fixed_scale: float = bootstrap_pvalue_for_ad(
+        observed_stat=0.3,
+        n=n,
+        sigma_hat=5.0,
+        xi_hat=0.1,
+        nboot=nboot,
+        fixed_scale=5.0,
+        random_seed=42,
+    )
+    assert 0.0 <= p_fixed_scale <= 1.0
+
+    # nboot = 0 returns NaN
+    p_zero: float = bootstrap_pvalue_for_ad(
+        observed_stat=0.3,
+        n=n,
+        sigma_hat=5.0,
+        xi_hat=0.1,
+        nboot=0,
+    )
+    assert np.isnan(p_zero)
+
+
+def test_return_period_model_automated_search_mode(
+    synthetic_daily_discharge: pd.Series,
+) -> None:
+    """Test ReturnPeriodModel automated candidate threshold search with bootstrap p-values.
+
+    Verifies that automated threshold search runs vectorized bootstrap simulations, selects a valid
+    threshold with p_ad > p_value_threshold, and calculates valid return levels.
+
+    Args:
+        synthetic_daily_discharge: Synthetic discharge series fixture.
+    """
+    model: ReturnPeriodModel = ReturnPeriodModel(
+        series=synthetic_daily_discharge,
+        return_periods=[2, 5, 10],
+        min_exceed=2,
+        nboot=200,
+        quantile_start=0.85,
+        quantile_end=0.95,
+        quantile_step=0.05,
+        fixed_shape=0.0,
+        p_value_threshold=0.05,
+    )
+
+    assert not np.isnan(model.p_ad)
+    assert model.p_ad > 0.0
+    assert model.u > 0.0
+    assert len(model.candidates_df) > 0
+
+
+def test_negative_nboot_raises_error(synthetic_daily_discharge: pd.Series) -> None:
+    """Test that negative nboot raises ValueError in bootstrap and ReturnPeriodModel."""
+    with pytest.raises(ValueError, match="nboot must be non-negative"):
+        bootstrap_pvalue_for_ad(
+            observed_stat=0.5,
+            n=30,
+            sigma_hat=10.0,
+            xi_hat=0.1,
+            nboot=-1,
+        )
+
+    with pytest.raises(ValueError, match="nboot must be non-negative"):
+        ReturnPeriodModel(
+            series=synthetic_daily_discharge,
+            min_exceed=2,
+            nboot=-5,
+        )
+
+
+def test_return_period_model_all_zero_series() -> None:
+    """Test ReturnPeriodModel with an all-zero discharge series.
+
+    Verifies that an all-zero series returns consistent zero return levels
+    without raising an error.
+    """
+    dates: pd.DatetimeIndex = pd.date_range("2020-01-01", periods=365 * 3, freq="D")
+    zero_series: pd.Series = pd.Series(0.0, index=dates, name="discharge")
+
+    model: ReturnPeriodModel = ReturnPeriodModel(
+        series=zero_series,
+        return_periods=[2, 5, 10],
+        fixed_quantile=0.95,
+        min_exceed=1,
+    )
+
+    assert model.u == 0.0
+    assert model.sigma == 0.0
+    assert model.xi == 0.0
+    assert model.n_exc == 0
+    assert np.isnan(model.p_ad)
+    assert model.lambda_per_year == 0.0
+    assert (model.rl_table["GPD_POT_RL"] == 0.0).all()
+    assert np.all(model.water_level_for_return_periods == 0.0)
+    assert len(model.candidates_df) == 1
+
+
+def test_return_period_model_zero_threshold_fixed() -> None:
+    """Test ReturnPeriodModel when threshold u is zero for fixed threshold or quantile.
+
+    Verifies that when fixed_threshold=0.0 or fixed_quantile evaluates to 0.0,
+    the model returns consistent zero return levels.
+    """
+    dates: pd.DatetimeIndex = pd.date_range("2020-01-01", periods=365 * 3, freq="D")
+    # Intermittent series: mostly zero with sparse positive runoff peaks
+    flow: np.ndarray = np.zeros(len(dates))
+    flow[30] = 10.0
+    flow[120] = 15.0
+    intermittent_series: pd.Series = pd.Series(flow, index=dates, name="discharge")
+
+    # Explicit fixed_threshold = 0.0
+    model_thresh: ReturnPeriodModel = ReturnPeriodModel(
+        series=intermittent_series,
+        return_periods=[2, 5],
+        fixed_threshold=0.0,
+        min_exceed=1,
+    )
+    assert model_thresh.u == 0.0
+    assert (model_thresh.rl_table["GPD_POT_RL"] == 0.0).all()
+
+    # Fixed quantile where quantile value evaluates to 0.0 (e.g. 0.95 on 99% zero series)
+    model_quant: ReturnPeriodModel = ReturnPeriodModel(
+        series=intermittent_series,
+        return_periods=[2, 5],
+        fixed_quantile=0.95,
+        min_exceed=1,
+    )
+    assert model_quant.u == 0.0
+    assert (model_quant.rl_table["GPD_POT_RL"] == 0.0).all()

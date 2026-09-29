@@ -1,7 +1,32 @@
 (function() {
   var map = {{ this._parent.get_name() }};
   var layer = {{ this.data.layer }};
-  var stations = {{ this.data.stations | script_json }};
+  var payload = {{ this.data.payload | script_json }};
+  var stations = [];
+  var decompressed = false;
+
+  async function decompress(base64Str) {
+    var binary = atob(base64Str);
+    var bytes = new Uint8Array(binary.length);
+    for (var i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    var stream = new Response(bytes).body.pipeThrough(new DecompressionStream('gzip'));
+    return await new Response(stream).json();
+  }
+
+  function ensureData(callback) {
+    if (decompressed) {
+      callback();
+      return;
+    }
+    decompress(payload).then(function(data) {
+      stations = data;
+      decompressed = true;
+      callback();
+    });
+  }
+
   var visibleLayers = new Map();
   var renderer = null;
   var selectedLayer = null;
@@ -96,7 +121,6 @@
     var bounds = map.getBounds().pad(0.1);
     var visible = [];
     stations.forEach(function(station, index) {
-      // Include a connector crossing the viewport even if its gauge is outside.
       if (bounds.intersects(L.latLngBounds(station.locations))) visible.push(index);
     });
     var detailed = map.getZoom() >= 9 && visible.length <= 150;
@@ -122,8 +146,11 @@
         'Zoom in for all steps (up to 150 stations), or click a dot.');
   }
   function schedule() {
-    // Coalesce zoomend/moveend without waiting for an animation frame.
-    if (map.hasLayer(layer) && updateTimer === null) updateTimer = setTimeout(update, 50);
+    if (map.hasLayer(layer) && updateTimer === null) {
+      updateTimer = setTimeout(function() {
+        ensureData(update);
+      }, 50);
+    }
   }
   function overlayChanged(event) {
     if (event.layer !== layer) return;
