@@ -745,6 +745,11 @@ class ReportConfig(BaseModel):
         alias="_discharge_stations",
         description="Whether to report discharge stations.",
     )
+    bankfull_depths: bool = Field(
+        True,
+        alias="_bankfull_depths",
+        description="Whether to report bankfull depths each year.",
+    )
     retention_basins: bool = Field(
         False,
         alias="_retention_basins",

@@ -903,6 +903,16 @@ def _write_dashboard_charts_from_saved_scores(
         dashboard_path=dashboard_path,
         max_stations_per_bundle=50,
     )
+    bankfull_df: pd.DataFrame | None = None
+    bankfull_file: Path = (
+        run_output_folder
+        / "report"
+        / "hydrology.routing"
+        / "bankfull_discharge_yearly_m3_per_s.parquet"
+    )
+    if bankfull_file.exists():
+        bankfull_df = pd.read_parquet(bankfull_file)
+
     chart_timelines: dict[str, Any] = {}
     processed: int = 0
     for (
@@ -942,6 +952,38 @@ def _write_dashboard_charts_from_saved_scores(
                 for metric_name in DischargeMetrics._fields
                 if f"{metric_name}_{frequency_label}" in station_row.index
             }
+
+            bankfull_discharge: float | None = None
+            if bankfull_df is not None:
+                for col_candidate in (station_id_text, str(station_id), station_id):
+                    if col_candidate in bankfull_df.columns:
+                        col_series: pd.Series = bankfull_df[col_candidate].dropna()
+                        if not col_series.empty:
+                            bankfull_discharge = float(col_series.iloc[-1])
+                        break
+            if bankfull_discharge is None:
+                station_bankfull_file: Path = (
+                    run_output_folder
+                    / "report"
+                    / "hydrology.routing"
+                    / f"bankfull_discharge_yearly_m3_per_s_{station_id_text}.parquet"
+                )
+                if station_bankfull_file.exists():
+                    try:
+                        ind_df: pd.DataFrame = pd.read_parquet(station_bankfull_file)
+                        ind_series: pd.Series = ind_df.iloc[:, 0].dropna()
+                        if not ind_series.empty:
+                            bankfull_discharge = float(ind_series.iloc[-1])
+                    except Exception:
+                        pass
+
+            if bankfull_discharge is not None and correct_discharge_observations:
+                correction_factor: float = (
+                    1.0 if np.isnan(upstream_area_ratio) else upstream_area_ratio
+                )
+                if np.isfinite(correction_factor) and correction_factor > 0:
+                    bankfull_discharge = bankfull_discharge * correction_factor
+
             chart_writer.add_station(
                 station_id=station_id_text,
                 chart_data=build_station_chart_data(
@@ -954,6 +996,7 @@ def _write_dashboard_charts_from_saved_scores(
                     logger=logger,
                     include_return_period_plots=include_return_period_plots,
                     main_time_index=main_time_index,
+                    bankfull_discharge=bankfull_discharge,
                 ),
             )
 
@@ -1108,6 +1151,7 @@ def build_station_chart_data(
     logger: logging.Logger,
     include_return_period_plots: bool = True,
     main_time_index: pd.DatetimeIndex | None = None,
+    bankfull_discharge: float | None = None,
 ) -> dict[str, Any]:
     """Prepare chart data for one station popup in the discharge dashboard.
 
@@ -1126,6 +1170,7 @@ def build_station_chart_data(
             curves. Defaults to True.
         main_time_index: Optional main DatetimeIndex shared across all stations
             to align time series onto a single dashboard timeline.
+        bankfull_discharge: Optional simulated bankfull discharge (m3/s).
 
     Returns:
         Chart data with discharge values (m3/s).
@@ -1162,6 +1207,7 @@ def build_station_chart_data(
         "timeseries": _build_timeseries_data(
             discharge_comparison=discharge_comparison,
             main_time_index=main_time_index,
+            bankfull_discharge=bankfull_discharge,
         ),
     }
     if include_return_period_plots:
@@ -1232,6 +1278,7 @@ def _to_int_deltas(values: list[int | None]) -> list[int | None]:
 def _build_timeseries_data(
     discharge_comparison: pd.DataFrame,
     main_time_index: pd.DatetimeIndex | None = None,
+    bankfull_discharge: float | None = None,
 ) -> dict[str, Any]:
     """Prepare data for one discharge time-series chart in a popup.
 
@@ -1248,6 +1295,7 @@ def _build_timeseries_data(
         main_time_index: Optional main DatetimeIndex shared across all stations.
             When provided, redundant leading/trailing nulls and the "time" array
             are omitted, storing only the start index offset.
+        bankfull_discharge: Optional simulated bankfull discharge (m3/s).
 
     Returns:
         Dictionary with delta-encoded integer observed/simulated values, start index,
@@ -1292,6 +1340,7 @@ def _build_timeseries_data(
             "simulated": _to_int_deltas(
                 _scale_series_to_int_cents(comparison["discharge_simulations"])
             ),
+            "bankfullDischarge": _as_finite_float(bankfull_discharge),
         }
 
     comparison = discharge_comparison
@@ -1305,6 +1354,7 @@ def _build_timeseries_data(
         "simulated": _to_int_deltas(
             _scale_series_to_int_cents(comparison["discharge_simulations"])
         ),
+        "bankfullDischarge": _as_finite_float(bankfull_discharge),
     }
 
 

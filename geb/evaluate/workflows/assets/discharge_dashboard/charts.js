@@ -3,7 +3,7 @@
   var stationChartFiles = (macroData && macroData.stations) ? macroData.stations : macroData;
   var globalTimeline = (macroData && macroData.timeline) ? macroData.timeline : null;
   var plotlyUrl = 'https://cdn.plot.ly/plotly-2.35.2.min.js';
-  var colors = { observed: '#facc15', simulated: '#38bdf8' };
+  var colors = { observed: '#facc15', simulated: '#38bdf8', bankfull: '#f87171' };
   var stationChartCache = {};
   var layoutBase = {
     autosize: true,
@@ -246,7 +246,9 @@
   function renderCharts(stationId, data) {
     var safeStationId = encodeURIComponent(stationId);
     var common = {responsive: true, displaylogo: false, modeBarButtonsToRemove: ['select2d', 'lasso2d']};
-    function trace(name, x, y, kind, mode, hoverTemplate) {
+    function trace(name, x, y, kind, mode, hoverTemplate, lineOpts) {
+      var line = {color: colors[name.toLowerCase()] || '#f87171', width: 1.5};
+      if (lineOpts) { Object.assign(line, lineOpts); }
       return {
         x: x,
         y: y,
@@ -255,8 +257,8 @@
         mode: mode,
         connectgaps: false,
         hovertemplate: hoverTemplate,
-        line: {color: colors[name.toLowerCase()], width: 1.5},
-        marker: {color: colors[name.toLowerCase()], size: 5}
+        line: line,
+        marker: {color: colors[name.toLowerCase()] || '#f87171', size: 5}
       };
     }
     if (data.timeseries) {
@@ -280,10 +282,17 @@
           : unscale(data.timeseries.simulated, scale);
 
         var timeRange = dateRange(timeline);
-        Plotly.newPlot('geb-time-' + safeStationId, [
+        var traces = [
           trace('Observed', timeline, observed, 'scatter', 'lines', '%{x|%b %Y}<br>%{y:,.0f} m3/s<extra>Observed</extra>'),
           trace('Simulated', timeline, simulated, 'scatter', 'lines', '%{x|%b %Y}<br>%{y:,.0f} m3/s<extra>Simulated</extra>')
-        ], Object.assign({}, layoutBase, {hovermode: 'x unified', xaxis: Object.assign({}, layoutBase.xaxis, {type: 'date', range: timeRange}), yaxis: Object.assign({}, layoutBase.yaxis, {title: 'Discharge (m3/s)'})}), common);
+        ];
+        if (data.timeseries.bankfullDischarge != null && timeRange) {
+          var bf = data.timeseries.bankfullDischarge;
+          traces.push(
+            trace('Bankfull', [timeRange[0], timeRange[1]], [bf, bf], 'scatter', 'lines', '%{y:,.0f} m3/s<extra>Bankfull</extra>', {dash: 'dash'})
+          );
+        }
+        Plotly.newPlot('geb-time-' + safeStationId, traces, Object.assign({}, layoutBase, {hovermode: 'x unified', xaxis: Object.assign({}, layoutBase.xaxis, {type: 'date', range: timeRange}), yaxis: Object.assign({}, layoutBase.yaxis, {title: 'Discharge (m3/s)'})}), common);
       }
     }
     if (data.returnPeriods) {
