@@ -637,3 +637,73 @@ def test_write_dashboard_charts_from_saved_scores_with_bankfull(
     encoded: str = bundle_content.split('"')[1]
     decoded = json.loads(gzip.decompress(base64.b64decode(encoded)).decode("utf-8"))
     assert decoded["101"]["timeseries"]["bankfullDischarge"] == 38.5
+    assert "bankfull" in decoded["101"]["timeseries"]
+    assert len(decoded["101"]["timeseries"]["bankfull"]) > 0
+
+
+def test_build_river_chart_data() -> None:
+    """Test that build_river_chart_data correctly structures the river payload."""
+    from geb.evaluate.workflows.dashboard import build_river_chart_data
+
+    river_data: dict[str, Any] = build_river_chart_data(
+        river_id="10",
+        upstream_area_km2=125.5,
+        time=["2020-01-01", "2021-01-01"],
+        bankfull_discharge=[30.0, 35.0],
+        width=[15.0, 15.0],
+        depth=[2.0, 2.2],
+    )
+    assert river_data["type"] == "river"
+    assert river_data["riverId"] == "10"
+    assert river_data["upstreamAreaKm2"] == 125.5
+    assert river_data["timeseries"]["time"] == ["2020-01-01", "2021-01-01"]
+    assert river_data["timeseries"]["bankfullDischarge"] == [30.0, 35.0]
+    assert river_data["timeseries"]["width"] == [15.0, 15.0]
+    assert river_data["timeseries"]["depth"] == [2.0, 2.2]
+
+
+def test_add_river_charts_to_bundle_writer(tmp_path: Path) -> None:
+    """Test that add_river_charts_to_bundle_writer adds river data into bundles."""
+    from geb.evaluate.workflows.dashboard import (
+        StationChartBundleWriter,
+        add_river_charts_to_bundle_writer,
+    )
+
+    run_output = tmp_path / "run"
+    routing_dir = run_output / "report" / "hydrology.routing"
+    routing_dir.mkdir(parents=True)
+
+    yearly_idx = pd.date_range("2020-01-01", periods=2, freq="YS")
+    df_q = pd.DataFrame({"20": [40.0, 45.0]}, index=yearly_idx)
+    df_d = pd.DataFrame({"20": [2.1, 2.3]}, index=yearly_idx)
+    df_w = pd.DataFrame({"20": [25.0, 25.0]}, index=yearly_idx)
+    df_q.to_parquet(routing_dir / "bankfull_discharge_rivers_yearly_m3_per_s.parquet")
+    df_d.to_parquet(routing_dir / "bankfull_depth_rivers_yearly_m.parquet")
+    df_w.to_parquet(routing_dir / "bankfull_width_rivers_yearly_m.parquet")
+
+    rivers_gdf = gpd.GeoDataFrame(
+        {"uparea_m2": [50_000_000.0], "geometry": [sg.LineString([(0, 0), (1, 1)])]},
+        index=pd.Index([20]),
+        crs="EPSG:4326",
+    )
+
+    dashboard_path = tmp_path / "dashboard.html"
+    writer = StationChartBundleWriter(
+        dashboard_path=dashboard_path, max_stations_per_bundle=50
+    )
+    add_river_charts_to_bundle_writer(
+        chart_writer=writer,
+        run_output_folder=run_output,
+        rivers=rivers_gdf,
+    )
+    files = writer.finish()
+    assert "river_20" in files
+    bundle_path = tmp_path / files["river_20"]
+    bundle_content = bundle_path.read_text(encoding="utf-8")
+    encoded: str = bundle_content.split('"')[1]
+    decoded = json.loads(gzip.decompress(base64.b64decode(encoded)).decode("utf-8"))
+    assert decoded["river_20"]["type"] == "river"
+    assert decoded["river_20"]["upstreamAreaKm2"] == 50.0
+    assert decoded["river_20"]["timeseries"]["bankfullDischarge"] == [40.0, 45.0]
+    assert decoded["river_20"]["timeseries"]["depth"] == [2.1, 2.3]
+    assert decoded["river_20"]["timeseries"]["width"] == [25.0, 25.0]

@@ -1129,6 +1129,20 @@ class Reporter:
                                     "_group": ("bankfull_discharge_yearly_m3_per_s"),
                                     "_group_key": str(station_ID),
                                 }
+                                bankfull_reporters[
+                                    f"bankfull_width_yearly_m_{station_ID}"
+                                ] = {
+                                    "varname": "var.rivers",
+                                    "type": "geodataframe",
+                                    "function": f"sample_loc,{river_id_int},width",
+                                    "frequency": {
+                                        "every": "year",
+                                        "month": 1,
+                                        "day": 1,
+                                    },
+                                    "_group": "bankfull_width_yearly_m",
+                                    "_group_key": str(station_ID),
+                                }
 
                             # Export for each river segment
                             active_rivers: gpd.GeoDataFrame = (
@@ -1166,6 +1180,20 @@ class Reporter:
                                     "_group": (
                                         "bankfull_discharge_rivers_yearly_m3_per_s"
                                     ),
+                                    "_group_key": str(river_ID_int),
+                                }
+                                bankfull_reporters[
+                                    f"bankfull_width_river_yearly_m_{river_ID_int}"
+                                ] = {
+                                    "varname": "var.rivers",
+                                    "type": "geodataframe",
+                                    "function": f"sample_loc,{river_ID_int},width",
+                                    "frequency": {
+                                        "every": "year",
+                                        "month": 1,
+                                        "day": 1,
+                                    },
+                                    "_group": "bankfull_width_rivers_yearly_m",
                                     "_group_key": str(river_ID_int),
                                 }
 

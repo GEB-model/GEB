@@ -322,6 +322,7 @@ def create_discharge_dashboard(
             correct_discharge_observations=correct_discharge_observations,
             dashboard_path=dashboard_path,
             include_return_period_plots=include_return_period_plots,
+            rivers=dashboard_geometries.rivers,
         )
     )
 
@@ -415,13 +416,13 @@ def write_discharge_dashboard(
         region_geom,
         name="Catchment",
         style_function=lambda _feature: {
-            "fillColor": "none",
+            "fill": False,
+            "fillOpacity": 0,
             "color": "black",
             "weight": 2,
         },
         z_index=1,
     ).add_to(discharge_map)
-
     _add_river_layers(
         discharge_map,
         rivers,
@@ -842,6 +843,7 @@ def _write_dashboard_charts_from_saved_scores(
     correct_discharge_observations: bool,
     dashboard_path: Path,
     include_return_period_plots: bool = True,
+    rivers: gpd.GeoDataFrame | None = None,
 ) -> tuple[dict[str, str], dict[str, list[int]]]:
     """Save interactive chart data for stations with saved evaluation scores.
 
@@ -855,6 +857,7 @@ def _write_dashboard_charts_from_saved_scores(
         dashboard_path: Output path of the dashboard HTML file.
         include_return_period_plots: Whether to fit and include return-period
             curves. Defaults to True.
+        rivers: Optional active river segments GeoDataFrame.
 
     Returns:
         Tuple of (mapping from station ID to chart data file, mapping from frequency to timeline).
@@ -953,36 +956,13 @@ def _write_dashboard_charts_from_saved_scores(
                 if f"{metric_name}_{frequency_label}" in station_row.index
             }
 
-            bankfull_discharge: float | None = None
-            if bankfull_df is not None:
-                for col_candidate in (station_id_text, str(station_id), station_id):
-                    if col_candidate in bankfull_df.columns:
-                        col_series: pd.Series = bankfull_df[col_candidate].dropna()
-                        if not col_series.empty:
-                            bankfull_discharge = float(col_series.iloc[-1])
-                        break
-            if bankfull_discharge is None:
-                station_bankfull_file: Path = (
-                    run_output_folder
-                    / "report"
-                    / "hydrology.routing"
-                    / f"bankfull_discharge_yearly_m3_per_s_{station_id_text}.parquet"
-                )
-                if station_bankfull_file.exists():
-                    try:
-                        ind_df: pd.DataFrame = pd.read_parquet(station_bankfull_file)
-                        ind_series: pd.Series = ind_df.iloc[:, 0].dropna()
-                        if not ind_series.empty:
-                            bankfull_discharge = float(ind_series.iloc[-1])
-                    except Exception:
-                        pass
-
-            if bankfull_discharge is not None and correct_discharge_observations:
-                correction_factor: float = (
-                    1.0 if np.isnan(upstream_area_ratio) else upstream_area_ratio
-                )
-                if np.isfinite(correction_factor) and correction_factor > 0:
-                    bankfull_discharge = bankfull_discharge * correction_factor
+            bankfull_discharge: pd.Series | None = None
+            if bankfull_df is not None and station_id_text in bankfull_df.columns:
+                col_series: pd.Series = bankfull_df[station_id_text].dropna()
+                if not col_series.empty:
+                    if correct_discharge_observations and upstream_area_ratio > 0:
+                        col_series = col_series * upstream_area_ratio
+                    bankfull_discharge = col_series
 
             chart_writer.add_station(
                 station_id=station_id_text,
@@ -1007,6 +987,13 @@ def _write_dashboard_charts_from_saved_scores(
                     processed,
                     total_work,
                 )
+
+    if rivers is not None and not rivers.empty:
+        add_river_charts_to_bundle_writer(
+            chart_writer=chart_writer,
+            run_output_folder=run_output_folder,
+            rivers=rivers,
+        )
 
     station_dashboard_chart_files: dict[str, str] = chart_writer.finish()
     logger.info(
@@ -1141,6 +1128,107 @@ def write_station_chart_data(
     return chart_path.relative_to(dashboard_path.parent).as_posix()
 
 
+def build_river_chart_data(
+    river_id: str,
+    upstream_area_km2: float,
+    time: list[str],
+    bankfull_discharge: list[float],
+    width: list[float],
+    depth: list[float],
+) -> dict[str, Any]:
+    """Prepare chart data for one river segment popup in the discharge dashboard.
+
+    Args:
+        river_id: River segment identifier.
+        upstream_area_km2: Upstream catchment area (km²).
+        time: ISO-formatted timestamp strings for each yearly step.
+        bankfull_discharge: Bankfull discharge values (m³/s).
+        width: Bankfull river width values (meters).
+        depth: Bankfull river depth values (meters).
+
+    Returns:
+        River chart data dictionary.
+    """
+    return {
+        "type": "river",
+        "riverId": river_id,
+        "upstreamAreaKm2": _as_finite_float(upstream_area_km2),
+        "timeseries": {
+            "time": time,
+            "bankfullDischarge": bankfull_discharge,
+            "width": width,
+            "depth": depth,
+        },
+    }
+
+
+def add_river_charts_to_bundle_writer(
+    chart_writer: StationChartBundleWriter,
+    run_output_folder: Path,
+    rivers: gpd.GeoDataFrame,
+) -> None:
+    """Add river segment bankfull chart data to the chart bundle writer.
+
+    Args:
+        chart_writer: Chart bundle writer accumulating interactive charts.
+        run_output_folder: Output folder of the selected simulation run.
+        rivers: Active river segments GeoDataFrame.
+    """
+    routing_dir: Path = run_output_folder / "report" / "hydrology.routing"
+    if not routing_dir.exists():
+        return
+
+    q_file: Path = routing_dir / "bankfull_discharge_rivers_yearly_m3_per_s.parquet"
+    d_file: Path = routing_dir / "bankfull_depth_rivers_yearly_m.parquet"
+    w_file: Path = routing_dir / "bankfull_width_rivers_yearly_m.parquet"
+    if not (q_file.exists() and d_file.exists() and w_file.exists()):
+        return
+
+    df_q: pd.DataFrame = pd.read_parquet(q_file)
+    df_d: pd.DataFrame = pd.read_parquet(d_file)
+    df_w: pd.DataFrame = pd.read_parquet(w_file)
+
+    for river_id in rivers.index:
+        river_id_str: str = str(river_id)
+        if (
+            river_id_str not in df_q.columns
+            or river_id_str not in df_d.columns
+            or river_id_str not in df_w.columns
+        ):
+            continue
+        q_series: pd.Series = df_q[river_id_str].dropna()
+        d_series: pd.Series = df_d[river_id_str].dropna()
+        w_series: pd.Series = df_w[river_id_str].dropna()
+        if q_series.empty or d_series.empty or w_series.empty:
+            continue
+
+        common_idx: pd.Index = q_series.index.intersection(d_series.index).intersection(
+            w_series.index
+        )
+        if common_idx.empty:
+            continue
+        q_aligned: pd.Series = q_series.loc[common_idx]
+        d_aligned: pd.Series = d_series.loc[common_idx]
+        w_aligned: pd.Series = w_series.loc[common_idx]
+
+        time_list: list[str] = [t.strftime("%Y-%m-%d") for t in common_idx]
+        q_list: list[float] = [round(float(v), 2) for v in q_aligned.values]
+        d_list: list[float] = [round(float(v), 2) for v in d_aligned.values]
+        w_list: list[float] = [round(float(v), 2) for v in w_aligned.values]
+
+        uparea_km2: float = float(rivers.loc[river_id, "uparea_m2"]) / 1_000_000.0
+
+        river_chart_data: dict[str, Any] = build_river_chart_data(
+            river_id=river_id_str,
+            upstream_area_km2=uparea_km2,
+            time=time_list,
+            bankfull_discharge=q_list,
+            width=w_list,
+            depth=d_list,
+        )
+        chart_writer.add_station(f"river_{river_id_str}", river_chart_data)
+
+
 def build_station_chart_data(
     discharge_comparison: pd.DataFrame,
     station_name: str,
@@ -1151,7 +1239,7 @@ def build_station_chart_data(
     logger: logging.Logger,
     include_return_period_plots: bool = True,
     main_time_index: pd.DatetimeIndex | None = None,
-    bankfull_discharge: float | None = None,
+    bankfull_discharge: float | pd.Series | None = None,
 ) -> dict[str, Any]:
     """Prepare chart data for one station popup in the discharge dashboard.
 
@@ -1170,7 +1258,8 @@ def build_station_chart_data(
             curves. Defaults to True.
         main_time_index: Optional main DatetimeIndex shared across all stations
             to align time series onto a single dashboard timeline.
-        bankfull_discharge: Optional simulated bankfull discharge (m3/s).
+        bankfull_discharge: Optional simulated bankfull discharge (m3/s) as a
+            scalar or yearly time series.
 
     Returns:
         Chart data with discharge values (m3/s).
@@ -1278,16 +1367,16 @@ def _to_int_deltas(values: list[int | None]) -> list[int | None]:
 def _build_timeseries_data(
     discharge_comparison: pd.DataFrame,
     main_time_index: pd.DatetimeIndex | None = None,
-    bankfull_discharge: float | None = None,
+    bankfull_discharge: float | pd.Series | None = None,
 ) -> dict[str, Any]:
     """Prepare data for one discharge time-series chart in a popup.
 
     Notes:
-        If ``main_time_index`` is provided, the dataframe is windowed to the
+        If main_time_index is provided, the dataframe is windowed to the
         overlapping active period and aligned with the shared dashboard timeline
         using a start index offset, eliminating leading and trailing missing values.
-        Missing observation values within the window are represented as ``None``
-        (serialized to JSON ``null``). Discharge values are scaled by 100, stored
+        Missing observation values within the window are represented as None
+        (serialized to JSON null). Discharge values are scaled by 100, stored
         as integers, and delta-encoded to minimize JSON payload size.
 
     Args:
@@ -1295,19 +1384,23 @@ def _build_timeseries_data(
         main_time_index: Optional main DatetimeIndex shared across all stations.
             When provided, redundant leading/trailing nulls and the "time" array
             are omitted, storing only the start index offset.
-        bankfull_discharge: Optional simulated bankfull discharge (m3/s).
+        bankfull_discharge: Optional simulated bankfull discharge (m3/s) as a
+            scalar or yearly time series.
 
     Returns:
         Dictionary with delta-encoded integer observed/simulated values, start index,
         and scale factor.
 
     Raises:
-        ValueError: If ``discharge_comparison`` is not indexed by timestamps.
+        ValueError: If discharge_comparison is not indexed by timestamps.
     """
     if not isinstance(discharge_comparison.index, pd.DatetimeIndex):
         raise ValueError(
             "discharge_comparison must use a DateTimeIndex for dashboard charts."
         )
+
+    bankfull_scalar: float | None = None
+    bankfull_deltas: list[int | None] | None = None
 
     if main_time_index is not None and not discharge_comparison.empty:
         obs_col: pd.Series = discharge_comparison["discharge_observations"]
@@ -1330,7 +1423,21 @@ def _build_timeseries_data(
             comparison = discharge_comparison.iloc[0:0]
             start_index = 0
 
-        return {
+        if isinstance(bankfull_discharge, pd.Series):
+            valid_bf: pd.Series = bankfull_discharge.dropna()
+            if not valid_bf.empty:
+                bankfull_scalar = float(valid_bf.iloc[-1])
+                if not comparison.empty:
+                    aligned_bf: pd.Series = valid_bf.reindex(
+                        comparison.index, method="ffill"
+                    ).bfill()
+                    bankfull_deltas = _to_int_deltas(
+                        _scale_series_to_int_cents(aligned_bf)
+                    )
+        elif bankfull_discharge is not None:
+            bankfull_scalar = float(bankfull_discharge)
+
+        res: dict[str, Any] = {
             "start": start_index,
             "scale": 100,
             "deltas": True,
@@ -1340,11 +1447,28 @@ def _build_timeseries_data(
             "simulated": _to_int_deltas(
                 _scale_series_to_int_cents(comparison["discharge_simulations"])
             ),
-            "bankfullDischarge": _as_finite_float(bankfull_discharge),
+            "bankfullDischarge": _as_finite_float(bankfull_scalar),
         }
+        if bankfull_deltas is not None:
+            res["bankfull"] = bankfull_deltas
+        return res
 
     comparison = discharge_comparison
-    return {
+    if isinstance(bankfull_discharge, pd.Series):
+        valid_bf_s: pd.Series = bankfull_discharge.dropna()
+        if not valid_bf_s.empty:
+            bankfull_scalar = float(valid_bf_s.iloc[-1])
+            if not comparison.empty:
+                aligned_bf_s: pd.Series = valid_bf_s.reindex(
+                    comparison.index, method="ffill"
+                ).bfill()
+                bankfull_deltas = _to_int_deltas(
+                    _scale_series_to_int_cents(aligned_bf_s)
+                )
+    elif bankfull_discharge is not None:
+        bankfull_scalar = float(bankfull_discharge)
+
+    res_no_main: dict[str, Any] = {
         "time": comparison.index.astype("datetime64[ms]").astype("int64").tolist(),
         "scale": 100,
         "deltas": True,
@@ -1354,8 +1478,11 @@ def _build_timeseries_data(
         "simulated": _to_int_deltas(
             _scale_series_to_int_cents(comparison["discharge_simulations"])
         ),
-        "bankfullDischarge": _as_finite_float(bankfull_discharge),
+        "bankfullDischarge": _as_finite_float(bankfull_scalar),
     }
+    if bankfull_deltas is not None:
+        res_no_main["bankfull"] = bankfull_deltas
+    return res_no_main
 
 
 def _build_return_period_data(

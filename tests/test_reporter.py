@@ -795,6 +795,7 @@ class TestSpecialExportersSingleFile:
         rivers_gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
             {
                 "depth": [1.5, 2.5],
+                "width": [10.0, 20.0],
                 "return_period_2_years_daily_m3_per_s": [50.0, 120.0],
             },
             index=[10, 20],
@@ -808,6 +809,7 @@ class TestSpecialExportersSingleFile:
         assert "bankfull_depths_m" in routing_reps
         # River gauges
         assert "bankfull_depth_yearly_m_101" in routing_reps
+        assert "bankfull_width_yearly_m_101" in routing_reps
         assert "bankfull_discharge_yearly_m3_per_s_101" in routing_reps
         assert (
             routing_reps["bankfull_depth_yearly_m_101"]["_group"]
@@ -819,6 +821,7 @@ class TestSpecialExportersSingleFile:
         )
         # River segments
         assert "bankfull_depth_river_yearly_m_10" in routing_reps
+        assert "bankfull_width_river_yearly_m_10" in routing_reps
         assert "bankfull_discharge_river_yearly_m3_per_s_10" in routing_reps
         assert (
             routing_reps["bankfull_depth_river_yearly_m_10"]["_group"]

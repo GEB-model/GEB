@@ -1,4 +1,9 @@
 # dev
+- Fixed bankfull river width and depth estimation for rivers without observed width so that bankfull geometry is estimated from simulated discharge (Q_2) and geomorphic power law parameters (alpha and beta) rather than falling back to the default channel width.
+- Added special reporter `_bankfull_depths` to export yearly bankfull depth across the river network as `bankfull_depths_m.geoparquet`, and yearly bankfull depth and discharge at discharge stations as consolidated parquet tables.
+- Added support in reporter for exporting from (geo)dataframes.
+- Added bankfull discharge reference line visualization in the discharge dashboard interactive time-series plots.
+- Added interactive popup time-series plots for river segments in the discharge dashboard displaying yearly bankfull discharge, channel width, and channel depth over time.
 - Added bankfull river depth estimation via hydraulic continuity derived from simulated 2-year flood discharge (Q_2) based on Andreadis et al. 2013. For channels with too observed width, the depth is scaled inversely with width to conserve volume.
 - For flood simulatons use channel depth and width from the hydrological model directly. Remove options power_law and mannings in flood simulatons.
 - Improve local inertial boundary conditions.
