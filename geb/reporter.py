@@ -33,7 +33,7 @@ from geb.geb_types import (
 from geb.hydrology.routing import get_river_representative_xys
 from geb.module import Module
 from geb.store import DynamicArray
-from geb.workflows.io import fast_rmtree, read_geom, write_table
+from geb.workflows.io import fast_rmtree, read_geom, write_geom, write_table
 from geb.workflows.methods import multi_level_merge
 from geb.workflows.raster import coord_to_pixel
 
@@ -868,6 +868,7 @@ class Reporter:
         There are also several pre-defined report configurations that can be activated by adding
         special keys to the report configuration. Multi-station/entity reporters export to a single consolidated parquet file:
         - _discharge_stations: if set to True, discharge at all discharge stations is reported.
+        - _bankfull_depths: if set to True, bankfull depths across rivers and at discharge stations are reported.
         - _retention_basins: if set to True, discharge and storage for all retention basins are reported as single parquet files.
         - _meteorological_stations: if set to True, meteorological variables at all meteorological stations are reported as a single parquet file.
         - _outflow_points: if set to True, outflow at all outflow points is reported as a single parquet file.
@@ -1073,6 +1074,132 @@ class Reporter:
                             self.variables_to_report = multi_level_merge(
                                 self.variables_to_report,
                                 ENERGY_BALANCE_REPORT_CONFIG,
+                            )
+                    elif module_name == "_bankfull_depths":
+                        if module_values is True:
+                            bankfull_reporters: dict[str, dict[str, Any]] = {
+                                "bankfull_depths_m": {
+                                    "varname": "var.rivers",
+                                    "type": "geodataframe",
+                                    "function": None,
+                                    "frequency": {
+                                        "every": "year",
+                                        "month": 1,
+                                        "day": 1,
+                                    },
+                                }
+                            }
+                            # Export for river gauges (discharge stations)
+                            stations: gpd.GeoDataFrame = read_geom(
+                                self.model.files["geom"][
+                                    "discharge/discharge_snapped_locations"
+                                ]
+                            )
+                            for station_ID, station_info in stations.iterrows():
+                                river_id_int: int = int(
+                                    station_info["snapped_river_id"]
+                                )
+                                bankfull_reporters[
+                                    f"bankfull_depth_yearly_m_{station_ID}"
+                                ] = {
+                                    "varname": "var.rivers",
+                                    "type": "geodataframe",
+                                    "function": f"sample_loc,{river_id_int},depth",
+                                    "frequency": {
+                                        "every": "year",
+                                        "month": 1,
+                                        "day": 1,
+                                    },
+                                    "_group": "bankfull_depth_yearly_m",
+                                    "_group_key": str(station_ID),
+                                }
+                                bankfull_reporters[
+                                    f"bankfull_discharge_yearly_m3_per_s_{station_ID}"
+                                ] = {
+                                    "varname": "var.rivers",
+                                    "type": "geodataframe",
+                                    "function": (
+                                        f"sample_loc,{river_id_int},return_period_2_years_daily_m3_per_s"
+                                    ),
+                                    "frequency": {
+                                        "every": "year",
+                                        "month": 1,
+                                        "day": 1,
+                                    },
+                                    "_group": ("bankfull_discharge_yearly_m3_per_s"),
+                                    "_group_key": str(station_ID),
+                                }
+                                bankfull_reporters[
+                                    f"bankfull_width_yearly_m_{station_ID}"
+                                ] = {
+                                    "varname": "var.rivers",
+                                    "type": "geodataframe",
+                                    "function": f"sample_loc,{river_id_int},width",
+                                    "frequency": {
+                                        "every": "year",
+                                        "month": 1,
+                                        "day": 1,
+                                    },
+                                    "_group": "bankfull_width_yearly_m",
+                                    "_group_key": str(station_ID),
+                                }
+
+                            # Export for each river segment
+                            active_rivers: gpd.GeoDataFrame = (
+                                self.model.hydrology.routing.get_active_rivers()
+                            )
+                            for river_ID in active_rivers.index:
+                                river_ID_int: int = int(river_ID)
+                                bankfull_reporters[
+                                    f"bankfull_depth_river_yearly_m_{river_ID_int}"
+                                ] = {
+                                    "varname": "var.rivers",
+                                    "type": "geodataframe",
+                                    "function": f"sample_loc,{river_ID_int},depth",
+                                    "frequency": {
+                                        "every": "year",
+                                        "month": 1,
+                                        "day": 1,
+                                    },
+                                    "_group": "bankfull_depth_rivers_yearly_m",
+                                    "_group_key": str(river_ID_int),
+                                }
+                                bankfull_reporters[
+                                    f"bankfull_discharge_river_yearly_m3_per_s_{river_ID_int}"
+                                ] = {
+                                    "varname": "var.rivers",
+                                    "type": "geodataframe",
+                                    "function": (
+                                        f"sample_loc,{river_ID_int},return_period_2_years_daily_m3_per_s"
+                                    ),
+                                    "frequency": {
+                                        "every": "year",
+                                        "month": 1,
+                                        "day": 1,
+                                    },
+                                    "_group": (
+                                        "bankfull_discharge_rivers_yearly_m3_per_s"
+                                    ),
+                                    "_group_key": str(river_ID_int),
+                                }
+                                bankfull_reporters[
+                                    f"bankfull_width_river_yearly_m_{river_ID_int}"
+                                ] = {
+                                    "varname": "var.rivers",
+                                    "type": "geodataframe",
+                                    "function": f"sample_loc,{river_ID_int},width",
+                                    "frequency": {
+                                        "every": "year",
+                                        "month": 1,
+                                        "day": 1,
+                                    },
+                                    "_group": "bankfull_width_rivers_yearly_m",
+                                    "_group_key": str(river_ID_int),
+                                }
+
+                            self.variables_to_report = multi_level_merge(
+                                self.variables_to_report,
+                                {"hydrology.routing": bankfull_reporters},
                             )
                     else:
                         raise ValueError(
@@ -1470,11 +1597,56 @@ class Reporter:
         else:
             raise ValueError(f"Function {function} not recognized")
 
+    def _apply_dataframe_function(
+        self,
+        module_name: str,
+        name: str,
+        df: pd.DataFrame | gpd.GeoDataFrame,
+        config: dict[str, Any],
+    ) -> np.float64:
+        """Apply an extraction or sampling function to a DataFrame or GeoDataFrame.
+
+        Args:
+            module_name: Name of the module.
+            name: Name of the variable.
+            df: DataFrame or GeoDataFrame to sample.
+            config: Reporter configuration dict for this variable.
+
+        Returns:
+            Extracted scalar value as float64.
+
+        Raises:
+            ValueError: If the function name is unknown or arguments are invalid.
+        """
+        function_str: str = config["function"]
+        parts: list[str] = [p.strip() for p in function_str.split(",")]
+        func_name: str = parts[0]
+        if func_name == "sample_loc":
+            if len(parts) != 3:
+                raise ValueError(
+                    f"Function sample_loc for {module_name}.{name} requires 2 arguments: row_id, column_name."
+                )
+            row_id_raw: str = parts[1]
+            col_name: str = parts[2]
+
+            row_id: int | str
+            try:
+                row_id = int(row_id_raw)
+            except ValueError:
+                row_id = row_id_raw
+
+            val: Any = df.loc[row_id, col_name]
+            return np.float64(val)
+        else:
+            raise ValueError(
+                f"Function {func_name} not recognized for DataFrame variable {module_name}.{name}."
+            )
+
     def process_value(
         self,
         module_name: str,
         name: str,
-        value: np.ndarray | np.generic | float,
+        value: np.ndarray | np.generic | float | pd.DataFrame | gpd.GeoDataFrame,
         config: dict,
     ) -> None:
         """Exports an array of values to the export folder.
@@ -1534,6 +1706,19 @@ class Reporter:
             else:
                 value = self._apply_agent_function(module_name, name, value, config)
 
+        elif type_ in ("dataframe", "geodataframe"):
+            if not isinstance(value, (pd.DataFrame, gpd.GeoDataFrame)):
+                raise ValueError(
+                    f"Value for {module_name}.{name} must be a DataFrame or GeoDataFrame, but is {type(value)}."
+                )
+            if config["function"] is None:
+                df_copy = value.copy()
+                df_copy["time"] = self.model.current_time
+                config.setdefault("_collected_dfs", []).append(df_copy)
+                return
+            else:
+                value = self._apply_dataframe_function(module_name, name, value, config)
+
         elif type_ == "scalar":
             pass  # no processing needed for scalar values
 
@@ -1560,6 +1745,8 @@ class Reporter:
                 dtype = value.dtype
             elif isinstance(value, np.generic):
                 dtype = np.dtype(value)
+            elif isinstance(value, (float, int, bool)):
+                dtype = np.dtype(type(value))
             else:
                 raise ValueError(
                     f"Value for {module_name}.{name} has unsupported type {type(value)}. Must be a numpy array or a scalar of type int, float or bool."
@@ -1823,6 +2010,8 @@ class Reporter:
             for module_name, configs in self.variables_to_report.items():
                 for name, config in configs.items():
                     if "function" in config and config["function"] is None:
+                        if config["type"] in ("dataframe", "geodataframe"):
+                            continue
                         if config["type"] == "agents":
                             chunk_time_size: int = config["_chunk_data"].shape[0]
                         elif config["type"] in ("grid", "HRU"):
@@ -1925,6 +2114,44 @@ class Reporter:
                 futures.append(
                     executor.submit(write_table, df, folder / (group_name + ".parquet"))
                 )
+
+            # Export dataframe and geodataframe variables
+            for module_name, module_configs in self.variables_to_report.items():
+                for name, config in module_configs.items():
+                    if (
+                        config.get("type") in ("dataframe", "geodataframe")
+                        and config.get("function") is None
+                    ):
+                        collected: list[pd.DataFrame] = config.get("_collected_dfs", [])
+                        if not collected:
+                            continue
+                        folder = self.report_folder / module_name
+                        folder.mkdir(parents=True, exist_ok=True)
+                        is_geo: bool = isinstance(collected[0], gpd.GeoDataFrame)
+                        if is_geo:
+                            crs = collected[0].crs
+                            final_gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
+                                pd.concat(collected, axis=0, ignore_index=False),
+                                crs=crs,
+                            )
+                            futures.append(
+                                executor.submit(
+                                    write_geom,
+                                    final_gdf,
+                                    folder / (name + ".geoparquet"),
+                                )
+                            )
+                        else:
+                            final_df: pd.DataFrame = pd.concat(
+                                collected, axis=0, ignore_index=False
+                            )
+                            futures.append(
+                                executor.submit(
+                                    write_table,
+                                    final_df,
+                                    folder / (name + ".parquet"),
+                                )
+                            )
 
             # Wait for all futures to complete before exiting context manager
             for future in as_completed(futures):

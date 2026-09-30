@@ -528,3 +528,182 @@ def test_write_discharge_dashboard(tmp_path: Path) -> None:
     assert "DecompressionStream" in html_content
     assert "_gebStations" in html_content
     assert "Station search" in html_content
+
+
+def test_build_station_chart_data_with_bankfull_discharge() -> None:
+    """Test that build_station_chart_data includes bankfullDischarge in timeseries."""
+    import logging
+
+    from geb.evaluate.workflows.dashboard import build_station_chart_data
+
+    idx = pd.date_range("2020-01-01", periods=5, freq="D")
+    df = pd.DataFrame(
+        {
+            "discharge_observations": [10.0, 12.0, 14.0, 11.0, 9.0],
+            "discharge_simulations": [11.0, 13.0, 13.5, 10.5, 9.5],
+        },
+        index=idx,
+    )
+    logger = logging.getLogger("test")
+    chart_data = build_station_chart_data(
+        discharge_comparison=df,
+        station_name="Test Station",
+        upstream_area_ratio=1.0,
+        timezone_utc_offset=0.0,
+        metrics={"KGE": 0.95},
+        frequency="daily",
+        logger=logger,
+        include_return_period_plots=False,
+        bankfull_discharge=25.5,
+    )
+    assert "timeseries" in chart_data
+    assert chart_data["timeseries"]["bankfullDischarge"] == 25.5
+
+
+def test_write_dashboard_charts_from_saved_scores_with_bankfull(
+    tmp_path: Path,
+) -> None:
+    """Test that _write_dashboard_charts_from_saved_scores picks up bankfull discharge."""
+    import logging
+
+    from geb.evaluate.workflows.dashboard import (
+        _write_dashboard_charts_from_saved_scores,
+    )
+
+    run_output = tmp_path / "run"
+    routing_dir = run_output / "report" / "hydrology.routing"
+    routing_dir.mkdir(parents=True)
+
+    # Write simulated hourly discharge for station
+    hourly_idx = pd.date_range("2020-01-01 00:30:00", periods=48, freq="h")
+    sim_df = pd.DataFrame(
+        {"discharge_hourly_m3_per_s_101": [10.0] * 48},
+        index=hourly_idx,
+    )
+    sim_df.to_parquet(routing_dir / "discharge_hourly_m3_per_s_101.parquet")
+
+    # Write bankfull discharge table
+    yearly_idx = pd.date_range("2020-01-01", periods=2, freq="YS")
+    bf_df = pd.DataFrame(
+        {"101": [30.0, 35.0]},
+        index=yearly_idx,
+    )
+    bf_df.to_parquet(routing_dir / "bankfull_discharge_yearly_m3_per_s.parquet")
+
+    # Observation table
+    obs_file = tmp_path / "obs_daily.parquet"
+    daily_idx = pd.date_range("2020-01-01 12:00:00", periods=2, freq="D")
+    obs_df = pd.DataFrame(
+        {"101": [9.5, 10.5]},
+        index=daily_idx,
+    )
+    obs_df.to_parquet(obs_file)
+
+    scores = gpd.GeoDataFrame(
+        {
+            "station_name": ["Station 101"],
+            "discharge_observations_to_GEB_upstream_area_ratio": [1.1],
+            "timezone_utc_offset": [0.0],
+            "KGE_daily": [0.9],
+        },
+        index=pd.Index(["101"]),
+        geometry=[sg.Point(8.0, 50.0)],
+        crs="EPSG:4326",
+    )
+
+    obs_hourly_file = tmp_path / "obs_hourly.parquet"
+    pd.DataFrame(index=pd.DatetimeIndex([], name="time")).to_parquet(obs_hourly_file)
+
+    table_files = {
+        "discharge/discharge_observations_daily": obs_file,
+        "discharge/discharge_observations_hourly": obs_hourly_file,
+    }
+    logger = logging.getLogger("test")
+    dashboard_path = tmp_path / "dashboard.html"
+
+    chart_files, _ = _write_dashboard_charts_from_saved_scores(
+        table_files=table_files,
+        logger=logger,
+        mapped_station_scores=scores,
+        run_output_folder=run_output,
+        correct_discharge_observations=True,
+        dashboard_path=dashboard_path,
+        include_return_period_plots=False,
+    )
+    assert "101" in chart_files
+    bundle_path = tmp_path / chart_files["101"]
+    assert bundle_path.exists()
+    bundle_content = bundle_path.read_text(encoding="utf-8")
+    encoded: str = bundle_content.split('"')[1]
+    decoded = json.loads(gzip.decompress(base64.b64decode(encoded)).decode("utf-8"))
+    assert decoded["101"]["timeseries"]["bankfullDischarge"] == 38.5
+    assert "bankfull" in decoded["101"]["timeseries"]
+    assert len(decoded["101"]["timeseries"]["bankfull"]) > 0
+
+
+def test_build_river_chart_data() -> None:
+    """Test that build_river_chart_data correctly structures the river payload."""
+    from geb.evaluate.workflows.dashboard import build_river_chart_data
+
+    river_data: dict[str, Any] = build_river_chart_data(
+        river_id="10",
+        upstream_area_km2=125.5,
+        time=["2020-01-01", "2021-01-01"],
+        bankfull_discharge=[30.0, 35.0],
+        width=[15.0, 15.0],
+        depth=[2.0, 2.2],
+    )
+    assert river_data["type"] == "river"
+    assert river_data["riverId"] == "10"
+    assert river_data["upstreamAreaKm2"] == 125.5
+    assert river_data["timeseries"]["time"] == ["2020-01-01", "2021-01-01"]
+    assert river_data["timeseries"]["bankfullDischarge"] == [30.0, 35.0]
+    assert river_data["timeseries"]["width"] == [15.0, 15.0]
+    assert river_data["timeseries"]["depth"] == [2.0, 2.2]
+
+
+def test_add_river_charts_to_bundle_writer(tmp_path: Path) -> None:
+    """Test that add_river_charts_to_bundle_writer adds river data into bundles."""
+    from geb.evaluate.workflows.dashboard import (
+        StationChartBundleWriter,
+        add_river_charts_to_bundle_writer,
+    )
+
+    run_output = tmp_path / "run"
+    routing_dir = run_output / "report" / "hydrology.routing"
+    routing_dir.mkdir(parents=True)
+
+    yearly_idx = pd.date_range("2020-01-01", periods=2, freq="YS")
+    df_q = pd.DataFrame({"20": [40.0, 45.0]}, index=yearly_idx)
+    df_d = pd.DataFrame({"20": [2.1, 2.3]}, index=yearly_idx)
+    df_w = pd.DataFrame({"20": [25.0, 25.0]}, index=yearly_idx)
+    df_q.to_parquet(routing_dir / "bankfull_discharge_rivers_yearly_m3_per_s.parquet")
+    df_d.to_parquet(routing_dir / "bankfull_depth_rivers_yearly_m.parquet")
+    df_w.to_parquet(routing_dir / "bankfull_width_rivers_yearly_m.parquet")
+
+    rivers_gdf = gpd.GeoDataFrame(
+        {"uparea_m2": [50_000_000.0], "geometry": [sg.LineString([(0, 0), (1, 1)])]},
+        index=pd.Index([20]),
+        crs="EPSG:4326",
+    )
+
+    dashboard_path = tmp_path / "dashboard.html"
+    writer = StationChartBundleWriter(
+        dashboard_path=dashboard_path, max_stations_per_bundle=50
+    )
+    add_river_charts_to_bundle_writer(
+        chart_writer=writer,
+        run_output_folder=run_output,
+        rivers=rivers_gdf,
+    )
+    files = writer.finish()
+    assert "river_20" in files
+    bundle_path = tmp_path / files["river_20"]
+    bundle_content = bundle_path.read_text(encoding="utf-8")
+    encoded: str = bundle_content.split('"')[1]
+    decoded = json.loads(gzip.decompress(base64.b64decode(encoded)).decode("utf-8"))
+    assert decoded["river_20"]["type"] == "river"
+    assert decoded["river_20"]["upstreamAreaKm2"] == 50.0
+    assert decoded["river_20"]["timeseries"]["bankfullDischarge"] == [40.0, 45.0]
+    assert decoded["river_20"]["timeseries"]["depth"] == [2.1, 2.3]
+    assert decoded["river_20"]["timeseries"]["width"] == [25.0, 25.0]

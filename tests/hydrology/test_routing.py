@@ -5942,3 +5942,175 @@ def test_routing_updates_rivers_geometry_missing_data_raises() -> None:
             depth_grid=depth_grid,
             manning_grid=manning_grid,
         )
+
+
+def test_routing_unobserved_channel_width_depth_estimation() -> None:
+    """Verify that unobserved rivers get width and depth estimated via hydraulic geometry without distortion."""
+    from geb.hydrology.routing import Routing, RoutingVariables
+
+    routing = Routing.__new__(Routing)
+    routing.config = {
+        "river_depth": {
+            "parameters": {
+                "c": 0.27,
+                "d": 0.36,
+                "velocity_factor": 1.0,
+                "min_depth_m": 0.1,
+            },
+        }
+    }
+    routing.default_missing_channel_width = 0.5
+
+    var: RoutingVariables = RoutingVariables()
+    # 3 cells: cell 0 (overland, -1), cell 1 (river 10, observed), cell 2 (river 20, unobserved)
+    var.river_ids = np.array([-1, 10, 20], dtype=np.int32)
+    var.river_width_alpha = np.full(3, 7.2, dtype=np.float32)
+    var.river_width_beta = np.full(3, 0.5, dtype=np.float32)
+
+    # River 10 has observed width 50.0m; River 20 has NaN (unobserved)
+    var.observed_average_river_width = np.array(
+        [np.nan, 50.0, np.nan], dtype=np.float32
+    )
+
+    # Q2 = 100 m3/s for both rivers
+    rivers_df: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "return_period_2_years_daily_m3_per_s": [100.0, 100.0],
+            "represented_in_grid": [True, True],
+        },
+        index=[10, 20],
+    )
+    var.rivers = rivers_df
+    routing.var = var
+
+    # Expected width: 7.2 * 100^0.5 = 72.0 m
+    # Expected depth: 0.27 * 100^0.36 = 1.414 m
+    q2_val: float = 100.0
+    expected_w: float = 7.2 * (q2_val**0.5)
+    expected_h: float = 0.27 * (q2_val**0.36)
+
+    # For river 10 (observed width 50m < 72m), depth is scaled up: (72 / 50) * expected_h
+    # For river 20 (unobserved), width is estimated as expected_w (72m), depth is exactly expected_h
+    input_widths: ArrayFloat32 = np.array([0.5, 50.0, expected_w], dtype=np.float32)
+
+    depths: ArrayFloat32 = routing.calculate_bankfull_depth(
+        bankfull_top_width_m=input_widths,
+        use_simulated_bankfull_q=True,
+    )
+
+    observed_depth: float = float(depths[1])
+    unobserved_depth: float = float(depths[2])
+
+    assert np.isclose(observed_depth, (expected_w / 50.0) * expected_h, rtol=1e-3)
+    assert np.isclose(unobserved_depth, expected_h, rtol=1e-3)
+
+
+def test_routing_set_router_estimates_width_from_simulated_q2(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify that set_router estimates width from Q2 for unobserved channels when Q2 is present."""
+    from geb.hydrology.routing import Routing, RoutingVariables
+
+    routing = Routing.__new__(Routing)
+    routing.config = {
+        "river_depth": {
+            "parameters": {
+                "c": 0.27,
+                "d": 0.36,
+                "velocity_factor": 1.0,
+                "min_depth_m": 0.1,
+            },
+        },
+        "retention_basins": {"release_threshold_factor": 1.0},
+    }
+    routing.default_missing_channel_width = 0.5
+    routing.retention_max_storage_m3 = np.zeros(0, dtype=np.float32)
+    routing.retention_basin_ids = np.full(2, -1, dtype=np.int32)
+    routing.controlled_retention = np.zeros(0, dtype=bool)
+    routing.river_network = None  # ty:ignore[invalid-assignment]
+
+    var: RoutingVariables = RoutingVariables()
+    var.river_ids = np.array([10, 20], dtype=np.int32)
+    var.river_width_alpha = np.full(2, 7.2, dtype=np.float32)
+    var.river_width_beta = np.full(2, 0.5, dtype=np.float32)
+    var.river_storage_alpha = np.ones(2, dtype=np.float32)
+    var.river_storage_beta = np.full(2, 0.6, dtype=np.float32)
+    var.water_stage_m = np.zeros(2, dtype=np.float32)
+    var.river_storage_m3 = np.zeros(2, dtype=np.float64)
+    # Cell 0 has observed width 30.0m, cell 1 is unobserved
+    var.observed_average_river_width = np.array([30.0, np.nan], dtype=np.float32)
+
+    # Both rivers have Q2 = 64 m3/s. Expected width: 7.2 * 64^0.5 = 7.2 * 8 = 57.6 m
+    rivers_df: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "return_period_2_years_daily_m3_per_s": [64.0, 64.0],
+            "represented_in_grid": [True, True],
+            "width": [np.nan, np.nan],
+            "depth": [np.nan, np.nan],
+            "manning": [np.nan, np.nan],
+        },
+        index=[10, 20],
+    )
+    var.rivers = rivers_df
+    routing.var = var
+
+    # Mock grid objects required by set_router
+    class DummyGridVar:
+        waterbody_outflow_points: np.ndarray = np.array([-1, -1], dtype=np.int32)
+        river_mannings: ArrayFloat32 = np.array([0.03, 0.03], dtype=np.float32)
+        river_length: ArrayFloat32 = np.array([1000.0, 1000.0], dtype=np.float32)
+        waterbody_ids: np.ndarray = np.array([-1, -1], dtype=np.int32)
+
+    class DummyGrid:
+        var = DummyGridVar()
+
+        def load2d(self, *args: Any, **kwargs: Any) -> np.ndarray:
+            return np.zeros(2, dtype=np.float32)
+
+    class DummyModel:
+        in_spinup: bool = False
+        files = {
+            "grid": {
+                "routing/floodplain_width_m": "dummy",
+                "routing/bankfull_river_elevation_m": "dummy",
+            }
+        }
+
+    class DummyWaterbodiesVar:
+        waterbody_outflow_linear_mapping = np.zeros(0, dtype=np.int32)
+        lake_area = np.zeros(0, dtype=np.float32)
+        lake_factor = np.zeros(0, dtype=np.float32)
+        outflow_height = np.zeros(0, dtype=np.float32)
+        storage = np.zeros(0, dtype=np.float32)
+
+    class DummyWaterbodies:
+        n = 0
+        var = DummyWaterbodiesVar()
+
+    class DummyHydrology:
+        waterbodies = DummyWaterbodies()
+
+    routing.grid = DummyGrid()  # ty:ignore[invalid-assignment]
+    routing.model = DummyModel()  # ty:ignore[invalid-assignment]
+    routing.hydrology = DummyHydrology()  # ty:ignore[invalid-assignment]
+
+    class MockRouter:
+        def initialize_stage(self, **kwargs: Any) -> None:
+            pass
+
+    monkeypatch.setattr(
+        "geb.hydrology.routing.LocalInertial",
+        lambda **kwargs: MockRouter(),
+    )
+
+    # Call set_router
+    routing.set_router()
+
+    # Unobserved cell (index 1) should have estimated width 57.6m, observed cell should keep 30.0m
+    expected_unobserved_w: float = 7.2 * (64.0**0.5)
+    assert np.isclose(routing.var.river_width[0], 30.0)
+    assert np.isclose(routing.var.river_width[1], expected_unobserved_w, rtol=1e-3)
+    assert np.isclose(routing.var.rivers.loc[10, "width"], 30.0)
+    assert np.isclose(
+        routing.var.rivers.loc[20, "width"], expected_unobserved_w, rtol=1e-3
+    )

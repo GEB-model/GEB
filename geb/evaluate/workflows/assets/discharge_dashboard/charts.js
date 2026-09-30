@@ -3,7 +3,7 @@
   var stationChartFiles = (macroData && macroData.stations) ? macroData.stations : macroData;
   var globalTimeline = (macroData && macroData.timeline) ? macroData.timeline : null;
   var plotlyUrl = 'https://cdn.plot.ly/plotly-2.35.2.min.js';
-  var colors = { observed: '#facc15', simulated: '#38bdf8' };
+  var colors = { observed: '#facc15', simulated: '#38bdf8', bankfull: '#f87171' };
   var stationChartCache = {};
   var layoutBase = {
     autosize: true,
@@ -246,7 +246,9 @@
   function renderCharts(stationId, data) {
     var safeStationId = encodeURIComponent(stationId);
     var common = {responsive: true, displaylogo: false, modeBarButtonsToRemove: ['select2d', 'lasso2d']};
-    function trace(name, x, y, kind, mode, hoverTemplate) {
+    function trace(name, x, y, kind, mode, hoverTemplate, lineOpts) {
+      var line = {color: colors[name.toLowerCase()] || '#f87171', width: 1.5};
+      if (lineOpts) { Object.assign(line, lineOpts); }
       return {
         x: x,
         y: y,
@@ -255,8 +257,8 @@
         mode: mode,
         connectgaps: false,
         hovertemplate: hoverTemplate,
-        line: {color: colors[name.toLowerCase()], width: 1.5},
-        marker: {color: colors[name.toLowerCase()], size: 5}
+        line: line,
+        marker: {color: colors[name.toLowerCase()] || '#f87171', size: 5}
       };
     }
     if (data.timeseries) {
@@ -279,11 +281,24 @@
           ? decodeDeltas(data.timeseries.simulated, scale)
           : unscale(data.timeseries.simulated, scale);
 
+        var bankfull = null;
+        if (data.timeseries.bankfull) {
+          bankfull = isDelta
+            ? decodeDeltas(data.timeseries.bankfull, scale)
+            : unscale(data.timeseries.bankfull, scale);
+        }
+
         var timeRange = dateRange(timeline);
-        Plotly.newPlot('geb-time-' + safeStationId, [
+        var traces = [
           trace('Observed', timeline, observed, 'scatter', 'lines', '%{x|%b %Y}<br>%{y:,.0f} m3/s<extra>Observed</extra>'),
           trace('Simulated', timeline, simulated, 'scatter', 'lines', '%{x|%b %Y}<br>%{y:,.0f} m3/s<extra>Simulated</extra>')
-        ], Object.assign({}, layoutBase, {hovermode: 'x unified', xaxis: Object.assign({}, layoutBase.xaxis, {type: 'date', range: timeRange}), yaxis: Object.assign({}, layoutBase.yaxis, {title: 'Discharge (m3/s)'})}), common);
+        ];
+        if (bankfull && timeline && timeline.length) {
+          traces.push(
+            trace('Bankfull', timeline, bankfull, 'scatter', 'lines', '%{x|%b %Y}<br>%{y:,.0f} m3/s<extra>Bankfull</extra>', {dash: 'dash'})
+          );
+        }
+        Plotly.newPlot('geb-time-' + safeStationId, traces, Object.assign({}, layoutBase, {hovermode: 'x unified', xaxis: Object.assign({}, layoutBase.xaxis, {type: 'date', range: timeRange}), yaxis: Object.assign({}, layoutBase.yaxis, {title: 'Discharge (m3/s)'})}), common);
       }
     }
     if (data.returnPeriods) {
@@ -303,12 +318,87 @@
     }
   }
 
+  function renderRiver(el, riverKey, data) {
+    var safeRiverId = encodeURIComponent(riverKey);
+    var riverId = data.riverId;
+    var ts = data.timeseries;
+    var times = ts.time;
+    var qValues = ts.bankfullDischarge;
+    var wValues = ts.width;
+    var dValues = ts.depth;
+
+    el.innerHTML = '<div class="geb-popup__title">River segment ' + escapeHtml(riverId) + '</div>' +
+      '<div class="geb-popup__subtitle">Upstream area: ' + formatNumber(data.upstreamAreaKm2) + ' km² · Bankfull hydraulic geometry over time</div>' +
+      '<div class="geb-popup__chart-title">Bankfull discharge</div>' +
+      '<div id="geb-river-q-' + safeRiverId + '" class="geb-popup__chart" style="height:180px"></div>' +
+      '<div class="geb-popup__chart-title">Channel width and depth</div>' +
+      '<div id="geb-river-geom-' + safeRiverId + '" class="geb-popup__chart" style="height:180px"></div>';
+
+    ensurePlotly(function(loaded) {
+      if (loaded === false) {
+        el.innerHTML = '<div class="geb-popup__error">Interactive charts require access to cdn.plot.ly.</div>';
+        return;
+      }
+      var common = {responsive: true, displaylogo: false, modeBarButtonsToRemove: ['select2d', 'lasso2d']};
+
+      var qTrace = {
+        x: times,
+        y: qValues,
+        name: 'Bankfull discharge',
+        type: 'scatter',
+        mode: 'lines+markers',
+        line: {color: '#f87171', width: 2},
+        marker: {color: '#f87171', size: 6},
+        hovertemplate: '%{x|%Y}<br>Discharge: %{y:,.2f} m³/s<extra>Bankfull discharge</extra>'
+      };
+      var qLayout = Object.assign({}, layoutBase, {
+        height: 180,
+        hovermode: 'x unified',
+        xaxis: Object.assign({}, layoutBase.xaxis, {type: 'date'}),
+        yaxis: Object.assign({}, layoutBase.yaxis, {title: 'Discharge (m³/s)'})
+      });
+      Plotly.newPlot('geb-river-q-' + safeRiverId, [qTrace], qLayout, common);
+
+      var wTrace = {
+        x: times,
+        y: wValues,
+        name: 'Width (m)',
+        type: 'scatter',
+        mode: 'lines+markers',
+        line: {color: '#38bdf8', width: 2},
+        marker: {color: '#38bdf8', size: 6},
+        hovertemplate: '%{x|%Y}<br>Width: %{y:,.2f} m<extra>Width</extra>'
+      };
+      var dTrace = {
+        x: times,
+        y: dValues,
+        name: 'Depth (m)',
+        type: 'scatter',
+        mode: 'lines+markers',
+        line: {color: '#4ade80', width: 2},
+        marker: {color: '#4ade80', size: 6},
+        hovertemplate: '%{x|%Y}<br>Depth: %{y:,.2f} m<extra>Depth</extra>'
+      };
+      var geomLayout = Object.assign({}, layoutBase, {
+        height: 180,
+        hovermode: 'x unified',
+        xaxis: Object.assign({}, layoutBase.xaxis, {type: 'date'}),
+        yaxis: Object.assign({}, layoutBase.yaxis, {title: 'Meters (m)'})
+      });
+      Plotly.newPlot('geb-river-geom-' + safeRiverId, [wTrace, dTrace], geomLayout, common);
+    });
+  }
+
   function renderStation(el, stationId) {
     if (el.dataset.rendered === 'true') return;
     el.dataset.rendered = 'true';
     loadStationData(stationId, function(data) {
       if (!data) {
         el.innerHTML = '<div class="geb-popup__error">No interactive chart data is available.</div>';
+        return;
+      }
+      if (data.type === 'river') {
+        renderRiver(el, stationId, data);
         return;
       }
     var metrics = data.metrics || {};
@@ -320,7 +410,8 @@
       metricHtml('α', metrics.KGE_variability_ratio) + metricHtml('NSE', metrics.NSE) +
       metricHtml('r²', metrics.R2) + metricHtml('RMSE', metrics.RMSE) +
       metricHtml('RRMSE', metrics.RRMSE) + metricHtml('Area ratio', metrics.upstreamAreaRatio) +
-      metricHtml('Fixed UTC offset (h)', metrics.timezoneUtcOffset) + '</div>' +
+      metricHtml('Fixed UTC offset (h)', metrics.timezoneUtcOffset) +
+      ((data.timeseries && data.timeseries.bankfullDischarge != null) ? metricHtml('Bankfull (m³/s)', data.timeseries.bankfullDischarge) : '') + '</div>' +
       (data.returnPeriods ? '<div class="geb-popup__chart-title">Return periods</div>' + makeChartDiv('geb-return-' + safeStationId) : '') +
       (data.timeseries ? '<div class="geb-popup__chart-title">Discharge time series</div>' + makeChartDiv('geb-time-' + safeStationId) : '');
     ensurePlotly(function(loaded) {
