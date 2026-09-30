@@ -1,4 +1,7 @@
 # dev
+- Fill missing width, depth, and Manning values for unrepresented flood-model river reaches by propagating the mean values of available upstream reaches through the river network; this prevents SFINCS builds from failing when a selected reach has no routing-grid cells of its own.
+- Resolve downstream/further-downstream outflow river attributes iteratively based on upstream dependencies, rather than relying solely on `topological_stream_order`, which can tie for pass-through reaches and their single upstream tributaries.
+- Fixed a crash in SFINCS subgrid river burning (`hydromt_sfincs` `ValueError: Lengths of inputs do not match`) for models with a geographic CRS, caused by `hydromt_sfincs` computing a river burn buffer radius (`max(width, subgrid_pixel_size) / 2`) too small to guarantee covering at least one subgrid pixel center for narrow rivers; the burn width is now floored at twice the subgrid pixel size (converted to meters for geographic CRSs), and degenerate sliver river fragments left over from clipping to the model region are dropped before burning.
 - Added bankfull river depth estimation via hydraulic continuity derived from simulated 2-year flood discharge (Q_2) based on Andreadis et al. 2013. For channels with too observed width, the depth is scaled inversely with width to conserve volume.
 - For flood simulatons use channel depth and width from the hydrological model directly. Remove options power_law and mannings in flood simulatons.
 - Improve local inertial boundary conditions.

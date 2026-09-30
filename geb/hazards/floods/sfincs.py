@@ -625,41 +625,94 @@ class SFINCSRootModel:
                     river_width_beta=river_width_beta,
                 )
 
-                for river_to_burn_index, river_to_burn in rivers_to_burn[
-                    rivers_to_burn["is_downstream_outflow"]
-                    | rivers_to_burn["is_further_downstream_outflow"]
-                ].iterrows():
-                    upstream_rivers = rivers_to_burn[
-                        rivers_to_burn["downstream_ID"] == river_to_burn_index
-                    ]
-                    assert len(upstream_rivers) > 0, (
-                        "Downstream rivers must have at least one upstream river to estimate width and depth"
-                    )
-                    river_parameters_upstream_rivers = river_parameters.loc[
-                        upstream_rivers.index
-                    ]
-                    river_parameters.loc[river_to_burn_index, "river_width_alpha"] = (
-                        river_parameters_upstream_rivers["river_width_alpha"].sum()
-                    )
-                    river_parameters.loc[river_to_burn_index, "river_width_beta"] = (
-                        river_parameters_upstream_rivers["river_width_beta"].mean()
+                river_attribute_sources: gpd.GeoDataFrame = self.rivers[
+                    ["downstream_ID", "width", "depth", "manning"]
+                ].copy()
+                while True:
+                    filled_any_attribute: bool = False
+                    for river_id in river_attribute_sources.index:
+                        missing_attributes: pd.Series = river_attribute_sources.loc[
+                            river_id, ["width", "depth", "manning"]
+                        ].isna()
+                        if not missing_attributes.any():
+                            continue
+                        upstream_rivers: gpd.GeoDataFrame = river_attribute_sources[
+                            river_attribute_sources["downstream_ID"] == river_id
+                        ]
+                        for attribute in missing_attributes[missing_attributes].index:
+                            upstream_values: pd.Series = upstream_rivers[
+                                attribute
+                            ].dropna()
+                            if not upstream_values.empty:
+                                river_attribute_sources.loc[river_id, attribute] = (
+                                    upstream_values.mean()
+                                )
+                                filled_any_attribute = True
+                    if not filled_any_attribute:
+                        break
+
+                for attribute in ["width", "depth", "manning"]:
+                    missing_ids = rivers_to_burn.index[rivers_to_burn[attribute].isna()]
+                    rivers_to_burn.loc[missing_ids, attribute] = (
+                        river_attribute_sources.loc[missing_ids, attribute]
                     )
 
-                    rivers_to_burn.loc[
-                        river_to_burn_index, "return_period_2_years_daily_m3_per_s"
-                    ] = rivers_to_burn.loc[
-                        upstream_rivers.index, "return_period_2_years_daily_m3_per_s"
-                    ].mean()
+                outflow_river_ids: set[Any] = set(
+                    rivers_to_burn[
+                        rivers_to_burn["is_downstream_outflow"]
+                        | rivers_to_burn["is_further_downstream_outflow"]
+                    ].index
+                )
+                unresolved_outflow_river_ids: set[Any] = set(outflow_river_ids)
+                while unresolved_outflow_river_ids:
+                    resolved_this_pass: set[Any] = set()
+                    for river_to_burn_index in unresolved_outflow_river_ids:
+                        upstream_rivers = rivers_to_burn[
+                            rivers_to_burn["downstream_ID"] == river_to_burn_index
+                        ]
+                        assert len(upstream_rivers) > 0, (
+                            "River is missing width, depth, or Manning's n and has no "
+                            f"upstream rivers to estimate them: {river_to_burn_index}"
+                        )
+                        if upstream_rivers.index.isin(
+                            unresolved_outflow_river_ids
+                        ).any():
+                            continue
 
-                    rivers_to_burn.loc[river_to_burn_index, "width"] = upstream_rivers[
-                        "width"
-                    ].mean()
-                    rivers_to_burn.loc[river_to_burn_index, "depth"] = upstream_rivers[
-                        "depth"
-                    ].mean()
-                    rivers_to_burn.loc[river_to_burn_index, "manning"] = (
-                        upstream_rivers["manning"].mean()
+                        river_parameters_upstream_rivers = river_parameters.loc[
+                            upstream_rivers.index
+                        ]
+                        river_parameters.loc[
+                            river_to_burn_index, "river_width_alpha"
+                        ] = river_parameters_upstream_rivers["river_width_alpha"].sum()
+                        river_parameters.loc[
+                            river_to_burn_index, "river_width_beta"
+                        ] = river_parameters_upstream_rivers["river_width_beta"].mean()
+                        rivers_to_burn.loc[
+                            river_to_burn_index,
+                            "return_period_2_years_daily_m3_per_s",
+                        ] = rivers_to_burn.loc[
+                            upstream_rivers.index,
+                            "return_period_2_years_daily_m3_per_s",
+                        ].mean()
+                        rivers_to_burn.loc[river_to_burn_index, "width"] = (
+                            upstream_rivers["width"].mean()
+                        )
+                        rivers_to_burn.loc[river_to_burn_index, "depth"] = (
+                            upstream_rivers["depth"].mean()
+                        )
+                        rivers_to_burn.loc[river_to_burn_index, "manning"] = (
+                            upstream_rivers["manning"].mean()
+                        )
+
+                        resolved_this_pass.add(river_to_burn_index)
+
+                    assert resolved_this_pass, (
+                        "Could not resolve river parameters for downstream outflow "
+                        "rivers due to a cyclical or unresolvable dependency: "
+                        f"{sorted(unresolved_outflow_river_ids)}"
                     )
+                    unresolved_outflow_river_ids -= resolved_this_pass
 
                 assert (
                     rivers_to_burn["return_period_2_years_daily_m3_per_s"]
@@ -714,6 +767,52 @@ class SFINCSRootModel:
                 f"Setting up SFINCS subgrid with {grid_size_multiplier} subgrid pixels..."
             )
 
+            if not rivers_to_burn.empty:
+                # clipping rivers to the model region can leave tiny sliver
+                # fragments at the domain boundary (e.g. from a river crossing
+                # the boundary at a shallow angle). hydromt_sfincs splits multi-part
+                # river geometries into separate segments before burning them per
+                # subgrid tile, and a sliver that is shorter than a subgrid pixel
+                # can end up with no pixel centers within its buffer, which raises a
+                # length-mismatch error deep inside hydromt_sfincs. We therefore
+                # explode and drop these degenerate fragments here first.
+                centerlines: gpd.GeoDataFrame = rivers_to_burn.explode(
+                    index_parts=False
+                )
+                river_length_m: pd.Series = centerlines.to_crs(self.utm_zone).length
+                centerlines = centerlines[river_length_m > 1.0].copy()
+
+                # hydromt_sfincs burns rivers using a buffer radius of
+                # max(width, subgrid_pixel_size) / 2. For a river narrower than the
+                # subgrid pixel size, this radius (subgrid_pixel_size / 2) can be
+                # smaller than the distance from a pixel corner to its nearest pixel
+                # center (up to subgrid_pixel_size * sqrt(2) / 2), so the buffered
+                # river polygon can end up containing zero subgrid pixel centers for
+                # a given tile, crashing hydromt_sfincs. We floor the burn width at
+                # twice the subgrid pixel size so the resulting buffer radius always
+                # covers at least one pixel center. The mask resolution is in degrees
+                # for geographic model CRSs, so it must be converted to meters first
+                # (mirroring hydromt_sfincs' own conversion using 111111 m/degree),
+                # since river width is always in meters.
+                main_grid_resolution: float = abs(self.mask.rio.resolution()[0])
+                main_grid_resolution_m: float = (
+                    main_grid_resolution * 111111.0
+                    if self.is_geographic
+                    else main_grid_resolution
+                )
+                subgrid_pixel_size_m: float = (
+                    main_grid_resolution_m / grid_size_multiplier
+                )
+                centerlines["width"] = centerlines["width"].clip(
+                    lower=2 * subgrid_pixel_size_m
+                )
+
+                centerlines = centerlines.rename(
+                    columns={"width": "rivwth", "depth": "rivdph"}
+                )
+            else:
+                centerlines = rivers_to_burn
+
             with np.errstate(invalid="ignore"):
                 # only burn rivers that are wider than the subgrid pixel size
                 sf.subgrid.create(
@@ -723,14 +822,8 @@ class SFINCSRootModel:
                             "manning": mannings.to_dataset(name="manning"),
                         }
                     ],
-                    river_list=[
-                        {
-                            "centerlines": rivers_to_burn.rename(
-                                columns={"width": "rivwth", "depth": "rivdph"}
-                            )
-                        }
-                    ]
-                    if not rivers_to_burn.empty
+                    river_list=[{"centerlines": centerlines}]
+                    if not centerlines.empty
                     else [],
                     write_dep_tif=True,
                     write_man_tif=True,
