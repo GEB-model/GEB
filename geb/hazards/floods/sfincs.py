@@ -285,6 +285,68 @@ class SFINCSRootModel:
             ValueError: if grid_size_multiplier is not a positive integer.
             ValueError: if resolution of DEM is not square pixels.
         """
+
+        def fill_missing_river_widths_from_network(
+            rivers: gpd.GeoDataFrame,
+            column: str = "width",
+            fill_width_value: float = 0.5,
+        ) -> gpd.GeoDataFrame:
+            """Fill missing river widths using the river network instead of the raster grid.
+
+            Some short river segments (e.g. small tributaries just upstream of a confluence)
+            have no matching source data (e.g. no SWORD reach) and are also too small to get
+            their own footprint in the low-resolution river raster, because their pixels are
+            absorbed by a neighbouring, wider river segment during rasterization. Such
+            segments can never receive a value through the raster-based downstream
+            propagation (`propagate_downstream`), since that function can only fill a cell
+            from a neighbouring cell that shares the same raster footprint.
+
+            This function fills those gaps directly on the vector river network: each
+            river segment without a value is assigned the mean value of its immediate
+            upstream segments, processed from headwaters to outlets so that chains of
+            missing segments are filled in order.
+
+            Args:
+                rivers: A GeoDataFrame of river segments indexed by river id, with a
+                    'downstream_ID' column and the column to fill.
+                column: Name of the column to fill missing values for. Defaults to 'width'.
+                fill_width_value: The value to use for segments that have no upstream
+                    segments with valid values. Defaults to 0.5 meters.
+
+            Returns:
+                The input GeoDataFrame with missing values in `column` filled where an
+                upstream segment with a valid value exists.
+            """
+            import networkx
+
+            river_graph = networkx.DiGraph()
+            edges: list[tuple[int, int]] = [
+                (idx, downstream_id)
+                for idx, downstream_id in rivers["downstream_ID"].items()
+                if downstream_id != -1
+            ]
+            river_graph.add_edges_from(edges)
+            river_graph.add_nodes_from(rivers.index)
+
+            values: dict[int, float] = rivers[column].to_dict()
+            # Fill missing values by propagating from upstream segments to downstream segments
+            for node in networkx.topological_sort(river_graph):
+                if not np.isnan(values[node]):
+                    continue
+                upstream_values: list[float] = [
+                    values[upstream_node]
+                    # Only consider upstream nodes with valid values
+                    for upstream_node in river_graph.predecessors(node)
+                    if not np.isnan(values[upstream_node])
+                ]
+                if upstream_values:
+                    values[node] = float(np.mean(upstream_values))
+
+            rivers[column] = rivers.index.map(values)
+
+            rivers[column] = rivers[column].fillna(fill_width_value)
+            return rivers
+
         # if overwrite is True, always rebuild the model
         if overwrite is True:
             self.logger.info("Building new SFINCS model...")
@@ -388,9 +450,6 @@ class SFINCSRootModel:
         DEMs: list[dict[str, str | Path | xr.DataArray | xr.Dataset]] = [
             DEM.copy() for DEM in DEMs
         ]
-        catchment_boundary = gpd.read_parquet(
-            "/scistor/ivm/rpo100/GEB/models/meuse_improved/forecast_runs/catchment_boundary.geoparquet"
-        )
         # Remove unnecessary keys (to avoid warnings) and set reproj_method to bilinear for all DEMs
         DEMs_in_area_of_interest = []
         for DEM in DEMs:
@@ -418,9 +477,6 @@ class SFINCSRootModel:
             DEM["reproj_method"] = "bilinear"
             time_start = time.perf_counter()
             self.logger.info("Setting up SFINCS model dep (DEMs)...")
-            # DEM["elevation"].chunk({"x": 500, "y": 500}).to_zarr(
-            #     self.path / f"dem_raw.zarr", mode="w"
-            # )
 
             DEM["elevation"] = clip_with_geometry(
                 DEM["elevation"]["elevation"],
@@ -479,8 +535,6 @@ class SFINCSRootModel:
         time_start = time.perf_counter()
         self.logger.info("Setting up SFINCS model mask...")
         sf.mask.create_active(include_polygon=flood_plain, reset_mask=True)
-        mask_debug: xr.DataArray = self.mask
-        mask_debug.to_zarr(self.path / "debug_mask.zarr", mode="w")
         time_setup_mask = time.perf_counter() - time_start
         self.logger.info(f"SFINCS model mask setup took {time_setup_mask:.2f} seconds")
 
@@ -651,6 +705,11 @@ class SFINCSRootModel:
                 # first sort by shreve stream order, forcing the upstream rivers to be processed first,
                 # so that the downstream rivers can use the average of the upstream rivers to
                 # estimate their width and depth.
+                # TODO: This is a bit of quick fix, but it works for now. We should find a better way to do find a more consistent way to calculate the width of the river segments that are overlayed by the raster resolution. As a result, some segments are skipped.
+                # rivers_to_burn = fill_missing_river_widths_from_network(
+                #     rivers_to_burn, column="width", fill_width_value=0.5
+                # )
+                rivers_to_burn["width"] = rivers_to_burn["width"].fillna(0.5)
                 rivers_to_burn = rivers_to_burn.sort_values(
                     by="topological_stream_order", ascending=True
                 )

@@ -1220,6 +1220,9 @@ class Hydrography(BuildModelBase):
         rivers_with_data = valid_SWORD_widths.any(axis=0) & (
             total_valid_reach_length_m > 0
         )
+        self.logger.info(
+            f"SWORD river widths available for {rivers_with_data.sum()} rivers of {len(rivers)} total rivers"
+        )
 
         rivers["width"] = np.nan
         rivers.loc[rivers_with_data, "width"] = (
