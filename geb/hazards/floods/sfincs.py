@@ -10,7 +10,11 @@ import logging
 import math
 import shutil
 import warnings
+from collections.abc import Iterator
+from contextlib import contextmanager
+from functools import wraps
 from pathlib import Path
+from threading import RLock
 from types import TracebackType
 from typing import Any, Literal
 
@@ -23,7 +27,7 @@ import pyflwdir
 import rasterio
 import rasterio.features
 import xarray as xr
-from hydromt_sfincs import SfincsModel
+from hydromt_sfincs import SfincsModel, workflows as sfincs_workflows
 from pyflwdir import FlwdirRaster
 from pyflwdir.dem import fill_depressions
 from pyproj import CRS
@@ -42,7 +46,10 @@ from geb.geb_types import (
     TwoDArrayInt32,
 )
 from geb.hazards.event import Event
-from geb.hazards.floods.workflows.bathymetry import burn_rivers
+from geb.hazards.floods.workflows.bathymetry import (
+    burn_rivers,
+    clip_river_lines_to_geometry,
+)
 from geb.hazards.floods.workflows.utils import get_end_point
 from geb.workflows.extreme_value_analysis import ReturnPeriodModel
 from geb.workflows.io import (
@@ -81,6 +88,50 @@ from .workflows.utils import (
 )
 
 SFINCS_WATER_LEVEL_BOUNDARY = 2
+_SFINCS_RIVER_BURN_LOCK = RLock()
+
+
+@contextmanager
+def _guard_point_only_river_clips() -> Iterator[None]:
+    """Ignore centerlines that touch a subgrid tile only at a point.
+
+    HydroMT-SFINCS clips centerlines to each tile. Point-only results are not
+    valid inputs to its line interpolation workflow.
+
+    Yields:
+        None: While the guarded river-burn function is installed.
+
+    Raises:
+        RuntimeError: If HydroMT-SFINCS does not expose a callable river-burn function.
+    """
+    with _SFINCS_RIVER_BURN_LOCK:
+        original_burn_river_rect = sfincs_workflows.bathymetry.burn_river_rect
+        if not callable(original_burn_river_rect):
+            raise RuntimeError("HydroMT-SFINCS river-burn workflow is unavailable.")
+
+        @wraps(original_burn_river_rect)
+        def guarded_burn_river_rect(
+            da_elv: xr.DataArray,
+            gdf_riv: gpd.GeoDataFrame,
+            da_man: xr.DataArray | None = None,
+            **kwargs: Any,
+        ) -> tuple[xr.DataArray, xr.DataArray | None]:
+            clip_geometry = da_elv.raster.box.to_crs(gdf_riv.crs).union_all()
+            clipped_rivers = clip_river_lines_to_geometry(gdf_riv, clip_geometry)
+            if clipped_rivers.empty:
+                return da_elv, da_man
+            return original_burn_river_rect(
+                da_elv=da_elv,
+                gdf_riv=clipped_rivers,
+                da_man=da_man,
+                **kwargs,
+            )
+
+        sfincs_workflows.bathymetry.burn_river_rect = guarded_burn_river_rect
+        try:
+            yield
+        finally:
+            sfincs_workflows.bathymetry.burn_river_rect = original_burn_river_rect
 
 
 class SFINCSRootModel:
@@ -815,22 +866,23 @@ class SFINCSRootModel:
 
             with np.errstate(invalid="ignore"):
                 # only burn rivers that are wider than the subgrid pixel size
-                sf.subgrid.create(
-                    elevation_list=DEMs,
-                    roughness_list=[
-                        {
-                            "manning": mannings.to_dataset(name="manning"),
-                        }
-                    ],
-                    river_list=[{"centerlines": centerlines}]
-                    if not centerlines.empty
-                    else [],
-                    write_dep_tif=True,
-                    write_man_tif=True,
-                    nr_subgrid_pixels=grid_size_multiplier,
-                    nr_levels=20,
-                    nrmax=500,
-                )
+                with _guard_point_only_river_clips():
+                    sf.subgrid.create(
+                        elevation_list=DEMs,
+                        roughness_list=[
+                            {
+                                "manning": mannings.to_dataset(name="manning"),
+                            }
+                        ],
+                        river_list=[{"centerlines": centerlines}]
+                        if not centerlines.empty
+                        else [],
+                        write_dep_tif=True,
+                        write_man_tif=True,
+                        nr_subgrid_pixels=grid_size_multiplier,
+                        nr_levels=20,
+                        nrmax=500,
+                    )
 
         else:
             self.logger.info(

@@ -13,13 +13,19 @@ import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
-from shapely.geometry import LineString
+from hydromt_sfincs import workflows as sfincs_workflows
+from rasterio.transform import from_origin
+from shapely.geometry import LineString, box
 
 from geb.cli import CONFIG_DEFAULT
 from geb.geb_types import TwoDArrayFloat64, TwoDArrayInt32
 from geb.hazards.event import Event
 from geb.hazards.floods import create_river_graph, group_subbasins
-from geb.hazards.floods.sfincs import SFINCSRootModel
+from geb.hazards.floods.sfincs import (
+    SFINCSRootModel,
+    _guard_point_only_river_clips,
+)
+from geb.hazards.floods.workflows.bathymetry import clip_river_lines_to_geometry
 from geb.hazards.floods.workflows.utils import get_start_point
 from geb.model import GEBModel
 from geb.runner import parse_config, run_model_with_method
@@ -33,6 +39,69 @@ SFINCS_PLOT_FOLDER = tmp_folder / "SFINCS_plots"
 SFINCS_PLOT_FOLDER.mkdir(exist_ok=True, parents=True)
 
 logger = logging.getLogger(__name__)
+
+
+def test_clip_river_lines_drops_point_only_intersections() -> None:
+    """Drop lines that touch a raster tile only at a corner."""
+    rivers: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        geometry=[
+            LineString([(-1, 0), (0, 1)]),
+            LineString([(-1, 0.5), (0.5, 0.5)]),
+        ],
+        crs="EPSG:4326",
+    )
+
+    clipped: gpd.GeoDataFrame = clip_river_lines_to_geometry(rivers, box(0, 0, 1, 1))
+
+    assert len(clipped) == 1
+    assert clipped.geometry.iloc[0].geom_type == "LineString"
+    assert clipped.geometry.iloc[0].length > 0
+
+
+def test_subgrid_river_burn_guard_filters_point_clips(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Filter tile-only point clips and restore HydroMT-SFINCS afterward."""
+    elevation: xr.DataArray = xr.DataArray(
+        np.zeros((2, 2), dtype=np.float32),
+        dims=("y", "x"),
+        coords={"y": [1.5, 0.5], "x": [0.5, 1.5]},
+    ).rio.write_crs("EPSG:4326")
+    elevation = elevation.rio.write_transform(from_origin(0, 2, 1, 1))
+    rivers: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        geometry=[
+            LineString([(-1, 0), (0, 1)]),
+            LineString([(-1, 1), (1, 1)]),
+        ],
+        crs="EPSG:4326",
+    )
+    captured_rivers: list[gpd.GeoDataFrame] = []
+
+    def fake_burn_river_rect(
+        da_elv: xr.DataArray,
+        gdf_riv: gpd.GeoDataFrame,
+        da_man: xr.DataArray | None = None,
+        **kwargs: Any,
+    ) -> tuple[xr.DataArray, xr.DataArray | None]:
+        captured_rivers.append(gdf_riv)
+        return da_elv, da_man
+
+    original_burn_river_rect = sfincs_workflows.bathymetry.burn_river_rect
+    monkeypatch.setattr(
+        sfincs_workflows.bathymetry,
+        "burn_river_rect",
+        fake_burn_river_rect,
+    )
+
+    with _guard_point_only_river_clips():
+        guarded_burn_river_rect = sfincs_workflows.bathymetry.burn_river_rect
+        guarded_burn_river_rect(da_elv=elevation, gdf_riv=rivers)
+
+    assert len(captured_rivers) == 1
+    assert len(captured_rivers[0]) == 1
+    assert captured_rivers[0].geometry.iloc[0].geom_type == "LineString"
+    assert sfincs_workflows.bathymetry.burn_river_rect is fake_burn_river_rect
+    assert original_burn_river_rect is not fake_burn_river_rect
 
 
 def plot_flood_map(flood_map: xr.DataArray, name: str) -> None:

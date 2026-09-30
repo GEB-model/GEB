@@ -7,7 +7,33 @@ import numpy as np
 import xarray as xr
 from rasterio.features import rasterize
 from scipy.spatial import cKDTree  # ty: ignore[unresolved-import]
+from shapely.geometry.base import BaseGeometry
 from shapely.ops import transform as shapely_transform
+
+
+def clip_river_lines_to_geometry(
+    rivers: gpd.GeoDataFrame, clip_geometry: BaseGeometry
+) -> gpd.GeoDataFrame:
+    """Clip river centerlines and discard point-only intersections.
+
+    Args:
+        rivers: River centerlines to clip.
+        clip_geometry: Polygon defining the raster tile bounds.
+
+    Returns:
+        Clipped line geometries with empty and zero-length results removed.
+
+    Raises:
+        ValueError: If the clip geometry is empty.
+    """
+    if clip_geometry.is_empty:
+        raise ValueError("clip_geometry cannot be empty.")
+    clipped: gpd.GeoDataFrame = rivers.clip(clip_geometry).explode(index_parts=False)
+    return clipped.loc[
+        clipped.geom_type.isin(["LineString", "MultiLineString"])
+        & ~clipped.geometry.is_empty
+        & clipped.geometry.apply(lambda geometry: geometry.length > 0)
+    ].copy()
 
 
 def _validate_inputs(
