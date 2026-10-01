@@ -858,6 +858,7 @@ class LocalInertial:
         self.shape_exponent = shape_exponent
         self.bankfull_depth = bankfull_depth_m
         self.floodplain_width = floodplain_width_m
+        self.rivers_gdf = rivers_gdf
 
         n_nodes_total = is_pit.size
         is_ocean_pit_orig = np.zeros(n_nodes_total, dtype=np.bool_)
@@ -1769,22 +1770,21 @@ class LocalInertial:
             confluence_factor * cfl_safety_factor * cfl_dx / sqrt_g
         ).astype(np.float32)
 
-    def update_channel_width(
+    def update_channel_geometry(
         self,
         river_width: ArrayFloat32,
-        bankfull_depth_m: ArrayFloat32 | None = None,
+        bankfull_depth_m: ArrayFloat32,
     ) -> None:
         """Updates channel bankfull top width and depth dynamically during simulation.
 
         Args:
             river_width: Updated channel bankfull top width (meters).
-            bankfull_depth_m: Optional updated bankfull channel depth (meters).
+            bankfull_depth_m: Updated bankfull channel depth (meters).
         """
         self.river_width = river_width.astype(np.float32)
         self._river_width = self.river_width[self.sorted_idxs]
-        if bankfull_depth_m is not None:
-            self.bankfull_depth = bankfull_depth_m.astype(np.float32)
-            self._bankfull_depth = self.bankfull_depth[self.sorted_idxs]
+        self.bankfull_depth = bankfull_depth_m.astype(np.float32)
+        self._bankfull_depth = self.bankfull_depth[self.sorted_idxs]
         self._compute_static_geometry()
 
     def calculate_river_storage_from_discharge(

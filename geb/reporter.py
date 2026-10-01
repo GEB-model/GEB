@@ -1146,7 +1146,9 @@ class Reporter:
 
                             # Export for each river segment
                             active_rivers: gpd.GeoDataFrame = (
-                                self.model.hydrology.routing.get_active_rivers()
+                                self.model.hydrology.routing.get_active_rivers(
+                                    include_rivers_not_represented_in_grid=True
+                                )
                             )
                             for river_ID in active_rivers.index:
                                 river_ID_int: int = int(river_ID)

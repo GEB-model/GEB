@@ -75,6 +75,10 @@ class GroundWater(Module):
             self.hydrology.grid.load3d(
                 self.model.files["grid"]["groundwater/hydraulic_conductivity"],
             )
+        ) * np.float32(
+            self.model.config["parameters"][
+                "groundwater_hydraulic_conductivity_multiplier"
+            ]
         )
 
         self.grid.var.specific_yield = self.hydrology.grid.load3d(

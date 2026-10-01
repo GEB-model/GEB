@@ -280,14 +280,20 @@ class RoutingVariables(Bucket):
     river_width_beta: ArrayFloat32
 
 
-def select_active_rivers(rivers: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+def select_active_rivers(
+    rivers: gpd.GeoDataFrame,
+    include_rivers_not_represented_in_grid: bool = False,
+) -> gpd.GeoDataFrame:
     """Select river segments simulated inside the model domain.
 
     Downstream outflow segments are excluded. A segment absent from the routing
-    grid is retained only when it connects to an upstream segment in that grid.
+    grid is retained only when it connects to an upstream segment in that grid,
+    unless include_rivers_not_represented_in_grid is True.
 
     Args:
         rivers: Built river network indexed by river ID.
+        include_rivers_not_represented_in_grid: Whether to include river segments
+            that are not represented in the routing grid.
 
     Returns:
         Active river geometries and their original attributes.
@@ -295,6 +301,9 @@ def select_active_rivers(rivers: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     active_rivers: gpd.GeoDataFrame = rivers[
         (~rivers["is_downstream_outflow"]) & (~rivers["is_further_downstream_outflow"])
     ]
+
+    if include_rivers_not_represented_in_grid:
+        return active_rivers.copy()
 
     to_remove: set[int] = set()
     river_id: int
@@ -460,6 +469,7 @@ class Routing(Module):
 
         rivers: gpd.GeoDataFrame = read_geom(self.model.files["geom"]["routing/rivers"])
         rivers["return_period_2_years_daily_m3_per_s"] = np.nan
+        rivers["width_is_observed"] = rivers["width"].notnull()
 
         # set river ID to -1 for waterbody cells
         river_ids = self.grid.load2d(
@@ -546,8 +556,11 @@ class Routing(Module):
                 "width": valid_widths,
                 "depth": valid_depths,
                 "manning": valid_mannings,
+                "river_width_alpha": self.var.river_width_alpha[valid_river_cell_mask],
+                "river_width_beta": self.var.river_width_beta[valid_river_cell_mask],
             }
         )
+
         reach_means: pd.DataFrame = df_grid.groupby("river_id").mean()
 
         self.var.rivers.loc[reach_means.index, "width"] = reach_means["width"].astype(
@@ -559,6 +572,32 @@ class Routing(Module):
         self.var.rivers.loc[reach_means.index, "manning"] = reach_means[
             "manning"
         ].astype(np.float64)
+        self.var.rivers.loc[reach_means.index, "river_width_alpha"] = reach_means[
+            "river_width_alpha"
+        ].astype(np.float64)
+        self.var.rivers.loc[reach_means.index, "river_width_beta"] = reach_means[
+            "river_width_beta"
+        ].astype(np.float64)
+
+        self.var.rivers.loc[reach_means.index, "river_depth_c"] = float(
+            self.config["river_depth"]["parameters"]["c"]
+        )
+        self.var.rivers.loc[reach_means.index, "river_depth_d"] = float(
+            self.config["river_depth"]["parameters"]["d"]
+        )
+
+        has_observed_cell: ArrayBool = ~np.isnan(
+            self.var.observed_average_river_width[valid_river_cell_mask]
+        )
+        df_grid["width_is_observed"] = has_observed_cell
+        reach_obs: pd.Series | pd.DataFrame = df_grid.groupby("river_id")[
+            "width_is_observed"
+        ].any()
+        self.var.rivers.loc[reach_obs.index, "width_is_observed"] = reach_obs.astype(
+            bool
+        )
+
+        self._estimate_unrepresented_rivers_geometry()
 
         represented_rivers: pd.DataFrame = self.var.rivers[
             self.var.rivers["represented_in_grid"]
@@ -570,6 +609,152 @@ class Routing(Module):
         ), (
             "All rivers represented in the grid must have width, depth, and manning defined."
         )
+
+    def _estimate_unrepresented_rivers_geometry(self) -> None:
+        """Estimate bankfull discharge and hydraulic geometry for rivers not represented in grid.
+
+        Traverses unrepresented river reaches in topological order (using Shreve stream order)
+        and calculates bankfull discharge, river width parameters (alpha, beta), depth parameters
+        (c, d), and Manning roughness based on their upstream river network. Width and depth are
+        estimated using downstream hydraulic geometry and assigned directly to self.var.rivers.
+        Reaches without upstream rivers are not assigned geometry and retain NaN.
+
+        Notes:
+            Bankfull discharge is the sum of upstream bankfull discharges (m3/s).
+            Parameters (alpha, beta, c, d, manning) are combined using discharge-weighted
+            averaging across upstream segments, which ensures scaling consistency.
+        """
+        unrepresented_mask: pd.Series = ~self.var.rivers["represented_in_grid"]
+        if not unrepresented_mask.any():
+            return
+
+        depth_params: dict[str, Any] = self.config["river_depth"]["parameters"]
+        velocity_factor: float = float(depth_params["velocity_factor"])
+        min_depth_m: float = float(depth_params["min_depth_m"])
+        default_missing_width: float = float(self.default_missing_channel_width)
+
+        rivers: gpd.GeoDataFrame = self.var.rivers
+
+        # Build upstream adjacency mapping: downstream reach -> list of upstream reaches
+        downstream_ids: dict[int, Any] = rivers["downstream_ID"].to_dict()
+        upstream_map: dict[int, list[int]] = {}
+        for u_idx, ds_id in downstream_ids.items():
+            if pd.notna(ds_id):
+                upstream_map.setdefault(int(ds_id), []).append(int(u_idx))
+
+        # Traverse unrepresented reaches from upstream to downstream using shreve_stream_order
+        unrepresented_reaches: pd.Index = (
+            rivers.loc[unrepresented_mask].sort_values("shreve_stream_order").index
+        )
+
+        for reach_id in unrepresented_reaches:
+            upstream_reaches: list[int] = upstream_map.get(reach_id, [])
+            if not upstream_reaches:
+                continue
+
+            up: pd.DataFrame = rivers.loc[upstream_reaches]
+            valid_up: pd.DataFrame = up[up["width"].notnull() & up["depth"].notnull()]
+            if valid_up.empty:
+                continue
+
+            # Upstream discharge: simulated Q2 or width inversion proxy
+            q_inv: pd.Series = (valid_up["width"] / valid_up["river_width_alpha"]) ** (
+                1.0 / valid_up["river_width_beta"]
+            )
+            q_sim: pd.Series = valid_up["return_period_2_years_daily_m3_per_s"]
+            upstream_q: np.ndarray = np.where(
+                q_sim.notnull() & (q_sim > 0), q_sim, q_inv
+            )
+            combined_q: float = float(upstream_q.sum())
+
+            weights: np.ndarray = (
+                upstream_q / combined_q
+                if combined_q > 0
+                else np.full(len(valid_up), 1.0 / len(valid_up))
+            )
+
+            # Discharge-weighted average parameters
+            combined_alpha: float = float(
+                (weights * valid_up["river_width_alpha"]).sum()
+            )
+            combined_beta: float = float((weights * valid_up["river_width_beta"]).sum())
+            combined_c: float = float((weights * valid_up["river_depth_c"]).sum())
+            combined_d: float = float((weights * valid_up["river_depth_d"]).sum())
+            combined_manning: float = float((weights * valid_up["manning"]).sum())
+
+            # Width: propagate observed width or estimate from downstream hydraulic geometry
+            has_observed_upstream: bool = bool(valid_up["width_is_observed"].any())
+            reach_already_observed: bool = bool(
+                rivers.loc[reach_id, "width_is_observed"]
+            ) and bool(pd.notnull(rivers.loc[reach_id, "width"]))
+
+            is_observed: bool = False
+            estimated_width: float
+            if reach_already_observed:
+                estimated_width = float(rivers.loc[reach_id, "width"])
+                is_observed = True
+            elif has_observed_upstream:
+                # Inherit and combine upstream channel widths using Leopold-Maddock power-law
+                # summation W = (sum W_i^(1/beta))^beta (simplified to sqrt(sum W_i^2) for beta=0.5).
+                sum_w_powers: float = float(
+                    (
+                        valid_up["width"].clip(lower=0)
+                        ** (1.0 / valid_up["river_width_beta"])
+                    ).sum()
+                )
+                estimated_width = max(
+                    sum_w_powers**combined_beta,
+                    default_missing_width,
+                )
+                is_observed = True
+            else:
+                estimated_width = max(
+                    combined_alpha * (max(combined_q, 0.0) ** combined_beta),
+                    default_missing_width,
+                )
+
+            w_expected: float = combined_alpha * (max(combined_q, 0.0) ** combined_beta)
+            h_expected: float = combined_c * (max(combined_q, 0.0) ** combined_d)
+            continuity_ratio: float = (
+                w_expected / max(estimated_width, 1e-3)
+                if is_observed and w_expected > 0.0
+                else 1.0
+            )
+            estimated_depth: float = max(
+                (continuity_ratio * h_expected) / velocity_factor,
+                min_depth_m,
+            )
+
+            alpha_to_assign: float = (
+                estimated_width / (max(combined_q, 1e-6) ** combined_beta)
+                if is_observed and combined_q > 0.0
+                else combined_alpha
+            )
+
+            rivers.loc[
+                reach_id,
+                [
+                    "width",
+                    "depth",
+                    "manning",
+                    "river_width_alpha",
+                    "river_width_beta",
+                    "river_depth_c",
+                    "river_depth_d",
+                    "return_period_2_years_daily_m3_per_s",
+                    "width_is_observed",
+                ],
+            ] = [
+                float(estimated_width),
+                float(estimated_depth),
+                float(combined_manning),
+                float(alpha_to_assign),
+                float(combined_beta),
+                float(combined_c),
+                float(combined_d),
+                float(combined_q),
+                bool(is_observed),
+            ]
 
     def calculate_bankfull_depth(
         self,
@@ -604,35 +789,38 @@ class Routing(Module):
             Bankfull channel depth per cell (meters).
 
         Raises:
-            ValueError: If use_simulated_bankfull_q is True but 'return_period_2_years_daily_m3_per_s'
-                is missing from self.var.rivers or contains null values.
+            ValueError: If use_simulated_bankfull_q is True but
+                'return_period_2_years_daily_m3_per_s' contains null values in self.var.rivers.
         """
         # Downstream hydraulic geometry width inversion proxy Q_proxy = (W / alpha)^(1 / beta):
         width_alpha: ArrayFloat32 = self.var.river_width_alpha
         width_beta: ArrayFloat32 = self.var.river_width_beta
         alpha: ArrayFloat32 = np.maximum(width_alpha, np.float32(1.0))
         beta: ArrayFloat32 = np.maximum(width_beta, np.float32(0.1))
+
+        q_proxy: ArrayFloat32 = (bankfull_top_width_m / alpha) ** (
+            np.float32(1.0) / beta
+        )
+
         if use_simulated_bankfull_q:
-            if "return_period_2_years_daily_m3_per_s" not in self.var.rivers.columns:
-                raise ValueError(
-                    "use_simulated_bankfull_q is True, but 'return_period_2_years_daily_m3_per_s' was not found "
-                    "in self.var.rivers. Return periods must be estimated before transitioning to simulated Q2."
-                )
-            q2_col = self.var.rivers[self.var.rivers["represented_in_grid"]][
-                "return_period_2_years_daily_m3_per_s"
+            q2_col: pd.Series = self.var.rivers.loc[
+                self.var.rivers["represented_in_grid"],
+                "return_period_2_years_daily_m3_per_s",
             ]
             if q2_col.isnull().any():
                 raise ValueError(
                     "use_simulated_bankfull_q is True, but 'return_period_2_years_daily_m3_per_s' contains null values in self.var.rivers."
                 )
-
-            bankfull_discharge_m3_s: ArrayFloat32 = q2_col.reindex(
-                self.var.river_ids
-            ).values.astype(np.float32)
-        else:
-            bankfull_discharge_m3_s = (bankfull_top_width_m / alpha) ** (
-                np.float32(1.0) / beta
+            q2_mapped: ArrayFloat32 = q2_col.reindex(self.var.river_ids).values.astype(
+                np.float32
             )
+            bankfull_discharge_m3_s: ArrayFloat32 = np.where(
+                self.var.river_ids == -1,
+                q_proxy,
+                q2_mapped,
+            ).astype(np.float32)
+        else:
+            bankfull_discharge_m3_s = q_proxy
 
         depth_params: dict[str, Any] = self.config["river_depth"]["parameters"]
         depth_c: np.float32 = np.float32(depth_params["c"])
@@ -658,6 +846,16 @@ class Routing(Module):
             depth_continuity, min_depth_m
         ).astype(np.float32)
 
+        # The Congo River is the deepest river in the world, with maximum recorded depths
+        # reaching ~220 m (and up to ~250 m in canyon sections). Calculated bankfull channel
+        # depths exceeding 250 m indicate something is wrong.
+        max_realistic_depth_m: np.float32 = np.float32(250.0)
+        assert bool(np.all(bankfull_depth_m <= max_realistic_depth_m)), (
+            f"Calculated bankfull river depth exceeds realistic bounds ({max_realistic_depth_m} m; "
+            f"the Congo River is the deepest river in the world at ~220-250 m). "
+            f"Max depth found: {float(np.nanmax(bankfull_depth_m)):.2f} m."
+        )
+
         return bankfull_depth_m
 
     def set_router(self) -> None:
@@ -674,6 +872,10 @@ class Routing(Module):
             that waterbody footprints are flattened and state variables (either synthesized during
             spinup or restored from checkpoint storage) are available before deriving
             setting up the local inertial routing solver.
+
+        Raises:
+            ValueError: If use_simulated_bankfull_q is True but
+                'return_period_2_years_daily_m3_per_s' contains null values in self.var.rivers.
         """
         is_waterbody_outflow: ArrayBool = self.grid.var.waterbody_outflow_points != -1
         retention_basin_release_threshold_factor: float = self.config[
@@ -688,9 +890,11 @@ class Routing(Module):
         # Use simulated 2-year return period discharge if it has already been estimated;
         # otherwise, fall back to empirical downstream hydraulic geometry width inversion:
         use_simulated_bankfull_q: bool = (
-            "return_period_2_years_daily_m3_per_s" in self.var.rivers.columns
-            and not self.var.rivers["return_period_2_years_daily_m3_per_s"]
-            .isnull()
+            self.var.rivers.loc[
+                self.var.rivers["represented_in_grid"],
+                "return_period_2_years_daily_m3_per_s",
+            ]
+            .notnull()
             .any()
         )
 
@@ -701,6 +905,10 @@ class Routing(Module):
             q2_col = self.var.rivers[self.var.rivers["represented_in_grid"]][
                 "return_period_2_years_daily_m3_per_s"
             ]
+            if q2_col.isnull().any():
+                raise ValueError(
+                    "use_simulated_bankfull_q is True, but 'return_period_2_years_daily_m3_per_s' contains null values in self.var.rivers."
+                )
             bankfull_discharge_m3_s: ArrayFloat32 = q2_col.reindex(
                 self.var.river_ids
             ).values.astype(np.float32)
@@ -714,7 +922,11 @@ class Routing(Module):
             )
             bankfull_top_width_m: ArrayFloat32 = np.where(
                 np.isnan(self.var.observed_average_river_width),
-                estimated_width,
+                np.where(
+                    self.var.river_ids == -1,
+                    np.float32(self.default_missing_channel_width),
+                    estimated_width,
+                ),
                 self.var.observed_average_river_width,
             ).astype(np.float32)
         else:
@@ -948,8 +1160,8 @@ class Routing(Module):
             * (self.grid.var.river_slope_m_per_m ** np.float32(0.38))
             * (hydraulic_radius_m ** np.float32(-0.16))
         )
-        mannings_lowland: ArrayFloat32 = np.float32(0.025) + (
-            np.float32(0.040 - 0.025)
+        mannings_lowland: ArrayFloat32 = np.float32(0.020) + (
+            np.float32(0.040 - 0.020)
             * (self.grid.var.river_slope_m_per_m / np.float32(0.002))
         )
         raw_mannings: ArrayFloat32 = np.where(
@@ -958,7 +1170,7 @@ class Routing(Module):
             mannings_lowland,
         )
         self.grid.var.river_mannings = (
-            np.clip(raw_mannings, np.float32(0.025), np.float32(0.075))
+            np.clip(raw_mannings, np.float32(0.020), np.float32(0.075))
             * np.float32(self.model.config["parameters"]["mannings_n_multiplier"])
         ).astype(np.float32)
         assert (self.grid.var.river_mannings > 0).all()
@@ -1212,21 +1424,18 @@ class Routing(Module):
                 ).astype(np.float32)
                 self.var.river_width = dynamic_width
                 use_simulated_bankfull_q: bool = (
-                    "return_period_2_years_daily_m3_per_s" in self.var.rivers.columns
-                    and not self.var.rivers["return_period_2_years_daily_m3_per_s"]
-                    .isnull()
+                    self.var.rivers.loc[
+                        self.var.rivers["represented_in_grid"],
+                        "return_period_2_years_daily_m3_per_s",
+                    ]
+                    .notnull()
                     .any()
                 )
                 dynamic_depth_m: ArrayFloat32 = self.calculate_bankfull_depth(
                     bankfull_top_width_m=dynamic_width,
                     use_simulated_bankfull_q=use_simulated_bankfull_q,
                 )
-                self.router.update_channel_width(dynamic_width, dynamic_depth_m)
-                self._update_rivers_geometry(
-                    width_grid=dynamic_width,
-                    depth_grid=dynamic_depth_m,
-                    manning_grid=self.grid.var.river_mannings,
-                )
+                self.router.update_channel_geometry(dynamic_width, dynamic_depth_m)
 
         for hour in range(24):
             # increment inflow index for next hour
@@ -1601,13 +1810,22 @@ class Routing(Module):
         ]
         return outflow_rivers
 
-    def get_active_rivers(self) -> gpd.GeoDataFrame:
+    def get_active_rivers(
+        self, include_rivers_not_represented_in_grid: bool = False
+    ) -> gpd.GeoDataFrame:
         """Get the rivers that are simulated (i.e., not downstream of the model region).
+
+        Args:
+            include_rivers_not_represented_in_grid: Whether to include rivers that are
+                not represented in the grid (e.g., for reporting river geometry).
 
         Returns:
             A GeoDataFrame containing the active rivers.
         """
-        return select_active_rivers(self.var.rivers)
+        return select_active_rivers(
+            self.var.rivers,
+            include_rivers_not_represented_in_grid=include_rivers_not_represented_in_grid,
+        )
 
     def get_active_and_downstream_outflow_rivers(self) -> gpd.GeoDataFrame:
         """Get the rivers that are simulated (i.e., not downstream of the model region) and the downstream outflow rivers.
@@ -1639,13 +1857,6 @@ class Routing(Module):
         active_rivers: gpd.GeoDataFrame = self.get_active_rivers()
         discharge_by_river: pd.DataFrame
         if self.model.in_spinup:
-            sample_key: str = f"river_outflow_hourly_m3_per_s_{active_rivers.index[0]}"
-            if (
-                self.variables_to_report is None
-                or sample_key not in self.variables_to_report
-                or self.variables_to_report[sample_key]["_var_index"] == 0
-            ):
-                return
             discharge_by_river = get_discharge_per_river(
                 rivers=active_rivers,
                 all_rivers=self.var.rivers,
@@ -1667,7 +1878,9 @@ class Routing(Module):
             )
 
             if self.model.current_timestep > 0:
-                sample_key = f"river_outflow_hourly_m3_per_s_{active_rivers.index[0]}"
+                sample_key: str = (
+                    f"river_outflow_hourly_m3_per_s_{active_rivers.index[0]}"
+                )
                 if (
                     self.variables_to_report is not None
                     and sample_key in self.variables_to_report
@@ -1729,6 +1942,10 @@ class Routing(Module):
         q2_col = self.var.rivers[self.var.rivers["represented_in_grid"]][
             "return_period_2_years_daily_m3_per_s"
         ]
+        if q2_col.isnull().any():
+            raise ValueError(
+                "'return_period_2_years_daily_m3_per_s' contains null values in self.var.rivers after return period estimation."
+            )
         bankfull_discharge_m3_s: ArrayFloat32 = q2_col.reindex(
             self.var.river_ids
         ).values.astype(np.float32)
@@ -1742,7 +1959,11 @@ class Routing(Module):
         )
         updated_river_width: ArrayFloat32 = np.where(
             np.isnan(self.var.observed_average_river_width),
-            estimated_width,
+            np.where(
+                self.var.river_ids == -1,
+                np.float32(self.default_missing_channel_width),
+                estimated_width,
+            ),
             self.var.observed_average_river_width,
         ).astype(np.float32)
         self.var.river_width = updated_river_width
@@ -1753,7 +1974,7 @@ class Routing(Module):
             bankfull_top_width_m=self.var.river_width,
             use_simulated_bankfull_q=True,
         )
-        self.router.update_channel_width(
+        self.router.update_channel_geometry(
             river_width=self.var.river_width,
             bankfull_depth_m=updated_bankfull_depth,
         )

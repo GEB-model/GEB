@@ -1247,26 +1247,7 @@ class CropFarmers(AgentBaseClass):
         ]  # Cultivation costs are set as a fraction of crop prices
         date_index, cultivation_costs_array = self.cultivation_costs
 
-        if (
-            "calibration" in self.model.config
-            and "KGE_crops" in self.model.config["calibration"]["calibration_targets"]
-        ):
-            # Load price change factors 0 to 25 into a NumPy array
-            factors = np.array(
-                [
-                    self.model.config["agent_settings"]["calibration_crops"][
-                        f"price_{i}"
-                    ]
-                    for i in range(len(self.var.crop_ids))
-                ]
-            )
-
-            # Multiply the cultivation_costs_array by the factors along the last axis
-            cultivation_costs_array *= factors
-        else:
-            cultivation_costs_array = (
-                cultivation_costs_array * cultivation_cost_fraction
-            )
+        cultivation_costs_array = cultivation_costs_array * cultivation_cost_fraction
         self.cultivation_costs = (date_index, cultivation_costs_array)
 
     @property

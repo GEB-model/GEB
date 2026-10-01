@@ -1454,7 +1454,7 @@ class LandSurface(Module):
         )
 
         self.HRU.var.variable_runoff_shape_beta = self.HRU.full_compressed(
-            self.model.config["parameters"]["variable_runoff_shape_beta"],
+            np.nan,
             dtype=np.float32,
         )
 
@@ -1830,7 +1830,7 @@ class LandSurface(Module):
 
             # Scale topographic shape parameter beta with the user-defined calibration scale factor
             variable_runoff_shape_beta_scale: np.float32 = np.float32(
-                self.model.config["parameters"]["variable_runoff_shape_beta"]
+                self.model.config["parameters"]["variable_runoff_shape_beta_multiplier"]
             )
             self.HRU.var.variable_runoff_shape_beta[:] = (
                 ((surface_area_ratio_hru - np.float32(1.0)) + np.float32(0.2))

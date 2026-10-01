@@ -131,12 +131,6 @@ def build_sfincs(
             subbasins=subbasins,
             DEMs=DEM_config,
             rivers=rivers,
-            river_width_alpha=geb_model.model.hydrology.grid.decompress(
-                geb_model.hydrology.routing.var.river_width_alpha
-            ),
-            river_width_beta=geb_model.model.hydrology.grid.decompress(
-                geb_model.hydrology.routing.var.river_width_beta
-            ),
             mannings=geb_model.hazard_driver.floods.mannings,
             grid_size_multiplier=10,
             subgrid=subgrid,

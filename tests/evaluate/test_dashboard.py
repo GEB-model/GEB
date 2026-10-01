@@ -20,6 +20,8 @@ from geb.evaluate.workflows.dashboard import (
     _as_finite_float,
     _build_station_marker_payload,
     _build_timeseries_data,
+    _decode_varint_deltas,
+    _encode_varint_deltas,
     _to_int_deltas,
     build_station_chart_data,
     determine_main_time_index,
@@ -67,6 +69,37 @@ def test_to_int_deltas() -> None:
     assert deltas == [1000, 50, -10, None, None, 2500, 10]
 
 
+def test_varint_deltas_roundtrip_and_sentinel() -> None:
+    """Test Base64 Varint encoding and decoding with sentinel 0 for missing data."""
+    # Test cases include None, zero, small positive/negative deltas, large deltas
+    test_values: list[int | None] = [
+        None,
+        None,
+        12500,
+        0,
+        5,
+        -3,
+        0,
+        -100,
+        None,
+        200,
+        -200,
+        32767,
+        -32768,
+        500000,
+        -500000,
+    ]
+    encoded: str = _encode_varint_deltas(test_values)
+    assert isinstance(encoded, str)
+    decoded: list[int | None] = _decode_varint_deltas(encoded)
+    assert decoded == test_values
+
+    # Verify sentinel 0 is used for missing data
+    assert _decode_varint_deltas(_encode_varint_deltas([None])) == [None]
+    assert _decode_varint_deltas(_encode_varint_deltas([0])) == [0]
+    assert _decode_varint_deltas(_encode_varint_deltas([-1, 1])) == [-1, 1]
+
+
 def test_build_timeseries_data_with_main_index() -> None:
     """Test timeseries window slicing to main index with delta integer cents scaling."""
     main_index: pd.DatetimeIndex = pd.date_range(
@@ -90,14 +123,12 @@ def test_build_timeseries_data_with_main_index() -> None:
     assert "time" not in data
     assert data["start"] == 1  # Jan 2 is index 1 of main_index
     assert data["scale"] == 100
-    assert data["deltas"] is True
-    assert len(data["observed"]) == 3
-    assert len(data["simulated"]) == 3
+    assert data["deltas"] == "varint"
 
     # Delta integer cents: Jan 2 is anchor (1235), Jan 3 is None, Jan 4 is anchor reset (3457)
-    assert data["observed"] == [1235, None, 3457]
+    assert _decode_varint_deltas(data["observed"]) == [1235, None, 3457]
     # Simulated has no missing values: anchor 1111, then deltas 1111, 1111
-    assert data["simulated"] == [1111, 1111, 1111]
+    assert _decode_varint_deltas(data["simulated"]) == [1111, 1111, 1111]
 
 
 def test_build_timeseries_data_without_main_index() -> None:
@@ -118,9 +149,9 @@ def test_build_timeseries_data_without_main_index() -> None:
     assert "time" in data
     assert data["time"] == [1577880000000, 1577966400000]
     assert data["scale"] == 100
-    assert data["deltas"] is True
-    assert data["observed"] == [1056, 1011]
-    assert data["simulated"] == [1011, 1011]
+    assert data["deltas"] == "varint"
+    assert _decode_varint_deltas(data["observed"]) == [1056, 1011]
+    assert _decode_varint_deltas(data["simulated"]) == [1011, 1011]
 
 
 def test_build_timeseries_data_invalid_index() -> None:
@@ -255,9 +286,17 @@ def test_build_station_chart_data_includes_timeseries() -> None:
     assert chart_data["metrics"]["upstreamAreaRatio"] == 1.05
     assert "timeseries" in chart_data
     assert chart_data["timeseries"]["scale"] == 100
-    assert chart_data["timeseries"]["deltas"] is True
-    assert chart_data["timeseries"]["observed"] == [1000, 1000, 1000]
-    assert chart_data["timeseries"]["simulated"] == [1100, 1000, 1000]
+    assert chart_data["timeseries"]["deltas"] == "varint"
+    assert _decode_varint_deltas(chart_data["timeseries"]["observed"]) == [
+        1000,
+        1000,
+        1000,
+    ]
+    assert _decode_varint_deltas(chart_data["timeseries"]["simulated"]) == [
+        1100,
+        1000,
+        1000,
+    ]
 
 
 def test_as_finite_float() -> None:
@@ -430,10 +469,8 @@ def test_build_timeseries_data_observation_window_pruning() -> None:
 
     # Pruned window should start at Jan 3 (index 2 of main_index) and end at Jan 5 (length 3)
     assert data["start"] == 2
-    assert len(data["observed"]) == 3
-    assert len(data["simulated"]) == 3
-    assert data["observed"] == [1500, 500, 500]
-    assert data["simulated"] == [1400, 500, 500]
+    assert _decode_varint_deltas(data["observed"]) == [1500, 500, 500]
+    assert _decode_varint_deltas(data["simulated"]) == [1400, 500, 500]
 
 
 def test_build_station_marker_payload() -> None:

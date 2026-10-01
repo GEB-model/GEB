@@ -1955,6 +1955,92 @@ def test_compute_cross_section_from_depth() -> None:
     assert np.isclose(top_width_ob, 32.5, atol=1e-4)
 
 
+def test_free_overfall_slope_bounded_by_bed_slope() -> None:
+    """Tests that free overfall slope across elevation steps is bounded by bed slope."""
+    bed_elev_node: np.float32 = np.float32(100.0)
+    bed_elev_ds: np.float32 = np.float32(80.0)
+    inv_interface_len: np.float32 = np.float32(1.0 / 2000.0)
+    effective_depth: np.float32 = np.float32(1.0)
+
+    bed_slope: np.float32 = (
+        max(bed_elev_node - bed_elev_ds, np.float32(0.0)) * inv_interface_len
+    )
+    water_slope: np.float32 = -max(effective_depth * inv_interface_len, bed_slope)
+
+    assert np.isclose(float(bed_slope), 0.01, atol=1e-5)
+    assert np.isclose(float(water_slope), -0.01, atol=1e-5)
+
+
+def test_lowland_mannings_n_calculation() -> None:
+    """Tests that lowland Manning roughness scales down to the 0.020 floor for flat slopes."""
+    slope: np.float32 = np.float32(0.0001)
+    mannings_lowland: np.float32 = np.float32(0.020) + (
+        np.float32(0.040 - 0.020) * (slope / np.float32(0.002))
+    )
+    raw_mannings: np.float32 = mannings_lowland
+    clipped_n: np.float32 = np.clip(raw_mannings, np.float32(0.020), np.float32(0.075))
+    assert 0.020 <= float(clipped_n) < 0.025
+    assert np.isclose(float(clipped_n), 0.021, atol=1e-3)
+
+
+def test_compute_cross_section_divided_channel_conveyance_monotonicity() -> None:
+    """Tests that compound cross-section conveyance increases monotonically into overbank flow."""
+    bankfull_width_m: np.float32 = np.float32(300.0)
+    shape_exponent: np.float32 = np.float32(0.5)
+    bankfull_depth_m: np.float32 = np.float32(4.0)
+    floodplain_width_m: np.float32 = np.float32(1500.0)
+
+    (
+        inverse_reach_length,
+        inverse_shape_exponent_plus_one,
+        bankfull_area_arr,
+        bankfull_volume_arr,
+        bankfull_perimeter_arr,
+        floodplain_side_slope_arr,
+        floodplain_depth_threshold_arr,
+        floodplain_area_threshold_arr,
+        sqrt_one_plus_floodplain_slope_squared_arr,
+        width_over_sqrt_bankfull_depth_arr,
+    ) = compute_static_geometry(
+        river_length=np.array([5000.0], dtype=np.float32),
+        river_width=np.array([bankfull_width_m], dtype=np.float32),
+        shape_exponent=np.array([shape_exponent], dtype=np.float32),
+        bankfull_depth=np.array([bankfull_depth_m], dtype=np.float32),
+        floodplain_width=np.array([floodplain_width_m], dtype=np.float32),
+    )
+
+    depths: list[float] = [3.0, 3.8, 4.0, 4.1, 4.5, 5.0, 6.0]
+    conveyances: list[float] = []
+
+    for d in depths:
+        area, top_width, p_wetted = compute_cross_section_from_depth(
+            effective_depth_m=np.float32(d),
+            bankfull_width_m=bankfull_width_m,
+            shape_exponent=shape_exponent,
+            bankfull_depth_m=bankfull_depth_m,
+            floodplain_width_m=floodplain_width_m,
+            inverse_shape_exponent_plus_one=inverse_shape_exponent_plus_one[0],
+            bankfull_area_m2=bankfull_area_arr[0],
+            bankfull_perimeter_m=bankfull_perimeter_arr[0],
+            floodplain_side_slope=floodplain_side_slope_arr[0],
+            floodplain_depth_threshold_m=floodplain_depth_threshold_arr[0],
+            floodplain_area_threshold_m2=floodplain_area_threshold_arr[0],
+            sqrt_one_plus_floodplain_slope_squared=sqrt_one_plus_floodplain_slope_squared_arr[
+                0
+            ],
+            width_over_sqrt_bankfull_depth=width_over_sqrt_bankfull_depth_arr[0],
+        )
+        r_eff: float = float(area / p_wetted)
+        conveyance: float = float(area * (r_eff ** (2.0 / 3.0)))
+        conveyances.append(conveyance)
+
+    # Conveyance must strictly increase as water level rises through and beyond bankfull
+    for i in range(len(conveyances) - 1):
+        assert conveyances[i + 1] > conveyances[i], (
+            f"Conveyance at depth {depths[i + 1]} ({conveyances[i + 1]}) must exceed depth {depths[i]} ({conveyances[i]})"
+        )
+
+
 def test_compute_static_geometry_validation() -> None:
     """Tests that compute_static_geometry raises explicit ValueErrors for invalid inputs."""
     valid_length: ArrayFloat32 = np.array([1000.0], dtype=np.float32)
@@ -3149,9 +3235,11 @@ def test_local_inertial_unobserved_river_width_and_dynamic_width_update() -> Non
             retention_activation_threshold_m3_s=np.zeros(0, dtype=np.float32),
         )
 
-    # Dynamically update river width as discharge develops (e.g. from 0.5m to 12.0m)
+    # Dynamically update river geometry as discharge develops (e.g. from 0.5m to 12.0m)
     updated_widths = np.array([8.0, 12.0, 15.0], dtype=np.float32)
-    router.update_channel_width(river_width=updated_widths)
+    router.update_channel_geometry(
+        river_width=updated_widths, bankfull_depth_m=router.bankfull_depth
+    )
 
     np.testing.assert_array_almost_equal(
         router._river_width, updated_widths[router.sorted_idxs]
@@ -5146,9 +5234,11 @@ def test_router_save_and_restore(tmp_path: Path) -> None:
         )
         discharge_A, storage_A = res[0], res[1]
 
-    # Dynamic channel width calibration occurs during spinup
+    # Dynamic channel geometry calibration occurs during spinup
     dynamic_width: ArrayFloat32 = np.array([2.0, 6.0, 9.0, 12.0], dtype=np.float32)
-    router_A.update_channel_width(dynamic_width, bankfull_depth)
+    router_A.update_channel_geometry(
+        river_width=dynamic_width, bankfull_depth_m=bankfull_depth
+    )
 
     # Take step 5 with updated dynamic channel geometry
     res = router_A.step(
@@ -5293,6 +5383,11 @@ def test_select_active_rivers() -> None:
     # Reach 4 is not represented, and has no upstream represented reach, excluded
     active: gpd.GeoDataFrame = select_active_rivers(rivers)
     assert set(active.index) == {0, 1}
+
+    active_all_unrep: gpd.GeoDataFrame = select_active_rivers(
+        rivers, include_rivers_not_represented_in_grid=True
+    )
+    assert set(active_all_unrep.index) == {0, 1, 4}
 
 
 def test_evaluate_reach_cfl_pure_wave_celerity_and_overbank_capping() -> None:
@@ -5844,10 +5939,25 @@ def test_routing_calculate_bankfull_depth_integration() -> None:
     assert np.all(np.isfinite(h_depth_fallback))
     assert np.all(h_depth_fallback >= 0.1)
 
-    # Scenario 3: Verify strict error handling (never silent fail if use_simulated_bankfull_q=True but Q2 is missing)
+    # Scenario 3: Verify strict error handling (never silent fail if use_simulated_bankfull_q=True but Q2 is missing or null)
     import pytest
 
-    with pytest.raises(ValueError, match="was not found in self.var.rivers"):
+    # 3a. Column missing entirely raises KeyError directly (columns must exist)
+    with pytest.raises(KeyError):
+        routing.calculate_bankfull_depth(
+            bankfull_top_width_m=widths,
+            use_simulated_bankfull_q=True,
+        )
+
+    # 3b. Column contains null values raises ValueError
+    var.rivers = gpd.GeoDataFrame(
+        {
+            "return_period_2_years_daily_m3_per_s": [np.nan, 200.0],
+            "represented_in_grid": [True, True],
+        },
+        index=[0, 1],
+    )
+    with pytest.raises(ValueError, match="contains null values"):
         routing.calculate_bankfull_depth(
             bankfull_top_width_m=widths,
             use_simulated_bankfull_q=True,
@@ -5867,13 +5977,47 @@ def test_routing_calculate_bankfull_depth_integration() -> None:
     )
     assert np.all(h_depth_zero_q[1:] >= 0.1)
 
+    # Scenario 5: Unrealistic river depth exceeds 250m (deepest river in the world is Congo River at ~220-250m)
+    var.rivers = gpd.GeoDataFrame(
+        {
+            "return_period_2_years_daily_m3_per_s": [5000.0, 5000.0],
+            "represented_in_grid": [True, True],
+        },
+        index=[0, 1],
+    )
+    unrealistic_widths = np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32)
+    with pytest.raises(AssertionError, match="exceeds realistic bounds"):
+        routing.calculate_bankfull_depth(
+            bankfull_top_width_m=unrealistic_widths,
+            use_simulated_bankfull_q=True,
+        )
+
 
 def test_routing_updates_rivers_geometry() -> None:
     """Verify that _update_rivers_geometry syncs grid width, depth, and manning to self.var.rivers."""
     from geb.hydrology.routing import Routing, RoutingVariables
 
     routing = Routing.__new__(Routing)
+    routing.config = {
+        "river_depth": {
+            "parameters": {
+                "c": 0.27,
+                "d": 0.30,
+                "velocity_factor": 1.0,
+                "min_depth_m": 0.1,
+            }
+        },
+        "river_width": {
+            "parameters": {
+                "default_alpha": 7.2,
+                "beta": 0.5,
+            }
+        },
+    }
+    routing.default_missing_channel_width = 0.5
     routing.var = RoutingVariables()
+    routing.var.river_width_alpha = np.full(5, 7.2, dtype=np.float32)
+    routing.var.river_width_beta = np.full(5, 0.5, dtype=np.float32)
 
     rivers = gpd.GeoDataFrame(
         {
@@ -5914,7 +6058,26 @@ def test_routing_updates_rivers_geometry_missing_data_raises() -> None:
     from geb.hydrology.routing import Routing, RoutingVariables
 
     routing = Routing.__new__(Routing)
+    routing.config = {
+        "river_depth": {
+            "parameters": {
+                "c": 0.27,
+                "d": 0.30,
+                "velocity_factor": 1.0,
+                "min_depth_m": 0.1,
+            }
+        },
+        "river_width": {
+            "parameters": {
+                "default_alpha": 7.2,
+                "beta": 0.5,
+            }
+        },
+    }
+    routing.default_missing_channel_width = 0.5
     routing.var = RoutingVariables()
+    routing.var.river_width_alpha = np.full(3, 7.2, dtype=np.float32)
+    routing.var.river_width_beta = np.full(3, 0.5, dtype=np.float32)
 
     rivers = gpd.GeoDataFrame(
         {
@@ -6114,3 +6277,531 @@ def test_routing_set_router_estimates_width_from_simulated_q2(
     assert np.isclose(
         routing.var.rivers.loc[20, "width"], expected_unobserved_w, rtol=1e-3
     )
+
+
+def test_unrepresented_river_geometry_confluence() -> None:
+    """Verify that unrepresented rivers at confluences combine bankfull Q and parameters."""
+    from geb.hydrology.routing import Routing, RoutingVariables
+
+    routing: Routing = Routing.__new__(Routing)
+    routing.config = {
+        "river_depth": {
+            "parameters": {
+                "c": 0.27,
+                "d": 0.30,
+                "velocity_factor": 1.0,
+                "min_depth_m": 0.1,
+            }
+        },
+        "river_width": {
+            "parameters": {
+                "default_alpha": 7.2,
+                "beta": 0.5,
+            }
+        },
+    }
+    routing.default_missing_channel_width = 0.5
+    routing.var = RoutingVariables()
+
+    # Reach 10 and 20 are represented; Reach 30 is unrepresented and receives both
+    rivers: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "width": [np.nan, np.nan, np.nan],
+            "depth": [np.nan, np.nan, np.nan],
+            "manning": [np.nan, np.nan, np.nan],
+            "represented_in_grid": [True, True, False],
+            "downstream_ID": [30, 30, -1],
+            "shreve_stream_order": [1, 1, 2],
+            "return_period_2_years_daily_m3_per_s": [50.0, 100.0, np.nan],
+            "width_is_observed": [False, False, False],
+        },
+        index=[10, 20, 30],
+    )
+    routing.var.rivers = rivers
+
+    # 4 cells: cell 0, 1 -> reach 10; cell 2, 3 -> reach 20
+    routing.var.river_ids = np.array([10, 10, 20, 20], dtype=np.int32)
+    width_grid: ArrayFloat32 = np.array([50.0, 50.0, 74.0, 74.0], dtype=np.float32)
+    depth_grid: ArrayFloat32 = np.array([1.0, 1.0, 1.5, 1.5], dtype=np.float32)
+    manning_grid: ArrayFloat32 = np.array([0.03, 0.03, 0.04, 0.04], dtype=np.float32)
+    routing.var.river_width_alpha = np.array([7.0, 7.0, 7.4, 7.4], dtype=np.float32)
+    routing.var.river_width_beta = np.array([0.5, 0.5, 0.5, 0.5], dtype=np.float32)
+    routing.var.observed_average_river_width = np.full(4, np.nan, dtype=np.float32)
+
+    routing._update_rivers_geometry(
+        width_grid=width_grid,
+        depth_grid=depth_grid,
+        manning_grid=manning_grid,
+    )
+
+    # Reach 30 must have combined bankfull discharge Q = 50 + 100 = 150 m3/s
+    q30: float = float(
+        routing.var.rivers.loc[30, "return_period_2_years_daily_m3_per_s"]
+    )
+    assert np.isclose(q30, 150.0)
+
+    # Discharge-weighted alpha: (50 * 7.0 + 100 * 7.4) / 150 = 7.2667
+    alpha30: float = float(routing.var.rivers.loc[30, "river_width_alpha"])
+    assert np.isclose(alpha30, 7.26667, rtol=1e-3)
+
+    # Discharge-weighted Manning: (50 * 0.03 + 100 * 0.04) / 150 = 0.03667
+    manning30: float = float(routing.var.rivers.loc[30, "manning"])
+    assert np.isclose(manning30, 0.03667, rtol=1e-3)
+
+    # Estimated width: alpha30 * 150^0.5
+    w30: float = float(routing.var.rivers.loc[30, "width"])
+    assert np.isclose(w30, alpha30 * (150.0**0.5), rtol=1e-3)
+
+    # Estimated depth: 0.27 * 150^0.30
+    h30: float = float(routing.var.rivers.loc[30, "depth"])
+    assert np.isclose(h30, 0.27 * (150.0**0.30), rtol=1e-3)
+
+
+def test_unrepresented_river_geometry_iterative_cascade() -> None:
+    """Verify that multi-step chains of unrepresented rivers are resolved iteratively."""
+    from geb.hydrology.routing import Routing, RoutingVariables
+
+    routing: Routing = Routing.__new__(Routing)
+    routing.config = {
+        "river_depth": {
+            "parameters": {
+                "c": 0.27,
+                "d": 0.30,
+                "velocity_factor": 1.0,
+                "min_depth_m": 0.1,
+            }
+        },
+        "river_width": {
+            "parameters": {
+                "default_alpha": 7.2,
+                "beta": 0.5,
+            }
+        },
+    }
+    routing.default_missing_channel_width = 0.5
+    routing.var = RoutingVariables()
+
+    # Reach 1 is represented, Reach 2 is unrepresented, Reach 3 is unrepresented (1 -> 2 -> 3)
+    rivers: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "width": [np.nan, np.nan, np.nan],
+            "depth": [np.nan, np.nan, np.nan],
+            "manning": [np.nan, np.nan, np.nan],
+            "represented_in_grid": [True, False, False],
+            "downstream_ID": [2, 3, -1],
+            "shreve_stream_order": [1, 2, 3],
+            "return_period_2_years_daily_m3_per_s": [64.0, np.nan, np.nan],
+            "width_is_observed": [False, False, False],
+        },
+        index=[1, 2, 3],
+    )
+    routing.var.rivers = rivers
+
+    routing.var.river_ids = np.array([1, 1], dtype=np.int32)
+    width_grid: ArrayFloat32 = np.array([57.6, 57.6], dtype=np.float32)
+    depth_grid: ArrayFloat32 = np.array([1.2, 1.2], dtype=np.float32)
+    manning_grid: ArrayFloat32 = np.array([0.03, 0.03], dtype=np.float32)
+    routing.var.river_width_alpha = np.array([7.2, 7.2], dtype=np.float32)
+    routing.var.river_width_beta = np.array([0.5, 0.5], dtype=np.float32)
+    routing.var.observed_average_river_width = np.full(2, np.nan, dtype=np.float32)
+
+    routing._update_rivers_geometry(
+        width_grid=width_grid,
+        depth_grid=depth_grid,
+        manning_grid=manning_grid,
+    )
+
+    # Both Reach 2 and Reach 3 should be resolved
+    assert np.isclose(
+        float(routing.var.rivers.loc[2, "return_period_2_years_daily_m3_per_s"]), 64.0
+    )
+    assert np.isclose(
+        float(routing.var.rivers.loc[3, "return_period_2_years_daily_m3_per_s"]), 64.0
+    )
+    assert np.isclose(float(routing.var.rivers.loc[2, "width"]), 57.6)
+    assert np.isclose(float(routing.var.rivers.loc[3, "width"]), 57.6)
+    assert np.isclose(
+        float(routing.var.rivers.loc[2, "depth"]), 0.27 * (64.0**0.30), rtol=1e-3
+    )
+    assert np.isclose(
+        float(routing.var.rivers.loc[3, "depth"]), 0.27 * (64.0**0.30), rtol=1e-3
+    )
+
+
+def test_unrepresented_river_isolated_no_upstream_retains_nan() -> None:
+    """Verify that an unrepresented river without upstream segments retains NaN."""
+    from geb.hydrology.routing import Routing, RoutingVariables
+
+    routing: Routing = Routing.__new__(Routing)
+    routing.config = {
+        "river_depth": {
+            "parameters": {
+                "c": 0.27,
+                "d": 0.30,
+                "velocity_factor": 1.0,
+                "min_depth_m": 0.1,
+            }
+        },
+        "river_width": {
+            "parameters": {
+                "default_alpha": 7.2,
+                "beta": 0.5,
+            }
+        },
+    }
+    routing.default_missing_channel_width = 0.5
+    routing.var = RoutingVariables()
+
+    # Reach 10 is represented; Reach 99 is unrepresented and has NO upstream rivers
+    rivers: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "width": [np.nan, np.nan],
+            "depth": [np.nan, np.nan],
+            "manning": [np.nan, np.nan],
+            "represented_in_grid": [True, False],
+            "downstream_ID": [-1, -1],
+            "shreve_stream_order": [1, 1],
+            "return_period_2_years_daily_m3_per_s": [40.0, np.nan],
+            "width_is_observed": [False, False],
+        },
+        index=[10, 99],
+    )
+    routing.var.rivers = rivers
+
+    routing.var.river_ids = np.array([10], dtype=np.int32)
+    width_grid: ArrayFloat32 = np.array([20.0], dtype=np.float32)
+    depth_grid: ArrayFloat32 = np.array([1.5], dtype=np.float32)
+    manning_grid: ArrayFloat32 = np.array([0.03], dtype=np.float32)
+    routing.var.river_width_alpha = np.array([7.2], dtype=np.float32)
+    routing.var.river_width_beta = np.array([0.5], dtype=np.float32)
+    routing.var.observed_average_river_width = np.full(1, np.nan, dtype=np.float32)
+
+    routing._update_rivers_geometry(
+        width_grid=width_grid,
+        depth_grid=depth_grid,
+        manning_grid=manning_grid,
+    )
+
+    # Reach 10 is updated; Reach 99 has no upstream segments and must remain NaN
+    assert not np.isnan(float(routing.var.rivers.loc[10, "width"]))
+    assert np.isnan(float(routing.var.rivers.loc[99, "width"]))
+    assert np.isnan(float(routing.var.rivers.loc[99, "depth"]))
+    assert np.isnan(
+        float(routing.var.rivers.loc[99, "return_period_2_years_daily_m3_per_s"])
+    )
+
+
+def test_unrepresented_river_confluence_with_isolated_headwater() -> None:
+    """Verify that an unrepresented reach is resolved even if one upstream branch is an unrepresented headwater."""
+    from geb.hydrology.routing import Routing, RoutingVariables
+
+    routing: Routing = Routing.__new__(Routing)
+    routing.config = {
+        "river_depth": {
+            "parameters": {
+                "c": 0.27,
+                "d": 0.30,
+                "velocity_factor": 1.0,
+                "min_depth_m": 0.1,
+            }
+        },
+        "river_width": {
+            "parameters": {
+                "default_alpha": 7.2,
+                "beta": 0.5,
+            }
+        },
+    }
+    routing.default_missing_channel_width = 0.5
+    routing.var = RoutingVariables()
+
+    # Reach 10 is represented -> flows into 30
+    # Reach 20 is unrepresented headwater (no upstream) -> flows into 30
+    # Reach 30 is unrepresented confluence
+    rivers: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "width": [np.nan, np.nan, np.nan],
+            "depth": [np.nan, np.nan, np.nan],
+            "manning": [np.nan, np.nan, np.nan],
+            "represented_in_grid": [True, False, False],
+            "downstream_ID": [30, 30, -1],
+            "shreve_stream_order": [1, 1, 2],
+            "return_period_2_years_daily_m3_per_s": [49.0, np.nan, np.nan],
+            "width_is_observed": [False, False, False],
+        },
+        index=[10, 20, 30],
+    )
+    routing.var.rivers = rivers
+
+    routing.var.river_ids = np.array([10], dtype=np.int32)
+    width_grid: ArrayFloat32 = np.array([50.4], dtype=np.float32)
+    depth_grid: ArrayFloat32 = np.array([1.5], dtype=np.float32)
+    manning_grid: ArrayFloat32 = np.array([0.03], dtype=np.float32)
+    routing.var.river_width_alpha = np.array([7.2], dtype=np.float32)
+    routing.var.river_width_beta = np.array([0.5], dtype=np.float32)
+    routing.var.observed_average_river_width = np.full(1, np.nan, dtype=np.float32)
+
+    routing._update_rivers_geometry(
+        width_grid=width_grid,
+        depth_grid=depth_grid,
+        manning_grid=manning_grid,
+    )
+
+    # Reach 20 retains NaN (isolated headwater)
+    assert np.isnan(float(routing.var.rivers.loc[20, "width"]))
+    # Reach 30 is not blocked by 20 and gets resolved from 10
+    assert not np.isnan(float(routing.var.rivers.loc[30, "width"]))
+    assert np.isclose(float(routing.var.rivers.loc[30, "width"]), 50.4)
+    assert np.isclose(
+        float(routing.var.rivers.loc[30, "return_period_2_years_daily_m3_per_s"]), 49.0
+    )
+
+
+def test_unrepresented_river_inherits_single_upstream_observed_width() -> None:
+    """Verify that an unrepresented river inherits its upstream observed width rather than calculating from Q."""
+    from geb.hydrology.routing import Routing, RoutingVariables
+
+    routing: Routing = Routing.__new__(Routing)
+    routing.config = {
+        "river_depth": {
+            "parameters": {
+                "c": 0.27,
+                "d": 0.30,
+                "velocity_factor": 1.0,
+                "min_depth_m": 0.1,
+            }
+        },
+        "river_width": {
+            "parameters": {
+                "default_alpha": 7.2,
+                "beta": 0.5,
+            }
+        },
+    }
+    routing.default_missing_channel_width = 0.5
+    routing.var = RoutingVariables()
+
+    # Reach 10 is represented with observed width; Reach 20 is unrepresented
+    rivers: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "width": [np.nan, np.nan],
+            "depth": [np.nan, np.nan],
+            "manning": [np.nan, np.nan],
+            "represented_in_grid": [True, False],
+            "downstream_ID": [20, -1],
+            "shreve_stream_order": [1, 2],
+            "return_period_2_years_daily_m3_per_s": [36.0, np.nan],
+            "width_is_observed": [True, False],
+        },
+        index=[10, 20],
+    )
+    routing.var.rivers = rivers
+
+    routing.var.river_ids = np.array([10], dtype=np.int32)
+    width_grid: ArrayFloat32 = np.array([80.0], dtype=np.float32)
+    depth_grid: ArrayFloat32 = np.array([1.2], dtype=np.float32)
+    manning_grid: ArrayFloat32 = np.array([0.03], dtype=np.float32)
+    routing.var.river_width_alpha = np.array([7.2], dtype=np.float32)
+    routing.var.river_width_beta = np.array([0.5], dtype=np.float32)
+    routing.var.observed_average_river_width = np.array([80.0], dtype=np.float32)
+
+    routing._update_rivers_geometry(
+        width_grid=width_grid,
+        depth_grid=depth_grid,
+        manning_grid=manning_grid,
+    )
+
+    # Reach 20 must inherit the exact observed width of 80.0m (instead of 7.2 * 36^0.5 = 43.2m)
+    w20: float = float(routing.var.rivers.loc[20, "width"])
+    assert np.isclose(w20, 80.0)
+    assert bool(routing.var.rivers.loc[20, "width_is_observed"])
+
+    # Depth should use continuity scaling: (43.2 / 80.0) * (0.27 * 36^0.30)
+    w_expected: float = 7.2 * (36.0**0.5)
+    h_expected: float = 0.27 * (36.0**0.30)
+    expected_depth: float = (w_expected / 80.0) * h_expected
+    h20: float = float(routing.var.rivers.loc[20, "depth"])
+    assert np.isclose(h20, expected_depth, rtol=1e-3)
+
+
+def test_unrepresented_river_confluence_both_observed_widths() -> None:
+    """Verify that unrepresented confluence combines multiple upstream observed widths via power law."""
+    from geb.hydrology.routing import Routing, RoutingVariables
+
+    routing: Routing = Routing.__new__(Routing)
+    routing.config = {
+        "river_depth": {
+            "parameters": {
+                "c": 0.27,
+                "d": 0.30,
+                "velocity_factor": 1.0,
+                "min_depth_m": 0.1,
+            }
+        },
+        "river_width": {
+            "parameters": {
+                "default_alpha": 7.2,
+                "beta": 0.5,
+            }
+        },
+    }
+    routing.default_missing_channel_width = 0.5
+    routing.var = RoutingVariables()
+
+    # Reach 10 and 20 are represented with observed widths; Reach 30 is unrepresented confluence
+    rivers: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "width": [np.nan, np.nan, np.nan],
+            "depth": [np.nan, np.nan, np.nan],
+            "manning": [np.nan, np.nan, np.nan],
+            "represented_in_grid": [True, True, False],
+            "downstream_ID": [30, 30, -1],
+            "shreve_stream_order": [1, 1, 2],
+            "return_period_2_years_daily_m3_per_s": [50.0, 50.0, np.nan],
+            "width_is_observed": [True, True, False],
+        },
+        index=[10, 20, 30],
+    )
+    routing.var.rivers = rivers
+
+    routing.var.river_ids = np.array([10, 20], dtype=np.int32)
+    width_grid: ArrayFloat32 = np.array([40.0, 30.0], dtype=np.float32)
+    depth_grid: ArrayFloat32 = np.array([1.0, 1.0], dtype=np.float32)
+    manning_grid: ArrayFloat32 = np.array([0.03, 0.03], dtype=np.float32)
+    routing.var.river_width_alpha = np.array([7.2, 7.2], dtype=np.float32)
+    routing.var.river_width_beta = np.array([0.5, 0.5], dtype=np.float32)
+    routing.var.observed_average_river_width = np.array([40.0, 30.0], dtype=np.float32)
+
+    routing._update_rivers_geometry(
+        width_grid=width_grid,
+        depth_grid=depth_grid,
+        manning_grid=manning_grid,
+    )
+
+    # Power law combination: sqrt(40^2 + 30^2) = sqrt(1600 + 900) = sqrt(2500) = 50.0m
+    w30: float = float(routing.var.rivers.loc[30, "width"])
+    assert np.isclose(w30, 50.0)
+    assert bool(routing.var.rivers.loc[30, "width_is_observed"])
+
+
+def test_unrepresented_river_confluence_one_observed_one_unobserved() -> None:
+    """Verify that an unrepresented confluence with one observed and one unobserved river combines widths and sets width_is_observed."""
+    from geb.hydrology.routing import Routing, RoutingVariables
+
+    routing: Routing = Routing.__new__(Routing)
+    routing.config = {
+        "river_depth": {
+            "parameters": {
+                "c": 0.27,
+                "d": 0.30,
+                "velocity_factor": 1.0,
+                "min_depth_m": 0.1,
+            }
+        },
+        "river_width": {
+            "parameters": {
+                "default_alpha": 7.2,
+                "beta": 0.5,
+            }
+        },
+    }
+    routing.default_missing_channel_width = 0.5
+    routing.var = RoutingVariables()
+
+    # Reach 10 has observed width 40m, Reach 20 is unobserved with estimated width 30m
+    rivers: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "width": [np.nan, np.nan, np.nan],
+            "depth": [np.nan, np.nan, np.nan],
+            "manning": [np.nan, np.nan, np.nan],
+            "represented_in_grid": [True, True, False],
+            "downstream_ID": [30, 30, -1],
+            "shreve_stream_order": [1, 1, 2],
+            "return_period_2_years_daily_m3_per_s": [50.0, 50.0, np.nan],
+            "width_is_observed": [True, False, False],
+        },
+        index=[10, 20, 30],
+    )
+    routing.var.rivers = rivers
+
+    routing.var.river_ids = np.array([10, 20], dtype=np.int32)
+    width_grid: ArrayFloat32 = np.array([40.0, 30.0], dtype=np.float32)
+    depth_grid: ArrayFloat32 = np.array([1.0, 1.0], dtype=np.float32)
+    manning_grid: ArrayFloat32 = np.array([0.03, 0.03], dtype=np.float32)
+    routing.var.river_width_alpha = np.array([7.2, 7.2], dtype=np.float32)
+    routing.var.river_width_beta = np.array([0.5, 0.5], dtype=np.float32)
+    routing.var.observed_average_river_width = np.array(
+        [40.0, np.nan], dtype=np.float32
+    )
+
+    routing._update_rivers_geometry(
+        width_grid=width_grid,
+        depth_grid=depth_grid,
+        manning_grid=manning_grid,
+    )
+
+    # Combined width: sqrt(40^2 + 30^2) = 50.0m
+    w30: float = float(routing.var.rivers.loc[30, "width"])
+    assert np.isclose(w30, 50.0)
+    assert bool(routing.var.rivers.loc[30, "width_is_observed"])
+
+
+def test_unrepresented_river_cascade_propagates_observed_width() -> None:
+    """Verify that multi-step cascading unrepresented reaches propagate the observed width."""
+    from geb.hydrology.routing import Routing, RoutingVariables
+
+    routing: Routing = Routing.__new__(Routing)
+    routing.config = {
+        "river_depth": {
+            "parameters": {
+                "c": 0.27,
+                "d": 0.30,
+                "velocity_factor": 1.0,
+                "min_depth_m": 0.1,
+            }
+        },
+        "river_width": {
+            "parameters": {
+                "default_alpha": 7.2,
+                "beta": 0.5,
+            }
+        },
+    }
+    routing.default_missing_channel_width = 0.5
+    routing.var = RoutingVariables()
+
+    # Reach 1 is represented (observed 60m) -> Reach 2 (unrepresented) -> Reach 3 (unrepresented)
+    rivers: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "width": [np.nan, np.nan, np.nan],
+            "depth": [np.nan, np.nan, np.nan],
+            "manning": [np.nan, np.nan, np.nan],
+            "represented_in_grid": [True, False, False],
+            "downstream_ID": [2, 3, -1],
+            "shreve_stream_order": [1, 2, 3],
+            "return_period_2_years_daily_m3_per_s": [64.0, np.nan, np.nan],
+            "width_is_observed": [True, False, False],
+        },
+        index=[1, 2, 3],
+    )
+    routing.var.rivers = rivers
+
+    routing.var.river_ids = np.array([1], dtype=np.int32)
+    width_grid: ArrayFloat32 = np.array([60.0], dtype=np.float32)
+    depth_grid: ArrayFloat32 = np.array([1.2], dtype=np.float32)
+    manning_grid: ArrayFloat32 = np.array([0.03], dtype=np.float32)
+    routing.var.river_width_alpha = np.array([7.2], dtype=np.float32)
+    routing.var.river_width_beta = np.array([0.5], dtype=np.float32)
+    routing.var.observed_average_river_width = np.array([60.0], dtype=np.float32)
+
+    routing._update_rivers_geometry(
+        width_grid=width_grid,
+        depth_grid=depth_grid,
+        manning_grid=manning_grid,
+    )
+
+    # Both Reach 2 and Reach 3 should inherit the 60.0m observed width and be marked observed
+    assert np.isclose(float(routing.var.rivers.loc[2, "width"]), 60.0)
+    assert np.isclose(float(routing.var.rivers.loc[3, "width"]), 60.0)
+    assert bool(routing.var.rivers.loc[2, "width_is_observed"])
+    assert bool(routing.var.rivers.loc[3, "width_is_observed"])
