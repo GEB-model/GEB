@@ -410,8 +410,12 @@ class ReturnPeriodModel:
                 return
 
             # Find independent peaks above the fixed threshold
+            # Peaks on the boundaries are normally not included, which is why
+            # we pad the series with -np.inf at the boundaries.
             _, properties_fixed = find_peaks(
-                self.series.values, height=u, distance=n_data_points_per_week
+                np.pad(self.series.values, (1, 1), "constant", constant_values=-np.inf),
+                height=u,
+                distance=n_data_points_per_week,
             )
             self.all_peaks = properties_fixed["peak_heights"]
             n_exc: int = self.all_peaks.size
