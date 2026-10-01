@@ -757,10 +757,15 @@ class Floods(Module):
 
         for subbasin_id, subbasin in riverine_active_subbasin.iterrows():
             downstream_basin = rivers.loc[subbasin_id]["downstream_ID"]
-
-            region_subbasins = subbasins[
-                subbasins.index.isin([subbasin_id, downstream_basin])
-            ].copy()
+            if not (downstream_basin in subbasins.index or downstream_basin == -1):
+                all_subbasins = read_geom(self.model.files["geom"]["routing/subbasins"])
+                region_subbasins = all_subbasins[
+                    all_subbasins.index.isin([subbasin_id, downstream_basin])
+                ].copy()
+            else:
+                region_subbasins = subbasins[
+                    subbasins.index.isin([subbasin_id, downstream_basin])
+                ].copy()
             region_rivers = rivers.copy()
 
             # if there is a downstream basin, mark it as downstream outflow subbasin

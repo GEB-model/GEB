@@ -1113,7 +1113,17 @@ class SFINCSRootModel:
             write_geom(outflow_gdf, self.path / "debug_outflow_point.geoparquet")
 
         boundary = area.union_all().boundary
-
+        assert (
+            len(
+                self.active_rivers[
+                    self.active_rivers["is_downstream_outflow"]  # any outflow river
+                    | (
+                        self.active_rivers["downstream_ID"] == -1
+                    )  # or river that flows into ocean
+                ]
+            )
+            > 0
+        )
         for river_idx, river in self.active_rivers[
             self.active_rivers["is_downstream_outflow"]  # any outflow river
             | (
