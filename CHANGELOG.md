@@ -1,4 +1,5 @@
 # dev
+- Read subbasins from model input files in case the downstream has been clipped in coastal_only mode when building sfincs models in estimate_return_periods.
 - Prevented SFINCS subgrid river burning from passing point-only tile-boundary intersections to HydroMT-SFINCS line interpolation, which raised a geometry-type `TypeError`.
 - Fill missing width, depth, and Manning values for unrepresented flood-model river reaches by propagating the mean values of available upstream reaches through the river network; this prevents SFINCS builds from failing when a selected reach has no routing-grid cells of its own.
 - Resolve downstream/further-downstream outflow river attributes iteratively based on upstream dependencies, rather than relying solely on `topological_stream_order`, which can tie for pass-through reaches and their single upstream tributaries.
