@@ -348,8 +348,7 @@ class SFINCSRootModel:
                     self.logger.info(
                         "SFINCS model and code unchanged, reading existing model..."
                     )
-                    return None
-                    # return self.read()
+                    return self.read()
                 else:
                     self.logger.info(
                         "SFINCS model or code changed, rebuilding model..."
