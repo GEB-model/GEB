@@ -348,7 +348,8 @@ class SFINCSRootModel:
                     self.logger.info(
                         "SFINCS model and code unchanged, reading existing model..."
                     )
-                    return self.read()
+                    return None
+                    # return self.read()
                 else:
                     self.logger.info(
                         "SFINCS model or code changed, rebuilding model..."
@@ -1248,7 +1249,10 @@ class SFINCSRootModel:
                 # due to floating point precision, the intersection point
                 # may be just outside the model grid. We therefore check if the
                 # point is outside the grid, and if so, move it 1 m upstream along the river
-                if not self.mask.values[outflow_row, outflow_col]:
+                if (
+                    outflow_row > self.mask.shape[0] - 1 or outflow_row < 0
+                ) or not self.mask.values[outflow_row, outflow_col]:
+                    # if not self.mask.values[outflow_row, outflow_col]:
                     # move outflow point 1 m upstream. 0.000008983 degrees is approximately 1 m
                     outflow_point: Point | MultiPoint | GeometryCollection = (
                         river.interpolate(
