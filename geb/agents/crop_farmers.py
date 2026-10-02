@@ -1230,14 +1230,7 @@ class CropFarmers(AgentBaseClass):
         )
 
     def adjust_cultivation_costs(self) -> None:
-        """Adjust cultivation costs based on configuration and calibration settings.
-
-        Loads regional cultivation costs for crops, then either:
-        (1) applies per-crop calibration factors when the model is configured to
-        calibrate against ``"KGE_crops"``, or (2) scales costs by the configured
-        ``cultivation_cost_fraction``. The updated values overwrite
-        ``self.cultivation_costs`` in place.
-        """
+        """Adjust cultivation costs based on configuration."""
         # Set the cultivation costs
         self.cultivation_costs = load_regional_crop_data_from_dict(
             self.model, "crops/cultivation_costs"
