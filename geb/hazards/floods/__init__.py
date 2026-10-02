@@ -860,16 +860,27 @@ class Floods(Module):
                         (rivers["downstream_ID"] == node_idx)
                         & (~rivers.index.isin(inflow_nodes.index))
                     ]
+                    _Q = []
+                    for river_idx in upstream_rivers.index:
+                        if river_idx in discharge_for_return_periods:
+                            _Q.append(discharge_for_return_periods[river_idx])
+                        else:
+                            self.model.logger.warning(
+                                f"No hydrograph found for upstream river {river_idx} and return period {return_period}. Setting inflow to 0."
+                            )
+                            _Q.append(
+                                pd.Series(
+                                    [0] * len(Q[0]), index=Q[0].index, name=node_idx
+                                )
+                            )  # fill with zeros if no hydrograph is found
 
-                    Q.append(
-                        pd.Series(
-                            discharge_for_return_periods[upstream_rivers.index]
-                            .mean(axis=0)
-                            .sum(axis=0),
-                            index=Q[0].index,
-                            name=node_idx,
+                        Q.append(
+                            pd.Series(
+                                pd.concat(_Q, axis=1).mean(axis=0).sum(axis=0),
+                                index=Q[0].index,
+                                name=node_idx,
+                            )
                         )
-                    )
 
                 # Concatenate the per-node series into a single DataFrame; index -> timestamps
                 Q: pd.DataFrame = pd.concat(Q, axis=1)
