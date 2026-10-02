@@ -392,6 +392,11 @@ class ReturnPeriodModel:
             (self.n_non_nan * self.series.index.freq.nanos) / pd.Timedelta(days=1).value  # ty:ignore[unresolved-attribute]
         ) / 365.2425
 
+        # Check for all-zero (or non-positive) series
+        if float(self.series.max()) <= 0.0:
+            self._set_zero_flow_return_levels()
+            return
+
         # Handle fixed threshold vs candidate threshold search
         if fixed_threshold is not None or fixed_quantile is not None:
             if fixed_threshold is not None:
@@ -400,9 +405,17 @@ class ReturnPeriodModel:
                 assert fixed_quantile is not None
                 u = float(np.quantile(self.series[~self.nanmask], fixed_quantile))
 
+            if u <= 0.0:
+                self._set_zero_flow_return_levels()
+                return
+
             # Find independent peaks above the fixed threshold
+            # Peaks on the boundaries are normally not included, which is why
+            # we pad the series with -np.inf at the boundaries.
             _, properties_fixed = find_peaks(
-                self.series.values, height=u, distance=n_data_points_per_week
+                np.pad(self.series.values, (1, 1), "constant", constant_values=-np.inf),
+                height=u,
+                distance=n_data_points_per_week,
             )
             self.all_peaks = properties_fixed["peak_heights"]
             n_exc: int = self.all_peaks.size
@@ -509,6 +522,10 @@ class ReturnPeriodModel:
 
             best_candidate = best_candidate_search
 
+        if best_candidate["u"] <= 0.0:
+            self._set_zero_flow_return_levels()
+            return
+
         self.u = best_candidate["u"]
         self.sigma = best_candidate["sigma"]
         self.xi = best_candidate["xi"]
@@ -518,6 +535,9 @@ class ReturnPeriodModel:
 
         self.water_level_for_return_periods = gpd_return_level(
             self.u, self.sigma, self.xi, self.lambda_per_year, self.return_periods
+        )
+        self.water_level_for_return_periods = np.maximum(
+            0.0, self.water_level_for_return_periods
         )
 
         self.rl_table = pd.DataFrame(
@@ -547,6 +567,41 @@ class ReturnPeriodModel:
                     "This likely indicates an unreliable fit or extreme extrapolation. "
                     "Consider reviewing the GPD fit diagnostics for this series."
                 )
+
+    def _set_zero_flow_return_levels(self) -> None:
+        """Set zero return levels for dry or zero-threshold series.
+
+        Initializes all model attributes to consistent zero values when the series
+        has no positive flow or when the threshold is zero.
+        """
+        self.all_peaks = np.array([], dtype=float)
+        self.candidates_df = pd.DataFrame(
+            [
+                {
+                    "u": 0.0,
+                    "sigma": 0.0,
+                    "xi": 0.0,
+                    "n_exc": 0,
+                    "p_ad": float(np.nan),
+                    "A_R2": float(np.nan),
+                }
+            ]
+        )
+        self.u = 0.0
+        self.sigma = 0.0
+        self.xi = 0.0
+        self.n_exc = 0
+        self.p_ad = float(np.nan)
+        self.lambda_per_year = 0.0
+        self.water_level_for_return_periods = np.zeros(
+            len(self.return_periods), dtype=float
+        )
+        self.rl_table = pd.DataFrame(
+            {
+                "T_years": self.return_periods.astype(int),
+                "GPD_POT_RL": self.water_level_for_return_periods,
+            }
+        )
 
     def plot_fit(
         self,
@@ -700,6 +755,18 @@ class ReturnPeriodModel:
             )
         else:
             axes = np.asarray(axes).flatten()
+
+        if n == 0:
+            for ax in axes:
+                ax.text(
+                    0.5,
+                    0.5,
+                    "No exceedances above threshold",
+                    ha="center",
+                    va="center",
+                    transform=ax.transAxes,
+                )
+            return axes
 
         # QQ Plot (Quantile-Quantile)
         ax = axes[0]

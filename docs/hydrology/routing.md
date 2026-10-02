@@ -136,3 +136,13 @@ $$ Q_{out} = \sum Q_{in} + Q_{sideflow} - E_{evaporation} $$
 ## Code
 
 ::: geb.hydrology.routing
+
+
+## Updating GDW model inputs
+
+Version 1.0.0b33 combines GDW structures and reservoir construction years with
+precomputed waterbody outlets. Inputs built with v1.0.0b32 also need updating.
+Run `geb update-version -b build.yml` from the model directory to rebuild
+`setup_waterbodies` and `setup_weirs`, then rerun spinup and simulation.
+Custom build files must include `setup_weirs` after `setup_waterbodies` and
+run `setup_elevation` before `setup_waterbodies`.

@@ -385,7 +385,14 @@ class WaterBodies(Module):
         is_active_cell = np.isin(waterbody_id_unmapped, active_waterbody_ids)
         waterbody_id_unmapped[~is_active_cell] = -1
 
-        waterbody_outflow_points_original_ids = self.get_outflows(waterbody_id_unmapped)
+        waterbody_outflow_points_original_ids = self.grid.load2d(
+            self.model.files["grid"]["waterbodies/waterbody_outflow_points"]
+        )
+        is_active_outflow = np.isin(
+            waterbody_outflow_points_original_ids, active_waterbody_ids
+        )
+        waterbody_outflow_points_original_ids[~is_active_outflow] = -1
+
         order_of_waterbodies_in_grid = waterbody_outflow_points_original_ids[
             waterbody_outflow_points_original_ids != -1
         ]
@@ -575,95 +582,6 @@ class WaterBodies(Module):
         ).set_index("waterbody_id")  # ty:ignore[invalid-assignment]
 
         return waterbody_data.loc[order_of_waterbodies_in_grid]
-
-    def get_outflows(self, waterbody_id: ArrayInt32) -> ArrayInt32:
-        """Identifies the outflow points for each water body.
-
-        Finds the cell with the highest upstream area in each water body as the outflow point.
-        If there are multiple cells with the same upstream area, the one with the lowest elevation is chosen.
-
-        Args:
-            waterbody_id: The mapped water body IDs from the grid.
-
-        Returns:
-            An array containing the outflow point for each water body.
-        """
-        # calculate biggest outlet = biggest accumulation of ldd network
-        upstream_area_n_cells = self.hydrology.routing.grid.var.upstream_area_n_cells
-        upstream_area_within_waterbodies = np.zeros_like(
-            upstream_area_n_cells,
-            shape=waterbody_id.max() + 2,
-        )
-        upstream_area_within_waterbodies[-1] = -1
-        np.maximum.at(
-            upstream_area_within_waterbodies,
-            waterbody_id[waterbody_id != -1],
-            upstream_area_n_cells[waterbody_id != -1],
-        )
-        upstream_area_within_waterbodies = np.take(
-            upstream_area_within_waterbodies, waterbody_id
-        )
-
-        # in some cases the cell with the highest number of upstream cells
-        # has mulitple occurences in the same lake, this seems to happen
-        # especially for very small lakes with a small drainage area.
-        # In such cases, we take the outflow cell with the lowest elevation.
-        waterbody_outflow_points = np.where(
-            upstream_area_n_cells == upstream_area_within_waterbodies,
-            waterbody_id,
-            -1,
-        )
-
-        number_of_outflow_points_per_waterbody = np.unique(
-            waterbody_outflow_points, return_counts=True
-        )
-        duplicate_outflow_points = number_of_outflow_points_per_waterbody[0][
-            number_of_outflow_points_per_waterbody[1] > 1
-        ]
-        duplicate_outflow_points = duplicate_outflow_points[
-            duplicate_outflow_points != -1
-        ]
-
-        if duplicate_outflow_points.size > 0:
-            # in some cases the cell with the highest number of upstream cells
-            # has mulitple occurences in the same lake, this seems to happen
-            # especially for very small lakes with a small drainage area.
-            # In such cases, we take the outflow cell with the lowest elevation.
-            outflow_elevation = self.hydrology.grid.load2d(
-                self.model.files["grid"]["landsurface/elevation_min_m"],
-            )
-
-            for duplicate_outflow_point in duplicate_outflow_points:
-                duplicate_outflow_points_indices = np.where(
-                    waterbody_outflow_points == duplicate_outflow_point
-                )[0]
-                minimum_elevation_outflows_idx = np.argmin(
-                    outflow_elevation[duplicate_outflow_points_indices]
-                )
-                non_minimum_elevation_outflows_indices = (
-                    duplicate_outflow_points_indices[
-                        (
-                            np.arange(duplicate_outflow_points_indices.size)
-                            != minimum_elevation_outflows_idx
-                        )
-                    ]
-                )
-                waterbody_outflow_points[non_minimum_elevation_outflows_indices] = -1
-
-        if __debug__:
-            # make sure that each water body has an outflow
-            assert np.array_equal(
-                np.unique(waterbody_outflow_points), np.unique(waterbody_id)
-            )
-            # make sure that each outflow point is only used once
-            unique_outflow_points = np.unique(
-                waterbody_outflow_points[waterbody_outflow_points != -1],
-                return_counts=True,
-            )[1]
-            if unique_outflow_points.size > 0:
-                assert unique_outflow_points.max() == 1
-
-        return waterbody_outflow_points
 
     def routing_lakes(self, routing_step_length_seconds: int | float) -> ArrayFloat32:
         """Lake routine to calculate lake outflow.

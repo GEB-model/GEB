@@ -418,7 +418,6 @@ def _run_inertial_routing_step(
     ds_inertial_k: ArrayInt32,
     ds_stage_idx: ArrayInt32,
     ds_bed_elevation: ArrayFloat32,
-    kin_ds_slope: ArrayFloat32,
     pit_slope_inertial: ArrayFloat32,
     min_dt_buf: ArrayFloat32,
     evaporation_m3_inertial: ArrayFloat32,
@@ -459,7 +458,21 @@ def _run_inertial_routing_step(
     wb_release_volume_substep: ArrayFloat32,
     inertial_topo_order: ArrayInt32,
     total_flow_rate_buf: ArrayFloat32,
-) -> tuple[int, np.float32]:
+    wb_to_wb_src_wb: ArrayInt32,
+    wb_to_wb_tgt_wb: ArrayInt32,
+    terminal_wb_outflow_accum_m3: ArrayFloat32,
+) -> tuple[
+    int,
+    np.float32,
+    int,
+    np.float32,
+    np.float32,
+    np.float32,
+    np.float32,
+    np.float32,
+    np.float32,
+    np.float32,
+]:
     """Routes 1D local inertial substeps and resolves lake and retention couplings.
 
     Args:
@@ -485,7 +498,6 @@ def _run_inertial_routing_step(
         ds_inertial_k: Downstream inertial reach indices.
         ds_stage_idx: Downstream stage buffer lookup index.
         ds_bed_elevation: Downstream boundary bed elevation (meters).
-        kin_ds_slope: Downstream bed slope for kinematic wave connections.
         pit_slope_inertial: Terminal pit bed slope.
         min_dt_buf: Scratch buffer for adaptive CFL timestep calculation.
         evaporation_m3_inertial: Potential evaporation volume for macro-timestep (m³).
@@ -526,16 +538,39 @@ def _run_inertial_routing_step(
         wb_release_volume_substep: Substep waterbody release volume buffer per reach (m³).
         inertial_topo_order: Topological traversal order of inertial reaches.
         total_flow_rate_buf: Pre-allocated workspace buffer storing peak flow rate per reach (m³/s).
+        wb_to_wb_src_wb: Source waterbody IDs discharging into another connected waterbody.
+        wb_to_wb_tgt_wb: Target waterbody IDs receiving cascading waterbody releases.
+        terminal_wb_outflow_accum_m3: Accumulator array for boundary waterbody release volume (m³).
 
     Returns:
-        A tuple of (num_inertial_substeps, terminal_wb_outflow_m3):
+        A tuple of (num_inertial_substeps, terminal_wb_outflow_m3, limiting_reach_idx, min_stable_timestep_s):
             - num_inertial_substeps: Number of adaptive substeps executed (-1 if n_inertial == 0).
             - terminal_wb_outflow_m3: Total outflow volume exiting domain via terminal waterbodies (m³).
+            - limiting_reach_idx: Reach index requiring the smallest stable timestep (-1 if n_inertial == 0).
+            - min_stable_timestep_s: Minimum stable timestep duration (seconds, -1.0 if n_inertial == 0).
     """
     num_inertial_substeps: int = -1  # for return if no inertial reaches are present
+    limiting_reach_idx: int = -1
+    min_stable_timestep_s: np.float32 = np.float32(-1.0)
+    h_vol: np.float32 = np.float32(0.0)
+    h_flow: np.float32 = np.float32(0.0)
+    h_gov: np.float32 = np.float32(0.0)
+    celerity: np.float32 = np.float32(0.0)
+    limiting_flow: np.float32 = np.float32(0.0)
+    limiting_storage: np.float32 = np.float32(0.0)
 
     if n_inertial > 0:
-        num_inertial_substeps = compute_inertial_substeps_cfl(
+        (
+            num_inertial_substeps,
+            limiting_reach_idx,
+            min_stable_timestep_s,
+            h_vol,
+            h_flow,
+            h_gov,
+            celerity,
+            limiting_flow,
+            limiting_storage,
+        ) = compute_inertial_substeps_cfl(
             dt_f32=dt_f32,
             inv_dt_f32=inv_dt_f32,
             n_inertial=n_inertial,
@@ -611,7 +646,6 @@ def _run_inertial_routing_step(
                 ds_inertial_k=ds_inertial_k,
                 ds_stage_idx=ds_stage_idx,
                 ds_bed_elevation=ds_bed_elevation,
-                kin_ds_slope=kin_ds_slope,
                 inertial_up_offsets=inertial_up_offsets,
                 inertial_up_indices=inertial_up_indices,
                 inertial_up_reach_idx=inertial_up_reach_idx,
@@ -625,6 +659,10 @@ def _run_inertial_routing_step(
                 wb_release_volume_substep=wb_release_volume_substep,
                 inertial_topo_order=inertial_topo_order,
                 total_flow_rate_buf=total_flow_rate_buf,
+                wb_to_wb_src_wb=wb_to_wb_src_wb,
+                wb_to_wb_tgt_wb=wb_to_wb_tgt_wb,
+                wb_terminal_wb_ids=wb_terminal_wb_ids,
+                terminal_wb_outflow_accum_m3=terminal_wb_outflow_accum_m3,
             )
         else:
             num_inertial_substeps = _run_inertial_substeps_serial(
@@ -669,7 +707,6 @@ def _run_inertial_routing_step(
                 ds_inertial_k=ds_inertial_k,
                 ds_stage_idx=ds_stage_idx,
                 ds_bed_elevation=ds_bed_elevation,
-                kin_ds_slope=kin_ds_slope,
                 inertial_up_offsets=inertial_up_offsets,
                 inertial_up_indices=inertial_up_indices,
                 inertial_up_reach_idx=inertial_up_reach_idx,
@@ -683,25 +720,29 @@ def _run_inertial_routing_step(
                 wb_release_volume_substep=wb_release_volume_substep,
                 inertial_topo_order=inertial_topo_order,
                 total_flow_rate_buf=total_flow_rate_buf,
+                wb_to_wb_src_wb=wb_to_wb_src_wb,
+                wb_to_wb_tgt_wb=wb_to_wb_tgt_wb,
+                wb_terminal_wb_ids=wb_terminal_wb_ids,
+                terminal_wb_outflow_accum_m3=terminal_wb_outflow_accum_m3,
             )
 
-    # Waterbodies discharging directly out of the domain (at pit or boundary cells).
-    # Prescribed releases (e.g. from reservoirs) cannot drain to any downstream
-    # grid cell, so they are deducted from storage and aggregated here to later be
-    # added to domain boundary outflow (outflow_at_pits_m3).
-    terminal_wb_outflow_m3: np.float32 = np.float32(0.0)
-    for idx in range(len(wb_terminal_wb_ids)):
-        wb_id_term: int = wb_terminal_wb_ids[idx]
-        terminal_rel: np.float32 = outflow_per_waterbody_m3[wb_id_term]
-        if terminal_rel > np.float32(0.0):
-            rel_vol_term: float = np.float64(terminal_rel)
-            waterbody_storage_m3[wb_id_term] -= rel_vol_term
-            terminal_wb_outflow_m3 += terminal_rel
-            outflow_per_waterbody_m3[wb_id_term] = np.float32(0.0)
+    # Waterbodies discharging directly out of the domain (at pit or boundary cells)
+    # have their releases transferred and accumulated during internal adaptive substepping.
+    # terminal_wb_outflow_accum_m3 is a 1-element mutable array passed by reference into
+    # Numba JIT to accumulate in-place, so index [0] extracts the scalar total:
+    terminal_wb_outflow_m3: np.float32 = terminal_wb_outflow_accum_m3[0]
 
     return (
         num_inertial_substeps,
         terminal_wb_outflow_m3,
+        limiting_reach_idx,
+        min_stable_timestep_s,
+        h_vol,
+        h_flow,
+        h_gov,
+        celerity,
+        limiting_flow,
+        limiting_storage,
     )
 
 
@@ -849,6 +890,7 @@ class LocalInertial:
         self.shape_exponent = shape_exponent
         self.bankfull_depth = bankfull_depth_m
         self.floodplain_width = floodplain_width_m
+        self.rivers_gdf = rivers_gdf
 
         n_nodes_total = is_pit.size
         is_ocean_pit_orig = np.zeros(n_nodes_total, dtype=np.bool_)
@@ -1008,6 +1050,20 @@ class LocalInertial:
 
         inertial_start: int = self.n_kinematic
         inertial_end: int = self.n_kinematic + self.n_inertial
+        self._iteration_count: int = 0
+        self._inertial_river_ids: ArrayInt32 = self._river_ids[
+            inertial_start:inertial_end
+        ]
+        self._inertial_grid_idxs: ArrayInt32 = indices_init[
+            sorted_idxs[inertial_start:inertial_end]
+        ].astype(np.int32)
+        if river_network is not None and hasattr(river_network, "xy"):
+            xs, ys = river_network.xy(self._inertial_grid_idxs)
+            self._inertial_xs: ArrayFloat32 = xs.astype(np.float32)
+            self._inertial_ys: ArrayFloat32 = ys.astype(np.float32)
+        else:
+            self._inertial_xs = np.zeros(self.n_inertial, dtype=np.float32)
+            self._inertial_ys = np.zeros(self.n_inertial, dtype=np.float32)
         self._river_length_inertial: ArrayFloat32 = self._river_length[
             inertial_start:inertial_end
         ]
@@ -1212,6 +1268,7 @@ class LocalInertial:
             n_ret, dtype=np.float64
         )
         self._wb_outflow_avail_buf: ArrayFloat64 = np.empty(n_wb, dtype=np.float64)
+        self._terminal_wb_outflow_accum_m3: ArrayFloat32 = np.zeros(1, dtype=np.float32)
 
         assert waterbody_lake_factor.size == n_wb, (
             f"waterbody_lake_factor size ({waterbody_lake_factor.size}) must match number of waterbodies ({n_wb})."
@@ -1362,7 +1419,6 @@ class LocalInertial:
         ds_inertial_k: ArrayInt32 = np.full(n_inertial, -1, dtype=np.int32)
         ds_waterbody_id: ArrayInt32 = np.full(n_inertial, -1, dtype=np.int32)
         ds_bed_elevation: ArrayFloat32 = np.empty(n_inertial, dtype=np.float32)
-        kin_ds_slope: ArrayFloat32 = np.zeros(n_inertial, dtype=np.float32)
 
         for k in range(n_inertial):
             i: int = n_kinematic + k
@@ -1385,11 +1441,10 @@ class LocalInertial:
                 if wb_ds != -1:
                     ds_boundary_type[k] = 2
                     ds_waterbody_id[k] = wb_ds
-                elif self._use_kinematic[ds]:
-                    ds_boundary_type[k] = 1
-                    slope_val: float = max((bed_node - bed_ds) / r_len, 1e-4)
-                    kin_ds_slope[k] = np.float32(slope_val)
                 else:
+                    assert not self._use_kinematic[ds], (
+                        f"Inertial reach at sorted index {i} cannot discharge into a kinematic reach."
+                    )
                     ds_boundary_type[k] = 0
                     ds_k: int = ds - n_kinematic
                     ds_inertial_k[k] = ds_k
@@ -1426,7 +1481,6 @@ class LocalInertial:
             elif ds_boundary_type[k] == 2:
                 ds_stage_idx[k] = n_inertial + ds_waterbody_id[k]
         self._ds_stage_idx: ArrayInt32 = ds_stage_idx
-        self._kin_ds_slope: ArrayFloat32 = kin_ds_slope
 
         # Upstream reach connectivity for inertial reaches
         max_up: int = self._upstream_matrix.shape[1]
@@ -1829,22 +1883,21 @@ class LocalInertial:
             confluence_factor * cfl_safety_factor * cfl_dx / sqrt_g
         ).astype(np.float32)
 
-    def update_channel_width(
+    def update_channel_geometry(
         self,
         river_width: ArrayFloat32,
-        bankfull_depth_m: ArrayFloat32 | None = None,
+        bankfull_depth_m: ArrayFloat32,
     ) -> None:
         """Updates channel bankfull top width and depth dynamically during simulation.
 
         Args:
             river_width: Updated channel bankfull top width (meters).
-            bankfull_depth_m: Optional updated bankfull channel depth (meters).
+            bankfull_depth_m: Updated bankfull channel depth (meters).
         """
         self.river_width = river_width.astype(np.float32)
         self._river_width = self.river_width[self.sorted_idxs]
-        if bankfull_depth_m is not None:
-            self.bankfull_depth = bankfull_depth_m.astype(np.float32)
-            self._bankfull_depth = self.bankfull_depth[self.sorted_idxs]
+        self.bankfull_depth = bankfull_depth_m.astype(np.float32)
+        self._bankfull_depth = self.bankfull_depth[self.sorted_idxs]
         self._compute_static_geometry()
 
     def calculate_river_storage_from_discharge(
@@ -2017,7 +2070,6 @@ class LocalInertial:
         ds_inertial_k: ArrayInt32,
         ds_stage_idx: ArrayInt32,
         ds_bed_elevation: ArrayFloat32,
-        kin_ds_slope: ArrayFloat32,
         min_dt_buf: ArrayFloat32,
         inertial_up_offsets: ArrayInt32,
         inertial_up_indices: ArrayInt32,
@@ -2036,6 +2088,7 @@ class LocalInertial:
         wb_release_volume_substep: ArrayFloat32,
         inertial_topo_order: ArrayInt32,
         total_flow_rate_buf: ArrayFloat32,
+        terminal_wb_outflow_accum_m3: ArrayFloat32,
     ) -> tuple[
         ArrayFloat32,
         ArrayFloat64,
@@ -2046,8 +2099,17 @@ class LocalInertial:
         ArrayFloat32,
         np.float32,
         int,
+        int,
+        np.float32,
+        np.float32,
+        np.float32,
+        np.float32,
+        np.float32,
+        np.float32,
+        np.float32,
     ]:
         dt_f32: np.float32 = np.float32(routing_timestep_s)
+        terminal_wb_outflow_accum_m3[0] = np.float32(0.0)
         inv_dt_f32: np.float32 = np.float32(1.0) / dt_f32
         n_cells: int = len(river_storage_m3)
 
@@ -2143,6 +2205,14 @@ class LocalInertial:
         (
             num_inertial_substeps,
             terminal_wb_outflow_m3,
+            limiting_reach_idx,
+            min_stable_timestep_s,
+            h_vol,
+            h_flow,
+            h_gov,
+            celerity,
+            limiting_flow,
+            limiting_storage,
         ) = _run_inertial_routing_step(
             dt_f32=dt_f32,
             inv_dt_f32=inv_dt_f32,
@@ -2164,7 +2234,6 @@ class LocalInertial:
             ds_inertial_k=ds_inertial_k,
             ds_stage_idx=ds_stage_idx,
             ds_bed_elevation=ds_bed_elevation,
-            kin_ds_slope=kin_ds_slope,
             pit_slope_inertial=pit_slope_inertial,
             min_dt_buf=min_dt_buf,
             evaporation_m3_inertial=evaporation_m3_inertial,
@@ -2205,6 +2274,9 @@ class LocalInertial:
             wb_release_volume_substep=wb_release_volume_substep,
             inertial_topo_order=inertial_topo_order,
             total_flow_rate_buf=total_flow_rate_buf,
+            wb_to_wb_src_wb=wb_to_wb_src_wb,
+            wb_to_wb_tgt_wb=wb_to_wb_tgt_wb,
+            terminal_wb_outflow_accum_m3=terminal_wb_outflow_accum_m3,
         )
 
         return (
@@ -2217,6 +2289,14 @@ class LocalInertial:
             retention_outflow_m3,
             terminal_wb_outflow_m3,
             num_inertial_substeps,
+            limiting_reach_idx,
+            min_stable_timestep_s,
+            h_vol,
+            h_flow,
+            h_gov,
+            celerity,
+            limiting_flow,
+            limiting_storage,
         )
 
     def _check_inertial_water_balance(
@@ -2295,6 +2375,74 @@ class LocalInertial:
                 f"over_abs={over_abstraction_m3:.2f}, net_outflow={net_inertial_outflow_m3:.2f}"
             )
         return balance_err
+
+    def _print_limiting_substep(
+        self,
+        limiting_reach_idx: int,
+        min_dt: float | np.float32,
+        num_substeps: int,
+        h_vol: float | np.float32,
+        h_flow: float | np.float32,
+        h_gov: float | np.float32,
+        celerity: float | np.float32,
+        flow_rate: float | np.float32,
+        storage_m3: float | np.float32,
+    ) -> None:
+        """Prints diagnostic information for the cell requiring the smallest substep.
+
+        Args:
+            limiting_reach_idx: Inertial reach index with the smallest stable timestep.
+            min_dt: Minimum stable timestep duration for stability (seconds).
+            num_substeps: Number of sub-timesteps required for stability.
+            h_vol: Hydraulic depth from stored channel volume (meters).
+            h_flow: Hydraulic depth estimated from flow normal depth (meters).
+            h_gov: Strictest governing hydraulic depth (meters).
+            celerity: Shallow-water wave celerity at governing depth (m/s).
+            flow_rate: Characteristic peak flow rate through the limiting reach (m³/s).
+            storage_m3: Water volume stored in the limiting reach (m³).
+        """
+        river_id: int = int(self._inertial_river_ids[limiting_reach_idx])
+        grid_idx: int = int(self._inertial_grid_idxs[limiting_reach_idx])
+        x_coord: float = float(self._inertial_xs[limiting_reach_idx])
+        y_coord: float = float(self._inertial_ys[limiting_reach_idx])
+        dx: float = float(self._river_length_inertial[limiting_reach_idx])
+        up_count: int = int(self._inertial_up_count[limiting_reach_idx])
+
+        h_v: float = float(h_vol)
+        h_f: float = float(h_flow)
+        h_g: float = float(h_gov)
+        c: float = float(celerity)
+        q: float = float(flow_rate)
+        v: float = float(storage_m3)
+
+        if h_v >= h_f:
+            gov_str: str = (
+                f"channel storage depth (h_vol={h_v:.2f} m >= h_flow={h_f:.2f} m, "
+                f"storage={v:.1f} m³)"
+            )
+        else:
+            gov_str: str = (
+                f"flow normal depth / Manning (h_flow={h_f:.2f} m > h_vol={h_v:.2f} m, "
+                f"flow={q:.2f} m³/s)"
+            )
+
+        confluence_info: str = (
+            f", confluence of {up_count} tributaries" if up_count > 1 else ""
+        )
+
+        substep_str: str = (
+            f"{num_substeps} substep"
+            if num_substeps == 1
+            else f"{num_substeps} substeps"
+        )
+
+        print(
+            f"[Routing Iteration {self._iteration_count}] Cell reach_idx={limiting_reach_idx} "
+            f"(river_id={river_id}, coords=({x_coord:.4f}, {y_coord:.4f}), grid_idx={grid_idx}) "
+            f"requires smallest substep dt={float(min_dt):.2f} s ({substep_str}).\n"
+            f"  Why: reach length dx={dx:.1f} m, governing depth h={h_g:.2f} m via {gov_str}, "
+            f"wave celerity c={c:.2f} m/s{confluence_info}."
+        )
 
     def step(
         self,
@@ -2385,6 +2533,7 @@ class LocalInertial:
         )
         sideflow_inertial: float = float(np.sum(self._sideflow_perm_inertial))
 
+        self._iteration_count += 1
         (
             discharge_perm,
             river_storage_perm,
@@ -2395,6 +2544,14 @@ class LocalInertial:
             retention_outflow_m3,
             terminal_wb_outflow_m3,
             num_inertial_substeps,
+            limiting_reach_idx,
+            min_stable_timestep_s,
+            h_vol,
+            h_flow,
+            h_gov,
+            celerity,
+            limiting_flow,
+            limiting_storage,
         ) = self._step(
             routing_timestep_s=self.dt,
             previous_discharge_m3_s=self._discharge_prev_perm,
@@ -2457,7 +2614,6 @@ class LocalInertial:
             ds_inertial_k=self._ds_inertial_k,
             ds_stage_idx=self._ds_stage_idx,
             ds_bed_elevation=self._ds_bed_elevation,
-            kin_ds_slope=self._kin_ds_slope,
             min_dt_buf=self._min_dt_buf,
             inertial_up_offsets=self._inertial_up_offsets,
             inertial_up_indices=self._inertial_up_indices,
@@ -2476,6 +2632,7 @@ class LocalInertial:
             wb_release_volume_substep=self._wb_release_volume_substep,
             inertial_topo_order=self._inertial_topo_order,
             total_flow_rate_buf=self._total_flow_rate_buf,
+            terminal_wb_outflow_accum_m3=self._terminal_wb_outflow_accum_m3,
         )
 
         self.gate_open[self._inertial_cells] = (

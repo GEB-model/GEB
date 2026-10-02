@@ -328,7 +328,14 @@ def test_off_waterbodies_filtered_out_at_spinup(input_type: int) -> None:
     # Raw grid waterbody_id has 3 waterbodies: 10, 20, 30
     # 10: LAKE (active), 20: OFF (disabled), 30: RESERVOIR (active)
     raw_wb_id = np.array([10, 10, 20, 30, -1], dtype=np.int32)
-    mock_grid.load2d.return_value = raw_wb_id
+    raw_outflow_points = np.array([-1, 10, 20, 30, -1], dtype=np.int32)
+
+    def mock_load2d(file_path: str, compress: bool = False) -> np.ndarray:
+        if "waterbody_outflow_points" in file_path:
+            return raw_outflow_points
+        return raw_wb_id
+
+    mock_grid.load2d.side_effect = mock_load2d
     mock_hydrology.routing.var.discharge_in_rivers_m3_s_substep = np.zeros(
         5, dtype=np.float32
     )
@@ -352,6 +359,7 @@ def test_off_waterbodies_filtered_out_at_spinup(input_type: int) -> None:
     wb.model.files = {
         "grid": {
             "waterbodies/waterbody_id": "dummy_grid_path",
+            "waterbodies/waterbody_outflow_points": "dummy_grid_path/waterbody_outflow_points",
             "routing/bankfull_river_elevation_m": "dummy_grid_path",
         },
         "geom": {"waterbodies/waterbody_data": "dummy_geom_path"},
@@ -388,3 +396,98 @@ def test_off_waterbodies_filtered_out_at_spinup(input_type: int) -> None:
         assert wb.var.storage[first_index] == pytest.approx(2.5e6)
         assert wb.var.construction_year[first_index] == 0
         assert wb.is_active[first_index]
+
+
+def test_identify_waterbody_outflows_and_absorb_trapped_river_cells() -> None:
+    """Test identifying waterbody outflows with elevation tie-breaking and absorbing trapped river cells."""
+    from geb.build.modules.hydrography import (
+        absorb_trapped_river_cells,
+        identify_waterbody_outflows,
+    )
+
+    # 1. Test identify_waterbody_outflows with tie-breaking on minimum elevation
+    # 2x3 grid:
+    # Waterbody 1 covers (0, 0) and (0, 1).
+    # Both have the same upstream area (100 cells), but (0, 1) has lower elevation (10 m vs 20 m).
+    wb_id = np.array([[1, 1, -1], [-1, -1, -1]], dtype=np.int32)
+    uparea = np.array([[100, 100, 50], [10, 10, 10]], dtype=np.int32)
+    elevation = np.array([[20.0, 10.0, 30.0], [50.0, 50.0, 50.0]], dtype=np.float32)
+
+    outflows = identify_waterbody_outflows(
+        waterbody_id=wb_id,
+        upstream_area_n_cells=uparea,
+        elevation_min_m=elevation,
+    )
+    # Outflow must be at (0, 1) due to lower elevation
+    assert outflows[0, 1] == 1
+    assert outflows[0, 0] == -1
+
+    # 2. Test absorb_trapped_river_cells
+    # 1x5 grid:
+    # (0, 0): Lake cell (wb=10), non-outflow, ldd=6 (drains EAST to 0, 1)
+    # (0, 1): Trapped river cell (river_ids=99, wb=-1), ldd=6 (drains EAST to 0, 2)
+    # (0, 2): Lake cell (wb=10), outflow cell, ldd=6 (drains EAST to 0, 3)
+    # (0, 3): Normal downstream river cell (river_ids=99, wb=-1), ldd=6 (drains EAST to 0, 4)
+    # (0, 4): River outlet (river_ids=99, wb=-1), ldd=5 (pit)
+    test_wb = np.array([[10, -1, 10, -1, -1]], dtype=np.int32)
+    test_outflows = np.array([[-1, -1, 10, -1, -1]], dtype=np.int32)
+    test_rivers = np.array([[-1, 99, -1, 99, 99]], dtype=np.int32)
+    # D8: 6 is East, 5 is pit
+    test_ldd = np.array([[6, 6, 6, 6, 5]], dtype=np.uint8)
+    import pyflwdir
+
+    test_flow_raster = pyflwdir.from_array(test_ldd, ftype="ldd")
+
+    updated_wb = absorb_trapped_river_cells(
+        waterbody_id=test_wb,
+        waterbody_outflows=test_outflows,
+        river_ids=test_rivers,
+        flow_raster=test_flow_raster,
+    )
+
+    # (0, 1) must be absorbed into upstream waterbody 10
+    assert updated_wb[0, 1] == 10
+    # (0, 3) and (0, 4) are downstream of the true outflow, so they must remain rivers (-1 for waterbody)
+    assert updated_wb[0, 3] == -1
+    assert updated_wb[0, 4] == -1
+
+    # 3. Test edge case: river leaves the river network before reconnecting to a waterbody
+    # (0, 0): Lake cell (wb=10), non-outflow
+    # (0, 1): River cell (river_ids=99, wb=-1)
+    # (0, 2): Non-river land cell (river_ids=-1, wb=-1)
+    # (0, 3): Lake cell (wb=10, pit)
+    test_wb_leaves = np.array([[10, -1, -1, 10]], dtype=np.int32)
+    test_outflows_leaves = np.array([[-1, -1, -1, 10]], dtype=np.int32)
+    test_rivers_leaves = np.array([[-1, 99, -1, -1]], dtype=np.int32)
+    test_ldd_leaves = np.array([[6, 6, 6, 5]], dtype=np.uint8)
+    flw_leaves = pyflwdir.from_array(test_ldd_leaves, ftype="ldd")
+
+    updated_wb_leaves = absorb_trapped_river_cells(
+        waterbody_id=test_wb_leaves,
+        waterbody_outflows=test_outflows_leaves,
+        river_ids=test_rivers_leaves,
+        flow_raster=flw_leaves,
+    )
+    # (0, 1) must NOT be absorbed because flow left the river network before reaching a waterbody
+    assert updated_wb_leaves[0, 1] == -1
+
+    # 4. Test edge case: multi-cell trapped river path
+    # (0, 0): Lake cell (wb=5), non-outflow
+    # (0, 1): River cell (river_ids=1, wb=-1)
+    # (0, 2): River cell (river_ids=1, wb=-1)
+    # (0, 3): Lake cell (wb=5, outflow, pit)
+    test_wb_multi = np.array([[5, -1, -1, 5]], dtype=np.int32)
+    test_outflows_multi = np.array([[-1, -1, -1, 5]], dtype=np.int32)
+    test_rivers_multi = np.array([[-1, 1, 1, -1]], dtype=np.int32)
+    test_ldd_multi = np.array([[6, 6, 6, 5]], dtype=np.uint8)
+    flw_multi = pyflwdir.from_array(test_ldd_multi, ftype="ldd")
+
+    updated_wb_multi = absorb_trapped_river_cells(
+        waterbody_id=test_wb_multi,
+        waterbody_outflows=test_outflows_multi,
+        river_ids=test_rivers_multi,
+        flow_raster=flw_multi,
+    )
+    # Both (0, 1) and (0, 2) must be absorbed
+    assert updated_wb_multi[0, 1] == 5
+    assert updated_wb_multi[0, 2] == 5

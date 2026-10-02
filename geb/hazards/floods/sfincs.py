@@ -44,7 +44,6 @@ from geb.geb_types import (
 from geb.hazards.event import Event
 from geb.hazards.floods.workflows.bathymetry import burn_rivers
 from geb.hazards.floods.workflows.utils import get_end_point
-from geb.hydrology.routing import get_river_width
 from geb.workflows.extreme_value_analysis import ReturnPeriodModel
 from geb.workflows.io import (
     create_hash_from_parameters,
@@ -67,14 +66,11 @@ from geb.workflows.raster import (
     rasterize_like,
 )
 
-from .workflows import get_river_depth, get_river_manning
 from .workflows.outflow import create_outflow_in_mask
 from .workflows.utils import (
     create_hourly_hydrograph,
     create_hydrograph_from_discharge_shape,
     export_rivers,
-    get_representative_river_points,
-    get_river_parameters_by_river,
     make_relative_paths,
     read_flood_depth,
     run_sfincs_simulation,
@@ -232,13 +228,9 @@ class SFINCSRootModel:
         DEMs: list[dict[str, str | Path | xr.DataArray | xr.Dataset]],
         subbasins: gpd.GeoDataFrame,
         rivers: gpd.GeoDataFrame,
-        river_width_alpha: npt.NDArray[np.float32],
-        river_width_beta: npt.NDArray[np.float32],
         mannings: xr.DataArray,
         subgrid: bool,
         grid_size_multiplier: int,
-        depth_calculation_method: str,
-        depth_calculation_parameters: dict[str, float | int] | None = None,
         coastal: bool = False,
         low_elevation_coastal_zone_mask: gpd.GeoDataFrame | None = None,
         coastal_boundary_exclude_mask: gpd.GeoDataFrame | None = None,
@@ -256,16 +248,11 @@ class SFINCSRootModel:
             DEMs: List of DEM datasets to use for the model. Should be a list of dictionaries with 'path' and 'name' keys.
             subbasins: A GeoDataFrame defining the subbasins of interest.
             rivers: A GeoDataFrame containing river segments.
-            river_width_alpha: An numpy array of river width alpha parameters. Used for calculating river width.
-            river_width_beta: An numpy array of river width beta parameters. Used for calculating river width
             mannings: A xarray DataArray of Manning's n values for the rivers.
             grid_size_multiplier: The number of grid cells to combine when setting up the model grid.
                 if 1, no combining is done.
                 if 2, every 2x2 grid cells are combined into one cell, etc.
             subgrid: Whether to set up subgrid pixels for the model.
-            depth_calculation_method: The method to use for calculating river depth. Can be 'manning' or 'power_law'.
-            depth_calculation_parameters: A dictionary of parameters for the depth calculation method. Only used if
-                depth_calculation_method is 'power_law', in which case it should contain 'c' and 'd' keys.
             coastal: Whether to set up coastal boundary conditions. Defaults to False.
             low_elevation_coastal_zone_mask: A GeoDataFrame defining the low elevation coastal zone to set as active cells.
             coastal_boundary_exclude_mask: A GeoDataFrame defining areas to exclude from the coastal boundary condition cells.
@@ -282,7 +269,6 @@ class SFINCSRootModel:
             The SFINCSRootModel instance with the built model.
 
         Raises:
-            ValueError: if depth_calculation_method is not 'manning' or 'power_law',
             ValueError: if grid_size_multiplier is not a positive integer.
             ValueError: if resolution of DEM is not square pixels.
         """
@@ -330,11 +316,6 @@ class SFINCSRootModel:
             raise ValueError(
                 "Cannot use subgrid pixels when grid_size_multiplier is 1 (no aggregation)"
             )
-
-        assert depth_calculation_method in [
-            "manning",
-            "power_law",
-        ], "Method should be 'manning' or 'power_law'"
 
         self.outflow_boundary_width_m = outflow_boundary_width_m
 
@@ -575,6 +556,10 @@ class SFINCSRootModel:
                     raise ValueError(
                         "Custom rivers to burn must have a 'depth' column when using custom rivers"
                     )
+                if "manning" not in rivers_to_burn.columns:
+                    raise ValueError(
+                        "Custom rivers to burn must have a 'manning' column when using custom rivers"
+                    )
             else:
                 active_rivers = self.active_rivers.copy()
                 # iteratively get all outflow rivers from self.rivers
@@ -599,101 +584,14 @@ class SFINCSRootModel:
                     ).union_all(),
                 )
 
-                # The downstream rivers are in principle not included in the hydrological simulations.
-                # They only may be if a subset of subbasins is requested for simulation. However, such further
-                # downstream rivers may have significant discharge missing because other inflowing rivers may not
-                # be include in the flood simulation. Therefore, we use the discharge of the upstream rivers
-                # to estimate the burn width and depth rather than the discharge of the river itself.
-                # The next line just removes them. A few steps later they are added back but with the discharge
-                # of the inflowing rivers that are simulated here.
-
-                # first sort by shreve stream order, forcing the upstream rivers to be processed first,
-                # so that the downstream rivers can use the average of the upstream rivers to
-                # estimate their width and depth.
-                rivers_to_burn = rivers_to_burn.sort_values(
-                    by="topological_stream_order", ascending=True
-                )
-
-                rivers_to_burn_with_data = rivers_to_burn[
-                    (~rivers_to_burn["is_further_downstream_outflow"])
-                    & (~rivers_to_burn["is_downstream_outflow"])
+                # Only burn rivers where width and depth are defined.
+                rivers_to_burn = rivers_to_burn[
+                    rivers_to_burn["width"].notnull()
+                    & rivers_to_burn["depth"].notnull()
                 ]
-
-                river_representative_points: list[list[tuple[int, int]]] = []
-                for ID in rivers_to_burn_with_data.index:
-                    river_representative_points.append(
-                        get_representative_river_points(
-                            ID, self.rivers, ~np.isnan(river_width_alpha)
-                        )
-                    )
-
-                river_parameters: pd.DataFrame = get_river_parameters_by_river(
-                    rivers_to_burn_with_data.index.tolist(),
-                    river_representative_points,
-                    river_width_alpha=river_width_alpha,
-                    river_width_beta=river_width_beta,
+                assert rivers_to_burn["manning"].notnull().all(), (
+                    "River Manning's n must be defined for all rivers to burn with valid width and depth."
                 )
-
-                for river_to_burn_index, river_to_burn in rivers_to_burn[
-                    rivers_to_burn["is_downstream_outflow"]
-                    | rivers_to_burn["is_further_downstream_outflow"]
-                ].iterrows():
-                    upstream_rivers = rivers_to_burn[
-                        rivers_to_burn["downstream_ID"] == river_to_burn_index
-                    ]
-                    assert len(upstream_rivers) > 0, (
-                        "Downstream rivers must have at least one upstream river to estimate width and depth"
-                    )
-                    river_parameters_upstream_rivers = river_parameters.loc[
-                        upstream_rivers.index
-                    ]
-                    river_parameters.loc[river_to_burn_index, "river_width_alpha"] = (
-                        river_parameters_upstream_rivers["river_width_alpha"].sum()
-                    )
-                    river_parameters.loc[river_to_burn_index, "river_width_beta"] = (
-                        river_parameters_upstream_rivers["river_width_beta"].mean()
-                    )
-
-                    rivers_to_burn.loc[
-                        river_to_burn_index, "return_period_2_years_daily_m3_per_s"
-                    ] = rivers_to_burn.loc[
-                        upstream_rivers.index, "return_period_2_years_daily_m3_per_s"
-                    ].mean()
-
-                assert (
-                    rivers_to_burn["return_period_2_years_daily_m3_per_s"]
-                    .notnull()
-                    .all()
-                ), (
-                    "All rivers to burn must have a return period 2 years daily discharge value for river width estimation"
-                )
-
-                assert set(rivers_to_burn.index) == set(river_parameters.index), (
-                    "All rivers to burn must have river width parameters for river width estimation"
-                )
-
-                river_width_unknown_mask = rivers_to_burn["width"].isnull()
-
-                rivers_to_burn.loc[river_width_unknown_mask, "width"] = get_river_width(
-                    river_parameters.loc[
-                        river_width_unknown_mask, "river_width_alpha"
-                    ].values,
-                    river_parameters.loc[
-                        river_width_unknown_mask, "river_width_beta"
-                    ].values,
-                    rivers_to_burn.loc[
-                        river_width_unknown_mask, "return_period_2_years_daily_m3_per_s"
-                    ].values,
-                ).astype(np.float64)
-
-                rivers_to_burn["depth"] = get_river_depth(
-                    river_segments=rivers_to_burn,
-                    method=depth_calculation_method,
-                    parameters=depth_calculation_parameters,
-                    bankfull_column="return_period_2_years_daily_m3_per_s",
-                )
-
-            rivers_to_burn["manning"] = get_river_manning(rivers_to_burn)
 
             rivers_to_burn.to_parquet(
                 self.path / "rivers_with_widths_and_depths.geoparquet"

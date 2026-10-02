@@ -50,6 +50,7 @@ def test_version_update_failure_propagates(
     "stored_version,target_version,method_names",
     [
         ("1.0.0b31", "1.0.0b32", ["setup_waterbodies", "setup_weirs"]),
+        ("1.0.0b32", "1.0.0b33", ["setup_waterbodies", "setup_weirs"]),
     ],
 )
 def test_waterbody_input_migration(

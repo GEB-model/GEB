@@ -133,7 +133,7 @@ def test_optional_weirs_and_width_update() -> None:
     weir: LocalInertial = make_router(np.array([2, 0, 0], dtype=np.float32))
     # The weir does not change how much water fits in the channel.
     np.testing.assert_array_equal(original._bankfull_volume, weir._bankfull_volume)
-    weir.update_channel_width(np.full(3, 25, dtype=np.float32))
+    weir.update_channel_geometry(np.full(3, 25, dtype=np.float32), weir.bankfull_depth)
     index: int = int(np.flatnonzero(weir._weir_height_inertial > 0)[0])
     assert weir._geom_inbank[index, GEOM_IN_INTERFACE_BED_ELEVATION_MAX] == 12.0
 
@@ -249,7 +249,9 @@ def test_gate_routing_and_restart() -> None:
     heights: ArrayFloat32 = np.array([2, 0, 0], dtype=np.float32)
     saved_state: np.ndarray = np.zeros(3, dtype=bool)
     router: LocalInertial = make_router(heights, gated=True, gate_open=saved_state)
-    router.update_channel_width(np.full(3, 200, dtype=np.float32))
+    router.update_channel_geometry(
+        np.full(3, 200, dtype=np.float32), router.bankfull_depth
+    )
     depth: float
     expected_open: bool
     for depth, expected_open in (
@@ -295,7 +297,9 @@ def test_gate_routing_and_restart() -> None:
             gate_open=saved_state.copy(),
         )
         saved_state = router.gate_open
-        router.update_channel_width(np.full(3, 200, dtype=np.float32))
+        router.update_channel_geometry(
+            np.full(3, 200, dtype=np.float32), router.bankfull_depth
+        )
 
 
 @pytest.mark.parametrize("gates", [[False, True, False], [True, False]])
@@ -369,7 +373,9 @@ def test_gate_stays_open_with_steady_inflow() -> None:
         above the closing depth threshold after the first opening.
     """
     router: LocalInertial = make_stage_gate_router(0.5, 0.05)
-    router.update_channel_width(np.full(3, 20, dtype=np.float32))
+    router.update_channel_geometry(
+        np.full(3, 20, dtype=np.float32), router.bankfull_depth
+    )
     storage: ArrayFloat64 = 1000 * 20 / 3 * np.array([0.9, 0.2, 0.2]) ** 1.5
     initial_total: float = float(storage.sum())
     discharge: ArrayFloat32 = np.zeros(3, dtype=np.float32)
@@ -602,11 +608,17 @@ def test_invalid_stage_level_fractions(opening: float, closing: float) -> None:
     Raises:
         AssertionError: If invalid fractions are accepted.
     """  # noqa: DOC202, DOC502
-    from geb.config_schema import RoutingConfig
+    from geb.config_schema import RiverDepthConfig, RiverDepthParameters, RoutingConfig
 
     with pytest.raises(ValueError):
         RoutingConfig(
-            gate_opening_level_fraction=opening, gate_closing_level_fraction=closing
+            gate_opening_level_fraction=opening,
+            gate_closing_level_fraction=closing,
+            river_depth=RiverDepthConfig(
+                parameters=RiverDepthParameters(
+                    c=0.27, d=0.30, min_depth_m=0.1, shape_exponent=0.5
+                )
+            ),
         )
     with pytest.raises(ValueError, match="Gate level fractions"):
         _make_local_inertial(

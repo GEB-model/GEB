@@ -396,6 +396,92 @@ def _evaluate_reach_cfl_dt(
     return min(dt_cfl, dt_f32)
 
 
+@njit(inline="always")
+def _diagnose_reach_cfl(
+    reach_idx: int,
+    total_flow_rate: np.float32,
+    current_volume_m3: float,
+    geom_inbank: TwoDArrayFloat32,
+    geom_overbank: TwoDArrayFloat32,
+    geom_cfl: TwoDArrayFloat32,
+    gravity_acceleration: np.float32,
+) -> tuple[np.float32, np.float32, np.float32, np.float32]:
+    """Calculates hydraulic depth components and wave celerity for diagnostics.
+
+    Args:
+        reach_idx: Local inertial reach index.
+        total_flow_rate: Peak flow rate through reach (m³/s).
+        current_volume_m3: Current river storage volume (m³).
+        geom_inbank: In-bank geometry lookup array.
+        geom_overbank: Overbank floodplain geometry array.
+        geom_cfl: CFL parameter matrix.
+        gravity_acceleration: Gravitational acceleration (m/s²).
+
+    Returns:
+        A tuple of (h_volume, h_flow, h_governing, wave_celerity) in meters and m/s.
+    """
+    h_vol: np.float32 = np.float32(0.0)
+    if current_volume_m3 > 0.0:
+        inv_shape_exponent_plus_one: np.float32 = geom_inbank[
+            reach_idx, GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE
+        ]
+        shape_exponent: np.float32 = (
+            np.float32(0.5)
+            if inv_shape_exponent_plus_one == np.float32(1.0 / 1.5)
+            else (np.float32(1.0) / inv_shape_exponent_plus_one) - np.float32(1.0)
+        )
+        bankfull_area_m2: np.float32 = (
+            geom_inbank[reach_idx, GEOM_IN_BANKFULL_VOLUME]
+            * geom_inbank[reach_idx, GEOM_IN_INVERSE_LENGTH]
+        )
+        wetted_cross_sectional_area_m2, water_top_width_m = (
+            compute_cfl_area_and_top_width(
+                volume_m3=np.float32(current_volume_m3),
+                bankfull_width_m=geom_overbank[reach_idx, GEOM_OV_RIVER_WIDTH],
+                shape_exponent=shape_exponent,
+                bankfull_depth_m=geom_inbank[reach_idx, GEOM_IN_BANKFULL_DEPTH],
+                floodplain_width_m=geom_overbank[reach_idx, GEOM_OV_FLOODPLAIN_WIDTH],
+                inverse_reach_length=geom_inbank[reach_idx, GEOM_IN_INVERSE_LENGTH],
+                inverse_shape_exponent_plus_one=inv_shape_exponent_plus_one,
+                bankfull_area_m2=bankfull_area_m2,
+                bankfull_volume_m3=geom_inbank[reach_idx, GEOM_IN_BANKFULL_VOLUME],
+                floodplain_side_slope=geom_overbank[
+                    reach_idx, GEOM_OV_FLOODPLAIN_SIDE_SLOPE
+                ],
+                floodplain_depth_threshold_m=geom_overbank[
+                    reach_idx, GEOM_OV_FLOODPLAIN_DEPTH_THRESHOLD
+                ],
+                floodplain_area_threshold_m2=geom_overbank[
+                    reach_idx, GEOM_OV_FLOODPLAIN_AREA_THRESHOLD
+                ],
+            )
+        )
+        h_vol = wetted_cross_sectional_area_m2 / max(
+            water_top_width_m, np.float32(1e-3)
+        )
+
+    h_flow: np.float32 = np.float32(0.0)
+    if total_flow_rate > np.float32(0.0):
+        raw_depth_from_flow: np.float32 = geom_cfl[
+            reach_idx, GEOM_CFL_MANNING_COEFFICIENT
+        ] * (total_flow_rate ** np.float32(0.6))
+        bankfull_depth_m: np.float32 = geom_inbank[reach_idx, GEOM_IN_BANKFULL_DEPTH]
+        if raw_depth_from_flow > bankfull_depth_m and bankfull_depth_m > np.float32(
+            0.0
+        ):
+            extra_depth: np.float32 = raw_depth_from_flow - bankfull_depth_m
+            bf_width: np.float32 = geom_overbank[reach_idx, GEOM_OV_RIVER_WIDTH]
+            fp_width: np.float32 = geom_overbank[reach_idx, GEOM_OV_FLOODPLAIN_WIDTH]
+            width_ratio: np.float32 = bf_width / max(bf_width + fp_width, bf_width)
+            h_flow = bankfull_depth_m + (extra_depth * width_ratio)
+        else:
+            h_flow = raw_depth_from_flow
+
+    h_gov: np.float32 = max(h_vol, h_flow)
+    celerity: np.float32 = np.sqrt(gravity_acceleration * h_gov)
+    return h_vol, h_flow, h_gov, celerity
+
+
 @njit(cache=True)
 def compute_inertial_substeps_cfl(
     dt_f32: np.float32,
@@ -426,7 +512,17 @@ def compute_inertial_substeps_cfl(
     wb_outflow_bed_elev: ArrayFloat32,
     inertial_topo_order: ArrayInt32,
     total_flow_rate_buf: ArrayFloat32,
-) -> int:
+) -> tuple[
+    int,
+    int,
+    np.float32,
+    np.float32,
+    np.float32,
+    np.float32,
+    np.float32,
+    np.float32,
+    np.float32,
+]:
     """Computes upstream kinematic inflow accumulations and adaptive CFL substepping stability constraint.
 
     Operates in parallel across available CPU threads without lock contention.
@@ -462,7 +558,16 @@ def compute_inertial_substeps_cfl(
         total_flow_rate_buf: Pre-allocated workspace buffer storing peak flow rate per reach (m³/s).
 
     Returns:
-        num_inertial_substeps: Total number of sub-timesteps required for stability.
+        A tuple of (num_inertial_substeps, limiting_reach_idx, min_stable_timestep_s, h_vol, h_flow, h_gov, celerity, limiting_flow, limiting_storage):
+            - num_inertial_substeps: Total number of sub-timesteps required for stability.
+            - limiting_reach_idx: Reach index requiring the smallest stable timestep.
+            - min_stable_timestep_s: Minimum stable timestep duration across all reaches (seconds).
+            - h_vol: Hydraulic depth from stored channel volume (meters).
+            - h_flow: Hydraulic depth estimated from oncoming flow normal depth (meters).
+            - h_gov: Strictest governing hydraulic depth (meters).
+            - celerity: Shallow-water wave celerity at governing depth (m/s).
+            - limiting_flow: Characteristic peak flow rate through the limiting reach (m³/s).
+            - limiting_storage: Stored volume in the limiting reach (m³).
     """
     kinematic_inflow_rate_inertial.fill(np.float32(0.0))
     total_flow_rate_buf.fill(np.float32(0.0))
@@ -592,7 +697,31 @@ def compute_inertial_substeps_cfl(
     raw_substeps: int = int(np.ceil(dt_f32 / min_stable_timestep_s))
     num_inertial_substeps: int = max(1, raw_substeps)
 
-    return num_inertial_substeps
+    h_vol, h_flow, h_gov, celerity = _diagnose_reach_cfl(
+        reach_idx=limiting_reach_idx,
+        total_flow_rate=total_flow_rate_buf[limiting_reach_idx],
+        current_volume_m3=river_storage_m3_inertial[limiting_reach_idx],
+        geom_inbank=geom_inbank,
+        geom_overbank=geom_overbank,
+        geom_cfl=geom_cfl,
+        gravity_acceleration=gravity_acceleration,
+    )
+    limiting_flow: np.float32 = total_flow_rate_buf[limiting_reach_idx]
+    limiting_storage: np.float32 = np.float32(
+        river_storage_m3_inertial[limiting_reach_idx]
+    )
+
+    return (
+        num_inertial_substeps,
+        limiting_reach_idx,
+        min_stable_timestep_s,
+        h_vol,
+        h_flow,
+        h_gov,
+        celerity,
+        limiting_flow,
+        limiting_storage,
+    )
 
 
 @njit(inline="always")
@@ -874,7 +1003,6 @@ def _run_inertial_substeps(
     ds_inertial_k: ArrayInt32,
     ds_stage_idx: ArrayInt32,
     ds_bed_elevation: ArrayFloat32,
-    kin_ds_slope: ArrayFloat32,
     inertial_up_offsets: ArrayInt32,
     inertial_up_indices: ArrayInt32,
     inertial_up_reach_idx: ArrayInt32,
@@ -888,6 +1016,10 @@ def _run_inertial_substeps(
     wb_release_volume_substep: ArrayFloat32,
     inertial_topo_order: ArrayInt32,
     total_flow_rate_buf: ArrayFloat32,
+    wb_to_wb_src_wb: ArrayInt32,
+    wb_to_wb_tgt_wb: ArrayInt32,
+    wb_terminal_wb_ids: ArrayInt32,
+    terminal_wb_outflow_accum_m3: ArrayFloat32,
 ) -> int:
     """Advances dynamic local inertial routing across adaptive substeps.
 
@@ -938,7 +1070,6 @@ def _run_inertial_substeps(
         ds_inertial_k: Downstream reach index within inertial domain (-1 if boundary).
         ds_stage_idx: Unified downstream stage lookup index for internal and lake boundaries.
         ds_bed_elevation: Downstream bed elevation for external boundaries (meters).
-        kin_ds_slope: Channel slope for reaches draining into kinematic domain (dimensionless).
         inertial_up_offsets: CSR offsets of upstream inertial reaches per reach.
         inertial_up_indices: CSR indices of upstream inertial reaches per reach.
         inertial_up_reach_idx: Precomputed direct upstream reach index array.
@@ -952,6 +1083,10 @@ def _run_inertial_substeps(
         wb_release_volume_substep: Workspace buffer buffering substep waterbody release volume into reaches (m³).
         inertial_topo_order: Topological traversal order of inertial reaches.
         total_flow_rate_buf: Workspace buffer propagating peak characteristic flow rate across reaches (m³/s).
+        wb_to_wb_src_wb: Source waterbody IDs discharging into another connected waterbody.
+        wb_to_wb_tgt_wb: Target waterbody IDs receiving cascading waterbody releases.
+        wb_terminal_wb_ids: Waterbody IDs discharging directly outside the model domain.
+        terminal_wb_outflow_accum_m3: Accumulator array for boundary waterbody release volume (m³).
 
     Returns:
         Total number of internal adaptive substeps executed.
@@ -1061,6 +1196,30 @@ def _run_inertial_substeps(
                         wb_outflow_avail_buf[wb_id_node] = 0.0
                         waterbody_storage_m3[wb_id_node] -= release
 
+            # Transfer waterbody releases to connected downstream waterbodies
+            n_wb_to_wb: int = len(wb_to_wb_src_wb)
+            if n_wb_to_wb > 0:
+                for link_idx in range(n_wb_to_wb):
+                    src_wb: int = wb_to_wb_src_wb[link_idx]
+                    release = wb_outflow_avail_buf[src_wb]
+                    if release > 0.0:
+                        tgt_wb: int = wb_to_wb_tgt_wb[link_idx]
+                        waterbody_storage_m3[src_wb] -= release
+                        waterbody_storage_m3[tgt_wb] += release
+                        waterbody_inflow_m3[tgt_wb] += np.float32(release)
+                        wb_outflow_avail_buf[src_wb] = 0.0
+
+            # Transfer releases of terminal waterbodies discharging outside the model domain
+            n_wb_term: int = len(wb_terminal_wb_ids)
+            if n_wb_term > 0:
+                for link_idx in range(n_wb_term):
+                    term_wb: int = wb_terminal_wb_ids[link_idx]
+                    release = wb_outflow_avail_buf[term_wb]
+                    if release > 0.0:
+                        waterbody_storage_m3[term_wb] -= release
+                        terminal_wb_outflow_accum_m3[0] += np.float32(release)
+                        wb_outflow_avail_buf[term_wb] = 0.0
+
         # Loop 1: Momentum Equation
         for reach_idx in prange(n_inertial):  # ty: ignore[not-iterable]
             boundary_type: int = ds_boundary_type[reach_idx]
@@ -1111,48 +1270,82 @@ def _run_inertial_substeps(
                     # A retracted barrier must also remove the raised sill, so
                     # ordinary river hydraulics apply below the closed crest.
                     max_bed = max(bed_elev_node, ds_bed_elevation[reach_idx])
-                if bed_elev_node >= max_bed and water_stage_ds <= bed_elev_node:
-                    # Steep drop / free overfall where downstream water level is below upstream bed:
-                    # By Bates' formulation, the flow depth is strictly upstream depth,
-                    # water slope is -depth / dx, and reverse flow across the drop is impossible.
-                    effective_depth = max(
-                        water_stage_node - bed_elev_node, np.float32(0.0)
-                    )
-                    water_slope = -effective_depth * inv_interface_len
-                    reach_can_reverse = False
-                else:
-                    # Submerged or backwater interface condition (Bates et al., 2010):
-                    # Flow depth is the difference between the maximum free-surface elevation
-                    # and the highest bed elevation of the two adjoining cells.
-                    effective_stage_node: np.float32 = max(water_stage_node, max_bed)
-                    effective_stage_ds: np.float32 = max(water_stage_ds, max_bed)
-                    max_stage: np.float32 = max(
-                        effective_stage_node, effective_stage_ds
-                    )
-                    effective_depth = max_stage - max_bed
-                    water_slope = (
-                        effective_stage_ds - effective_stage_node
-                    ) * inv_interface_len
-                    reach_can_reverse = ALLOW_REVERSE_FLOW and boundary_type == 0
-            elif boundary_type == 1:
+                max_stage: np.float32 = max(water_stage_node, water_stage_ds)
+                effective_depth = max(max_stage - max_bed, np.float32(0.0))
+                water_slope = (water_stage_ds - water_stage_node) * inv_interface_len
+                reach_can_reverse = bool(
+                    ALLOW_REVERSE_FLOW
+                    and boundary_type == 0
+                    and water_stage_ds > bed_elev_node
+                )
+            elif boundary_type == 3 or boundary_type == 4:
+                # Open boundary reaches (no downstream water level available):
+                #   - boundary_type 3: inland outlet / domain edge (pit)
+                #   - boundary_type 4: coastal outlet to the sea (ocean pit)
+                #
+                # Because there is no downstream stage to compute a surface gradient (dz/dx),
+                # we determine an effective outflow slope by taking the maximum of:
+                #   (a) incoming upstream surface slope: allows flood waves and lake releases to pass freely
+                #   (b) free drawdown slope (depth / length): allows standing water to drain even on flat beds
+                #   (c) pit outlet bed slope: ensures normal gravity drainage
+                #   (d) drop to sea level: for ocean outlets (type 4) when river stage is above sea level
                 bed_elev_node = geom_inbank[reach_idx, GEOM_IN_BED_ELEVATION]
                 effective_depth = max(water_stage_node - bed_elev_node, np.float32(0.0))
-                water_slope = -kin_ds_slope[reach_idx]
-            elif boundary_type == 3:
-                bed_elev_node = geom_inbank[reach_idx, GEOM_IN_BED_ELEVATION]
-                bed_elev_ds: np.float32 = ds_bed_elevation[reach_idx]
-                max_bed = max(bed_elev_node, bed_elev_ds)
-                effective_stage_node = max(water_stage_node, max_bed)
-                effective_depth = effective_stage_node - max_bed
-                water_slope = (bed_elev_ds - bed_elev_node) * inv_interface_len
-            else:  # boundary_type == 4 (ocean pit)
-                bed_elev_node = geom_inbank[reach_idx, GEOM_IN_BED_ELEVATION]
-                effective_depth = max(water_stage_node - bed_elev_node, np.float32(0.0))
-                sea_stage: np.float32 = np.float32(0.0)
-                if bed_elev_node < sea_stage:
-                    water_slope = (sea_stage - water_stage_node) * inv_interface_len
-                else:
-                    water_slope = -pit_slope_inertial[reach_idx]
+
+                # (a) Incoming surface slope from upstream reaches:
+                # In flat rivers, bed slope can be nearly zero, but incoming flood waves have a steep
+                # surface slope. Using the upstream slope lets the flood wave exit without piling up.
+                max_upstream_slope: np.float32 = np.float32(0.0)
+                upstream_reach_k: int = inertial_up_reach_idx[reach_idx]
+                if upstream_reach_k >= 0:
+                    upstream_stage: np.float32 = stage_buf[upstream_reach_k]
+                    inv_up_dx: np.float32 = geom_inbank[
+                        upstream_reach_k, GEOM_IN_INVERSE_INTERFACE_LENGTH
+                    ]
+                    s_up: np.float32 = (upstream_stage - water_stage_node) * inv_up_dx
+                    if s_up > np.float32(0.0):
+                        max_upstream_slope = s_up
+                elif upstream_reach_k < -1:
+                    start_up_idx: int = -upstream_reach_k - 2
+                    end_up_idx: int = inertial_up_offsets[reach_idx + 1]
+                    for up_i in range(start_up_idx, end_up_idx):
+                        u_k: int = inertial_up_indices[up_i]
+                        upstream_stage = stage_buf[u_k]
+                        inv_up_dx = geom_inbank[u_k, GEOM_IN_INVERSE_INTERFACE_LENGTH]
+                        s_up = (upstream_stage - water_stage_node) * inv_up_dx
+                        if s_up > max_upstream_slope:
+                            max_upstream_slope = s_up
+
+                # Also check incoming surface slope from upstream lakes/reservoirs:
+                if n_lake_links > 0:
+                    for link_i in range(n_lake_links):
+                        if lake_outflow_target_k[link_i] == reach_idx:
+                            wb_id: int = lake_outflow_wb_id[link_i]
+                            wb_stage: np.float32 = stage_buf[n_inertial + wb_id]
+                            s_wb: np.float32 = (
+                                wb_stage - water_stage_node
+                            ) * inv_interface_len
+                            if s_wb > max_upstream_slope:
+                                max_upstream_slope = s_wb
+
+                # (b) Free drawdown slope: water drawing down under its own depth (h / length)
+                # at an unconstrained brink, so standing water can drain even without upstream inflow.
+                drawdown_slope: np.float32 = effective_depth * inv_interface_len
+
+                # (c) Pit outlet bed slope as minimum baseline slope
+                base_slope: np.float32 = pit_slope_inertial[reach_idx]
+                outflow_slope: np.float32 = max(
+                    max_upstream_slope, drawdown_slope, base_slope
+                )
+                if boundary_type == 4:
+                    # (d) Ocean outlet: drop to sea level (sea_stage = 0.0) if water stage is above sea level
+                    sea_stage: np.float32 = np.float32(0.0)
+                    if water_stage_node > sea_stage:
+                        sea_drop_slope: np.float32 = (
+                            water_stage_node - sea_stage
+                        ) * inv_interface_len
+                        outflow_slope = max(outflow_slope, sea_drop_slope)
+                water_slope = -outflow_slope
 
             discharge: np.float32
             if gate_height > 0 and not gate_open:

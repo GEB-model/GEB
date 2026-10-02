@@ -1,7 +1,37 @@
+# dev
+
+# v1.0.0b33
+- Integrate GDW structures and reservoir construction years with the updated channel geometry, open boundaries, and precomputed waterbody outlets. Rebuild `setup_waterbodies` and `setup_weirs`, then rerun spinup and simulation, including for inputs already marked v1.0.0b32.
+
 # v1.0.0b32
 - Implement water structures (sluices, locks, weirs, instream dams) from GDW points outside reservoir outlines. Gates use water-level hysteresis and the same crest-height rules as other structures. Rebuild `setup_waterbodies` and `setup_weirs`, then rerun spinup.
 - Integrate Global Dam Watch (GDW) data and use it to correct Hydrolakes types. For example, a hydrolakes controlled lake becomes a reservoir if GDW classifies it as dam or lake controlled dam.
-
+- Removed defaults from ParametersConfig in configuration schema so that all parameters must be explicitly set via reasonable_default_config.yml or model.yml, and added groundwater_hydraulic_conductivity_multiplier to the schema.
+- Detect waterbody outflow points in model build process rather than the run.
+- Added non-negativity checks for topwater, surface runoff, and other land surface water storages and fluxes in `LandSurface` validation under `__debug__`, exporting diagnostic snapshots as `diagnostic_landsurface_water_error_cell_{index}.npz` on failure.
+- Added `use_observed_width_as_bankfull` configuration flag to routing river depth parameters (default `true`) allowing observed channel widths to be used directly as bankfull widths with depth scaled by hydraulic continuity, while preserving previous reach-specific alpha scaling behind the flag for easy reversion.
+- Fixed bankfull depth hydraulic continuity scaling to use baseline default hydraulic geometry parameters (alpha and beta) when calculating expected channel width, correctly scaling channel depth inversely with observed widths without flow ratio cancellation or depth explosion.
+- Precomputed waterbody outflow points in `setup_waterbodies` exported as `grid/waterbodies/waterbody_outflow_points`, breaking ties using minimum elevation.
+- Detected and absorbed trapped river cells (cells between non-outflow waterbody cells that drain into and reconnect with waterbodies) into the upstream waterbody ID in `setup_waterbodies`, preventing stranded river cells with starved flows and depth estimation errors.
+- Fixed channel shape exponent in routing to properly model parabolic channels (shape_exponent = 0.5) and scaled hydraulic geometry mean channel depth to centerline bankfull depth (h_centerline = 1.5 * h_mean), preserving bankfull flow area and channel conveyance.
+- Assert realistic calculated bankfull river depth
+- Removed obsolete river width and depth estimations from SFINCS root model build, directly using river widths, depths, and Manning roughness estimated by routing.
+- Inherit upstream observed channel widths for unrepresented river reaches, combining multiple upstream widths at confluences via Leopold-Maddock power-law summation (W = (sum W_i^(1/beta))^beta) and scaling channel depth using hydraulic continuity.
+- Maintain channel conveyance and wave celerity during overbank flood events.
+- Lowered the lowland river Manning roughness floor from 0.025 to 0.020 for flat and large rivers.
+- Added include_rivers_not_represented_in_grid option to get_active_rivers and select_active_rivers so bankfull discharge, width, and depth are reported for all unrepresented river segments.
+- Added update_channel_geometry to LocalInertial routing solver ensuring both bankfull depth and river width are properly updated and synchronized during simulation.
+- Fixed bankfull river width and depth estimation for rivers without observed width so that bankfull geometry is estimated from simulated discharge (Q_2) and geomorphic power law parameters (alpha and beta) rather than falling back to the default channel width.
+- Added special reporter `_bankfull_depths` to export yearly bankfull depth across the river network as `bankfull_depths_m.geoparquet`, and yearly bankfull depth and discharge at discharge stations as consolidated parquet tables.
+- Added support in reporter for exporting from (geo)dataframes.
+- Added bankfull discharge reference line visualization in the discharge dashboard interactive time-series plots.
+- Added interactive popup time-series plots for river segments in the discharge dashboard displaying yearly bankfull discharge, channel width, and channel depth over time.
+- Dynamically scale river line widths and colors in the discharge evaluation dashboard based on simulated end-of-run channel width (linear scaling) and depth (light-to-dark blue gradient).
+- Added bankfull river depth estimation via hydraulic continuity derived from simulated 2-year flood discharge (Q_2) based on Andreadis et al. 2013. For channels with too observed width, the depth is scaled inversely with width to conserve volume.
+- For flood simulatons use channel depth and width from the hydrological model directly. Remove options power_law and mannings in flood simulatons.
+- Improve local inertial boundary conditions.
+- Fixed cascading waterbody-to-waterbody routing transfers in local inertial routing so connected natural lakes dynamically transfer releases each substep.
+- Allow ReturnPeriodModel to work with zero discharge by returning zero for these special cases.
 
 # v1.0.0b31
 - Reduce size of discharge evaluation HTML dashboard. 
@@ -43,7 +73,7 @@
 - Added `setup_flood_protection_standards` build method to process FLOPROS flood protection standards. Subsequently these flood protection standards are used to initialize the flood protection standards for each subbasin in the model domain.
 
 # v1.0.0b30
-- Implement evaporation for retention basins using a constant area based on maximum storage and a depth of 3 meters.
+- Implement evaporation for retention basins using a constant area based on maximum storage and a depth of 3 meters.,
 - Added optional external discharge skill-score comparisons for Google Streamflow, GloFAS, and PCR-GLOBWB/Utrecht.
 - Expanded discharge metrics with original/modified KGE, KGE components, NSE, Pearson r², RMSE, and RRMSE.
 - Added skill-score maps, boxplots, external KGE comparisons, upstream-area diagnostics, and dashboard summaries.
