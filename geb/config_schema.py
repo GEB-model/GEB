@@ -207,15 +207,27 @@ class RiverWidthConfig(BaseModel):
 class RiverDepthParameters(BaseModel):
     """Parameters for river depth calculation."""
 
-    c: float = Field(description="Power law coefficient c for depth = c * Q^d.")
-    d: float = Field(description="Power law exponent d for depth = c * Q^d.")
-    velocity_factor: float = Field(
-        gt=0.0,
-        description="Dimensionless velocity calibration factor for continuity depth: h = (W_expected / W_obs) * (h_expected / velocity_factor).",
+    c: float = Field(
+        description="Power law coefficient c for mean channel depth = c * Q^d."
+    )
+    d: float = Field(
+        description="Power law exponent d for mean channel depth = c * Q^d."
     )
     min_depth_m: float = Field(
         ge=0.0,
         description="Minimum allowable bankfull depth (m).",
+    )
+    shape_exponent: float = Field(
+        gt=0.0,
+        description="Power-law cross-sectional shape exponent r (0.5 for parabolic channel).",
+    )
+    use_observed_width_as_bankfull: bool = Field(
+        True,
+        description=(
+            "Whether to use observed channel width directly as bankfull width and scale depth "
+            "accordingly using baseline expected channel width. If False, reverts to previous "
+            "machinery using reach-specific alpha for expected width."
+        ),
     )
 
 
@@ -745,6 +757,11 @@ class ReportConfig(BaseModel):
         alias="_discharge_stations",
         description="Whether to report discharge stations.",
     )
+    bankfull_depths: bool = Field(
+        True,
+        alias="_bankfull_depths",
+        description="Whether to report bankfull depths each year.",
+    )
     retention_basins: bool = Field(
         False,
         alias="_retention_basins",
@@ -765,18 +782,23 @@ class ReportConfig(BaseModel):
 class ParametersConfig(BaseModel):
     """Configuration for parameters."""
 
-    mannings_n_multiplier: float = Field(1.0, description="Manning's n multiplier.")
-    crop_factor_multiplier: float = Field(1.0, description="Crop factor multiplier.")
+    mannings_n_multiplier: float = Field(description="Manning's n multiplier.")
+    bankfull_discharge_multiplier: float = Field(
+        gt=0.0,
+        description="Calibration multiplier for bankfull discharge (Q_bf) used to determine channel geometry and overbank spill capacity.",
+    )
+    crop_factor_multiplier: float = Field(description="Crop factor multiplier.")
     saturated_hydraulic_conductivity_multiplier: float = Field(
-        1.0, description="Saturated hydraulic conductivity multiplier."
+        description="Saturated hydraulic conductivity multiplier."
     )
-    reservoir_release_factor: float = Field(
-        0.1, description="Reservoir release factor."
+    groundwater_hydraulic_conductivity_multiplier: float = Field(
+        description="Groundwater hydraulic conductivity multiplier."
     )
-    lake_outflow_multiplier: float = Field(1.0, description="Lake outflow multiplier.")
-    interflow_multiplier: float = Field(1.0, description="Interflow multiplier.")
-    variable_runoff_shape_beta: float = Field(
-        1.0, description="Scale factor for the variable runoff shape parameter beta."
+    reservoir_release_factor: float = Field(description="Reservoir release factor.")
+    lake_outflow_multiplier: float = Field(description="Lake outflow multiplier.")
+    interflow_multiplier: float = Field(description="Interflow multiplier.")
+    variable_runoff_shape_beta_multiplier: float = Field(
+        description="Scale factor for the variable runoff shape parameter beta."
     )
 
 
@@ -833,9 +855,6 @@ class CalibrationParameterConfig(BaseModel):
 class CalibrationConfig(BaseModel):
     """Configuration for calibration."""
 
-    spinup_time: date = Field(..., description="Spinup start time (YYYY-MM-DD).")
-    start_time: date = Field(..., description="Calibration start time (YYYY-MM-DD).")
-    end_time: date = Field(..., description="Calibration end time (YYYY-MM-DD).")
     path: str = Field("calibration", description="Path to calibration output.")
     gpus: int = Field(0, description="Number of GPUs to use.")
     scenario: str = Field("no-adaptation", description="Scenario name.")
@@ -872,9 +891,7 @@ class Config(BaseModel):
     report: ReportConfig = Field(
         default_factory=ReportConfig, description="Reporting configuration."
     )
-    parameters: ParametersConfig = Field(
-        default_factory=ParametersConfig, description="Parameters configuration."
-    )
+    parameters: ParametersConfig = Field(description="Parameters configuration.")
     plantFATE: PlantFATEConfig = Field(
         default_factory=PlantFATEConfig, description="PlantFATE configuration."
     )

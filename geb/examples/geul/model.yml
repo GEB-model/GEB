@@ -37,6 +37,17 @@ hazards:
       - start_time: 2021-07-12 09:00:00
         end_time: 2021-07-20 09:00:00
 
+parameters:
+  mannings_n_multiplier: 1.0
+  bankfull_discharge_multiplier: 1.0
+  crop_factor_multiplier: 1.0
+  saturated_hydraulic_conductivity_multiplier: 1.0
+  groundwater_hydraulic_conductivity_multiplier: 1.0
+  reservoir_release_factor: 0.1
+  lake_outflow_multiplier: 1.0
+  interflow_multiplier: 1.0
+  variable_runoff_shape_beta_multiplier: 1.0
+
 report:
   hydrology.landsurface:
     bare_soil_evaporation_weighted_sum_m:
@@ -83,16 +94,28 @@ calibration:
     parameters:
       mannings_n_multiplier:
           variable: parameters.mannings_n_multiplier
-          min: 0.1
-          max: 10.0
+          min: 0.5
+          max: 2.0
+      bankfull_discharge_multiplier:
+          variable: parameters.bankfull_discharge_multiplier
+          min: 0.5
+          max: 2.0
       crop_factor_multiplier:
           variable: parameters.crop_factor_multiplier
           min: 0.5
-          max: 2
+          max: 2.0
+      variable_runoff_shape_beta_multiplier:
+          variable: parameters.variable_runoff_shape_beta_multiplier
+          min: 0.5
+          max: 2.0
       saturated_hydraulic_conductivity_multiplier:
           variable: parameters.saturated_hydraulic_conductivity_multiplier
           min: 0.5
-          max: 2
+          max: 2.0
+      groundwater_hydraulic_conductivity_multiplier:
+          variable: parameters.groundwater_hydraulic_conductivity_multiplier
+          min: 0.5
+          max: 2.0
       reservoir_M_factor:
           variable: agent_settings.reservoir_operators.reservoir_M_factor
           min: 0.05

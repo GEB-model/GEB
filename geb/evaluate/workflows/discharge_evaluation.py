@@ -17,6 +17,8 @@ from geb.evaluate.workflows import (
 from geb.evaluate.workflows.dashboard import (
     DischargeDashboardGeometries,
     StationChartBundleWriter,
+    add_river_charts_to_bundle_writer,
+    attach_end_of_run_river_dimensions,
     build_station_chart_data,
     determine_main_time_index,
     load_discharge_dashboard_geometries,
@@ -241,6 +243,16 @@ def evaluate_discharge(
         else None
     )
     chart_timelines: dict[str, Any] = {}
+    bankfull_discharge_file: Path = (
+        report_folder
+        / "hydrology.routing"
+        / "bankfull_discharge_yearly_m3_per_s.parquet"
+    )
+    bankfull_discharges: pd.DataFrame | None = (
+        pd.read_parquet(bankfull_discharge_file)
+        if bankfull_discharge_file.exists()
+        else None
+    )
 
     self.model.logger.info("Starting discharge evaluation...")
     for (
@@ -342,6 +354,19 @@ def evaluate_discharge(
                         eval_plot_folder=evaluation_paths.plot_folder,
                     )
                 station_id_text: str = str(station_id)
+                bankfull_discharge: pd.Series | None = None
+                if (
+                    bankfull_discharges is not None
+                    and station_id_text in bankfull_discharges.columns
+                ):
+                    station_bf_series: pd.Series = bankfull_discharges[
+                        station_id_text
+                    ].dropna()
+                    if not station_bf_series.empty:
+                        if correct_discharge_observations and upstream_area_ratio > 0:
+                            station_bf_series = station_bf_series * upstream_area_ratio
+                        bankfull_discharge = station_bf_series
+
                 assert chart_writer is not None
                 chart_writer.add_station(
                     station_id=station_id_text,
@@ -355,6 +380,7 @@ def evaluate_discharge(
                         logger=self.model.logger,
                         include_return_period_plots=include_return_period_plots,
                         main_time_index=main_time_index,
+                        bankfull_discharge=bankfull_discharge,
                     ),
                 )
 
@@ -441,6 +467,16 @@ def evaluate_discharge(
             )
 
             station_score_records.append(station_score_record)
+
+    if chart_writer is not None:
+        dashboard_geometries_pre: DischargeDashboardGeometries = (
+            load_discharge_dashboard_geometries(self.model.files["geom"])
+        )
+        add_river_charts_to_bundle_writer(
+            chart_writer=chart_writer,
+            run_output_folder=run_output_folder,
+            rivers=dashboard_geometries_pre.rivers,
+        )
 
     station_dashboard_chart_files: dict[str, str] = (
         chart_writer.finish() if chart_writer is not None else {}
@@ -543,6 +579,10 @@ def evaluate_discharge(
         dashboard_geometries: DischargeDashboardGeometries = (
             load_discharge_dashboard_geometries(self.model.files["geom"])
         )
+        enriched_rivers: gpd.GeoDataFrame = attach_end_of_run_river_dimensions(
+            rivers=dashboard_geometries.rivers,
+            run_output_folder=run_output_folder,
+        )
         use_daily_discharge_scores(dashboard_station_scores)
         dashboard_characteristics: pd.DataFrame | None = (
             discharge_characteristics.load_dashboard_catchment_characteristics(
@@ -556,7 +596,7 @@ def evaluate_discharge(
             mapped_station_scores=dashboard_station_scores,
             output_path=dashboard_path,
             region_geom=dashboard_geometries.region,
-            rivers=dashboard_geometries.rivers,
+            rivers=enriched_rivers,
             station_chart_files=station_dashboard_chart_files,
             waterbodies=dashboard_geometries.waterbodies,
             station_characteristics=dashboard_characteristics,
