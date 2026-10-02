@@ -683,10 +683,67 @@ class TestSpecialExportersSingleFile:
             report_dir / "hydrology.routing" / "bankfull_depths_m.geoparquet"
         )
         assert output_file.exists()
+        assert not (
+            report_dir / "hydrology.routing" / "bankfull_depths_m.zarr"
+        ).exists()
         gdf_res: gpd.GeoDataFrame = gpd.read_parquet(output_file)
         assert len(gdf_res) == 4
         assert "time" in gdf_res.columns
         assert gdf_res.crs.to_epsg() == 4326
+
+    def test_dataframe_export_whole(self, tmp_path: Path) -> None:
+        """Verify that a whole DataFrame variable is exported to a parquet file with time column and without an empty zarr directory."""
+        import datetime
+        from unittest.mock import MagicMock
+
+        import pandas as pd
+
+        from geb.reporter import Reporter
+
+        report_dir: Path = tmp_path / "report"
+        model: MagicMock = MagicMock()
+        model.config = {
+            "report": {
+                "_config": {"compression_level": 1, "chunk_target_size_bytes": 1000000},
+                "economy": {
+                    "firm_data": {
+                        "varname": "var.firms",
+                        "type": "dataframe",
+                        "function": None,
+                        "frequency": {"every": "year", "month": 1, "day": 1},
+                    }
+                },
+            }
+        }
+        model.mode = "w"
+        model.simulate_hydrology = False
+        model.files = {}
+        model.current_time = datetime.datetime(2020, 1, 1)
+
+        reporter: Reporter = Reporter(model, report_dir, clean=True)
+
+        df_y1: pd.DataFrame = pd.DataFrame(
+            {"revenue": [100.0, 200.0], "capital": [50.0, 75.0]},
+            index=[1, 2],
+        )
+        conf: dict = reporter.variables_to_report["economy"]["firm_data"]
+        reporter.process_value("economy", "firm_data", df_y1, conf)
+
+        model.current_time = datetime.datetime(2021, 1, 1)
+        df_y2: pd.DataFrame = pd.DataFrame(
+            {"revenue": [110.0, 220.0], "capital": [55.0, 80.0]},
+            index=[1, 2],
+        )
+        reporter.process_value("economy", "firm_data", df_y2, conf)
+
+        reporter.finalize()
+
+        output_file: Path = report_dir / "economy" / "firm_data.parquet"
+        assert output_file.exists()
+        assert not (report_dir / "economy" / "firm_data.zarr").exists()
+        df_res: pd.DataFrame = pd.read_parquet(output_file)
+        assert len(df_res) == 4
+        assert "time" in df_res.columns
 
     def test_geodataframe_export_sample_loc(self, tmp_path: Path) -> None:
         """Verify that sample_loc extracts scalar values from a GeoDataFrame into time series."""
