@@ -21,7 +21,7 @@ france_damage_model = {
                     [55.00, 0.027],
                     [60.00, 0.043],
                 ],
-                "maximum_damage": 1806
+                "maximum_damage": 517.087,
             },
         },
     }

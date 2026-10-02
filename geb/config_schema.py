@@ -37,6 +37,10 @@ class GeneralConfig(BaseModel):
         "simulation_root", description="Root directory for the simulation."
     )
     name: str = Field("default", description="Name of the simulation.")
+    random_seed: int | None = Field(
+        None,
+        description="Seed for reproducible stochastic runtime behavior. If null, randomness is not fixed."
+    )
     export_inital_on_spinup: bool = Field(
         True, description="Whether to export initial state on spinup."
     )

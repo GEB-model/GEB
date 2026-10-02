@@ -55,7 +55,7 @@ geul_damage_model = {
                     [2.5, 0.47],
                     [3, 0.5],
                 ],
-                "maximum_damage": 1806,
+                "maximum_damage": 517.087,
             },
             "content": {
                 "curve": [
@@ -68,7 +68,7 @@ geul_damage_model = {
                     [2.50, 0.7],
                     [3.00, 0.72],
                 ],
-                "maximum_damage": 78787,
+                "maximum_damage": 258.5435,
             },
         },
         "rail": {

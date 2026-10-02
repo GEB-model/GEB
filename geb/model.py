@@ -11,6 +11,7 @@ from types import TracebackType
 from typing import Any, Callable, cast, overload
 
 import geopandas as gpd
+import random
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -581,6 +582,12 @@ class GEBModel(Module):
         self.n_timesteps = n_timesteps
         self.current_timestep = 0
 
+        seed = self.config["general"].get("random_seed")
+        if seed is not None:
+            seed = int(seed)
+            random.seed(seed)
+            np.random.seed(seed)
+
         self.regions: gpd.GeoDataFrame = read_geom(self.files["geom"]["regions"])
 
         self.output_folder.mkdir(parents=True, exist_ok=True)
@@ -735,10 +742,27 @@ class GEBModel(Module):
 
         # MODIFICATION
         # Export final buildings after simulation
-        # self.agents.households.buildings.to_file(
-        #    "C:/Users/nxu279/GitHub/GEB_try/models/geul/base/buildings_final.gpkg",
-        #    layer="buildings",
-        #    driver="GPKG",
+        # final_buildings = self.agents.households.buildings.drop(
+        #     columns="geometry", errors="ignore"
+        # )
+
+        # building_ids = self.agents.households.buildings["id"].tolist()
+
+        # building_geometries = read_geom(
+        #     self.files["geom"]["assets/open_building_map"],
+        #     filters=[("id", "in", building_ids)],
+        # )[["id", "geometry"]]
+
+        # buildings_gdf = gpd.GeoDataFrame(
+        #     final_buildings.merge(building_geometries, on="id", how="left"),
+        #     geometry="geometry",
+        #     crs=building_geometries.crs,
+        # )
+
+        # buildings_gdf.to_file(
+        #     "/scistor/ivm/nxu279/GEB/models/large_scale/large_scale/cluster_001/base/buildings_final.gpkg",
+        #     layer="buildings",
+        #     driver="GPKG",
         # )
 
         print("Model run finished, finalizing report...")

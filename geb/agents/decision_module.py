@@ -942,8 +942,11 @@ class DecisionModule:
         discounts = 1 / (1 + r) ** np.arange(loan_duration)  # only year 0
         years = np.arange(loan_duration + 1, dtype=np.int32)
         cost_array = np.full((n_agents, years.size), -1, np.float32)
+        # for i, year in enumerate(years):
+        #     cost_array[:, i] = np.sum(discounts[: year + 1]) * adaptation_costs
+        #NEW
         for i, year in enumerate(years):
-            cost_array[:, i] = np.sum(discounts[: year + 1]) * adaptation_costs
+            cost_array[:, i] = np.sum(discounts[: year]) * adaptation_costs
 
         # right now we are considering no loan but this could be change/adapted in the future
         loan_left = (loan_duration - time_adapted).astype(np.int32)  # 0 for no loan
@@ -1330,6 +1333,9 @@ class DecisionModule:
             p_flood=p_flood,
             expected_damages_wind=damages_wind_insured,
             p_wind=p_wind,
+            income=income,
+            operating_insurer=operating_insurer,
+            reinsurance_share=public_reinsurer,
         )
 
         wealth_after_premium = wealth.astype(np.float32) - premium.astype(np.float32)
@@ -1489,6 +1495,7 @@ class DecisionModule:
         expected_damages_wind,
         p_wind,
         operating_insurer=0.3,
+        **kwargs,
     ):
         
         
@@ -1510,10 +1517,12 @@ class DecisionModule:
         p_flood: np.ndarray,
         expected_damages_wind: np.ndarray,
         p_wind: np.ndarray,
+        income: np.ndarray,
         operating_insurer: float = 0.3,
         #solidarity_share: float = 0.4,
         #catnat_surcharge: float = 0.15,
         reinsurance_share: float = 0.5,
+        premium_cap_rate: float = 0.015,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Hybrid insurance reform system:
@@ -1528,21 +1537,73 @@ class DecisionModule:
                 premium_private
         """
         
-        EAD_flood = self.calc_EAD(expected_damages_flood, p_flood)
+        # EAD_flood = self.calc_EAD(expected_damages_flood, p_flood)
         
 
         
-        EAD_wind = self.calc_EAD(expected_damages_wind, p_wind)
+        # EAD_wind = self.calc_EAD(expected_damages_wind, p_wind)
         
 
-        EAD_household = EAD_flood + EAD_wind
+        # EAD_household = EAD_flood + EAD_wind
 
    
-        premium_total = EAD_household * (1.0 + operating_insurer)
+        # premium_total = EAD_household * (1.0 + operating_insurer)
 
+
+        # premium_reinsured = premium_total * reinsurance_share
+
+        # premium_private = premium_total - premium_reinsured
+
+        # return (
+        #     premium_total.astype(np.float32),
+        #     premium_reinsured.astype(np.float32),
+        #     premium_private.astype(np.float32),
+        # )
+        ead_flood = self.calc_EAD(expected_damages_flood, p_flood)
+        ead_wind = self.calc_EAD(expected_damages_wind, p_wind)
+
+        raw_flood = ead_flood * (1.0 + operating_insurer)
+        raw_wind = ead_wind * (1.0 + operating_insurer)
+        raw_premium = raw_flood + raw_wind
+
+        # Assumes income is annual household disposable income.
+        premium_cap = np.float32(premium_cap_rate * np.nanmedian(income))
+
+        #Premium initially paid after applying the affordability cap
+        premium_paid = np.minimum(raw_premium, premium_cap).astype(np.float32)
+
+        #Revenue lost because high-risk households are capped
+        solidarity_needed = float(np.maximum(raw_premium - premium_cap, 0.0).sum())
+
+        #Lower-risk houeholds can contribute only up to their remaining room below the same cap
+        remaining_room = np.maximum(premium_cap - premium_paid, 0.0)
+        eligible = remaining_room > 0.0
+
+        solidarity_levy = np.zeros_like(raw_premium, dtype=np.float32)
+        amount_left = solidarity_needed
+
+        # Equal levy among eligible households, while perserving the cap
+        while amount_left > 1e-6 and eligible.any():
+            equal_share = amount_left / eligible.sum()
+
+            levy_now = np.minimum(
+                remaining_room[eligible],
+                np.float32(equal_share),
+            )
+
+            solidarity_levy[eligible] += levy_now
+            remaining_room[eligible] -= levy_now
+            amount_left -= float(levy_now.sum())
+
+            eligible = remaining_room > 1e-6
+
+        premium_total = premium_paid + solidarity_levy
+
+        # amount_left is any subsidy the solidarity pool cannot finance;
+        # account for it as public suppor in your results/reporting.
+        public_top_up = np.float32(max(amount_left, 0.0))
 
         premium_reinsured = premium_total * reinsurance_share
-
         premium_private = premium_total - premium_reinsured
 
         return (
@@ -1574,3 +1635,104 @@ class DecisionModule:
 
         else:
             raise ValueError("Unknown insurance scheme")
+
+    def quote_adaptation_premium_savings(
+        self,
+        *,
+        insurance_scheme: str,
+        income: np.ndarray,
+        damages_flood: np.ndarray,
+        damages_flood_adapted: np.ndarray,
+        damages_wind: np.ndarray,
+        damages_wind_adapted: np.ndarray,
+        p_flood: np.ndarray,
+        p_wind: np.ndarray,
+        currently_floodproofed: np.ndarray,
+        currently_shuttered: np.ndarray,
+        deductible: float = 0.1,
+        operating_insurer: float = 0.3,
+        public_reinsurer: float = 0.5,
+    ) -> dict[str, np.ndarray]:
+        """ Quote risk-based premiums for four adaptation configurations.
+        Shows premium reductions relative to the household's physical protection. 
+        """
+
+        n_agents = damages_flood.shape[1]
+        zeros = np.zeros(n_agents, dtype=np.float32)
+
+        if insurance_scheme in {"catnat"}:
+            return { 
+                "premium_current": zeros.copy(),
+                "premium_flood": zeros.copy(),
+                "premium_shutters": zeros.copy(),
+                "premium_both": zeros.copy(),
+                "saving_flood": zeros.copy(),
+                "saving_shutters": zeros.copy(),
+                "saving_flood_shapley": zeros.copy(),
+                "saving_shutters_shapley": zeros.copy(),
+            }
+
+        current_flood = np.asarray(currently_floodproofed, dtype=bool)
+        current_shutters = np.asarray(currently_shuttered, dtype=bool)
+        if current_flood.shape != (n_agents,) or current_shutters.shape != (n_agents,):
+            raise ValueError("Adaptation-status arrays must have one entry per household")
+
+        def quote(floodproofed: np.ndarray, shuttered: np.ndarray) -> np.ndarray:
+            #Start from unprotected losses, then replace losses only for the candidate measures in this quote
+            quote_flood = damages_flood.astype(np.float32, copy=True)
+            quote_wind = damages_wind.astype(np.float32, copy=True)
+            
+            quote_flood[:, floodproofed] = damages_flood_adapted[:, floodproofed]
+            quote_wind[:, shuttered] = damages_wind_adapted[:, shuttered]
+
+            premium_kwargs = {
+                "scheme": insurance_scheme,
+                "expected_damages_flood": quote_flood*np.float32(1.0 - deductible),
+                "p_flood": p_flood,
+                "expected_damages_wind": quote_wind * np.float32(1.0 - deductible),
+                "p_wind": p_wind,
+                "income": income,
+                "operating_insurer": operating_insurer,
+            }
+            if insurance_scheme == "reform":
+                premium_kwargs["reinsurance_share"] = public_reinsurer
+
+            premium,_,_= self.Insurance_premium(**premium_kwargs)
+            premium = np.asarray(premium, dtype=np.float32)
+            if premium.ndim == 0:
+                premium = np.full(n_agents, premium.item(), dtype=np.float32)
+            return premium.reshape(n_agents)
+
+        flood_candidate = np.ones(n_agents, dtype=bool)
+        shutters_candidate = np.ones(n_agents, dtype=bool)
+
+        premium_current = quote(current_flood, current_shutters)
+        premium_flood = quote(flood_candidate, current_shutters)
+        premium_shutters = quote(current_flood, shutters_candidate)
+        premium_both = quote(flood_candidate, shutters_candidate)
+
+        saving_flood = np.maximum(0.0, premium_current - premium_flood)
+        saving_shutters = np.maximum(0.0, premium_current - premium_shutters)
+        saving_both = np.maximum(0.0, premium_current - premium_both)
+
+        saving_flood_shapley = 0.5 * ((premium_current - premium_flood) + (premium_shutters-premium_both))
+        saving_shutters_shapley = 0.5 * ((premium_current - premium_shutters) + (premium_flood-premium_both))
+
+        return{
+            "premium_current": premium_current.astype(np.float32),
+            "premium_flood": premium_flood.astype(np.float32),
+            "premium_shutters": premium_shutters.astype(np.float32),
+            "premium_both": premium_both.astype(np.float32),
+            "saving_flood": saving_flood.astype(np.float32),
+            "saving_shutters": saving_shutters.astype(np.float32),
+            "saving_both": saving_both.astype(np.float32),
+            "saving_flood_shapley": np.maximum(0.0, saving_flood_shapley).astype(np.float32),
+            "saving_shutters_shapley": np.maximum(0.0, saving_shutters_shapley).astype(np.float32),
+        }
+
+
+
+        
+            
+
+
