@@ -425,8 +425,8 @@ def test_local_inertial_basic(
         river_storage_m3=river_storage,
         sideflow_m3=sideflow,
         evaporation_m3=np.zeros_like(sideflow, dtype=np.float32),
-        waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
-        outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float32),
+        waterbody_storage_m3=np.zeros(0, dtype=np.float64),
+        outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(mask.sum(), dtype=np.float32),
         retention_activation_threshold_m3_s=np.zeros(mask.sum(), dtype=np.float32),
     )
@@ -486,8 +486,8 @@ def test_local_inertial_with_retention_basins(
         river_storage_m3=river_storage_m3,
         sideflow_m3=sideflow,
         evaporation_m3=np.zeros(n_cells, dtype=np.float32),
-        waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
-        outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float32),
+        waterbody_storage_m3=np.zeros(0, dtype=np.float64),
+        outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=retention_storage_m3,
         retention_activation_threshold_m3_s=retention_activation_threshold_m3_s,
     )
@@ -533,8 +533,8 @@ def test_local_inertial_with_longer_dt(
         river_storage_m3=river_storage_m3,
         sideflow_m3=sideflow,
         evaporation_m3=np.zeros(n_cells, dtype=np.float32),
-        waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
-        outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float32),
+        waterbody_storage_m3=np.zeros(0, dtype=np.float64),
+        outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(0, dtype=np.float32),
         retention_activation_threshold_m3_s=np.zeros(0, dtype=np.float32),
     )
@@ -579,8 +579,8 @@ def test_local_inertial_with_sideflow(
         river_storage_m3=river_storage_m3,
         sideflow_m3=sideflow,
         evaporation_m3=np.zeros(n_cells, dtype=np.float32),
-        waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
-        outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float32),
+        waterbody_storage_m3=np.zeros(0, dtype=np.float64),
+        outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(0, dtype=np.float32),
         retention_activation_threshold_m3_s=np.zeros(0, dtype=np.float32),
     )
@@ -756,8 +756,8 @@ def test_local_inertial_sudden_flood_wave(
             river_storage_m3=river_storage_m3,
             sideflow_m3=sideflow_m3,
             evaporation_m3=np.zeros(n_cells, dtype=np.float32),
-            waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
-            outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float32),
+            waterbody_storage_m3=np.zeros(0, dtype=np.float64),
+            outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
             retention_storage_m3=np.zeros(n_cells, dtype=np.float32),
             retention_activation_threshold_m3_s=retention_activation_threshold_m3_s,
         )
@@ -861,8 +861,8 @@ def _run_retention_step(
         river_storage_m3=river_storage,
         sideflow_m3=sideflow,
         evaporation_m3=np.zeros_like(sideflow),
-        waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
-        outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float32),
+        waterbody_storage_m3=np.zeros(0, dtype=np.float64),
+        outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=retention_storage,
         retention_activation_threshold_m3_s=retention_activation_threshold_m3_s,
     )
@@ -1151,8 +1151,8 @@ def test_local_inertial_momentum_persistence(
         river_storage_m3=river_storage_m3,
         sideflow_m3=np.zeros(n_cells, dtype=np.float32),
         evaporation_m3=np.zeros(n_cells, dtype=np.float32),
-        waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
-        outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float32),
+        waterbody_storage_m3=np.zeros(0, dtype=np.float64),
+        outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(n_cells, dtype=np.float32),
         retention_activation_threshold_m3_s=np.zeros(n_cells, dtype=np.float32),
     )
@@ -1206,8 +1206,8 @@ def test_local_inertial_reverse_flow_mass_conservation() -> None:
         river_storage_m3=river_storage_m3,
         sideflow_m3=np.zeros(2, dtype=np.float32),
         evaporation_m3=np.zeros(2, dtype=np.float32),
-        waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
-        outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float32),
+        waterbody_storage_m3=np.zeros(0, dtype=np.float64),
+        outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(2, dtype=np.float32),
         retention_activation_threshold_m3_s=np.zeros(2, dtype=np.float32),
     )
@@ -1262,8 +1262,8 @@ def test_local_inertial_head_gradient_overflow_resilience() -> None:
         river_storage_m3=river_storage_m3,
         sideflow_m3=np.zeros(2, dtype=np.float32),
         evaporation_m3=np.zeros(2, dtype=np.float32),
-        waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
-        outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float32),
+        waterbody_storage_m3=np.zeros(0, dtype=np.float64),
+        outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(2, dtype=np.float32),
         retention_activation_threshold_m3_s=np.zeros(2, dtype=np.float32),
     )
@@ -1302,8 +1302,8 @@ def test_local_inertial_raises_on_non_finite_inputs() -> None:
             river_storage_m3=np.array([np.nan, 1000.0], dtype=np.float64),
             sideflow_m3=np.zeros(2, dtype=np.float32),
             evaporation_m3=np.zeros(2, dtype=np.float32),
-            waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
-            outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float32),
+            waterbody_storage_m3=np.zeros(0, dtype=np.float64),
+            outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
             retention_storage_m3=np.zeros(2, dtype=np.float32),
             retention_activation_threshold_m3_s=np.zeros(2, dtype=np.float32),
         )
@@ -1315,8 +1315,8 @@ def test_local_inertial_raises_on_non_finite_inputs() -> None:
             river_storage_m3=np.array([1000.0, 1000.0], dtype=np.float64),
             sideflow_m3=np.array([np.nan, 0.0], dtype=np.float32),
             evaporation_m3=np.zeros(2, dtype=np.float32),
-            waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
-            outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float32),
+            waterbody_storage_m3=np.zeros(0, dtype=np.float64),
+            outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
             retention_storage_m3=np.zeros(2, dtype=np.float32),
             retention_activation_threshold_m3_s=np.zeros(2, dtype=np.float32),
         )
@@ -1363,8 +1363,8 @@ def test_local_inertial_no_backflow_into_dry_cell() -> None:
         river_storage_m3=river_storage_m3,
         sideflow_m3=np.zeros(2, dtype=np.float32),
         evaporation_m3=np.zeros(2, dtype=np.float32),
-        waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
-        outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float32),
+        waterbody_storage_m3=np.zeros(0, dtype=np.float64),
+        outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(2, dtype=np.float32),
         retention_activation_threshold_m3_s=np.zeros(2, dtype=np.float32),
     )
@@ -1420,8 +1420,8 @@ def test_local_inertial_with_excess_abstraction() -> None:
         river_storage_m3=river_storage_m3,
         sideflow_m3=sideflow_m3,
         evaporation_m3=np.zeros(2, dtype=np.float32),
-        waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
-        outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float32),
+        waterbody_storage_m3=np.zeros(0, dtype=np.float64),
+        outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(2, dtype=np.float32),
         retention_activation_threshold_m3_s=np.zeros(2, dtype=np.float32),
     )
@@ -1529,8 +1529,8 @@ def test_local_inertial_channel_evaporation() -> None:
         river_storage_m3=river_storage_init,
         sideflow_m3=np.array([0.0, 20000.0], dtype=np.float32),
         evaporation_m3=evaporation_m3,
-        waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
-        outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float32),
+        waterbody_storage_m3=np.zeros(0, dtype=np.float64),
+        outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(0, dtype=np.float32),
         retention_activation_threshold_m3_s=np.zeros(0, dtype=np.float32),
     )
@@ -1630,8 +1630,8 @@ def test_local_inertial_tributary_junction_multidirectional_scaling() -> None:
         river_storage_m3=river_storage_init,
         sideflow_m3=np.zeros(n_cells, dtype=np.float32),
         evaporation_m3=np.zeros(n_cells, dtype=np.float32),
-        waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
-        outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float32),
+        waterbody_storage_m3=np.zeros(0, dtype=np.float64),
+        outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(0, dtype=np.float32),
         retention_activation_threshold_m3_s=np.zeros(0, dtype=np.float32),
     )
@@ -1687,8 +1687,8 @@ def test_local_inertial_kinematic_pit_missing_river_id() -> None:
         river_storage_m3=np.array([1000.0, 500.0], dtype=np.float64),
         sideflow_m3=np.zeros(n_cells, dtype=np.float32),
         evaporation_m3=np.zeros(n_cells, dtype=np.float32),
-        waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
-        outflow_per_waterbody_m3=np.ndarray(0, dtype=np.float32),
+        waterbody_storage_m3=np.zeros(0, dtype=np.float64),
+        outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
         retention_storage_m3=np.zeros(0, dtype=np.float32),
         retention_activation_threshold_m3_s=np.zeros(0, dtype=np.float32),
     )
@@ -6286,8 +6286,6 @@ def test_routing_set_router_estimates_width_from_simulated_q2(
         def load2d(self, *args: Any, **kwargs: Any) -> np.ndarray:
             return np.zeros(2, dtype=np.float32)
 
-
-
     class DummyWaterbodiesVar:
         waterbody_outflow_linear_mapping = np.zeros(0, dtype=np.int32)
         lake_area = np.zeros(0, dtype=np.float32)
@@ -6413,6 +6411,7 @@ def test_unrepresented_river_geometry_iterative_cascade() -> None:
     from geb.hydrology.routing import Routing, RoutingVariables
 
     routing: Routing = Routing.__new__(Routing)
+    routing.model = DummyModel()  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
             "parameters": {
@@ -6687,6 +6686,7 @@ def test_unrepresented_river_confluence_both_observed_widths() -> None:
     from geb.hydrology.routing import Routing, RoutingVariables
 
     routing: Routing = Routing.__new__(Routing)
+    routing.model = DummyModel()  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
             "parameters": {
@@ -6748,6 +6748,7 @@ def test_unrepresented_river_confluence_one_observed_one_unobserved() -> None:
     from geb.hydrology.routing import Routing, RoutingVariables
 
     routing: Routing = Routing.__new__(Routing)
+    routing.model = DummyModel()  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
             "parameters": {
@@ -6811,6 +6812,7 @@ def test_unrepresented_river_cascade_propagates_observed_width() -> None:
     from geb.hydrology.routing import Routing, RoutingVariables
 
     routing: Routing = Routing.__new__(Routing)
+    routing.model = DummyModel()  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
             "parameters": {
@@ -7345,8 +7347,6 @@ def test_routing_unobserved_river_width_and_depth_uses_parameters() -> None:
 def test_bankfull_discharge_multiplier_scaling() -> None:
     """Verifies that bankfull_discharge_multiplier scales bankfull discharge, width, and depth."""
     from geb.hydrology.routing import Routing, RoutingVariables
-
-
 
     def make_routing(mult: float) -> Routing:
         r: Routing = Routing.__new__(Routing)
