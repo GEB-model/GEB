@@ -5847,7 +5847,7 @@ def test_routing_continuity_bankfull_depth_narrow_vs_wide() -> None:
     - When W_obs == W_expected, depth collapses identically to Andreadis power law h_expected.
     - Narrow constrictions scour deeper (W_obs down -> h_bf up).
     - Wide reaches spread shallower (W_obs up -> h_bf down).
-    - Velocity factor directly calibrates depth.
+    - Bankfull depth scales inversely with observed width to conserve continuity.
     """
     # Fixed 2-year bankfull flood (Rhine scale: 3000 m3/s)
     q2: float = 3000.0
@@ -5855,27 +5855,50 @@ def test_routing_continuity_bankfull_depth_narrow_vs_wide() -> None:
     beta: float = 0.5
     c: float = 0.27
     d: float = 0.36
-    velocity_factor: float = 1.0
 
     w_expected: float = alpha * (q2**beta)
     h_expected: float = c * (q2**d)
 
     # When W_obs matches W_expected, depth must equal h_expected:
-    h_normal: float = (w_expected / w_expected) * (h_expected / velocity_factor)
+    h_normal: float = (w_expected / w_expected) * h_expected
     assert np.isclose(h_normal, h_expected)
     assert 4.5 < h_normal < 5.5  # lower Rhine depth is ~4.8 m
 
     # Narrow constriction (half width):
     w_narrow: float = 0.5 * w_expected
-    h_narrow: float = (w_expected / w_narrow) * (h_expected / velocity_factor)
+    h_narrow: float = (w_expected / w_narrow) * h_expected
     assert np.isclose(h_narrow, 2.0 * h_expected)
 
     # Wide braided section (double width):
     w_wide: float = 2.0 * w_expected
-    h_wide: float = (w_expected / w_wide) * (h_expected / velocity_factor)
+    h_wide: float = (w_expected / w_wide) * h_expected
     assert np.isclose(h_wide, 0.5 * h_expected)
 
     assert h_narrow > h_normal > h_wide
+
+
+class DummyModel:
+    """Minimal mock model providing parameters config for Routing tests."""
+
+    def __init__(self, mult: float = 1.0) -> None:
+        """Initialize DummyModel.
+
+        Args:
+            mult: Bankfull discharge multiplier (dimensionless).
+        """
+        self.in_spinup: bool = False
+        self.config: dict[str, Any] = {
+            "parameters": {
+                "bankfull_discharge_multiplier": mult,
+                "mannings_n_multiplier": 1.0,
+            }
+        }
+        self.files: dict[str, Any] = {
+            "grid": {
+                "routing/floodplain_width_m": "dummy",
+                "routing/bankfull_river_elevation_m": "dummy",
+            }
+        }
 
 
 def test_routing_calculate_bankfull_depth_integration() -> None:
@@ -5889,15 +5912,23 @@ def test_routing_calculate_bankfull_depth_integration() -> None:
     from geb.hydrology.routing import Routing
 
     routing = object.__new__(Routing)
+    routing.model = DummyModel()  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
             "parameters": {
                 "c": 0.27,
                 "d": 0.30,
-                "velocity_factor": 1.0,
                 "min_depth_m": 0.1,
+                "shape_exponent": 0.5,
+                "use_observed_width_as_bankfull": True,
             },
-        }
+        },
+        "river_width": {
+            "parameters": {
+                "default_alpha": 7.2,
+                "beta": 0.5,
+            },
+        },
     }
     routing.default_missing_channel_width = 10.0
 
@@ -5907,6 +5938,7 @@ def test_routing_calculate_bankfull_depth_integration() -> None:
     var.river_width_alpha = np.full(4, 7.2, dtype=np.float32)
     var.river_width_beta = np.full(4, 0.5, dtype=np.float32)
     widths = np.array([10.0, 50.0, 100.0, 200.0], dtype=np.float32)
+    var.observed_average_river_width = widths.copy()
     shape_exponent = np.full(4, 0.5, dtype=np.float32)
 
     # Scenario 1: rivers GeoDataFrame has return_period_2_years_daily_m3_per_s and use_simulated_bankfull_q=True
@@ -5986,7 +6018,7 @@ def test_routing_calculate_bankfull_depth_integration() -> None:
         index=[0, 1],
     )
     unrealistic_widths = np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32)
-    with pytest.raises(AssertionError, match="exceeds realistic bounds"):
+    with pytest.raises(ValueError, match="exceeds realistic bounds"):
         routing.calculate_bankfull_depth(
             bankfull_top_width_m=unrealistic_widths,
             use_simulated_bankfull_q=True,
@@ -5998,13 +6030,15 @@ def test_routing_updates_rivers_geometry() -> None:
     from geb.hydrology.routing import Routing, RoutingVariables
 
     routing = Routing.__new__(Routing)
+    routing.model = DummyModel()  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
             "parameters": {
                 "c": 0.27,
                 "d": 0.30,
-                "velocity_factor": 1.0,
                 "min_depth_m": 0.1,
+                "shape_exponent": 0.5,
+                "use_observed_width_as_bankfull": True,
             }
         },
         "river_width": {
@@ -6018,6 +6052,7 @@ def test_routing_updates_rivers_geometry() -> None:
     routing.var = RoutingVariables()
     routing.var.river_width_alpha = np.full(5, 7.2, dtype=np.float32)
     routing.var.river_width_beta = np.full(5, 0.5, dtype=np.float32)
+    routing.var.observed_average_river_width = np.full(5, np.nan, dtype=np.float32)
 
     rivers = gpd.GeoDataFrame(
         {
@@ -6063,8 +6098,9 @@ def test_routing_updates_rivers_geometry_missing_data_raises() -> None:
             "parameters": {
                 "c": 0.27,
                 "d": 0.30,
-                "velocity_factor": 1.0,
                 "min_depth_m": 0.1,
+                "shape_exponent": 0.5,
+                "use_observed_width_as_bankfull": True,
             }
         },
         "river_width": {
@@ -6078,6 +6114,7 @@ def test_routing_updates_rivers_geometry_missing_data_raises() -> None:
     routing.var = RoutingVariables()
     routing.var.river_width_alpha = np.full(3, 7.2, dtype=np.float32)
     routing.var.river_width_beta = np.full(3, 0.5, dtype=np.float32)
+    routing.var.observed_average_river_width = np.full(3, np.nan, dtype=np.float32)
 
     rivers = gpd.GeoDataFrame(
         {
@@ -6112,15 +6149,23 @@ def test_routing_unobserved_channel_width_depth_estimation() -> None:
     from geb.hydrology.routing import Routing, RoutingVariables
 
     routing = Routing.__new__(Routing)
+    routing.model = DummyModel()  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
             "parameters": {
                 "c": 0.27,
                 "d": 0.36,
-                "velocity_factor": 1.0,
                 "min_depth_m": 0.1,
+                "shape_exponent": 0.5,
+                "use_observed_width_as_bankfull": True,
             },
-        }
+        },
+        "river_width": {
+            "parameters": {
+                "default_alpha": 7.2,
+                "beta": 0.5,
+            },
+        },
     }
     routing.default_missing_channel_width = 0.5
 
@@ -6164,8 +6209,12 @@ def test_routing_unobserved_channel_width_depth_estimation() -> None:
     observed_depth: float = float(depths[1])
     unobserved_depth: float = float(depths[2])
 
-    assert np.isclose(observed_depth, (expected_w / 50.0) * expected_h, rtol=1e-3)
-    assert np.isclose(unobserved_depth, expected_h, rtol=1e-3)
+    # Parabolic centerline depth factor = (shape_exponent + 1) = 1.5 * mean_depth
+    expected_centerline_h: float = 1.5 * expected_h
+    assert np.isclose(
+        observed_depth, (expected_w / 50.0) * expected_centerline_h, rtol=1e-3
+    )
+    assert np.isclose(unobserved_depth, expected_centerline_h, rtol=1e-3)
 
 
 def test_routing_set_router_estimates_width_from_simulated_q2(
@@ -6180,8 +6229,15 @@ def test_routing_set_router_estimates_width_from_simulated_q2(
             "parameters": {
                 "c": 0.27,
                 "d": 0.36,
-                "velocity_factor": 1.0,
                 "min_depth_m": 0.1,
+                "shape_exponent": 0.5,
+                "use_observed_width_as_bankfull": True,
+            },
+        },
+        "river_width": {
+            "parameters": {
+                "default_alpha": 7.2,
+                "beta": 0.5,
             },
         },
         "retention_basins": {"release_threshold_factor": 1.0},
@@ -6230,14 +6286,7 @@ def test_routing_set_router_estimates_width_from_simulated_q2(
         def load2d(self, *args: Any, **kwargs: Any) -> np.ndarray:
             return np.zeros(2, dtype=np.float32)
 
-    class DummyModel:
-        in_spinup: bool = False
-        files = {
-            "grid": {
-                "routing/floodplain_width_m": "dummy",
-                "routing/bankfull_river_elevation_m": "dummy",
-            }
-        }
+
 
     class DummyWaterbodiesVar:
         waterbody_outflow_linear_mapping = np.zeros(0, dtype=np.int32)
@@ -6284,13 +6333,15 @@ def test_unrepresented_river_geometry_confluence() -> None:
     from geb.hydrology.routing import Routing, RoutingVariables
 
     routing: Routing = Routing.__new__(Routing)
+    routing.model = DummyModel()  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
             "parameters": {
                 "c": 0.27,
                 "d": 0.30,
-                "velocity_factor": 1.0,
                 "min_depth_m": 0.1,
+                "shape_exponent": 0.5,
+                "use_observed_width_as_bankfull": True,
             }
         },
         "river_width": {
@@ -6352,9 +6403,9 @@ def test_unrepresented_river_geometry_confluence() -> None:
     w30: float = float(routing.var.rivers.loc[30, "width"])
     assert np.isclose(w30, alpha30 * (150.0**0.5), rtol=1e-3)
 
-    # Estimated depth: 0.27 * 150^0.30
+    # Estimated depth: 1.5 * 0.27 * 150^0.30 (parabolic centerline depth factor = 1.5)
     h30: float = float(routing.var.rivers.loc[30, "depth"])
-    assert np.isclose(h30, 0.27 * (150.0**0.30), rtol=1e-3)
+    assert np.isclose(h30, 1.5 * 0.27 * (150.0**0.30), rtol=1e-3)
 
 
 def test_unrepresented_river_geometry_iterative_cascade() -> None:
@@ -6367,8 +6418,9 @@ def test_unrepresented_river_geometry_iterative_cascade() -> None:
             "parameters": {
                 "c": 0.27,
                 "d": 0.30,
-                "velocity_factor": 1.0,
                 "min_depth_m": 0.1,
+                "shape_exponent": 0.5,
+                "use_observed_width_as_bankfull": True,
             }
         },
         "river_width": {
@@ -6421,10 +6473,10 @@ def test_unrepresented_river_geometry_iterative_cascade() -> None:
     assert np.isclose(float(routing.var.rivers.loc[2, "width"]), 57.6)
     assert np.isclose(float(routing.var.rivers.loc[3, "width"]), 57.6)
     assert np.isclose(
-        float(routing.var.rivers.loc[2, "depth"]), 0.27 * (64.0**0.30), rtol=1e-3
+        float(routing.var.rivers.loc[2, "depth"]), 1.5 * 0.27 * (64.0**0.30), rtol=1e-3
     )
     assert np.isclose(
-        float(routing.var.rivers.loc[3, "depth"]), 0.27 * (64.0**0.30), rtol=1e-3
+        float(routing.var.rivers.loc[3, "depth"]), 1.5 * 0.27 * (64.0**0.30), rtol=1e-3
     )
 
 
@@ -6433,13 +6485,15 @@ def test_unrepresented_river_isolated_no_upstream_retains_nan() -> None:
     from geb.hydrology.routing import Routing, RoutingVariables
 
     routing: Routing = Routing.__new__(Routing)
+    routing.model = DummyModel()  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
             "parameters": {
                 "c": 0.27,
                 "d": 0.30,
-                "velocity_factor": 1.0,
                 "min_depth_m": 0.1,
+                "shape_exponent": 0.5,
+                "use_observed_width_as_bankfull": True,
             }
         },
         "river_width": {
@@ -6496,13 +6550,15 @@ def test_unrepresented_river_confluence_with_isolated_headwater() -> None:
     from geb.hydrology.routing import Routing, RoutingVariables
 
     routing: Routing = Routing.__new__(Routing)
+    routing.model = DummyModel()  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
             "parameters": {
                 "c": 0.27,
                 "d": 0.30,
-                "velocity_factor": 1.0,
                 "min_depth_m": 0.1,
+                "shape_exponent": 0.5,
+                "use_observed_width_as_bankfull": True,
             }
         },
         "river_width": {
@@ -6562,13 +6618,15 @@ def test_unrepresented_river_inherits_single_upstream_observed_width() -> None:
     from geb.hydrology.routing import Routing, RoutingVariables
 
     routing: Routing = Routing.__new__(Routing)
+    routing.model = DummyModel()  # ty:ignore[invalid-assignment]
     routing.config = {
         "river_depth": {
             "parameters": {
                 "c": 0.27,
                 "d": 0.30,
-                "velocity_factor": 1.0,
                 "min_depth_m": 0.1,
+                "shape_exponent": 0.5,
+                "use_observed_width_as_bankfull": True,
             }
         },
         "river_width": {
@@ -6616,10 +6674,10 @@ def test_unrepresented_river_inherits_single_upstream_observed_width() -> None:
     assert np.isclose(w20, 80.0)
     assert bool(routing.var.rivers.loc[20, "width_is_observed"])
 
-    # Depth should use continuity scaling: (43.2 / 80.0) * (0.27 * 36^0.30)
+    # Depth should use continuity scaling: 1.5 * (43.2 / 80.0) * (0.27 * 36^0.30)
     w_expected: float = 7.2 * (36.0**0.5)
     h_expected: float = 0.27 * (36.0**0.30)
-    expected_depth: float = (w_expected / 80.0) * h_expected
+    expected_depth: float = 1.5 * (w_expected / 80.0) * h_expected
     h20: float = float(routing.var.rivers.loc[20, "depth"])
     assert np.isclose(h20, expected_depth, rtol=1e-3)
 
@@ -6634,8 +6692,9 @@ def test_unrepresented_river_confluence_both_observed_widths() -> None:
             "parameters": {
                 "c": 0.27,
                 "d": 0.30,
-                "velocity_factor": 1.0,
                 "min_depth_m": 0.1,
+                "shape_exponent": 0.5,
+                "use_observed_width_as_bankfull": True,
             }
         },
         "river_width": {
@@ -6694,8 +6753,9 @@ def test_unrepresented_river_confluence_one_observed_one_unobserved() -> None:
             "parameters": {
                 "c": 0.27,
                 "d": 0.30,
-                "velocity_factor": 1.0,
                 "min_depth_m": 0.1,
+                "shape_exponent": 0.5,
+                "use_observed_width_as_bankfull": True,
             }
         },
         "river_width": {
@@ -6756,8 +6816,9 @@ def test_unrepresented_river_cascade_propagates_observed_width() -> None:
             "parameters": {
                 "c": 0.27,
                 "d": 0.30,
-                "velocity_factor": 1.0,
                 "min_depth_m": 0.1,
+                "shape_exponent": 0.5,
+                "use_observed_width_as_bankfull": True,
             }
         },
         "river_width": {
@@ -6805,3 +6866,562 @@ def test_unrepresented_river_cascade_propagates_observed_width() -> None:
     assert np.isclose(float(routing.var.rivers.loc[3, "width"]), 60.0)
     assert bool(routing.var.rivers.loc[2, "width_is_observed"])
     assert bool(routing.var.rivers.loc[3, "width_is_observed"])
+
+
+def test_unrepresented_river_non_positive_width_raises_assertion() -> None:
+    """Verify that non-positive upstream channel width raises an AssertionError."""
+    from geb.hydrology.routing import Routing, RoutingVariables
+
+    routing: Routing = Routing.__new__(Routing)
+    routing.config = {
+        "river_depth": {
+            "parameters": {
+                "c": 0.27,
+                "d": 0.30,
+                "min_depth_m": 0.1,
+                "shape_exponent": 0.5,
+                "use_observed_width_as_bankfull": True,
+            }
+        },
+        "river_width": {
+            "parameters": {
+                "default_alpha": 7.2,
+                "beta": 0.5,
+            }
+        },
+    }
+    routing.default_missing_channel_width = 0.5
+    routing.var = RoutingVariables()
+
+    # Reach 1 is represented with invalid width <= 0; Reach 2 is unrepresented
+    rivers: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "width": [np.nan, np.nan],
+            "depth": [np.nan, np.nan],
+            "manning": [np.nan, np.nan],
+            "represented_in_grid": [True, False],
+            "downstream_ID": [2, -1],
+            "shreve_stream_order": [1, 2],
+            "return_period_2_years_daily_m3_per_s": [36.0, np.nan],
+            "width_is_observed": [False, False],
+        },
+        index=[1, 2],
+    )
+    routing.var.rivers = rivers
+    routing.var.river_ids = np.array([1], dtype=np.int32)
+    routing.var.river_width_alpha = np.array([7.2], dtype=np.float32)
+    routing.var.river_width_beta = np.array([0.5], dtype=np.float32)
+    routing.var.observed_average_river_width = np.full(1, np.nan, dtype=np.float32)
+
+    with pytest.raises(AssertionError, match="must be strictly positive"):
+        routing._update_rivers_geometry(
+            width_grid=np.array([0.0], dtype=np.float32),
+            depth_grid=np.array([1.0], dtype=np.float32),
+            manning_grid=np.array([0.03], dtype=np.float32),
+        )
+
+
+def test_parabolic_channel_geometry_and_mean_depth_conversion() -> None:
+    """Verify that calculate_bankfull_depth scales mean channel depth to centerline depth.
+
+    For a parabolic channel (shape_exponent r = 0.5), cross-sectional area is
+    A = (2/3) * W * h_centerline. Bankfull mean depth is h_mean = A / W = (2/3) * h_centerline.
+    Therefore, the maximum centerline depth must equal 1.5 * h_mean so that bankfull
+    area exactly reproduces hydraulic geometry expectations.
+    """
+    from geb.hydrology.routing import Routing, RoutingVariables
+
+    routing: Routing = Routing.__new__(Routing)
+    routing.model = DummyModel()  # ty:ignore[invalid-assignment]
+    routing.config = {
+        "river_depth": {
+            "parameters": {
+                "c": 0.27,
+                "d": 0.30,
+                "min_depth_m": 0.1,
+                "shape_exponent": 0.5,
+                "use_observed_width_as_bankfull": True,
+            }
+        },
+        "river_width": {
+            "parameters": {
+                "default_alpha": 7.2,
+                "beta": 0.5,
+            }
+        },
+    }
+    routing.default_missing_channel_width = 10.0
+
+    var: RoutingVariables = RoutingVariables()
+    var.river_ids = np.array([0], dtype=np.int32)
+    var.river_width_alpha = np.array([7.2], dtype=np.float32)
+    var.river_width_beta = np.array([0.5], dtype=np.float32)
+    var.rivers = gpd.GeoDataFrame(
+        {
+            "return_period_2_years_daily_m3_per_s": [100.0],
+            "represented_in_grid": [True],
+        },
+        index=[0],
+    )
+    routing.var = var
+
+    # Bankfull Q = 100 m3/s
+    q_bf: float = 100.0
+    w_expected: float = 7.2 * (q_bf**0.5)
+    mean_depth_expected: float = 0.27 * (q_bf**0.30)
+
+    # 1. Unobserved / matching width reach: W = w_expected
+    widths: ArrayFloat32 = np.array([w_expected], dtype=np.float32)
+    routing.var.observed_average_river_width = widths.copy()
+    var.observed_average_river_width = widths.copy()
+    depths: ArrayFloat32 = routing.calculate_bankfull_depth(
+        bankfull_top_width_m=widths,
+        use_simulated_bankfull_q=True,
+    )
+
+    # Centerline depth should be 1.5 * mean_depth for r = 0.5
+    expected_centerline_depth: float = 1.5 * mean_depth_expected
+    assert np.isclose(float(depths[0]), expected_centerline_depth, rtol=1e-3)
+
+    # Parabolic cross-sectional area: A_bf = (2/3) * W * h_centerline
+    # This must equal W * h_mean
+    parabolic_area: float = (2.0 / 3.0) * float(widths[0]) * float(depths[0])
+    expected_area: float = float(widths[0]) * mean_depth_expected
+    assert np.isclose(parabolic_area, expected_area, rtol=1e-3)
+
+    # 2. Narrow constriction reach (half width): mean depth doubles, centerline depth also doubles
+    narrow_widths: ArrayFloat32 = np.array([0.5 * w_expected], dtype=np.float32)
+    var.observed_average_river_width = narrow_widths.copy()
+    narrow_depths: ArrayFloat32 = routing.calculate_bankfull_depth(
+        bankfull_top_width_m=narrow_widths,
+        use_simulated_bankfull_q=True,
+    )
+    assert np.isclose(
+        float(narrow_depths[0]), 2.0 * expected_centerline_depth, rtol=1e-3
+    )
+
+
+def test_routing_calculate_bankfull_depth_continuity_scaling_with_observed_width() -> (
+    None
+):
+    """Verify that calculate_bankfull_depth scales depth inversely with observed width.
+
+    Tests that:
+    1. Baseline expected width W_expected is computed using default hydraulic geometry parameters
+       (default_alpha = 7.2, beta = 0.5), preventing double-counting or cancellation when
+       reach-specific river_width_alpha has been scaled from low mean annual discharge.
+    2. Wide reaches scale depth down proportionally (W_obs = 2 * W_expected -> depth = 0.5 * baseline).
+    3. Narrow reaches scale depth up proportionally (W_obs = 0.5 * W_expected -> depth = 2.0 * baseline).
+    4. Constrictions scale depth up proportionally without exploding to unphysical values.
+    5. Fallback width inversion operates correctly during cold start when simulated Q2 is unavailable.
+    """
+    from geb.hydrology.routing import Routing, RoutingVariables
+
+    routing: Routing = Routing.__new__(Routing)
+    routing.model = DummyModel()  # ty:ignore[invalid-assignment]
+    routing.config = {
+        "river_depth": {
+            "parameters": {
+                "c": 0.27,
+                "d": 0.30,
+                "min_depth_m": 0.1,
+                "shape_exponent": 0.5,
+                "use_observed_width_as_bankfull": True,
+            }
+        },
+        "river_width": {
+            "parameters": {
+                "default_alpha": 7.2,
+                "beta": 0.5,
+            }
+        },
+    }
+    routing.default_missing_channel_width = 10.0
+
+    q2_flood: float = 100.0  # m3/s
+    w_expected: float = 7.2 * (q2_flood**0.5)  # 72.0 m
+    expected_mean_depth: float = 0.27 * (q2_flood**0.30)  # ~1.075 m
+    expected_centerline_depth: float = 1.5 * expected_mean_depth  # ~1.612 m
+
+    # 4 reaches:
+    # Reach 0: matching expected width (72 m)
+    # Reach 1: wide reach (2 * 72 = 144 m)
+    # Reach 2: narrow reach (0.5 * 72 = 36 m)
+    # Reach 3: constriction (0.25 * 72 = 18 m)
+    widths: ArrayFloat32 = np.array(
+        [w_expected, 2.0 * w_expected, 0.5 * w_expected, 0.25 * w_expected],
+        dtype=np.float32,
+    )
+
+    var: RoutingVariables = RoutingVariables()
+    var.river_ids = np.array([0, 1, 2, 3], dtype=np.int32)
+    var.observed_average_river_width = widths.copy()
+    # Reach-specific river_width_alpha values are inflated (e.g. scaled from low baseflow Q_mean during spinup)
+    var.river_width_alpha = np.array([120.0, 180.0, 95.0, 150.0], dtype=np.float32)
+    var.river_width_beta = np.full(4, 0.5, dtype=np.float32)
+    var.rivers = gpd.GeoDataFrame(
+        {
+            "return_period_2_years_daily_m3_per_s": [q2_flood] * 4,
+            "represented_in_grid": [True] * 4,
+        },
+        index=[0, 1, 2, 3],
+    )
+    routing.var = var
+
+    depths: ArrayFloat32 = routing.calculate_bankfull_depth(
+        bankfull_top_width_m=widths,
+        use_simulated_bankfull_q=True,
+    )
+
+    # 1. Matching width reach: depth equals baseline expected centerline depth
+    assert np.isclose(float(depths[0]), expected_centerline_depth, rtol=1e-3)
+
+    # 2. Wide reach (2x width): depth is halved (0.5x)
+    assert np.isclose(float(depths[1]), 0.5 * expected_centerline_depth, rtol=1e-3)
+
+    # 3. Narrow reach (0.5x width): depth is doubled (2.0x)
+    assert np.isclose(float(depths[2]), 2.0 * expected_centerline_depth, rtol=1e-3)
+
+    # 4. Constriction (0.25x width): depth is quadrupled (4.0x)
+    assert np.isclose(float(depths[3]), 4.0 * expected_centerline_depth, rtol=1e-3)
+
+    # 5. Verify flow area conservation: cross-sectional area A = (2/3) * W * h_centerline
+    # must equal expected flow area W_expected * expected_mean_depth for all reaches
+    expected_area: float = w_expected * expected_mean_depth
+    for i in range(4):
+        actual_area: float = (2.0 / 3.0) * float(widths[i]) * float(depths[i])
+        assert np.isclose(actual_area, expected_area, rtol=1e-3)
+
+    # 6. Cold-start fallback (use_simulated_bankfull_q = False): operates without error and produces positive finite depths
+    fallback_depths: ArrayFloat32 = routing.calculate_bankfull_depth(
+        bankfull_top_width_m=widths,
+        use_simulated_bankfull_q=False,
+    )
+    assert np.all(np.isfinite(fallback_depths))
+    assert np.all(fallback_depths >= 0.1)
+
+
+def test_routing_calculate_bankfull_depth_flag_revert_machinery() -> None:
+    """Verify that use_observed_width_as_bankfull flag toggles between scaling modes.
+
+    Tests that:
+    1. When use_observed_width_as_bankfull is True (default), expected top width W_expected
+       is calculated using default_alpha (7.2), scaling depth inversely with observed width.
+    2. When use_observed_width_as_bankfull is False, expected top width W_expected reverts
+       to using reach-specific river_width_alpha, allowing easy rollback to previous machinery.
+    3. Cold-start fallback width inversion proxy q_proxy similarly respects the flag.
+    """
+    from geb.hydrology.routing import Routing, RoutingVariables
+
+    routing: Routing = Routing.__new__(Routing)
+    routing.model = DummyModel()  # ty:ignore[invalid-assignment]
+    routing.config = {
+        "river_depth": {
+            "parameters": {
+                "c": 0.27,
+                "d": 0.30,
+                "min_depth_m": 0.1,
+                "shape_exponent": 0.5,
+                "use_observed_width_as_bankfull": True,
+            }
+        },
+        "river_width": {
+            "parameters": {
+                "default_alpha": 7.2,
+                "beta": 0.5,
+            }
+        },
+    }
+    routing.default_missing_channel_width = 10.0
+
+    q2_flood: float = 100.0  # m3/s
+    w_obs: float = 72.0  # m
+    widths: ArrayFloat32 = np.array([w_obs], dtype=np.float32)
+
+    var: RoutingVariables = RoutingVariables()
+    var.river_ids = np.array([0], dtype=np.int32)
+    var.observed_average_river_width = widths.copy()
+    # Inflated reach-specific river_width_alpha (e.g. 14.4, twice default_alpha)
+    var.river_width_alpha = np.array([14.4], dtype=np.float32)
+    var.river_width_beta = np.array([0.5], dtype=np.float32)
+    var.rivers = gpd.GeoDataFrame(
+        {
+            "return_period_2_years_daily_m3_per_s": [q2_flood],
+            "represented_in_grid": [True],
+        },
+        index=[0],
+    )
+    routing.var = var
+
+    # 1. Flag True (default): baseline expected width is default_alpha * Q2^beta = 7.2 * 10 = 72.0 m
+    # continuity_ratio = 72.0 / 72.0 = 1.0
+    depth_new: ArrayFloat32 = routing.calculate_bankfull_depth(
+        bankfull_top_width_m=widths,
+        use_simulated_bankfull_q=True,
+    )
+    expected_depth_new: float = 1.5 * (0.27 * (q2_flood**0.30))
+    assert np.isclose(float(depth_new[0]), expected_depth_new, rtol=1e-3)
+
+    # 2. Flag False (revert machinery): expected width is reach alpha * Q2^beta = 14.4 * 10 = 144.0 m
+    # continuity_ratio = 144.0 / 72.0 = 2.0 -> depth is doubled
+    routing.config["river_depth"]["parameters"]["use_observed_width_as_bankfull"] = (
+        False
+    )
+    depth_revert: ArrayFloat32 = routing.calculate_bankfull_depth(
+        bankfull_top_width_m=widths,
+        use_simulated_bankfull_q=True,
+    )
+    assert np.isclose(float(depth_revert[0]), 2.0 * expected_depth_new, rtol=1e-3)
+
+    # 3. Test cold-start fallback width inversion proxy q_proxy toggles properly
+    fallback_revert: ArrayFloat32 = routing.calculate_bankfull_depth(
+        bankfull_top_width_m=widths,
+        use_simulated_bankfull_q=False,
+    )
+    assert np.all(np.isfinite(fallback_revert))
+    assert np.all(fallback_revert >= 0.1)
+
+
+def test_routing_missing_config_keys_raise_key_error() -> None:
+    """Verify that calculate_bankfull_depth raises KeyError if required config keys are missing."""
+    from geb.hydrology.routing import Routing
+
+    routing: Routing = Routing.__new__(Routing)
+    routing.model = DummyModel()  # ty:ignore[invalid-assignment]
+    widths: ArrayFloat32 = np.array([50.0], dtype=np.float32)
+
+    # Missing river_width entirely raises KeyError
+    routing.config = {
+        "river_depth": {
+            "parameters": {
+                "c": 0.27,
+                "d": 0.30,
+                "min_depth_m": 0.1,
+                "shape_exponent": 0.5,
+                "use_observed_width_as_bankfull": True,
+            }
+        }
+    }
+    with pytest.raises(KeyError):
+        routing.calculate_bankfull_depth(widths, use_simulated_bankfull_q=False)
+
+    # Missing use_observed_width_as_bankfull raises KeyError
+    routing.config = {
+        "river_depth": {
+            "parameters": {
+                "c": 0.27,
+                "d": 0.30,
+                "min_depth_m": 0.1,
+                "shape_exponent": 0.5,
+            }
+        },
+        "river_width": {
+            "parameters": {
+                "default_alpha": 7.2,
+                "beta": 0.5,
+            }
+        },
+    }
+    with pytest.raises(KeyError):
+        routing.calculate_bankfull_depth(widths, use_simulated_bankfull_q=False)
+
+
+def test_routing_calculate_bankfull_width() -> None:
+    """Test Routing.calculate_bankfull_width with simulated Q2 and cold start."""
+    from geb.hydrology.routing import Routing, RoutingVariables
+
+    routing: Routing = Routing.__new__(Routing)
+    routing.model = DummyModel()  # ty:ignore[invalid-assignment]
+    routing.config = {
+        "river_depth": {
+            "parameters": {
+                "c": 0.27,
+                "d": 0.30,
+                "min_depth_m": 0.1,
+                "shape_exponent": 0.5,
+                "use_observed_width_as_bankfull": True,
+            }
+        },
+        "river_width": {
+            "parameters": {
+                "default_alpha": 7.2,
+                "beta": 0.5,
+            }
+        },
+    }
+    routing.default_missing_channel_width = 10.0
+    var: RoutingVariables = RoutingVariables()
+    var.river_ids = np.array([-1, 0, 1], dtype=np.int32)
+    var.river_width_alpha = np.full(3, 7.2, dtype=np.float32)
+    var.river_width_beta = np.full(3, 0.5, dtype=np.float32)
+    var.observed_average_river_width = np.array(
+        [np.nan, 50.0, np.nan], dtype=np.float32
+    )
+    var.rivers = gpd.GeoDataFrame(
+        {
+            "return_period_2_years_daily_m3_per_s": [100.0, 100.0],
+            "represented_in_grid": [True, True],
+        },
+        index=[0, 1],
+    )
+    routing.var = var
+
+    # Cold start (use_simulated_bankfull_q=False): observed width preserved, unobserved gets default_missing
+    widths_cold: ArrayFloat32 = routing.calculate_bankfull_width(
+        use_simulated_bankfull_q=False
+    )
+    assert widths_cold[0] == 10.0
+    assert widths_cold[1] == 50.0
+    assert widths_cold[2] == 10.0
+
+    # Simulated Q2 (use_simulated_bankfull_q=True): cell 2 estimated as 7.2 * 100^0.5 = 72.0
+    widths_q2: ArrayFloat32 = routing.calculate_bankfull_width(
+        use_simulated_bankfull_q=True
+    )
+    assert widths_q2[0] == 10.0
+    assert widths_q2[1] == 50.0
+    assert np.isclose(float(widths_q2[2]), 72.0)
+
+
+def test_routing_unobserved_river_width_and_depth_uses_parameters() -> None:
+    """Verify that unobserved rivers always use alpha/beta for width and c/d for depth without continuity distortion."""
+    from geb.hydrology.routing import Routing, RoutingVariables
+
+    routing: Routing = Routing.__new__(Routing)
+    routing.model = DummyModel()  # ty:ignore[invalid-assignment]
+    routing.config = {
+        "river_depth": {
+            "parameters": {
+                "c": 0.27,
+                "d": 0.30,
+                "min_depth_m": 0.1,
+                "shape_exponent": 0.5,
+                "use_observed_width_as_bankfull": True,
+            }
+        },
+        "river_width": {
+            "parameters": {
+                "default_alpha": 7.2,
+                "beta": 0.5,
+            }
+        },
+    }
+    routing.default_missing_channel_width = 0.5
+    var: RoutingVariables = RoutingVariables()
+    var.river_ids = np.array([42], dtype=np.int32)
+    var.river_width_alpha = np.array([7.2], dtype=np.float32)
+    var.river_width_beta = np.array([0.5], dtype=np.float32)
+    # River 42 has NO observed width
+    var.observed_average_river_width = np.array([np.nan], dtype=np.float32)
+    q2_val: float = 110.71
+    var.rivers = gpd.GeoDataFrame(
+        {
+            "return_period_2_years_daily_m3_per_s": [q2_val],
+            "represented_in_grid": [True],
+        },
+        index=[42],
+    )
+    routing.var = var
+
+    # 1. Width calculation uses alpha * Q^beta = 7.2 * 110.71^0.5 = ~75.76 m
+    widths: ArrayFloat32 = routing.calculate_bankfull_width(
+        use_simulated_bankfull_q=True
+    )
+    expected_w: float = 7.2 * (q2_val**0.5)
+    assert np.isclose(float(widths[0]), expected_w, rtol=1e-3)
+
+    # 2. Even if a small width (e.g. 0.5 m) is passed to calculate_bankfull_depth,
+    # the unobserved river depth is NOT multiplied by (75.76 / 0.5); it uses c * Q^d directly
+    small_widths: ArrayFloat32 = np.array([0.5], dtype=np.float32)
+    depths: ArrayFloat32 = routing.calculate_bankfull_depth(
+        bankfull_top_width_m=small_widths,
+        use_simulated_bankfull_q=True,
+    )
+    expected_mean_depth: float = 0.27 * (q2_val**0.30)
+    expected_centerline_depth: float = 1.5 * expected_mean_depth
+    assert np.isclose(float(depths[0]), expected_centerline_depth, rtol=1e-3)
+
+
+def test_bankfull_discharge_multiplier_scaling() -> None:
+    """Verifies that bankfull_discharge_multiplier scales bankfull discharge, width, and depth."""
+    from geb.hydrology.routing import Routing, RoutingVariables
+
+
+
+    def make_routing(mult: float) -> Routing:
+        r: Routing = Routing.__new__(Routing)
+        r.model = DummyModel(mult)  # ty:ignore[invalid-assignment]
+        r.config = {
+            "river_width": {
+                "parameters": {
+                    "default_alpha": 7.2,
+                    "beta": 0.5,
+                },
+            },
+            "river_depth": {
+                "parameters": {
+                    "c": 0.27,
+                    "d": 0.30,
+                    "min_depth_m": 0.1,
+                    "shape_exponent": 0.5,
+                    "use_observed_width_as_bankfull": False,
+                },
+            },
+        }
+        r.default_missing_channel_width = 0.5
+        var = RoutingVariables()
+        var.river_ids = np.array([10, 20], dtype=np.int32)
+        var.river_width_alpha = np.array([7.2, 7.2], dtype=np.float32)
+        var.river_width_beta = np.array([0.5, 0.5], dtype=np.float32)
+        # Reach 10 has observed width 50m; Reach 20 is unobserved (NaN)
+        var.observed_average_river_width = np.array([50.0, np.nan], dtype=np.float32)
+        var.rivers = gpd.GeoDataFrame(
+            {
+                "return_period_2_years_daily_m3_per_s": [100.0, 100.0],
+                "represented_in_grid": [True, True],
+            },
+            index=[10, 20],
+        )
+        r.var = var
+        return r
+
+    r_base: Routing = make_routing(1.0)
+    w_base: ArrayFloat32 = r_base.calculate_bankfull_width(
+        use_simulated_bankfull_q=True
+    )
+    d_base: ArrayFloat32 = r_base.calculate_bankfull_depth(
+        bankfull_top_width_m=w_base, use_simulated_bankfull_q=True
+    )
+
+    # Multiplier = 2.0
+    r_high: Routing = make_routing(2.0)
+    w_high: ArrayFloat32 = r_high.calculate_bankfull_width(
+        use_simulated_bankfull_q=True
+    )
+    d_high: ArrayFloat32 = r_high.calculate_bankfull_depth(
+        bankfull_top_width_m=w_high, use_simulated_bankfull_q=True
+    )
+
+    # Multiplier = 0.5
+    r_low: Routing = make_routing(0.5)
+    w_low: ArrayFloat32 = r_low.calculate_bankfull_width(use_simulated_bankfull_q=True)
+    d_low: ArrayFloat32 = r_low.calculate_bankfull_depth(
+        bankfull_top_width_m=w_low, use_simulated_bankfull_q=True
+    )
+
+    # 1. Observed width reach (index 0): width remains strictly observed (50m) across all multipliers
+    assert np.isclose(w_base[0], 50.0)
+    assert np.isclose(w_high[0], 50.0)
+    assert np.isclose(w_low[0], 50.0)
+
+    # For observed reach, depth scales with (Q_mult)^(beta + d) = (Q_mult)^0.80
+    assert np.isclose(d_high[0] / d_base[0], 2.0 ** (0.5 + 0.30), rtol=1e-3)
+    assert np.isclose(d_low[0] / d_base[0], 0.5 ** (0.5 + 0.30), rtol=1e-3)
+
+    # 2. Unobserved width reach (index 1): width scales with Q_mult^beta = Q_mult^0.5
+    assert np.isclose(w_high[1] / w_base[1], 2.0**0.5, rtol=1e-3)
+    assert np.isclose(w_low[1] / w_base[1], 0.5**0.5, rtol=1e-3)
+
+    # For unobserved reach, depth scales with Q_mult^d = Q_mult^0.30
+    assert np.isclose(d_high[1] / d_base[1], 2.0**0.30, rtol=1e-3)
+    assert np.isclose(d_low[1] / d_base[1], 0.5**0.30, rtol=1e-3)

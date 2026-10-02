@@ -85,6 +85,10 @@ calibration:
           variable: parameters.mannings_n_multiplier
           min: 0.5
           max: 2.0
+      bankfull_discharge_multiplier:
+          variable: parameters.bankfull_discharge_multiplier
+          min: 0.5
+          max: 2.0
       crop_factor_multiplier:
           variable: parameters.crop_factor_multiplier
           min: 0.5
