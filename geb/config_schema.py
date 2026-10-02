@@ -782,23 +782,23 @@ class ReportConfig(BaseModel):
 class ParametersConfig(BaseModel):
     """Configuration for parameters."""
 
-    mannings_n_multiplier: float = Field(1.0, description="Manning's n multiplier.")
+    mannings_n_multiplier: float = Field(description="Manning's n multiplier.")
     bankfull_discharge_multiplier: float = Field(
-        1.0,
         gt=0.0,
         description="Calibration multiplier for bankfull discharge (Q_bf) used to determine channel geometry and overbank spill capacity.",
     )
-    crop_factor_multiplier: float = Field(1.0, description="Crop factor multiplier.")
+    crop_factor_multiplier: float = Field(description="Crop factor multiplier.")
     saturated_hydraulic_conductivity_multiplier: float = Field(
-        1.0, description="Saturated hydraulic conductivity multiplier."
+        description="Saturated hydraulic conductivity multiplier."
     )
-    reservoir_release_factor: float = Field(
-        0.1, description="Reservoir release factor."
+    groundwater_hydraulic_conductivity_multiplier: float = Field(
+        description="Groundwater hydraulic conductivity multiplier."
     )
-    lake_outflow_multiplier: float = Field(1.0, description="Lake outflow multiplier.")
-    interflow_multiplier: float = Field(1.0, description="Interflow multiplier.")
-    variable_runoff_shape_beta: float = Field(
-        1.0, description="Scale factor for the variable runoff shape parameter beta."
+    reservoir_release_factor: float = Field(description="Reservoir release factor.")
+    lake_outflow_multiplier: float = Field(description="Lake outflow multiplier.")
+    interflow_multiplier: float = Field(description="Interflow multiplier.")
+    variable_runoff_shape_beta_multiplier: float = Field(
+        description="Scale factor for the variable runoff shape parameter beta."
     )
 
 
@@ -891,9 +891,7 @@ class Config(BaseModel):
     report: ReportConfig = Field(
         default_factory=ReportConfig, description="Reporting configuration."
     )
-    parameters: ParametersConfig = Field(
-        default_factory=ParametersConfig, description="Parameters configuration."
-    )
+    parameters: ParametersConfig = Field(description="Parameters configuration.")
     plantFATE: PlantFATEConfig = Field(
         default_factory=PlantFATEConfig, description="PlantFATE configuration."
     )

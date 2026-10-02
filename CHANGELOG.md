@@ -1,4 +1,5 @@
 # dev
+- Removed defaults from ParametersConfig in configuration schema so that all parameters must be explicitly set via reasonable_default_config.yml or model.yml, and added groundwater_hydraulic_conductivity_multiplier to the schema.
 - Detect waterbody outflow points in model build process rather than the run.
 - Added non-negativity checks for topwater, surface runoff, and other land surface water storages and fluxes in `LandSurface` validation under `__debug__`, exporting diagnostic snapshots as `diagnostic_landsurface_water_error_cell_{index}.npz` on failure.
 - Added `use_observed_width_as_bankfull` configuration flag to routing river depth parameters (default `true`) allowing observed channel widths to be used directly as bankfull widths with depth scaled by hydraulic continuity, while preserving previous reach-specific alpha scaling behind the flag for easy reversion.
