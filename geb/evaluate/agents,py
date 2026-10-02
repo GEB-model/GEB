@@ -1,17 +1,32 @@
-"""Module implementing agent evaluation functions for the GEB model."""
+"""Module implementing agent evaluation functions for the GEB model.
+
+This function allows to evaluate floodproofing and windstorm-shutter uptake across GEB clusters."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Sequence
 
+import geopandas as gpd
 import numpy as np
 import pandas as pd
+import zarr
 
 from geb.workflows.io import read_zarr
 
 if TYPE_CHECKING:
     from geb.evaluate import Evaluate
     from geb.model import GEBModel
+
+LECZ_REL_PATH = Path(
+    "input/geom/coastal/low_elevation_coastal_zone_mask.geoparquet"
+)
+HOUSEHOLD_OUTPUT_REL_PATH = Path("output")
+HOUSEHOLD_TABLE_REL_PATH = Path("buildings_each_step")
+HOUSEHOLD_LOCATION_REL_PATH = Path(
+    "input/array/agents/households/location.zarr"
+)
 
 
 class Agents:
@@ -24,13 +39,7 @@ class Agents:
 
     def evaluate_household_adaptation(
         self,
-        spinup_name: str = "spinup",
-        run_name: str = "default",
-        include_spinup: bool = False,
-        include_yearly_plots: bool = True,
-        correct_discharge_observations: bool = False,
-    ) -> dict[str, Any]:
-        """Evaluate the household adaptation module of GEB.
+        spinup_name: str = "
 
         Compares simulated household adaptation (dry- and wetproofing measures)
         with observed adoption rates. Reads saved simulation data
