@@ -675,14 +675,12 @@ class Routing(Module):
             upstream_q: np.ndarray = np.where(
                 q_sim.notnull() & (q_sim > 0), q_sim, q_inv
             )
-            combined_q: float = float(upstream_q.sum()) * float(
-                self.bankfull_discharge_multiplier
-            )
-            assert combined_q > 0.0, (
+            raw_summed_q: float = float(upstream_q.sum())
+            assert raw_summed_q > 0.0, (
                 f"Combined bankfull discharge for reach {reach_id} must be strictly positive."
             )
 
-            weights: np.ndarray = upstream_q / combined_q
+            weights: np.ndarray = upstream_q / raw_summed_q
 
             # Discharge-weighted average parameters
             combined_alpha: float = float(
@@ -692,6 +690,12 @@ class Routing(Module):
             combined_c: float = float((weights * valid_up["river_depth_c"]).sum())
             combined_d: float = float((weights * valid_up["river_depth_d"]).sum())
             combined_manning: float = float((weights * valid_up["manning"]).sum())
+
+            # Calibrated bankfull discharge for deriving geometry
+            bankfull_q: float = raw_summed_q * float(self.bankfull_discharge_multiplier)
+            assert bankfull_q > 0.0, (
+                f"Bankfull discharge for reach {reach_id} must be strictly positive."
+            )
 
             # Width: propagate observed width or estimate from downstream hydraulic geometry
             has_observed_upstream: bool = bool(valid_up["width_is_observed"].any())
@@ -717,7 +721,7 @@ class Routing(Module):
                 is_observed = True
             else:
                 estimated_width = max(
-                    combined_alpha * (combined_q**combined_beta),
+                    combined_alpha * (bankfull_q**combined_beta),
                     default_missing_width,
                 )
 
@@ -726,11 +730,11 @@ class Routing(Module):
             )
 
             w_expected: float = (
-                default_alpha * (combined_q**default_beta)
+                default_alpha * (bankfull_q**default_beta)
                 if use_observed_width_as_bankfull
-                else combined_alpha * (combined_q**combined_beta)
+                else combined_alpha * (bankfull_q**combined_beta)
             )
-            expected_mean_channel_depth: float = combined_c * (combined_q**combined_d)
+            expected_mean_channel_depth: float = combined_c * (bankfull_q**combined_d)
             continuity_ratio: float = (
                 w_expected / estimated_width
                 if is_observed and w_expected > 0.0
@@ -745,8 +749,8 @@ class Routing(Module):
             )
 
             alpha_to_assign: float = (
-                estimated_width / (combined_q**combined_beta)
-                if is_observed and combined_q > 0.0
+                estimated_width / (bankfull_q**combined_beta)
+                if is_observed and bankfull_q > 0.0
                 else combined_alpha
             )
 
@@ -771,7 +775,7 @@ class Routing(Module):
                 float(combined_beta),
                 float(combined_c),
                 float(combined_d),
-                float(combined_q),
+                float(raw_summed_q),
                 bool(is_observed),
             ]
 
@@ -930,18 +934,15 @@ class Routing(Module):
         q_mult: np.float32 = np.float32(self.bankfull_discharge_multiplier)
         if use_observed_width_as_bankfull:
             # Downstream hydraulic geometry width inversion proxy Q_proxy = (W / alpha)^(1 / beta):
-            q_proxy = (
-                (bankfull_top_width_m / default_alpha)
-                ** (np.float32(1.0) / default_beta)
-            ) * q_mult
+            q_proxy = (bankfull_top_width_m / default_alpha) ** (
+                np.float32(1.0) / default_beta
+            )
         else:
             width_alpha: ArrayFloat32 = self.var.river_width_alpha
             width_beta: ArrayFloat32 = self.var.river_width_beta
             alpha: ArrayFloat32 = np.maximum(width_alpha, np.float32(1.0))
             beta: ArrayFloat32 = np.maximum(width_beta, np.float32(0.1))
-            q_proxy = (
-                (bankfull_top_width_m / alpha) ** (np.float32(1.0) / beta)
-            ) * q_mult
+            q_proxy = (bankfull_top_width_m / alpha) ** (np.float32(1.0) / beta)
 
         if use_simulated_bankfull_q:
             q2_col: pd.Series = self.var.rivers.loc[
@@ -964,7 +965,7 @@ class Routing(Module):
                 * q_mult
             )
         else:
-            bankfull_discharge_m3_s = q_proxy
+            bankfull_discharge_m3_s = q_proxy * q_mult
 
         # For a power-law channel W(y) = W_bf * (y / h_bf)^r, cross-sectional area is A_bf = (1 / (r + 1)) * W_bf * h_bf.
         # Mean bankfull depth is h_mean = A_bf / W_bf = h_bf / (r + 1).

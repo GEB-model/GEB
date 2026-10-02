@@ -581,7 +581,7 @@ def evaluate_discharge(
         )
         enriched_rivers: gpd.GeoDataFrame = attach_end_of_run_river_dimensions(
             rivers=dashboard_geometries.rivers,
-            run_output_folder=self.model.output_folder,
+            run_output_folder=run_output_folder,
         )
         use_daily_discharge_scores(dashboard_station_scores)
         dashboard_characteristics: pd.DataFrame | None = (

@@ -745,6 +745,54 @@ class TestSpecialExportersSingleFile:
         assert len(df_res) == 4
         assert "time" in df_res.columns
 
+    def test_geodataframe_rejects_plain_dataframe(self, tmp_path: Path) -> None:
+        """Verify that a report configured as geodataframe rejects a plain DataFrame.
+
+        Args:
+            tmp_path: Pytest temporary directory fixture.
+        """
+        import datetime
+        from unittest.mock import MagicMock
+
+        import pandas as pd
+        import pytest
+
+        from geb.reporter import Reporter
+
+        report_dir: Path = tmp_path / "report"
+        model: MagicMock = MagicMock()
+        model.config = {
+            "report": {
+                "_config": {"compression_level": 1, "chunk_target_size_bytes": 1000000},
+                "hydrology.routing": {
+                    "bankfull_depths_m": {
+                        "varname": "var.rivers",
+                        "type": "geodataframe",
+                        "function": None,
+                        "frequency": {"every": "year", "month": 1, "day": 1},
+                    }
+                },
+            }
+        }
+        model.mode = "w"
+        model.simulate_hydrology = False
+        model.files = {}
+        model.current_time = datetime.datetime(2020, 1, 1)
+
+        reporter: Reporter = Reporter(model, report_dir, clean=True)
+        plain_df: pd.DataFrame = pd.DataFrame(
+            {"depth": [1.5, 2.0], "width": [10.0, 15.0]},
+            index=[1, 2],
+        )
+        conf: dict = reporter.variables_to_report["hydrology.routing"][
+            "bankfull_depths_m"
+        ]
+
+        with pytest.raises(ValueError, match="must be a GeoDataFrame"):
+            reporter.process_value(
+                "hydrology.routing", "bankfull_depths_m", plain_df, conf
+            )
+
     def test_geodataframe_export_sample_loc(self, tmp_path: Path) -> None:
         """Verify that sample_loc extracts scalar values from a GeoDataFrame into time series."""
         import datetime

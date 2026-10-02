@@ -1722,9 +1722,13 @@ class Reporter:
                 value = self._apply_agent_function(module_name, name, value, config)
 
         elif type_ in ("dataframe", "geodataframe"):
-            if not isinstance(value, (pd.DataFrame, gpd.GeoDataFrame)):
+            if type_ == "geodataframe" and not isinstance(value, gpd.GeoDataFrame):
                 raise ValueError(
-                    f"Value for {module_name}.{name} must be a DataFrame or GeoDataFrame, but is {type(value)}."
+                    f"Value for {module_name}.{name} must be a GeoDataFrame, but is {type(value)}."
+                )
+            elif not isinstance(value, pd.DataFrame):
+                raise ValueError(
+                    f"Value for {module_name}.{name} must be a DataFrame, but is {type(value)}."
                 )
             if config["function"] is None:
                 df_copy = value.copy()
@@ -1949,7 +1953,7 @@ class Reporter:
                             continue
                         folder = self.report_folder / module_name
                         folder.mkdir(parents=True, exist_ok=True)
-                        is_geo: bool = isinstance(collected[0], gpd.GeoDataFrame)
+                        is_geo: bool = config.get("type") == "geodataframe"
                         if is_geo:
                             crs = collected[0].crs
                             final_gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(

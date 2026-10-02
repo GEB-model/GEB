@@ -6479,6 +6479,86 @@ def test_unrepresented_river_geometry_iterative_cascade() -> None:
     )
 
 
+def test_unrepresented_river_cascade_with_bankfull_multiplier() -> None:
+    """Verify that unrepresented cascades do not compound bankfull multiplier across hops or distort weights."""
+    from geb.hydrology.routing import Routing, RoutingVariables
+
+    routing: Routing = Routing.__new__(Routing)
+    # Configure calibration multiplier to 2.0 to verify non-compounding
+    routing.model = DummyModel(2.0)  # ty:ignore[invalid-assignment]
+    routing.config = {
+        "river_depth": {
+            "parameters": {
+                "c": 0.27,
+                "d": 0.30,
+                "min_depth_m": 0.1,
+                "shape_exponent": 0.5,
+                "use_observed_width_as_bankfull": True,
+            }
+        },
+        "river_width": {
+            "parameters": {
+                "default_alpha": 7.2,
+                "beta": 0.5,
+            }
+        },
+    }
+    routing.default_missing_channel_width = 0.5
+    routing.var = RoutingVariables()
+
+    # Reach 1 is represented, Reach 2 is unrepresented, Reach 3 is unrepresented (1 -> 2 -> 3)
+    rivers: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "width": [np.nan, np.nan, np.nan],
+            "depth": [np.nan, np.nan, np.nan],
+            "manning": [np.nan, np.nan, np.nan],
+            "represented_in_grid": [True, False, False],
+            "downstream_ID": [2, 3, -1],
+            "shreve_stream_order": [1, 2, 3],
+            "return_period_2_years_daily_m3_per_s": [64.0, np.nan, np.nan],
+            "width_is_observed": [False, False, False],
+        },
+        index=[1, 2, 3],
+    )
+    routing.var.rivers = rivers
+
+    routing.var.river_ids = np.array([1, 1], dtype=np.int32)
+    width_grid: ArrayFloat32 = np.array([57.6, 57.6], dtype=np.float32)
+    depth_grid: ArrayFloat32 = np.array([1.2, 1.2], dtype=np.float32)
+    manning_grid: ArrayFloat32 = np.array([0.03, 0.03], dtype=np.float32)
+    routing.var.river_width_alpha = np.array([7.2, 7.2], dtype=np.float32)
+    routing.var.river_width_beta = np.array([0.5, 0.5], dtype=np.float32)
+    routing.var.observed_average_river_width = np.full(2, np.nan, dtype=np.float32)
+
+    routing._update_rivers_geometry(
+        width_grid=width_grid,
+        depth_grid=depth_grid,
+        manning_grid=manning_grid,
+    )
+
+    # 1. Raw summed Q (64.0 m3/s) must be propagated to both reach 2 and 3 without compounding to 128 or 256
+    assert np.isclose(
+        float(routing.var.rivers.loc[2, "return_period_2_years_daily_m3_per_s"]), 64.0
+    )
+    assert np.isclose(
+        float(routing.var.rivers.loc[3, "return_period_2_years_daily_m3_per_s"]), 64.0
+    )
+
+    # 2. Weights must sum to 1.0 (not 0.5), so Manning roughness and alpha/beta must NOT be scaled down
+    assert np.isclose(float(routing.var.rivers.loc[2, "manning"]), 0.03)
+    assert np.isclose(float(routing.var.rivers.loc[3, "manning"]), 0.03)
+    assert np.isclose(float(routing.var.rivers.loc[2, "river_width_alpha"]), 7.2)
+    assert np.isclose(float(routing.var.rivers.loc[3, "river_width_alpha"]), 7.2)
+
+    # 3. Geometry must apply the multiplier (2.0) exactly once: Q_bf = 64.0 * 2.0 = 128.0 m3/s
+    expected_w: float = 7.2 * (128.0**0.5)
+    expected_h: float = 1.5 * 0.27 * (128.0**0.30)
+    assert np.isclose(float(routing.var.rivers.loc[2, "width"]), expected_w)
+    assert np.isclose(float(routing.var.rivers.loc[3, "width"]), expected_w)
+    assert np.isclose(float(routing.var.rivers.loc[2, "depth"]), expected_h, rtol=1e-3)
+    assert np.isclose(float(routing.var.rivers.loc[3, "depth"]), expected_h, rtol=1e-3)
+
+
 def test_unrepresented_river_isolated_no_upstream_retains_nan() -> None:
     """Verify that an unrepresented river without upstream segments retains NaN."""
     from geb.hydrology.routing import Routing, RoutingVariables
