@@ -310,6 +310,10 @@ def create_discharge_dashboard(
     dashboard_geometries: DischargeDashboardGeometries = (
         load_discharge_dashboard_geometries(geometry_files)
     )
+    enriched_rivers: gpd.GeoDataFrame = attach_end_of_run_river_dimensions(
+        rivers=dashboard_geometries.rivers,
+        run_output_folder=run_output_folder,
+    )
 
     dashboard_path: Path = evaluation_folder / output_path
     logger.info("Preparing interactive chart data...")
@@ -322,7 +326,7 @@ def create_discharge_dashboard(
             correct_discharge_observations=correct_discharge_observations,
             dashboard_path=dashboard_path,
             include_return_period_plots=include_return_period_plots,
-            rivers=dashboard_geometries.rivers,
+            rivers=enriched_rivers,
         )
     )
 
@@ -331,7 +335,7 @@ def create_discharge_dashboard(
         mapped_station_scores=dashboard_station_scores,
         output_path=dashboard_path,
         region_geom=dashboard_geometries.region,
-        rivers=dashboard_geometries.rivers,
+        rivers=enriched_rivers,
         station_chart_files=station_dashboard_chart_files,
         waterbodies=dashboard_geometries.waterbodies,
         station_characteristics=dashboard_characteristics,
@@ -356,6 +360,7 @@ def write_discharge_dashboard(
     station_characteristics: pd.DataFrame | None = None,
     excluded_stations: gpd.GeoDataFrame | None = None,
     chart_timeline: list[int] | dict[str, Any] | None = None,
+    run_output_folder: Path | None = None,
 ) -> folium.Map:
     """Save the discharge map with station charts, score layers, and snapping characteristics (e.g., station IDs, upstream areas).
 
@@ -384,10 +389,20 @@ def write_discharge_dashboard(
         chart_timeline: Optional shared integer timestamp array (epoch ms) or
             dictionary of timelines by frequency for popup time-series charts.
             Defaults to None.
+        run_output_folder: Optional simulation output folder used to attach
+            end-of-run simulated river dimensions if not already present on
+            rivers. Defaults to None.
 
     Returns:
         The Folium map object (already saved to ``output_path``).
     """
+    if run_output_folder is not None and (
+        "width_m" not in rivers.columns or "depth_m" not in rivers.columns
+    ):
+        rivers = attach_end_of_run_river_dimensions(
+            rivers=rivers,
+            run_output_folder=run_output_folder,
+        )
     min_lon, min_lat, max_lon, max_lat = region_geom.total_bounds
     if excluded_stations is not None and not excluded_stations.empty:
         mapped_station_scores = mapped_station_scores.copy()
@@ -412,16 +427,24 @@ def write_discharge_dashboard(
         max_zoom=19,
     ).add_to(discharge_map)
     discharge_map.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]], padding=(30, 30))
-    folium.GeoJson(
-        region_geom,
+    catchment_layer: folium.FeatureGroup = folium.FeatureGroup(
         name="Catchment",
-        style_function=lambda _feature: {
-            "fill": False,
-            "fillOpacity": 0,
-            "color": "black",
-            "weight": 2,
+        show=True,
+    )
+    catchment_layer.add_to(discharge_map)
+    catchment_geom: gpd.GeoDataFrame = region_geom.copy()
+    catchment_geom["geometry"] = shapely.set_precision(
+        catchment_geom["geometry"], grid_size=1e-5
+    )
+    catchment_json_bytes: bytes = catchment_geom.to_json(drop_id=True).encode("utf-8")
+    compressed_catchment: bytes = gzip.compress(catchment_json_bytes, compresslevel=9)
+    encoded_catchment: str = base64.b64encode(compressed_catchment).decode("ascii")
+    _JavascriptMacro(
+        "catchment.js",
+        {
+            "layer": catchment_layer.get_name(),
+            "payload": encoded_catchment,
         },
-        z_index=1,
     ).add_to(discharge_map)
     _add_river_layers(
         discharge_map,
@@ -632,7 +655,7 @@ def write_discharge_dashboard(
         snapping_json_bytes: bytes = json.dumps(
             snapping_stations, separators=(",", ":")
         ).encode("utf-8")
-        compressed_snapping: bytes = gzip.compress(snapping_json_bytes, compresslevel=6)
+        compressed_snapping: bytes = gzip.compress(snapping_json_bytes, compresslevel=9)
         encoded_snapping_payload: str = base64.b64encode(compressed_snapping).decode(
             "ascii"
         )
@@ -655,8 +678,14 @@ def write_discharge_dashboard(
         station_count=len(mapped_station_scores),
     )
 
+    unique_bundles: list[str] = sorted(set(station_chart_files.values()))
+    bundle_to_idx: dict[str, int] = {b: i for i, b in enumerate(unique_bundles)}
+    station_bundle_indices: dict[str, int] = {
+        sid: bundle_to_idx[b] for sid, b in station_chart_files.items()
+    }
     chart_macro_data: dict[str, Any] = {
-        "stations": station_chart_files,
+        "bundles": unique_bundles,
+        "stations": station_bundle_indices,
         "timeline": chart_timeline,
     }
     _JavascriptMacro("charts.js", chart_macro_data).add_to(discharge_map)
@@ -702,9 +731,55 @@ def load_discharge_dashboard_geometries(
     )
     return DischargeDashboardGeometries(
         region=region_geom,
-        rivers=select_active_rivers(all_rivers),
+        rivers=select_active_rivers(
+            all_rivers, include_rivers_not_represented_in_grid=True
+        ),
         waterbodies=waterbodies,
     )
+
+
+def attach_end_of_run_river_dimensions(
+    rivers: gpd.GeoDataFrame,
+    run_output_folder: Path,
+) -> gpd.GeoDataFrame:
+    """Attach end-of-run simulated river width and depth to the river network.
+
+    Args:
+        rivers: Active river segments GeoDataFrame indexed by river ID.
+        run_output_folder: Output folder of the simulation run containing
+            hydrology routing reports.
+
+    Returns:
+        Copy of the rivers GeoDataFrame with 'width_m' and 'depth_m' columns attached if available.
+    """
+    routing_dir: Path = run_output_folder / "report" / "hydrology.routing"
+    w_file: Path = routing_dir / "bankfull_width_rivers_yearly_m.parquet"
+    d_file: Path = routing_dir / "bankfull_depth_rivers_yearly_m.parquet"
+
+    enriched_rivers: gpd.GeoDataFrame = rivers.copy()
+    if w_file.exists():
+        df_w: pd.DataFrame = pd.read_parquet(w_file)
+        if not df_w.empty:
+            last_w: pd.Series = df_w.iloc[-1]
+            w_map: dict[str, float] = {
+                str(col): float(val) for col, val in last_w.items() if pd.notna(val)
+            }
+            enriched_rivers["width_m"] = [
+                w_map.get(str(rid)) for rid in enriched_rivers.index
+            ]
+
+    if d_file.exists():
+        df_d: pd.DataFrame = pd.read_parquet(d_file)
+        if not df_d.empty:
+            last_d: pd.Series = df_d.iloc[-1]
+            d_map: dict[str, float] = {
+                str(col): float(val) for col, val in last_d.items() if pd.notna(val)
+            }
+            enriched_rivers["depth_m"] = [
+                d_map.get(str(rid)) for rid in enriched_rivers.index
+            ]
+
+    return enriched_rivers
 
 
 def serialize_main_timeline(
@@ -1043,6 +1118,12 @@ class StationChartBundleWriter:
                     existing_file.unlink()
                 except OSError:
                     pass
+            rivers_bundle: Path = self.chart_folder / "rivers_bundle.js"
+            if rivers_bundle.exists():
+                try:
+                    rivers_bundle.unlink()
+                except OSError:
+                    pass
         self.chart_folder.mkdir(parents=True, exist_ok=True)
         self.station_chart_files: dict[str, str] = {}
         self._current_bundle: dict[str, Any] = {}
@@ -1058,6 +1139,33 @@ class StationChartBundleWriter:
         self._current_bundle[station_id] = chart_data
         if len(self._current_bundle) >= self.max_stations_per_bundle:
             self._flush_bundle()
+
+    def write_named_bundle(
+        self, bundle_filename: str, bundle_data: dict[str, Any]
+    ) -> None:
+        """Write a dictionary of chart data to a single named compressed JavaScript bundle.
+
+        Args:
+            bundle_filename: Filename for the bundle, e.g. 'rivers_bundle.js'.
+            bundle_data: Mapping from chart keys to chart payloads.
+        """
+        if not bundle_data:
+            return
+        bundle_path: Path = self.chart_folder / bundle_filename
+        json_bytes: bytes = json.dumps(bundle_data, separators=(",", ":")).encode(
+            "utf-8"
+        )
+        compressed_bytes: bytes = gzip.compress(json_bytes, compresslevel=9)
+        encoded_payload: str = base64.b64encode(compressed_bytes).decode("ascii")
+        bundle_path.write_text(
+            f'window._gebStationChartBundle="{encoded_payload}";',
+            encoding="utf-8",
+        )
+        relative_path: str = bundle_path.relative_to(
+            self.dashboard_path.parent
+        ).as_posix()
+        for key in bundle_data:
+            self.station_chart_files[key] = relative_path
 
     def finish(self) -> dict[str, str]:
         """Flush any remaining station data and return the station-to-file mapping.
@@ -1078,7 +1186,7 @@ class StationChartBundleWriter:
         json_bytes: bytes = json.dumps(
             self._current_bundle, separators=(",", ":")
         ).encode("utf-8")
-        compressed_bytes: bytes = gzip.compress(json_bytes, compresslevel=6)
+        compressed_bytes: bytes = gzip.compress(json_bytes, compresslevel=9)
         encoded_payload: str = base64.b64encode(compressed_bytes).decode("ascii")
         bundle_path.write_text(
             f'window._gebStationChartBundle="{encoded_payload}";',
@@ -1119,7 +1227,7 @@ def write_station_chart_data(
     station_hash: str = hashlib.sha256(station_id.encode()).hexdigest()[:16]
     chart_path: Path = chart_folder / f"{station_hash}.js"
     json_bytes: bytes = json.dumps(chart_data, separators=(",", ":")).encode("utf-8")
-    compressed_bytes: bytes = gzip.compress(json_bytes, compresslevel=6)
+    compressed_bytes: bytes = gzip.compress(json_bytes, compresslevel=9)
     encoded_payload: str = base64.b64encode(compressed_bytes).decode("ascii")
     chart_path.write_text(
         f'window._gebStationChartPayload="{encoded_payload}";',
@@ -1187,6 +1295,7 @@ def add_river_charts_to_bundle_writer(
     df_q: pd.DataFrame = pd.read_parquet(q_file)
     df_d: pd.DataFrame = pd.read_parquet(d_file)
     df_w: pd.DataFrame = pd.read_parquet(w_file)
+    all_river_charts: dict[str, Any] = {}
 
     for river_id in rivers.index:
         river_id_str: str = str(river_id)
@@ -1226,7 +1335,9 @@ def add_river_charts_to_bundle_writer(
             width=w_list,
             depth=d_list,
         )
-        chart_writer.add_station(f"river_{river_id_str}", river_chart_data)
+        all_river_charts[f"river_{river_id_str}"] = river_chart_data
+
+    chart_writer.write_named_bundle("rivers_bundle.js", all_river_charts)
 
 
 def build_station_chart_data(
@@ -1364,6 +1475,77 @@ def _to_int_deltas(values: list[int | None]) -> list[int | None]:
     return deltas
 
 
+def _encode_varint_deltas(values: list[int | None]) -> str:
+    """Encode delta integers into a compact Base64-encoded Varint stream.
+
+    Notes:
+        Signed integer deltas are folded using ZigZag encoding ((v << 1) ^ (v >> 31)).
+        To reserve zero as a sentinel for missing data (None), valid values
+        are shifted by +1 (code = zigzag + 1). Values are then serialized
+        into 7-bit LEB128 Varint bytes and Base64-encoded.
+
+    Args:
+        values: Sequence of integer delta values (cents, 100 * m3/s) or None for missing data.
+
+    Returns:
+        Base64-encoded ASCII string containing the Varint byte stream.
+    """
+    buffer: bytearray = bytearray()
+    for value in values:
+        if value is None:
+            # Sentinel 0 reserved for missing data (None)
+            buffer.append(0)
+        else:
+            zigzag: int = (value << 1) ^ (value >> 31)
+            code: int = zigzag + 1
+            while True:
+                byte_val: int = code & 0x7F
+                code >>= 7
+                if code:
+                    buffer.append(byte_val | 0x80)
+                else:
+                    buffer.append(byte_val)
+                    break
+    return base64.b64encode(buffer).decode("ascii")
+
+
+def _decode_varint_deltas(b64_encoded: str) -> list[int | None]:
+    """Decode a Base64-encoded Varint stream back to integer deltas.
+
+    Notes:
+        Reads LEB128 Varint bytes. A code of 0 represents missing data (None).
+        Codes greater than 0 are shifted back (zigzag = code - 1) and ZigZag-decoded
+        to recover the original signed delta integer.
+
+    Args:
+        b64_encoded: Base64-encoded ASCII string representing the Varint byte stream.
+
+    Returns:
+        List of integer delta values (cents, 100 * m3/s) or None for missing data.
+    """
+    raw_bytes: bytes = base64.b64decode(b64_encoded)
+    deltas: list[int | None] = []
+    index: int = 0
+    total_bytes: int = len(raw_bytes)
+    while index < total_bytes:
+        code: int = 0
+        shift: int = 0
+        while True:
+            byte_val: int = raw_bytes[index]
+            index += 1
+            code |= (byte_val & 0x7F) << shift
+            if (byte_val & 0x80) == 0:
+                break
+            shift += 7
+        if code == 0:
+            deltas.append(None)
+        else:
+            zigzag: int = code - 1
+            delta_val: int = (zigzag >> 1) ^ -(zigzag & 1)
+            deltas.append(delta_val)
+    return deltas
+
+
 def _build_timeseries_data(
     discharge_comparison: pd.DataFrame,
     main_time_index: pd.DatetimeIndex | None = None,
@@ -1377,7 +1559,8 @@ def _build_timeseries_data(
         using a start index offset, eliminating leading and trailing missing values.
         Missing observation values within the window are represented as None
         (serialized to JSON null). Discharge values are scaled by 100, stored
-        as integers, and delta-encoded to minimize JSON payload size.
+        as integers, delta-encoded, and serialized to a Base64-encoded Varint stream
+        with a 0 sentinel for missing data to minimize JSON payload size.
 
     Args:
         discharge_comparison: Observed/simulated discharge dataframe (m3/s).
@@ -1440,17 +1623,21 @@ def _build_timeseries_data(
         res: dict[str, Any] = {
             "start": start_index,
             "scale": 100,
-            "deltas": True,
-            "observed": _to_int_deltas(
-                _scale_series_to_int_cents(comparison["discharge_observations"])
+            "deltas": "varint",
+            "observed": _encode_varint_deltas(
+                _to_int_deltas(
+                    _scale_series_to_int_cents(comparison["discharge_observations"])
+                )
             ),
-            "simulated": _to_int_deltas(
-                _scale_series_to_int_cents(comparison["discharge_simulations"])
+            "simulated": _encode_varint_deltas(
+                _to_int_deltas(
+                    _scale_series_to_int_cents(comparison["discharge_simulations"])
+                )
             ),
             "bankfullDischarge": _as_finite_float(bankfull_scalar),
         }
         if bankfull_deltas is not None:
-            res["bankfull"] = bankfull_deltas
+            res["bankfull"] = _encode_varint_deltas(bankfull_deltas)
         return res
 
     comparison = discharge_comparison
@@ -1471,17 +1658,21 @@ def _build_timeseries_data(
     res_no_main: dict[str, Any] = {
         "time": comparison.index.astype("datetime64[ms]").astype("int64").tolist(),
         "scale": 100,
-        "deltas": True,
-        "observed": _to_int_deltas(
-            _scale_series_to_int_cents(comparison["discharge_observations"])
+        "deltas": "varint",
+        "observed": _encode_varint_deltas(
+            _to_int_deltas(
+                _scale_series_to_int_cents(comparison["discharge_observations"])
+            )
         ),
-        "simulated": _to_int_deltas(
-            _scale_series_to_int_cents(comparison["discharge_simulations"])
+        "simulated": _encode_varint_deltas(
+            _to_int_deltas(
+                _scale_series_to_int_cents(comparison["discharge_simulations"])
+            )
         ),
         "bankfullDischarge": _as_finite_float(bankfull_scalar),
     }
     if bankfull_deltas is not None:
-        res_no_main["bankfull"] = bankfull_deltas
+        res_no_main["bankfull"] = _encode_varint_deltas(bankfull_deltas)
     return res_no_main
 
 
@@ -1789,7 +1980,7 @@ def _build_station_marker_payload(
         stations_data.append(station_dict)
 
     json_bytes: bytes = json.dumps(stations_data, separators=(",", ":")).encode("utf-8")
-    compressed: bytes = gzip.compress(json_bytes, compresslevel=6)
+    compressed: bytes = gzip.compress(json_bytes, compresslevel=9)
     return base64.b64encode(compressed).decode("ascii")
 
 
@@ -1890,14 +2081,23 @@ def _add_river_layers(
         discharge_map: Map receiving the river network.
         rivers: Active WGS84 river segments indexed by river ID, with areas in m².
     """
-    river_data: gpd.GeoDataFrame = rivers[["uparea_m2", "geometry"]].copy()
+    cols: list[str] = ["uparea_m2", "geometry"]
+    if "width_m" in rivers.columns:
+        cols.append("width_m")
+    if "depth_m" in rivers.columns:
+        cols.append("depth_m")
+    river_data: gpd.GeoDataFrame = rivers[cols].copy()
     river_data["river_id"] = rivers.index.astype(str)
     river_data["uparea_m2"] = river_data["uparea_m2"].round(1)
+    if "width_m" in river_data.columns:
+        river_data["width_m"] = river_data["width_m"].round(2)
+    if "depth_m" in river_data.columns:
+        river_data["depth_m"] = river_data["depth_m"].round(2)
     simplified_geom: gpd.GeoSeries = river_data["geometry"].simplify(0.0001)
     river_data["geometry"] = shapely.set_precision(simplified_geom, grid_size=1e-5)
     river_geojson: str = river_data.to_json(drop_id=True)
     compressed_bytes: bytes = gzip.compress(
-        river_geojson.encode("utf-8"), compresslevel=6
+        river_geojson.encode("utf-8"), compresslevel=9
     )
     encoded_payload: str = base64.b64encode(compressed_bytes).decode("ascii")
 

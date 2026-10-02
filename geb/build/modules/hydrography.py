@@ -37,7 +37,10 @@ from geb.build.workflows.river_snapping import (
 from geb.geb_types import (
     ArrayBool,
     ArrayFloat32,
+    ArrayInt32,
     ArrayInt64,
+    TwoDArrayBool,
+    TwoDArrayFloat32,
     TwoDArrayFloat64,
     TwoDArrayInt32,
     TwoDArrayInt64,
@@ -644,6 +647,141 @@ def propagate_downstream(
                     flat_data[ds_idx] = val
 
     return flat_data.reshape(data.shape)
+
+
+def identify_waterbody_outflows(
+    waterbody_id: TwoDArrayInt32,
+    upstream_area_n_cells: TwoDArrayInt32,
+    elevation_min_m: TwoDArrayFloat32,
+) -> TwoDArrayInt32:
+    """Identifies the outflow points for each water body.
+
+    Finds the cell with the highest upstream area in each water body as the outflow point.
+    If there are multiple cells with the same upstream area, the one with the lowest elevation is chosen.
+
+    Args:
+        waterbody_id: 2D array of water body IDs (-1 for non-waterbody).
+        upstream_area_n_cells: 2D array of upstream area in number of cells.
+        elevation_min_m: 2D array of minimum elevation in meters.
+
+    Returns:
+        2D array containing the original waterbody ID at each outflow point and -1 elsewhere.
+    """
+    valid_wb: TwoDArrayBool = waterbody_id != -1
+    if not np.any(valid_wb):
+        return np.full_like(waterbody_id, -1, dtype=np.int32)
+
+    max_wb_id: int = int(np.max(waterbody_id))
+    upstream_area_within_waterbodies: ArrayInt32 = np.zeros(
+        max_wb_id + 2, dtype=np.int32
+    )
+    upstream_area_within_waterbodies[-1] = -1
+
+    np.maximum.at(
+        upstream_area_within_waterbodies,
+        waterbody_id[valid_wb],
+        upstream_area_n_cells[valid_wb],
+    )
+    upstream_area_at_cells: TwoDArrayInt32 = np.take(
+        upstream_area_within_waterbodies, waterbody_id
+    )
+
+    waterbody_outflow_points: TwoDArrayInt32 = np.where(
+        valid_wb & (upstream_area_n_cells == upstream_area_at_cells),
+        waterbody_id,
+        np.int32(-1),
+    )
+
+    number_of_outflow_points_per_waterbody = np.unique(
+        waterbody_outflow_points, return_counts=True
+    )
+    duplicate_outflow_points = number_of_outflow_points_per_waterbody[0][
+        number_of_outflow_points_per_waterbody[1] > 1
+    ]
+    duplicate_outflow_points = duplicate_outflow_points[duplicate_outflow_points != -1]
+
+    if duplicate_outflow_points.size > 0:
+        for duplicate_outflow_point in duplicate_outflow_points:
+            duplicate_coords = np.where(
+                waterbody_outflow_points == duplicate_outflow_point
+            )
+            elevations: ArrayFloat32 = elevation_min_m[duplicate_coords]
+            minimum_elevation_idx: int = int(np.argmin(elevations))
+            for i in range(len(duplicate_coords[0])):
+                if i != minimum_elevation_idx:
+                    waterbody_outflow_points[
+                        duplicate_coords[0][i], duplicate_coords[1][i]
+                    ] = -1
+
+    return waterbody_outflow_points
+
+
+def absorb_trapped_river_cells(
+    waterbody_id: TwoDArrayInt32,
+    waterbody_outflows: TwoDArrayInt32,
+    river_ids: TwoDArrayInt32,
+    flow_raster: FlwdirRaster,
+) -> TwoDArrayInt32:
+    """Finds trapped river cells between waterbodies and assigns them the upstream waterbody ID.
+
+    A trapped river cell is a cell with an active river ID that is downstream of a
+    non-outflow waterbody cell and reconnects downstream into a waterbody.
+
+    Args:
+        waterbody_id: 2D array of water body IDs (-1 for non-waterbody).
+        waterbody_outflows: 2D array containing waterbody IDs at outflow points and -1 elsewhere.
+        river_ids: 2D array of river reach IDs (-1 for non-river).
+        flow_raster: FlwdirRaster flow direction object.
+
+    Returns:
+        Updated 2D array of waterbody IDs with trapped cells absorbed.
+    """
+    updated_waterbody_id: TwoDArrayInt32 = waterbody_id.copy()
+
+    # Identify all waterbody cells that are NOT outflows
+    non_outflow_mask: TwoDArrayBool = (waterbody_id != -1) & (waterbody_outflows == -1)
+    non_outflow_idxs: ArrayInt64 = np.where(non_outflow_mask.ravel())[0]
+    if non_outflow_idxs.size == 0:
+        return updated_waterbody_id
+
+    downstream_idxs: ArrayInt64 = flow_raster.idxs_ds[non_outflow_idxs]
+
+    # Filter for downstream cells that exit the waterbody into an active river cell
+    valid_candidates: ArrayBool = (
+        (downstream_idxs != -1)
+        & (downstream_idxs != non_outflow_idxs)
+        & (river_ids.ravel()[downstream_idxs] != -1)
+        & (waterbody_id.ravel()[downstream_idxs] == -1)
+    )
+    if not np.any(valid_candidates):
+        return updated_waterbody_id
+
+    start_idxs: ArrayInt64 = downstream_idxs[valid_candidates]
+    source_waterbody_ids: ArrayInt32 = waterbody_id.ravel()[
+        non_outflow_idxs[valid_candidates]
+    ]
+
+    # Trace downstream paths until hitting a waterbody or leaving the river network
+    termination_mask: TwoDArrayBool = (waterbody_id != -1) | (river_ids == -1)
+    paths: list[ArrayInt64]
+    paths, _ = flow_raster.path(idxs=start_idxs, mask=termination_mask)
+
+    flat_updated_waterbody_id: ArrayInt32 = updated_waterbody_id.ravel()
+    trapped_cells_to_assign: dict[int, int] = {}
+
+    for path, source_waterbody_id in zip(paths, source_waterbody_ids):
+        # path[-1] is the cell where tracing stopped. If it belongs to a waterbody,
+        # all preceding cells along the path are river cells trapped between waterbodies.
+        if flat_updated_waterbody_id[path[-1]] != -1:
+            for cell_idx in path[:-1]:
+                cell_idx_int: int = int(cell_idx)
+                if cell_idx_int not in trapped_cells_to_assign:
+                    trapped_cells_to_assign[cell_idx_int] = int(source_waterbody_id)
+
+    for cell_idx_int, assigned_waterbody_id in trapped_cells_to_assign.items():
+        flat_updated_waterbody_id[cell_idx_int] = assigned_waterbody_id
+
+    return updated_waterbody_id
 
 
 class Hydrography(BuildModelBase):
@@ -1445,7 +1583,7 @@ class Hydrography(BuildModelBase):
             name="coastal/low_elevation_coastal_zone_mask",
         )
 
-    @build_method(required=True, depends_on=["setup_hydrography"])
+    @build_method(required=True, depends_on=["setup_hydrography", "setup_elevation"])
     def setup_waterbodies(
         self,
         mode: Literal["on", "off", "lakes_only", "reservoirs_only"] = "on",
@@ -1557,7 +1695,56 @@ class Hydrography(BuildModelBase):
             all_touched=True,
         )
 
+        waterbody_id_array: TwoDArrayInt32 = waterbody_id.values.copy()
+        if np.any(waterbody_id_array != -1):
+            river_ids: TwoDArrayInt32 = self.grid["routing/river_ids"].values
+            flow_raster_idxs_ds = self.grid["flow_raster_idxs_ds"].compute()
+            flow_raster = FlwdirRaster(
+                flow_raster_idxs_ds.values.ravel(),
+                shape=flow_raster_idxs_ds.shape,
+                transform=np.array(flow_raster_idxs_ds.rio.transform(recalc=True)),
+                ftype="d8",
+                latlon=True,
+            )
+            upstream_area_n_cells: TwoDArrayInt32 = self.grid[
+                "routing/upstream_area_n_cells"
+            ].values
+            elevation_min_m: TwoDArrayFloat32 = self.grid[
+                "landsurface/elevation_min_m"
+            ].values
+
+            waterbody_outflows: TwoDArrayInt32 = identify_waterbody_outflows(
+                waterbody_id=waterbody_id_array,
+                upstream_area_n_cells=upstream_area_n_cells,
+                elevation_min_m=elevation_min_m,
+            )
+            waterbody_id_array = absorb_trapped_river_cells(
+                waterbody_id=waterbody_id_array,
+                waterbody_outflows=waterbody_outflows,
+                river_ids=river_ids,
+                flow_raster=flow_raster,
+            )
+            waterbody_outflows = identify_waterbody_outflows(
+                waterbody_id=waterbody_id_array,
+                upstream_area_n_cells=upstream_area_n_cells,
+                elevation_min_m=elevation_min_m,
+            )
+        else:
+            waterbody_outflows = np.full_like(waterbody_id_array, -1, dtype=np.int32)
+
+        waterbody_id.data = waterbody_id_array
         self.set_grid(waterbody_id, name="waterbodies/waterbody_id")
+
+        waterbody_outflow_points: xr.DataArray = self.full_like(
+            self.grid["mask"],
+            fill_value=-1,
+            nodata=-1,
+            dtype=np.int32,
+        )
+        waterbody_outflow_points.data = waterbody_outflows
+        self.set_grid(
+            waterbody_outflow_points, name="waterbodies/waterbody_outflow_points"
+        )
 
         if mode in ("on", "reservoirs_only") and command_areas:
             command_areas_gdf: gpd.GeoDataFrame = gpd.read_file(

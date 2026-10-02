@@ -1146,7 +1146,9 @@ class Reporter:
 
                             # Export for each river segment
                             active_rivers: gpd.GeoDataFrame = (
-                                self.model.hydrology.routing.get_active_rivers()
+                                self.model.hydrology.routing.get_active_rivers(
+                                    include_rivers_not_represented_in_grid=True
+                                )
                             )
                             for river_ID in active_rivers.index:
                                 river_ID_int: int = int(river_ID)
@@ -1665,6 +1667,24 @@ class Reporter:
         if type_ is None:
             raise ValueError(f"Type not specified for {config}.")
 
+        if (
+            type_ in ("grid", "HRU", "agents")
+            and "function" in config
+            and config["function"] is None
+            and "path" not in config
+        ):
+            zarr_path: Path = self.report_folder / module_name / (name + ".zarr")
+            zarr_path.parent.mkdir(parents=True, exist_ok=True)
+            config["path"] = str(zarr_path)
+
+            store = zarr.storage.LocalStore(zarr_path, read_only=False)
+            config["_store"] = store
+
+            root_group = zarr.open_group(store, mode="w")
+            config["_root_group"] = root_group
+
+            config["_index"] = 0
+
         if type_ in ("grid", "HRU"):
             if not isinstance(value, np.ndarray):
                 raise ValueError(
@@ -1707,9 +1727,13 @@ class Reporter:
                 value = self._apply_agent_function(module_name, name, value, config)
 
         elif type_ in ("dataframe", "geodataframe"):
-            if not isinstance(value, (pd.DataFrame, gpd.GeoDataFrame)):
+            if type_ == "geodataframe" and not isinstance(value, gpd.GeoDataFrame):
                 raise ValueError(
-                    f"Value for {module_name}.{name} must be a DataFrame or GeoDataFrame, but is {type(value)}."
+                    f"Value for {module_name}.{name} must be a GeoDataFrame, but is {type(value)}."
+                )
+            elif not isinstance(value, pd.DataFrame):
+                raise ValueError(
+                    f"Value for {module_name}.{name} must be a DataFrame, but is {type(value)}."
                 )
             if config["function"] is None:
                 df_copy = value.copy()
@@ -2127,7 +2151,7 @@ class Reporter:
                             continue
                         folder = self.report_folder / module_name
                         folder.mkdir(parents=True, exist_ok=True)
-                        is_geo: bool = isinstance(collected[0], gpd.GeoDataFrame)
+                        is_geo: bool = config.get("type") == "geodataframe"
                         if is_geo:
                             crs = collected[0].crs
                             final_gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(

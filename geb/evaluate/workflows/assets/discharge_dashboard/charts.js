@@ -1,5 +1,6 @@
 (function(){
   var macroData = {{ this.data | script_json }};
+  var bundles = (macroData && macroData.bundles) ? macroData.bundles : null;
   var stationChartFiles = (macroData && macroData.stations) ? macroData.stations : macroData;
   var globalTimeline = (macroData && macroData.timeline) ? macroData.timeline : null;
   var plotlyUrl = 'https://cdn.plot.ly/plotly-2.35.2.min.js';
@@ -82,6 +83,9 @@
       return;
     }
     var chartFile = stationChartFiles[stationId];
+    if (typeof chartFile === 'number' && bundles) {
+      chartFile = bundles[chartFile];
+    }
     if (!chartFile) {
       callback(null);
       return;
@@ -157,28 +161,44 @@
     return [];
   }
 
-  function unscale(values, scale) {
-    if (!values) return [];
-    if (!scale || scale === 1) return values;
-    return values.map(function(v) { return v !== null ? v / scale : null; });
-  }
-
-  function decodeDeltas(deltas, scale) {
-    if (!deltas) return [];
+  function decodeVarintDeltas(base64Str, scale) {
+    if (!base64Str) return [];
     var s = scale || 100;
+    var binaryStr = atob(base64Str);
+    var len = binaryStr.length;
+    var bytes = new Uint8Array(len);
+    for (var k = 0; k < len; k++) {
+      bytes[k] = binaryStr.charCodeAt(k);
+    }
+
     var out = [];
+    var i = 0;
     var prev = null;
-    for (var i = 0; i < deltas.length; i++) {
-      var d = deltas[i];
-      if (d === null) {
+
+    while (i < len) {
+      var code = 0;
+      var shift = 0;
+      while (true) {
+        var b = bytes[i++];
+        code |= (b & 0x7F) << shift;
+        if ((b & 0x80) === 0) break;
+        shift += 7;
+      }
+
+      if (code === 0) {
+        // Sentinel 0 reserved for missing observation (null)
         out.push(null);
         prev = null;
-      } else if (prev === null) {
-        out.push(d / s);
-        prev = d;
       } else {
-        prev += d;
-        out.push(prev / s);
+        var zz = code - 1;
+        var d = (zz >>> 1) ^ -(zz & 1);
+        if (prev === null) {
+          out.push(d / s);
+          prev = d;
+        } else {
+          prev += d;
+          out.push(prev / s);
+        }
       }
     }
     return out;
@@ -266,27 +286,19 @@
         ? data.timeseries.time
         : (globalTimeline && globalTimeline[data.frequency] ? globalTimeline[data.frequency] : globalTimeline);
       var startIndex = data.timeseries.start || 0;
-      var seriesLength = (data.timeseries.observed && data.timeseries.observed.length)
-        || (data.timeseries.simulated && data.timeseries.simulated.length)
+
+      var scale = data.timeseries.scale || 100;
+      var observed = decodeVarintDeltas(data.timeseries.observed, scale);
+      var simulated = decodeVarintDeltas(data.timeseries.simulated, scale);
+      var bankfull = data.timeseries.bankfull
+        ? decodeVarintDeltas(data.timeseries.bankfull, scale)
+        : null;
+
+      var seriesLength = (observed && observed.length)
+        || (simulated && simulated.length)
         || 0;
       var timeline = resolveTimeline(rawTimeline, startIndex, seriesLength);
       if (timeline && timeline.length) {
-
-        var scale = data.timeseries.scale || 100;
-        var isDelta = Boolean(data.timeseries.deltas);
-        var observed = isDelta
-          ? decodeDeltas(data.timeseries.observed, scale)
-          : unscale(data.timeseries.observed, scale);
-        var simulated = isDelta
-          ? decodeDeltas(data.timeseries.simulated, scale)
-          : unscale(data.timeseries.simulated, scale);
-
-        var bankfull = null;
-        if (data.timeseries.bankfull) {
-          bankfull = isDelta
-            ? decodeDeltas(data.timeseries.bankfull, scale)
-            : unscale(data.timeseries.bankfull, scale);
-        }
 
         var timeRange = dateRange(timeline);
         var traces = [

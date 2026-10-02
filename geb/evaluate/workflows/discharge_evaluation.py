@@ -18,6 +18,7 @@ from geb.evaluate.workflows.dashboard import (
     DischargeDashboardGeometries,
     StationChartBundleWriter,
     add_river_charts_to_bundle_writer,
+    attach_end_of_run_river_dimensions,
     build_station_chart_data,
     determine_main_time_index,
     load_discharge_dashboard_geometries,
@@ -578,6 +579,10 @@ def evaluate_discharge(
         dashboard_geometries: DischargeDashboardGeometries = (
             load_discharge_dashboard_geometries(self.model.files["geom"])
         )
+        enriched_rivers: gpd.GeoDataFrame = attach_end_of_run_river_dimensions(
+            rivers=dashboard_geometries.rivers,
+            run_output_folder=run_output_folder,
+        )
         use_daily_discharge_scores(dashboard_station_scores)
         dashboard_characteristics: pd.DataFrame | None = (
             discharge_characteristics.load_dashboard_catchment_characteristics(
@@ -591,7 +596,7 @@ def evaluate_discharge(
             mapped_station_scores=dashboard_station_scores,
             output_path=dashboard_path,
             region_geom=dashboard_geometries.region,
-            rivers=dashboard_geometries.rivers,
+            rivers=enriched_rivers,
             station_chart_files=station_dashboard_chart_files,
             waterbodies=dashboard_geometries.waterbodies,
             station_characteristics=dashboard_characteristics,

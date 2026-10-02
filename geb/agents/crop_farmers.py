@@ -1230,14 +1230,7 @@ class CropFarmers(AgentBaseClass):
         )
 
     def adjust_cultivation_costs(self) -> None:
-        """Adjust cultivation costs based on configuration and calibration settings.
-
-        Loads regional cultivation costs for crops, then either:
-        (1) applies per-crop calibration factors when the model is configured to
-        calibrate against ``"KGE_crops"``, or (2) scales costs by the configured
-        ``cultivation_cost_fraction``. The updated values overwrite
-        ``self.cultivation_costs`` in place.
-        """
+        """Adjust cultivation costs based on configuration."""
         # Set the cultivation costs
         self.cultivation_costs = load_regional_crop_data_from_dict(
             self.model, "crops/cultivation_costs"
@@ -1247,37 +1240,7 @@ class CropFarmers(AgentBaseClass):
         ]  # Cultivation costs are set as a fraction of crop prices
         date_index, cultivation_costs_array = self.cultivation_costs
 
-        calibration_section = self.model.config.get("calibration", {})
-        calibration_targets: dict[str, Any] = {}
-        if isinstance(calibration_section, dict):
-            if isinstance(calibration_section.get("calibration_targets"), dict):
-                calibration_targets = calibration_section["calibration_targets"]
-            else:
-                # Backward compatibility for track-based configs under calibration.<track>.
-                for track_config in calibration_section.values():
-                    if isinstance(track_config, dict) and isinstance(
-                        track_config.get("calibration_targets"), dict
-                    ):
-                        calibration_targets = track_config["calibration_targets"]
-                        break
-
-        if "KGE_crops" in calibration_targets:
-            # Load price change factors 0 to 25 into a NumPy array
-            factors = np.array(
-                [
-                    self.model.config["agent_settings"]["calibration_crops"][
-                        f"price_{i}"
-                    ]
-                    for i in range(len(self.var.crop_ids))
-                ]
-            )
-
-            # Multiply the cultivation_costs_array by the factors along the last axis
-            cultivation_costs_array *= factors
-        else:
-            cultivation_costs_array = (
-                cultivation_costs_array * cultivation_cost_fraction
-            )
+        cultivation_costs_array = cultivation_costs_array * cultivation_cost_fraction
         self.cultivation_costs = (date_index, cultivation_costs_array)
 
     @property

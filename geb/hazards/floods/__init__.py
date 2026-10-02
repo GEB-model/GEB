@@ -282,12 +282,6 @@ class Floods(Module):
             subbasins=subbasins,
             DEMs=self.DEM_config,
             rivers=all_rivers,
-            river_width_alpha=self.model.hydrology.grid.decompress(
-                self.model.hydrology.routing.var.river_width_alpha
-            ),
-            river_width_beta=self.model.hydrology.grid.decompress(
-                self.model.hydrology.routing.var.river_width_beta
-            ),
             mannings=self.mannings,
             grid_size_multiplier=self.config["grid_size_multiplier"],
             subgrid=self.config["subgrid"],
