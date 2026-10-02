@@ -39,7 +39,6 @@ if TYPE_CHECKING:
 OFF: int = 0
 LAKE: int = 1
 RESERVOIR: int = 2
-LAKE_CONTROL: int = 3  # currently modelled as normal lake
 
 
 GRAVITY: np.float32 = np.float32(9.81)
@@ -356,7 +355,14 @@ class WaterBodies(Module):
         8. Estimate outflow height for each water body.
         9. Leave future reservoirs empty and route their cells as rivers.
 
-        """
+        Returns:
+            None.
+
+        Raises:
+            ValueError: If saved waterbody types are invalid or still use the
+                HydroLAKES controlled-lake code; rebuild setup_waterbodies.
+
+        """  # noqa: DOC202
         # load lakes/reservoirs map with a single ID for each lake/reservoir
         waterbody_id_unmapped: np.ndarray = self.grid.load2d(
             self.model.files["grid"]["waterbodies/waterbody_id"]
@@ -365,6 +371,11 @@ class WaterBodies(Module):
         waterbody_data_raw: gpd.GeoDataFrame = read_geom(
             self.model.files["geom"]["waterbodies/waterbody_data"],
         ).set_index("waterbody_id")  # ty:ignore[invalid-assignment]
+
+        if not waterbody_data_raw["waterbody_type"].isin((OFF, LAKE, RESERVOIR)).all():
+            raise ValueError(
+                "Waterbody types must be off, lake, or reservoir. Rebuild setup_waterbodies."
+            )
 
         # Identify active waterbodies (filter out OFF waterbodies during loading)
         active_wb_mask = waterbody_data_raw["waterbody_type"] != OFF
@@ -421,9 +432,9 @@ class WaterBodies(Module):
         )
         self.var.all_waterbody_ids = self.grid.var.waterbody_ids.copy()
 
-        self.var.waterbody_type = waterbody_data["waterbody_type"].values.copy()
-        # change water body type to LAKE if it is a control lake, thus currently modelled as normal lake
-        self.var.waterbody_type[self.var.waterbody_type == LAKE_CONTROL] = LAKE
+        self.var.waterbody_type = waterbody_data["waterbody_type"].to_numpy(
+            dtype=np.int32, copy=True
+        )
 
         # Natural lakes stay active regardless of the dam year.
         self.var.construction_year[self.var.waterbody_type != RESERVOIR] = 0

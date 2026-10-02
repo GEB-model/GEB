@@ -11,22 +11,23 @@ from geb.build.workflows.river_snapping import (
     SnappingResults,
     snap_point_to_river_network,
 )
+from geb.workflows.raster import full_like
 
 
-def create_weir_height_grid(
+def create_weir_grids(
     gdw_points: gpd.GeoDataFrame,
-    crest_height_m: float,
+    crest_height_m: float | None,
     waterbody_id: xr.DataArray,
     rivers: gpd.GeoDataFrame,
     upstream_area_grid: xr.DataArray,
     upstream_area_subgrid: xr.DataArray,
     valid_river_cells: xr.DataArray,
-) -> xr.DataArray:
-    """Set the height of each weir on the river grid.
+) -> tuple[xr.DataArray, xr.DataArray]:
+    """Place weir heights and gates on the river grid.
 
     Args:
         gdw_points: GDW points and their linked lake or reservoir IDs.
-        crest_height_m: Height to use when the GDW height is missing or invalid (m).
+        crest_height_m: Missing-height override (m). None uses type defaults.
         waterbody_id: Existing waterbody grid; -1 means no lake or reservoir.
         rivers: Rivers used to place the points on the grid.
         upstream_area_grid: Model-grid drainage area (m2).
@@ -34,16 +35,29 @@ def create_weir_height_grid(
         valid_river_cells: True where a weir can be placed.
 
     Returns:
-        Weir heights (m), with zero where there is no weir.
+        Height grid and gate flags. Positive heights are in meters, zero means
+        no structure, -1 means bankfull depth + 1 m, and -2 means half
+        bankfull depth.
+        Missing heights are resolved from bankfull depth at runtime. Gate
+        thresholds use the configured fractions of the resolved crest height.
 
     Raises:
-        ValueError: If the default height is not positive and finite.
+        ValueError: If the missing-height override is invalid.
     """
-    if not np.isfinite(crest_height_m) or crest_height_m <= 0:
+    if crest_height_m is not None and (
+        not np.isfinite(crest_height_m) or crest_height_m <= 0
+    ):
         raise ValueError("crest_height_m must be positive and finite.")
-    weir_height_grid: xr.DataArray = xr.zeros_like(waterbody_id, dtype=np.float32)
+    # Load the small grids once so cell reads and writes use arrays in memory.
+    waterbody_id = waterbody_id.compute()
+    valid_river_cells = valid_river_cells.compute()
+    upstream_area_grid = upstream_area_grid.compute()
+    weir_height_grid: xr.DataArray = full_like(
+        waterbody_id, fill_value=0.0, nodata=np.nan, dtype=np.float32
+    )
+    gate_grid: xr.DataArray = full_like(waterbody_id, False, nodata=None, dtype=bool)
     if gdw_points.empty:
-        return weir_height_grid
+        return weir_height_grid, gate_grid
     weirs: gpd.GeoDataFrame = gdw_points.loc[~gdw_points["inside_gdw_polygon"]]
     logger: logging.Logger = logging.getLogger(__name__)
     gdw_point: pd.Series
@@ -69,16 +83,26 @@ def create_weir_height_grid(
         if (
             not valid_river_cells.values[row, column]
             or waterbody_id.values[row, column] != -1
-            or weir_height_grid.values[row, column] > 0
+            or weir_height_grid.values[row, column] != 0
         ):
             logger.warning(
                 "Skipping GDW weir %s: cell already used, or no river cell on both sides.",
                 gdw_point.gdw_id,
             )
             continue
-        height_m: float = crest_height_m
+        dam_type: str = str(gdw_point.get("dam_type", "")).strip()
         gdw_height_m: float = gdw_point.dam_hgt_m
+        height_m: float = 0.0
         if pd.notna(gdw_height_m) and np.isfinite(gdw_height_m) and gdw_height_m > 0:
             height_m = float(gdw_height_m)
+        elif crest_height_m is not None:
+            height_m = crest_height_m
+        elif dam_type in {"Dam", "Lake Control Dam"}:
+            height_m = -1.0  # Resolve to bankfull depth + 1 m when routing starts.
+        else:
+            height_m = -2.0  # Resolve to half bankfull depth when routing starts.
+        # Gate operation is a simple assumption based on the barrier type.
+        is_controlled: bool = dam_type in {"Dam", "Sluice", "Lake Control Dam"}
         weir_height_grid.values[row, column] = height_m
-    return weir_height_grid
+        gate_grid.values[row, column] = is_controlled
+    return weir_height_grid, gate_grid

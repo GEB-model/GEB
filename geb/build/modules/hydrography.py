@@ -38,7 +38,7 @@ from geb.build.workflows.waterbodies_preprocessing import (
     load_and_enrich_waterbodies,
     snap_waterbody_points,
 )
-from geb.build.workflows.weirs import create_weir_height_grid
+from geb.build.workflows.weirs import create_weir_grids
 from geb.geb_types import (
     ArrayBool,
     ArrayFloat32,
@@ -48,7 +48,7 @@ from geb.geb_types import (
     TwoDArrayInt64,
     TwoDArrayUint8,
 )
-from geb.hydrology.waterbodies import LAKE, LAKE_CONTROL, RESERVOIR
+from geb.hydrology.waterbodies import LAKE, RESERVOIR
 from geb.workflows.raster import (
     calculate_height_m,
     calculate_width_m,
@@ -1448,12 +1448,22 @@ class Hydrography(BuildModelBase):
         )
 
     @build_method(required=True, depends_on=["setup_waterbodies"])
-    def setup_weirs(self, crest_height_m: float = 1.0) -> None:
+    def setup_weirs(
+        self,
+        crest_height_m: float | None = None,
+    ) -> None:
         """Add GDW points outside reservoir polygons as weirs.
 
         Args:
-            crest_height_m: Height to use when the GDW height is missing or invalid (m). Default: 1 m.
-        """
+            crest_height_m: Missing-height override (m). None uses bankfull depth
+                + 1 m for dams/lake-control dams, half bankfull depth for others.
+
+        Returns:
+            None.
+
+        Raises:
+            ValueError: If the missing-height override is invalid.
+        """  # noqa: DOC202, DOC502
         gdw_points: gpd.GeoDataFrame = gpd.GeoDataFrame()
         if "waterbodies/gdw_checks" in self.geom:
             # Bracket access reads the file; .get() only returns its path.
@@ -1480,7 +1490,9 @@ class Hydrography(BuildModelBase):
         valid_river_cells = valid_river_cells & has_downstream_river.reshape(
             valid_river_cells.shape
         )
-        weir_height_grid: xr.DataArray = create_weir_height_grid(
+        weir_height_grid: xr.DataArray
+        gate_grid: xr.DataArray
+        weir_height_grid, gate_grid = create_weir_grids(
             gdw_points=gdw_points,
             crest_height_m=crest_height_m,
             waterbody_id=waterbody_id,
@@ -1490,6 +1502,7 @@ class Hydrography(BuildModelBase):
             valid_river_cells=valid_river_cells,
         )
         self.set_grid(weir_height_grid, name="routing/weir_height_m")
+        self.set_grid(gate_grid, name="routing/weir_gate")
 
     @build_method(required=True, depends_on=["setup_hydrography"])
     def setup_waterbodies(
@@ -1565,17 +1578,6 @@ class Hydrography(BuildModelBase):
                 dam_checks["match_method"].value_counts().to_dict(),
             )
 
-        hydrolakes_to_geb: dict[int, np.int32] = {
-            1: np.int32(LAKE),
-            2: np.int32(RESERVOIR),
-            3: np.int32(LAKE_CONTROL),
-        }
-        assert set(waterbodies["waterbody_type"]).issubset(hydrolakes_to_geb.keys())
-        waterbodies["waterbody_type"] = waterbodies["waterbody_type"].map(
-            hydrolakes_to_geb
-        )
-        assert waterbodies["waterbody_type"].dtype == np.int32
-
         if mode == "lakes_only":
             waterbodies = waterbodies[waterbodies["waterbody_type"] == LAKE]
         elif mode == "reservoirs_only":
@@ -1632,7 +1634,7 @@ class Hydrography(BuildModelBase):
                 by="waterbody_id", as_index=False
             )
 
-            # Set lakes with command area to reservoirs and reservoirs without command area to lakes
+            # Command areas require reservoir operations for irrigation releases.
             ids_with_command: set[int] = set(command_areas_gdf["waterbody_id"])
             waterbodies.loc[
                 waterbodies["waterbody_id"].isin(ids_with_command),

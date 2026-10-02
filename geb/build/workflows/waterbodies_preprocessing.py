@@ -1,5 +1,7 @@
 """Link GDW dams to HydroLAKES lakes and compare their classifications."""
 
+from collections.abc import Hashable
+
 import geopandas as gpd
 import numpy as np
 import pandas as pd
@@ -12,7 +14,7 @@ from geb.build.workflows.river_snapping import (
     SnappingResults,
     snap_point_to_river_network,
 )
-from geb.hydrology.waterbodies import RESERVOIR
+from geb.hydrology.waterbodies import LAKE, RESERVOIR
 
 # HydroLAKES v1.0 IDs are below two million. Keep new IDs nearby because routing
 # creates arrays indexed by the original waterbody ID.
@@ -99,8 +101,11 @@ def enrich_waterbodies(
     the dam must lie inside or on the edge of exactly one lake. Keep ID matches
     outside the lake, but flag them for review.
 
-    Type-3 lakes (controlled lakes) become reservoirs only with one matching GDW
-    'Dam', no lake-control flag, positive capacity, and no location or ID conflict.
+    With linked GDW dams, type-3 lakes become reservoirs only with one matching
+    'Dam' or 'Lake Control Dam', a recognized lake-control flag (including
+    'Maybe'), positive capacity, and no location or ID conflict.
+    Remaining controlled lakes become lakes, including those without GDW
+    matches. Preserve original types in hydrolakes_type.
     New reservoirs need non-overlapping outlines and positive, finite capacity,
     area, and discharge.
 
@@ -115,13 +120,19 @@ def enrich_waterbodies(
         Updated waterbodies and a table linking each dam to a lake, with any
         differences in IDs, locations, or lake/reservoir classifications.
         If several dams link to one lake, their attributes stay in this table only.
+        Volumes use m3, areas use m2, and discharges use m3/s.
 
     Raises:
-        ValueError: If lake IDs are duplicated, a lake type is unknown, or a new ID
+        ValueError: If lake IDs are missing or duplicated, a lake type is unknown, or a new ID
             is already used or too large for int32 rasters.
     """
-    if not waterbodies["waterbody_id"].is_unique:
-        raise ValueError("Waterbody IDs must be unique.")
+    if not waterbodies["waterbody_type"].isin((1, 2, 3)).all():
+        raise ValueError("Unknown or missing HydroLAKES waterbody type.")
+    if (
+        waterbodies["waterbody_id"].isna().any()
+        or not waterbodies["waterbody_id"].is_unique
+    ):
+        raise ValueError("Waterbody IDs must be present and unique.")
 
     waterbodies = waterbodies.copy().reset_index(drop=True)
     # Keep the original type and volume so changes can be checked later.
@@ -140,7 +151,7 @@ def enrich_waterbodies(
     )
     dam_checks["type_check"] = "unmatched"
 
-    # ID matches also find dams outside the model region.
+    # Prefer the recorded lake ID. A dam may sit just outside its lake outline.
     matched_by_id: pd.Series = dam_checks["hydrolakes_id"].isin(
         waterbodies["waterbody_id"]
     )
@@ -178,9 +189,9 @@ def enrich_waterbodies(
     matched_dams: gpd.GeoDataFrame = dam_checks.loc[
         dam_checks["waterbody_id"].notna()
     ].fillna({"dam_type": "", "lake_control": ""})
-    row_index: int
-    for row_index in matched_dams.index:
-        dam: pd.Series = matched_dams.loc[row_index]
+    row_index: Hashable
+    dam: pd.Series
+    for row_index, dam in matched_dams.iterrows():
         lake_id: int = int(dam["waterbody_id"])
         lake_type: int = int(lakes_by_id.at[lake_id, "hydrolakes_type"])
         dam_checks.at[row_index, "hydrolakes_type"] = lake_type
@@ -189,8 +200,6 @@ def enrich_waterbodies(
         )
         dam_type: str = dam["dam_type"]
         lake_control: str = dam["lake_control"]
-        if lake_type not in (1, 2, 3):
-            raise ValueError(f"Unknown HydroLAKES type: {lake_type}.")
         # Check lake control first: it is more specific than the barrier label.
         if lake_control == "Maybe":
             type_check: str = "uncertain_lake_control"
@@ -204,7 +213,7 @@ def enrich_waterbodies(
         elif dam_type == "Dam" and lake_type == 3 and lake_control == "":
             type_check = "controlled_lake_with_dam"
         else:
-            # 'Dam' is GDW's default label, so lake control is still possible.
+            # Keep unclear classifications in the report for review.
             type_check = "review_barrier_type"
         dam_checks.at[row_index, "type_check"] = type_check
 
@@ -213,15 +222,12 @@ def enrich_waterbodies(
     waterbodies["gdw_count"] = (
         waterbodies["waterbody_id"].map(dam_counts).fillna(0).astype("int32")
     )
-    # One conflicting barrier is enough to flag the whole lake for review.
-    type_conflicts: pd.Series = (
-        dam_checks["type_check"]
-        .eq("lake_control_differs")
-        .groupby(dam_checks["waterbody_id"])
-        .any()
-    )
-    waterbodies["gdw_type_conflict"] = (
-        waterbodies["waterbody_id"].map(type_conflicts).fillna(False).astype(bool)
+    # Keep this warning separate from the final lake or reservoir decision.
+    conflicting_lake_ids: pd.Series = dam_checks.loc[
+        dam_checks["type_check"].eq("lake_control_differs"), "waterbody_id"
+    ]
+    waterbodies["gdw_type_conflict"] = waterbodies["waterbody_id"].isin(
+        conflicting_lake_ids
     )
     # Copy attributes only when one dam is linked, so its values are unambiguous.
     single_dam_matches: gpd.GeoDataFrame = dam_checks.loc[
@@ -235,22 +241,44 @@ def enrich_waterbodies(
                 single_dam_matches[field]
             )
 
-    # Use dam capacity: the operator may not control the full lake volume.
+    # Only change controlled lakes. Natural lakes and existing reservoirs keep their type.
+    is_controlled_lake: pd.Series = single_dam_matches["hydrolakes_type"].eq(3)
+    has_reservoir_dam: pd.Series = single_dam_matches["dam_type"].isin(
+        ("Dam", "Lake Control Dam")
+    )
+    # Missing and uncertain flags are allowed; an explicit "No" is not.
+    has_recognized_control_flag: pd.Series = (
+        single_dam_matches["lake_control"]
+        .fillna("")
+        .isin(("", "Yes", "Enlarged", "Maybe"))
+    )
+    has_valid_capacity: pd.Series = np.isfinite(
+        single_dam_matches["capacity_m3"]
+    ) & single_dam_matches["capacity_m3"].gt(0)
+    # A dam outside the lake or with a different recorded ID needs review first.
+    has_matching_location: pd.Series = (
+        ~single_dam_matches["point_outside_lake"] & ~single_dam_matches["id_differs"]
+    )
     controlled_lakes_with_dams: pd.Series = (
-        single_dam_matches["hydrolakes_type"].eq(3)
-        & single_dam_matches["dam_type"].eq("Dam")
-        & single_dam_matches["lake_control"].fillna("").eq("")
-        & np.isfinite(single_dam_matches["capacity_m3"])
-        & single_dam_matches["capacity_m3"].gt(0)
-        & ~single_dam_matches["point_outside_lake"]
-        & ~single_dam_matches["id_differs"]
+        is_controlled_lake
+        & has_reservoir_dam
+        & has_recognized_control_flag
+        & has_valid_capacity
+        & has_matching_location
     ).fillna(False)
     reservoir_ids: pd.Index = single_dam_matches.index[controlled_lakes_with_dams]
     use_as_reservoir: pd.Series = waterbodies["waterbody_id"].isin(reservoir_ids)
     waterbodies.loc[use_as_reservoir, "waterbody_type"] = RESERVOIR
-    waterbodies.loc[use_as_reservoir, "volume_total"] = waterbodies.loc[
-        use_as_reservoir, "gdw_capacity_m3"
-    ]
+    if use_as_reservoir.any():
+        # Use the dam's capacity, which may differ from the lake's full volume.
+        # Widen the column before assignment so float32 does not round GDW values.
+        waterbodies["volume_total"] = waterbodies["volume_total"].astype(np.float64)
+        waterbodies.loc[use_as_reservoir, "volume_total"] = waterbodies.loc[
+            use_as_reservoir, "gdw_capacity_m3"
+        ]
+    # All controlled lakes not approved above use lake behavior.
+    waterbodies.loc[waterbodies["waterbody_type"].eq(3), "waterbody_type"] = LAKE
+    waterbodies["waterbody_type"] = waterbodies["waterbody_type"].astype(np.int32)
     dam_checks["changed_to_reservoir"] = dam_checks["waterbody_id"].isin(reservoir_ids)
     if reservoir_shapes is None:
         return waterbodies, dam_checks

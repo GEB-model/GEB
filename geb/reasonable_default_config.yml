@@ -68,6 +68,8 @@ hazards:
 
 hydrology:
   routing:
+    gate_opening_level_fraction: 0.9 # Opening depth / crest height above the bed
+    gate_closing_level_fraction: 0.7 # Closing depth / crest height above the bed
     retention_basins:
       release_threshold_factor: 0.2
       activation_threshold_return_period_years: 2

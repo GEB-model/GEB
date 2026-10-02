@@ -43,7 +43,8 @@ setup_vegetation:
 setup_waterbodies:
 
 setup_weirs:
-  crest_height_m: 1.0 # Used when GDW has no valid height (m).
+  # Fills missing GDW heights for all types: Dam, Lake Control Dam, Sluice, Lock, Weir, Low Permeable Dam, Unknown.
+  crest_height_m: null # takes default: bankfull + 1 m for Dam/Lake Control Dam; half bankfull for other types.
 
 setup_groundwater:
 

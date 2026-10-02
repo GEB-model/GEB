@@ -46,27 +46,39 @@ def test_version_update_failure_propagates(
     builder.update.assert_called_once_with(methods)
 
 
-def test_weir_input_migration(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Build the required weir grid when updating b31 inputs.
+@pytest.mark.parametrize(
+    "stored_version,target_version,method_names",
+    [
+        ("1.0.0b31", "1.0.0b32", ["setup_waterbodies", "setup_weirs"]),
+    ],
+)
+def test_waterbody_input_migration(
+    monkeypatch: pytest.MonkeyPatch,
+    stored_version: str,
+    target_version: str,
+    method_names: list[str],
+) -> None:
+    """Rebuild affected waterbody inputs and require rerunning spinup.
 
     Args:
         monkeypatch: Fixture for fixing the target package version.
+        stored_version: Version of the existing inputs.
+        target_version: Version to migrate to.
+        method_names: Build methods required by the migration.
     """
-    monkeypatch.setattr(version_updates, "__version__", "1.0.0b32")
+    monkeypatch.setattr(version_updates, "__version__", target_version)
     builder: Mock = Mock()
     methods: dict[str, dict[str, list[int]]] = {
-        "setup_waterbodies": {},
-        "setup_weirs": {},
+        method_name: {} for method_name in method_names
     }
     with pytest.raises(RuntimeError, match="Rerun spinup"):
         version_updates.get_and_maybe_do_version_updates(
-            "1.0.0b31",
+            stored_version,
             logging.getLogger(__name__),
             build_model=builder,
             methods=methods,
         )
     assert builder.update.call_args_list == [
-        call({"setup_waterbodies": {}}),
-        call({"setup_weirs": {}}),
+        call({method_name: {}}) for method_name in method_names
     ]
-    builder.set_version.assert_called_once_with("1.0.0b32")
+    builder.set_version.assert_called_once_with(target_version)

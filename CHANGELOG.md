@@ -1,5 +1,7 @@
 # v1.0.0b32
-- Impletemented weirs from the GDW dataset. Weirs are all GDW points that are not in a GDW polygon. Default height is 1m.  Rebuild `setup_waterbodies` and `setup_weirs`, then rerun spinup.
+- Implement water structures (sluices, locks, weirs, instream dams) from GDW points outside reservoir outlines. Gates use water-level hysteresis and the same crest-height rules as other structures. Rebuild `setup_waterbodies` and `setup_weirs`, then rerun spinup.
+- Integrate Global Dam Watch (GDW) data and use it to correct Hydrolakes types. For example, a hydrolakes controlled lake becomes a reservoir if GDW classifies it as dam or lake controlled dam.
+
 
 # v1.0.0b31
 - Reduce size of discharge evaluation HTML dashboard. 

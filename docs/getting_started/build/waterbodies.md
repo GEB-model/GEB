@@ -1,195 +1,152 @@
 # Waterbodies
 
-Use `setup_waterbodies` to add lakes and reservoirs to your model. In most cases, you can use the defaults. Customize only if you need to (a) provide reservoir command areas, or (b) override reservoir capacity.
-
-## What `setup_waterbodies` produces
-
-After running, the model stores:
-
-- `waterbodies/waterbody_id`: waterbody ID per coarse grid cell (`-1` means no waterbody).
-- `waterbodies/sub_waterbody_id`: waterbody ID per subgrid cell (`-1` means no waterbody).
-- `waterbodies/command_area`: waterbody ID per coarse grid cell where command areas exist (`-1` means no command area).
-- `waterbodies/subcommand_areas`: waterbody ID per subgrid cell where command areas exist (`-1` means no command area).
-- `waterbodies/waterbody_data`: a table (GeoDataFrame) with waterbody attributes used by the hydrology model.
-- `waterbodies/gdw_checks`: Each GDW dam's location, linked waterbody ID, and any disagreement with HydroLAKES about lake type or location.
-- `reports/waterbodies/gdw_checks.csv`: the same checks as a CSV, without geometry.
+Use `setup_waterbodies` to add lakes and reservoirs. The default settings work
+for most models.
 
 ## Default setup
 
-By default, `setup_waterbodies`:
+GEB reads lakes from HydroLAKES and dam data from Global Dam Watch (GDW). It:
 
-- Reads waterbodies from the `hydrolakes` dataset.
-- Adds attributes from Global Dam Watch (GDW v1.0) and adds missing GDW reservoir outlines where possible.
-- Keeps only waterbodies that intersect your model region.
-- Converts HydroLAKES waterbody types into GEB types:
+- keeps waterbodies inside the model region;
+- links GDW dams to HydroLAKES waterbodies;
+- adds missing GDW reservoirs when possible;
+- creates waterbody and command-area grids; and
+- stores waterbody data and GDW checks.
 
-  - `1` = `LAKE`
-  - `2` = `RESERVOIR`
-  - `3` = `LAKE_CONTROL`
+The main outputs are:
 
-- Initializes `volume_flood` to match `volume_total`.
+- `waterbodies/waterbody_id` and `waterbodies/sub_waterbody_id`;
+- `waterbodies/command_area` and `waterbodies/subcommand_areas`;
+- `waterbodies/waterbody_data`;
+- `waterbodies/gdw_checks`; and
+- `reports/waterbodies/gdw_checks.csv`.
 
-If you do not provide command areas, the command area rasters are still created but filled with `-1` everywhere.
+Grid cells without a waterbody or command area have the value `-1`.
 
-## How GDW is used
+HydroLAKES uses these types:
 
-GEB keeps HydroLAKES outlines and IDs. It first matches GDW's `HYLAK_ID` to the
-HydroLAKES ID. If no lake has that ID, a dam point must lie inside or on the edge of
-a lake. GEB does not use the nearest lake. Points outside GDW polygons are
-handled by `setup_weirs`.
+- `1`: natural lake;
+- `2`: reservoir; and
+- `3`: controlled lake.
 
-GEB currently uses HydroLAKES v1.0, while GDW refers to v1.1. The checks mark ID
-matches where the dam lies outside the lake (`point_outside_lake`). They also
-mark dams linked by location whose GDW lake ID differs from the linked lake ID
-(`id_differs`). These links need review.
+## GDW matching
 
-The waterbody table includes GDW names, dam type, lake-control flag, purpose,
-capacity (m3), area (m2), discharge (m3/s), and source information. GDW `YEAR_DAM`
-is stored as `gdw_construction_year`. `gdw_count` gives the number of matched dam points.
-When several dams match one lake, their individual attributes remain in the check table. GEB does not choose
-one dam or sum their capacities.
+GEB first matches the GDW lake ID to the HydroLAKES ID. If that fails, the dam
+must be inside or on the edge of one lake. GEB does not use the nearest lake.
 
-### Construction year
-
-Reservoirs start operating on **January 1 of their GDW construction year**.
-Before then, their cells route water as rivers: the reservoir has no storage,
-evaporation, or irrigation supply. At construction, river water is
-transferred into the (then empty) reservoir, which then fills from inflow.
-
-Natural lakes stay active in every year. Reservoirs with an unknown construction
-year also stay active. Controlled lakes converted to reservoirs follow the
-reservoir construction year.
-
-Activation rebuilds the local inertial solver connections while preserving water
-stored in rivers and reservoirs, including during spinup.
-
-This controls river routing and reservoir storage; it does not reconstruct
-land cover for past years. To use construction years, rebuild waterbodies and rerun
-spinup and the simulation. Saved states without construction years keep all reservoirs active
-until spinup is rerun.
-
-### Reading the dam table
-
-`match_method` shows how each dam was linked:
+The `match_method` field shows the result:
 
 | Value | Meaning |
 | --- | --- |
-| `id` | GDW's lake ID matches the HydroLAKES ID. |
-| `point_in_polygon` | The dam lies inside or on the edge of exactly one lake. |
-| `multiple_lakes` | The dam touches several lakes, so none was chosen. |
-| `unmatched` | No lake was found by ID or location. |
-| `gdw_polygon` | GEB added a reservoir using its GDW outline. |
-| `gdw_point` | GEB added a reservoir from a dam point, snapped to one river cell. |
+| `id` | The GDW and HydroLAKES IDs match. |
+| `point_in_polygon` | The dam is inside one lake. |
+| `multiple_lakes` | The dam touches several lakes. |
+| `unmatched` | No lake was found. |
+| `gdw_polygon` | A GDW outline was added as a reservoir. |
+| `gdw_point` | A dam was added on one river cell. |
 
-`waterbody_id` is the linked lake or added reservoir ID; it is empty for unlinked
-dams. `addition_reason` says whether a reservoir was added or why it was skipped.
-`inside_gdw_polygon` records whether the point touches any GDW polygon.
-`gdw_type_conflict` is true only for `lake_control_differs`: GDW identifies
-lake control, but HydroLAKES does not classify the lake as controlled.
-A barrier alone is a reason to review the lake, not a confirmed type conflict.
+Review rows marked `point_outside_lake` or `id_differs`. The table keeps the GDW
+name, type, purpose, construction year, capacity, area, and discharge.
 
-### Checking and changing types
+GEB changes a controlled lake to a reservoir when one suitable GDW dam is linked
+to it and GDW provides a valid capacity. The dam must be inside the lake and its
+lake ID must not conflict. The check table marks this as
+`changed_to_reservoir`.
 
-`type_check` compares each linked GDW barrier with the **original** HydroLAKES
-classification: **1 = natural lake, 2 = reservoir, 3 = controlled lake**.
+GEB can also add an unmatched GDW dam as a reservoir. It needs a valid capacity,
+area, discharge, and either an outline or a usable river cell. Other unmatched
+dam points are handled by `setup_weirs`.
 
-The GDW fields are `Dam_type` and `Lake_ctrl`, renamed to `dam_type` and
-`lake_control` in the dam table. There is no check for the words "controlled lake".
-GDW indicates lake control when `Dam_type` is `Lake Control Dam`, or `Lake_ctrl`
-is `Yes` or `Enlarged`.
+Sources: [GDW v1.0](https://figshare.com/articles/dataset/25988293) and the
+[GDW publication](https://doi.org/10.1038/s41597-024-03752-9). GDW uses the
+CC BY 4.0 licence.
 
-Checks run in the order below. **The first matching row wins.**
+## Construction year
 
-| Order | GDW values | HydroLAKES type | `type_check` |
-| --- | --- | --- | --- |
-| 1 | `Lake_ctrl = Maybe`, whatever `Dam_type` says | 1, 2, or 3 | `uncertain_lake_control` |
-| 2 | `Dam_type = Lake Control Dam` **or** `Lake_ctrl = Yes` or `Enlarged` | 1 or 2 | `lake_control_differs` |
-| 3 | Same lake-control values as row 2 | 3 | `agree` |
-| 4 | None of the rows above apply; any barrier type | 1 | `type_1_with_barrier` |
-| 5 | None of the rows above apply; `Dam_type = Dam` | 2 | `agree` |
-| 6 | `Dam_type = Dam` and `Lake_ctrl` is empty | 3 | `controlled_lake_with_dam` |
-| 7 | Any remaining combination, such as `Lock` with type 2 or 3 | 2 or 3 | `review_barrier_type` |
+A reservoir starts operating on January 1 of its GDW construction year. Before
+that date, its cells behave as river cells. Natural lakes and reservoirs without
+a known year are always active.
 
-A HydroLAKES type-3 lake (controlled lake) is modeled as a reservoir when it has exactly one GDW
-match labeled `Dam`, an empty lake-control flag, positive finite GDW capacity,
-with the dam inside or on the lake edge and no conflicting lake ID. GEB then uses GDW capacity as `volume_total`.
-The checks mark the change with `changed_to_reservoir`. Other type-3 lakes retain
-`LAKE_CONTROL`, which GEB currently simulates as an ordinary lake.
-
-### Reservoirs missing from HydroLAKES
-
-GEB adds unmatched GDW dams with a `Dam` label, no Yes, Maybe, or Enlarged
-lake-control flag, and positive, finite capacity (m3), area (m2), and discharge
-(m3/s). Available outlines must be valid and must not touch another waterbody.
-
-Without an outline, GEB uses the existing river snapping method to place the dam
-in one river cell. Storage and evaporation use the GDW capacity and area.
-The build raises an error if snapping fails or the cell already has a waterbody.
-This represents storage and releases, but not the flooded footprint.
-Rerun `setup_waterbodies` and spinup to include these dams.
-
-Sources: [GDW v1.0 dataset and technical documentation](https://figshare.com/articles/dataset/25988293)
-and [GDW publication](https://doi.org/10.1038/s41597-024-03752-9). GDW is licensed
-under CC BY 4.0; retain the dataset attribution when sharing derived data.
+Rebuild waterbodies and rerun spinup and the simulation to use construction
+years. This does not rebuild historic land cover.
 
 ## Custom setup
 
-You can override parts of the default setup with the following options.
-
 ### Command areas
 
-`command_areas` should be a path to a vector file (e.g., GeoPackage) containing polygons with a `waterbody_id` column.
-
-If you provide `command_areas`, GEB will:
-
-- Dissolve command areas by `waterbody_id`.
-- Mark any waterbody that has a command area as a reservoir.
-- Rasterize command areas to `waterbodies/command_area` and `waterbodies/subcommand_areas`.
-
-Command areas that do not match any reservoir in the current region are removed.
-
-### Custom reservoir capacity
-
-`custom_reservoir_capacity` should be an excel-file ('.xlsx') or csv-file ('.csv').
-
-If you provide `custom_reservoir_capacity`, GEB will override reservoir capacity by matching on `waterbody_id`.
-
-Expected columns in the file:
-
-- `waterbody_id`
-- `volume_total` (m3)
-
-## Examples
-
-### Use the defaults (no changes)
-
-```yaml
-setup_waterbodies: {}
-```
-
-### Add command areas
+Set `command_areas` to a vector file with polygons and a `waterbody_id` column.
+GEB joins these areas to reservoirs and creates the command-area grids.
 
 ```yaml
 setup_waterbodies:
   command_areas: data/command_areas.gpkg
 ```
 
-### Override reservoir capacity
+### Reservoir capacity
+
+Set `custom_reservoir_capacity` to a CSV or Excel file with `waterbody_id` and
+`volume_total` (m³) columns.
 
 ```yaml
 setup_waterbodies:
   custom_reservoir_capacity: data/custom_reservoir_capacity.csv
 ```
 
-## Weirs
+To use all defaults:
 
-GDW points outside all GDW reservoir outlines are treated as weirs, whatever their
-name or type. Points on an outline's edge count as inside.
+```yaml
+setup_waterbodies: {}
+```
 
-We use the GDW height, or **1 m** if it is missing or invalid. We treat this as the height
-above the model river bed. Weirs hold back water until it flows over the top.
-There are no gate opening or closing rules. Points that share a lake, reservoir,
-or weir cell, or cannot be placed on a river, are skipped with a warning.
+## Weirs and gates
 
-In `build.yml`, `setup_weirs.crest_height_m` sets the height used when GDW has no valid height.
-Rebuild `setup_waterbodies` and `setup_weirs`, then rerun spinup and the simulation.
+`setup_weirs` places unmatched GDW barriers on rivers. It skips points that are
+already linked, use an occupied cell, or cannot be placed on a valid river link.
+
+| GDW type | Gate | Height used when GDW height is missing |
+| --- | --- | --- |
+| Dam or Lake Control Dam | Yes | Bankfull depth + 1 m |
+| Sluice | Yes | Half the bankfull depth |
+| Other types | No | Half the bankfull depth |
+
+`routing/weir_height_m` stores positive known heights (m), zero for no
+structure, -1 for bankfull depth + 1 m, and -2 for half bankfull depth.
+The two negative markers are resolved into physical heights at runtime,
+when the river's bankfull depth is available. Rebuild `setup_weirs` when
+updating older inputs.
+
+Fixed barriers allow flow above their crest. Gates start closed and open or
+close based on the upstream water depth. The default limits are 90% and 70% of
+the crest height:
+
+```yaml
+hydrology:
+  routing:
+    gate_opening_level_fraction: 0.9
+    gate_closing_level_fraction: 0.7
+```
+
+Gate thresholds can only be configured as fractions of each structure's crest
+height. Fractions are dimensionless and must satisfy
+`0 <= gate_closing_level_fraction < gate_opening_level_fraction < 1`.
+The resulting depths are metres above the upstream river bed. Between the
+thresholds, gates retain their previous state.
+
+Fixed-depth settings `open_depth_m` and `close_depth_m` in `setup_weirs` are no
+longer supported. Remove them from existing build files and configure the
+fractions in `model.yml` instead. Existing fixed-depth input grids are ignored.
+
+Each run writes `output/<run>/weir_heights.csv`. It lists the chosen heights,
+gate settings, and `gate_report_index` values. Use a gate's index
+to select its hourly routing diagnostics.
+
+After changing build settings, rebuild `setup_weirs` and rerun spinup and the
+simulation. Changes to runtime limits only need a new spinup and simulation.
+
+## Controlled lakes without GDW data
+
+The build classifies controlled lakes as lakes unless a suitable linked GDW
+dam qualifies them as reservoirs. A missing GDW match does not justify
+reservoir classification. Saved `waterbody_type` values are 1 (lake) or 2 (reservoir);
+`hydrolakes_type` preserves the original source classification. Rebuild
+`setup_waterbodies` for existing inputs that still contain type 3.
