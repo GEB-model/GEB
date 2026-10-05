@@ -74,24 +74,18 @@ The dashboard is an interactive map for exploring where GEB reproduces river
 discharge well and where it needs improvement.
 
 #### Interactive UK_test example
-
-The embedded example below uses the UK_test model. Select either anonymous
-sample series to explore simulated discharge; the map also includes interactive
-river layers. Observed GRDC discharge, station identifiers and locations, and
-observation-derived skill scores are masked because GRDC data licensing does not
-permit republishing those data here. The map tiles and interactive chart library
-load from external services, so an internet connection is required.
+Example map and station plot to evalaute discharge. 
 
 <iframe
   src="../uk_test_dashboard/index.html"
-  title="Interactive UK_test simulated-discharge dashboard with GRDC data masked"
+  title="Interactive UK_test map and simulated-discharge charts; GRDC data masked"
   width="100%"
   height="720"
   loading="lazy"
   style="border: 1px solid #cbd5e1; border-radius: 8px;"
 ></iframe>
 
-A full locally generated dashboard also supports:
+A full local dashboard also offers these features:
 
 - **Explore station scores:** switch between KGE, NSE, and other map layers.
   Colours show performance; larger station markers represent larger upstream areas.
