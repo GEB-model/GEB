@@ -5317,23 +5317,34 @@ class CropFarmers(AgentBaseClass):
         self.var.n = value
 
     def get_farmer_elevation(self) -> DynamicArray:
-        """Compute mean elevation per farmer.
+        """Compute mean elevation for farmers with land in the active grid.
 
         Returns:
-            DynamicArray: Mean elevation per farmer (meters), sized to ``max_n``.
+            Mean elevation per farmer (meters), sized to ``max_n``.
+
+        Raises:
+            ValueError: If a farmer has no active land or an owner ID is invalid.
         """
-        # get elevation per farmer
-        elevation_subgrid = read_grid(
+        elevation_subgrid: np.ndarray = read_grid(
             self.model.files["subgrid"]["landsurface/elevation"], ndim=2
         )
         elevation_subgrid = np.nan_to_num(elevation_subgrid, copy=False, nan=0.0)
-        decompressed_land_owners = self.HRU.decompress(self.HRU.var.land_owners)
-        mask = decompressed_land_owners != -1
-        return DynamicArray(
-            np.bincount(
-                decompressed_land_owners[mask],
-                weights=elevation_subgrid[mask],
+        land_owners: np.ndarray = self.HRU.decompress(self.HRU.var.land_owners)
+        mask: np.ndarray = land_owners != -1
+        farmer_ids: np.ndarray = land_owners[mask]
+        if np.any(farmer_ids < 0) or np.any(farmer_ids >= self.var.n):
+            raise ValueError(
+                "Farmer IDs do not match the farmer attribute rows; update the model inputs."
             )
-            / np.bincount(decompressed_land_owners[mask]),
-            max_n=self.var.max_n,
+        pixel_counts: np.ndarray = np.bincount(farmer_ids, minlength=self.var.n)
+        missing_ids: np.ndarray = np.flatnonzero(pixel_counts == 0)
+        if missing_ids.size:
+            raise ValueError(
+                f"{missing_ids.size} farmers have no land in the active model grid "
+                f"(IDs: {missing_ids[:20].tolist()}). Run geb update-version "
+                "with the build configuration, then rerun spinup."
+            )
+        elevation_sums: np.ndarray = np.bincount(
+            farmer_ids, weights=elevation_subgrid[mask], minlength=self.var.n
         )
+        return DynamicArray(elevation_sums / pixel_counts, max_n=self.var.max_n)

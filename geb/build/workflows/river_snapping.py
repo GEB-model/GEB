@@ -10,6 +10,7 @@ import geopandas as gpd
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
+import numpy.typing as npt
 import shapely
 import xarray as xr
 from shapely.ops import nearest_points
@@ -192,10 +193,11 @@ def snap_point_to_river_network(
     point: shapely.geometry.Point,
     rivers: gpd.GeoDataFrame,
     upstream_area_grid: xr.DataArray,
-    upstream_area_subgrid: xr.DataArray,
+    upstream_area_subgrid: xr.DataArray | None,
     upstream_area_m2: float | None = None,
     max_uparea_difference_ratio: float = 0.3,
     max_spatial_difference_degrees: float = 0.1,
+    river_coordinate_cache: dict[int, npt.NDArray[np.float64]] | None = None,
 ) -> SnappingResults | None:
     """Snap a point to the river network grid.
 
@@ -207,13 +209,21 @@ def snap_point_to_river_network(
         point: The location to snap (shapely Point).
         rivers: GeoDataFrame of river segments. Must contain 'uparea_m2' and 'hydrography_xy'.
         upstream_area_grid: Low-resolution upstream area grid.
-        upstream_area_subgrid: High-resolution upstream area subgrid.
+        upstream_area_subgrid: High-resolution upstream area subgrid (m2).
+            None skips reading subgrid diagnostics, which are not needed for
+            selecting the river or model cell.
         upstream_area_m2: Optional target upstream area for matching (m2).
         max_uparea_difference_ratio: Max allowed difference ratio for upstream area.
         max_spatial_difference_degrees: Max allowed spatial distance in degrees.
+        river_coordinate_cache: Optional cache of river cell coordinates (degrees).
+            Reuse only with the same river network and model grid.
 
     Returns:
-        SnappingResults or None if no segment found.
+        SnappingResults or None if no segment found. Subgrid coordinates
+        (degrees) and upstream area (m2) are NaN when no subgrid is supplied.
+
+    Raises:
+        ValueError: If the selected river has no model grid cells.
     """
     # Calculate distances and sort from closest to furthest
     rivers = rivers.copy()
@@ -225,10 +235,10 @@ def snap_point_to_river_network(
         warnings.filterwarnings("ignore", category=UserWarning)
         rivers["station_distance"] = rivers.geometry.distance(point)
 
-    rivers_sorted = rivers.sort_values(by="station_distance")
+    rivers_sorted: gpd.GeoDataFrame = rivers.sort_values(by="station_distance")
 
     # We first need to find the best river segment to snap to, based on distance and (optionally) upstream area.
-    best_river_segment = select_river_segment(
+    best_river_segment: RiverSegment | None = select_river_segment(
         rivers_sorted=rivers_sorted,
         max_spatial_difference_degrees=max_spatial_difference_degrees,
         upstream_area_m2=upstream_area_m2,
@@ -241,54 +251,67 @@ def snap_point_to_river_network(
     # Then along the selected river segment, we find the closest point on the river line to the original point.
     # The first point returned by nearest_points is the point itself,
     # the second is the closest point on the linestring.
+    closest_point_on_riverline: shapely.geometry.Point
     _, closest_point_on_riverline = nearest_points(point, best_river_segment.geometry)
 
-    # Next, we find the corresponding cell in the high-resolution subgrid that is part of the river network.
-    river_cell_in_subgrid = upstream_area_subgrid.sel(
-        x=closest_point_on_riverline.x,
-        y=closest_point_on_riverline.y,
-        method="nearest",
-    ).compute()
+    subgrid_pixel_coords: tuple[float, float] = (float("nan"), float("nan"))
+    subgrid_upstream_area_m2: float = float("nan")
+    if upstream_area_subgrid is not None:
+        # Subgrid sampling is diagnostic; river and model-cell selection do not
+        # depend on it. Avoid decompressing a large raster for callers such as weirs.
+        river_cell_in_subgrid: xr.DataArray = upstream_area_subgrid.sel(
+            x=closest_point_on_riverline.x,
+            y=closest_point_on_riverline.y,
+            method="nearest",
+        ).compute()
+        subgrid_pixel_coords = (
+            river_cell_in_subgrid.x.item(),
+            river_cell_in_subgrid.y.item(),
+        )
+        subgrid_upstream_area_m2 = river_cell_in_subgrid.item()
 
     # then we find the river cell in the low resolution grid that is closest to the snapped
     # river point, and that is part of the same river segment.
     # hydrography_xy contains the list of (x,y) coordinates in the low-res grid that belong to the river segment.
-    hydrography_xy = best_river_segment.hydrography_xy
-    river_points_and_xy = []
-    for xy in hydrography_xy:
-        river_points_and_xy.append(
-            (
-                shapely.geometry.Point(
-                    upstream_area_grid.x.values[xy[0]].item(),
-                    upstream_area_grid.y.values[xy[1]].item(),
-                ),
-                xy,
-            )
-        )
-    closest_river_point_and_xy = min(
-        river_points_and_xy,
-        key=lambda x: shapely.distance(x[0], closest_point_on_riverline),
+    hydrography_xy: list[tuple[int, int]] = best_river_segment.hydrography_xy
+    if len(hydrography_xy) == 0:
+        raise ValueError("The selected river has no model grid cells.")
+    coordinates: npt.NDArray[np.float64] | None = (
+        river_coordinate_cache.get(best_river_segment.ID)
+        if river_coordinate_cache is not None
+        else None
     )
+    if coordinates is None:
+        grid_indices: npt.NDArray[np.int64] = np.stack(hydrography_xy).astype(np.int64)
+        coordinates = np.column_stack(
+            (
+                upstream_area_grid.x.values[grid_indices[:, 0]],
+                upstream_area_grid.y.values[grid_indices[:, 1]],
+            )
+        ).astype(np.float64)
+        if river_coordinate_cache is not None:
+            river_coordinate_cache[best_river_segment.ID] = coordinates
+    # argmin keeps the first cell on ties, matching the previous sequential search.
+    offsets: npt.NDArray[np.float64] = coordinates - np.array(
+        [closest_point_on_riverline.x, closest_point_on_riverline.y]
+    )
+    closest_position: int = int(np.argmin(np.hypot(offsets[:, 0], offsets[:, 1])))
+    closest_grid_xy: tuple[int, int] = hydrography_xy[closest_position]
 
     return SnappingResults(
         closest_point_coords=(
             float(closest_point_on_riverline.x),
             float(closest_point_on_riverline.y),
         ),
-        subgrid_pixel_coords=(
-            river_cell_in_subgrid.x.item(),
-            river_cell_in_subgrid.y.item(),
-        ),
+        subgrid_pixel_coords=subgrid_pixel_coords,
         snapped_grid_pixel_lonlat=(
-            closest_river_point_and_xy[0].x,
-            closest_river_point_and_xy[0].y,
+            float(coordinates[closest_position, 0]),
+            float(coordinates[closest_position, 1]),
         ),
-        snapped_grid_pixel_xy=closest_river_point_and_xy[1],
-        geb_uparea_subgrid=(river_cell_in_subgrid.item()),
+        snapped_grid_pixel_xy=closest_grid_xy,
+        geb_uparea_subgrid=subgrid_upstream_area_m2,
         geb_uparea_grid=(
-            upstream_area_grid.isel(
-                x=closest_river_point_and_xy[1][0], y=closest_river_point_and_xy[1][1]
-            ).item()
+            upstream_area_grid.isel(x=closest_grid_xy[0], y=closest_grid_xy[1]).item()
         ),
         distance_degrees=best_river_segment.station_distance,
         closest_river_segment=best_river_segment,

@@ -146,3 +146,24 @@ Run `geb update-version -b build.yml` from the model directory to rebuild
 `setup_waterbodies` and `setup_weirs`, then rerun spinup and simulation.
 Custom build files must include `setup_weirs` after `setup_waterbodies` and
 run `setup_elevation` before `setup_waterbodies`.
+
+## AMBER barriers
+
+The [AMBER atlas](https://doi.org/10.6084/m9.figshare.12629051) adds barriers within 250 m of a represented river using GDW height and gate rules; existing waterbodies and GDW structures take priority. AMBER dams intersecting exactly one natural or controlled lake promote it to a reservoir using its positive, finite HydroLAKES volume as capacity (m³).
+Weir placement filters distant AMBER points in bulk, reuses river grid-cell coordinates, and skips detailed drainage-area raster sampling because it does not affect barrier placement. AMBER distance checks project WGS84 river lines directly into the same local projection used previously. These optimizations preserve the 250 m inclusion rule and exclusion diagnostics; lake classification still uses the full atlas.
+
+Run `geb update-version -b build.yml` to rebuild `setup_waterbodies` and `setup_weirs`, then rerun spinup and simulation.
+
+`setup_weirs` shows a progress bar in terminals, logs progress every 30 seconds in batch jobs, and summarizes included and excluded barriers by source and reason. Individual exclusions are recorded in the diagnostic file rather than printed as warnings.
+
+`setup_weirs` saves all GDW and AMBER points considered by the model to
+`input/geom/routing/barriers.geoparquet`, at their original locations.
+The file contains `source`, `barrier_id`, `barrier_type`, `height_m`,
+`distance_to_river_m`, `included` and `exclusion_reason`.
+Heights are the positive source values in meters; missing or invalid heights
+are null. The existing default height rules still apply during routing.
+`included` means the point was placed on the weir grid. Excluded points have a
+short reason, such as `farther than 250 m` or `part of lake or reservoir`.
+Distance is in meters and is null when no nearby river was found or the point
+was excluded before snapping. Empty models still get an empty file.
+Rerun `setup_weirs` to add this file to existing inputs.

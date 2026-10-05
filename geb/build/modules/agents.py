@@ -29,7 +29,11 @@ from ..workflows.conversions import (
     TRADE_REGIONS,
     setup_donor_countries,
 )
-from ..workflows.farmers import create_farm_distributions, create_farms
+from ..workflows.farmers import (
+    create_farm_distributions,
+    create_farms,
+    retain_active_farmers,
+)
 from .base import BuildModelBase
 
 
@@ -1107,11 +1111,17 @@ class Agents(BuildModelBase):
             self.set_params(prices_dict, name=f"socioeconomics/{price_type}")
 
     def set_farmers_and_create_farms(self, farmers: pd.DataFrame) -> None:
-        """Sets up the farmers data for GEB.
+        """Create farm fields and retain farmers with land in the active model grid.
 
         Args:
-            farmers: A DataFrame containing the farmer data.
-        """
+            farmers: Farmer rows with region IDs and farm sizes in subgrid cells.
+
+        Returns:
+            None.
+
+        Raises:
+            ValueError: If farm IDs or raster dimensions are invalid.
+        """  # noqa: DOC202, DOC502
         regions: gpd.GeoDataFrame = self.geom["regions"]
         region_ids: xr.DataArray = self.subgrid["region_ids"]
         cultivated_land: xr.DataArray = self.subgrid["landsurface/cultivated_land"]
@@ -1119,6 +1129,9 @@ class Agents(BuildModelBase):
         farms: xr.DataArray = self.full_like(
             region_ids, fill_value=-1, nodata=-1, dtype=np.int32
         )
+        region_id: int
+        region_clip: xr.DataArray
+        bounds: dict[str, slice]
         for region_id in tqdm(regions["region_id"]):
             region: xr.DataArray = region_ids == region_id
             region_clip, bounds = clip_with_grid(region, region)
@@ -1148,8 +1161,58 @@ class Agents(BuildModelBase):
         assert farms.min() >= -1  # -1 is nodata value, all farms should be positive
         assert farms.max().item() == len(farmers) - 1
 
+        retained_ids: np.ndarray
+        farms, retained_ids = retain_active_farmers(
+            farms, self.grid["mask"], len(farmers)
+        )
+        farmers = farmers.iloc[retained_ids].reset_index(drop=True)
         self.set_subgrid(farms, name="agents/farmers/farms")
         self.set_array(farmers["region_id"].values, name="agents/farmers/region_id")
+
+    def remove_inactive_farmers(self) -> int:
+        """Repair existing inputs by removing farmers without active land.
+
+        Compact all arrays under agents/farmers using the same original row
+        selection as the farm raster. Validate every array before writing.
+        Existing simulation checkpoints must be recreated after IDs change.
+
+        Returns:
+            Number of removed farmer agents.
+
+        Raises:
+            ValueError: If any farmer array or farm raster has inconsistent IDs.
+        """
+        if "agents/farmers/farms" not in self.subgrid:
+            return 0
+        number_of_farmers: int = self.array["agents/farmers/region_id"].shape[0]
+        farms: xr.DataArray
+        retained_ids: np.ndarray
+        farms, retained_ids = retain_active_farmers(
+            self.subgrid["agents/farmers/farms"], self.grid["mask"], number_of_farmers
+        )
+        removed_count: int = number_of_farmers - retained_ids.size
+        if removed_count == 0:
+            return 0
+        farmer_arrays: dict[str, np.ndarray] = {}
+        array_name: str
+        values: np.ndarray
+        for array_name in self.array:
+            if array_name.startswith("agents/farmers/"):
+                values = self.array[array_name]
+                if values.ndim == 0 or values.shape[0] != number_of_farmers:
+                    raise ValueError(
+                        f"Farmer array {array_name} does not have {number_of_farmers} rows."
+                    )
+                farmer_arrays[array_name] = values[retained_ids]
+        for array_name, values in farmer_arrays.items():
+            self.set_array(values, name=array_name)
+        self.set_subgrid(farms, name="agents/farmers/farms")
+        self.logger.info(
+            "Removed %s farmers without active land; retained %s farmers.",
+            removed_count,
+            retained_ids.size,
+        )
+        return removed_count
 
     @build_method(
         depends_on=["setup_regions_and_land_use", "setup_cell_area"], required=True

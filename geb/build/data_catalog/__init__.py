@@ -4,6 +4,7 @@ import logging
 import os
 from typing import Any
 
+from .amber import AMBER
 from .aquastat import AQUASTAT
 from .base import Adapter
 from .cmip6 import CMIP6
@@ -834,6 +835,19 @@ data_catalog: dict[str, dict[str, Any]] = {
             "author": "European Space Agency (ESA)",
             "version": "v200",
             "license": "CC BY 4.0",
+        },
+    },
+    "amber_barriers": {
+        "adapter": AMBER(
+            folder="amber", local_version=1, filename="barriers.parquet", cache="global"
+        ),
+        "url": "https://ndownloader.figshare.com/files/25777667",
+        "source": {
+            "name": "AMBER Atlas of Instream Barriers in Europe",
+            "author": "Belletti et al.",
+            "version": "V1",
+            "license": "CC BY 4.0",
+            "url": "https://doi.org/10.6084/m9.figshare.12629051",
         },
     },
     "gdw_barriers": {

@@ -1590,7 +1590,10 @@ class Hydrography(BuildModelBase):
         self,
         crest_height_m: float | None = None,
     ) -> None:
-        """Add GDW points outside reservoir polygons as weirs.
+        """Add GDW and AMBER barriers as weirs.
+
+        AMBER points farther than 250 m from the nearest river are excluded.
+        Save all barrier locations and exclusion reasons to routing/barriers.
 
         Args:
             crest_height_m: Missing-height override (m). None uses bankfull depth
@@ -1606,6 +1609,11 @@ class Hydrography(BuildModelBase):
         if "waterbodies/gdw_checks" in self.geom:
             # Bracket access reads the file; .get() only returns its path.
             gdw_points = self.geom["waterbodies/gdw_checks"]
+        region: gpd.GeoDataFrame = self.region.to_crs(4326)
+        amber_points: gpd.GeoDataFrame = self.data_catalog.fetch("amber_barriers").read(
+            bbox=tuple(region.total_bounds)
+        )
+        amber_points = amber_points.loc[amber_points.intersects(region.union_all())]
         waterbody_id: xr.DataArray = self.grid["waterbodies/waterbody_id"]
         valid_river_cells: xr.DataArray = (
             ~self.grid["mask"]
@@ -1630,17 +1638,21 @@ class Hydrography(BuildModelBase):
         )
         weir_height_grid: xr.DataArray
         gate_grid: xr.DataArray
-        weir_height_grid, gate_grid = create_weir_grids(
+        barrier_records: gpd.GeoDataFrame
+        weir_height_grid, gate_grid, barrier_records = create_weir_grids(
             gdw_points=gdw_points,
+            amber_points=amber_points,
             crest_height_m=crest_height_m,
             waterbody_id=waterbody_id,
             rivers=self.geom["routing/rivers"],
             upstream_area_grid=self.grid["routing/upstream_area_m2"],
             upstream_area_subgrid=self.other["drainage/original_d8_upstream_area_m2"],
             valid_river_cells=valid_river_cells,
+            logger=self.logger,
         )
         self.set_grid(weir_height_grid, name="routing/weir_height_m")
         self.set_grid(gate_grid, name="routing/weir_gate")
+        self.set_geom(barrier_records, name="routing/barriers")
 
     @build_method(required=True, depends_on=["setup_hydrography", "setup_elevation"])
     def setup_waterbodies(
@@ -1656,6 +1668,8 @@ class Hydrography(BuildModelBase):
         GDW adds dam data and missing reservoirs. Points outside GDW polygons
         are handled by setup_weirs. It flags differences
         between its dam types and HydroLAKES lake/reservoir classifications.
+        AMBER dams intersecting one lake polygon promote natural or controlled
+        lakes to reservoirs, using positive HydroLAKES volume as capacity (m3).
         This includes rasterizing lake and reservoir identifiers, optionally
         assigning command areas from preset data or by deriving them from the river
         routing network, and updating reservoir storage capacities.

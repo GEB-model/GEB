@@ -2,6 +2,7 @@
 
 import logging
 from pathlib import Path
+from unittest.mock import Mock
 
 import geopandas as gpd
 import numpy as np
@@ -15,17 +16,27 @@ from geb.build.workflows.weirs import create_weir_grids
 from geb.workflows.io import read_geom, read_zarr
 
 
+@pytest.mark.parametrize("amber_longitude", [0.001, 0.003])
+@pytest.mark.parametrize("has_amber_points", [True, False])
 @pytest.mark.parametrize("has_gdw_points", [True, False])
 @pytest.mark.parametrize("lazy_grids", [True, False])
 def test_setup_weirs_from_files(
-    tmp_path: Path, has_gdw_points: bool, lazy_grids: bool
+    tmp_path: Path,
+    has_gdw_points: bool,
+    has_amber_points: bool,
+    amber_longitude: float,
+    lazy_grids: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Read saved GDW points during an update; allow builds without GDW points.
 
     Args:
         tmp_path: Folder for test files.
         has_gdw_points: Whether a GDW points file is available.
+        has_amber_points: Whether the atlas contains a barrier in this region.
+        amber_longitude: Barrier longitude (degrees), within or beyond 250 m.
         lazy_grids: Whether to use Dask arrays, as input updates do.
+        monkeypatch: Fixture to replace the atlas download.
     """
     geometry_files: DelayedReader = DelayedReader(read_geom)
     if has_gdw_points:
@@ -69,6 +80,16 @@ def test_setup_weirs_from_files(
         data=np.array([[2, 3], [2, 3]], dtype=np.int64)
     )
     builder: GEBModel = GEBModel(logger=logging.getLogger(__name__), root=tmp_path)
+    catalog: Mock = Mock()
+    catalog.fetch.return_value.read.return_value = gpd.GeoDataFrame(
+        {"amber_id": ["amber-1"], "dam_type": ["Weir"], "dam_hgt_m": [3.5]},
+        geometry=[Point(amber_longitude, 0.0)],
+        crs=4326,
+    ).iloc[: 1 if has_amber_points else 0]
+    monkeypatch.setattr(builder, "data_catalog", catalog)
+    region_file: Path = tmp_path / "region.parquet"
+    gpd.GeoDataFrame(geometry=[Point(0, 0).buffer(1)], crs=4326).to_parquet(region_file)
+    geometry_files["mask"] = region_file
     builder.files = builder.read_or_create_file_library()
     builder.geom = geometry_files
     grids: dict[str, xr.DataArray] = {
@@ -100,13 +121,54 @@ def test_setup_weirs_from_files(
     saved_gates: xr.DataArray = read_zarr(
         tmp_path / "grid/routing/weir_gate.zarr"
     ).compute()
+    barrier_file: Path = tmp_path / "geom/routing/barriers.geoparquet"
+    saved_barriers: gpd.GeoDataFrame = gpd.read_parquet(barrier_file)
+    assert saved_barriers.crs.to_epsg() == 4326
+    assert pd.api.types.is_string_dtype(saved_barriers["source"].dtype)
+    assert pd.api.types.is_string_dtype(saved_barriers["barrier_id"].dtype)
+    assert pd.api.types.is_string_dtype(saved_barriers["barrier_type"].dtype)
+    assert saved_barriers.columns.tolist() == [
+        "source",
+        "barrier_id",
+        "barrier_type",
+        "height_m",
+        "geometry",
+        "distance_to_river_m",
+        "included",
+        "exclusion_reason",
+    ]
+    assert len(saved_barriers) == int(has_gdw_points) + int(has_amber_points)
+    assert saved_barriers["included"].sum() == int(
+        has_gdw_points or (has_amber_points and amber_longitude == 0.001)
+    )
+    if has_amber_points:
+        amber_record: pd.Series = saved_barriers.loc[
+            saved_barriers["source"] == "AMBER"
+        ].iloc[0]
+        assert amber_record["barrier_id"] == "amber-1"
+        assert amber_record["height_m"] == 3.5
+        assert amber_record.geometry == Point(amber_longitude, 0.0)
+        assert amber_record["distance_to_river_m"] > 0
+        assert amber_record["exclusion_reason"] == (
+            "farther than 250 m"
+            if amber_longitude == 0.003
+            else "cell already used"
+            if has_gdw_points
+            else ""
+        )
     assert saved_gates.dtype == bool
     assert saved_gates.values[0, 0] == has_gdw_points
     assert saved_gates.values.sum() == int(has_gdw_points)
     assert saved_heights.dtype == np.float32
     assert np.isnan(saved_heights.attrs["_FillValue"])
     assert np.isnan(saved_heights.values[1, 1])
-    assert saved_heights.sum().item() == (-2.0 if has_gdw_points else 0.0)
+    assert saved_heights.sum().item() == (
+        -2.0
+        if has_gdw_points
+        else 3.5
+        if has_amber_points and amber_longitude == 0.001
+        else 0.0
+    )
     assert (
         "routing/weir_height_source"
         not in builder.read_or_create_file_library()["grid"]
@@ -230,7 +292,8 @@ def test_build_weir(case: str, crest_height_m: float | None) -> None:
     )
     result: xr.DataArray
     gates: xr.DataArray
-    result, gates = create_weir_grids(
+    records: gpd.GeoDataFrame
+    result, gates, records = create_weir_grids(
         barriers,
         crest_height_m,
         waterbody_ids,
@@ -253,6 +316,19 @@ def test_build_weir(case: str, crest_height_m: float | None) -> None:
             "infinite_height",
         )
     )
+    assert len(records) == (0 if case == "empty" else 1)
+    assert int(records["included"].sum()) == int(bool((result.values != 0).any()))
+    if case == "inside":
+        assert records.iloc[0]["exclusion_reason"] == "inside reservoir outline"
+    elif case in {"linked", "occupied"}:
+        assert records.iloc[0]["exclusion_reason"] == "part of lake or reservoir"
+    elif case == "boundary":
+        assert records.iloc[0]["exclusion_reason"] == "unsuitable river cell"
+    elif case == "distant":
+        assert records.iloc[0]["exclusion_reason"] == "no river found"
+    if not records.empty:
+        assert records.iloc[0]["source"] == "GDW"
+        assert records.iloc[0]["barrier_id"] == "42"
     assert result.dtype == np.float32
     if case == "height":
         assert result.values.sum() == 2.5
@@ -329,7 +405,8 @@ def test_gate_classification(dam_type: str) -> None:
     )
     heights: xr.DataArray
     gates: xr.DataArray
-    heights, gates = create_weir_grids(
+    records: gpd.GeoDataFrame
+    heights, gates, records = create_weir_grids(
         barriers,
         None,
         waterbody_ids,
@@ -365,5 +442,12 @@ def test_fixed_gate_depth_options_removed(option_name: str) -> None:
     points: gpd.GeoDataFrame = gpd.GeoDataFrame()
     with pytest.raises(TypeError, match=option_name):
         create_weir_grids(
-            points, None, grid, points, grid, grid, grid, **{option_name: 1.0}
+            points,
+            None,
+            grid,
+            points,
+            grid,
+            grid,
+            grid,
+            **{option_name: 1.0},  # ty:ignore[invalid-argument-type]
         )

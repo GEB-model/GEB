@@ -41,10 +41,10 @@ def load_and_enrich_waterbodies(
     region: gpd.GeoDataFrame,
     mode: str,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
-    """Load lakes and add GDW dam data.
+    """Load lakes, add GDW data, and classify lakes with AMBER dams.
 
     Args:
-        data_catalog: Catalog for reading HydroLAKES and GDW.
+        data_catalog: Catalog for reading HydroLAKES, GDW, and AMBER.
         region: Model boundary with a coordinate reference system.
         mode: 'off' returns no waterbodies. Other modes load all waterbodies;
             setup_waterbodies applies the lake/reservoir filter later.
@@ -52,8 +52,13 @@ def load_and_enrich_waterbodies(
     Returns:
         Waterbody outlines with GDW data, plus each dam's linked lake and any
         differences in their IDs, locations, or lake/reservoir classifications.
-        Area, volume, and discharge use m2, m3, and m3/s.
-    """
+        AMBER dams can promote natural and controlled lakes to reservoirs,
+        retaining HydroLAKES volume (m3) as capacity. Area and discharge use
+        m2 and m3/s.
+
+    Raises:
+        ValueError: If waterbody IDs, types, or coordinate systems are invalid.
+    """  # noqa: DOC502
     region = region.to_crs(4326)
     region_shape: BaseGeometry = region.union_all()
     waterbodies: gpd.GeoDataFrame = data_catalog.fetch("hydrolakes").read(
@@ -81,12 +86,84 @@ def load_and_enrich_waterbodies(
         bbox=tuple(region.total_bounds)
     )
     reservoir_shapes = reservoir_shapes[reservoir_shapes.intersects(region_shape)]
-    return enrich_waterbodies(
+    waterbodies, dam_checks = enrich_waterbodies(
         waterbodies,
         barriers,
         reservoir_shapes=reservoir_shapes,
         region_shape=region_shape,
     )
+    if not waterbodies.empty:
+        # A lake can extend beyond the model boundary, with its dam outside it.
+        amber_points: gpd.GeoDataFrame = data_catalog.fetch("amber_barriers").read(
+            bbox=tuple(waterbodies.to_crs(4326).total_bounds)
+        )
+        waterbodies = promote_lakes_with_amber_dams(waterbodies, amber_points)
+    return waterbodies, dam_checks
+
+
+def promote_lakes_with_amber_dams(
+    waterbodies: gpd.GeoDataFrame,
+    amber_points: gpd.GeoDataFrame,
+) -> gpd.GeoDataFrame:
+    """Promote HydroLAKES lakes intersected by AMBER dams to reservoirs.
+
+    Match points inside or on polygon edges, accepting only dams intersecting
+    exactly one waterbody. Several unambiguous dams may identify the same lake.
+    Existing reservoirs retain their classification and capacity. The original
+    HydroLAKES type remains available in hydrolakes_type.
+
+    Args:
+        waterbodies: GDW-enriched waterbodies with volume_total in m3.
+        amber_points: AMBER points with dam_type and a coordinate system.
+
+    Returns:
+        Copied waterbodies with amber_dam_count and amber_changed_to_reservoir
+        fields. Promoted reservoirs retain their lake volume as capacity (m3),
+        because AMBER supplies no reservoir capacity.
+
+    Raises:
+        ValueError: If either coordinate system is missing or waterbody IDs
+            are missing or duplicated.
+    """
+    if waterbodies.crs is None or amber_points.crs is None:
+        raise ValueError("Waterbodies and AMBER points must have a CRS.")
+    if (
+        waterbodies["waterbody_id"].isna().any()
+        or not waterbodies["waterbody_id"].is_unique
+    ):
+        raise ValueError("Waterbody IDs must be present and unique.")
+    waterbodies = waterbodies.copy()
+    dams: gpd.GeoDataFrame = (
+        amber_points.loc[
+            amber_points["dam_type"].str.strip().str.casefold().eq("dam"), ["geometry"]
+        ]
+        .to_crs(waterbodies.crs)
+        .reset_index(drop=True)
+    )
+    # Match against all waterbodies so a shared boundary cannot select a lake
+    # merely because the other waterbody is already a reservoir.
+    matches: gpd.GeoDataFrame = gpd.sjoin(
+        dams,
+        waterbodies[["waterbody_id", "geometry"]],
+        how="inner",
+        predicate="intersects",
+    )
+    matches = matches.loc[~matches.index.duplicated(keep=False)]
+    dam_counts: pd.Series = matches["waterbody_id"].value_counts()
+    waterbodies["amber_dam_count"] = (
+        waterbodies["waterbody_id"].map(dam_counts).fillna(0).astype(np.int32)
+    )
+    # A reservoir needs usable storage; never infer capacity from dam height.
+    use_as_reservoir: pd.Series = (
+        waterbodies["waterbody_type"].eq(LAKE)
+        & waterbodies["hydrolakes_type"].isin((1, 3))
+        & waterbodies["amber_dam_count"].gt(0)
+        & np.isfinite(waterbodies["volume_total"])
+        & waterbodies["volume_total"].gt(0)
+    )
+    waterbodies["amber_changed_to_reservoir"] = use_as_reservoir
+    waterbodies.loc[use_as_reservoir, "waterbody_type"] = RESERVOIR
+    return waterbodies
 
 
 def enrich_waterbodies(

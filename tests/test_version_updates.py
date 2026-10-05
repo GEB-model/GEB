@@ -51,6 +51,8 @@ def test_version_update_failure_propagates(
     [
         ("1.0.0b31", "1.0.0b32", ["setup_waterbodies", "setup_weirs"]),
         ("1.0.0b32", "1.0.0b33", ["setup_waterbodies", "setup_weirs"]),
+        ("1.0.0b33", "1.0.0b34", ["setup_weirs"]),
+        ("1.0.0b34", "1.0.0b35", ["setup_waterbodies", "setup_weirs"]),
     ],
 )
 def test_waterbody_input_migration(
@@ -83,3 +85,22 @@ def test_waterbody_input_migration(
         call({method_name: {}}) for method_name in method_names
     ]
     builder.set_version.assert_called_once_with(target_version)
+
+
+def test_barrier_file_migration(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Add the barrier file to existing inputs without requiring a new spinup.
+
+    Args:
+        monkeypatch: Fixture for fixing the package version.
+    """
+    monkeypatch.setattr(version_updates, "__version__", "1.0.0b36")
+    builder: Mock = Mock()
+    updates: list[str] = version_updates.get_and_maybe_do_version_updates(
+        "1.0.0b35",
+        logging.getLogger(__name__),
+        build_model=builder,
+        methods={"setup_weirs": {}},
+    )
+    assert updates == []
+    builder.update.assert_called_once_with({"setup_weirs": {}})
+    builder.set_version.assert_called_once_with("1.0.0b36")

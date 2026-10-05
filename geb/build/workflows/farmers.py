@@ -736,3 +736,66 @@ def get_farm_locations(farms: xr.DataArray, method: str = "centroid") -> TwoDArr
         gt,
     )
     return locations
+
+
+def retain_active_farmers(
+    farms: xr.DataArray, grid_mask: xr.DataArray, number_of_farmers: int
+) -> tuple[xr.DataArray, ArrayInt32]:
+    """Remove farms outside the active grid and compact the remaining farmer IDs.
+
+    Args:
+        farms: Subgrid raster of farmer IDs; -1 means no farmer.
+        grid_mask: Model grid mask; True means outside the active domain.
+        number_of_farmers: Number of rows in the farmer attribute arrays.
+
+    Returns:
+        Updated raster with consecutive IDs and the retained original IDs in
+        ascending order, for selecting matching farmer attribute rows.
+
+    Raises:
+        ValueError: If raster shapes, IDs, or the number of farmers are invalid.
+    """
+    if (
+        farms.ndim != 2
+        or grid_mask.ndim != 2
+        or number_of_farmers < 0
+        or min(grid_mask.shape) == 0
+    ):
+        raise ValueError(
+            "Farm and mask rasters must be two-dimensional; farmer count must be nonnegative."
+        )
+    row_scale: int = farms.shape[0] // grid_mask.shape[0]
+    column_scale: int = farms.shape[1] // grid_mask.shape[1]
+    if (
+        row_scale < 1
+        or row_scale != column_scale
+        or farms.shape
+        != (grid_mask.shape[0] * row_scale, grid_mask.shape[1] * row_scale)
+    ):
+        raise ValueError("Farm raster must be an integer refinement of the model grid.")
+    farm_ids: TwoDArrayInt32 = farms.values
+    if (
+        not np.issubdtype(farm_ids.dtype, np.integer)
+        or np.any(farm_ids < -1)
+        or np.any(farm_ids >= number_of_farmers)
+    ):
+        raise ValueError("Farm IDs must be -1 or valid farmer attribute row indices.")
+    mask_values: TwoDArrayBool = grid_mask.values.astype(bool)
+    present: np.ndarray = np.zeros(number_of_farmers, dtype=bool)
+    row: int
+    active_columns: np.ndarray
+    block: np.ndarray
+    for row in range(grid_mask.shape[0]):
+        active_columns = np.repeat(~mask_values[row], row_scale)
+        block = farm_ids[row * row_scale : (row + 1) * row_scale, active_columns]
+        present[block[block >= 0]] = True
+    retained_ids: ArrayInt32 = np.flatnonzero(present).astype(np.int32)
+    # The final entry handles -1 indexing without a full-sized ownership mask.
+    new_ids: ArrayInt32 = np.full(number_of_farmers + 1, -1, dtype=np.int32)
+    new_ids[retained_ids] = np.arange(retained_ids.size, dtype=np.int32)
+    updated_ids: TwoDArrayInt32 = np.empty(farm_ids.shape, dtype=np.int32)
+    for row in range(grid_mask.shape[0]):
+        block = updated_ids[row * row_scale : (row + 1) * row_scale]
+        block[:] = new_ids[farm_ids[row * row_scale : (row + 1) * row_scale]]
+        block[:, np.repeat(mask_values[row], row_scale)] = -1
+    return farms.copy(data=updated_ids), retained_ids

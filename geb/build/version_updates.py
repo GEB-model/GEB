@@ -13,6 +13,20 @@ if TYPE_CHECKING:
     from geb.build import GEBModel as GEBModelBuild
 
 VERSION_UPDATES: dict[str, list[str]] = {
+    "1.0.0b37": [
+        "[remove-inactive-farmers]",
+        "[manual] Rerun spinup and simulation after removing farmers without active land; existing checkpoints contain the old farmer IDs.",
+    ],
+    "1.0.0b36": ["[update-method;setup_weirs]"],
+    "1.0.0b35": [
+        "[update-method;setup_waterbodies]",
+        "[update-method;setup_weirs]",
+        "[manual] Rerun spinup and simulation after promoting lakes with AMBER dams to reservoirs.",
+    ],
+    "1.0.0b34": [
+        "[update-method;setup_weirs]",
+        "[manual] Rerun spinup and simulation after adding AMBER barriers.",
+    ],
     "1.0.0b33": [
         "[update-method;setup_waterbodies]",
         "[update-method;setup_weirs]",
@@ -189,6 +203,18 @@ def get_and_maybe_do_version_updates(
                         else:
                             updates_to_print.append(
                                 f"Re-run `{method_name}`: `geb update -b build.yml::{method_name}`."
+                            )
+
+                    elif update_type == "remove-inactive-farmers":
+                        if update_type_arguments:
+                            raise ValueError(
+                                "remove-inactive-farmers takes no arguments."
+                            )
+                        if build_model is not None:
+                            build_model.remove_inactive_farmers()
+                        else:
+                            updates_to_print.append(
+                                "Run geb update-version with the build configuration to remove farmers without active land."
                             )
 
                     elif update_type == "create-file":
