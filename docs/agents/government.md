@@ -134,6 +134,40 @@ agent_settings:
 
 ---
 
+## Flood protection standards
+
+The government can raise the flood protection standard of individual subbasins. The initial standard of each subbasin (a return period in years, e.g. 100 for protection against the 1-in-100-year flood) is derived from the FLOPROS database[@scussolini2016flopros] during the model build, or set manually through `hazards.floods.flood_protection_standard` (`mode: manual`). Households in a protected subbasin are assumed to suffer no damage from floods with a return period lower than the standard.
+
+This mechanism is part of the adaptation pathway and is activated with `adaptation.mode: cba` (cost-benefit analysis) together with `adaptation.enabled: true`. In this mode the threshold-based indicators described above are not used. On each January 1st, for every subbasin with a defined standard, the government evaluates raising the standard by one step to the next return period in the list of simulated return periods:
+
+1. **Benefit** — The reduction in expected annual damage (EAD) for the households in the subbasin when moving from the current to the next standard. Damages for return periods below the new standard are set to zero before integrating over the exceedance probability curve. The reduction is multiplied by an indirect damage factor of 1.6 to account for damages not captured by the direct damage model.
+2. **Investment cost** — The dike height is sampled along the river segments of the subbasin from the flood maps of the current and the next return period. The difference in height is multiplied by the segment length (approximately 100 m) and the unit elevation cost, and doubled to account for dikes on both river banks.
+3. **Maintenance cost** — The yearly maintenance cost per meter of dike times the length of the dike segments that must be raised, also doubled for both banks.
+4. **Decision** — The standard is raised when the discounted benefit exceeds the investment cost plus the discounted maintenance cost. Benefits and maintenance costs are accumulated over 35 years using a discount rate of 10%. Subbasins where no dike needs to be raised, or that already have the highest return period as standard, are skipped.
+
+Standards are never lowered by default. The function can optionally also remove the protection of a subbasin (standard set to 0) when the yearly maintenance cost exceeds the damage reduction that the current standard provides compared to having no protection.
+
+In the final year of the simulation the resulting standards are exported to `flood_protection_standards.parquet` in the output folder, with one row per subbasin (`COMID`) and its `flood_protection_standard` (years).
+
+```yaml
+agent_settings:
+  government:
+    adaptation:
+      enabled: true
+      mode: cba
+      dike_elevation_cost_per_meter_usd: 6800   # USD per meter of height per meter of dike length
+      dike_maintenance_cost_per_year_usd: 80    # USD per year per meter of dike length
+```
+
+**Configuration reference**
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `adaptation.enabled` | `bool` | `false` | Enable the adaptation pathway. |
+| `adaptation.mode` | `str` | `"threshold"` | Set to `"cba"` to raise flood protection standards based on a cost-benefit analysis. |
+| `adaptation.dike_elevation_cost_per_meter_usd` | `float` | `6800` | Cost of raising a dike by 1 m over 1 m of length (USD). |
+| `adaptation.dike_maintenance_cost_per_year_usd` | `float` | `80` | Yearly maintenance cost of 1 m of dike (USD/year). |
+
 ## Code
 
 ::: geb.agents.government
