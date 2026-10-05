@@ -137,8 +137,8 @@ For each subbasin in the routing network, GEB constructs a SFINCS model domain t
 
 The return period mapping process follows these steps:
 
-1.  **Discharge Estimation**: GEB uses discharge time series from a long-term spinup or routing simulation to estimate peak flows for specific return periods (e.g., 10, 50, 100 years).
-2.  **Hydrograph Generation**: For each subbasin of interest, a design hydrograph is generated for the estimated return period peak.
+1.  **Discharge Estimation**: GEB uses discharge time series from a long-term spinup or routing simulation to estimate peak flows for specific return periods (e.g., 10, 50, 100 years). It is recommended to use atleast 40 years of discharge (either "spinup" or "run"), and by default the estimation uses a joined time series of both "spinup" + "run" discharge.
+2.  **Hydrograph Generation**: For each subbasin of interest, a design hydrograph is generated for the estimated return period peak. The shape of this hydrograph can be selected by the user, see [Hydrograph shape](#hydrograph-shape).
 3.  **Boundary Conditions**: These hydrographs are applied as discharge forcing at the "inflow nodes" (upstream points) of the focused subbasin.
 4.  **Local Hydrodynamic Modeling**: A separate SFINCS simulation is executed for each pairing.
 5.  **Mosaicking**: The maximum flood depth maps from all individual simulations are then combined into a single, consistent flood visibility map for the entire region.
@@ -169,12 +169,40 @@ Metrics may include:
 - Comparison against observed flood extents
 - Event-based skill scores (binary class statistics)
 
-## Future Enhancements
+## Hydrograph shape
 
-The shape of the riverine return period hydrograph will use historical hydrograph shape, currently a triangular shape is assumed based on the user input. 
+The peak discharge of a riverine return period event ($Q_N$) is estimated from the long-term discharge record using a peaks-over-threshold (POT) analysis with a Generalized Pareto Distribution. GEB offers three methods to construct the design hydrograph around $Q_N$, which can be selected with `hydrograph_shape.method` in the [configuration](../getting_started/configuration.md):
+
+- **`triangular`** (default): A symmetric hydrograph that rises linearly from zero to $Q_N$ and then falls linearly back to zero. The duration of the rising (and falling) limb is set by the user (by default 72 hours). This method is simple, requires no historical events, and works for any return period.
+- **`direct`**: The shape is derived from the modelled discharge record. GEB identifies all historical events whose peak lies within a tolerance of $Q_N$ (default ±10%), extracts the discharge time series around each peak, and averages these to a mean event shape. The mean shape is then scaled so that its peak is exactly $Q_N$. Because it is based on events of similar magnitude, this is the most realistic shape, but for rare return periods (e.g., 1-in-100 years) there are often too few comparable events in the record. If fewer than three events are found, an error is raised.
+- **`anchor`**: Same as `direct`, but the mean shape is extracted from events near the 2-year return period discharge ($Q_2$), which occur frequently enough to obtain a robust average shape. This shape is then scaled up to $Q_N$ of the requested return period. This is the recommended alternative to `triangular` when the record is too short for `direct`. Note that it assumes that the shape of extreme events is similar to that of frequent events.
+
+For `direct` and `anchor`, the time window extracted around each peak is controlled by `window_days` (days before and after the peak, default 3.5, so 7 days in total) and the selection of events by `tolerance` (default 0.1).
+
+```yaml
+hazards:
+  floods:
+    hydrograph_shape:
+      method: anchor    # triangular (default), direct, or anchor
+      window_days: 3.5  # days before and after the peak
+      tolerance: 0.1    # ± 10% tolerance around the anchor discharge used to select events
+```
+
+When `hazards.floods.write_figures` is enabled, a diagnostic figure is written for each river and return period (in the `hydrograph_shapes` figure folder) for the `direct` and `anchor` methods.
+
+<figure markdown="span">
+  ![Comparison of hydrograph shape methods](../images/hydrograph_shape_comparison.png)
+  <figcaption>**Hydrograph shape methods compared** for the Geul catchment (2-, 10- and 100-year return periods, 1960-2020 simulated discharge). The triangular hydrograph rises slowly over 72 hours, whereas the historical shapes show the sharp, short peak that is typical for this river. For the 2-year event `direct` and `anchor` are identical by definition, and for the 100-year event `direct` is not available because too few comparable historical events exist.</figcaption>
+</figure>
+
+<figure markdown="span">
+  ![Anchor hydrograph shape diagnostic](../images/hydrograph_shape_anchor_example.png)
+  <figcaption>**Diagnostic figure for the `anchor` method** (Geul, 100-year return period). Gray lines are the historical events with a peak within ±10% of Q<sub>2</sub> (yellow band), the dashed blue line is their mean shape, and the purple line is that shape scaled to the 100-year peak discharge.</figcaption>
+</figure>
+
 <figure markdown="span">
   ![triangular shape](../images/hydrograph_riverine.jpg)
-  <figcaption>Example riverine return period plot.</figcaption>
+  <figcaption>Example riverine return period plot (triangular shape).</figcaption>
 </figure>
 
 ## Code
