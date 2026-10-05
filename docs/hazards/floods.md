@@ -32,7 +32,7 @@ The static components of a SFINCS model remain constant across different flood s
 - **Digital Elevation Model (DEM)**: Multiple DEMs from different sources can be merged, with priority given to user defined 1st and subsequent source. For example in a riverine flood, the priority by default is given to inland elevation (FABDEM V1-2) and then if needed sometimes the outflows reach a part where topobathy is needed (2nd source: GEBCO version ?) 
 - **Manning's roughness coefficient**: Represents surface friction that slows down water flow. Different land cover types (forests, urban developed areas, cropland etc.,) have different roughness values. By default the ESA Landcover 2021 is used.
 - **Model domain (mask)**: Defines which grid cells are active in the simulation. This is determined based on the subbasins being modeled (delineated via the hydrological part) and made faster using the aforementioned HAND method.
-- **River network**: The geometry (centerlines) by default use the MERIT-BASINS global product based on 90-m MERIT-HYDRO DEM. The width and depth of the river is now estimated in the routing of the hydrological model (`geb.hydrology.routing`).
+- **River network**: By default, the geometry (centerlines) uses the global MERIT-BASINS product based on the 90 m MERIT-HYDRO DEM. River width and depth are estimated by the hydrological model's routing module (`geb.hydrology.routing`).
 
 ### (Dynamic) forcing data
 
