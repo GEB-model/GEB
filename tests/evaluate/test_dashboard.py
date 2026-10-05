@@ -16,7 +16,9 @@ import pytest
 import shapely.geometry as sg
 
 from geb.evaluate.workflows.dashboard import (
+    DischargeDashboardGeometries,
     StationChartBundleWriter,
+    _add_weir_layers,
     _as_finite_float,
     _build_station_marker_payload,
     _build_timeseries_data,
@@ -25,6 +27,7 @@ from geb.evaluate.workflows.dashboard import (
     _to_int_deltas,
     build_station_chart_data,
     determine_main_time_index,
+    load_discharge_dashboard_geometries,
     serialize_main_timeline,
     write_discharge_dashboard,
     write_station_chart_data,
@@ -525,8 +528,20 @@ def test_build_station_marker_payload() -> None:
     assert layer_upstream.get_name() not in stations[1]["m"]  # ratio was NaN
 
 
-def test_write_discharge_dashboard(tmp_path: Path) -> None:
-    """Test generating interactive dashboard HTML with compressed layers."""
+@pytest.mark.parametrize("include_barriers", [False, True])
+def test_write_discharge_dashboard(tmp_path: Path, include_barriers: bool) -> None:
+    """Test generating dashboard HTML with optional weir overlays.
+
+    Args:
+        tmp_path: Folder for the rendered dashboard.
+        include_barriers: Whether to include a GDW weir in the map.
+
+    Returns:
+        None.
+
+    Raises:
+        AssertionError: If expected station or weir layers are missing.
+    """  # noqa: DOC202, DOC502
     dashboard_file: Path = tmp_path / "discharge_evaluation_map.html"
     region = gpd.GeoDataFrame(
         geometry=[sg.box(7.0, 49.0, 9.0, 51.0)],
@@ -559,12 +574,144 @@ def test_write_discharge_dashboard(tmp_path: Path) -> None:
         region_geom=region,
         rivers=rivers,
         station_chart_files={"test_st": "charts/test.js"},
+        barriers=(
+            gpd.GeoDataFrame(
+                {"source": ["GDW"], "barrier_id": ["123"], "included": [True]},
+                geometry=[sg.Point(8.0, 50.0)],
+                crs=4326,
+            )
+            if include_barriers
+            else None
+        ),
     )
     assert dashboard_file.exists()
     html_content = dashboard_file.read_text(encoding="utf-8")
     assert "DecompressionStream" in html_content
     assert "_gebStations" in html_content
     assert "Station search" in html_content
+    assert ("GDW weirs" in html_content) == include_barriers
+
+
+@pytest.mark.parametrize("epsg", [4326, 3857])
+def test_weir_layer_sources_and_exclusions(epsg: int) -> None:
+    """Show catalog sources, original coordinates, and exclusion diagnostics.
+
+    Args:
+        epsg: CRS used to supply barrier records.
+
+    Returns:
+        None.
+
+    Raises:
+        AssertionError: If layers, popup fields, or coordinates are incorrect.
+    """  # noqa: DOC202, DOC502
+    barriers: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "source": ["GDW", "AMBER", "AMBER", "GDW"],
+            "barrier_id": ["gdw-1", "amber-2", "amber-3", "missing-point"],
+            "barrier_type": ["Weir", "<script>alert(1)</script>", "Dam", None],
+            "included": [True, True, False, True],
+            "height_m": [2.5, np.nan, 4.0, np.nan],
+            "distance_to_river_m": [10.0, 25.0, 300.0, np.nan],
+            "exclusion_reason": ["", "", "farther than 250 m", ""],
+        },
+        geometry=[sg.Point(8.0, 50.0), sg.Point(8.1, 50.1), sg.Point(8.2, 50.2), None],
+        crs=4326,
+    ).to_crs(epsg)
+    discharge_map: folium.Map = folium.Map()
+    _add_weir_layers(discharge_map, barriers)
+    layers: dict[str, folium.GeoJson] = {
+        layer.layer_name: layer
+        for layer in discharge_map._children.values()
+        if isinstance(layer, folium.GeoJson)
+    }
+    assert set(layers) == {"GDW weirs", "AMBER weirs", "Excluded barriers"}
+    assert layers["GDW weirs"].show and layers["AMBER weirs"].show
+    assert not layers["Excluded barriers"].show
+    gdw_feature: dict[str, Any] = layers["GDW weirs"].data["features"][0]
+    assert gdw_feature["geometry"]["coordinates"] == pytest.approx([8.0, 50.0])
+    assert gdw_feature["properties"]["height_m"] == 2.5
+    amber_properties: dict[str, Any] = layers["AMBER weirs"].data["features"][0][
+        "properties"
+    ]
+    assert amber_properties["height_m"] == "Unknown"
+    assert amber_properties["barrier_type"] == "&lt;script&gt;alert(1)&lt;/script&gt;"
+    excluded_properties: dict[str, Any] = layers["Excluded barriers"].data["features"][
+        0
+    ]["properties"]
+    assert excluded_properties["status"] == "Excluded"
+    assert excluded_properties["exclusion_reason"] == "farther than 250 m"
+    assert "Source height (m)" in discharge_map.get_root().render()
+
+
+@pytest.mark.parametrize(
+    "invalid_input", ["missing_columns", "missing_crs", "line_geometry"]
+)
+def test_weir_layer_invalid_inputs(invalid_input: str) -> None:
+    """Reject malformed barrier records before creating markers.
+
+    Args:
+        invalid_input: Kind of malformed barrier input.
+
+    Returns:
+        None.
+
+    Raises:
+        AssertionError: If malformed inputs are accepted.
+    """  # noqa: DOC202, DOC502
+    barriers: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {"source": ["GDW"], "barrier_id": ["123"], "included": [True]},
+        geometry=[sg.Point(8.0, 50.0)],
+        crs=4326,
+    )
+    if invalid_input == "missing_columns":
+        del barriers["included"]
+    elif invalid_input == "missing_crs":
+        barriers.set_crs(None, allow_override=True, inplace=True)
+    else:
+        barriers.geometry = [sg.LineString([(8.0, 50.0), (8.1, 50.1)])]
+    with pytest.raises(ValueError):
+        _add_weir_layers(folium.Map(), barriers)
+
+
+@pytest.mark.parametrize("include_barriers", [False, True])
+def test_load_dashboard_optional_barriers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, include_barriers: bool
+) -> None:
+    """Load existing barrier records while supporting older model inputs.
+
+    Args:
+        tmp_path: Folder for geometry files.
+        monkeypatch: Fixture isolating unrelated river selection.
+        include_barriers: Whether the model has a barrier geometry file.
+
+    Returns:
+        None.
+
+    Raises:
+        AssertionError: If registered barrier geometry is not returned.
+    """  # noqa: DOC202, DOC502
+    geometry: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        geometry=[sg.Point(8.0, 50.0)], crs=4326
+    )
+    geometry_path: Path = tmp_path / "geometry.parquet"
+    geometry.to_parquet(geometry_path)
+    files: dict[str, Path] = {
+        name: geometry_path
+        for name in ("mask", "routing/rivers", "waterbodies/waterbody_data")
+    }
+    if include_barriers:
+        files["routing/barriers"] = geometry_path
+    monkeypatch.setattr(
+        "geb.evaluate.workflows.dashboard.select_active_rivers",
+        lambda rivers, **kwargs: rivers,
+    )
+    loaded: DischargeDashboardGeometries = load_discharge_dashboard_geometries(files)
+    if include_barriers:
+        assert loaded.barriers is not None
+        assert loaded.barriers.geometry.equals(geometry.geometry)
+    else:
+        assert loaded.barriers is None
 
 
 def test_build_station_chart_data_with_bankfull_discharge() -> None:

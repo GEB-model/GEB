@@ -52,6 +52,15 @@ In `evaluate_discharge`, static return-period exports are controlled separately 
 `--export-return-period-plots`; existing commands that used
 `--include-return-period-plots true` to export figures must use this new option.
 
+The discharge map includes separate **GDW weirs** and **AMBER weirs** overlays
+when `setup_weirs` has saved `routing/barriers`. Click a marker to see its source
+ID, barrier type, source height (m), and distance to the river (m). Markers use
+the source catalog coordinates, rather than snapped model-grid locations; source
+heights are not the crest heights derived by the model when measurements are missing.
+Enable **Excluded barriers** to inspect records omitted from the model and their
+exclusion reasons. Regenerate the dashboard to show these layers; older inputs
+without barrier records continue to work, and require `setup_weirs` to add them.
+
 
 ## Discharge evaluation
 

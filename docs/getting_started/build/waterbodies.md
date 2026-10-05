@@ -100,6 +100,19 @@ setup_waterbodies: {}
 
 ## Weirs and gates
 
+River weirs and gates from both GDW and AMBER are enabled by default. To run
+without them, set the following in `model.yml`:
+
+```yaml
+hydrology:
+  routing:
+    weirs: false
+```
+
+This runtime switch does not require rebuilding inputs. Rerun spinup and the
+simulation with the same setting. Set `weirs: true` to enable them again.
+Lakes and reservoirs, including AMBER's lake classification, are unaffected.
+
 `setup_weirs` places unmatched GDW barriers on rivers. It skips points that are
 already linked, use an occupied cell, or cannot be placed on a valid river link.
 

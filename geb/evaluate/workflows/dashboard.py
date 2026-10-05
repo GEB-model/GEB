@@ -92,6 +92,7 @@ class DischargeDashboardGeometries(NamedTuple):
     region: gpd.GeoDataFrame
     rivers: gpd.GeoDataFrame
     waterbodies: gpd.GeoDataFrame
+    barriers: gpd.GeoDataFrame | None = None
 
 
 _METRIC_LAYER_CONFIGS: list[dict] = [
@@ -338,6 +339,7 @@ def create_discharge_dashboard(
         rivers=enriched_rivers,
         station_chart_files=station_dashboard_chart_files,
         waterbodies=dashboard_geometries.waterbodies,
+        barriers=dashboard_geometries.barriers,
         station_characteristics=dashboard_characteristics,
         excluded_stations=excluded_stations,
         chart_timeline=chart_timelines,
@@ -361,6 +363,7 @@ def write_discharge_dashboard(
     excluded_stations: gpd.GeoDataFrame | None = None,
     chart_timeline: list[int] | dict[str, Any] | None = None,
     run_output_folder: Path | None = None,
+    barriers: gpd.GeoDataFrame | None = None,
 ) -> folium.Map:
     """Save the discharge map with station charts, score layers, and snapping characteristics (e.g., station IDs, upstream areas).
 
@@ -392,10 +395,16 @@ def write_discharge_dashboard(
         run_output_folder: Optional simulation output folder used to attach
             end-of-run simulated river dimensions if not already present on
             rivers. Defaults to None.
+        barriers: Optional ``routing/barriers`` records at source locations.
+            Included GDW and AMBER weirs are shown separately; excluded barriers
+            are available as a diagnostic overlay. Source heights are in meters.
 
     Returns:
         The Folium map object (already saved to ``output_path``).
-    """
+
+    Raises:
+        ValueError: If barrier records lack required fields, a CRS, or point geometries.
+    """  # noqa: DOC502
     if run_output_folder is not None and (
         "width_m" not in rivers.columns or "depth_m" not in rivers.columns
     ):
@@ -693,6 +702,8 @@ def write_discharge_dashboard(
 
     if waterbodies is not None and not waterbodies.empty:
         _add_reservoir_layer(discharge_map, waterbodies)
+    if barriers is not None and not barriers.empty:
+        _add_weir_layers(discharge_map, barriers)
 
     _JavascriptMacro("units.js", {}).add_to(discharge_map)
     folium.LayerControl(collapsed=False).add_to(discharge_map)
@@ -722,8 +733,12 @@ def load_discharge_dashboard_geometries(
         geometry_files: Model geometry paths keyed by dataset name.
 
     Returns:
-        Region boundary, river network, and waterbodies.
-    """
+        Region boundary, river network, waterbodies, and optional barrier records.
+        Inputs without ``routing/barriers`` retain the existing dashboard layers.
+
+    Raises:
+        FileNotFoundError: If a registered geometry file is missing.
+    """  # noqa: DOC502
     region_geom: gpd.GeoDataFrame = read_geom(geometry_files["mask"])
     all_rivers: gpd.GeoDataFrame = read_geom(geometry_files["routing/rivers"])
     waterbodies: gpd.GeoDataFrame = read_geom(
@@ -735,6 +750,11 @@ def load_discharge_dashboard_geometries(
             all_rivers, include_rivers_not_represented_in_grid=True
         ),
         waterbodies=waterbodies,
+        barriers=(
+            read_geom(geometry_files["routing/barriers"])
+            if "routing/barriers" in geometry_files
+            else None
+        ),
     )
 
 
@@ -2113,6 +2133,135 @@ def _add_river_layers(
             "payload": encoded_payload,
         },
     ).add_to(discharge_map)
+
+
+def _add_weir_layers(
+    discharge_map: folium.Map,
+    barriers: gpd.GeoDataFrame,
+) -> None:
+    """Add source-specific weir markers and excluded-barrier diagnostics.
+
+    Notes:
+        Points retain catalog locations rather than snapped model-grid locations.
+        Heights describe catalog measurements, not runtime-derived crest heights.
+
+    Args:
+        discharge_map: Folium map receiving the overlays.
+        barriers: Barrier records from ``setup_weirs``. Heights and river distances
+            are in meters; ``included`` identifies modeled structures.
+
+    Returns:
+        None.
+
+    Raises:
+        ValueError: If required fields, a CRS, or point geometries are missing.
+    """  # noqa: DOC202
+    if barriers.empty:
+        return
+    required_columns: set[str] = {"source", "barrier_id", "included"}
+    missing_columns: set[str] = required_columns.difference(barriers.columns)
+    if missing_columns:
+        raise ValueError(
+            f"Barrier records are missing columns: {sorted(missing_columns)}"
+        )
+    if barriers.crs is None:
+        raise ValueError("Barrier records must have a CRS.")
+    valid_barriers: gpd.GeoDataFrame = barriers.loc[
+        barriers.geometry.notna() & ~barriers.geometry.is_empty
+    ].to_crs(4326)
+    if not valid_barriers.geometry.geom_type.eq("Point").all():
+        raise ValueError("Barrier records must have point geometries.")
+    valid_barriers = valid_barriers.loc[
+        np.isfinite(valid_barriers.geometry.x) & np.isfinite(valid_barriers.geometry.y)
+    ]
+    included: pd.Series = valid_barriers["included"].fillna(False).astype(bool)
+    layer_settings: list[tuple[str, pd.Series, str, bool]] = [
+        ("GDW weirs", included & valid_barriers["source"].eq("GDW"), "#7c3aed", True),
+        (
+            "AMBER weirs",
+            included & valid_barriers["source"].eq("AMBER"),
+            "#00897b",
+            True,
+        ),
+        ("Excluded barriers", ~included, "#6b7280", False),
+    ]
+    layer_name: str
+    selection: pd.Series
+    color: str
+    show: bool
+    for layer_name, selection, color, show in layer_settings:
+        selected_barriers: gpd.GeoDataFrame = valid_barriers.loc[selection]
+        if selected_barriers.empty:
+            continue
+        features: list[dict[str, Any]] = []
+        barrier_row: pd.Series
+        for _, barrier_row in selected_barriers.iterrows():
+            properties: dict[str, str | float] = {}
+            field: str
+            for field in ("source", "barrier_id", "barrier_type", "exclusion_reason"):
+                value: Any = barrier_row.get(field)
+                # Catalog text becomes popup HTML, so escape it before serialization.
+                properties[field] = (
+                    html.escape(str(value)) if pd.notna(value) else "Unknown"
+                )
+            properties["status"] = "Included as modelled weir" if show else "Excluded"
+            height_m: float | None = _as_finite_float(barrier_row.get("height_m"))
+            distance_m: float | None = _as_finite_float(
+                barrier_row.get("distance_to_river_m")
+            )
+            properties["height_m"] = height_m if height_m is not None else "Unknown"
+            properties["distance_to_river_m"] = (
+                distance_m if distance_m is not None else "Unknown"
+            )
+            properties["location"] = "Source catalog location"
+            features.append(
+                {
+                    "type": "Feature",
+                    "geometry": shapely.geometry.mapping(barrier_row.geometry),
+                    "properties": properties,
+                }
+            )
+        # A single GeoJSON overlay keeps large AMBER catalogs compact in the HTML.
+        folium.GeoJson(
+            {"type": "FeatureCollection", "features": features},
+            name=layer_name,
+            show=show,
+            marker=folium.CircleMarker(
+                radius=5,
+                color=color,
+                weight=1.5,
+                fill=True,
+                fill_color=color,
+                fill_opacity=0.85,
+            ),
+            tooltip=folium.GeoJsonTooltip(
+                fields=["source", "barrier_id", "barrier_type"],
+                aliases=["Source", "ID", "Type"],
+            ),
+            popup=folium.GeoJsonPopup(
+                fields=[
+                    "source",
+                    "barrier_id",
+                    "barrier_type",
+                    "status",
+                    "height_m",
+                    "distance_to_river_m",
+                    "exclusion_reason",
+                    "location",
+                ],
+                aliases=[
+                    "Source",
+                    "ID",
+                    "Type",
+                    "Model status",
+                    "Source height (m)",
+                    "Distance to river (m)",
+                    "Exclusion reason",
+                    "Marker location",
+                ],
+                max_width=350,
+            ),
+        ).add_to(discharge_map)
 
 
 def _add_reservoir_layer(

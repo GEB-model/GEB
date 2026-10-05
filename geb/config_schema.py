@@ -255,6 +255,11 @@ class RetentionBasinsConfig(BaseModel):
 class RoutingConfig(BaseModel):
     """Configuration for routing."""
 
+    weirs: bool = Field(
+        True,
+        strict=True,
+        description="Enable GDW and AMBER river weirs and gates at runtime; lakes and reservoirs are unaffected.",
+    )
     gate_opening_level_fraction: float = Field(
         0.9,
         gt=0,

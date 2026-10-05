@@ -349,7 +349,7 @@ class Routing(Module):
 
         Raises:
             ValueError: If stored gate flags contain values other than boolean or 0/1.
-        """
+        """  # noqa: DOC502
         super().__init__(model)
 
         self.config = model.config["hydrology"]["routing"]
@@ -366,18 +366,7 @@ class Routing(Module):
             self.model.files["grid"]["routing/ldd"],
         )
 
-        self.weir_height_m: ArrayFloat32 = self.grid.load2d(
-            self.model.files["grid"]["routing/weir_height_m"]
-        )
-
-        gate_values: np.ndarray = self.grid.load2d(
-            self.model.files["grid"]["routing/weir_gate"]
-        )
-        if gate_values.dtype != np.bool_ and not np.isin(gate_values, (0, 1)).all():
-            raise ValueError(
-                "Stored gate flags must contain only boolean or 0/1 values."
-            )
-        self.weir_gate: ArrayBool = gate_values.astype(np.bool_, copy=False)
+        self.load_weirs()
 
         mask: TwoDArrayBool = ~self.grid.mask
 
@@ -463,6 +452,37 @@ class Routing(Module):
 
         if self.model.in_spinup:
             self.spinup()
+
+    def load_weirs(self) -> None:
+        """Load river weir heights and gates, or disable them for this run.
+
+        Notes:
+            With routing.weirs disabled, input files are not read or modified.
+            Lakes and reservoirs retain their separate outflow controls.
+
+        Returns:
+            None. Sets weir heights (m) and boolean gate flags in grid cell order.
+
+        Raises:
+            ValueError: If stored gate flags are not boolean or 0/1 values.
+        """  # noqa: DOC202
+        if not self.config.get("weirs", True):
+            # Zero heights also remove raised river sills; gates must be disabled too.
+            self.weir_height_m: ArrayFloat32 = np.zeros_like(self.ldd, dtype=np.float32)
+            self.weir_gate: ArrayBool = np.zeros_like(self.ldd, dtype=np.bool_)
+            return
+
+        self.weir_height_m = self.grid.load2d(
+            self.model.files["grid"]["routing/weir_height_m"]
+        )
+        gate_values: np.ndarray = self.grid.load2d(
+            self.model.files["grid"]["routing/weir_gate"]
+        )
+        if gate_values.dtype != np.bool_ and not np.isin(gate_values, (0, 1)).all():
+            raise ValueError(
+                "Stored gate flags must contain only boolean or 0/1 values."
+            )
+        self.weir_gate = gate_values.astype(np.bool_, copy=False)
 
     def load_rivers(
         self,

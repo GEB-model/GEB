@@ -68,6 +68,7 @@ hazards:
 
 hydrology:
   routing:
+    weirs: true # Enable river weirs and gates from GDW and AMBER
     gate_opening_level_fraction: 0.9 # Opening depth / crest height above the bed
     gate_closing_level_fraction: 0.7 # Closing depth / crest height above the bed
     minimum_river_slope_m_per_m: 0.0001
