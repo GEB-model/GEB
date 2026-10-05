@@ -97,9 +97,9 @@ hazards:
     subbasins: auto
 ```
 Description:
-    - `auto`: this is the default where the model automatically detect whether the basin exceeds the bankfull discharge.
-    - `all`: the model is simulating all the subbasins
-    - list of `COMID IDs`: list the COMID IDs of the basins that need to be simulated
+- **`auto`** (default): Simulates subbasins whose discharge exceeds the bankfull threshold during the event, along with their downstream subbasins.
+- **`all`**: Simulates all subbasins.
+- **List of COMID values**: Simulates only the listed subbasins (for example, `[23011134, 23011135]`).
 ### Flood events
 
 Flood event simulations model specific historical or synthetic flood scenarios over a defined time period (e.g., a major storm lasting several days). These simulations use time-varying forcing data:
