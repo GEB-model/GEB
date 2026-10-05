@@ -80,7 +80,6 @@ class HouseholdVariables(Bucket):
     action_lead_time: DynamicArray
     buildings: gpd.GeoDataFrame
 
-
 class Households(AgentBaseClass):
     """This class implements the household agents."""
 
@@ -1106,7 +1105,7 @@ class Households(AgentBaseClass):
             self.flood_risk_module.calculate_building_flood_damages(dynamic=False)
         )
         if hasattr(self, "factor_change"):
-            GDP_i_t = self.factor_change
+            GDP_i_t = self.var.factor_change
         else:
             GDP_i_t = 1
         # calculate expected utilities
@@ -1534,13 +1533,76 @@ class Households(AgentBaseClass):
 
     def update_monetary_variables_to_ssp(self) -> None:
         """Update monetary variables to match the specified SSP scenario."""
-        if not hasattr(self.var, "iiasa_ssp"):
-            self.iiasa_ssp = read_table(self.model.files["table"]["ssp/iiasa_ssp"])
-        growth_rate = self.iiasa_ssp.loc[self.model.current_time.year][
-            "GDP_growth_rate"
-        ]
-        factor_change = self.iiasa_ssp.loc[self.model.current_time.year]["GDP_scaled"]
-        self.factor_change = factor_change
+        # We consider 2020 to be the base year
+        base_year=2020
+        if not hasattr(self, "factor_change"):
+            self.country_wide=self.model.config["agent_settings"]["climrisk"]["country_wide"]
+            ssp=self.model.config["agent_settings"]["climrisk"]["ssp"]
+            rcp=self.model.config["agent_settings"]["climrisk"]["rcp"]
+            function=self.model.config["agent_settings"]["climrisk"]["function"]
+            p=self.model.config["agent_settings"]["climrisk"]["p"]
+            ssp_map_name=f"SSP{ssp}{rcp}_{function}_p{p}.zarr"
+            ssp_map_path: Path = (
+                self.model.input_folder / "ssp_maps" / ssp_map_name
+            )
+            # Pending: Load as DynamicArray into the var Bucket
+            # flood_map in line 635 is also an xarray and it 
+            # is currently not loaded into the var bucket, an 
+            # implementation should probably be set for both maps
+            try: ssp_map = xr.load_dataset(ssp_map_path)
+            except: 
+                raise ValueError(
+                    f"Requested file {ssp_map_name} has not been built. "
+                    + f"Please build the model again passing the "
+                    + f"requested data to 'setup_climrisk'.")
+
+            # Calculate factor change and growth rate
+            # Contry-wide or cell-level growth rate
+            if not self.country_wide:
+                self.growth_rate = (
+                    ssp_map[f"GDP"].diff(dim="time")
+                    / ssp_map[f"GDP"].shift({"time":1}))
+            else: 
+                self.growth_rate = (
+                    ssp_map[f"GDP"].sum(["lon", "lat"]).diff(dim="time")
+                    / ssp_map[f"GDP"].sum(["lon", "lat"]).shift({"time":1}))
+            # flood_risk_module._building_damages_all_return_periods
+            # has one value for every return period, so these are values 
+            # that  apply to all households regardless of their location. 
+            # Here we will use the GDP change for all Mexico.
+            # ssp_map has already been applied a mask for Mexico.
+            self.factor_change = (ssp_map[f"GDP"].sum(["lon", "lat"])
+                / ssp_map[f"GDP"].sel(
+                    {"time": base_year}).sum(["lon", "lat"]))
+
+        current_year: int = self.model.current_time.year
+        # Contry-wide or cell-level growth rate
+        if not self.country_wide:
+            # Sample household data from map
+            # sample_from_map takes a map with y, x coordinates
+            growth_rate_map: np.ndarray = self.growth_rate.sel(
+                time=current_year).to_numpy().swapaxes(-2, -1)
+            growth_rate = sample_from_map(
+                array=growth_rate_map, 
+                coords=self.var.locations.data, 
+                gt=(
+                    -118.75,
+                    #self.growth_rate.attrs["lon_origin"],     # x_offset = gt[0]
+                    -self.growth_rate.attrs["lon_resolution"], # x_step = gt[1]
+                    0,                                        # row rotation
+                    self.growth_rate.attrs["lat_origin"],     # y_offset = gt[3]
+                    0,                                        # column rotation
+                    self.growth_rate.attrs["lat_resolution"]  # y_step = gt[5]
+                ), 
+                out_of_bounds_value=None,
+                ssp_map=True
+            )
+        else: 
+            self.var.growth_rate = float(self.growth_rate.sel({
+                "time": current_year}).item())
+        self.var.factor_change = float(self.factor_change.sel({
+            "time": current_year}).item())
+
         self.var.wealth *= 1 + growth_rate
         self.var.income *= 1 + growth_rate
         self.var.property_value *= 1 + growth_rate
@@ -1555,7 +1617,7 @@ class Households(AgentBaseClass):
                     self.flood_risk_module._building_damages_all_return_periods[
                         return_period
                     ]["damages_t0"]
-                    * factor_change
+                    * self.var.factor_change
                 )
                 self.flood_risk_module._building_damages_all_return_periods[
                     return_period
@@ -1563,7 +1625,7 @@ class Households(AgentBaseClass):
                     self.flood_risk_module._building_damages_all_return_periods[
                         return_period
                     ]["damages_flood_proofed_t0"]
-                    * factor_change
+                    * self.var.factor_change
                 )
 
     def step(self) -> None:

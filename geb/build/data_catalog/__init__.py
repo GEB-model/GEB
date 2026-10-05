@@ -38,6 +38,7 @@ from .grow import GROW
 from .gtsm import GTSM, GTSM_timeseries
 from .hydrolakes import HydroLakes
 from .iiasa_ssp import IIASA_SSP
+from .climrisk import CLIMRISK
 from .isimip import ISIMIPCO2
 from .lisflood import LISFLOOD
 from .lowder import Lowder
@@ -712,6 +713,22 @@ data_catalog: dict[str, dict[str, Any]] = {
             cache="global",
         ),
         "url": "placeholder",
+    },
+    "climrisk": {
+        "adapter": CLIMRISK(
+            folder="climrisk",
+            local_version=1,
+            filename="placeholder",
+            cache="global",
+        ),
+        "url": "placeholder",
+        "source": {
+            "name": "CLIMRISK",
+            "author": "Estrada et al. (2021)",
+            "paper_doi": "https://doi.org/10.1111/nyas.14652",
+            "license": "Not public",
+            "url": "placeholder",
+        },
     },
     "wb_inflation_rate": {
         "adapter": WorldBankData(

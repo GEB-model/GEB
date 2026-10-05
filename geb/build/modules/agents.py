@@ -1809,6 +1809,42 @@ class Agents(BuildModelBase):
         )
         self.set_table(iiasa_ssps, name="ssp/iiasa_ssp")
 
+    @build_method(required=True)
+    def setup_climrisk(self,
+        countries: list[str] | None = None,
+        ssp: list[str] | None = None,
+        rcp:list[str] | None = None,
+        function: list[str] | None = None,
+        p: list[int] | None = None,
+        reference_year: int = 2020,
+    ) -> None:
+        """Sets up the CLIMRISK GDP projections for the model.
+
+        Args:
+            countries: Country names to include. Defaults to Mexico.
+            ssp: SSP scenario identifier, such as ``"2"``.
+            rcp: RCP scenario identifier. Supported values are as ``"26"``, ``"45"``, and ``"70"``.
+            function: Damage function identifier. Supported values are
+                ``"K"``, ``"KU"``, ``"KPU"``, ``"RU"``, and ``"RPU"``.
+            p: Damage percentile, from 0 to 100.
+            reference_year: First year to include, from 2010 through 2100.
+        """
+
+        if ssp      is None: ssp=["2"]
+        if rcp      is None: rcp=["70"]
+        if function is None: function=["K"]
+        if p        is None: p=[90]
+
+        for i in range(len(ssp)):
+            for j in range(len(rcp)):
+                for k in range(len(function)):
+                    for l in range(len(p)):
+                        climrisk = self.data_catalog.fetch("climrisk").read(
+                            countries=countries, ssp=ssp[i],rcp=rcp[j],function=function[k],
+                            p=p[l], reference_year=reference_year
+                        )
+                        self.set_other(climrisk, name=f"ssp_maps/{climrisk['name'].item()}")
+
     @build_method(
         depends_on=[
             "setup_assets",

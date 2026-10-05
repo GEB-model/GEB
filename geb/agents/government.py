@@ -629,14 +629,15 @@ class Government(AgentBaseClass):
                 "dike_maintenance_cost_per_year_usd"
             ]
             if hasattr(self.model.agents.households, "factor_change"):
-                cost_per_meter *= self.model.agents.households.factor_change
+                cost_per_meter *= self.model.agents.households.var.factor_change
                 maintenance_cost_per_m_dike *= (
-                    self.model.agents.households.factor_change
+                    self.model.agents.households.var.factor_change
                 )
 
             total_cost_riverine = (
                 np.sum(riverine_height_difference * 100 * cost_per_meter) * 2
             )  # investment cost in euros; segments are roughly 100 meters long, double the cost to account for both sides of the dike
+
 
             total_cost_coastal = np.sum(
                 coastal_height_difference * 100 * cost_per_meter
