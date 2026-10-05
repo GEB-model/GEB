@@ -28,15 +28,17 @@ The table below summarizes the water-level ranges used for each of the strategie
 For example, these are the water level ranges for specific strategies currently used in the model:
 
 **Water level warning strategy (action-oriented)**
+
 | Water level range (m) | Sandbags | Elevate possessions | Evacuation |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | 0.05 - 0.8 | X | - | - |
 | 0.05 - 2 | - | X | - |
 | >0.5 | - | - | X |
 
 **Critical infrastructure warning strategy**
+
 | Water level range (m) | Impact level | Sandbags | Elevate possessions | Evacuation | Exposed element |
-|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- |
 | >0.3 | Power outages | - | - | X | Energy substations |
 | >0.05 | Disruption to basic services | - | - | X | Vulnerable and emergency facilities |
 
