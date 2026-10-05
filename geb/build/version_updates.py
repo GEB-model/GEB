@@ -13,25 +13,6 @@ if TYPE_CHECKING:
     from geb.build import GEBModel as GEBModelBuild
 
 VERSION_UPDATES: dict[str, list[str]] = {
-    "1.0.0b37": [
-        "[remove-inactive-farmers]",
-        "[manual] Rerun spinup and simulation after removing farmers without active land; existing checkpoints contain the old farmer IDs.",
-    ],
-    "1.0.0b36": ["[update-method;setup_weirs]"],
-    "1.0.0b35": [
-        "[update-method;setup_waterbodies]",
-        "[update-method;setup_weirs]",
-        "[manual] Rerun spinup and simulation after promoting lakes with AMBER dams to reservoirs.",
-    ],
-    "1.0.0b34": [
-        "[update-method;setup_weirs]",
-        "[manual] Rerun spinup and simulation after adding AMBER barriers.",
-    ],
-    "1.0.0b33": [
-        "[update-method;setup_waterbodies]",
-        "[update-method;setup_weirs]",
-        "[manual] Rerun spinup and simulation after rebuilding waterbodies and weirs with precomputed outflow points. Custom build files must include setup_weirs after setup_waterbodies.",
-    ],
     "1.0.0b32": [
         "[update-method;setup_waterbodies]",
         "[update-method;setup_weirs]",
