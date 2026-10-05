@@ -6,10 +6,9 @@ The floods module in GEB uses the Super-Fast INundation of CoastS (SFINCS) hydro
 
 SFINCS works by dividing the area of interest into a grid of cells. For each cell, it calculates water depth and flow at successive time steps based on the elevation (topography), surface roughness (manning's), and incoming water (forcing) from rain (precipitation), rivers (discharge), or the coast (surge and storm tide).
 
-Multiple flood types can be simulated:
+Multiple flood types can be simulated in GEB:
 
 - **Fluvial (riverine)**: Flooding from river overflow when discharge exceeds river channel capacity
-- **Pluvial (precipitation)**: Surface (overland) flooding from intense rainfall overcoming local infiltration capacity
 - **Coastal**: Inundation from elevated sea levels due to storm surge and tides
 - **Return period**: Probability flood maps showing expected flooding for specific return periods (e.g., 1-in-100 year event)
 
@@ -24,7 +23,7 @@ Rivers are represented in the model in one of two ways:
 - **With subgrid**: River channels are "burned" into a high-resolution subgrid, preserving their width and depth.
 - **Without subgrid**: Rivers are directly carved into the main computational grid, modifying the elevation and roughness values of affected cells.
 
-The model automatically identifies flood-prone areas inside the region using Height Above Nearest Drainage (HAND) analysis (*REF). This method calculates how high each location sits above the nearest stream or drainage channel, helping to define which areas are prione to flooding.
+The model automatically identifies flood-prone areas inside the region using Height Above Nearest Drainage (HAND) analysis [@nobre2016hand]. This method calculates how high each location sits above the nearest stream or drainage channel, helping to define which areas are prione to flooding.
 
 ### Static input data
 
@@ -33,7 +32,7 @@ The static components of a SFINCS model remain constant across different flood s
 - **Digital Elevation Model (DEM)**: Multiple DEMs from different sources can be merged, with priority given to user defined 1st and subsequent source. For example in a riverine flood, the priority by default is given to inland elevation (FABDEM V1-2) and then if needed sometimes the outflows reach a part where topobathy is needed (2nd source: GEBCO version ?) 
 - **Manning's roughness coefficient**: Represents surface friction that slows down water flow. Different land cover types (forests, urban developed areas, cropland etc.,) have different roughness values. By default the ESA Landcover 2021 is used.
 - **Model domain (mask)**: Defines which grid cells are active in the simulation. This is determined based on the subbasins being modeled (delineated via the hydrological part) and made faster using the aforementioned HAND method.
-- **River network**: The geometry (centerlines) by default use the MERIT-BASINS global product based on 90-m MERIT-HYDRO DEM. The width is derived in two parts, firstly satellite observed widths (resolution = 30m or larger) are given priority which comes from the MERIT-SWORD dataset (latest version 0.4) [@wade2025meritsword]. Secondly, whereever there is no satellite data available (<30m tributaries) a gap-filling method via the power-law equation is used to derive widths [@sadana2026validation]. The depth of rivers are derived from discharge estimates and using the Manning's open channel flow equation.
+- **River network**: By default, the geometry (centerlines) uses the global MERIT-BASINS product based on the 90 m MERIT-HYDRO DEM. River width and depth are estimated by the hydrological model's routing module (`geb.hydrology.routing`).
 
 ### (Dynamic) forcing data
 
@@ -47,12 +46,6 @@ Riverine (fluvial) forcing represents water entering the model domain through ri
 - **All inflow point forcing**: Discharge is applied at multiple start points (headwater points) throughout the river network, including tributaries.
 
 Discharge values comes from GEB hydrological module, which simulates rainfall-runoff processes across the region. For return period mapping, synthetic design hydrographs are generated based on extreme value analysis of long-term discharge records.
-
-#### Precipitation Forcing
-
-Direct precipitation forcing adds rainfall directly onto the SFINCS model grid. This is particularly important for pluvial (rainfall-induced) flooding, where surface runoff and local flooding cause inundation independently of river overflow.
-
-Precipitation data can be taken from observed rainfall records, climate model outputs, or synthetic design storms. The SFINCS model routes this rainfall across the landscape based on topography and surface properties. This is an external input coming from sources outside GEB.
 
 #### Coastal forcing
 
@@ -95,12 +88,23 @@ Simulations can run on either CPU (default) or GPU (optional) hardware. GPU exec
 
 The model includes a spinup period (typically 24 hours) before the main simulation begins. During spinup, the model reaches a balanced initial state, ensuring that results are not affected by artificial conditions (too extreme amounts of water entering) at the start of the simulation.
 
+### Basin selection for a model run
+Flood simulations for basins can be executed in various ways. The following settings determine the selection of basins in a flood simulation:
+```yaml
+hazards:
+  floods:
+    simulate: true
+    subbasins: auto
+```
+Description:
+- **`auto`** (default): Simulates subbasins whose discharge exceeds the bankfull threshold during the event, along with their downstream subbasins.
+- **`all`**: Simulates all subbasins.
+- **List of COMID values**: Simulates only the listed subbasins (for example, `[23011134, 23011135]`).
 ### Flood events
 
 Flood event simulations model specific historical or synthetic flood scenarios over a defined time period (e.g., a major storm lasting several days). These simulations use time-varying forcing data:
 
 - Rivers discharge varies according to the hydrograph for that event
-- Precipitation falls according to the rainfall pattern
 - Coastal water levels vary following observed or modeled sea level conditions
 
 #### Detecting historical flood events 
