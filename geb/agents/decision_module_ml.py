@@ -392,6 +392,42 @@ class DecisionModuleML:
             config.get("random_seed", self.bundle.get("model_random_seed", 44))
         )
         self.selection_rng = np.random.default_rng(self.selection_random_seed)
+        self.log_crop_counts = bool(config.get("log_crop_counts", False))
+
+        # The training workflow stores whether crops 23/25 were omitted from every
+        # FROM/TO decision row. Read that contract from the deployment bundle rather
+        # than inferring model behaviour from the directory name. The directory-name
+        # check below only protects against accidentally placing a standard bundle in
+        # a ``*_no_others_class`` folder.
+        self.omit_others_class = bool(self.bundle.get("omit_others_class", False))
+        self.others_class_crop_ids = np.asarray(
+            self.bundle.get("others_class_crop_ids", []),
+            dtype=np.int64,
+        ).reshape(-1)
+        directory_marks_omit_others = "_no_others_class" in self.model_directory.name
+        if directory_marks_omit_others and not self.omit_others_class:
+            raise ValueError(
+                "The selected model directory is marked '_no_others_class', but its "
+                "deployment bundle has omit_others_class=False. Refusing to run an "
+                "ambiguous online crop-choice model."
+            )
+        if self.omit_others_class:
+            if self.others_class_crop_ids.size == 0:
+                raise ValueError(
+                    "omit_others_class=True requires others_class_crop_ids in the "
+                    "deployment bundle."
+                )
+            if (
+                np.unique(self.others_class_crop_ids).size
+                != self.others_class_crop_ids.size
+            ):
+                raise ValueError("others_class_crop_ids contains duplicate crop IDs.")
+            self.model.logger.info(
+                "Online crop choice will freeze omitted current crops %s: farmers "
+                "currently in those crops are not sent through the ML decision and "
+                "retain their existing crop calendar.",
+                self.others_class_crop_ids.tolist(),
+            )
 
         self.variable_config = self.bundle["variable_config"]
         if not isinstance(self.variable_config, Mapping):
@@ -651,6 +687,17 @@ class DecisionModuleML:
         self.target_classes = np.rint(raw_target_classes).astype(np.int32)
         if np.unique(self.target_classes, axis=0).shape[0] != len(self.target_classes):
             raise ValueError("Target calendar classes contain duplicate rows.")
+        if self.omit_others_class:
+            omitted_targets = np.isin(
+                self.target_classes[:, 0],
+                self.others_class_crop_ids,
+            )
+            if np.any(omitted_targets):
+                found = np.unique(self.target_classes[omitted_targets, 0]).tolist()
+                raise ValueError(
+                    "The deployment bundle has omit_others_class=True, but its target "
+                    f"calendar vocabulary still contains omitted crop IDs {found}."
+                )
         if self.n_calendar_classes != len(self.target_classes):
             raise ValueError(
                 "Hierarchical RF calendar-class count disagrees with target vocabulary."
@@ -3215,6 +3262,90 @@ class DecisionModuleML:
         self._candidate_start_days_cache[cache_key] = result
         return result
 
+    def _omitted_current_crop_mask(self, farmers: ArrayInt64) -> np.ndarray:
+        """Return which farmers are frozen by an OMIT_OTHERS_CLASS deployment.
+
+        The offline ``_no_others_class`` variant removes decisions both FROM and TO
+        the configured residual crop classes. Online, target classes are already
+        absent from the fitted vocabulary, so this mask implements the corresponding
+        FROM-side rule: a farmer whose current crop is omitted does not enter the RF.
+        """
+        farmers = np.asarray(farmers, dtype=np.int64)
+        if not self.omit_others_class or farmers.size == 0:
+            return np.zeros(farmers.size, dtype=bool)
+
+        current_crop_raw = np.asarray(
+            self.calendar_history[farmers, 0, 0],
+            dtype=np.float64,
+        )
+        current_crop = np.full(farmers.size, -9999, dtype=np.int64)
+        finite = np.isfinite(current_crop_raw)
+        current_crop[finite] = np.rint(current_crop_raw[finite]).astype(np.int64)
+        return np.isin(current_crop, self.others_class_crop_ids)
+
+    def _freeze_omitted_crop_advances(
+        self,
+        farmers: ArrayInt64,
+        target_years: ArrayInt32,
+    ) -> None:
+        """Advance omitted crops without making an ML choice.
+
+        These farmers retain the exact current crop calendar (crop, planting day and
+        duration). The runtime calendar is deliberately left in place, so with this
+        study's one-year crop rotation it repeats in the following calendar year.
+        Calendar history and ``calendar_year`` are still advanced so yield/history
+        bookkeeping remains synchronized with CropFarmers.
+        """
+        farmers = np.asarray(farmers, dtype=np.int64)
+        target_years = np.asarray(target_years, dtype=np.int32)
+        if farmers.ndim != 1 or target_years.shape != farmers.shape:
+            raise ValueError(
+                "Frozen omitted-crop advances require one target year per farmer."
+            )
+        if farmers.size == 0:
+            return
+
+        expected_target_years = self.calendar_year[farmers] + 1
+        if np.any(target_years != expected_target_years):
+            raise RuntimeError(
+                "An omitted-crop frozen advance does not follow the current calendar year."
+            )
+
+        frozen_calendars = np.asarray(
+            self.calendar_history[farmers, 0, :],
+            dtype=np.float32,
+        ).copy()
+        current_crop_ids = np.rint(frozen_calendars[:, 0]).astype(np.int64)
+        if np.any(~np.isin(current_crop_ids, self.others_class_crop_ids)):
+            raise RuntimeError(
+                "A farmer was routed through omitted-crop persistence without an "
+                "omitted current crop."
+            )
+
+        if self.calendar_history.shape[1] > 1:
+            self.calendar_history[farmers, 1:] = self.calendar_history[farmers, :-1]
+        self.calendar_history[farmers, 0] = frozen_calendars
+        self.calendar_is_predicted[farmers] = False
+        self.calendar_year[farmers] = target_years
+
+        # Any precomputed ML due date for this target year is cancelled. Importantly,
+        # do NOT blank farmers.var.crop_calendar: retaining it is the persistence action.
+        self.pending_target_year[farmers] = -1
+        self.pending_due_date[farmers] = np.datetime64("NaT", "D")
+        self.awaiting_decision[farmers] = False
+
+        crop_counts = {
+            int(crop_id): int(np.count_nonzero(current_crop_ids == crop_id))
+            for crop_id in np.unique(current_crop_ids)
+        }
+        self.model.logger.info(
+            "OMIT_OTHERS_CLASS: skipped ML choice for %s farmer(s) and retained "
+            "their current crop calendars for target year(s) %s; crop counts=%s.",
+            farmers.size,
+            np.unique(target_years).tolist(),
+            crop_counts,
+        )
+
     def schedule(
         self,
         farmers: ArrayInt64,
@@ -3260,6 +3391,49 @@ class DecisionModuleML:
             target_years = np.asarray(target_years, dtype=np.int32)
             if target_years.shape != farmers.shape:
                 raise ValueError("target_years must have one value per farmer.")
+
+        # Match the offline OMIT_OTHERS_CLASS filter on the FROM side. When an
+        # omitted crop finishes, do not activate an ML decision and do not blank the
+        # runtime calendar. Instead, carry that same calendar into the next model year.
+        # The fitted no-others target vocabulary already enforces the TO-side rule.
+        if activate and self.omit_others_class:
+            frozen_mask = self._omitted_current_crop_mask(farmers)
+            if np.any(frozen_mask):
+                frozen_farmers = farmers[frozen_mask]
+                existing_targets = self.pending_target_year[frozen_farmers]
+                if target_years is None:
+                    frozen_target_years = np.where(
+                        existing_targets >= 0,
+                        existing_targets,
+                        self.calendar_year[frozen_farmers] + 1,
+                    ).astype(np.int32, copy=False)
+                else:
+                    frozen_target_years = target_years[frozen_mask].copy()
+                    scheduled = existing_targets >= 0
+                    if np.any(scheduled & (existing_targets != frozen_target_years)):
+                        raise RuntimeError(
+                            "An explicitly activated omitted-crop target year differs "
+                            "from its already prepared target year."
+                        )
+                    frozen_target_years[scheduled] = existing_targets[scheduled]
+
+                self._freeze_omitted_crop_advances(
+                    frozen_farmers,
+                    frozen_target_years,
+                )
+
+                keep = ~frozen_mask
+                farmers = farmers[keep]
+                if target_years is not None:
+                    target_years = target_years[keep]
+                if farmers.size == 0:
+                    self.model.logger.info(
+                        "DecisionModuleML timing: schedule=%.2f s for %s requested "
+                        "farmer(s); all were frozen omitted-crop advances.",
+                        time.perf_counter() - schedule_timer,
+                        requested_farmer_count,
+                    )
+                    return
 
         already_scheduled = self.pending_target_year[farmers] >= 0
         if activate and np.any(already_scheduled):
@@ -3878,6 +4052,22 @@ class DecisionModuleML:
             if self.latent is not None:
                 self.latent[batch_farmers] = latent_np
 
+        # Preserve the crop that each due farmer had before the new calendar is
+        # installed. This is used only for optional online diagnostics.
+        previous_crop_raw = np.asarray(
+            self.calendar_history[due, 0, 0],
+            dtype=np.float32,
+        )
+        previous_crops = np.full(due.size, -9999, dtype=np.int32)
+        previous_finite = np.isfinite(previous_crop_raw)
+        previous_crops[previous_finite] = previous_crop_raw[previous_finite].astype(
+            np.int32
+        )
+        diagnostic_target_years = np.asarray(
+            self.pending_target_year[due],
+            dtype=np.int32,
+        ).copy()
+
         install_timer = time.perf_counter()
         runtime_calendars = np.full(
             (due.size, *self.farmers.var.crop_calendar.shape[1:]),
@@ -3901,6 +4091,53 @@ class DecisionModuleML:
         self.calendar_history[due, 0] = predicted_calendars
         self.calendar_is_predicted[due] = True
         self.calendar_year[due] = self.pending_target_year[due]
+
+        if self.log_crop_counts:
+            predicted_crops = predicted_calendars[:, 0].astype(np.int32)
+            switched = predicted_crops != previous_crops
+
+            latest_crop_raw = np.asarray(
+                self.calendar_history[:, 0, 0],
+                dtype=np.float32,
+            )
+            latest_crops = np.full(self.n_farmers, -9999, dtype=np.int32)
+            latest_finite = np.isfinite(latest_crop_raw)
+            latest_crops[latest_finite] = latest_crop_raw[latest_finite].astype(
+                np.int32
+            )
+
+            crop_ids = [
+                -1,
+                *sorted(int(crop_id) for crop_id in self.farmers.var.crop_ids),
+            ]
+            rows = []
+            for crop_id in crop_ids:
+                crop_name = (
+                    "fallow"
+                    if crop_id == -1
+                    else str(self.farmers.var.crop_ids.get(crop_id, f"crop_{crop_id}"))
+                )
+                switched_to = int(
+                    np.count_nonzero(switched & (predicted_crops == crop_id))
+                )
+                total_latest = int(np.count_nonzero(latest_crops == crop_id))
+                rows.append(
+                    f"{crop_id:>3} {crop_name:<24} "
+                    f"switched_to={switched_to:>7} "
+                    f"latest_total={total_latest:>7}"
+                )
+
+            unknown_latest = int(np.count_nonzero(latest_crops == -9999))
+            self.model.logger.info(
+                "ML crop-count diagnostic on %s for target year(s) %s "
+                "(%s decisions, %s crop switches, %s unknown latest calendars):\n%s",
+                self.model.current_time.date(),
+                np.unique(diagnostic_target_years).tolist(),
+                due.size,
+                int(np.count_nonzero(switched)),
+                unknown_latest,
+                "\n".join(rows),
+            )
 
         self.first_decision_done[due] = True
         self.last_decision_date[due] = today

@@ -196,6 +196,13 @@ class CropFarmersVariables(Bucket):
     actual_yield_per_farmer: DynamicArray
     latest_harvest_spei: DynamicArray
     latest_harvest_yield_ratio: DynamicArray
+    yearly_planted_crop_id: DynamicArray
+    yearly_planting_day: DynamicArray
+    yearly_crop_duration_days: DynamicArray
+    yearly_harvested_crop_id: DynamicArray
+    yearly_harvest_day: DynamicArray
+    yearly_harvest_yield_ratio: DynamicArray
+    yearly_actual_yield_kg: DynamicArray
     crop_decision_active_year_index: DynamicArray
     crop_decision_spei: DynamicArray
     crop_decision_yield_ratio: DynamicArray
@@ -569,6 +576,49 @@ class CropFarmers(AgentBaseClass):
         self._initialize_decision_module_ml()
         if self.decision_module_ml is not None and not self.model.in_spinup:
             self.decision_module_ml.run_due()
+
+    def _ensure_yearly_crop_reporting_state(self) -> None:
+        """Create persistent yearly crop-event reporters if they are not restored.
+
+        The fallback makes the new reporters compatible with an existing spin-up
+        state that predates these variables.
+        """
+        int_reporters = (
+            "yearly_planted_crop_id",
+            "yearly_planting_day",
+            "yearly_crop_duration_days",
+            "yearly_harvested_crop_id",
+            "yearly_harvest_day",
+        )
+        for name in int_reporters:
+            if not hasattr(self.var, name):
+                setattr(
+                    self.var,
+                    name,
+                    DynamicArray(
+                        n=self.var.n,
+                        max_n=self.var.max_n,
+                        dtype=np.int32,
+                        fill_value=-1,
+                    ),
+                )
+
+        float_reporters = (
+            "yearly_harvest_yield_ratio",
+            "yearly_actual_yield_kg",
+        )
+        for name in float_reporters:
+            if not hasattr(self.var, name):
+                setattr(
+                    self.var,
+                    name,
+                    DynamicArray(
+                        n=self.var.n,
+                        max_n=self.var.max_n,
+                        dtype=np.float32,
+                        fill_value=np.nan,
+                    ),
+                )
 
     def farmers_due_for_earliest_subregion_candidate_planting(self) -> np.ndarray:
         """Expose the farmer selection used for today's ML crop decisions.
@@ -2457,6 +2507,23 @@ class CropFarmers(AgentBaseClass):
             self.var.latest_harvest_yield_ratio[harvesting_farmers] = (
                 harvest_yield_ratio
             )
+
+            # Persistent current-year harvest reporters. Unlike harvested_crop and
+            # actual_yield_per_farmer, these are not reset every day.
+            self.var.yearly_harvested_crop_id[harvesting_farmers] = (
+                self.var.harvested_crop[harvesting_farmers]
+            )
+            self.var.yearly_harvest_day[harvesting_farmers] = (
+                self.model.current_time.timetuple().tm_yday - 1
+            )
+            self.var.yearly_harvest_yield_ratio[harvesting_farmers] = (
+                harvest_yield_ratio
+            )
+            self.var.yearly_actual_yield_kg[harvesting_farmers] = np.asarray(
+                self.var.actual_yield_per_farmer[harvesting_farmers],
+                dtype=np.float32,
+            )
+
             # Get the crop age
             crop_age = self.HRU.var.crop_age_days_map[harvest]
             current_crop_age = (
@@ -3565,12 +3632,41 @@ class CropFarmers(AgentBaseClass):
         if farmers_selling_land.size > 0:
             self.remove_agents(farmers_selling_land, GRASSLAND_LIKE)
 
-        number_of_planted_fields = np.count_nonzero(plant_map >= 0)
+        planted_fields = plant_map >= 0
+        number_of_planted_fields = np.count_nonzero(planted_fields)
         if number_of_planted_fields > 0:
             self.model.logger.debug(
                 f"Planting {number_of_planted_fields} fields with crops: "
-                f"{np.unique(plant_map[plant_map >= 0])}"
+                f"{np.unique(plant_map[planted_fields])}"
             )
+
+            planted_owners = np.asarray(
+                self.HRU.var.land_owners[planted_fields],
+                dtype=np.int64,
+            )
+            planted_crops = np.asarray(
+                plant_map[planted_fields],
+                dtype=np.int32,
+            )
+            valid_owner = planted_owners >= 0
+            planted_owners = planted_owners[valid_owner]
+            planted_crops = planted_crops[valid_owner]
+
+            if planted_owners.size:
+                planted_farmers, first_field = np.unique(
+                    planted_owners,
+                    return_index=True,
+                )
+                self.var.yearly_planted_crop_id[planted_farmers] = planted_crops[
+                    first_field
+                ]
+                self.var.yearly_planting_day[planted_farmers] = (
+                    self.model.current_time.timetuple().tm_yday - 1
+                )
+                self.var.yearly_crop_duration_days[planted_farmers] = np.asarray(
+                    self.var.crop_calendar[planted_farmers, 0, 2],
+                    dtype=np.int32,
+                )
 
         self.HRU.var.crop_map = np.where(
             plant_map >= 0, plant_map, self.HRU.var.crop_map
@@ -6057,6 +6153,21 @@ class CropFarmers(AgentBaseClass):
         # first timestep. Initialize the ML module here as a second post-restore
         # hook in case LandSurface has not requested its feature names yet.
         self._initialize_decision_module_ml()
+        self._ensure_yearly_crop_reporting_state()
+
+        # Reset event-based yearly reporters before any harvest or planting can
+        # occur on the first day of the new hydrological year.
+        if (
+            self.model.current_time.month == self.hydrological_year_start_month
+            and self.model.current_time.day == 1
+        ):
+            self.var.yearly_planted_crop_id.fill(-1)
+            self.var.yearly_planting_day.fill(-1)
+            self.var.yearly_crop_duration_days.fill(-1)
+            self.var.yearly_harvested_crop_id.fill(-1)
+            self.var.yearly_harvest_day.fill(-1)
+            self.var.yearly_harvest_yield_ratio.fill(np.nan)
+            self.var.yearly_actual_yield_kg.fill(np.nan)
 
         timer = TimingModule("crop_farmers")
 
