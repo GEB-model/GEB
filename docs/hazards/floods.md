@@ -103,6 +103,14 @@ Flood event simulations model specific historical or synthetic flood scenarios o
 - Precipitation falls according to the rainfall pattern
 - Coastal water levels vary following observed or modeled sea level conditions
 
+#### Detecting historical flood events 
+
+GEB also supports automatic detection of historical flood events. If the discharge at a certain location exceeds a certain threshold, the historical flood will be automatically simulated using SFINCS. The user does not need to manually provide start and end times of the flood. For this to work the following parameters need to be set: 
+- discharge_threshold: 30  # discharge threshold in m3/s for flood detection
+- threshold_location: 
+    - lon
+    - lat  # [lon, lat] of the location where the discharge threshold is applied.
+
 
 ### Return period maps
 
