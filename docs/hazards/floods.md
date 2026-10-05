@@ -23,7 +23,7 @@ Rivers are represented in the model in one of two ways:
 - **With subgrid**: River channels are "burned" into a high-resolution subgrid, preserving their width and depth.
 - **Without subgrid**: Rivers are directly carved into the main computational grid, modifying the elevation and roughness values of affected cells.
 
-The model automatically identifies flood-prone areas inside the region using Height Above Nearest Drainage (HAND) analysis (Nobre et al., 2015). This method calculates how high each location sits above the nearest stream or drainage channel, helping to define which areas are prione to flooding.
+The model automatically identifies flood-prone areas inside the region using Height Above Nearest Drainage (HAND) analysis [@nobre2016hand]. This method calculates how high each location sits above the nearest stream or drainage channel, helping to define which areas are prione to flooding.
 
 ### Static input data
 
