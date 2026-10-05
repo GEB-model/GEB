@@ -85,46 +85,90 @@ A diagnostic figure (`reforestation_scenario.png`) is saved to `output/forest_pl
 
 ## Adaptation Pathway
 
-The adaptation pathway is an optional annual decision loop in which the government monitors three indicators and triggers adaptation measures when any threshold is crossed. It runs every January 1st during the simulation.
+When adaptation is enabled and set to the method pathway in the configuration, the government agent can develop an adaptation pathway, a sequence of adaptation measures over time, through an annual decision making loop. This decision making is based on feedbacks between decisions made by the government and other actors as well as the physical environment within the model, while targeting multiple objectives beyond flood risk reduction simultaneously. It runs every January 1st during the simulation.
 
-**How it works**
+To develop the adaptation pathway, the government agent needs to be able to decide between the different adaptation measures that are available. Currently, the government agent can decide to implement floodproofing (less damage to houses), reforestation (see above) or risk communication (increase risk perception of households to nudge them to self-adapting). The decision making for this is based on which adaptation measure would generate the most improvement in terms of a multi-objective score. The objectives of the government go beyond flood risk and also include ecosystem health and equity. This is conceptually visible in the figure below. 
 
-On each January 1st the government calculates:
+<img width="550" height="300" alt="image" src="https://github.com/user-attachments/assets/d8bcbe33-45ca-464a-9435-ffba8ea1274d" />
 
-- **EAD** — Expected Annual Damage from flooding (€), integrated over the damage–exceedance probability curve.
-- **Equity indicator** — A measure of how evenly flood exposure is distributed across households (0–1, where 1 = perfect equality).
-- **Ecosystem indicator** — A measure of ecosystem health (0–1, where 1 = healthy).
+### How a decision is made
 
-If any indicator exceeds its threshold, the corresponding adaptation measure is applied:
+At every decision point, the government agent enters a hypothetical world, which is a copy of the simulated system at that time step. This hypothetical world allows the agent to determine which adaptation measure is best suited at that time to meet its multiple objectives. Each year, the following steps are taken:
 
-| Indicator crossed | Measure applied |
-|---|---|
-| EAD > `EAD_threshold` | Floodproof buildings of a fraction of at-risk households |
-| Equity < `equity_indicator_threshold` | *(planned — subsidies)* |
-| Ecosystem < `ecosystem_indicator_threshold` | Plant one increment of forest (`prepare_modified_soil_maps_for_forest`) |
+1. ***Implement each measure separately:*** In this hypothetical world, each adaptation measure is implemented in separate instances.
+2. ***Apply the budget:*** To constrain the adaptation, the government agent has a yearly budget for adaptation. The amount of each measure that is hypothetically implemented is the maximum amount affordable with this available annual budget. If the budget does not allow for catchment wide implementation, adaptation measures are implemented in increments.The full budget is spend on one adaptation measure yearly, in the following the full budget is available again. 
+3. ***Run three years ahead:*** After the implementation, the simulated hypothetical system is propagated forward for three years. To prevent the agent from having perfect foresight, the system is propagated forward using the climatic forcing from the last three years. This allows the government to determine the effect of the affordable adaptation measure over the next three years, including the feedbacks of this measure on other agents and, for example, the ecosystem within the simulated system, without knowing future conditions.
+4. ***Evaluate performance:*** The effectiveness of the adaptation measures is determined by calculating their performance on the objectives. These indicator values are combined in an Integrated Performance Value (IPV).
+5. ***Select the best measure:*** When the improvement in IPV has been calculated for each candidate adaptation separately, the government exits this hypothetical world. The adaptation measure that generated the largest improvement in the IPV compared to the IPV in the current timestep (ΔIPV) is then implemented in the 'real world'.
+6. ***Continue the simulation:*** The implemented measure persists through the following time steps. The model continues until the following first of January, when the hypothetical world is initiated again.
+
+As this decision-making is done annually, an adaptation pathway emerges over time from within the model that is driven by the government agent that has multiple objectives. 
+
+**Objectives and indicators**
+
+The government considers 3 objectives: flood risk, ecosystem health and equity. The indicators for them are as follows: 
+- ***Flood risk:*** The expected annual damage (EAD, €), calculated from the integration over the damage–exceedance probability curve.
+- ***Ecosystem health:*** Represented through the capacity of certain land uses to supply ecosystem services. The indicator calculates an area-weighted average score across the catchment. Grid cells with a higher capacity to supply ecosystem services, have a higher score. The scores are based on expert judgement derived from case studies in Europe [@burkhard2012].
+- ***Equity:*** the indicator for equity is two-fold, made up by 1) how much of the total EAD, relative to household income, is borne by low-income households, compared to all households in the catchment and 2) the average fraction of forest low-income households have within their local neighbourhood. They are normalised and then summed and divided by 2.
+
+**Normalisation and IPV**
+
+To be able to combine and compare these indicators they are normalised on a 0-1 scale. This normalisation uses bounds representing the theoretically worst- and best-case scenarios. These bounds are derived from the minimum and maximum value for the indicators found within a set of reference runs. These reference runs can, for example, include one run with no adaptation under a high-end climate scenario and one run under baseline climate in which all adaptation measures are implemented with an unconstrained budget. However, these reference runs can be tailored to the experiment that is being simulated. For example, if there are clear quantitative goals available for these objectives in the studied catchment these can also be used in the normalisation. This allows for measuring how effective the simulated adaptation pathway is on achieving these goals.
+
+By summing the normalised values of these indicators, combined with weights indicating government priorities, the IPV is calculated. This IPV can then drive the decision making of the government but can also help in assessing the effectiveness of pathways in contributing to the objectives. In default setting the government weights are equal. To experiment how different priorities can change the adaptation pathway decision making these values can be changed. 
+
+**Applying to your catchment**
+
+This method for generating adaptation pathways can be tailored to the studied catchment. To do this, a few things need to be specified in the configuration: the annual available budget for climate adaptation, the costs for the adaptation measure and the normalisation bounds. For the normalisation run, the reference runs need to be defined and redone. Furthermore, the adaptation measures and objectives that are considered can also be adjusted. To add or change objectives, quantitative indicators will need to be developed. 
 
 **Configuration**
 
 ```yaml
-agent_settings:
   government:
     adaptation:
       enabled: true
-      EAD_threshold: 1000000          # in euros
-      equity_indicator_threshold: 0.5  # 0–1
-      ecosystem_indicator_threshold: 0.5  # 0–1
-      adaptation_fraction: 0.1        # fraction of at-risk households to floodproof per year
+      mode: pathway
+    priority_weights:
+      risk_reduction: 0.3333
+      equity: 0.3333
+      ecosystem_health: 0.3333
+    adaptation_costs:
+      budget: 3650000 #for the Geul catchment
+      floodproofing_cost_per_household: 27384 #for the Geul catchment
+      reforestation_cost_per_m2: 1.66 #for the Geul catchment
+      communication_cost_per_household: 35 #for the Geul catchment
+    normalisation_values:
+      ead_best_value: 112729510 #for the Geul catchment
+      ead_worst_value: 157183895 #for the Geul catchment
+      flooddamageburden_best_value: 0.763942849 #for the Geul catchment
+      flooddamageburden_worst_value: 0.747929522 #for the Geul catchment
+      ecosystemhealth_best_value: 0.726538458 #for the Geul catchment
+      ecosystemhealth_worst_value: 0.402870868 #for the Geul catchment
+      forestaccesslowincome_best_value: 0.974048587 #for the Geul catchment
+      forestaccesslowincome_worst_value: 0.310953705 #for the Geul catchment
 ```
 
 **Configuration reference**
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `adaptation.enabled` | `bool` | `false` | Enable the adaptation pathway. |
-| `adaptation.EAD_threshold` | `float` | `1000000` | EAD (€) above which flood adaptation is triggered. |
-| `adaptation.equity_indicator_threshold` | `float` | `0.5` | Equity value below which equity adaptation is triggered. |
-| `adaptation.ecosystem_indicator_threshold` | `float` | `0.5` | Ecosystem health value below which reforestation is triggered. |
-| `adaptation.adaptation_fraction` | `float` | `0.1` | Fraction of at-risk households to floodproof per trigger (0–1). |
+| `adaptation.enabled` | `bool` | `false` | Enable government adaptation. |
+| `adaptation.mode` | `str` | `pathway` | Decision mode. `pathway` runs the annual decision loop. |
+| `priority_weights.risk_reduction` | `float` | `0.3333` | Weight of the flood risk objective in the IPV. |
+| `priority_weights.equity` | `float` | `0.3333` | Weight of the equity objective in the IPV. |
+| `priority_weights.ecosystem_health` | `float` | `0.3333` | Weight of the ecosystem health objective in the IPV. |
+| `adaptation_costs.budget` | `float` | `3650000` | Annual adaptation budget (€). |
+| `adaptation_costs.floodproofing_cost_per_household` | `float` | `27384` | Cost of floodproofing one household (€). |
+| `adaptation_costs.reforestation_cost_per_m2` | `float` | `1.66` | Cost of reforestation (€/m²). |
+| `adaptation_costs.communication_cost_per_household` | `float` | `35` | Cost of risk communication per household (€). |
+| `normalisation_values.ead_best_value` | `float` | `112729510` | EAD (€) mapped to the best normalised score. |
+| `normalisation_values.ead_worst_value` | `float` | `157183895` | EAD (€) mapped to the worst normalised score. |
+| `normalisation_values.flooddamageburden_best_value` | `float` | `0.763942849` | Flood damage burden mapped to the best normalised score. |
+| `normalisation_values.flooddamageburden_worst_value` | `float` | `0.747929522` | Flood damage burden mapped to the worst normalised score. |
+| `normalisation_values.ecosystemhealth_best_value` | `float` | `0.726538458` | Ecosystem health mapped to the best normalised score. |
+| `normalisation_values.ecosystemhealth_worst_value` | `float` | `0.402870868` | Ecosystem health mapped to the worst normalised score. |
+| `normalisation_values.forestaccesslowincome_best_value` | `float` | `0.974048587` | Forest access for low-income households mapped to the best normalised score. |
+| `normalisation_values.forestaccesslowincome_worst_value` | `float` | `0.310953705` | Forest access for low-income households mapped to the worst normalised score. |
 
 ---
 
