@@ -68,6 +68,43 @@ The evaluation process:
 5. Generates an interactive map showing station performance
 6. Saves evaluation metrics to Excel and GeoParquet files
 
+### Discharge dashboard
+
+The dashboard is an interactive map for exploring where GEB reproduces river
+discharge well and where it needs improvement.
+
+![Example discharge dashboard with coloured stations and an observed-versus-simulated discharge plot](../../images/discharge_evaluation_example.png)
+
+*Example map and station plot. The current dashboard also includes interactive
+charts, station search, and extra diagnostic layers.*
+
+- **Explore station scores:** switch between KGE, NSE, and other map layers.
+  Colours show performance; larger station markers represent larger upstream areas.
+- **Inspect a station:** click a marker to compare simulated and observed
+  discharge. Zoom into the time series to examine seasons or individual floods.
+  Return-period curves are included by default.
+- **Check the station match:** inspect original and snapped locations and
+  upstream-area differences. Excluded stations show why they were left out
+  of the summary scores.
+- **Explore the catchment:** view rivers, waterbodies, and available
+  GRDC-Caravan catchment characteristics. Search by station name or ID.
+
+Create the dashboard together with the evaluation scores:
+
+```bash
+geb evaluate hydrology.evaluate_discharge --run-name default
+```
+
+Open `discharge_evaluation_map.html` in the evaluation output folder described
+below. Keep its neighbouring `discharge_evaluation_map_charts/` folder when
+copying or sharing it, because charts load from those files.
+
+To rebuild the dashboard using saved scores:
+
+```bash
+geb evaluate hydrology.create_discharge_dashboard --run-name default
+```
+
 ### Performance metrics
 
 Daily evaluation uses local midnight-to-midnight days with fixed GRDC UTC offsets. Optional discharge correction multiplies simulations by GRDC area / routing area.
