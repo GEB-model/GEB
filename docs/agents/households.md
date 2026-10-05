@@ -3,7 +3,10 @@
 ### Summary
 In this module of the GEB model framework, it is possible to generate action-based flood early warnings to households. This FEWS require an ensemble of flood maps generated in the multiverse function of the model.py file. These maps are here processed into flood probability maps. Then, they are evaluated based on specific conditions to determine whether to issue a warning and which measures to recommend. Once a warning is generated, it can be communicated to households. Households will "decide" on whether to take the recommended actions based their initially assigned responsive_ratio. These measures are taken into account in the damage calculation through specific vulnerability curves. 
 
-In the households.py file, the main functions composing this system are:
+The workflow can be summarized as:
+Ensemble flood maps → Flood probabilities → Warning triggers → Warning communication → Household actions
+
+The main functions composing this system are:
 - create_flood_probability_maps
 - water_level_warning_strategy
 - critical_infrastructure_warning_strategy
@@ -12,34 +15,75 @@ In the households.py file, the main functions composing this system are:
 
 The following sections provide a more detailed description of each step.
 
+### Ensemble flood maps
+
+The starting point of the warning system is a set of flood maps produced for the individual members of an ensemble forecast. These flood maps should have been created by the multiverse function in the main model.py file. Please note that, for this, the correct flags need to be set in the model.yml (i.e., forecasts = True). For a given forecast initialization, the module loads the flood map from each ensemble member and combines them into a single dataset. River channels are removed from the flood maps so that permanent water in the river itself is not interpreted as flooding. The ensemble is then used to calculate flood probability maps for different water-depth thresholds.
+
 ### Flood probability maps
 
-The flood probability maps are created in the create_flood_probability_maps function. The warning system was designed to link forecasts directly to actionable household-level measures. Therefore, to generate the flood probability maps, water level ranges were defined based on measures to which they are applicable. Ranges for two different impact types are considered: (i) damages due to floods at a building-scale and (ii) damages due to flooding of critical infrastructure. These are represented in the model as different strategies that can be used in combination or isolated. Table 1 summarizes the damaging water-level ranges, their associated impacts, and the ranges for which each type of measure is suitable. The ranges and associated impacts were derived from the official risk data and guidelines from The Dutch Government: Overstromingsrisicozonering (Flood Risk Zoning) and Risicokaart (https://www.risicokaart.nl/). The recommended measures were also derived from these sources and complemented by literature. All these ranges and measures can be customized.
+In the create_flood_probability_maps function, the ensemble flood maps are translated into flood probability maps for different water-depth ranges. For example, if 6 out of 10 ensemble members predict that a location will exceed a given flood depth, the exceedance probability at that location is 60%. The warning system was designed to link forecasts directly to actionable household-level measures. Therefore, the water level ranges were defined based on measures to which they are applicable. Ranges for two different impact types are considered: (i) damages due to floods at a building-scale and (ii) damages due to flooding of critical infrastructure. 
+
+The table below summarizes the water-level ranges used for each of the strategies, and the protective measures associated to each range. The ranges were derived from the official risk data and guidelines from The Dutch Government: Overstromingsrisicozonering (Flood Risk Zoning) and Risicokaart (https://www.risicokaart.nl/). The recommended measures were also derived from these sources and complemented by literature. All these ranges and measures can be customized.
 
 For example, these are the water level ranges for specific strategies currently used in the model:
 
-**Water level warning strategy**
-| Water level range (m) | Impact level | Sandbags | Elevate possessions | Evacuation | Exposed element |
-| --- | --- | --- | --- | --- | --- |
-| 0.05 - 0.2 | People can get away on foot, minor damage | X | X | - | Buildings |
-| 0.2 - 0.5 | Cars can still drive, increasing damage | X | X | - |
-| 0.5 - 0.8 | Military vehicles can still drive, increasing damage| X | X | X |
-| 0.8 - 2 | People can say on the 1st floor, maximum damage | - | X | X |
-| >2 | Not safe for humans, maximum damage | - | - | X |
+**Water level warning strategy (action-oriented)**
+| Water level range (m) | Sandbags | Elevate possessions | Evacuation |
+|---|---|---|---|
+| 0.05 - 0.8 | X | - | - |
+| 0.05 - 2 | - | X | - |
+| >0.5 | - | - | X |
 
-**Critical infrastructure strategy**
+**Critical infrastructure warning strategy**
 | Water level range (m) | Impact level | Sandbags | Elevate possessions | Evacuation | Exposed element |
-| --- | --- | --- | --- | --- | --- |
+|---|---|---|---|---|---|
 | >0.3 | Power outages | - | - | X | Energy substations |
 | >0.05 | Disruption to basic services | - | - | X | Vulnerable and emergency facilities |
 
-### Warning generation and household decision-making
+### Water-level warning strategy
 
-Warnings are generated at the postal code level. To determine when a warning should be issued, two impact-based thresholds are applied: one for the probability of occurrence and another for the % of buildings hit within a postal code area. This is applied in the water_level_warning_strategy function. The default probability threshold in the model is set at 60%, following the KNMI protocol to move from a yellow (“be alert”) to an orange (“be prepared”) warning [egusphere-2025-828]. To avoid false alarms caused by isolated pixels, a 10% critical hit threshold was implemented, meaning that a warning is generated if at least 10% of the buildings in the postal code are intersects an area with a flood probability higher than 60%. Once the thresholds are exceeded, the system issues a warning specifying appropriate measures, based on the available lead time, and the time needed for their implementation. The warning is then disseminated, accounting for the efficiency of warning communication. 
+The water-level warning strategy determines whether households should receive a warning based on the forecasted flood probabilities. Warnings are generated at the postal code level. Two approaches are available:
+- building-based warnings
+- area-based warnings
 
-### Rule-based decision making
+For the **building-based warnings**, two impact-based thresholds are applied: one for the probability of occurrence and another for the % of buildings hit within a postal code area.
+First, the flood probability map is intersected with residential buildings. A building is considered potentially flooded when the forecast probability at its location exceeds the specified probability threshold. The model then calculates the fraction of buildings affected within each postal code. A warning is issued to a postal code when this fraction exceeds the buildings-hit threshold. 
 
-Finally in the decision module, once a household receives a warning, it decides whether to implement the recommended forecast-based measures depending on its responsive or non-responsive state. 
+The default probability threshold in the model is set at 60%, following the KNMI protocol to move from a yellow (“be alert”) to an orange (“be prepared”) warning [egusphere-2025-828]. And a threshold of 10% of buildings hit was implemented. In other words, a postal code is warned when at least 10% of its buildings are located in areas where the probability of exceeding the relevant flood-depth threshold is at least 60%.
+
+The **area-based warnings**, on the other hand, instead of counting buildings affected, evaluates only the fraction of pixels within each postal code that exceed the probability threshold. A warning is issued when the affected fraction exceeds the specified area-hit threshold.
+
+This process is repeated for each flood probability map, corresponding to the water level ranges defined in the configuration. If the warning thresholds are exceeded for one or more water-level ranges, the system issues a warning with the protective measures associated with those ranges. The warning is then communicated to households within the affected postal code.
+
+### Warning communication
+
+Not every household in a warned postal code necessarily receives the warning. The communication_efficiency parameter controls the fraction of targeted households that are reached by the warning. For example, a communication efficiency of 0.92 means that approximately 92% of the households targeted by the warning are selected to receive it. Households can be selected either randomly or using weights based on socioeconomic characteristics such as income and education. A fixed random seed is used so that the selection can be reproduced between simulations. 
+
+The system also considers the available lead time and the time required to implement each protective measure, ensuring that only measures that can still be implemented are recommended. Warnings can become more severe over time, but they cannot be revoked. For example, a household that previously received a warning recommending 'in-place' protective measures can later receive an evacuation warning if a newer forecast indicates more severe flooding. Conversely, if a newer forecast indicates a lower flood probability, the warning level is not reduced and previously issued recommendations are maintained. The warning is then disseminated and the module stores whether each household has received a warning, the warning level, the warning trigger, and the measures that were recommended. 
+
+### Critical infrastructure warnings
+
+Warnings can also be triggered by forecasted impacts on critical infrastructure. For each selected infrastructure type, the model evaluates the flood probability at the location of the asset. Examples of assets are:
+- energy infrastructure
+- hospitals or emergency facilities
+
+If the probability of flooding exceeds the specified threshold set for the asset, the model identifies the postal codes that depend on the affected infrastructure. Households in these postal codes can then receive an evacuation warning. 
+
+### Household decision making
+
+After warnings have been issued, the household decision-making component determines whether households follow the recommendations. Only a fraction of households are assumed to respond to a warning. This is controlled by their responsive_ratio, which represents a responsive or non-responsive behavior. For households that respond, the recommended measures are translated into actions taken by the household. The resulting actions can subsequently influence flood impacts and damages in the model.
+
+### Main parameters
+
+The behaviour of the warning system can therefore be controlled through several important parameters:
+| Parameter | Meaning |
+| --- | --- |
+| prob_threshold | Minimum forecast probability required for an impact to be considered |
+| buildings_hit_threshold | Minimum fraction of affected buildings required to warn a postal code |
+| area_hit_threshold | Minimum fraction of affected area required to warn a postal code |
+| communication_efficiency | Fraction of targeted households that receive the warning
+| responsive_ratio | Fraction of warned households that act on the warning |
+| evacuation_lead_time_threshold | Maximum lead time at which evacuation is recommended |
 
 ### Supporting functions
 
