@@ -142,10 +142,8 @@ This mechanism is part of the adaptation pathway and is activated with `adaptati
 
 1. **Benefit** — The reduction in expected annual damage (EAD) for the households in the subbasin when moving from the current to the next standard. Damages for return periods below the new standard are set to zero before integrating over the exceedance probability curve. The reduction is multiplied by an indirect damage factor of 1.6 to account for damages not captured by the direct damage model.
 2. **Investment cost** — The dike height is sampled along the river segments of the subbasin from the flood maps of the current and the next return period. The difference in height is multiplied by the segment length (approximately 100 m) and the unit elevation cost, and doubled to account for dikes on both river banks.
-3. **Maintenance cost** — The yearly maintenance cost per meter of dike times the length of the dike segments that must be raised, also doubled for both banks.
+3. **Maintenance cost** — The yearly maintenance cost per meter of dike times the length of all dike segments, also doubled for both banks.
 4. **Decision** — The standard is raised when the discounted benefit exceeds the investment cost plus the discounted maintenance cost. Benefits and maintenance costs are accumulated over 35 years using a discount rate of 10%. Subbasins where no dike needs to be raised, or that already have the highest return period as standard, are skipped.
-
-Standards are never lowered by default. The function can optionally also remove the protection of a subbasin (standard set to 0) when the yearly maintenance cost exceeds the damage reduction that the current standard provides compared to having no protection.
 
 In the final year of the simulation the resulting standards are exported to `flood_protection_standards.parquet` in the output folder, with one row per subbasin (`COMID`) and its `flood_protection_standard` (years).
 
