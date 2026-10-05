@@ -7,6 +7,7 @@ The workflow can be summarized as:
 Ensemble flood maps → Flood probabilities → Warning triggers → Warning communication → Household actions
 
 The main functions composing this system are:
+
 - create_flood_probability_maps
 - water_level_warning_strategy
 - critical_infrastructure_warning_strategy
@@ -45,6 +46,7 @@ For example, these are the water level ranges for specific strategies currently 
 ### Water-level warning strategy
 
 The water-level warning strategy determines whether households should receive a warning based on the forecasted flood probabilities. Warnings are generated at the postal code level. Two approaches are available:
+
 - building-based warnings
 - area-based warnings
 
@@ -78,6 +80,7 @@ After warnings have been issued, the household decision-making component determi
 ### Main parameters
 
 The behaviour of the warning system can therefore be controlled through several important parameters:
+
 | Parameter | Meaning |
 | --- | --- |
 | prob_threshold | Minimum forecast probability required for an impact to be considered |
@@ -90,6 +93,7 @@ The behaviour of the warning system can therefore be controlled through several 
 ### Supporting functions
 
 In the assign_household_attributes function, a few attributes relative to households are initialized for the FEWS to work:
+
 - warning_state
 - warning_level
 - warning_trigger
@@ -99,6 +103,7 @@ In the assign_household_attributes function, a few attributes relative to househ
 - actions_taken
 
 In the load_objects function, the objects needed for the system are:
+
 - buildings
 - postal_codes
 
