@@ -1,0 +1,1397 @@
+<!DOCTYPE html>
+<html>
+<head>
+    
+    <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
+    <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.js"></script>
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Leaflet.awesome-markers/2.0.2/leaflet.awesome-markers.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.2/dist/css/bootstrap.min.css"/>
+    <link rel="stylesheet" href="https://netdna.bootstrapcdn.com/bootstrap/3.0.0/css/bootstrap-glyphicons.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.2.0/css/all.min.css"/>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/Leaflet.awesome-markers/2.0.2/leaflet.awesome-markers.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/python-visualization/folium/folium/templates/leaflet.awesome.rotate.min.css"/>
+    
+            <meta name="viewport" content="width=device-width,
+                initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+            <style>
+                #map_1e1d80bbec3b35b6fb256acdcce050ce {
+                    position: relative;
+                    width: 100.0%;
+                    height: 100.0%;
+                    left: 0.0%;
+                    top: 0.0%;
+                }
+                .leaflet-container { font-size: 1rem; }
+            </style>
+
+            <style>html, body {
+                width: 100%;
+                height: 100%;
+                margin: 0;
+                padding: 0;
+            }
+            </style>
+
+            <style>#map {
+                position:absolute;
+                top:0;
+                bottom:0;
+                right:0;
+                left:0;
+                }
+            </style>
+
+            <script>
+                L_NO_TOUCH = false;
+                L_DISABLE_3D = false;
+            </script>
+
+        
+</head>
+<body>
+    
+    
+            <div class="folium-map" id="map_1e1d80bbec3b35b6fb256acdcce050ce" ></div>
+        
+
+<style>
+#demo-station-panel{position:absolute;z-index:10000;left:12px;bottom:24px;width:min(440px,calc(100vw - 40px));padding:14px;background:#fff;border:1px solid #94a3b8;border-radius:10px;box-shadow:0 8px 28px #0f172a55;font:14px system-ui,sans-serif;color:#0f172a}
+#demo-station-panel h2{font-size:17px;margin:0 0 8px}#demo-station-panel label{font-weight:650}#demo-station-panel select{margin-left:8px;padding:5px;max-width:65%}#demo-station-note{font-size:12px;color:#7c2d12;background:#fff7ed;padding:8px;border-radius:6px;margin:9px 0}#demo-station-chart{height:220px}
+</style>
+<div id="demo-station-panel"><h2>UK_test · simulated discharge</h2><label for="demo-station-select">Example series</label><select id="demo-station-select"><option>Sample station 1</option><option>Sample station 2</option></select><div id="demo-station-note">Observed GRDC discharge, station identifiers and locations, and observation-derived skill scores are masked due to GRDC data licensing.</div><div id="demo-station-chart" aria-label="Interactive simulated discharge chart"></div></div>
+<script>
+(function(){
+  var select=document.getElementById('demo-station-select'), chart=document.getElementById('demo-station-chart');
+  function decode(encoded,scale){var bin=atob(encoded),bytes=Uint8Array.from(bin,function(c){return c.charCodeAt(0)}),out=[],i=0,prev=null;while(i<bytes.length){var code=0,shift=0,b;do{b=bytes[i++];code|=(b&127)<<shift;shift+=7}while(b&128);if(code===0){out.push(null);prev=null}else{var z=code-1,d=(z>>>1)^-(z&1);prev=prev===null?d:prev+d;out.push(prev/scale)}}return out}
+  function draw(){var label=select.value;window._gebStationChartBundle=undefined;var script=document.createElement('script');script.src='./discharge_evaluation_map_charts/bundle_000.js';script.onload=function(){var data=window._gebStationChartBundle&&window._gebStationChartBundle[label];if(!data){chart.innerHTML='<p>Series unavailable.</p>';return}var ts=data.timeseries||{},macro=document.querySelector('script[data-demo-timeline]');var daily={start:946728000000,step:86400000,count:8674},timeline=Array.from({length:daily.count},function(_,i){return new Date(daily.start+i*daily.step)});var values=decode(ts.simulated||'',ts.scale||100),start=ts.start||0;timeline=timeline.slice(start,start+values.length);if(window.Plotly){Plotly.newPlot(chart,[{x:timeline,y:values,name:'Simulated',type:'scatter',mode:'lines',line:{color:'#0284c7'}}],{title:'Simulated discharge only',xaxis:{title:'Date'},yaxis:{title:'Discharge (m³/s)',rangemode:'tozero'},margin:{t:40,r:20,b:45,l:60}},{responsive:true,displaylogo:false})}};script.onerror=function(){chart.textContent='Could not load the sample chart bundle.'};document.head.appendChild(script)}
+  function loadPlotly(){if(window.Plotly){draw();return}var p=document.createElement('script');p.src='https://cdn.plot.ly/plotly-2.35.2.min.js';p.onload=draw;p.onerror=function(){chart.textContent='Interactive chart requires internet access to load Plotly.'};document.head.appendChild(p)}
+  select.addEventListener('change',loadPlotly);loadPlotly();
+})();
+</script>
+</body>
+<script>
+    
+    
+            var map_1e1d80bbec3b35b6fb256acdcce050ce = L.map(
+                "map_1e1d80bbec3b35b6fb256acdcce050ce",
+                {
+                    center: [50.67541666666666, -4.337916666666665],
+                    crs: L.CRS.EPSG3857,
+                    ...{
+  "zoom": 10,
+  "zoomControl": true,
+  "preferCanvas": true,
+}
+
+                }
+            );
+
+            
+
+        
+    
+            var tile_layer_37d60796ec24605875062928d417001f = L.tileLayer(
+                "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
+                {
+  "minZoom": 0,
+  "maxZoom": 18,
+  "maxNativeZoom": 18,
+  "noWrap": false,
+  "attribution": "Sources: Esri, HERE, Garmin, Intermap, INCREMENT P, GEBCO, USGS, FAO, NPS, NRCan, GeoBase, IGN, Kadaster NL, Ordnance Survey, Esri Japan, METI, Mapwithyou, NOSTRA, \u00a9 OpenStreetMap contributors, and the GIS user community",
+  "subdomains": "abc",
+  "detectRetina": false,
+  "tms": false,
+  "opacity": 1,
+}
+
+            );
+        
+    
+            tile_layer_37d60796ec24605875062928d417001f.addTo(map_1e1d80bbec3b35b6fb256acdcce050ce);
+        
+    
+            var tile_layer_57ac19fe33c40946a17f761ea62744cd = L.tileLayer(
+                "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+                {
+  "minZoom": 0,
+  "maxZoom": 19,
+  "maxNativeZoom": 19,
+  "noWrap": false,
+  "attribution": "Tiles \u0026copy; Esri \u0026mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community",
+  "subdomains": "abc",
+  "detectRetina": false,
+  "tms": false,
+  "opacity": 1,
+}
+
+            );
+        
+    
+            map_1e1d80bbec3b35b6fb256acdcce050ce.fitBounds(
+                [[50.42541666666666, -4.642083333333332], [50.92541666666666, -4.033749999999998]],
+                {"padding": [30, 30]}
+            );
+        
+    
+            var feature_group_acebadc686c8e430b0e322845c50579a = L.featureGroup(
+                {
+}
+            );
+        
+    
+            feature_group_acebadc686c8e430b0e322845c50579a.addTo(map_1e1d80bbec3b35b6fb256acdcce050ce);
+        
+    (function() {
+  var layerGroup = feature_group_acebadc686c8e430b0e322845c50579a;
+  var payload = "H4sIAAAAAAAC/4WYzW7bQAyEX8XQ2Q1W+yPJuRbouXfDhyBVAwNuZKjqwTD87o1imDMOhvIxHzZccYbk7vpcTadjXz2vqh/9y/Rv7L8Ph0P/Ou2H92q9qn5f4d+PBdvz16XzguM4HPtx2n8uOV8+yFs//Omn8TT/bf/xczic3q4hX4dh/LV/f5muUbfbb/kp5xi69aqEp00sOe7Wqy+0bkN3o/OKJRq6ttzovGKRBuw2r1ig3SZit3nFEu2S7ZY2tywc2iLjNK9Yog0yTqVbpgUZp5QeUGScTEmHJsrClHQouZmgpKbkZizLtCXVY7mprmlHbkZ8maR3EYLcDZTcjOa8Q8mh2px3KDlUN+0DiixqqKNpRha1dZZDyc2A3TQlNwO8kLQhJYN9mUNJyWBf5lDqlmBV7VBSnSJomvnLLAtNWR3rWIeyOua8Q6kDaqtUh1IEuOlQjoAsNKXpiYryKFWfVYmmRXaWQ6kD0Fkepd1MSYeSQ7U55FBWsr1NRIcG1bGaZqpqRHAoTwL7MocmNY0cSllAdYdyBDsZHErdEq0LHUoOYdp7lJyX6hClSRChjqY8wa1KHEqVmqCkpIU6AKeeR+mUpgiSUsfilHYon7xJVTVRPtGz6hai5GZCB2ha+HYVHlC6tclJQJQmOG54DiXnMzLWlJzPNhEdSs4XqKMpRSiYD5pyBCgpKU/aglNEUo7QBJUFKE/7JqgzgChVH0XQlKqPImhK1ddYVTuUqq+RJzpRqr4GNwWHdmo3Tan6GpzSmrLq2E3SltxEFh5VX+ZQcqjYRHQoOYSKcmhSVe1QjpDjMiU3C7LQlHfDLV5TjoBbvKY8uaCOphQhy5t5lrf4LG/8RO+mkXqhZPl2ogiS8qsut+oFSJQnrXyxEu1kBE35y/BqlvTulW+7OVT/0vBJd7vLZXf5D3Zs+l8cEQAA";
+
+  async function decompress(base64Str) {
+    var binary = atob(base64Str);
+    var bytes = new Uint8Array(binary.length);
+    for (var i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    var stream = new Response(bytes).body.pipeThrough(new DecompressionStream('gzip'));
+    return await new Response(stream).json();
+  }
+
+  decompress(payload).then(function(geoJsonData) {
+    L.geoJson(geoJsonData, {
+      style: {
+        fill: false,
+        fillOpacity: 0,
+        color: "black",
+        weight: 2
+      }
+    }).addTo(layerGroup);
+  });
+})();
+    
+            var feature_group_911c6341a2978eed6179c9721e955a31 = L.featureGroup(
+                {
+}
+            );
+        
+    
+            feature_group_911c6341a2978eed6179c9721e955a31.addTo(map_1e1d80bbec3b35b6fb256acdcce050ce);
+        
+    (function() {
+  var layerGroup = feature_group_911c6341a2978eed6179c9721e955a31;
+  var payload = "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";
+
+  function escapeHtml(str) {
+    return String(str).replace(/[&<>"']/g, function(c) {
+      return ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'})[c];
+    });
+  }
+
+  async function decompress(base64Str) {
+    var binary = atob(base64Str);
+    var bytes = new Uint8Array(binary.length);
+    for (var i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    var stream = new Response(bytes).body.pipeThrough(new DecompressionStream('gzip'));
+    return await new Response(stream).json();
+  }
+
+  decompress(payload).then(function(geoJsonData) {
+    var features = geoJsonData.features || [];
+
+    // Compute min and max width across all river segments
+    var minWidth = Infinity;
+    var maxWidth = -Infinity;
+    for (var i = 0; i < features.length; i++) {
+      var w = features[i].properties && features[i].properties.width_m;
+      if (w != null && !isNaN(w) && w > 0) {
+        if (w < minWidth) minWidth = w;
+        if (w > maxWidth) maxWidth = w;
+      }
+    }
+    var hasWidth = isFinite(minWidth) && isFinite(maxWidth);
+    var widthDiff = (hasWidth && maxWidth > minWidth) ? (maxWidth - minWidth) : 1;
+
+    // Compute min and max depth across all river segments
+    var minDepth = Infinity;
+    var maxDepth = -Infinity;
+    for (var j = 0; j < features.length; j++) {
+      var d = features[j].properties && features[j].properties.depth_m;
+      if (d != null && !isNaN(d) && d > 0) {
+        if (d < minDepth) minDepth = d;
+        if (d > maxDepth) maxDepth = d;
+      }
+    }
+    var hasDepth = isFinite(minDepth) && isFinite(maxDepth);
+    var depthDiff = (hasDepth && maxDepth > minDepth) ? (maxDepth - minDepth) : 1;
+
+    var minWeight = 2;
+    var maxWeight = 6;
+
+    // Linear scaling between min and max river width
+    function getWeight(feature) {
+      if (!hasWidth) return minWeight;
+      var w = feature && feature.properties && feature.properties.width_m;
+      if (w == null || isNaN(w) || w <= 0) return minWeight;
+      var norm = (w - minWidth) / widthDiff;
+      norm = Math.max(0, Math.min(1, norm));
+      return minWeight + norm * (maxWeight - minWeight);
+    }
+
+    // Color gradient from light blue (shallow) to dark blue (deep)
+    // Light sky blue (#7dd3fc): [125, 211, 252]
+    // Dark navy blue (#1e3a8a): [30, 58, 138]
+    var shallowR = 125, shallowG = 211, shallowB = 252;
+    var deepR = 30, deepG = 58, deepB = 138;
+
+    var noDepthColor = "#4b5563"; // Dark grey for rivers without depth data
+
+    function getColor(feature) {
+      if (!hasDepth) return noDepthColor;
+      var d = feature && feature.properties && feature.properties.depth_m;
+      if (d == null || isNaN(d) || d <= 0) return noDepthColor;
+      var norm = (d - minDepth) / depthDiff;
+      norm = Math.max(0, Math.min(1, norm));
+      var r = Math.round(shallowR + norm * (deepR - shallowR));
+      var g = Math.round(shallowG + norm * (deepG - shallowG));
+      var b = Math.round(shallowB + norm * (deepB - shallowB));
+      return "rgb(" + r + "," + g + "," + b + ")";
+    }
+
+    var riverLayer = L.geoJson(geoJsonData, {
+      style: function(feature) {
+        return {
+          color: getColor(feature),
+          weight: getWeight(feature),
+          opacity: 0.85
+        };
+      },
+      onEachFeature: function(feature, layer) {
+        var properties = feature.properties || {};
+        var riverId = properties.river_id || '';
+        var tooltip = document.createElement('div');
+        var uparea = properties.uparea_m2 ? (properties.uparea_m2 / 1e6).toLocaleString() : 'N/A';
+        var widthText = properties.width_m != null ? ' · Width: ' + properties.width_m + ' m' : '';
+        var depthText = properties.depth_m != null ? ' · Depth: ' + properties.depth_m + ' m' : '';
+        tooltip.textContent = 'River ID: ' + riverId + ' · Upstream area: ' + uparea + ' km²' + widthText + depthText + ' (click for charts)';
+        layer.bindTooltip(tooltip, {sticky: true});
+
+        var popupHtml = '<div class="geb-popup" data-station-id="river_' + escapeHtml(riverId) + '" data-river-id="' + escapeHtml(riverId) + '"></div>';
+        layer.bindPopup(popupHtml, {maxWidth: 820});
+
+        var baseWeight = getWeight(feature);
+        layer.on({
+          mouseover: function(e) {
+            e.target.setStyle({weight: Math.max(baseWeight + 3, 5), opacity: 1, color: '#f59e0b'});
+          },
+          mouseout: function(e) {
+            riverLayer.resetStyle(e.target);
+          }
+        });
+      }
+    });
+    riverLayer.addTo(layerGroup);
+  });
+})();
+    
+            var feature_group_9f7269fee49632b89719138823b3f0ad = L.featureGroup(
+                {
+}
+            );
+        
+    
+            feature_group_9f7269fee49632b89719138823b3f0ad.addTo(map_1e1d80bbec3b35b6fb256acdcce050ce);
+        
+    
+            var feature_group_b9c11d28124513fdd35bf5c2f8bac088 = L.featureGroup(
+                {
+}
+            );
+        
+    
+            var feature_group_d86b45e9329d668488076555b6bf3af9 = L.featureGroup(
+                {
+}
+            );
+        
+    
+            var feature_group_e8a610baa17f8a0df1fa240eaa62b045 = L.featureGroup(
+                {
+}
+            );
+        
+    
+            var feature_group_d381bace25fb613065cb746e6a4b93d0 = L.featureGroup(
+                {
+}
+            );
+        
+    
+            var feature_group_5ca6ca039f8818803a3fdf0c76d59f9a = L.featureGroup(
+                {
+}
+            );
+        
+    
+            var feature_group_64777fc1dbc85cec515f93804bb2c219 = L.featureGroup(
+                {
+}
+            );
+        
+    
+            var feature_group_03af64a369cf9a460afd139008d8a483 = L.featureGroup(
+                {
+}
+            );
+        
+    
+            var feature_group_7b4cead494662d8d3701f8cd02b10810 = L.featureGroup(
+                {
+}
+            );
+        
+    
+            var feature_group_319e905ff3d0804aa9ef22bab7aa9255 = L.featureGroup(
+                {
+}
+            );
+        
+    (function() {
+  var macroData = {"payload": "H4sIAAAAAAAC/4uOBQApu0wNAgAAAA==", "upstreamLayer": "feature_group_7b4cead494662d8d3701f8cd02b10810", "availabilityLayer": "feature_group_319e905ff3d0804aa9ef22bab7aa9255", "caravanAvailableColor": "#1B9E77", "caravanUnavailableColor": "#9CA3AF"};
+  var payload = macroData.payload;
+  var upstreamLayer = macroData.upstreamLayer || '';
+  var availabilityLayer = macroData.availabilityLayer || '';
+  var caravanAvailableColor = macroData.caravanAvailableColor || '#22c55e';
+  var caravanUnavailableColor = macroData.caravanUnavailableColor || '#94a3b8';
+
+  function escapeHtml(str) {
+    return String(str).replace(/[&<>"']/g, function(c) {
+      return ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'})[c];
+    });
+  }
+
+  async function decompress(base64Str) {
+    var binary = atob(base64Str);
+    var bytes = new Uint8Array(binary.length);
+    for (var i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    var stream = new Response(bytes).body.pipeThrough(new DecompressionStream('gzip'));
+    return await new Response(stream).json();
+  }
+
+  decompress(payload).then(function(stations) {
+    var avLayer = availabilityLayer ? window[availabilityLayer] : null;
+
+    stations.forEach(function(station) {
+      station._markers = [];
+      var escapedId = escapeHtml(station.id);
+      var escapedName = escapeHtml(station.name);
+      var baseTooltip = escapedId + ': ' + escapedName;
+      if (station.tz !== null && station.tz !== undefined) {
+        baseTooltip += '<br><span data-geb-utc-offset-hours="' + station.tz + '"></span> fixed';
+      }
+      if (station.ex) {
+        baseTooltip += '<br>Diagnostic only — excluded from evaluation';
+      }
+
+      var popupHtml = '';
+      if (station.ex) {
+        popupHtml += '<div style="color:#b91c1c;padding:8px"><b>Diagnostic only — excluded from evaluation.</b><br>' +
+          escapeHtml(station.ex) + '</div>';
+      }
+      popupHtml += '<div class="geb-popup" data-station-id="' + escapedId + '"></div>';
+
+      // Metric & upstream layers
+      if (station.m) {
+        for (var layerName in station.m) {
+          var layer = window[layerName];
+          if (!layer) continue;
+          var radius = (layerName === upstreamLayer) ? 10 : station.r;
+          var marker = L.circleMarker(station.coords, {
+            radius: radius,
+            color: 'black',
+            fill: true,
+            fillColor: station.m[layerName],
+            fillOpacity: 0.9,
+            zIndexOffset: 1000
+          });
+          marker.bindPopup(popupHtml, {maxWidth: 800});
+          marker.bindTooltip(baseTooltip);
+          marker.addTo(layer);
+          station._markers.push(marker);
+        }
+      }
+
+      // Availability layer
+      if (avLayer && station.av !== null && station.av !== undefined) {
+        var isAv = !!station.av;
+        var avColor = isAv ? caravanAvailableColor : caravanUnavailableColor;
+        var avLabel = isAv ? 'available' : 'not available';
+        var avMarker = L.circleMarker(station.coords, {
+          radius: station.r,
+          color: 'black',
+          fill: true,
+          fillColor: avColor,
+          fillOpacity: 0.9,
+          zIndexOffset: 1000
+        });
+        avMarker.bindPopup(popupHtml, {maxWidth: 800});
+        avMarker.bindTooltip(baseTooltip + '<br>GRDC-Caravan data: ' + avLabel);
+        avMarker.addTo(avLayer);
+        station._markers.push(avMarker);
+      }
+
+      // Characteristic layers
+      if (station.ch) {
+        for (var chLayerName in station.ch) {
+          var chLayer = window[chLayerName];
+          if (!chLayer) continue;
+          var chData = station.ch[chLayerName];
+          var chMarker = L.circleMarker(station.coords, {
+            radius: station.r,
+            color: 'black',
+            fill: true,
+            fillColor: chData[0],
+            fillOpacity: 0.9,
+            zIndexOffset: 1000
+          });
+          chMarker.bindPopup(popupHtml, {maxWidth: 800});
+          chMarker.bindTooltip(baseTooltip + '<br>' + chData[1]);
+          chMarker.addTo(chLayer);
+          station._markers.push(chMarker);
+        }
+      }
+    });
+
+    window._gebStations = stations;
+    window.dispatchEvent(new CustomEvent('gebStationsReady', {detail: stations}));
+  });
+})();
+    
+            var feature_group_3404e810ff633b2a6d286418452288ee = L.featureGroup(
+                {
+}
+            );
+        
+    (function() {
+  var map = map_1e1d80bbec3b35b6fb256acdcce050ce;
+  var layer = feature_group_3404e810ff633b2a6d286418452288ee;
+  var payload = "H4sIAAAAAAAC/4uOBQApu0wNAgAAAA==";
+  var stations = [];
+  var decompressed = false;
+
+  async function decompress(base64Str) {
+    var binary = atob(base64Str);
+    var bytes = new Uint8Array(binary.length);
+    for (var i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    var stream = new Response(bytes).body.pipeThrough(new DecompressionStream('gzip'));
+    return await new Response(stream).json();
+  }
+
+  function ensureData(callback) {
+    if (decompressed) {
+      callback();
+      return;
+    }
+    decompress(payload).then(function(data) {
+      stations = data;
+      decompressed = true;
+      callback();
+    });
+  }
+
+  var visibleLayers = new Map();
+  var renderer = null;
+  var selectedLayer = null;
+  var selectedIndex = null;
+  var currentMode = '';
+  var updateTimer = null;
+  var popup = null;
+  var markerStyles = [
+    ['1', 'Original gauge', '#BE123C', '50%'],
+    ['2', 'Selected original subgrid pixel', '#92400E', '3px'],
+    ['3', 'Snapped model cell', '#1D4ED8', '0']
+  ];
+  var control = L.control({position: 'bottomright'});
+  control.onAdd = function() {
+    var box = L.DomUtil.create('div', 'geb-snapping-legend');
+    box.style.display = 'none';
+    box.innerHTML = '<b>Station snapping: 1 → 2 → 3</b>' +
+      '<div><i style="background:#BE123C;border-radius:50%">1</i> Original gauge (observations)</div>' +
+      '<div><i style="background:#92400E;border-radius:3px">2</i> Selected original subgrid pixel</div>' +
+      '<div><i style="background:#1D4ED8">3</i> Snapped model-cell centre (simulation)</div>' +
+      '<small>Overview dots: green = PASS, orange = area warning, red = excluded.<br>' +
+      'Click a dot for its three snapping steps, or zoom in.<br>' +
+      'Dashed lines connect the three locations.<br>' +
+      'Coincident symbols can overlap; each popup lists all coordinates.</small>' +
+      '<small class="geb-snapping-status"></small>';
+    L.DomEvent.disableClickPropagation(box);
+    L.DomEvent.disableScrollPropagation(box);
+    return box;
+  };
+  control.addTo(map);
+  var style = document.createElement('style');
+  style.textContent = '.geb-snapping-legend{background:white;color:#111827;padding:12px;border-radius:8px;box-shadow:0 2px 10px #0004;font:12px system-ui;max-width:310px}' +
+    '.geb-snapping-legend div{margin-top:6px;display:flex;align-items:center;gap:8px}' +
+    '.geb-snapping-legend i{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;color:white;font-style:normal;font-weight:bold}' +
+    '.geb-snapping-legend small{display:block;margin-top:8px;line-height:1.5}';
+  document.head.appendChild(style);
+
+  function openPopup(station, heading, location) {
+    if (!popup) popup = L.popup({maxWidth: 440});
+    popup.setLatLng(location).setContent(heading + station.popup).openOn(map);
+  }
+  function detail(index, labels) {
+    var station = stations[index];
+    var group = L.featureGroup();
+    var connector = L.polyline(station.locations, {
+      renderer: renderer, color: station.color, weight: 3, opacity: 0.85, dashArray: '6 4'
+    }).addTo(group);
+    connector.on('click', function(event) {openPopup(station, '', event.latlng);});
+    station.locations.forEach(function(coordinates, position) {
+      var spec = markerStyles[position];
+      var marker = L.marker(coordinates, {icon: L.divIcon({
+        iconSize: [26, 26], iconAnchor: [13, 13], className: 'geb-snapping-icon',
+        html: '<span style="display:flex;align-items:center;justify-content:center;width:26px;height:26px;box-sizing:border-box;background:' + spec[2] +
+          ';border:2px solid white;border-radius:' + spec[3] + ';color:white;font:bold 14px system-ui;box-shadow:0 1px 5px #0008;">' + spec[0] + '</span>'
+      })}).addTo(group);
+      marker.bindTooltip(spec[0] + '. ' + spec[1] + ' · ' + station.id, {
+        permanent: labels, direction: position === 0 ? 'left' : 'right', className: 'geb-snapping-label'
+      });
+      marker.on('click', function() {
+        openPopup(station, '<h4>' + spec[0] + '. ' + spec[1] + '</h4>', coordinates);
+      });
+    });
+    return group;
+  }
+  function overview(index) {
+    var station = stations[index];
+    var dot = L.circleMarker(station.locations[0], {
+      renderer: renderer, radius: 5, color: station.color, fillColor: station.color,
+      fillOpacity: 0.85, weight: 1
+    });
+    dot.bindTooltip(station.tooltip);
+    dot.on('click', function() {
+      if (selectedLayer) layer.removeLayer(selectedLayer);
+      selectedIndex = index;
+      selectedLayer = detail(index, map.getZoom() >= 11).addTo(layer);
+      openPopup(station, '', station.locations[0]);
+    });
+    return dot;
+  }
+  function clear() {
+    layer.clearLayers();
+    visibleLayers.clear();
+    selectedLayer = null;
+    selectedIndex = null;
+    currentMode = '';
+    if (popup) map.closePopup(popup);
+  }
+  function update() {
+    updateTimer = null;
+    if (!map.hasLayer(layer)) return;
+    if (!renderer) renderer = L.canvas({padding: 0.2});
+    var bounds = map.getBounds().pad(0.1);
+    var visible = [];
+    stations.forEach(function(station, index) {
+      if (bounds.intersects(L.latLngBounds(station.locations))) visible.push(index);
+    });
+    var detailed = map.getZoom() >= 9 && visible.length <= 150;
+    var labels = map.getZoom() >= 11;
+    var mode = detailed ? (labels ? 'labelled' : 'detailed') : 'overview';
+    var previousSelection = selectedIndex;
+    if (mode !== currentMode) {clear(); currentMode = mode; selectedIndex = previousSelection;}
+    var wanted = new Set(visible);
+    visibleLayers.forEach(function(feature, index) {
+      if (!wanted.has(index)) {layer.removeLayer(feature); visibleLayers.delete(index);}
+    });
+    visible.forEach(function(index) {
+      if (!visibleLayers.has(index)) {
+        visibleLayers.set(index, (detailed ? detail(index, labels) : overview(index)).addTo(layer));
+      }
+    });
+    if (selectedLayer && !wanted.has(selectedIndex)) {
+      layer.removeLayer(selectedLayer); selectedLayer = null; selectedIndex = null;
+      if (popup) map.closePopup(popup);
+    }
+    control.getContainer().querySelector('.geb-snapping-status').textContent =
+      visible.length + ' stations in view. ' + (detailed ? (labels ? 'Numbered steps and labels shown.' : 'Zoom further for labels.') :
+        'Zoom in for all steps (up to 150 stations), or click a dot.');
+  }
+  function schedule() {
+    if (map.hasLayer(layer) && updateTimer === null) {
+      updateTimer = setTimeout(function() {
+        ensureData(update);
+      }, 50);
+    }
+  }
+  function overlayChanged(event) {
+    if (event.layer !== layer) return;
+    var enabled = map.hasLayer(layer);
+    control.getContainer().style.display = enabled ? '' : 'none';
+    if (enabled) schedule();
+    else {
+      if (updateTimer !== null) clearTimeout(updateTimer);
+      updateTimer = null;
+      clear();
+      if (renderer && map.hasLayer(renderer)) map.removeLayer(renderer);
+    }
+  }
+  map.on('overlayadd overlayremove', overlayChanged);
+  map.on('moveend zoomend', schedule);
+})();
+    (function(){
+  var gebMetricLegendConfigs = [{"layer": "feature_group_9f7269fee49632b89719138823b3f0ad", "kind": "continuous", "name": "KGE", "colors": ["red", "orange", "yellow", "blue", "green"], "minimum": -1.0, "maximum": 1.0, "show": true}, {"layer": "feature_group_b9c11d28124513fdd35bf5c2f8bac088", "kind": "continuous", "name": "mKGE", "colors": ["red", "orange", "yellow", "blue", "green"], "minimum": -1.0, "maximum": 1.0, "show": false}, {"layer": "feature_group_d86b45e9329d668488076555b6bf3af9", "kind": "continuous", "name": "KGE correlation", "colors": ["red", "orange", "yellow", "blue", "green"], "minimum": 0.0, "maximum": 1.0, "show": false}, {"layer": "feature_group_e8a610baa17f8a0df1fa240eaa62b045", "kind": "continuous", "name": "KGE bias (\u03b2)", "colors": ["red", "orange", "green", "orange", "red"], "minimum": 0.0, "maximum": 2.0, "show": false}, {"layer": "feature_group_d381bace25fb613065cb746e6a4b93d0", "kind": "continuous", "name": "KGE variability (\u03b1)", "colors": ["red", "orange", "green", "orange", "red"], "minimum": 0.0, "maximum": 2.0, "show": false}, {"layer": "feature_group_5ca6ca039f8818803a3fdf0c76d59f9a", "kind": "continuous", "name": "NSE", "colors": ["red", "orange", "yellow", "blue", "green"], "minimum": -1.0, "maximum": 1.0, "show": false}, {"layer": "feature_group_64777fc1dbc85cec515f93804bb2c219", "kind": "continuous", "name": "Pearson r\u00b2", "colors": ["red", "orange", "yellow", "blue", "green"], "minimum": 0.0, "maximum": 1.0, "show": false}, {"layer": "feature_group_03af64a369cf9a460afd139008d8a483", "kind": "continuous", "name": "RRMSE", "colors": ["green", "blue", "yellow", "orange", "red"], "minimum": 0.0, "maximum": 1.0, "show": false}, {"layer": "feature_group_7b4cead494662d8d3701f8cd02b10810", "kind": "continuous", "name": "Upstream Area Ratio", "colors": ["red", "orange", "yellow", "blue", "green"], "minimum": 0.5, "maximum": 2.0, "show": false}, {"layer": "feature_group_319e905ff3d0804aa9ef22bab7aa9255", "kind": "availability", "name": "GRDC-Caravan data availability", "available_count": 0, "unavailable_count": 2, "available_color": "#1B9E77", "unavailable_color": "#9CA3AF", "show": false}];
+  var map = map_1e1d80bbec3b35b6fb256acdcce050ce;
+  var configByLayer = {};
+  var layerByName = {};
+  var activeConfig = null;
+  gebMetricLegendConfigs.forEach(function(config) {
+    var layer = window[config.layer];
+    if (!layer) return;
+    configByLayer[L.stamp(layer)] = config;
+    layerByName[config.layer] = layer;
+    if (config.show) activeConfig = config;
+  });
+
+  var legendControl = L.control({position: 'bottomleft'});
+  legendControl.onAdd = function() {
+    var element = L.DomUtil.create('div', 'geb-metric-legend');
+    L.DomEvent.disableClickPropagation(element);
+    return element;
+  };
+  legendControl.addTo(map);
+  var legendRoot = map.getContainer().querySelector('.geb-metric-legend');
+
+  function formatTick(value) {
+    var numericValue = Number(value);
+    var absoluteValue = Math.abs(numericValue);
+    if (numericValue === 0) return '0';
+    if (absoluteValue < 0.01) return numericValue.toExponential(1);
+    var digits = absoluteValue >= 1000 ? 0 : absoluteValue >= 100 ? 1 : absoluteValue >= 10 ? 1 : absoluteValue >= 1 ? 2 : 3;
+    return numericValue.toLocaleString(undefined, {maximumFractionDigits: digits});
+  }
+
+  function renderLegend(config) {
+    if (!config) {
+      legendRoot.style.display = 'none';
+      return;
+    }
+    legendRoot.style.display = '';
+    if (config.kind === 'availability') {
+      legendRoot.innerHTML = '<b>' + config.name + '</b>' +
+        '<div class="geb-categorical-key"><i style="background:' + config.available_color + '"></i>' +
+        'Available (n=' + config.available_count + ')</div>' +
+        '<div class="geb-categorical-key"><i style="background:' + config.unavailable_color + '"></i>' +
+        'Not available (n=' + config.unavailable_count + ')</div>';
+      return;
+    }
+    var ticks = [];
+    for (var index = 0; index < 5; index += 1) {
+      ticks.push(config.minimum + (config.maximum - config.minimum) * index / 4);
+    }
+    var detail = '';
+    if (config.kind === 'characteristic') {
+      ticks = config.reference_values;
+      detail = '<div class="geb-metric-note">Colour shows empirical percentile rank (n=' +
+        config.ranked_count + '); ticks are values at ranks 0 / 25 / 50 / 75 / 100.</div>' +
+        '<div class="geb-metric-note">Missing value: n=' + config.missing_count + '</div>';
+    }
+    legendRoot.innerHTML = '<b>' + config.name + '</b>' +
+      '<div class="geb-metric-gradient" style="background:linear-gradient(90deg,' +
+      config.colors.join(',') + ')"></div><div class="geb-metric-ticks">' +
+      ticks.map(function(value) { return '<span>' + formatTick(value) + '</span>'; }).join('') +
+      '</div>' + detail;
+  }
+
+  map.on('overlayadd', function(event) {
+    var config = configByLayer[L.stamp(event.layer)];
+    if (!config) return;
+    gebMetricLegendConfigs.forEach(function(otherConfig) {
+      if (otherConfig.layer === config.layer) return;
+      var otherLayer = layerByName[otherConfig.layer];
+      if (otherLayer && map.hasLayer(otherLayer)) map.removeLayer(otherLayer);
+    });
+    activeConfig = config;
+    renderLegend(activeConfig);
+  });
+  map.on('overlayremove', function(event) {
+    var config = configByLayer[L.stamp(event.layer)];
+    if (config && activeConfig && config.layer === activeConfig.layer) {
+      activeConfig = null;
+      renderLegend(null);
+    }
+  });
+
+  var style = document.createElement('style');
+  style.textContent = '.geb-metric-legend{background:rgba(255,255,255,.96);border:1px solid #d8dee8;border-radius:8px;box-shadow:0 6px 20px rgba(15,23,42,.18);font-family:Inter,system-ui,sans-serif;margin-bottom:22px!important;padding:9px 10px;width:240px}.geb-metric-legend>b{color:#111827;display:block;font-size:11px;margin-bottom:6px}.geb-metric-gradient{border-radius:2px;height:9px}.geb-metric-ticks{color:#475569;display:flex;font-size:9px;justify-content:space-between;margin-top:3px}.geb-metric-note{color:#64748b;font-size:9px;line-height:1.3;margin-top:5px}.geb-categorical-key{align-items:center;color:#475569;display:flex;font-size:9px;gap:6px;margin-top:5px}.geb-categorical-key i{border:1px solid #fff;border-radius:50%;height:9px;width:9px}';
+  document.head.appendChild(style);
+  renderLegend(activeConfig);
+})();
+    (function(){
+  var macroData = {"bundles": ["discharge_evaluation_map_charts/bundle_000.js", "discharge_evaluation_map_charts/rivers_bundle.js"], "stations": {"river_23011059": 1, "river_23011076": 1, "river_23011099": 1, "river_23011105": 1, "river_23011113": 1, "river_23011192": 1, "river_23011198": 1, "river_23011211": 1, "river_23011249": 1, "river_23011255": 1, "river_23011259": 1, "river_23011299": 1, "river_23011482": 1, "river_23011494": 1, "river_23011531": 1, "river_23011532": 1, "river_23011547": 1, "river_23011590": 1, "river_23011602": 1, "river_23011621": 1, "river_23011652": 1, "river_23011654": 1, "river_23011704": 1, "river_23011751": 1, "river_23011808": 1, "river_23011880": 1, "river_23012438": 1, "Sample station 1": 0, "Sample station 2": 0}, "timeline": {"daily": {"start": 946728000000, "step": 86400000, "count": 8674}}};
+  var bundles = (macroData && macroData.bundles) ? macroData.bundles : null;
+  var stationChartFiles = (macroData && macroData.stations) ? macroData.stations : macroData;
+  var globalTimeline = (macroData && macroData.timeline) ? macroData.timeline : null;
+  var plotlyUrl = 'https://cdn.plot.ly/plotly-2.35.2.min.js';
+  var colors = { observed: '#facc15', simulated: '#38bdf8', bankfull: '#f87171' };
+  var stationChartCache = {};
+  var layoutBase = {
+    autosize: true,
+    height: 260,
+    margin: {l: 50, r: 18, t: 18, b: 42},
+    paper_bgcolor: '#020617',
+    plot_bgcolor: '#020617',
+    font: {color: '#e2e8f0', size: 11},
+    legend: {orientation: 'h', x: 0, y: 1.15},
+    xaxis: {gridcolor: '#1f2937', zerolinecolor: '#334155'},
+    yaxis: {gridcolor: '#1f2937', zerolinecolor: '#334155', rangemode: 'tozero'}
+  };
+
+  function ensurePlotly(callback) {
+    if (window.Plotly) { callback(); return; }
+    var script = document.createElement('script');
+    script.src = plotlyUrl;
+    script.onload = callback;
+    script.onerror = function() { callback(false); };
+    document.head.appendChild(script);
+  }
+
+  function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, function(character) {
+      return ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'})[character];
+    });
+  }
+
+  function formatNumber(value) {
+    return Number.isFinite(value) ? value.toFixed(2) : 'n/a';
+  }
+
+  function metricHtml(label, value) {
+    return '<span><b>' + label + '</b> ' + formatNumber(value) + '</span>';
+  }
+
+  function makeChartDiv(id) {
+    return '<div id="' + id + '" class="geb-popup__chart"></div>';
+  }
+
+  function unpackStationData(rawPayload, callback) {
+    if (!rawPayload) {
+      callback(null);
+      return;
+    }
+    if (typeof rawPayload === 'object') {
+      callback(rawPayload);
+      return;
+    }
+    try {
+      var binaryStr = atob(rawPayload);
+      var bytes = new Uint8Array(binaryStr.length);
+      for (var i = 0; i < binaryStr.length; i++) {
+        bytes[i] = binaryStr.charCodeAt(i);
+      }
+      var stream = new Response(bytes).body.pipeThrough(new DecompressionStream('gzip'));
+      new Response(stream).text().then(function(decompressedText) {
+        try {
+          callback(JSON.parse(decompressedText));
+        } catch (parseErr) {
+          callback(null);
+        }
+      }).catch(function() {
+        callback(null);
+      });
+    } catch (err) {
+      callback(null);
+    }
+  }
+
+  var pendingBundleCallbacks = {};
+
+  function loadStationData(stationId, callback) {
+    if (stationChartCache[stationId]) {
+      callback(stationChartCache[stationId]);
+      return;
+    }
+    var chartFile = stationChartFiles[stationId];
+    if (typeof chartFile === 'number' && bundles) {
+      chartFile = bundles[chartFile];
+    }
+    if (!chartFile) {
+      callback(null);
+      return;
+    }
+    if (pendingBundleCallbacks[chartFile]) {
+      pendingBundleCallbacks[chartFile].push(function() {
+        callback(stationChartCache[stationId] || null);
+      });
+      return;
+    }
+    pendingBundleCallbacks[chartFile] = [function() {
+      callback(stationChartCache[stationId] || null);
+    }];
+
+    var script = document.createElement('script');
+    script.src = chartFile;
+    script.onload = function() {
+      var rawBundle = window._gebStationChartBundle;
+      delete window._gebStationChartBundle;
+      var rawSingle = window._gebStationChartPayload;
+      delete window._gebStationChartPayload;
+      if (script.remove) script.remove();
+
+      function notifyPending() {
+        var cbs = pendingBundleCallbacks[chartFile] || [];
+        delete pendingBundleCallbacks[chartFile];
+        cbs.forEach(function(cb) { cb(); });
+      }
+
+      if (rawBundle !== undefined) {
+        unpackStationData(rawBundle, function(bundleData) {
+          if (bundleData && typeof bundleData === 'object') {
+            Object.assign(stationChartCache, bundleData);
+          }
+          notifyPending();
+        });
+      } else if (rawSingle !== undefined) {
+        unpackStationData(rawSingle, function(singleData) {
+          if (singleData && typeof singleData === 'object') {
+            stationChartCache[stationId] = singleData;
+          }
+          notifyPending();
+        });
+      } else {
+        notifyPending();
+      }
+    };
+    script.onerror = function() {
+      if (script.remove) script.remove();
+      var cbs = pendingBundleCallbacks[chartFile] || [];
+      delete pendingBundleCallbacks[chartFile];
+      cbs.forEach(function(cb) { cb(); });
+    };
+    document.head.appendChild(script);
+  }
+
+  function resolveTimeline(spec, startIndex, length) {
+    if (!spec) return [];
+    if (Array.isArray(spec)) {
+      return (startIndex > 0 || length < spec.length)
+        ? spec.slice(startIndex, startIndex + length)
+        : spec;
+    }
+    if (typeof spec === 'object' && typeof spec.start === 'number' && typeof spec.step === 'number') {
+      var count = length || spec.count || 0;
+      var start = spec.start + (startIndex || 0) * spec.step;
+      var arr = new Array(count);
+      for (var i = 0; i < count; i++) {
+        arr[i] = start + i * spec.step;
+      }
+      return arr;
+    }
+    return [];
+  }
+
+  function decodeVarintDeltas(base64Str, scale) {
+    if (!base64Str) return [];
+    var s = scale || 100;
+    var binaryStr = atob(base64Str);
+    var len = binaryStr.length;
+    var bytes = new Uint8Array(len);
+    for (var k = 0; k < len; k++) {
+      bytes[k] = binaryStr.charCodeAt(k);
+    }
+
+    var out = [];
+    var i = 0;
+    var prev = null;
+
+    while (i < len) {
+      var code = 0;
+      var shift = 0;
+      while (true) {
+        var b = bytes[i++];
+        code |= (b & 0x7F) << shift;
+        if ((b & 0x80) === 0) break;
+        shift += 7;
+      }
+
+      if (code === 0) {
+        // Sentinel 0 reserved for missing observation (null)
+        out.push(null);
+        prev = null;
+      } else {
+        var zz = code - 1;
+        var d = (zz >>> 1) ^ -(zz & 1);
+        if (prev === null) {
+          out.push(d / s);
+          prev = d;
+        } else {
+          prev += d;
+          out.push(prev / s);
+        }
+      }
+    }
+    return out;
+  }
+
+  function finiteNumbers(values, minimumValue) {
+    return (values || []).filter(function(value) { return value !== null; }).map(Number).filter(function(value) {
+      return Number.isFinite(value) && (minimumValue === undefined || value >= minimumValue);
+    });
+  }
+
+  function linearRange(values) {
+    var numbers = finiteNumbers(values);
+    if (!numbers.length) return undefined;
+    var minimum = numbers.reduce(function(a, b) { return Math.min(a, b); }, Infinity);
+    var maximum = numbers.reduce(function(a, b) { return Math.max(a, b); }, -Infinity);
+    if (minimum === maximum) {
+      var padding = Math.max(Math.abs(minimum) * 0.05, 1);
+      return [minimum - padding, maximum + padding];
+    }
+    return [minimum, maximum];
+  }
+
+  function logRange(values) {
+    var numbers = finiteNumbers(values, Number.MIN_VALUE);
+    if (!numbers.length) return undefined;
+    var minimum = numbers.reduce(function(a, b) { return Math.min(a, b); }, Infinity);
+    var maximum = numbers.reduce(function(a, b) { return Math.max(a, b); }, -Infinity);
+    if (minimum === maximum) {
+      return [Math.log10(minimum) - 0.05, Math.log10(maximum) + 0.05];
+    }
+    return [Math.log10(minimum), Math.log10(maximum)];
+  }
+
+  function dateRange(values) {
+    if (!values || !values.length) return undefined;
+    var first = new Date(values[0]);
+    var last = new Date(values[values.length - 1]);
+    if (Number.isFinite(first.getTime()) && Number.isFinite(last.getTime())) {
+      return [first, last];
+    }
+    var times = (values || []).map(function(value) {
+      return new Date(value).getTime();
+    }).filter(Number.isFinite);
+    if (!times.length) return undefined;
+    return [new Date(times.reduce(function(a, b) { return Math.min(a, b); }, Infinity)), new Date(times.reduce(function(a, b) { return Math.max(a, b); }, -Infinity))];
+  }
+
+  function sortedUniqueNumbers(values) {
+    var seen = {};
+    return finiteNumbers(values).filter(function(value) {
+      var key = String(value);
+      if (seen[key]) return false;
+      seen[key] = true;
+      return true;
+    }).sort(function(firstValue, secondValue) {
+      return firstValue - secondValue;
+    });
+  }
+
+  function formatTick(value) {
+    return Number.isInteger(value) ? String(value) : value.toPrecision(3);
+  }
+
+  function renderCharts(stationId, data) {
+    var safeStationId = encodeURIComponent(stationId);
+    var common = {responsive: true, displaylogo: false, modeBarButtonsToRemove: ['select2d', 'lasso2d']};
+    function trace(name, x, y, kind, mode, hoverTemplate, lineOpts) {
+      var line = {color: colors[name.toLowerCase()] || '#f87171', width: 1.5};
+      if (lineOpts) { Object.assign(line, lineOpts); }
+      return {
+        x: x,
+        y: y,
+        name: name,
+        type: kind,
+        mode: mode,
+        connectgaps: false,
+        hovertemplate: hoverTemplate,
+        line: line,
+        marker: {color: colors[name.toLowerCase()] || '#f87171', size: 5}
+      };
+    }
+    if (data.timeseries) {
+      var rawTimeline = (data.timeseries.time)
+        ? data.timeseries.time
+        : (globalTimeline && globalTimeline[data.frequency] ? globalTimeline[data.frequency] : globalTimeline);
+      var startIndex = data.timeseries.start || 0;
+
+      var scale = data.timeseries.scale || 100;
+      var observed = decodeVarintDeltas(data.timeseries.observed, scale);
+      var simulated = decodeVarintDeltas(data.timeseries.simulated, scale);
+      var bankfull = data.timeseries.bankfull
+        ? decodeVarintDeltas(data.timeseries.bankfull, scale)
+        : null;
+
+      var seriesLength = (observed && observed.length)
+        || (simulated && simulated.length)
+        || 0;
+      var timeline = resolveTimeline(rawTimeline, startIndex, seriesLength);
+      if (timeline && timeline.length) {
+
+        var timeRange = dateRange(timeline);
+        var traces = [
+          trace('Observed', timeline, observed, 'scatter', 'lines', '%{x|%b %Y}<br>%{y:,.0f} m3/s<extra>Observed</extra>'),
+          trace('Simulated', timeline, simulated, 'scatter', 'lines', '%{x|%b %Y}<br>%{y:,.0f} m3/s<extra>Simulated</extra>')
+        ];
+        if (bankfull && timeline && timeline.length) {
+          traces.push(
+            trace('Bankfull', timeline, bankfull, 'scatter', 'lines', '%{x|%b %Y}<br>%{y:,.0f} m3/s<extra>Bankfull</extra>', {dash: 'dash'})
+          );
+        }
+        Plotly.newPlot('geb-time-' + safeStationId, traces, Object.assign({}, layoutBase, {hovermode: 'x unified', xaxis: Object.assign({}, layoutBase.xaxis, {type: 'date', range: timeRange}), yaxis: Object.assign({}, layoutBase.yaxis, {title: 'Discharge (m3/s)'})}), common);
+      }
+    }
+    if (data.returnPeriods) {
+      var observedReturnPeriodRange = linearRange(data.returnPeriods.observed.returnPeriod);
+      var simulatedReturnPeriodRange = linearRange(data.returnPeriods.simulated.returnPeriod);
+      var returnPeriodValues = [];
+      if (observedReturnPeriodRange) returnPeriodValues = returnPeriodValues.concat(observedReturnPeriodRange);
+      if (simulatedReturnPeriodRange) returnPeriodValues = returnPeriodValues.concat(simulatedReturnPeriodRange);
+      var returnPeriodRange = logRange(returnPeriodValues);
+      var returnPeriodTicks = sortedUniqueNumbers(
+        data.returnPeriods.observed.returnPeriod.concat(data.returnPeriods.simulated.returnPeriod)
+      );
+      Plotly.newPlot('geb-return-' + safeStationId, [
+        trace('Observed', data.returnPeriods.observed.returnPeriod, data.returnPeriods.observed.discharge, 'scatter', 'lines+markers', '%{x:g}-year<br>%{y:,.0f} m3/s<extra>Observed</extra>'),
+        trace('Simulated', data.returnPeriods.simulated.returnPeriod, data.returnPeriods.simulated.discharge, 'scatter', 'lines+markers', '%{x:g}-year<br>%{y:,.0f} m3/s<extra>Simulated</extra>')
+      ], Object.assign({}, layoutBase, {hovermode: 'x unified', xaxis: Object.assign({}, layoutBase.xaxis, {type: 'log', range: returnPeriodRange, tickmode: 'array', tickvals: returnPeriodTicks, ticktext: returnPeriodTicks.map(formatTick), title: 'Return period (years)'}), yaxis: Object.assign({}, layoutBase.yaxis, {title: 'Discharge (m3/s)'})}), common);
+    }
+  }
+
+  function renderRiver(el, riverKey, data) {
+    var safeRiverId = encodeURIComponent(riverKey);
+    var riverId = data.riverId;
+    var ts = data.timeseries;
+    var times = ts.time;
+    var qValues = ts.bankfullDischarge;
+    var wValues = ts.width;
+    var dValues = ts.depth;
+
+    el.innerHTML = '<div class="geb-popup__title">River segment ' + escapeHtml(riverId) + '</div>' +
+      '<div class="geb-popup__subtitle">Upstream area: ' + formatNumber(data.upstreamAreaKm2) + ' km² · Bankfull hydraulic geometry over time</div>' +
+      '<div class="geb-popup__chart-title">Bankfull discharge</div>' +
+      '<div id="geb-river-q-' + safeRiverId + '" class="geb-popup__chart" style="height:180px"></div>' +
+      '<div class="geb-popup__chart-title">Channel width and depth</div>' +
+      '<div id="geb-river-geom-' + safeRiverId + '" class="geb-popup__chart" style="height:180px"></div>';
+
+    ensurePlotly(function(loaded) {
+      if (loaded === false) {
+        el.innerHTML = '<div class="geb-popup__error">Interactive charts require access to cdn.plot.ly.</div>';
+        return;
+      }
+      var common = {responsive: true, displaylogo: false, modeBarButtonsToRemove: ['select2d', 'lasso2d']};
+
+      var qTrace = {
+        x: times,
+        y: qValues,
+        name: 'Bankfull discharge',
+        type: 'scatter',
+        mode: 'lines+markers',
+        line: {color: '#f87171', width: 2},
+        marker: {color: '#f87171', size: 6},
+        hovertemplate: '%{x|%Y}<br>Discharge: %{y:,.2f} m³/s<extra>Bankfull discharge</extra>'
+      };
+      var qLayout = Object.assign({}, layoutBase, {
+        height: 180,
+        hovermode: 'x unified',
+        xaxis: Object.assign({}, layoutBase.xaxis, {type: 'date'}),
+        yaxis: Object.assign({}, layoutBase.yaxis, {title: 'Discharge (m³/s)'})
+      });
+      Plotly.newPlot('geb-river-q-' + safeRiverId, [qTrace], qLayout, common);
+
+      var wTrace = {
+        x: times,
+        y: wValues,
+        name: 'Width (m)',
+        type: 'scatter',
+        mode: 'lines+markers',
+        line: {color: '#38bdf8', width: 2},
+        marker: {color: '#38bdf8', size: 6},
+        hovertemplate: '%{x|%Y}<br>Width: %{y:,.2f} m<extra>Width</extra>'
+      };
+      var dTrace = {
+        x: times,
+        y: dValues,
+        name: 'Depth (m)',
+        type: 'scatter',
+        mode: 'lines+markers',
+        line: {color: '#4ade80', width: 2},
+        marker: {color: '#4ade80', size: 6},
+        hovertemplate: '%{x|%Y}<br>Depth: %{y:,.2f} m<extra>Depth</extra>'
+      };
+      var geomLayout = Object.assign({}, layoutBase, {
+        height: 180,
+        hovermode: 'x unified',
+        xaxis: Object.assign({}, layoutBase.xaxis, {type: 'date'}),
+        yaxis: Object.assign({}, layoutBase.yaxis, {title: 'Meters (m)'})
+      });
+      Plotly.newPlot('geb-river-geom-' + safeRiverId, [wTrace, dTrace], geomLayout, common);
+    });
+  }
+
+  function renderStation(el, stationId) {
+    if (el.dataset.rendered === 'true') return;
+    el.dataset.rendered = 'true';
+    loadStationData(stationId, function(data) {
+      if (!data) {
+        el.innerHTML = '<div class="geb-popup__error">No interactive chart data is available.</div>';
+        return;
+      }
+      if (data.type === 'river') {
+        renderRiver(el, stationId, data);
+        return;
+      }
+    var metrics = data.metrics || {};
+    var safeStationId = encodeURIComponent(stationId);
+    el.innerHTML = '<div class="geb-popup__title">' + escapeHtml(data.stationName || stationId) + '</div>' +
+      '<div class="geb-popup__subtitle">Station ' + escapeHtml(stationId) + ' · ' + escapeHtml(data.frequency || 'discharge') + '</div>' +
+      '<div class="geb-popup__metrics">' + metricHtml('KGE', metrics.KGE) + metricHtml('mKGE', metrics.KGE_modified) +
+      metricHtml('r', metrics.KGE_correlation) + metricHtml('β', metrics.KGE_bias_ratio) +
+      metricHtml('α', metrics.KGE_variability_ratio) + metricHtml('NSE', metrics.NSE) +
+      metricHtml('r²', metrics.R2) + metricHtml('RMSE', metrics.RMSE) +
+      metricHtml('RRMSE', metrics.RRMSE) + metricHtml('Area ratio', metrics.upstreamAreaRatio) +
+      metricHtml('Fixed UTC offset (h)', metrics.timezoneUtcOffset) +
+      ((data.timeseries && data.timeseries.bankfullDischarge != null) ? metricHtml('Bankfull (m³/s)', data.timeseries.bankfullDischarge) : '') + '</div>' +
+      (data.returnPeriods ? '<div class="geb-popup__chart-title">Return periods</div>' + makeChartDiv('geb-return-' + safeStationId) : '') +
+      (data.timeseries ? '<div class="geb-popup__chart-title">Discharge time series</div>' + makeChartDiv('geb-time-' + safeStationId) : '');
+    ensurePlotly(function(loaded) {
+      if (loaded === false) {
+        el.innerHTML = '<div class="geb-popup__error">Interactive charts require access to cdn.plot.ly.</div>';
+        return;
+      }
+      renderCharts(stationId, data);
+    });
+    });
+  }
+
+  var style = document.createElement('style');
+  style.textContent = '.geb-popup{width:820px;max-width:86vw;color:#0f172a;font-family:Inter,system-ui,sans-serif}.geb-popup:empty:before{content:"Loading interactive charts...";display:block;padding:12px;color:#64748b;font-style:italic}.geb-popup__title{color:#0f172a;font-size:18px;font-weight:750}.geb-popup__subtitle{color:#475569;font-size:12px;margin-bottom:8px}.geb-popup__metrics{display:flex;gap:12px;flex-wrap:wrap;margin:6px 0 10px}.geb-popup__metrics span{background:#111827;border:1px solid #263244;border-radius:6px;color:#e2e8f0;padding:5px 8px}.geb-popup__chart{height:260px;background:#020617;border:1px solid #263244;border-radius:8px;margin-bottom:10px}.geb-popup__chart-title{color:#334155;font-weight:700;font-size:13px;margin:10px 0 4px}.geb-popup__error{color:#b91c1c;padding:18px}.geb-popup img{width:100%;height:auto;display:block}';
+  document.head.appendChild(style);
+
+  function handlePopupOpen(e) {
+    var container = (e.popup && e.popup.getElement ? e.popup.getElement() : null) ||
+                    (e.popup && e.popup._container) ||
+                    (e.popup && e.popup.getContent && e.popup.getContent().nodeType ? e.popup.getContent() : null) ||
+                    document.querySelector('.leaflet-popup-pane');
+    if (!container) return;
+    var el = container.querySelector('[data-station-id]');
+    if (!el) return;
+    var sid = el.getAttribute('data-station-id');
+    renderStation(el, sid);
+  }
+
+  map_1e1d80bbec3b35b6fb256acdcce050ce.on('popupopen', function(e) {
+    handlePopupOpen(e);
+    if (e.popup && e.popup.on) {
+      e.popup.off('contentupdate', handlePopupOpen).on('contentupdate', handlePopupOpen);
+    }
+  });
+})();
+    (function(){
+  var excludedStationIndex = [];
+  var map = map_1e1d80bbec3b35b6fb256acdcce050ce;
+  var gebStationIndex = (window._gebStations || []).concat(excludedStationIndex || []);
+
+  function resolveMarkers(station) {
+    if (station._markers) return station._markers;
+    if (station.markers) {
+      station._markers = station.markers.map(function(name) {
+        return window[name] || null;
+      }).filter(Boolean);
+      return station._markers;
+    }
+    return [];
+  }
+
+  function setStationVisible(station, visible) {
+    resolveMarkers(station).forEach(function(marker) {
+      marker.setStyle({
+        opacity: visible ? 1 : 0,
+        fillOpacity: visible ? (marker.options.fillOpacity || 0.9) : 0
+      });
+      marker.options.interactive = visible;
+      if (marker.getElement()) {
+        marker.getElement().style.pointerEvents = visible ? '' : 'none';
+      }
+    });
+  }
+
+  function applySearch(query) {
+    var normalizedQuery = query.trim().toLowerCase();
+    var matches = [];
+    gebStationIndex.forEach(function(station) {
+      var haystack = (station.id + ' ' + station.name).toLowerCase();
+      var visible = !normalizedQuery || haystack.indexOf(normalizedQuery) !== -1;
+      if (visible) matches.push(station);
+      setStationVisible(station, visible);
+    });
+    updateStatus(normalizedQuery, matches);
+    return matches;
+  }
+
+  function updateStatus(query, matches) {
+    var text = query ? matches.length + ' matching stations' : gebStationIndex.length + ' stations';
+    if (query && matches.length) {
+      text += ' · Enter opens first match';
+    }
+    status.textContent = text;
+  }
+
+  function openFirstMatch(matches) {
+    if (!matches.length) return;
+    var markers = resolveMarkers(matches[0]);
+    var marker = markers[0];
+    if (!marker) return;
+    map.setView(marker.getLatLng(), Math.max(map.getZoom(), 8));
+    marker.openPopup();
+  }
+
+  var control = L.control({position: 'topright'});
+  control.onAdd = function() {
+    var root = L.DomUtil.create('div', 'geb-station-search');
+    root.innerHTML = '<label for="geb-station-search-input">Station search</label>' +
+      '<div class="geb-station-search__row"><input id="geb-station-search-input" type="search" placeholder="ID or name">' +
+      '<button type="button" title="Clear station search">Clear</button></div>' +
+      '<div class="geb-station-search__status"></div>';
+    L.DomEvent.disableClickPropagation(root);
+    L.DomEvent.disableScrollPropagation(root);
+    return root;
+  };
+  control.addTo(map);
+
+  var root = document.querySelector('.geb-station-search');
+  var input = root.querySelector('input');
+  var button = root.querySelector('button');
+  var status = root.querySelector('.geb-station-search__status');
+
+  input.addEventListener('input', function() { applySearch(input.value); });
+  input.addEventListener('keydown', function(event) {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      openFirstMatch(applySearch(input.value));
+    }
+  });
+  button.addEventListener('click', function() {
+    input.value = '';
+    input.focus();
+    applySearch('');
+  });
+
+  window.addEventListener('gebStationsReady', function(e) {
+    gebStationIndex = (window._gebStations || []).concat(excludedStationIndex || []);
+    updateStatus(input.value, applySearch(input.value));
+  });
+
+  var style = document.createElement('style');
+  style.textContent = '.geb-station-search{background:#020617;color:#e2e8f0;border:1px solid #263244;border-radius:8px;padding:10px;width:250px;box-shadow:0 12px 30px rgba(0,0,0,.35);font-family:Inter,system-ui,sans-serif}.geb-station-search label{display:block;font-size:12px;font-weight:750;margin-bottom:6px}.geb-station-search__row{display:flex;gap:6px}.geb-station-search input{min-width:0;flex:1;background:#111827;color:#f8fafc;border:1px solid #334155;border-radius:6px;padding:6px 8px}.geb-station-search button{background:#1f2937;color:#f8fafc;border:1px solid #475569;border-radius:6px;padding:6px 8px;cursor:pointer}.geb-station-search__status{color:#94a3b8;font-size:11px;margin-top:6px}';
+  document.head.appendChild(style);
+  updateStatus('', gebStationIndex);
+})();
+    
+            var feature_group_43925140d36272ee7cf742e65018a90e = L.featureGroup(
+                {
+}
+            );
+        
+    
+            var circle_marker_3ec3ef93442ac71d4f191d4b86e0a64f = L.circleMarker(
+                [50.70316915141182, -4.2287074643587745],
+                {"bubblingMouseEvents": true, "color": "black", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#FF8A65", "fillOpacity": 0.8, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 5, "stroke": true, "weight": 0.5}
+            ).addTo(feature_group_43925140d36272ee7cf742e65018a90e);
+        
+    
+        var popup_c6ca2344faa41ac5e4686b9301b9f19f = L.popup({
+  "maxWidth": 200,
+});
+
+        
+            
+                var html_71dee9d4341bb551560441d4ee064d0c = $(`<div id="html_71dee9d4341bb551560441d4ee064d0c" style="width: 100.0%; height: 100.0%;"><b>Reservoir</b> (ID 166458)<br>Area: <span data-geb-area-m2='2700000.0'></span> km²<br>Volume: <span data-geb-volume-m3='37000000.0'></span> km³<br></div>`)[0];
+                popup_c6ca2344faa41ac5e4686b9301b9f19f.setContent(html_71dee9d4341bb551560441d4ee064d0c);
+            
+        
+
+        circle_marker_3ec3ef93442ac71d4f191d4b86e0a64f.bindPopup(popup_c6ca2344faa41ac5e4686b9301b9f19f)
+        ;
+
+        
+    
+    
+            circle_marker_3ec3ef93442ac71d4f191d4b86e0a64f.bindTooltip(
+                `<div>
+                     Reservoir 166458
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            feature_group_43925140d36272ee7cf742e65018a90e.addTo(map_1e1d80bbec3b35b6fb256acdcce050ce);
+        
+    (function() {
+  var map = map_1e1d80bbec3b35b6fb256acdcce050ce;
+  function formatUtcOffset(offsetHours) {
+    if (!Number.isFinite(offsetHours)) return 'missing';
+    var absoluteMinutes = Math.round(Math.abs(offsetHours) * 60);
+    var wholeHours = Math.floor(absoluteMinutes / 60);
+    var minutes = absoluteMinutes % 60;
+    var sign = offsetHours >= 0 ? '+' : '-';
+    return 'UTC' + sign + String(wholeHours).padStart(2, '0') + ':' + String(minutes).padStart(2, '0');
+  }
+  function formatUnits(container) {
+    if (!container) return;
+    [['area-m2', 1e6, 1], ['volume-m3', 1e9, 3], ['distance-m', 1e3, 3]].forEach(function(unit) {
+      var attribute = 'data-geb-' + unit[0];
+      container.querySelectorAll('[' + attribute + ']').forEach(function(element) {
+        var value = Number(element.getAttribute(attribute));
+        element.textContent = Number.isFinite(value) ? (value / unit[1]).toLocaleString(undefined, {
+          minimumFractionDigits: unit[2], maximumFractionDigits: unit[2]
+        }) : 'missing';
+      });
+    });
+    container.querySelectorAll('[data-geb-utc-offset-hours]').forEach(function(element) {
+      var value = Number(element.getAttribute('data-geb-utc-offset-hours'));
+      element.textContent = formatUtcOffset(value);
+    });
+  }
+  function formatPopup(event) {formatUnits(event.target.getElement());}
+  map.on('popupopen', function(event) {
+    formatUnits(event.popup.getElement());
+    // Snapping reuses a popup when another station is selected.
+    event.popup.off('contentupdate', formatPopup).on('contentupdate', formatPopup);
+  });
+  map.on('tooltipopen', function(event) {formatUnits(event.tooltip.getElement());});
+})();
+    
+            var layer_control_283c3d2ce25e495e06ea351beb7b2795_layers = {
+                base_layers : {
+                    "Topographic Map" : tile_layer_37d60796ec24605875062928d417001f,
+                    "Satellite imagery" : tile_layer_57ac19fe33c40946a17f761ea62744cd,
+                },
+                overlays :  {
+                    "Catchment" : feature_group_acebadc686c8e430b0e322845c50579a,
+                    "Active rivers" : feature_group_911c6341a2978eed6179c9721e955a31,
+                    "Reservoirs" : feature_group_43925140d36272ee7cf742e65018a90e,
+                },
+            };
+            let layer_control_283c3d2ce25e495e06ea351beb7b2795 = L.control.layers(
+                layer_control_283c3d2ce25e495e06ea351beb7b2795_layers.base_layers,
+                layer_control_283c3d2ce25e495e06ea351beb7b2795_layers.overlays,
+                {
+  "position": "topright",
+  "collapsed": false,
+  "autoZIndex": true,
+}
+            ).addTo(map_1e1d80bbec3b35b6fb256acdcce050ce);
+
+        
+</script>
+</html>
