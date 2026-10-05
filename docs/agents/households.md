@@ -117,7 +117,7 @@ The flood damage model is set up in the build either for world regions, or using
 
 | `region` option | Damage model | Description |
 | --- | --- | --- |
-| `geul` (default) | [Geul flood damage model](#geul-flood-damage-model) | Context-specific curves and maximum damages for the Netherlands, Belgium and Germany. |
+| `geul` | [Geul flood damage model](#geul-flood-damage-model) | Context-specific curves and maximum damages for the Netherlands, Belgium and Germany. |
 | `global` | [Global flood damage model](#global-flood-damage-model) | Averaged global vulnerability curves (Huizinga et al., 2017). |
 | `europe` | [Global flood damage model](#global-flood-damage-model) | Continental vulnerability curves for Europe. |
 | `north america` | [Global flood damage model](#global-flood-damage-model) | Continental vulnerability curves for North America. |
