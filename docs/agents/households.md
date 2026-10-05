@@ -134,6 +134,36 @@ The maximum damages for buildings are taken from the Global Exposure Model[@yepe
 ### Geul flood damage model 
 The Geul damage model is based on data specific to the Dutch, Belgian and German context. For buildings, we use the curves derived by Endendijk et al.[@endendijk2023flood]. For roads, we use the curves derived by Van Ginkel et al.[@van2021flood]. For railways, we use the curves developed by Kellermann et al.[@kellermann2015estimating]. For nature and agriculture, we use the curves developed by De Moel et al.[@de2014evaluating]. The figure below shows all curves and maximum damages used in the Geul damage model. Damages are reported for every exposure category individually and as a combined total damage value.
 <img width="1280" height="720" alt="Vulnerability Curves and their corresponding maximum damages" src="https://github.com/user-attachments/assets/3a4dbc03-3a45-49c6-b1f6-028eac385d7d" />
+
+## Windstorm Adaptation
+The Windstorm adaptation module is focused on designing a decision-making framework for households to choose between adapting to or not adapting to windstorm risk. As a first step, the risk maps are generated externally based on ERA5 data. After generating the different return-period maps, each household's associated damage is calculated. The data are then used as inputs to the Expected Utility, which is the basis of the households' decision-making. The module is set in three scripts: wind_risk.py, households.py, and decision_module.py
+
+### Windstorm damage model
+The windstorm damage model is performed in the wind_risk script. In the script, a return period is randomly selected based on its return-period probability. Using the pre-generated wind risk map, the damage is automatically calculated. At the moment, the windstorm module only works for households obtained from the OpenBuildingMap dataset. The vulnerability curve shows the relationship between wind speed and the damage factor (i.e., the fraction of maximum damage for a certain wind speed). The curves used in this module are derived by Riedel et al. [@riedel2024calibrating]. The maximum damages for buildings are consistent through the flood and windstorm modules.
+
+In the wind_risk.py script, the main functions composing this system are:
+- load_wind_maps: loads the pre-existing windstorm return-period maps
+- load_windstorm_damage_curves: loads the windstorm vulnerability curves
+- calculate_building_wind_damages: calculates the damage by using the vulnerability curves and the associated wind speed at every household location
+- calculate_ead: converts return-period damage to annualized risk
+
+### Decision-making process
+The windstorm decision-making framework evaluates the household-level utility of undertaking windstorm adaptation compared with remaining unadapted. This is done by calculating the expected utility of implementing window shutters by accounting for expected damages after adaptation, perceived windstorm probabilities, household wealth and income, adaptation costs, remaining loan payments, the decision horizon, discounting, and risk preferences. This is then compared to the utility of doing nothing.
+
+In the decision_module.py script, the main functions for decision-making associated with windstorm adaptation are:
+- IterateThroughEvents: Links the Expected Utility functions to the windstorm events
+- calcEU_do_nothing_w: calculates the utility of not adapting
+- calcEU_shutters_windstorm: calculates the utility of adapting
+
+### Integration in the class Household
+Lastly, the household script calls for the WindRiskModule to access wind risk perception data. As part of the household decisions between strategies, the wind module calculates potential building damages with and without shutters. With the resulting data, the households call the decision-making module to calculate the necessary expected utilities. Lastly, households may then adopt shutters based on the expected utilities and the set budget constraints. The resulting adaptation status is used to update the expected annual damage.
+
+In the household.py script, the main functions associated with windstorm adaptation are:
+- assign_household_attributes: Initializes household adaptation and risk-related state
+- decide_household_strategy: Integrates the decision module with the household class
+- update_windstorm_risk_perceptions: Updates households' years since the last simulated windstorm and adjusts risk perceptions
+
+
 ## Code
 
 ::: geb.agents.households
