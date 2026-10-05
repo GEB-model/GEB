@@ -131,6 +131,7 @@ nav:
     - Runoff concentration: hydrology/runoff_concentration.md
     - Routing: hydrology/routing.md
     - Waterbodies: hydrology/waterbodies.md
+    - Weirs and gates: hydrology/weirs.md
     - HRUs: hydrology/HRUs.md
   - Hazards:
     - Overview: hazards/index.md
