@@ -73,10 +73,19 @@ The evaluation process:
 The dashboard is an interactive map for exploring where GEB reproduces river
 discharge well and where it needs improvement.
 
-![Example discharge dashboard with coloured stations and an observed-versus-simulated discharge plot](../../images/discharge_evaluation_example.png)
+#### Interactive UK_test example
+Example map and station plot to evalaute discharge. 
 
-*Example map and station plot. The current dashboard also includes interactive
-charts, station search, and extra diagnostic layers.*
+<iframe
+  src="../uk_test_dashboard/index.html"
+  title="Interactive UK_test map and simulated-discharge charts; GRDC data masked"
+  width="100%"
+  height="720"
+  loading="lazy"
+  style="border: 1px solid #cbd5e1; border-radius: 8px;"
+></iframe>
+
+A full local dashboard also offers these features:
 
 - **Explore station scores:** switch between KGE, NSE, and other map layers.
   Colours show performance; larger station markers represent larger upstream areas.
