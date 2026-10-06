@@ -1,4 +1,4 @@
-# Waterbodies
+# Waterbody setup
 
 Use `setup_waterbodies` to add lakes and reservoirs. The default settings work
 for most models.
