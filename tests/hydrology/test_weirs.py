@@ -175,18 +175,6 @@ def test_missing_height_scales_with_depth(
     )
 
 
-
-
-
-
-
-
-
-
-
-
-
-
 @pytest.mark.parametrize("has_weirs", [True, False])
 def test_save_weirs(tmp_path: Path, has_weirs: bool) -> None:
     """Write resolved heights, including an empty file when no weirs exist.
@@ -219,16 +207,6 @@ def test_save_weirs(tmp_path: Path, has_weirs: bool) -> None:
         assert saved.bankfull_depth_m.tolist() == [4, 4]
         assert saved.grid_cell_index.tolist() == [0, 1]
         assert saved.latitude_deg.tolist() == [54, 53]
-
-
-
-
-
-
-
-
-
-
 
 
 @pytest.mark.parametrize(
