@@ -1,4 +1,5 @@
 # dev
+- Implement groundwater fluxes at catchment boundaries. This is especially important when modelling small catchments. Previously there was essentially a wall around the catchment, while groundwater can now enter of leave the catchment based on prescribed heads based on GLOBGM (by default). Oceans have a groundwater head of 0 now.
 
 # v1.0.0b32
 - Removed defaults from ParametersConfig in configuration schema so that all parameters must be explicitly set via reasonable_default_config.yml or model.yml, and added groundwater_hydraulic_conductivity_multiplier to the schema.

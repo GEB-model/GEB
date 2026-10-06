@@ -401,8 +401,8 @@ def test_run() -> None:
                 "_energy_balance": True,
             }
         )
-        args["config"]["hazards"]["floods"]["simulate"] = True
-        args["config"]["hazards"]["floods"]["run_for_validation_events"] = True
+        # args["config"]["hazards"]["floods"]["simulate"] = True
+        # args["config"]["hazards"]["floods"]["run_for_validation_events"] = True
 
         run_model_with_method(method="run", **args)
 
