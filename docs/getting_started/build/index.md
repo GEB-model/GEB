@@ -137,6 +137,57 @@ Optionally, you can specify the path to the `build.yml`-file using the `-b/--bui
 geb build --help
 ```
 
+### Upscaling from basin scale to a region
+
+GEB can cover large regions by splitting them into several clustered hydrological model regions, which can run in paralel. Tgese hydrological regions can be merged hydrological basins, but can never be smaller than a hydrological basins, and hence, a hydrological region is always hydrologically connected. Each sub-model is built and run separately, so different models can run in parallel.
+Their results can then be combined for regional evaluation.
+
+There are two ways to define the area:
+
+- **Known basin IDs:** set `general.region.subbasin` in `model.yml` to a list
+  of MERIT-BASINS IDs, as shown under [Study region](#study-region). This creates
+  one model containing these basins and all their upstream basins.
+- **A larger region:** use `geb init-multiple` with `--geometry-bounds` or
+  `--region-shapefile`. This creates several basin models automatically.
+  A region shape selects basin outlets; each model includes their full upstream
+  basins, so its boundary can extend beyond the supplied shape.
+
+1. **Create the models:** `geb init-multiple` selects basin outlets within a
+   bounding box or region shape and groups their upstream basins into clusters.
+   `--target-area-km2` controls the target cluster size; large basins can exceed
+   this target. GEB writes the configuration for each cluster.
+2. **Build and run:** review the configuration files, then run `geb build`,
+   `geb spinup`, and `geb run` in each cluster's `base` directory.
+3. **Combine results:** `geb tool merge` combines cluster geometries and
+   discharge observations, and links the report files into one directory for
+   `geb evaluate`. The original cluster outputs must remain available.
+
+For example, from a working directory containing a `models/` folder:
+
+```bash
+geb init-multiple --init-multiple-dir europe --cluster-prefix Europe \
+  --geometry-bounds="-10,35,40,70" --target-area-km2 420000
+```
+
+To use a polygon file instead of a bounding box:
+
+```bash
+geb init-multiple --init-multiple-dir my_region --cluster-prefix Region \
+  --region-shapefile data/region.gpkg --target-area-km2 420000
+```
+
+After building and running the clusters:
+
+```bash
+geb tool merge models/europe --cluster-prefix Europe --run-name default
+```
+
+The merged result is in `models/europe/merged/base`. It is an evaluation
+collection; the simulations still run as separate basin models.
+
+The same approach can support future global runs. Use `geb init-multiple --help` and
+`geb tool merge --help` for all options.
+
 ### Updating the model
 
 It is also possible to update an already existing model by running the following command.
