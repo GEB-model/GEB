@@ -118,9 +118,6 @@ def test_setup_weirs_from_files(
     builder.update({"setup_weirs": {}})
     output_file: Path = tmp_path / "grid/routing/weir_height_m.zarr"
     saved_heights: xr.DataArray = read_zarr(output_file).compute()
-    saved_gates: xr.DataArray = read_zarr(
-        tmp_path / "grid/routing/weir_gate.zarr"
-    ).compute()
     barrier_file: Path = tmp_path / "geom/routing/barriers.geoparquet"
     saved_barriers: gpd.GeoDataFrame = gpd.read_parquet(barrier_file)
     assert saved_barriers.crs.to_epsg() == 4326
@@ -152,13 +149,10 @@ def test_setup_weirs_from_files(
         assert amber_record["exclusion_reason"] == (
             "farther than 250 m"
             if amber_longitude == 0.003
-            else "cell already used"
+            else "unsuitable river cell"
             if has_gdw_points
             else ""
         )
-    assert saved_gates.dtype == bool
-    assert saved_gates.values[0, 0] == has_gdw_points
-    assert saved_gates.values.sum() == int(has_gdw_points)
     assert saved_heights.dtype == np.float32
     assert np.isnan(saved_heights.attrs["_FillValue"])
     assert np.isnan(saved_heights.values[1, 1])
@@ -291,9 +285,8 @@ def test_build_weir(case: str, crest_height_m: float | None) -> None:
         crs=4326,
     )
     result: xr.DataArray
-    gates: xr.DataArray
     records: gpd.GeoDataFrame
-    result, gates, records = create_weir_grids(
+    result, records = create_weir_grids(
         barriers,
         crest_height_m,
         waterbody_ids,
@@ -301,20 +294,6 @@ def test_build_weir(case: str, crest_height_m: float | None) -> None:
         upstream_area,
         upstream_area,
         river_cells,
-    )
-    assert gates.values.sum() == int(
-        case
-        in (
-            "weir",
-            "dam",
-            "sluice",
-            "offstream",
-            "lake_control",
-            "height",
-            "zero_height",
-            "negative_height",
-            "infinite_height",
-        )
     )
     assert len(records) == (0 if case == "empty" else 1)
     assert int(records["included"].sum()) == int(bool((result.values != 0).any()))
@@ -360,19 +339,42 @@ def test_build_weir(case: str, crest_height_m: float | None) -> None:
 
 @pytest.mark.parametrize(
     "dam_type",
-    ["Dam", "Lock", "Weir", "Low Permeable Dam", "Sluice", "Lake Control Dam", ""],
+    [
+        "Dam",
+        "Lock",
+        "Weir",
+        "Low Permeable Dam",
+        "Sluice",
+        "Lake Control Dam",
+        "Culvert",
+        "Ford",
+        "Ramp",
+        "Other",
+        "",
+    ],
 )
-def test_gate_classification(dam_type: str) -> None:
-    """Classify flow-control types independently of their default heights.
+@pytest.mark.parametrize("source", ["GDW", "AMBER"])
+@pytest.mark.parametrize("recorded_height_m", [np.nan, 3.5])
+@pytest.mark.parametrize("crest_height_m", [None, 1.25])
+def test_structure_classification(
+    dam_type: str,
+    source: str,
+    recorded_height_m: float,
+    crest_height_m: float | None,
+) -> None:
+    """Apply source-specific type and height rules to fixed barriers.
 
     Args:
-        dam_type: GDW dam type shared by two test points.
+        dam_type: Barrier type shared by two test points.
+        source: Atlas providing the two structures.
+        recorded_height_m: Source height (m), or NaN when missing.
+        crest_height_m: Explicit height override (m), or None for bankfull defaults.
 
     Returns:
         None.
 
     Raises:
-        AssertionError: If gate flags or heights are incorrect.
+        AssertionError: If inclusion or heights are incorrect.
     """  # noqa: DOC202, DOC502
     barriers: gpd.GeoDataFrame = gpd.GeoDataFrame(
         {
@@ -380,9 +382,9 @@ def test_gate_classification(dam_type: str) -> None:
             "dam_type": [dam_type, dam_type],
             "waterbody_id": [np.nan, np.nan],
             "inside_gdw_polygon": [False, False],
-            "dam_hgt_m": [np.nan, np.nan],
+            "dam_hgt_m": [recorded_height_m, recorded_height_m],
         },
-        geometry=[Point(0.01, 0.01), Point(0.01, -0.09)],
+        geometry=[Point(0.001, 0.0), Point(0.001, -0.1)],
         crs=4326,
     )
     upstream_area: xr.DataArray = xr.DataArray(
@@ -404,50 +406,138 @@ def test_gate_classification(dam_type: str) -> None:
         crs=4326,
     )
     heights: xr.DataArray
-    gates: xr.DataArray
     records: gpd.GeoDataFrame
-    heights, gates, records = create_weir_grids(
+    amber_points: gpd.GeoDataFrame | None = None
+    if source == "AMBER":
+        amber_points = gpd.GeoDataFrame(
+            barriers.rename(columns={"gdw_id": "amber_id"}),
+            geometry="geometry",
+            crs=barriers.crs,
+        )
+        barriers = gpd.GeoDataFrame()
+    heights, records = create_weir_grids(
         barriers,
-        None,
+        crest_height_m,
         waterbody_ids,
         rivers,
         upstream_area,
         upstream_area,
         river_cells,
+        amber_points=amber_points,
     )
-    is_gated: bool = dam_type in {"Dam", "Sluice", "Lake Control Dam"}
+    is_supported: bool = source == "GDW" or dam_type not in {
+        "Dam",
+        "Lake Control Dam",
+        "Culvert",
+    }
+    assert records["included"].all() == is_supported
+    if not is_supported:
+        expected_reason: str = (
+            "AMBER culvert excluded"
+            if dam_type == "Culvert"
+            else "AMBER dam classification only"
+        )
+        assert (records["exclusion_reason"] == expected_reason).all()
     expected_height: float
-    if dam_type in {"Dam", "Lake Control Dam"}:
+    if not is_supported:
+        expected_height = 0.0
+    elif source == "AMBER" and dam_type in {"Sluice", "Lock", "Ford", "Ramp"}:
+        expected_height = (
+            crest_height_m
+            if crest_height_m is not None
+            else -2.0
+            if dam_type in {"Sluice", "Lock"}
+            else -3.0
+        )
+    elif np.isfinite(recorded_height_m):
+        expected_height = recorded_height_m
+    elif crest_height_m is not None:
+        expected_height = crest_height_m
+    elif source == "AMBER" and dam_type != "Weir":
+        expected_height = -3.0
+    elif source == "GDW" and dam_type in {"Dam", "Lake Control Dam"}:
         expected_height = -1.0
     else:
         expected_height = -2.0
-    assert gates.values.sum() == 2 * int(is_gated)
-    np.testing.assert_array_equal(heights.values[:, 0], expected_height)
+    np.testing.assert_array_equal(
+        heights.values[:, 0], expected_height, err_msg=records.to_string()
+    )
 
 
-@pytest.mark.parametrize("option_name", ["open_depth_m", "close_depth_m"])
-def test_fixed_gate_depth_options_removed(option_name: str) -> None:
-    """Reject removed fixed-depth build options.
+@pytest.mark.parametrize("cell_count", [1, 2, 4])
+@pytest.mark.parametrize("alternative_status", ["free", "invalid", "waterbody"])
+def test_occupied_weir_cell_fallback(cell_count: int, alternative_status: str) -> None:
+    """Try one alternative cell without overwriting barriers or searching further.
 
     Args:
-        option_name: Removed gate depth setting.
+        cell_count: Number of distinct routing cells on the river segment.
+        alternative_status: Whether the second cell is free, invalid or a waterbody.
 
     Returns:
         None.
 
     Raises:
-        AssertionError: If a removed option is accepted.
+        AssertionError: If placement overwrites a weir or checks a third cell.
     """  # noqa: DOC202, DOC502
-    grid: xr.DataArray = xr.DataArray([[-1]])
-    points: gpd.GeoDataFrame = gpd.GeoDataFrame()
-    with pytest.raises(TypeError, match=option_name):
-        create_weir_grids(
-            points,
-            None,
-            grid,
-            points,
-            grid,
-            grid,
-            grid,
-            **{option_name: 1.0},  # ty:ignore[invalid-argument-type]
-        )
+    barriers: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "gdw_id": [1, 2, 3, 4],
+            "dam_type": ["Weir", "Sluice", "Dam", "Weir"],
+            "waterbody_id": [np.nan] * 4,
+            "inside_gdw_polygon": [False] * 4,
+            "dam_hgt_m": [1.0, 2.0, 3.0, 4.0],
+        },
+        geometry=[Point(0.0, 0.0)] * 4,
+        crs=4326,
+    )
+    upstream_area: xr.DataArray = xr.DataArray(
+        np.full((4, 2), 1000.0, dtype=np.float32),
+        coords={"y": [0.0, -0.001, -0.002, -0.003], "x": [0.0, 0.001]},
+        dims=("y", "x"),
+    )
+    waterbody_ids: xr.DataArray = xr.full_like(upstream_area, -1, dtype=np.int32)
+    valid_cells: xr.DataArray = xr.full_like(upstream_area, True, dtype=bool)
+    if alternative_status == "invalid":
+        valid_cells.values[1, 0] = False
+    elif alternative_status == "waterbody":
+        waterbody_ids.values[1, 0] = 7
+    rivers: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "represented_in_grid": [True],
+            "uparea_m2": [1000.0],
+            "hydrography_xy": [[(0, row) for row in range(cell_count)]],
+            "shreve_stream_order": [1],
+        },
+        index=pd.Index([1], dtype="int64"),
+        geometry=[LineString([(0.0, 0.0), (0.0, -0.002)])],
+        crs=4326,
+    )
+    heights: xr.DataArray
+    records: gpd.GeoDataFrame
+    heights, records = create_weir_grids(
+        barriers, None, waterbody_ids, rivers, upstream_area, upstream_area, valid_cells
+    )
+    alternative_available: bool = cell_count > 1 and alternative_status == "free"
+    np.testing.assert_array_equal(
+        heights.values[:, 0],
+        [
+            1.0,
+            2.0 if alternative_available else 0.0,
+            0.0,
+            0.0,
+        ],
+    )
+    assert records["included"].tolist() == [
+        True,
+        alternative_available,
+        False,
+        False,
+    ]
+    expected_reason: str = (
+        "cell already used"
+        if cell_count == 1 or alternative_status == "free"
+        else "unsuitable river cell"
+        if alternative_status == "invalid"
+        else "part of lake or reservoir"
+    )
+    assert records.iloc[3]["exclusion_reason"] == expected_reason

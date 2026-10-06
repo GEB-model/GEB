@@ -1,9 +1,9 @@
 """Configuration schema for the GEB model."""
 
 from datetime import date, datetime
-from typing import Any, Literal, Self
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ForecastsConfig(BaseModel):
@@ -258,37 +258,8 @@ class RoutingConfig(BaseModel):
     weirs: bool = Field(
         True,
         strict=True,
-        description="Enable GDW and AMBER river weirs and gates at runtime; lakes and reservoirs are unaffected.",
+        description="Enable fixed GDW and AMBER river barriers at runtime; lakes and reservoirs are unaffected.",
     )
-    gate_opening_level_fraction: float = Field(
-        0.9,
-        gt=0,
-        lt=1,
-        allow_inf_nan=False,
-        description="Gate opening threshold as a fraction of crest height above the bed (dimensionless); fixed-depth overrides are not supported.",
-    )
-    gate_closing_level_fraction: float = Field(
-        0.7,
-        ge=0,
-        lt=1,
-        allow_inf_nan=False,
-        description="Gate closing threshold as a fraction of crest height above the bed (dimensionless); must be below the opening fraction.",
-    )
-
-    @model_validator(mode="after")
-    def validate_gate_thresholds(self) -> Self:
-        """Check that gate operation has a nonempty hysteresis interval.
-
-        Returns:
-            Validated routing configuration.
-
-        Raises:
-            ValueError: If a closing threshold is not below its opening threshold.
-        """
-        if self.gate_closing_level_fraction >= self.gate_opening_level_fraction:
-            raise ValueError("Gate closing level must be below opening level.")
-        return self
-
     algorithm: Literal["accuflux", "kinematic_wave"] = Field(
         "kinematic_wave",
         description="Routing algorithm: 'accuflux' or 'kinematic_wave'.",

@@ -26,12 +26,6 @@ from .inertial_substeps import (
     GEOM_IN_BANKFULL_DEPTH,
     GEOM_IN_BANKFULL_VOLUME,
     GEOM_IN_BED_ELEVATION,
-    GEOM_IN_GATE_CLOSE_DEPTH,
-    GEOM_IN_GATE_CLOSING_COUNT,
-    GEOM_IN_GATE_HEIGHT,
-    GEOM_IN_GATE_OPEN,
-    GEOM_IN_GATE_OPEN_DEPTH,
-    GEOM_IN_GATE_OPEN_SECONDS,
     GEOM_IN_INTERFACE_BED_ELEVATION_MAX,
     GEOM_IN_INVERSE_INTERFACE_LENGTH,
     GEOM_IN_INVERSE_LENGTH,
@@ -489,9 +483,8 @@ def _run_inertial_routing_step(
         updated_discharge_m3_s: Discharge array updated by kinematic routing (m³/s).
         river_storage_m3_inertial: Reach storage for inertial reaches (m³).
         sideflow_m3_inertial: Sideflow volume per reach for macro-timestep (m³).
-        geom_inbank: River geometry and gate settings, including whether each gate
-            is open or closed. An open gate lets water flow normally. A closed gate
-            blocks flow below its top; water can still flow over the top.
+        geom_inbank: Static in-bank river geometry, including the raised interface
+            elevation used by fixed river barriers.
         geom_overbank: Static compound overbank geometry lookup table.
         geom_cfl: Static CFL stability parameters table.
         ds_boundary_type: Downstream boundary condition type flags.
@@ -783,10 +776,6 @@ class LocalInertial:
         in_spinup: bool,
         min_slope: float = 1e-4,
         weir_height_m: ArrayFloat32 | None = None,
-        weir_gate: ArrayBool | None = None,
-        gate_open: ArrayBool | None = None,
-        gate_opening_level_fraction: float = 0.9,
-        gate_closing_level_fraction: float = 0.7,
     ) -> None:
         """Initializes the LocalInertial router object.
 
@@ -819,24 +808,14 @@ class LocalInertial:
             in_spinup: Whether the model is in spinup mode.
             weir_height_m: Weir heights above the river bed (m), in original cell order.
                 Zero means no structure; -1 uses bankfull depth + 1 m and
-                -2 uses half bankfull depth.
-            weir_gate: True for barriers with controlled gates.
-            gate_open: Gate states in original cell order, updated in place.
-            gate_opening_level_fraction: Opening depth as a fraction of crest height
-                above the bed (dimensionless), strictly between zero and one.
-            gate_closing_level_fraction: Closing depth as a fraction of crest height
-                (dimensionless), nonnegative and less than the opening fraction.
+                -2 uses full bankfull depth; -3 uses half bankfull depth.
+                Fixed weirs use river momentum
+                over a fixed raised sill.
 
         Raises:
             KeyError: If a local inertial pit reach has a river ID not found in rivers_gdf.
-            ValueError: If weir heights or gate thresholds are invalid, or links unsupported.
+            ValueError: If weir heights are invalid or links unsupported.
         """
-        if not (
-            np.isfinite(gate_opening_level_fraction)
-            and np.isfinite(gate_closing_level_fraction)
-            and 0 <= gate_closing_level_fraction < gate_opening_level_fraction < 1
-        ):
-            raise ValueError("Gate level fractions need 0 <= closing < opening < 1.")
         assert dt > 0, "dt must be greater than 0"
         self.dt = dt
         self.in_spinup = in_spinup
@@ -1115,10 +1094,6 @@ class LocalInertial:
         )
 
         self._setup_inertial_boundary_arrays()
-        if weir_gate is None:
-            weir_gate = np.zeros(river_length.shape, dtype=bool)
-        if weir_gate.shape != river_length.shape or weir_gate.dtype != bool:
-            raise ValueError("Gate flags must be boolean and match river cells.")
         self._weir_height_inertial: ArrayFloat32 = np.zeros(
             self.n_inertial, dtype=np.float32
         )
@@ -1128,11 +1103,14 @@ class LocalInertial:
                 or not np.isfinite(weir_height_m).all()
             ):
                 raise ValueError("Weir heights must match river cells and be finite.")
-            # Build inputs use -1 and -2 because bankfull depth is only known here.
+            # Negative markers defer crest proxies until bankfull depth is known.
             needs_bankfull_plus_one: ArrayBool = weir_height_m == -1.0
-            needs_half_bankfull: ArrayBool = weir_height_m == -2.0
+            needs_bankfull_depth: ArrayBool = weir_height_m == -2.0
+            needs_half_bankfull_depth: ArrayBool = weir_height_m == -3.0
             needs_default_height: ArrayBool = (
-                needs_bankfull_plus_one | needs_half_bankfull
+                needs_bankfull_plus_one
+                | needs_bankfull_depth
+                | needs_half_bankfull_depth
             )
             if np.any((weir_height_m < 0) & ~needs_default_height):
                 raise ValueError(
@@ -1154,8 +1132,9 @@ class LocalInertial:
             weir_height_m[needs_bankfull_plus_one] = (
                 bankfull_depth_m[needs_bankfull_plus_one] + 1.0
             )
-            weir_height_m[needs_half_bankfull] = (
-                0.5 * bankfull_depth_m[needs_half_bankfull]
+            weir_height_m[needs_bankfull_depth] = bankfull_depth_m[needs_bankfull_depth]
+            weir_height_m[needs_half_bankfull_depth] = (
+                bankfull_depth_m[needs_half_bankfull_depth] * 0.5
             )
             sorted_weir_heights_m: ArrayFloat32 = weir_height_m[self.sorted_idxs]
             self._weir_height_inertial = sorted_weir_heights_m[
@@ -1168,26 +1147,6 @@ class LocalInertial:
             ):
                 raise ValueError("Weirs need a river cell on each side.")
         self._inertial_cells: ArrayInt32 = self.sorted_idxs[inertial_start:inertial_end]
-        if weir_gate.any() and (
-            weir_height_m is None or np.any(weir_gate & (weir_height_m <= 0))
-        ):
-            raise ValueError("Gates must select weir cells only.")
-        self._gate_height: ArrayFloat32 = np.where(
-            weir_gate[self._inertial_cells], self._weir_height_inertial, 0
-        ).astype(np.float32)
-        # Derive thresholds after resolving missing heights so each gate scales
-        # with its own crest, including bankfull-based height defaults.
-        self._gate_open_depth_m: ArrayFloat32 = (
-            self._gate_height * gate_opening_level_fraction
-        ).astype(np.float32)
-        self._gate_close_depth_m: ArrayFloat32 = (
-            self._gate_height * gate_closing_level_fraction
-        ).astype(np.float32)
-        if gate_open is None:
-            gate_open = np.zeros(river_length.shape, dtype=bool)
-        self.gate_open: ArrayBool = gate_open
-        if self.gate_open.shape != river_length.shape or self.gate_open.dtype != bool:
-            raise ValueError("Gate states must be boolean and match river cells.")
         self._compute_static_geometry()
 
         self._f64_global_workspace: np.ndarray = np.empty(
@@ -1797,12 +1756,6 @@ class LocalInertial:
         self._geom_inbank: TwoDArrayFloat32 = np.empty(
             (self.n_inertial, GEOM_IN_NUM_COLS), dtype=np.float32
         )
-        self._geom_inbank[:, GEOM_IN_GATE_HEIGHT] = self._gate_height
-        self._geom_inbank[:, GEOM_IN_GATE_OPEN_DEPTH] = self._gate_open_depth_m
-        self._geom_inbank[:, GEOM_IN_GATE_CLOSE_DEPTH] = self._gate_close_depth_m
-        self._geom_inbank[:, GEOM_IN_GATE_OPEN] = self.gate_open[self._inertial_cells]
-        self._geom_inbank[:, GEOM_IN_GATE_OPEN_SECONDS] = 0
-        self._geom_inbank[:, GEOM_IN_GATE_CLOSING_COUNT] = 0
         self._geom_inbank[:, GEOM_IN_INVERSE_LENGTH] = (
             self._inverse_reach_length_inertial
         )
@@ -2523,9 +2476,6 @@ class LocalInertial:
             self._sideflow_perm[:] = sideflow_m3
             self._evaporation_perm[:] = evaporation_m3
 
-        self._geom_inbank[:, GEOM_IN_GATE_OPEN] = self.gate_open[self._inertial_cells]
-        self._geom_inbank[:, GEOM_IN_GATE_OPEN_SECONDS] = 0
-        self._geom_inbank[:, GEOM_IN_GATE_CLOSING_COUNT] = 0
         self._wb_extra_lateral_accum_m3.fill(0.0)
 
         storage_inertial_before: float = float(
@@ -2635,9 +2585,6 @@ class LocalInertial:
             terminal_wb_outflow_accum_m3=self._terminal_wb_outflow_accum_m3,
         )
 
-        self.gate_open[self._inertial_cells] = (
-            self._geom_inbank[:, GEOM_IN_GATE_OPEN] > 0
-        )
         storage_inertial_after: float = float(np.sum(self._river_storage_perm_inertial))
         kinematic_inflow_total: float = float(
             np.sum(self._kinematic_inflow_rate_inertial) * self.dt

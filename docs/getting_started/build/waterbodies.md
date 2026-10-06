@@ -98,10 +98,10 @@ To use all defaults:
 setup_waterbodies: {}
 ```
 
-## Weirs and gates
+## Fixed river barriers
 
-River weirs and gates from both GDW and AMBER are enabled by default. To run
-without them, set the following in `model.yml`:
+River barriers from both GDW and AMBER are enabled by default. To run without
+them, set the following in `model.yml`:
 
 ```yaml
 hydrology:
@@ -116,11 +116,11 @@ Lakes and reservoirs, including AMBER's lake classification, are unaffected.
 `setup_weirs` places unmatched GDW barriers on rivers. It skips points that are
 already linked, use an occupied cell, or cannot be placed on a valid river link.
 
-| GDW type | Gate | Height used when GDW height is missing |
-| --- | --- | --- |
-| Dam or Lake Control Dam | Yes | Bankfull depth + 1 m |
-| Sluice | Yes | Half the bankfull depth |
-| Other types | No | Half the bankfull depth |
+| GDW type | Height used when GDW height is missing |
+| --- | --- |
+| Dam or Lake Control Dam | Bankfull depth + 1 m |
+| Sluice | Half the bankfull depth |
+| Other types | Half the bankfull depth |
 
 `routing/weir_height_m` stores positive known heights (m), zero for no
 structure, -1 for bankfull depth + 1 m, and -2 for half bankfull depth.
@@ -128,33 +128,13 @@ The two negative markers are resolved into physical heights at runtime,
 when the river's bankfull depth is available. Rebuild `setup_weirs` when
 updating older inputs.
 
-Fixed barriers allow flow above their crest. Gates start closed and open or
-close based on the upstream water depth. The default limits are 90% and 70% of
-the crest height:
+Fixed barriers allow flow over their raised crest.
 
-```yaml
-hydrology:
-  routing:
-    gate_opening_level_fraction: 0.9
-    gate_closing_level_fraction: 0.7
-```
-
-Gate thresholds can only be configured as fractions of each structure's crest
-height. Fractions are dimensionless and must satisfy
-`0 <= gate_closing_level_fraction < gate_opening_level_fraction < 1`.
-The resulting depths are metres above the upstream river bed. Between the
-thresholds, gates retain their previous state.
-
-Fixed-depth settings `open_depth_m` and `close_depth_m` in `setup_weirs` are no
-longer supported. Remove them from existing build files and configure the
-fractions in `model.yml` instead. Existing fixed-depth input grids are ignored.
-
-Each run writes `output/<run>/weir_heights.csv`. It lists the chosen heights,
-gate settings, and `gate_report_index` values. Use a gate's index
-to select its hourly routing diagnostics.
+Each run writes `output/<run>/weir_heights.csv` with the input and resolved
+barrier heights and associated river-cell information.
 
 After changing build settings, rebuild `setup_weirs` and rerun spinup and the
-simulation. Changes to runtime limits only need a new spinup and simulation.
+simulation.
 
 ## Controlled lakes without GDW data
 

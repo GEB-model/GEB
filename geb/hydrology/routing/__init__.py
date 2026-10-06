@@ -30,7 +30,6 @@ from geb.workflows import balance_check
 from geb.workflows.extreme_value_analysis import ReturnPeriodModel
 from geb.workflows.io import read_geom, read_table
 
-from .inertial_substeps import GEOM_IN_GATE_CLOSING_COUNT, GEOM_IN_GATE_OPEN_SECONDS
 from .kinematic import update_node_kinematic as update_node_kinematic
 from .local_inertial import LocalInertial as LocalInertial
 
@@ -258,7 +257,6 @@ def fill_discharge_in_waterbodies(
 class RoutingVariables(Bucket):
     """Routing variables."""
 
-    gate_open: ArrayBool
     discharge_step_count: int
     sum_of_all_discharge_steps: ArrayFloat64
     rivers: gpd.GeoDataFrame
@@ -346,9 +344,6 @@ class Routing(Module):
         Args:
             model: The GEB model instance.
             hydrology: The hydrology submodel instance.
-
-        Raises:
-            ValueError: If stored gate flags contain values other than boolean or 0/1.
         """  # noqa: DOC502
         super().__init__(model)
 
@@ -454,35 +449,23 @@ class Routing(Module):
             self.spinup()
 
     def load_weirs(self) -> None:
-        """Load river weir heights and gates, or disable them for this run.
+        """Load fixed river barriers, or disable them for this run.
 
         Notes:
             With routing.weirs disabled, input files are not read or modified.
             Lakes and reservoirs retain their separate outflow controls.
 
         Returns:
-            None. Sets weir heights (m) and boolean gate flags in grid cell order.
-
-        Raises:
-            ValueError: If stored gate flags are not boolean or 0/1 values.
+            None. Sets weir heights (m) in grid cell order.
         """  # noqa: DOC202
         if not self.config.get("weirs", True):
-            # Zero heights also remove raised river sills; gates must be disabled too.
+            # Zero heights remove the raised river sills from routing.
             self.weir_height_m: ArrayFloat32 = np.zeros_like(self.ldd, dtype=np.float32)
-            self.weir_gate: ArrayBool = np.zeros_like(self.ldd, dtype=np.bool_)
             return
 
         self.weir_height_m = self.grid.load2d(
             self.model.files["grid"]["routing/weir_height_m"]
         )
-        gate_values: np.ndarray = self.grid.load2d(
-            self.model.files["grid"]["routing/weir_gate"]
-        )
-        if gate_values.dtype != np.bool_ and not np.isin(gate_values, (0, 1)).all():
-            raise ValueError(
-                "Stored gate flags must contain only boolean or 0/1 values."
-            )
-        self.weir_gate = gate_values.astype(np.bool_, copy=False)
 
     def load_rivers(
         self,
@@ -565,7 +548,7 @@ class Routing(Module):
         return rivers, river_ids, river_ids_no_waterbodies_removed
 
     def save_weirs(self) -> None:
-        """Write resolved weir heights (m) and gate settings to weir_heights.csv.
+        """Write resolved weir heights (m) to weir_heights.csv.
 
         Returns:
             None.
@@ -577,9 +560,6 @@ class Routing(Module):
         weir_mask: ArrayBool = heights > 0
         cells: ArrayInt32 = self.router._inertial_cells[weir_mask]
         input_heights: ArrayFloat32 = self.weir_height_m[cells]
-        gate_mask: ArrayBool = self.router._gate_height[weir_mask] > 0
-        gate_report_indices: ArrayInt64 = np.full(cells.size, -1, dtype=np.int64)
-        gate_report_indices[gate_mask] = np.arange(np.count_nonzero(gate_mask))
         locations: TwoDArrayFloat32 = self.grid.lonlat[cells]
         weirs: pd.DataFrame = pd.DataFrame(
             {
@@ -590,10 +570,6 @@ class Routing(Module):
                 "input_height_m": input_heights,
                 "effective_height_m": heights[weir_mask],
                 "bankfull_depth_m": self.router.bankfull_depth[cells],
-                "gate_controlled": gate_mask,
-                "gate_open_depth_m": self.router._gate_open_depth_m[weir_mask],
-                "gate_close_depth_m": self.router._gate_close_depth_m[weir_mask],
-                "gate_report_index": gate_report_indices,
             }
         )
         weirs.to_csv(self.model.output_folder / "weir_heights.csv", index=False)
@@ -1156,7 +1132,7 @@ class Routing(Module):
             None.
 
         Raises:
-            ValueError: If channel geometry or gate settings are invalid.
+            ValueError: If channel geometry is invalid.
             OSError: If weir diagnostics cannot be written.
         """  # noqa: DOC202, DOC502
         is_waterbody_outflow: ArrayBool = self.grid.var.waterbody_outflow_points != -1
@@ -1249,14 +1225,6 @@ class Routing(Module):
             river_storage_beta=self.var.river_storage_beta,
             in_spinup=self.model.in_spinup,
             weir_height_m=self.weir_height_m,
-            weir_gate=self.weir_gate,
-            gate_opening_level_fraction=self.config.get(
-                "gate_opening_level_fraction", 0.9
-            ),
-            gate_closing_level_fraction=self.config.get(
-                "gate_closing_level_fraction", 0.7
-            ),
-            gate_open=self.var.gate_open,
         )
 
         self.save_weirs()
@@ -1443,7 +1411,6 @@ class Routing(Module):
         # For dynamic river width, we need the average discharge. Therefore,
         # we track the sum of all discharge steps and the number of discharge steps,
         # which can be used to calculate the average discharge at each time step.
-        self.var.gate_open = self.grid.full_compressed(False, dtype=np.bool_)
         self.var.discharge_step_count = 0
         self.var.sum_of_all_discharge_steps = self.grid.full_compressed(
             0, dtype=np.float64
@@ -1615,17 +1582,6 @@ class Routing(Module):
         self.var.discharge_m3_s_per_substep = np.full_like(
             self.var.discharge_m3_s_per_substep,
             fill_value=np.nan,
-        )
-        gate_reach_indices: ArrayInt64 = np.flatnonzero(self.router._gate_height > 0)
-        gate_cells: ArrayInt32 = self.router._inertial_cells[gate_reach_indices]
-        gate_open_fraction_hourly: TwoDArrayFloat32 = np.zeros(
-            (24, gate_cells.size), dtype=np.float32
-        )
-        gate_closing_count_hourly: TwoDArrayInt32 = np.zeros(
-            (24, gate_cells.size), dtype=np.int32
-        )
-        gate_depth_m_hourly: TwoDArrayFloat32 = np.zeros(
-            (24, gate_cells.size), dtype=np.float32
         )
         self.var.retention_basin_storage_m3_per_substep = np.full_like(
             self.var.discharge_m3_s_per_substep,
@@ -1899,20 +1855,6 @@ class Routing(Module):
             self.var.water_stage_m = self.router.get_water_stage(
                 out=self.var.water_stage_m
             )
-            gate_open_fraction_hourly[hour] = np.clip(
-                self.router._geom_inbank[gate_reach_indices, GEOM_IN_GATE_OPEN_SECONDS]
-                / 3600.0,
-                0.0,
-                1.0,
-            )
-            gate_closing_count_hourly[hour] = self.router._geom_inbank[
-                gate_reach_indices, GEOM_IN_GATE_CLOSING_COUNT
-            ].astype(np.int32)
-            gate_depth_m_hourly[hour] = (
-                self.var.water_stage_m[gate_cells]
-                - self.router.bed_elevation[gate_cells]
-            )
-
             if not (actual_evaporation_in_rivers_m3_per_hour >= 0.0).all():
                 raise ValueError(
                     f"Negative evaporation detected, min evaporation: {actual_evaporation_in_rivers_m3_per_hour.min()}, min discharge: {self.var.discharge_in_rivers_m3_s_substep.min()}. "

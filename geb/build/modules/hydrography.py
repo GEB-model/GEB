@@ -1596,14 +1596,18 @@ class Hydrography(BuildModelBase):
         Save all barrier locations and exclusion reasons to routing/barriers.
 
         Args:
-            crest_height_m: Missing-height override (m). None uses bankfull depth
-                + 1 m for dams/lake-control dams, half bankfull depth for others.
+            crest_height_m: Missing-height override (m). Known heights are retained.
+                None uses bankfull for AMBER weirs/sluices/locks and half bankfull
+                for fords/ramps and unknown types. Sluice/lock/ford/ramp proxies
+                replace recorded heights. Known weir and unknown-type heights
+                are retained. AMBER dams only classify waterbodies; culverts are
+                excluded. GDW height defaults remain unchanged. All barriers are fixed.
 
         Returns:
             None.
 
         Raises:
-            ValueError: If the missing-height override is invalid.
+            ValueError: If the height override is invalid.
         """  # noqa: DOC202, DOC502
         gdw_points: gpd.GeoDataFrame = gpd.GeoDataFrame()
         if "waterbodies/gdw_checks" in self.geom:
@@ -1637,9 +1641,8 @@ class Hydrography(BuildModelBase):
             valid_river_cells.shape
         )
         weir_height_grid: xr.DataArray
-        gate_grid: xr.DataArray
         barrier_records: gpd.GeoDataFrame
-        weir_height_grid, gate_grid, barrier_records = create_weir_grids(
+        weir_height_grid, barrier_records = create_weir_grids(
             gdw_points=gdw_points,
             amber_points=amber_points,
             crest_height_m=crest_height_m,
@@ -1651,7 +1654,6 @@ class Hydrography(BuildModelBase):
             logger=self.logger,
         )
         self.set_grid(weir_height_grid, name="routing/weir_height_m")
-        self.set_grid(gate_grid, name="routing/weir_gate")
         self.set_geom(barrier_records, name="routing/barriers")
 
     @build_method(required=True, depends_on=["setup_hydrography", "setup_elevation"])

@@ -32,16 +32,19 @@ def create_weir_grids(
     valid_river_cells: xr.DataArray,
     amber_points: gpd.GeoDataFrame | None = None,
     logger: logging.Logger | None = None,
-) -> tuple[xr.DataArray, xr.DataArray, gpd.GeoDataFrame]:
-    """Place weir heights and gates on the river grid.
+) -> tuple[xr.DataArray, gpd.GeoDataFrame]:
+    """Place fixed barrier heights on the river grid.
 
     Show a progress bar in terminals and periodic progress in batch logs.
     Log inclusion counts and exclusion reasons once after placement; retain
     individual barrier diagnostics in the returned records.
+    If the closest cell already has a weir, try only the second-closest
+    distinct cell on the same river segment before excluding the barrier.
 
     Args:
         gdw_points: GDW points and their linked lake or reservoir IDs.
-        crest_height_m: Missing-height override (m). None uses type defaults.
+        crest_height_m: Missing-height override (m). None uses type defaults: bankfull for AMBER weirs/sluices/locks,
+            half bankfull for fords/ramps and unknown types, and GDW defaults.
         waterbody_id: Existing waterbody grid; -1 means no lake or reservoir.
         rivers: Rivers used to place the points on the grid.
         upstream_area_grid: Model-grid drainage area (m2).
@@ -52,16 +55,18 @@ def create_weir_grids(
         logger: Build logger for progress and summaries. None uses the module logger.
 
     Returns:
-        Height grid, gate flags and barrier records at their original locations.
+        Height grid and barrier records at their original locations.
         Records show source heights (m), river distances (m) and exclusion reasons.
         Positive grid heights are in meters, zero means
-        no structure, -1 means bankfull depth + 1 m, and -2 means half
-        bankfull depth.
-        Missing heights are resolved from bankfull depth at runtime. Gate
-        thresholds use the configured fractions of the resolved crest height.
+        no structure, -1 means bankfull depth + 1 m, -2 means full
+        bankfull depth, and -3 means half bankfull depth.
+        AMBER weirs and unknown types retain known heights. Sluices/locks use
+        bankfull depth; fords/ramps use half bankfull depth. AMBER dams and
+        culverts are excluded from river routing. All river structures are fixed.
+        Bankfull markers are resolved when routing initializes; crests remain fixed.
 
     Raises:
-        ValueError: If the missing-height override is invalid.
+        ValueError: If the height override is invalid.
     """
     if crest_height_m is not None and (
         not np.isfinite(crest_height_m) or crest_height_m <= 0
@@ -74,7 +79,6 @@ def create_weir_grids(
     weir_height_grid: xr.DataArray = full_like(
         waterbody_id, fill_value=0.0, nodata=np.nan, dtype=np.float32
     )
-    gate_grid: xr.DataArray = full_like(waterbody_id, False, nodata=None, dtype=bool)
     barriers: gpd.GeoDataFrame = gdw_points.copy()
     if not barriers.empty:
         barriers = barriers.to_crs(4326)
@@ -110,7 +114,7 @@ def create_weir_grids(
     barrier_records["included"] = False
     barrier_records["exclusion_reason"] = ""
     if barriers.empty:
-        return weir_height_grid, gate_grid, barrier_records
+        return weir_height_grid, barrier_records
     represented_rivers: gpd.GeoDataFrame = rivers.loc[
         rivers["represented_in_grid"]
     ].to_crs(4326)
@@ -174,6 +178,20 @@ def create_weir_grids(
                 "part of lake or reservoir"
             )
             continue
+        dam_type: str = str(barrier.get("dam_type", "")).strip()
+        if barrier.source == "AMBER" and dam_type in {
+            "Dam",
+            "Lake Control Dam",
+            "Culvert",
+        }:
+            # Dams only inform waterbody classification; culverts need an opening
+            # model rather than a solid river crest.
+            barrier_records.at[barrier_index, "exclusion_reason"] = (
+                "AMBER dam classification only"
+                if dam_type != "Culvert"
+                else "AMBER culvert excluded"
+            )
+            continue
         nearby_rivers: gpd.GeoDataFrame = rivers
         if barrier.source == "AMBER":
             if not amber_search_candidates[barrier_index]:
@@ -216,6 +234,29 @@ def create_weir_grids(
         column: int
         row: int
         column, row = river_location.snapped_grid_pixel_xy
+        if weir_height_grid.values[row, column] != 0:
+            river_cells: npt.NDArray[np.int64] = np.stack(
+                river_location.closest_river_segment.hydrography_xy
+            ).astype(np.int64)
+            alternative_positions: npt.NDArray[np.int64] = np.flatnonzero(
+                np.any(river_cells != (column, row), axis=1)
+            )
+            if alternative_positions.size:
+                # Keep the same river and distance ranking as the initial snap;
+                # limiting the search avoids moving barriers far along it.
+                cell_coordinates: npt.NDArray[np.float64] = river_coordinate_cache[
+                    river_location.closest_river_segment.ID
+                ][alternative_positions]
+                offsets: npt.NDArray[np.float64] = (
+                    cell_coordinates - river_location.closest_point_coords
+                )
+                second_position: int = int(
+                    alternative_positions[
+                        np.argmin(np.hypot(offsets[:, 0], offsets[:, 1]))
+                    ]
+                )
+                column, row = map(int, river_cells[second_position])
+
         if (
             not valid_river_cells.values[row, column]
             or waterbody_id.values[row, column] != -1
@@ -234,10 +275,19 @@ def create_weir_grids(
                     "unsuitable river cell"
                 )
             continue
-        dam_type: str = str(barrier.get("dam_type", "")).strip()
         barrier_height_m: float = barrier.dam_hgt_m
         height_m: float = 0.0
-        if (
+        if barrier.source == "AMBER" and dam_type in {"Sluice", "Lock", "Ford", "Ramp"}:
+            # These types use the requested common river-depth proxies, not
+            # atlas heights that may describe the whole structure.
+            height_m = (
+                crest_height_m
+                if crest_height_m is not None
+                else -2.0
+                if dam_type in {"Sluice", "Lock"}
+                else -3.0
+            )
+        elif (
             pd.notna(barrier_height_m)
             and np.isfinite(barrier_height_m)
             and barrier_height_m > 0
@@ -245,14 +295,13 @@ def create_weir_grids(
             height_m = float(barrier_height_m)
         elif crest_height_m is not None:
             height_m = crest_height_m
-        elif dam_type in {"Dam", "Lake Control Dam"}:
+        elif barrier.source == "AMBER" and dam_type != "Weir":
+            height_m = -3.0  # Unknown types use a lower fallback crest.
+        elif barrier.source == "GDW" and dam_type in {"Dam", "Lake Control Dam"}:
             height_m = -1.0  # Resolve to bankfull depth + 1 m when routing starts.
         else:
-            height_m = -2.0  # Resolve to half bankfull depth when routing starts.
-        # Gate operation is a simple assumption based on the barrier type.
-        is_controlled: bool = dam_type in {"Dam", "Sluice", "Lake Control Dam"}
+            height_m = -2.0  # Resolve to full bankfull depth when routing starts.
         weir_height_grid.values[row, column] = height_m
-        gate_grid.values[row, column] = is_controlled
         barrier_records.at[barrier_index, "included"] = True
     source: Hashable
     source_records: pd.DataFrame
@@ -274,7 +323,7 @@ def create_weir_grids(
             logger.info(
                 "%s excluded: %s — %s.", source, excluded_count, exclusion_reason
             )
-    return weir_height_grid, gate_grid, barrier_records
+    return weir_height_grid, barrier_records
 
 
 def nearest_amber_river(

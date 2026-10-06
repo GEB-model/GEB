@@ -122,9 +122,8 @@ def test_distant_barrier_diagnostics(
         np.ones((2, 2)), dims=("y", "x"), coords={"y": [0.01, 0], "x": [0, 0.01]}
     ).rio.write_crs(4326)
     heights: xr.DataArray
-    gates: xr.DataArray
     records: gpd.GeoDataFrame
-    heights, gates, records = create_weir_grids(
+    heights, records = create_weir_grids(
         gpd.GeoDataFrame(),
         None,
         xr.full_like(area, -1),
@@ -144,7 +143,6 @@ def test_distant_barrier_diagnostics(
     assert "Skipping" not in caplog.text
     assert all(record.name == expected_logger for record in caplog.records)
     assert not heights.values.any()
-    assert not gates.values.any()
 
 
 def _unexpected_subgrid_read() -> npt.NDArray[np.float32]:
@@ -202,9 +200,8 @@ def test_weirs_skip_subgrid_read() -> None:
         crs=4326,
     )
     heights: xr.DataArray
-    gates: xr.DataArray
     records: gpd.GeoDataFrame
-    heights, gates, records = create_weir_grids(
+    heights, records = create_weir_grids(
         gpd.GeoDataFrame(),
         None,
         xr.full_like(area, -1),
@@ -217,4 +214,3 @@ def test_weirs_skip_subgrid_read() -> None:
     assert heights.values[0, 0] == 3.0
     assert records.iloc[0].included
     assert records.iloc[0].distance_to_river_m > 0
-    assert not gates.values.any()

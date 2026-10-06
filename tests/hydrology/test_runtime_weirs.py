@@ -24,13 +24,9 @@ def routing() -> Mock:
     routing_module.model.files = {
         "grid": {
             "routing/weir_height_m": "heights",
-            "routing/weir_gate": "gates",
         }
     }
-    routing_module.grid.load2d.side_effect = [
-        np.array([-1, 2, 0], dtype=np.float32),
-        np.array([1, 0, 0], dtype=np.uint8),
-    ]
+    routing_module.grid.load2d.return_value = np.array([-1, 2, 0], dtype=np.float32)
     return routing_module
 
 
@@ -38,7 +34,7 @@ def routing() -> Mock:
 def test_enabled_weirs_load_stored_inputs(
     routing: Mock, config: dict[str, bool]
 ) -> None:
-    """Keep stored heights, including missing-height markers, when enabled.
+    """Load stored barrier heights when barriers are enabled.
 
     Args:
         routing: Mock routing module with stored barrier inputs.
@@ -48,13 +44,11 @@ def test_enabled_weirs_load_stored_inputs(
     Routing.load_weirs(cast(Routing, routing))
 
     np.testing.assert_array_equal(routing.weir_height_m, [-1, 2, 0])
-    np.testing.assert_array_equal(routing.weir_gate, [True, False, False])
-    assert routing.weir_gate.dtype == np.bool_
-    assert routing.grid.load2d.call_count == 2
+    assert routing.grid.load2d.call_count == 1
 
 
 def test_disabled_weirs_do_not_require_input_files(routing: Mock) -> None:
-    """Remove all river barriers and gates even if barrier files are absent.
+    """Remove river barriers even if barrier files are absent.
 
     Args:
         routing: Mock routing module with stored barrier inputs.
@@ -64,24 +58,8 @@ def test_disabled_weirs_do_not_require_input_files(routing: Mock) -> None:
     Routing.load_weirs(cast(Routing, routing))
 
     np.testing.assert_array_equal(routing.weir_height_m, [0, 0, 0])
-    np.testing.assert_array_equal(routing.weir_gate, [False, False, False])
     assert routing.weir_height_m.dtype == np.float32
-    assert routing.weir_gate.dtype == np.bool_
     routing.grid.load2d.assert_not_called()
-
-
-def test_enabled_weirs_reject_invalid_gate_flags(routing: Mock) -> None:
-    """Retain validation of stored gate flags when barriers are enabled.
-
-    Args:
-        routing: Mock routing module with stored barrier inputs.
-    """
-    routing.grid.load2d.side_effect = [
-        np.array([2, 0, 0], dtype=np.float32),
-        np.array([2, 0, 0], dtype=np.uint8),
-    ]
-    with pytest.raises(ValueError, match="Stored gate flags"):
-        Routing.load_weirs(cast(Routing, routing))
 
 
 @pytest.fixture

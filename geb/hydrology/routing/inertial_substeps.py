@@ -35,8 +35,6 @@ __all__ = [
     "GEOM_IN_INVERSE_LENGTH",
     "GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE",
     "GEOM_IN_MANNING_N_SQUARED",
-    "GEOM_IN_GATE_CLOSE_DEPTH",
-    "GEOM_IN_GATE_OPEN_DEPTH",
     "GEOM_IN_NUM_COLS",
     "GEOM_IN_STAGE_VOLUME_COEFFICIENT",
     "GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH",
@@ -75,13 +73,7 @@ GEOM_IN_INTERFACE_BED_ELEVATION_MAX: int = 6
 GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH: int = 7
 GEOM_IN_MANNING_N_SQUARED: int = 8
 GEOM_IN_INVERSE_INTERFACE_LENGTH: int = 9
-GEOM_IN_GATE_HEIGHT: int = 10
-GEOM_IN_GATE_OPEN: int = 11
-GEOM_IN_GATE_OPEN_SECONDS: int = 12
-GEOM_IN_GATE_CLOSING_COUNT: int = 13
-GEOM_IN_GATE_OPEN_DEPTH: int = 14
-GEOM_IN_GATE_CLOSE_DEPTH: int = 15
-GEOM_IN_NUM_COLS: int = 16
+GEOM_IN_NUM_COLS: int = 10
 
 
 # Column indices for overbank floodplain geometry (geom_overbank)
@@ -725,78 +717,6 @@ def compute_inertial_substeps_cfl(
 
 
 @njit(inline="always")
-def update_gate_state(
-    upstream_depth_m: float,
-    opening_depth_m: float,
-    closing_depth_m: float,
-    is_open: bool,
-) -> bool:
-    """Open at the upper threshold and close at the lower threshold.
-
-    Notes:
-        The router validates the upstream depth thresholds (m).
-
-    Args:
-        upstream_depth_m: Current upstream depth above the river bed (m).
-        opening_depth_m: Depth at which a closed gate opens (m).
-        closing_depth_m: Depth at which an open gate closes (m).
-        is_open: Previous gate state.
-
-    Returns:
-        Updated state, retaining the previous state between thresholds.
-    """
-    if upstream_depth_m >= opening_depth_m:
-        return True
-    if upstream_depth_m <= closing_depth_m:
-        return False
-    return is_open
-
-
-@njit(inline="always")
-def closed_gate_overflow(
-    upstream_water_level_m: float,
-    downstream_water_level_m: float,
-    upstream_bed_level_m: float,
-    river_sill_level_m: float,
-    barrier_height_m: float,
-    river_width_m: float,
-) -> float:
-    """Calculate forward overflow over a closed, impermeable barrier.
-
-    Args:
-        upstream_water_level_m: Upstream water level (m).
-        downstream_water_level_m: Downstream water level (m).
-        upstream_bed_level_m: Upstream river bed level (m).
-        river_sill_level_m: Higher of the two river beds (m).
-        barrier_height_m: Positive barrier height above the upstream bed (m).
-        river_width_m: River width (m).
-
-    Returns:
-        Forward overflow (m3/s), zero below the crest or under reverse head.
-
-    Notes:
-        Inputs are validated when constructing the router.
-    """
-    crest_level_m: float = max(
-        upstream_bed_level_m + barrier_height_m, river_sill_level_m
-    )
-    upstream_depth_above_crest_m: float = max(
-        upstream_water_level_m - crest_level_m, 0.0
-    )
-    downstream_depth_above_crest_m: float = max(
-        downstream_water_level_m - crest_level_m, 0.0
-    )
-    # Submerged overflow weakens as the two water levels approach each other.
-    return (
-        1.7
-        * river_width_m
-        * max(
-            upstream_depth_above_crest_m**1.5 - downstream_depth_above_crest_m**1.5, 0.0
-        )
-    )
-
-
-@njit(inline="always")
 def _solve_inertial_momentum(
     reach_idx: int,
     effective_depth: np.float32,
@@ -1231,30 +1151,6 @@ def _run_inertial_substeps(
             effective_depth: np.float32 = np.float32(0.0)
             water_slope: np.float32 = np.float32(0.0)
 
-            gate_height: float = float(geom_inbank[reach_idx, GEOM_IN_GATE_HEIGHT])
-            gate_open: bool = False
-            if gate_height > 0:
-                gate_was_open: bool = geom_inbank[reach_idx, GEOM_IN_GATE_OPEN] > 0
-                gate_open_depth_m: float = float(
-                    geom_inbank[reach_idx, GEOM_IN_GATE_OPEN_DEPTH]
-                )
-                upstream_depth_m: float = float(
-                    water_stage_node - geom_inbank[reach_idx, GEOM_IN_BED_ELEVATION]
-                )
-                gate_open = update_gate_state(
-                    upstream_depth_m,
-                    gate_open_depth_m,
-                    float(geom_inbank[reach_idx, GEOM_IN_GATE_CLOSE_DEPTH]),
-                    gate_was_open,
-                )
-                geom_inbank[reach_idx, GEOM_IN_GATE_OPEN] = np.float32(gate_open)
-                # Record substep events so brief closures are not lost when
-                # reports aggregate to hourly intervals.
-                if gate_open:
-                    geom_inbank[reach_idx, GEOM_IN_GATE_OPEN_SECONDS] += dt_substep
-                elif gate_was_open:
-                    geom_inbank[reach_idx, GEOM_IN_GATE_CLOSING_COUNT] += np.float32(1)
-
             reach_can_reverse: bool = False
             if boundary_type == 0 or boundary_type == 2:
                 # Internal reach or lake boundary
@@ -1266,10 +1162,6 @@ def _run_inertial_substeps(
                 bed_elev_node: np.float32 = geom_inbank[
                     reach_idx, GEOM_IN_BED_ELEVATION
                 ]
-                if gate_open:
-                    # A retracted barrier must also remove the raised sill, so
-                    # ordinary river hydraulics apply below the closed crest.
-                    max_bed = max(bed_elev_node, ds_bed_elevation[reach_idx])
                 max_stage: np.float32 = max(water_stage_node, water_stage_ds)
                 effective_depth = max(max_stage - max_bed, np.float32(0.0))
                 water_slope = (water_stage_ds - water_stage_node) * inv_interface_len
@@ -1348,39 +1240,20 @@ def _run_inertial_substeps(
                 water_slope = -outflow_slope
 
             discharge: np.float32
-            if gate_height > 0 and not gate_open:
-                # Closed gates ignore previous momentum to prevent leakage.
-                gate_discharge: float = closed_gate_overflow(
-                    float(water_stage_node),
-                    float(stage_buf[ds_stage_idx[reach_idx]]),
-                    float(bed_elev_node),
-                    float(max(bed_elev_node, ds_bed_elevation[reach_idx])),
-                    gate_height,
-                    float(geom_overbank[reach_idx, GEOM_OV_RIVER_WIDTH]),
-                )
-                discharge = np.float32(
-                    min(
-                        gate_discharge,
-                        0.95
-                        * max(river_storage_m3_inertial[reach_idx], 0.0)
-                        * inv_dt_substep,
-                    )
-                )
-            else:
-                discharge = _solve_inertial_momentum(
-                    reach_idx=reach_idx,
-                    effective_depth=effective_depth,
-                    water_slope=water_slope,
-                    curr_discharge=substep_discharge_m3_s[reach_idx],
-                    min_wet_depth_m=min_wet_depth_m,
-                    geom_inbank=geom_inbank,
-                    geom_overbank=geom_overbank,
-                    g_dt_substep=g_dt_substep,
-                    sqrt_gravity=sqrt_gravity,
-                    can_reverse=reach_can_reverse,
-                    river_storage_m3_inertial=river_storage_m3_inertial,
-                    inv_dt_substep=inv_dt_substep,
-                )
+            discharge = _solve_inertial_momentum(
+                reach_idx=reach_idx,
+                effective_depth=effective_depth,
+                water_slope=water_slope,
+                curr_discharge=substep_discharge_m3_s[reach_idx],
+                min_wet_depth_m=min_wet_depth_m,
+                geom_inbank=geom_inbank,
+                geom_overbank=geom_overbank,
+                g_dt_substep=g_dt_substep,
+                sqrt_gravity=sqrt_gravity,
+                can_reverse=reach_can_reverse,
+                river_storage_m3_inertial=river_storage_m3_inertial,
+                inv_dt_substep=inv_dt_substep,
+            )
             updated_discharge_m3_s_inertial[reach_idx] = discharge
 
         # Multi-outflow storage depletion limiter for reverse flows.
