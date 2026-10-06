@@ -318,12 +318,12 @@ def test_drainage() -> None:
 
     parameters["heads"][0] = layer_boundary_elevation[0]
     parameters["heads"][1] = layer_boundary_elevation[0]
+    parameters["boundary_heads"] = parameters["boundary_heads"] - 2
 
     sim = ModFlowSimulation(**parameters)
 
     groundwater_content_prev = np.nansum(sim.groundwater_content_m3)
 
-    parameters["boundary_heads"] = parameters["boundary_heads"] - 2
     recharge_m = np.full((YSIZE, XSIZE), 0.1)
     recharge_m[9, 11] = 0.0  # Do not recharge constant-head boundary cell
     recharge_m3 = recharge_m * cell_area
@@ -832,11 +832,6 @@ def test_modflow_boundary_flows_inflow_and_water_balance() -> None:
     parameters["boundary_heads"] = parameters["boundary_heads"] - 2
 
     # Prescribe boundary head 0.5 m higher than domain heads at outside boundary cell
-    decomp_heads: ThreeDArrayFloat64 = decompress(
-        parameters["heads"], parameters["basin_mask"]
-    )
-    decomp_heads[:, 9, 11] += 0.5
-    parameters["heads"] = compress(decomp_heads, parameters["basin_mask"])
     parameters["boundary_heads"][:, 9 + 1, 11 + 2] += 0.5
 
     sim: ModFlowSimulation = ModFlowSimulation(**parameters)
@@ -893,11 +888,6 @@ def test_modflow_boundary_flows_outflow_and_water_balance() -> None:
     parameters["boundary_heads"] = parameters["boundary_heads"] - 2
 
     # Prescribe boundary head 0.5 m lower than domain heads at outside boundary cell
-    decomp_heads: ThreeDArrayFloat64 = decompress(
-        parameters["heads"], parameters["basin_mask"]
-    )
-    decomp_heads[:, 9, 11] -= 0.5
-    parameters["heads"] = compress(decomp_heads, parameters["basin_mask"])
     parameters["boundary_heads"][:, 9 + 1, 11 + 2] -= 0.5
 
     sim: ModFlowSimulation = ModFlowSimulation(**parameters)
@@ -965,16 +955,13 @@ def test_modflow_boundary_flows_simultaneous_inflow_outflow_water_balance() -> N
     decomp_heads: ThreeDArrayFloat64 = decompress(
         parameters["heads"], parameters["basin_mask"]
     )
-    decomp_heads[:, 9, 11] += 0.5
-    decomp_heads[:, 1, 5] -= 0.5
 
     bnd_heads: ThreeDArrayFloat64 = np.zeros(
         (NLAY, YSIZE + 2, XSIZE + 2), dtype=np.float64
     )
-    bnd_heads[:, 9 + 1, 11 + 2] = decomp_heads[:, 9, 11]
-    bnd_heads[:, 1, 5 + 1] = decomp_heads[:, 1, 5]
+    bnd_heads[:, 9 + 1, 11 + 2] = decomp_heads[:, 9, 11] + 0.5
+    bnd_heads[:, 1, 5 + 1] = decomp_heads[:, 1, 5] - 0.5
 
-    parameters["heads"] = compress(decomp_heads, parameters["basin_mask"])
     parameters["boundary_mask"] = bnd_mask
     parameters["boundary_heads"] = bnd_heads
 

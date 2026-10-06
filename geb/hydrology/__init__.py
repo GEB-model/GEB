@@ -442,7 +442,8 @@ class Hydrology(Data, Module):
     def finalize(self) -> None:
         """Finalize the model."""
         # finalize modflow model
-        self.groundwater.modflow.finalize()
+        if hasattr(self, "groundwater") and hasattr(self.groundwater, "modflow"):
+            self.groundwater.modflow.finalize()
 
         if self.model.config["general"]["simulate_forest"]:
             assert hasattr(self.model, "plantFATE")
