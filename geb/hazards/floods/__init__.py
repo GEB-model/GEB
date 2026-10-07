@@ -870,13 +870,15 @@ class Floods(Module):
                                 )
                             )  # fill with zeros if no hydrograph is found
 
-                        Q.append(
-                            pd.Series(
-                                pd.concat(_Q, axis=1).mean(axis=0).sum(axis=0),
-                                index=Q[0].index,
-                                name=node_idx,
-                            )
+                    Q.append(
+                        pd.Series(
+                            pd.concat(_Q, axis=1).mean(axis=0).sum(axis=0)
+                            if _Q
+                            else 0.0,
+                            index=Q[0].index,
+                            name=node_idx,
                         )
+                    )
 
                 # Concatenate the per-node series into a single DataFrame; index -> timestamps
                 Q: pd.DataFrame = pd.concat(Q, axis=1)
