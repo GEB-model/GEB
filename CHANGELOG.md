@@ -1,4 +1,6 @@
 # dev
+- Log forecast input files, ensemble members, time coverage, and the actual normal/forecast substep selection for each forcing variable.
+- Fixed shape mismatch in forecast mode when forcing variables are on different grids: forecast data is now regridded to the historical mask grid of each variable during the build (requires rebuilding forecasts).
 
 # v1.0.0b32
 - Removed defaults from ParametersConfig in configuration schema so that all parameters must be explicitly set via reasonable_default_config.yml or model.yml, and added groundwater_hydraulic_conductivity_multiplier to the schema.

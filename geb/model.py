@@ -262,6 +262,15 @@ class GEBModel(Module):
                 variable_forecast_members: list[str] = [
                     i.item() for i in forecast_data[loader_name].member.values
                 ]
+                self.logger.info(
+                    "Loaded forecast forcing: variable=%s file=%s members=%s "
+                    "time_range=%s..%s",
+                    loader_name,
+                    forecast_file_path,
+                    variable_forecast_members,
+                    forecast_data[loader_name].time.values[0],
+                    forecast_data[loader_name].time.values[-1],
+                )
                 variable_forecast_end_dt = (
                     forecast_data[loader_name].time.values[-1]
                 ).item()  # get the end datetime of the forecast

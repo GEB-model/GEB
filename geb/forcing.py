@@ -377,6 +377,9 @@ class ForcingLoader(ABC):
         Raises:
             ValueError: If the data is invalid according to the validation criteria.
         """
+        normal_substeps: int = self.n
+        forecast_substeps: int = 0
+        source_selection: str = "normal"
         # check if we are in forecasting mode, and if the end of the timestep is after the
         # start of the forecast
         if (
@@ -392,6 +395,9 @@ class ForcingLoader(ABC):
                 (self.forecast_issue_datetime - dt).total_seconds()
                 / (self.model.timestep_length / self.n).total_seconds()
             )
+            normal_substeps = substeps_to_forecast
+            forecast_substeps = self.n - substeps_to_forecast
+            source_selection = "mixed" if normal_substeps > 0 else "forecast"
             # if some substeps are before the forecast, load them from the normal reader
             if substeps_to_forecast > 0:
                 # TODO: The reader breaks when loading less than n timesteps, so we load n and slice
@@ -432,6 +438,22 @@ class ForcingLoader(ABC):
                     f"Standard reader returned data starting at {normal_start_date}, but expected {dt}."
                 )
             data: npt.NDArray[np.float32] = data_all
+
+        if source_selection != "normal":
+            self.model.logger.debug(
+                "Forcing source selected: variable=%s time=%s source=%s "
+                "normal_dataset=%s forecast_member=%s normal_substeps=%d/%d "
+                "forecast_substeps=%d/%d",
+                self.variable,
+                dt.isoformat(),
+                source_selection,
+                self.source if normal_substeps else "none",
+                self.model.multiverse_name,
+                normal_substeps,
+                self.n,
+                forecast_substeps,
+                self.n,
+            )
 
         interpolated: npt.NDArray[np.float32] = self.interpolate(data)
         valid: bool = self.validate(interpolated)

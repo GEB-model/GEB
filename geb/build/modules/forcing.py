@@ -1970,6 +1970,20 @@ class Forcing(BuildModelBase):
             base_folder: str, forecast_product: str, forecast_model: str, date_str: str
         ) -> str:
             return f"{base_folder}/ECMWF/{_get_forecast_model_folder(forecast_model)}/{date_str}"
+        
+        def _to_variable_grid(da: xr.DataArray, variable: str) -> xr.DataArray:
+                        # Historical variables can be on different grids (e.g. MSWEP vs ERA5-Land),
+                        # and the model expects forecast cells to match the historical mask of each variable.
+                        mask = self.other[f"climate/{variable}_mask"]
+                        if da.x.size == mask.x.size and da.y.size == mask.y.size:
+                            if np.allclose(da.x, mask.x) and np.allclose(da.y, mask.y):
+                                return da
+                        return da.interp(
+                            x=mask.x,
+                            y=mask.y,
+                            method="linear",
+                            kwargs={"fill_value": "extrapolate"},
+                        )
 
         def _save_ecmwf_forcing(
             forecast_ds: xr.Dataset,
@@ -1977,7 +1991,11 @@ class Forcing(BuildModelBase):
             date_str: str,
             create_plots: bool,
         ) -> None:
-            pr = forecast_ds["tp"].rename("precipitation")
+
+
+            pr = _to_variable_grid(forecast_ds["tp"], "pr_kg_per_m2_per_s").rename(
+                "precipitation"
+            )
             pr = pr.where(pr >= 0, 0)
             self.set_pr_kg_per_m2_per_s(
                 pr,
@@ -1987,42 +2005,46 @@ class Forcing(BuildModelBase):
             )
 
             self.set_tas_2m_K(
-                forecast_ds["t2m"].rename("tas"),
+                _to_variable_grid(forecast_ds["t2m"], "tas_2m_K").rename("tas"),
                 name=f"{base_name}/tas_2m_K_{date_str}",
                 create_plots=create_plots,
                 source="ECMWF",
             )
 
             self.set_dewpoint_tas_2m_K(
-                forecast_ds["d2m"].rename("dew_point_tas"),
+                _to_variable_grid(forecast_ds["d2m"], "dewpoint_tas_2m_K").rename(
+                    "dew_point_tas"
+                ),
                 name=f"{base_name}/dewpoint_tas_2m_K_{date_str}",
                 create_plots=create_plots,
                 source="ECMWF",
             )
 
             self.set_rsds_W_per_m2(
-                forecast_ds["ssrd"].rename("rsds"),
+                _to_variable_grid(forecast_ds["ssrd"], "rsds_W_per_m2").rename("rsds"),
                 name=f"{base_name}/rsds_W_per_m2_{date_str}",
                 create_plots=create_plots,
                 source="ECMWF",
             )
 
             self.set_rlds_W_per_m2(
-                forecast_ds["strd"].rename("rlds"),
+                _to_variable_grid(forecast_ds["strd"], "rlds_W_per_m2").rename("rlds"),
                 name=f"{base_name}/rlds_W_per_m2_{date_str}",
                 create_plots=create_plots,
                 source="ECMWF",
             )
 
             self.set_ps_pascal(
-                forecast_ds["sp"].rename("ps"),
+                _to_variable_grid(forecast_ds["sp"], "ps_pascal").rename("ps"),
                 name=f"{base_name}/ps_pascal_{date_str}",
                 create_plots=create_plots,
                 source="ECMWF",
             )
 
             self.set_wind_10m_m_per_s(
-                forecast_ds["u10"].rename("u10"),
+                _to_variable_grid(forecast_ds["u10"], "wind_u10m_m_per_s").rename(
+                    "u10"
+                ),
                 direction="u",
                 name=f"{base_name}/wind_u10m_m_per_s_{date_str}",
                 create_plots=create_plots,
@@ -2030,7 +2052,9 @@ class Forcing(BuildModelBase):
             )
 
             self.set_wind_10m_m_per_s(
-                forecast_ds["v10"].rename("v10"),
+                _to_variable_grid(forecast_ds["v10"], "wind_v10m_m_per_s").rename(
+                    "v10"
+                ),
                 direction="v",
                 name=f"{base_name}/wind_v10m_m_per_s_{date_str}",
                 create_plots=create_plots,

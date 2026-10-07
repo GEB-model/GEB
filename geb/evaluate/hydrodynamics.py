@@ -395,7 +395,8 @@ def calculate_performance_metrics(
             ctx.add_basemap(
                 ax,
                 crs=target_crs,
-                source="OpenStreetMap.Mapnik",
+                source="https://server.arcgisonline.com/ArcGIS/rest/services/"
+                "World_Street_Map/MapServer/tile/{z}/{y}/{x}",
                 zoom=12,
                 zorder=0,
                 alpha=0.9,
@@ -446,24 +447,29 @@ def calculate_performance_metrics(
                     f"CSI = {csi_pct:.2f} %",
                 ]
             )
-            from matplotlib.artist import Artist
-            from matplotlib.legend import Legend
             from matplotlib.legend_handler import HandlerBase
-            from matplotlib.transforms import Transform
 
             class TextOnlyHandler(HandlerBase):
                 def create_artists(
                     self,
-                    legend: Legend,
-                    orig_handle: object,
-                    xdescent: float,
-                    ydescent: float,
-                    width: float,
-                    height: float,
-                    fontsize: float,
-                    trans: Transform,
-                ) -> list[Artist]:
-                    return []
+                    legend,
+                    orig_handle,
+                    xdescent,
+                    ydescent,
+                    width,
+                    height,
+                    fontsize,
+                    trans,
+                ):
+                    # Return an invisible artist instead of an empty list.
+                    artist = mtext.Text(
+                        x=0,
+                        y=0,
+                        text="",
+                        transform=trans,
+                    )
+                    artist.set_visible(False)
+                    return [artist]
 
             # Create a single legend
             legend = ax.legend(
@@ -1130,7 +1136,10 @@ class Hydrodynamics:
         ]
 
         sfincs_root = (
-            Path(self.model.config["general"]["simulation_root"]) / run_name / "SFINCS"
+            Path(self.model.config["general"]["simulation_root"])
+            / run_name
+            / "SFINCS"
+            / "group_0"
         )
         if not sfincs_root.exists():
             raise FileNotFoundError(
@@ -1413,7 +1422,7 @@ class Hydrodynamics:
                         elevation_data=read_zarr(
                             self.model.files["other"]["DEM/fabdem"]
                         ),
-                        visualization_type="Hillshade",
+                        visualization_type="OSM",
                         name=obs_file.stem,
                     )
                     print(f"Successfully evaluated: {flood_map_path.name}")
@@ -1492,7 +1501,7 @@ class Hydrodynamics:
                             metrics = calculate_performance_metrics(
                                 observation=read_zarr(obs_file),
                                 simulated=read_zarr(flood_map_path),
-                                visualization_type="Hillshade",
+                                visualization_type="OSM",
                                 output_folder=forecast_folder,
                                 run_name=run_name,
                                 minimum_flood_depth=self.config["floods"][
