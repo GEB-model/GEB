@@ -30,9 +30,16 @@ from typing import TYPE_CHECKING
 import numpy as np
 import numpy.typing as npt
 
-from geb.geb_types import ArrayFloat32, TwoDArrayFloat64
+from geb.geb_types import (
+    ArrayFloat32,
+    ArrayFloat64 as ArrayFloat64,
+    ThreeDArrayFloat64,
+    TwoDArrayBool,
+    TwoDArrayFloat64,
+)
 from geb.module import Module
 from geb.workflows import balance_check
+from geb.workflows.io import read_zarr
 
 from .model import ModFlowSimulation
 
@@ -70,28 +77,32 @@ class GroundWater(Module):
 
     def spinup(self) -> None:
         """Initialize groundwater model parameters and state variables."""
-        # load hydraulic conductivity (md-1)
-        self.grid.var.groundwater_hydraulic_conductivity_m_per_day = (
-            self.hydrology.grid.load3d(
-                self.model.files["grid"]["groundwater/hydraulic_conductivity"],
-            )
-        ) * np.float32(
+        boundary_hydraulic_conductivity: ThreeDArrayFloat64 = read_zarr(
+            self.model.files["other"]["groundwater/boundary_hydraulic_conductivity"]
+        ).values.astype(np.float64) * np.float32(
             self.model.config["parameters"][
                 "groundwater_hydraulic_conductivity_multiplier"
             ]
+        )
+        boundary_layer_boundary_elevation: ThreeDArrayFloat64 = read_zarr(
+            self.model.files["other"]["groundwater/boundary_layer_boundary_elevation"]
+        ).values.astype(np.float64)
+        boundary_heads: ThreeDArrayFloat64 = read_zarr(
+            self.model.files["other"]["groundwater/boundary_heads"]
+        ).values.astype(np.float64)
+
+        # load hydraulic conductivity (md-1)
+        self.grid.var.groundwater_hydraulic_conductivity_m_per_day = self.grid.compress(
+            boundary_hydraulic_conductivity[:, 1:-1, 1:-1].astype(np.float32)
         )
 
         self.grid.var.specific_yield = self.hydrology.grid.load3d(
             self.model.files["grid"]["groundwater/specific_yield"],
         )
 
-        self.grid.var.layer_boundary_elevation = self.hydrology.grid.load3d(
-            self.model.files["grid"]["groundwater/layer_boundary_elevation"],
+        self.grid.var.layer_boundary_elevation = self.grid.compress(
+            boundary_layer_boundary_elevation[:, 1:-1, 1:-1].astype(np.float32)
         )
-
-        # recession_coefficient = self.hydrology.grid.load(
-        #     self.model.files["grid"]["groundwater/recession_coefficient"],
-        # )
 
         self.grid.var.elevation = self.hydrology.grid.load2d(
             self.model.files["grid"]["landsurface/elevation_m"]
@@ -103,9 +114,7 @@ class GroundWater(Module):
         )
 
         def get_initial_head() -> npt.NDArray[np.float64]:
-            heads = self.hydrology.grid.load3d(
-                self.model.files["grid"]["groundwater/heads"]
-            ).astype(np.float64)  # modflow is an exception, it needs double precision
+            heads = self.grid.compress(boundary_heads[:, 1:-1, 1:-1])
             heads = np.where(
                 ~np.isnan(heads),
                 heads,
@@ -134,6 +143,18 @@ class GroundWater(Module):
 
     def initalize_modflow_model(self) -> None:
         """Initialize the ModFlow groundwater simulation model."""
+        boundary_heads: ThreeDArrayFloat64 = read_zarr(
+            self.model.files["other"]["groundwater/boundary_heads"]
+        ).values.astype(np.float64)
+        boundary_mask: TwoDArrayBool = read_zarr(
+            self.model.files["other"]["groundwater/boundary_mask"]
+        ).values.astype(bool)
+        boundary_layer_boundary_elevation: ThreeDArrayFloat64 = read_zarr(
+            self.model.files["other"]["groundwater/boundary_layer_boundary_elevation"]
+        ).values.astype(np.float64)
+        boundary_hydraulic_conductivity: ThreeDArrayFloat64 = read_zarr(
+            self.model.files["other"]["groundwater/boundary_hydraulic_conductivity"]
+        ).values.astype(np.float64)
         self.modflow = ModFlowSimulation(
             working_directory=self.model.simulation_root_spinup / "modflow_model",
             modflow_bin_folder=self.model.bin_folder / "modflow",
@@ -143,11 +164,15 @@ class GroundWater(Module):
             specific_yield=self.grid.var.specific_yield,
             layer_boundary_elevation=self.grid.var.layer_boundary_elevation,
             basin_mask=self.model.hydrology.grid.mask,
-            heads=self.grid.var.heads,
             hydraulic_conductivity=self.grid.var.groundwater_hydraulic_conductivity_m_per_day,
-            logger=self.model.logger,
-            verbose=False,
+            heads=self.grid.var.heads,
             heads_update_callback=self.heads_update_callback,
+            logger=self.model.logger,
+            boundary_heads=boundary_heads,
+            boundary_mask=boundary_mask,
+            boundary_layer_boundary_elevation=boundary_layer_boundary_elevation,
+            boundary_hydraulic_conductivity=boundary_hydraulic_conductivity,
+            verbose=False,
         )
 
     def step(
@@ -178,16 +203,21 @@ class GroundWater(Module):
         self.modflow.step()
 
         if __debug__:
+            influxes: list[npt.NDArray[np.float64] | np.float64] = [
+                groundwater_recharge_m.astype(np.float64) * self.grid.var.cell_area,
+                self.boundary_inflow_m3,
+            ]
+            outfluxes: list[npt.NDArray[np.float64] | np.float64] = [
+                groundwater_abstraction_m3.astype(np.float64),
+                self.modflow.drainage_m3.astype(np.float64),
+                self.boundary_outflow_m3,
+            ]
+
             balance_check(
                 name="groundwater",
                 how="sum",
-                influxes=[
-                    groundwater_recharge_m.astype(np.float64) * self.grid.var.cell_area
-                ],
-                outfluxes=[
-                    groundwater_abstraction_m3.astype(np.float64),
-                    self.modflow.drainage_m3.astype(np.float64),
-                ],
+                influxes=influxes,
+                outfluxes=outfluxes,
                 prestorages=[groundwater_storage_pre.astype(np.float64)],
                 poststorages=[self.modflow.groundwater_content_m3.astype(np.float64)],
                 tolerance=groundwater_recharge_m.size,  # maximum of 1m3 per cell
@@ -216,6 +246,36 @@ class GroundWater(Module):
             Groundwater content in cubic meters in active grid cells.
         """
         return self.modflow.groundwater_content_m3.astype(np.float32)
+
+    @property
+    def boundary_inflow_m3(self) -> np.float64:
+        """Total inflow from groundwater boundary cells (m3/step).
+
+        Returns:
+            The total volume of groundwater entering the model domain from boundary cells (m3).
+        """
+        return np.float64(self.modflow.boundary_inflow_m3.sum())
+
+    @property
+    def boundary_outflow_m3(self) -> np.float64:
+        """Total outflow to groundwater boundary cells (m3/step).
+
+        Returns:
+            The total volume of groundwater leaving the model domain to boundary cells (m3).
+        """
+        return np.float64(self.modflow.boundary_outflow_m3.sum())
+
+    @property
+    def boundary_flow_m3(self) -> np.float64:
+        """Net groundwater flow across boundary cells (m3/step).
+
+        Positive values represent net flow into the model domain,
+        and negative values represent net flow out of the model domain.
+
+        Returns:
+            The net volume of groundwater flow across boundary cells (m3).
+        """
+        return np.float64(self.modflow.boundary_flow_m3.sum())
 
     @property
     def groundwater_depth(self) -> npt.NDArray[np.float32]:

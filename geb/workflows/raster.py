@@ -11,7 +11,6 @@ import geopandas as gpd
 import numba
 import numpy as np
 import numpy.typing as npt
-import xarray
 import xarray as xr
 import xarray_regrid
 from affine import Affine
@@ -792,8 +791,8 @@ def pad_to_grid_alignment(
         raise ValueError("grid_size_multiplier must be a positive integer >= 1")
 
     array_rio = da.rio
-    x_dim: str = array_rio.x_dim
-    y_dim: str = array_rio.y_dim
+    x_dim: str = str(array_rio.x_dim)
+    y_dim: str = str(array_rio.y_dim)
 
     x_coord: np.ndarray = da[x_dim].values
     y_coord: np.ndarray = da[y_dim].values
@@ -829,35 +828,162 @@ def pad_to_grid_alignment(
     pad_right: int = (-width_cells) % grid_size_multiplier
     pad_top: int = (-height_cells) % grid_size_multiplier
 
+    return pad_cells(
+        da=da,
+        left=pad_left,
+        right=pad_right,
+        top=pad_top,
+        bottom=pad_bottom,
+        constant_values=constant_values,
+    )
+
+
+@overload
+def pad_cells(
+    da: xr.DataArray,
+    left: int = 0,
+    right: int = 0,
+    top: int = 0,
+    bottom: int = 0,
+    constant_values: float
+    | bool
+    | tuple[int, int]
+    | Mapping[Any, tuple[int, int]]
+    | None = None,
+    return_slice: Literal[False] = False,
+) -> xr.DataArray: ...
+
+
+@overload
+def pad_cells(
+    da: xr.DataArray,
+    left: int = 0,
+    right: int = 0,
+    top: int = 0,
+    bottom: int = 0,
+    constant_values: float
+    | bool
+    | tuple[int, int]
+    | Mapping[Any, tuple[int, int]]
+    | None = ...,
+    return_slice: Literal[True] = ...,
+) -> tuple[xr.DataArray, dict[str, slice]]: ...
+
+
+def pad_cells(
+    da: xr.DataArray,
+    left: int = 0,
+    right: int = 0,
+    top: int = 0,
+    bottom: int = 0,
+    constant_values: float
+    | bool
+    | tuple[int, int]
+    | Mapping[Any, tuple[int, int]]
+    | None = None,
+    return_slice: bool = False,
+) -> xr.DataArray | tuple[xr.DataArray, dict[str, slice]]:
+    """Pad the array by a whole number of cells on each side, preserving existing coordinates.
+
+    Rather than recalculating existing coordinates across the padded domain, this function
+    keeps the original coordinates untouched and extends them outwards by integer multiples
+    of the cell resolution. This ensures the original coordinates are preserved without
+    introducing floating point imprecision.
+
+    Notes:
+        `left`, `right`, `top`, and `bottom` refer to the edges in geospatial coordinate space:
+        `left` corresponds to decreasing x (west), `right` to increasing x (east),
+        `top` to increasing y (north), and `bottom` to decreasing y (south).
+        Original coordinates are preserved exactly in the resulting DataArray.
+
+    Args:
+        da: The DataArray to pad.
+        left: Number of cells to add on the left (west) edge (cells).
+        right: Number of cells to add on the right (east) edge (cells).
+        top: Number of cells to add on the top (north) edge (cells).
+        bottom: Number of cells to add on the bottom (south) edge (cells).
+        constant_values: The value used for padding. If None, nodata will be used if set,
+            and np.nan otherwise.
+        return_slice: If True, returns a tuple of (padded DataArray, slice dictionary).
+
+    Returns:
+        Padded DataArray with extended coordinates and updated transform.
+        If `return_slice` is True, also returns a dictionary with slices for the spatial
+        dimensions that can be used to index the padded DataArray to get the original data.
+
+    Raises:
+        ValueError: If any padding count is negative.
+
+    """
+    if left < 0 or right < 0 or top < 0 or bottom < 0:
+        raise ValueError(
+            f"Padding cell counts must be non-negative integers, got left={left}, right={right}, top={top}, bottom={bottom}."
+        )
+
+    array_rio: RasterArray = da.rio
+    x_dim: str = str(array_rio.x_dim)
+    y_dim: str = str(array_rio.y_dim)
+    x_coord: np.ndarray = da[x_dim].values
+    y_coord: np.ndarray = da[y_dim].values
+
+    # Use step directly from coordinates to preserve existing spacing
+    x_step: float = (
+        float(x_coord[1] - x_coord[0])
+        if x_coord.size > 1
+        else float(array_rio.resolution()[0])
+    )
+    y_step: float = (
+        float(y_coord[1] - y_coord[0])
+        if y_coord.size > 1
+        else float(array_rio.resolution()[1])
+    )
+
+    # In typical rasters, y_step is negative (top row at index 0, decreasing y southward).
+    # Map directional padding counts (left, right, top, bottom) to array index padding (before, after).
+    x_before: int = left if x_step > 0 else right
+    x_after: int = right if x_step > 0 else left
+    y_before: int = top if y_step < 0 else bottom
+    y_after: int = bottom if y_step < 0 else top
+
+    # Extend coordinates preserving original coordinates exactly
+    if x_before > 0:
+        new_left_coords: np.ndarray = x_coord[0] + x_step * np.arange(-x_before, 0)
+        x_coord = np.concatenate([new_left_coords, x_coord])
+
+    if x_after > 0:
+        new_right_coords: np.ndarray = x_coord[-1] + x_step * np.arange(1, x_after + 1)
+        x_coord = np.concatenate([x_coord, new_right_coords])
+
+    if y_before > 0:
+        new_top_coords: np.ndarray = y_coord[0] + y_step * np.arange(-y_before, 0)
+        y_coord = np.concatenate([new_top_coords, y_coord])
+
+    if y_after > 0:
+        new_bottom_coords: np.ndarray = y_coord[-1] + y_step * np.arange(1, y_after + 1)
+        y_coord = np.concatenate([y_coord, new_bottom_coords])
+
     if constant_values is None:
         constant_values = np.nan if array_rio.nodata is None else array_rio.nodata
 
-    padded = da.pad(
+    superset: xr.DataArray = da.pad(
         pad_width={
-            x_dim: (pad_left, pad_right),
-            y_dim: (pad_top, pad_bottom),
+            x_dim: (x_before, x_after),
+            y_dim: (y_before, y_after),
         },
         constant_values=constant_values,
     ).rio.set_spatial_dims(x_dim=x_dim, y_dim=y_dim, inplace=True)
 
-    if pad_left > 0:
-        new_left_coords = x_coord[0] + x_step * np.arange(-pad_left, 0)
-        x_coord = np.concatenate([new_left_coords, x_coord])
-    if pad_right > 0:
-        new_right_coords = x_coord[-1] + x_step * np.arange(1, pad_right + 1)
-        x_coord = np.concatenate([x_coord, new_right_coords])
+    superset[x_dim] = x_coord
+    superset[y_dim] = y_coord
+    superset.rio.write_transform(inplace=True)
 
-    if pad_top > 0:
-        new_top_coords = y_coord[0] + y_step * np.arange(-pad_top, 0)
-        y_coord = np.concatenate([new_top_coords, y_coord])
-    if pad_bottom > 0:
-        new_bottom_coords = y_coord[-1] + y_step * np.arange(1, pad_bottom + 1)
-        y_coord = np.concatenate([y_coord, new_bottom_coords])
-
-    padded[x_dim] = x_coord
-    padded[y_dim] = y_coord
-    padded.rio.write_transform(inplace=True)
-    return padded
+    if return_slice:
+        slice_dict: dict[str, slice] = {
+            x_dim: slice(x_before, superset[x_dim].size - x_after),
+            y_dim: slice(y_before, superset[y_dim].size - y_after),
+        }
+        return superset, slice_dict
+    return superset
 
 
 @overload
@@ -914,10 +1040,10 @@ def pad_xy(
 
     Args:
         da: the DataArray to pad.
-        minx: Minimum bound for x coordinate.
-        miny: Minimum bound for y coordinate.
-        maxx: Maximum bound for x coordinate.
-        maxy: Maximum bound for y coordinate.
+        minx: Minimum bound for x coordinate (m or degrees).
+        miny: Minimum bound for y coordinate (m or degrees).
+        maxx: Maximum bound for x coordinate (m or degrees).
+        maxy: Maximum bound for y coordinate (m or degrees).
         constant_values: scalar, tuple or mapping of hashable to tuple
             The value used for padding. If None, nodata will be used if it is
             set, and np.nan otherwise.
@@ -933,10 +1059,14 @@ def pad_xy(
     """
     array_rio: RasterArray = da.rio
 
-    left, bottom, right, top = array_rio._internal_bounds()
+    left_bound: float
+    bottom_bound: float
+    right_bound: float
+    top_bound: float
+    left_bound, bottom_bound, right_bound, top_bound = array_rio._internal_bounds()
+    resolution_x: float
+    resolution_y: float
     resolution_x, resolution_y = array_rio.resolution()
-    y_coord: xarray.DataArray | np.ndarray = da[array_rio.y_dim].values
-    x_coord: xarray.DataArray | np.ndarray = da[array_rio.x_dim].values
 
     # Bounding box bounds (minx, miny, maxx, maxy) represent cell edges, whereas
     # coordinates represent cell centroids. We offset by half the cell resolution
@@ -951,61 +1081,31 @@ def pad_xy(
     x_before: int = 0
     x_after: int = 0
 
-    # Create new coordinates by extending existing ones
-    if top - resolution_y < pad_maxy:
-        new_top_coords: np.ndarray = np.arange(
-            top - resolution_y, pad_maxy, -resolution_y
-        )[::-1]
-        new_y_coord: np.ndarray = np.concatenate([new_top_coords, y_coord])
-        y_before = len(new_y_coord) - len(y_coord)
-        y_coord = new_y_coord
-        top = y_coord[0]
-    if bottom + resolution_y > pad_miny:
-        new_bottom_coords: np.ndarray = np.arange(
-            bottom + resolution_y, pad_miny, resolution_y
-        )
-        new_y_coord = np.concatenate([y_coord, new_bottom_coords])
-        y_after = len(new_y_coord) - len(y_coord)
-        y_coord = new_y_coord
-        bottom = y_coord[-1]
+    # Calculate required cell padding along each axis
+    if top_bound - resolution_y < pad_maxy:
+        y_before = len(np.arange(top_bound - resolution_y, pad_maxy, -resolution_y))
+    if bottom_bound + resolution_y > pad_miny:
+        y_after = len(np.arange(bottom_bound + resolution_y, pad_miny, resolution_y))
+    if left_bound - resolution_x > pad_minx:
+        x_before = len(np.arange(left_bound - resolution_x, pad_minx, -resolution_x))
+    if right_bound + resolution_x < pad_maxx:
+        x_after = len(np.arange(right_bound + resolution_x, pad_maxx, resolution_x))
 
-    if left - resolution_x > pad_minx:
-        new_left_coords: np.ndarray = np.arange(
-            left - resolution_x, pad_minx, -resolution_x
-        )[::-1]
-        new_x_coord = np.concatenate([new_left_coords, x_coord])
-        x_before = len(new_x_coord) - len(x_coord)
-        x_coord = new_x_coord
-        left = x_coord[0]
-    if right + resolution_x < pad_maxx:
-        new_right_coords: np.ndarray = np.arange(
-            x_coord[-1] + resolution_x, pad_maxx, resolution_x
-        )
-        new_x_coord = np.concatenate([x_coord, new_right_coords])
-        x_after = len(new_x_coord) - len(x_coord)
-        x_coord = new_x_coord
-        right = x_coord[-1]
+    # Map array index padding (before, after) back to directional edges (left, right, top, bottom)
+    left_cells: int = x_before if resolution_x > 0 else x_after
+    right_cells: int = x_after if resolution_x > 0 else x_before
+    top_cells: int = y_before if resolution_y < 0 else y_after
+    bottom_cells: int = y_after if resolution_y < 0 else y_before
 
-    if constant_values is None:
-        constant_values = np.nan if array_rio.nodata is None else array_rio.nodata
-
-    superset = da.pad(
-        pad_width={
-            array_rio.x_dim: (x_before, x_after),
-            array_rio.y_dim: (y_before, y_after),
-        },
+    return pad_cells(
+        da=da,
+        left=left_cells,
+        right=right_cells,
+        top=top_cells,
+        bottom=bottom_cells,
         constant_values=constant_values,
-    ).rio.set_spatial_dims(x_dim=array_rio.x_dim, y_dim=array_rio.y_dim, inplace=True)
-    superset[array_rio.x_dim] = x_coord
-    superset[array_rio.y_dim] = y_coord
-    superset.rio.write_transform(inplace=True)
-    if return_slice:
-        return superset, {
-            "x": slice(x_before, superset["x"].size - x_after),
-            "y": slice(y_before, superset["y"].size - y_after),
-        }
-    else:
-        return superset
+        return_slice=return_slice,
+    )
 
 
 def interpolate_na_along_dim(
