@@ -42,7 +42,10 @@ from geb.geb_types import (
     TwoDArrayInt32,
 )
 from geb.hazards.event import Event
-from geb.hazards.floods.workflows.bathymetry import burn_rivers
+from geb.hazards.floods.workflows.bathymetry import (
+    burn_rivers,
+    skip_subgrid_tiles_without_river_bed_levels,
+)
 from geb.hazards.floods.workflows.utils import get_end_point
 from geb.workflows.extreme_value_analysis import ReturnPeriodModel
 from geb.workflows.io import (
@@ -621,7 +624,10 @@ class SFINCSRootModel:
                 f"Setting up SFINCS subgrid with {grid_size_multiplier} subgrid pixels..."
             )
 
-            with np.errstate(invalid="ignore"):
+            with (
+                np.errstate(invalid="ignore"),
+                skip_subgrid_tiles_without_river_bed_levels(),
+            ):
                 # only burn rivers that are wider than the subgrid pixel size
                 sf.subgrid.create(
                     elevation_list=DEMs,

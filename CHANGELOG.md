@@ -1,4 +1,5 @@
 # dev
+- Fixed SFINCS subgrid build crashing with `Lengths of inputs do not match` when a subgrid tile only contains a sliver of a river for which no river bed level can be estimated; such tiles are now left unburned.
 
 # v1.0.0b32
 - Removed defaults from ParametersConfig in configuration schema so that all parameters must be explicitly set via reasonable_default_config.yml or model.yml, and added groundwater_hydraulic_conductivity_multiplier to the schema.
