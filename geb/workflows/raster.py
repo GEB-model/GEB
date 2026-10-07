@@ -152,7 +152,7 @@ def pixels_to_coords(
     assert pixels.shape[1] == 2
     if gt[2] + gt[4] == 0:
         coords = np.empty(pixels.shape, dtype=np.float64)
-        for i in prange(coords.shape[0]):  # ty: ignore[not-iterable]
+        for i in prange(coords.shape[0]):
             coords[i, 0] = pixels[i, 0] * gt[1] + gt[0]
             coords[i, 1] = pixels[i, 1] * gt[5] + gt[3]
         return coords
@@ -193,7 +193,7 @@ def sample_from_map(
     values = np.empty((size,) + array.shape[:-2], dtype=array.dtype)
 
     if out_of_bounds_value is None:
-        for i in prange(size):  # ty: ignore[not-iterable]
+        for i in prange(size):
             y_idx = int(np.floor((coords[i, 1] - y_offset) / y_step))
             x_idx = int(np.floor((coords[i, 0] - x_offset) / x_step))
             if 0 <= y_idx < array.shape[-2] and 0 <= x_idx < array.shape[-1]:
@@ -202,7 +202,7 @@ def sample_from_map(
                 raise IndexError("Coordinate is out of bounds for array")
 
     else:
-        for i in prange(size):  # ty: ignore[not-iterable]
+        for i in prange(size):
             y_idx = int(np.floor((coords[i, 1] - y_offset) / y_step))
             x_idx = int(np.floor((coords[i, 0] - x_offset) / x_step))
             if 0 <= y_idx < array.shape[-2] and 0 <= x_idx < array.shape[-1]:
@@ -257,7 +257,7 @@ def write_to_array(
         )
 
         # Parallel loop where each thread writes to its own sub-array
-        for i in prange(size):  # ty:ignore[not-iterable]
+        for i in prange(size):
             thread_id = numba.get_thread_id()
             y_idx = int((coords[i, 1] - y_offset) / y_step)
             x_idx = int((coords[i, 0] - x_offset) / x_step)
@@ -329,7 +329,7 @@ def coords_to_pixels(
         y_step = gt[5]
         pxs = np.empty(size, dtype=dtype)
         pys = np.empty(size, dtype=dtype)
-        for i in prange(size):  # ty: ignore[not-iterable]
+        for i in prange(size):
             pxs[i] = int((coords[i, 0] - x_offset) / x_step)
             pys[i] = int((coords[i, 1] - y_offset) / y_step)
         return pxs, pys

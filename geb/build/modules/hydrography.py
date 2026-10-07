@@ -815,7 +815,7 @@ class Hydrography(BuildModelBase):
             y=self.subgrid_factor,
             boundary="exact",
             coord_func="mean",
-        ).mean()  # ty:ignore[unresolved-attribute]
+        ).mean()
         surface_area_ratio.attrs["_FillValue"] = np.nan
 
         surface_area_ratio: xr.DataArray = snap_to_grid(
@@ -1027,7 +1027,7 @@ class Hydrography(BuildModelBase):
             y=self.ldd_scale_factor,
             boundary="exact",
             coord_func="mean",
-        ).sum()  # ty:ignore[unresolved-attribute]
+        ).sum()
 
         routing_streams_length.attrs["_FillValue"] = np.nan
         routing_streams_length = snap_to_grid(routing_streams_length, self.grid["mask"])
