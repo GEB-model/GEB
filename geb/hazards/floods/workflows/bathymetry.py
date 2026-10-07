@@ -1,13 +1,87 @@
 """Workflows for DEM processing and river burning."""
 
-from typing import Callable
+from contextlib import contextmanager
+from typing import Any, Callable, Iterator
 
 import geopandas as gpd
+import hydromt_sfincs.workflows.bathymetry as hydromt_sfincs_bathymetry
 import numpy as np
 import xarray as xr
 from rasterio.features import rasterize
 from scipy.spatial import cKDTree  # ty: ignore[unresolved-import]
 from shapely.ops import transform as shapely_transform
+
+
+@contextmanager
+def skip_subgrid_tiles_without_river_bed_levels() -> Iterator[None]:
+    """Makes hydromt-sfincs subgrid river burning robust for tiles without river bed levels.
+
+    When hydromt-sfincs burns rivers into a subgrid tile, the river bed level is
+    estimated from the elevation of the river banks. If a tile only contains a
+    sliver of a river (for example at the tile edge), no valid river bed level can
+    be derived and hydromt-sfincs crashes with
+    `ValueError: Lengths of inputs do not match`. Within this context, such tiles
+    are left unchanged (no river is burned) instead.
+
+    Notes:
+        This temporarily replaces `interp_along_line_to_grid` in the
+        hydromt-sfincs bathymetry workflow and restores it on exit.
+
+    Yields:
+        None.
+    """
+    original_interpolation: Callable[..., Any] = (
+        hydromt_sfincs_bathymetry.interp_along_line_to_grid
+    )
+
+    def interpolation_with_empty_fallback(
+        da_mask: xr.DataArray,
+        gdf_lines: gpd.GeoDataFrame,
+        gdf_zb: gpd.GeoDataFrame,
+        column_names: list[str] = ["z"],
+        **kwargs: Any,
+    ) -> Any:
+        """Interpolates along lines, returning NaN everywhere if there are no valid points.
+
+        Args:
+            da_mask: Boolean mask of the cells to interpolate.
+            gdf_lines: River center lines.
+            gdf_zb: Points with the values to interpolate.
+            column_names: Names of the columns in `gdf_zb` to interpolate.
+            **kwargs: Additional arguments passed to the original function.
+
+        Returns:
+            Dataset with one NaN-filled variable per column name if `gdf_zb` or
+            `gdf_lines` is empty, otherwise the interpolated values.
+        """
+        if gdf_zb.empty or gdf_lines.empty:
+            return xr.Dataset(
+                {
+                    name: xr.full_like(da_mask, np.nan, dtype=np.float32)
+                    for name in column_names
+                }
+            )
+        return original_interpolation(
+            da_mask=da_mask,
+            gdf_lines=gdf_lines,
+            gdf_zb=gdf_zb,
+            column_names=column_names,
+            **kwargs,
+        )
+
+    setattr(
+        hydromt_sfincs_bathymetry,
+        "interp_along_line_to_grid",
+        interpolation_with_empty_fallback,
+    )
+    try:
+        yield
+    finally:
+        setattr(
+            hydromt_sfincs_bathymetry,
+            "interp_along_line_to_grid",
+            original_interpolation,
+        )
 
 
 def _validate_inputs(
