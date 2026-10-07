@@ -1,4 +1,5 @@
 # dev
+- Implement groundwater fluxes at catchment boundaries. This is especially important when modelling small catchments. Previously there was essentially a wall around the catchment, while groundwater can now enter or leave the catchment based on prescribed heads based on GLOBGM (by default). Oceans have a groundwater head of 0 now.
 
 # v1.0.0b33
 - Integrate GDW structures and reservoir construction years with the updated channel geometry, open boundaries, and precomputed waterbody outlets. Rebuild `setup_waterbodies` and `setup_weirs`, then rerun spinup and simulation, including for inputs already marked v1.0.0b32.
