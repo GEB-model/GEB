@@ -890,7 +890,8 @@ class SFINCSRootModel:
                     )  # or river that flows into ocean
                 ]
             )
-            > 0
+            > 0,
+            "No outflow rivers found in the model. Please check the river geometries and subbasins boundary.",
         )
         for river_idx, river in self.active_rivers[
             self.active_rivers["is_downstream_outflow"]  # any outflow river
