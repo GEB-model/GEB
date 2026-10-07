@@ -881,7 +881,17 @@ class SFINCSRootModel:
             write_geom(outflow_gdf, self.path / "debug_outflow_point.geoparquet")
 
         boundary = area.union_all().boundary
-
+        assert (
+            len(
+                self.active_rivers[
+                    self.active_rivers["is_downstream_outflow"]  # any outflow river
+                    | (
+                        self.active_rivers["downstream_ID"] == -1
+                    )  # or river that flows into ocean
+                ]
+            )
+            > 0
+        )
         for river_idx, river in self.active_rivers[
             self.active_rivers["is_downstream_outflow"]  # any outflow river
             | (
@@ -1006,7 +1016,10 @@ class SFINCSRootModel:
                 # due to floating point precision, the intersection point
                 # may be just outside the model grid. We therefore check if the
                 # point is outside the grid, and if so, move it 1 m upstream along the river
-                if not self.mask.values[outflow_row, outflow_col]:
+                if (
+                    outflow_row > self.mask.shape[0] - 1 or outflow_row < 0
+                ) or not self.mask.values[outflow_row, outflow_col]:
+                    # if not self.mask.values[outflow_row, outflow_col]:
                     # move outflow point 1 m upstream. 0.000008983 degrees is approximately 1 m
                     outflow_point: Point | MultiPoint | GeometryCollection = (
                         river.interpolate(
