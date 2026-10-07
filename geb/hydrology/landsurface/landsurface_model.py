@@ -90,6 +90,7 @@ SOIL_EMISSIVITY: np.float32 = np.float32(0.95)
 # Padding the HRU dimension to this multiple allows Numba/LLVM to emit full
 # width vector loads and stores with no scalar remainder loop.
 BLOCK_SIZE: int = 16
+WATER_BALANCE_ROUNDOFF_TOLERANCE_M: np.float32 = np.float32(1e-10)
 
 if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
@@ -942,9 +943,18 @@ def land_surface_model(
             snow_density_kg_per_m3[i, 0] = snow_density_top_kg_per_m3_cell
             snow_density_kg_per_m3[i, 1] = snow_density_bottom_kg_per_m3_cell
 
-    # TEMPORARY FIX
-    runoff_m = np.maximum(runoff_m, 0.0)  # Ensure non-negative runoff values
-    topwater_m = np.maximum(topwater_m, 0.0)  # Ensure non-negative topwater values
+    # Only remove sub-nanometer roundoff. Larger negative values must remain
+    # visible to the diagnostic checks below because they indicate a real bug.
+    runoff_m = np.where(
+        runoff_m > -WATER_BALANCE_ROUNDOFF_TOLERANCE_M,
+        np.maximum(runoff_m, np.float32(0.0)),
+        runoff_m,
+    )
+    topwater_m = np.where(
+        topwater_m > -WATER_BALANCE_ROUNDOFF_TOLERANCE_M,
+        np.maximum(topwater_m, np.float32(0.0)),
+        topwater_m,
+    )
 
     return (
         rain_m,
@@ -1541,7 +1551,7 @@ class LandSurface(Module):
             fail_idx_topwater: int = int(np.where(nan_topwater)[0][0])
             fail(fail_idx_topwater, "NaN topwater detected")
 
-        neg_topwater: ArrayBool = topwater < 0.0
+        neg_topwater: ArrayBool = topwater < -WATER_BALANCE_ROUNDOFF_TOLERANCE_M
         if np.any(neg_topwater):
             worst_idx_topwater: int = int(np.argmin(topwater))
             val_topwater: float = float(topwater[worst_idx_topwater])
@@ -1556,7 +1566,7 @@ class LandSurface(Module):
             fail_idx_runoff: int = int(np.where(np.any(nan_runoff, axis=1))[0][0])
             fail(fail_idx_runoff, "NaN runoff detected")
 
-        neg_runoff: ArrayBool = runoff_m < 0.0
+        neg_runoff: ArrayBool = runoff_m < -WATER_BALANCE_ROUNDOFF_TOLERANCE_M
         if np.any(neg_runoff):
             min_runoff_per_cell: ArrayFloat32 = runoff_m.min(axis=1)
             worst_idx_runoff: int = int(np.argmin(min_runoff_per_cell))

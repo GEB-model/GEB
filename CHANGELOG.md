@@ -1,5 +1,7 @@
 # dev
 
+- Ignore sub-nanometer land-surface runoff/topwater roundoff in water diagnostics while preserving larger negative values for diagnostic export.
+
 # v1.0.0b34
 - Fix for trapped waterbody cells. Only classify waterbody as trapped if they are both down- and upstream of the same waterbody.
 - Pruned starved river cells originating from active non-outflow waterbody cells to avoid zero-discharge hydrodynamic river reaches.
