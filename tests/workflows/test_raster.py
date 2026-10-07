@@ -20,6 +20,7 @@ from geb.workflows.raster import (
     full_like,
     interpolate_na_2d,
     interpolate_na_along_dim,
+    pad_cells,
     pad_to_grid_alignment,
     pad_xy,
     pixel_to_coord,
@@ -747,6 +748,134 @@ def test_pad_xy(pad_bounds: tuple[int, int, int, int]) -> None:
     mask = np.zeros(padded_da.shape, dtype=bool)
     mask[returned_slice["y"], returned_slice["x"]] = True
     assert np.allclose(padded_da.values[~mask], constant_values)
+
+
+def test_pad_cells_projected() -> None:
+    """Test pad_cells with independently configured sides on a projected raster."""
+    original_da: xr.DataArray = xr.DataArray(
+        np.arange(100, dtype=np.float64).reshape((10, 10)),
+        dims=["y", "x"],
+        coords={"y": np.arange(14.5, 4.5, -1), "x": np.arange(5.5, 15.5, 1)},
+        attrs={"_FillValue": -9999},
+    )
+    original_da.rio.write_crs("EPSG:28992", inplace=True)
+    original_da.rio.write_transform(from_bounds(5, 5, 15, 15, 10, 10), inplace=True)
+
+    left_pad: int = 2
+    right_pad: int = 3
+    top_pad: int = 1
+    bottom_pad: int = 4
+    constant_val: float = -42.0
+
+    padded_da: xr.DataArray
+    returned_slice: dict[str, slice]
+    padded_da, returned_slice = pad_cells(
+        original_da,
+        left=left_pad,
+        right=right_pad,
+        top=top_pad,
+        bottom=bottom_pad,
+        constant_values=constant_val,
+        return_slice=True,
+    )
+
+    # Check resulting shape
+    expected_y_size: int = 10 + top_pad + bottom_pad
+    expected_x_size: int = 10 + left_pad + right_pad
+    assert padded_da.shape == (expected_y_size, expected_x_size)
+
+    # Check that original coordinates are preserved exactly (bit-for-bit identical)
+    original_subset: xr.DataArray = padded_da.isel(returned_slice)
+    assert (original_subset.x.values == original_da.x.values).all()
+    assert (original_subset.y.values == original_da.y.values).all()
+    assert np.array_equal(original_subset.values, original_da.values)
+
+    # Check constant values in padded regions
+    mask: np.ndarray = np.zeros(padded_da.shape, dtype=bool)
+    mask[returned_slice["y"], returned_slice["x"]] = True
+    assert np.allclose(padded_da.values[~mask], constant_val)
+
+    # Check coordinate steps
+    assert np.allclose(np.diff(padded_da.x.values), 1.0)
+    assert np.allclose(np.diff(padded_da.y.values), -1.0)
+
+
+def test_pad_cells_geographical() -> None:
+    """Test pad_cells with geographic coordinates (descending y)."""
+    original_da: xr.DataArray = xr.DataArray(
+        np.ones((6, 8)),
+        dims=["y", "x"],
+        coords={"y": np.arange(50.5, 44.5, -1), "x": np.arange(5.5, 13.5, 1)},
+        attrs={"_FillValue": -9999},
+    )
+    original_da.rio.write_crs("EPSG:4326", inplace=True)
+    original_da.rio.write_transform(from_bounds(5, 44, 13, 51, 8, 6), inplace=True)
+
+    padded_da: xr.DataArray = pad_cells(
+        original_da,
+        left=1,
+        right=2,
+        top=3,
+        bottom=0,
+        constant_values=-1.0,
+    )
+
+    assert padded_da.shape == (9, 11)
+    assert np.allclose(np.diff(padded_da.x.values), 1.0)
+    assert np.allclose(np.diff(padded_da.y.values), -1.0)
+
+
+def test_pad_cells_zero_padding() -> None:
+    """Test pad_cells when padding is 0 on all sides."""
+    original_da: xr.DataArray = xr.DataArray(
+        np.ones((5, 5)),
+        dims=["y", "x"],
+        coords={"y": np.arange(4.5, -0.5, -1), "x": np.arange(0.5, 5.5, 1)},
+    )
+    original_da.rio.write_crs("EPSG:28992", inplace=True)
+    original_da.rio.write_transform(from_bounds(0, 0, 5, 5, 5, 5), inplace=True)
+
+    padded_da, returned_slice = pad_cells(original_da, return_slice=True)
+    assert padded_da.shape == original_da.shape
+    assert (padded_da.x.values == original_da.x.values).all()
+    assert (padded_da.y.values == original_da.y.values).all()
+    assert np.array_equal(padded_da.values, original_da.values)
+    assert returned_slice == {"x": slice(0, 5), "y": slice(0, 5)}
+
+
+def test_pad_cells_default_nodata() -> None:
+    """Test that pad_cells uses nodata attribute when constant_values is None."""
+    original_da: xr.DataArray = xr.DataArray(
+        np.ones((4, 4)),
+        dims=["y", "x"],
+        coords={"y": np.arange(3.5, -0.5, -1), "x": np.arange(0.5, 4.5, 1)},
+    )
+    original_da.rio.write_nodata(-999.0, inplace=True)
+    original_da.rio.write_crs("EPSG:28992", inplace=True)
+    original_da.rio.write_transform(from_bounds(0, 0, 4, 4, 4, 4), inplace=True)
+
+    padded_da: xr.DataArray = pad_cells(original_da, left=1, right=1, top=1, bottom=1)
+    assert padded_da.values[0, 0] == -999.0
+
+
+def test_pad_cells_invalid_negative() -> None:
+    """Test that pad_cells raises ValueError when negative cell count is passed."""
+    original_da: xr.DataArray = xr.DataArray(
+        np.ones((2, 2)),
+        dims=["y", "x"],
+        coords={"y": [1.5, 0.5], "x": [0.5, 1.5]},
+    )
+    original_da.rio.write_crs("EPSG:28992", inplace=True)
+    original_da.rio.write_transform(from_bounds(0, 0, 2, 2, 2, 2), inplace=True)
+
+    with pytest.raises(ValueError, match="non-negative"):
+        pad_cells(original_da, left=-1)
+    with pytest.raises(ValueError, match="non-negative"):
+        pad_cells(original_da, right=-1)
+    with pytest.raises(ValueError, match="non-negative"):
+        pad_cells(original_da, top=-1)
+    with pytest.raises(ValueError, match="non-negative"):
+        pad_cells(original_da, bottom=-1)
 
 
 @pytest.mark.parametrize(

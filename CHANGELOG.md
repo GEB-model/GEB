@@ -1,4 +1,5 @@
 # dev
+- Implement groundwater fluxes at catchment boundaries. This is especially important when modelling small catchments. Previously there was essentially a wall around the catchment, while groundwater can now enter or leave the catchment based on prescribed heads based on GLOBGM (by default). Oceans have a groundwater head of 0 now.
 - Log forecast input files, ensemble members, time coverage, and the actual normal/forecast substep selection for each forcing variable.
 - Fixed shape mismatch in forecast mode when forcing variables are on different grids: forecast data is now regridded to the historical mask grid of each variable during the build (requires rebuilding forecasts).
 
