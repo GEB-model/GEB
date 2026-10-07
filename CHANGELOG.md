@@ -2,6 +2,7 @@
 
 # v1.0.0b34
 - Fix for trapped waterbody cells. Only classify waterbody as trapped if they are both down- and upstream of the same waterbody.
+- Pruned starved river cells originating from active non-outflow waterbody cells to avoid zero-discharge hydrodynamic river reaches.
 
 # v1.0.0b33
 - Implement groundwater fluxes at catchment boundaries. This is especially important when modelling small catchments. Previously there was essentially a wall around the catchment, while groundwater can now enter or leave the catchment based on prescribed heads based on GLOBGM (by default). Oceans have a groundwater head of 0 now,
