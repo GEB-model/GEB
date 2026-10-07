@@ -109,6 +109,11 @@ def _load_and_tile(npz_path: Path, num_cells: int) -> dict:
         raw["daily_reference_evapotranspiration_grass_m"] = np.full(
             raw["root_depth_m"].shape, 0.003, dtype=np.float32
         )
+    if "groundwater_depth_m" not in raw:
+        raw["groundwater_depth_m"] = np.full(
+            raw["root_depth_m"].shape, 10.0, dtype=np.float32
+        )
+    raw.pop("capillar_rise_m", None)
 
     if "thermal_conductivity_saturated_unfrozen_W_per_m_K" not in raw:
         porosity = raw["water_content_saturated_m"] / raw["soil_layer_height"]

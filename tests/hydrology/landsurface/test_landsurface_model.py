@@ -75,6 +75,11 @@ def test_land_surface_model_error_cases(error_case_path: Path, asfloat64: bool) 
         inputs["daily_reference_evapotranspiration_grass_m"] = np.full(
             inputs["root_depth_m"].shape, 0.003, dtype=np.float32
         )
+    if "groundwater_depth_m" not in inputs:
+        inputs["groundwater_depth_m"] = np.full(
+            inputs["root_depth_m"].shape, 10.0, dtype=np.float32
+        )
+    inputs.pop("capillar_rise_m", None)
 
     # Cast inputs if requested
     if asfloat64:
@@ -149,6 +154,7 @@ def test_land_surface_model_error_cases(error_case_path: Path, asfloat64: bool) 
         out_open_water_evaporation_m,
         out_runoff_m,  # This is the 2D runoff_m [substep, indices]
         out_groundwater_recharge_m,
+        out_capillar_rise_m,
         out_interflow_m,  # This is the 2D interflow_m [substep, indices]
         out_bare_soil_evaporation,
         out_transpiration_m,
@@ -182,7 +188,7 @@ def test_land_surface_model_error_cases(error_case_path: Path, asfloat64: bool) 
         influxes=[
             inputs["pr_kg_per_m2_per_s"].sum(axis=1) * 3.6,
             inputs["actual_irrigation_consumption_m"],
-            inputs["capillar_rise_m"],
+            out_capillar_rise_m,
         ],
         outfluxes=[
             -out_sublimation_m,

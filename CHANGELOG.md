@@ -1,4 +1,5 @@
 # dev
+- Implement capillary rise in the Ross solver.
 - Implement groundwater fluxes at catchment boundaries. This is especially important when modelling small catchments. Previously there was essentially a wall around the catchment, while groundwater can now enter or leave the catchment based on prescribed heads based on GLOBGM (by default). Oceans have a groundwater head of 0 now.
 
 # v1.0.0b32
