@@ -76,7 +76,7 @@ def _sum_landsurface_storage(
     n_snow_layers = snow_water_equivalent_m.shape[1]
     n_layers = water_content_m.shape[0]
     total = np.float64(0.0)
-    for i in numba.prange(n_hru):  # ty:ignore[not-iterable]
+    for i in numba.prange(n_hru):
         snow_water = np.float64(0.0)
         liquid_snow_water = np.float64(0.0)
         for snow_layer in range(n_snow_layers):
@@ -119,7 +119,7 @@ def _sum_overland_flow_buffer_storage(
     n_substeps = overland_flow_buffer.shape[0]
     n_grid = overland_flow_buffer.shape[1]
     total = np.float64(0.0)
-    for i in numba.prange(n_grid):  # ty:ignore[not-iterable]
+    for i in numba.prange(n_grid):
         cell_sum = np.float64(0.0)
         for s in range(n_substeps):
             cell_sum += np.float64(overland_flow_buffer[s, i])
@@ -340,6 +340,10 @@ class Hydrology(Data, Module):
             ).sum()
 
             outflux_m3 += capillar_next_step.sum()  # capillary rise is added to sinks
+
+            # Account for groundwater flow across model boundaries
+            influx += self.groundwater.boundary_inflow_m3
+            outflux_m3 += self.groundwater.boundary_outflow_m3
 
             balance_check(
                 name="total water balance 2",

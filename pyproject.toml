@@ -7,7 +7,7 @@ module-root = ""
 
 [project]
 name = "geb"
-version = "1.0.0b32"
+version = "1.0.0b33"
 description = "GEB simulates the environment (e.g., hydrology, floods), the individual people, households and orginizations as well as their interactions at both small and large scale."
 authors = [
     {name = "Jens de Bruijn", email = "jens.de.bruijn@vu.nl"},
@@ -25,7 +25,7 @@ authors = [
 ]
 dependencies = [
     "affine<3.0",  # release pin when 0.5.13 of pyflwdir or higher is released
-    "cartopy==0.24.1", # pin until https://github.com/SciTools/cartopy/issues/2577 is fixed
+    "cartopy>=0.26",
     "cfgrib>=0.9.14",
     "click>=8.1.8",
     "contextily>=1.6.2",  # plot basemaps
