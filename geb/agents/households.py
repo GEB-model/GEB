@@ -1598,7 +1598,7 @@ class Households(AgentBaseClass):
                 ssp_map=True
             )
         else: 
-            self.var.growth_rate = float(self.growth_rate.sel({
+            growth_rate = float(self.growth_rate.sel({
                 "time": current_year}).item())
         self.var.factor_change = float(self.factor_change.sel({
             "time": current_year}).item())
