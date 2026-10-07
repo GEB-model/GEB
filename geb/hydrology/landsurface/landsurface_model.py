@@ -936,10 +936,6 @@ def land_surface_model(
             snow_density_kg_per_m3[i, 0] = snow_density_top_kg_per_m3_cell
             snow_density_kg_per_m3[i, 1] = snow_density_bottom_kg_per_m3_cell
 
-    # TEMPORARY FIX
-    runoff_m = np.maximum(runoff_m, 0.0)  # Ensure non-negative runoff values
-    topwater_m = np.maximum(topwater_m, 0.0)  # Ensure non-negative topwater values
-
     return (
         rain_m,
         snow_m,

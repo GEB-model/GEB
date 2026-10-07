@@ -176,6 +176,10 @@ def test_land_surface_model_error_cases(error_case_path: Path, asfloat64: bool) 
     assert np.all(out_top_soil_rise_from_layer_2_m >= 0.0)
     assert np.all(out_top_soil_transpiration_m >= 0.0)
     assert np.all(out_top_soil_transpiration_m <= out_transpiration_m + 1e-6)
+    assert np.all(post_topwater_m >= 0.0), (
+        f"Negative topwater: {np.min(post_topwater_m)}"
+    )
+    assert np.all(out_runoff_m >= 0.0), f"Negative runoff: {np.min(out_runoff_m)}"
 
     # Perform water balance check using in-place updated water content
     post_water_content_m: np.ndarray = padded_inputs.water_content_m[

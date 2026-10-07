@@ -1,5 +1,6 @@
 # dev
 - Implement capillary rise in the Ross solver.
+- Fixed rare floating-point precision underflow in `infiltration` during profile saturation recharge subtraction that caused slightly negative `topwater_m` and false `direct_runoff` in the land surface model.
 
 # v1.0.0b34
 - Fix for trapped waterbody cells. Only classify waterbody as trapped if they are both down- and upstream of the same waterbody.
