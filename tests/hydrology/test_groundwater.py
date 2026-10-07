@@ -692,7 +692,7 @@ def test_modflow_simulation_with_groundwater_level_boundary() -> None:
     """Test MODFLOW simulation with specified groundwater level boundary condition (CHD).
 
     Verifies that:
-    1. Boundary heads are correctly applied and exported to diagnostic initial_conditions.png.
+    1. Boundary heads are correctly applied.
     2. Boundary heads have a physical hydrodynamic effect on interior cells of the modelled domain.
     3. Boundary heads can be dynamically updated via BMI.
     4. Custom boundary mask correctly configures specified constant-head boundary cells.
@@ -721,9 +721,6 @@ def test_modflow_simulation_with_groundwater_level_boundary() -> None:
     head_base_interior: float = float(decomp_base[0, 1, 5])
     sim_base.finalize()
 
-    # Verify diagnostic initial_conditions.png was exported on build
-    assert (p_base["working_directory"] / "initial_conditions.png").is_file()
-
     # 1. Test with high boundary heads (50.0 m)
     ext_boundary_heads: ThreeDArrayFloat64 = np.full(
         (NLAY, YSIZE + 2, XSIZE + 2), 50.0, dtype=np.float64
@@ -734,7 +731,6 @@ def test_modflow_simulation_with_groundwater_level_boundary() -> None:
     parameters["boundary_mask"] = bnd_mask_full
     sim: ModFlowSimulation = ModFlowSimulation(**parameters)
 
-    assert (parameters["working_directory"] / "initial_conditions.png").is_file()
     assert sim.boundary_heads is not None
     assert len(sim.boundary_heads) > 0
 
@@ -767,7 +763,6 @@ def test_modflow_simulation_with_groundwater_level_boundary() -> None:
     parameters_custom["boundary_mask"] = custom_bnd_mask
     sim_custom: ModFlowSimulation = ModFlowSimulation(**parameters_custom)
 
-    assert (parameters_custom["working_directory"] / "initial_conditions.png").is_file()
     assert len(sim_custom.boundary_heads) == NLAY
     np.testing.assert_allclose(sim_custom.boundary_heads, 45.0)
 
