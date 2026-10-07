@@ -1596,12 +1596,14 @@ class Hydrography(BuildModelBase):
         Save all barrier locations and exclusion reasons to routing/barriers.
 
         Args:
-            crest_height_m: Missing-height override (m). Known heights are retained.
-                None uses bankfull for AMBER weirs/sluices/locks and half bankfull
-                for fords/ramps and unknown types. Sluice/lock/ford/ramp proxies
-                replace recorded heights. Known weir and unknown-type heights
-                are retained. AMBER dams only classify waterbodies; culverts are
-                excluded. GDW height defaults remain unchanged. All barriers are fixed.
+            crest_height_m: Height to use when the recorded height is missing (m).
+                Use the recorded height if it is available and greater than zero.
+                Missing, zero, negative or infinite heights use this value, or
+                bankfull for AMBER dams, weirs, sluices and locks; half bankfull
+                for fords, ramps and unknown types. Missing GDW height values will use
+                bankfull. AMBER river dams open as the upstream water rises;
+                other barriers stay fixed. Skip culverts, and barriers already
+                included in a lake or reservoir.
 
         Returns:
             None.
@@ -1617,7 +1619,26 @@ class Hydrography(BuildModelBase):
         amber_points: gpd.GeoDataFrame = self.data_catalog.fetch("amber_barriers").read(
             bbox=tuple(region.total_bounds)
         )
-        amber_points = amber_points.loc[amber_points.intersects(region.union_all())]
+        amber_points = amber_points.loc[
+            amber_points.intersects(region.union_all())
+        ].copy()
+        if "waterbodies/waterbody_data" in self.geom:
+            # Check the lake outlines so a dam on the edge is not counted twice.
+            dams_in_waterbodies: gpd.GeoDataFrame = gpd.sjoin(
+                amber_points.loc[amber_points["dam_type"].eq("Dam"), ["geometry"]],
+                self.geom["waterbodies/waterbody_data"][
+                    ["waterbody_id", "geometry"]
+                ].to_crs(4326),
+                how="inner",
+                predicate="intersects",
+            )
+            dam_waterbody_ids: pd.Series = (
+                dams_in_waterbodies["waterbody_id"].groupby(level=0).first()
+            )
+            amber_points["waterbody_id"] = np.nan
+            amber_points.loc[dam_waterbody_ids.index, "waterbody_id"] = (
+                dam_waterbody_ids
+            )
         waterbody_id: xr.DataArray = self.grid["waterbodies/waterbody_id"]
         valid_river_cells: xr.DataArray = (
             ~self.grid["mask"]
@@ -1641,8 +1662,9 @@ class Hydrography(BuildModelBase):
             valid_river_cells.shape
         )
         weir_height_grid: xr.DataArray
+        instream_dam_grid: xr.DataArray
         barrier_records: gpd.GeoDataFrame
-        weir_height_grid, barrier_records = create_weir_grids(
+        weir_height_grid, instream_dam_grid, barrier_records = create_weir_grids(
             gdw_points=gdw_points,
             amber_points=amber_points,
             crest_height_m=crest_height_m,
@@ -1654,6 +1676,7 @@ class Hydrography(BuildModelBase):
             logger=self.logger,
         )
         self.set_grid(weir_height_grid, name="routing/weir_height_m")
+        self.set_grid(instream_dam_grid, name="routing/instream_dam")
         self.set_geom(barrier_records, name="routing/barriers")
 
     @build_method(required=True, depends_on=["setup_hydrography", "setup_elevation"])

@@ -15,6 +15,10 @@ from geb.geb_types import (
     TwoDArrayFloat32,
     TwoDArrayInt32,
 )
+from geb.workflows import (
+    USE_BANKFULL_HEIGHT,
+    USE_HALF_BANKFULL_HEIGHT,
+)
 
 from .geometry import (
     compute_static_geometry,
@@ -26,12 +30,14 @@ from .inertial_substeps import (
     GEOM_IN_BANKFULL_DEPTH,
     GEOM_IN_BANKFULL_VOLUME,
     GEOM_IN_BED_ELEVATION,
+    GEOM_IN_INSTREAM_DAM,
     GEOM_IN_INTERFACE_BED_ELEVATION_MAX,
     GEOM_IN_INVERSE_INTERFACE_LENGTH,
     GEOM_IN_INVERSE_LENGTH,
     GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE,
     GEOM_IN_MANNING_N_SQUARED,
     GEOM_IN_NUM_COLS,
+    GEOM_IN_OPEN_BED_ELEVATION_MAX,
     GEOM_IN_STAGE_VOLUME_COEFFICIENT,
     GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH,
     GEOM_OV_BANKFULL_PERIMETER,
@@ -776,6 +782,7 @@ class LocalInertial:
         in_spinup: bool,
         min_slope: float = 1e-4,
         weir_height_m: ArrayFloat32 | None = None,
+        instream_dam: ArrayBool | None = None,
     ) -> None:
         """Initializes the LocalInertial router object.
 
@@ -807,14 +814,17 @@ class LocalInertial:
             min_slope: Minimum allowable slope for ocean/pit boundary boundaries (dimensionless).
             in_spinup: Whether the model is in spinup mode.
             weir_height_m: Weir heights above the river bed (m), in original cell order.
-                Zero means no structure; -1 uses bankfull depth + 1 m and
-                -2 uses full bankfull depth; -3 uses half bankfull depth.
+                Zero means no structure; -2 uses full bankfull depth and
+                -3 uses half bankfull depth.
                 Fixed weirs use river momentum
                 over a fixed raised sill.
+            instream_dam: True for AMBER river dams that can open, in original cell order.
+                None keeps all barriers fixed. Dams open gradually between
+                65% and 90% of upstream bankfull depth, with 10% minimum opening.
 
         Raises:
             KeyError: If a local inertial pit reach has a river ID not found in rivers_gdf.
-            ValueError: If weir heights are invalid or links unsupported.
+            ValueError: If barrier heights are invalid or a barrier has no river cell on each side.
         """
         assert dt > 0, "dt must be greater than 0"
         self.dt = dt
@@ -1103,38 +1113,35 @@ class LocalInertial:
                 or not np.isfinite(weir_height_m).all()
             ):
                 raise ValueError("Weir heights must match river cells and be finite.")
-            # Negative markers defer crest proxies until bankfull depth is known.
-            needs_bankfull_plus_one: ArrayBool = weir_height_m == -1.0
-            needs_bankfull_depth: ArrayBool = weir_height_m == -2.0
-            needs_half_bankfull_depth: ArrayBool = weir_height_m == -3.0
-            needs_default_height: ArrayBool = (
-                needs_bankfull_plus_one
-                | needs_bankfull_depth
-                | needs_half_bankfull_depth
+            # Fill in the default heights now that the river depth is known.
+            use_bankfull_height: ArrayBool = weir_height_m == USE_BANKFULL_HEIGHT
+            use_half_bankfull_height: ArrayBool = (
+                weir_height_m == USE_HALF_BANKFULL_HEIGHT
             )
-            if np.any((weir_height_m < 0) & ~needs_default_height):
+            use_default_height: ArrayBool = (
+                use_bankfull_height | use_half_bankfull_height
+            )
+            if np.any((weir_height_m < 0) & ~use_default_height):
                 raise ValueError(
-                    "Weir heights contain an unknown missing-height marker."
+                    "Weir heights contain an unsupported marker; rebuild setup_weirs "
+                    "to use bankfull or half-bankfull defaults."
                 )
             if weir_height_m.shape != bankfull_depth_m.shape:
                 raise ValueError(
                     "Weir heights and bankfull depths must match river cells."
                 )
             if np.any(
-                needs_default_height
+                use_default_height
                 & (~np.isfinite(bankfull_depth_m) | (bankfull_depth_m <= 0))
             ):
                 raise ValueError(
                     "Weir defaults require positive, finite bankfull depths."
                 )
-            # Keep the saved input heights unchanged for reporting and repeated setup.
+            # Copy the heights so the original values remain available for reporting.
             weir_height_m = weir_height_m.copy()
-            weir_height_m[needs_bankfull_plus_one] = (
-                bankfull_depth_m[needs_bankfull_plus_one] + 1.0
-            )
-            weir_height_m[needs_bankfull_depth] = bankfull_depth_m[needs_bankfull_depth]
-            weir_height_m[needs_half_bankfull_depth] = (
-                bankfull_depth_m[needs_half_bankfull_depth] * 0.5
+            weir_height_m[use_bankfull_height] = bankfull_depth_m[use_bankfull_height]
+            weir_height_m[use_half_bankfull_height] = (
+                bankfull_depth_m[use_half_bankfull_height] * 0.5
             )
             sorted_weir_heights_m: ArrayFloat32 = weir_height_m[self.sorted_idxs]
             self._weir_height_inertial = sorted_weir_heights_m[
@@ -1146,6 +1153,28 @@ class LocalInertial:
                 (self._weir_height_inertial > 0) & (self._ds_boundary_type != 0)
             ):
                 raise ValueError("Weirs need a river cell on each side.")
+        self._instream_dam_inertial: ArrayBool = np.zeros(self.n_inertial, dtype=bool)
+        if instream_dam is not None:
+            if (
+                instream_dam.shape != river_length.shape
+                or instream_dam.dtype != np.bool_
+            ):
+                raise ValueError(
+                    "Instream dam flags must be boolean and match river cells."
+                )
+            if np.any(instream_dam):
+                if weir_height_m is None or np.any(instream_dam & (weir_height_m <= 0)):
+                    raise ValueError("Instream dams need a height greater than zero.")
+                if np.any(
+                    instream_dam
+                    & (~np.isfinite(bankfull_depth_m) | (bankfull_depth_m <= 0))
+                ):
+                    raise ValueError(
+                        "Instream dams need valid bankfull depths greater than zero."
+                    )
+            self._instream_dam_inertial = instream_dam[self.sorted_idxs][
+                inertial_start:inertial_end
+            ].copy()
         self._inertial_cells: ArrayInt32 = self.sorted_idxs[inertial_start:inertial_end]
         self._compute_static_geometry()
 
@@ -1780,6 +1809,10 @@ class LocalInertial:
         )
         self._geom_inbank[:, GEOM_IN_MANNING_N_SQUARED] = self._manning_n_sq_inertial
         self._geom_inbank[:, GEOM_IN_INVERSE_INTERFACE_LENGTH] = self._inv_dx_interface
+        self._geom_inbank[:, GEOM_IN_INSTREAM_DAM] = self._instream_dam_inertial
+        self._geom_inbank[:, GEOM_IN_OPEN_BED_ELEVATION_MAX] = (
+            self._interface_bed_elev_max
+        )
 
         # Precompute overbank floodplain geometry
         self._geom_overbank: TwoDArrayFloat32 = np.empty(

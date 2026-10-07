@@ -43,8 +43,8 @@ setup_vegetation:
 setup_waterbodies:
 
 setup_weirs:
-  # Fills missing GDW heights for all types: Dam, Lake Control Dam, Sluice, Lock, Weir, Low Permeable Dam, Unknown.
-  crest_height_m: null # Missing-height override; AMBER weirs/sluices/locks: bankfull, fords/ramps/unknown: half bankfull.
+  # Defaults: bankfull for instream dams/weirs/sluices/locks; half bankfull for fords/ramps/unknown.
+  crest_height_m: null
 
 setup_groundwater:
 

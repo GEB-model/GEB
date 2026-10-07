@@ -19,6 +19,10 @@ from geb.build.workflows.river_snapping import (
     SnappingResults,
     snap_point_to_river_network,
 )
+from geb.workflows import (
+    USE_BANKFULL_HEIGHT,
+    USE_HALF_BANKFULL_HEIGHT,
+)
 from geb.workflows.raster import full_like
 
 
@@ -32,8 +36,8 @@ def create_weir_grids(
     valid_river_cells: xr.DataArray,
     amber_points: gpd.GeoDataFrame | None = None,
     logger: logging.Logger | None = None,
-) -> tuple[xr.DataArray, gpd.GeoDataFrame]:
-    """Place fixed barrier heights on the river grid.
+) -> tuple[xr.DataArray, xr.DataArray, gpd.GeoDataFrame]:
+    """Place barrier heights and AMBER instream dams on the river grid.
 
     Show a progress bar in terminals and periodic progress in batch logs.
     Log inclusion counts and exclusion reasons once after placement; retain
@@ -43,8 +47,10 @@ def create_weir_grids(
 
     Args:
         gdw_points: GDW points and their linked lake or reservoir IDs.
-        crest_height_m: Missing-height override (m). None uses type defaults: bankfull for AMBER weirs/sluices/locks,
-            half bankfull for fords/ramps and unknown types, and GDW defaults.
+        crest_height_m: Height to use when the recorded height is missing (m).
+            Use the recorded height if it is available and greater than zero.
+            None uses bankfull for AMBER dams, weirs, sluices, locks and GDW,
+            and half bankfull for AMBER fords, ramps and unknown types.
         waterbody_id: Existing waterbody grid; -1 means no lake or reservoir.
         rivers: Rivers used to place the points on the grid.
         upstream_area_grid: Model-grid drainage area (m2).
@@ -55,15 +61,19 @@ def create_weir_grids(
         logger: Build logger for progress and summaries. None uses the module logger.
 
     Returns:
-        Height grid and barrier records at their original locations.
+        Height grid, instream-dam mask, and barrier records at their original locations.
         Records show source heights (m), river distances (m) and exclusion reasons.
         Positive grid heights are in meters, zero means
-        no structure, -1 means bankfull depth + 1 m, -2 means full
-        bankfull depth, and -3 means half bankfull depth.
-        AMBER weirs and unknown types retain known heights. Sluices/locks use
-        bankfull depth; fords/ramps use half bankfull depth. AMBER dams and
-        culverts are excluded from river routing. All river structures are fixed.
-        Bankfull markers are resolved when routing initializes; crests remain fixed.
+        no structure, -2 means full bankfull depth, and -3 means half
+        bankfull depth.
+        Use the recorded height if it is available and greater than zero.
+        Missing, zero, negative or infinite heights use the default:
+        bankfull for AMBER dams, weirs, sluices and locks; half bankfull for
+        fords, ramps and unknown types. AMBER instream dams open gradually.
+        Dams already included in a lake or reservoir are skipped. Culverts and lake control dams are skipped.
+        Other barriers stay fixed.
+        Routing fills in the default heights when the river depth is known.
+        Only AMBER instream dams change their opening as upstream depth changes.
 
     Raises:
         ValueError: If the height override is invalid.
@@ -79,6 +89,9 @@ def create_weir_grids(
     weir_height_grid: xr.DataArray = full_like(
         waterbody_id, fill_value=0.0, nodata=np.nan, dtype=np.float32
     )
+    instream_dam_grid: xr.DataArray = full_like(
+        waterbody_id, fill_value=False, nodata=None, dtype=bool
+    )
     barriers: gpd.GeoDataFrame = gdw_points.copy()
     if not barriers.empty:
         barriers = barriers.to_crs(4326)
@@ -88,7 +101,8 @@ def create_weir_grids(
         amber_points = amber_points.to_crs(4326).copy()
         amber_points["barrier_id"] = amber_points["amber_id"]
         amber_points["source"] = "AMBER"
-        amber_points["waterbody_id"] = np.nan
+        if "waterbody_id" not in amber_points:
+            amber_points["waterbody_id"] = np.nan
         # Process GDW first so AMBER cannot replace an existing structure.
         barriers = gpd.GeoDataFrame(
             pd.concat([barriers, amber_points], ignore_index=True), crs=4326
@@ -114,7 +128,7 @@ def create_weir_grids(
     barrier_records["included"] = False
     barrier_records["exclusion_reason"] = ""
     if barriers.empty:
-        return weir_height_grid, barrier_records
+        return weir_height_grid, instream_dam_grid, barrier_records
     represented_rivers: gpd.GeoDataFrame = rivers.loc[
         rivers["represented_in_grid"]
     ].to_crs(4326)
@@ -180,12 +194,10 @@ def create_weir_grids(
             continue
         dam_type: str = str(barrier.get("dam_type", "")).strip()
         if barrier.source == "AMBER" and dam_type in {
-            "Dam",
             "Lake Control Dam",
             "Culvert",
         }:
-            # Dams only inform waterbody classification; culverts need an opening
-            # model rather than a solid river crest.
+            # Lakes have their own flow rules. Culverts need a pipe-flow model.
             barrier_records.at[barrier_index, "exclusion_reason"] = (
                 "AMBER dam classification only"
                 if dam_type != "Culvert"
@@ -275,33 +287,28 @@ def create_weir_grids(
                     "unsuitable river cell"
                 )
             continue
-        barrier_height_m: float = barrier.dam_hgt_m
+        recorded_height_m: float = barrier.dam_hgt_m
         height_m: float = 0.0
-        if barrier.source == "AMBER" and dam_type in {"Sluice", "Lock", "Ford", "Ramp"}:
-            # These types use the requested common river-depth proxies, not
-            # atlas heights that may describe the whole structure.
-            height_m = (
-                crest_height_m
-                if crest_height_m is not None
-                else -2.0
-                if dam_type in {"Sluice", "Lock"}
-                else -3.0
-            )
-        elif (
-            pd.notna(barrier_height_m)
-            and np.isfinite(barrier_height_m)
-            and barrier_height_m > 0
+        is_instream_dam: bool = barrier.source == "AMBER" and dam_type == "Dam"
+        if (
+            pd.notna(recorded_height_m)
+            and np.isfinite(recorded_height_m)
+            and recorded_height_m > 0
         ):
-            height_m = float(barrier_height_m)
+            height_m = float(recorded_height_m)
         elif crest_height_m is not None:
             height_m = crest_height_m
-        elif barrier.source == "AMBER" and dam_type != "Weir":
-            height_m = -3.0  # Unknown types use a lower fallback crest.
-        elif barrier.source == "GDW" and dam_type in {"Dam", "Lake Control Dam"}:
-            height_m = -1.0  # Resolve to bankfull depth + 1 m when routing starts.
+        elif barrier.source == "AMBER" and dam_type not in {
+            "Dam",
+            "Weir",
+            "Sluice",
+            "Lock",
+        }:
+            height_m = USE_HALF_BANKFULL_HEIGHT
         else:
-            height_m = -2.0  # Resolve to full bankfull depth when routing starts.
+            height_m = USE_BANKFULL_HEIGHT
         weir_height_grid.values[row, column] = height_m
+        instream_dam_grid.values[row, column] = is_instream_dam
         barrier_records.at[barrier_index, "included"] = True
     source: Hashable
     source_records: pd.DataFrame
@@ -323,7 +330,7 @@ def create_weir_grids(
             logger.info(
                 "%s excluded: %s — %s.", source, excluded_count, exclusion_reason
             )
-    return weir_height_grid, barrier_records
+    return weir_height_grid, instream_dam_grid, barrier_records
 
 
 def nearest_amber_river(

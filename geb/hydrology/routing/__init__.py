@@ -449,15 +449,16 @@ class Routing(Module):
             self.spinup()
 
     def load_weirs(self) -> None:
-        """Load fixed river barriers, or disable them for this run.
+        """Load barrier heights and which AMBER dams can open.
 
         Notes:
             With routing.weirs disabled, input files are not read or modified.
-            Lakes and reservoirs retain their separate outflow controls.
+            Lakes and reservoirs keep their own flow rules.
 
         Returns:
-            None. Sets weir heights (m) in grid cell order.
+            None. Sets weir heights (m) and instream-dam flags in grid cell order.
         """  # noqa: DOC202
+        self.instream_dam: ArrayBool = np.zeros_like(self.ldd, dtype=bool)
         if not self.config.get("weirs", True):
             # Zero heights remove the raised river sills from routing.
             self.weir_height_m: ArrayFloat32 = np.zeros_like(self.ldd, dtype=np.float32)
@@ -466,6 +467,12 @@ class Routing(Module):
         self.weir_height_m = self.grid.load2d(
             self.model.files["grid"]["routing/weir_height_m"]
         )
+        dam_grid: Path | None = self.model.files["grid"].get("routing/instream_dam")
+        if dam_grid is None:
+            # Read the old grid name too, so existing builds still work.
+            dam_grid = self.model.files["grid"].get("routing/gated_dam")
+        if dam_grid is not None:
+            self.instream_dam = self.grid.load2d(dam_grid)
 
     def load_rivers(
         self,
@@ -548,7 +555,7 @@ class Routing(Module):
         return rivers, river_ids, river_ids_no_waterbodies_removed
 
     def save_weirs(self) -> None:
-        """Write resolved weir heights (m) to weir_heights.csv.
+        """Save barrier heights (m) and which dams can open to weir_heights.csv.
 
         Returns:
             None.
@@ -569,6 +576,7 @@ class Routing(Module):
                 "river_id": self.var.river_ids[cells],
                 "input_height_m": input_heights,
                 "effective_height_m": heights[weir_mask],
+                "instream_dam": self.router._instream_dam_inertial[weir_mask],
                 "bankfull_depth_m": self.router.bankfull_depth[cells],
             }
         )
@@ -1225,6 +1233,7 @@ class Routing(Module):
             river_storage_beta=self.var.river_storage_beta,
             in_spinup=self.model.in_spinup,
             weir_height_m=self.weir_height_m,
+            instream_dam=self.instream_dam,
         )
 
         self.save_weirs()

@@ -114,7 +114,7 @@ def test_distant_barrier_diagnostics(
         crs=4326,
     ).iloc[: int(has_river)]
     points: gpd.GeoDataFrame = gpd.GeoDataFrame(
-        {"amber_id": ["far"], "dam_type": ["Dam"], "dam_hgt_m": [3.0]},
+        {"amber_id": ["far"], "dam_type": ["Weir"], "dam_hgt_m": [3.0]},
         geometry=[Point(10, 52)],
         crs=4326,
     )
@@ -123,7 +123,7 @@ def test_distant_barrier_diagnostics(
     ).rio.write_crs(4326)
     heights: xr.DataArray
     records: gpd.GeoDataFrame
-    heights, records = create_weir_grids(
+    heights, instream_dams, records = create_weir_grids(
         gpd.GeoDataFrame(),
         None,
         xr.full_like(area, -1),
@@ -201,7 +201,7 @@ def test_weirs_skip_subgrid_read() -> None:
     )
     heights: xr.DataArray
     records: gpd.GeoDataFrame
-    heights, records = create_weir_grids(
+    heights, instream_dams, records = create_weir_grids(
         gpd.GeoDataFrame(),
         None,
         xr.full_like(area, -1),

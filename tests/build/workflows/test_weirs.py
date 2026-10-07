@@ -13,9 +13,15 @@ from shapely.geometry import LineString, Point
 
 from geb.build import DelayedReader, GEBModel
 from geb.build.workflows.weirs import create_weir_grids
+from geb.workflows import (
+    USE_BANKFULL_HEIGHT,
+    USE_HALF_BANKFULL_HEIGHT,
+)
 from geb.workflows.io import read_geom, read_zarr
 
 
+@pytest.mark.parametrize("with_waterbody_outline", [False, True])
+@pytest.mark.parametrize("amber_type", ["Weir", "Dam"])
 @pytest.mark.parametrize("amber_longitude", [0.001, 0.003])
 @pytest.mark.parametrize("has_amber_points", [True, False])
 @pytest.mark.parametrize("has_gdw_points", [True, False])
@@ -25,6 +31,8 @@ def test_setup_weirs_from_files(
     has_gdw_points: bool,
     has_amber_points: bool,
     amber_longitude: float,
+    amber_type: str,
+    with_waterbody_outline: bool,
     lazy_grids: bool,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -35,6 +43,8 @@ def test_setup_weirs_from_files(
         has_gdw_points: Whether a GDW points file is available.
         has_amber_points: Whether the atlas contains a barrier in this region.
         amber_longitude: Barrier longitude (degrees), within or beyond 250 m.
+        amber_type: Fixed weir or gated AMBER dam.
+        with_waterbody_outline: Whether the AMBER point intersects a waterbody polygon.
         lazy_grids: Whether to use Dask arrays, as input updates do.
         monkeypatch: Fixture to replace the atlas download.
     """
@@ -82,7 +92,7 @@ def test_setup_weirs_from_files(
     builder: GEBModel = GEBModel(logger=logging.getLogger(__name__), root=tmp_path)
     catalog: Mock = Mock()
     catalog.fetch.return_value.read.return_value = gpd.GeoDataFrame(
-        {"amber_id": ["amber-1"], "dam_type": ["Weir"], "dam_hgt_m": [3.5]},
+        {"amber_id": ["amber-1"], "dam_type": [amber_type], "dam_hgt_m": [3.5]},
         geometry=[Point(amber_longitude, 0.0)],
         crs=4326,
     ).iloc[: 1 if has_amber_points else 0]
@@ -90,6 +100,15 @@ def test_setup_weirs_from_files(
     region_file: Path = tmp_path / "region.parquet"
     gpd.GeoDataFrame(geometry=[Point(0, 0).buffer(1)], crs=4326).to_parquet(region_file)
     geometry_files["mask"] = region_file
+    if with_waterbody_outline:
+        waterbody_file: Path = tmp_path / "waterbody_data.parquet"
+        gpd.GeoDataFrame(
+            {"waterbody_id": [7]},
+            geometry=[Point(amber_longitude, 0.0).buffer(0.0001)],
+            crs=4326,
+        ).to_parquet(waterbody_file)
+        geometry_files["waterbodies/waterbody_data"] = waterbody_file
+    dam_linked_to_waterbody: bool = with_waterbody_outline and amber_type == "Dam"
     builder.files = builder.read_or_create_file_library()
     builder.geom = geometry_files
     grids: dict[str, xr.DataArray] = {
@@ -136,7 +155,12 @@ def test_setup_weirs_from_files(
     ]
     assert len(saved_barriers) == int(has_gdw_points) + int(has_amber_points)
     assert saved_barriers["included"].sum() == int(
-        has_gdw_points or (has_amber_points and amber_longitude == 0.001)
+        has_gdw_points
+        or (
+            has_amber_points
+            and amber_longitude == 0.001
+            and not dam_linked_to_waterbody
+        )
     )
     if has_amber_points:
         amber_record: pd.Series = saved_barriers.loc[
@@ -145,14 +169,27 @@ def test_setup_weirs_from_files(
         assert amber_record["barrier_id"] == "amber-1"
         assert amber_record["height_m"] == 3.5
         assert amber_record.geometry == Point(amber_longitude, 0.0)
-        assert amber_record["distance_to_river_m"] > 0
+        if not dam_linked_to_waterbody:
+            assert amber_record["distance_to_river_m"] > 0
         assert amber_record["exclusion_reason"] == (
-            "farther than 250 m"
+            "part of lake or reservoir"
+            if dam_linked_to_waterbody
+            else "farther than 250 m"
             if amber_longitude == 0.003
             else "unsuitable river cell"
             if has_gdw_points
             else ""
         )
+    saved_instream_dams: xr.DataArray = read_zarr(
+        tmp_path / "grid/routing/instream_dam.zarr"
+    ).compute()
+    assert bool(saved_instream_dams.any()) == (
+        has_amber_points
+        and amber_type == "Dam"
+        and amber_longitude == 0.001
+        and not has_gdw_points
+        and not dam_linked_to_waterbody
+    )
     assert saved_heights.dtype == np.float32
     assert np.isnan(saved_heights.attrs["_FillValue"])
     assert np.isnan(saved_heights.values[1, 1])
@@ -160,7 +197,7 @@ def test_setup_weirs_from_files(
         -2.0
         if has_gdw_points
         else 3.5
-        if has_amber_points and amber_longitude == 0.001
+        if has_amber_points and amber_longitude == 0.001 and not dam_linked_to_waterbody
         else 0.0
     )
     assert (
@@ -191,6 +228,9 @@ def test_invalid_default_height(height_m: float) -> None:
     [
         "weir",
         "dam",
+        "amber_dam",
+        "amber_dam_in_waterbody",
+        "amber_dam_linked",
         "lock",
         "sluice",
         "fixed",
@@ -241,7 +281,7 @@ def test_build_weir(case: str, crest_height_m: float | None) -> None:
         barriers["dam_hgt_m"] = -99.0
     if case == "infinite_height":
         barriers["dam_hgt_m"] = np.inf
-    if case == "linked":
+    if case in {"linked", "amber_dam_linked"}:
         barriers["waterbody_id"] = 1
     if case == "dam":
         barriers["dam_name"] = None
@@ -271,7 +311,7 @@ def test_build_weir(case: str, crest_height_m: float | None) -> None:
     river_cells: xr.DataArray = xr.full_like(upstream_area, True, dtype=bool)
     if case == "boundary":
         river_cells.values[0, 0] = False
-    if case == "occupied":
+    if case in {"occupied", "amber_dam_in_waterbody"}:
         waterbody_ids.values[0, 0] = 1
     rivers: gpd.GeoDataFrame = gpd.GeoDataFrame(
         {
@@ -284,9 +324,17 @@ def test_build_weir(case: str, crest_height_m: float | None) -> None:
         geometry=[LineString([(0, 0), (0, -0.1)])],
         crs=4326,
     )
+    amber_points: gpd.GeoDataFrame | None = None
+    if case.startswith("amber_dam"):
+        barriers.geometry = [Point(0.001, 0.0)]
+        amber_points = gpd.GeoDataFrame(
+            barriers.rename(columns={"gdw_id": "amber_id"}), crs=barriers.crs
+        )
+        barriers = gpd.GeoDataFrame()
     result: xr.DataArray
+    instream_dams: xr.DataArray
     records: gpd.GeoDataFrame
-    result, records = create_weir_grids(
+    result, instream_dams, records = create_weir_grids(
         barriers,
         crest_height_m,
         waterbody_ids,
@@ -294,7 +342,19 @@ def test_build_weir(case: str, crest_height_m: float | None) -> None:
         upstream_area,
         upstream_area,
         river_cells,
+        amber_points=amber_points,
     )
+    if case.startswith("amber_dam"):
+        assert instream_dams.values.any() == (case == "amber_dam")
+        assert result.values.sum() == (
+            (crest_height_m if crest_height_m is not None else -2.0)
+            if case == "amber_dam"
+            else 0.0
+        )
+        if case in {"amber_dam_in_waterbody", "amber_dam_linked"}:
+            assert records.iloc[0]["exclusion_reason"] == "part of lake or reservoir"
+        return
+    assert not instream_dams.values.any()
     assert len(records) == (0 if case == "empty" else 1)
     assert int(records["included"].sum()) == int(bool((result.values != 0).any()))
     if case == "inside":
@@ -327,12 +387,7 @@ def test_build_weir(case: str, crest_height_m: float | None) -> None:
         if crest_height_m is not None:
             assert result.values.sum() == crest_height_m
         else:
-            expected_height: float
-            if case in {"lock", "sluice", "fixed", "low_dam"}:
-                expected_height = -2.0
-            else:
-                expected_height = -1.0
-            assert result.values.sum() == expected_height
+            assert result.values.sum() == -2.0
     else:
         assert result.values.sum() == 0.0
 
@@ -354,7 +409,9 @@ def test_build_weir(case: str, crest_height_m: float | None) -> None:
     ],
 )
 @pytest.mark.parametrize("source", ["GDW", "AMBER"])
-@pytest.mark.parametrize("recorded_height_m", [np.nan, 3.5])
+@pytest.mark.parametrize(
+    "recorded_height_m", [np.nan, 3.5, 0.0, -99.0, np.inf, -np.inf]
+)
 @pytest.mark.parametrize("crest_height_m", [None, 1.25])
 def test_structure_classification(
     dam_type: str,
@@ -415,7 +472,7 @@ def test_structure_classification(
             crs=barriers.crs,
         )
         barriers = gpd.GeoDataFrame()
-    heights, records = create_weir_grids(
+    heights, instream_dams, records = create_weir_grids(
         barriers,
         crest_height_m,
         waterbody_ids,
@@ -426,11 +483,11 @@ def test_structure_classification(
         amber_points=amber_points,
     )
     is_supported: bool = source == "GDW" or dam_type not in {
-        "Dam",
         "Lake Control Dam",
         "Culvert",
     }
     assert records["included"].all() == is_supported
+    assert instream_dams.values.any() == (source == "AMBER" and dam_type == "Dam")
     if not is_supported:
         expected_reason: str = (
             "AMBER culvert excluded"
@@ -441,24 +498,14 @@ def test_structure_classification(
     expected_height: float
     if not is_supported:
         expected_height = 0.0
-    elif source == "AMBER" and dam_type in {"Sluice", "Lock", "Ford", "Ramp"}:
-        expected_height = (
-            crest_height_m
-            if crest_height_m is not None
-            else -2.0
-            if dam_type in {"Sluice", "Lock"}
-            else -3.0
-        )
-    elif np.isfinite(recorded_height_m):
+    elif np.isfinite(recorded_height_m) and recorded_height_m > 0:
         expected_height = recorded_height_m
     elif crest_height_m is not None:
         expected_height = crest_height_m
-    elif source == "AMBER" and dam_type != "Weir":
-        expected_height = -3.0
-    elif source == "GDW" and dam_type in {"Dam", "Lake Control Dam"}:
-        expected_height = -1.0
+    elif source == "AMBER" and dam_type not in {"Dam", "Weir", "Sluice", "Lock"}:
+        expected_height = USE_HALF_BANKFULL_HEIGHT
     else:
-        expected_height = -2.0
+        expected_height = USE_BANKFULL_HEIGHT
     np.testing.assert_array_equal(
         heights.values[:, 0], expected_height, err_msg=records.to_string()
     )
@@ -514,7 +561,7 @@ def test_occupied_weir_cell_fallback(cell_count: int, alternative_status: str) -
     )
     heights: xr.DataArray
     records: gpd.GeoDataFrame
-    heights, records = create_weir_grids(
+    heights, instream_dams, records = create_weir_grids(
         barriers, None, waterbody_ids, rivers, upstream_area, upstream_area, valid_cells
     )
     alternative_available: bool = cell_count > 1 and alternative_status == "free"

@@ -23,12 +23,15 @@ from .geometry import (
 
 __all__ = [
     "ALLOW_REVERSE_FLOW",
+    "compute_instream_dam_open_fraction",
     "compute_retention_routing",
     "GEOM_CFL_CONSTANT",
     "GEOM_CFL_MANNING_COEFFICIENT",
     "GEOM_CFL_NUM_COLS",
     "GEOM_IN_BANKFULL_DEPTH",
     "GEOM_IN_BANKFULL_VOLUME",
+    "GEOM_IN_INSTREAM_DAM",
+    "GEOM_IN_OPEN_BED_ELEVATION_MAX",
     "GEOM_IN_BED_ELEVATION",
     "GEOM_IN_INTERFACE_BED_ELEVATION_MAX",
     "GEOM_IN_INVERSE_INTERFACE_LENGTH",
@@ -73,7 +76,9 @@ GEOM_IN_INTERFACE_BED_ELEVATION_MAX: int = 6
 GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH: int = 7
 GEOM_IN_MANNING_N_SQUARED: int = 8
 GEOM_IN_INVERSE_INTERFACE_LENGTH: int = 9
-GEOM_IN_NUM_COLS: int = 10
+GEOM_IN_INSTREAM_DAM: int = 10
+GEOM_IN_OPEN_BED_ELEVATION_MAX: int = 11
+GEOM_IN_NUM_COLS: int = 12
 
 
 # Column indices for overbank floodplain geometry (geom_overbank)
@@ -93,6 +98,39 @@ GEOM_CFL_NUM_COLS: int = 2
 
 # Threshold of reach count above which parallel multi-threading outperforms serial execution
 INERTIAL_PARALLEL_THRESHOLD: int = 5000
+
+
+@njit(cache=True)
+def compute_instream_dam_open_fraction(
+    upstream_depth_m: np.float32, bankfull_depth_m: np.float32
+) -> np.float32:
+    """Open an instream dam as the upstream water rises.
+
+    Args:
+        upstream_depth_m: Water depth above the original river bed (m).
+        bankfull_depth_m: Positive bankfull channel depth (m).
+
+    Returns:
+        Part of the dam that is open: 10% below 65% bankfull,
+        increasing to 100% at 90% bankfull (dimensionless).
+
+    Raises:
+        ValueError: If a depth is missing or infinite, or bankfull depth is
+            zero or negative.
+    """
+    if (
+        not np.isfinite(upstream_depth_m)
+        or not np.isfinite(bankfull_depth_m)
+        or bankfull_depth_m <= 0
+    ):
+        raise ValueError(
+            "Instream dam operation needs valid water depths and bankfull depth greater than zero."
+        )
+    depth_ratio: np.float32 = upstream_depth_m / bankfull_depth_m
+    open_fraction: np.float32 = np.float32(0.1) + np.float32(0.9) * (
+        (depth_ratio - np.float32(0.65)) / np.float32(0.25)
+    )
+    return np.float32(min(max(open_fraction, np.float32(0.1)), np.float32(1.0)))
 
 
 @njit(fastmath=True, parallel=True)
@@ -730,11 +768,17 @@ def _solve_inertial_momentum(
     can_reverse: bool,
     river_storage_m3_inertial: ArrayFloat64,
     inv_dt_substep: np.float32,
+    instream_dam_open_fraction: np.float32 = np.float32(1.0),
+    overflow_depth_m: np.float32 = np.float32(0.0),
 ) -> np.float32:
     """Evaluates local inertial momentum update for a single reach using two-tier geometry.
 
     Fast-paths in-bank flow to read only the compact single-cache-line geom_inbank row,
     completely bypassing secondary floodplain parameters when unflooded.
+
+    Notes:
+        Water flows through the open part and over the closed part of the dam.
+        This uses the river flow equation as a simple approximation.
 
     Args:
         reach_idx: Reach index within local inertial domain.
@@ -749,6 +793,9 @@ def _solve_inertial_momentum(
         can_reverse: Boolean flag indicating whether reverse flow is permitted.
         river_storage_m3_inertial: Current reach storage volume array (m³).
         inv_dt_substep: Reciprocal of substep timestep (1/seconds).
+        instream_dam_open_fraction: Part of the dam that is open (0.1 to 1.0).
+            Use 1.0 for an ordinary river or a fixed weir.
+        overflow_depth_m: Flow depth above the remaining dam crest (m).
 
     Returns:
         Computed instantaneous discharge at end of substep (m³/s).
@@ -827,6 +874,59 @@ def _solve_inertial_momentum(
             width_over_sqrt_bankfull_depth=geom_inbank[
                 reach_idx, GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH
             ],
+        )
+
+    if instream_dam_open_fraction < np.float32(1.0):
+        overflow_area_m2: np.float32 = np.float32(0.0)
+        overflow_width_m: np.float32 = np.float32(0.0)
+        overflow_perimeter_m: np.float32 = np.float32(0.0)
+        if overflow_depth_m >= min_wet_depth_m:
+            overflow_area_m2, overflow_width_m, overflow_perimeter_m = (
+                compute_cross_section_from_depth(
+                    effective_depth_m=overflow_depth_m,
+                    bankfull_width_m=geom_overbank[reach_idx, GEOM_OV_RIVER_WIDTH],
+                    shape_exponent=(np.float32(1.0) / inv_shape_exponent_plus_one)
+                    - np.float32(1.0),
+                    bankfull_depth_m=bankfull_depth_m,
+                    floodplain_width_m=geom_overbank[
+                        reach_idx, GEOM_OV_FLOODPLAIN_WIDTH
+                    ],
+                    inverse_shape_exponent_plus_one=inv_shape_exponent_plus_one,
+                    bankfull_area_m2=geom_inbank[reach_idx, GEOM_IN_BANKFULL_VOLUME]
+                    * geom_inbank[reach_idx, GEOM_IN_INVERSE_LENGTH],
+                    bankfull_perimeter_m=geom_overbank[
+                        reach_idx, GEOM_OV_BANKFULL_PERIMETER
+                    ],
+                    floodplain_side_slope=geom_overbank[
+                        reach_idx, GEOM_OV_FLOODPLAIN_SIDE_SLOPE
+                    ],
+                    floodplain_depth_threshold_m=geom_overbank[
+                        reach_idx, GEOM_OV_FLOODPLAIN_DEPTH_THRESHOLD
+                    ],
+                    floodplain_area_threshold_m2=geom_overbank[
+                        reach_idx, GEOM_OV_FLOODPLAIN_AREA_THRESHOLD
+                    ],
+                    sqrt_one_plus_floodplain_slope_squared=geom_overbank[
+                        reach_idx, GEOM_OV_SQRT_ONE_PLUS_FLOODPLAIN_SLOPE_SQUARED
+                    ],
+                    width_over_sqrt_bankfull_depth=geom_inbank[
+                        reach_idx, GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH
+                    ],
+                )
+            )
+        # Use the open width to keep results consistent for different timesteps.
+        closed_fraction: np.float32 = np.float32(1.0) - instream_dam_open_fraction
+        cross_sectional_area = (
+            instream_dam_open_fraction * cross_sectional_area
+            + closed_fraction * overflow_area_m2
+        )
+        interface_top_width = (
+            instream_dam_open_fraction * interface_top_width
+            + closed_fraction * overflow_width_m
+        )
+        interface_p_wetted = (
+            instream_dam_open_fraction * interface_p_wetted
+            + closed_fraction * overflow_perimeter_m
         )
 
     # Manning friction term
@@ -1152,6 +1252,8 @@ def _run_inertial_substeps(
             water_slope: np.float32 = np.float32(0.0)
 
             reach_can_reverse: bool = False
+            instream_dam_open_fraction: np.float32 = np.float32(1.0)
+            overflow_depth_m: np.float32 = np.float32(0.0)
             if boundary_type == 0 or boundary_type == 2:
                 # Internal reach or lake boundary
                 ds_idx: int = ds_stage_idx[reach_idx]
@@ -1164,6 +1266,18 @@ def _run_inertial_substeps(
                 ]
                 max_stage: np.float32 = max(water_stage_node, water_stage_ds)
                 effective_depth = max(max_stage - max_bed, np.float32(0.0))
+                if geom_inbank[reach_idx, GEOM_IN_INSTREAM_DAM] != 0:
+                    instream_dam_open_fraction = compute_instream_dam_open_fraction(
+                        water_stage_node - bed_elev_node,
+                        geom_inbank[reach_idx, GEOM_IN_BANKFULL_DEPTH],
+                    )
+                    overflow_depth_m = effective_depth
+                    river_bed_elevation_m: np.float32 = geom_inbank[
+                        reach_idx, GEOM_IN_OPEN_BED_ELEVATION_MAX
+                    ]
+                    effective_depth = max(
+                        max_stage - river_bed_elevation_m, np.float32(0.0)
+                    )
                 water_slope = (water_stage_ds - water_stage_node) * inv_interface_len
                 reach_can_reverse = bool(
                     ALLOW_REVERSE_FLOW
@@ -1253,6 +1367,8 @@ def _run_inertial_substeps(
                 can_reverse=reach_can_reverse,
                 river_storage_m3_inertial=river_storage_m3_inertial,
                 inv_dt_substep=inv_dt_substep,
+                instream_dam_open_fraction=instream_dam_open_fraction,
+                overflow_depth_m=overflow_depth_m,
             )
             updated_discharge_m3_s_inertial[reach_idx] = discharge
 
