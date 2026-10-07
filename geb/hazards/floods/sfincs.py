@@ -1013,9 +1013,12 @@ class SFINCSRootModel:
                 # may be just outside the model grid. We therefore check if the
                 # point is outside the grid, and if so, move it 1 m upstream along the river
                 if (
-                    outflow_row > self.mask.shape[0] - 1 or outflow_row < 0
-                ) or not self.mask.values[outflow_row, outflow_col]:
-                    # if not self.mask.values[outflow_row, outflow_col]:
+                    not (
+                        0 <= outflow_row < self.mask.shape[0]
+                        and 0 <= outflow_col < self.mask.shape[1]
+                    )
+                    or not self.mask.values[outflow_row, outflow_col]
+                ):
                     # move outflow point 1 m upstream. 0.000008983 degrees is approximately 1 m
                     outflow_point: Point | MultiPoint | GeometryCollection = (
                         river.interpolate(
