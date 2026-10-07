@@ -456,3 +456,22 @@ def test_identify_waterbody_outflows_and_absorb_trapped_river_cells() -> None:
     # Both (0, 1) and (0, 2) must be absorbed
     assert updated_wb_multi[0, 1] == 5
     assert updated_wb_multi[0, 2] == 5
+
+    # 5. Test edge case: river connects to a DIFFERENT downstream waterbody (must NOT be absorbed)
+    # (0, 0): Lake cell (wb=5), non-outflow
+    # (0, 1): River cell (river_ids=1, wb=-1)
+    # (0, 2): Downstream lake cell (wb=6, outflow, pit)
+    test_wb_diff = np.array([[5, -1, 6]], dtype=np.int32)
+    test_outflows_diff = np.array([[-1, -1, 6]], dtype=np.int32)
+    test_rivers_diff = np.array([[-1, 1, -1]], dtype=np.int32)
+    test_ldd_diff = np.array([[6, 6, 5]], dtype=np.uint8)
+    flw_diff = pyflwdir.from_array(test_ldd_diff, ftype="ldd")
+
+    updated_wb_diff = absorb_trapped_river_cells(
+        waterbody_id=test_wb_diff,
+        waterbody_outflows=test_outflows_diff,
+        river_ids=test_rivers_diff,
+        flow_raster=flw_diff,
+    )
+    # (0, 1) must NOT be absorbed because it connects to a different waterbody (6 != 5)
+    assert updated_wb_diff[0, 1] == -1
