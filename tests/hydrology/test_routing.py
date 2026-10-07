@@ -7505,3 +7505,92 @@ def test_bankfull_discharge_multiplier_scaling() -> None:
     # For unobserved reach, depth scales with Q_mult^d = Q_mult^0.30
     assert np.isclose(d_high[1] / d_base[1], 2.0**0.30, rtol=1e-3)
     assert np.isclose(d_low[1] / d_base[1], 0.5**0.30, rtol=1e-3)
+
+
+def test_load_rivers_prunes_starved_channels_and_updates_represented_in_grid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify that load_rivers prunes starved channels downstream of non-outflow waterbody cells."""
+    import pyflwdir
+    from shapely.geometry import Point
+
+    from geb.hydrology.routing import Routing
+
+    routing = Routing.__new__(Routing)
+
+    # 1x3 grid:
+    # (0, 0): Lake 5 (non-outflow), drains East (6)
+    # (0, 1): River reach 20, drains East (6)
+    # (0, 2): River reach 20 (outlet pit 5)
+    wb_id_2d = np.array([[5, -1, -1]], dtype=np.int32)
+    wb_outflows_2d = np.array([[-1, -1, -1]], dtype=np.int32)
+    river_ids_2d = np.array([[-1, 20, 20]], dtype=np.int32)
+    ldd_2d = np.array([[6, 6, 5]], dtype=np.uint8)
+
+    routing.river_network = pyflwdir.from_array(ldd_2d, ftype="ldd")
+
+    class MockGrid:
+        def load2d(self, file_path: Any, compress: bool = False) -> np.ndarray:
+            if "waterbody_id" in str(file_path):
+                return wb_id_2d
+            elif "waterbody_outflow_points" in str(file_path):
+                return wb_outflows_2d
+            elif "river_ids" in str(file_path):
+                return river_ids_2d.copy()
+            raise ValueError(f"Unknown file {file_path}")
+
+        def compress(self, arr: np.ndarray) -> np.ndarray:
+            return arr.ravel()
+
+    routing.grid = MockGrid()  # ty:ignore[invalid-assignment]
+
+    class MockModel:
+        import logging
+
+        logger = logging.getLogger("test")
+        files = {
+            "grid": {
+                "waterbodies/waterbody_id": "waterbody_id",
+                "waterbodies/waterbody_outflow_points": "waterbody_outflow_points",
+                "routing/river_ids": "river_ids",
+            },
+            "geom": {
+                "waterbodies/waterbody_data": "waterbody_data",
+                "routing/rivers": "rivers",
+            },
+        }
+
+    routing.model = MockModel()  # ty:ignore[invalid-assignment]
+
+    wb_data = gpd.GeoDataFrame(
+        {"waterbody_id": [5], "waterbody_type": [1]},
+        geometry=[Point(0, 0)],
+    )
+    rivers_data = gpd.GeoDataFrame(
+        {
+            "width": [10.0],
+            "hydrography_xy": [[(1, 0), (2, 0)]],
+            "hydrography_upstream_area_m2": [[1000.0, 2000.0]],
+        },
+        index=[20],
+        geometry=[Point(1, 0)],
+    )
+
+    def mock_read_geom(path: Any) -> gpd.GeoDataFrame:
+        if "waterbody_data" in str(path):
+            return wb_data.copy()
+        elif "rivers" in str(path):
+            return rivers_data.copy()
+        raise ValueError(f"Unknown geom path: {path}")
+
+    monkeypatch.setattr("geb.hydrology.routing.read_geom", mock_read_geom)
+
+    grid_linear_mapping = np.array([[0, 1, 2]], dtype=np.int32)
+    rivers, river_ids_comp, river_ids_orig = routing.load_rivers(grid_linear_mapping)
+
+    # Reach 20 is starved, so it should not be represented in the grid
+    assert not rivers.loc[20, "represented_in_grid"]
+    assert len(rivers.loc[20, "hydrography_xy"]) == 0
+    assert len(rivers.loc[20, "hydrography_upstream_area_m2"]) == 0
+    # The river IDs grid must have had the reach pruned to -1
+    assert (river_ids_comp == -1).all()
