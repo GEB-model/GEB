@@ -1,5 +1,7 @@
 # dev
 
+- Fix spinup failures near reservoirs built after the spinup starts. Keep their river channels until construction, then update the river cells when the reservoir becomes active. No input rebuild is needed; rerun failed spinups and simulations.
+
 # v1.0.0b35
 - Add WOKAM karst coverage and a store that slowly releases runoff to groundwater. Off by default; release time starts at 10 days. Build `setup_karst` and rerun spinup before use.
 
