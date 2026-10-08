@@ -24,6 +24,7 @@ from geb.geb_types import (
     TwoDArrayInt32,
     TwoDArrayUint8,
 )
+from geb.hydrology.waterbodies import OFF, RESERVOIR
 from geb.module import Module
 from geb.store import Bucket
 from geb.workflows import balance_check
@@ -561,22 +562,37 @@ class Routing(Module):
     def load_rivers(
         self,
         grid_linear_mapping: TwoDArrayInt32,
+        active_waterbody_ids: ArrayInt32 | None = None,
     ) -> tuple[gpd.GeoDataFrame, ArrayInt32, ArrayInt32]:
-        """Load the river network geometries.
+        """Load river geometries with only currently active waterbodies removed.
 
         Args:
             grid_linear_mapping: A 2D array mapping grid cells to linear indices.
+            active_waterbody_ids: IDs of waterbodies active in the model. Before
+                waterbodies are loaded, use their construction years instead.
 
         Returns:
             A GeoDataFrame containing the river network geometries, the updated river IDs and the original river IDs before removing waterbodies.
         """
-        raw_wb_id = self.grid.load2d(
+        raw_wb_id: TwoDArrayInt32 = self.grid.load2d(
             self.model.files["grid"]["waterbodies/waterbody_id"], compress=False
         )
-        wb_geom_file = self.model.files["geom"]["waterbodies/waterbody_data"]
-        wb_data_df = read_geom(wb_geom_file).set_index("waterbody_id")
-        active_ids = wb_data_df.index[wb_data_df["waterbody_type"] != 0].values
-        is_waterbody: TwoDArrayBool = np.isin(raw_wb_id, active_ids)
+        if active_waterbody_ids is None:
+            wb_geom_file: Path = self.model.files["geom"]["waterbodies/waterbody_data"]
+            wb_data_df: pd.DataFrame = read_geom(wb_geom_file).set_index("waterbody_id")
+            # Lakes and reservoirs with unknown dates are active from the start.
+            construction_years: pd.Series = wb_data_df.get(
+                "gdw_construction_year", pd.Series(0, index=wb_data_df.index)
+            ).fillna(0)
+            enabled: pd.Series = wb_data_df["waterbody_type"] != OFF
+            built: pd.Series = (wb_data_df["waterbody_type"] != RESERVOIR) | (
+                construction_years <= self.model.current_time.year
+            )
+            active_mask: ArrayBool = (enabled & built).to_numpy()
+            active_waterbody_ids = wb_data_df.index.to_numpy(dtype=np.int32)[
+                active_mask
+            ]
+        is_waterbody: TwoDArrayBool = np.isin(raw_wb_id, active_waterbody_ids)
 
         rivers: gpd.GeoDataFrame = read_geom(self.model.files["geom"]["routing/rivers"])
         rivers["return_period_2_years_daily_m3_per_s"] = np.nan
@@ -596,7 +612,9 @@ class Routing(Module):
             self.model.files["grid"]["waterbodies/waterbody_outflow_points"],
             compress=False,
         )
-        is_active_outflow: TwoDArrayBool = np.isin(raw_wb_outflows, active_ids)
+        is_active_outflow: TwoDArrayBool = np.isin(
+            raw_wb_outflows, active_waterbody_ids
+        )
         active_wb_outflows: TwoDArrayInt32 = np.where(
             is_active_outflow, raw_wb_outflows, -1
         ).astype(np.int32)
@@ -628,6 +646,15 @@ class Routing(Module):
         def remove_masked_river_cells(
             xys: list[tuple[int, int]], mask: list[bool]
         ) -> np.ndarray[tuple[int], np.dtype[Any]]:
+            """Keep coordinates for cells still represented as river channels.
+
+            Args:
+                xys: Grid column and row pairs.
+                mask: Whether each coordinate remains a river cell.
+
+            Returns:
+                Coordinates of the retained cells.
+            """
             array: np.ndarray[tuple[int], np.dtype[Any]] = np.empty(
                 sum(mask), dtype=object
             )
@@ -663,6 +690,33 @@ class Routing(Module):
             )
         )
         return rivers, river_ids_compressed, river_ids_no_waterbodies_removed
+
+    def update_river_cells(self) -> None:
+        """Update river cells when reservoirs become active.
+
+        Reload the river cells, but keep saved discharge statistics and water storage.
+        """
+        active_waterbody_ids: ArrayInt32 = (
+            self.hydrology.waterbodies.var.waterbodies.index.to_numpy(dtype=np.int32)[
+                self.hydrology.waterbodies.is_active
+            ]
+        )
+        rivers: gpd.GeoDataFrame
+        rivers, self.var.river_ids, self.var.river_ids_no_waterbodies_removed = (
+            self.load_rivers(self.grid.linear_mapping, active_waterbody_ids)
+        )
+        # Only replace cell locations. Keep the other river properties.
+        column: str
+        for column in (
+            "hydrography_xy",
+            "hydrography_xy_no_waterbodies_removed",
+            "hydrography_upstream_area_m2",
+            "hydrography_upstream_area_m2_no_waterbodies_removed",
+            "represented_in_grid",
+            "hydrography_linear",
+        ):
+            self.var.rivers[column] = rivers[column]
+        self.var.active_rivers = self.get_active_rivers()
 
     def save_weirs(self) -> None:
         """Save barrier heights (m) and which dams can open to weir_heights.csv.
@@ -1258,6 +1312,9 @@ class Routing(Module):
             ValueError: If channel geometry is invalid.
             OSError: If weir diagnostics cannot be written.
         """  # noqa: DOC202, DOC502
+        # A new reservoir changes which cells are rivers. Update these before
+        # creating the solver, including when loading a saved model.
+        self.update_river_cells()
         is_waterbody_outflow: ArrayBool = self.grid.var.waterbody_outflow_points != -1
         retention_basin_release_threshold_factor: float = self.config[
             "retention_basins"

@@ -6352,6 +6352,7 @@ def test_routing_set_router_estimates_width_from_simulated_q2(
 
     # Geometry assertions do not require the solver's weir diagnostic arrays.
     monkeypatch.setattr(Routing, "save_weirs", lambda self: None)
+    monkeypatch.setattr(Routing, "update_river_cells", lambda self: None)
 
     # Call set_router
     routing.set_router()
@@ -7551,6 +7552,8 @@ def test_load_rivers_prunes_starved_channels_and_updates_represented_in_grid(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Verify that load_rivers prunes starved channels downstream of non-outflow waterbody cells."""
+    from datetime import datetime
+
     import pyflwdir
     from shapely.geometry import Point
 
@@ -7587,6 +7590,7 @@ def test_load_rivers_prunes_starved_channels_and_updates_represented_in_grid(
     class MockModel:
         import logging
 
+        current_time: datetime = datetime(1990, 1, 1)
         logger = logging.getLogger("test")
         files = {
             "grid": {

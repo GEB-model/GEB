@@ -1,5 +1,7 @@
 # dev
 
+- Fix spinup failures near reservoirs built after the spinup starts. Keep their river channels until construction, then update the river cells when the reservoir becomes active. No input rebuild is needed; rerun failed spinups and simulations.
+
 # v1.0.0b35
 - Add simple karst recharge. `setup_karst` builds a karst map from WOKAM. When enabled, part of the surface runoff and interflow goes to MODFLOW groundwater. Default: disabled, capture fraction 1.0, based on the full-capture assumption in Wan et al. (2024), doi:10.1029/2023WR036182. GEB also captures soil overflow, which the paper excludes. Build the karst map and rerun spinup before enabling. Explicit capture settings are unchanged.
 
