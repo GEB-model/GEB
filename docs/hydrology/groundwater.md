@@ -39,18 +39,13 @@ The groundwater simulation proceeds in the following steps during each model tim
 
 ## Simple karst recharge
 
-GEB can send part of the surface runoff and interflow (water flowing sideways
-through the soil) to groundwater in karst areas. This represents water entering
-cracks and sinkholes. MODFLOW then calculates groundwater storage and flow.
+Karst stores part of the surface runoff and interflow, then slowly releases it
+to groundwater. Sealed areas and open water are excluded. Karst is off by default.
 
-The build method `setup_karst` downloads the [World Karst Aquifer Map (WOKAM)](https://download.bgr.de/bgr/grundwasser/whymap/shp/WHYMAP_WOKAM_v1.zip)
-and saves `groundwater/karst_fraction` (0–1). It includes rocks that cover only
-part of a grid cell. WOKAM shows surface rocks that can form karst. It does not
-give an exact karst fraction. We use 0.825 for continuous carbonate or evaporite
-rocks, 0.4 for discontinuous rocks, and 0.65 for mixed rocks. These are estimates
-from the middle of the coverage ranges. See
-[Goldscheider et al. (2020)](https://doi.org/10.1007/s10040-020-02139-5).
-Data source: WHYMAP WOKAM, BGR Berlin, IAH Reading, KIT Karlsruhe, UNESCO Paris, 2017.
+`setup_karst` uses [WOKAM](https://download.bgr.de/bgr/grundwasser/whymap/shp/WHYMAP_WOKAM_v1.zip)
+to estimate coverage per cell: 0.825 for continuous rocks, 0.4 for discontinuous
+rocks, and 0.65 for mixed rocks. These are estimates from the mapped ranges;
+see [Goldscheider et al. (2020)](https://doi.org/10.1007/s10040-020-02139-5).
 
 Enable it in `model.yml`:
 
@@ -59,45 +54,32 @@ hydrology:
   karst:
     enabled: true
     capture_fraction: 1.0
+    release_time_days: 10.0
 ```
 
-Karst recharge is off by default. `capture_fraction` must be between 0 and 1.
-The default is 1.0, based on the full-capture assumption used by
-[Wan, Döll and Müller Schmied (2024)](https://doi.org/10.1029/2023WR036182).
-They found that WaterGAP land runoff, excluding urban runoff and soil overflow,
-best represented groundwater recharge on the karst area, using estimates from
-64 karst grid cells. This supports a simple model assumption, not a measured
-capture fraction for the Geul. GEB applies it to surface runoff and interflow;
-these are not the same components as WaterGAP's runoff. In particular, GEB's
-surface runoff includes soil overflow, which this simple scheme also captures.
-The earlier value of 0.5 was a trial value with no literature basis.
+Capture equals karst coverage times `capture_fraction` (0–1). The default of 1.0
+follows [Wan et al. (2024)](https://doi.org/10.1029/2023WR036182), but GEB also
+captures soil overflow, which that study excludes.
 
-With a karst fraction of 0.6 and capture set to 1.0, 60% of the surface runoff
-and interflow goes to groundwater. Each HRU uses the karst fraction of its grid
-cell. Sealed areas and open water are excluded. The same amount is removed from runoff and added to
-recharge, so no water is lost. This happens after the soil calculations.
-Flood runoff files and erosion calculations use the remaining surface runoff.
-Land-surface reports show runoff before karst capture. To report the added
-recharge, use `.karst_recharge_m` in the `hydrology` module (HRU, meters per day).
+Longer release times hold water longer. The time must be finite and positive;
+10 days is a trial value. Without new inflow, 37% of stored water remains after
+that time. Storage is saved in checkpoints and included in the water balance.
 
-For existing inputs, first run `uv run geb update-version -b build.yml` to update
-the input version. It prints the karst update instructions once. Then build the
-map before running with karst enabled:
+Build the map and rerun spinup:
 
 ```bash
+uv run geb update-version -b build.yml
 uv run geb update -b build.yml::setup_karst
 uv run geb spinup
 uv run geb run
 ```
 
-`setup_karst` is included in the default build. Custom build files must include
-it after `setup_region`. Rerun spinup when turning karst on or changing the
-capture fraction, so groundwater levels adjust to the new recharge.
-For the Geul at Meerssen, compare runs with karst off and on. Start with 1.0
-and check peak flows, how quickly flows fall after rain, low flows and annual
-discharge. The effect on peaks depends on how quickly MODFLOW returns the water
-to the river. This simple approach does not model individual springs or
-underground river connections. It may not reduce the annual discharge.
+Custom builds need `setup_karst` after `setup_region`. Rebuild older karst maps,
+which may contain only zeros. Rerun spinup after changing karst settings.
+
+In `hydrology`, report `.karst_capture_m` on HRUs, `.karst_recharge_m` on the grid
+(m/day), and `grid.var.karst_storage_m` on the grid (m). Land-surface runoff
+reports show runoff before capture. This delays water; it does not remove it.
 
 ## Code
 

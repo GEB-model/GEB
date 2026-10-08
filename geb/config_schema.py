@@ -306,16 +306,23 @@ class HydrologyEvaluationConfig(BaseModel):
 
 
 class KarstConfig(BaseModel):
-    """Settings for sending part of the runoff in karst areas to groundwater."""
+    """Karst capture and release settings."""
 
     enabled: bool = Field(
-        False, description="Send part of the runoff in karst areas to groundwater."
+        False,
+        description="Enable karst storage and recharge.",
     )
     capture_fraction: float = Field(
         1.0,
         ge=0.0,
         le=1.0,
-        description="Share of surface runoff and interflow sent to groundwater on karst land (0–1).",
+        description="Fraction of runoff and interflow captured on karst land (0–1).",
+    )
+    release_time_days: float = Field(
+        10.0,
+        gt=0.0,
+        allow_inf_nan=False,
+        description="Time for karst storage to fall to 37% without new inflow (days).",
     )
 
 

@@ -53,6 +53,8 @@ class GroundWater(BuildModelBase):
         if transform.b != 0 or transform.d != 0:
             raise ValueError("Karst coverage requires an unrotated model grid.")
         coverage: xr.DataArray = full_like(mask, 0.0, nodata=np.nan, dtype=np.float32)
+        # Load before editing values; edits to a lazy array's .values are discarded.
+        coverage = coverage.load()
         coverage.values[mask.values] = np.nan
         coverage.attrs["units"] = "1"
         coverage.attrs["source"] = "WHYMAP WOKAM, BGR, IAH, KIT, UNESCO, 2017"

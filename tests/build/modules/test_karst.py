@@ -12,13 +12,20 @@ from shapely.geometry import box
 from geb.build.modules.groundwater import GroundWater
 
 
-def test_setup_karst_fractional_coverage() -> None:
-    """Build partial coverage, class weighting, zero coverage and inactive cells."""
+@pytest.mark.parametrize("lazy", [False, True])
+def test_setup_karst_fractional_coverage(lazy: bool) -> None:
+    """Build coverage for both in-memory and lazily loaded model grids.
+
+    Args:
+        lazy: Whether the grid uses Dask, as when reading built inputs.
+    """
     mask: xr.DataArray = xr.DataArray(
         [[False, False, False], [False, False, True]],
         coords={"y": [3.0, 1.0], "x": [1.0, 3.0, 5.0]},
         dims=("y", "x"),
     ).rio.write_crs(6933)
+    if lazy:
+        mask = mask.chunk({"y": 1, "x": 2})
     polygons: gpd.GeoDataFrame = gpd.GeoDataFrame(
         {"rock_type": [1, 1, 2, 4]},
         geometry=[box(0, 2, 2, 4), box(0, 2, 2, 4), box(2, 0, 3, 4), box(4, 2, 6, 4)],

@@ -22,6 +22,10 @@ def test_karst_input_migration(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "setup_karst" in updates[0]
     assert "rerun spinup" in updates[0]
     assert "karst disabled require no input changes" in updates[0]
+    assert "new karst store" in updates[0]
+    assert "may contain only zeros" in updates[0]
+    assert "1.0.0b36" not in version_updates.VERSION_UPDATES
+    assert "1.0.0b37" not in version_updates.VERSION_UPDATES
 
 
 @pytest.mark.parametrize("update_fails", [False, True])

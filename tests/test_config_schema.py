@@ -32,6 +32,8 @@ def test_karst_default_matches_configuration() -> None:
     assert defaults["hydrology"]["karst"]["capture_fraction"] == 1.0
     assert KarstConfig().enabled is False
     assert KarstConfig(capture_fraction=0.5).capture_fraction == 0.5
+    assert KarstConfig().release_time_days == 10.0
+    assert defaults["hydrology"]["karst"]["release_time_days"] == 10.0
 
 
 def test_parameters_config_requires_all_parameters() -> None:
