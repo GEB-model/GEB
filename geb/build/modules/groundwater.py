@@ -2,12 +2,15 @@
 
 import geopandas as gpd
 import numpy as np
+import shapely
 import xarray as xr
+from affine import Affine
 
 from geb.build.methods import build_method
 from geb.workflows.io import get_window
 from geb.workflows.raster import (
     convert_nodata,
+    full_like,
     interpolate_na_2d,
     pad_cells,
     rasterize_like,
@@ -23,6 +26,80 @@ class GroundWater(BuildModelBase):
     def __init__(self) -> None:
         """Initialize the GroundWater class."""
         pass
+
+    @build_method(required=False)
+    def setup_karst(self) -> None:
+        """Use WOKAM to estimate how much of each grid cell is karst.
+
+        Notes:
+            WOKAM gives ranges, not exact fractions. Use their
+            midpoints: 0.825 for continuous rocks, 0.4 for discontinuous rocks,
+            and 0.65 for mixed rocks. Inactive grid cells are NaN.
+
+        Returns:
+            None; saves ``groundwater/karst_fraction`` (0–1).
+
+        Raises:
+            ValueError: If a coordinate reference system is missing, the grid
+                is rotated, or WOKAM has unknown rock classes.
+        """  # noqa: DOC202
+        polygons: gpd.GeoDataFrame = self.data_catalog.fetch("wokam").read()
+        mask: xr.DataArray = self.grid["mask"]
+        if polygons.crs is None or mask.rio.crs is None:
+            raise ValueError("WOKAM polygons and the model grid must have a CRS.")
+        if not polygons["rock_type"].isin([1, 2, 3, 4, 5]).all():
+            raise ValueError("WOKAM contains unknown rock classes.")
+        transform: Affine = mask.rio.transform(recalc=True)
+        if transform.b != 0 or transform.d != 0:
+            raise ValueError("Karst coverage requires an unrotated model grid.")
+        coverage: xr.DataArray = full_like(mask, 0.0, nodata=np.nan, dtype=np.float32)
+        coverage.values[mask.values] = np.nan
+        coverage.attrs["units"] = "1"
+        coverage.attrs["source"] = "WHYMAP WOKAM, BGR, IAH, KIT, UNESCO, 2017"
+        polygons = polygons.to_crs(mask.rio.crs)
+        bounds: tuple[float, float, float, float] = mask.rio.bounds(recalc=True)
+        polygons = polygons.cx[bounds[0] : bounds[2], bounds[1] : bounds[3]].copy()
+        if not polygons.empty:
+            # Merge polygons of the same rock type to avoid counting overlap twice.
+            polygons = polygons.dissolve(by="rock_type").to_crs(6933)
+            rows: np.ndarray
+            columns: np.ndarray
+            rows, columns = np.where(~mask.values)
+            cell_x: np.ndarray = transform.c + columns * transform.a
+            cell_y: np.ndarray = transform.f + rows * transform.e
+            # Calculate areas in an equal-area projection, rather than degrees.
+            cells: gpd.GeoSeries = gpd.GeoSeries(
+                shapely.box(
+                    np.minimum(cell_x, cell_x + transform.a),
+                    np.minimum(cell_y, cell_y + transform.e),
+                    np.maximum(cell_x, cell_x + transform.a),
+                    np.maximum(cell_y, cell_y + transform.e),
+                ),
+                crs=mask.rio.crs,
+            ).to_crs(6933)
+            cell_indices: np.ndarray
+            polygon_indices: np.ndarray
+            cell_indices, polygon_indices = polygons.sindex.query(
+                cells, predicate="intersects"
+            )
+            # WOKAM codes: 1/3 continuous, 2/5 discontinuous, 4 mixed rocks.
+            rock_fraction: np.ndarray = polygons.index.map(
+                {1: 0.825, 2: 0.4, 3: 0.825, 4: 0.65, 5: 0.4}
+            ).to_numpy(dtype=np.float64)
+            overlap_area_m2: np.ndarray = shapely.area(
+                shapely.intersection(
+                    cells.array[cell_indices], polygons.geometry.array[polygon_indices]
+                )
+            )
+            karst_area_m2: np.ndarray = np.bincount(
+                cell_indices,
+                weights=overlap_area_m2 * rock_fraction[polygon_indices],
+                minlength=len(cells),
+            )
+            coverage.values[rows, columns] = np.clip(
+                karst_area_m2 / cells.area.to_numpy(), 0.0, 1.0
+            ).astype(np.float32)
+        self.set_grid(coverage, name="groundwater/karst_fraction")
 
     @build_method(depends_on=["setup_elevation"], required=True)
     def setup_groundwater(

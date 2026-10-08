@@ -1,5 +1,8 @@
 # dev
 
+# v1.0.0b35
+- Add simple karst recharge. `setup_karst` builds a karst map from WOKAM. When enabled, part of the surface runoff and interflow goes to MODFLOW groundwater. Default: disabled, capture fraction 1.0, based on the full-capture assumption in Wan et al. (2024), doi:10.1029/2023WR036182. GEB also captures soil overflow, which the paper excludes. Build the karst map and rerun spinup before enabling. Explicit capture settings are unchanged.
+
 # v1.0.0b34
 - Fix for trapped waterbody cells. Only classify waterbody as trapped if they are both down- and upstream of the same waterbody.
 - Pruned starved river cells originating from active non-outflow waterbody cells to avoid zero-discharge hydrodynamic river reaches.

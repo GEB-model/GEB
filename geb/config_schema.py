@@ -305,11 +305,28 @@ class HydrologyEvaluationConfig(BaseModel):
     )
 
 
+class KarstConfig(BaseModel):
+    """Settings for sending part of the runoff in karst areas to groundwater."""
+
+    enabled: bool = Field(
+        False, description="Send part of the runoff in karst areas to groundwater."
+    )
+    capture_fraction: float = Field(
+        1.0,
+        ge=0.0,
+        le=1.0,
+        description="Share of surface runoff and interflow sent to groundwater on karst land (0–1).",
+    )
+
+
 class HydrologyConfig(BaseModel):
     """Configuration for hydrology."""
 
     routing: RoutingConfig = Field(
         default_factory=RoutingConfig, description="Routing configuration."
+    )
+    karst: KarstConfig = Field(
+        default_factory=KarstConfig, description="Karst recharge settings."
     )
     evaluation: HydrologyEvaluationConfig = Field(
         default_factory=HydrologyEvaluationConfig,

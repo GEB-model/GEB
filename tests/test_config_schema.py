@@ -1,13 +1,14 @@
 """Tests for configuration schema and parameters validation."""
 
 import os
+from typing import Any
 
 import pytest
 import yaml
 from pydantic import ValidationError
 
 from geb import GEB_PACKAGE_DIR
-from geb.config_schema import Config, ParametersConfig
+from geb.config_schema import Config, KarstConfig, ParametersConfig
 from geb.runner import parse_config
 
 EXPECTED_PARAMETERS: set[str] = {
@@ -21,6 +22,16 @@ EXPECTED_PARAMETERS: set[str] = {
     "interflow_multiplier",
     "variable_runoff_shape_beta_multiplier",
 }
+
+
+def test_karst_default_matches_configuration() -> None:
+    """Use full capture in both the schema and default configuration."""
+    with (GEB_PACKAGE_DIR / "reasonable_default_config.yml").open() as config_file:
+        defaults: dict[str, Any] = yaml.safe_load(config_file)
+    assert KarstConfig().capture_fraction == 1.0
+    assert defaults["hydrology"]["karst"]["capture_fraction"] == 1.0
+    assert KarstConfig().enabled is False
+    assert KarstConfig(capture_fraction=0.5).capture_fraction == 0.5
 
 
 def test_parameters_config_requires_all_parameters() -> None:

@@ -26,13 +26,14 @@ from typing import TYPE_CHECKING
 import numba
 import numpy as np
 
-from geb.geb_types import TwoDArrayFloat32 as TwoDArrayFloat32
+from geb.geb_types import ArrayFloat32, TwoDArrayFloat32 as TwoDArrayFloat32
 from geb.hydrology.HRUs import Data
 from geb.module import Module
 from geb.workflows import TimingModule, balance_check
 
 from .erosion.hillslope import HillSlopeErosion
 from .groundwater import GroundWater
+from .landcovers import SEALED
 from .landsurface.landsurface_model import LandSurface
 from .routing import Routing
 from .runoff_concentration import RunoffConcentrator
@@ -140,12 +141,36 @@ class Hydrology(Data, Module):
     """
 
     def __init__(self, model: GEBModel) -> None:
-        """Create the hydrology module."""
+        """Set up hydrology and load the karst map if karst is enabled.
+
+        Args:
+            model: The GEB model instance.
+
+        Raises:
+            ValueError: If the karst map is missing or its values are outside 0–1.
+        """
         Data.__init__(self, model)
         Module.__init__(self, model)
 
         if not self.model.simulate_hydrology:
             return
+
+        self.karst_fraction: ArrayFloat32 | None = None
+        if self.model.config["hydrology"]["karst"]["enabled"]:
+            if "groundwater/karst_fraction" not in self.model.files["grid"]:
+                raise ValueError(
+                    "Karst inputs are missing. Run setup_karst and rerun spinup."
+                )
+            self.karst_fraction = self.grid.load2d(
+                self.model.files["grid"]["groundwater/karst_fraction"]
+            )
+            if (
+                not np.isfinite(self.karst_fraction).all()
+                or ((self.karst_fraction < 0) | (self.karst_fraction > 1)).any()
+            ):
+                raise ValueError(
+                    "Karst map values must be between 0 and 1, with no NaNs or infinities."
+                )
 
         self.landsurface = LandSurface(self.model, self)
         self.groundwater = GroundWater(self.model, self)
@@ -241,6 +266,8 @@ class Hydrology(Data, Module):
         """Perform a single time step of the hydrological model.
 
         Calculates the water balance and updates all hydrological components.
+        When karst is enabled, send part of the surface runoff and interflow
+        on land to groundwater before combining HRU results into grid cells.
         """
         timer: TimingModule = TimingModule("Hydrology")
 
@@ -271,6 +298,25 @@ class Hydrology(Data, Module):
 
         if __debug__:
             influx += pr_total_m3
+
+        if self.karst_fraction is not None:
+            # Only land runoff can enter karst; skip sealed areas and open water.
+            # Full capture follows Wan et al. (2024), doi:10.1029/2023WR036182.
+            capture_fraction: ArrayFloat32 = (
+                self.to_HRU(data=self.karst_fraction)
+                * np.float32(
+                    self.model.config["hydrology"]["karst"]["capture_fraction"]
+                )
+                * (self.HRU.var.land_use_type < SEALED)
+            )
+            karst_recharge_m: ArrayFloat32 = (
+                overland_runoff_m.sum(axis=0) + interflow_m.sum(axis=0)
+            ) * capture_fraction
+            groundwater_recharge_m += karst_recharge_m
+            overland_runoff_m *= np.float32(1.0) - capture_fraction
+            interflow_m *= np.float32(1.0) - capture_fraction
+        elif "karst_recharge_m" in self.local_variables_to_report:
+            karst_recharge_m = np.zeros_like(groundwater_recharge_m)
 
         interflow_m = self.to_grid(HRU_data=interflow_m)
         overland_runoff_m = self.to_grid(HRU_data=overland_runoff_m)

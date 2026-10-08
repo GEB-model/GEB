@@ -13,6 +13,9 @@ if TYPE_CHECKING:
     from geb.build import GEBModel as GEBModelBuild
 
 VERSION_UPDATES: dict[str, list[str]] = {
+    "1.0.0b35": [
+        "[manual] To enable hydrology.karst, add setup_karst to custom build files, run geb update -b build.yml::setup_karst, and rerun spinup. Existing runs with karst disabled require no input changes.",
+    ],
     "1.0.0b34": [
         "[update-method;setup_waterbodies]",
     ],

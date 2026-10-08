@@ -61,6 +61,7 @@ from .sword import Sword
 from .undp import HumanDevelopmentIndex
 from .wekeo_copernicus import WEkEOCopernicus
 from .why_map import WhyMap
+from .wokam import WOKAM
 from .world_bank import WorldBankData
 from .worldfloods import WorldFloodsV2
 
@@ -225,6 +226,20 @@ data_catalog: dict[str, dict[str, Any]] = {
             "author": "European Commission, Joint Research Centre (JRC)",
             "license": "CC BY 4.0",
             "url": "https://data.jrc.ec.europa.eu/dataset/f572c443-7466-4adf-87aa-c0847a169f23",
+        },
+    },
+    "wokam": {
+        "adapter": WOKAM(
+            folder="wokam", filename="wokam.parquet", local_version=1, cache="global"
+        ),
+        "url": "https://download.bgr.de/bgr/grundwasser/whymap/shp/WHYMAP_WOKAM_v1.zip",
+        "source": {
+            "name": "World Karst Aquifer Map (WOKAM)",
+            "author": "BGR, IAH, KIT, UNESCO",
+            "year": "2017",
+            "license": "BGR standard terms; attribution required",
+            "url": "https://www.whymap.org/whymap/EN/Maps_Data/Wokam/wokam_node_en.html",
+            "paper_doi": "10.1007/s10040-020-02139-5",
         },
     },
     "why_map": {
