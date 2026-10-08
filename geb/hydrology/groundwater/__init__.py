@@ -31,6 +31,7 @@ import numpy as np
 import numpy.typing as npt
 
 from geb.geb_types import (
+    ArrayBool,
     ArrayFloat32,
     ArrayFloat64 as ArrayFloat64,
     ThreeDArrayFloat64,
@@ -179,36 +180,77 @@ class GroundWater(Module):
         self,
         groundwater_recharge_m: ArrayFloat32,
         groundwater_abstraction_m3: ArrayFloat32,
+        capillary_rise_m: ArrayFloat32,
     ) -> ArrayFloat32:
         """Perform a groundwater model step.
 
         Args:
             groundwater_recharge_m: Recharge to the groundwater (m/step).
             groundwater_abstraction_m3: Groundwater abstraction (m3/step).
+            capillary_rise_m: Capillary rise drawn from groundwater (m/step).
 
         Returns:
             Baseflow to rivers (m/step).
+
+        Raises:
+            AssertionError: If total groundwater abstraction exceeds available groundwater storage by more than numerical tolerance.
         """
         assert (groundwater_abstraction_m3 + 1e-7 >= 0).all()
         groundwater_abstraction_m3[groundwater_abstraction_m3 < 0] = 0
         assert (groundwater_recharge_m >= 0).all()
+        assert (capillary_rise_m >= 0).all()
+
+        # Net recharge after accounting for capillary rise
+        net_recharge_m: ArrayFloat32 = np.maximum(
+            np.float32(0.0), groundwater_recharge_m - capillary_rise_m
+        )
+        excess_capillary_rise_m: ArrayFloat32 = np.maximum(
+            np.float32(0.0), capillary_rise_m - groundwater_recharge_m
+        )
+        excess_capillary_rise_m3: ArrayFloat64 = excess_capillary_rise_m.astype(
+            np.float64
+        ) * self.grid.var.cell_area.astype(np.float64)
+
+        total_groundwater_abstraction_m3: ArrayFloat64 = (
+            groundwater_abstraction_m3.astype(np.float64) + excess_capillary_rise_m3
+        )
+
+        excess_storage_m3: ArrayFloat64 = (
+            total_groundwater_abstraction_m3 - self.modflow.available_groundwater_m3
+        )
+        epsilon_m3: ArrayFloat64 = (
+            np.float64(1e-4) + np.float64(1e-5) * self.modflow.available_groundwater_m3
+        )
+        if (excess_storage_m3 > epsilon_m3).any():
+            max_excess: float = float(excess_storage_m3.max())
+            raise AssertionError(
+                "Total groundwater abstraction exceeds available groundwater storage by "
+                f"more than numerical tolerance ({max_excess} m3 > tolerance)."
+            )
+
+        # Only correct minor floating-point inaccuracies within epsilon tolerance
+        epsilon_mask: ArrayBool = excess_storage_m3 > 0
+        if epsilon_mask.any():
+            total_groundwater_abstraction_m3[epsilon_mask] = (
+                self.modflow.available_groundwater_m3[epsilon_mask]
+            )
 
         if __debug__:
             groundwater_storage_pre = self.modflow.groundwater_content_m3
 
-        self.modflow.set_recharge_m3(groundwater_recharge_m * self.grid.var.cell_area)
-        self.modflow.set_groundwater_abstraction_m3(
-            groundwater_abstraction_m3.astype(np.float64)
+        self.modflow.set_recharge_m3(
+            (net_recharge_m * self.grid.var.cell_area).astype(np.float32)
         )
+        self.modflow.set_groundwater_abstraction_m3(total_groundwater_abstraction_m3)
         self.modflow.step()
 
         if __debug__:
             influxes: list[npt.NDArray[np.float64] | np.float64] = [
-                groundwater_recharge_m.astype(np.float64) * self.grid.var.cell_area,
+                net_recharge_m.astype(np.float64) * self.grid.var.cell_area,
                 self.boundary_inflow_m3,
             ]
             outfluxes: list[npt.NDArray[np.float64] | np.float64] = [
-                groundwater_abstraction_m3.astype(np.float64),
+                total_groundwater_abstraction_m3,
                 self.modflow.drainage_m3.astype(np.float64),
                 self.boundary_outflow_m3,
             ]
@@ -225,14 +267,8 @@ class GroundWater(Module):
 
         groundwater_drainage = self.modflow.drainage_m3 / self.grid.var.cell_area
 
-        # we assume that all the baseflow ends up in the river
-        channel_ratio = np.float32(1.0)
-
-        # this is the capillary rise for the NEXT timestep
-        self.grid.var.capillar = (groundwater_drainage * (1 - channel_ratio)).astype(
-            np.float32
-        )
-        baseflow = (groundwater_drainage * channel_ratio).astype(np.float32)
+        # All groundwater drainage is discharged as baseflow to the river network
+        baseflow = groundwater_drainage.astype(np.float32)
 
         self.report(locals())
 

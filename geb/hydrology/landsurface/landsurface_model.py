@@ -21,7 +21,7 @@ from geb.store import Bucket
 from geb.workflows import TimingModule, balance_check
 from geb.workflows.io import read_grid
 
-from ..landcovers import FOREST, GRASSLAND_LIKE, OPEN_WATER, PADDY_IRRIGATED, SEALED
+from ..landcovers import FOREST, GRASSLAND_LIKE, OPEN_WATER, SEALED
 from .constants import (
     KELVIN_OFFSET,
     MIN_ACTIVE_SNOW_SWE_M,
@@ -75,7 +75,6 @@ from .water import (
     get_soil_moisture_at_pressure,
     infiltration,
     kv_wosten,
-    rise_from_groundwater,
     thetar_brakensiek,
     thetas_toth,
 )
@@ -160,7 +159,7 @@ def land_surface_model(
     CO2_ppm: np.float32,
     crop_factor: ArrayFloat32,
     actual_irrigation_consumption_m: ArrayFloat32,
-    capillar_rise_m: ArrayFloat32,
+    groundwater_depth_m: ArrayFloat32,
     groundwater_toplayer_conductivity_m_per_day: ArrayFloat32,
     saturated_hydraulic_conductivity_m_per_s: TwoDArrayFloat32,
     wetting_front_depth_m: ArrayFloat32,
@@ -176,6 +175,7 @@ def land_surface_model(
     leaf_area_index: ArrayFloat32,
     rainfall_lookup_table: TwoDArrayFloat32,
     daily_reference_evapotranspiration_grass_m: ArrayFloat32,
+    max_capillary_rise_m: ArrayFloat32,
 ) -> tuple[
     ArrayFloat32,
     ArrayFloat32,
@@ -191,6 +191,7 @@ def land_surface_model(
     ArrayFloat32,
     ArrayFloat32,
     TwoDArrayFloat32,
+    ArrayFloat32,
     ArrayFloat32,
     TwoDArrayFloat32,
     ArrayFloat32,
@@ -260,7 +261,7 @@ def land_surface_model(
         CO2_ppm: Atmospheric CO2 concentration in ppm.
         crop_factor: Crop factor for each HRU. Dimensionless.
         actual_irrigation_consumption_m: Actual irrigation consumption in meters.
-        capillar_rise_m: Capillary rise in meters.
+        groundwater_depth_m: Depth of groundwater table below surface in meters.
         saturated_hydraulic_conductivity_m_per_s: Saturated hydraulic conductivity in m/s.
         wetting_front_depth_m: Wetting front depth in meters.
         wetting_front_suction_head_m: Wetting front suction head [m].
@@ -276,6 +277,7 @@ def land_surface_model(
         daily_reference_evapotranspiration_grass_m: Daily reference evapotranspiration for grass (meters).
         leaf_area_index: Leaf area index for the cell.
         rainfall_lookup_table: Precomputed lognormal weights lookup table of shape (table_size, 6).
+        max_capillary_rise_m: Maximum available groundwater storage for capillary rise per cell (meters).
 
     Returns:
         Tuple of:
@@ -325,13 +327,13 @@ def land_surface_model(
 
     # convert values to substep (i.e., per hour)
     actual_irrigation_consumption_m = actual_irrigation_consumption_m / 24.0
-    capillar_rise_m = capillar_rise_m / 24.0
 
     groundwater_toplayer_conductivity_m_per_s = (
         groundwater_toplayer_conductivity_m_per_day
     ) / np.float32(24.0 * 3600.0)
 
     num_cells: int = slope_m_per_m.size
+    capillar_rise_m: ArrayFloat32 = np.zeros(num_cells, dtype=np.float32)
     runoff_m: TwoDArrayFloat32 = np.zeros((num_cells, 24), dtype=np.float32)
     interflow_m: TwoDArrayFloat32 = np.zeros((num_cells, 24), dtype=np.float32)
     reference_evapotranspiration_water_m: TwoDArrayFloat32 = np.zeros(
@@ -384,9 +386,10 @@ def land_surface_model(
     )
 
     num_blocks: int = num_cells // BLOCK_SIZE
-    for _block in prange(num_blocks):  # ty: ignore[not-iterable]
+    for _block in prange(num_blocks):
         for _j in range(BLOCK_SIZE):
             i: int = _block * BLOCK_SIZE + _j
+            remaining_capillary_rise_m: np.float32 = max_capillary_rise_m[i]
             # Pre-allocate the per-cell transpiration snapshot buffer here (outside the
             # hour loop) to avoid a heap allocation on each of the 24 hourly sub-steps.
             water_content_before_transpiration_m = np.empty(
@@ -642,15 +645,7 @@ def land_surface_model(
                 )
                 open_water_evaporation_m[i] += open_water_evaporation_m_cell_hour
 
-                groundwater_rise = rise_from_groundwater(
-                    w=water_content_m[i, :],
-                    ws=water_content_saturated_m[i, :],
-                    capillary_rise_from_groundwater=capillar_rise_m[i],
-                )
-                if land_use_type[i] == PADDY_IRRIGATED:
-                    topwater_m[i] += groundwater_rise
-                else:
-                    runoff_m[i, hour] += groundwater_rise
+                # Capillary rise is handled dynamically by distribute_soil_water_ross below.
 
                 # Only newly added liquid surface water should advect rain heat here.
                 # Pre-existing ponded water is already part of the top-soil control
@@ -688,7 +683,7 @@ def land_surface_model(
                     land_use_type=land_use_type[i],
                     w=water_content_m[i, :],
                     topwater_m=topwater_m[i],
-                    capillary_rise_from_groundwater_m=capillar_rise_m[i],
+                    capillary_rise_from_groundwater_m=np.float32(0.0),
                     wetting_front_depth_m=wetting_front_depth_m[i],
                     wetting_front_suction_head_m=wetting_front_suction_head_m[i],
                     wetting_front_moisture_deficit=wetting_front_moisture_deficit[i],
@@ -721,15 +716,14 @@ def land_surface_model(
                 # This also handles percolation to groundwater if infiltration did not Already
                 # produce recharge this hour.
                 gw_ksat_m_per_s = np.float32(0.0)
-                if groundwater_recharge_from_infiltraton_m <= np.float32(
-                    0.0
-                ) and capillar_rise_m[i] <= np.float32(0):
+                if groundwater_recharge_from_infiltraton_m <= np.float32(0.0):
                     gw_ksat_m_per_s = groundwater_toplayer_conductivity_m_per_s[i]
 
                 (
                     top_soil_percolation_ross,
                     top_soil_rise_ross,
                     percolation_to_groundwater_ross,
+                    capillary_rise_ross,
                     percolation_to_groundwater_enthalpy_loss_ross,
                     total_lateral_outflow_ross,
                     interflow_enthalpy_loss_ross,
@@ -755,10 +749,17 @@ def land_surface_model(
                     green_ampt_active_layer_idx=green_ampt_active_layer_idx[i],
                     topwater_m=topwater_m[i],
                     gw_ksat_m_per_s=gw_ksat_m_per_s,
+                    groundwater_depth_m=groundwater_depth_m[i],
+                    deep_soil_temperature_C=deep_soil_temperature_C[i],
+                    max_capillary_rise_m=remaining_capillary_rise_m,
                 )
                 top_soil_percolation_to_layer_2_m[i] += top_soil_percolation_ross
                 top_soil_rise_from_layer_2_m[i] += top_soil_rise_ross
                 groundwater_recharge_m[i] += percolation_to_groundwater_ross
+                capillar_rise_m[i] += capillary_rise_ross
+                remaining_capillary_rise_m = max(
+                    np.float32(0.0), remaining_capillary_rise_m - capillary_rise_ross
+                )
                 interflow_m[i, hour] += total_lateral_outflow_ross
                 groundwater_recharge_enthalpy_loss_J_per_m2[i] += (
                     percolation_to_groundwater_enthalpy_loss_ross
@@ -942,10 +943,6 @@ def land_surface_model(
             snow_density_kg_per_m3[i, 0] = snow_density_top_kg_per_m3_cell
             snow_density_kg_per_m3[i, 1] = snow_density_bottom_kg_per_m3_cell
 
-    # TEMPORARY FIX
-    runoff_m = np.maximum(runoff_m, 0.0)  # Ensure non-negative runoff values
-    topwater_m = np.maximum(topwater_m, 0.0)  # Ensure non-negative topwater values
-
     return (
         rain_m,
         snow_m,
@@ -962,6 +959,7 @@ def land_surface_model(
         open_water_evaporation_m,
         runoff_m,
         groundwater_recharge_m,
+        capillar_rise_m,
         interflow_m,
         bare_soil_evaporation,
         transpiration_m,
@@ -1025,7 +1023,7 @@ class LandSurfaceInputs(NamedTuple):
     CO2_ppm: np.float32
     crop_factor: ArrayFloat32
     actual_irrigation_consumption_m: ArrayFloat32
-    capillar_rise_m: ArrayFloat32
+    groundwater_depth_m: ArrayFloat32
     groundwater_toplayer_conductivity_m_per_day: ArrayFloat32
     saturated_hydraulic_conductivity_m_per_s: TwoDArrayFloat32
     wetting_front_depth_m: ArrayFloat32
@@ -1041,6 +1039,7 @@ class LandSurfaceInputs(NamedTuple):
     leaf_area_index: ArrayFloat32
     rainfall_lookup_table: TwoDArrayFloat32
     daily_reference_evapotranspiration_grass_m: ArrayFloat32
+    max_capillary_rise_m: ArrayFloat32
 
 
 def _pad_hru_arrays(inputs: LandSurfaceInputs) -> LandSurfaceInputs:
@@ -1149,10 +1148,11 @@ class LandSurface(Module):
         tas_2m_K: TwoDArrayFloat32,
         crop_factor: ArrayFloat32,
         actual_irrigation_consumption_m: ArrayFloat32,
-        capillar_rise_m: ArrayFloat32,
+        groundwater_depth_m: ArrayFloat32,
         delta_z: TwoDArrayFloat32,
         deep_soil_temperature_C: ArrayFloat32,
         leaf_area_index: ArrayFloat32,
+        max_capillary_rise_m: ArrayFloat32,
     ) -> LandSurfaceInputs:
         """Build the input bundle for `land_surface_model`.
 
@@ -1164,10 +1164,11 @@ class LandSurface(Module):
             tas_2m_K: 2m air temperature per hour (K).
             crop_factor: Crop factor per HRU (-).
             actual_irrigation_consumption_m: Actual irrigation consumption (m).
-            capillar_rise_m: Capillary rise (m).
+            groundwater_depth_m: Depth of groundwater table below surface (m).
             delta_z: Layer interface thicknesses (m).
             deep_soil_temperature_C: Sub-surface boundary temperature (C).
             leaf_area_index: Leaf area index per HRU (-).
+            max_capillary_rise_m: Maximum available groundwater storage for capillary rise per HRU (meters).
 
         Returns:
             Bundle of inputs for `land_surface_model`, with all HRU-dimensioned
@@ -1254,7 +1255,7 @@ class LandSurface(Module):
             CO2_ppm=CO2_ppm,
             crop_factor=crop_factor,
             actual_irrigation_consumption_m=actual_irrigation_consumption_m,
-            capillar_rise_m=capillar_rise_m,
+            groundwater_depth_m=groundwater_depth_m,
             groundwater_toplayer_conductivity_m_per_day=groundwater_toplayer_conductivity_m_per_day,
             saturated_hydraulic_conductivity_m_per_s=np.ascontiguousarray(
                 self.HRU.var.saturated_hydraulic_conductivity_m_per_s.T
@@ -1281,6 +1282,7 @@ class LandSurface(Module):
             leaf_area_index=leaf_area_index,
             rainfall_lookup_table=self.rainfall_lookup_table,
             daily_reference_evapotranspiration_grass_m=self.HRU.var.daily_reference_evapotranspiration_grass_m,
+            max_capillary_rise_m=max_capillary_rise_m,
         )
 
         return _pad_hru_arrays(unpadded_inputs)
@@ -2171,6 +2173,7 @@ class LandSurface(Module):
         ArrayFloat32,
         ArrayFloat32,
         ArrayFloat32,
+        ArrayFloat32,
         float,
         ArrayFloat32,
         ArrayFloat32,
@@ -2188,6 +2191,7 @@ class LandSurface(Module):
             - interflow_m: Lateral subsurface flow per hour (m/hour).
             - runoff_m: Surface runoff per hour (m/hour).
             - groundwater_recharge_m: Groundwater recharge per day (m).
+            - capillar_rise_m: Capillary rise from groundwater per day (m).
             - groundwater_abstraction_m3: Groundwater abstraction for irrigation per day (m3).
             - channel_abstraction_m3: Surface water abstraction for irrigation per day (m3).
             - return_flow_m: Return flow to surface water per day (m).
@@ -2349,14 +2353,23 @@ class LandSurface(Module):
 
         timer.finish_split("Water demand")
 
-        # Obtain capillary rise for the HRUs
-        capillar_rise_m: ArrayFloat32 = self.hydrology.to_HRU(
-            data=self.grid.var.capillar
+        # Obtain groundwater table depth for HRUs
+        groundwater_depth_m: ArrayFloat32 = self.hydrology.to_HRU(
+            data=self.hydrology.groundwater.groundwater_depth
         )
-        if capillar_rise_m.sum() > 0.0:
-            raise NotImplementedError(
-                "Capillary rise is not implemented in the land surface model yet."
-            )
+
+        # Available groundwater remaining after human abstractions (m3)
+        remaining_available_groundwater_m3: ArrayFloat64 = np.maximum(
+            0.0,
+            self.hydrology.groundwater.modflow.available_groundwater_m3
+            - groundwater_abstraction_m3,
+        )
+        remaining_available_groundwater_m: ArrayFloat32 = (
+            remaining_available_groundwater_m3 / self.grid.var.cell_area
+        ).astype(np.float32)
+        max_capillary_rise_m: ArrayFloat32 = self.hydrology.to_HRU(
+            data=remaining_available_groundwater_m
+        )
 
         # TODO: pre-compute this once only
         # Transpose to cell-major layout (num_cells, N_SOIL_LAYERS-1) for
@@ -2398,10 +2411,11 @@ class LandSurface(Module):
             tas_2m_K=tas_2m_K,
             crop_factor=crop_factor,
             actual_irrigation_consumption_m=actual_irrigation_consumption_m,
-            capillar_rise_m=capillar_rise_m,
+            groundwater_depth_m=groundwater_depth_m,
             delta_z=delta_z,
             deep_soil_temperature_C=self.HRU.var.deep_soil_temperature_C,
             leaf_area_index=leaf_area_index,
+            max_capillary_rise_m=max_capillary_rise_m,
         )
 
         timer.finish_split("Prepare inputs for land surface model")
@@ -2426,6 +2440,7 @@ class LandSurface(Module):
             open_water_evaporation_m,
             runoff_m,
             groundwater_recharge_m,
+            capillar_rise_m,
             interflow_m,
             bare_soil_evaporation_m,
             transpiration_m,
@@ -2464,6 +2479,7 @@ class LandSurface(Module):
             open_water_evaporation_m = open_water_evaporation_m[:_n]
             runoff_m = runoff_m[:_n, :]
             groundwater_recharge_m = groundwater_recharge_m[:_n]
+            capillar_rise_m = capillar_rise_m[:_n]
             interflow_m = interflow_m[:_n, :]
             bare_soil_evaporation_m = bare_soil_evaporation_m[:_n]
             transpiration_m = transpiration_m[:_n]
@@ -2730,6 +2746,7 @@ class LandSurface(Module):
             interflow_m,
             runoff_m,
             groundwater_recharge_m,
+            capillar_rise_m,
             groundwater_abstraction_m3,
             channel_abstraction_m3,
             return_flow_m,

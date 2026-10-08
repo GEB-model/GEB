@@ -1590,7 +1590,7 @@ class Forcing(BuildModelBase):
             # while xarray handles the time dimension automatically.
             ny, nx = temperature_K.shape
             reference_et_m_per_h = np.empty((ny, nx), dtype=np.float32)
-            for y in prange(ny):  # ty: ignore[not-iterable]
+            for y in prange(ny):
                 for x in range(nx):
                     wind_speed = np.float32(
                         np.sqrt(wind_u_m_per_s[y, x] ** 2 + wind_v_m_per_s[y, x] ** 2)
