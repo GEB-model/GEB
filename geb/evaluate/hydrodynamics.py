@@ -1277,7 +1277,7 @@ class Hydrodynamics:
                     run_name=run_name,
                     minimum_flood_depth=self.config["floods"]["minimum_flood_depth"],
                     elevation_data=read_zarr(self.model.files["other"]["DEM/fabdem"]),
-                    visualization_type="OSM",
+                    visualization_type="Hillshade",
                     name=flood_map_path.stem,
                 )
                 if performance is None:
@@ -1422,7 +1422,7 @@ class Hydrodynamics:
                         elevation_data=read_zarr(
                             self.model.files["other"]["DEM/fabdem"]
                         ),
-                        visualization_type="OSM",
+                        visualization_type="Hillshade",
                         name=obs_file.stem,
                     )
                     print(f"Successfully evaluated: {flood_map_path.name}")
@@ -1501,7 +1501,7 @@ class Hydrodynamics:
                             metrics = calculate_performance_metrics(
                                 observation=read_zarr(obs_file),
                                 simulated=read_zarr(flood_map_path),
-                                visualization_type="OSM",
+                                visualization_type="Hillshade",
                                 output_folder=forecast_folder,
                                 run_name=run_name,
                                 minimum_flood_depth=self.config["floods"][
