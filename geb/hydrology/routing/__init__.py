@@ -327,6 +327,90 @@ def select_active_rivers(
     return active_rivers.copy()
 
 
+def prune_starved_river_cells(
+    waterbody_id: TwoDArrayInt32,
+    waterbody_outflows: TwoDArrayInt32,
+    river_ids: TwoDArrayInt32,
+    flow_raster: pyflwdir.FlwdirRaster,
+) -> TwoDArrayInt32:
+    """Prune river cells downstream of non-outflow waterbody cells that receive no river inflow.
+
+    When waterbodies are resolved with a single designated outflow point, non-outflow
+    lake cells do not release discharge into downstream channels. Any river channels
+    originating from non-outflow lake cells that receive no other upstream inflows
+    (from active rivers or designated outflows) are starved abandoned channels.
+    This function modifies river_ids in-place to set starved channel cells to -1.
+
+    Args:
+        waterbody_id: 2D array of water body IDs (-1 for non-waterbody).
+        waterbody_outflows: 2D array containing waterbody IDs at outflow points and -1 elsewhere.
+        river_ids: 2D array of river reach IDs (-1 for non-river).
+        flow_raster: FlwdirRaster flow direction object.
+
+    Returns:
+        Updated 2D array of river IDs with starved channels set to -1.
+    """
+    flat_river_ids: ArrayInt32 = river_ids.ravel()
+    flat_wb_id: ArrayInt32 = waterbody_id.ravel()
+    flat_outflows: ArrayInt32 = waterbody_outflows.ravel()
+    idxs_ds: ArrayInt64 = flow_raster.idxs_ds
+
+    non_outflow_mask: ArrayBool = (flat_wb_id != -1) & (flat_outflows == -1)
+    non_outflow_idxs: ArrayInt64 = np.where(non_outflow_mask)[0]
+    if non_outflow_idxs.size == 0:
+        return river_ids
+
+    downstream_idxs: ArrayInt64 = idxs_ds[non_outflow_idxs]
+    valid_candidates: ArrayBool = (
+        (downstream_idxs != -1)
+        & (downstream_idxs != non_outflow_idxs)
+        & (flat_river_ids[downstream_idxs] != -1)
+        & (flat_wb_id[downstream_idxs] == -1)
+    )
+    if not np.any(valid_candidates):
+        return river_ids
+
+    # Upstream mapping tracking cells that drain into each node
+    up_map: dict[int, list[int]] = {}
+    for u, d in enumerate(idxs_ds):
+        if d != -1 and d != u:
+            d_int: int = int(d)
+            if d_int not in up_map:
+                up_map[d_int] = []
+            up_map[d_int].append(int(u))
+
+    def has_valid_river_inflow(cell: int) -> bool:
+        for u in up_map.get(cell, ()):
+            # Active lake outflow or active river outside waterbodies
+            if flat_outflows[u] != -1 or (
+                flat_wb_id[u] == -1 and flat_river_ids[u] != -1
+            ):
+                return True
+        return False
+
+    queue: list[int] = [int(idx) for idx in set(downstream_idxs[valid_candidates])]
+    visited: set[int] = set()
+
+    while queue:
+        curr: int = queue.pop()
+        if curr in visited or flat_wb_id[curr] != -1 or flat_river_ids[curr] == -1:
+            continue
+        visited.add(curr)
+
+        if not has_valid_river_inflow(curr):
+            flat_river_ids[curr] = -1
+            ds: int = int(idxs_ds[curr])
+            if (
+                ds != -1
+                and ds != curr
+                and flat_wb_id[ds] == -1
+                and flat_river_ids[ds] != -1
+            ):
+                queue.append(ds)
+
+    return river_ids
+
+
 class Routing(Module):
     """Routing module of the hydrological model.
 
@@ -499,19 +583,45 @@ class Routing(Module):
         rivers["width_is_observed"] = rivers["width"].notnull()
 
         # set river ID to -1 for waterbody cells
-        river_ids = self.grid.load2d(
+        river_ids: TwoDArrayInt32 = self.grid.load2d(
             self.model.files["grid"]["routing/river_ids"], compress=False
         )
         # keep a copy of the original river IDs before removing waterbodies,
         # which is needed for some output variables
-        river_ids_no_waterbodies_removed = self.grid.compress(river_ids)
+        river_ids_no_waterbodies_removed: ArrayInt32 = self.grid.compress(river_ids)
         river_ids[is_waterbody] = -1  # set river ID to -1 for waterbody cells
-        river_ids: ArrayInt32 = self.grid.compress(river_ids)
 
-        # select only hydrography_xy that are not in waterbodies
+        # Load waterbody outflow points to identify active outflows
+        raw_wb_outflows: TwoDArrayInt32 = self.grid.load2d(
+            self.model.files["grid"]["waterbodies/waterbody_outflow_points"],
+            compress=False,
+        )
+        is_active_outflow: TwoDArrayBool = np.isin(raw_wb_outflows, active_ids)
+        active_wb_outflows: TwoDArrayInt32 = np.where(
+            is_active_outflow, raw_wb_outflows, -1
+        ).astype(np.int32)
+        active_wb_id: TwoDArrayInt32 = np.where(is_waterbody, raw_wb_id, -1).astype(
+            np.int32
+        )
+
+        # Prune river cells downstream of non-outflow waterbody cells that receive no river inflow
+        n_river_cells_before: int = int(np.sum(river_ids != -1))
+        river_ids = prune_starved_river_cells(
+            waterbody_id=active_wb_id,
+            waterbody_outflows=active_wb_outflows,
+            river_ids=river_ids,
+            flow_raster=self.river_network,
+        )
+        self.model.logger.debug(
+            f"Pruned {n_river_cells_before - int(np.sum(river_ids != -1))} starved river cells."
+        )
+        river_ids_compressed: ArrayInt32 = self.grid.compress(river_ids)
+
+        # select only hydrography_xy that are still active river cells
         # and store the mask to filter other columns as well
-        not_waterbody_mask = rivers["hydrography_xy"].apply(
-            lambda xys: [not is_waterbody[xy[1], xy[0]] for xy in xys]
+        valid_river_cell_mask: TwoDArrayBool = river_ids != -1
+        active_cell_mask: pd.Series = rivers["hydrography_xy"].apply(
+            lambda xys: [valid_river_cell_mask[xy[1], xy[0]] for xy in xys]
         )
         rivers["hydrography_xy_no_waterbodies_removed"] = rivers["hydrography_xy"]
 
@@ -530,7 +640,7 @@ class Routing(Module):
 
         rivers["hydrography_xy"] = [
             remove_masked_river_cells(xys, mask)
-            for xys, mask in zip(rivers["hydrography_xy"], not_waterbody_mask)
+            for xys, mask in zip(rivers["hydrography_xy"], active_cell_mask)
         ]
 
         rivers["hydrography_upstream_area_m2_no_waterbodies_removed"] = rivers[
@@ -539,11 +649,11 @@ class Routing(Module):
         rivers["hydrography_upstream_area_m2"] = [
             np.array([ua for ua, m in zip(uas, mask) if m])
             for uas, mask in zip(
-                rivers["hydrography_upstream_area_m2"], not_waterbody_mask
+                rivers["hydrography_upstream_area_m2"], active_cell_mask
             )
         ]
 
-        # update represented_in_grid based on whether there are any hydrography_xy left after removing waterbodies
+        # update represented_in_grid based on whether there are any hydrography_xy left after removing waterbodies and starved channels
         rivers["represented_in_grid"] = rivers["hydrography_xy"].apply(
             lambda xys: len(xys) > 0
         )
@@ -552,7 +662,7 @@ class Routing(Module):
                 [grid_linear_mapping[xy[1], xy[0]].item() for xy in xys]
             )
         )
-        return rivers, river_ids, river_ids_no_waterbodies_removed
+        return rivers, river_ids_compressed, river_ids_no_waterbodies_removed
 
     def save_weirs(self) -> None:
         """Save barrier heights (m) and which dams can open to weir_heights.csv.
