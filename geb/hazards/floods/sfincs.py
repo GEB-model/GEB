@@ -43,7 +43,10 @@ from geb.geb_types import (
     TwoDArrayInt32,
 )
 from geb.hazards.event import Event
-from geb.hazards.floods.workflows.bathymetry import burn_rivers
+from geb.hazards.floods.workflows.bathymetry import (
+    burn_rivers,
+    skip_subgrid_tiles_without_river_bed_levels,
+)
 from geb.hazards.floods.workflows.utils import get_end_point
 from geb.workflows.extreme_value_analysis import ReturnPeriodModel
 from geb.workflows.io import (
@@ -670,7 +673,10 @@ class SFINCSRootModel:
                 f"Setting up SFINCS subgrid with {grid_size_multiplier} subgrid pixels..."
             )
 
-            with np.errstate(invalid="ignore"):
+            with (
+                np.errstate(invalid="ignore"),
+                skip_subgrid_tiles_without_river_bed_levels(),
+            ):
                 # only burn rivers that are wider than the subgrid pixel size
 
                 sf.subgrid.create(
@@ -949,7 +955,13 @@ class SFINCSRootModel:
             write_geom(outflow_gdf, self.path / "debug_outflow_point.geoparquet")
 
         boundary = area.union_all().boundary
-
+        if not (
+            self.active_rivers["is_downstream_outflow"]
+            | (self.active_rivers["downstream_ID"] == -1)
+        ).any():
+            raise ValueError(
+                "No outflow rivers found in the model. Please check the river geometries and subbasins boundary."
+            )
         for river_idx, river in self.active_rivers[
             self.active_rivers["is_downstream_outflow"]  # any outflow river
             | (
@@ -1091,7 +1103,13 @@ class SFINCSRootModel:
                 # due to floating point precision, the intersection point
                 # may be just outside the model grid. We therefore check if the
                 # point is outside the grid, and if so, move it 1 m upstream along the river
-                if not self.mask.values[outflow_row, outflow_col]:
+                if (
+                    not (
+                        0 <= outflow_row < self.mask.shape[0]
+                        and 0 <= outflow_col < self.mask.shape[1]
+                    )
+                    or not self.mask.values[outflow_row, outflow_col]
+                ):
                     # move outflow point 1 m upstream. 0.000008983 degrees is approximately 1 m
                     outflow_point: Point | MultiPoint | GeometryCollection = (
                         river.interpolate(

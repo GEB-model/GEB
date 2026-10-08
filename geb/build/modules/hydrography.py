@@ -770,9 +770,9 @@ def absorb_trapped_river_cells(
     trapped_cells_to_assign: dict[int, int] = {}
 
     for path, source_waterbody_id in zip(paths, source_waterbody_ids):
-        # path[-1] is the cell where tracing stopped. If it belongs to a waterbody,
-        # all preceding cells along the path are river cells trapped between waterbodies.
-        if flat_updated_waterbody_id[path[-1]] != -1:
+        # path[-1] is the cell where tracing stopped. If it belongs to the same waterbody,
+        # all preceding cells along the path are river cells trapped inside this waterbody.
+        if flat_updated_waterbody_id[path[-1]] == source_waterbody_id:
             for cell_idx in path[:-1]:
                 cell_idx_int: int = int(cell_idx)
                 if cell_idx_int not in trapped_cells_to_assign:
