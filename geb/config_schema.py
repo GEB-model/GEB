@@ -777,6 +777,11 @@ class ReportConfig(BaseModel):
         alias="_meteorological_stations",
         description="Whether to report meteorological stations.",
     )
+    waterworks: bool = Field(
+        True,
+        alias="_waterworks",
+        description="Report hourly barrier flow and end-of-hour modeled opening/closing actions.",
+    )
     outflow_points: bool = Field(
         True,
         alias="_outflow_points",

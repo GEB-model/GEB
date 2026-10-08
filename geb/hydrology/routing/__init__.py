@@ -568,9 +568,14 @@ class Routing(Module):
         cells: ArrayInt32 = self.router._inertial_cells[weir_mask]
         input_heights: ArrayFloat32 = self.weir_height_m[cells]
         locations: TwoDArrayFloat32 = self.grid.lonlat[cells]
+        grid_rows: np.ndarray
+        grid_columns: np.ndarray
+        grid_rows, grid_columns = np.where(~self.grid.mask)
         weirs: pd.DataFrame = pd.DataFrame(
             {
                 "grid_cell_index": cells,
+                "grid_row": grid_rows[cells],
+                "grid_column": grid_columns[cells],
                 "longitude_deg": locations[:, 0],
                 "latitude_deg": locations[:, 1],
                 "river_id": self.var.river_ids[cells],
@@ -1544,6 +1549,11 @@ class Routing(Module):
     ]:
         """Perform a daily routing step with multiple substeps.
 
+        Notes:
+            When waterworks reporting is enabled, sample barrier outflow and
+            upstream river inflow (m³/s) each hour and the modeled opening
+            fraction at the end of that hour. Diagnostics do not affect flow.
+
         Args:
             total_runoff_m: Total runoff in meters for each grid cell for each hour.
                 Shape is (24, n_cells).
@@ -1561,6 +1571,26 @@ class Routing(Module):
         Raises:
             ValueError: If inflow is added to waterbody cells.
         """
+        from .waterworks import sample_waterworks
+
+        report_waterworks: bool = any(
+            name.startswith("waterworks_") for name in self.variables_to_report
+        )
+        waterworks_indices: ArrayInt32 = (
+            np.flatnonzero(self.router._weir_height_inertial > 0).astype(np.int32)
+            if report_waterworks
+            else np.empty(0, dtype=np.int32)
+        )
+        waterworks_open_fraction: TwoDArrayFloat32 = np.empty(
+            (24, len(waterworks_indices)), dtype=np.float32
+        )
+        waterworks_outflow_m3_s: TwoDArrayFloat32 = np.empty_like(
+            waterworks_open_fraction
+        )
+        waterworks_inflow_m3_s: TwoDArrayFloat32 = np.empty_like(
+            waterworks_open_fraction
+        )
+
         if __debug__:
             pre_waterbody_storage: np.ndarray = (
                 self.hydrology.waterbodies.var.storage.copy()
@@ -1922,6 +1952,17 @@ class Routing(Module):
             assert not np.isnan(discharge_m3_s_substep[self.var.river_ids != -1]).any()
 
             self.var.discharge_m3_s_per_substep[hour, :] = discharge_m3_s_substep
+            if report_waterworks:
+                (
+                    waterworks_open_fraction[hour],
+                    waterworks_outflow_m3_s[hour],
+                    waterworks_inflow_m3_s[hour],
+                ) = sample_waterworks(
+                    self.router,
+                    self.var.river_storage_m3,
+                    discharge_m3_s_substep,
+                    waterworks_indices,
+                )
 
             retention_basin_storage_m3_substep = self.grid.full_compressed(
                 0, dtype=np.float32

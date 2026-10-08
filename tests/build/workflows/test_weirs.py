@@ -150,9 +150,22 @@ def test_setup_weirs_from_files(
         "height_m",
         "geometry",
         "distance_to_river_m",
+        "grid_row",
+        "grid_column",
         "included",
         "exclusion_reason",
     ]
+    saved_record: pd.Series
+    for _, saved_record in saved_barriers.iterrows():
+        if saved_record["included"]:
+            assert (
+                saved_heights.values[
+                    saved_record["grid_row"], saved_record["grid_column"]
+                ]
+                != 0
+            )
+        else:
+            assert saved_record["grid_row"] == saved_record["grid_column"] == -1
     assert len(saved_barriers) == int(has_gdw_points) + int(has_amber_points)
     assert saved_barriers["included"].sum() == int(
         has_gdw_points

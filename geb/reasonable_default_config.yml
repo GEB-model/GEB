@@ -255,6 +255,7 @@ report:
   _retention_basins: false
   _meteorological_stations: true
   _outflow_points: true
+  _waterworks: true # Hourly barrier flows and modeled opening snapshots
 
 parameters:
   mannings_n_multiplier: 1.0

@@ -876,6 +876,8 @@ class Reporter:
         - _water_balance: if set to True, a standard set of variables to monitor the water balance is reported.
         - _water_storage: if set to True, a standard set of variables to monitor water storage is reported.
         - _energy_balance: if set to True, a standard set of variables to monitor the energy balance is reported.
+        - _waterworks: if set to True, report hourly barrier flows (m³/s) and
+          end-of-hour opening fractions, grouped by compressed grid-cell index.
 
         Args:
             model: The GEB model instance.
@@ -1017,6 +1019,36 @@ class Reporter:
                                     self.variables_to_report,
                                     {"hydrology.landsurface": station_reporters},
                                 )
+                    elif module_name == "_waterworks":
+                        if module_values is True:
+                            routing = self.model.hydrology.routing
+                            barrier_indices: np.ndarray = np.flatnonzero(
+                                routing.router._weir_height_inertial > 0
+                            )
+                            waterworks_reporters: dict[str, dict[str, Any]] = {}
+                            for position, barrier_index in enumerate(barrier_indices):
+                                grid_cell: int = int(
+                                    routing.router._inertial_cells[barrier_index]
+                                )
+                                for quantity in (
+                                    "open_fraction",
+                                    "outflow_m3_s",
+                                    "inflow_m3_s",
+                                ):
+                                    group_name: str = f"waterworks_{quantity}"
+                                    waterworks_reporters[
+                                        f"{group_name}_{grid_cell}"
+                                    ] = {
+                                        "varname": f".{group_name}[:,{position}]",
+                                        "type": "scalar",
+                                        "substeps": 24,
+                                        "_group": group_name,
+                                        "_group_key": str(grid_cell),
+                                    }
+                            self.variables_to_report = multi_level_merge(
+                                self.variables_to_report,
+                                {"hydrology.routing": waterworks_reporters},
+                            )
                     elif module_name == "_outflow_points":
                         if module_values is True:
                             routing = self.model.hydrology.routing

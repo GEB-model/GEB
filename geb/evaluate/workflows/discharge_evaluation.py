@@ -603,6 +603,7 @@ def evaluate_discharge(
             station_characteristics=dashboard_characteristics,
             excluded_stations=excluded_stations,
             chart_timeline=chart_timelines,
+            run_output_folder=run_output_folder,
         )
         self.model.logger.info(
             "Discharge dashboard created. Keep its HTML and charts folder together."

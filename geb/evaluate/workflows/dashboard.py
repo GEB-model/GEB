@@ -343,6 +343,7 @@ def create_discharge_dashboard(
         station_characteristics=dashboard_characteristics,
         excluded_stations=excluded_stations,
         chart_timeline=chart_timelines,
+        run_output_folder=run_output_folder,
     )
     logger.info("Discharge evaluation dashboard created: %s", dashboard_path)
     logger.info(
@@ -367,6 +368,7 @@ def write_discharge_dashboard(
 ) -> folium.Map:
     """Save the discharge map with station charts, score layers, and snapping characteristics (e.g., station IDs, upstream areas).
 
+    A linked AMBER page shows reported hourly barrier flows and opening snapshots.
     Charts and snapping features load on demand. Station size reflects upstream
     area; score and attribute layers share a dynamic legend.
 
@@ -719,6 +721,19 @@ def write_discharge_dashboard(
             )
         )
 
+    from .waterworks_dashboard import waterworks_navigation, write_waterworks_dashboard
+
+    write_waterworks_dashboard(
+        output_path.with_name(output_path.stem + "_amber.html"),
+        output_path,
+        region_geom,
+        rivers,
+        barriers,
+        run_output_folder,
+    )
+    cast(Figure, discharge_map.get_root()).html.add_child(
+        folium.Element(waterworks_navigation(output_path))
+    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     discharge_map.save(str(output_path))
     return discharge_map

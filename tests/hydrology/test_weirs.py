@@ -204,6 +204,7 @@ def test_save_weirs(tmp_path: Path, has_weirs: bool) -> None:
     routing.weir_height_m = heights
     routing.var.river_ids = np.array([11, 12, 13], dtype=np.int32)
     routing.grid.lonlat = np.array([[-6, 54], [-6, 53], [-6, 52]], dtype=np.float32)
+    routing.grid.mask = np.array([[False, False, False]])
     routing.model.output_folder = tmp_path
     Routing.save_weirs(routing)
     saved: pd.DataFrame = pd.read_csv(tmp_path / "weir_heights.csv")
@@ -460,3 +461,40 @@ def test_dam_steady_flow_is_independent_of_substep(substep_seconds: float) -> No
         passage_area_m2 * hydraulic_radius_m ** (2 / 3) * np.sqrt(0.001) / 0.03
     )
     assert discharge == pytest.approx(expected_discharge, rel=1e-4)
+
+
+@pytest.mark.parametrize(
+    "depth_m,expected_opening", [(0.0, 0.1), (3.1, 0.55), (4.0, 1.0)]
+)
+def test_waterworks_sampling(depth_m: float, expected_opening: float) -> None:
+    """Sample current gate operation and distinguish it from a fixed barrier.
+
+    Args:
+        depth_m: Upstream depth above the river bed (m).
+        expected_opening: Expected dimensionless opening fraction.
+
+    Returns:
+        None.
+
+    Raises:
+        AssertionError: If opening, discharge or upstream inflow is incorrect.
+    """  # noqa: DOC202, DOC502
+    from geb.hydrology.routing.waterworks import sample_waterworks
+
+    router: LocalInertial = make_router(
+        np.array([2, 2, 0], dtype=np.float32),
+        instream_dam=np.array([True, False, False]),
+    )
+    storage: ArrayFloat64 = np.array(
+        [1000 * 20 / 3 * depth_m**1.5, 0, 0], dtype=np.float64
+    )
+    discharge: ArrayFloat32 = np.array([5, 7, 9], dtype=np.float32)
+    indices: np.ndarray = np.flatnonzero(router._weir_height_inertial > 0).astype(
+        np.int32
+    )
+    sampled: np.ndarray = sample_waterworks(router, storage, discharge, indices)
+    np.testing.assert_allclose(sampled[0], [expected_opening, -1], atol=1e-5)
+    np.testing.assert_allclose(sampled[1], [5, 7])
+    np.testing.assert_allclose(sampled[2], [0, 5])
+    with pytest.raises(ValueError, match="inertial domain"):
+        sample_waterworks(router, storage, discharge, np.array([-1], dtype=np.int32))
