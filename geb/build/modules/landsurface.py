@@ -88,7 +88,7 @@ class LandSurface(BuildModelBase):
         self,
         DEMs: list[dict[str, str | float]] = [
             {
-                "name": "fabdem",
+                "name": "fathomdem",
                 "zmin": 0.001,
                 "fill_depressions": False,
             },
@@ -111,7 +111,7 @@ class LandSurface(BuildModelBase):
         """Sets up the elevation data for the model.
 
         Configuration parameters:
-            name: The name of the DEM to use. Supported names are 'fabdem', 'delta_dtm', 'gebco'. If it is not supported,
+            name: The name of the DEM to use. Supported names are 'fathomdem', 'delta_dtm', 'gebco'. If it is not supported,
                 the path must be set.
             path: The path to the DEM file. Only required if the name is not supported.
             zmin: The minimum elevation where to use the DEM. Elevations below this value will be set to NaN.
@@ -203,8 +203,9 @@ class LandSurface(BuildModelBase):
             # Remove coastal DEMs if no coastal subbasins are present
             DEMs = [DEM for DEM in DEMs if not DEM.get("coastal_only", False)]
 
-        fabdem: xr.DataArray = self.data_catalog.fetch(
-            "fabdem",
+        fathomdem: xr.DataArray = self.data_catalog.fetch(
+            "fathomdem",
+            mask=potential_flood_area_with_buffer,
         ).read(mask=potential_flood_area_with_buffer)
 
         potential_flood_area_with_buffer_gdf = gpd.GeoDataFrame(
@@ -214,7 +215,7 @@ class LandSurface(BuildModelBase):
         target: xr.DataArray = self.subgrid["mask"].chunk({"x": 5000, "y": 5000})
         assert target.rio.crs is not None, "target grid must have a crs"
 
-        subgrid_elevation = resample_chunked(fabdem, target, method="nearest")
+        subgrid_elevation = resample_chunked(fathomdem, target, method="nearest")
         # fill nan values with 0
         subgrid_elevation = subgrid_elevation.where(
             ~np.isnan(subgrid_elevation) & ~self.subgrid["mask"], 0
@@ -226,9 +227,8 @@ class LandSurface(BuildModelBase):
 
         DEM_raster: xr.DataArray
         for DEM in DEMs:
-            # FABDEM is already handled above, so we just use it from there
-            if DEM["name"] == "fabdem":
-                DEM_raster: xr.DataArray = fabdem
+            if DEM["name"] == "fathomdem":
+                DEM_raster = fathomdem
 
             elif DEM["name"] == "delta_dtm":
                 DEM_raster: xr.DataArray = delta_dtm
