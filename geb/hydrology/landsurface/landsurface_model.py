@@ -1739,7 +1739,9 @@ class LandSurface(Module):
         # Spin-up must not depend on a trained ML deployment: if these variables
         # are used by crop_prediction.py, their reporters are already part of the
         # spin-up configuration that produced the training data.
-        if "profile_soil_depth_m_agents" in self.model.config["report"]:
+        if "profile_soil_depth_m_agents" in self.model.config.get("report", {}).get(
+            "hydrology.landsurface", {}
+        ):
             topsoil_layers = slice(0, 3)
             profile_layers = slice(0, N_SOIL_LAYERS)
             soil_layer_height_m = self.HRU.var.soil_layer_height_m

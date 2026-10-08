@@ -1170,10 +1170,14 @@ class Reporter:
         # in the first timestep, we create the array that will hold the actual data
         if value.ndim == 3:
             substeps: int = value.shape[0]
-            # move time axis to the end, so that we can write the data to zarr in chunks along the time axis
+            time_substeps: int | None = substeps
+
+            # move time axis to the end, so that we can write the data to zarr
+            # in chunks along the time axis
             value = np.moveaxis(value, 0, -1)
         else:
-            substeps: int = 1
+            substeps = 1
+            time_substeps = None
             value = np.expand_dims(value, axis=-1)
 
         if config["_index"] == 0:  # first time writing data
@@ -1187,7 +1191,7 @@ class Reporter:
                 end=self.model.simulation_end,
                 timestep=self.model.timestep_length,
                 conf=config,
-                substeps=substeps,
+                substeps=time_substeps,
             )
 
             time_chunk_size: int = get_time_chunk_size(
