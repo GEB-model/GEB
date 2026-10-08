@@ -374,4 +374,4 @@ class FathomDem(Adapter):
         chunk_y: int = min(1800, da.sizes.get("y", 1800))
         da = da.chunk({"x": chunk_x, "y": chunk_y})
         da.attrs["_FillValue"] = np.nan
-        return da.astype(np.float32)
+        return da.astype(np.float32) / 100
