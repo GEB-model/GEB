@@ -191,6 +191,9 @@ class GroundWater(Module):
 
         Returns:
             Baseflow to rivers (m/step).
+
+        Raises:
+            AssertionError: If total groundwater abstraction exceeds available groundwater storage by more than numerical tolerance.
         """
         assert (groundwater_abstraction_m3 + 1e-7 >= 0).all()
         groundwater_abstraction_m3[groundwater_abstraction_m3 < 0] = 0

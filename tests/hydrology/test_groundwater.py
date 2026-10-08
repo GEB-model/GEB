@@ -1057,6 +1057,7 @@ def test_modflow_boundary_flows_combined_fluxes_and_dynamic_update() -> None:
 def test_groundwater_step_epsilon_safeguard() -> None:
     """Test that minor epsilon excesses are clamped to available storage while large excesses raise AssertionError."""
     from unittest.mock import MagicMock
+
     from geb.hydrology.groundwater import GroundWater
 
     gw: GroundWater = GroundWater.__new__(GroundWater)
@@ -1066,8 +1067,8 @@ def test_groundwater_step_epsilon_safeguard() -> None:
     gw.modflow.available_groundwater_m3 = np.array([100.0, 200.0], dtype=np.float64)
     gw.modflow.groundwater_content_m3 = np.array([500.0, 500.0], dtype=np.float64)
     gw.modflow.drainage_m3 = np.array([0.0, 0.0], dtype=np.float64)
-    gw.boundary_inflow_m3 = np.float64(0.0)
-    gw.boundary_outflow_m3 = np.float64(0.0)
+    gw.modflow.boundary_inflow_m3 = np.array([0.0, 0.0], dtype=np.float64)
+    gw.modflow.boundary_outflow_m3 = np.array([0.0, 0.0], dtype=np.float64)
     gw.report = MagicMock()
 
     # 1. Minor excess within epsilon (e.g. 1e-6 m3 over available_groundwater_m3)
@@ -1081,7 +1082,9 @@ def test_groundwater_step_epsilon_safeguard() -> None:
         capillary_rise_m=capillary,
     )
     # The set_groundwater_abstraction_m3 should have received clamped value 100.0
-    passed_abstraction: ArrayFloat64 = gw.modflow.set_groundwater_abstraction_m3.call_args[0][0]
+    passed_abstraction: ArrayFloat64 = (
+        gw.modflow.set_groundwater_abstraction_m3.call_args[0][0]
+    )
     assert passed_abstraction[0] == 100.0
     assert passed_abstraction[1] == 200.0
 
