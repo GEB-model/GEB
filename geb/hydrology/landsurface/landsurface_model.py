@@ -175,6 +175,7 @@ def land_surface_model(
     leaf_area_index: ArrayFloat32,
     rainfall_lookup_table: TwoDArrayFloat32,
     daily_reference_evapotranspiration_grass_m: ArrayFloat32,
+    max_capillary_rise_m: ArrayFloat32,
 ) -> tuple[
     ArrayFloat32,
     ArrayFloat32,
@@ -276,6 +277,7 @@ def land_surface_model(
         daily_reference_evapotranspiration_grass_m: Daily reference evapotranspiration for grass (meters).
         leaf_area_index: Leaf area index for the cell.
         rainfall_lookup_table: Precomputed lognormal weights lookup table of shape (table_size, 6).
+        max_capillary_rise_m: Maximum available groundwater storage for capillary rise per cell (meters).
 
     Returns:
         Tuple of:
@@ -387,6 +389,7 @@ def land_surface_model(
     for _block in prange(num_blocks):
         for _j in range(BLOCK_SIZE):
             i: int = _block * BLOCK_SIZE + _j
+            remaining_capillary_rise_m: np.float32 = max_capillary_rise_m[i]
             # Pre-allocate the per-cell transpiration snapshot buffer here (outside the
             # hour loop) to avoid a heap allocation on each of the 24 hourly sub-steps.
             water_content_before_transpiration_m = np.empty(
@@ -748,11 +751,15 @@ def land_surface_model(
                     gw_ksat_m_per_s=gw_ksat_m_per_s,
                     groundwater_depth_m=groundwater_depth_m[i],
                     deep_soil_temperature_C=deep_soil_temperature_C[i],
+                    max_capillary_rise_m=remaining_capillary_rise_m,
                 )
                 top_soil_percolation_to_layer_2_m[i] += top_soil_percolation_ross
                 top_soil_rise_from_layer_2_m[i] += top_soil_rise_ross
                 groundwater_recharge_m[i] += percolation_to_groundwater_ross
                 capillar_rise_m[i] += capillary_rise_ross
+                remaining_capillary_rise_m = max(
+                    np.float32(0.0), remaining_capillary_rise_m - capillary_rise_ross
+                )
                 interflow_m[i, hour] += total_lateral_outflow_ross
                 groundwater_recharge_enthalpy_loss_J_per_m2[i] += (
                     percolation_to_groundwater_enthalpy_loss_ross
@@ -1032,6 +1039,7 @@ class LandSurfaceInputs(NamedTuple):
     leaf_area_index: ArrayFloat32
     rainfall_lookup_table: TwoDArrayFloat32
     daily_reference_evapotranspiration_grass_m: ArrayFloat32
+    max_capillary_rise_m: ArrayFloat32
 
 
 def _pad_hru_arrays(inputs: LandSurfaceInputs) -> LandSurfaceInputs:
@@ -1144,6 +1152,7 @@ class LandSurface(Module):
         delta_z: TwoDArrayFloat32,
         deep_soil_temperature_C: ArrayFloat32,
         leaf_area_index: ArrayFloat32,
+        max_capillary_rise_m: ArrayFloat32,
     ) -> LandSurfaceInputs:
         """Build the input bundle for `land_surface_model`.
 
@@ -1159,6 +1168,7 @@ class LandSurface(Module):
             delta_z: Layer interface thicknesses (m).
             deep_soil_temperature_C: Sub-surface boundary temperature (C).
             leaf_area_index: Leaf area index per HRU (-).
+            max_capillary_rise_m: Maximum available groundwater storage for capillary rise per HRU (meters).
 
         Returns:
             Bundle of inputs for `land_surface_model`, with all HRU-dimensioned
@@ -1272,6 +1282,7 @@ class LandSurface(Module):
             leaf_area_index=leaf_area_index,
             rainfall_lookup_table=self.rainfall_lookup_table,
             daily_reference_evapotranspiration_grass_m=self.HRU.var.daily_reference_evapotranspiration_grass_m,
+            max_capillary_rise_m=max_capillary_rise_m,
         )
 
         return _pad_hru_arrays(unpadded_inputs)
@@ -2347,6 +2358,19 @@ class LandSurface(Module):
             data=self.hydrology.groundwater.groundwater_depth
         )
 
+        # Available groundwater remaining after human abstractions (m3)
+        remaining_available_groundwater_m3: ArrayFloat64 = np.maximum(
+            0.0,
+            self.hydrology.groundwater.modflow.available_groundwater_m3
+            - groundwater_abstraction_m3,
+        )
+        remaining_available_groundwater_m: ArrayFloat32 = (
+            remaining_available_groundwater_m3 / self.grid.var.cell_area
+        ).astype(np.float32)
+        max_capillary_rise_m: ArrayFloat32 = self.hydrology.to_HRU(
+            data=remaining_available_groundwater_m
+        )
+
         # TODO: pre-compute this once only
         # Transpose to cell-major layout (num_cells, N_SOIL_LAYERS-1) for
         # cache-efficient access inside the land surface kernel.
@@ -2391,6 +2415,7 @@ class LandSurface(Module):
             delta_z=delta_z,
             deep_soil_temperature_C=self.HRU.var.deep_soil_temperature_C,
             leaf_area_index=leaf_area_index,
+            max_capillary_rise_m=max_capillary_rise_m,
         )
 
         timer.finish_split("Prepare inputs for land surface model")

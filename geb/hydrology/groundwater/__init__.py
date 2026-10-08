@@ -31,6 +31,7 @@ import numpy as np
 import numpy.typing as npt
 
 from geb.geb_types import (
+    ArrayBool,
     ArrayFloat32,
     ArrayFloat64 as ArrayFloat64,
     ThreeDArrayFloat64,
@@ -210,6 +211,26 @@ class GroundWater(Module):
         total_groundwater_abstraction_m3: ArrayFloat64 = (
             groundwater_abstraction_m3.astype(np.float64) + excess_capillary_rise_m3
         )
+
+        excess_storage_m3: ArrayFloat64 = (
+            total_groundwater_abstraction_m3 - self.modflow.available_groundwater_m3
+        )
+        epsilon_m3: ArrayFloat64 = (
+            np.float64(1e-4) + np.float64(1e-5) * self.modflow.available_groundwater_m3
+        )
+        if (excess_storage_m3 > epsilon_m3).any():
+            max_excess: float = float(excess_storage_m3.max())
+            raise AssertionError(
+                "Total groundwater abstraction exceeds available groundwater storage by "
+                f"more than numerical tolerance ({max_excess} m3 > tolerance)."
+            )
+
+        # Only correct minor floating-point inaccuracies within epsilon tolerance
+        epsilon_mask: ArrayBool = excess_storage_m3 > 0
+        if epsilon_mask.any():
+            total_groundwater_abstraction_m3[epsilon_mask] = (
+                self.modflow.available_groundwater_m3[epsilon_mask]
+            )
 
         if __debug__:
             groundwater_storage_pre = self.modflow.groundwater_content_m3

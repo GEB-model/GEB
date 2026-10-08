@@ -57,6 +57,7 @@ def calculate_capillary_rise_and_percolation_parameters(
     dconductivity_dS_bottom: np.float32,
     liquid_fraction: np.float32,
     gw_ksat_m_per_s: np.float32,
+    max_capillary_flux_m_per_s: np.float32 = np.float32(np.inf),
 ) -> tuple[np.float32, np.float32]:
     """Calculate water flux between bottom soil and groundwater, and its sensitivity to soil moisture.
 
@@ -78,6 +79,7 @@ def calculate_capillary_rise_and_percolation_parameters(
         dconductivity_dS_bottom: Derivative of conductivity with respect to saturation (m/s).
         liquid_fraction: Unfrozen liquid water fraction of bottom soil layer (0 to 1).
         gw_ksat_m_per_s: Saturated hydraulic conductivity of groundwater toplayer (m/s).
+        max_capillary_flux_m_per_s: Maximum allowable upward capillary flux based on available groundwater supply (m/s).
 
     Returns:
         A tuple of (groundwater_flux_m_per_s, dgroundwater_flux_dS).
@@ -118,16 +120,19 @@ def calculate_capillary_rise_and_percolation_parameters(
         )
 
     # Capillary suction flux is directed upward (negative flux in a downward-positive coordinate system).
-    # We clamp the flux to [-eagleson_max_capillary_flux, 0.0]:
-    # - Lower bound (-eagleson_max_capillary_flux): steady upward unsaturated transmission limit.
+    # We clamp the flux to [-max_upward_capillary_flux, 0.0] accounting for unsaturated capacity and aquifer supply:
+    # - Lower bound (-max_upward_capillary_flux): steady upward unsaturated transmission and aquifer supply limit.
     # - Upper bound (0.0): matric suction cannot push water downward into groundwater (gravity handles downward drainage).
+    max_upward_capillary_flux: np.float32 = min(
+        eagleson_max_capillary_flux, max_capillary_flux_m_per_s
+    )
     groundwater_capillary_flux_m_per_s: np.float32 = min(
         np.float32(0.0),
-        max(-eagleson_max_capillary_flux, matric_flux_potential_gradient),
+        max(-max_upward_capillary_flux, matric_flux_potential_gradient),
     )
 
     # Sensitivity d(flux)/dS is non-zero only within the active clamping bounds.
-    if -eagleson_max_capillary_flux < matric_flux_potential_gradient < np.float32(0.0):
+    if -max_upward_capillary_flux < matric_flux_potential_gradient < np.float32(0.0):
         dgroundwater_capillary_flux_dS: np.float32 = (
             dmatric_flux_potential_dS_bottom / effective_distance_m
         )
@@ -186,6 +191,7 @@ def distribute_soil_water_ross(
     gw_ksat_m_per_s: np.float32,
     groundwater_depth_m: np.float32,
     deep_soil_temperature_C: np.float32,
+    max_capillary_rise_m: np.float32 = np.float32(np.inf),
 ) -> tuple[
     np.float32,
     np.float32,
@@ -219,6 +225,7 @@ def distribute_soil_water_ross(
         gw_ksat_m_per_s: Saturated hydraulic conductivity of the groundwater toplayer (m/s).
         groundwater_depth_m: Depth of groundwater table below surface (m).
         deep_soil_temperature_C: Sub-surface temperature for advective heat of capillary rise (C).
+        max_capillary_rise_m: Maximum available groundwater storage that can be drawn as capillary rise (meters).
 
     Returns:
         A tuple containing:
@@ -515,6 +522,11 @@ def distribute_soil_water_ross(
         dconductivity_dS_bottom=dK_dS[bottom_layer_index],
         liquid_fraction=liquid_fractions[bottom_layer_index],
         gw_ksat_m_per_s=gw_ksat_m_per_s,
+        max_capillary_flux_m_per_s=(
+            max_capillary_rise_m / timestep_length_s
+            if np.isfinite(max_capillary_rise_m)
+            else np.float32(np.inf)
+        ),
     )
 
     dq_dS_i[0] = np.float32(0.0)  # No flux at top, so no saturation dependence.
@@ -692,7 +704,7 @@ def distribute_soil_water_ross(
             (water_content_saturated_m[bottom_layer] - water_content_m[bottom_layer]),
         )
         capillary_rise_from_groundwater_m = min(
-            -groundwater_boundary_flux_m, remaining_capacity
+            -groundwater_boundary_flux_m, remaining_capacity, max_capillary_rise_m
         )
         percolation_to_groundwater_m = np.float32(0.0)
 

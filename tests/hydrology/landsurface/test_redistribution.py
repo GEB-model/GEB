@@ -1033,6 +1033,154 @@ def test_distribute_soil_water_ross_capillary_rise_deep_gw_shutoff() -> None:
     assert cap_gw == 0.0, "Capillary rise must be zero when water table is deep"
 
 
+def test_distribute_soil_water_ross_capillary_rise_supply_limited() -> None:
+    """Test that capillary rise is strictly bounded by max_capillary_rise_m."""
+    timestep_length_s: np.float32 = np.float32(3600.0)
+    soil_layer_height_m: np.ndarray = np.array(
+        [0.05, 0.10, 0.15, 0.30, 0.40, 1.00], dtype=np.float32
+    )
+    ws: np.ndarray = 0.45 * soil_layer_height_m
+    wr: np.ndarray = 0.05 * soil_layer_height_m
+    wfc: np.ndarray = 0.25 * soil_layer_height_m
+
+    w_initial: np.ndarray = wr + 0.1 * (wfc - wr)
+    enth: np.ndarray = np.full(N_SOIL_LAYERS, 1e7, dtype=np.float32)
+    hc: np.ndarray = np.full(N_SOIL_LAYERS, 1e6, dtype=np.float32)
+    ksat: np.ndarray = np.full(
+        N_SOIL_LAYERS, 0.01 / np.float32(3600.0), dtype=np.float32
+    )
+    bubbling_pressure_m_positive: np.ndarray = np.full(
+        N_SOIL_LAYERS, 0.3, dtype=np.float32
+    )
+    lambda_: np.ndarray = np.full(N_SOIL_LAYERS, 0.3, dtype=np.float32)
+    pore_size_index: np.ndarray = np.float32(3.0) + (np.float32(2.0) / lambda_)
+    interface_dist_m: np.ndarray = (
+        soil_layer_height_m[:-1] + soil_layer_height_m[1:]
+    ) / 2.0
+
+    gw_ksat: np.float32 = np.float32(1e-4)
+    groundwater_depth_m: np.float32 = np.float32(2.1)
+    deep_soil_temp_C: np.float32 = np.float32(12.0)
+
+    # 1. Unconstrained reference run
+    w_unconstrained: np.ndarray = w_initial.copy()
+    (
+        _,
+        _,
+        perc_gw_ref,
+        cap_gw_ref,
+        perc_gw_e_ref,
+        lateral_outflow_ref,
+        _,
+    ) = distribute_soil_water_ross(
+        timestep_length_s=timestep_length_s,
+        water_content_m=w_unconstrained,
+        water_content_residual_m=wr,
+        water_content_saturated_m=ws,
+        water_content_field_capacity_m=wfc,
+        soil_enthalpy_J_per_m2=enth.copy(),
+        solid_heat_capacity_J_per_m2_K=hc,
+        saturated_hydraulic_conductivity_m_per_s=ksat,
+        interface_dist_m=interface_dist_m,
+        soil_layer_height=soil_layer_height_m,
+        bubbling_pressure_m_positive=bubbling_pressure_m_positive,
+        lambda_=lambda_,
+        pore_size_index=pore_size_index,
+        slope_m_per_m=np.float32(0.0),
+        hillslope_length_m=np.float32(100.0),
+        interflow_multiplier=np.float32(0.0),
+        green_ampt_active_layer_idx=np.int32(-1),
+        topwater_m=np.float32(0.0),
+        gw_ksat_m_per_s=gw_ksat,
+        groundwater_depth_m=groundwater_depth_m,
+        deep_soil_temperature_C=deep_soil_temp_C,
+    )
+    assert cap_gw_ref > 0.0
+
+    # 2. Fully exhausted supply: max_capillary_rise_m = 0.0
+    w_zero_cap: np.ndarray = w_initial.copy()
+    (
+        _,
+        _,
+        perc_gw_zero,
+        cap_gw_zero,
+        perc_gw_e_zero,
+        lateral_outflow_zero,
+        _,
+    ) = distribute_soil_water_ross(
+        timestep_length_s=timestep_length_s,
+        water_content_m=w_zero_cap,
+        water_content_residual_m=wr,
+        water_content_saturated_m=ws,
+        water_content_field_capacity_m=wfc,
+        soil_enthalpy_J_per_m2=enth.copy(),
+        solid_heat_capacity_J_per_m2_K=hc,
+        saturated_hydraulic_conductivity_m_per_s=ksat,
+        interface_dist_m=interface_dist_m,
+        soil_layer_height=soil_layer_height_m,
+        bubbling_pressure_m_positive=bubbling_pressure_m_positive,
+        lambda_=lambda_,
+        pore_size_index=pore_size_index,
+        slope_m_per_m=np.float32(0.0),
+        hillslope_length_m=np.float32(100.0),
+        interflow_multiplier=np.float32(0.0),
+        green_ampt_active_layer_idx=np.int32(-1),
+        topwater_m=np.float32(0.0),
+        gw_ksat_m_per_s=gw_ksat,
+        groundwater_depth_m=groundwater_depth_m,
+        deep_soil_temperature_C=deep_soil_temp_C,
+        max_capillary_rise_m=np.float32(0.0),
+    )
+    assert cap_gw_zero == 0.0, "Capillary rise must be zero when available supply is 0"
+    assert perc_gw_e_zero >= 0.0, (
+        "Enthalpy loss should not be negative (no heat gained from capillary rise)"
+    )
+
+    # 3. Partially limited supply: cap at 50% of unconstrained flux
+    half_supply: np.float32 = np.float32(cap_gw_ref * 0.5)
+    w_limited: np.ndarray = w_initial.copy()
+    (
+        _,
+        _,
+        perc_gw_lim,
+        cap_gw_lim,
+        perc_gw_e_lim,
+        lateral_outflow_lim,
+        _,
+    ) = distribute_soil_water_ross(
+        timestep_length_s=timestep_length_s,
+        water_content_m=w_limited,
+        water_content_residual_m=wr,
+        water_content_saturated_m=ws,
+        water_content_field_capacity_m=wfc,
+        soil_enthalpy_J_per_m2=enth.copy(),
+        solid_heat_capacity_J_per_m2_K=hc,
+        saturated_hydraulic_conductivity_m_per_s=ksat,
+        interface_dist_m=interface_dist_m,
+        soil_layer_height=soil_layer_height_m,
+        bubbling_pressure_m_positive=bubbling_pressure_m_positive,
+        lambda_=lambda_,
+        pore_size_index=pore_size_index,
+        slope_m_per_m=np.float32(0.0),
+        hillslope_length_m=np.float32(100.0),
+        interflow_multiplier=np.float32(0.0),
+        green_ampt_active_layer_idx=np.int32(-1),
+        topwater_m=np.float32(0.0),
+        gw_ksat_m_per_s=gw_ksat,
+        groundwater_depth_m=groundwater_depth_m,
+        deep_soil_temperature_C=deep_soil_temp_C,
+        max_capillary_rise_m=half_supply,
+    )
+    assert cap_gw_lim <= half_supply + 1e-7, (
+        f"Capillary rise {cap_gw_lim} exceeded supply limit {half_supply}"
+    )
+    assert cap_gw_lim > 0.0
+    water_change_lim = float(np.sum(w_limited) - np.sum(w_initial))
+    assert np.isclose(
+        water_change_lim, float(cap_gw_lim - lateral_outflow_lim), rtol=1e-5, atol=1e-6
+    )
+
+
 def test_calculate_capillary_rise_and_percolation_shallow_gw() -> None:
     """Test capillary rise flux when groundwater is within capillary reach of dry soil."""
     bubbling_pressure = np.float32(0.3)

@@ -79,6 +79,10 @@ def test_land_surface_model_error_cases(error_case_path: Path, asfloat64: bool) 
         inputs["groundwater_depth_m"] = np.full(
             inputs["root_depth_m"].shape, 10.0, dtype=np.float32
         )
+    if "max_capillary_rise_m" not in inputs:
+        inputs["max_capillary_rise_m"] = np.full(
+            inputs["root_depth_m"].shape, np.inf, dtype=np.float32
+        )
     inputs.pop("capillar_rise_m", None)
 
     # Cast inputs if requested

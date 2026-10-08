@@ -113,6 +113,10 @@ def _load_and_tile(npz_path: Path, num_cells: int) -> dict:
         raw["groundwater_depth_m"] = np.full(
             raw["root_depth_m"].shape, 10.0, dtype=np.float32
         )
+    if "max_capillary_rise_m" not in raw:
+        raw["max_capillary_rise_m"] = np.full(
+            raw["root_depth_m"].shape, np.inf, dtype=np.float32
+        )
     raw.pop("capillar_rise_m", None)
 
     if "thermal_conductivity_saturated_unfrozen_W_per_m_K" not in raw:
