@@ -491,3 +491,80 @@ def test_identify_waterbody_outflows_and_absorb_trapped_river_cells() -> None:
     # Both (0, 1) and (0, 2) must be absorbed
     assert updated_wb_multi[0, 1] == 5
     assert updated_wb_multi[0, 2] == 5
+
+    # 5. Test edge case: river connects to a DIFFERENT downstream waterbody (must NOT be absorbed)
+    # (0, 0): Lake cell (wb=5), non-outflow
+    # (0, 1): River cell (river_ids=1, wb=-1)
+    # (0, 2): Downstream lake cell (wb=6, outflow, pit)
+    test_wb_diff = np.array([[5, -1, 6]], dtype=np.int32)
+    test_outflows_diff = np.array([[-1, -1, 6]], dtype=np.int32)
+    test_rivers_diff = np.array([[-1, 1, -1]], dtype=np.int32)
+    test_ldd_diff = np.array([[6, 6, 5]], dtype=np.uint8)
+    flw_diff = pyflwdir.from_array(test_ldd_diff, ftype="ldd")
+
+    updated_wb_diff = absorb_trapped_river_cells(
+        waterbody_id=test_wb_diff,
+        waterbody_outflows=test_outflows_diff,
+        river_ids=test_rivers_diff,
+        flow_raster=flw_diff,
+    )
+    # (0, 1) must NOT be absorbed because it connects to a different waterbody (6 != 5)
+    assert updated_wb_diff[0, 1] == -1
+
+
+def test_prune_starved_river_cells() -> None:
+    """Test pruning starved river cells originating from non-outflow waterbody cells."""
+    import pyflwdir
+
+    from geb.hydrology.routing import prune_starved_river_cells
+
+    # 1. Test parallel outflow channel (happy path):
+    # 2x3 grid:
+    # Row 0: Lake cell (wb=10, non-outflow), drains EAST (6) -> River cell (0, 1), drains SOUTH (2) -> Confluence (1, 1)
+    # Row 1: Lake cell (wb=10, outflow), drains EAST (6) -> Confluence (1, 1), drains EAST (6) -> River outlet (1, 2, pit 5)
+    #
+    # Flow direction (LDD):
+    # (0, 0)=6 (East),  (0, 1)=2 (South), (0, 2)=5 (Pit)
+    # (1, 0)=6 (East),  (1, 1)=6 (East),  (1, 2)=5 (Pit)
+    wb_grid = np.array([[10, -1, -1], [10, -1, -1]], dtype=np.int32)
+    outflows_grid = np.array([[-1, -1, -1], [10, -1, -1]], dtype=np.int32)
+    rivers_grid = np.array([[-1, 99, -1], [-1, 99, 99]], dtype=np.int32)
+    ldd_grid = np.array([[6, 2, 5], [6, 6, 5]], dtype=np.uint8)
+    flw = pyflwdir.from_array(ldd_grid, ftype="ldd")
+
+    pruned = prune_starved_river_cells(
+        waterbody_id=wb_grid,
+        waterbody_outflows=outflows_grid,
+        river_ids=rivers_grid,
+        flow_raster=flw,
+    )
+
+    # (0, 1) is a starved parallel branch from non-outflow cell (0, 0), so it must be pruned to -1
+    assert pruned[0, 1] == -1
+    # (1, 1) receives the official outflow from (1, 0), so it must remain an active river
+    assert pruned[1, 1] == 99
+    # (1, 2) receives flow from (1, 1), so it must remain an active river
+    assert pruned[1, 2] == 99
+
+    # 2. Test multi-cell dead-end starved reach:
+    # 1x4 grid:
+    # (0, 0): Lake cell (wb=5, non-outflow), drains EAST (6)
+    # (0, 1): River cell (river=1), drains EAST (6)
+    # (0, 2): River cell (river=1), drains EAST (6)
+    # (0, 3): River outlet (river=1, pit 5)
+    wb_dead = np.array([[5, -1, -1, -1]], dtype=np.int32)
+    outflows_dead = np.array([[-1, -1, -1, -1]], dtype=np.int32)
+    rivers_dead = np.array([[-1, 1, 1, 1]], dtype=np.int32)
+    ldd_dead = np.array([[6, 6, 6, 5]], dtype=np.uint8)
+    flw_dead = pyflwdir.from_array(ldd_dead, ftype="ldd")
+
+    pruned_dead = prune_starved_river_cells(
+        waterbody_id=wb_dead,
+        waterbody_outflows=outflows_dead,
+        river_ids=rivers_dead,
+        flow_raster=flw_dead,
+    )
+    # All river cells along the starved channel must be pruned
+    assert pruned_dead[0, 1] == -1
+    assert pruned_dead[0, 2] == -1
+    assert pruned_dead[0, 3] == -1

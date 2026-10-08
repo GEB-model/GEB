@@ -752,9 +752,16 @@ class Floods(Module):
         for subbasin_id, subbasin in riverine_active_subbasin.iterrows():
             downstream_basin = rivers.loc[subbasin_id]["downstream_ID"]
 
-            region_subbasins = subbasins[
-                subbasins.index.isin([subbasin_id, downstream_basin])
-            ].copy()
+            if not (downstream_basin in subbasins.index or downstream_basin == -1):
+                all_subbasins = read_geom(self.model.files["geom"]["routing/subbasins"])
+                region_subbasins = all_subbasins[
+                    all_subbasins.index.isin([subbasin_id, downstream_basin])
+                ].copy()
+            else:
+                region_subbasins = subbasins[
+                    subbasins.index.isin([subbasin_id, downstream_basin])
+                ].copy()
+
             region_rivers = rivers.copy()
 
             # if there is a downstream basin, mark it as downstream outflow subbasin
@@ -849,12 +856,25 @@ class Floods(Module):
                         (rivers["downstream_ID"] == node_idx)
                         & (~rivers.index.isin(inflow_nodes.index))
                     ]
+                    _Q = []
+                    for river_idx in upstream_rivers.index:
+                        if river_idx in discharge_for_return_periods:
+                            _Q.append(discharge_for_return_periods[river_idx])
+                        else:
+                            self.model.logger.warning(
+                                f"No hydrograph found for upstream river {river_idx} and return period {return_period}. Setting inflow to 0."
+                            )
+                            _Q.append(
+                                pd.Series(
+                                    [0] * len(Q[0]), index=Q[0].index, name=node_idx
+                                )
+                            )  # fill with zeros if no hydrograph is found
 
                     Q.append(
                         pd.Series(
-                            discharge_for_return_periods[upstream_rivers.index]
-                            .mean(axis=0)
-                            .sum(axis=0),
+                            pd.concat(_Q, axis=1).mean(axis=0).sum(axis=0)
+                            if _Q
+                            else 0.0,
                             index=Q[0].index,
                             name=node_idx,
                         )
