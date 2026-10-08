@@ -1,7 +1,7 @@
 (function(){
   var macroData = {{ this.data | script_json }};
-  var bundles = (macroData && macroData.bundles) ? macroData.bundles : null;
-  var stationChartFiles = (macroData && macroData.stations) ? macroData.stations : macroData;
+  var bundles = (macroData && macroData.bundles) ? macroData.bundles : [];
+  var stationBundleIndices = (macroData && macroData.stations) ? macroData.stations : {};
   var globalTimeline = (macroData && macroData.timeline) ? macroData.timeline : null;
   var plotlyUrl = 'https://cdn.plot.ly/plotly-2.35.2.min.js';
   var colors = { observed: '#facc15', simulated: '#38bdf8', bankfull: '#f87171' };
@@ -50,10 +50,6 @@
       callback(null);
       return;
     }
-    if (typeof rawPayload === 'object') {
-      callback(rawPayload);
-      return;
-    }
     try {
       var binaryStr = atob(rawPayload);
       var bytes = new Uint8Array(binaryStr.length);
@@ -82,64 +78,37 @@
       callback(stationChartCache[stationId]);
       return;
     }
-    var chartFile = stationChartFiles[stationId];
-    if (typeof chartFile === 'number' && bundles) {
-      chartFile = bundles[chartFile];
-    }
-    if (!chartFile) {
+    var bundleIdx = stationBundleIndices[stationId];
+    if (bundleIdx === undefined || bundleIdx === null) {
       callback(null);
       return;
     }
-    if (pendingBundleCallbacks[chartFile]) {
-      pendingBundleCallbacks[chartFile].push(function() {
+
+    var rawPayload = bundles[bundleIdx];
+    if (!rawPayload) {
+      callback(null);
+      return;
+    }
+
+    if (pendingBundleCallbacks[bundleIdx]) {
+      pendingBundleCallbacks[bundleIdx].push(function() {
         callback(stationChartCache[stationId] || null);
       });
       return;
     }
-    pendingBundleCallbacks[chartFile] = [function() {
+    pendingBundleCallbacks[bundleIdx] = [function() {
       callback(stationChartCache[stationId] || null);
     }];
 
-    var script = document.createElement('script');
-    script.src = chartFile;
-    script.onload = function() {
-      var rawBundle = window._gebStationChartBundle;
-      delete window._gebStationChartBundle;
-      var rawSingle = window._gebStationChartPayload;
-      delete window._gebStationChartPayload;
-      if (script.remove) script.remove();
-
-      function notifyPending() {
-        var cbs = pendingBundleCallbacks[chartFile] || [];
-        delete pendingBundleCallbacks[chartFile];
-        cbs.forEach(function(cb) { cb(); });
+    unpackStationData(rawPayload, function(bundleData) {
+      if (bundleData && typeof bundleData === 'object') {
+        Object.assign(stationChartCache, bundleData);
+        bundles[bundleIdx] = null;
       }
-
-      if (rawBundle !== undefined) {
-        unpackStationData(rawBundle, function(bundleData) {
-          if (bundleData && typeof bundleData === 'object') {
-            Object.assign(stationChartCache, bundleData);
-          }
-          notifyPending();
-        });
-      } else if (rawSingle !== undefined) {
-        unpackStationData(rawSingle, function(singleData) {
-          if (singleData && typeof singleData === 'object') {
-            stationChartCache[stationId] = singleData;
-          }
-          notifyPending();
-        });
-      } else {
-        notifyPending();
-      }
-    };
-    script.onerror = function() {
-      if (script.remove) script.remove();
-      var cbs = pendingBundleCallbacks[chartFile] || [];
-      delete pendingBundleCallbacks[chartFile];
+      var cbs = pendingBundleCallbacks[bundleIdx] || [];
+      delete pendingBundleCallbacks[bundleIdx];
       cbs.forEach(function(cb) { cb(); });
-    };
-    document.head.appendChild(script);
+    });
   }
 
   function resolveTimeline(spec, startIndex, length) {

@@ -1,4 +1,6 @@
 # dev
+- Supply-limited upward capillary rise in the land surface model to remaining available groundwater storage after accounting for human water demand abstractions, preventing requested abstractions from exceeding available storage.
+- Integrated interactive chart data bundles directly into the single discharge dashboard HTML file with lazy per-bundle decompression on demand, eliminating external bundle JS files and the separate charts directory while preserving fast initial page load.
 - Implement capillary rise in the Ross solver.
 - Fixed rare floating-point precision underflow in `infiltration` during profile saturation recharge subtraction that caused slightly negative `topwater_m` and false `direct_runoff` in the land surface model.
 

@@ -27,7 +27,6 @@ from geb.evaluate.workflows.dashboard import (
     determine_main_time_index,
     serialize_main_timeline,
     write_discharge_dashboard,
-    write_station_chart_data,
 )
 
 
@@ -312,52 +311,9 @@ def test_as_finite_float() -> None:
     assert _as_finite_float(0.12345, decimals=3) == 0.123
 
 
-def test_write_station_chart_data_gzip_base64(tmp_path: Path) -> None:
-    """Test that write_station_chart_data writes compressed Base64 Gzip JS payload."""
-    dashboard_file: Path = tmp_path / "eval_map.html"
-    station_payload: dict[str, Any] = {
-        "stationName": "Test Gzip Station",
-        "frequency": "daily",
-        "metrics": {"KGE": 0.91, "NSE": 0.88},
-        "timeseries": {
-            "start": 0,
-            "scale": 100,
-            "deltas": True,
-            "observed": [500, 10, -5],
-            "simulated": [510, 8, -3],
-        },
-    }
-
-    rel_path: str = write_station_chart_data(
-        dashboard_path=dashboard_file,
-        station_id="station_abc_123",
-        chart_data=station_payload,
-    )
-
-    chart_file: Path = tmp_path / rel_path
-    assert chart_file.exists()
-    assert rel_path.startswith("eval_map_charts/")
-    assert rel_path.endswith(".js")
-
-    content: str = chart_file.read_text(encoding="utf-8")
-    prefix: str = 'window._gebStationChartPayload="'
-    suffix: str = '";'
-    assert content.startswith(prefix)
-    assert content.endswith(suffix)
-
-    b64_payload: str = content[len(prefix) : -len(suffix)]
-    compressed_bytes: bytes = base64.b64decode(b64_payload)
-    decompressed_json: bytes = gzip.decompress(compressed_bytes)
-    recovered_data: dict[str, Any] = json.loads(decompressed_json.decode("utf-8"))
-
-    assert recovered_data == station_payload
-
-
-def test_station_chart_bundle_writer(tmp_path: Path) -> None:
-    """Test that StationChartBundleWriter chunks stations into bundle files."""
-    dashboard_file: Path = tmp_path / "eval_map.html"
+def test_station_chart_bundle_writer() -> None:
+    """Test that StationChartBundleWriter chunks stations into compressed in-memory bundles."""
     writer: StationChartBundleWriter = StationChartBundleWriter(
-        dashboard_path=dashboard_file,
         max_stations_per_bundle=2,
     )
 
@@ -367,49 +323,30 @@ def test_station_chart_bundle_writer(tmp_path: Path) -> None:
 
     writer.add_station("st1", data1)
     writer.add_station("st2", data2)
-    # 2 stations should trigger bundle_000.js flush
-    assert len(writer.station_chart_files) == 2
-    assert writer.station_chart_files["st1"] == "eval_map_charts/bundle_000.js"
-    assert writer.station_chart_files["st2"] == "eval_map_charts/bundle_000.js"
+    # 2 stations should trigger bundle flush
+    assert len(writer.station_bundle_indices) == 2
+    assert writer.station_bundle_indices["st1"] == 0
+    assert writer.station_bundle_indices["st2"] == 0
+    assert len(writer.bundles) == 1
 
     writer.add_station("st3", data3)
-    files: dict[str, str] = writer.finish()
+    indices: dict[str, int] = writer.finish()
 
-    assert len(files) == 3
-    assert files["st3"] == "eval_map_charts/bundle_001.js"
+    assert len(indices) == 3
+    assert indices["st3"] == 1
+    assert len(writer.bundles) == 2
 
-    # Verify bundle_000.js content
-    bundle0_path: Path = tmp_path / "eval_map_charts" / "bundle_000.js"
-    assert bundle0_path.exists()
-    content0: str = bundle0_path.read_text(encoding="utf-8")
-    prefix: str = 'window._gebStationChartBundle="'
-    suffix: str = '";'
-    assert content0.startswith(prefix) and content0.endswith(suffix)
+    # Verify bundle 0 content
     b0_data: dict[str, Any] = json.loads(
-        gzip.decompress(base64.b64decode(content0[len(prefix) : -len(suffix)])).decode(
-            "utf-8"
-        )
+        gzip.decompress(base64.b64decode(writer.bundles[0])).decode("utf-8")
     )
     assert b0_data == {"st1": data1, "st2": data2}
 
-    # Verify bundle_001.js content
-    bundle1_path: Path = tmp_path / "eval_map_charts" / "bundle_001.js"
-    assert bundle1_path.exists()
-    content1: str = bundle1_path.read_text(encoding="utf-8")
+    # Verify bundle 1 content
     b1_data: dict[str, Any] = json.loads(
-        gzip.decompress(base64.b64decode(content1[len(prefix) : -len(suffix)])).decode(
-            "utf-8"
-        )
+        gzip.decompress(base64.b64decode(writer.bundles[1])).decode("utf-8")
     )
     assert b1_data == {"st3": data3}
-
-    # Test that reinitializing cleans up stale bundle files
-    writer_reinit: StationChartBundleWriter = StationChartBundleWriter(
-        dashboard_path=dashboard_file,
-        max_stations_per_bundle=2,
-    )
-    assert not bundle0_path.exists()
-    assert not bundle1_path.exists()
 
 
 def test_serialize_main_timeline() -> None:
@@ -526,13 +463,13 @@ def test_build_station_marker_payload() -> None:
 
 
 def test_write_discharge_dashboard(tmp_path: Path) -> None:
-    """Test generating interactive dashboard HTML with compressed layers."""
+    """Test generating a single self-contained dashboard HTML file with inlined chart bundles."""
     dashboard_file: Path = tmp_path / "discharge_evaluation_map.html"
-    region = gpd.GeoDataFrame(
+    region: gpd.GeoDataFrame = gpd.GeoDataFrame(
         geometry=[sg.box(7.0, 49.0, 9.0, 51.0)],
         crs="EPSG:4326",
     )
-    rivers = gpd.GeoDataFrame(
+    rivers: gpd.GeoDataFrame = gpd.GeoDataFrame(
         {
             "uparea_m2": [5000000.0],
         },
@@ -540,7 +477,7 @@ def test_write_discharge_dashboard(tmp_path: Path) -> None:
         index=pd.Index(["riv_1"]),
         crs="EPSG:4326",
     )
-    scores = gpd.GeoDataFrame(
+    scores: gpd.GeoDataFrame = gpd.GeoDataFrame(
         {
             "station_name": ["Station Test"],
             "upstream_area_GEB": [1000000.0],
@@ -553,18 +490,27 @@ def test_write_discharge_dashboard(tmp_path: Path) -> None:
         crs="EPSG:4326",
     )
 
+    writer: StationChartBundleWriter = StationChartBundleWriter()
+    writer.add_station(
+        "test_st", {"stationName": "Station Test", "metrics": {"KGE": 0.88}}
+    )
+    station_indices: dict[str, int] = writer.finish()
+
     write_discharge_dashboard(
         mapped_station_scores=scores,
         output_path=dashboard_file,
         region_geom=region,
         rivers=rivers,
-        station_chart_files={"test_st": "charts/test.js"},
+        chart_bundles=writer.bundles,
+        station_bundle_indices=station_indices,
     )
     assert dashboard_file.exists()
-    html_content = dashboard_file.read_text(encoding="utf-8")
+    assert not (tmp_path / "discharge_evaluation_map_charts").exists()
+    html_content: str = dashboard_file.read_text(encoding="utf-8")
     assert "DecompressionStream" in html_content
     assert "_gebStations" in html_content
     assert "Station search" in html_content
+    assert writer.bundles[0] in html_content
 
 
 def test_build_station_chart_data_with_bankfull_discharge() -> None:
@@ -658,20 +604,17 @@ def test_write_dashboard_charts_from_saved_scores_with_bankfull(
     logger = logging.getLogger("test")
     dashboard_path = tmp_path / "dashboard.html"
 
-    chart_files, _ = _write_dashboard_charts_from_saved_scores(
+    chart_files, chart_bundles, _ = _write_dashboard_charts_from_saved_scores(
         table_files=table_files,
         logger=logger,
         mapped_station_scores=scores,
         run_output_folder=run_output,
         correct_discharge_observations=True,
-        dashboard_path=dashboard_path,
         include_return_period_plots=False,
     )
     assert "101" in chart_files
-    bundle_path = tmp_path / chart_files["101"]
-    assert bundle_path.exists()
-    bundle_content = bundle_path.read_text(encoding="utf-8")
-    encoded: str = bundle_content.split('"')[1]
+    bundle_idx: int = chart_files["101"]
+    encoded: str = chart_bundles[bundle_idx]
     decoded = json.loads(gzip.decompress(base64.b64decode(encoded)).decode("utf-8"))
     assert decoded["101"]["timeseries"]["bankfullDischarge"] == 38.5
     assert "bankfull" in decoded["101"]["timeseries"]
@@ -724,10 +667,7 @@ def test_add_river_charts_to_bundle_writer(tmp_path: Path) -> None:
         crs="EPSG:4326",
     )
 
-    dashboard_path = tmp_path / "dashboard.html"
-    writer = StationChartBundleWriter(
-        dashboard_path=dashboard_path, max_stations_per_bundle=50
-    )
+    writer = StationChartBundleWriter(max_stations_per_bundle=50)
     add_river_charts_to_bundle_writer(
         chart_writer=writer,
         run_output_folder=run_output,
@@ -735,9 +675,8 @@ def test_add_river_charts_to_bundle_writer(tmp_path: Path) -> None:
     )
     files = writer.finish()
     assert "river_20" in files
-    bundle_path = tmp_path / files["river_20"]
-    bundle_content = bundle_path.read_text(encoding="utf-8")
-    encoded: str = bundle_content.split('"')[1]
+    bundle_idx: int = files["river_20"]
+    encoded: str = writer.bundles[bundle_idx]
     decoded = json.loads(gzip.decompress(base64.b64decode(encoded)).decode("utf-8"))
     assert decoded["river_20"]["type"] == "river"
     assert decoded["river_20"]["upstreamAreaKm2"] == 50.0
