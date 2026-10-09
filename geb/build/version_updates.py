@@ -13,6 +13,16 @@ if TYPE_CHECKING:
     from geb.build import GEBModel as GEBModelBuild
 
 VERSION_UPDATES: dict[str, list[str]] = {
+    "1.0.0b36": [
+        "[update-method;setup_well_prices_by_reference_year_global]",
+        "[update-method;setup_create_farms]",
+        "[update-method;setup_farmer_household_characteristics]",
+        "[update-method;setup_crops]",
+        "[update-method;setup_farmer_crop_calendar]",
+        "[update-method;setup_farmer_characteristics]",
+        "[update-method;setup_crop_prices]",
+        "[manual] Rerun spinup, simulation, and evaluation after rebuilding farmers.",
+    ],
     "1.0.0b35": [
         "[manual] For hydrology.karst, add setup_karst to custom builds, run geb update -b build.yml::setup_karst, and rerun spinup for the new karst store. Rebuild older maps, which may contain only zeros. Runs with karst disabled require no input changes.",
     ],

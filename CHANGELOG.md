@@ -1,5 +1,8 @@
 # dev
 
+# v1.0.0b36
+- Rebuild farms, farmer household and behaviour data, crop parameters, crop calendars, crop prices, and well prices through `geb update-version`. Rerun spinup, simulation, and evaluation afterwards. Existing input versions do not need to be downgraded.
+
 - Fix spinup failures near reservoirs built after the spinup starts. Keep their river channels until construction, then update the river cells when the reservoir becomes active. No input rebuild is needed; rerun failed spinups and simulations.
 
 # v1.0.0b35
