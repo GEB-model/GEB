@@ -1,5 +1,7 @@
 # dev
 
+- Use double precision in the soil heat solver to avoid a Geul spinup failure during freezing. No input rebuild is needed; rerun failed spinups.
+
 - Fix spinup failures near reservoirs built after the spinup starts. Keep their river channels until construction, then update the river cells when the reservoir becomes active. No input rebuild is needed; rerun failed spinups and simulations.
 
 # v1.0.0b35

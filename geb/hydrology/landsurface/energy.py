@@ -842,6 +842,10 @@ def solve_soil_enthalpy_column(
             from the matrix for numerical stability. Their enthalpy is synchronized
             with the top soil layer so they melt or sublimate when the surface warms.
 
+    Notes:
+        The heat solve uses double precision; stored soil and snow states keep
+        their original precision.
+
     Args:
         soil_enthalpies_J_per_m2: Current layer enthalpies (J/m2).
         layer_thicknesses_m: Layer thicknesses (m).
@@ -874,21 +878,40 @@ def solve_soil_enthalpy_column(
             - Soil heat flux (W/m2).
             - Top-layer frozen fraction (0-1).
     """
-    lower_diagonal_a = stack_empty(_N_COUPLED_SURFACE_LAYERS, np.float32)
-    main_diagonal_b = stack_empty(_N_COUPLED_SURFACE_LAYERS, np.float32)
-    upper_diagonal_c = stack_empty(_N_COUPLED_SURFACE_LAYERS, np.float32)
-    rhs_vector_d = stack_empty(_N_COUPLED_SURFACE_LAYERS, np.float32)
-    thermal_conductances_between_layer_centers_W_per_m2_K = stack_empty(
-        _N_COUPLED_SURFACE_LAYERS, dtype=np.float32
+    # Keep the small heat solve in double precision near freezing.
+    lower_diagonal_a: npt.NDArray[np.float64] = stack_empty(
+        _N_COUPLED_SURFACE_LAYERS, np.float64
     )
-    dT_dH_linearized = stack_empty(_N_COUPLED_SURFACE_LAYERS, dtype=np.float32)
-    beta_linearized = stack_empty(_N_COUPLED_SURFACE_LAYERS, dtype=np.float32)
-    conductivities_W_per_m_K = stack_empty(_N_COUPLED_SURFACE_LAYERS, dtype=np.float32)
-    half_layer_thicknesses_m = stack_empty(_N_COUPLED_SURFACE_LAYERS, dtype=np.float32)
-    enthalpies_at_start_of_timestep = stack_empty(
-        _N_COUPLED_SURFACE_LAYERS, dtype=np.float32
+    main_diagonal_b: npt.NDArray[np.float64] = stack_empty(
+        _N_COUPLED_SURFACE_LAYERS, np.float64
     )
-    enthalpies_updated = stack_empty(_N_COUPLED_SURFACE_LAYERS, dtype=np.float32)
+    upper_diagonal_c: npt.NDArray[np.float64] = stack_empty(
+        _N_COUPLED_SURFACE_LAYERS, np.float64
+    )
+    rhs_vector_d: npt.NDArray[np.float64] = stack_empty(
+        _N_COUPLED_SURFACE_LAYERS, np.float64
+    )
+    thermal_conductances_between_layer_centers_W_per_m2_K: npt.NDArray[np.float64] = (
+        stack_empty(_N_COUPLED_SURFACE_LAYERS, dtype=np.float64)
+    )
+    dT_dH_linearized: npt.NDArray[np.float64] = stack_empty(
+        _N_COUPLED_SURFACE_LAYERS, dtype=np.float64
+    )
+    beta_linearized: npt.NDArray[np.float64] = stack_empty(
+        _N_COUPLED_SURFACE_LAYERS, dtype=np.float64
+    )
+    conductivities_W_per_m_K: npt.NDArray[np.float64] = stack_empty(
+        _N_COUPLED_SURFACE_LAYERS, dtype=np.float64
+    )
+    half_layer_thicknesses_m: npt.NDArray[np.float64] = stack_empty(
+        _N_COUPLED_SURFACE_LAYERS, dtype=np.float64
+    )
+    enthalpies_at_start_of_timestep: npt.NDArray[np.float64] = stack_empty(
+        _N_COUPLED_SURFACE_LAYERS, dtype=np.float64
+    )
+    enthalpies_updated: npt.NDArray[np.float64] = stack_empty(
+        _N_COUPLED_SURFACE_LAYERS, dtype=np.float64
+    )
 
     n_active_snow_layers = 0
     if snow_water_equivalent_m[0] > MIN_ACTIVE_SNOW_SWE_M and snow_density_kg_per_m3[
@@ -1162,8 +1185,12 @@ def solve_soil_enthalpy_column(
     )
 
     # Thomas algorithm forward sweep and back substitution.
-    c_prime = stack_empty(_N_COUPLED_SURFACE_LAYERS, np.float32)
-    d_prime = stack_empty(_N_COUPLED_SURFACE_LAYERS, np.float32)
+    c_prime: npt.NDArray[np.float64] = stack_empty(
+        _N_COUPLED_SURFACE_LAYERS, np.float64
+    )
+    d_prime: npt.NDArray[np.float64] = stack_empty(
+        _N_COUPLED_SURFACE_LAYERS, np.float64
+    )
 
     if main_diagonal_b[0] == np.float32(0.0):
         c_prime[0] = np.float32(0.0)
