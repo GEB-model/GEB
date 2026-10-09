@@ -319,7 +319,7 @@ class KarstConfig(BaseModel):
         description="Fraction of runoff and interflow captured on karst land (0–1).",
     )
     release_time_days: float = Field(
-        10.0,
+        2.0,
         gt=0.0,
         allow_inf_nan=False,
         description="Time for karst storage to fall to 37% without new inflow (days).",

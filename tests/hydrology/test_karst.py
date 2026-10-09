@@ -54,7 +54,7 @@ def test_enabled_karst_requires_valid_map(
     "enabled,coverage,capture_fraction",
     [(False, 0.6, 0.5), (True, 0, 0.5), (True, 0.6, 0), (True, 0.6, 0.5), (True, 1, 1)],
 )
-@pytest.mark.parametrize("release_time_days", [0.01, 10.0, 1000.0])
+@pytest.mark.parametrize("release_time_days", [0.01, 2.0, 10.0, 1000.0])
 def test_hydrology_karst_integration(
     monkeypatch: pytest.MonkeyPatch,
     enabled: bool,
