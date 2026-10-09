@@ -559,6 +559,39 @@ class Routing(Module):
         if dam_grid is not None:
             self.instream_dam = self.grid.load2d(dam_grid)
 
+    def get_active_weirs(self) -> tuple[ArrayFloat32, ArrayBool]:
+        """Select barriers with an active river cell on both sides.
+
+        Returns:
+            Filtered heights (m) and dam flags, preserving stored inputs for
+            subsequent router rebuilds after reservoir activation or river pruning.
+
+        Raises:
+            ValueError: If barrier arrays do not match the active river grid.
+        """
+        heights: ArrayFloat32 = self.weir_height_m
+        dams: ArrayBool = self.instream_dam
+        if heights.shape != self.var.river_ids.shape or dams.shape != heights.shape:
+            raise ValueError("Barrier arrays must match the active river grid.")
+        if not np.any(heights) and not np.any(dams):
+            return heights.copy(), dams.copy()
+
+        cells: ArrayInt64 = np.flatnonzero(self.river_network.mask)
+        downstream: ArrayInt64 = self.river_network.idxs_ds[cells]
+        # The extra False entry handles the network's missing-neighbor index (-1).
+        river: ArrayBool = np.zeros(self.river_network.size + 1, dtype=bool)
+        river[cells] = self.var.river_ids != -1
+        supported: ArrayBool = river[cells] & river[downstream] & (downstream != cells)
+        excluded_count: int = int(
+            np.count_nonzero(~supported & ((heights != 0) | dams))
+        )
+        if excluded_count:
+            self.model.logger.warning(
+                "Disabled %s river barriers without an active river cell on each side.",
+                excluded_count,
+            )
+        return np.where(supported, heights, 0), dams & supported
+
     def load_rivers(
         self,
         grid_linear_mapping: TwoDArrayInt32,
@@ -1378,6 +1411,9 @@ class Routing(Module):
             waterbody_outflow_linear
         ].astype(np.float32)
 
+        weir_heights: ArrayFloat32
+        instream_dams: ArrayBool
+        weir_heights, instream_dams = self.get_active_weirs()
         self.router = LocalInertial(
             dt=3600,
             river_network=self.river_network,
@@ -1404,8 +1440,8 @@ class Routing(Module):
             river_storage_alpha=self.var.river_storage_alpha,
             river_storage_beta=self.var.river_storage_beta,
             in_spinup=self.model.in_spinup,
-            weir_height_m=self.weir_height_m,
-            instream_dam=self.instream_dam,
+            weir_height_m=weir_heights,
+            instream_dam=instream_dams,
         )
 
         self.save_weirs()

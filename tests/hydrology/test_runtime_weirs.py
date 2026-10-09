@@ -143,3 +143,75 @@ def test_instream_dam_grid_takes_priority(routing: Mock) -> None:
     Routing.load_weirs(cast(Routing, routing))
     assert routing.grid.load2d.call_args.args == ("new_dams",)
     np.testing.assert_array_equal(routing.instream_dam, [True, False, False])
+
+
+@pytest.mark.parametrize("outlet_downstream", [3, -1])
+@pytest.mark.parametrize("removed_cell", [None, 1, 2])
+def test_active_weirs_follow_runtime_network(
+    routing: Mock, removed_cell: int | None, outlet_downstream: int
+) -> None:
+    """Filter barriers at outlets, pruned channels, and waterbody interfaces.
+
+    Args:
+        routing: Mock routing module with stored barrier inputs.
+        removed_cell: Compressed cell removed from the river network, if any.
+        outlet_downstream: Raster index for a self-draining or missing outlet neighbor.
+
+    Returns:
+        None.
+
+    Raises:
+        AssertionError: If filtering changes inputs or retains unsupported barriers.
+    """  # noqa: DOC202, DOC502
+    routing.weir_height_m = np.array([-2, 3, 1], dtype=np.float32)
+    routing.instream_dam = np.array([True, False, True])
+    routing.var = Mock(river_ids=np.array([10, 10, 10], dtype=np.int32))
+    routing.grid.var.waterbody_ids = np.full(3, -1, dtype=np.int32)
+    # Include a masked raster cell to exercise compressed-to-raster mapping.
+    routing.river_network = Mock(
+        size=4,
+        mask=np.array([False, True, True, True]),
+        idxs_ds=np.array([-1, 2, 3, outlet_downstream], dtype=np.int32),
+    )
+    if removed_cell is not None:
+        # Runtime river IDs already exclude both pruned and waterbody cells.
+        routing.var.river_ids[removed_cell] = -1
+    if removed_cell == 2:
+        routing.grid.var.waterbody_ids[removed_cell] = 0
+    heights: np.ndarray
+    dams: np.ndarray
+    heights, dams = Routing.get_active_weirs(cast(Routing, routing))
+    expected: list[float] = (
+        [-2, 3, 0]
+        if removed_cell is None
+        else ([0, 0, 0] if removed_cell == 1 else [-2, 0, 0])
+    )
+    np.testing.assert_array_equal(heights, expected)
+    np.testing.assert_array_equal(dams, [expected[0] != 0, False, False])
+    np.testing.assert_array_equal(routing.weir_height_m, [-2, 3, 1])
+    np.testing.assert_array_equal(routing.instream_dam, [True, False, True])
+    routing.model.logger.warning.assert_called_once()
+    # A later router rebuild must recover barriers where channels are active again.
+    routing.var.river_ids[:] = 10
+    routing.grid.var.waterbody_ids[:] = -1
+    heights, dams = Routing.get_active_weirs(cast(Routing, routing))
+    np.testing.assert_array_equal(heights, [-2, 3, 0])
+
+
+def test_active_weirs_reject_mismatched_arrays(routing: Mock) -> None:
+    """Reject barrier arrays that cannot be mapped to active river cells.
+
+    Args:
+        routing: Mock routing module with stored barrier inputs.
+
+    Returns:
+        None.
+
+    Raises:
+        AssertionError: If mismatched arrays are accepted.
+    """  # noqa: DOC202, DOC502
+    routing.weir_height_m = np.zeros(2, dtype=np.float32)
+    routing.instream_dam = np.zeros(3, dtype=bool)
+    routing.var = Mock(river_ids=np.zeros(3, dtype=np.int32))
+    with pytest.raises(ValueError, match="Barrier arrays"):
+        Routing.get_active_weirs(cast(Routing, routing))

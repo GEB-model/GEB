@@ -1,6 +1,7 @@
 """Regression tests for automatic input version update failures."""
 
 import logging
+from contextlib import nullcontext
 from unittest.mock import Mock, call
 
 import pytest
@@ -24,7 +25,6 @@ def test_karst_input_migration(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "karst disabled require no input changes" in updates[0]
     assert "new karst store" in updates[0]
     assert "may contain only zeros" in updates[0]
-    assert "1.0.0b36" not in version_updates.VERSION_UPDATES
     assert "1.0.0b37" not in version_updates.VERSION_UPDATES
 
 
@@ -67,12 +67,12 @@ def test_version_update_failure_propagates(
 
 
 @pytest.mark.parametrize(
-    "stored_version,target_version,method_names",
+    "stored_version,target_version,method_names,manual_notice",
     [
-        ("1.0.0b31", "1.0.0b32", ["setup_waterbodies", "setup_weirs"]),
-        ("1.0.0b32", "1.0.0b33", ["setup_waterbodies", "setup_weirs"]),
-        ("1.0.0b33", "1.0.0b34", ["setup_weirs"]),
-        ("1.0.0b34", "1.0.0b35", ["setup_waterbodies", "setup_weirs"]),
+        ("1.0.0b31", "1.0.0b32", ["setup_waterbodies", "setup_weirs"], "Rerun spinup"),
+        ("1.0.0b32", "1.0.0b33", ["setup_groundwater"], None),
+        ("1.0.0b33", "1.0.0b34", ["setup_waterbodies"], None),
+        ("1.0.0b34", "1.0.0b35", [], "karst"),
     ],
 )
 def test_waterbody_input_migration(
@@ -80,21 +80,27 @@ def test_waterbody_input_migration(
     stored_version: str,
     target_version: str,
     method_names: list[str],
+    manual_notice: str | None,
 ) -> None:
-    """Rebuild affected waterbody inputs and require rerunning spinup.
+    """Run the methods and manual notices registered for each input version.
 
     Args:
         monkeypatch: Fixture for fixing the target package version.
         stored_version: Version of the existing inputs.
         target_version: Version to migrate to.
         method_names: Build methods required by the migration.
+        manual_notice: Expected manual instruction, or None for automatic updates.
     """
     monkeypatch.setattr(version_updates, "__version__", target_version)
     builder: Mock = Mock()
     methods: dict[str, dict[str, list[int]]] = {
         method_name: {} for method_name in method_names
     }
-    with pytest.raises(RuntimeError, match="Rerun spinup"):
+    with (
+        pytest.raises(RuntimeError, match=manual_notice)
+        if manual_notice is not None
+        else nullcontext()
+    ):
         version_updates.get_and_maybe_do_version_updates(
             stored_version,
             logging.getLogger(__name__),
@@ -107,20 +113,48 @@ def test_waterbody_input_migration(
     builder.set_version.assert_called_once_with(target_version)
 
 
-def test_barrier_file_migration(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Add the barrier file to existing inputs without requiring a new spinup.
+@pytest.mark.parametrize("update_fails", [False, True])
+def test_farmer_input_migration(
+    monkeypatch: pytest.MonkeyPatch, update_fails: bool
+) -> None:
+    """Rebuild farmer inputs in order and require a new spinup and simulation.
 
     Args:
-        monkeypatch: Fixture for fixing the package version.
+        monkeypatch: Fixture fixing the package version.
+        update_fails: Whether rebuilding farms fails.
     """
     monkeypatch.setattr(version_updates, "__version__", "1.0.0b36")
+    method_names: list[str] = [
+        "setup_well_prices_by_reference_year_global",
+        "setup_create_farms",
+        "setup_farmer_household_characteristics",
+        "setup_crops",
+        "setup_farmer_crop_calendar",
+        "setup_farmer_characteristics",
+        "setup_crop_prices",
+    ]
+    methods: dict[str, dict] = {name: {} for name in method_names}
     builder: Mock = Mock()
-    updates: list[str] = version_updates.get_and_maybe_do_version_updates(
-        "1.0.0b35",
-        logging.getLogger(__name__),
-        build_model=builder,
-        methods={"setup_weirs": {}},
-    )
-    assert updates == []
-    builder.update.assert_called_once_with({"setup_weirs": {}})
-    builder.set_version.assert_called_once_with("1.0.0b36")
+    if update_fails:
+        builder.update.side_effect = [None, ValueError("Farm rebuild failed")]
+        with pytest.raises(RuntimeError, match="error occurred during auto-update"):
+            version_updates.get_and_maybe_do_version_updates(
+                "1.0.0b35", logging.getLogger(__name__), builder, methods
+            )
+        builder.set_version.assert_not_called()
+        builder.set_current_version.assert_not_called()
+    else:
+        with pytest.raises(RuntimeError, match="after rebuilding farmers"):
+            version_updates.get_and_maybe_do_version_updates(
+                "1.0.0b35", logging.getLogger(__name__), builder, methods
+            )
+        assert builder.update.call_args_list == [
+            call({name: {}}) for name in method_names
+        ]
+        builder.set_version.assert_called_once_with("1.0.0b36")
+        builder.set_current_version.assert_called_once_with()
+        builder.reset_mock()
+        version_updates.get_and_maybe_do_version_updates(
+            "1.0.0b36", logging.getLogger(__name__), builder, methods
+        )
+        builder.update.assert_not_called()
