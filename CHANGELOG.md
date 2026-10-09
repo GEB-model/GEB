@@ -1,4 +1,5 @@
 # dev
+- Filter runtime weirs and instream dams against active river connections after reservoir activation and channel pruning, excluding waterbody interfaces and outlets with a warning. No input rebuild is needed; rerun failed spinups.
 - Rebuild farms, farmer household and behaviour data, crop parameters, crop calendars, crop prices, and well prices through `geb update-version`. Rerun spinup, simulation, and evaluation afterwards. Existing input versions do not need to be downgraded.
 - Use double precision in the soil heat solver to avoid a Geul spinup failure during freezing. No input rebuild is needed; rerun failed spinups.
 - Fix spinup failures near reservoirs built after the spinup starts. Keep their river channels until construction, then update the river cells when the reservoir becomes active. No input rebuild is needed; rerun failed spinups and simulations.
