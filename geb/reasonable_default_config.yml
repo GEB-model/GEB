@@ -70,7 +70,6 @@ hydrology:
   karst:
     enabled: false
     capture_fraction: 1.0 # Full capture on karst land, following the WaterGAP assumption in Wan et al. (2024), doi:10.1029/2023WR036182
-    release_time_days: 2.0 # Starting value; fit to the observed fall in flow after rain.
   routing:
     weirs: true # Enable fixed river barriers from GDW and AMBER
     minimum_river_slope_m_per_m: 0.0001

@@ -306,23 +306,17 @@ class HydrologyEvaluationConfig(BaseModel):
 
 
 class KarstConfig(BaseModel):
-    """Karst capture and release settings."""
+    """Settings for direct karst recharge."""
 
     enabled: bool = Field(
         False,
-        description="Enable karst storage and recharge.",
+        description="Enable direct recharge of captured runoff and interflow in karst areas.",
     )
     capture_fraction: float = Field(
         1.0,
         ge=0.0,
         le=1.0,
         description="Fraction of runoff and interflow captured on karst land (0–1).",
-    )
-    release_time_days: float = Field(
-        2.0,
-        gt=0.0,
-        allow_inf_nan=False,
-        description="Time for karst storage to fall to 37% without new inflow (days).",
     )
 
 

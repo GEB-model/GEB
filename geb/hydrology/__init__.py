@@ -171,11 +171,6 @@ class Hydrology(Data, Module):
                 raise ValueError(
                     "Karst map values must be between 0 and 1, with no NaNs or infinities."
                 )
-            if self.model.in_spinup:
-                self.grid.var.karst_storage_m = np.zeros_like(
-                    self.karst_fraction, dtype=np.float64
-                )
-
         self.landsurface = LandSurface(self.model, self)
         self.groundwater = GroundWater(self.model, self)
         self.routing = Routing(self.model, self)
@@ -252,7 +247,6 @@ class Hydrology(Data, Module):
     def get_current_storage(self) -> np.float64:
         """Get the current water storage in the hydrological system.
 
-        Includes water held in the karst store when enabled.
         Uses float64 to ensure that the storage is calculated accurately. If float32
         is used, the storage can be under- or overestimated due to rounding errors.
 
@@ -265,13 +259,6 @@ class Hydrology(Data, Module):
             + self.get_routing_storage_m3()
             + self.get_waterbodies_storage_m3()
             + self.get_groundwater_storage_m3()
-            + (
-                (self.grid.var.karst_storage_m * self.grid.var.cell_area).sum(
-                    dtype=np.float64
-                )
-                if self.karst_fraction is not None
-                else np.float64(0.0)
-            )
         )
 
     def step(self) -> None:
@@ -279,18 +266,19 @@ class Hydrology(Data, Module):
 
         Calculates the water balance and updates all hydrological components.
         When karst is enabled, send part of the surface runoff and interflow
-        on land to a store that releases water gradually to groundwater.
+        on land directly to groundwater recharge.
 
         Raises:
-            ValueError: If an enabled karst store is missing from the saved state.
+            ValueError: If a checkpoint contains the removed karst storage state.
         """
         timer: TimingModule = TimingModule("Hydrology")
 
-        if self.karst_fraction is not None and not hasattr(
+        if self.karst_fraction is not None and hasattr(
             self.grid.var, "karst_storage_m"
         ):
             raise ValueError(
-                "Karst storage is missing. Rerun spinup with karst enabled."
+                "Checkpoint contains legacy karst storage. Rerun spinup with the "
+                "direct karst recharge implementation."
             )
 
         if __debug__:
@@ -349,20 +337,8 @@ class Hydrology(Data, Module):
         groundwater_recharge_m = self.to_grid(HRU_data=groundwater_recharge_m)
 
         if self.karst_fraction is not None:
-            karst_inflow_m: np.ndarray = self.to_grid(HRU_data=karst_capture_m).astype(
-                np.float64
-            )
-            release_time_days: float = self.model.config["hydrology"]["karst"][
-                "release_time_days"
-            ]
-            # Exact daily release for constant inflow: dS/dt = inflow - S / T.
-            release_fraction: float = -np.expm1(-1.0 / release_time_days)
-            karst_recharge_m: np.ndarray = (
-                self.grid.var.karst_storage_m * release_fraction
-                + karst_inflow_m * (1.0 - release_time_days * release_fraction)
-            )
-            self.grid.var.karst_storage_m += karst_inflow_m - karst_recharge_m
-            groundwater_recharge_m += karst_recharge_m.astype(np.float32)
+            karst_recharge_m: np.ndarray = self.to_grid(HRU_data=karst_capture_m)
+            groundwater_recharge_m += karst_recharge_m
 
         if self.model.config["hazards"]["floods"]["simulate"]:
             self.model.hazard_driver.floods.save_runoff_m(overland_runoff_m)

@@ -13,6 +13,9 @@ if TYPE_CHECKING:
     from geb.build import GEBModel as GEBModelBuild
 
 VERSION_UPDATES: dict[str, list[str]] = {
+    "1.0.0b37": [
+        "[manual] Karst now recharges groundwater directly; remove hydrology.karst.release_time_days from model.yml and rerun spinup before continuing simulations with karst enabled.",
+    ],
     "1.0.0b36": [
         "[update-method;setup_well_prices_by_reference_year_global]",
         "[update-method;setup_create_farms]",

@@ -1,4 +1,5 @@
 # dev
+- Send captured karst runoff and interflow directly to groundwater recharge. Remove `hydrology.karst.release_time_days` from model configuration and rerun spinup before continuing simulations with karst enabled; no separate karst storage is used.
 - Filter runtime weirs and instream dams against active river connections after reservoir activation and channel pruning, excluding waterbody interfaces and outlets with a warning. No input rebuild is needed; rerun failed spinups.
 - Rebuild farms, farmer household and behaviour data, crop parameters, crop calendars, crop prices, and well prices through `geb update-version`. Rerun spinup, simulation, and evaluation afterwards. Existing input versions do not need to be downgraded.
 - Use double precision in the soil heat solver to avoid a Geul spinup failure during freezing. No input rebuild is needed; rerun failed spinups.

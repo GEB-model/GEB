@@ -39,8 +39,9 @@ The groundwater simulation proceeds in the following steps during each model tim
 
 ## Simple karst recharge
 
-Karst stores part of the surface runoff and interflow, then slowly releases it
-to groundwater. Sealed areas and open water are excluded. Karst is off by default.
+Karst redirects part of the surface runoff and interflow directly to groundwater
+recharge in the same daily timestep. Sealed areas and open water are excluded.
+Karst is off by default, and no separate karst storage bucket is used.
 
 `setup_karst` uses [WOKAM](https://download.bgr.de/bgr/grundwasser/whymap/shp/WHYMAP_WOKAM_v1.zip)
 to estimate coverage per cell: 0.825 for continuous rocks, 0.4 for discontinuous
@@ -54,16 +55,11 @@ hydrology:
   karst:
     enabled: true
     capture_fraction: 1.0
-    release_time_days: 10.0
 ```
 
 Capture equals karst coverage times `capture_fraction` (0–1). The default of 1.0
 follows [Wan et al. (2024)](https://doi.org/10.1029/2023WR036182), but GEB also
 captures soil overflow, which that study excludes.
-
-Longer release times hold water longer. The time must be finite and positive;
-10 days is a trial value. Without new inflow, 37% of stored water remains after
-that time. Storage is saved in checkpoints and included in the water balance.
 
 Build the map and rerun spinup:
 
@@ -75,11 +71,14 @@ uv run geb run
 ```
 
 Custom builds need `setup_karst` after `setup_region`. Rebuild older karst maps,
-which may contain only zeros. Rerun spinup after changing karst settings.
+which may contain only zeros. Rerun spinup after enabling karst or changing its
+settings. Existing `release_time_days` settings are obsolete and should be
+removed from `model.yml`.
 
-In `hydrology`, report `.karst_capture_m` on HRUs, `.karst_recharge_m` on the grid
-(m/day), and `grid.var.karst_storage_m` on the grid (m). Land-surface runoff
-reports show runoff before capture. This delays water; it does not remove it.
+In `hydrology`, report `.karst_capture_m` on HRUs and `.karst_recharge_m` on the
+grid (m/day). Land-surface runoff reports show runoff before capture; captured
+water is removed from routed runoff and added to groundwater recharge in the
+same timestep.
 
 ## Code
 

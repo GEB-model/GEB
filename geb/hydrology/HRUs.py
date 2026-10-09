@@ -284,7 +284,6 @@ class GridVariables(Bucket):
 
     heads: TwoDArrayFloat64
     capillar: ArrayFloat32
-    karst_storage_m: ArrayFloat64
     layer_boundary_elevation: TwoDArrayFloat32
     elevation: ArrayFloat32
     specific_yield: TwoDArrayFloat32
