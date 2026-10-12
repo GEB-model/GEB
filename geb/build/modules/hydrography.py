@@ -1540,7 +1540,7 @@ class Hydrography(BuildModelBase):
         """Sets up the coastal sfincs model regions."""
         if self.geom["routing/subbasins"]["is_coastal"].any():
             # load elevation data
-            elevation = self.other["DEM/fabdem"]
+            elevation = self.other["DEM/fathomdem"]
             # load the lecz mask
             low_elevation_coastal_zone_mask = (
                 self.create_low_elevation_coastal_zone_mask()

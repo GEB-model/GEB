@@ -15,7 +15,6 @@ import requests
 import rioxarray as rxr
 import xarray as xr
 from dotenv import load_dotenv
-from rioxarray import merge
 from shapely.geometry import box
 from shapely.geometry.base import BaseGeometry
 
@@ -321,36 +320,54 @@ class FathomDem(Adapter):
                 tile_paths.append(tif_file)
         return sorted(tile_paths)
 
-    def _merge_tiles(self, tile_paths: list[Path]) -> xr.DataArray:
-        """Merge multiple FathomDEM GeoTIFF tiles into a single xarray DataArray.
+    def _open_tile(self, tile_path: Path) -> xr.DataArray:
+        """Open a FathomDEM GeoTIFF tile as a lazy chunked DataArray.
+
+        Resolves the local GeoTIFF tile and opens it using dask chunks to
+        avoid loading the entire tile into memory at once.
 
         Args:
-            tile_paths: List of file paths to local GeoTIFF tiles.
+            tile_path: Path to the local GeoTIFF file.
 
         Returns:
-            Merged xarray DataArray.
+            Lazy xr.DataArray for the tile (band 1 selected).
         """
-        das: list[xr.DataArray] = [
-            rxr.open_rasterio(path, chunks={}) for path in tile_paths
-        ]  # ty: ignore[invalid-assignment]
-        das = [da.sel(band=1) for da in das]
+        da: xr.DataArray = rxr.open_rasterio(tile_path, chunks={"x": 1800, "y": 1800})  # ty: ignore[invalid-assignment]
+        return da.sel(band=1)
 
-        da_merged: xr.DataArray = merge.merge_arrays(das)
-        assert isinstance(da_merged, xr.DataArray)
-        return da_merged
+    def _merge_fathomdem_tiles(self, tile_das: list[xr.DataArray]) -> xr.DataArray:
+        """Merge FathomDEM tile DataArrays into a single lazy xarray DataArray.
+
+        Args:
+            tile_das: Individual 1x1-degree tile DataArrays (already band-selected and chunked).
+
+        Returns:
+            Merged xarray DataArray covering the union of all tile extents.
+        """
+        da: xr.DataArray = xr.combine_by_coords(
+            tile_das,
+            fill_value=tile_das[0].rio.nodata,
+            combine_attrs="drop_conflicts",
+            join="outer",
+            compat="broadcast_equals",
+            data_vars="all",
+        )  # ty: ignore[invalid-assignment]
+        assert isinstance(da, xr.DataArray)
+        return da
 
     def read(self, mask: BaseGeometry) -> xr.DataArray:
         """Read FathomDEM elevation data for the area covered by mask.
 
         Finds all extracted 1x1 degree GeoTIFF tiles in cache that intersect
-        with mask, merges them, clips to the mask geometry, and converts
-        nodata values to np.nan.
+        with mask, opens them lazily with chunks, merges them, clips to
+        the mask geometry, converts nodata values to np.nan, and converts
+        vertical units from centimeters to meters.
 
         Args:
             mask: The geometry used to select and clip intersecting elevation tiles.
 
         Returns:
-            xarray DataArray containing elevation values in meters, clipped to mask.
+            Lazy chunked xarray DataArray with elevation values in meters, clipped to mask.
 
         Raises:
             RuntimeError: If no extracted tiles intersect the mask.
@@ -362,7 +379,11 @@ class FathomDem(Adapter):
                 "Ensure fetch(mask) has been called first."
             )
 
-        da: xr.DataArray = self._merge_tiles(tile_paths)
+        tile_das: list[xr.DataArray] = [
+            self._open_tile(tile_path) for tile_path in tile_paths
+        ]
+
+        da: xr.DataArray = self._merge_fathomdem_tiles(tile_das)
         da = clip_with_geometry(
             da,
             gdf=gpd.GeoDataFrame(geometry=[mask], crs=4326),
@@ -370,8 +391,7 @@ class FathomDem(Adapter):
             drop=False,
         )
         da = convert_nodata(da, np.nan)
-        chunk_x: int = min(1800, da.sizes.get("x", 1800))
-        chunk_y: int = min(1800, da.sizes.get("y", 1800))
-        da = da.chunk({"x": chunk_x, "y": chunk_y})
+        # Convert vertical units from centimeters to meters (float32) while preserving chunks and nodata
+        da = (da.astype(np.float32) / 100).astype(np.float32)
         da.attrs["_FillValue"] = np.nan
-        return da.astype(np.float32) / 100
+        return da
