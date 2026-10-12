@@ -1336,6 +1336,13 @@ class Store:
         if path is None:
             path = self.path
 
+        # Stage live ML context before writing any Buckets. This also covers
+        # temporary forecast stores, not just GEBModel.save_checkpoint().
+        agents = getattr(self.model, "agents", None)
+        farmers = getattr(agents, "crop_farmers", None)
+        if farmers is not None:
+            farmers.save_ml_checkpoint_state()
+
         shutil.rmtree(path, ignore_errors=True)
         path.mkdir(parents=True, exist_ok=True)
         with ThreadPoolExecutor() as executor:

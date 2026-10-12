@@ -547,6 +547,13 @@ class CropFarmers(AgentBaseClass):
         data. The method is intentionally idempotent and is called from both the
         LandSurface feature hook and CropFarmers.step.
         """
+        # Store.load replaces Buckets, including when restoring the same model
+        # object for a forecast branch. Never retain the previous branch's ML state.
+        if (
+            self.decision_module_ml is not None
+            and getattr(self, "_decision_module_ml_bucket", None) is not self.var
+        ):
+            self.decision_module_ml = None
         if (
             self.model.in_spinup
             or not self.machine_learning_crop_switching_active
@@ -570,6 +577,16 @@ class CropFarmers(AgentBaseClass):
             self,
             self.machine_learning_crop_switching_config,
         )
+        self._decision_module_ml_bucket = self.var
+
+    def save_ml_checkpoint_state(self) -> None:
+        """Include operational ML context in every Store checkpoint."""
+        if self.model.in_spinup or not self.machine_learning_crop_switching_active:
+            return
+        self._initialize_decision_module_ml()
+        if self.decision_module_ml is None:
+            raise RuntimeError("Cannot checkpoint ML before farmer state is available.")
+        self.decision_module_ml.save_checkpoint_state()
 
     def _run_due_crop_predictions(self) -> None:
         """Install due ML calendars, but only during the simulation run."""

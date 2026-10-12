@@ -11,6 +11,10 @@ does not require one Zarr read per variable per simulated day.
 from __future__ import annotations
 
 import calendar
+import copy
+import hashlib
+import json
+from collections import deque
 import time
 from collections.abc import Mapping
 from datetime import datetime
@@ -1297,7 +1301,22 @@ class DecisionModuleML:
             time.perf_counter() - supporting_inputs_timer,
         )
 
+        # Restore before scheduling or replay: those operations would overwrite
+        # the saved prediction flags, pending dates and recurrent history.
+        if self._restore_checkpoint_state():
+            self.model.logger.info(
+                "Restored ML decision context without historical replay."
+            )
+            return
+
         run_start = pd.Timestamp(self.model.config["general"]["start_time"])
+        if pd.Timestamp(self.model.current_time) != run_start:
+            raise RuntimeError(
+                "This mid-run checkpoint has no saved ML decision context. "
+                "Its predicted calendars, decision history and recurrent state cannot "
+                "be recovered from spin-up reporters. Restart from the spin-up "
+                "checkpoint with this version and create a new run checkpoint."
+            )
         initial_schedule_timer = time.perf_counter()
         # The restored farmer state is authoritative at the spin-up/run boundary.
         # A farmer may already be in the run-start calendar year, so preparing all
@@ -1341,6 +1360,139 @@ class DecisionModuleML:
             "DecisionModuleML timing: total initialization=%.2f s.",
             time.perf_counter() - initialization_timer,
         )
+
+    # Explicit state contract: add any new mutable inference state here.
+    CHECKPOINT_ARRAYS = (
+        "continuous_hidden",
+        "continuous_raw_window",
+        "continuous_block_start_date",
+        "continuous_window_days",
+        "continuous_interval_days",
+        "continuous_started",
+        "first_decision_done",
+        "first_state_start_date",
+        "last_decision_date",
+        "spei_month_values",
+        "pending_target_year",
+        "pending_due_date",
+        "awaiting_decision",
+        "calendar_is_predicted",
+        "completed_prescribed_before_run",
+        "yield_recorded_year",
+        "calendar_history",
+        "yield_history",
+        "calendar_year",
+    )
+    CHECKPOINT_DIAGNOSTICS = ("latent", "predicted_calendar", "prediction_probability")
+
+    def _checkpoint_contract(self) -> str:
+        """Identify the trained artifacts and inference configuration by content."""
+        digest = hashlib.sha256()
+        for name in ("geb_crop_choice_bundle.joblib", "temporal_autoencoder.pt"):
+            with (self.model_directory / name).open("rb") as stream:
+                for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+                    digest.update(block)
+        # Paths and execution tuning do not change the inference contract.
+        execution_options = {
+            "model_directory",
+            "device",
+            "batch_size",
+            "daily_state_batch_size",
+            "spinup_daily_chunk_days",
+            "spinup_bootstrap_max_buffer_mb",
+            "spinup_encoder_window_batch_size",
+        }
+        settings = {k: v for k, v in self.config.items() if k not in execution_options}
+        digest.update(json.dumps(settings, sort_keys=True, default=str).encode())
+        return digest.hexdigest()
+
+    def save_checkpoint_state(self) -> None:
+        """Stage compact runtime state in the farmer Bucket for Store.save.
+
+        The existing deque serializer preserves NumPy dtypes, NaT and RNG state.
+        No estimator, torch module, or long daily reporter history is serialized.
+        Store.save waits for its workers before simulation can continue.
+        """
+        if not hasattr(self, "_checkpoint_fingerprint"):
+            self._checkpoint_fingerprint = self._checkpoint_contract()
+        state = {
+            "version": 1,
+            "timestamp": self.model.current_time.isoformat(),
+            "contract": self._checkpoint_fingerprint,
+            "arrays": {name: getattr(self, name) for name in self.CHECKPOINT_ARRAYS},
+            "diagnostics": {
+                name: getattr(self, name) for name in self.CHECKPOINT_DIAGNOSTICS
+            },
+            "last_daily_date": self.last_daily_date,
+            "latest_spei_month_ordinal": self.latest_spei_month_ordinal,
+            "selection_rng": copy.deepcopy(self.selection_rng.bit_generator.state),
+            "crop_calendar": np.asarray(self.farmers.var.crop_calendar).copy(),
+            "active_indices": np.asarray(
+                self.farmers.var.crop_calendar_active_year_index
+            ).copy(),
+            "region_id": np.asarray(self.farmers.var.region_id).copy(),
+        }
+        self.farmers.var.ml_decision_checkpoint = deque([state], maxlen=1)
+
+    def _restore_checkpoint_state(self) -> bool:
+        """Validate the complete snapshot before changing any inference state."""
+        saved = getattr(self.farmers.var, "ml_decision_checkpoint", None)
+        if saved is None:
+            return False
+        if not isinstance(saved, deque) or len(saved) != 1:
+            raise ValueError("Malformed ML decision checkpoint.")
+        state = saved[0]
+        if state["version"] != 1:
+            raise ValueError("Unsupported ML decision checkpoint version.")
+        if pd.Timestamp(state["timestamp"]) != pd.Timestamp(self.model.current_time):
+            raise ValueError("ML checkpoint timestamp does not match the model clock.")
+        self._checkpoint_fingerprint = self._checkpoint_contract()
+        if state["contract"] != self._checkpoint_fingerprint:
+            raise ValueError(
+                "ML checkpoint trained artifacts/configuration have changed."
+            )
+        for key, name in (
+            ("crop_calendar", "crop_calendar"),
+            ("active_indices", "crop_calendar_active_year_index"),
+            ("region_id", "region_id"),
+        ):
+            if not np.array_equal(
+                state[key], np.asarray(getattr(self.farmers.var, name))
+            ):
+                raise ValueError(
+                    f"ML checkpoint does not match restored farmer {name}."
+                )
+        for section, names in (
+            ("arrays", self.CHECKPOINT_ARRAYS),
+            ("diagnostics", self.CHECKPOINT_DIAGNOSTICS),
+        ):
+            for name in names:
+                value, expected = state[section][name], getattr(self, name)
+                if expected is None:
+                    if value is not None:
+                        raise ValueError(f"Unexpected ML checkpoint diagnostic {name}.")
+                elif (
+                    not isinstance(value, np.ndarray)
+                    or value.shape != expected.shape
+                    or value.dtype != expected.dtype
+                ):
+                    raise ValueError(f"Incompatible ML checkpoint array {name}.")
+        # Validate the generator state without consuming a draw.
+        rng = np.random.default_rng()
+        rng.bit_generator.state = copy.deepcopy(state["selection_rng"])
+        for section, names in (
+            ("arrays", self.CHECKPOINT_ARRAYS),
+            ("diagnostics", self.CHECKPOINT_DIAGNOSTICS),
+        ):
+            for name in names:
+                value = state[section][name]
+                setattr(self, name, None if value is None else value.copy())
+        self.last_daily_date = state["last_daily_date"]
+        self.latest_spei_month_ordinal = state["latest_spei_month_ordinal"]
+        self.selection_rng = rng
+        # The live runtime now owns the state; avoid retaining a second full copy.
+        del self.farmers.var.ml_decision_checkpoint
+        return True
 
     def _spinup_report_directory(self) -> Path:
         """Locate the completed spin-up report directory.
