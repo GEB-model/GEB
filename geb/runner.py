@@ -307,16 +307,17 @@ def run_model_with_method(
         if method is not None:
             # This is a bit of hack to allow the model to know if it is in spinup mode or not,
             # so that we can detect if it is done. To avoid side effects
-            # we immediately delete the attribute after the method is called.
+            # we delete the attribute after the method is called if skip_done and is_done are true.
+            # If false, in_spinup is overwritten in self._initialize.
             geb.in_spinup = method == "spinup"
             is_done: bool = geb.is_done
-            del geb.in_spinup
             if not (skip_done and is_done):
                 result = getattr(geb, method)(**method_args)
             else:
                 logger.info(
                     f"Skipping run because the model is already marked as done."
                 )
+                del geb.in_spinup
 
         t2 = datetime.now()
 
