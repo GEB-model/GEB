@@ -202,6 +202,8 @@ def sample_from_map(
         coords: The coordinates used to sample (shape: m, 2).
         gt: The geotransformation. Must be unrotated.
         out_of_bounds_value: The value to return for coordinates that are out of bounds. If None, an error will be raised.
+        ssp_map: If True, fill missing values by searching for the nearest valid
+            nearby cell.
 
     Returns:
         The values at each coordinate.

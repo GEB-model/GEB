@@ -1514,6 +1514,7 @@ class Agents(BuildModelBase):
             A GeoDataFrame with sub-basin IDs assigned to each building.
         """
         subbasins = self.geom["routing/subbasins"].reset_index()
+        
         buildings_with_subbasin = gpd.sjoin(
             buildings,
             subbasins[["COMID", "geometry"]],
@@ -1538,11 +1539,11 @@ class Agents(BuildModelBase):
             Buildings with distance columns appended (meters).
         """
         rivers: gpd.GeoDataFrame = gpd.read_parquet(
-            "input/" + self.files["geom"]["routing/rivers"]
+            "input" / self.files["geom"]["routing/rivers"]
         )[["geometry"]]
 
         coastline: gpd.GeoDataFrame = gpd.read_parquet(
-            "input/" + self.files["geom"]["coastal/coastlines"]
+            "input" / self.files["geom"]["coastal/coastlines"]
         )[["geometry"]]
 
         region_centroid = self.region.union_all().centroid
@@ -1606,28 +1607,6 @@ class Agents(BuildModelBase):
 
         return buildings
 
-    def assign_subbasins_to_buildings(
-        self, buildings: gpd.GeoDataFrame
-    ) -> gpd.GeoDataFrame:
-        """Assigns sub-basin IDs to buildings based on their spatial location.
-
-        Args:
-            buildings: A GeoDataFrame containing building data within the model domain.
-        Returns:
-            A GeoDataFrame with sub-basin IDs assigned to each building.
-        """
-        subbasins = self.geom["routing/subbasins"].reset_index()
-        buildings_with_subbasin = gpd.sjoin(
-            buildings,
-            subbasins[["COMID", "geometry"]],
-            how="left",
-            predicate="within",
-        ).drop(columns="index_right")
-        buildings_with_subbasin["COMID"] = (
-            buildings_with_subbasin["COMID"].fillna(-1).astype(int)
-        )
-        return buildings_with_subbasin
-
     def assign_GDL_region_to_buildings(
         self, buildings: gpd.GeoDataFrame
     ) -> gpd.GeoDataFrame:
@@ -1663,7 +1642,6 @@ class Agents(BuildModelBase):
         buildings = self.setup_building_reconstruction_costs(buildings)
         buildings = self.assign_subbasins_to_buildings(buildings)
         buildings = self.calculate_distance_parameters(buildings)
-        buildings = self.assign_subbasins_to_buildings(buildings)
         # reset id column to avoid issues with duplicate ids
         buildings["id"] = np.arange(len(buildings))
 
@@ -1812,10 +1790,10 @@ class Agents(BuildModelBase):
     @build_method(required=True)
     def setup_climrisk(self,
         countries: list[str] | None = None,
-        ssp: list[str] | None = None,
-        rcp:list[str] | None = None,
-        function: list[str] | None = None,
-        p: list[int] | None = None,
+        ssp: list[str] = ["2"],
+        rcp: list[str] = ["70"],
+        function: list[str] = ["K"],
+        p: list[str] = ["90"],
         reference_year: int = 2020,
     ) -> None:
         """Sets up the CLIMRISK GDP projections for the model.
@@ -1826,24 +1804,33 @@ class Agents(BuildModelBase):
             rcp: RCP scenario identifier. Supported values are as ``"26"``, ``"45"``, and ``"70"``.
             function: Damage function identifier. Supported values are
                 ``"K"``, ``"KU"``, ``"KPU"``, ``"RU"``, and ``"RPU"``.
-            p: Damage percentile, from 0 to 100.
+            p: Damage percentile.
+            Supported values are
+                ``"10"``, ``"50"``, ``"90"``.
             reference_year: First year to include, from 2010 through 2100.
         """
 
-        if ssp      is None: ssp=["2"]
-        if rcp      is None: rcp=["70"]
-        if function is None: function=["K"]
-        if p        is None: p=[90]
+        for name, value in {"ssp": ssp, "rcp": rcp, "function": function, "p": p}.items():
+            if not isinstance(value, list):
+                raise TypeError(f"{name} must be a list, got {type(value).__name__}")
+            if not all(isinstance(v, str) for v in value):
+                raise TypeError(f"All items in {name} must be strings.")
 
+        self.logger.info("Processing climrisk data")
         for i in range(len(ssp)):
             for j in range(len(rcp)):
-                for k in range(len(function)):
-                    for l in range(len(p)):
+                for k in range(len(p)):
+                    for l in range(len(function)):
+                        self.logger.info(f"Processing combination: SSP{ssp[i]}-{rcp[j]}, Damage function {function[l]}, for countries: {countries}")
                         climrisk = self.data_catalog.fetch("climrisk").read(
-                            countries=countries, ssp=ssp[i],rcp=rcp[j],function=function[k],
-                            p=p[l], reference_year=reference_year
+                            countries=countries, ssp=ssp[i], rcp=rcp[j],function=function[l],
+                            p=p[k], reference_year=reference_year
                         )
-                        self.set_other(climrisk, name=f"ssp_maps/{climrisk['name'].item()}")
+                        if function[l]=="GDP":
+                            self.set_other(climrisk, name=f"ssp_maps/SSP{ssp[i]}{rcp[j]}_{function[l]}")
+                        else:
+                            self.set_other(climrisk, name=f"ssp_maps/SSP{ssp[i]}{rcp[j]}_{function[l]}_p{p[k]}")
+        self.logger.info("All climrisk data processed.")
 
     @build_method(
         depends_on=[

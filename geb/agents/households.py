@@ -1536,20 +1536,34 @@ class Households(AgentBaseClass):
         # We consider 2020 to be the base year
         base_year=2020
         if not hasattr(self, "factor_change"):
-            self.country_wide=self.model.config["agent_settings"]["climrisk"]["country_wide"]
-            ssp=self.model.config["agent_settings"]["climrisk"]["ssp"]
-            rcp=self.model.config["agent_settings"]["climrisk"]["rcp"]
-            function=self.model.config["agent_settings"]["climrisk"]["function"]
-            p=self.model.config["agent_settings"]["climrisk"]["p"]
-            ssp_map_name=f"SSP{ssp}{rcp}_{function}_p{p}.zarr"
+            self.country_wide: bool =self.model.config["agent_settings"]["climrisk"]["country_wide"]
+            ssp: str = self.model.config["agent_settings"]["climrisk"]["ssp"]
+            rcp: str = self.model.config["agent_settings"]["climrisk"]["rcp"]
+            function: str = self.model.config["agent_settings"]["climrisk"]["function"]
+            p: str = self.model.config["agent_settings"]["climrisk"]["p"]
+
+            if p not in ["10", "50", "90"]:
+                raise ValueError(f"Possible climrisk percentiles: 10, 50, 90; got {p!r}.")
+            if ssp not in ["1", "2", "3", "4", "5"]:
+                raise ValueError(f"Possible climrisk SSPs: 1, 2, 3, 4, 5; got {ssp!r}.")
+            if rcp not in ["19", "26", "34", "45", "60", "70", "85"]:
+                raise ValueError(f"Possible climrisk RCPs: 19, 26, 34, 45, 60, 70, 85; got {rcp!r}.")
+            if function not in ["GDP", "K", "KU", "KPU", "RU", "RPU"]:
+                raise ValueError(f"Possible climrisk damage functions: K, KU, KPU, RU, RPU; got {function!r}.")
+
+            if function=="GDP":
+                ssp_map_name:str = f"SSP{ssp}{rcp}_{function}.zarr"
+            else:
+                ssp_map_name:str = f"SSP{ssp}{rcp}_{function}.zarr"
             ssp_map_path: Path = (
-                self.model.input_folder / "ssp_maps" / ssp_map_name
+                self.model.input_folder / "other" / "ssp_maps" / ssp_map_name
             )
+
             # Pending: Load as DynamicArray into the var Bucket
             # flood_map in line 635 is also an xarray and it 
             # is currently not loaded into the var bucket, an 
             # implementation should probably be set for both maps
-            try: ssp_map = xr.load_dataset(ssp_map_path)
+            try: ssp_map: xr.Dataset = xr.open_dataarray(ssp_map_path)
             except: 
                 raise ValueError(
                     f"Requested file {ssp_map_name} has not been built. "
@@ -1560,20 +1574,20 @@ class Households(AgentBaseClass):
             # Contry-wide or cell-level growth rate
             if not self.country_wide:
                 self.growth_rate = (
-                    ssp_map[f"GDP"].diff(dim="time")
-                    / ssp_map[f"GDP"].shift({"time":1}))
+                    ssp_map.diff(dim="year")
+                    / ssp_map.shift({"year":1}))
             else: 
                 self.growth_rate = (
-                    ssp_map[f"GDP"].sum(["lon", "lat"]).diff(dim="time")
-                    / ssp_map[f"GDP"].sum(["lon", "lat"]).shift({"time":1}))
+                    ssp_map.sum(["lon", "lat"]).diff(dim="year")
+                    / ssp_map.sum(["lon", "lat"]).shift({"year":1}))
             # flood_risk_module._building_damages_all_return_periods
             # has one value for every return period, so these are values 
             # that  apply to all households regardless of their location. 
             # Here we will use the GDP change for all Mexico.
             # ssp_map has already been applied a mask for Mexico.
-            self.factor_change = (ssp_map[f"GDP"].sum(["lon", "lat"])
-                / ssp_map[f"GDP"].sel(
-                    {"time": base_year}).sum(["lon", "lat"]))
+            self.factor_change = (ssp_map.sum(["lon", "lat"])
+                / ssp_map.sel(
+                    {"year": base_year}).sum(["lon", "lat"]))
 
         current_year: int = self.model.current_time.year
         # Contry-wide or cell-level growth rate
@@ -1581,14 +1595,13 @@ class Households(AgentBaseClass):
             # Sample household data from map
             # sample_from_map takes a map with y, x coordinates
             growth_rate_map: np.ndarray = self.growth_rate.sel(
-                time=current_year).to_numpy().swapaxes(-2, -1)
+                {"year":current_year}).to_numpy().swapaxes(-2, -1)
             growth_rate = sample_from_map(
                 array=growth_rate_map, 
                 coords=self.var.locations.data, 
                 gt=(
-                    -118.75,
-                    #self.growth_rate.attrs["lon_origin"],     # x_offset = gt[0]
-                    -self.growth_rate.attrs["lon_resolution"], # x_step = gt[1]
+                    self.growth_rate.attrs["lon_origin"],     # x_offset = gt[0]
+                    self.growth_rate.attrs["lon_resolution"], # x_step = gt[1]
                     0,                                        # row rotation
                     self.growth_rate.attrs["lat_origin"],     # y_offset = gt[3]
                     0,                                        # column rotation
@@ -1599,9 +1612,9 @@ class Households(AgentBaseClass):
             )
         else: 
             growth_rate = float(self.growth_rate.sel({
-                "time": current_year}).item())
+                "year": current_year}).item())
         self.var.factor_change = float(self.factor_change.sel({
-            "time": current_year}).item())
+            "year": current_year}).item())
 
         self.var.wealth *= 1 + growth_rate
         self.var.income *= 1 + growth_rate

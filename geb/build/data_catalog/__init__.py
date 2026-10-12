@@ -718,8 +718,8 @@ data_catalog: dict[str, dict[str, Any]] = {
         "adapter": CLIMRISK(
             folder="climrisk",
             local_version=1,
-            filename="placeholder",
-            cache="global",
+            filename="",
+            cache="local",
         ),
         "url": "placeholder",
         "source": {

@@ -64,11 +64,15 @@ setup_iiasa_ssp:
 
 setup_climrisk:
   countries:
-    - Mexico
-  ssp: 2
-  rcp: 70
-  function: K
-  p: 90
+    - 'Mexico'
+  ssp: 
+    - '2'
+  rcp: 
+    - '70'
+  function:
+    - 'K'
+  p:
+    - '90'
 
 # setup_warning_communication_weights:
 

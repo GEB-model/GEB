@@ -103,8 +103,14 @@ class CLIMRISK(Adapter):
             countries = ["Mexico"]
         if not countries:
             raise ValueError("At least one country must be specified.")
+        valid = {"10", "50", "90"}
+
         if p not in ["10", "50", "90"]:
-            raise ValueError(f"Available percentiles: 10, 50, 90; got {p}.")
+            raise ValueError(f"Possible climrisk percentiles: 10, 50, 90; got {p!r}.")
+        if ssp not in ["1", "2", "3", "4", "5"]:
+            raise ValueError(f"Possible climrisk SSPs: 1, 2, 3, 4, 5; got {ssp!r}.")
+        if rcp not in ["19", "26", "34", "45", "60", "70", "85"]:
+            raise ValueError(f"Possible climrisk RCPs: 19, 26, 34, 45, 60, 70, 85; got {rcp!r}.")
         if not 2010 <= reference_year <= 2100:
             raise ValueError(
                 "reference_year must be between 2010 and 2100; "
@@ -113,6 +119,7 @@ class CLIMRISK(Adapter):
 
         # Multiple function identifiers share the same CLIMRISK output file.
         file_groups: dict[str, tuple[str, str]] = {
+            "GDP": ("Kompas_", "K_KU"), 
             "K": ("Kompas_", "K_KU"),
             "KU": ("Kompas_", "K_KU"),
             "KPU": ("Kompas_", "K_KU"),
@@ -120,11 +127,7 @@ class CLIMRISK(Adapter):
             "RPU": ("", "RU_RPU"),
         }
         if function not in file_groups:
-            supported_functions: str = ", ".join(file_groups)
-            raise ValueError(
-                f"Unsupported damage function {function!r}. "
-                f"Choose from: {supported_functions}."
-            )
+            raise ValueError(f"Possible climrisk damage functions: K, KU, KPU, RU, RPU; got {function!r}.")
 
         file_prefix: str
         function_abbreviation: str
@@ -145,23 +148,33 @@ class CLIMRISK(Adapter):
                 f"The country map file has no 'CountryMap': {country_file}"
             )
 
-        scenario: str = f"{ssp}{rcp}"
-        damage_file = (
-            self.path
-            / "climrisk_output"
-            / f"SSP{scenario}_{file_prefix}results_p{p}"
-            / f"SSP{scenario}_{function_abbreviation}_results{p}.mat"
-        )
+        if function=="GDP":
+            damage_file = (
+                self.path
+                / f"SSP{ssp}26_Kompas_results_p10"
+                / f"SSP{ssp}26_K_KU_results10.mat"
+            )
+        else:
+            scenario: str = f"{ssp}{rcp}"
+            damage_file = (
+                self.path
+                / f"SSP{scenario}_{file_prefix}results_p{p}"
+                / f"SSP{scenario}_{function_abbreviation}_results{p}.mat"
+            )
 
         # These coordinates describe the grid represented by the source arrays.
-        dimensions: tuple[str, str, str] = ("time", "lon", "lat")
+        dimensions: tuple[str, str, str] = ("year", "lon", "lat")
         years: np.ndarray = np.arange(2010, 2101)
         longitudes: np.ndarray = np.arange(-179.75, 180.25, 0.5)
         latitudes: np.ndarray = np.arange(-89.75, 90.25, 0.5)
 
         with h5py.File(damage_file, "r") as file:
-            damage_key: str = f"CLIMRISK_DOLLARS_{function}_GRID_WORLD_S"
-            proportion_key: str = f"CLIMRISK_PROP_{function}_GRID_WORLD_S"
+            if function=="GDP":
+                damage_key: str = f"CLIMRISK_DOLLARS_K_GRID_WORLD_S"
+                proportion_key: str = f"CLIMRISK_PROP_K_GRID_WORLD_S"
+            else:
+                damage_key: str = f"CLIMRISK_DOLLARS_{function}_GRID_WORLD_S"
+                proportion_key: str = f"CLIMRISK_PROP_{function}_GRID_WORLD_S"
 
             if damage_key not in file or proportion_key not in file:
                 raise ValueError(
@@ -178,11 +191,17 @@ class CLIMRISK(Adapter):
                     max=100
                 )
                 with np.errstate(divide="ignore", invalid="ignore"):
-                    gdp_damage: np.ndarray = (
-                        damage_dollars
-                        * (100 - damage_proportion)
-                        / damage_proportion
-                    )
+                    if function=="GDP":
+                        gdp_damage: np.darray = (
+                            damage_dollars
+                            *100/damage_proportion
+                        )
+                    else:
+                        gdp_damage: np.ndarray = (
+                            damage_dollars
+                            * (100 - damage_proportion)
+                            / damage_proportion
+                        )
 
             # The MATLAB map's latitude order is opposite to the ascending
             # latitude coordinate used to label the xarray data.
@@ -190,11 +209,11 @@ class CLIMRISK(Adapter):
                 country_data["CountryMap"], axis=0
             )
 
-            data_array: xr.DataArray = xr.DataArray(
+            gdp_damage: xr.DataArray = xr.DataArray(
                 data=gdp_damage,
                 dims=dimensions,
                 coords={
-                    "time": years,
+                    "year": years,
                     "lon": longitudes,
                     "lat": latitudes,
                     "country": (("lat", "lon"), country_grid),
@@ -203,7 +222,7 @@ class CLIMRISK(Adapter):
             )
 
         # Find the smallest rectangular crop containing all requested countries.
-        country_mask: xr.DataArray = data_array["country"].isin(
+        country_mask: xr.DataArray = gdp_damage["country"].isin(
             country_code_numbers
         )
         matching_longitudes: np.ndarray = np.flatnonzero(
@@ -233,26 +252,34 @@ class CLIMRISK(Adapter):
         )
 
         # Crop inclusively, then mask other countries inside the bounding box.
-        data_array = data_array.sel(
-            lon=slice(*longitude_bounds),
-            lat=slice(*latitude_bounds),
-            time=slice(reference_year, 2100),
+        gdp_damage = gdp_damage.sel(
+            {
+                "lon":slice(*longitude_bounds),
+                "lat":slice(*latitude_bounds),
+                "year":slice(reference_year, 2100),
+            }
         )
-        data_array = data_array.where(
-            data_array["country"].isin(country_code_numbers)
+        gdp_damage = gdp_damage.where(
+            gdp_damage["country"].isin(country_code_numbers)
         )
 
-        dataset: xr.Dataset = data_array.to_dataset(name="GDP")
-        dataset.attrs.update(
+        gdp_damage.attrs.update(
             {
                 "lon_origin": longitude_bounds[0],
                 "lon_resolution": 0.5,
                 "lat_origin": latitude_bounds[0],
                 "lat_resolution": 0.5,
+                "_FillValue": np.nan
             }
         )
+        gdp_damage = xr.apply_ufunc(
+            np.nan_to_num,
+            gdp_damage,
+            kwargs={"nan": np.nan, "posinf": np.nan, "neginf": np.nan},
+            dask="allowed",
+        )
 
-        return dataset
+        return gdp_damage.astype(np.float32)
 
     @staticmethod
     @cache
