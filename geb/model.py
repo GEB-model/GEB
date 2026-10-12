@@ -657,6 +657,8 @@ class GEBModel(Module):
 
         self.timestep_length = timestep_length
         self.n_timesteps = n_timesteps
+
+        self._simulation_start = current_time
         self.current_timestep = 0
         self._timing_start_time: float | None = None
 
@@ -1508,15 +1510,17 @@ class GEBModel(Module):
 
     @property
     def simulation_start(self) -> datetime.datetime:
-        """Get the start of the current simulation, depending on whether in spinup or run mode.
+        """Get the start of the current simulation, depending on whether in spinup, run mode or from a checkpoint.
 
         Returns:
             Datetime object representing the start of the current simulation.
         """
+        if hasattr(self, "_simulation_start"):
+            return self._simulation_start
+
         if self.in_spinup:
             return self.spinup_start
-        else:
-            return self.run_start
+        return self.run_start
 
     @property
     def simulation_end(self) -> datetime.datetime:
