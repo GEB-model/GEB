@@ -237,10 +237,11 @@ class CLIMRISK(Adapter):
                 f"No grid cells found for the requested countries: {countries}"
             )
 
-        first_longitude_index: int = int(matching_longitudes[0])
-        last_longitude_index: int = int(matching_longitudes[-1])
-        first_latitude_index: int = int(matching_latitudes[0])
-        last_latitude_index: int = int(matching_latitudes[-1])
+        # Pad values by one cell to avoid out of boundary errors in basins located at the extremes of our regions
+        first_longitude_index: int = int( min(matching_longitudes[0]-1, 0))
+        last_longitude_index: int = int( max(matching_longitudes[-1], longitudes.shape[0]-1))
+        first_latitude_index: int = int( min(matching_latitudes[0], 0))
+        last_latitude_index: int = int( max(matching_latitudes[-1], latitudes.shape[0]-1))
 
         longitude_bounds: tuple[float, float] = (
             float(longitudes[first_longitude_index]),

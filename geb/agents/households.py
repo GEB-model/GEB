@@ -66,6 +66,7 @@ class HouseholdVariables(Bucket):
     agriculture_curve: pd.DataFrame
     road_curves: pd.DataFrame
     adapted: DynamicArray
+    relocated: DynamicArray
     max_dam_buildings_content: float
     max_dam_rail: float
     max_dam_forest_m2: float
@@ -75,7 +76,6 @@ class HouseholdVariables(Bucket):
     water_demand_per_household_m3_gridded: ArrayFloat32
     households_with_postal_codes: gpd.GeoDataFrame
     education_level: DynamicArray
-    income: DynamicArray
     ead_usd_per_year: DynamicArray
     action_lead_time: DynamicArray
     buildings: gpd.GeoDataFrame
@@ -401,6 +401,9 @@ class Households(AgentBaseClass):
 
         # initiate array for adaptation status [0=not adapted, 1=dryfloodproofing implemented]
         self.var.adapted = DynamicArray(np.zeros(self.n, np.int32), max_n=self.max_n)
+
+        # initiate array for adaptation status [0=not relocated, 1=relocated]
+        self.var.relocated = DynamicArray(np.zeros(self.n, np.int32), max_n=self.max_n)
 
         # initiate array for warning state [0 = not warned, 1 = warned]
         self.var.warning_reached = DynamicArray(
@@ -1102,7 +1105,7 @@ class Households(AgentBaseClass):
         # calculate damages for adapting and not adapting households based on building footprints
         # calculate expected utilities
         damages_do_not_adapt, damages_adapt = (
-            self.flood_risk_module.calculate_building_flood_damages(dynamic=False)
+            self.flood_risk_module.calculate_building_flood_damages(dynamic=False, export_building_damages=True)
         )
         if hasattr(self, "factor_change"):
             GDP_i_t = self.var.factor_change
@@ -1215,6 +1218,7 @@ class Households(AgentBaseClass):
         household_adapting = np.where(
             np.logical_and(EU_adapt > EU_do_not_adapt, EU_adapt > EU_relocate_full)
         )[0]
+        self.var.relocated[households_relocating] = 1
         self.var.adapted[household_adapting] = 1
         self.var.time_adapted[household_adapting] += 1
 
@@ -1798,17 +1802,6 @@ class Households(AgentBaseClass):
         )
         self._cached_mapped_comids = mapped_comids
         return mapped_comids
-
-    @property
-    def adaptation_uptake_in_floodzone(self) -> np.ndarray:
-        """Extract adaptation uptake in the flood zone.
-
-        Returns:
-            A numpy array with the adaptation uptake in the flood zone.
-        """
-        if not hasattr(self, "households_exposed_to_flooding"):
-            self.update_building_attributes()
-        return self.var.adapted.data[self.households_exposed_to_flooding]
 
     @property
     def comid_of_household(self) -> np.ndarray:
