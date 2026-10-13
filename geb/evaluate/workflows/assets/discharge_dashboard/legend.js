@@ -45,8 +45,12 @@
       return;
     }
     var ticks = [];
-    for (var index = 0; index < 5; index += 1) {
-      ticks.push(config.minimum + (config.maximum - config.minimum) * index / 4);
+    if (config.ticks && Array.isArray(config.ticks) && config.ticks.length > 0) {
+      ticks = config.ticks;
+    } else {
+      for (var index = 0; index < 5; index += 1) {
+        ticks.push(config.minimum + (config.maximum - config.minimum) * index / 4);
+      }
     }
     var detail = '';
     if (config.kind === 'characteristic') {

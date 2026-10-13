@@ -94,69 +94,95 @@ class DischargeDashboardGeometries(NamedTuple):
     waterbodies: gpd.GeoDataFrame
 
 
+_EFFICIENCY_METRIC_COLORS: list[str] = [
+    "#d73027",  # deep red (-0.50)
+    "#f46d43",  # red-orange (-0.25)
+    "#fdae61",  # amber (0.00, mean flow baseline)
+    "#fee08b",  # yellow (0.25)
+    "#1a9850",  # green (0.50)
+    "#762a83",  # purple (0.75)
+    "#ffffff",  # white (1.00, exceptional)
+]
+
+_RATIO_METRIC_COLORS: list[str] = [
+    "#d7191c",  # deep red (0.00, severe underestimation / smaller area)
+    "#fdae61",  # orange/amber (0.50, moderate underestimation)
+    "#1a9850",  # green (1.00, optimal 1:1 match)
+    "#92c5de",  # light blue (1.50, moderate overestimation)
+    "#0571b0",  # dark blue (2.00, severe overestimation / larger area)
+]
+
 _METRIC_LAYER_CONFIGS: list[dict] = [
     {
         "col": "KGE",
         "name": "KGE",
-        "colors": ["red", "orange", "yellow", "blue", "green"],
-        "vmin": -1.0,
+        "colors": _EFFICIENCY_METRIC_COLORS,
+        "vmin": -0.5,
         "vmax": 1.0,
+        "ticks": [-0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0],
         "show": True,
     },
     {
         "col": "KGE_modified",
         "name": "mKGE",
-        "colors": ["red", "orange", "yellow", "blue", "green"],
-        "vmin": -1.0,
+        "colors": _EFFICIENCY_METRIC_COLORS,
+        "vmin": -0.5,
         "vmax": 1.0,
+        "ticks": [-0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0],
         "show": False,
     },
     {
         "col": "KGE_correlation",
         "name": "KGE correlation",
-        "colors": ["red", "orange", "yellow", "blue", "green"],
+        "colors": _EFFICIENCY_METRIC_COLORS,
         "vmin": 0.0,
         "vmax": 1.0,
+        "ticks": [0.0, 0.25, 0.5, 0.75, 1.0],
         "show": False,
     },
     {
         "col": "KGE_bias_ratio",
         "name": "KGE bias (β)",
-        "colors": ["red", "orange", "green", "orange", "red"],
+        "colors": _RATIO_METRIC_COLORS,
         "vmin": 0.0,
         "vmax": 2.0,
+        "ticks": [0.0, 0.5, 1.0, 1.5, 2.0],
         "show": False,
     },
     {
         "col": "KGE_variability_ratio",
         "name": "KGE variability (α)",
-        "colors": ["red", "orange", "green", "orange", "red"],
+        "colors": _RATIO_METRIC_COLORS,
         "vmin": 0.0,
         "vmax": 2.0,
+        "ticks": [0.0, 0.5, 1.0, 1.5, 2.0],
         "show": False,
     },
     {
         "col": "NSE",
         "name": "NSE",
-        "colors": ["red", "orange", "yellow", "blue", "green"],
-        "vmin": -1.0,
+        "colors": _EFFICIENCY_METRIC_COLORS,
+        "vmin": -0.5,
         "vmax": 1.0,
+        "ticks": [-0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0],
         "show": False,
     },
     {
         "col": "R2",
         "name": "Pearson r²",
-        "colors": ["red", "orange", "yellow", "blue", "green"],
+        "colors": _EFFICIENCY_METRIC_COLORS,
         "vmin": 0.0,
         "vmax": 1.0,
+        "ticks": [0.0, 0.25, 0.5, 0.75, 1.0],
         "show": False,
     },
     {
         "col": "RRMSE",
         "name": "RRMSE",
-        "colors": ["green", "blue", "yellow", "orange", "red"],
+        "colors": list(reversed(_EFFICIENCY_METRIC_COLORS)),
         "vmin": 0.0,
         "vmax": 1.0,
+        "ticks": [0.0, 0.25, 0.5, 0.75, 1.0],
         "show": False,
     },
 ]
@@ -473,8 +499,8 @@ def write_discharge_dashboard(
         .all()
     ):
         colormap_upstream = cm.LinearColormap(
-            colors=["red", "orange", "yellow", "blue", "green"],
-            vmin=0.5,
+            colors=_RATIO_METRIC_COLORS,
+            vmin=0.0,
             vmax=2.0,
             caption="Station / routing upstream area",
         )
@@ -2010,26 +2036,28 @@ def _inject_station_layer_legend_script(
     legend_configs: list[dict[str, Any]] = []
     for layer, _, column in metric_layers:
         config: dict[str, Any] = configs_by_column[column]
-        legend_configs.append(
-            {
-                "layer": layer.get_name(),
-                "kind": "continuous",
-                "name": config["name"],
-                "colors": config["colors"],
-                "minimum": config["vmin"],
-                "maximum": config["vmax"],
-                "show": config["show"],
-            }
-        )
+        legend_entry: dict[str, Any] = {
+            "layer": layer.get_name(),
+            "kind": "continuous",
+            "name": config["name"],
+            "colors": config["colors"],
+            "minimum": config["vmin"],
+            "maximum": config["vmax"],
+            "show": config["show"],
+        }
+        if "ticks" in config:
+            legend_entry["ticks"] = config["ticks"]
+        legend_configs.append(legend_entry)
     if upstream_layer is not None:
         legend_configs.append(
             {
                 "layer": upstream_layer.get_name(),
                 "kind": "continuous",
                 "name": "Upstream Area Ratio",
-                "colors": ["red", "orange", "yellow", "blue", "green"],
-                "minimum": 0.5,
+                "colors": _RATIO_METRIC_COLORS,
+                "minimum": 0.0,
                 "maximum": 2.0,
+                "ticks": [0.0, 0.5, 1.0, 1.5, 2.0],
                 "show": False,
             }
         )

@@ -5,7 +5,7 @@ import gzip
 import json
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import branca.colormap as cm
 import folium
@@ -744,3 +744,67 @@ def test_add_river_charts_to_bundle_writer(tmp_path: Path) -> None:
     assert decoded["river_20"]["timeseries"]["bankfullDischarge"] == [40.0, 45.0]
     assert decoded["river_20"]["timeseries"]["depth"] == [2.1, 2.3]
     assert decoded["river_20"]["timeseries"]["width"] == [25.0, 25.0]
+
+
+def test_metric_layer_colormap_ranges() -> None:
+    """Test that KGE, mKGE, NSE, and ratio metric colormaps are properly configured.
+
+    Ensures that efficiency metrics use 7 colors spanning from -0.5 to 1.0 with
+    yellow at 0.25 and purple at 1.0, while ratio metrics apply the mirrored
+    color scale centered at 1.0.
+    """
+    from geb.evaluate.workflows.dashboard import (
+        _EFFICIENCY_METRIC_COLORS,
+        _METRIC_LAYER_CONFIGS,
+        _RATIO_METRIC_COLORS,
+    )
+    from geb.evaluate.workflows.discharge_metrics import (
+        SKILL_SCORE_PLOT_CONFIG_BY_COLUMN,
+    )
+
+    dashboard_configs_by_col: dict[str, dict] = {
+        cfg["col"]: cfg for cfg in _METRIC_LAYER_CONFIGS
+    }
+
+    # Verify dashboard configurations for efficiency metrics
+    for metric_col in ("KGE", "KGE_modified", "NSE"):
+        cfg: dict = dashboard_configs_by_col[metric_col]
+        vmin: float = cfg["vmin"]
+        vmax: float = cfg["vmax"]
+        assert vmin == -0.5
+        assert vmax == 1.0
+        assert cfg["colors"] == _EFFICIENCY_METRIC_COLORS
+        assert len(cfg["colors"]) == 7
+        # Index 3 is yellow (#fee08b) at the exact 0.25 midpoint
+        midpoint: float = (vmin + vmax) / 2.0
+        assert midpoint == 0.25
+        assert cfg["colors"][3] == "#fee08b"
+        assert cfg["colors"][4] == "#1a9850"  # green
+        assert cfg["colors"][5] == "#762a83"  # purple
+        assert cfg["colors"][6] == "#ffffff"  # white at maximum (1.0)
+
+    # Verify dashboard configurations for ratio metrics (bias and variability)
+    for ratio_col in ("KGE_bias_ratio", "KGE_variability_ratio"):
+        ratio_cfg: dict = dashboard_configs_by_col[ratio_col]
+        assert ratio_cfg["vmin"] == 0.0
+        assert ratio_cfg["vmax"] == 2.0
+        assert ratio_cfg["colors"] == _RATIO_METRIC_COLORS
+        assert len(ratio_cfg["colors"]) == 5
+        # Red (< 1.0 underestimation)
+        assert ratio_cfg["colors"][0] == "#d7191c"
+        assert ratio_cfg["colors"][1] == "#fdae61"
+        # Center index 2 is green (#1a9850) at optimum 1.0
+        assert ratio_cfg["colors"][2] == "#1a9850"
+        # Blue (> 1.0 overestimation)
+        assert ratio_cfg["colors"][3] == "#92c5de"
+        assert ratio_cfg["colors"][4] == "#0571b0"
+
+    # Verify static plot configurations for KGE and NSE
+    for metric_col in ("KGE", "NSE"):
+        plot_cfg: dict[str, object] = SKILL_SCORE_PLOT_CONFIG_BY_COLUMN[metric_col]
+        plot_vmin: float = float(cast(float, plot_cfg["vmin"]))
+        plot_vmax: float = float(cast(float, plot_cfg["vmax"]))
+        assert plot_vmin == -0.5
+        assert plot_vmax == 1.0
+        plot_midpoint: float = (plot_vmin + plot_vmax) / 2.0
+        assert plot_midpoint == 0.25
