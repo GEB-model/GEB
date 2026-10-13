@@ -13,6 +13,10 @@ if TYPE_CHECKING:
     from geb.build import GEBModel as GEBModelBuild
 
 VERSION_UPDATES: dict[str, list[str]] = {
+    "1.0.0b35": [
+        "[update-method;setup_elevation]",
+        "[update-method;setup_coastal_sfincs_model_regions]",
+    ],
     "1.0.0b34": [
         "[update-method;setup_waterbodies]",
     ],
@@ -255,9 +259,7 @@ def get_and_maybe_do_version_updates(
                 "Updates are required to update to the current version. Run geb update-version to perform them."
             )
     elif not error_occurred:
-        logger.info(
-            "Successfully auto-updated. No further manual updates are required. Version file is updated to the current version."
-        )
+        logger.info("Successfully auto-updated.")
     else:  # error occurred but no updates to print
         logger.error(
             "An error occurred during auto-update. Please check the error message above and fix the issue. After fixing the issue, you can re-run the update command to perform the remaining updates and update the version file."

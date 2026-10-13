@@ -131,7 +131,7 @@ def _to_grid_1d(
     """
     n_grid_cells: int = grid_to_HRU.size
     out: ArrayFloat32 = np.empty(n_grid_cells, dtype=np.float32)
-    for i in prange(n_grid_cells):  # ty:ignore[not-iterable]
+    for i in prange(n_grid_cells):
         start: int = cell_start_indices[i]
         end: int = grid_to_HRU[i]
         s: np.float32 = np.float32(0.0)
@@ -166,7 +166,7 @@ def _to_grid_2d(
     n_rows: int = data.shape[0]
     n_grid_cells: int = grid_to_HRU.size
     out: TwoDArrayFloat32 = np.empty((n_rows, n_grid_cells), dtype=np.float32)
-    for i in prange(n_grid_cells):  # ty:ignore[not-iterable]
+    for i in prange(n_grid_cells):
         start: int = cell_start_indices[i]
         end: int = grid_to_HRU[i]
         for t in range(n_rows):
@@ -1248,7 +1248,7 @@ class HRUs(BaseVariables):
         use_nan: bool = np.isnan(nodatavalue)
 
         if method == "last":
-            for y in prange(ysize):  # ty:ignore[not-iterable]
+            for y in prange(ysize):
                 for x in range(xsize):
                     for sy in range(scaling):
                         for sx in range(scaling):
@@ -1266,7 +1266,7 @@ class HRUs(BaseVariables):
         elif method == "mean":
             outarray[:] = 0.0
             counts: ArrayInt32 = np.zeros(outarray.size, dtype=np.int32)
-            for y in prange(ysize):  # ty:ignore[not-iterable]
+            for y in prange(ysize):
                 for x in range(xsize):
                     for sy in range(scaling):
                         for sx in range(scaling):
@@ -1283,7 +1283,7 @@ class HRUs(BaseVariables):
                                     if val != nodatavalue:
                                         outarray[HRU] += val
                                         counts[HRU] += 1
-            for i in prange(outarray.size):  # ty:ignore[not-iterable]
+            for i in prange(outarray.size):
                 if counts[i] > 0:
                     outarray[i] /= counts[i]
                 else:
