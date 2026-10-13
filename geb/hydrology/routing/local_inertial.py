@@ -1156,20 +1156,35 @@ class LocalInertial:
         self._inertial_wb_ds_k: ArrayInt32 = np.array(wb_ds_k, dtype=np.int32)
         self._inertial_wb_ds_id: ArrayInt32 = np.array(wb_ds_id, dtype=np.int32)
 
-        # Waterbody outlets to receiving inertial reaches
+        # Waterbody outlet routing links (classified by downstream destination)
         lake_outflow_targets: list[int] = []
         lake_outflow_wbs: list[int] = []
-        for k in range(n_inertial):
-            i = n_kinematic + k
-            for j in range(max_up):
-                up_node = int(self._upstream_matrix[i, j])
-                if up_node == -1:
-                    break
-                if self._is_waterbody_outflow[up_node]:
-                    wb_id_val: int = int(self._waterbody_ids[up_node])
-                    if wb_id_val != -1:
-                        lake_outflow_targets.append(k)
-                        lake_outflow_wbs.append(wb_id_val)
+        wb_to_wb_src: list[int] = []
+        wb_to_wb_tgt: list[int] = []
+        wb_to_kin_targets: list[int] = []
+        wb_to_kin_wbs: list[int] = []
+        wb_term_ids: list[int] = []
+
+        for idx in range(len(self._wb_outflow_indices)):
+            wb_node: int = int(self._wb_outflow_indices[idx])
+            wb_id: int = int(self._waterbody_ids[wb_node])
+            if wb_id == -1:
+                continue
+            ds: int = int(self._ds_node[wb_node])
+
+            if ds == -1 or self._is_pit[wb_node]:
+                wb_term_ids.append(wb_id)
+            elif self._waterbody_ids[ds] != -1:
+                target_wb: int = int(self._waterbody_ids[ds])
+                if target_wb != wb_id:
+                    wb_to_wb_src.append(wb_id)
+                    wb_to_wb_tgt.append(target_wb)
+            elif 0 <= ds < n_kinematic:
+                wb_to_kin_targets.append(ds)
+                wb_to_kin_wbs.append(wb_id)
+            elif n_kinematic <= ds < n_kinematic + n_inertial:
+                lake_outflow_targets.append(ds - n_kinematic)
+                lake_outflow_wbs.append(wb_id)
 
         self._lake_outflow_target_k: ArrayInt32 = np.array(
             lake_outflow_targets, dtype=np.int32
@@ -1177,62 +1192,26 @@ class LocalInertial:
         self._lake_outflow_wb_id: ArrayInt32 = np.array(
             lake_outflow_wbs, dtype=np.int32
         )
-
-        # Waterbody-to-waterbody routing links
-        wb_to_wb_src: list[int] = []
-        wb_to_wb_tgt: list[int] = []
-        for idx in range(len(self._wb_outflow_indices)):
-            wb_node: int = int(self._wb_outflow_indices[idx])
-            wb_id: int = int(self._waterbody_ids[wb_node])
-            ds: int = int(self._ds_node[wb_node])
-            if ds != -1:
-                target_wb: int = int(self._waterbody_ids[ds])
-                if target_wb != -1 and target_wb != wb_id:
-                    wb_to_wb_src.append(wb_id)
-                    wb_to_wb_tgt.append(target_wb)
         self._wb_to_wb_src_wb: ArrayInt32 = np.array(wb_to_wb_src, dtype=np.int32)
         self._wb_to_wb_tgt_wb: ArrayInt32 = np.array(wb_to_wb_tgt, dtype=np.int32)
-
-        # Waterbody outflows into receiving kinematic reaches
-        wb_to_kin_targets: list[int] = []
-        wb_to_kin_wbs: list[int] = []
-        for idx in range(len(self._wb_outflow_indices)):
-            wb_node = int(self._wb_outflow_indices[idx])
-            wb_id = int(self._waterbody_ids[wb_node])
-            ds = int(self._ds_node[wb_node])
-            if 0 <= ds < n_kinematic:
-                wb_to_kin_targets.append(ds)
-                wb_to_kin_wbs.append(wb_id)
         self._wb_to_kin_target_reach: ArrayInt32 = np.array(
             wb_to_kin_targets, dtype=np.int32
         )
         self._wb_to_kin_wb_id: ArrayInt32 = np.array(wb_to_kin_wbs, dtype=np.int32)
         self._kin_wb_inflow_m3: ArrayFloat32 = np.zeros(n_kinematic, dtype=np.float32)
-
-        # Waterbodies discharging directly out of the domain
-        wb_term_ids: list[int] = []
-        for idx in range(len(self._wb_outflow_indices)):
-            wb_node = int(self._wb_outflow_indices[idx])
-            if self._ds_node[wb_node] == -1 or self._is_pit[wb_node]:
-                wb_id_term: int = int(self._waterbody_ids[wb_node])
-                if wb_id_term != -1:
-                    wb_term_ids.append(wb_id_term)
         self._wb_terminal_wb_ids: ArrayInt32 = np.array(wb_term_ids, dtype=np.int32)
 
-        # Downstream waterbodies for kinematic reaches
-        kin_ds_wb_id: ArrayInt32 = np.full(n_kinematic, -1, dtype=np.int32)
-        for i in range(n_kinematic):
-            ds = int(self._ds_node[i])
-            if ds != -1 and self._waterbody_ids[ds] != -1:
-                kin_ds_wb_id[i] = self._waterbody_ids[ds]
-        self._kin_ds_waterbody_id: ArrayInt32 = kin_ds_wb_id
-
         # Downstream targets for kinematic reaches
+        kin_ds_wb_id: ArrayInt32 = np.full(n_kinematic, -1, dtype=np.int32)
         kin_ds_reach: ArrayInt32 = np.full(n_kinematic, -1, dtype=np.int32)
         for i in range(n_kinematic):
             ds = int(self._ds_node[i])
-            if 0 <= ds < n_kinematic:
-                kin_ds_reach[i] = ds
+            if ds != -1:
+                if self._waterbody_ids[ds] != -1:
+                    kin_ds_wb_id[i] = self._waterbody_ids[ds]
+                elif 0 <= ds < n_kinematic:
+                    kin_ds_reach[i] = ds
+        self._kin_ds_waterbody_id: ArrayInt32 = kin_ds_wb_id
         self._kin_ds_reach: ArrayInt32 = kin_ds_reach
         self._kin_inflow_m3_s: ArrayFloat32 = np.zeros(n_kinematic, dtype=np.float32)
 
@@ -1343,57 +1322,6 @@ class LocalInertial:
             shape_exponent=self._shape_exponent_inertial,
             bankfull_depth=self._bankfull_depth_inertial,
             floodplain_width=self._floodplain_width_inertial,
-        )
-
-        n_nodes: int = len(self._river_length)
-        self._inverse_reach_length: ArrayFloat32 = np.zeros(n_nodes, dtype=np.float32)
-        self._inverse_shape_exponent_plus_one: ArrayFloat32 = np.zeros(
-            n_nodes, dtype=np.float32
-        )
-        self._bankfull_area: ArrayFloat32 = np.zeros(n_nodes, dtype=np.float32)
-        self._bankfull_volume: ArrayFloat32 = np.zeros(n_nodes, dtype=np.float32)
-        self._bankfull_perimeter: ArrayFloat32 = np.zeros(n_nodes, dtype=np.float32)
-        self._floodplain_side_slope: ArrayFloat32 = np.zeros(n_nodes, dtype=np.float32)
-        self._floodplain_depth_threshold: ArrayFloat32 = np.zeros(
-            n_nodes, dtype=np.float32
-        )
-        self._floodplain_area_threshold: ArrayFloat32 = np.zeros(
-            n_nodes, dtype=np.float32
-        )
-        self._sqrt_one_plus_floodplain_slope_squared: ArrayFloat32 = np.zeros(
-            n_nodes, dtype=np.float32
-        )
-        self._width_over_sqrt_bankfull_depth: ArrayFloat32 = np.zeros(
-            n_nodes, dtype=np.float32
-        )
-
-        self._inverse_reach_length[inertial_start:inertial_end] = (
-            self._inverse_reach_length_inertial
-        )
-        self._inverse_shape_exponent_plus_one[inertial_start:inertial_end] = (
-            self._inverse_shape_exponent_plus_one_inertial
-        )
-        self._bankfull_area[inertial_start:inertial_end] = self._bankfull_area_inertial
-        self._bankfull_volume[inertial_start:inertial_end] = (
-            self._bankfull_volume_inertial
-        )
-        self._bankfull_perimeter[inertial_start:inertial_end] = (
-            self._bankfull_perimeter_inertial
-        )
-        self._floodplain_side_slope[inertial_start:inertial_end] = (
-            self._floodplain_side_slope_inertial
-        )
-        self._floodplain_depth_threshold[inertial_start:inertial_end] = (
-            self._floodplain_depth_threshold_inertial
-        )
-        self._floodplain_area_threshold[inertial_start:inertial_end] = (
-            self._floodplain_area_threshold_inertial
-        )
-        self._sqrt_one_plus_floodplain_slope_squared[inertial_start:inertial_end] = (
-            self._sqrt_one_plus_floodplain_slope_squared_inertial
-        )
-        self._width_over_sqrt_bankfull_depth[inertial_start:inertial_end] = (
-            self._width_over_sqrt_bankfull_depth_inertial
         )
 
         self._stage_vol_coeff_inertial: ArrayFloat32 = (
