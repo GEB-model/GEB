@@ -815,7 +815,7 @@ class Hydrography(BuildModelBase):
             y=self.subgrid_factor,
             boundary="exact",
             coord_func="mean",
-        ).mean()  # ty:ignore[unresolved-attribute]
+        ).mean()
         surface_area_ratio.attrs["_FillValue"] = np.nan
 
         surface_area_ratio: xr.DataArray = snap_to_grid(
@@ -1027,7 +1027,7 @@ class Hydrography(BuildModelBase):
             y=self.ldd_scale_factor,
             boundary="exact",
             coord_func="mean",
-        ).sum()  # ty:ignore[unresolved-attribute]
+        ).sum()
 
         routing_streams_length.attrs["_FillValue"] = np.nan
         routing_streams_length = snap_to_grid(routing_streams_length, self.grid["mask"])
@@ -1540,7 +1540,7 @@ class Hydrography(BuildModelBase):
         """Sets up the coastal sfincs model regions."""
         if self.geom["routing/subbasins"]["is_coastal"].any():
             # load elevation data
-            elevation = self.other["DEM/fabdem"]
+            elevation = self.other["DEM/fathomdem"]
             # load the lecz mask
             low_elevation_coastal_zone_mask = (
                 self.create_low_elevation_coastal_zone_mask()
