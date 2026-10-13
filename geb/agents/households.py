@@ -1558,7 +1558,7 @@ class Households(AgentBaseClass):
             if function=="GDP":
                 ssp_map_name:str = f"SSP{ssp}{rcp}_{function}.zarr"
             else:
-                ssp_map_name:str = f"SSP{ssp}{rcp}_{function}.zarr"
+                ssp_map_name:str = f"SSP{ssp}{rcp}_{function}_p{p}.zarr"
             ssp_map_path: Path = (
                 self.model.input_folder / "other" / "ssp_maps" / ssp_map_name
             )
