@@ -43,6 +43,11 @@ from .inertial_substeps import (
     GEOM_OV_RIVER_WIDTH,
     GEOM_OV_SQRT_ONE_PLUS_FLOODPLAIN_SLOPE_SQUARED,
     INERTIAL_PARALLEL_THRESHOLD,
+    InertialGeometry,
+    InertialTopology,
+    RetentionCoupling,
+    SubstepBuffers,
+    WaterbodyCoupling,
     _compute_stage_from_storage_inertial,
     _gather_inputs,
     _run_inertial_substeps_parallel,
@@ -114,6 +119,130 @@ def _transfer_waterbody_outflows(
             waterbody_storage_m3[wb_id_up] -= rel_vol
             kin_wb_inflow_m3[tgt_reach] += wb_of
             inertial_outflow_per_waterbody[wb_id_up] = np.float32(0.0)
+
+
+@njit(inline="always")
+def _solve_kinematic_reach(
+    reach_idx: int,
+    upstream_inflow_m3_s: np.float32,
+    node_sideflow: np.float32,
+    dt_f32: np.float32,
+    inv_dt_f32: np.float32,
+    previous_discharge: np.float32,
+    evaporation_vol_m3: np.float32,
+    river_storage_alpha: np.float32,
+    river_storage_beta: np.float32,
+    river_length: np.float32,
+    river_storage_m3: ArrayFloat64,
+    updated_discharge_m3_s: ArrayFloat32,
+    actual_evaporation_m3: ArrayFloat32,
+    over_abstraction_m3: ArrayFloat32,
+    retention_node_id: ArrayInt32,
+    retention_storage_m3: ArrayFloat32,
+    retention_max_storage_m3: ArrayFloat32,
+    controlled_retention: ArrayBool,
+    retention_activation_threshold_m3_s: ArrayFloat32,
+    retention_basin_release_threshold_factor: np.float32,
+    retention_inflow_m3: ArrayFloat32,
+    retention_outflow_m3: ArrayFloat32,
+) -> np.float32:
+    """Solves flood retention, kinematic wave routing, evaporation, and mass balance for a single reach.
+
+    Args:
+        reach_idx: Index of reach to update.
+        upstream_inflow_m3_s: Aggregated upstream inflow discharge rate (m³/s).
+        node_sideflow: Net lateral inflow volume (including waterbody release) for reach (m³).
+        dt_f32: Routing timestep duration (seconds).
+        inv_dt_f32: Reciprocal of routing timestep (1/s).
+        previous_discharge: Discharge at start of timestep (m³/s).
+        evaporation_vol_m3: Potential evaporation volume for reach (m³).
+        river_storage_alpha: Kinematic wave alpha parameter.
+        river_storage_beta: Kinematic wave beta parameter.
+        river_length: Channel reach length (meters).
+        river_storage_m3: Storage volume array for all reaches (m³).
+        updated_discharge_m3_s: Output array to store computed discharge (m³/s).
+        actual_evaporation_m3: Output array to store realized evaporation volume (m³).
+        over_abstraction_m3: Output array accumulating unmet extraction volume (m³).
+        retention_node_id: Reach-to-retention basin mapping index (-1 if none).
+        retention_storage_m3: Current retention storage volume array (m³).
+        retention_max_storage_m3: Capacity limit per retention basin (m³).
+        controlled_retention: Control logic flags per retention basin.
+        retention_activation_threshold_m3_s: Discharge threshold triggering diversion (m³/s).
+        retention_basin_release_threshold_factor: Release threshold parameter.
+        retention_inflow_m3: Retention basin cumulative diversion volume (m³).
+        retention_outflow_m3: Retention basin cumulative release volume (m³).
+
+    Returns:
+        Computed downstream discharge rate for reach (m³/s).
+    """
+    ret_id: int = retention_node_id[reach_idx]
+    if ret_id != -1:
+        discharge_before_diversion: np.float32 = max(
+            upstream_inflow_m3_s, np.float32(0.0)
+        ) + (node_sideflow * inv_dt_f32)
+
+        discharge_at_basin_vol: np.float32 = (
+            upstream_inflow_m3_s * dt_f32 + node_sideflow
+        )
+        inflow_limit: np.float32 = np.float32(0.20) * retention_max_storage_m3[ret_id]
+        max_outflow_limit: np.float32 = (
+            np.float32(0.05) * retention_max_storage_m3[ret_id]
+        )
+        is_rising_limb: bool = bool(discharge_before_diversion > previous_discharge)
+
+        (
+            diverted_volume,
+            outflow_volume,
+            retention_storage_m3[ret_id],
+            discharge_at_basin_vol,
+        ) = compute_retention_routing(
+            dt=dt_f32,
+            river_volume_m3=discharge_at_basin_vol,
+            discharge_before_diversion_m3_s=discharge_before_diversion,
+            is_rising_limb=bool(is_rising_limb),
+            retention_storage_m3=retention_storage_m3[ret_id],
+            retention_max_storage_m3=retention_max_storage_m3[ret_id],
+            controlled_retention=controlled_retention[ret_id],
+            activation_threshold_m3_s=retention_activation_threshold_m3_s[ret_id],
+            release_threshold_factor=retention_basin_release_threshold_factor,
+            inflow_limit_m3=inflow_limit,
+            max_outflow_limit_m3=max_outflow_limit,
+        )
+
+        retention_inflow_m3[ret_id] += diverted_volume
+        retention_outflow_m3[ret_id] += outflow_volume
+        node_sideflow = discharge_at_basin_vol - upstream_inflow_m3_s * dt_f32
+
+    # Solve kinematic wave routing for outflow discharge and channel evaporation.
+    kinematic_discharge, act_evap_rate = update_node_kinematic(
+        inflow_m3_s=upstream_inflow_m3_s,
+        previous_discharge_m3_s=previous_discharge,
+        sideflow_m3_s=node_sideflow * inv_dt_f32,
+        evaporation_m3_s=evaporation_vol_m3 * inv_dt_f32,
+        river_storage_alpha=river_storage_alpha,
+        river_storage_beta=river_storage_beta,
+        timestep_s=dt_f32,
+        river_length_m=river_length,
+    )
+
+    kinematic_discharge = max(kinematic_discharge, np.float32(0.0))
+    updated_discharge_m3_s[reach_idx] = kinematic_discharge
+
+    evap_vol: np.float32 = act_evap_rate * dt_f32
+    actual_evaporation_m3[reach_idx] = evap_vol
+
+    # Update reach storage (mass balance) and track over-abstraction deficit if any.
+    inflow_vol: np.float32 = upstream_inflow_m3_s * dt_f32 + node_sideflow
+    outflow_vol: np.float32 = kinematic_discharge * dt_f32
+    river_storage_m3[reach_idx] += (
+        np.float64(inflow_vol) - np.float64(outflow_vol) - np.float64(evap_vol)
+    )
+
+    if river_storage_m3[reach_idx] < np.float64(0.0):
+        over_abstraction_m3[reach_idx] += np.float32(-river_storage_m3[reach_idx])
+        river_storage_m3[reach_idx] = np.float64(0.0)
+
+    return kinematic_discharge
 
 
 def _run_kinematic_step(
@@ -198,79 +327,30 @@ def _run_kinematic_step(
             node_sideflow += kin_wb_inflow_m3[i]
             kin_wb_inflow_m3[i] = np.float32(0.0)
 
-        upstream_inflow_m3_s: np.float32 = np.float32(0.0)
-
-        # Divert peak floodwater to (or release water from) retention basins if present.
-        ret_id: int = retention_node_id[i]
-        if ret_id != -1:
-            discharge_before_diversion: np.float32 = max(
-                upstream_inflow_m3_s, np.float32(0.0)
-            ) + (node_sideflow * inv_dt_f32)
-
-            discharge_at_basin_vol: np.float32 = (
-                upstream_inflow_m3_s * dt_f32 + node_sideflow
-            )
-            inflow_limit: np.float32 = (
-                np.float32(0.20) * retention_max_storage_m3[ret_id]
-            )
-            max_outflow_limit: np.float32 = (
-                np.float32(0.05) * retention_max_storage_m3[ret_id]
-            )
-            is_rising_limb: bool = (
-                discharge_before_diversion > previous_discharge_m3_s[i]
-            )
-
-            (
-                diverted_volume,
-                outflow_volume,
-                retention_storage_m3[ret_id],
-                discharge_at_basin_vol,
-            ) = compute_retention_routing(
-                dt=dt_f32,
-                river_volume_m3=discharge_at_basin_vol,
-                discharge_before_diversion_m3_s=discharge_before_diversion,
-                is_rising_limb=bool(is_rising_limb),
-                retention_storage_m3=retention_storage_m3[ret_id],
-                retention_max_storage_m3=retention_max_storage_m3[ret_id],
-                controlled_retention=controlled_retention[ret_id],
-                activation_threshold_m3_s=retention_activation_threshold_m3_s[ret_id],
-                release_threshold_factor=retention_basin_release_threshold_factor,
-                inflow_limit_m3=np.float32(inflow_limit),
-                max_outflow_limit_m3=np.float32(max_outflow_limit),
-            )
-
-            retention_inflow_m3[ret_id] += diverted_volume
-            retention_outflow_m3[ret_id] += outflow_volume
-            node_sideflow = discharge_at_basin_vol - upstream_inflow_m3_s * dt_f32
-
-        # Solve kinematic wave routing for outflow discharge and channel evaporation.
-        kinematic_discharge, act_evap_rate = update_node_kinematic(
-            inflow_m3_s=upstream_inflow_m3_s,
-            previous_discharge_m3_s=previous_discharge_m3_s[i],
-            sideflow_m3_s=node_sideflow * inv_dt_f32,
-            evaporation_m3_s=evaporation_m3[i] * inv_dt_f32,
+        _solve_kinematic_reach(
+            reach_idx=i,
+            upstream_inflow_m3_s=np.float32(0.0),
+            node_sideflow=node_sideflow,
+            dt_f32=dt_f32,
+            inv_dt_f32=inv_dt_f32,
+            previous_discharge=previous_discharge_m3_s[i],
+            evaporation_vol_m3=evaporation_m3[i],
             river_storage_alpha=river_storage_alpha[i],
             river_storage_beta=river_storage_beta[i],
-            timestep_s=dt_f32,
-            river_length_m=river_length[i],
+            river_length=river_length[i],
+            river_storage_m3=river_storage_m3,
+            updated_discharge_m3_s=updated_discharge_m3_s,
+            actual_evaporation_m3=actual_evaporation_m3,
+            over_abstraction_m3=over_abstraction_m3,
+            retention_node_id=retention_node_id,
+            retention_storage_m3=retention_storage_m3,
+            retention_max_storage_m3=retention_max_storage_m3,
+            controlled_retention=controlled_retention,
+            retention_activation_threshold_m3_s=retention_activation_threshold_m3_s,
+            retention_basin_release_threshold_factor=retention_basin_release_threshold_factor,
+            retention_inflow_m3=retention_inflow_m3,
+            retention_outflow_m3=retention_outflow_m3,
         )
-
-        kinematic_discharge = max(kinematic_discharge, np.float32(0.0))
-        updated_discharge_m3_s[i] = kinematic_discharge
-
-        evap_vol: np.float32 = act_evap_rate * dt_f32
-        actual_evaporation_m3[i] = evap_vol
-
-        # Update reach storage (mass balance) and track over-abstraction deficit if any.
-        inflow_vol: np.float32 = upstream_inflow_m3_s * dt_f32 + node_sideflow
-        outflow_vol: np.float32 = kinematic_discharge * dt_f32
-        river_storage_m3[i] += (
-            np.float64(inflow_vol) - np.float64(outflow_vol) - np.float64(evap_vol)
-        )
-
-        if river_storage_m3[i] < np.float64(0.0):
-            over_abstraction_m3[i] += np.float32(-river_storage_m3[i])
-            river_storage_m3[i] = np.float64(0.0)
 
     # Pass headwater outflows to downstream reaches and waterbodies.
     # This must be done in serial to avoid race conditions.
@@ -296,446 +376,56 @@ def _run_kinematic_step(
     # Because reaches are sorted topologically, all upstream reaches feeding reach `i`
     # have already finished and deposited their outflow into kin_inflow_m3_s[i].
     for i in range(n_kin_headwater, n_kinematic):
-        node_sideflow = sideflow_m3[i]
+        node_sideflow: np.float32 = sideflow_m3[i]
         if len(wb_to_kin_target_reach) > 0:
             node_sideflow += kin_wb_inflow_m3[i]
             kin_wb_inflow_m3[i] = np.float32(0.0)
 
-        upstream_inflow_m3_s = kin_inflow_m3_s[i]
-
-        # Manage flood retention diversions/releases.
-        ret_id = retention_node_id[i]
-        if ret_id != -1:
-            discharge_before_diversion = max(upstream_inflow_m3_s, np.float32(0.0)) + (
-                node_sideflow * inv_dt_f32
-            )
-
-            discharge_at_basin_vol = upstream_inflow_m3_s * dt_f32 + node_sideflow
-            inflow_limit = np.float32(0.20) * retention_max_storage_m3[ret_id]
-            max_outflow_limit = np.float32(0.05) * retention_max_storage_m3[ret_id]
-            is_rising_limb = discharge_before_diversion > previous_discharge_m3_s[i]
-
-            (
-                diverted_volume,
-                outflow_volume,
-                retention_storage_m3[ret_id],
-                discharge_at_basin_vol,
-            ) = compute_retention_routing(
-                dt=dt_f32,
-                river_volume_m3=discharge_at_basin_vol,
-                discharge_before_diversion_m3_s=discharge_before_diversion,
-                is_rising_limb=bool(is_rising_limb),
-                retention_storage_m3=retention_storage_m3[ret_id],
-                retention_max_storage_m3=retention_max_storage_m3[ret_id],
-                controlled_retention=controlled_retention[ret_id],
-                activation_threshold_m3_s=retention_activation_threshold_m3_s[ret_id],
-                release_threshold_factor=retention_basin_release_threshold_factor,
-                inflow_limit_m3=np.float32(inflow_limit),
-                max_outflow_limit_m3=np.float32(max_outflow_limit),
-            )
-
-            retention_inflow_m3[ret_id] += diverted_volume
-            retention_outflow_m3[ret_id] += outflow_volume
-            node_sideflow = discharge_at_basin_vol - upstream_inflow_m3_s * dt_f32
-
-        # Solve kinematic wave routing for this reach.
-        kinematic_discharge, act_evap_rate = update_node_kinematic(
-            inflow_m3_s=upstream_inflow_m3_s,
-            previous_discharge_m3_s=previous_discharge_m3_s[i],
-            sideflow_m3_s=node_sideflow * inv_dt_f32,
-            evaporation_m3_s=evaporation_m3[i] * inv_dt_f32,
+        kinematic_discharge: np.float32 = _solve_kinematic_reach(
+            reach_idx=i,
+            upstream_inflow_m3_s=kin_inflow_m3_s[i],
+            node_sideflow=node_sideflow,
+            dt_f32=dt_f32,
+            inv_dt_f32=inv_dt_f32,
+            previous_discharge=previous_discharge_m3_s[i],
+            evaporation_vol_m3=evaporation_m3[i],
             river_storage_alpha=river_storage_alpha[i],
             river_storage_beta=river_storage_beta[i],
-            timestep_s=dt_f32,
-            river_length_m=river_length[i],
+            river_length=river_length[i],
+            river_storage_m3=river_storage_m3,
+            updated_discharge_m3_s=updated_discharge_m3_s,
+            actual_evaporation_m3=actual_evaporation_m3,
+            over_abstraction_m3=over_abstraction_m3,
+            retention_node_id=retention_node_id,
+            retention_storage_m3=retention_storage_m3,
+            retention_max_storage_m3=retention_max_storage_m3,
+            controlled_retention=controlled_retention,
+            retention_activation_threshold_m3_s=retention_activation_threshold_m3_s,
+            retention_basin_release_threshold_factor=retention_basin_release_threshold_factor,
+            retention_inflow_m3=retention_inflow_m3,
+            retention_outflow_m3=retention_outflow_m3,
         )
 
-        kinematic_discharge = max(kinematic_discharge, np.float32(0.0))
-        updated_discharge_m3_s[i] = kinematic_discharge
-
-        evap_vol = act_evap_rate * dt_f32
-        actual_evaporation_m3[i] = evap_vol
-
-        # Update reach storage (mass balance) and waterbody storage.
-        inflow_vol = upstream_inflow_m3_s * dt_f32 + node_sideflow
-        outflow_vol = kinematic_discharge * dt_f32
-        river_storage_m3[i] += (
-            np.float64(inflow_vol) - np.float64(outflow_vol) - np.float64(evap_vol)
-        )
-
-        wb_ds_id = kin_ds_waterbody_id[i]
+        wb_ds_id: int = kin_ds_waterbody_id[i]
         if wb_ds_id != -1:
+            outflow_vol: np.float32 = kinematic_discharge * dt_f32
             waterbody_storage_m3[wb_ds_id] += np.float64(outflow_vol)
             if outflow_vol > np.float32(0.0):
                 waterbody_inflow_m3[wb_ds_id] += outflow_vol
 
-        if river_storage_m3[i] < np.float64(0.0):
-            over_abstraction_m3[i] += np.float32(-river_storage_m3[i])
-            river_storage_m3[i] = np.float64(0.0)
-
         if __debug__:
-            if not np.isfinite(updated_discharge_m3_s[i]):
+            if not np.isfinite(kinematic_discharge):
                 raise ValueError(
                     "Non-finite discharge computed in kinematic wave reach."
                 )
 
-        # Push outflow into downstream reach for subsequent steps in the topological sweep.
-        ds_reach = kin_ds_reach[i]
+        ds_reach: int = kin_ds_reach[i]
         if ds_reach != -1:
             kin_inflow_m3_s[ds_reach] += kinematic_discharge
 
 
-# 2 versions of _run_kinematic_step: one serial, one parallel
 _run_kinematic_step_serial = njit(parallel=False, cache=True)(_run_kinematic_step)
 _run_kinematic_step_parallel = njit(parallel=True, cache=True)(_run_kinematic_step)
-
-
-@njit(cache=True)
-def _run_inertial_routing_step(
-    dt_f32: np.float32,
-    inv_dt_f32: np.float32,
-    n_inertial: int,
-    inertial_up_kin_offsets: ArrayInt32,
-    inertial_up_kin_indices: ArrayInt32,
-    inertial_up_kin_reach_idx: ArrayInt32,
-    inertial_up_offsets: ArrayInt32,
-    inertial_up_indices: ArrayInt32,
-    inertial_up_reach_idx: ArrayInt32,
-    previous_discharge_m3_s_inertial: ArrayFloat32,
-    updated_discharge_m3_s: ArrayFloat32,
-    river_storage_m3_inertial: ArrayFloat64,
-    sideflow_m3_inertial: ArrayFloat32,
-    geom_inbank: TwoDArrayFloat32,
-    geom_overbank: TwoDArrayFloat32,
-    geom_cfl: TwoDArrayFloat32,
-    ds_boundary_type: ArrayInt32,
-    ds_inertial_k: ArrayInt32,
-    ds_stage_idx: ArrayInt32,
-    ds_bed_elevation: ArrayFloat32,
-    pit_slope_inertial: ArrayFloat32,
-    min_dt_buf: ArrayFloat32,
-    evaporation_m3_inertial: ArrayFloat32,
-    over_abstraction_m3_inertial: ArrayFloat32,
-    actual_evaporation_m3_inertial: ArrayFloat32,
-    updated_discharge_m3_s_inertial: ArrayFloat32,
-    kinematic_inflow_rate_inertial: ArrayFloat32,
-    discharge_vol_sum_inertial: ArrayFloat32,
-    wb_outflow_substep_m3_buf: ArrayFloat64,
-    retention_inflow_limit_sub_buf: ArrayFloat64,
-    retention_max_outflow_limit_sub_buf: ArrayFloat64,
-    wb_outflow_avail_buf: ArrayFloat64,
-    wb_extra_lateral_accum_m3: ArrayFloat64,
-    substep_discharge_inertial: ArrayFloat32,
-    wb_lake_area: ArrayFloat32,
-    wb_lake_factor: ArrayFloat32,
-    wb_outflow_height: ArrayFloat32,
-    wb_outflow_bed_elev: ArrayFloat32,
-    stage_buf: ArrayFloat32,
-    inertial_retention_k: ArrayInt32,
-    inertial_retention_id: ArrayInt32,
-    retention_storage_m3: ArrayFloat32,
-    retention_max_storage_m3: ArrayFloat32,
-    controlled_retention: ArrayBool,
-    retention_activation_threshold_m3_s: ArrayFloat32,
-    retention_basin_release_threshold_factor: np.float32,
-    waterbody_inflow_m3: ArrayFloat32,
-    retention_inflow_m3: ArrayFloat32,
-    retention_outflow_m3: ArrayFloat32,
-    waterbody_storage_m3: ArrayFloat64,
-    outflow_per_waterbody_m3: ArrayFloat32,
-    inertial_wb_ds_k: ArrayInt32,
-    inertial_wb_ds_id: ArrayInt32,
-    lake_outflow_target_k: ArrayInt32,
-    lake_outflow_wb_id: ArrayInt32,
-    wb_terminal_wb_ids: ArrayInt32,
-    rev_demand_buf: ArrayFloat32,
-    wb_release_volume_substep: ArrayFloat32,
-    inertial_topo_order: ArrayInt32,
-    total_flow_rate_buf: ArrayFloat32,
-    wb_to_wb_src_wb: ArrayInt32,
-    wb_to_wb_tgt_wb: ArrayInt32,
-    terminal_wb_outflow_accum_m3: ArrayFloat32,
-) -> tuple[
-    int,
-    np.float32,
-    int,
-    np.float32,
-    np.float32,
-    np.float32,
-    np.float32,
-    np.float32,
-    np.float32,
-    np.float32,
-]:
-    """Routes 1D local inertial substeps and resolves lake and retention couplings.
-
-    Args:
-        dt_f32: Macro-timestep duration (seconds).
-        inv_dt_f32: Inverse macro-timestep (1/s).
-        n_inertial: Number of local inertial reaches.
-        inertial_up_kin_offsets: CSR offsets of kinematic waves feeding inertial reaches.
-        inertial_up_kin_indices: CSR reach indices of upstream kinematic nodes.
-        inertial_up_kin_reach_idx: Optimized upstream kinematic reach map.
-        inertial_up_offsets: CSR offsets of inertial reaches upstream.
-        inertial_up_indices: CSR indices of inertial reaches upstream.
-        inertial_up_reach_idx: Direct upstream index for single-parent reaches (-1 if none, negative if multi).
-        previous_discharge_m3_s_inertial: Previous substep discharge for inertial reaches (m³/s).
-        updated_discharge_m3_s: Discharge array updated by kinematic routing (m³/s).
-        river_storage_m3_inertial: Reach storage for inertial reaches (m³).
-        sideflow_m3_inertial: Sideflow volume per reach for macro-timestep (m³).
-        geom_inbank: Static in-bank channel geometry lookup table.
-        geom_overbank: Static compound overbank geometry lookup table.
-        geom_cfl: Static CFL stability parameters table.
-        ds_boundary_type: Downstream boundary condition type flags.
-        ds_inertial_k: Downstream inertial reach indices.
-        ds_stage_idx: Downstream stage buffer lookup index.
-        ds_bed_elevation: Downstream boundary bed elevation (meters).
-        pit_slope_inertial: Terminal pit bed slope.
-        min_dt_buf: Scratch buffer for adaptive CFL timestep calculation.
-        evaporation_m3_inertial: Potential evaporation volume for macro-timestep (m³).
-        over_abstraction_m3_inertial: Output over-abstraction deficit volume (m³).
-        actual_evaporation_m3_inertial: Output actual evaporation volume (m³).
-        updated_discharge_m3_s_inertial: Output time-averaged discharge (m³/s).
-        kinematic_inflow_rate_inertial: Inflow rate from upstream kinematic reaches (m³/s).
-        discharge_vol_sum_inertial: Accumulator for volume integrated across substeps (m³).
-        wb_outflow_substep_m3_buf: Substep waterbody outflow volume buffer (m³).
-        retention_inflow_limit_sub_buf: Substep retention inflow volume limit buffer (m³).
-        retention_max_outflow_limit_sub_buf: Substep retention outflow volume limit buffer (m³).
-        wb_outflow_avail_buf: Available waterbody outflow volume buffer (m³).
-        wb_extra_lateral_accum_m3: Accumulator for extra lateral lake volume (m³).
-        substep_discharge_inertial: Substep discharge state vector (m³/s).
-        wb_lake_area: Waterbody surface area (m²).
-        wb_lake_factor: Lake weir/rating multiplier.
-        wb_outflow_height: Weir crest height above lake bed (meters).
-        wb_outflow_bed_elev: Bed elevation at waterbody outflow outlet (meters).
-        stage_buf: Unified stage buffer for reaches and connected waterbodies (meters).
-        inertial_retention_k: Inertial reach indices connected to retention basins.
-        inertial_retention_id: Retention basin IDs connected to inertial reaches.
-        retention_storage_m3: Retention basin current storage volume (m³).
-        retention_max_storage_m3: Retention basin capacity (m³).
-        controlled_retention: Boolean flag per retention basin for controlled diversion.
-        retention_activation_threshold_m3_s: Discharge threshold triggering diversion (m³/s).
-        retention_basin_release_threshold_factor: Capacity fraction triggering controlled release.
-        waterbody_inflow_m3: Waterbody cumulative inflow volume (m³).
-        retention_inflow_m3: Retention basin cumulative inflow volume (m³).
-        retention_outflow_m3: Retention basin cumulative outflow volume (m³).
-        waterbody_storage_m3: Waterbody storage volume (m³).
-        outflow_per_waterbody_m3: Prescribed outflow volume per waterbody (m³).
-        inertial_wb_ds_k: Inertial reach indices draining into a waterbody.
-        inertial_wb_ds_id: Waterbody IDs receiving inflow from inertial reaches.
-        lake_outflow_target_k: Inertial reach indices receiving waterbody outflow.
-        lake_outflow_wb_id: Waterbody IDs discharging into inertial reaches.
-        wb_terminal_wb_ids: Waterbody IDs that discharge directly out of model domain.
-        rev_demand_buf: Scratch buffer for reverse flow demand accumulation (m³/s).
-        wb_release_volume_substep: Substep waterbody release volume buffer per reach (m³).
-        inertial_topo_order: Topological traversal order of inertial reaches.
-        total_flow_rate_buf: Pre-allocated workspace buffer storing peak flow rate per reach (m³/s).
-        wb_to_wb_src_wb: Source waterbody IDs discharging into another connected waterbody.
-        wb_to_wb_tgt_wb: Target waterbody IDs receiving cascading waterbody releases.
-        terminal_wb_outflow_accum_m3: Accumulator array for boundary waterbody release volume (m³).
-
-    Returns:
-        A tuple of (num_inertial_substeps, terminal_wb_outflow_m3, limiting_reach_idx, min_stable_timestep_s):
-            - num_inertial_substeps: Number of adaptive substeps executed (-1 if n_inertial == 0).
-            - terminal_wb_outflow_m3: Total outflow volume exiting domain via terminal waterbodies (m³).
-            - limiting_reach_idx: Reach index requiring the smallest stable timestep (-1 if n_inertial == 0).
-            - min_stable_timestep_s: Minimum stable timestep duration (seconds, -1.0 if n_inertial == 0).
-    """
-    num_inertial_substeps: int = -1  # for return if no inertial reaches are present
-    limiting_reach_idx: int = -1
-    min_stable_timestep_s: np.float32 = np.float32(-1.0)
-    h_vol: np.float32 = np.float32(0.0)
-    h_flow: np.float32 = np.float32(0.0)
-    h_gov: np.float32 = np.float32(0.0)
-    celerity: np.float32 = np.float32(0.0)
-    limiting_flow: np.float32 = np.float32(0.0)
-    limiting_storage: np.float32 = np.float32(0.0)
-
-    if n_inertial > 0:
-        (
-            num_inertial_substeps,
-            limiting_reach_idx,
-            min_stable_timestep_s,
-            h_vol,
-            h_flow,
-            h_gov,
-            celerity,
-            limiting_flow,
-            limiting_storage,
-        ) = compute_inertial_substeps_cfl(
-            dt_f32=dt_f32,
-            inv_dt_f32=inv_dt_f32,
-            n_inertial=n_inertial,
-            inertial_up_kin_offsets=inertial_up_kin_offsets,
-            inertial_up_kin_indices=inertial_up_kin_indices,
-            inertial_up_kin_reach_idx=inertial_up_kin_reach_idx,
-            inertial_up_offsets=inertial_up_offsets,
-            inertial_up_indices=inertial_up_indices,
-            inertial_up_reach_idx=inertial_up_reach_idx,
-            previous_discharge_m3_s_inertial=previous_discharge_m3_s_inertial,
-            updated_discharge_m3_s=updated_discharge_m3_s,
-            river_storage_m3_inertial=river_storage_m3_inertial,
-            sideflow_m3_inertial=sideflow_m3_inertial,
-            geom_inbank=geom_inbank,
-            geom_overbank=geom_overbank,
-            geom_cfl=geom_cfl,
-            min_dt_buf=min_dt_buf,
-            kinematic_inflow_rate_inertial=kinematic_inflow_rate_inertial,
-            lake_outflow_target_k=lake_outflow_target_k,
-            lake_outflow_wb_id=lake_outflow_wb_id,
-            outflow_per_waterbody_m3=outflow_per_waterbody_m3,
-            waterbody_storage_m3=waterbody_storage_m3,
-            wb_lake_area=wb_lake_area,
-            wb_lake_factor=wb_lake_factor,
-            wb_outflow_height=wb_outflow_height,
-            wb_outflow_bed_elev=wb_outflow_bed_elev,
-            inertial_topo_order=inertial_topo_order,
-            total_flow_rate_buf=total_flow_rate_buf,
-        )
-
-        substep_discharge_inertial[:] = previous_discharge_m3_s_inertial[:]
-
-        if n_inertial >= INERTIAL_PARALLEL_THRESHOLD:
-            num_inertial_substeps = _run_inertial_substeps_parallel(
-                num_inertial_substeps=num_inertial_substeps,
-                dt_f32=dt_f32,
-                n_inertial=n_inertial,
-                substep_discharge_m3_s=substep_discharge_inertial,
-                river_storage_m3_inertial=river_storage_m3_inertial,
-                sideflow_m3_inertial=sideflow_m3_inertial,
-                evaporation_m3_inertial=evaporation_m3_inertial,
-                waterbody_storage_m3=waterbody_storage_m3,
-                outflow_per_waterbody_m3=outflow_per_waterbody_m3,
-                geom_inbank=geom_inbank,
-                geom_overbank=geom_overbank,
-                retention_storage_m3=retention_storage_m3,
-                retention_max_storage_m3=retention_max_storage_m3,
-                inertial_retention_k=inertial_retention_k,
-                inertial_retention_id=inertial_retention_id,
-                controlled_retention=controlled_retention,
-                retention_activation_threshold_m3_s=retention_activation_threshold_m3_s,
-                retention_basin_release_threshold_factor=retention_basin_release_threshold_factor,
-                pit_slope_inertial=pit_slope_inertial,
-                over_abstraction_m3_inertial=over_abstraction_m3_inertial,
-                actual_evaporation_m3_inertial=actual_evaporation_m3_inertial,
-                waterbody_inflow_m3=waterbody_inflow_m3,
-                retention_inflow_m3=retention_inflow_m3,
-                retention_outflow_m3=retention_outflow_m3,
-                updated_discharge_m3_s_inertial=updated_discharge_m3_s_inertial,
-                kinematic_inflow_rate=kinematic_inflow_rate_inertial,
-                discharge_vol_sum_m3_inertial=discharge_vol_sum_inertial,
-                wb_outflow_substep_m3_buf=wb_outflow_substep_m3_buf,
-                retention_inflow_limit_sub_buf=retention_inflow_limit_sub_buf,
-                retention_max_outflow_limit_sub_buf=retention_max_outflow_limit_sub_buf,
-                wb_outflow_avail_buf=wb_outflow_avail_buf,
-                wb_extra_lateral_accum_m3=wb_extra_lateral_accum_m3,
-                wb_lake_area=wb_lake_area,
-                wb_lake_factor=wb_lake_factor,
-                wb_outflow_height=wb_outflow_height,
-                wb_outflow_bed_elev=wb_outflow_bed_elev,
-                stage_buf=stage_buf,
-                ds_boundary_type=ds_boundary_type,
-                ds_inertial_k=ds_inertial_k,
-                ds_stage_idx=ds_stage_idx,
-                ds_bed_elevation=ds_bed_elevation,
-                inertial_up_offsets=inertial_up_offsets,
-                inertial_up_indices=inertial_up_indices,
-                inertial_up_reach_idx=inertial_up_reach_idx,
-                inertial_wb_ds_k=inertial_wb_ds_k,
-                inertial_wb_ds_id=inertial_wb_ds_id,
-                lake_outflow_target_k=lake_outflow_target_k,
-                lake_outflow_wb_id=lake_outflow_wb_id,
-                geom_cfl=geom_cfl,
-                min_dt_buf=min_dt_buf,
-                rev_demand_buf=rev_demand_buf,
-                wb_release_volume_substep=wb_release_volume_substep,
-                inertial_topo_order=inertial_topo_order,
-                total_flow_rate_buf=total_flow_rate_buf,
-                wb_to_wb_src_wb=wb_to_wb_src_wb,
-                wb_to_wb_tgt_wb=wb_to_wb_tgt_wb,
-                wb_terminal_wb_ids=wb_terminal_wb_ids,
-                terminal_wb_outflow_accum_m3=terminal_wb_outflow_accum_m3,
-            )
-        else:
-            num_inertial_substeps = _run_inertial_substeps_serial(
-                num_inertial_substeps=num_inertial_substeps,
-                dt_f32=dt_f32,
-                n_inertial=n_inertial,
-                substep_discharge_m3_s=substep_discharge_inertial,
-                river_storage_m3_inertial=river_storage_m3_inertial,
-                sideflow_m3_inertial=sideflow_m3_inertial,
-                evaporation_m3_inertial=evaporation_m3_inertial,
-                waterbody_storage_m3=waterbody_storage_m3,
-                outflow_per_waterbody_m3=outflow_per_waterbody_m3,
-                geom_inbank=geom_inbank,
-                geom_overbank=geom_overbank,
-                retention_storage_m3=retention_storage_m3,
-                retention_max_storage_m3=retention_max_storage_m3,
-                inertial_retention_k=inertial_retention_k,
-                inertial_retention_id=inertial_retention_id,
-                controlled_retention=controlled_retention,
-                retention_activation_threshold_m3_s=retention_activation_threshold_m3_s,
-                retention_basin_release_threshold_factor=retention_basin_release_threshold_factor,
-                pit_slope_inertial=pit_slope_inertial,
-                over_abstraction_m3_inertial=over_abstraction_m3_inertial,
-                actual_evaporation_m3_inertial=actual_evaporation_m3_inertial,
-                waterbody_inflow_m3=waterbody_inflow_m3,
-                retention_inflow_m3=retention_inflow_m3,
-                retention_outflow_m3=retention_outflow_m3,
-                updated_discharge_m3_s_inertial=updated_discharge_m3_s_inertial,
-                kinematic_inflow_rate=kinematic_inflow_rate_inertial,
-                discharge_vol_sum_m3_inertial=discharge_vol_sum_inertial,
-                wb_outflow_substep_m3_buf=wb_outflow_substep_m3_buf,
-                retention_inflow_limit_sub_buf=retention_inflow_limit_sub_buf,
-                retention_max_outflow_limit_sub_buf=retention_max_outflow_limit_sub_buf,
-                wb_outflow_avail_buf=wb_outflow_avail_buf,
-                wb_extra_lateral_accum_m3=wb_extra_lateral_accum_m3,
-                wb_lake_area=wb_lake_area,
-                wb_lake_factor=wb_lake_factor,
-                wb_outflow_height=wb_outflow_height,
-                wb_outflow_bed_elev=wb_outflow_bed_elev,
-                stage_buf=stage_buf,
-                ds_boundary_type=ds_boundary_type,
-                ds_inertial_k=ds_inertial_k,
-                ds_stage_idx=ds_stage_idx,
-                ds_bed_elevation=ds_bed_elevation,
-                inertial_up_offsets=inertial_up_offsets,
-                inertial_up_indices=inertial_up_indices,
-                inertial_up_reach_idx=inertial_up_reach_idx,
-                inertial_wb_ds_k=inertial_wb_ds_k,
-                inertial_wb_ds_id=inertial_wb_ds_id,
-                lake_outflow_target_k=lake_outflow_target_k,
-                lake_outflow_wb_id=lake_outflow_wb_id,
-                geom_cfl=geom_cfl,
-                min_dt_buf=min_dt_buf,
-                rev_demand_buf=rev_demand_buf,
-                wb_release_volume_substep=wb_release_volume_substep,
-                inertial_topo_order=inertial_topo_order,
-                total_flow_rate_buf=total_flow_rate_buf,
-                wb_to_wb_src_wb=wb_to_wb_src_wb,
-                wb_to_wb_tgt_wb=wb_to_wb_tgt_wb,
-                wb_terminal_wb_ids=wb_terminal_wb_ids,
-                terminal_wb_outflow_accum_m3=terminal_wb_outflow_accum_m3,
-            )
-
-    # Waterbodies discharging directly out of the domain (at pit or boundary cells)
-    # have their releases transferred and accumulated during internal adaptive substepping.
-    # terminal_wb_outflow_accum_m3 is a 1-element mutable array passed by reference into
-    # Numba JIT to accumulate in-place, so index [0] extracts the scalar total:
-    terminal_wb_outflow_m3: np.float32 = terminal_wb_outflow_accum_m3[0]
-
-    return (
-        num_inertial_substeps,
-        terminal_wb_outflow_m3,
-        limiting_reach_idx,
-        min_stable_timestep_s,
-        h_vol,
-        h_flow,
-        h_gov,
-        celerity,
-        limiting_flow,
-        limiting_storage,
-    )
 
 
 class LocalInertial:
@@ -1189,6 +879,36 @@ class LocalInertial:
         self._discharge_out: ArrayFloat32 = np.empty(n_up_nodes, dtype=np.float32)
         self._actual_evap_out: ArrayFloat32 = np.empty(n_up_nodes, dtype=np.float32)
         self._over_abs_out: ArrayFloat32 = np.empty(n_up_nodes, dtype=np.float32)
+
+        self._geometry: InertialGeometry = InertialGeometry(
+            geom_inbank=self._geom_inbank,
+            geom_overbank=self._geom_overbank,
+            geom_cfl=self._geom_cfl,
+            pit_slope_inertial=self._pit_slope_inertial,
+        )
+        self._topology: InertialTopology = InertialTopology(
+            inertial_up_offsets=self._inertial_up_offsets,
+            inertial_up_indices=self._inertial_up_indices,
+            inertial_up_reach_idx=self._inertial_up_reach_idx,
+            ds_boundary_type=self._ds_boundary_type,
+            ds_inertial_k=self._ds_inertial_k,
+            ds_stage_idx=self._ds_stage_idx,
+            ds_bed_elevation=self._ds_bed_elevation,
+            inertial_topo_order=self._inertial_topo_order,
+        )
+        self._substep_buffers: SubstepBuffers = SubstepBuffers(
+            stage_buf=self._stage_buf,
+            min_dt_buf=self._min_dt_buf,
+            rev_demand_buf=self._rev_demand_buf,
+            wb_release_volume_substep=self._wb_release_volume_substep,
+            total_flow_rate_buf=self._total_flow_rate_buf,
+            discharge_vol_sum_inertial=self._discharge_vol_sum_inertial,
+            retention_inflow_limit_sub_buf=self._retention_inflow_limit_sub_buf,
+            retention_max_outflow_limit_sub_buf=self._retention_max_outflow_limit_sub_buf,
+            wb_outflow_avail_buf=self._wb_outflow_avail_buf,
+            wb_extra_lateral_accum_m3=self._wb_extra_lateral_accum_m3,
+            terminal_wb_outflow_accum_m3=self._terminal_wb_outflow_accum_m3,
+        )
 
     def initialize_stage(
         self,
@@ -1786,6 +1506,12 @@ class LocalInertial:
         self.bankfull_depth = bankfull_depth_m.astype(np.float32)
         self._bankfull_depth = self.bankfull_depth[self.sorted_idxs]
         self._compute_static_geometry()
+        self._geometry = InertialGeometry(
+            geom_inbank=self._geom_inbank,
+            geom_overbank=self._geom_overbank,
+            geom_cfl=self._geom_cfl,
+            pit_slope_inertial=self._pit_slope_inertial,
+        )
 
     def calculate_river_storage_from_discharge(
         self,
@@ -1901,37 +1627,24 @@ class LocalInertial:
         river_storage_m3: ArrayFloat64,
         sideflow_m3: ArrayFloat32,
         evaporation_m3: ArrayFloat32,
-        waterbody_storage_m3: ArrayFloat64,
-        outflow_per_waterbody_m3: ArrayFloat32,
         kin_ds_reach: ArrayInt32,
         kin_inflow_m3_s: ArrayFloat32,
         n_kin_headwater: int,
         inertial_up_kin_offsets: ArrayInt32,
         inertial_up_kin_indices: ArrayInt32,
         inertial_up_kin_reach_idx: ArrayInt32,
-        wb_to_wb_src_wb: ArrayInt32,
-        wb_to_wb_tgt_wb: ArrayInt32,
         wb_to_kin_target_reach: ArrayInt32,
         wb_to_kin_wb_id: ArrayInt32,
         kin_wb_inflow_m3: ArrayFloat32,
-        wb_terminal_wb_ids: ArrayInt32,
         kin_ds_waterbody_id: ArrayInt32,
         river_storage_alpha: ArrayFloat32,
         river_storage_beta: ArrayFloat32,
         river_length: ArrayFloat32,
-        retention_storage_m3: ArrayFloat32,
-        retention_max_storage_m3: ArrayFloat32,
         retention_node_id: ArrayInt32,
-        controlled_retention: ArrayBool,
-        retention_activation_threshold_m3_s: ArrayFloat32,
-        retention_basin_release_threshold_factor: np.float32,
         n_kinematic: int,
         n_inertial: int,
         over_abstraction_m3: ArrayFloat32,
         actual_evaporation_m3: ArrayFloat32,
-        waterbody_inflow_m3: ArrayFloat32,
-        retention_inflow_m3: ArrayFloat32,
-        retention_outflow_m3: ArrayFloat32,
         updated_discharge_m3_s: ArrayFloat32,
         river_storage_m3_inertial: ArrayFloat64,
         previous_discharge_m3_s_inertial: ArrayFloat32,
@@ -1941,41 +1654,12 @@ class LocalInertial:
         actual_evaporation_m3_inertial: ArrayFloat32,
         updated_discharge_m3_s_inertial: ArrayFloat32,
         kinematic_inflow_rate_inertial: ArrayFloat32,
-        discharge_vol_sum_inertial: ArrayFloat32,
-        wb_outflow_substep_m3_buf: ArrayFloat64,
-        retention_inflow_limit_sub_buf: ArrayFloat64,
-        retention_max_outflow_limit_sub_buf: ArrayFloat64,
-        wb_outflow_avail_buf: ArrayFloat64,
-        wb_extra_lateral_accum_m3: ArrayFloat64,
         substep_discharge_inertial: ArrayFloat32,
-        wb_lake_area: ArrayFloat32,
-        wb_lake_factor: ArrayFloat32,
-        wb_outflow_height: ArrayFloat32,
-        wb_outflow_bed_elev: ArrayFloat32,
-        stage_buf: ArrayFloat32,
-        ds_boundary_type: ArrayInt32,
-        ds_inertial_k: ArrayInt32,
-        ds_stage_idx: ArrayInt32,
-        ds_bed_elevation: ArrayFloat32,
-        min_dt_buf: ArrayFloat32,
-        inertial_up_offsets: ArrayInt32,
-        inertial_up_indices: ArrayInt32,
-        inertial_up_reach_idx: ArrayInt32,
-        inertial_retention_k: ArrayInt32,
-        inertial_retention_id: ArrayInt32,
-        inertial_wb_ds_k: ArrayInt32,
-        inertial_wb_ds_id: ArrayInt32,
-        lake_outflow_target_k: ArrayInt32,
-        lake_outflow_wb_id: ArrayInt32,
-        geom_inbank: TwoDArrayFloat32,
-        geom_overbank: TwoDArrayFloat32,
-        geom_cfl: TwoDArrayFloat32,
-        pit_slope_inertial: ArrayFloat32,
-        rev_demand_buf: ArrayFloat32,
-        wb_release_volume_substep: ArrayFloat32,
-        inertial_topo_order: ArrayInt32,
-        total_flow_rate_buf: ArrayFloat32,
-        terminal_wb_outflow_accum_m3: ArrayFloat32,
+        geom: InertialGeometry,
+        topo: InertialTopology,
+        wb: WaterbodyCoupling,
+        ret: RetentionCoupling,
+        buffers: SubstepBuffers,
     ) -> tuple[
         ArrayFloat32,
         ArrayFloat64,
@@ -1995,16 +1679,78 @@ class LocalInertial:
         np.float32,
         np.float32,
     ]:
+        """Routes a single macro-timestep across kinematic and inertial subdomains.
+
+        Args:
+            routing_timestep_s: Duration of macro timestep (seconds).
+            previous_discharge_m3_s: Pre-allocated discharge array at start of timestep (m³/s).
+            river_storage_m3: Full-network reach water storage array (m³).
+            sideflow_m3: Full-network lateral sideflow volume array (m³).
+            evaporation_m3: Full-network potential channel evaporation volume array (m³).
+            kin_ds_reach: Downstream kinematic target reach index per kinematic reach.
+            kin_inflow_m3_s: Kinematic upstream tributary inflow rate accumulator (m³/s).
+            n_kin_headwater: Number of independent kinematic headwater reaches.
+            inertial_up_kin_offsets: CSR offsets of kinematic waves feeding inertial reaches.
+            inertial_up_kin_indices: CSR reach indices of upstream kinematic nodes.
+            inertial_up_kin_reach_idx: Precomputed direct upstream kinematic node map.
+            wb_to_kin_target_reach: Kinematic reach indices receiving waterbody outflow releases.
+            wb_to_kin_wb_id: Source waterbody IDs discharging into kinematic reaches.
+            kin_wb_inflow_m3: Buffer storing waterbody releases to kinematic reaches (m³).
+            kin_ds_waterbody_id: Waterbody ID receiving inflow from kinematic reaches.
+            river_storage_alpha: Kinematic wave alpha parameter per reach.
+            river_storage_beta: Kinematic wave beta parameter per reach.
+            river_length: Channel length per reach (meters).
+            retention_node_id: Identifier map linking reaches to retention basins.
+            n_kinematic: Number of reaches routed with kinematic wave.
+            n_inertial: Number of reaches routed with local inertial equations.
+            over_abstraction_m3: Full-network over-abstraction deficit volume accumulator (m³).
+            actual_evaporation_m3: Full-network actual evaporation volume accumulator (m³).
+            updated_discharge_m3_s: Output full-network time-averaged discharge (m³/s).
+            river_storage_m3_inertial: View of reach storage for inertial subdomain (m³).
+            previous_discharge_m3_s_inertial: View of initial discharge for inertial reaches (m³/s).
+            sideflow_m3_inertial: View of lateral sideflow for inertial subdomain (m³).
+            evaporation_m3_inertial: View of potential evaporation for inertial subdomain (m³).
+            over_abstraction_m3_inertial: View of over-abstraction for inertial subdomain (m³).
+            actual_evaporation_m3_inertial: View of actual evaporation for inertial subdomain (m³).
+            updated_discharge_m3_s_inertial: View of output discharge for inertial subdomain (m³/s).
+            kinematic_inflow_rate_inertial: Workspace storing upstream kinematic inflow rates (m³/s).
+            substep_discharge_inertial: Dynamic substep discharge state vector (m³/s).
+            geom: Static channel and floodplain geometry lookup tables.
+            topo: Network connectivity and topological ordering structure.
+            wb: Waterbody coupling parameters, links, and storage state arrays.
+            ret: Flood retention basin state arrays, capacities, and control parameters.
+            buffers: Pre-allocated workspace scratch buffers.
+
+        Returns:
+            A tuple containing updated state arrays and diagnostic CFL substepping statistics:
+                - updated_discharge_m3_s: Full-network time-averaged discharge (m³/s).
+                - river_storage_m3: Full-network updated reach storage volume (m³).
+                - actual_evaporation_m3: Full-network actual evaporation volume (m³).
+                - over_abstraction_m3: Full-network unfulfilled abstraction deficit (m³).
+                - waterbody_inflow_m3: Cumulative inflow volume per waterbody (m³).
+                - retention_inflow_m3: Cumulative diverted inflow volume per retention basin (m³).
+                - retention_outflow_m3: Cumulative released outflow volume per retention basin (m³).
+                - terminal_wb_outflow_m3: Total outflow volume exiting domain via terminal waterbodies (m³).
+                - num_inertial_substeps: Total number of adaptive inertial substeps executed.
+                - limiting_reach_idx: Reach index requiring the smallest stable timestep.
+                - min_stable_timestep_s: Minimum stable timestep duration across all reaches (seconds).
+                - h_vol: Hydraulic depth from stored channel volume in limiting reach (meters).
+                - h_flow: Hydraulic depth estimated from oncoming flow in limiting reach (meters).
+                - h_gov: Governing hydraulic depth in limiting reach (meters).
+                - celerity: Shallow-water wave celerity in limiting reach (m/s).
+                - limiting_flow: Peak flow rate in limiting reach (m³/s).
+                - limiting_storage: Stored volume in limiting reach (m³).
+        """
         dt_f32: np.float32 = np.float32(routing_timestep_s)
-        terminal_wb_outflow_accum_m3[0] = np.float32(0.0)
-        inv_dt_f32: np.float32 = np.float32(1.0) / dt_f32
+        inv_dt_f32: np.float32 = np.float32(1.0 / dt_f32)
+
         n_cells: int = len(river_storage_m3)
 
         over_abstraction_m3.fill(0.0)
         actual_evaporation_m3.fill(0.0)
-        waterbody_inflow_m3.fill(0.0)
-        retention_inflow_m3.fill(0.0)
-        retention_outflow_m3.fill(0.0)
+        wb.inflow_m3.fill(0.0)
+        ret.inflow_m3.fill(0.0)
+        ret.outflow_m3.fill(0.0)
         updated_discharge_m3_s.fill(0.0)
         kinematic_inflow_rate_inertial.fill(0.0)
 
@@ -2013,11 +1759,11 @@ class LocalInertial:
             updated_discharge_m3_s[i] = np.float32(np.nan)
 
         _transfer_waterbody_outflows(
-            wb_to_wb_src_wb=wb_to_wb_src_wb,
-            wb_to_wb_tgt_wb=wb_to_wb_tgt_wb,
-            inertial_outflow_per_waterbody=outflow_per_waterbody_m3,
-            waterbody_storage_m3=waterbody_storage_m3,
-            waterbody_inflow_m3=waterbody_inflow_m3,
+            wb_to_wb_src_wb=wb.wb_to_wb_src_wb,
+            wb_to_wb_tgt_wb=wb.wb_to_wb_tgt_wb,
+            inertial_outflow_per_waterbody=wb.prescribed_outflow_m3,
+            waterbody_storage_m3=wb.storage_m3,
+            waterbody_inflow_m3=wb.inflow_m3,
             wb_to_kin_target_reach=wb_to_kin_target_reach,
             wb_to_kin_wb_id=wb_to_kin_wb_id,
             kin_wb_inflow_m3=kin_wb_inflow_m3,
@@ -2034,7 +1780,7 @@ class LocalInertial:
                     river_storage_m3=river_storage_m3,
                     sideflow_m3=sideflow_m3,
                     evaporation_m3=evaporation_m3,
-                    waterbody_storage_m3=waterbody_storage_m3,
+                    waterbody_storage_m3=wb.storage_m3,
                     kin_ds_reach=kin_ds_reach,
                     kin_inflow_m3_s=kin_inflow_m3_s,
                     wb_to_kin_target_reach=wb_to_kin_target_reach,
@@ -2043,17 +1789,17 @@ class LocalInertial:
                     river_storage_alpha=river_storage_alpha,
                     river_storage_beta=river_storage_beta,
                     river_length=river_length,
-                    retention_storage_m3=retention_storage_m3,
-                    retention_max_storage_m3=retention_max_storage_m3,
+                    retention_storage_m3=ret.storage_m3,
+                    retention_max_storage_m3=ret.max_storage_m3,
                     retention_node_id=retention_node_id,
-                    controlled_retention=controlled_retention,
-                    retention_activation_threshold_m3_s=retention_activation_threshold_m3_s,
-                    retention_basin_release_threshold_factor=retention_basin_release_threshold_factor,
+                    controlled_retention=ret.controlled_retention,
+                    retention_activation_threshold_m3_s=ret.activation_threshold_m3_s,
+                    retention_basin_release_threshold_factor=ret.release_threshold_factor,
                     over_abstraction_m3=over_abstraction_m3,
                     actual_evaporation_m3=actual_evaporation_m3,
-                    waterbody_inflow_m3=waterbody_inflow_m3,
-                    retention_inflow_m3=retention_inflow_m3,
-                    retention_outflow_m3=retention_outflow_m3,
+                    waterbody_inflow_m3=wb.inflow_m3,
+                    retention_inflow_m3=ret.inflow_m3,
+                    retention_outflow_m3=ret.outflow_m3,
                     updated_discharge_m3_s=updated_discharge_m3_s,
                 )
             else:
@@ -2066,7 +1812,7 @@ class LocalInertial:
                     river_storage_m3=river_storage_m3,
                     sideflow_m3=sideflow_m3,
                     evaporation_m3=evaporation_m3,
-                    waterbody_storage_m3=waterbody_storage_m3,
+                    waterbody_storage_m3=wb.storage_m3,
                     kin_ds_reach=kin_ds_reach,
                     kin_inflow_m3_s=kin_inflow_m3_s,
                     wb_to_kin_target_reach=wb_to_kin_target_reach,
@@ -2075,105 +1821,110 @@ class LocalInertial:
                     river_storage_alpha=river_storage_alpha,
                     river_storage_beta=river_storage_beta,
                     river_length=river_length,
-                    retention_storage_m3=retention_storage_m3,
-                    retention_max_storage_m3=retention_max_storage_m3,
+                    retention_storage_m3=ret.storage_m3,
+                    retention_max_storage_m3=ret.max_storage_m3,
                     retention_node_id=retention_node_id,
-                    controlled_retention=controlled_retention,
-                    retention_activation_threshold_m3_s=retention_activation_threshold_m3_s,
-                    retention_basin_release_threshold_factor=retention_basin_release_threshold_factor,
+                    controlled_retention=ret.controlled_retention,
+                    retention_activation_threshold_m3_s=ret.activation_threshold_m3_s,
+                    retention_basin_release_threshold_factor=ret.release_threshold_factor,
                     over_abstraction_m3=over_abstraction_m3,
                     actual_evaporation_m3=actual_evaporation_m3,
-                    waterbody_inflow_m3=waterbody_inflow_m3,
-                    retention_inflow_m3=retention_inflow_m3,
-                    retention_outflow_m3=retention_outflow_m3,
+                    waterbody_inflow_m3=wb.inflow_m3,
+                    retention_inflow_m3=ret.inflow_m3,
+                    retention_outflow_m3=ret.outflow_m3,
                     updated_discharge_m3_s=updated_discharge_m3_s,
                 )
 
-        (
-            num_inertial_substeps,
-            terminal_wb_outflow_m3,
-            limiting_reach_idx,
-            min_stable_timestep_s,
-            h_vol,
-            h_flow,
-            h_gov,
-            celerity,
-            limiting_flow,
-            limiting_storage,
-        ) = _run_inertial_routing_step(
-            dt_f32=dt_f32,
-            inv_dt_f32=inv_dt_f32,
-            n_inertial=n_inertial,
-            inertial_up_kin_offsets=inertial_up_kin_offsets,
-            inertial_up_kin_indices=inertial_up_kin_indices,
-            inertial_up_kin_reach_idx=inertial_up_kin_reach_idx,
-            inertial_up_offsets=inertial_up_offsets,
-            inertial_up_indices=inertial_up_indices,
-            inertial_up_reach_idx=inertial_up_reach_idx,
-            previous_discharge_m3_s_inertial=previous_discharge_m3_s_inertial,
-            updated_discharge_m3_s=updated_discharge_m3_s,
-            river_storage_m3_inertial=river_storage_m3_inertial,
-            sideflow_m3_inertial=sideflow_m3_inertial,
-            geom_inbank=geom_inbank,
-            geom_overbank=geom_overbank,
-            geom_cfl=geom_cfl,
-            ds_boundary_type=ds_boundary_type,
-            ds_inertial_k=ds_inertial_k,
-            ds_stage_idx=ds_stage_idx,
-            ds_bed_elevation=ds_bed_elevation,
-            pit_slope_inertial=pit_slope_inertial,
-            min_dt_buf=min_dt_buf,
-            evaporation_m3_inertial=evaporation_m3_inertial,
-            over_abstraction_m3_inertial=over_abstraction_m3_inertial,
-            actual_evaporation_m3_inertial=actual_evaporation_m3_inertial,
-            updated_discharge_m3_s_inertial=updated_discharge_m3_s_inertial,
-            kinematic_inflow_rate_inertial=kinematic_inflow_rate_inertial,
-            discharge_vol_sum_inertial=discharge_vol_sum_inertial,
-            wb_outflow_substep_m3_buf=wb_outflow_substep_m3_buf,
-            retention_inflow_limit_sub_buf=retention_inflow_limit_sub_buf,
-            retention_max_outflow_limit_sub_buf=retention_max_outflow_limit_sub_buf,
-            wb_outflow_avail_buf=wb_outflow_avail_buf,
-            wb_extra_lateral_accum_m3=wb_extra_lateral_accum_m3,
-            substep_discharge_inertial=substep_discharge_inertial,
-            wb_lake_area=wb_lake_area,
-            wb_lake_factor=wb_lake_factor,
-            wb_outflow_height=wb_outflow_height,
-            wb_outflow_bed_elev=wb_outflow_bed_elev,
-            stage_buf=stage_buf,
-            inertial_retention_k=inertial_retention_k,
-            inertial_retention_id=inertial_retention_id,
-            retention_storage_m3=retention_storage_m3,
-            retention_max_storage_m3=retention_max_storage_m3,
-            controlled_retention=controlled_retention,
-            retention_activation_threshold_m3_s=retention_activation_threshold_m3_s,
-            retention_basin_release_threshold_factor=retention_basin_release_threshold_factor,
-            waterbody_inflow_m3=waterbody_inflow_m3,
-            retention_inflow_m3=retention_inflow_m3,
-            retention_outflow_m3=retention_outflow_m3,
-            waterbody_storage_m3=waterbody_storage_m3,
-            outflow_per_waterbody_m3=outflow_per_waterbody_m3,
-            inertial_wb_ds_k=inertial_wb_ds_k,
-            inertial_wb_ds_id=inertial_wb_ds_id,
-            lake_outflow_target_k=lake_outflow_target_k,
-            lake_outflow_wb_id=lake_outflow_wb_id,
-            wb_terminal_wb_ids=wb_terminal_wb_ids,
-            rev_demand_buf=rev_demand_buf,
-            wb_release_volume_substep=wb_release_volume_substep,
-            inertial_topo_order=inertial_topo_order,
-            total_flow_rate_buf=total_flow_rate_buf,
-            wb_to_wb_src_wb=wb_to_wb_src_wb,
-            wb_to_wb_tgt_wb=wb_to_wb_tgt_wb,
-            terminal_wb_outflow_accum_m3=terminal_wb_outflow_accum_m3,
-        )
+        num_inertial_substeps: int = -1
+        limiting_reach_idx: int = -1
+        min_stable_timestep_s: np.float32 = np.float32(-1.0)
+        h_vol: np.float32 = np.float32(0.0)
+        h_flow: np.float32 = np.float32(0.0)
+        h_gov: np.float32 = np.float32(0.0)
+        celerity: np.float32 = np.float32(0.0)
+        limiting_flow: np.float32 = np.float32(0.0)
+        limiting_storage: np.float32 = np.float32(0.0)
+
+        if n_inertial > 0:
+            (
+                num_inertial_substeps,
+                limiting_reach_idx,
+                min_stable_timestep_s,
+                h_vol,
+                h_flow,
+                h_gov,
+                celerity,
+                limiting_flow,
+                limiting_storage,
+            ) = compute_inertial_substeps_cfl(
+                dt_f32=dt_f32,
+                inv_dt_f32=inv_dt_f32,
+                n_inertial=n_inertial,
+                inertial_up_kin_offsets=inertial_up_kin_offsets,
+                inertial_up_kin_indices=inertial_up_kin_indices,
+                inertial_up_kin_reach_idx=inertial_up_kin_reach_idx,
+                previous_discharge_m3_s_inertial=previous_discharge_m3_s_inertial,
+                updated_discharge_m3_s=updated_discharge_m3_s,
+                river_storage_m3_inertial=river_storage_m3_inertial,
+                sideflow_m3_inertial=sideflow_m3_inertial,
+                kinematic_inflow_rate_inertial=kinematic_inflow_rate_inertial,
+                geom=geom,
+                topo=topo,
+                wb=wb,
+                buffers=buffers,
+            )
+
+            substep_discharge_inertial[:] = previous_discharge_m3_s_inertial[:]
+
+            if n_inertial >= INERTIAL_PARALLEL_THRESHOLD:
+                num_inertial_substeps = _run_inertial_substeps_parallel(
+                    num_inertial_substeps=num_inertial_substeps,
+                    dt_f32=dt_f32,
+                    n_inertial=n_inertial,
+                    substep_discharge_m3_s=substep_discharge_inertial,
+                    river_storage_m3_inertial=river_storage_m3_inertial,
+                    sideflow_m3_inertial=sideflow_m3_inertial,
+                    evaporation_m3_inertial=evaporation_m3_inertial,
+                    over_abstraction_m3_inertial=over_abstraction_m3_inertial,
+                    actual_evaporation_m3_inertial=actual_evaporation_m3_inertial,
+                    updated_discharge_m3_s_inertial=updated_discharge_m3_s_inertial,
+                    kinematic_inflow_rate=kinematic_inflow_rate_inertial,
+                    geom=geom,
+                    topo=topo,
+                    wb=wb,
+                    ret=ret,
+                    buffers=buffers,
+                )
+            else:
+                num_inertial_substeps = _run_inertial_substeps_serial(
+                    num_inertial_substeps=num_inertial_substeps,
+                    dt_f32=dt_f32,
+                    n_inertial=n_inertial,
+                    substep_discharge_m3_s=substep_discharge_inertial,
+                    river_storage_m3_inertial=river_storage_m3_inertial,
+                    sideflow_m3_inertial=sideflow_m3_inertial,
+                    evaporation_m3_inertial=evaporation_m3_inertial,
+                    over_abstraction_m3_inertial=over_abstraction_m3_inertial,
+                    actual_evaporation_m3_inertial=actual_evaporation_m3_inertial,
+                    updated_discharge_m3_s_inertial=updated_discharge_m3_s_inertial,
+                    kinematic_inflow_rate=kinematic_inflow_rate_inertial,
+                    geom=geom,
+                    topo=topo,
+                    wb=wb,
+                    ret=ret,
+                    buffers=buffers,
+                )
+
+        terminal_wb_outflow_m3: np.float32 = buffers.terminal_wb_outflow_accum_m3[0]
 
         return (
             updated_discharge_m3_s,
             river_storage_m3,
             actual_evaporation_m3,
             over_abstraction_m3,
-            waterbody_inflow_m3,
-            retention_inflow_m3,
-            retention_outflow_m3,
+            wb.inflow_m3,
+            ret.inflow_m3,
+            ret.outflow_m3,
             terminal_wb_outflow_m3,
             num_inertial_substeps,
             limiting_reach_idx,
@@ -2418,6 +2169,34 @@ class LocalInertial:
         sideflow_inertial: float = float(np.sum(self._sideflow_perm_inertial))
 
         self._iteration_count += 1
+        wb_coupling: WaterbodyCoupling = WaterbodyCoupling(
+            storage_m3=waterbody_storage_m3,
+            prescribed_outflow_m3=outflow_per_waterbody_m3,
+            inflow_m3=self._waterbody_inflow_perm,
+            lake_area=self._wb_lake_area,
+            lake_factor=self._wb_lake_factor,
+            outflow_height=self._wb_outflow_height,
+            outflow_bed_elev=self._wb_outflow_bed_elev,
+            inertial_wb_ds_k=self._inertial_wb_ds_k,
+            inertial_wb_ds_id=self._inertial_wb_ds_id,
+            lake_outflow_target_k=self._lake_outflow_target_k,
+            lake_outflow_wb_id=self._lake_outflow_wb_id,
+            wb_to_wb_src_wb=self._wb_to_wb_src_wb,
+            wb_to_wb_tgt_wb=self._wb_to_wb_tgt_wb,
+            wb_terminal_wb_ids=self._wb_terminal_wb_ids,
+        )
+        ret_coupling: RetentionCoupling = RetentionCoupling(
+            storage_m3=retention_storage_m3,
+            inflow_m3=self._retention_inflow_perm,
+            outflow_m3=self._retention_outflow_perm,
+            max_storage_m3=self.retention_max_storage_m3,
+            inertial_retention_k=self._inertial_retention_k,
+            inertial_retention_id=self._inertial_retention_id,
+            controlled_retention=self.controlled_retention,
+            activation_threshold_m3_s=retention_activation_threshold_m3_s,
+            release_threshold_factor=self.retention_basin_release_threshold_factor,
+        )
+
         (
             discharge_perm,
             river_storage_perm,
@@ -2442,37 +2221,24 @@ class LocalInertial:
             river_storage_m3=self._river_storage_perm,
             sideflow_m3=self._sideflow_perm,
             evaporation_m3=self._evaporation_perm,
-            waterbody_storage_m3=waterbody_storage_m3,
-            outflow_per_waterbody_m3=outflow_per_waterbody_m3,
             kin_ds_reach=self._kin_ds_reach,
             kin_inflow_m3_s=self._kin_inflow_m3_s,
             n_kin_headwater=self.n_kin_headwater,
             inertial_up_kin_offsets=self._inertial_up_kin_offsets,
             inertial_up_kin_indices=self._inertial_up_kin_indices,
             inertial_up_kin_reach_idx=self._inertial_up_kin_reach_idx,
-            wb_to_wb_src_wb=self._wb_to_wb_src_wb,
-            wb_to_wb_tgt_wb=self._wb_to_wb_tgt_wb,
             wb_to_kin_target_reach=self._wb_to_kin_target_reach,
             wb_to_kin_wb_id=self._wb_to_kin_wb_id,
             kin_wb_inflow_m3=self._kin_wb_inflow_m3,
-            wb_terminal_wb_ids=self._wb_terminal_wb_ids,
             kin_ds_waterbody_id=self._kin_ds_waterbody_id,
             river_storage_alpha=self._alpha_perm,
             river_storage_beta=self._beta_perm,
             river_length=self._river_length,
-            retention_storage_m3=retention_storage_m3,
-            retention_max_storage_m3=self.retention_max_storage_m3,
             retention_node_id=self._retention_node_id,
-            controlled_retention=self.controlled_retention,
-            retention_activation_threshold_m3_s=retention_activation_threshold_m3_s,
-            retention_basin_release_threshold_factor=self.retention_basin_release_threshold_factor,
             n_kinematic=self.n_kinematic,
             n_inertial=self.n_inertial,
             over_abstraction_m3=self._over_abstraction_perm,
             actual_evaporation_m3=self._actual_evaporation_perm,
-            waterbody_inflow_m3=self._waterbody_inflow_perm,
-            retention_inflow_m3=self._retention_inflow_perm,
-            retention_outflow_m3=self._retention_outflow_perm,
             updated_discharge_m3_s=self._updated_discharge_perm,
             river_storage_m3_inertial=self._river_storage_perm_inertial,
             previous_discharge_m3_s_inertial=self._discharge_prev_perm_inertial,
@@ -2482,41 +2248,12 @@ class LocalInertial:
             actual_evaporation_m3_inertial=self._actual_evaporation_perm_inertial,
             updated_discharge_m3_s_inertial=self._updated_discharge_perm_inertial,
             kinematic_inflow_rate_inertial=self._kinematic_inflow_rate_inertial,
-            discharge_vol_sum_inertial=self._discharge_vol_sum_inertial,
-            wb_outflow_substep_m3_buf=self._wb_outflow_substep_m3_buf,
-            retention_inflow_limit_sub_buf=self._retention_inflow_limit_sub_buf,
-            retention_max_outflow_limit_sub_buf=self._retention_max_outflow_limit_sub_buf,
-            wb_outflow_avail_buf=self._wb_outflow_avail_buf,
-            wb_extra_lateral_accum_m3=self._wb_extra_lateral_accum_m3,
             substep_discharge_inertial=self._substep_discharge_inertial,
-            wb_lake_area=self._wb_lake_area,
-            wb_lake_factor=self._wb_lake_factor,
-            wb_outflow_height=self._wb_outflow_height,
-            wb_outflow_bed_elev=self._wb_outflow_bed_elev,
-            stage_buf=self._stage_buf,
-            ds_boundary_type=self._ds_boundary_type,
-            ds_inertial_k=self._ds_inertial_k,
-            ds_stage_idx=self._ds_stage_idx,
-            ds_bed_elevation=self._ds_bed_elevation,
-            min_dt_buf=self._min_dt_buf,
-            inertial_up_offsets=self._inertial_up_offsets,
-            inertial_up_indices=self._inertial_up_indices,
-            inertial_up_reach_idx=self._inertial_up_reach_idx,
-            inertial_retention_k=self._inertial_retention_k,
-            inertial_retention_id=self._inertial_retention_id,
-            inertial_wb_ds_k=self._inertial_wb_ds_k,
-            inertial_wb_ds_id=self._inertial_wb_ds_id,
-            lake_outflow_target_k=self._lake_outflow_target_k,
-            lake_outflow_wb_id=self._lake_outflow_wb_id,
-            geom_inbank=self._geom_inbank,
-            geom_overbank=self._geom_overbank,
-            geom_cfl=self._geom_cfl,
-            pit_slope_inertial=self._pit_slope_inertial,
-            rev_demand_buf=self._rev_demand_buf,
-            wb_release_volume_substep=self._wb_release_volume_substep,
-            inertial_topo_order=self._inertial_topo_order,
-            total_flow_rate_buf=self._total_flow_rate_buf,
-            terminal_wb_outflow_accum_m3=self._terminal_wb_outflow_accum_m3,
+            geom=self._geometry,
+            topo=self._topology,
+            wb=wb_coupling,
+            ret=ret_coupling,
+            buffers=self._substep_buffers,
         )
 
         # if self.n_inertial > 0 and limiting_reach_idx >= 0:

@@ -1914,16 +1914,9 @@ def test_compute_cross_section_from_depth() -> None:
         bankfull_width_m=bankfull_width_m,
         shape_exponent=shape_exponent,
         bankfull_depth_m=bankfull_depth_m,
-        floodplain_width_m=floodplain_width_m,
         inverse_shape_exponent_plus_one=inverse_shape_exponent_plus_one[0],
         bankfull_area_m2=bankfull_area_arr[0],
         bankfull_perimeter_m=bankfull_perimeter_arr[0],
-        floodplain_side_slope=floodplain_side_slope_arr[0],
-        floodplain_depth_threshold_m=floodplain_depth_threshold_arr[0],
-        floodplain_area_threshold_m2=floodplain_area_threshold_arr[0],
-        sqrt_one_plus_floodplain_slope_squared=sqrt_one_plus_floodplain_slope_squared_arr[
-            0
-        ],
         width_over_sqrt_bankfull_depth=width_over_sqrt_bankfull_depth_arr[0],
     )
     expected_w = 20.0 * math.sqrt(0.75)
@@ -1940,16 +1933,9 @@ def test_compute_cross_section_from_depth() -> None:
         bankfull_width_m=bankfull_width_m,
         shape_exponent=shape_exponent,
         bankfull_depth_m=bankfull_depth_m,
-        floodplain_width_m=floodplain_width_m,
         inverse_shape_exponent_plus_one=inverse_shape_exponent_plus_one[0],
         bankfull_area_m2=bankfull_area_arr[0],
         bankfull_perimeter_m=bankfull_perimeter_arr[0],
-        floodplain_side_slope=floodplain_side_slope_arr[0],
-        floodplain_depth_threshold_m=floodplain_depth_threshold_arr[0],
-        floodplain_area_threshold_m2=floodplain_area_threshold_arr[0],
-        sqrt_one_plus_floodplain_slope_squared=sqrt_one_plus_floodplain_slope_squared_arr[
-            0
-        ],
         width_over_sqrt_bankfull_depth=width_over_sqrt_bankfull_depth_arr[0],
     )
     expected_area_ob = (40.0 / 1.5) + (20.0 * 0.5)
@@ -2021,16 +2007,9 @@ def test_compute_cross_section_divided_channel_conveyance_monotonicity() -> None
             bankfull_width_m=bankfull_width_m,
             shape_exponent=shape_exponent,
             bankfull_depth_m=bankfull_depth_m,
-            floodplain_width_m=floodplain_width_m,
             inverse_shape_exponent_plus_one=inverse_shape_exponent_plus_one[0],
             bankfull_area_m2=bankfull_area_arr[0],
             bankfull_perimeter_m=bankfull_perimeter_arr[0],
-            floodplain_side_slope=floodplain_side_slope_arr[0],
-            floodplain_depth_threshold_m=floodplain_depth_threshold_arr[0],
-            floodplain_area_threshold_m2=floodplain_area_threshold_arr[0],
-            sqrt_one_plus_floodplain_slope_squared=sqrt_one_plus_floodplain_slope_squared_arr[
-                0
-            ],
             width_over_sqrt_bankfull_depth=width_over_sqrt_bankfull_depth_arr[0],
         )
         r_eff: float = float(area / p_wetted)
@@ -3645,6 +3624,9 @@ def test_inertial_substeps_parallel_and_serial_equivalence() -> None:
     """
     from geb.hydrology.routing.inertial_substeps import (
         INERTIAL_PARALLEL_THRESHOLD,
+        RetentionCoupling,
+        SubstepBuffers,
+        WaterbodyCoupling,
         _run_inertial_substeps,
         _run_inertial_substeps_parallel,
         _run_inertial_substeps_serial,
@@ -3680,65 +3662,77 @@ def test_inertial_substeps_parallel_and_serial_equivalence() -> None:
     )
 
     def build_test_state() -> list[Any]:
+        substep_q = np.full(n_reaches, 10.0, dtype=np.float32)
+        storage = np.full(n_reaches, 5000.0, dtype=np.float64)
+        sideflow = np.full(n_reaches, 50.0, dtype=np.float32)
+        evap = np.full(n_reaches, 1.0, dtype=np.float32)
+        over_abs = np.zeros(n_reaches, dtype=np.float32)
+        actual_evap = np.zeros(n_reaches, dtype=np.float32)
+        updated_q = np.zeros(n_reaches, dtype=np.float32)
+        kin_inflow = np.zeros(n_reaches, dtype=np.float32)
+
+        wb_coupling = WaterbodyCoupling(
+            storage_m3=np.zeros(0, dtype=np.float64),
+            prescribed_outflow_m3=np.zeros(0, dtype=np.float32),
+            inflow_m3=np.zeros(0, dtype=np.float32),
+            lake_area=np.zeros(0, dtype=np.float32),
+            lake_factor=np.zeros(0, dtype=np.float32),
+            outflow_height=np.zeros(0, dtype=np.float32),
+            outflow_bed_elev=np.zeros(0, dtype=np.float32),
+            inertial_wb_ds_k=router._inertial_wb_ds_k,
+            inertial_wb_ds_id=router._inertial_wb_ds_id,
+            lake_outflow_target_k=router._lake_outflow_target_k,
+            lake_outflow_wb_id=router._lake_outflow_wb_id,
+            wb_to_wb_src_wb=router._wb_to_wb_src_wb,
+            wb_to_wb_tgt_wb=router._wb_to_wb_tgt_wb,
+            wb_terminal_wb_ids=router._wb_terminal_wb_ids,
+        )
+
+        ret_coupling = RetentionCoupling(
+            storage_m3=np.zeros(0, dtype=np.float32),
+            inflow_m3=np.zeros(0, dtype=np.float32),
+            outflow_m3=np.zeros(0, dtype=np.float32),
+            max_storage_m3=np.zeros(0, dtype=np.float32),
+            inertial_retention_k=np.zeros(0, dtype=np.int32),
+            inertial_retention_id=np.zeros(0, dtype=np.int32),
+            controlled_retention=np.zeros(0, dtype=bool),
+            activation_threshold_m3_s=np.zeros(0, dtype=np.float32),
+            release_threshold_factor=np.float32(
+                router.retention_basin_release_threshold_factor
+            ),
+        )
+
+        substep_buffers = SubstepBuffers(
+            stage_buf=np.linspace(101.0, 11.0, n_reaches, dtype=np.float32),
+            min_dt_buf=np.zeros(n_reaches, dtype=np.float32),
+            rev_demand_buf=np.zeros(n_reaches, dtype=np.float32),
+            wb_release_volume_substep=np.zeros(n_reaches, dtype=np.float32),
+            total_flow_rate_buf=np.zeros(n_reaches, dtype=np.float32),
+            discharge_vol_sum_inertial=np.zeros(n_reaches, dtype=np.float32),
+            retention_inflow_limit_sub_buf=np.zeros(0, dtype=np.float64),
+            retention_max_outflow_limit_sub_buf=np.zeros(0, dtype=np.float64),
+            wb_outflow_avail_buf=np.zeros(0, dtype=np.float64),
+            wb_extra_lateral_accum_m3=np.zeros(n_reaches, dtype=np.float64),
+            terminal_wb_outflow_accum_m3=np.zeros(1, dtype=np.float32),
+        )
+
         return [
             3,
             np.float32(router.dt),
             n_reaches,
-            np.full(n_reaches, 10.0, dtype=np.float32),
-            np.full(n_reaches, 5000.0, dtype=np.float64),
-            np.full(n_reaches, 50.0, dtype=np.float32),
-            np.full(n_reaches, 1.0, dtype=np.float32),
-            np.zeros(0, dtype=np.float64),
-            np.zeros(0, dtype=np.float32),
-            router._geom_inbank,
-            router._geom_overbank,
-            np.zeros(0, dtype=np.float32),
-            np.zeros(0, dtype=np.float32),
-            np.zeros(0, dtype=np.int32),
-            np.zeros(0, dtype=np.int32),
-            np.zeros(0, dtype=bool),
-            np.zeros(0, dtype=np.float32),
-            np.float32(router.retention_basin_release_threshold_factor),
-            router._pit_slope_inertial,
-            np.zeros(n_reaches, dtype=np.float32),
-            np.zeros(n_reaches, dtype=np.float32),
-            np.zeros(0, dtype=np.float32),
-            np.zeros(0, dtype=np.float32),
-            np.zeros(0, dtype=np.float32),
-            np.zeros(n_reaches, dtype=np.float32),
-            np.zeros(n_reaches, dtype=np.float32),
-            np.zeros(n_reaches, dtype=np.float32),
-            np.zeros(0, dtype=np.float64),
-            np.zeros(0, dtype=np.float64),
-            np.zeros(0, dtype=np.float64),
-            np.zeros(0, dtype=np.float64),
-            np.zeros(n_reaches, dtype=np.float64),
-            np.zeros(0, dtype=np.float32),
-            np.zeros(0, dtype=np.float32),
-            np.zeros(0, dtype=np.float32),
-            np.zeros(0, dtype=np.float32),
-            np.linspace(101.0, 11.0, n_reaches, dtype=np.float32),
-            router._ds_boundary_type,
-            router._ds_inertial_k,
-            router._ds_stage_idx,
-            router._ds_bed_elevation,
-            router._inertial_up_offsets,
-            router._inertial_up_indices,
-            router._inertial_up_reach_idx,
-            router._inertial_wb_ds_k,
-            router._inertial_wb_ds_id,
-            router._lake_outflow_target_k,
-            router._lake_outflow_wb_id,
-            router._geom_cfl,
-            router._min_dt_buf,
-            router._rev_demand_buf,
-            router._wb_release_volume_substep,
-            router._inertial_topo_order,
-            router._total_flow_rate_buf,
-            router._wb_to_wb_src_wb,
-            router._wb_to_wb_tgt_wb,
-            router._wb_terminal_wb_ids,
-            router._terminal_wb_outflow_accum_m3,
+            substep_q,
+            storage,
+            sideflow,
+            evap,
+            over_abs,
+            actual_evap,
+            updated_q,
+            kin_inflow,
+            router._geometry,
+            router._topology,
+            wb_coupling,
+            ret_coupling,
+            substep_buffers,
         ]
 
     state_serial: list[Any] = build_test_state()
@@ -3761,19 +3755,17 @@ def test_inertial_substeps_parallel_and_serial_equivalence() -> None:
     np.testing.assert_allclose(
         state_serial[4], state_dispatched[4], rtol=1e-5, atol=1e-5
     )
-    # Time-averaged discharge output (index 24)
+    # Time-averaged discharge output (index 9)
+    np.testing.assert_allclose(state_serial[9], state_parallel[9], rtol=1e-5, atol=1e-5)
     np.testing.assert_allclose(
-        state_serial[24], state_parallel[24], rtol=1e-5, atol=1e-5
+        state_serial[9], state_dispatched[9], rtol=1e-5, atol=1e-5
+    )
+    # Stage buffer (inside SubstepBuffers at index 15)
+    np.testing.assert_allclose(
+        state_serial[15].stage_buf, state_parallel[15].stage_buf, rtol=1e-5, atol=1e-5
     )
     np.testing.assert_allclose(
-        state_serial[24], state_dispatched[24], rtol=1e-5, atol=1e-5
-    )
-    # Stage buffer (index 37)
-    np.testing.assert_allclose(
-        state_serial[37], state_parallel[37], rtol=1e-5, atol=1e-5
-    )
-    np.testing.assert_allclose(
-        state_serial[37], state_dispatched[37], rtol=1e-5, atol=1e-5
+        state_serial[15].stage_buf, state_dispatched[15].stage_buf, rtol=1e-5, atol=1e-5
     )
 
 

@@ -164,14 +164,9 @@ def compute_cross_section_from_depth(
     bankfull_width_m: np.float32,
     shape_exponent: np.float32,
     bankfull_depth_m: np.float32,
-    floodplain_width_m: np.float32,
     inverse_shape_exponent_plus_one: np.float32,
     bankfull_area_m2: np.float32,
     bankfull_perimeter_m: np.float32,
-    floodplain_side_slope: np.float32,
-    floodplain_depth_threshold_m: np.float32,
-    floodplain_area_threshold_m2: np.float32,
-    sqrt_one_plus_floodplain_slope_squared: np.float32,
     width_over_sqrt_bankfull_depth: np.float32,
 ) -> tuple[np.float32, np.float32, np.float32]:
     """Calculates cross-sectional area, top width, and wetted perimeter from effective interface depth.
@@ -190,14 +185,9 @@ def compute_cross_section_from_depth(
         bankfull_width_m: River channel width when full to the top of its banks (meters).
         shape_exponent: Channel shape factor: how curved the river bed is, where 0.5 is a parabola (dimensionless).
         bankfull_depth_m: Channel depth when full to the top of its banks (meters).
-        floodplain_width_m: Extra width available on the floodplain next to the channel (meters).
         inverse_shape_exponent_plus_one: Precomputed value of 1 / (shape_exponent + 1) (dimensionless).
         bankfull_area_m2: Water area when the channel is full to the banks (m²).
         bankfull_perimeter_m: Channel bed length touching water when full to the banks (meters).
-        floodplain_side_slope: Side slope of the floodplain banks (horizontal to vertical ratio) (dimensionless).
-        floodplain_depth_threshold_m: Water depth where the sloping floodplain reaches its full width (meters).
-        floodplain_area_threshold_m2: Extra water area when the floodplain reaches its full width (m²).
-        sqrt_one_plus_floodplain_slope_squared: Precomputed factor sqrt(1 + slope²) (dimensionless).
         width_over_sqrt_bankfull_depth: Precomputed shortcut for parabola channels (r=0.5) (m^(1/2)).
 
     Returns:
