@@ -1,5 +1,6 @@
 # dev
 - Fixed rare floating-point precision underflow in `infiltration` during profile saturation recharge subtraction that caused slightly negative `topwater_m` and false `direct_runoff` in the land surface model.
+- Fixed build fail if the coastlines are a single LineString and could not be merged into one using shapely.ops linemerge.
 
 # v1.0.0b34
 - Fix for trapped waterbody cells. Only classify waterbody as trapped if they are both down- and upstream of the same waterbody.
