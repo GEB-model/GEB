@@ -191,7 +191,7 @@ def _run_kinematic_step(
     # Route headwater reaches in parallel across threads.
     # Headwaters have no upstream river reaches feeding them, making them mutually
     # independent. They can be computed concurrently without race conditions.
-    for i in prange(n_kin_headwater):  # ty: ignore[not-iterable]
+    for i in prange(n_kin_headwater):
         # Collect local lateral runoff and waterbody releases (upstream river inflow is 0).
         node_sideflow: np.float32 = sideflow_m3[i]
         if len(wb_to_kin_target_reach) > 0:

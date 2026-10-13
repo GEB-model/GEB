@@ -1,5 +1,10 @@
 # dev
 - Add optional WOKAM karst coverage and storage for soil drainage, runoff and interflow, with a default release time of 10 days. Build `setup_karst` and rerun spinup before enabling karst.
+- Use FathomDEM as default instead of FABDEM.
+- Integrated interactive chart data bundles directly into the single discharge dashboard HTML file.
+- Implement capillary rise in the Ross solver.
+- Fixed rare floating-point precision underflow in `infiltration` during profile saturation recharge subtraction that caused slightly negative `topwater_m` and false `direct_runoff` in the land surface model.
+- Fixed a build failure when a coastline is already a single `LineString` and cannot be passed to `shapely.ops.linemerge`.
 
 # v1.0.0b34
 - Fix for trapped waterbody cells. Only classify waterbody as trapped if they are both down- and upstream of the same waterbody.
@@ -8,7 +13,6 @@
 # v1.0.0b33
 - Implement groundwater fluxes at catchment boundaries. This is especially important when modelling small catchments. Previously there was essentially a wall around the catchment, while groundwater can now enter or leave the catchment based on prescribed heads based on GLOBGM (by default). Oceans have a groundwater head of 0 now,
 - Fixed SFINCS subgrid build crashing with `Lengths of inputs do not match` when a subgrid tile only contains a sliver of a river for which no river bed level can be estimated; such tiles are now left unburned.
-- Implement groundwater fluxes at catchment boundaries. This is especially important when modelling small catchments. Previously there was essentially a wall around the catchment, while groundwater can now enter or leave the catchment based on prescribed heads based on GLOBGM (by default). Oceans have a groundwater head of 0 now.
 
 # v1.0.0b32
 - Removed defaults from ParametersConfig in configuration schema so that all parameters must be explicitly set via reasonable_default_config.yml or model.yml, and added groundwater_hydraulic_conductivity_multiplier to the schema.

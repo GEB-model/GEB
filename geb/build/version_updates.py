@@ -13,11 +13,10 @@ if TYPE_CHECKING:
     from geb.build import GEBModel as GEBModelBuild
 
 VERSION_UPDATES: dict[str, list[str]] = {
-    "1.0.0b37": [
-        "[manual] Karst now stores soil drainage too; its default release time is 10 days. Rerun spinup with karst enabled, including inputs already marked 1.0.0b37.",
-    ],
     "1.0.0b35": [
-        "[manual] For hydrology.karst, add setup_karst to custom builds, run geb update -b build.yml::setup_karst, and rerun spinup for the new karst store. Rebuild older maps, which may contain only zeros. Runs with karst disabled require no input changes.",
+        "[update-method;setup_elevation]",
+        "[update-method;setup_coastal_sfincs_model_regions]",
+        "[manual] Add setup_karst to your build.yml (if not inherited from the reasonable_default_config.yml). Then run `geb update -b build.yml::setup_karst` to set up karst parameters.",
     ],
     "1.0.0b34": [
         "[update-method;setup_waterbodies]",
@@ -261,9 +260,7 @@ def get_and_maybe_do_version_updates(
                 "Updates are required to update to the current version. Run geb update-version to perform them."
             )
     elif not error_occurred:
-        logger.info(
-            "Successfully auto-updated. No further manual updates are required. Version file is updated to the current version."
-        )
+        logger.info("Successfully auto-updated.")
     else:  # error occurred but no updates to print
         logger.error(
             "An error occurred during auto-update. Please check the error message above and fix the issue. After fixing the issue, you can re-run the update command to perform the remaining updates and update the version file."

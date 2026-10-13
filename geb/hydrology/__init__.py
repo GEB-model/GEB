@@ -295,9 +295,7 @@ class Hydrology(Data, Module):
 
         if __debug__:
             prev_storage: np.float64 = self.get_current_storage()
-            influx = (
-                self.grid.var.capillar.astype(np.float64) * self.grid.var.cell_area
-            ).sum()
+            influx: np.float64 = np.float64(0.0)  # initialize influx
         else:
             prev_storage: np.float64 = np.float64(np.nan)
 
@@ -309,6 +307,7 @@ class Hydrology(Data, Module):
             interflow_m,
             overland_runoff_m,
             groundwater_recharge_m,
+            capillar_rise_m,
             groundwater_abstraction_m3,
             channel_abstraction_m3,
             return_flow_m,
@@ -352,6 +351,8 @@ class Hydrology(Data, Module):
         interflow_m = self.to_grid(HRU_data=interflow_m)
         overland_runoff_m = self.to_grid(HRU_data=overland_runoff_m)
         groundwater_recharge_m = self.to_grid(HRU_data=groundwater_recharge_m)
+        capillar_rise_m = self.to_grid(HRU_data=capillar_rise_m)
+        self.grid.var.capillar = capillar_rise_m
 
         if self.karst_fraction is not None:
             karst_inflow_m: ArrayFloat64 = self.to_grid(
@@ -383,6 +384,9 @@ class Hydrology(Data, Module):
                 (
                     channel_abstraction_m3.sum()  # already applied but not yet removed from river
                     + groundwater_abstraction_m3.sum()  # already applied but not yet removed from GW
+                    + (
+                        capillar_rise_m.astype(np.float64) * self.grid.var.cell_area
+                    ).sum()  # added to soil in land surface, not yet removed from GW
                     + self.model.agents.reservoir_operators.command_area_release_m3.sum()  # already applied but not yet removed from reservoir
                 )
                 - (
@@ -412,7 +416,9 @@ class Hydrology(Data, Module):
         timer.finish_split("Land surface")
 
         baseflow_m = self.groundwater.step(
-            groundwater_recharge_m, groundwater_abstraction_m3
+            groundwater_recharge_m=groundwater_recharge_m,
+            groundwater_abstraction_m3=groundwater_abstraction_m3,
+            capillary_rise_m=capillar_rise_m,
         )
 
         if __debug__:
@@ -423,15 +429,11 @@ class Hydrology(Data, Module):
                 + (
                     groundwater_recharge_m * self.grid.var.cell_area
                 ).sum()  # now accounted for
+                - (
+                    capillar_rise_m.astype(np.float64) * self.grid.var.cell_area
+                ).sum()  # now accounted for in GW
                 - groundwater_abstraction_m3.sum()  # now accounted for
             )
-
-            capillar_next_step: np.float64 = (
-                self.grid.var.capillar.astype(np.float64) * self.grid.var.cell_area
-            ).sum()
-
-            outflux_m3 += capillar_next_step.sum()  # capillary rise is added to sinks
-
             # Account for groundwater flow across model boundaries
             influx += self.groundwater.boundary_inflow_m3
             outflux_m3 += self.groundwater.boundary_outflow_m3

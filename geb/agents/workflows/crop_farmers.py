@@ -1346,7 +1346,7 @@ def crop_profit_difference_total(
     unique_gain = np.zeros((n_groups, n_calendars, n_cols), dtype=np.float32)
     id_to_switch_to = np.full((n_groups, n_calendars), -1, dtype=np.int32)
 
-    for group_id in prange(n_groups):  # ty:ignore[not-iterable]
+    for group_id in prange(n_groups):
         unique_group = unique_crop_groups[group_id]
 
         # membership mask for this group
@@ -1504,7 +1504,7 @@ def compute_premiums_and_best_contracts_numba(
     best_rmse_arr = np.empty(n_agents, dtype=np.float64)
     best_prem_arr = np.empty(n_agents, dtype=np.float64)
 
-    for agent_idx in prange(n_agents):  # ty: ignore[not-iterable]
+    for agent_idx in prange(n_agents):
         shape = -gev_params[agent_idx, 0]
         loc = gev_params[agent_idx, 1]
         scale = gev_params[agent_idx, 2]
