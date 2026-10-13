@@ -52,7 +52,6 @@ __all__ = [
     "GEOM_OV_FLOODPLAIN_WIDTH",
     "GEOM_OV_NUM_COLS",
     "GEOM_OV_RIVER_WIDTH",
-    "GEOM_OV_SQRT_ONE_PLUS_FLOODPLAIN_SLOPE_SQUARED",
     "INERTIAL_PARALLEL_THRESHOLD",
     "_gather_inputs",
     "_run_inertial_substeps",
@@ -89,8 +88,7 @@ GEOM_OV_BANKFULL_PERIMETER: int = 2
 GEOM_OV_FLOODPLAIN_SIDE_SLOPE: int = 3
 GEOM_OV_FLOODPLAIN_DEPTH_THRESHOLD: int = 4
 GEOM_OV_FLOODPLAIN_AREA_THRESHOLD: int = 5
-GEOM_OV_SQRT_ONE_PLUS_FLOODPLAIN_SLOPE_SQUARED: int = 6
-GEOM_OV_NUM_COLS: int = 7
+GEOM_OV_NUM_COLS: int = 6
 
 # Column indices for CFL stability parameters (geom_cfl)
 GEOM_CFL_MANNING_COEFFICIENT: int = 0
@@ -390,144 +388,7 @@ def _compute_stage_from_storage_inertial(
 
 
 @njit(inline="always")
-def _evaluate_reach_cfl_dt(
-    reach_idx: int,
-    total_flow_rate: np.float32,
-    current_volume_m3: float,
-    geom_inbank: TwoDArrayFloat32,
-    geom_overbank: TwoDArrayFloat32,
-    geom_cfl: TwoDArrayFloat32,
-    gravity_acceleration: np.float32,
-    dt_f32: np.float32,
-) -> np.float32:
-    """Calculates Courant-Friedrichs-Lewy (CFL) stable timestep for a single reach.
-
-    Numerical stability is dictated by shallow-water wave celerity:
-        dt_stable <= CFL * dx / wave_celerity
-    where:
-        - wave_celerity c = sqrt(g * hydraulic_depth)
-
-    Notes:
-        Wave celerity (c) is the propagation speed of a surface wave or disturbance
-        relative to the moving water itself (distinct from the bulk flow velocity
-        v = Q / A). In the local inertial approximation (Bates et al., 2010),
-        the advective acceleration term (v * dv/dx) is omitted from the momentum equation,
-        so information propagation and numerical stability are governed strictly by
-        the gravity wave celerity c = sqrt(g * h).
-
-    Args:
-        reach_idx: Local inertial reach index.
-        total_flow_rate: Characteristic incoming or conveyance flow rate (m³/s).
-        current_volume_m3: Current river reach storage volume (m³).
-        geom_inbank: Compact in-bank geometry table.
-        geom_overbank: Overbank floodplain geometry table.
-        geom_cfl: Precomputed CFL stability parameters table.
-        gravity_acceleration: Gravitational acceleration (m/s²).
-        dt_f32: Routing macro-timestep duration (seconds).
-
-    Returns:
-        Maximum CFL-stable timestep duration for this reach (seconds).
-    """
-    # A completely dry reach with no oncoming flow cannot propagate waves;
-    # advancing by the full macro-timestep is safe.
-    if current_volume_m3 <= 0.0 and total_flow_rate <= np.float32(0.0):
-        return dt_f32
-
-    # 1. Hydraulic depth from stored water volume:
-    # We compute the wetted cross-sectional area (A) and surface top width (W)
-    # corresponding to the water volume currently sitting in this reach (V = A * L).
-    # The hydraulic depth is h = A / W.
-    hydraulic_depth_from_volume: np.float32 = np.float32(0.0)
-    wetted_cross_sectional_area_m2: np.float32 = np.float32(0.0)
-    if current_volume_m3 > 0.0:
-        inv_shape_exponent_plus_one: np.float32 = geom_inbank[
-            reach_idx, GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE
-        ]
-        shape_exponent: np.float32 = (
-            np.float32(0.5)
-            if inv_shape_exponent_plus_one == np.float32(1.0 / 1.5)
-            else (np.float32(1.0) / inv_shape_exponent_plus_one) - np.float32(1.0)
-        )
-        bankfull_area_m2: np.float32 = (
-            geom_inbank[reach_idx, GEOM_IN_BANKFULL_VOLUME]
-            * geom_inbank[reach_idx, GEOM_IN_INVERSE_LENGTH]
-        )
-        wetted_cross_sectional_area_m2, water_top_width_m = (
-            compute_cfl_area_and_top_width(
-                volume_m3=np.float32(current_volume_m3),
-                bankfull_width_m=geom_overbank[reach_idx, GEOM_OV_RIVER_WIDTH],
-                shape_exponent=shape_exponent,
-                bankfull_depth_m=geom_inbank[reach_idx, GEOM_IN_BANKFULL_DEPTH],
-                floodplain_width_m=geom_overbank[reach_idx, GEOM_OV_FLOODPLAIN_WIDTH],
-                inverse_reach_length=geom_inbank[reach_idx, GEOM_IN_INVERSE_LENGTH],
-                inverse_shape_exponent_plus_one=inv_shape_exponent_plus_one,
-                bankfull_area_m2=bankfull_area_m2,
-                bankfull_volume_m3=geom_inbank[reach_idx, GEOM_IN_BANKFULL_VOLUME],
-                floodplain_side_slope=geom_overbank[
-                    reach_idx, GEOM_OV_FLOODPLAIN_SIDE_SLOPE
-                ],
-                floodplain_depth_threshold_m=geom_overbank[
-                    reach_idx, GEOM_OV_FLOODPLAIN_DEPTH_THRESHOLD
-                ],
-                floodplain_area_threshold_m2=geom_overbank[
-                    reach_idx, GEOM_OV_FLOODPLAIN_AREA_THRESHOLD
-                ],
-            )
-        )
-        hydraulic_depth_from_volume = wetted_cross_sectional_area_m2 / max(
-            water_top_width_m, np.float32(1e-3)
-        )
-
-    # 2. Anticipatory depth from oncoming flow (Manning normal depth):
-    # If a nearly dry reach suddenly receives a fast-moving flood wave (Q > 0 while V ~ 0),
-    # depth based on stored volume alone would be zero, which would cause instability.
-    # Therefore, we estimate expected flow depth from Manning normal depth (h_normal ~ Q^0.6).
-    hydraulic_depth_from_flow: np.float32 = np.float32(0.0)
-    if total_flow_rate > np.float32(0.0):
-        raw_depth_from_flow: np.float32 = geom_cfl[
-            reach_idx, GEOM_CFL_MANNING_COEFFICIENT
-        ] * (total_flow_rate ** np.float32(0.6))
-        bankfull_depth_m: np.float32 = geom_inbank[reach_idx, GEOM_IN_BANKFULL_DEPTH]
-        if raw_depth_from_flow > bankfull_depth_m and bankfull_depth_m > np.float32(
-            0.0
-        ):
-            # When flow exceeds bankfull, water spills across the much wider floodplain.
-            # Scale the excess depth by the width expansion ratio so low-slope reaches
-            # do not predict absurdly deep narrow-slot depths.
-            extra_depth: np.float32 = raw_depth_from_flow - bankfull_depth_m
-            bf_width: np.float32 = geom_overbank[reach_idx, GEOM_OV_RIVER_WIDTH]
-            fp_width: np.float32 = geom_overbank[reach_idx, GEOM_OV_FLOODPLAIN_WIDTH]
-            width_ratio: np.float32 = bf_width / max(bf_width + fp_width, bf_width)
-            hydraulic_depth_from_flow = bankfull_depth_m + (extra_depth * width_ratio)
-        else:
-            hydraulic_depth_from_flow = raw_depth_from_flow
-
-    # 3. Take the governing (strictest/deepest) hydraulic depth:
-    hydraulic_depth: np.float32 = max(
-        hydraulic_depth_from_volume, hydraulic_depth_from_flow
-    )
-
-    if hydraulic_depth <= np.float32(0.0):
-        # Dry channel: no waves can propagate, so full macro timestep is safe
-        return dt_f32
-
-    # 4. Compute shallow-water wave celerity and maximum stable timestep:
-    # Wave celerity c = sqrt(g * h) is the speed at which a surface gravity wave disturbance
-    # propagates relative to the water itself (in contrast to flow velocity v = Q / A).
-    # In local inertial routing, this celerity governs how fast pressure/depth signals travel.
-    wave_celerity: np.float32 = np.sqrt(gravity_acceleration * hydraulic_depth)
-
-    # dt_max = CFL * dx / wave_celerity
-    dt_cfl: np.float32 = (
-        geom_cfl[reach_idx, GEOM_CFL_CONSTANT]
-        * np.sqrt(gravity_acceleration)
-        / max(wave_celerity, np.float32(1e-3))
-    )
-    return min(dt_cfl, dt_f32)
-
-
-@njit(inline="always")
-def _diagnose_reach_cfl(
+def _compute_reach_cfl_depths(
     reach_idx: int,
     total_flow_rate: np.float32,
     current_volume_m3: float,
@@ -536,7 +397,7 @@ def _diagnose_reach_cfl(
     geom_cfl: TwoDArrayFloat32,
     gravity_acceleration: np.float32,
 ) -> tuple[np.float32, np.float32, np.float32, np.float32]:
-    """Calculates hydraulic depth components and wave celerity for diagnostics.
+    """Calculates hydraulic depth components and wave celerity for CFL stability evaluation.
 
     Args:
         reach_idx: Local inertial reach index.
@@ -610,6 +471,61 @@ def _diagnose_reach_cfl(
     h_gov: np.float32 = max(h_vol, h_flow)
     celerity: np.float32 = np.sqrt(gravity_acceleration * h_gov)
     return h_vol, h_flow, h_gov, celerity
+
+
+@njit(inline="always")
+def _evaluate_reach_cfl_dt(
+    reach_idx: int,
+    total_flow_rate: np.float32,
+    current_volume_m3: float,
+    geom_inbank: TwoDArrayFloat32,
+    geom_overbank: TwoDArrayFloat32,
+    geom_cfl: TwoDArrayFloat32,
+    gravity_acceleration: np.float32,
+    dt_f32: np.float32,
+) -> np.float32:
+    """Calculates Courant-Friedrichs-Lewy (CFL) stable timestep for a single reach.
+
+    Numerical stability is dictated by shallow-water wave celerity:
+        dt_stable <= CFL * dx / wave_celerity
+    where:
+        - wave_celerity c = sqrt(g * hydraulic_depth)
+
+    Args:
+        reach_idx: Local inertial reach index.
+        total_flow_rate: Characteristic incoming or conveyance flow rate (m³/s).
+        current_volume_m3: Current river reach storage volume (m³).
+        geom_inbank: Compact in-bank geometry table.
+        geom_overbank: Overbank floodplain geometry table.
+        geom_cfl: Precomputed CFL stability parameters table.
+        gravity_acceleration: Gravitational acceleration (m/s²).
+        dt_f32: Routing macro-timestep duration (seconds).
+
+    Returns:
+        Maximum CFL-stable timestep duration for this reach (seconds).
+    """
+    if current_volume_m3 <= 0.0 and total_flow_rate <= np.float32(0.0):
+        return dt_f32
+
+    _, _, h_gov, wave_celerity = _compute_reach_cfl_depths(
+        reach_idx=reach_idx,
+        total_flow_rate=total_flow_rate,
+        current_volume_m3=current_volume_m3,
+        geom_inbank=geom_inbank,
+        geom_overbank=geom_overbank,
+        geom_cfl=geom_cfl,
+        gravity_acceleration=gravity_acceleration,
+    )
+
+    if h_gov <= np.float32(0.0):
+        return dt_f32
+
+    dt_cfl: np.float32 = (
+        geom_cfl[reach_idx, GEOM_CFL_CONSTANT]
+        * np.sqrt(gravity_acceleration)
+        / max(wave_celerity, np.float32(1e-3))
+    )
+    return min(dt_cfl, dt_f32)
 
 
 @njit(cache=True)
@@ -797,7 +713,7 @@ def compute_inertial_substeps_cfl(
     raw_substeps: int = int(np.ceil(dt_f32 / min_stable_timestep_s))
     num_inertial_substeps: int = max(1, raw_substeps)
 
-    h_vol, h_flow, h_gov, celerity = _diagnose_reach_cfl(
+    h_vol, h_flow, h_gov, celerity = _compute_reach_cfl_depths(
         reach_idx=limiting_reach_idx,
         total_flow_rate=buffers.total_flow_rate_buf[limiting_reach_idx],
         current_volume_m3=river_storage_m3_inertial[limiting_reach_idx],
@@ -865,64 +781,34 @@ def _solve_inertial_momentum(
         return np.float32(0.0)
 
     bankfull_depth_m: np.float32 = geom_inbank[reach_idx, GEOM_IN_BANKFULL_DEPTH]
-    cross_sectional_area: np.float32 = np.float32(0.0)
-    interface_top_width: np.float32 = np.float32(0.0)
-    interface_p_wetted: np.float32 = np.float32(0.0)
-
     inv_shape_exponent_plus_one: np.float32 = geom_inbank[
         reach_idx, GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE
     ]
-
-    if effective_depth <= bankfull_depth_m or bankfull_depth_m <= np.float32(0.0):
-        depth: np.float32 = effective_depth
-        # Parabolic channel (shape exponent r = 0.5)
-        if inv_shape_exponent_plus_one == np.float32(1.0 / 1.5):
-            interface_top_width = max(
-                np.sqrt(depth)
-                * geom_inbank[reach_idx, GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH],
-                np.float32(1e-3),
-            )
-        else:
-            shape_exponent: np.float32 = (
-                np.float32(1.0) / inv_shape_exponent_plus_one
-            ) - np.float32(1.0)
-            depth_ratio: np.float32 = depth / max(bankfull_depth_m, np.float32(1e-4))
-            interface_top_width = max(
-                geom_overbank[reach_idx, GEOM_OV_RIVER_WIDTH]
-                * (depth_ratio**shape_exponent),
-                np.float32(1e-3),
-            )
-        cross_sectional_area = interface_top_width * depth * inv_shape_exponent_plus_one
-        interface_p_wetted = (
-            interface_top_width
-            + np.float32(8.0 / 3.0) * (depth * depth) / interface_top_width
-        )
-    else:
-        shape_exponent = (
-            np.float32(0.5)
-            if inv_shape_exponent_plus_one == np.float32(1.0 / 1.5)
-            else (np.float32(1.0) / inv_shape_exponent_plus_one) - np.float32(1.0)
-        )
-        bankfull_area: np.float32 = (
-            geom_inbank[reach_idx, GEOM_IN_BANKFULL_VOLUME]
-            * geom_inbank[reach_idx, GEOM_IN_INVERSE_LENGTH]
-        )
-        (
-            cross_sectional_area,
-            interface_top_width,
-            interface_p_wetted,
-        ) = compute_cross_section_from_depth(
-            effective_depth_m=effective_depth,
-            bankfull_width_m=geom_overbank[reach_idx, GEOM_OV_RIVER_WIDTH],
-            shape_exponent=shape_exponent,
-            bankfull_depth_m=bankfull_depth_m,
-            inverse_shape_exponent_plus_one=inv_shape_exponent_plus_one,
-            bankfull_area_m2=bankfull_area,
-            bankfull_perimeter_m=geom_overbank[reach_idx, GEOM_OV_BANKFULL_PERIMETER],
-            width_over_sqrt_bankfull_depth=geom_inbank[
-                reach_idx, GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH
-            ],
-        )
+    shape_exponent: np.float32 = (
+        np.float32(0.5)
+        if inv_shape_exponent_plus_one == np.float32(1.0 / 1.5)
+        else (np.float32(1.0) / inv_shape_exponent_plus_one) - np.float32(1.0)
+    )
+    bankfull_area: np.float32 = (
+        geom_inbank[reach_idx, GEOM_IN_BANKFULL_VOLUME]
+        * geom_inbank[reach_idx, GEOM_IN_INVERSE_LENGTH]
+    )
+    (
+        cross_sectional_area,
+        interface_top_width,
+        interface_p_wetted,
+    ) = compute_cross_section_from_depth(
+        effective_depth_m=effective_depth,
+        bankfull_width_m=geom_overbank[reach_idx, GEOM_OV_RIVER_WIDTH],
+        shape_exponent=shape_exponent,
+        bankfull_depth_m=bankfull_depth_m,
+        inverse_shape_exponent_plus_one=inv_shape_exponent_plus_one,
+        bankfull_area_m2=bankfull_area,
+        bankfull_perimeter_m=geom_overbank[reach_idx, GEOM_OV_BANKFULL_PERIMETER],
+        width_over_sqrt_bankfull_depth=geom_inbank[
+            reach_idx, GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH
+        ],
+    )
 
     # Manning friction term
     hydraulic_radius_term: np.float32 = (

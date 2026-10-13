@@ -41,7 +41,6 @@ from .inertial_substeps import (
     GEOM_OV_FLOODPLAIN_WIDTH,
     GEOM_OV_NUM_COLS,
     GEOM_OV_RIVER_WIDTH,
-    GEOM_OV_SQRT_ONE_PLUS_FLOODPLAIN_SLOPE_SQUARED,
     INERTIAL_PARALLEL_THRESHOLD,
     InertialGeometry,
     InertialTopology,
@@ -1382,9 +1381,6 @@ class LocalInertial:
         )
         self._geom_overbank[:, GEOM_OV_FLOODPLAIN_AREA_THRESHOLD] = (
             self._floodplain_area_threshold_inertial
-        )
-        self._geom_overbank[:, GEOM_OV_SQRT_ONE_PLUS_FLOODPLAIN_SLOPE_SQUARED] = (
-            self._sqrt_one_plus_floodplain_slope_squared_inertial
         )
 
         # Precompute CFL stability parameters
