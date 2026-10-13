@@ -17,6 +17,7 @@ from .ecmwf_geopotential import ECMWFGeopotential
 from .esa_worldcover import ESAWorldCover
 from .fabdem import Fabdem as Fabdem
 from .fao import FAOSTAT, GMIA
+from .fathomdem import FathomDem
 from .field_boundaries import FieldBoundaries
 from .flood_damage_model import (
     GeulFloodDamageModel,
@@ -1007,6 +1008,24 @@ data_catalog: dict[str, dict[str, Any]] = {
             "license": "CC BY-NC-SA 4.0",
             "url": "https://huggingface.co/datasets/links-ads/fabdem-v12",
             "paper_doi": "10.1088/1748-9326/ac4d4f",
+        },
+    },
+    "fathomdem": {
+        "adapter": FathomDem(
+            folder="fathomdem",
+            local_version=1,
+            filename="placeholder.txt",
+            cache="global",
+        ),
+        "url": "https://doi.org/10.5281/zenodo.14511570",
+        "source": {
+            "name": "FathomDEM",
+            "author": "Hawker et al. (2025)",
+            "version": "1-0",
+            "license": "CC BY-NC-SA 4.0",
+            "url": "https://zenodo.org/records/14511570",
+            "paper_doi": "10.5281/zenodo.14511570",
+            "americas_url": "https://zenodo.org/records/14523356",
         },
     },
     "global_ocean_mean_dynamic_topography": {
