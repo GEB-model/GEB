@@ -46,16 +46,19 @@ open water are excluded. This delays water; it does not remove it.
 ```yaml
 hydrology:
   karst:
-    enabled: true
     capture_fraction: 1.0
     release_time_days: 10.0
 ```
 
-Karst is off by default. `capture_fraction` applies to runoff and interflow; soil
+Karst is included in every hydrology run. Cells with zero mapped coverage keep
+their existing flow paths. There is no enable/disable setting. `capture_fraction` applies to runoff and interflow; soil
 drainage uses mapped coverage. The release time is in days; after that many dry
 days, 37% of stored water remains. Ten days is a starting value.
 
-Build the map with `geb update -b build.yml::setup_karst`, then rerun spinup.
+The default build includes `setup_karst`; custom builds must include it too.
+When upgrading, remove `hydrology.karst.enabled` from `model.yml`. Build a
+missing map with `geb update -b build.yml::setup_karst`, then rerun spinup and
+simulation to initialize karst storage.
 Rerun spinup after changing karst settings or updating its routing. Existing
 maps can be reused unless they contain only zeros. Storage is included in
 checkpoints and water balances.

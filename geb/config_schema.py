@@ -303,10 +303,8 @@ class HydrologyEvaluationConfig(BaseModel):
 class KarstConfig(BaseModel):
     """Karst capture and release settings."""
 
-    enabled: bool = Field(
-        False,
-        description="Enable karst storage and recharge.",
-    )
+    model_config = ConfigDict(extra="forbid")
+
     capture_fraction: float = Field(
         1.0,
         ge=0.0,

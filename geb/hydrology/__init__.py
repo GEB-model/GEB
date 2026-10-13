@@ -145,7 +145,7 @@ class Hydrology(Data, Module):
     """
 
     def __init__(self, model: GEBModel) -> None:
-        """Set up hydrology and load the karst map if karst is enabled.
+        """Set up hydrology and load the required karst coverage map.
 
         Args:
             model: The GEB model instance.
@@ -160,26 +160,24 @@ class Hydrology(Data, Module):
             return
 
         self.dynamic_waterbodies = False
-        self.karst_fraction: ArrayFloat32 | None = None
-        if self.model.config["hydrology"]["karst"]["enabled"]:
-            if "groundwater/karst_fraction" not in self.model.files["grid"]:
-                raise ValueError(
-                    "Karst inputs are missing. Run setup_karst and rerun spinup."
-                )
-            self.karst_fraction = self.grid.load2d(
-                self.model.files["grid"]["groundwater/karst_fraction"]
+        if "groundwater/karst_fraction" not in self.model.files["grid"]:
+            raise ValueError(
+                "Karst inputs are missing. Run setup_karst and rerun spinup."
             )
-            if (
-                not np.isfinite(self.karst_fraction).all()
-                or ((self.karst_fraction < 0) | (self.karst_fraction > 1)).any()
-            ):
-                raise ValueError(
-                    "Karst map values must be between 0 and 1, with no NaNs or infinities."
-                )
-            if self.model.in_spinup:
-                self.grid.var.karst_storage_m = np.zeros_like(
-                    self.karst_fraction, dtype=np.float64
-                )
+        self.karst_fraction: ArrayFloat32 = self.grid.load2d(
+            self.model.files["grid"]["groundwater/karst_fraction"]
+        )
+        if (
+            not np.isfinite(self.karst_fraction).all()
+            or ((self.karst_fraction < 0) | (self.karst_fraction > 1)).any()
+        ):
+            raise ValueError(
+                "Karst map values must be between 0 and 1, with no NaNs or infinities."
+            )
+        if self.model.in_spinup:
+            self.grid.var.karst_storage_m = np.zeros_like(
+                self.karst_fraction, dtype=np.float64
+            )
 
         self.landsurface = LandSurface(self.model, self)
         self.groundwater = GroundWater(self.model, self)
@@ -266,31 +264,25 @@ class Hydrology(Data, Module):
             + self.get_routing_storage_m3()
             + self.get_waterbodies_storage_m3()
             + self.get_groundwater_storage_m3()
-            + (
-                (self.grid.var.karst_storage_m * self.grid.var.cell_area).sum(
-                    dtype=np.float64
-                )
-                if self.karst_fraction is not None
-                else np.float64(0.0)
+            + (self.grid.var.karst_storage_m * self.grid.var.cell_area).sum(
+                dtype=np.float64
             )
         )
 
     def step(self) -> None:
-        """Run one day of hydrology, including karst storage when enabled.
+        """Run one day of hydrology, including karst storage and recharge.
 
         Returns:
             None; updates water storage (m) and daily flows (m/day).
 
         Raises:
-            ValueError: If enabled karst storage is missing from the checkpoint.
+            ValueError: If karst storage is missing from the checkpoint.
         """  # noqa: DOC202
         timer: TimingModule = TimingModule("Hydrology")
 
-        if self.karst_fraction is not None and not hasattr(
-            self.grid.var, "karst_storage_m"
-        ):
+        if not hasattr(self.grid.var, "karst_storage_m"):
             raise ValueError(
-                "Karst storage is missing. Rerun spinup with karst enabled."
+                "Karst storage is missing. Rerun spinup to initialize karst storage."
             )
 
         if __debug__:
@@ -320,33 +312,23 @@ class Hydrology(Data, Module):
         if __debug__:
             influx += pr_total_m3
 
-        if self.karst_fraction is not None:
-            # Skip sealed land and open water.
-            karst_land_fraction: ArrayFloat32 = self.to_HRU(
-                data=self.karst_fraction
-            ) * (self.HRU.var.land_use_type < SEALED)
-            capture_fraction: ArrayFloat32 = karst_land_fraction * np.float32(
-                self.model.config["hydrology"]["karst"]["capture_fraction"]
-            )
-            karst_capture_m: ArrayFloat32 = (
-                overland_runoff_m.sum(axis=0) + interflow_m.sum(axis=0)
-            ) * capture_fraction
-            overland_runoff_m *= np.float32(1.0) - capture_fraction
-            interflow_m *= np.float32(1.0) - capture_fraction
-            karst_soil_recharge_m: ArrayFloat32 = (
-                groundwater_recharge_m * karst_land_fraction
-            )
-            # Remove diverted soil drainage so it is counted only once.
-            groundwater_recharge_m -= karst_soil_recharge_m
-        else:
-            if "karst_soil_recharge_m" in self.local_variables_to_report:
-                karst_soil_recharge_m = np.zeros_like(groundwater_recharge_m)
-            if "karst_capture_m" in self.local_variables_to_report:
-                karst_capture_m = np.zeros_like(groundwater_recharge_m)
-            if "karst_recharge_m" in self.local_variables_to_report:
-                karst_recharge_m = np.zeros_like(
-                    self.grid.var.cell_area, dtype=np.float32
-                )
+        # Skip sealed land and open water.
+        karst_land_fraction: ArrayFloat32 = self.to_HRU(
+            data=self.karst_fraction
+        ) * (self.HRU.var.land_use_type < SEALED)
+        capture_fraction: ArrayFloat32 = karst_land_fraction * np.float32(
+            self.model.config["hydrology"]["karst"]["capture_fraction"]
+        )
+        karst_capture_m: ArrayFloat32 = (
+            overland_runoff_m.sum(axis=0) + interflow_m.sum(axis=0)
+        ) * capture_fraction
+        overland_runoff_m *= np.float32(1.0) - capture_fraction
+        interflow_m *= np.float32(1.0) - capture_fraction
+        karst_soil_recharge_m: ArrayFloat32 = (
+            groundwater_recharge_m * karst_land_fraction
+        )
+        # Remove diverted soil drainage so it is counted only once.
+        groundwater_recharge_m -= karst_soil_recharge_m
 
         interflow_m = self.to_grid(HRU_data=interflow_m)
         overland_runoff_m = self.to_grid(HRU_data=overland_runoff_m)
@@ -354,21 +336,20 @@ class Hydrology(Data, Module):
         capillar_rise_m = self.to_grid(HRU_data=capillar_rise_m)
         self.grid.var.capillar = capillar_rise_m
 
-        if self.karst_fraction is not None:
-            karst_inflow_m: ArrayFloat64 = self.to_grid(
-                HRU_data=karst_capture_m + karst_soil_recharge_m
-            ).astype(np.float64)
-            release_time_days: float = self.model.config["hydrology"]["karst"][
-                "release_time_days"
-            ]
-            # Use the exact daily release to keep the water balance.
-            release_fraction: np.float64 = -np.expm1(-1.0 / release_time_days)
-            karst_recharge_m: ArrayFloat64 = (
-                self.grid.var.karst_storage_m * release_fraction
-                + karst_inflow_m * (1.0 - release_time_days * release_fraction)
-            )
-            self.grid.var.karst_storage_m += karst_inflow_m - karst_recharge_m
-            groundwater_recharge_m += karst_recharge_m.astype(np.float32)
+        karst_inflow_m: ArrayFloat64 = self.to_grid(
+            HRU_data=karst_capture_m + karst_soil_recharge_m
+        ).astype(np.float64)
+        release_time_days: float = self.model.config["hydrology"]["karst"][
+            "release_time_days"
+        ]
+        # Use the exact daily release to keep the water balance.
+        release_fraction: np.float64 = -np.expm1(-1.0 / release_time_days)
+        karst_recharge_m: ArrayFloat64 = (
+            self.grid.var.karst_storage_m * release_fraction
+            + karst_inflow_m * (1.0 - release_time_days * release_fraction)
+        )
+        self.grid.var.karst_storage_m += karst_inflow_m - karst_recharge_m
+        groundwater_recharge_m += karst_recharge_m.astype(np.float32)
 
         if self.model.config["hazards"]["floods"]["simulate"]:
             self.model.hazard_driver.floods.save_runoff_m(overland_runoff_m)

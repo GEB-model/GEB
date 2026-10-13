@@ -1,5 +1,5 @@
 # dev
-- Add optional WOKAM karst coverage and storage for soil drainage, runoff and interflow, with a default release time of 10 days. Build `setup_karst` and rerun spinup before enabling karst.
+- Add WOKAM karst coverage and storage for soil drainage, runoff and interflow, with a default release time of 10 days. Build `setup_karst` and rerun spinup before enabling karst.
 - Use FathomDEM as default instead of FABDEM.
 - Integrated interactive chart data bundles directly into the single discharge dashboard HTML file.
 - Implement capillary rise in the Ross solver.

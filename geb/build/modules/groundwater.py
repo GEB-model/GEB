@@ -27,7 +27,7 @@ class GroundWater(BuildModelBase):
         """Initialize the GroundWater class."""
         pass
 
-    @build_method(required=False)
+    @build_method(required=True)
     def setup_karst(self) -> None:
         """Use WOKAM to estimate how much of each grid cell is karst.
 
