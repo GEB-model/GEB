@@ -2475,10 +2475,9 @@ class Crops(BuildModelBase):
             has_rainfed_options: bool = farmer_crop_rainfed_fractions.sum() > 0
             has_irrigated_options: bool = farmer_crop_irrigated_fractions.sum() > 0
             if n_rainfed_farmers > 0 and not has_rainfed_options:
-if not has_irrigated_options:
-                    raise ValueError(
-                        f"All rainfed and irrigated crop fractions are zero for cell {linear_index} with MIRCA unit {MIRCA_unit_cell}."
-                    )
+                assert has_irrigated_options, (
+                    f"Error: All rainfed and irrigated crop fractions are zero for cell {linear_index} with MIRCA unit {MIRCA_unit_cell}."
+                )
                 n_irrigating_farmers += n_rainfed_farmers
                 n_rainfed_farmers = 0
             elif n_irrigating_farmers > 0 and not has_irrigated_options:
