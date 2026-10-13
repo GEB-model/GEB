@@ -720,15 +720,28 @@ def infiltration(
             - soil_enthalpy_top_layer_J_per_m2: Updated top-layer soil enthalpy (J/m2).
     """
     no_infiltration_land_use: bool = land_use_type == OPEN_WATER
-    no_topwater_available: bool = bool(topwater_m <= np.float32(1e-6))
+    no_topwater_available: bool = bool(topwater_m <= np.float32(0.0))
 
     # Early return avoids expensive Green-Ampt substeps when infiltration is impossible:
     # Open water does not allow infiltration, and if there is no topwater, there is no water to infiltrate.
-    if no_infiltration_land_use or no_topwater_available:
-        direct_runoff: np.float32 = topwater_m
+    if no_infiltration_land_use:
+        direct_runoff: np.float32 = max(np.float32(0.0), topwater_m)
         return (
             np.float32(0.0),  # topwater_m
             direct_runoff,  # direct_runoff
+            np.float32(0.0),  # groundwater_recharge
+            np.float32(0.0),  # infiltration
+            np.float32(0.0),  # wetting_front_depth_m
+            np.float32(0.0),  # wetting_front_suction_head_m
+            np.float32(0.0),  # wetting_front_moisture_deficit
+            -1,
+            soil_enthalpy_top_layer_J_per_m2,
+        )
+
+    if no_topwater_available:
+        return (
+            np.float32(0.0),  # topwater_m
+            np.float32(0.0),  # direct_runoff
             np.float32(0.0),  # groundwater_recharge
             np.float32(0.0),  # infiltration
             np.float32(0.0),  # wetting_front_depth_m
@@ -1046,10 +1059,13 @@ def infiltration(
             recharge_from_excess: np.float32 = min(
                 excess_surface_water, step_groundwater_recharge_m
             )
-            recharge_from_topwater: np.float32 = (
-                step_groundwater_recharge_m - recharge_from_excess
+            recharge_from_topwater: np.float32 = min(
+                current_topwater_m,
+                step_groundwater_recharge_m - recharge_from_excess,
             )
-            current_topwater_m -= recharge_from_topwater
+            current_topwater_m = max(
+                np.float32(0.0), current_topwater_m - recharge_from_topwater
+            )
             step_excess_unabsorbed: np.float32 = (
                 excess_surface_water - recharge_from_excess
             )
