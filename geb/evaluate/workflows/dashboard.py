@@ -7,7 +7,6 @@ _JavascriptMacro adds these scripts and their data to the HTML file.
 
 import base64
 import gzip
-import hashlib
 import html
 import json
 import logging
@@ -317,14 +316,13 @@ def create_discharge_dashboard(
 
     dashboard_path: Path = evaluation_folder / output_path
     logger.info("Preparing interactive chart data...")
-    station_dashboard_chart_files, chart_timelines = (
+    station_bundle_indices, chart_bundles, chart_timelines = (
         _write_dashboard_charts_from_saved_scores(
             table_files=table_files,
             logger=logger,
             mapped_station_scores=mapped_station_scores,
             run_output_folder=run_output_folder,
             correct_discharge_observations=correct_discharge_observations,
-            dashboard_path=dashboard_path,
             include_return_period_plots=include_return_period_plots,
             rivers=enriched_rivers,
         )
@@ -336,17 +334,14 @@ def create_discharge_dashboard(
         output_path=dashboard_path,
         region_geom=dashboard_geometries.region,
         rivers=enriched_rivers,
-        station_chart_files=station_dashboard_chart_files,
+        chart_bundles=chart_bundles,
+        station_bundle_indices=station_bundle_indices,
         waterbodies=dashboard_geometries.waterbodies,
         station_characteristics=dashboard_characteristics,
         excluded_stations=excluded_stations,
         chart_timeline=chart_timelines,
     )
     logger.info("Discharge evaluation dashboard created: %s", dashboard_path)
-    logger.info(
-        "Tip: If station charts do not appear, download the dashboard HTML "
-        "and its charts folder to the same local directory."
-    )
     return {"dashboard": str(dashboard_path)}
 
 
@@ -355,7 +350,8 @@ def write_discharge_dashboard(
     output_path: Path,
     region_geom: gpd.GeoDataFrame,
     rivers: gpd.GeoDataFrame,
-    station_chart_files: dict[str, str],
+    chart_bundles: list[str],
+    station_bundle_indices: dict[str, int],
     waterbodies: gpd.GeoDataFrame | None = None,
     station_characteristics: pd.DataFrame | None = None,
     excluded_stations: gpd.GeoDataFrame | None = None,
@@ -377,8 +373,8 @@ def write_discharge_dashboard(
         region_geom: Basin/region boundary GeoDataFrame used to fit the map
             extent and draw the catchment outline.
         rivers: WGS84 river network shown on the map.
-        station_chart_files: Interactive chart data files keyed by
-            station ID string.
+        chart_bundles: List of inlined Base64-encoded compressed chart bundle payloads.
+        station_bundle_indices: Mapping from station ID string to its integer bundle index.
         waterbodies: Optional GeoDataFrame with columns ``waterbody_type``
             (2 = reservoir) and polygon geometries. Centroids are used for dot
             placement.
@@ -611,7 +607,7 @@ def write_discharge_dashboard(
             ):
                 snapping_stations.append(record)
             excluded_popup: str = record["popup"]
-            if str(station_id) in station_chart_files:
+            if str(station_id) in station_bundle_indices:
                 excluded_popup += (
                     "<hr><b>Diagnostic only — excluded from evaluation.</b>"
                     f"<div class='geb-popup' data-station-id='{html.escape(str(station_id), quote=True)}'>"
@@ -678,13 +674,8 @@ def write_discharge_dashboard(
         station_count=len(mapped_station_scores),
     )
 
-    unique_bundles: list[str] = sorted(set(station_chart_files.values()))
-    bundle_to_idx: dict[str, int] = {b: i for i, b in enumerate(unique_bundles)}
-    station_bundle_indices: dict[str, int] = {
-        sid: bundle_to_idx[b] for sid, b in station_chart_files.items()
-    }
     chart_macro_data: dict[str, Any] = {
-        "bundles": unique_bundles,
+        "bundles": chart_bundles,
         "stations": station_bundle_indices,
         "timeline": chart_timeline,
     }
@@ -916,10 +907,9 @@ def _write_dashboard_charts_from_saved_scores(
     mapped_station_scores: gpd.GeoDataFrame,
     run_output_folder: Path,
     correct_discharge_observations: bool,
-    dashboard_path: Path,
     include_return_period_plots: bool = True,
     rivers: gpd.GeoDataFrame | None = None,
-) -> tuple[dict[str, str], dict[str, list[int]]]:
+) -> tuple[dict[str, int], list[str], dict[str, Any] | list[int] | None]:
     """Save interactive chart data for stations with saved evaluation scores.
 
     Args:
@@ -928,20 +918,22 @@ def _write_dashboard_charts_from_saved_scores(
         mapped_station_scores: Saved per-station discharge evaluation metrics.
         run_output_folder: Model output folder for the selected run.
         correct_discharge_observations: Whether to correct simulated discharge
-            by the observed-to-GEB upstream-area ratio (dimensionless).
-        dashboard_path: Output path of the dashboard HTML file.
-        include_return_period_plots: Whether to fit and include return-period
-            curves. Defaults to True.
-        rivers: Optional active river segments GeoDataFrame.
+            by the observed-to-GEB upstream-area ratio (dimensionless), matching
+            the option in evaluate_discharge.
+        include_return_period_plots: Whether to calculate and plot return-period
+            curves in station popups. Defaults to True.
+        rivers: Optional river network GeoDataFrame for attaching bankfull
+            charts. Defaults to None.
 
     Returns:
-        Tuple of (mapping from station ID to chart data file, mapping from frequency to timeline).
+        Tuple containing station-to-bundle index mapping, inlined compressed
+        bundle payloads, and common observation time-series index.
 
     Raises:
-        ValueError: If saved metrics are missing required station columns.
+        ValueError: If ``mapped_station_scores`` is missing required columns.
     """
     if mapped_station_scores.empty:
-        return {}, {}
+        return {}, [], {}
     required_columns: set[str] = {
         "station_name",
         "discharge_observations_to_GEB_upstream_area_ratio",
@@ -978,7 +970,6 @@ def _write_dashboard_charts_from_saved_scores(
     )
 
     chart_writer: StationChartBundleWriter = StationChartBundleWriter(
-        dashboard_path=dashboard_path,
         max_stations_per_bundle=50,
     )
     bankfull_df: pd.DataFrame | None = None
@@ -1070,67 +1061,48 @@ def _write_dashboard_charts_from_saved_scores(
             rivers=rivers,
         )
 
-    station_dashboard_chart_files: dict[str, str] = chart_writer.finish()
+    station_dashboard_chart_files: dict[str, int] = chart_writer.finish()
+    chart_bundles: list[str] = chart_writer.bundles
     logger.info(
-        "Chart data built for %d stations in %d bundle file(s).",
+        "Chart data built for %d stations in %d bundle(s).",
         len(station_dashboard_chart_files),
-        len(set(station_dashboard_chart_files.values())),
+        len(chart_bundles),
     )
-    return station_dashboard_chart_files, chart_timelines
+    return station_dashboard_chart_files, chart_bundles, chart_timelines
 
 
 class StationChartBundleWriter:
-    """Accumulates and writes station chart data in compressed JavaScript bundles.
+    """Accumulates station chart data in compressed in-memory JavaScript bundles.
 
     Notes:
         Grouping station chart data into bundles of up to max_stations_per_bundle
-        stations avoids creating hundreds of small individual files on disk, greatly
-        reducing inode usage and filesystem metadata operations on network storage
-        while keeping bundle file sizes small enough for fast asynchronous browser
-        loading.
+        stations allows integrating chart data directly into a single dashboard HTML
+        file without decompressing all stations at page load. Each bundle is
+        decompressed lazily on demand when a user clicks a station marker, keeping
+        map loading and initial rendering fast and responsive.
 
     Args:
-        dashboard_path: Output path of the dashboard HTML file.
         max_stations_per_bundle: Maximum number of stations to bundle into a
-            single JavaScript file. Defaults to 50.
+            single compressed bundle. Defaults to 50.
     """
 
     def __init__(
         self,
-        dashboard_path: Path,
         max_stations_per_bundle: int = 50,
     ) -> None:
-        """Initialize the bundle writer and prepare the output folder.
+        """Initialize the bundle writer.
 
         Args:
-            dashboard_path: Output path of the dashboard HTML file.
             max_stations_per_bundle: Maximum number of stations to bundle into a
-                single JavaScript file. Defaults to 50.
+                single compressed bundle. Defaults to 50.
         """
-        self.dashboard_path: Path = dashboard_path
         self.max_stations_per_bundle: int = max_stations_per_bundle
-        self.chart_folder: Path = (
-            dashboard_path.parent / f"{dashboard_path.stem}_charts"
-        )
-        if self.chart_folder.exists():
-            for existing_file in self.chart_folder.glob("bundle_*.js"):
-                try:
-                    existing_file.unlink()
-                except OSError:
-                    pass
-            rivers_bundle: Path = self.chart_folder / "rivers_bundle.js"
-            if rivers_bundle.exists():
-                try:
-                    rivers_bundle.unlink()
-                except OSError:
-                    pass
-        self.chart_folder.mkdir(parents=True, exist_ok=True)
-        self.station_chart_files: dict[str, str] = {}
+        self.bundles: list[str] = []
+        self.station_bundle_indices: dict[str, int] = {}
         self._current_bundle: dict[str, Any] = {}
-        self._bundle_index: int = 0
 
     def add_station(self, station_id: str, chart_data: dict[str, Any]) -> None:
-        """Add chart data for one station and flush to disk if the bundle is full.
+        """Add chart data for one station and flush to a bundle if full.
 
         Args:
             station_id: Station identifier.
@@ -1140,100 +1112,48 @@ class StationChartBundleWriter:
         if len(self._current_bundle) >= self.max_stations_per_bundle:
             self._flush_bundle()
 
-    def write_named_bundle(
-        self, bundle_filename: str, bundle_data: dict[str, Any]
-    ) -> None:
-        """Write a dictionary of chart data to a single named compressed JavaScript bundle.
+    def add_bundle(self, bundle_data: dict[str, Any]) -> None:
+        """Compress and store a dictionary of chart data (e.g. rivers) in a bundle.
 
         Args:
-            bundle_filename: Filename for the bundle, e.g. 'rivers_bundle.js'.
             bundle_data: Mapping from chart keys to chart payloads.
         """
         if not bundle_data:
             return
-        bundle_path: Path = self.chart_folder / bundle_filename
         json_bytes: bytes = json.dumps(bundle_data, separators=(",", ":")).encode(
             "utf-8"
         )
         compressed_bytes: bytes = gzip.compress(json_bytes, compresslevel=9)
         encoded_payload: str = base64.b64encode(compressed_bytes).decode("ascii")
-        bundle_path.write_text(
-            f'window._gebStationChartBundle="{encoded_payload}";',
-            encoding="utf-8",
-        )
-        relative_path: str = bundle_path.relative_to(
-            self.dashboard_path.parent
-        ).as_posix()
+        bundle_index: int = len(self.bundles)
+        self.bundles.append(encoded_payload)
         for key in bundle_data:
-            self.station_chart_files[key] = relative_path
+            self.station_bundle_indices[key] = bundle_index
 
-    def finish(self) -> dict[str, str]:
-        """Flush any remaining station data and return the station-to-file mapping.
+    def finish(self) -> dict[str, int]:
+        """Flush any remaining station data and return station-to-bundle index mapping.
 
         Returns:
-            Dictionary mapping station identifiers to their relative bundle file path.
+            Dictionary mapping station identifiers to their integer bundle index.
         """
         if self._current_bundle:
             self._flush_bundle()
-        return self.station_chart_files
+        return self.station_bundle_indices
 
     def _flush_bundle(self) -> None:
-        """Write accumulated stations to a Base64-compressed JavaScript bundle."""
+        """Compress accumulated stations into a Base64-compressed bundle."""
         if not self._current_bundle:
             return
-        bundle_filename: str = f"bundle_{self._bundle_index:03d}.js"
-        bundle_path: Path = self.chart_folder / bundle_filename
         json_bytes: bytes = json.dumps(
             self._current_bundle, separators=(",", ":")
         ).encode("utf-8")
         compressed_bytes: bytes = gzip.compress(json_bytes, compresslevel=9)
         encoded_payload: str = base64.b64encode(compressed_bytes).decode("ascii")
-        bundle_path.write_text(
-            f'window._gebStationChartBundle="{encoded_payload}";',
-            encoding="utf-8",
-        )
-        relative_path: str = bundle_path.relative_to(
-            self.dashboard_path.parent
-        ).as_posix()
+        bundle_index: int = len(self.bundles)
+        self.bundles.append(encoded_payload)
         for station_id in self._current_bundle:
-            self.station_chart_files[station_id] = relative_path
+            self.station_bundle_indices[station_id] = bundle_index
         self._current_bundle.clear()
-        self._bundle_index += 1
-
-
-def write_station_chart_data(
-    dashboard_path: Path,
-    station_id: str,
-    chart_data: dict[str, Any],
-) -> str:
-    """Write compressed chart data for one station to a JS file.
-
-    Notes:
-        Chart data is serialized to JSON, compressed using gzip, and encoded
-        as a Base64 string within a JavaScript assignment. This keeps file sizes
-        minimal while preserving compatibility with direct local file:///
-        browsing without encountering browser CORS restrictions.
-
-    Args:
-        dashboard_path: Output path of the dashboard HTML file.
-        station_id: Station identifier used to derive a stable asset filename.
-        chart_data: Data for the interactive station charts.
-
-    Returns:
-        Path to the chart data file relative to the dashboard HTML, using forward slashes.
-    """
-    chart_folder: Path = dashboard_path.parent / f"{dashboard_path.stem}_charts"
-    chart_folder.mkdir(parents=True, exist_ok=True)
-    station_hash: str = hashlib.sha256(station_id.encode()).hexdigest()[:16]
-    chart_path: Path = chart_folder / f"{station_hash}.js"
-    json_bytes: bytes = json.dumps(chart_data, separators=(",", ":")).encode("utf-8")
-    compressed_bytes: bytes = gzip.compress(json_bytes, compresslevel=9)
-    encoded_payload: str = base64.b64encode(compressed_bytes).decode("ascii")
-    chart_path.write_text(
-        f'window._gebStationChartPayload="{encoded_payload}";',
-        encoding="utf-8",
-    )
-    return chart_path.relative_to(dashboard_path.parent).as_posix()
 
 
 def build_river_chart_data(
@@ -1337,7 +1257,7 @@ def add_river_charts_to_bundle_writer(
         )
         all_river_charts[f"river_{river_id_str}"] = river_chart_data
 
-    chart_writer.write_named_bundle("rivers_bundle.js", all_river_charts)
+    chart_writer.add_bundle(all_river_charts)
 
 
 def build_station_chart_data(

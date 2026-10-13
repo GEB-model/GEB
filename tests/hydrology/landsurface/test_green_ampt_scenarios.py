@@ -128,7 +128,6 @@ def run_infiltration_simulation(
             land_use_type,
             w,
             topwater_input,
-            np.float32(0.0),
             wetting_front_depth,
             wetting_front_suction,
             wetting_front_deficit,
@@ -423,7 +422,6 @@ def test_ga_full_column_saturation_processes() -> None:
             land_use_type,
             w,
             rain_m,
-            np.float32(0.0),
             wetting_front_depth,
             wetting_front_suction,
             wetting_front_deficit,
@@ -440,7 +438,7 @@ def test_ga_full_column_saturation_processes() -> None:
         )
 
         # Simulate Drainage (simple gravity flow)
-        # This mocks the redistribution that happens in landsurface (or rise_from_groundwater)
+        # This mocks the redistribution that happens in landsurface
         # We need to drain from bottom layer to simulate "Drainage to groundwater"
         # Since 'infiltration' function doesn't do drainage of the bottom layer itself (it returns 0 for gw_recharge usually unless w > ws logic is triggered),
         # we calculate flux manually to test continuity.
@@ -566,7 +564,6 @@ def test_ga_top_layer_refill_priority() -> None:
         land_use,
         w,
         rain_m,
-        np.float32(0.0),
         wetting_front_depth,
         wetting_front_suction,
         wetting_front_deficit,
@@ -704,7 +701,6 @@ def test_ga_saturation_excess_runoff() -> None:
         land_use,
         w,
         rain_m,
-        np.float32(0.0),
         wetting_front_depth,
         wetting_front_suction,
         wetting_front_deficit,

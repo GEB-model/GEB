@@ -24,7 +24,6 @@ from geb.hydrology.landsurface.water import (
     kv_brakensiek,
     kv_cosby,
     kv_wosten,
-    rise_from_groundwater,
     thetar_brakensiek,
     thetas_toth,
     thetas_wosten,
@@ -169,76 +168,6 @@ def test_add_water_to_topwater_and_evaporate_open_water() -> None:
     assert abs(open_water_evaporation - 0.01) < 1e-6
 
 
-def test_rise_from_groundwater() -> None:
-    """Test the scalar version of rise_from_groundwater."""
-    # Test case 1: No overflow
-    w = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1], dtype=np.float32)
-    ws = np.array([0.3, 0.3, 0.3, 0.3, 0.3, 0.3], dtype=np.float32)
-    capillary_rise = np.float32(0.05)
-
-    w_pre = w.copy()
-    runoff = rise_from_groundwater(w, ws, capillary_rise)
-
-    # Bottom layer should have increased by capillary_rise
-    assert abs(w[5] - (w_pre[5] + capillary_rise)) < 1e-6
-    # No runoff since there's capacity
-    assert runoff == 0.0
-
-    # Test case 2: Overflow to runoff
-    w = np.array(
-        [0.29, 0.3, 0.3, 0.3, 0.3, 0.3], dtype=np.float32
-    )  # Top layer almost full
-    ws = np.array([0.3, 0.3, 0.3, 0.3, 0.3, 0.3], dtype=np.float32)
-    capillary_rise = np.float32(0.05)
-
-    w_pre = w.copy()
-    runoff = rise_from_groundwater(w, ws, capillary_rise)
-
-    # Should have runoff
-    assert runoff > 0.0
-    # Top layer should be at capacity
-    assert abs(w[0] - ws[0]) < 1e-6
-
-    # Test case 3: Zero capillary rise
-    w = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1], dtype=np.float32)
-    ws = np.array([0.3, 0.3, 0.3, 0.3, 0.3, 0.3], dtype=np.float32)
-    capillary_rise = np.float32(0.0)
-
-    w_pre = w.copy()
-    runoff = rise_from_groundwater(w, ws, capillary_rise)
-
-    # No change in soil water
-    assert np.allclose(w, w_pre)
-    assert runoff == 0.0
-
-    # Test case 4: Capillary rise exceeding total soil capacity
-    w = np.array(
-        [0.29, 0.3, 0.3, 0.3, 0.3, 0.3], dtype=np.float32
-    )  # All layers almost full
-    ws = np.array([0.3, 0.3, 0.3, 0.3, 0.3, 0.3], dtype=np.float32)
-    capillary_rise = np.float32(0.1)  # More than remaining capacity
-
-    runoff = rise_from_groundwater(w, ws, capillary_rise)
-
-    # Should have significant runoff
-    assert runoff > 0.05  # At least the excess
-    # All layers should be at capacity
-    assert np.allclose(w, ws)
-
-    # Test case 5: Soil already saturated
-    w = np.array([0.3, 0.3, 0.3, 0.3, 0.3, 0.3], dtype=np.float32)
-    ws = np.array([0.3, 0.3, 0.3, 0.3, 0.3, 0.3], dtype=np.float32)
-    capillary_rise = np.float32(0.01)
-
-    w_pre = w.copy()
-    runoff = rise_from_groundwater(w, ws, capillary_rise)
-
-    # All water should go to runoff
-    assert abs(runoff - capillary_rise) < 1e-6
-    # Soil water unchanged
-    assert np.allclose(w, w_pre)
-
-
 def test_infiltration() -> None:
     """Test the scalar infiltration function."""
     # Test case 1: Normal infiltration
@@ -280,7 +209,6 @@ def test_infiltration() -> None:
         land_use_type,
         w,
         topwater,
-        np.float32(0.0),  # capillary_rise_from_groundwater_m
         np.float32(0.0),
         np.float32(0.1),  # wetting_front_suction_head_m
         np.float32(0.1),  # wetting_front_moisture_deficit
@@ -348,7 +276,6 @@ def test_infiltration() -> None:
         land_use_type,
         w,
         topwater,
-        np.float32(0.0),  # capillary_rise_from_groundwater_m
         np.float32(0.0),
         np.float32(0.1),  # wetting_front_suction_head_m
         np.float32(0.1),  # wetting_front_moisture_deficit
@@ -397,7 +324,6 @@ def test_infiltration() -> None:
         land_use_type,
         w,
         topwater,
-        np.float32(0.0),  # capillary_rise_from_groundwater_m
         np.float32(0.0),
         np.float32(0.1),  # wetting_front_suction_head_m
         np.float32(0.1),  # wetting_front_moisture_deficit
@@ -450,7 +376,6 @@ def test_infiltration() -> None:
         w,
         topwater,
         np.float32(0.0),
-        np.float32(0.0),
         np.float32(0.1),
         np.float32(0.1),
         np.int32(0),
@@ -495,7 +420,6 @@ def test_infiltration() -> None:
         w,
         topwater,
         np.float32(0.0),
-        np.float32(0.0),
         np.float32(0.1),
         np.float32(0.1),
         np.int32(0),
@@ -538,7 +462,6 @@ def test_infiltration() -> None:
         land_use_type,
         w,
         topwater,
-        np.float32(0.0),  # capillary_rise_from_groundwater_m
         np.float32(0.0),
         np.float32(0.1),  # wetting_front_suction_head_m
         np.float32(0.1),  # wetting_front_moisture_deficit
@@ -582,7 +505,6 @@ def test_infiltration() -> None:
         w,
         topwater,
         np.float32(0.0),
-        np.float32(0.0),
         np.float32(0.1),
         np.float32(0.1),
         np.int32(0),
@@ -623,7 +545,6 @@ def test_infiltration() -> None:
         land_use_type,
         w,
         topwater,
-        np.float32(0.0),  # capillary_rise_from_groundwater_m
         np.float32(0.0),
         np.float32(0.1),  # wetting_front_suction_head_m
         np.float32(0.1),  # wetting_front_moisture_deficit
@@ -672,7 +593,6 @@ def test_infiltration() -> None:
         land_use_type,
         w,
         topwater,
-        np.float32(0.0),  # capillary_rise_from_groundwater_m
         np.float32(0.0),
         np.float32(0.1),  # wetting_front_suction_head_m
         np.float32(0.1),  # wetting_front_moisture_deficit
@@ -719,7 +639,6 @@ def test_infiltration() -> None:
         land_use_type,
         w,
         topwater,
-        np.float32(0.0),  # capillary_rise_from_groundwater_m
         np.float32(0.0),
         np.float32(0.1),  # wetting_front_suction_head_m
         np.float32(0.1),  # wetting_front_moisture_deficit
@@ -772,7 +691,6 @@ def test_infiltration() -> None:
         land_use_type,
         w,
         topwater,
-        np.float32(0.0),  # capillary_rise_from_groundwater_m
         np.float32(0.0),
         np.float32(0.1),  # wetting_front_suction_head_m
         np.float32(0.1),  # wetting_front_moisture_deficit
@@ -840,7 +758,6 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
         np.int32(NON_PADDY_IRRIGATED),
         w,
         very_high_topwater,  # very high topwater
-        np.float32(0.0),
         total_soil_depth_m,
         np.float32(10.0 / 3600.0),
         np.float32(0.1),
@@ -871,47 +788,6 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
         < 1e-6
     )
 
-    # If there is capillary rise, groundwater recharge should be suppressed.
-    w = ws.copy()
-    (
-        updated_topwater_with_rise,
-        direct_runoff,
-        groundwater_recharge_with_rise,
-        infiltration_amount,
-        _,
-        _,
-        _,
-        _,
-        _,
-    ) = infiltration(
-        np.int64(42),
-        ws,
-        wres,
-        saturated_hydraulic_conductivity_m_per_s,
-        groundwater_toplayer_conductivity_m_per_s,
-        np.int32(NON_PADDY_IRRIGATED),
-        w,
-        topwater_m,
-        np.float32(0.001),
-        total_soil_depth_m,
-        np.float32(10.0 / 3600.0),
-        np.float32(0.1),
-        np.int32(0),
-        np.float32(0.1),
-        bubbling_pressure_m_positive,
-        soil_layer_height_m,
-        lambda_param,
-        np.float32(0.0),
-        np.float32(100000.0),
-        np.float32(0.0),
-        np.float32(0.0),
-        rainfall_lookup_table=DEFAULT_TEST_LUT,
-        distribute_rainfall_lognormally=False,
-    )
-    assert infiltration_amount == 0.0
-    assert groundwater_recharge_with_rise == 0.0
-    assert abs(direct_runoff + updated_topwater_with_rise - topwater_m) < 1e-6
-
     # Test case: Compare two different groundwater conductivities.
     # Lower groundwater conductivity should lead to lower recharge and MORE runoff.
     w_baseline = ws.copy()
@@ -928,7 +804,6 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
         np.int32(NON_PADDY_IRRIGATED),
         w_baseline.copy(),
         topwater_test,
-        np.float32(0.0),
         total_soil_depth_m,
         np.float32(10.0 / 3600.0),
         np.float32(0.1),
@@ -958,7 +833,6 @@ def test_infiltration_groundwater_recharge_is_capped_by_groundwater_conductivity
         np.int32(NON_PADDY_IRRIGATED),
         w_baseline.copy(),
         topwater_test,
-        np.float32(0.0),
         total_soil_depth_m,
         np.float32(10.0 / 3600.0),
         np.float32(0.1),
@@ -1088,7 +962,6 @@ def test_infiltration_variable_runoff_integration() -> None:
         w_variable,
         topwater,
         np.float32(0.0),
-        np.float32(0.0),
         np.float32(0.1),  # wetting_front_suction_head_m
         np.float32(0.1),  # wetting_front_moisture_deficit
         np.int32(0),
@@ -1142,7 +1015,6 @@ def test_infiltration_variable_runoff_plot() -> None:
                 land_use_type,
                 w.copy(),
                 rainfall_amount,
-                np.float32(0.0),
                 np.float32(0.0),
                 np.float32(0.1),  # wetting_front_suction_head_m
                 np.float32(0.1),  # wetting_front_moisture_deficit
@@ -1471,7 +1343,6 @@ def test_infiltration_with_custom_lookup_table() -> None:
         w,
         np.float32(0.01),
         np.float32(0.0),
-        np.float32(0.0),
         np.float32(0.1),
         np.float32(0.1),
         np.int32(0),
@@ -1532,7 +1403,6 @@ def test_infiltration_burst_storm_runoff_and_depression_storage() -> None:
         land_use_type=np.int32(NON_PADDY_IRRIGATED),
         w=w,
         topwater_m=total_water_input_m,
-        capillary_rise_from_groundwater_m=np.float32(0.0),
         wetting_front_depth_m=np.float32(0.0),
         wetting_front_suction_head_m=np.float32(0.1),
         wetting_front_moisture_deficit=np.float32(0.1),
@@ -1648,7 +1518,6 @@ def test_infiltration_pre_existing_puddle_dry_timestep() -> None:
         land_use_type=np.int32(NON_PADDY_IRRIGATED),
         w=w.copy(),
         topwater_m=topwater_puddle,
-        capillary_rise_from_groundwater_m=np.float32(0.0),
         wetting_front_depth_m=np.float32(0.0),
         wetting_front_suction_head_m=np.float32(0.1),
         wetting_front_moisture_deficit=np.float32(0.1),
@@ -1691,7 +1560,6 @@ def test_infiltration_pre_existing_puddle_dry_timestep() -> None:
         land_use_type=np.int32(SEALED),
         w=w.copy(),
         topwater_m=topwater_puddle,
-        capillary_rise_from_groundwater_m=np.float32(0.0),
         wetting_front_depth_m=np.float32(0.0),
         wetting_front_suction_head_m=np.float32(0.1),
         wetting_front_moisture_deficit=np.float32(0.1),
