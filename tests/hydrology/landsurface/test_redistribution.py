@@ -1669,3 +1669,87 @@ def test_plot_saturated_matric_flux_potential_and_capillary_fluxes() -> None:
 
     assert plot3_path.exists(), f"{plot3_path} was not created"
     assert plot3_path.stat().st_size > 0, f"{plot3_path} is empty"
+
+
+def test_distribute_soil_water_ross_wet_bottom_dry_upper_layers_no_spurious_capillary_rise() -> (
+    None
+):
+    """Test that a wet bottom layer under dry upper layers does not cause spurious capillary rise from deep groundwater.
+
+    With a 2 m profile and a 15 m deep water table, upward redistribution
+    from a wet bottom layer (S=0.95) to dry upper layers (S=0.05) causes a large negative
+    dS in the bottom layer. The linearized Taylor correction q + (dq/dS)*dS must not turn
+    downward drainage into spurious upward capillary rise that violates the capillary capacity limit.
+    """
+    timestep_length_s: np.float32 = np.float32(3600.0)
+    soil_layer_height_m: np.ndarray = np.array(
+        [0.05, 0.10, 0.15, 0.30, 0.40, 1.00], dtype=np.float32
+    )
+    n_layers: int = len(soil_layer_height_m)
+    wr: np.ndarray = np.full(n_layers, 0.05, dtype=np.float32) * soil_layer_height_m
+    ws: np.ndarray = np.full(n_layers, 0.50, dtype=np.float32) * soil_layer_height_m
+    wfc: np.ndarray = np.full(n_layers, 0.30, dtype=np.float32) * soil_layer_height_m
+
+    s_eff: np.ndarray = np.array([0.05, 0.05, 0.05, 0.05, 0.05, 0.95], dtype=np.float32)
+    w_initial: np.ndarray = wr + s_eff * (ws - wr)
+
+    enth: np.ndarray = np.full(n_layers, 1e7, dtype=np.float32)
+    hc: np.ndarray = np.full(n_layers, 1e6, dtype=np.float32)
+
+    ksat: np.ndarray = np.full(n_layers, 1e-4, dtype=np.float32)
+    bubbling_pressure_m_positive: np.ndarray = np.full(
+        n_layers, 0.6666, dtype=np.float32
+    )
+    lambda_: np.ndarray = np.full(n_layers, 0.3, dtype=np.float32)
+    pore_size_index: np.ndarray = np.float32(3.0) + (np.float32(2.0) / lambda_)
+
+    interface_dist_m: np.ndarray = (
+        soil_layer_height_m[:-1] + soil_layer_height_m[1:]
+    ) / 2.0
+    w_new: np.ndarray = w_initial.copy()
+    e_new: np.ndarray = enth.copy()
+
+    (
+        top_soil_percolation_to_layer_2_m,
+        top_soil_rise_from_layer_2_m,
+        percolation_to_groundwater_m,
+        capillary_rise_from_groundwater_m,
+        percolation_to_groundwater_enthalpy_loss_J_per_m2,
+        total_lateral_outflow_m,
+        total_interflow_enthalpy_loss_J_per_m2,
+    ) = distribute_soil_water_ross(
+        timestep_length_s=timestep_length_s,
+        water_content_m=w_new,
+        water_content_residual_m=wr,
+        water_content_saturated_m=ws,
+        water_content_field_capacity_m=wfc,
+        soil_enthalpy_J_per_m2=e_new,
+        solid_heat_capacity_J_per_m2_K=hc,
+        saturated_hydraulic_conductivity_m_per_s=ksat,
+        interface_dist_m=interface_dist_m,
+        soil_layer_height=soil_layer_height_m,
+        bubbling_pressure_m_positive=bubbling_pressure_m_positive,
+        lambda_=lambda_,
+        pore_size_index=pore_size_index,
+        slope_m_per_m=np.float32(0.0),
+        hillslope_length_m=np.float32(100.0),
+        interflow_multiplier=np.float32(0.0),
+        green_ampt_active_layer_idx=np.int32(-1),
+        topwater_m=np.float32(0.0),
+        gw_ksat_m_per_s=np.float32(1e-4),
+        groundwater_depth_m=np.float32(15.0),
+        deep_soil_temperature_C=np.float32(10.0),
+    )
+
+    # Capillary rise from 15 m deep water table must be zero (not ~5.3 mm/hr spurious influx)
+    assert capillary_rise_from_groundwater_m == pytest.approx(0.0, abs=1e-8)
+    # Bottom layer should drain downwards into groundwater via gravity percolation
+    assert percolation_to_groundwater_m >= 0.0
+    # Mass balance check
+    expected_storage_change_m: np.float32 = (
+        capillary_rise_from_groundwater_m
+        - percolation_to_groundwater_m
+        - total_lateral_outflow_m
+    )
+    actual_storage_change_m: np.float32 = np.sum(w_new) - np.sum(w_initial)
+    assert actual_storage_change_m == pytest.approx(expected_storage_change_m, abs=1e-7)

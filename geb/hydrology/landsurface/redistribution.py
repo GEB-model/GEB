@@ -675,9 +675,17 @@ def distribute_soil_water_ross(
     bottom_layer: int = (
         N_SOIL_LAYERS - 1
     )  # lowest soil layer is the interface with groundwater
-    corrected_groundwater_flux_m_per_s: np.float32 = q[N_SOIL_LAYERS] + (
+    linearized_gw_flux_m_per_s: np.float32 = q[N_SOIL_LAYERS] + (
         dq_dS_i[N_SOIL_LAYERS] * dS[bottom_layer]
     )
+    # Downward gravity drainage cannot turn into upward capillary rise through Taylor linearization
+    if q[N_SOIL_LAYERS] >= np.float32(0.0):
+        corrected_groundwater_flux_m_per_s: np.float32 = max(
+            np.float32(0.0), linearized_gw_flux_m_per_s
+        )
+    else:
+        corrected_groundwater_flux_m_per_s = linearized_gw_flux_m_per_s
+
     groundwater_boundary_flux_m: np.float32 = (
         corrected_groundwater_flux_m_per_s * timestep_length_s
     )
