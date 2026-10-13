@@ -645,8 +645,6 @@ def land_surface_model(
                 )
                 open_water_evaporation_m[i] += open_water_evaporation_m_cell_hour
 
-                # Capillary rise is handled dynamically by distribute_soil_water_ross below.
-
                 # Only newly added liquid surface water should advect rain heat here.
                 # Pre-existing ponded water is already part of the top-soil control
                 # volume and must not be reheated every infiltration call.
@@ -683,7 +681,6 @@ def land_surface_model(
                     land_use_type=land_use_type[i],
                     w=water_content_m[i, :],
                     topwater_m=topwater_m[i],
-                    capillary_rise_from_groundwater_m=np.float32(0.0),
                     wetting_front_depth_m=wetting_front_depth_m[i],
                     wetting_front_suction_head_m=wetting_front_suction_head_m[i],
                     wetting_front_moisture_deficit=wetting_front_moisture_deficit[i],
