@@ -389,6 +389,8 @@ def land_surface_model(
     for _block in prange(num_blocks):
         for _j in range(BLOCK_SIZE):
             i: int = _block * BLOCK_SIZE + _j
+            # Track remaining available groundwater storage across the 24 hourly sub-steps
+            # to ensure capillary rise does not overdraw the aquifer during the daily step.
             remaining_capillary_rise_m: np.float32 = max_capillary_rise_m[i]
             # Pre-allocate the per-cell transpiration snapshot buffer here (outside the
             # hour loop) to avoid a heap allocation on each of the 24 hourly sub-steps.
