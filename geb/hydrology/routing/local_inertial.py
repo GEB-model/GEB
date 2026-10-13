@@ -739,11 +739,11 @@ def _run_inertial_routing_step(
 
 
 class LocalInertial:
-    """Local inertial river network router with non-rectangular & compound floodplain geometry.
+    """Local inertial river network router with CaMa-Flood style dead-storage floodplain geometry.
 
     Combines non-linear kinematic wave routing for overland / non-river cells with a
     1D local inertial dynamic routing formulation for river network reaches,
-    supporting trapezoidal and compound floodplain cross-sections.
+    supporting trapezoidal channels and CaMa-Flood style dead-storage floodplains.
     """
 
     def __init__(

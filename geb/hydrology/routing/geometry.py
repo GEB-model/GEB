@@ -177,13 +177,13 @@ def compute_cross_section_from_depth(
     """Calculates cross-sectional area, top width, and wetted perimeter from effective interface depth.
 
     The river channel has curved sides (a bowl or parabola shape). When water
-    rises above the river banks, it spills onto the flat floodplain next to it.
+    rises above the river banks, it spills onto the floodplain next to it.
 
-    When water floods over the banks, deep water in the river still moves fast,
-    while shallow water on the floodplain moves slowly. To prevent the shallow
-    floodplain water from making the whole river appear to suddenly slow down,
-    we calculate the river and the floodplain separately and combine how easily
-    water can move through both.
+    In CaMa-Flood style routing (Yamazaki et al. 2011, 2012), water exceeding bankfull
+    depth spills onto the floodplain where it is stored (acting as a capacitive retention /
+    dead zone that attenuates the flood wave and raises the water level), while downstream
+    longitudinal conveyance between reaches is carried by the river channel section (channel
+    area plus the column of water directly above the river channel).
 
     Args:
         effective_depth_m: Water depth at the boundary between two river reaches (meters).
@@ -236,68 +236,13 @@ def compute_cross_section_from_depth(
             effective_depth_m - bankfull_depth_m, np.float32(0.0)
         )
 
-        if (
-            floodplain_width_m > np.float32(0.0)
-            and floodplain_depth > floodplain_depth_threshold_m
-        ):
-            # Water is deep enough that the floodplain has expanded to its full width.
-            # Above this level, water rises straight up between the outer valley walls.
-            area = (
-                bankfull_area_m2
-                + floodplain_area_threshold_m2
-                + floodplain_width_m * (floodplain_depth - floodplain_depth_threshold_m)
-            )
-            top_width = bankfull_width_m + floodplain_width_m
-            actual_floodplain_width: np.float32 = floodplain_width_m
-        else:
-            # Water is still spreading out sideways along the sloping floodplain edges.
-            area = bankfull_area_m2 + floodplain_side_slope * (
-                floodplain_depth * floodplain_depth
-            )
-            actual_floodplain_width = (
-                np.float32(2.0) * floodplain_side_slope * floodplain_depth
-            )
-            top_width = bankfull_width_m + actual_floodplain_width
-
-        # Why we separate the river and the floodplain:
-        # Deep river water moves fast, while shallow floodplain water moves slowly.
-        # If we mixed them together into one shape, the huge width of the floodplain
-        # would make it look like the fast river suddenly slowed down.
-        # To avoid this, we calculate how easily water flows through each part separately,
-        # then add their flow capacities together.
-
-        # 1. Main channel flow: river channel area plus the column of water directly above it.
-        channel_area: np.float32 = min(
-            bankfull_area_m2 + bankfull_width_m * floodplain_depth, area
-        )
-        # 2. Floodplain flow: shallow water spreading out to the sides.
-        floodplain_area: np.float32 = max(area - channel_area, np.float32(0.0))
-
-        # Flow efficiency (hydraulic radius = area / bed length touching water) for each part.
-        r_channel: np.float32 = channel_area / max(
-            bankfull_perimeter_m, np.float32(1e-3)
-        )
-        p_floodplain: np.float32 = max(actual_floodplain_width, np.float32(1e-3))
-        r_floodplain: np.float32 = floodplain_area / p_floodplain
-
-        # How easily water flows through each part (Manning's flow factor: area * radius^(2/3)).
-        conveyance_channel: np.float32 = channel_area * (
-            r_channel ** np.float32(2.0 / 3.0)
-        )
-        conveyance_floodplain: np.float32 = floodplain_area * (
-            r_floodplain ** np.float32(2.0 / 3.0)
-        )
-        total_conveyance: np.float32 = conveyance_channel + conveyance_floodplain
-
-        # Convert the total flow capacity back into an equivalent wetted perimeter
-        # so the standard flow equation can use it.
-        effective_r_two_thirds: np.float32 = total_conveyance / max(
-            area, np.float32(1e-6)
-        )
-        effective_hydraulic_radius: np.float32 = effective_r_two_thirds ** np.float32(
-            1.5
-        )
-        wetted_perimeter = area / max(effective_hydraulic_radius, np.float32(1e-6))
+        # In CaMa-Flood style routing, the floodplain acts as a storage reservoir (dead zone):
+        # water stored on the floodplain attenuates the flood wave and raises the water surface level,
+        # but downstream conveyance between reaches is carried by the river channel section (channel
+        # area plus the column of water directly above the river channel).
+        area = bankfull_area_m2 + bankfull_width_m * floodplain_depth
+        top_width = bankfull_width_m
+        wetted_perimeter = bankfull_perimeter_m
 
     return area, top_width, wetted_perimeter
 

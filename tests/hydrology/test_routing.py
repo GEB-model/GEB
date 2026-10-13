@@ -1931,9 +1931,10 @@ def test_compute_cross_section_from_depth() -> None:
     assert np.isclose(area, expected_w, atol=1e-4)
 
     # Overbank interface depth (2.5 m -> 0.5 m overbank)
-    # W_bf=20.0, h_bf=2.0, W_fp=50.0 -> eff_z_fp = 50 / 4 = 12.5
-    # Overbank top width = 20 + 2 * 12.5 * 0.5 = 32.5 m
-    # Overbank area = 12.5 * (0.5^2) = 3.125 m2; Total area = (40.0 / 1.5) + 3.125 m2
+    # CaMa-Flood style: floodplain acts as dead storage; flow is carried by the main channel column.
+    # W_bf=20.0, h_bf=2.0, effective_depth=2.5 -> floodplain_depth = 0.5 m
+    # Channel flow area = bankfull_area + W_bf * floodplain_depth = (40.0 / 1.5) + 20.0 * 0.5 = 36.6667 m2
+    # Top width = W_bf = 20.0 m; Wetted perimeter = bankfull_perimeter
     area_ob, top_width_ob, p_wetted_ob = compute_cross_section_from_depth(
         effective_depth_m=np.float32(2.5),
         bankfull_width_m=bankfull_width_m,
@@ -1951,8 +1952,10 @@ def test_compute_cross_section_from_depth() -> None:
         ],
         width_over_sqrt_bankfull_depth=width_over_sqrt_bankfull_depth_arr[0],
     )
-    assert np.isclose(area_ob, (40.0 / 1.5) + 3.125, atol=1e-4)
-    assert np.isclose(top_width_ob, 32.5, atol=1e-4)
+    expected_area_ob = (40.0 / 1.5) + (20.0 * 0.5)
+    assert np.isclose(area_ob, expected_area_ob, atol=1e-4)
+    assert np.isclose(top_width_ob, 20.0, atol=1e-4)
+    assert np.isclose(p_wetted_ob, bankfull_perimeter_arr[0], atol=1e-4)
 
 
 def test_free_overfall_slope_bounded_by_bed_slope() -> None:
