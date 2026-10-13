@@ -234,7 +234,7 @@ def test_fathomdem_fetch_and_read(
     assert not np.isnan(read_da.values).all()
     # Check elevation value
     valid_vals = read_da.values[~np.isnan(read_da.values)]
-    assert np.allclose(valid_vals, 42.0)
+    assert np.allclose(valid_vals, 0.42)
 
     # Test resampling with resample_chunked (as done in setup_elevation)
     from geb.workflows.raster import resample_chunked
@@ -264,3 +264,48 @@ def test_fathomdem_fetch_and_read(
     # Edge case: fetch for an area with no intersecting zip packages raises RuntimeError
     with pytest.raises(RuntimeError, match="No FathomDEM zip archives intersect"):
         adapter.fetch(mask=outside_mask)
+
+
+def test_fathomdem_read_multi_tile_lazy_chunks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test that multiple FathomDEM tiles are merged lazily with dask chunks."""
+    monkeypatch.setenv("GEB_DATA_ROOT", str(tmp_path))
+    monkeypatch.setenv("ZENODO_ACCESS_TOKEN", "test_token")
+    adapter = FathomDem(
+        record_ids=("14511570",),
+        folder="fathomdem",
+        local_version=1,
+        filename="placeholder.txt",
+        cache="global",
+    )
+    adapter.logger = logging.getLogger("test")
+
+    # Create two adjacent 1x1 degree GeoTIFF tiles: n00e120 and n00e121
+    tile1_path: Path = adapter.root / "n00e120.tif"
+    tile2_path: Path = adapter.root / "n00e121.tif"
+    adapter.root.mkdir(parents=True, exist_ok=True)
+
+    y_coords = np.linspace(1.0, 0.0, 10)
+    for path, x_start in [(tile1_path, 120.0), (tile2_path, 121.0)]:
+        x_coords = np.linspace(x_start, x_start + 1.0, 10)
+        data = np.ones((1, 10, 10), dtype=np.int32) * 5000
+        da = xr.DataArray(
+            data,
+            coords={"band": [1], "y": y_coords, "x": x_coords},
+            dims=["band", "y", "x"],
+        )
+        da.rio.write_crs("EPSG:4326", inplace=True)
+        da.rio.write_nodata(-32768, inplace=True)
+        da.rio.to_raster(path)
+
+    # Read mask spanning both tiles
+    spanning_mask = box(120.4, 0.2, 121.6, 0.8)
+    merged_da = adapter.read(mask=spanning_mask)
+
+    assert isinstance(merged_da, xr.DataArray)
+    assert merged_da.chunks is not None, "Merged DataArray must retain dask chunks"
+    # Ensure elevation is converted from cm to m (5000 cm -> 50.0 m)
+    valid_values = merged_da.values[~np.isnan(merged_da.values)]
+    assert np.allclose(valid_values, 50.0)
+    assert merged_da.dtype == np.float32
