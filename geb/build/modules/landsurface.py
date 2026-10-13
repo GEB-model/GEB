@@ -166,8 +166,13 @@ class LandSurface(BuildModelBase):
                 ),
                 crs=coastlines.crs,
             )
+
+            # if the coastlines are not a single LineString, we merge them into one
+            geom = coastlines.geometry.union_all()
+            if geom.geom_type == "MultiLineString":
+                geom = linemerge(geom)
             coastlines = gpd.GeoDataFrame(
-                geometry=[linemerge(coastlines.geometry.union_all())],
+                geometry=[geom],
                 crs=coastlines.crs,
             )
 
