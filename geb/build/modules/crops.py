@@ -947,9 +947,9 @@ class Crops(BuildModelBase):
                             region_dict[str(crop_id)] = region_data.mean(
                                 axis=1
                             ).tolist()
-                            raise ValueError(
-                                f"Crop {crop_name} has NaN values in region {region_id} data."
-                            )
+                            # raise ValueError(
+                            #     f"Crop {crop_name} has NaN values in region {region_id} data."
+                            # )
                         else:
                             region_dict[str(crop_id)] = region_data[crop_name].tolist()
                     # check if crop is in the crop calendar, if is raise an error because it must be
