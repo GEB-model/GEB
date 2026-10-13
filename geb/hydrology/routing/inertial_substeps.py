@@ -27,6 +27,8 @@ __all__ = [
     "ALLOW_REVERSE_FLOW",
     "InertialGeometry",
     "InertialTopology",
+    "KinematicTopology",
+    "RoutingStepDiagnostics",
     "WaterbodyCoupling",
     "RetentionCoupling",
     "SubstepBuffers",
@@ -113,6 +115,70 @@ class InertialGeometry(NamedTuple):
     geom_overbank: TwoDArrayFloat32
     geom_cfl: TwoDArrayFloat32
     pit_slope_inertial: ArrayFloat32
+
+
+class KinematicTopology(NamedTuple):
+    """Encapsulates static topology and routing parameters for kinematic reaches.
+
+    Attributes:
+        n_kinematic: Number of reaches routed with kinematic wave.
+        n_kin_headwater: Number of kinematic headwater reaches (solvable in parallel).
+        kin_ds_reach: Downstream kinematic reach index per kinematic reach (-1 if none).
+        kin_inflow_m3_s: Buffer accumulating upstream inflow discharges into kinematic reaches (m³/s).
+        kin_ds_waterbody_id: Downstream waterbody ID per kinematic reach (-1 if none).
+        wb_to_kin_target_reach: Target kinematic reaches receiving waterbody outflow.
+        wb_to_kin_wb_id: Waterbody IDs discharging into kinematic reaches.
+        kin_wb_inflow_m3: Buffer storing waterbody release volumes per kinematic reach (m³).
+        inertial_up_kin_offsets: CSR offsets of upstream kinematic reaches per inertial reach.
+        inertial_up_kin_indices: CSR indices of upstream kinematic reaches per inertial reach.
+        inertial_up_kin_reach_idx: Precomputed direct upstream kinematic index array.
+        river_storage_alpha: Storage equation alpha parameter array.
+        river_storage_beta: Storage equation beta parameter array.
+        river_length: Channel length array (meters).
+        retention_node_id: Retention basin index mapping per node (-1 if none).
+    """
+
+    n_kinematic: int
+    n_kin_headwater: int
+    kin_ds_reach: ArrayInt32
+    kin_inflow_m3_s: ArrayFloat32
+    kin_ds_waterbody_id: ArrayInt32
+    wb_to_kin_target_reach: ArrayInt32
+    wb_to_kin_wb_id: ArrayInt32
+    kin_wb_inflow_m3: ArrayFloat32
+    inertial_up_kin_offsets: ArrayInt32
+    inertial_up_kin_indices: ArrayInt32
+    inertial_up_kin_reach_idx: ArrayInt32
+    river_storage_alpha: ArrayFloat32
+    river_storage_beta: ArrayFloat32
+    river_length: ArrayFloat32
+    retention_node_id: ArrayInt32
+
+
+class RoutingStepDiagnostics(NamedTuple):
+    """Encapsulates numerical stability and CFL limiting diagnostics from a routing step.
+
+    Attributes:
+        num_inertial_substeps: Total number of sub-timesteps executed.
+        limiting_reach_idx: Reach index requiring the smallest stable timestep (-1 if none).
+        min_stable_timestep_s: Minimum stable timestep duration across all reaches (seconds).
+        h_vol: Hydraulic depth from stored channel volume in limiting reach (meters).
+        h_flow: Hydraulic depth estimated from oncoming flow in limiting reach (meters).
+        h_gov: Governing hydraulic depth in limiting reach (meters).
+        celerity: Shallow-water wave celerity in limiting reach (m/s).
+        limiting_flow: Characteristic peak flow rate through limiting reach (m³/s).
+        limiting_storage: Stored volume in limiting reach (m³).
+    """
+
+    num_inertial_substeps: int
+    limiting_reach_idx: int
+    min_stable_timestep_s: np.float32
+    h_vol: np.float32
+    h_flow: np.float32
+    h_gov: np.float32
+    celerity: np.float32
+    limiting_flow: np.float32
+    limiting_storage: np.float32
 
 
 class InertialTopology(NamedTuple):
@@ -533,9 +599,7 @@ def compute_inertial_substeps_cfl(
     dt_f32: np.float32,
     inv_dt_f32: np.float32,
     n_inertial: int,
-    inertial_up_kin_offsets: ArrayInt32,
-    inertial_up_kin_indices: ArrayInt32,
-    inertial_up_kin_reach_idx: ArrayInt32,
+    kin: KinematicTopology,
     previous_discharge_m3_s_inertial: ArrayFloat32,
     updated_discharge_m3_s: ArrayFloat32,
     river_storage_m3_inertial: ArrayFloat64,
@@ -545,17 +609,7 @@ def compute_inertial_substeps_cfl(
     topo: InertialTopology,
     wb: WaterbodyCoupling,
     buffers: SubstepBuffers,
-) -> tuple[
-    int,
-    int,
-    np.float32,
-    np.float32,
-    np.float32,
-    np.float32,
-    np.float32,
-    np.float32,
-    np.float32,
-]:
+) -> RoutingStepDiagnostics:
     """Computes upstream kinematic inflow accumulations and adaptive CFL substepping stability constraint.
 
     Operates in parallel across available CPU threads without lock contention.
@@ -564,9 +618,7 @@ def compute_inertial_substeps_cfl(
         dt_f32: Macro routing timestep duration (seconds).
         inv_dt_f32: Reciprocal of macro routing timestep (1/seconds).
         n_inertial: Number of reaches routed with local inertial equations.
-        inertial_up_kin_offsets: CSR offsets of upstream kinematic nodes per inertial reach.
-        inertial_up_kin_indices: CSR indices of upstream kinematic nodes per inertial reach.
-        inertial_up_kin_reach_idx: Precomputed direct upstream kinematic node index array.
+        kin: Kinematic topology parameters and upstream index maps.
         previous_discharge_m3_s_inertial: Inertial reach discharge from previous timestep (m³/s).
         updated_discharge_m3_s: Discharge array updated from kinematic reaches (m³/s).
         river_storage_m3_inertial: Inertial reach water storage volume array (m³).
@@ -578,21 +630,17 @@ def compute_inertial_substeps_cfl(
         buffers: Pre-allocated workspace scratch buffers.
 
     Returns:
-        A tuple of (num_inertial_substeps, limiting_reach_idx, min_stable_timestep_s, h_vol, h_flow, h_gov, celerity, limiting_flow, limiting_storage):
-            - num_inertial_substeps: Total number of sub-timesteps required for stability.
-            - limiting_reach_idx: Reach index requiring the smallest stable timestep.
-            - min_stable_timestep_s: Minimum stable timestep duration across all reaches (seconds).
-            - h_vol: Hydraulic depth from stored channel volume (meters).
-            - h_flow: Hydraulic depth estimated from oncoming flow normal depth (meters).
-            - h_gov: Strictest governing hydraulic depth (meters).
-            - celerity: Shallow-water wave celerity at governing depth (m/s).
-            - limiting_flow: Characteristic peak flow rate through the limiting reach (m³/s).
-            - limiting_storage: Stored volume in the limiting reach (m³).
+        Encapsulated routing step stability diagnostics.
     """
+    inertial_up_kin_offsets: ArrayInt32 = kin.inertial_up_kin_offsets
+    inertial_up_kin_indices: ArrayInt32 = kin.inertial_up_kin_indices
+    inertial_up_kin_reach_idx: ArrayInt32 = kin.inertial_up_kin_reach_idx
+
     kinematic_inflow_rate_inertial.fill(np.float32(0.0))
     buffers.total_flow_rate_buf.fill(np.float32(0.0))
 
-    wb_inflow_rate: ArrayFloat32 = np.zeros(n_inertial, dtype=np.float32)
+    wb_inflow_rate: ArrayFloat32 = buffers.wb_release_volume_substep
+    wb_inflow_rate.fill(np.float32(0.0))
     n_lake_links: int = len(wb.lake_outflow_target_k)
     if n_lake_links > 0:
         for link_idx in range(n_lake_links):
@@ -727,16 +775,16 @@ def compute_inertial_substeps_cfl(
         river_storage_m3_inertial[limiting_reach_idx]
     )
 
-    return (
-        num_inertial_substeps,
-        limiting_reach_idx,
-        min_stable_timestep_s,
-        h_vol,
-        h_flow,
-        h_gov,
-        celerity,
-        limiting_flow,
-        limiting_storage,
+    return RoutingStepDiagnostics(
+        num_inertial_substeps=num_inertial_substeps,
+        limiting_reach_idx=limiting_reach_idx,
+        min_stable_timestep_s=min_stable_timestep_s,
+        h_vol=h_vol,
+        h_flow=h_flow,
+        h_gov=h_gov,
+        celerity=celerity,
+        limiting_flow=limiting_flow,
+        limiting_storage=limiting_storage,
     )
 
 
