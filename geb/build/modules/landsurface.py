@@ -166,10 +166,13 @@ class LandSurface(BuildModelBase):
                 ),
                 crs=coastlines.crs,
             )
-            coastlines = gpd.GeoDataFrame(
-                geometry=[linemerge(coastlines.geometry.union_all())],
-                crs=coastlines.crs,
-            )
+
+            # if the coastlines are not a single LineString, we merge them into one
+            if len(coastlines) != 1 and coastlines.geom_type[0] != "LineString":
+                coastlines = gpd.GeoDataFrame(
+                    geometry=[linemerge(coastlines.geometry.union_all())],
+                    crs=coastlines.crs,
+                )
 
             # buffer coastlines with 0.2 degrees
             with warnings.catch_warnings():
