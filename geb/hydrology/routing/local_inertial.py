@@ -15,6 +15,10 @@ from geb.geb_types import (
     TwoDArrayFloat32,
     TwoDArrayInt32,
 )
+from geb.workflows import (
+    USE_BANKFULL_HEIGHT,
+    USE_HALF_BANKFULL_HEIGHT,
+)
 
 from .geometry import (
     compute_static_geometry,
@@ -26,12 +30,14 @@ from .inertial_substeps import (
     GEOM_IN_BANKFULL_DEPTH,
     GEOM_IN_BANKFULL_VOLUME,
     GEOM_IN_BED_ELEVATION,
+    GEOM_IN_INSTREAM_DAM,
     GEOM_IN_INTERFACE_BED_ELEVATION_MAX,
     GEOM_IN_INVERSE_INTERFACE_LENGTH,
     GEOM_IN_INVERSE_LENGTH,
     GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE,
     GEOM_IN_MANNING_N_SQUARED,
     GEOM_IN_NUM_COLS,
+    GEOM_IN_OPEN_BED_ELEVATION_MAX,
     GEOM_IN_STAGE_VOLUME_COEFFICIENT,
     GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH,
     GEOM_OV_BANKFULL_PERIMETER,
@@ -483,7 +489,8 @@ def _run_inertial_routing_step(
         updated_discharge_m3_s: Discharge array updated by kinematic routing (m³/s).
         river_storage_m3_inertial: Reach storage for inertial reaches (m³).
         sideflow_m3_inertial: Sideflow volume per reach for macro-timestep (m³).
-        geom_inbank: Static in-bank channel geometry lookup table.
+        geom_inbank: Static in-bank river geometry, including the raised interface
+            elevation used by fixed river barriers.
         geom_overbank: Static compound overbank geometry lookup table.
         geom_cfl: Static CFL stability parameters table.
         ds_boundary_type: Downstream boundary condition type flags.
@@ -774,6 +781,8 @@ class LocalInertial:
         river_storage_beta: ArrayFloat32,
         in_spinup: bool,
         min_slope: float = 1e-4,
+        weir_height_m: ArrayFloat32 | None = None,
+        instream_dam: ArrayBool | None = None,
     ) -> None:
         """Initializes the LocalInertial router object.
 
@@ -804,9 +813,18 @@ class LocalInertial:
             river_storage_beta: Kinematic wave beta parameter per reach (dimensionless).
             min_slope: Minimum allowable slope for ocean/pit boundary boundaries (dimensionless).
             in_spinup: Whether the model is in spinup mode.
+            weir_height_m: Weir heights above the river bed (m), in original cell order.
+                Zero means no structure; -2 uses full bankfull depth and
+                -3 uses half bankfull depth.
+                Fixed weirs use river momentum
+                over a fixed raised sill.
+            instream_dam: True for AMBER river dams that can open, in original cell order.
+                None keeps all barriers fixed. Dams open gradually between
+                65% and 90% of upstream bankfull depth, with 10% minimum opening.
 
         Raises:
             KeyError: If a local inertial pit reach has a river ID not found in rivers_gdf.
+            ValueError: If barrier heights are invalid or a barrier has no river cell on each side.
         """
         assert dt > 0, "dt must be greater than 0"
         self.dt = dt
@@ -842,13 +860,16 @@ class LocalInertial:
         self.waterbody_ids: ArrayInt32 = waterbody_ids
 
         assert is_waterbody_outflow.shape == self.idxs_up_to_downstream.shape
-        assert (
-            np.bincount(
-                self.waterbody_ids[self.waterbody_ids != -1],
-                weights=is_waterbody_outflow[self.waterbody_ids != -1],
-            )
-            == 1
-        ).all()
+        # Future reservoirs leave gaps in the active waterbody IDs.
+        waterbody_cells: ArrayBool = self.waterbody_ids != -1
+        active_waterbody_ids: ArrayInt32 = self.waterbody_ids[waterbody_cells]
+        outlet_counts: np.ndarray = np.bincount(
+            active_waterbody_ids, weights=is_waterbody_outflow[waterbody_cells]
+        )
+        assert (outlet_counts[np.unique(active_waterbody_ids)] == 1).all()
+        assert (active_waterbody_ids < waterbody_lake_area.size).all(), (
+            "Active waterbody IDs must index the full waterbody parameter arrays."
+        )
 
         self.river_length = river_length
         self.river_width = river_width
@@ -1073,7 +1094,8 @@ class LocalInertial:
             0
         ].astype(np.int32)
 
-        n_wb: int = int(is_waterbody_outflow.sum())
+        # Include future reservoirs to preserve stable IDs in solver buffers.
+        n_wb: int = waterbody_lake_area.size
         self.n_wb: int = n_wb
         n_ret: int = retention_max_storage_m3.size
         assert controlled_retention.size == n_ret, (
@@ -1082,6 +1104,78 @@ class LocalInertial:
         )
 
         self._setup_inertial_boundary_arrays()
+        self._weir_height_inertial: ArrayFloat32 = np.zeros(
+            self.n_inertial, dtype=np.float32
+        )
+        if weir_height_m is not None:
+            if (
+                weir_height_m.shape != river_length.shape
+                or not np.isfinite(weir_height_m).all()
+            ):
+                raise ValueError("Weir heights must match river cells and be finite.")
+            # Fill in the default heights now that the river depth is known.
+            use_bankfull_height: ArrayBool = weir_height_m == USE_BANKFULL_HEIGHT
+            use_half_bankfull_height: ArrayBool = (
+                weir_height_m == USE_HALF_BANKFULL_HEIGHT
+            )
+            use_default_height: ArrayBool = (
+                use_bankfull_height | use_half_bankfull_height
+            )
+            if np.any((weir_height_m < 0) & ~use_default_height):
+                raise ValueError(
+                    "Weir heights contain an unsupported marker; rebuild setup_weirs "
+                    "to use bankfull or half-bankfull defaults."
+                )
+            if weir_height_m.shape != bankfull_depth_m.shape:
+                raise ValueError(
+                    "Weir heights and bankfull depths must match river cells."
+                )
+            if np.any(
+                use_default_height
+                & (~np.isfinite(bankfull_depth_m) | (bankfull_depth_m <= 0))
+            ):
+                raise ValueError(
+                    "Weir defaults require positive, finite bankfull depths."
+                )
+            # Copy the heights so the original values remain available for reporting.
+            weir_height_m = weir_height_m.copy()
+            weir_height_m[use_bankfull_height] = bankfull_depth_m[use_bankfull_height]
+            weir_height_m[use_half_bankfull_height] = (
+                bankfull_depth_m[use_half_bankfull_height] * 0.5
+            )
+            sorted_weir_heights_m: ArrayFloat32 = weir_height_m[self.sorted_idxs]
+            self._weir_height_inertial = sorted_weir_heights_m[
+                inertial_start:inertial_end
+            ].copy()
+            if np.count_nonzero(self._weir_height_inertial) != np.count_nonzero(
+                weir_height_m
+            ) or np.any(
+                (self._weir_height_inertial > 0) & (self._ds_boundary_type != 0)
+            ):
+                raise ValueError("Weirs need a river cell on each side.")
+        self._instream_dam_inertial: ArrayBool = np.zeros(self.n_inertial, dtype=bool)
+        if instream_dam is not None:
+            if (
+                instream_dam.shape != river_length.shape
+                or instream_dam.dtype != np.bool_
+            ):
+                raise ValueError(
+                    "Instream dam flags must be boolean and match river cells."
+                )
+            if np.any(instream_dam):
+                if weir_height_m is None or np.any(instream_dam & (weir_height_m <= 0)):
+                    raise ValueError("Instream dams need a height greater than zero.")
+                if np.any(
+                    instream_dam
+                    & (~np.isfinite(bankfull_depth_m) | (bankfull_depth_m <= 0))
+                ):
+                    raise ValueError(
+                        "Instream dams need valid bankfull depths greater than zero."
+                    )
+            self._instream_dam_inertial = instream_dam[self.sorted_idxs][
+                inertial_start:inertial_end
+            ].copy()
+        self._inertial_cells: ArrayInt32 = self.sorted_idxs[inertial_start:inertial_end]
         self._compute_static_geometry()
 
         self._f64_global_workspace: np.ndarray = np.empty(
@@ -1164,9 +1258,6 @@ class LocalInertial:
         self._wb_outflow_avail_buf: ArrayFloat64 = np.empty(n_wb, dtype=np.float64)
         self._terminal_wb_outflow_accum_m3: ArrayFloat32 = np.zeros(1, dtype=np.float32)
 
-        assert waterbody_lake_area.size == n_wb, (
-            f"waterbody_lake_area size ({waterbody_lake_area.size}) must match number of waterbodies ({n_wb})."
-        )
         assert waterbody_lake_factor.size == n_wb, (
             f"waterbody_lake_factor size ({waterbody_lake_factor.size}) must match number of waterbodies ({n_wb})."
         )
@@ -1707,13 +1798,21 @@ class LocalInertial:
             self._stage_vol_coeff_inertial
         )
         self._geom_inbank[:, GEOM_IN_INTERFACE_BED_ELEVATION_MAX] = (
-            self._interface_bed_elev_max
+            # Raise the sill without changing channel storage.
+            np.maximum(
+                self._interface_bed_elev_max,
+                self._bed_elevation_inertial + self._weir_height_inertial,
+            )
         )
         self._geom_inbank[:, GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH] = (
             self._width_over_sqrt_bankfull_depth_inertial
         )
         self._geom_inbank[:, GEOM_IN_MANNING_N_SQUARED] = self._manning_n_sq_inertial
         self._geom_inbank[:, GEOM_IN_INVERSE_INTERFACE_LENGTH] = self._inv_dx_interface
+        self._geom_inbank[:, GEOM_IN_INSTREAM_DAM] = self._instream_dam_inertial
+        self._geom_inbank[:, GEOM_IN_OPEN_BED_ELEVATION_MAX] = (
+            self._interface_bed_elev_max
+        )
 
         # Precompute overbank floodplain geometry
         self._geom_overbank: TwoDArrayFloat32 = np.empty(
@@ -2518,19 +2617,6 @@ class LocalInertial:
             total_flow_rate_buf=self._total_flow_rate_buf,
             terminal_wb_outflow_accum_m3=self._terminal_wb_outflow_accum_m3,
         )
-
-        # if self.n_inertial > 0 and limiting_reach_idx >= 0:
-        #     self._print_limiting_substep(
-        #         limiting_reach_idx=limiting_reach_idx,
-        #         min_dt=min_stable_timestep_s,
-        #         num_substeps=num_inertial_substeps,
-        #         h_vol=h_vol,
-        #         h_flow=h_flow,
-        #         h_gov=h_gov,
-        #         celerity=celerity,
-        #         flow_rate=limiting_flow,
-        #         storage_m3=limiting_storage,
-        #     )
 
         storage_inertial_after: float = float(np.sum(self._river_storage_perm_inertial))
         kinematic_inflow_total: float = float(

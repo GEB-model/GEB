@@ -255,6 +255,11 @@ class RetentionBasinsConfig(BaseModel):
 class RoutingConfig(BaseModel):
     """Configuration for routing."""
 
+    weirs: bool = Field(
+        True,
+        strict=True,
+        description="Enable fixed GDW and AMBER river barriers at runtime; lakes and reservoirs are unaffected.",
+    )
     algorithm: Literal["accuflux", "kinematic_wave"] = Field(
         "kinematic_wave",
         description="Routing algorithm: 'accuflux' or 'kinematic_wave'.",
@@ -771,6 +776,11 @@ class ReportConfig(BaseModel):
         True,
         alias="_meteorological_stations",
         description="Whether to report meteorological stations.",
+    )
+    waterworks: bool = Field(
+        True,
+        alias="_waterworks",
+        description="Report hourly barrier flow and end-of-hour modeled opening/closing actions.",
     )
     outflow_points: bool = Field(
         True,

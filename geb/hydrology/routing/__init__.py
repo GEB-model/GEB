@@ -24,6 +24,7 @@ from geb.geb_types import (
     TwoDArrayInt32,
     TwoDArrayUint8,
 )
+from geb.hydrology.waterbodies import OFF, RESERVOIR
 from geb.module import Module
 from geb.store import Bucket
 from geb.workflows import balance_check
@@ -428,8 +429,7 @@ class Routing(Module):
         Args:
             model: The GEB model instance.
             hydrology: The hydrology submodel instance.
-
-        """
+        """  # noqa: DOC502
         super().__init__(model)
 
         self.config = model.config["hydrology"]["routing"]
@@ -445,6 +445,8 @@ class Routing(Module):
         self.ldd: ArrayUint8 = self.grid.load2d(
             self.model.files["grid"]["routing/ldd"],
         )
+
+        self.load_weirs()
 
         mask: TwoDArrayBool = ~self.grid.mask
 
@@ -531,25 +533,99 @@ class Routing(Module):
         if self.model.in_spinup:
             self.spinup()
 
+    def load_weirs(self) -> None:
+        """Load barrier heights and which AMBER dams can open.
+
+        Notes:
+            With routing.weirs disabled, input files are not read or modified.
+            Lakes and reservoirs keep their own flow rules.
+
+        Returns:
+            None. Sets weir heights (m) and instream-dam flags in grid cell order.
+        """  # noqa: DOC202
+        self.instream_dam: ArrayBool = np.zeros_like(self.ldd, dtype=bool)
+        if not self.config.get("weirs", True):
+            # Zero heights remove the raised river sills from routing.
+            self.weir_height_m: ArrayFloat32 = np.zeros_like(self.ldd, dtype=np.float32)
+            return
+
+        self.weir_height_m = self.grid.load2d(
+            self.model.files["grid"]["routing/weir_height_m"]
+        )
+        dam_grid: Path | None = self.model.files["grid"].get("routing/instream_dam")
+        if dam_grid is None:
+            # Read the old grid name too, so existing builds still work.
+            dam_grid = self.model.files["grid"].get("routing/gated_dam")
+        if dam_grid is not None:
+            self.instream_dam = self.grid.load2d(dam_grid)
+
+    def get_active_weirs(self) -> tuple[ArrayFloat32, ArrayBool]:
+        """Select barriers with an active river cell on both sides.
+
+        Returns:
+            Filtered heights (m) and dam flags, preserving stored inputs for
+            subsequent router rebuilds after reservoir activation or river pruning.
+
+        Raises:
+            ValueError: If barrier arrays do not match the active river grid.
+        """
+        heights: ArrayFloat32 = self.weir_height_m
+        dams: ArrayBool = self.instream_dam
+        if heights.shape != self.var.river_ids.shape or dams.shape != heights.shape:
+            raise ValueError("Barrier arrays must match the active river grid.")
+        if not np.any(heights) and not np.any(dams):
+            return heights.copy(), dams.copy()
+
+        cells: ArrayInt64 = np.flatnonzero(self.river_network.mask)
+        downstream: ArrayInt64 = self.river_network.idxs_ds[cells]
+        # The extra False entry handles the network's missing-neighbor index (-1).
+        river: ArrayBool = np.zeros(self.river_network.size + 1, dtype=bool)
+        river[cells] = self.var.river_ids != -1
+        supported: ArrayBool = river[cells] & river[downstream] & (downstream != cells)
+        excluded_count: int = int(
+            np.count_nonzero(~supported & ((heights != 0) | dams))
+        )
+        if excluded_count:
+            self.model.logger.warning(
+                "Disabled %s river barriers without an active river cell on each side.",
+                excluded_count,
+            )
+        return np.where(supported, heights, 0), dams & supported
+
     def load_rivers(
         self,
         grid_linear_mapping: TwoDArrayInt32,
+        active_waterbody_ids: ArrayInt32 | None = None,
     ) -> tuple[gpd.GeoDataFrame, ArrayInt32, ArrayInt32]:
-        """Load the river network geometries.
+        """Load river geometries with only currently active waterbodies removed.
 
         Args:
             grid_linear_mapping: A 2D array mapping grid cells to linear indices.
+            active_waterbody_ids: IDs of waterbodies active in the model. Before
+                waterbodies are loaded, use their construction years instead.
 
         Returns:
             A GeoDataFrame containing the river network geometries, the updated river IDs and the original river IDs before removing waterbodies.
         """
-        raw_wb_id = self.grid.load2d(
+        raw_wb_id: TwoDArrayInt32 = self.grid.load2d(
             self.model.files["grid"]["waterbodies/waterbody_id"], compress=False
         )
-        wb_geom_file = self.model.files["geom"]["waterbodies/waterbody_data"]
-        wb_data_df = read_geom(wb_geom_file).set_index("waterbody_id")
-        active_ids = wb_data_df.index[wb_data_df["waterbody_type"] != 0].values
-        is_waterbody: TwoDArrayBool = np.isin(raw_wb_id, active_ids)
+        if active_waterbody_ids is None:
+            wb_geom_file: Path = self.model.files["geom"]["waterbodies/waterbody_data"]
+            wb_data_df: pd.DataFrame = read_geom(wb_geom_file).set_index("waterbody_id")
+            # Lakes and reservoirs with unknown dates are active from the start.
+            construction_years: pd.Series = wb_data_df.get(
+                "gdw_construction_year", pd.Series(0, index=wb_data_df.index)
+            ).fillna(0)
+            enabled: pd.Series = wb_data_df["waterbody_type"] != OFF
+            built: pd.Series = (wb_data_df["waterbody_type"] != RESERVOIR) | (
+                construction_years <= self.model.current_time.year
+            )
+            active_mask: ArrayBool = (enabled & built).to_numpy()
+            active_waterbody_ids = wb_data_df.index.to_numpy(dtype=np.int32)[
+                active_mask
+            ]
+        is_waterbody: TwoDArrayBool = np.isin(raw_wb_id, active_waterbody_ids)
 
         rivers: gpd.GeoDataFrame = read_geom(self.model.files["geom"]["routing/rivers"])
         rivers["return_period_2_years_daily_m3_per_s"] = np.nan
@@ -569,7 +645,9 @@ class Routing(Module):
             self.model.files["grid"]["waterbodies/waterbody_outflow_points"],
             compress=False,
         )
-        is_active_outflow: TwoDArrayBool = np.isin(raw_wb_outflows, active_ids)
+        is_active_outflow: TwoDArrayBool = np.isin(
+            raw_wb_outflows, active_waterbody_ids
+        )
         active_wb_outflows: TwoDArrayInt32 = np.where(
             is_active_outflow, raw_wb_outflows, -1
         ).astype(np.int32)
@@ -601,6 +679,15 @@ class Routing(Module):
         def remove_masked_river_cells(
             xys: list[tuple[int, int]], mask: list[bool]
         ) -> np.ndarray[tuple[int], np.dtype[Any]]:
+            """Keep coordinates for cells still represented as river channels.
+
+            Args:
+                xys: Grid column and row pairs.
+                mask: Whether each coordinate remains a river cell.
+
+            Returns:
+                Coordinates of the retained cells.
+            """
             array: np.ndarray[tuple[int], np.dtype[Any]] = np.empty(
                 sum(mask), dtype=object
             )
@@ -636,6 +723,66 @@ class Routing(Module):
             )
         )
         return rivers, river_ids_compressed, river_ids_no_waterbodies_removed
+
+    def update_river_cells(self) -> None:
+        """Update river cells when reservoirs become active.
+
+        Reload the river cells, but keep saved discharge statistics and water storage.
+        """
+        active_waterbody_ids: ArrayInt32 = (
+            self.hydrology.waterbodies.var.waterbodies.index.to_numpy(dtype=np.int32)[
+                self.hydrology.waterbodies.is_active
+            ]
+        )
+        rivers: gpd.GeoDataFrame
+        rivers, self.var.river_ids, self.var.river_ids_no_waterbodies_removed = (
+            self.load_rivers(self.grid.linear_mapping, active_waterbody_ids)
+        )
+        # Only replace cell locations. Keep the other river properties.
+        column: str
+        for column in (
+            "hydrography_xy",
+            "hydrography_xy_no_waterbodies_removed",
+            "hydrography_upstream_area_m2",
+            "hydrography_upstream_area_m2_no_waterbodies_removed",
+            "represented_in_grid",
+            "hydrography_linear",
+        ):
+            self.var.rivers[column] = rivers[column]
+        self.var.active_rivers = self.get_active_rivers()
+
+    def save_weirs(self) -> None:
+        """Save barrier heights (m) and which dams can open to weir_heights.csv.
+
+        Returns:
+            None.
+
+        Raises:
+            OSError: If the output file cannot be written.
+        """  # noqa: DOC202, DOC502
+        heights: ArrayFloat32 = self.router._weir_height_inertial
+        weir_mask: ArrayBool = heights > 0
+        cells: ArrayInt32 = self.router._inertial_cells[weir_mask]
+        input_heights: ArrayFloat32 = self.weir_height_m[cells]
+        locations: TwoDArrayFloat32 = self.grid.lonlat[cells]
+        grid_rows: np.ndarray
+        grid_columns: np.ndarray
+        grid_rows, grid_columns = np.where(~self.grid.mask)
+        weirs: pd.DataFrame = pd.DataFrame(
+            {
+                "grid_cell_index": cells,
+                "grid_row": grid_rows[cells],
+                "grid_column": grid_columns[cells],
+                "longitude_deg": locations[:, 0],
+                "latitude_deg": locations[:, 1],
+                "river_id": self.var.river_ids[cells],
+                "input_height_m": input_heights,
+                "effective_height_m": heights[weir_mask],
+                "instream_dam": self.router._instream_dam_inertial[weir_mask],
+                "bankfull_depth_m": self.router.bankfull_depth[cells],
+            }
+        )
+        weirs.to_csv(self.model.output_folder / "weir_heights.csv", index=False)
 
     def _update_rivers_geometry(
         self,
@@ -1172,7 +1319,7 @@ class Routing(Module):
 
         return bankfull_depth_m
 
-    def set_router(self) -> None:
+    def set_router(self, initialize_storage: bool = True) -> None:
         """Initialize the local inertial routing algorithm with derived river geometry.
 
         Derives cross-sectional channel geometry (bankfull width, depth via hydraulic continuity
@@ -1186,7 +1333,21 @@ class Routing(Module):
             that waterbody footprints are flattened and state variables (either synthesized during
             spinup or restored from checkpoint storage) are available before deriving
             setting up the local inertial routing solver.
-        """
+
+        Args:
+            initialize_storage: Initialize river storage during spinup. Set False
+                when rebuilding connections after reservoir construction.
+
+        Returns:
+            None.
+
+        Raises:
+            ValueError: If channel geometry is invalid.
+            OSError: If weir diagnostics cannot be written.
+        """  # noqa: DOC202, DOC502
+        # A new reservoir changes which cells are rivers. Update these before
+        # creating the solver, including when loading a saved model.
+        self.update_river_cells()
         is_waterbody_outflow: ArrayBool = self.grid.var.waterbody_outflow_points != -1
         retention_basin_release_threshold_factor: float = self.config[
             "retention_basins"
@@ -1250,6 +1411,9 @@ class Routing(Module):
             waterbody_outflow_linear
         ].astype(np.float32)
 
+        weir_heights: ArrayFloat32
+        instream_dams: ArrayBool
+        weir_heights, instream_dams = self.get_active_weirs()
         self.router = LocalInertial(
             dt=3600,
             river_network=self.river_network,
@@ -1276,9 +1440,13 @@ class Routing(Module):
             river_storage_alpha=self.var.river_storage_alpha,
             river_storage_beta=self.var.river_storage_beta,
             in_spinup=self.model.in_spinup,
+            weir_height_m=weir_heights,
+            instream_dam=instream_dams,
         )
 
-        if self.model.in_spinup:
+        self.save_weirs()
+
+        if self.model.in_spinup and initialize_storage:
             # Power-law bankfull storage V_bf = length * (W_bf * h_bf / (r + 1)) (m³)
             bankfull_volume: ArrayFloat64 = self.grid.var.river_length.astype(
                 np.float64
@@ -1320,7 +1488,7 @@ class Routing(Module):
             water_stage_m=self.var.water_stage_m,
             river_storage_m3=self.var.river_storage_m3,
             waterbody_storage_m3=self.hydrology.waterbodies.var.storage,
-            in_spinup=self.model.in_spinup,
+            in_spinup=self.model.in_spinup and initialize_storage,
         )
 
     def spinup(self) -> None:
@@ -1584,6 +1752,11 @@ class Routing(Module):
     ]:
         """Perform a daily routing step with multiple substeps.
 
+        Notes:
+            When waterworks reporting is enabled, sample barrier outflow and
+            upstream river inflow (m³/s) each hour and the modeled opening
+            fraction at the end of that hour. Diagnostics do not affect flow.
+
         Args:
             total_runoff_m: Total runoff in meters for each grid cell for each hour.
                 Shape is (24, n_cells).
@@ -1601,6 +1774,26 @@ class Routing(Module):
         Raises:
             ValueError: If inflow is added to waterbody cells.
         """
+        from .waterworks import sample_waterworks
+
+        report_waterworks: bool = any(
+            name.startswith("waterworks_") for name in self.variables_to_report
+        )
+        waterworks_indices: ArrayInt32 = (
+            np.flatnonzero(self.router._weir_height_inertial > 0).astype(np.int32)
+            if report_waterworks
+            else np.empty(0, dtype=np.int32)
+        )
+        waterworks_open_fraction: TwoDArrayFloat32 = np.empty(
+            (24, len(waterworks_indices)), dtype=np.float32
+        )
+        waterworks_outflow_m3_s: TwoDArrayFloat32 = np.empty_like(
+            waterworks_open_fraction
+        )
+        waterworks_inflow_m3_s: TwoDArrayFloat32 = np.empty_like(
+            waterworks_open_fraction
+        )
+
         if __debug__:
             pre_waterbody_storage: np.ndarray = (
                 self.hydrology.waterbodies.var.storage.copy()
@@ -1624,6 +1817,7 @@ class Routing(Module):
         return_flow_m3_to_waterbodies_per_hour: np.ndarray = np.bincount(
             self.grid.var.waterbody_ids[self.grid.var.waterbody_ids != -1],
             weights=return_flow_m3_per_hour[self.grid.var.waterbody_ids != -1],
+            minlength=self.hydrology.waterbodies.n,
         )
         return_flow_m3_per_hour[self.grid.var.waterbody_ids != -1] = 0.0
 
@@ -1733,6 +1927,7 @@ class Routing(Module):
             self.hydrology.waterbodies.var.storage += np.bincount(
                 self.grid.var.waterbody_ids[self.grid.var.waterbody_ids != -1],
                 weights=total_runoff_m3[self.grid.var.waterbody_ids != -1],
+                minlength=self.hydrology.waterbodies.n,
             )
 
             # after adding the runoff to the water bodies, we set the runoff to zero
@@ -1743,15 +1938,24 @@ class Routing(Module):
                 return_flow_m3_to_waterbodies_per_hour
             )
 
+            evaporation_sum_m: np.ndarray = np.bincount(
+                self.grid.var.waterbody_ids[self.grid.var.waterbody_ids != -1],
+                weights=reference_evapotranspiration_water_m[
+                    hour, self.grid.var.waterbody_ids != -1
+                ],
+                minlength=self.hydrology.waterbodies.n,
+            )
+            waterbody_cell_count: ArrayInt64 = np.bincount(
+                self.grid.var.waterbody_ids[self.grid.var.waterbody_ids != -1],
+                minlength=self.hydrology.waterbodies.n,
+            )
+            # Future reservoirs have no cells or evaporation.
             potential_evaporation_per_waterbody_m3 = (
-                np.bincount(
-                    self.grid.var.waterbody_ids[self.grid.var.waterbody_ids != -1],
-                    weights=reference_evapotranspiration_water_m[
-                        hour, self.grid.var.waterbody_ids != -1
-                    ],
-                )
-                / np.bincount(
-                    self.grid.var.waterbody_ids[self.grid.var.waterbody_ids != -1]
+                np.divide(
+                    evaporation_sum_m,
+                    waterbody_cell_count,
+                    out=np.zeros(self.hydrology.waterbodies.n, dtype=np.float64),
+                    where=waterbody_cell_count > 0,
                 )
                 * self.hydrology.waterbodies.var.lake_area
             )
@@ -1893,7 +2097,6 @@ class Routing(Module):
             self.var.water_stage_m = self.router.get_water_stage(
                 out=self.var.water_stage_m
             )
-
             if not (actual_evaporation_in_rivers_m3_per_hour >= 0.0).all():
                 raise ValueError(
                     f"Negative evaporation detected, min evaporation: {actual_evaporation_in_rivers_m3_per_hour.min()}, min discharge: {self.var.discharge_in_rivers_m3_s_substep.min()}. "
@@ -1901,9 +2104,19 @@ class Routing(Module):
 
             assert (actual_evaporation_in_rivers_m3_per_hour >= 0.0).all()
 
-            # the reservoir operators need to track the inflow to the reservoirs
+            # Dam operators need past river flows when the reservoir opens.
+            operator_inflow_m3: ArrayFloat32 = waterbody_inflow_m3.copy()
+            future_reservoirs: ArrayBool = ~self.hydrology.waterbodies.is_active
+            operator_inflow_m3[future_reservoirs] = (
+                self.var.discharge_in_rivers_m3_s_substep[
+                    self.hydrology.waterbodies.var.waterbody_outflow_linear_mapping[
+                        future_reservoirs
+                    ]
+                ]
+                * 3600
+            )
             self.model.agents.reservoir_operators.track_inflow(
-                waterbody_inflow_m3[self.model.hydrology.waterbodies.is_reservoir]
+                operator_inflow_m3[self.model.hydrology.waterbodies.is_reservoir]
             )
 
             # ensure that discharge is nan for water bodies
@@ -1942,6 +2155,17 @@ class Routing(Module):
             assert not np.isnan(discharge_m3_s_substep[self.var.river_ids != -1]).any()
 
             self.var.discharge_m3_s_per_substep[hour, :] = discharge_m3_s_substep
+            if report_waterworks:
+                (
+                    waterworks_open_fraction[hour],
+                    waterworks_outflow_m3_s[hour],
+                    waterworks_inflow_m3_s[hour],
+                ) = sample_waterworks(
+                    self.router,
+                    self.var.river_storage_m3,
+                    discharge_m3_s_substep,
+                    waterworks_indices,
+                )
 
             retention_basin_storage_m3_substep = self.grid.full_compressed(
                 0, dtype=np.float32

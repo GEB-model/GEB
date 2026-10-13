@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 
 import geopandas as gpd
 import numpy as np
+import pandas as pd
 
 from geb.geb_types import Array, ArrayBool, ArrayFloat32, ArrayFloat64, ArrayInt32
 from geb.module import Module
@@ -38,7 +39,6 @@ if TYPE_CHECKING:
 OFF: int = 0
 LAKE: int = 1
 RESERVOIR: int = 2
-LAKE_CONTROL: int = 3  # currently modelled as normal lake
 
 
 GRAVITY: np.float32 = np.float32(9.81)
@@ -298,6 +298,9 @@ class WaterBodyVariables(Bucket):
     waterbody_type: ArrayInt32
     outflow_height: ArrayFloat32
     waterbody_outflow_linear_mapping: ArrayInt32
+    construction_year: ArrayInt32
+    all_waterbody_ids: ArrayInt32
+    active: ArrayBool
 
 
 class WaterBodies(Module):
@@ -324,9 +327,6 @@ class WaterBodies(Module):
 
         self.HRU = hydrology.HRU
         self.grid = hydrology.grid
-        self.hydrological_year_start_month = self.model.config["general"][
-            "hydrological_year_start_month"
-        ]
         if self.model.in_spinup:
             self.spinup()
 
@@ -353,8 +353,16 @@ class WaterBodies(Module):
         6. Calculate river width and lake factor for each water body.
         7. Initialize storage for lakes and reservoirs, setting initial values based on capacity.
         8. Estimate outflow height for each water body.
+        9. Leave future reservoirs empty and route their cells as rivers.
 
-        """
+        Returns:
+            None.
+
+        Raises:
+            ValueError: If saved waterbody types are invalid or still use the
+                HydroLAKES controlled-lake code; rebuild setup_waterbodies.
+
+        """  # noqa: DOC202
         # load lakes/reservoirs map with a single ID for each lake/reservoir
         waterbody_id_unmapped: np.ndarray = self.grid.load2d(
             self.model.files["grid"]["waterbodies/waterbody_id"]
@@ -363,6 +371,11 @@ class WaterBodies(Module):
         waterbody_data_raw: gpd.GeoDataFrame = read_geom(
             self.model.files["geom"]["waterbodies/waterbody_data"],
         ).set_index("waterbody_id")  # ty:ignore[invalid-assignment]
+
+        if not waterbody_data_raw["waterbody_type"].isin((OFF, LAKE, RESERVOIR)).all():
+            raise ValueError(
+                "Waterbody types must be off, lake, or reservoir. Rebuild setup_waterbodies."
+            )
 
         # Identify active waterbodies (filter out OFF waterbodies during loading)
         active_wb_mask = waterbody_data_raw["waterbody_type"] != OFF
@@ -406,7 +419,9 @@ class WaterBodies(Module):
             == self.grid.var.waterbody_outflow_points
         ).all()
 
-        waterbody_data = waterbody_data_raw.loc[order_of_waterbodies_in_grid]
+        waterbody_data: gpd.GeoDataFrame = waterbody_data_raw.loc[
+            order_of_waterbodies_in_grid
+        ]
         bankfull_river_elev: ArrayFloat32 = self.grid.load2d(
             self.model.files["grid"]["routing/bankfull_river_elevation_m"]
         )
@@ -414,10 +429,23 @@ class WaterBodies(Module):
             self.var.waterbody_outflow_linear_mapping
         ].astype(np.float32)
         self.var.waterbodies = waterbody_data
+        # Reservoirs with unknown years stay active.
+        self.var.construction_year = (
+            waterbody_data.get(
+                "gdw_construction_year", pd.Series(0, index=waterbody_data.index)
+            )
+            .fillna(0)
+            .to_numpy(dtype=np.int32)
+        )
+        self.var.all_waterbody_ids = self.grid.var.waterbody_ids.copy()
 
-        self.var.waterbody_type = waterbody_data["waterbody_type"].values.copy()
-        # change water body type to LAKE if it is a control lake, thus currently modelled as normal lake
-        self.var.waterbody_type[self.var.waterbody_type == LAKE_CONTROL] = LAKE
+        self.var.waterbody_type = waterbody_data["waterbody_type"].to_numpy(
+            dtype=np.int32, copy=True
+        )
+
+        # Natural lakes stay active regardless of the dam year.
+        self.var.construction_year[self.var.waterbody_type != RESERVOIR] = 0
+        self.var.active = self.var.construction_year <= self.model.current_time.year
 
         assert (np.isin(self.var.waterbody_type, [LAKE, RESERVOIR])).all()
 
@@ -471,6 +499,42 @@ class WaterBodies(Module):
             )
             < 1e-5
         ).all()
+
+        # Before construction, keep storage empty and route water as a river.
+        self.var.storage[~self.is_active] = 0
+        self.set_active_waterbody_maps()
+        self.hydrology.routing.var.discharge_in_rivers_m3_s_substep[
+            (self.var.all_waterbody_ids != -1) & (self.grid.var.waterbody_ids == -1)
+        ] = 0
+
+    @property
+    def is_active(self) -> ArrayBool:
+        """Return which waterbodies are active this year.
+
+        Returns:
+            True for lakes and built reservoirs, including those with unknown years.
+            Saved states without construction years keep all waterbodies active.
+        """
+        return getattr(self.var, "active", np.ones(self.n, dtype=bool))
+
+    def set_active_waterbody_maps(self) -> None:
+        """Route future reservoir cells as rivers.
+
+        Keep IDs unchanged so saved states and command areas still match.
+        """
+        # River cells have ID -1 and use the last (False) entry.
+        active_cells: ArrayBool = np.append(self.is_active, False)[
+            self.var.all_waterbody_ids
+        ]
+        self.grid.var.waterbody_ids = np.where(
+            active_cells, self.var.all_waterbody_ids, -1
+        )
+        self.grid.var.waterbody_outflow_points = self.map_to_grid_outflow(
+            np.arange(self.n, dtype=np.int32), fill_value=-1
+        )
+        self.grid.var.capacity = self.map_to_grid_outflow(
+            self.var.capacity, fill_value=0
+        )
 
     def map_waterbody_ids(
         self, waterbody_id_unmapped: ArrayInt32, order_of_waterbodies: ArrayInt32
@@ -790,15 +854,16 @@ class WaterBodies(Module):
         fill_value: float | int = np.nan,
         out: Array | None = None,
     ) -> Array:
-        """Maps values at the outflow points to the full grid.
+        """Map values at active waterbody outlets to the full grid.
 
         Args:
-            values_at_outflow_points: An array containing values at the outflow points of the water bodies.
-            fill_value: The value to fill in for grid cells that are not outflow points. Only used if out is None.
-            out: An optional array to write the output to. If None, a new array will be created.
+            values_at_outflow_points: One value per waterbody, including inactive ones.
+            fill_value: Value for cells without an active outlet when out is None.
+            out: Grid array to update, or None to create one.
 
         Returns:
-            An array of the same shape as the grid, where the values at the outflow points are filled in and the rest is 0.
+            The grid array with active outlets filled. Other cells keep their
+            previous values when out is supplied, or use fill_value otherwise.
         """
         if out is None:
             out: Array = np.full(
@@ -806,17 +871,41 @@ class WaterBodies(Module):
                 fill_value,
                 dtype=values_at_outflow_points.dtype,
             )
-        out[self.var.waterbody_outflow_linear_mapping] = values_at_outflow_points
+        out[self.var.waterbody_outflow_linear_mapping[self.is_active]] = (
+            values_at_outflow_points[self.is_active]
+        )
         return out
 
     def step(self) -> None:
-        """Dynamic part set lakes and reservoirs for each year."""
-        # if first timestep, or beginning of new year
-        if self.model.current_timestep == 1 or (
-            self.model.current_time.month == self.hydrological_year_start_month
-            and self.model.current_time.day == 1
-        ):
-            if self.hydrology.dynamic_waterbodies:
-                raise NotImplementedError("dynamic_waterbodies not implemented yet")
+        """Activate reservoirs from January 1 of their construction year.
+
+        Start with the water already in the river, then fill from inflow.
+        """
+        if hasattr(self.var, "construction_year"):
+            active: ArrayBool = (
+                self.var.construction_year <= self.model.current_time.year
+            )
+            if not np.array_equal(active, self.is_active):
+                river_storage_m3: ArrayFloat64 = (
+                    self.hydrology.routing.var.river_storage_m3
+                )
+                self.var.active = active
+                previous_waterbody_ids: ArrayInt32 = self.grid.var.waterbody_ids
+                self.set_active_waterbody_maps()
+                new_reservoir_cells: ArrayBool = (previous_waterbody_ids == -1) & (
+                    self.grid.var.waterbody_ids != -1
+                )
+                # Keep the river water when the reservoir starts operating.
+                self.var.storage += np.bincount(
+                    self.grid.var.waterbody_ids[new_reservoir_cells],
+                    weights=river_storage_m3[new_reservoir_cells],
+                    minlength=self.n,
+                )
+                self.hydrology.routing.var.discharge_in_rivers_m3_s_substep[
+                    new_reservoir_cells
+                ] = np.nan
+                river_storage_m3[new_reservoir_cells] = 0
+                # The solver caches river connections and waterbody boundaries.
+                self.hydrology.routing.set_router(initialize_storage=False)
 
         self.report(locals())

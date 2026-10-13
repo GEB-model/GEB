@@ -1,4 +1,7 @@
 # dev
+- Filter runtime weirs and instream dams against active river connections after reservoir activation and channel pruning, excluding waterbody interfaces and outlets with a warning. No input rebuild is needed; rerun failed spinups.
+- Rebuild farms, farmer household and behaviour data, crop parameters, crop calendars, crop prices, and well prices through `geb update-version`. Rerun spinup, simulation, and evaluation afterwards. Existing input versions do not need to be downgraded.
+- Fix spinup failures near reservoirs built after the spinup starts. Keep their river channels until construction, then update the river cells when the reservoir becomes active. No input rebuild is needed; rerun failed spinups and simulations.
 
 # v1.0.0b34
 - Fix for trapped waterbody cells. Only classify waterbody as trapped if they are both down- and upstream of the same waterbody.
@@ -9,7 +12,12 @@
 - Fixed SFINCS subgrid build crashing with `Lengths of inputs do not match` when a subgrid tile only contains a sliver of a river for which no river bed level can be estimated; such tiles are now left unburned.
 - Implement groundwater fluxes at catchment boundaries. This is especially important when modelling small catchments. Previously there was essentially a wall around the catchment, while groundwater can now enter or leave the catchment based on prescribed heads based on GLOBGM (by default). Oceans have a groundwater head of 0 now.
 
+# v1.0.0b33
+- Integrate GDW structures and reservoir construction years with the updated channel geometry, open boundaries, and precomputed waterbody outlets. Rebuild `setup_waterbodies` and `setup_weirs`, then rerun spinup and simulation, including for inputs already marked v1.0.0b32.
+
 # v1.0.0b32
+- Implement water structures (sluices, locks, weirs, instream dams) from GDW points outside reservoir outlines. Gates use water-level hysteresis and the same crest-height rules as other structures. Rebuild `setup_waterbodies` and `setup_weirs`, then rerun spinup.
+- Integrate Global Dam Watch (GDW) data and use it to correct Hydrolakes types. For example, a hydrolakes controlled lake becomes a reservoir if GDW classifies it as dam or lake controlled dam.
 - Removed defaults from ParametersConfig in configuration schema so that all parameters must be explicitly set via reasonable_default_config.yml or model.yml, and added groundwater_hydraulic_conductivity_multiplier to the schema.
 - Detect waterbody outflow points in model build process rather than the run.
 - Added non-negativity checks for topwater, surface runoff, and other land surface water storages and fluxes in `LandSurface` validation under `__debug__`, exporting diagnostic snapshots as `diagnostic_landsurface_water_error_cell_{index}.npz` on failure.
@@ -42,6 +50,8 @@
 - Vectorized GPD bootstrap goodness-of-fit testing in extreme value analysis, speeding up threshold selection by ~80x and removing early stopping parameters.
 - Use np.float64 in accumulation of soil moisture in water balance check. This caused an error if rare cases that was just an accumulation error.
 - Use a fixed 95th percentile threshold for significantly faster return period estimation for bankful discharge estimation.
+- Include GDW dams without reservoir outlines as single-cell reservoirs using the existing river snapping method. Rerun `setup_waterbodies` and spinup to include them.
+- Raise an error when automatic input version updates fail, allowing workflows to stop before building or running with incomplete updates.
 - Removed the MCP server (`geb server`), documentation, and the `mcp` dependency.
 - Resolved all ty check errors.
 - Made the MSWEP_URL environment variable optional when all required MSWEP precipitation data is already available locally.
@@ -50,6 +60,8 @@
 - Add retry logic for chunk downloads and limit concurrent connections in Destination Earth ERA5 adapter to prevent connection errors.
 - Export multi-entity special reporters (such as retention basins, meteorological stations, and outflow points) as single consolidated Parquet files.
 - Disable station time-series and return-period figure exports by default in discharge evaluation; enable them with `--export-timeseries-plots true` and `--export-return-period-plots true`.
+- Enrich the dam representation with the Global Dam Watch (GDW) dataset alongside HydroLAKES, including construction years, dam purposes, missing reservoir outlines, and classification checks. For example, controlled lakes in HydroLAKES (type 3) classified as dams by GDW are represented as reservoirs. Rerun `setup_waterbodies` to use GDW.
+- Implement dynamic dam construction. Reservoirs are now only routed as reservoirs from their construction year onwards; route water as a river before then. Lakes and reservoirs with unknown years stay active. Reservoir activation preserves river storage and rebuilds the local inertial routing connections. Rerun spinup to apply this.
 - Major re-organization of the hydrological evaluation code. This considerably shortened `evaluate/hydrology.py`, and all of its former contents are now distributed in various workflow scripts. 
 - Changed discharge skill score calculation, from package-calculated skill scores to the raw skill score formulas.
 - Add `--export-timeseries-plots false` to discharge evaluation to skip static station time-series images while keeping the dashboard and skill-score plots.

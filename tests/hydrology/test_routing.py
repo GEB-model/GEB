@@ -63,6 +63,8 @@ def _make_local_inertial(
     waterbody_outflow_bed_elev: np.ndarray | None = None,
     river_storage_alpha: np.ndarray | None = None,
     river_storage_beta: np.ndarray | None = None,
+    weir_height_m: ArrayFloat32 | None = None,
+    instream_dam: np.ndarray | None = None,
 ) -> LocalInertial:
     """Helper to instantiate LocalInertial for unit tests with explicit required arrays.
 
@@ -122,7 +124,11 @@ def _make_local_inertial(
     if river_storage_beta is None:
         river_storage_beta = np.full(n_cells, 0.6, dtype=np.float32)
 
-    n_wb: int = int(is_waterbody_outflow.sum())
+    n_wb: int = (
+        waterbody_lake_area.size
+        if waterbody_lake_area is not None
+        else int(is_waterbody_outflow.sum())
+    )
     if waterbody_lake_area is None:
         waterbody_lake_area = np.ones(n_wb, dtype=np.float32) * np.float32(1e6)
     if waterbody_lake_factor is None:
@@ -159,6 +165,8 @@ def _make_local_inertial(
         river_storage_alpha=river_storage_alpha,
         river_storage_beta=river_storage_beta,
         in_spinup=True,
+        weir_height_m=weir_height_m,
+        instream_dam=instream_dam,
     )
     router.initialize_stage(
         waterbody_storage_m3=np.zeros(n_wb, dtype=np.float64) if n_wb > 0 else None
@@ -3603,7 +3611,7 @@ def test_local_inertial_waterbody_parameters_required(
         router_cls(**incomplete_kwargs)
 
     # 2. Mismatched array length against n_wb should raise AssertionError
-    with pytest.raises(AssertionError, match="waterbody_lake_area size"):
+    with pytest.raises(AssertionError, match="waterbody_lake_factor size"):
         LocalInertial(
             dt=3600,
             river_network=flw,
@@ -3623,7 +3631,7 @@ def test_local_inertial_waterbody_parameters_required(
             shape_exponent=shape_exp,
             bankfull_depth_m=bk_depth,
             floodplain_width_m=fp_width,
-            waterbody_lake_area=np.ones(2, dtype=np.float32),  # n_wb is 0
+            waterbody_lake_area=np.ones(2, dtype=np.float32),  # Two future reservoirs.
             waterbody_lake_factor=np.zeros(0, dtype=np.float32),
             waterbody_outflow_height=np.zeros(0, dtype=np.float32),
             waterbody_outflow_bed_elev=np.zeros(0, dtype=np.float32),
@@ -3633,12 +3641,18 @@ def test_local_inertial_waterbody_parameters_required(
         )
 
 
-def test_inertial_substeps_parallel_and_serial_equivalence() -> None:
+@pytest.mark.parametrize("with_instream_dam", [False, True])
+def test_inertial_substeps_parallel_and_serial_equivalence(
+    with_instream_dam: bool,
+) -> None:
     """Test numerical equivalence and dynamic dispatch of serial and parallel local inertial kernels.
 
     Verifies that the serial and parallel compiled variants of the 1D Saint-Venant momentum/continuity
     substepping kernel produce numerically identical results, and that dispatching works across the
     threshold boundary.
+
+    Args:
+        with_instream_dam: Whether the upstream reach uses gradual dam opening.
     """
     from geb.hydrology.routing.inertial_substeps import (
         INERTIAL_PARALLEL_THRESHOLD,
@@ -3658,6 +3672,12 @@ def test_inertial_substeps_parallel_and_serial_equivalence() -> None:
     )
 
     router: LocalInertial = _make_local_inertial(
+        weir_height_m=np.array([-2.0] + [0.0] * (n_reaches - 1), dtype=np.float32)
+        if with_instream_dam
+        else None,
+        instream_dam=np.array([True] + [False] * (n_reaches - 1))
+        if with_instream_dam
+        else None,
         dt=15,
         river_network=network,
         river_length=np.full(n_reaches, 100.0, dtype=np.float32),
@@ -3677,12 +3697,17 @@ def test_inertial_substeps_parallel_and_serial_equivalence() -> None:
     )
 
     def build_test_state() -> list[Any]:
+        initial_storage: npt.NDArray[np.float64] = np.full(
+            n_reaches, 5000.0, dtype=np.float64
+        )
+        if with_instream_dam:
+            initial_storage[0] = 1000.0  # Keep the dam partly open during the test.
         return [
             3,
             np.float32(router.dt),
             n_reaches,
             np.full(n_reaches, 10.0, dtype=np.float32),
-            np.full(n_reaches, 5000.0, dtype=np.float64),
+            initial_storage,
             np.full(n_reaches, 50.0, dtype=np.float32),
             np.full(n_reaches, 1.0, dtype=np.float32),
             np.zeros(0, dtype=np.float64),
@@ -6220,7 +6245,17 @@ def test_routing_unobserved_channel_width_depth_estimation() -> None:
 def test_routing_set_router_estimates_width_from_simulated_q2(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Verify that set_router estimates width from Q2 for unobserved channels when Q2 is present."""
+    """Verify that set_router estimates unobserved channel widths from simulated Q2.
+
+    Args:
+        monkeypatch: Fixture for replacing the solver and its diagnostic export.
+
+    Returns:
+        None.
+
+    Raises:
+        AssertionError: If channel widths do not match hydraulic geometry (m).
+    """  # noqa: DOC202, DOC502
     from geb.hydrology.routing import Routing, RoutingVariables
 
     routing = Routing.__new__(Routing)
@@ -6247,6 +6282,8 @@ def test_routing_set_router_estimates_width_from_simulated_q2(
     routing.retention_basin_ids = np.full(2, -1, dtype=np.int32)
     routing.controlled_retention = np.zeros(0, dtype=bool)
     routing.river_network = None  # ty:ignore[invalid-assignment]
+    routing.weir_height_m = np.zeros(2, dtype=np.float32)
+    routing.instream_dam = np.zeros(2, dtype=bool)
 
     var: RoutingVariables = RoutingVariables()
     var.river_ids = np.array([10, 20], dtype=np.int32)
@@ -6312,6 +6349,10 @@ def test_routing_set_router_estimates_width_from_simulated_q2(
         "geb.hydrology.routing.LocalInertial",
         lambda **kwargs: MockRouter(),
     )
+
+    # Geometry assertions do not require the solver's weir diagnostic arrays.
+    monkeypatch.setattr(Routing, "save_weirs", lambda self: None)
+    monkeypatch.setattr(Routing, "update_river_cells", lambda self: None)
 
     # Call set_router
     routing.set_router()
@@ -7511,6 +7552,8 @@ def test_load_rivers_prunes_starved_channels_and_updates_represented_in_grid(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Verify that load_rivers prunes starved channels downstream of non-outflow waterbody cells."""
+    from datetime import datetime
+
     import pyflwdir
     from shapely.geometry import Point
 
@@ -7547,6 +7590,7 @@ def test_load_rivers_prunes_starved_channels_and_updates_represented_in_grid(
     class MockModel:
         import logging
 
+        current_time: datetime = datetime(1990, 1, 1)
         logger = logging.getLogger("test")
         files = {
             "grid": {

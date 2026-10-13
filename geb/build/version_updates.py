@@ -13,6 +13,16 @@ if TYPE_CHECKING:
     from geb.build import GEBModel as GEBModelBuild
 
 VERSION_UPDATES: dict[str, list[str]] = {
+    "1.0.0b37": [
+        "[update-method;setup_well_prices_by_reference_year_global]",
+        "[update-method;setup_create_farms]",
+        "[update-method;setup_farmer_household_characteristics]",
+        "[update-method;setup_crops]",
+        "[update-method;setup_farmer_crop_calendar]",
+        "[update-method;setup_farmer_characteristics]",
+        "[update-method;setup_crop_prices]",
+        "[manual] Rerun spinup, simulation, and evaluation after rebuilding farmers.",
+    ],
     "1.0.0b34": [
         "[update-method;setup_waterbodies]",
     ],
@@ -21,6 +31,8 @@ VERSION_UPDATES: dict[str, list[str]] = {
     ],
     "1.0.0b32": [
         "[update-method;setup_waterbodies]",
+        "[update-method;setup_weirs]",
+        "[manual] Rerun spinup and simulation after rebuilding waterbodies and weirs. Custom build files must include setup_weirs after setup_waterbodies.",
     ],
     "1.0.0b31": [
         "[update-method;set_time_range]",
@@ -36,6 +48,7 @@ VERSION_UPDATES: dict[str, list[str]] = {
     "1.0.0b30": [
         "[update-method;setup_retention_basins]",
         "[update-method;setup_elevation]",
+        "[update-method;setup_groundwater]",
         "[update-method;setup_hydrography]",
         "[update-method;setup_flood_protection_standards]",
     ],
@@ -190,6 +203,18 @@ def get_and_maybe_do_version_updates(
                                 f"Re-run `{method_name}`: `geb update -b build.yml::{method_name}`."
                             )
 
+                    elif update_type == "remove-inactive-farmers":
+                        if update_type_arguments:
+                            raise ValueError(
+                                "remove-inactive-farmers takes no arguments."
+                            )
+                        if build_model is not None:
+                            build_model.remove_inactive_farmers()
+                        else:
+                            updates_to_print.append(
+                                "Run geb update-version with the build configuration to remove farmers without active land."
+                            )
+
                     elif update_type == "create-file":
                         if len(update_type_arguments) != 1:
                             raise ValueError(
@@ -259,7 +284,7 @@ def get_and_maybe_do_version_updates(
             "Successfully auto-updated. No further manual updates are required. Version file is updated to the current version."
         )
     else:  # error occurred but no updates to print
-        logger.error(
+        raise RuntimeError(
             "An error occurred during auto-update. Please check the error message above and fix the issue. After fixing the issue, you can re-run the update command to perform the remaining updates and update the version file."
         )
 

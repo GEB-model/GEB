@@ -42,6 +42,10 @@ setup_vegetation:
 
 setup_waterbodies:
 
+setup_weirs:
+  # Defaults: bankfull for instream dams/weirs/sluices/locks; half bankfull for fords/ramps/unknown.
+  crest_height_m: null
+
 setup_groundwater:
 
 setup_well_prices_by_reference_year_global:
