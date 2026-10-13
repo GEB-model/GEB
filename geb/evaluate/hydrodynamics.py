@@ -28,6 +28,10 @@ if TYPE_CHECKING:
     from geb.evaluate import Evaluate
     from geb.model import GEBModel
 
+VESDRE_CLIP_FILE: Path = Path(
+    "/scistor/ivm/rpo100/GEB/output_scripts/Meuse_JCAR_CI_IBF_project/flood_extents/Clip_Vesdre_flood_extent.gpkg"
+)
+
 
 def calculate_critical_success_index(
     simulations: xr.DataArray, observations: xr.DataArray
@@ -184,6 +188,7 @@ def calculate_performance_metrics(
     visualization_type: Literal["Hillshade", "OSM"] = "Hillshade",
     name: str = "simulation",
     dpi: int = 300,
+    clip_file: Path | None = None,
 ) -> dict[str, float | int] | None:
     """Calculate performance metrics for flood maps against observations and generate visualizations.
 
@@ -197,6 +202,7 @@ def calculate_performance_metrics(
         visualization_type: Type of visualization for plotting (default is "Hillshade").
         name: Name of the simulation for filename purposes.
         dpi: Resolution of the output figure in dots per inch (default is 300).
+        clip_file: Optional vector file; the simulated (and observed) flood map is clipped to its geometry.
 
     Returns:
         Dictionary containing performance metrics:
@@ -263,6 +269,24 @@ def calculate_performance_metrics(
         print(
             f"No simulated data found within the subbasin bounds for event {name}. Skipping this event."
         )
+
+    if clip_file is not None:
+        clip_geometry: gpd.GeoDataFrame = gpd.read_file(clip_file).to_crs(
+            observation.rio.crs
+        )
+        try:
+            # both maps are clipped so they stay on the same grid for the metrics
+            simulated = simulated.rio.clip(
+                clip_geometry.geometry.values, clip_geometry.crs
+            ).compute()
+            observation = observation.rio.clip(
+                clip_geometry.geometry.values, clip_geometry.crs
+            ).compute()
+        except NoDataInBounds:
+            print(
+                f"No data found within the clip file {clip_file} for event {name}. Skipping this event."
+            )
+            return None
 
     # Create masks for remapping and plotting
     # 'encoding': {'invalid': -2, 'cloud': -1, 'land': 0, 'flood': 2, 'permanent_water': 1}
@@ -395,8 +419,7 @@ def calculate_performance_metrics(
             ctx.add_basemap(
                 ax,
                 crs=target_crs,
-                source="https://server.arcgisonline.com/ArcGIS/rest/services/"
-                "World_Street_Map/MapServer/tile/{z}/{y}/{x}",
+                source="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
                 zoom=12,
                 zorder=0,
                 alpha=0.9,
@@ -1380,6 +1403,17 @@ class Hydrodynamics:
                     raise ValueError(
                         "Flood observation file is not in the correct format. Please provide a .zarr file."
                     )
+                clip_file: Path | None = None
+                if "vesdre" in obs_file.name.lower():
+                    self.model.logger.info(
+                        "Observation file contains 'vesdre' in its name, "
+                        "clipping flood maps to the Vesdre extent."
+                    )
+                    if not VESDRE_CLIP_FILE.exists():
+                        raise FileNotFoundError(
+                            f"Vesdre clip file not found at {VESDRE_CLIP_FILE}."
+                        )
+                    clip_file = VESDRE_CLIP_FILE
 
                 # Find all flood maps corresponding to the event
                 # Use recursive glob to handle both forecast and non-forecast folder structures
@@ -1422,8 +1456,9 @@ class Hydrodynamics:
                         elevation_data=read_zarr(
                             self.model.files["other"]["DEM/fabdem"]
                         ),
-                        visualization_type="Hillshade",
+                        visualization_type="OSM",
                         name=obs_file.stem,
+                        clip_file=clip_file,
                     )
                     print(f"Successfully evaluated: {flood_map_path.name}")
 
@@ -1509,6 +1544,7 @@ class Hydrodynamics:
                                 ],
                                 elevation_data=read_zarr(elevation_path),
                                 name=flood_map_path.stem,
+                                clip_file=clip_file,
                             )
                             if metrics is None:
                                 continue
