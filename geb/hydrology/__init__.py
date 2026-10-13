@@ -313,9 +313,9 @@ class Hydrology(Data, Module):
             influx += pr_total_m3
 
         # Skip sealed land and open water.
-        karst_land_fraction: ArrayFloat32 = self.to_HRU(
-            data=self.karst_fraction
-        ) * (self.HRU.var.land_use_type < SEALED)
+        karst_land_fraction: ArrayFloat32 = self.to_HRU(data=self.karst_fraction) * (
+            self.HRU.var.land_use_type < SEALED
+        )
         capture_fraction: ArrayFloat32 = karst_land_fraction * np.float32(
             self.model.config["hydrology"]["karst"]["capture_fraction"]
         )

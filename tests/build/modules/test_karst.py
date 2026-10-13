@@ -9,7 +9,25 @@ import pytest
 import xarray as xr
 from shapely.geometry import box
 
+from geb.build.methods import build_method
 from geb.build.modules.groundwater import GroundWater
+
+
+def test_build_requires_karst() -> None:
+    """Require custom builds to include the karst coverage map.
+
+    Returns:
+        None.
+
+    Raises:
+        AssertionError: If a build without karst coverage is accepted.
+    """  # noqa: DOC202, DOC502
+    methods: set[str] = build_method.required_methods.copy()
+    methods.discard("setup_karst")
+    with pytest.raises(ValueError, match="setup_karst"):
+        build_method.check_required_methods(methods)
+    methods.add("setup_karst")
+    build_method.check_required_methods(methods)
 
 
 @pytest.mark.parametrize("lazy", [False, True])

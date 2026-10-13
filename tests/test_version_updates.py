@@ -12,15 +12,22 @@ def test_karst_input_migration(monkeypatch: pytest.MonkeyPatch) -> None:
 
     Args:
         monkeypatch: Fixture fixing the target version to the karst release.
-    """
+
+    Returns:
+        None.
+
+    Raises:
+        AssertionError: If the required migration instructions are missing.
+    """  # noqa: DOC202, DOC502
     monkeypatch.setattr(version_updates, "__version__", "1.0.0b35")
     updates: list[str] = version_updates.get_and_maybe_do_version_updates(
         "1.0.0b34", logging.getLogger(__name__)
     )
-    assert len(updates) == 1
-    assert "setup_karst" in updates[0]
-    assert "rerun spinup" in updates[0]
-    assert "karst disabled require no input changes" in updates[0]
-    assert "new karst store" in updates[0]
-    assert "may contain only zeros" in updates[0]
-    assert "1.0.0b37" in version_updates.VERSION_UPDATES
+    karst_notices: list[str] = [notice for notice in updates if "setup_karst" in notice]
+    assert len(karst_notices) == 1
+    notice: str = karst_notices[0]
+    assert "every hydrology run" in notice
+    assert "Remove hydrology.karst.enabled" in notice
+    assert "reasonable_default_build.yml" in notice
+    assert "rerun spinup and simulation" in notice
+    assert "missing or invalid" in notice

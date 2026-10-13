@@ -25,15 +25,40 @@ EXPECTED_PARAMETERS: set[str] = {
 
 
 def test_karst_default_matches_configuration() -> None:
-    """Keep karst defaults the same in the schema and configuration."""
+    """Keep mandatory karst defaults the same in the schema and configuration.
+
+    Returns:
+        None.
+
+    Raises:
+        AssertionError: If defaults differ or the enable switch is still present.
+    """  # noqa: DOC202, DOC502
     with (GEB_PACKAGE_DIR / "reasonable_default_config.yml").open() as config_file:
         defaults: dict[str, Any] = yaml.safe_load(config_file)
     assert KarstConfig().capture_fraction == 1.0
     assert defaults["hydrology"]["karst"]["capture_fraction"] == 1.0
-    assert KarstConfig().enabled is False
+    assert "enabled" not in KarstConfig.model_fields
+    assert "enabled" not in defaults["hydrology"]["karst"]
     assert KarstConfig(capture_fraction=0.5).capture_fraction == 0.5
     assert KarstConfig().release_time_days == 10.0
     assert defaults["hydrology"]["karst"]["release_time_days"] == 10.0
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_karst_rejects_removed_enable_setting(enabled: bool) -> None:
+    """Reject the obsolete switch instead of silently ignoring user settings.
+
+    Args:
+        enabled: Value of the removed karst enable switch.
+
+    Returns:
+        None.
+
+    Raises:
+        AssertionError: If validation accepts the obsolete setting.
+    """  # noqa: DOC202, DOC502
+    with pytest.raises(ValidationError, match="enabled"):
+        KarstConfig.model_validate({"enabled": enabled})
 
 
 def test_parameters_config_requires_all_parameters() -> None:
