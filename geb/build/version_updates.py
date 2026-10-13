@@ -13,6 +13,12 @@ if TYPE_CHECKING:
     from geb.build import GEBModel as GEBModelBuild
 
 VERSION_UPDATES: dict[str, list[str]] = {
+    "1.0.0b37": [
+        "[manual] Karst now stores soil drainage too; its default release time is 10 days. Rerun spinup with karst enabled, including inputs already marked 1.0.0b37.",
+    ],
+    "1.0.0b35": [
+        "[manual] For hydrology.karst, add setup_karst to custom builds, run geb update -b build.yml::setup_karst, and rerun spinup for the new karst store. Rebuild older maps, which may contain only zeros. Runs with karst disabled require no input changes.",
+    ],
     "1.0.0b34": [
         "[update-method;setup_waterbodies]",
     ],

@@ -300,11 +300,35 @@ class HydrologyEvaluationConfig(BaseModel):
     )
 
 
+class KarstConfig(BaseModel):
+    """Karst capture and release settings."""
+
+    enabled: bool = Field(
+        False,
+        description="Enable karst storage and recharge.",
+    )
+    capture_fraction: float = Field(
+        1.0,
+        ge=0.0,
+        le=1.0,
+        description="Fraction of runoff and interflow captured on karst land (0–1).",
+    )
+    release_time_days: float = Field(
+        10.0,
+        gt=0.0,
+        allow_inf_nan=False,
+        description="Time for karst storage to fall to 37% without new inflow (days).",
+    )
+
+
 class HydrologyConfig(BaseModel):
     """Configuration for hydrology."""
 
     routing: RoutingConfig = Field(
         default_factory=RoutingConfig, description="Routing configuration."
+    )
+    karst: KarstConfig = Field(
+        default_factory=KarstConfig, description="Karst recharge settings."
     )
     evaluation: HydrologyEvaluationConfig = Field(
         default_factory=HydrologyEvaluationConfig,

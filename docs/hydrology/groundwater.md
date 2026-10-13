@@ -37,6 +37,29 @@ The groundwater simulation proceeds in the following steps during each model tim
     *   **Capillary Rise**: A portion of the drainage flux is partitioned into capillary rise (water moving back up to the unsaturated zone), though currently, the implementation assigns most drainage to river baseflow.
     *   **State Update**: The updated hydraulic heads are synchronized back to the GEB grid state.
 
+## Karst
+
+One store holds the mapped karst share of soil drainage, plus captured runoff
+and interflow. It releases water to groundwater over time. Sealed areas and
+open water are excluded. This delays water; it does not remove it.
+
+```yaml
+hydrology:
+  karst:
+    enabled: true
+    capture_fraction: 1.0
+    release_time_days: 10.0
+```
+
+Karst is off by default. `capture_fraction` applies to runoff and interflow; soil
+drainage uses mapped coverage. The release time is in days; after that many dry
+days, 37% of stored water remains. Ten days is a starting value.
+
+Build the map with `geb update -b build.yml::setup_karst`, then rerun spinup.
+Rerun spinup after changing karst settings or updating its routing. Existing
+maps can be reused unless they contain only zeros. Storage is included in
+checkpoints and water balances.
+
 ## Code
 
 ::: geb.hydrology.groundwater

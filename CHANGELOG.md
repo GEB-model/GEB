@@ -1,4 +1,5 @@
 # dev
+- Add optional WOKAM karst coverage and storage for soil drainage, runoff and interflow, with a default release time of 10 days. Build `setup_karst` and rerun spinup before enabling karst.
 
 # v1.0.0b34
 - Fix for trapped waterbody cells. Only classify waterbody as trapped if they are both down- and upstream of the same waterbody.
