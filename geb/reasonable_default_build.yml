@@ -182,6 +182,8 @@ setup_crop_prices:
 setup_flood_damage_model:
   region: global
 
+setup_sea_level_projections:
+
 setup_forcing:
   forcing_source: ERA5-Land
   precipitation_source: MSWEP
