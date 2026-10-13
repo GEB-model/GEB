@@ -1,4 +1,5 @@
 # dev
+- Fixed `assign_crops` build failure when a cell's rounded rainfed (or irrigated) farmer count had no available crop fractions; those farmers are now assigned to the other group.
 - Use FathomDEM as default instead of FABDEM.
 - Integrated interactive chart data bundles directly into the single discharge dashboard HTML file.
 - Implement capillary rise in the Ross solver.
