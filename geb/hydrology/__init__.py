@@ -37,6 +37,7 @@ from geb.workflows import TimingModule, balance_check
 
 from .erosion.hillslope import HillSlopeErosion
 from .groundwater import GroundWater
+from .karst import Karst
 from .landcovers import SEALED
 from .landsurface.landsurface_model import LandSurface
 from .routing import Routing
@@ -145,13 +146,10 @@ class Hydrology(Data, Module):
     """
 
     def __init__(self, model: GEBModel) -> None:
-        """Set up hydrology and load the required karst coverage map.
+        """Set up the hydrology components.
 
         Args:
             model: The GEB model instance.
-
-        Raises:
-            ValueError: If the karst map is missing or its values are outside 0–1.
         """
         Data.__init__(self, model)
         Module.__init__(self, model)
@@ -160,25 +158,7 @@ class Hydrology(Data, Module):
             return
 
         self.dynamic_waterbodies = False
-        if "groundwater/karst_fraction" not in self.model.files["grid"]:
-            raise ValueError(
-                "Karst inputs are missing. Run setup_karst and rerun spinup."
-            )
-        self.karst_fraction: ArrayFloat32 = self.grid.load2d(
-            self.model.files["grid"]["groundwater/karst_fraction"]
-        )
-        if (
-            not np.isfinite(self.karst_fraction).all()
-            or ((self.karst_fraction < 0) | (self.karst_fraction > 1)).any()
-        ):
-            raise ValueError(
-                "Karst map values must be between 0 and 1, with no NaNs or infinities."
-            )
-        if self.model.in_spinup:
-            self.grid.var.karst_storage_m = np.zeros_like(
-                self.karst_fraction, dtype=np.float64
-            )
-
+        self.karst = Karst(self.model, self)
         self.landsurface = LandSurface(self.model, self)
         self.groundwater = GroundWater(self.model, self)
         self.routing = Routing(self.model, self)
@@ -313,7 +293,7 @@ class Hydrology(Data, Module):
             influx += pr_total_m3
 
         # Skip sealed land and open water.
-        karst_land_fraction: ArrayFloat32 = self.to_HRU(data=self.karst_fraction) * (
+        karst_land_fraction: ArrayFloat32 = self.to_HRU(data=self.karst.fraction) * (
             self.HRU.var.land_use_type < SEALED
         )
         capture_fraction: ArrayFloat32 = karst_land_fraction * np.float32(
@@ -339,16 +319,7 @@ class Hydrology(Data, Module):
         karst_inflow_m: ArrayFloat64 = self.to_grid(
             HRU_data=karst_capture_m + karst_soil_recharge_m
         ).astype(np.float64)
-        release_time_days: float = self.model.config["hydrology"]["karst"][
-            "release_time_days"
-        ]
-        # Assume inflow is spread evenly over the day; exact integration conserves water.
-        release_fraction: np.float64 = -np.expm1(-1.0 / release_time_days)
-        karst_recharge_m: ArrayFloat64 = (
-            self.grid.var.karst_storage_m * release_fraction
-            + karst_inflow_m * (1.0 - release_time_days * release_fraction)
-        )
-        self.grid.var.karst_storage_m += karst_inflow_m - karst_recharge_m
+        karst_recharge_m: ArrayFloat64 = self.karst.step(karst_inflow_m)
         groundwater_recharge_m += karst_recharge_m.astype(np.float32)
 
         if self.model.config["hazards"]["floods"]["simulate"]:

@@ -9,6 +9,7 @@ import pytest
 
 from geb.hydrology import Hydrology
 from geb.hydrology.HRUs import GridVariables
+from geb.hydrology.karst import Karst
 from geb.store import Store
 
 
@@ -64,9 +65,11 @@ def test_hydrology_karst_integration(
     hydrology.grid.var = cast(GridVariables, store.create_bucket("hydrology.grid.var"))
     hydrology.grid.var.cell_area = np.array([6.0], dtype=np.float32)
     hydrology.grid.var.capillar = np.zeros(1, dtype=np.float32)
-    hydrology.grid.var.karst_storage_m = np.zeros(1, dtype=np.float64)
     hydrology.grid.compressed_size = 1
-    hydrology.karst_fraction = np.array([coverage], dtype=np.float32)
+    hydrology.model.in_spinup = True
+    hydrology.model.files = {"grid": {"groundwater/karst_fraction": "karst.zarr"}}
+    hydrology.grid.load2d.return_value = np.array([coverage], dtype=np.float32)
+    hydrology.karst = Karst(hydrology.model, hydrology)
     hydrology.to_HRU = MagicMock(return_value=np.full(6, coverage, dtype=np.float32))
     hydrology.to_grid = MagicMock(
         side_effect=lambda *, HRU_data: HRU_data.mean(axis=-1, keepdims=True)
