@@ -1,6 +1,7 @@
 """Tests for hydrological routing."""
 
 import math
+from pathlib import Path
 from typing import Any
 
 import geopandas as gpd
@@ -2092,23 +2093,26 @@ def test_bankfull_discharge_multiplier_scaling() -> None:
 
 def test_load_rivers_prunes_starved_channels_and_updates_represented_in_grid(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Verify that load_rivers prunes starved channels downstream of non-outflow waterbody cells."""
     import pyflwdir
     from shapely.geometry import Point
 
     from geb.hydrology.routing import Routing
+    from geb.workflows.io import read_geom, write_geom
 
     routing = Routing.__new__(Routing)
 
-    # 1x3 grid:
+    # 1x4 grid:
     # (0, 0): Lake 5 (non-outflow), drains East (6)
     # (0, 1): River reach 20, drains East (6)
     # (0, 2): River reach 20 (outlet pit 5)
-    wb_id_2d = np.array([[5, -1, -1]], dtype=np.int32)
-    wb_outflows_2d = np.array([[-1, -1, -1]], dtype=np.int32)
-    river_ids_2d = np.array([[-1, 20, 20]], dtype=np.int32)
-    ldd_2d = np.array([[6, 6, 5]], dtype=np.uint8)
+    # (0, 3): River reach 30 (outlet pit 5, not starved)
+    wb_id_2d = np.array([[5, -1, -1, -1]], dtype=np.int32)
+    wb_outflows_2d = np.array([[-1, -1, -1, -1]], dtype=np.int32)
+    river_ids_2d = np.array([[-1, 20, 20, 30]], dtype=np.int32)
+    ldd_2d = np.array([[6, 6, 5, 5]], dtype=np.uint8)
 
     routing.river_network = pyflwdir.from_array(ldd_2d, ftype="ldd")
 
@@ -2151,12 +2155,12 @@ def test_load_rivers_prunes_starved_channels_and_updates_represented_in_grid(
     )
     rivers_data = gpd.GeoDataFrame(
         {
-            "width": [10.0],
-            "hydrography_xy": [[(1, 0), (2, 0)]],
-            "hydrography_upstream_area_m2": [[1000.0, 2000.0]],
+            "width": [10.0, 15.0],
+            "hydrography_xy": [[(1, 0), (2, 0)], [(3, 0)]],
+            "hydrography_upstream_area_m2": [[1000.0, 2000.0], [5000.0]],
         },
-        index=[20],
-        geometry=[Point(1, 0)],
+        index=[20, 30],
+        geometry=[Point(1, 0), Point(3, 0)],
     )
 
     def mock_read_geom(path: Any) -> gpd.GeoDataFrame:
@@ -2168,12 +2172,24 @@ def test_load_rivers_prunes_starved_channels_and_updates_represented_in_grid(
 
     monkeypatch.setattr("geb.hydrology.routing.read_geom", mock_read_geom)
 
-    grid_linear_mapping = np.array([[0, 1, 2]], dtype=np.int32)
+    grid_linear_mapping = np.array([[0, 1, 2, 3]], dtype=np.int32)
     rivers, river_ids_comp, river_ids_orig = routing.load_rivers(grid_linear_mapping)
 
     # Reach 20 is starved, so it should not be represented in the grid
     assert not rivers.loc[20, "represented_in_grid"]
     assert len(rivers.loc[20, "hydrography_xy"]) == 0
     assert len(rivers.loc[20, "hydrography_upstream_area_m2"]) == 0
-    # The river IDs grid must have had the reach pruned to -1
-    assert (river_ids_comp == -1).all()
+    # Reach 30 is active, so it should be represented in the grid
+    assert rivers.loc[30, "represented_in_grid"]
+    assert rivers.loc[30, "hydrography_xy"] == [(3, 0)]
+    assert (rivers.loc[30, "hydrography_upstream_area_m2"] == [5000.0]).all()
+    # The river IDs grid must have had reach 20 pruned to -1, but reach 30 retained
+    assert (river_ids_comp[:3] == -1).all()
+    assert river_ids_comp[3] == 30
+
+    # Ensure rivers can be saved to geoparquet and restored without PyArrow serialization errors
+    saved_parquet: Path = tmp_path / "rivers.geoparquet"
+    write_geom(rivers, saved_parquet)
+    restored_rivers: gpd.GeoDataFrame = read_geom(saved_parquet)
+    assert len(restored_rivers.loc[20, "hydrography_xy"]) == 0
+    assert len(restored_rivers.loc[30, "hydrography_xy"]) == 1

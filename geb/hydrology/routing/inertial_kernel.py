@@ -59,8 +59,6 @@ __all__ = [
     "_run_inertial_substeps_serial",
     "_scatter_outputs",
     "compute_inertial_substeps_cfl",
-    "_compute_inertial_substeps_cfl_serial",
-    "_compute_inertial_substeps_cfl_parallel",
 ]
 
 # Global option to toggle reverse flow across river reaches
@@ -427,7 +425,8 @@ def _evaluate_reach_cfl_dt(
     return min(dt_cfl, dt_f32)
 
 
-def _compute_inertial_substeps_cfl(
+@njit(cache=True)
+def compute_inertial_substeps_cfl(
     dt_f32: np.float32,
     inv_dt_f32: np.float32,
     n_inertial: int,
@@ -618,15 +617,6 @@ def _compute_inertial_substeps_cfl(
         limiting_flow=limiting_flow,
         limiting_storage=limiting_storage,
     )
-
-
-_compute_inertial_substeps_cfl_serial = njit(fastmath=True, parallel=False)(
-    _compute_inertial_substeps_cfl
-)
-_compute_inertial_substeps_cfl_parallel = njit(fastmath=True, parallel=True)(
-    _compute_inertial_substeps_cfl
-)
-compute_inertial_substeps_cfl = _compute_inertial_substeps_cfl_parallel
 
 
 @njit(inline="always")
@@ -1300,6 +1290,7 @@ def _run_inertial_substeps(
     buffers.discharge_vol_sum_inertial.fill(0.0)
     buffers.wb_extra_lateral_accum_m3.fill(0.0)
     buffers.terminal_wb_outflow_accum_m3.fill(0.0)
+    buffers.wb_release_volume_substep.fill(0.0)
 
     # Initialize reach water stages from current storage to ensure physical consistency
     _compute_stage_from_storage_inertial(

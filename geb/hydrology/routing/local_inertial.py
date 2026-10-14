@@ -23,13 +23,12 @@ from .inertial_kernel import (
     INERTIAL_PARALLEL_THRESHOLD,
     RoutingStepDiagnostics,
     SubstepBuffers,
-    _compute_inertial_substeps_cfl_parallel,
-    _compute_inertial_substeps_cfl_serial,
     _compute_stage_from_storage_inertial,
     _gather_inputs,
     _run_inertial_substeps_parallel,
     _run_inertial_substeps_serial,
     _scatter_outputs,
+    compute_inertial_substeps_cfl,
 )
 from .kinematic import (
     KINEMATIC_PARALLEL_THRESHOLD,
@@ -969,12 +968,7 @@ class LocalInertial:
                 self._substep_buffers.kinematic_inflow_rate_inertial
             )
 
-            run_cfl = (
-                _compute_inertial_substeps_cfl_parallel
-                if self.n_inertial >= INERTIAL_PARALLEL_THRESHOLD
-                else _compute_inertial_substeps_cfl_serial
-            )
-            diagnostics: RoutingStepDiagnostics = run_cfl(
+            diagnostics: RoutingStepDiagnostics = compute_inertial_substeps_cfl(
                 dt_f32=dt_f32,
                 inv_dt_f32=inv_dt_f32,
                 n_inertial=self.n_inertial,

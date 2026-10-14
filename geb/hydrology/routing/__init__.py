@@ -644,6 +644,7 @@ class Routing(Module):
         self._wb_act_evap_buf: ArrayFloat32 = np.zeros(0, dtype=np.float32)
         self._wb_outflow_rate_buf: ArrayFloat32 = np.zeros(0, dtype=np.float32)
         self._reservoir_indices: ArrayInt32 = np.zeros(0, dtype=np.int32)
+        self._river_cell_indices: ArrayInt32 = np.zeros(0, dtype=np.int32)
         self.var.discharge_m3_s = self.grid.full_compressed(0, dtype=np.float32)
 
         self.inflow = {}
@@ -754,10 +755,7 @@ class Routing(Module):
         rivers["hydrography_xy_no_waterbodies_removed"] = rivers["hydrography_xy"]
 
         rivers["hydrography_xy"] = [
-            np.array(
-                [np.array(xy, dtype=object) for xy, m in zip(xys, mask) if m],
-                dtype=object,
-            )
+            [(int(xy[0]), int(xy[1])) for xy, m in zip(xys, mask) if m]
             for xys, mask in zip(rivers["hydrography_xy"], active_cell_mask)
         ]
 
@@ -1546,6 +1544,9 @@ class Routing(Module):
         )
         self.var.rivers["return_period_2_years_daily_m3_per_s"] = np.nan
         self.var.active_rivers = self.get_active_rivers()
+        self._river_cell_indices = np.flatnonzero(self.var.river_ids != -1).astype(
+            np.int32
+        )
 
         self.grid.var.upstream_area = self.grid.load2d(
             self.model.files["grid"]["routing/upstream_area_m2"]
@@ -1566,10 +1567,6 @@ class Routing(Module):
         )
         assert (self.grid.var.river_length > 0).all(), (
             "Channel length must be greater than 0 for all cells"
-        )
-        # Enforce minimum channel reach length of 1000m to prevent severe CFL substepping constraints
-        self.grid.var.river_length = np.maximum(
-            self.grid.var.river_length, np.float32(1000.0)
         )
 
         # Channel bottom width [meters]
@@ -1816,23 +1813,26 @@ class Routing(Module):
         channel_abstraction_m3_per_hour: ArrayFloat32 = (
             channel_abstraction_m3 / 24
         ).astype(np.float32)
-        assert (
-            channel_abstraction_m3_per_hour[self.grid.var.waterbody_ids != -1] == 0.0
-        ).all(), (
-            "Channel abstraction must be zero for water bodies, "
-            "but found non-zero value."
-        )
+        if __debug__:
+            assert (channel_abstraction_m3_per_hour[self._wb_cell_mask] == 0.0).all(), (
+                "Channel abstraction must be zero for water bodies, "
+                "but found non-zero value."
+            )
 
         return_flow_m3_per_hour: ArrayFloat32 = (
             return_flow * self.grid.var.cell_area / 24
         ).astype(np.float32)
 
         # add return flow to the water bodies
-        return_flow_m3_to_waterbodies_per_hour: np.ndarray = np.bincount(
-            self.grid.var.waterbody_ids[self.grid.var.waterbody_ids != -1],
-            weights=return_flow_m3_per_hour[self.grid.var.waterbody_ids != -1],
-        )
-        return_flow_m3_per_hour[self.grid.var.waterbody_ids != -1] = 0.0
+        if len(self._active_wb_cells) > 0:
+            return_flow_m3_to_waterbodies_per_hour: np.ndarray = np.bincount(
+                self._active_wb_cells,
+                weights=return_flow_m3_per_hour[self._wb_cell_indices],
+                minlength=self.hydrology.waterbodies.n,
+            )
+            return_flow_m3_per_hour[self._wb_cell_mask] = 0.0
+        else:
+            return_flow_m3_to_waterbodies_per_hour = np.zeros(0, dtype=np.float32)
 
         net_base_sideflow_per_hour: ArrayFloat32 = (
             return_flow_m3_per_hour - channel_abstraction_m3_per_hour
@@ -2038,12 +2038,12 @@ class Routing(Module):
                 out=self.var.water_stage_m
             )
 
-            if not (actual_evaporation_in_rivers_m3_per_hour >= 0.0).all():
-                raise ValueError(
-                    f"Negative evaporation detected, min evaporation: {actual_evaporation_in_rivers_m3_per_hour.min()}, min discharge: {self.var.discharge_in_rivers_m3_s_substep.min()}. "
-                )
-
-            assert (actual_evaporation_in_rivers_m3_per_hour >= 0.0).all()
+            if __debug__:
+                if not (actual_evaporation_in_rivers_m3_per_hour >= 0.0).all():
+                    raise ValueError(
+                        f"Negative evaporation detected, min evaporation: {actual_evaporation_in_rivers_m3_per_hour.min()}, min discharge: {self.var.discharge_in_rivers_m3_s_substep.min()}. "
+                    )
+                assert (actual_evaporation_in_rivers_m3_per_hour >= 0.0).all()
 
             # the reservoir operators need to track the inflow to the reservoirs
             if len(self._reservoir_indices) > 0:
@@ -2087,20 +2087,22 @@ class Routing(Module):
                     idxs_up_to_downstream=self.router.idxs_up_to_downstream,
                 )
 
-            # after filling the gaps, we should not have any nans in the river cells
-            assert not np.isnan(discharge_row[self.var.river_ids != -1]).any()
+            if __debug__:
+                # after filling the gaps, we should not have any nans in the river cells
+                assert not np.isnan(discharge_row[self._river_cell_indices]).any()
 
             ret_row: ArrayFloat32 = self.var.retention_basin_storage_m3_per_substep[
                 hour, :
             ]
             ret_row.fill(0.0)
             if not self.retention_basin_data.empty:
-                ret_row[self._retention_cell_mask] = (
+                ret_row[self._retention_cell_indices] = (
                     self.var.retention_basin_storage_m3[self._retention_cell_basin_ids]
                 )
 
-            self.var.sum_of_all_discharge_steps += discharge_row
-            self.var.discharge_step_count += 1
+            if self.model.in_spinup:
+                self.var.sum_of_all_discharge_steps += discharge_row
+                self.var.discharge_step_count += 1
 
             if __debug__:
                 assert (
