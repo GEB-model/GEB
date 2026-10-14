@@ -3775,6 +3775,11 @@ def test_serial_and_parallel_kinematic_kernels_equivalence() -> None:
     Verifies that the serial and parallel compiled variants of the kinematic wave routing
     step produce numerically identical results, and that dispatching logic operates correctly.
     """
+    from geb.hydrology.routing.inertial_substeps import (
+        KinematicTopology,
+        RetentionCoupling,
+        WaterbodyCoupling,
+    )
     from geb.hydrology.routing.local_inertial import (
         KINEMATIC_PARALLEL_THRESHOLD,
         _run_kinematic_step,
@@ -3794,36 +3799,63 @@ def test_serial_and_parallel_kinematic_kernels_equivalence() -> None:
     kin_ds_wb_id: npt.NDArray[np.int32] = np.array([-1, -1, -1, -1], dtype=np.int32)
 
     def build_test_state() -> list[Any]:
+        kin = KinematicTopology(
+            n_kinematic=n_kinematic,
+            n_kin_headwater=n_kin_headwater,
+            kin_ds_reach=kin_ds_reach.copy(),
+            kin_inflow_m3_s=np.zeros(n_kinematic, dtype=np.float32),
+            kin_ds_waterbody_id=kin_ds_wb_id.copy(),
+            wb_to_kin_target_reach=np.zeros(0, dtype=np.int32),
+            wb_to_kin_wb_id=np.zeros(0, dtype=np.int32),
+            kin_wb_inflow_m3=np.zeros(n_kinematic, dtype=np.float32),
+            inertial_up_kin_offsets=np.zeros(1, dtype=np.int32),
+            inertial_up_kin_indices=np.zeros(0, dtype=np.int32),
+            inertial_up_kin_reach_idx=np.zeros(0, dtype=np.int32),
+            river_storage_alpha=np.array([0.5, 0.6, 0.55, 0.52], dtype=np.float32),
+            river_storage_beta=np.array([0.6, 0.6, 0.6, 0.6], dtype=np.float32),
+            river_length=np.array([1000.0, 1200.0, 1500.0, 1100.0], dtype=np.float32),
+            retention_node_id=np.array([0, -1, -1, -1], dtype=np.int32),
+        )
+        wb = WaterbodyCoupling(
+            storage_m3=np.zeros(0, dtype=np.float64),
+            prescribed_outflow_m3=np.zeros(0, dtype=np.float32),
+            inflow_m3=np.zeros(0, dtype=np.float32),
+            lake_area=np.zeros(0, dtype=np.float32),
+            lake_factor=np.zeros(0, dtype=np.float32),
+            outflow_height=np.zeros(0, dtype=np.float32),
+            outflow_bed_elev=np.zeros(0, dtype=np.float32),
+            inertial_wb_ds_k=np.zeros(0, dtype=np.int32),
+            inertial_wb_ds_id=np.zeros(0, dtype=np.int32),
+            lake_outflow_target_k=np.zeros(0, dtype=np.int32),
+            lake_outflow_wb_id=np.zeros(0, dtype=np.int32),
+            wb_to_wb_src_wb=np.zeros(0, dtype=np.int32),
+            wb_to_wb_tgt_wb=np.zeros(0, dtype=np.int32),
+            wb_terminal_wb_ids=np.zeros(0, dtype=np.int32),
+        )
+        ret = RetentionCoupling(
+            storage_m3=np.array([100.0], dtype=np.float32),
+            inflow_m3=np.zeros(1, dtype=np.float32),
+            outflow_m3=np.zeros(1, dtype=np.float32),
+            max_storage_m3=np.array([5000.0], dtype=np.float32),
+            inertial_retention_k=np.zeros(0, dtype=np.int32),
+            inertial_retention_id=np.zeros(0, dtype=np.int32),
+            controlled_retention=np.array([True], dtype=bool),
+            activation_threshold_m3_s=np.array([1.5], dtype=np.float32),
+            release_threshold_factor=np.float32(0.2),
+        )
         return [
             dt_f32,
             inv_dt_f32,
-            n_kinematic,
-            n_kin_headwater,
-            kin_ds_reach.copy(),
-            np.zeros(n_kinematic, dtype=np.float32),
+            np.array([2.0, 3.0, 5.0, 4.0], dtype=np.float32),
+            np.array([5000.0, 6000.0, 10000.0, 8000.0], dtype=np.float64),
             np.array([1000.0, 1500.0, 500.0, 200.0], dtype=np.float32),
             np.array([50.0, 60.0, 30.0, 20.0], dtype=np.float32),
-            np.array([2.0, 3.0, 5.0, 4.0], dtype=np.float32),
-            np.array([0.5, 0.6, 0.55, 0.52], dtype=np.float32),
-            np.array([0.6, 0.6, 0.6, 0.6], dtype=np.float32),
-            np.array([1000.0, 1200.0, 1500.0, 1100.0], dtype=np.float32),
-            np.array([5000.0, 6000.0, 10000.0, 8000.0], dtype=np.float64),
             np.zeros(n_kinematic, dtype=np.float32),
             np.zeros(n_kinematic, dtype=np.float32),
             np.zeros(n_kinematic, dtype=np.float32),
-            kin_ds_wb_id.copy(),
-            np.zeros(0, dtype=np.float64),
-            np.zeros(0, dtype=np.float32),
-            np.zeros(0, dtype=np.int32),
-            np.zeros(n_kinematic, dtype=np.float32),
-            np.array([0, -1, -1, -1], dtype=np.int32),
-            np.array([100.0], dtype=np.float32),
-            np.array([5000.0], dtype=np.float32),
-            np.array([True], dtype=bool),
-            np.array([1.5], dtype=np.float32),
-            np.float32(0.2),
-            np.zeros(1, dtype=np.float32),
-            np.zeros(1, dtype=np.float32),
+            kin,
+            wb,
+            ret,
         ]
 
     state_serial: list[Any] = build_test_state()
@@ -3834,29 +3866,25 @@ def test_serial_and_parallel_kinematic_kernels_equivalence() -> None:
     _run_kinematic_step_parallel(*state_parallel)
     _run_kinematic_step(*state_raw)
 
-    # updated_discharge_m3_s (index 13)
-    np.testing.assert_allclose(
-        state_serial[13], state_parallel[13], rtol=1e-5, atol=1e-5
-    )
-    np.testing.assert_allclose(state_serial[13], state_raw[13], rtol=1e-5, atol=1e-5)
+    # updated_discharge_m3_s (index 8)
+    np.testing.assert_allclose(state_serial[8], state_parallel[8], rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(state_serial[8], state_raw[8], rtol=1e-5, atol=1e-5)
 
-    # river_storage_m3 (index 12)
-    np.testing.assert_allclose(
-        state_serial[12], state_parallel[12], rtol=1e-5, atol=1e-5
-    )
-    np.testing.assert_allclose(state_serial[12], state_raw[12], rtol=1e-5, atol=1e-5)
+    # river_storage_m3 (index 3)
+    np.testing.assert_allclose(state_serial[3], state_parallel[3], rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(state_serial[3], state_raw[3], rtol=1e-5, atol=1e-5)
 
-    # actual_evaporation_m3 (index 14)
-    np.testing.assert_allclose(
-        state_serial[14], state_parallel[14], rtol=1e-5, atol=1e-5
-    )
-    np.testing.assert_allclose(state_serial[14], state_raw[14], rtol=1e-5, atol=1e-5)
+    # actual_evaporation_m3 (index 7)
+    np.testing.assert_allclose(state_serial[7], state_parallel[7], rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(state_serial[7], state_raw[7], rtol=1e-5, atol=1e-5)
 
-    # retention_storage_m3 (index 22)
+    # retention_storage_m3 (inside ret coupling at index 11)
     np.testing.assert_allclose(
-        state_serial[22], state_parallel[22], rtol=1e-5, atol=1e-5
+        state_serial[11].storage_m3, state_parallel[11].storage_m3, rtol=1e-5, atol=1e-5
     )
-    np.testing.assert_allclose(state_serial[22], state_raw[22], rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(
+        state_serial[11].storage_m3, state_raw[11].storage_m3, rtol=1e-5, atol=1e-5
+    )
 
 
 def test_local_inertial_oscillation_suppression() -> None:

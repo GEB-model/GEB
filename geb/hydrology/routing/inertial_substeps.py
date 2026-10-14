@@ -282,6 +282,8 @@ class SubstepBuffers(NamedTuple):
         wb_outflow_avail_buf: Buffer holding available outflow volume per waterbody (m³).
         wb_extra_lateral_accum_m3: Accumulator tracking total waterbody release volume transferred (m³).
         terminal_wb_outflow_accum_m3: Single-element accumulator for domain boundary lake outflows (m³).
+        substep_discharge_inertial: Dynamic substep discharge state vector (m³/s).
+        kinematic_inflow_rate_inertial: Workspace storing upstream kinematic inflow rates (m³/s).
     """
 
     stage_buf: ArrayFloat32
@@ -295,6 +297,8 @@ class SubstepBuffers(NamedTuple):
     wb_outflow_avail_buf: ArrayFloat64
     wb_extra_lateral_accum_m3: ArrayFloat64
     terminal_wb_outflow_accum_m3: ArrayFloat32
+    substep_discharge_inertial: ArrayFloat32 = np.empty(0, dtype=np.float32)
+    kinematic_inflow_rate_inertial: ArrayFloat32 = np.empty(0, dtype=np.float32)
 
 
 @njit(fastmath=True, parallel=True)
@@ -803,31 +807,55 @@ def _solve_inertial_momentum(
     river_storage_m3_inertial: ArrayFloat64,
     inv_dt_substep: np.float32,
 ) -> np.float32:
-    """Evaluates local inertial momentum update for a single reach using two-tier geometry.
+    """Evaluates the 1D local inertial momentum equation for a single reach interface.
 
-    Fast-paths in-bank flow to read only the compact single-cache-line geom_inbank row,
-    completely bypassing secondary floodplain parameters when unflooded.
+    This function represents the mathematical core of the local inertial hydrodynamics
+    formulation (Bates et al. 2010; de Almeida et al. 2012). It solves the 1D de Saint-Venant
+    momentum equation simplified by neglecting the advective acceleration term d(Q^2/A)/dx,
+    which is negligible in subcritical river and floodplain dynamics:
+
+        dQ/dt + g * A * dz/dx + (g * n^2 * |Q| * Q) / (R^(4/3) * A) = 0
+
+    Discretizing from time t to t + dt with a semi-implicit friction formulation yields
+    the explicit, unconditionally friction-stable update:
+
+        Q^{t+dt} = (Q^t - g * dt * A * dz/dx) / (1 + g * dt * n^2 * |Q^t| / (A * R^(4/3)))
+
+    Where:
+        1. Gravity acceleration predictor:
+           Q* = Q^t - g * dt * A * dz/dx
+           Accelerates (or decelerates) flow along the water surface slope dz/dx. When downstream
+           water elevation exceeds upstream (backwater effects), dz/dx > 0 and flow decelerates
+           or reverses.
+        2. Semi-implicit Manning friction corrector:
+           Dampens the flow by dividing Q* by (1 + friction_damping). Using |Q^t| in the denominator
+           prevents numerical friction oscillation and ensures unconditional stability for any Manning n.
+        3. Physical limiters:
+           - Critical flow limiter (Fr <= 1): Caps discharge at critical depth celerity across steep drops.
+           - Volume conservation limiter: Caps outgoing discharge at 95% of available reach volume per dt.
 
     Args:
         reach_idx: Reach index within local inertial domain.
-        effective_depth: Flow depth at the interface (meters).
-        water_slope: Longitudinal water surface slope dz/dx (dimensionless).
-        curr_discharge: Discharge at start of substep (m³/s).
+        effective_depth: Flow depth at the interface between reaches (meters).
+        water_slope: Longitudinal water surface slope dz/dx = (z_ds - z_us) / dx (dimensionless).
+        curr_discharge: Instantaneous discharge at start of substep Q^t (m³/s).
         min_wet_depth_m: Minimum depth threshold below which reach is treated as dry (meters).
-        geom_inbank: Compact 2D in-bank reach geometry array (meters, dimensionless).
-        geom_overbank: Secondary 2D overbank floodplain geometry array (meters, dimensionless).
-        g_dt_substep: Precalculated g * dt scalar.
-        sqrt_gravity: Square root of gravitational acceleration (m^(1/2)/s).
-        can_reverse: Boolean flag indicating whether reverse flow is permitted.
-        river_storage_m3_inertial: Current reach storage volume array (m³).
-        inv_dt_substep: Reciprocal of substep timestep (1/seconds).
+        geom_inbank: Compact 2D in-bank reach geometry table (meters, dimensionless).
+        geom_overbank: Secondary 2D overbank floodplain geometry table (meters, dimensionless).
+        g_dt_substep: Precalculated gravitational acceleration times substep dt: g * dt (m/s).
+        sqrt_gravity: Square root of gravitational acceleration sqrt(g) (m^(1/2)/s).
+        can_reverse: Boolean flag indicating whether reverse/backwater flow is permitted.
+        river_storage_m3_inertial: Upstream reach storage volume array (m³).
+        inv_dt_substep: Reciprocal of substep timestep duration 1 / dt (1/s).
 
     Returns:
-        Computed instantaneous discharge at end of substep (m³/s).
+        Computed channel discharge Q^{t+dt} at end of substep (m³/s).
     """
+    # Dry-bed check: no momentum transfer across dry channel interfaces
     if effective_depth < min_wet_depth_m:
         return np.float32(0.0)
 
+    # Reconstruct cross-sectional parameters from precomputed geometry tables
     bankfull_depth_m: np.float32 = geom_inbank[reach_idx, GEOM_IN_BANKFULL_DEPTH]
     inv_shape_exponent_plus_one: np.float32 = geom_inbank[
         reach_idx, GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE
@@ -858,7 +886,8 @@ def _solve_inertial_momentum(
         ],
     )
 
-    # Manning friction term
+    # Evaluate Manning friction term:
+    # Hydraulic radius R = A / P, giving denominator term A * R^(4/3) = A * (A / P)^(4/3)
     hydraulic_radius_term: np.float32 = (
         cross_sectional_area / max(interface_p_wetted, np.float32(1e-6))
     ) ** np.float32(4.0 / 3.0)
@@ -871,21 +900,24 @@ def _solve_inertial_momentum(
         g_dt_substep * geom_inbank[reach_idx, GEOM_IN_MANNING_N_SQUARED]
     )
 
-    # Predictor step: intermediate frictionless gravity-accelerated flow.
-    # Calculates how much gravity accelerates (or decelerates) flow along the water surface slope.
+    # 1. PREDICTOR STEP (Gravity acceleration):
+    # Accelerates flow along water surface slope dz/dx: Q* = Q^t - g * dt * A * (dz/dx).
+    # Downhill slopes (dz/dx < 0) accelerate forward flow; adverse slopes (dz/dx > 0) decelerate flow.
     intermediate_discharge: np.float32 = (
         incoming_discharge - g_dt_substep * cross_sectional_area * water_slope
     )
 
-    # Apply implicit Manning bed friction damping.
+    # 2. CORRECTOR STEP (Semi-implicit Manning bed friction):
+    # Q^{t+dt} = Q* / (1 + g * dt * n^2 * |Q^t| / (A * R^(4/3))).
+    # Evaluating friction semi-implicitly provides unconditional stability regardless of Manning n.
     effective_friction_q: np.float32 = abs(incoming_discharge)
     friction_denom: np.float32 = np.float32(1.0) + (
         gravity_dt_manning_n_sq * effective_friction_q / friction_denom_term
     )
     computed_discharge: np.float32 = intermediate_discharge / friction_denom
 
-    # Physical ceiling: critical flow limiter (Froude number Fr <= 1).
-    # Prevents unphysical hyper-supercritical runaway over steep drops.
+    # 3. PHYSICAL LIMITER: Critical flow ceiling (Froude number Fr <= 1):
+    # Q_crit = A * sqrt(g * D_hydraulic). Prevents unphysical supercritical runaway over sharp drops.
     hydraulic_depth: np.float32 = cross_sectional_area / max(
         interface_top_width, np.float32(1e-3)
     )
@@ -893,7 +925,8 @@ def _solve_inertial_momentum(
         sqrt_gravity * cross_sectional_area * np.sqrt(hydraulic_depth)
     )
 
-    # Storage availability and directional discharge capping:
+    # 4. PHYSICAL LIMITER: Upstream storage availability (Courant mass ceiling):
+    # Ensures a reach cannot discharge more than 95% of its available water volume in a single substep.
     if computed_discharge >= np.float32(0.0):
         available_storage_m3: float = river_storage_m3_inertial[reach_idx]
         if available_storage_m3 > 0.0:
@@ -903,7 +936,7 @@ def _solve_inertial_momentum(
             return min(computed_discharge, critical_discharge, max_drain_rate)
         return np.float32(0.0)
 
-    # Reverse flow is only allowed for internal reaches, limited by critical discharge
+    # Reverse flow (backwater wave propagation) is permitted only for internal reaches
     if not can_reverse:
         return np.float32(0.0)
 
