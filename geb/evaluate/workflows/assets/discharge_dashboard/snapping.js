@@ -58,13 +58,12 @@
   function detail(index, labels) {
     var station = stations[index];
     var group = L.featureGroup();
-    var connector = L.polyline(station.locations, {pane: "stationsPane", 
-      renderer: renderer, color: station.color, weight: 3, opacity: 0.85, dashArray: '6 4'
+    var connector = L.polyline(station.locations, {      renderer: renderer, color: station.color, weight: 3, opacity: 0.85, dashArray: '6 4'
     }).addTo(group);
     connector.on('click', function(event) {openPopup(station, '', event.latlng);});
     station.locations.forEach(function(coordinates, position) {
       var spec = markerStyles[position];
-      var marker = L.marker(coordinates, {pane: "stationsPane", icon: L.divIcon({
+      var marker = L.marker(coordinates, {icon: L.divIcon({
         iconSize: [26, 26], iconAnchor: [13, 13], className: 'geb-snapping-icon',
         html: '<span style="display:flex;align-items:center;justify-content:center;width:26px;height:26px;box-sizing:border-box;background:' + spec[2] +
           ';border:2px solid white;border-radius:' + spec[3] + ';color:white;font:bold 14px system-ui;box-shadow:0 1px 5px #0008;">' + spec[0] + '</span>'
@@ -80,8 +79,7 @@
   }
   function overview(index) {
     var station = stations[index];
-    var dot = L.circleMarker(station.locations[0], {pane: "stationsPane", 
-      renderer: renderer, radius: 5, color: station.color, fillColor: station.color,
+    var dot = L.circleMarker(station.locations[0], {      renderer: renderer, radius: 5, color: station.color, fillColor: station.color,
       fillOpacity: 0.85, weight: 1
     });
     dot.bindTooltip(station.tooltip);

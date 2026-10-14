@@ -811,6 +811,9 @@
       if (!map.hasLayer(newLayer)) {
         newLayer.addTo(map);
       }
+      if (newLayer.bringToFront) {
+        try { newLayer.bringToFront(); } catch(e) {}
+      }
     }
     activeConfig = targetConfig;
     renderMenu();

@@ -58,7 +58,6 @@
       if (station.m && station.m[layerName] !== undefined) {
         var radius = (layerName === upstreamLayer) ? 10 : station.r;
         marker = L.circleMarker(station.coords, {
-          pane: "stationsPane",
           radius: radius,
           color: 'black',
           weight: 1.2,
@@ -74,7 +73,6 @@
         var avColor = isAv ? caravanAvailableColor : caravanUnavailableColor;
         var avLabel = isAv ? 'available' : 'not available';
         marker = L.circleMarker(station.coords, {
-          pane: "stationsPane",
           radius: station.r,
           color: 'black',
           weight: 1.2,
@@ -88,7 +86,6 @@
       } else if (station.ch && station.ch[layerName]) {
         var chData = station.ch[layerName];
         marker = L.circleMarker(station.coords, {
-          pane: "stationsPane",
           radius: station.r,
           color: 'black',
           weight: 1.2,
@@ -101,7 +98,6 @@
         marker.bindTooltip(station._baseTooltip + '<br>' + chData[1]);
       } else if (isCharLayer) {
         marker = L.circleMarker(station.coords, {
-          pane: "stationsPane",
           radius: station.r,
           color: 'black',
           weight: 1,
@@ -126,6 +122,9 @@
         station._markers.push(marker);
       }
     });
+    if (layer && layer.bringToFront) {
+      try { layer.bringToFront(); } catch(e) {}
+    }
   }
 
   window._gebPopulateStationLayer = populateLayer;

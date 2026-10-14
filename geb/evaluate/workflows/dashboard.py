@@ -683,7 +683,6 @@ def write_discharge_dashboard(
                 tooltip=record["tooltip"],
                 popup=folium.Popup(excluded_popup, max_width=850),
             )
-            marker.options["pane"] = "stationsPane"
             marker.add_to(excluded_layer)
             station_marker_index.append(
                 {
