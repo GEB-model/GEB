@@ -13,10 +13,13 @@ if TYPE_CHECKING:
     from geb.build import GEBModel as GEBModelBuild
 
 VERSION_UPDATES: dict[str, list[str]] = {
+    "1.0.0b36": [
+        "[update-method;setup_karst]",
+        "[manual] Karst is included in every hydrology run. Remove hydrology.karst.enabled from model.yml. Add setup_karst to custom build.yml files unless inherited from reasonable_default_build.yml, then rerun spinup and simulation.",
+    ],
     "1.0.0b35": [
         "[update-method;setup_elevation]",
         "[update-method;setup_coastal_sfincs_model_regions]",
-        "[manual] Karst is included in every hydrology run. Remove hydrology.karst.enabled from model.yml and add setup_karst to custom build.yml files if not inherited from reasonable_default_build.yml. Run `geb update -b build.yml::setup_karst` if the coverage map is missing or invalid, then rerun spinup and simulation to initialize karst storage.",
     ],
     "1.0.0b34": [
         "[update-method;setup_waterbodies]",

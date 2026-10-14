@@ -39,9 +39,15 @@ The groundwater simulation proceeds in the following steps during each model tim
 
 ## Karst
 
-One store holds the mapped karst share of soil drainage, plus captured runoff
-and interflow. It releases water to groundwater over time. Sealed areas and
-open water are excluded. This delays water; it does not remove it.
+Karst is included in every hydrology run. WOKAM estimates coverage in each
+cell using the polygon area and rock class: 82.5% for continuous rocks,
+40% for discontinuous rocks and 65% for mixed rocks. These are assumptions
+about rock coverage, not measurements of connected karst. See the
+[WOKAM paper](https://doi.org/10.1007/s10040-020-02139-5) for the class ranges.
+
+One store receives the karst share of soil drainage, runoff and interflow.
+Sealed areas and open water are excluded. Stored water drains to MODFLOW;
+it is delayed, not lost. Cells with zero coverage keep their existing flows.
 
 ```yaml
 hydrology:
@@ -50,18 +56,17 @@ hydrology:
     release_time_days: 10.0
 ```
 
-Karst is included in every hydrology run. Cells with zero mapped coverage keep
-their existing flow paths. There is no enable/disable setting. `capture_fraction` applies to runoff and interflow; soil
-drainage uses mapped coverage. The release time is in days; after that many dry
-days, 37% of stored water remains. Ten days is a starting value.
+`capture_fraction` controls how much runoff and interflow enters the store.
+Soil drainage always uses mapped coverage. After `release_time_days` without
+new inflow, 37% of stored water remains. The default of 10 days is a starting
+value, not a measured value for every catchment. Storage is saved in
+checkpoints and included in the water balance.
 
-The default build includes `setup_karst`; custom builds must include it too.
-When upgrading, remove `hydrology.karst.enabled` from `model.yml`. Build a
-missing map with `geb update -b build.yml::setup_karst`, then rerun spinup and
-simulation to initialize karst storage.
-Rerun spinup after changing karst settings or updating its routing. Existing
-maps can be reused unless they contain only zeros. Storage is included in
-checkpoints and water balances.
+To upgrade to 1.0.0b36, remove `hydrology.karst.enabled` from `model.yml` if
+present. Custom build files must include `setup_karst`, either directly or
+through the default build. Then run `geb update-version` and rerun spinup
+and simulation.
+Rerun spinup when changing karst settings or coverage.
 
 ## Code
 

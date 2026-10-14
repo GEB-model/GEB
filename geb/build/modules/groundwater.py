@@ -33,8 +33,8 @@ class GroundWater(BuildModelBase):
 
         Notes:
             WOKAM gives ranges, not exact fractions. Use their
-            midpoints: 0.825 for continuous rocks, 0.4 for discontinuous rocks,
-            and 0.65 for mixed rocks. Inactive grid cells are NaN.
+            midpoints for continuous (0.825) and discontinuous (0.4) rocks,
+            and assume 0.65 for mixed rocks. Inactive grid cells are NaN.
 
         Returns:
             None; saves ``groundwater/karst_fraction`` (0–1).
