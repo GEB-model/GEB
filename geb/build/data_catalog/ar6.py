@@ -36,15 +36,12 @@ class AR6(Adapter):
             fetch_and_save(url=url, file_path=self.path, logger=self.logger)
         return self
 
-    def read(self) -> xr.DataArray:
+    def read(self, scenario, percentile) -> xr.DataArray:
         """Read the AR6 data."""
-        return None  # Placeholder for the actual implementation
-        # file_in_zip = (
-        #     "ar6/global/confidence_output_files/medium_confidence/"
-        #     "ssp245/total_ssp245_medium_confidence_values.nc"
-        # )
-        # with zipfile.ZipFile(self.path, "r") as z, z.open(file_in_zip) as f:
-        #     data = f.read()
-        # ds = xr.open_dataset(io.BytesIO(data))
+        file_in_zip = f"ar6-regional-confidence/regional/confidence_output_files/medium_confidence/ssp{scenario}/total_ssp{scenario}_medium_confidence_values.nc"
+        with zipfile.ZipFile(self.path, "r") as z, z.open(file_in_zip) as f:
+            data = f.read()
 
-        # return data
+        ds = xr.open_dataset(io.BytesIO(data))
+        ds = ds.sel(quantiles=percentile)
+        return ds
