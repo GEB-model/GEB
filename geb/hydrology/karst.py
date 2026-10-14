@@ -124,10 +124,16 @@ class Karst(Module):
         release_time_days: float = self.model.config["hydrology"]["karst"][
             "release_time_days"
         ]
-        # Spread inflow evenly over the day; exact integration conserves water.
+        # Release a fraction of the stored water each day: 1 - exp(-1 / release time).
+        # With a release time of 10 days, about 9.5% leaves the existing store today.
         release_fraction: np.float64 = -np.expm1(-1.0 / release_time_days)
+
+        # Add release from existing storage and from today's inflow.
+        # New water arrives evenly during the day, so it has less time to drain.
         recharge_m: ArrayFloat64 = storage_m * release_fraction + inflow_m * (
             1.0 - release_time_days * release_fraction
         )
+
+        # Keep the rest: old storage + water entering - water sent to MODFLOW.
         storage_m += inflow_m - recharge_m
         return recharge_m
