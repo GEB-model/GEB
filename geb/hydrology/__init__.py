@@ -38,7 +38,6 @@ from geb.workflows import TimingModule, balance_check
 from .erosion.hillslope import HillSlopeErosion
 from .groundwater import GroundWater
 from .karst import Karst
-from .landcovers import SEALED
 from .landsurface.landsurface_model import LandSurface
 from .routing import Routing
 from .runoff_concentration import RunoffConcentrator
@@ -232,6 +231,14 @@ class Hydrology(Data, Module):
         """
         return self.groundwater.groundwater_content_m3.sum(dtype=np.float64)
 
+    def get_karst_storage_m3(self) -> np.float64:
+        """Get the current water storage in karst.
+
+        Returns:
+            Total karst water storage (m3), summed with float64 precision.
+        """
+        return (self.karst.storage_m * self.grid.var.cell_area).sum(dtype=np.float64)
+
     def get_current_storage(self) -> np.float64:
         """Sum stored water, including karst.
 
@@ -244,26 +251,15 @@ class Hydrology(Data, Module):
             + self.get_routing_storage_m3()
             + self.get_waterbodies_storage_m3()
             + self.get_groundwater_storage_m3()
-            + (self.grid.var.karst_storage_m * self.grid.var.cell_area).sum(
-                dtype=np.float64
-            )
+            + self.get_karst_storage_m3()
         )
 
     def step(self) -> None:
         """Run one day of hydrology, including karst storage and recharge.
 
-        Returns:
-            None; updates water storage (m) and daily flows (m/day).
-
-        Raises:
-            ValueError: If karst storage is missing from the checkpoint.
-        """  # noqa: DOC202
+        Updates water storage (m) and daily flows (m/day).
+        """
         timer: TimingModule = TimingModule("Hydrology")
-
-        if not hasattr(self.grid.var, "karst_storage_m"):
-            raise ValueError(
-                "Karst storage is missing. Rerun spinup to initialize karst storage."
-            )
 
         if __debug__:
             prev_storage: np.float64 = self.get_current_storage()
@@ -292,23 +288,11 @@ class Hydrology(Data, Module):
         if __debug__:
             influx += pr_total_m3
 
-        # Skip sealed land and open water.
-        karst_land_fraction: ArrayFloat32 = self.to_HRU(data=self.karst.fraction) * (
-            self.HRU.var.land_use_type < SEALED
+        karst_capture_m: ArrayFloat32
+        karst_soil_recharge_m: ArrayFloat32
+        karst_capture_m, karst_soil_recharge_m = self.karst.capture(
+            overland_runoff_m, interflow_m, groundwater_recharge_m
         )
-        capture_fraction: ArrayFloat32 = karst_land_fraction * np.float32(
-            self.model.config["hydrology"]["karst"]["capture_fraction"]
-        )
-        karst_capture_m: ArrayFloat32 = (
-            overland_runoff_m.sum(axis=0) + interflow_m.sum(axis=0)
-        ) * capture_fraction
-        overland_runoff_m *= np.float32(1.0) - capture_fraction
-        interflow_m *= np.float32(1.0) - capture_fraction
-        karst_soil_recharge_m: ArrayFloat32 = (
-            groundwater_recharge_m * karst_land_fraction
-        )
-        # Remove diverted soil drainage so it is counted only once.
-        groundwater_recharge_m -= karst_soil_recharge_m
 
         interflow_m = self.to_grid(HRU_data=interflow_m)
         overland_runoff_m = self.to_grid(HRU_data=overland_runoff_m)

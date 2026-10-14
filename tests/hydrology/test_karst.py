@@ -177,3 +177,10 @@ def test_hydrology_karst_integration(
             np.testing.assert_array_equal(
                 hydrology.grid.var.karst_storage_m, saved_storage_m
             )
+
+    # Missing checkpoint storage must give a clear error before any water is routed.
+    del hydrology.grid.var.karst_storage_m
+    with pytest.raises(ValueError, match="Rerun spinup"):
+        hydrology.get_karst_storage_m3()
+    with pytest.raises(ValueError, match="Rerun spinup"):
+        hydrology.karst.step(np.zeros(1, dtype=np.float64))
