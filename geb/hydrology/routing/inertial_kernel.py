@@ -1301,10 +1301,7 @@ def _run_inertial_substeps(
         buffers.stage_buf,
     )
 
-    min_dt_floor: np.float32 = min(np.float32(0.1), dt_f32)
-    dt_substep: np.float32 = max(
-        dt_f32 / np.float32(num_inertial_substeps), min_dt_floor
-    )
+    dt_substep: np.float32 = dt_f32 / np.float32(num_inertial_substeps)
 
     t_elapsed: np.float32 = np.float32(0.0)
     substep_count: int = 0
@@ -1315,7 +1312,9 @@ def _run_inertial_substeps(
         if time_remaining <= np.float32(1e-4):
             break
 
-        if dt_substep >= time_remaining or (time_remaining - dt_substep < min_dt_floor):
+        if dt_substep >= time_remaining or (
+            time_remaining - dt_substep <= np.float32(1e-3)
+        ):
             dt_substep = time_remaining
 
         inv_dt_substep: np.float32 = np.float32(1.0) / dt_substep
@@ -1434,7 +1433,7 @@ def _run_inertial_substeps(
             for r_idx in range(n_inertial):
                 if buffers.min_dt_buf[r_idx] < min_dt_next:
                     min_dt_next = buffers.min_dt_buf[r_idx]
-            dt_substep = max(min_dt_next, min_dt_floor)
+            dt_substep = min_dt_next
 
     # Calculate average discharge over the time step
     inv_macro_dt: np.float32 = np.float32(1.0) / dt_f32

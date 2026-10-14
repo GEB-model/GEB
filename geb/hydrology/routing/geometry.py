@@ -305,7 +305,7 @@ def build_inertial_geometry(
     ).astype(np.float32)
     cfl_safety_factor: np.float32 = np.float32(0.7)
     sqrt_g: np.float32 = np.sqrt(np.float32(9.80665))
-    cfl_dx: ArrayFloat32 = np.minimum(river_length, np.float32(1.0) / inv_dx_interface)
+    cfl_dx: ArrayFloat32 = river_length
     confluence_factor: ArrayFloat32 = np.where(
         up_count > 1,
         np.float32(1.0) / np.sqrt(np.maximum(up_count, 1).astype(np.float32)),

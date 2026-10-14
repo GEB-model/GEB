@@ -1560,11 +1560,6 @@ class Routing(Module):
             self.model.files["grid"]["routing/river_length_m"]
         )
 
-        # where there is a pit, the river length is set to distance to the center of the cell,
-        # thus half of the sqrt of the cell area
-        self.grid.var.river_length[self.ldd == 5] = (
-            np.sqrt(self.grid.var.cell_area[self.ldd == 5]) / 2
-        )
         assert (self.grid.var.river_length > 0).all(), (
             "Channel length must be greater than 0 for all cells"
         )
