@@ -342,7 +342,7 @@ class Hydrology(Data, Module):
         release_time_days: float = self.model.config["hydrology"]["karst"][
             "release_time_days"
         ]
-        # Use the exact daily release to keep the water balance.
+        # Assume inflow is spread evenly over the day; exact integration conserves water.
         release_fraction: np.float64 = -np.expm1(-1.0 / release_time_days)
         karst_recharge_m: ArrayFloat64 = (
             self.grid.var.karst_storage_m * release_fraction

@@ -1,5 +1,5 @@
 # dev
-- Include karst in all hydrology runs using WOKAM coverage and a water store with a default release time of 10 days. Update inputs and rerun spinup.
+- Add karst storage to all hydrology runs, with a default release time of 10 days. Update inputs and rerun spinup.
 - Use FathomDEM as default instead of FABDEM.
 - Integrated interactive chart data bundles directly into the single discharge dashboard HTML file.
 - Implement capillary rise in the Ross solver.
