@@ -236,7 +236,6 @@ def evaluate_discharge(
     station_score_records: list[dict[str, Any]] = []
     chart_writer: StationChartBundleWriter | None = (
         StationChartBundleWriter(
-            dashboard_path=dashboard_path,
             max_stations_per_bundle=50,
         )
         if enable_plotting
@@ -478,9 +477,10 @@ def evaluate_discharge(
             rivers=dashboard_geometries_pre.rivers,
         )
 
-    station_dashboard_chart_files: dict[str, str] = (
+    station_bundle_indices: dict[str, int] = (
         chart_writer.finish() if chart_writer is not None else {}
     )
+    chart_bundles: list[str] = chart_writer.bundles if chart_writer is not None else []
 
     station_scores: pd.DataFrame
     if not station_score_records:
@@ -597,7 +597,8 @@ def evaluate_discharge(
             output_path=dashboard_path,
             region_geom=dashboard_geometries.region,
             rivers=enriched_rivers,
-            station_chart_files=station_dashboard_chart_files,
+            chart_bundles=chart_bundles,
+            station_bundle_indices=station_bundle_indices,
             waterbodies=dashboard_geometries.waterbodies,
             barriers=dashboard_geometries.barriers,
             station_characteristics=dashboard_characteristics,
@@ -605,9 +606,7 @@ def evaluate_discharge(
             chart_timeline=chart_timelines,
             run_output_folder=run_output_folder,
         )
-        self.model.logger.info(
-            "Discharge dashboard created. Keep its HTML and charts folder together."
-        )
+        self.model.logger.info("Discharge dashboard created: %s", dashboard_path)
 
     if not station_scores.empty:
         if enable_plotting:

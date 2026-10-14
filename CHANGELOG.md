@@ -2,6 +2,11 @@
 - Filter runtime weirs and instream dams against active river connections after reservoir activation and channel pruning, excluding waterbody interfaces and outlets with a warning. No input rebuild is needed; rerun failed spinups.
 - Rebuild farms, farmer household and behaviour data, crop parameters, crop calendars, crop prices, and well prices through `geb update-version`. Rerun spinup, simulation, and evaluation afterwards. Existing input versions do not need to be downgraded.
 - Fix spinup failures near reservoirs built after the spinup starts. Keep their river channels until construction, then update the river cells when the reservoir becomes active. No input rebuild is needed; rerun failed spinups and simulations.
+- Use FathomDEM as default instead of FABDEM.
+- Integrated interactive chart data bundles directly into the single discharge dashboard HTML file.
+- Implement capillary rise in the Ross solver.
+- Fixed rare floating-point precision underflow in `infiltration` during profile saturation recharge subtraction that caused slightly negative `topwater_m` and false `direct_runoff` in the land surface model.
+- Fixed a build failure when a coastline is already a single `LineString` and cannot be passed to `shapely.ops.linemerge`.
 
 # v1.0.0b34
 - Fix for trapped waterbody cells. Only classify waterbody as trapped if they are both down- and upstream of the same waterbody.
@@ -10,7 +15,6 @@
 # v1.0.0b33
 - Implement groundwater fluxes at catchment boundaries. This is especially important when modelling small catchments. Previously there was essentially a wall around the catchment, while groundwater can now enter or leave the catchment based on prescribed heads based on GLOBGM (by default). Oceans have a groundwater head of 0 now,
 - Fixed SFINCS subgrid build crashing with `Lengths of inputs do not match` when a subgrid tile only contains a sliver of a river for which no river bed level can be estimated; such tiles are now left unburned.
-- Implement groundwater fluxes at catchment boundaries. This is especially important when modelling small catchments. Previously there was essentially a wall around the catchment, while groundwater can now enter or leave the catchment based on prescribed heads based on GLOBGM (by default). Oceans have a groundwater head of 0 now.
 
 # v1.0.0b33
 - Integrate GDW structures and reservoir construction years with the updated channel geometry, open boundaries, and precomputed waterbody outlets. Rebuild `setup_waterbodies` and `setup_weirs`, then rerun spinup and simulation, including for inputs already marked v1.0.0b32.

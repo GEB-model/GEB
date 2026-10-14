@@ -363,7 +363,7 @@ class DecisionModule:
         # Iterate only through agents who can afford to adapt
         unconstrained_indices = np.where(unconstrained_mask)[0]
 
-        for idx in prange(unconstrained_indices.size):  # ty: ignore[not-iterable]
+        for idx in prange(unconstrained_indices.size):
             i = unconstrained_indices[idx]
 
             # Loan payment years remaining

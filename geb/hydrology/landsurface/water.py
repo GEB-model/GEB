@@ -7,7 +7,6 @@ from geb.geb_types import ArrayFloat32, Shape, TwoDArrayFloat64
 from geb.hydrology import TwoDArrayFloat32
 
 from ..landcovers import OPEN_WATER, PADDY_IRRIGATED, SEALED
-from .constants import N_SOIL_LAYERS
 from .energy import (
     apply_rain_heat_advection,
     get_temperature_and_frozen_fraction_from_enthalpy_scalar,
@@ -285,46 +284,6 @@ def calculate_green_ampt_potential_cumulative_infiltration(
         )
 
     return np.float32(cumulative_infiltration)
-
-
-@njit(cache=True, inline="always")
-def rise_from_groundwater(
-    w: ArrayFloat32,
-    ws: ArrayFloat32,
-    capillary_rise_from_groundwater: np.float32,
-) -> np.float32:
-    """Adds capillary rise from groundwater to the bottom soil layer and moves excess water upwards for a single cell.
-
-    This function modifies the soil water content array in place for the given cell and returns the runoff from groundwater.
-
-    Args:
-        w: Soil water content in each layer for the cell in meters, shape (N_SOIL_LAYERS,).
-        ws: Saturated soil water content in each layer for the cell in meters, shape (N_SOIL_LAYERS,).
-        capillary_rise_from_groundwater: Capillary rise from groundwater for the cell in meters.
-
-    Returns:
-        The runoff from groundwater for the cell in meters, which is the excess water that cannot be stored in the soil layers.
-    """
-    bottom_soil_layer_index: int = N_SOIL_LAYERS - 1
-    runoff_from_groundwater: np.float32 = np.float32(0.0)
-
-    # Add capillary rise to the bottom soil layer
-    w[bottom_soil_layer_index] += capillary_rise_from_groundwater
-
-    # If the bottom soil layer is full, send water to the above layer, repeat until top layer
-    for j in range(bottom_soil_layer_index, 0, -1):
-        if w[j] > ws[j]:
-            excess_water = w[j] - ws[j]
-            w[j - 1] += excess_water  # Move excess water to layer above
-            w[j] = ws[j]  # Set the current layer to full
-
-    # If the top layer is full, send water to the runoff
-    # TODO: Send to topwater instead of runoff if paddy irrigated
-    if w[0] > ws[0]:
-        runoff_from_groundwater = w[0] - ws[0]  # Move excess water to runoff
-        w[0] = ws[0]  # Set the top layer to full
-
-    return runoff_from_groundwater
 
 
 @njit(cache=True, inline="always", fastmath=True)
@@ -643,7 +602,6 @@ def infiltration(
     land_use_type: np.int32,
     w: ArrayFloat32,
     topwater_m: np.float32,
-    capillary_rise_from_groundwater_m: np.float32,
     wetting_front_depth_m: np.float32,
     wetting_front_suction_head_m: np.float32,
     wetting_front_moisture_deficit: np.float32,
@@ -689,7 +647,6 @@ def infiltration(
         land_use_type: Land use type for the cell.
         w: Soil water content in each layer for the cell in meters, shape (N_SOIL_LAYERS,), modified in place.
         topwater_m: Topwater for the cell in meters, modified in place.
-        capillary_rise_from_groundwater_m: Capillary rise from groundwater for the cell (m/timestep). If >0, percolation to groundwater is suppressed.
         wetting_front_depth_m: Depth of the wetting front in meters.
         wetting_front_suction_head_m: Suction head at the wetting front in meters.
         wetting_front_moisture_deficit: Moisture deficit at the wetting front [-].
@@ -720,15 +677,28 @@ def infiltration(
             - soil_enthalpy_top_layer_J_per_m2: Updated top-layer soil enthalpy (J/m2).
     """
     no_infiltration_land_use: bool = land_use_type == OPEN_WATER
-    no_topwater_available: bool = bool(topwater_m <= np.float32(1e-6))
+    no_topwater_available: bool = bool(topwater_m <= np.float32(0.0))
 
     # Early return avoids expensive Green-Ampt substeps when infiltration is impossible:
     # Open water does not allow infiltration, and if there is no topwater, there is no water to infiltrate.
-    if no_infiltration_land_use or no_topwater_available:
-        direct_runoff: np.float32 = topwater_m
+    if no_infiltration_land_use:
+        direct_runoff: np.float32 = max(np.float32(0.0), topwater_m)
         return (
             np.float32(0.0),  # topwater_m
             direct_runoff,  # direct_runoff
+            np.float32(0.0),  # groundwater_recharge
+            np.float32(0.0),  # infiltration
+            np.float32(0.0),  # wetting_front_depth_m
+            np.float32(0.0),  # wetting_front_suction_head_m
+            np.float32(0.0),  # wetting_front_moisture_deficit
+            -1,
+            soil_enthalpy_top_layer_J_per_m2,
+        )
+
+    if no_topwater_available:
+        return (
+            np.float32(0.0),  # topwater_m
+            np.float32(0.0),  # direct_runoff
             np.float32(0.0),  # groundwater_recharge
             np.float32(0.0),  # infiltration
             np.float32(0.0),  # wetting_front_depth_m
@@ -1037,19 +1007,19 @@ def infiltration(
             step_groundwater_recharge_m: np.float32 = min(
                 water_available_for_recharge, recharge_capacity_m_step
             )
-            step_groundwater_recharge_m *= (
-                capillary_rise_from_groundwater_m <= np.float32(0.0)
-            )
             groundwater_recharge_m += step_groundwater_recharge_m
 
             # Recharging water is drawn first from surface excess, then from current_topwater_m
             recharge_from_excess: np.float32 = min(
                 excess_surface_water, step_groundwater_recharge_m
             )
-            recharge_from_topwater: np.float32 = (
-                step_groundwater_recharge_m - recharge_from_excess
+            recharge_from_topwater: np.float32 = min(
+                current_topwater_m,
+                step_groundwater_recharge_m - recharge_from_excess,
             )
-            current_topwater_m -= recharge_from_topwater
+            current_topwater_m = max(
+                np.float32(0.0), current_topwater_m - recharge_from_topwater
+            )
             step_excess_unabsorbed: np.float32 = (
                 excess_surface_water - recharge_from_excess
             )
