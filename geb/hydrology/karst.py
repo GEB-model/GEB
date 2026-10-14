@@ -116,7 +116,7 @@ class Karst(Module):
 
         Notes:
             Storage and outflow follow S = K * Q, where K is release_time_days.
-            We solve dS/dt = inflow - S/K exactly over one day, assuming inflow
+            We solve dS/dt = inflow - S/K over one day, assuming inflow
             arrives evenly. Released water goes to MODFLOW.
             See the MIKE SHE explanation of linear reservoirs:
             https://mikeshe-mike-platform-prod.eu.mike-cloud.com/2026/WM/SZ/LinearReservoir/
