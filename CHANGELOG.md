@@ -1,13 +1,10 @@
 # dev
+- Add karst storage to all hydrology runs, with a default release time of 10 days. Update inputs and rerun spinup.
 - Use FathomDEM as default instead of FABDEM.
 - Integrated interactive chart data bundles directly into the single discharge dashboard HTML file.
 - Implement capillary rise in the Ross solver.
 - Fixed rare floating-point precision underflow in `infiltration` during profile saturation recharge subtraction that caused slightly negative `topwater_m` and false `direct_runoff` in the land surface model.
 - Fixed a build failure when a coastline is already a single `LineString` and cannot be passed to `shapely.ops.linemerge`.
-
-# v1.0.0b36
-
-- Add karst storage to all hydrology runs, with a default release time of 10 days. Update inputs and rerun spinup.
 
 # v1.0.0b34
 - Fix for trapped waterbody cells. Only classify waterbody as trapped if they are both down- and upstream of the same waterbody.

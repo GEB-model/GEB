@@ -59,8 +59,9 @@ coverage. After 10 dry days, 37% of stored water remains; this default is a
 starting estimate. Storage is saved in checkpoints and the water balance.
 
 To upgrade, remove `hydrology.karst.enabled` if present and include
-`setup_karst` in custom builds. Run `geb update-version`, then rerun spinup
-and simulation. Rerun spinup after changing karst settings or coverage.
+`setup_karst` in custom builds. Run `geb update -b build.yml::setup_karst`,
+then rerun spinup and simulation. Rerun spinup after changing karst settings
+or coverage.
 
 ## Code
 

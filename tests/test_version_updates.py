@@ -7,7 +7,7 @@ import pytest
 from geb.build import version_updates
 
 
-@pytest.mark.parametrize("stored_version", ["1.0.0b34", "1.0.0b35"])
+@pytest.mark.parametrize("stored_version", ["1.0.0b33", "1.0.0b34"])
 def test_karst_input_migration(
     monkeypatch: pytest.MonkeyPatch, stored_version: str
 ) -> None:
@@ -23,7 +23,7 @@ def test_karst_input_migration(
     Raises:
         AssertionError: If the required migration instructions are missing.
     """  # noqa: DOC202, DOC502
-    monkeypatch.setattr(version_updates, "__version__", "1.0.0b36")
+    monkeypatch.setattr(version_updates, "__version__", "1.0.0b35")
     updates: list[str] = version_updates.get_and_maybe_do_version_updates(
         stored_version, logging.getLogger(__name__)
     )
