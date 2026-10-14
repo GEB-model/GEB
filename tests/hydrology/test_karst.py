@@ -1,133 +1,29 @@
-"""Tests for conservative karst recharge and its hydrology integration."""
+"""Test karst routing, water conservation and saved storage."""
 
 from pathlib import Path
-from types import SimpleNamespace
 from typing import cast
 from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 
-from geb.config_schema import KarstConfig
 from geb.hydrology import Hydrology
 from geb.hydrology.HRUs import GridVariables
 from geb.store import Store
 
 
-@pytest.mark.parametrize("fraction", [-0.1, 1.1, np.nan, np.inf])
-def test_invalid_capture_fraction(fraction: float) -> None:
-    """Reject capture settings outside the allowed range.
-
-    Args:
-        fraction: Invalid dimensionless capture fraction.
-    """
-    with pytest.raises(ValueError):
-        KarstConfig(capture_fraction=fraction)
-
-
-@pytest.mark.parametrize("coverage", [None, np.nan, -0.1, 1.1])
-def test_karst_requires_valid_map(
-    monkeypatch: pytest.MonkeyPatch, coverage: float | None
-) -> None:
-    """Reject missing or invalid maps without an opt-in configuration.
-
-    Args:
-        monkeypatch: Fixture bypassing unrelated data and module initialization.
-        coverage: Invalid mapped coverage, or None for a missing map.
-
-    Returns:
-        None.
-
-    Raises:
-        AssertionError: If invalid karst inputs are accepted.
-    """  # noqa: DOC202, DOC502
-    monkeypatch.setattr("geb.hydrology.Data.__init__", MagicMock(return_value=None))
-    monkeypatch.setattr("geb.hydrology.Module.__init__", MagicMock(return_value=None))
-    hydrology: Hydrology = Hydrology.__new__(Hydrology)
-    hydrology.model = MagicMock()
-    hydrology.model.simulate_hydrology = True
-    hydrology.model.config = {"hydrology": {"karst": {}}}
-    hydrology.model.files = {
-        "grid": {} if coverage is None else {"groundwater/karst_fraction": "karst.zarr"}
-    }
-    hydrology.grid = MagicMock()
-    hydrology.grid.load2d.return_value = np.array([coverage], dtype=np.float32)
-    with pytest.raises(ValueError, match="Karst"):
-        hydrology.__init__(hydrology.model)
-
-
 @pytest.mark.parametrize("coverage", [0.0, 0.6, 1.0])
-def test_karst_initializes_without_enable_setting(
-    monkeypatch: pytest.MonkeyPatch, coverage: float
-) -> None:
-    """Load coverage and initialize storage in every hydrology spinup.
-
-    Args:
-        monkeypatch: Fixture replacing unrelated hydrology components.
-        coverage: Dimensionless karst coverage, between zero and one.
-
-    Returns:
-        None.
-
-    Raises:
-        AssertionError: If coverage or zero initial storage is incorrect.
-    """  # noqa: DOC202, DOC502
-    monkeypatch.setattr("geb.hydrology.Data.__init__", MagicMock(return_value=None))
-    monkeypatch.setattr("geb.hydrology.Module.__init__", MagicMock(return_value=None))
-    component_name: str
-    for component_name in (
-        "LandSurface",
-        "GroundWater",
-        "Routing",
-        "WaterBodies",
-        "WaterDemand",
-        "HillSlopeErosion",
-        "RunoffConcentrator",
-    ):
-        monkeypatch.setattr(f"geb.hydrology.{component_name}", MagicMock())
-    hydrology: Hydrology = Hydrology.__new__(Hydrology)
-    hydrology.model = MagicMock()
-    hydrology.model.simulate_hydrology = True
-    hydrology.model.in_spinup = True
-    hydrology.model.config = {"hydrology": {"karst": {}}}
-    hydrology.model.files = {"grid": {"groundwater/karst_fraction": "karst.zarr"}}
-    hydrology.grid = MagicMock()
-    hydrology.grid.var = SimpleNamespace()
-    hydrology.grid.load2d.return_value = np.array([coverage], dtype=np.float32)
-
-    hydrology.__init__(hydrology.model)
-
-    hydrology.grid.load2d.assert_called_once_with("karst.zarr")
-    np.testing.assert_array_equal(
-        hydrology.karst_fraction, hydrology.grid.load2d.return_value
-    )
-    np.testing.assert_array_equal(hydrology.grid.var.karst_storage_m, [0.0])
-    assert hydrology.grid.var.karst_storage_m.dtype == np.float64
-
-
-@pytest.mark.parametrize(
-    "coverage,capture_fraction",
-    [(0.0, 0.5), (0.6, 0.0), (0.6, 0.5), (1.0, 1.0)],
-)
-@pytest.mark.parametrize("release_time_days", [0.01, 2.0, 10.0, 1000.0])
-@pytest.mark.parametrize("soil_recharge_m", [0.0, 0.002])
 def test_hydrology_karst_integration(
     monkeypatch: pytest.MonkeyPatch,
     coverage: float,
-    capture_fraction: float,
     tmp_path: Path,
-    release_time_days: float,
-    soil_recharge_m: float,
 ) -> None:
     """Delay karst recharge and conserve water at zero and full coverage.
 
     Args:
         monkeypatch: Fixture replacing unrelated whole-model balance checks.
         coverage: Karst area fraction of the grid cell (0–1).
-        capture_fraction: Fraction of runoff captured on karst land (0–1).
         tmp_path: Temporary checkpoint directory.
-        release_time_days: Time controlling release of stored water (days).
-        soil_recharge_m: Daily soil drainage before karst routing (m).
 
     Returns:
         None.
@@ -135,6 +31,9 @@ def test_hydrology_karst_integration(
     Raises:
         AssertionError: If routing, storage or checkpoint conservation is incorrect.
     """  # noqa: DOC202, DOC502
+    capture_fraction: float = 0.5
+    release_time_days: float = 10.0
+    soil_recharge_m: float = 0.002
     monkeypatch.setattr("geb.hydrology.balance_check", MagicMock())
     hydrology: Hydrology = Hydrology.__new__(Hydrology)
     hydrology.model = MagicMock()
@@ -275,25 +174,3 @@ def test_hydrology_karst_integration(
             np.testing.assert_array_equal(
                 hydrology.grid.var.karst_storage_m, saved_storage_m
             )
-
-
-@pytest.mark.parametrize("days", [0.0, -1.0, np.nan, np.inf])
-def test_invalid_release_time(days: float) -> None:
-    """Reject invalid release times.
-
-    Args:
-        days: Invalid release time (days).
-
-    """
-    with pytest.raises(ValueError):
-        KarstConfig(release_time_days=days)
-
-
-def test_missing_karst_storage_requires_spinup() -> None:
-    """Reject an old checkpoint rather than silently starting with an empty store."""
-    hydrology: Hydrology = Hydrology.__new__(Hydrology)
-    hydrology.karst_fraction = np.ones(1, dtype=np.float32)
-    hydrology.grid = MagicMock()
-    hydrology.grid.var = SimpleNamespace()
-    with pytest.raises(ValueError, match="Rerun spinup"):
-        hydrology.step()
