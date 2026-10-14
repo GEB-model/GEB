@@ -20,6 +20,7 @@ from geb.evaluate.workflows.dashboard import (
     _as_finite_float,
     _build_station_marker_payload,
     _build_timeseries_data,
+    _calculate_distribution_summary,
     _decode_varint_deltas,
     _encode_varint_deltas,
     _to_int_deltas,
@@ -512,6 +513,18 @@ def test_write_discharge_dashboard(tmp_path: Path) -> None:
     assert "Station search" in html_content
     assert writer.bundles[0] in html_content
     assert '<script id="geb-chart-data" type="application/json">' in html_content
+    assert "stationsPane" in html_content
+    assert "geb-metric-dropdown" in html_content
+    assert "geb-violin-svg" in html_content
+    assert "data-geb-theme" in html_content
+    assert "geb-theme-btn" in html_content
+    assert "geb-export-violin" in html_content
+    assert "geb-export-map-btn" in html_content
+    assert "Download plot as SVG" in html_content
+    assert "Download table (CSV)" in html_content
+    assert "Download GeoJSON" in html_content
+    assert "exportStationGeoJson" in html_content
+    assert "Rivers" in html_content
 
 
 def test_build_station_chart_data_with_bankfull_discharge() -> None:
@@ -748,3 +761,106 @@ def test_metric_layer_colormap_ranges() -> None:
         assert plot_vmax == 1.0
         plot_midpoint: float = (plot_vmin + plot_vmax) / 2.0
         assert plot_midpoint == 0.25
+
+
+def test_calculate_distribution_summary() -> None:
+    """Test calculating distribution statistics and histogram bins."""
+    data: pd.Series = pd.Series([0.2, 0.4, 0.6, 0.8, 1.0, np.nan, np.inf])
+    dist: dict[str, Any] = _calculate_distribution_summary(
+        data, vmin=0.0, vmax=1.0, num_bins=5
+    )
+    assert dist["count"] == 5
+    assert dist["median"] == 0.6
+    assert dist["mean"] == 0.6
+    assert dist["min"] == 0.2
+    assert dist["max"] == 1.0
+    assert len(dist["bins"]) == 6
+    assert len(dist["counts"]) == 5
+    assert sum(dist["counts"]) == 5
+    assert len(dist["density_points"]) == 80
+
+    empty_dist: dict[str, Any] = _calculate_distribution_summary(
+        pd.Series([], dtype=float), vmin=0.0, vmax=1.0
+    )
+    assert empty_dist["count"] == 0
+    assert empty_dist["median"] is None
+    assert len(empty_dist["density_points"]) == 80
+
+
+def test_write_discharge_dashboard_with_lakes_and_reservoirs(tmp_path: Path) -> None:
+    """Test dashboard rendering with lakes, reservoirs, and excluded station subpanels."""
+    dashboard_file: Path = tmp_path / "discharge_evaluation_map_lakes.html"
+    region: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        geometry=[sg.box(7.0, 49.0, 9.0, 51.0)],
+        crs="EPSG:4326",
+    )
+    rivers: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {"uparea_m2": [5000000.0]},
+        geometry=[sg.LineString([(7.5, 49.5), (8.5, 50.5)])],
+        index=pd.Index(["riv_1"]),
+        crs="EPSG:4326",
+    )
+    scores: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "station_name": ["Station Test"],
+            "upstream_area_GEB": [1000000.0],
+            "discharge_observations_to_GEB_upstream_area_ratio": [1.02],
+            "KGE": [0.88],
+            "timezone_utc_offset": [1.0],
+        },
+        geometry=[sg.Point(8.0, 50.0)],
+        index=pd.Index(["test_st"]),
+        crs="EPSG:4326",
+    )
+    waterbodies: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "waterbody_type": [1, 2],
+            "waterbody_id": [101, 102],
+            "average_area": [1500000.0, 3200000.0],
+            "volume_total": [5000000.0, 12000000.0],
+        },
+        geometry=[
+            sg.Polygon([(7.2, 49.2), (7.3, 49.2), (7.3, 49.3), (7.2, 49.3)]),
+            sg.Polygon([(8.2, 50.2), (8.3, 50.2), (8.3, 50.3), (8.2, 50.3)]),
+        ],
+        crs="EPSG:4326",
+    )
+    excluded_stations: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "station_name": ["Excluded Station 1"],
+            "exclusion_reason": ["Missing station observations"],
+            "station_longitude": [7.8],
+            "station_latitude": [49.8],
+            "discharge_observations_to_GEB_upstream_area_ratio": [np.nan],
+            "upstream_area_GEB": [np.nan],
+        },
+        geometry=[sg.Point(7.8, 49.8)],
+        index=pd.Index(["ex_1"]),
+        crs="EPSG:4326",
+    )
+    writer: StationChartBundleWriter = StationChartBundleWriter()
+    writer.add_station(
+        "test_st", {"stationName": "Station Test", "metrics": {"KGE": 0.88}}
+    )
+    station_indices: dict[str, int] = writer.finish()
+
+    write_discharge_dashboard(
+        mapped_station_scores=scores,
+        output_path=dashboard_file,
+        region_geom=region,
+        rivers=rivers,
+        waterbodies=waterbodies,
+        excluded_stations=excluded_stations,
+        chart_bundles=writer.bundles,
+        station_bundle_indices=station_indices,
+    )
+    assert dashboard_file.exists()
+    html_content: str = dashboard_file.read_text(encoding="utf-8")
+    assert "Lakes" in html_content
+    assert "Reservoirs" in html_content
+    assert "Rivers" in html_content
+    assert "geb-exclusion-subpanel" in html_content
+    assert '"name": "Lakes", "layer":' in html_content
+    assert '"name": "Reservoirs", "layer":' in html_content
+    assert '"active": false' in html_content
+    assert '"crossOrigin": true' in html_content
