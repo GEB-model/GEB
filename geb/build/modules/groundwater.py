@@ -32,27 +32,29 @@ class GroundWater(BuildModelBase):
         """Use WOKAM to estimate how much of each grid cell is karst.
 
         Notes:
-            WOKAM gives ranges, not exact fractions. Use their
-            midpoints for continuous (0.825) and discontinuous (0.4) rocks,
-            and assume 0.65 for mixed rocks. Inactive grid cells are NaN.
-            Saves ``groundwater/karst_fraction`` as a fraction between 0 and 1.
+            Uses WOKAM range midpoints for continuous and discontinuous rocks,
+            and assumes 65% for mixed rocks. Saves ``groundwater/karst_fraction``
+            (0–1), with NaN in inactive cells.
 
         Raises:
             ValueError: If a coordinate reference system is missing, the grid
                 is rotated, or WOKAM has unknown rock classes.
         """
+        # WOKAM codes: 1/3 continuous, 2/5 discontinuous, 4 mixed rocks.
+        rock_fractions: dict[int, float] = {1: 0.825, 2: 0.4, 3: 0.825, 4: 0.65, 5: 0.4}
         polygons: gpd.GeoDataFrame = self.data_catalog.fetch("wokam").read()
         mask: xr.DataArray = self.grid["mask"]
         if polygons.crs is None or mask.rio.crs is None:
             raise ValueError("WOKAM polygons and the model grid must have a CRS.")
-        if not polygons["rock_type"].isin([1, 2, 3, 4, 5]).all():
+        if not polygons["rock_type"].isin(rock_fractions).all():
             raise ValueError("WOKAM contains unknown rock classes.")
         transform: Affine = mask.rio.transform(recalc=True)
         if transform.b != 0 or transform.d != 0:
             raise ValueError("Karst coverage requires an unrotated model grid.")
-        coverage: xr.DataArray = full_like(mask, 0.0, nodata=np.nan, dtype=np.float32)
         # Load before editing values; edits to a lazy array's .values are discarded.
-        coverage = coverage.load()
+        coverage: xr.DataArray = full_like(
+            mask, 0.0, nodata=np.nan, dtype=np.float32
+        ).load()
         coverage.values[mask.values] = np.nan
         coverage.attrs["units"] = "1"
         coverage.attrs["source"] = "WHYMAP WOKAM, BGR, IAH, KIT, UNESCO, 2017"
@@ -69,12 +71,7 @@ class GroundWater(BuildModelBase):
             cell_y: np.ndarray = transform.f + rows * transform.e
             # Calculate areas in an equal-area projection, rather than degrees.
             cells: gpd.GeoSeries = gpd.GeoSeries(
-                shapely.box(
-                    np.minimum(cell_x, cell_x + transform.a),
-                    np.minimum(cell_y, cell_y + transform.e),
-                    np.maximum(cell_x, cell_x + transform.a),
-                    np.maximum(cell_y, cell_y + transform.e),
-                ),
+                shapely.box(cell_x, cell_y, cell_x + transform.a, cell_y + transform.e),
                 crs=mask.rio.crs,
             ).to_crs(6933)
             cell_indices: np.ndarray
@@ -82,10 +79,9 @@ class GroundWater(BuildModelBase):
             cell_indices, polygon_indices = polygons.sindex.query(
                 cells, predicate="intersects"
             )
-            # WOKAM codes: 1/3 continuous, 2/5 discontinuous, 4 mixed rocks.
-            rock_fraction: np.ndarray = polygons.index.map(
-                {1: 0.825, 2: 0.4, 3: 0.825, 4: 0.65, 5: 0.4}
-            ).to_numpy(dtype=np.float64)
+            rock_fraction: np.ndarray = polygons.index.map(rock_fractions).to_numpy(
+                dtype=np.float64
+            )
             overlap_area_m2: np.ndarray = shapely.area(
                 shapely.intersection(
                     cells.array[cell_indices], polygons.geometry.array[polygon_indices]
