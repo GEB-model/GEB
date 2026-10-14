@@ -718,8 +718,8 @@ class Floods(Module):
             ).rio.write_crs("EPSG:4326")
 
             # load sea level rise data
-            sea_level_rise_rcp8p5: pd.DataFrame = read_table(
-                self.model.files["table"]["gtsm/sea_level_rise_rcp8p5"]
+            sea_level_rise: pd.DataFrame = read_table(
+                self.model.files["table"]["ar6/sea_level_rise"]
             )
 
             sfincs_coastal_root_model: SFINCSRootModel = self.build(
@@ -824,7 +824,7 @@ class Floods(Module):
                         return_period,
                         coastal_forcing_locations,
                         offset=coastal_offset,
-                        sea_level_rise=sea_level_rise_rcp8p5,
+                        sea_level_rise=sea_level_rise,
                         year=self.model.current_time.year,
                     )
                 )

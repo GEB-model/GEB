@@ -1,16 +1,14 @@
 """File adapter for IPCC AR6 Sea Level Projections."""
 
+import io
+import zipfile
 from typing import Any
 
-import pandas as pd
+import xarray as xr
 
 from geb.workflows.io import fetch_and_save
 
 from .base import Adapter
-
-import xarray as xr
-import zipfile
-import io
 
 
 class AR6(Adapter):
@@ -22,7 +20,7 @@ class AR6(Adapter):
 
     def fetch(
         self,
-        url=None,
+        url: str | None = None,
     ) -> AR6:
         """Fetch the dataset from the given URL if not already present.
 
@@ -36,11 +34,26 @@ class AR6(Adapter):
             fetch_and_save(url=url, file_path=self.path, logger=self.logger)
         return self
 
-    def read(self, scenario, percentile) -> xr.DataArray:
-        """Read the AR6 data."""
+    def read(self, scenario: str | int, percentile: float) -> xr.DataArray:
+        """Read the AR6 data.
+
+        Args:
+            scenario: The SSP scenario to read (e.g., 119, 126, 245, 370, 585).
+            percentile: The percentile to read (e.g., 0.5, 0.95, 1.0).
+        Returns:
+            The AR6 data as a DataArray.
+        Raises:
+            FileNotFoundError: If the specified file is not found in the zip archive.
+        """
         file_in_zip = f"ar6-regional-confidence/regional/confidence_output_files/medium_confidence/ssp{scenario}/total_ssp{scenario}_medium_confidence_values.nc"
-        with zipfile.ZipFile(self.path, "r") as z, z.open(file_in_zip) as f:
-            data = f.read()
+        # check if the file exists in the zip
+        with zipfile.ZipFile(self.path, "r") as z:
+            if file_in_zip not in z.namelist():
+                raise FileNotFoundError(
+                    f"{file_in_zip} not found in {self.path}. Check if the scenario is correct."
+                )
+            with z.open(file_in_zip) as f:
+                data = f.read()
 
         ds = xr.open_dataset(io.BytesIO(data))
         ds = ds.sel(quantiles=percentile)
