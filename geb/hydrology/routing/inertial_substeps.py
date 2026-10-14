@@ -20,7 +20,6 @@ from geb.geb_types import (
 from .geometry import (
     GEOM_CFL_CONSTANT,
     GEOM_CFL_MANNING_COEFFICIENT,
-    GEOM_CFL_NUM_COLS,
     GEOM_IN_BANKFULL_DEPTH,
     GEOM_IN_BANKFULL_VOLUME,
     GEOM_IN_BED_ELEVATION,
@@ -28,22 +27,17 @@ from .geometry import (
     GEOM_IN_INVERSE_INTERFACE_LENGTH,
     GEOM_IN_INVERSE_LENGTH,
     GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE,
-    GEOM_IN_MANNING_N_SQUARED,
-    GEOM_IN_NUM_COLS,
     GEOM_IN_STAGE_VOLUME_COEFFICIENT,
-    GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH,
-    GEOM_OV_BANKFULL_PERIMETER,
     GEOM_OV_FLOODPLAIN_AREA_THRESHOLD,
     GEOM_OV_FLOODPLAIN_DEPTH_THRESHOLD,
     GEOM_OV_FLOODPLAIN_SIDE_SLOPE,
     GEOM_OV_FLOODPLAIN_WIDTH,
-    GEOM_OV_NUM_COLS,
     GEOM_OV_RIVER_WIDTH,
     InertialGeometry,
     compute_cfl_area_and_top_width,
     compute_overbank_depth,
 )
-from .solver import _solve_inertial_momentum
+from .solver import solve_inertial_momentum
 from .topology import (
     InertialTopology,
     KinematicTopology,
@@ -51,46 +45,21 @@ from .topology import (
 
 __all__ = [
     "ALLOW_REVERSE_FLOW",
-    "InertialGeometry",
-    "InertialTopology",
-    "KinematicTopology",
-    "RoutingStepDiagnostics",
-    "WaterbodyCoupling",
-    "RetentionCoupling",
-    "SubstepBuffers",
-    "compute_retention_routing",
-    "GEOM_CFL_CONSTANT",
-    "GEOM_CFL_MANNING_COEFFICIENT",
-    "GEOM_CFL_NUM_COLS",
-    "GEOM_IN_BANKFULL_DEPTH",
-    "GEOM_IN_BANKFULL_VOLUME",
-    "GEOM_IN_BED_ELEVATION",
-    "GEOM_IN_INTERFACE_BED_ELEVATION_MAX",
-    "GEOM_IN_INVERSE_INTERFACE_LENGTH",
-    "GEOM_IN_INVERSE_LENGTH",
-    "GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE",
-    "GEOM_IN_MANNING_N_SQUARED",
-    "GEOM_IN_NUM_COLS",
-    "GEOM_IN_STAGE_VOLUME_COEFFICIENT",
-    "GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH",
-    "GEOM_OV_BANKFULL_PERIMETER",
-    "GEOM_OV_FLOODPLAIN_AREA_THRESHOLD",
-    "GEOM_OV_FLOODPLAIN_DEPTH_THRESHOLD",
-    "GEOM_OV_FLOODPLAIN_SIDE_SLOPE",
-    "GEOM_OV_FLOODPLAIN_WIDTH",
-    "GEOM_OV_NUM_COLS",
-    "GEOM_OV_RIVER_WIDTH",
     "INERTIAL_PARALLEL_THRESHOLD",
+    "RetentionCoupling",
+    "RoutingStepDiagnostics",
+    "SubstepBuffers",
+    "WaterbodyCoupling",
+    "_compute_reach_stage_from_vol",
+    "_compute_stage_from_storage_inertial",
+    "_evaluate_reach_cfl_dt",
     "_gather_inputs",
     "_run_inertial_substeps",
-    "_run_inertial_substeps_serial",
     "_run_inertial_substeps_parallel",
-    "_compute_stage_from_storage_inertial",
-    "_compute_reach_stage_from_vol",
+    "_run_inertial_substeps_serial",
     "_scatter_outputs",
-    "_solve_inertial_momentum",
-    "_evaluate_reach_cfl_dt",
     "compute_inertial_substeps_cfl",
+    "compute_retention_routing",
 ]
 
 # Global option to toggle reverse flow across river reaches
@@ -477,7 +446,7 @@ def _evaluate_reach_cfl_dt(
 ) -> np.float32:
     """Calculates Courant-Friedrichs-Lewy (CFL) stable timestep for a single reach.
 
-    Numerical stability is dictated by shallow-water wave celerity:
+    Numerical stability is dictated by shallow-water wave celerity (Bates et al. 2010):
         dt_stable <= CFL * dx / wave_celerity
     where:
         - wave_celerity c = sqrt(g * hydraulic_depth)
@@ -1055,7 +1024,7 @@ def _solve_momentum_loop(
                     outflow_slope = max(outflow_slope, sea_drop_slope)
             water_slope = -outflow_slope
 
-        discharge: np.float32 = _solve_inertial_momentum(
+        discharge: np.float32 = solve_inertial_momentum(
             reach_idx=reach_idx,
             effective_depth=effective_depth,
             water_slope=water_slope,

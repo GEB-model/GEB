@@ -585,7 +585,9 @@ def test_scenario_flat_bed_filling_no_outflow() -> None:
     # 3. Water surface should level out horizontally at the end across all reaches
     final_stage = results.sampled_stages_m[-1]
     stage_difference = abs(float(final_stage[0] - final_stage[-1]))
-    assert stage_difference < 0.30  # Levels towards horizontal equilibrium across 3 km basin
+    assert (
+        stage_difference < 0.30
+    )  # Levels towards horizontal equilibrium across 3 km basin
 
 
 def test_scenario_sloping_bed_reservoir_filling_no_outflow() -> None:

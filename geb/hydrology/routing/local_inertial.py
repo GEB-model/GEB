@@ -34,7 +34,6 @@ from .inertial_substeps import (
 )
 from .kinematic import (
     KINEMATIC_PARALLEL_THRESHOLD,
-    _run_kinematic_step,
     _run_kinematic_step_parallel,
     _run_kinematic_step_serial,
     _transfer_waterbody_outflows,
@@ -48,10 +47,6 @@ from .topology import (
 
 __all__: list[str] = [
     "LocalInertial",
-    "KINEMATIC_PARALLEL_THRESHOLD",
-    "_run_kinematic_step",
-    "_run_kinematic_step_parallel",
-    "_run_kinematic_step_serial",
 ]
 
 
@@ -60,7 +55,8 @@ class LocalInertial:
 
     Combines non-linear kinematic wave routing for overland / non-river cells with a
     1D local inertial dynamic routing formulation for river network reaches,
-    supporting trapezoidal channels and CaMa-Flood style dead-storage floodplains.
+    supporting power-law (parabolic) channels and CaMa-Flood style dead-storage floodplains
+    (Yamazaki et al. 2011; Bates et al. 2010).
     """
 
     def __init__(

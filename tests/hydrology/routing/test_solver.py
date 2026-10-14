@@ -1,6 +1,6 @@
 """Unit tests for the 1D local inertial momentum solver.
 
-Tests the semi-implicit momentum equation solver (_solve_inertial_momentum),
+Tests the semi-implicit momentum equation solver (solve_inertial_momentum),
 including gravity acceleration, Manning friction damping, critical flow limiting,
 upstream storage volume limiting, and backwater/reversal dynamics.
 """
@@ -21,10 +21,7 @@ from geb.hydrology.routing.geometry import (
     GEOM_OV_NUM_COLS,
     GEOM_OV_RIVER_WIDTH,
 )
-from geb.hydrology.routing.solver import (
-    _solve_inertial_momentum,
-    solve_inertial_momentum,
-)
+from geb.hydrology.routing.solver import solve_inertial_momentum
 
 
 def _create_single_reach_geometry(
@@ -291,8 +288,3 @@ def test_zero_upstream_storage_produces_zero_discharge() -> None:
         inv_dt_substep=np.float32(1.0 / 10.0),
     )
     assert q == np.float32(0.0)
-
-
-def test_solver_backward_compatibility_alias() -> None:
-    """Tests that _solve_inertial_momentum is identical to solve_inertial_momentum."""
-    assert _solve_inertial_momentum is solve_inertial_momentum

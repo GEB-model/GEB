@@ -242,16 +242,16 @@ def test_serial_and_parallel_kinematic_kernels_equivalence() -> None:
     step produce numerically identical results, and that dispatching logic operates correctly.
     """
     from geb.hydrology.routing.inertial_substeps import (
-        KinematicTopology,
         RetentionCoupling,
         WaterbodyCoupling,
     )
-    from geb.hydrology.routing.local_inertial import (
+    from geb.hydrology.routing.kinematic import (
         KINEMATIC_PARALLEL_THRESHOLD,
         _run_kinematic_step,
         _run_kinematic_step_parallel,
         _run_kinematic_step_serial,
     )
+    from geb.hydrology.routing.topology import KinematicTopology
 
     assert KINEMATIC_PARALLEL_THRESHOLD == 5000
 

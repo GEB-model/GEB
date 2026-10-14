@@ -1,7 +1,7 @@
 """Local inertial momentum solver for 1D shallow water channel routing.
 
 Solves the 1D de Saint-Venant momentum equation simplified by neglecting the advective
-acceleration term (Bates et al. 2010; de Almeida et al. 2012).
+acceleration term (Bates et al. 2010).
 """
 
 import numpy as np
@@ -21,7 +21,6 @@ from geb.hydrology.routing.geometry import (
 )
 
 __all__ = [
-    "_solve_inertial_momentum",
     "solve_inertial_momentum",
 ]
 
@@ -127,7 +126,7 @@ def solve_inertial_momentum(
     critical_discharge: np.float32 = (
         sqrt_gravity * cross_sectional_area * np.sqrt(hydraulic_depth)
     )
- 
+
     # downward flow
     if computed_discharge >= np.float32(0.0):
         # Cap outflow to 95% of available upstream volume to prevent over-draining in one substep
@@ -137,13 +136,10 @@ def solve_inertial_momentum(
         )
         return min(computed_discharge, critical_discharge, max_drain_rate)
 
-    else: # upward flow
+    else:  # upward flow
         # if flow cannot reverse, flow is 0 when there is upward flow
         if not can_reverse:
             return np.float32(0.0)
 
         # otherwise limit by critical discharge, which is now negative (as flow is upward)
         return max(computed_discharge, -critical_discharge)
-
-
-_solve_inertial_momentum = solve_inertial_momentum

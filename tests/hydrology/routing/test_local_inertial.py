@@ -3199,7 +3199,7 @@ def test_local_inertial_volume_limiter_subcritical_preservation() -> None:
     2. Over-draft conditions where target discharge greatly exceeds available storage:
        discharge is smoothly clamped so storage volume remains positive.
     """
-    from geb.hydrology.routing.inertial_substeps import (
+    from geb.hydrology.routing.geometry import (
         GEOM_IN_BANKFULL_DEPTH,
         GEOM_IN_BANKFULL_VOLUME,
         GEOM_IN_BED_ELEVATION,
@@ -3218,8 +3218,8 @@ def test_local_inertial_volume_limiter_subcritical_preservation() -> None:
         GEOM_OV_FLOODPLAIN_WIDTH,
         GEOM_OV_NUM_COLS,
         GEOM_OV_RIVER_WIDTH,
-        _solve_inertial_momentum,
     )
+    from geb.hydrology.routing.solver import solve_inertial_momentum
 
     geom_inbank: np.ndarray = np.zeros((1, GEOM_IN_NUM_COLS), dtype=np.float32)
     geom_inbank[0, GEOM_IN_INVERSE_LENGTH] = np.float32(1.0 / 1000.0)
@@ -3251,7 +3251,7 @@ def test_local_inertial_volume_limiter_subcritical_preservation() -> None:
 
     # Case 1: Normal subcritical flow with plenty of storage (V = 10000 m3, V * inv_dt = 1000 m3/s)
     storage_subcritical: np.ndarray = np.array([10000.0], dtype=np.float64)
-    q_subcritical: np.float32 = _solve_inertial_momentum(
+    q_subcritical: np.float32 = solve_inertial_momentum(
         reach_idx=0,
         effective_depth=np.float32(2.0),
         water_slope=np.float32(-0.001),
@@ -3269,7 +3269,7 @@ def test_local_inertial_volume_limiter_subcritical_preservation() -> None:
 
     # Case 2: Near empty reach with high discharge demand (V = 100 m3, V * inv_dt = 10 m3/s)
     storage_near_empty: np.ndarray = np.array([100.0], dtype=np.float64)
-    q_limited: np.float32 = _solve_inertial_momentum(
+    q_limited: np.float32 = solve_inertial_momentum(
         reach_idx=0,
         effective_depth=np.float32(3.0),
         water_slope=np.float32(-0.01),
@@ -3299,7 +3299,7 @@ def test_local_inertial_short_reach_cfl_stability() -> None:
     The CFL spatial step must use min(dx_reach, dx_interface) = 50 m, preventing Courant condition
     violations in the short reach.
     """
-    from geb.hydrology.routing.inertial_substeps import GEOM_CFL_CONSTANT
+    from geb.hydrology.routing.geometry import GEOM_CFL_CONSTANT
 
     n_cells: int = 3
     # Reach 0: 50 m, Reach 1: 2500 m, Reach 2: 2500 m
@@ -4454,7 +4454,7 @@ def test_evaluate_reach_cfl_pure_wave_celerity_and_overbank_capping() -> None:
     2. Anticipatory normal depth exceeding bankfull is scaled by the floodplain width ratio
        on flat reaches, preventing unphysical collapse of CFL timesteps.
     """
-    from geb.hydrology.routing.inertial_substeps import (
+    from geb.hydrology.routing.geometry import (
         GEOM_CFL_CONSTANT,
         GEOM_CFL_MANNING_COEFFICIENT,
         GEOM_CFL_NUM_COLS,
@@ -4466,8 +4466,8 @@ def test_evaluate_reach_cfl_pure_wave_celerity_and_overbank_capping() -> None:
         GEOM_OV_FLOODPLAIN_WIDTH,
         GEOM_OV_NUM_COLS,
         GEOM_OV_RIVER_WIDTH,
-        _evaluate_reach_cfl_dt,
     )
+    from geb.hydrology.routing.inertial_substeps import _evaluate_reach_cfl_dt
 
     geom_inbank: np.ndarray = np.zeros((1, GEOM_IN_NUM_COLS), dtype=np.float32)
     geom_overbank: np.ndarray = np.zeros((1, GEOM_OV_NUM_COLS), dtype=np.float32)
