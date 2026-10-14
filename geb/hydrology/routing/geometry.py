@@ -303,17 +303,12 @@ def build_inertial_geometry(
     geom_cfl[:, GEOM_CFL_MANNING_COEFFICIENT] = (
         (manning_n / (river_width * np.sqrt(eff_slope))) ** np.float32(0.6)
     ).astype(np.float32)
-    cfl_safety_factor: np.float32 = np.float32(0.7)
+    cfl_safety_factor: np.float32 = np.float32(0.85)
     sqrt_g: np.float32 = np.sqrt(np.float32(9.80665))
     cfl_dx: ArrayFloat32 = river_length
-    confluence_factor: ArrayFloat32 = np.where(
-        up_count > 1,
-        np.float32(1.0) / np.sqrt(np.maximum(up_count, 1).astype(np.float32)),
-        np.float32(1.0),
-    ).astype(np.float32)
-    geom_cfl[:, GEOM_CFL_CONSTANT] = (
-        confluence_factor * cfl_safety_factor * cfl_dx / sqrt_g
-    ).astype(np.float32)
+    geom_cfl[:, GEOM_CFL_CONSTANT] = (cfl_safety_factor * cfl_dx / sqrt_g).astype(
+        np.float32
+    )
 
     return InertialGeometry(
         geom_inbank=geom_inbank,

@@ -923,6 +923,143 @@ def _apply_reverse_flow_limits(
 
 
 @njit(inline="always")
+def _apply_confluence_inflow_limits(
+    n_inertial: int,
+    updated_discharge_m3_s_inertial: ArrayFloat32,
+    geom_inbank: TwoDArrayFloat32,
+    geom_overbank: TwoDArrayFloat32,
+    topo: InertialTopology,
+    buffers: SubstepBuffers,
+    dt_substep_f32: np.float32,
+) -> None:
+    """Scales back incoming forward tributary discharges at confluences to prevent stage overshoots.
+
+    At river junctions where multiple reaches converge, simultaneously evaluating
+    unconstrained momentum updates from all incoming tributaries can dump more volume
+    than the confluence reach can accommodate in a single substep, causing non-physical
+    stage overshoots and high-frequency numerical oscillations.
+
+    This function calculates the maximum physical absorption capacity of each confluence
+    reach—bounded by approaching upstream water stage and a maximum depth rise cap—and
+    proportionally scales down incoming forward tributary discharges if total inflow exceeds
+    that capacity. Unrouted water remains in upstream reaches, ensuring 100% mass conservation.
+
+    Args:
+        n_inertial: Number of reaches in local inertial domain.
+        updated_discharge_m3_s_inertial: Updated substep discharge array (m³/s).
+        geom_inbank: Compact 2D in-bank reach geometry table.
+        geom_overbank: Secondary 2D overbank floodplain geometry table.
+        topo: Network connectivity and topological ordering structure.
+        buffers: Pre-allocated workspace scratch buffers.
+        dt_substep_f32: Current adaptive sub-timestep duration (seconds).
+    """
+    for reach_idx in range(n_inertial):
+        upstream_reach_k: int = topo.inertial_up_reach_idx[reach_idx]
+        has_multiple_inertial: bool = upstream_reach_k < -1
+        has_inertial_and_kinematic: bool = (
+            upstream_reach_k >= 0
+            and buffers.kinematic_inflow_rate_inertial[reach_idx] > np.float32(0.0)
+        )
+
+        if not (has_multiple_inertial or has_inertial_and_kinematic):
+            continue
+
+        tot_inertial_inflow: np.float32 = np.float32(0.0)
+        max_up_stage: np.float32 = np.float32(-1e9)
+
+        if has_multiple_inertial:
+            start_up_idx: int = -upstream_reach_k - 2
+            end_up_idx: int = topo.inertial_up_offsets[reach_idx + 1]
+            for up_i in range(start_up_idx, end_up_idx):
+                u_k: int = topo.inertial_up_indices[up_i]
+                q_up: np.float32 = updated_discharge_m3_s_inertial[u_k]
+                if q_up > np.float32(0.0):
+                    tot_inertial_inflow += q_up
+                    u_stage: np.float32 = buffers.stage_buf[u_k]
+                    if u_stage > max_up_stage:
+                        max_up_stage = u_stage
+        else:
+            u_k_single: int = upstream_reach_k
+            q_up_single: np.float32 = updated_discharge_m3_s_inertial[u_k_single]
+            if q_up_single > np.float32(0.0):
+                tot_inertial_inflow = q_up_single
+                max_up_stage = buffers.stage_buf[u_k_single]
+
+        if tot_inertial_inflow <= np.float32(0.0):
+            continue
+
+        stage_c: np.float32 = buffers.stage_buf[reach_idx]
+        bed_c: np.float32 = geom_inbank[reach_idx, GEOM_IN_BED_ELEVATION]
+        depth_c: np.float32 = max(stage_c - bed_c, np.float32(0.0))
+        bankfull_depth_c: np.float32 = geom_inbank[reach_idx, GEOM_IN_BANKFULL_DEPTH]
+
+        depth_cap: np.float32 = max(
+            np.float32(0.5) * depth_c,
+            np.float32(0.2) * bankfull_depth_c,
+            np.float32(0.05),
+        )
+        head_diff: np.float32 = max(max_up_stage - stage_c, np.float32(0.0))
+        delta_z_max: np.float32 = (
+            min(head_diff, depth_cap)
+            if head_diff > np.float32(0.0)
+            else np.float32(0.05)
+        )
+
+        inv_length_c: np.float32 = geom_inbank[reach_idx, GEOM_IN_INVERSE_LENGTH]
+        reach_length_c: np.float32 = np.float32(1.0) / inv_length_c
+        bf_width_c: np.float32 = geom_overbank[reach_idx, GEOM_OV_RIVER_WIDTH]
+        fp_width_c: np.float32 = geom_overbank[reach_idx, GEOM_OV_FLOODPLAIN_WIDTH]
+
+        if depth_c > bankfull_depth_c:
+            top_width_c: np.float32 = bf_width_c + fp_width_c
+        else:
+            depth_ratio: np.float32 = depth_c / max(bankfull_depth_c, np.float32(1e-3))
+            inv_shape_exp_plus_one: np.float32 = geom_inbank[
+                reach_idx, GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE
+            ]
+            shape_exponent: np.float32 = (
+                np.float32(0.5)
+                if inv_shape_exp_plus_one == np.float32(1.0 / 1.5)
+                else (np.float32(1.0) / inv_shape_exp_plus_one) - np.float32(1.0)
+            )
+            top_width_c = max(
+                bf_width_c * (depth_ratio**shape_exponent),
+                bf_width_c * np.float32(0.1),
+            )
+
+        surface_area_c: np.float32 = top_width_c * reach_length_c
+        delta_v_cap: np.float32 = surface_area_c * delta_z_max
+
+        q_out_c: np.float32 = updated_discharge_m3_s_inertial[reach_idx]
+        outflow_vol_c: np.float32 = (
+            q_out_c * dt_substep_f32 if q_out_c > np.float32(0.0) else np.float32(0.0)
+        )
+        kin_inflow_vol: np.float32 = (
+            buffers.kinematic_inflow_rate_inertial[reach_idx] * dt_substep_f32
+        )
+        v_in_avail: np.float32 = max(
+            delta_v_cap + outflow_vol_c - kin_inflow_vol, np.float32(0.0)
+        )
+        v_in_proposed: np.float32 = tot_inertial_inflow * dt_substep_f32
+
+        if v_in_proposed > v_in_avail:
+            scale: np.float32 = v_in_avail / v_in_proposed
+            if has_multiple_inertial:
+                start_up_idx_s = -upstream_reach_k - 2
+                end_up_idx_s = topo.inertial_up_offsets[reach_idx + 1]
+                for up_i in range(start_up_idx_s, end_up_idx_s):
+                    u_k_idx: int = topo.inertial_up_indices[up_i]
+                    q_cand: np.float32 = updated_discharge_m3_s_inertial[u_k_idx]
+                    if q_cand > np.float32(0.0):
+                        updated_discharge_m3_s_inertial[u_k_idx] = q_cand * scale
+            else:
+                u_k_single_idx: int = upstream_reach_k
+                q_cand_s: np.float32 = updated_discharge_m3_s_inertial[u_k_single_idx]
+                if q_cand_s > np.float32(0.0):
+                    updated_discharge_m3_s_inertial[u_k_single_idx] = q_cand_s * scale
+
+
+@njit(inline="always")
 def _route_inertial_retention(
     substep_discharge_m3_s: ArrayFloat32,
     sideflow_m3_inertial: ArrayFloat32,
@@ -1369,6 +1506,17 @@ def _run_inertial_substeps(
             buffers=buffers,
             dt_substep_f64=dt_substep_f64,
             inv_dt_substep=inv_dt_substep,
+        )
+
+        # 4. Limit forward inflows at confluences to prevent stage overshooting
+        _apply_confluence_inflow_limits(
+            n_inertial=n_inertial,
+            updated_discharge_m3_s_inertial=updated_discharge_m3_s_inertial,
+            geom_inbank=geom.geom_inbank,
+            geom_overbank=geom.geom_overbank,
+            topo=topo,
+            buffers=buffers,
+            dt_substep_f32=dt_substep,
         )
 
         substep_discharge_m3_s[:] = updated_discharge_m3_s_inertial[:]

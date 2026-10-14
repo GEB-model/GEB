@@ -531,6 +531,7 @@ class LocalInertial:
         self._discharge_out: ArrayFloat32 = np.empty(n_up_nodes, dtype=np.float32)
         self._actual_evap_out: ArrayFloat32 = np.empty(n_up_nodes, dtype=np.float32)
         self._over_abs_out: ArrayFloat32 = np.empty(n_up_nodes, dtype=np.float32)
+        self._iteration_count: int = 0
 
     def initialize_stage(
         self,
@@ -868,8 +869,10 @@ class LocalInertial:
             self._sideflow_perm[:] = sideflow_m3
             self._evaporation_perm[:] = evaporation_m3
 
+        self._iteration_count += 1
         self._substep_buffers.wb_extra_lateral_accum_m3.fill(0.0)
         self._substep_buffers.terminal_wb_outflow_accum_m3.fill(0.0)
+        diagnostics: RoutingStepDiagnostics | None = None
 
         inertial_start: int = self.n_kinematic
         inertial_end: int = self.n_kinematic + self.n_inertial
@@ -1015,8 +1018,12 @@ class LocalInertial:
             self._substep_buffers.terminal_wb_outflow_accum_m3[0]
         )
 
-        # if self.n_inertial > 0 and diagnostics.limiting_reach_idx >= 0:
-        #     self._print_limiting_substep(diagnostics)
+        if (
+            self.n_inertial > 0
+            and diagnostics is not None
+            and diagnostics.limiting_reach_idx >= 0
+        ):
+            self._print_limiting_substep(diagnostics)
 
         if __debug__:
             storage_inertial_after: float = float(
@@ -1183,3 +1190,58 @@ class LocalInertial:
                 f"over_abs={over_abstraction_m3:.2f}, net_outflow={net_inertial_outflow_m3:.2f}"
             )
         return balance_err
+
+    def _print_limiting_substep(
+        self,
+        diagnostics: RoutingStepDiagnostics,
+    ) -> None:
+        """Prints diagnostic information for the cell requiring the smallest substep.
+
+        Args:
+            diagnostics: Encapsulated routing step stability diagnostics.
+        """
+        limiting_reach_idx: int = diagnostics.limiting_reach_idx
+        river_id: int = int(self._river_ids[self.n_kinematic + limiting_reach_idx])
+        grid_idx: int = int(self.sorted_idxs[self.n_kinematic + limiting_reach_idx])
+        dx: float = float(self._river_length_inertial[limiting_reach_idx])
+        up_count: int = int(
+            self._routing_topology.inertial_up_count[limiting_reach_idx]
+        )
+
+        h_v: float = float(diagnostics.h_vol)
+        h_f: float = float(diagnostics.h_flow)
+        h_g: float = float(diagnostics.h_gov)
+        c: float = float(diagnostics.celerity)
+        q: float = float(diagnostics.limiting_flow)
+        v: float = float(diagnostics.limiting_storage)
+        min_dt: float = float(diagnostics.min_stable_timestep_s)
+        num_substeps: int = diagnostics.num_inertial_substeps
+
+        if h_v >= h_f:
+            gov_str: str = (
+                f"channel storage depth (h_vol={h_v:.2f} m >= h_flow={h_f:.2f} m, "
+                f"storage={v:.1f} m³)"
+            )
+        else:
+            gov_str: str = (
+                f"flow normal depth / Manning (h_flow={h_f:.2f} m > h_vol={h_v:.2f} m, "
+                f"flow={q:.2f} m³/s)"
+            )
+
+        confluence_info: str = (
+            f", confluence of {up_count} tributaries" if up_count > 1 else ""
+        )
+
+        substep_str: str = (
+            f"{num_substeps} substep"
+            if num_substeps == 1
+            else f"{num_substeps} substeps"
+        )
+
+        print(
+            f"[Routing Iteration {self._iteration_count}] Cell reach_idx={limiting_reach_idx} "
+            f"(river_id={river_id}, grid_idx={grid_idx}) "
+            f"requires smallest substep dt={min_dt:.2f} s ({substep_str}).\n"
+            f"  Why: reach length dx={dx:.1f} m, governing depth h={h_g:.2f} m via {gov_str}, "
+            f"wave celerity c={c:.2f} m/s{confluence_info}."
+        )
