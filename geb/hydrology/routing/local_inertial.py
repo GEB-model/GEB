@@ -17,32 +17,11 @@ from geb.geb_types import (
 )
 
 from .geometry import (
-    compute_static_geometry,
+    InertialGeometry,
+    build_inertial_geometry,
 )
 from .inertial_substeps import (
-    GEOM_CFL_CONSTANT,
-    GEOM_CFL_MANNING_COEFFICIENT,
-    GEOM_CFL_NUM_COLS,
-    GEOM_IN_BANKFULL_DEPTH,
-    GEOM_IN_BANKFULL_VOLUME,
-    GEOM_IN_BED_ELEVATION,
-    GEOM_IN_INTERFACE_BED_ELEVATION_MAX,
-    GEOM_IN_INVERSE_INTERFACE_LENGTH,
-    GEOM_IN_INVERSE_LENGTH,
-    GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE,
-    GEOM_IN_MANNING_N_SQUARED,
-    GEOM_IN_NUM_COLS,
-    GEOM_IN_STAGE_VOLUME_COEFFICIENT,
-    GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH,
-    GEOM_OV_BANKFULL_PERIMETER,
-    GEOM_OV_FLOODPLAIN_AREA_THRESHOLD,
-    GEOM_OV_FLOODPLAIN_DEPTH_THRESHOLD,
-    GEOM_OV_FLOODPLAIN_SIDE_SLOPE,
-    GEOM_OV_FLOODPLAIN_WIDTH,
-    GEOM_OV_NUM_COLS,
-    GEOM_OV_RIVER_WIDTH,
     INERTIAL_PARALLEL_THRESHOLD,
-    InertialGeometry,
     InertialTopology,
     KinematicTopology,
     RetentionCoupling,
@@ -752,12 +731,6 @@ class LocalInertial:
         self._actual_evap_out: ArrayFloat32 = np.empty(n_up_nodes, dtype=np.float32)
         self._over_abs_out: ArrayFloat32 = np.empty(n_up_nodes, dtype=np.float32)
 
-        self._geometry: InertialGeometry = InertialGeometry(
-            geom_inbank=self._geom_inbank,
-            geom_overbank=self._geom_overbank,
-            geom_cfl=self._geom_cfl,
-            pit_slope_inertial=self._pit_slope_inertial,
-        )
         self._topology: InertialTopology = InertialTopology(
             inertial_up_offsets=self._inertial_up_offsets,
             inertial_up_indices=self._inertial_up_indices,
@@ -1174,8 +1147,24 @@ class LocalInertial:
             inertial_boundary_outflow_k, dtype=np.int32
         )
 
+    @property
+    def _geom_inbank(self) -> TwoDArrayFloat32:
+        return self._geometry.geom_inbank
+
+    @property
+    def _geom_overbank(self) -> TwoDArrayFloat32:
+        return self._geometry.geom_overbank
+
+    @property
+    def _geom_cfl(self) -> TwoDArrayFloat32:
+        return self._geometry.geom_cfl
+
+    @property
+    def _pit_slope_inertial(self) -> ArrayFloat32:
+        return self._geometry.pit_slope_inertial
+
     def _compute_static_geometry(self) -> None:
-        """Computes and stores reach-static cross-sectional geometric arrays."""
+        """Precomputes reach-static channel cross-sections, thresholds, and CFL parameters."""
         inertial_start: int = self.n_kinematic
         inertial_end: int = self.n_kinematic + self.n_inertial
         self._river_width_inertial: ArrayFloat32 = self._river_width[
@@ -1184,99 +1173,20 @@ class LocalInertial:
         self._bankfull_depth_inertial: ArrayFloat32 = self._bankfull_depth[
             inertial_start:inertial_end
         ]
-        bed_elevation_inertial: ArrayFloat32 = self._bed_elevation_inertial
-
-        (
-            inv_reach_length,
-            inv_shape_exponent_plus_one,
-            _bankfull_area,
-            bankfull_volume,
-            bankfull_perimeter,
-            fp_side_slope,
-            fp_depth_threshold,
-            fp_area_threshold,
-            _sqrt_fp_slope_sq,
-            width_over_sqrt_bankfull_depth,
-        ) = compute_static_geometry(
+        self._geometry: InertialGeometry = build_inertial_geometry(
             river_length=self._river_length_inertial,
             river_width=self._river_width_inertial,
             shape_exponent=self._shape_exponent_inertial,
             bankfull_depth=self._bankfull_depth_inertial,
             floodplain_width=self._floodplain_width_inertial,
+            bed_elevation=self._bed_elevation_inertial,
+            ds_bed_elevation=self._ds_bed_elevation,
+            interface_bed_elevation_max=self._interface_bed_elev_max,
+            manning_n_sq=self._manning_n_sq_inertial,
+            inv_dx_interface=self._inv_dx_interface,
+            up_count=self._inertial_up_count,
+            pit_slope=self._pit_slope[inertial_start:inertial_end],
         )
-
-        stage_vol_coeff: ArrayFloat32 = (
-            self._bankfull_depth_inertial
-            / (bankfull_volume**inv_shape_exponent_plus_one)
-        ).astype(np.float32)
-        self._pit_slope_inertial: ArrayFloat32 = self._pit_slope[
-            inertial_start:inertial_end
-        ]
-
-        # Precompute in-bank channel geometry
-        self._geom_inbank: TwoDArrayFloat32 = np.empty(
-            (self.n_inertial, GEOM_IN_NUM_COLS), dtype=np.float32
-        )
-        self._geom_inbank[:, GEOM_IN_INVERSE_LENGTH] = inv_reach_length
-        self._geom_inbank[:, GEOM_IN_BED_ELEVATION] = bed_elevation_inertial
-        self._geom_inbank[:, GEOM_IN_BANKFULL_DEPTH] = self._bankfull_depth_inertial
-        self._geom_inbank[:, GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE] = (
-            inv_shape_exponent_plus_one
-        )
-        self._geom_inbank[:, GEOM_IN_BANKFULL_VOLUME] = bankfull_volume
-        self._geom_inbank[:, GEOM_IN_STAGE_VOLUME_COEFFICIENT] = stage_vol_coeff
-        self._geom_inbank[:, GEOM_IN_INTERFACE_BED_ELEVATION_MAX] = (
-            self._interface_bed_elev_max
-        )
-        self._geom_inbank[:, GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH] = (
-            width_over_sqrt_bankfull_depth
-        )
-        self._geom_inbank[:, GEOM_IN_MANNING_N_SQUARED] = self._manning_n_sq_inertial
-        self._geom_inbank[:, GEOM_IN_INVERSE_INTERFACE_LENGTH] = self._inv_dx_interface
-
-        # Precompute overbank floodplain geometry
-        self._geom_overbank: TwoDArrayFloat32 = np.empty(
-            (self.n_inertial, GEOM_OV_NUM_COLS), dtype=np.float32
-        )
-        self._geom_overbank[:, GEOM_OV_FLOODPLAIN_WIDTH] = (
-            self._floodplain_width_inertial
-        )
-        self._geom_overbank[:, GEOM_OV_RIVER_WIDTH] = self._river_width_inertial
-        self._geom_overbank[:, GEOM_OV_BANKFULL_PERIMETER] = bankfull_perimeter
-        self._geom_overbank[:, GEOM_OV_FLOODPLAIN_SIDE_SLOPE] = fp_side_slope
-        self._geom_overbank[:, GEOM_OV_FLOODPLAIN_DEPTH_THRESHOLD] = fp_depth_threshold
-        self._geom_overbank[:, GEOM_OV_FLOODPLAIN_AREA_THRESHOLD] = fp_area_threshold
-
-        # Precompute CFL stability parameters
-        self._geom_cfl: TwoDArrayFloat32 = np.empty(
-            (self.n_inertial, GEOM_CFL_NUM_COLS), dtype=np.float32
-        )
-        bed_drop: ArrayFloat32 = np.maximum(
-            bed_elevation_inertial - self._ds_bed_elevation,
-            np.float32(0.0),
-        )
-        eff_slope: ArrayFloat32 = np.maximum(
-            bed_drop * inv_reach_length, np.float32(1e-4)
-        )
-        manning_n: ArrayFloat32 = np.sqrt(self._manning_n_sq_inertial)
-        self._geom_cfl[:, GEOM_CFL_MANNING_COEFFICIENT] = (
-            (manning_n / (self._river_width_inertial * np.sqrt(eff_slope)))
-            ** np.float32(0.6)
-        ).astype(np.float32)
-        cfl_safety_factor: np.float32 = np.float32(0.7)
-        sqrt_g: np.float32 = np.sqrt(np.float32(9.80665))
-        cfl_dx: ArrayFloat32 = np.minimum(
-            self._river_length_inertial, np.float32(1.0) / self._inv_dx_interface
-        )
-        confluence_factor: ArrayFloat32 = np.where(
-            self._inertial_up_count > 1,
-            np.float32(1.0)
-            / np.sqrt(np.maximum(self._inertial_up_count, 1).astype(np.float32)),
-            np.float32(1.0),
-        ).astype(np.float32)
-        self._geom_cfl[:, GEOM_CFL_CONSTANT] = (
-            confluence_factor * cfl_safety_factor * cfl_dx / sqrt_g
-        ).astype(np.float32)
 
     def update_channel_geometry(
         self,
@@ -1294,12 +1204,6 @@ class LocalInertial:
         self.bankfull_depth = bankfull_depth_m.astype(np.float32)
         self._bankfull_depth = self.bankfull_depth[self.sorted_idxs]
         self._compute_static_geometry()
-        self._geometry = InertialGeometry(
-            geom_inbank=self._geom_inbank,
-            geom_overbank=self._geom_overbank,
-            geom_cfl=self._geom_cfl,
-            pit_slope_inertial=self._pit_slope_inertial,
-        )
 
     def calculate_river_storage_from_discharge(
         self,

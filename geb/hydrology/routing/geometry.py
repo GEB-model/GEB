@@ -1,16 +1,88 @@
 """Cross-sectional geometry calculations for 1D river reaches."""
 
+from typing import NamedTuple
+
 import numpy as np
 from numba import njit
 
-from geb.geb_types import ArrayFloat32
+from geb.geb_types import (
+    ArrayFloat32,
+    ArrayInt32,
+    TwoDArrayFloat32,
+)
 
 __all__: list[str] = [
+    "GEOM_CFL_CONSTANT",
+    "GEOM_CFL_MANNING_COEFFICIENT",
+    "GEOM_CFL_NUM_COLS",
+    "GEOM_IN_BANKFULL_DEPTH",
+    "GEOM_IN_BANKFULL_VOLUME",
+    "GEOM_IN_BED_ELEVATION",
+    "GEOM_IN_INTERFACE_BED_ELEVATION_MAX",
+    "GEOM_IN_INVERSE_INTERFACE_LENGTH",
+    "GEOM_IN_INVERSE_LENGTH",
+    "GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE",
+    "GEOM_IN_MANNING_N_SQUARED",
+    "GEOM_IN_NUM_COLS",
+    "GEOM_IN_STAGE_VOLUME_COEFFICIENT",
+    "GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH",
+    "GEOM_OV_BANKFULL_PERIMETER",
+    "GEOM_OV_FLOODPLAIN_AREA_THRESHOLD",
+    "GEOM_OV_FLOODPLAIN_DEPTH_THRESHOLD",
+    "GEOM_OV_FLOODPLAIN_SIDE_SLOPE",
+    "GEOM_OV_FLOODPLAIN_WIDTH",
+    "GEOM_OV_NUM_COLS",
+    "GEOM_OV_RIVER_WIDTH",
+    "InertialGeometry",
+    "build_inertial_geometry",
     "compute_cfl_area_and_top_width",
     "compute_cross_section_from_depth",
     "compute_overbank_depth",
     "compute_static_geometry",
 ]
+
+# Column indices for in-bank channel geometry (geom_inbank)
+GEOM_IN_INVERSE_LENGTH: int = 0
+GEOM_IN_BED_ELEVATION: int = 1
+GEOM_IN_BANKFULL_DEPTH: int = 2
+GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE: int = 3
+GEOM_IN_BANKFULL_VOLUME: int = 4
+GEOM_IN_STAGE_VOLUME_COEFFICIENT: int = 5
+GEOM_IN_INTERFACE_BED_ELEVATION_MAX: int = 6
+GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH: int = 7
+GEOM_IN_MANNING_N_SQUARED: int = 8
+GEOM_IN_INVERSE_INTERFACE_LENGTH: int = 9
+GEOM_IN_NUM_COLS: int = 10
+
+# Column indices for overbank floodplain geometry (geom_overbank)
+GEOM_OV_FLOODPLAIN_WIDTH: int = 0
+GEOM_OV_RIVER_WIDTH: int = 1
+GEOM_OV_BANKFULL_PERIMETER: int = 2
+GEOM_OV_FLOODPLAIN_SIDE_SLOPE: int = 3
+GEOM_OV_FLOODPLAIN_DEPTH_THRESHOLD: int = 4
+GEOM_OV_FLOODPLAIN_AREA_THRESHOLD: int = 5
+GEOM_OV_NUM_COLS: int = 6
+
+# Column indices for CFL stability parameters (geom_cfl)
+GEOM_CFL_MANNING_COEFFICIENT: int = 0
+GEOM_CFL_CONSTANT: int = 1
+GEOM_CFL_NUM_COLS: int = 2
+
+
+class InertialGeometry(NamedTuple):
+    """Encapsulates static geometric and roughness lookup tables for inertial reaches.
+
+    Attributes:
+        geom_inbank: Compact 2D array of in-bank channel geometry attributes (meters, dimensionless).
+        geom_overbank: Secondary 2D array of overbank floodplain geometry attributes (meters, dimensionless).
+        geom_cfl: 2D array of CFL stability condition parameters per reach.
+        pit_slope_inertial: Baseline bed slope assigned to terminal pit/boundary reaches (m/m).
+    """
+
+    geom_inbank: TwoDArrayFloat32
+    geom_overbank: TwoDArrayFloat32
+    geom_cfl: TwoDArrayFloat32
+    pit_slope_inertial: ArrayFloat32
 
 
 def compute_static_geometry(
@@ -119,6 +191,131 @@ def compute_static_geometry(
         floodplain_area_threshold,
         sqrt_one_plus_floodplain_slope_squared,
         width_over_sqrt_bankfull_depth,
+    )
+
+
+def build_inertial_geometry(
+    river_length: ArrayFloat32,
+    river_width: ArrayFloat32,
+    shape_exponent: ArrayFloat32,
+    bankfull_depth: ArrayFloat32,
+    floodplain_width: ArrayFloat32,
+    bed_elevation: ArrayFloat32,
+    ds_bed_elevation: ArrayFloat32,
+    interface_bed_elevation_max: ArrayFloat32,
+    manning_n_sq: ArrayFloat32,
+    inv_dx_interface: ArrayFloat32,
+    up_count: ArrayInt32,
+    pit_slope: ArrayFloat32,
+) -> InertialGeometry:
+    """Precomputes reach-static channel cross-sections, thresholds, and CFL parameters.
+
+    Constructs dense 2D matrices containing in-bank geometry, overbank floodplain
+    properties, and CFL stability scaling terms to optimize CPU cache line utilization
+    during local inertial substepping.
+
+    Args:
+        river_length: Channel length of each reach (meters).
+        river_width: Bankfull top width of the main channel (meters).
+        shape_exponent: Power-law cross-sectional shape exponent r (dimensionless).
+        bankfull_depth: Bankfull channel depth before floodplain spilling (meters).
+        floodplain_width: Additional floodplain width beyond bankfull channel (meters).
+        bed_elevation: Bed elevation of each reach (meters).
+        ds_bed_elevation: Downstream bed elevation for slope calculation (meters).
+        interface_bed_elevation_max: Max upstream interface bed elevation (meters).
+        manning_n_sq: Square of Manning roughness coefficient n^2 (s^2 / m^(2/3)).
+        inv_dx_interface: Inverse spatial step at reach boundaries (1/meters).
+        up_count: Count of upstream tributaries entering each reach (dimensionless).
+        pit_slope: Default channel slope for boundary pit reaches (dimensionless).
+
+    Returns:
+        Structured InertialGeometry containing the packed 2D geometric matrices.
+    """
+    (
+        inv_reach_length,
+        inv_shape_exponent_plus_one,
+        _bankfull_area,
+        bankfull_volume,
+        bankfull_perimeter,
+        fp_side_slope,
+        fp_depth_threshold,
+        fp_area_threshold,
+        _sqrt_one_plus_fp_slope_sq,
+        width_over_sqrt_bankfull_depth,
+    ) = compute_static_geometry(
+        river_length=river_length,
+        river_width=river_width,
+        shape_exponent=shape_exponent,
+        bankfull_depth=bankfull_depth,
+        floodplain_width=floodplain_width,
+    )
+
+    stage_vol_coeff: ArrayFloat32 = (
+        bankfull_depth / (bankfull_volume**inv_shape_exponent_plus_one)
+    ).astype(np.float32)
+
+    n_inertial: int = river_length.shape[0]
+
+    # Precompute in-bank channel geometry
+    geom_inbank: TwoDArrayFloat32 = np.empty(
+        (n_inertial, GEOM_IN_NUM_COLS), dtype=np.float32
+    )
+    geom_inbank[:, GEOM_IN_INVERSE_LENGTH] = inv_reach_length
+    geom_inbank[:, GEOM_IN_BED_ELEVATION] = bed_elevation
+    geom_inbank[:, GEOM_IN_BANKFULL_DEPTH] = bankfull_depth
+    geom_inbank[:, GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE] = (
+        inv_shape_exponent_plus_one
+    )
+    geom_inbank[:, GEOM_IN_BANKFULL_VOLUME] = bankfull_volume
+    geom_inbank[:, GEOM_IN_STAGE_VOLUME_COEFFICIENT] = stage_vol_coeff
+    geom_inbank[:, GEOM_IN_INTERFACE_BED_ELEVATION_MAX] = interface_bed_elevation_max
+    geom_inbank[:, GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH] = (
+        width_over_sqrt_bankfull_depth
+    )
+    geom_inbank[:, GEOM_IN_MANNING_N_SQUARED] = manning_n_sq
+    geom_inbank[:, GEOM_IN_INVERSE_INTERFACE_LENGTH] = inv_dx_interface
+
+    # Precompute overbank floodplain geometry
+    geom_overbank: TwoDArrayFloat32 = np.empty(
+        (n_inertial, GEOM_OV_NUM_COLS), dtype=np.float32
+    )
+    geom_overbank[:, GEOM_OV_FLOODPLAIN_WIDTH] = floodplain_width
+    geom_overbank[:, GEOM_OV_RIVER_WIDTH] = river_width
+    geom_overbank[:, GEOM_OV_BANKFULL_PERIMETER] = bankfull_perimeter
+    geom_overbank[:, GEOM_OV_FLOODPLAIN_SIDE_SLOPE] = fp_side_slope
+    geom_overbank[:, GEOM_OV_FLOODPLAIN_DEPTH_THRESHOLD] = fp_depth_threshold
+    geom_overbank[:, GEOM_OV_FLOODPLAIN_AREA_THRESHOLD] = fp_area_threshold
+
+    # Precompute CFL stability parameters
+    geom_cfl: TwoDArrayFloat32 = np.empty(
+        (n_inertial, GEOM_CFL_NUM_COLS), dtype=np.float32
+    )
+    bed_drop: ArrayFloat32 = np.maximum(
+        bed_elevation - ds_bed_elevation,
+        np.float32(0.0),
+    )
+    eff_slope: ArrayFloat32 = np.maximum(bed_drop * inv_reach_length, np.float32(1e-4))
+    manning_n: ArrayFloat32 = np.sqrt(manning_n_sq)
+    geom_cfl[:, GEOM_CFL_MANNING_COEFFICIENT] = (
+        (manning_n / (river_width * np.sqrt(eff_slope))) ** np.float32(0.6)
+    ).astype(np.float32)
+    cfl_safety_factor: np.float32 = np.float32(0.7)
+    sqrt_g: np.float32 = np.sqrt(np.float32(9.80665))
+    cfl_dx: ArrayFloat32 = np.minimum(river_length, np.float32(1.0) / inv_dx_interface)
+    confluence_factor: ArrayFloat32 = np.where(
+        up_count > 1,
+        np.float32(1.0) / np.sqrt(np.maximum(up_count, 1).astype(np.float32)),
+        np.float32(1.0),
+    ).astype(np.float32)
+    geom_cfl[:, GEOM_CFL_CONSTANT] = (
+        confluence_factor * cfl_safety_factor * cfl_dx / sqrt_g
+    ).astype(np.float32)
+
+    return InertialGeometry(
+        geom_inbank=geom_inbank,
+        geom_overbank=geom_overbank,
+        geom_cfl=geom_cfl,
+        pit_slope_inertial=pit_slope,
     )
 
 

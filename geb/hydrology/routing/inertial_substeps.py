@@ -18,6 +18,28 @@ from geb.geb_types import (
 )
 
 from .geometry import (
+    GEOM_CFL_CONSTANT,
+    GEOM_CFL_MANNING_COEFFICIENT,
+    GEOM_CFL_NUM_COLS,
+    GEOM_IN_BANKFULL_DEPTH,
+    GEOM_IN_BANKFULL_VOLUME,
+    GEOM_IN_BED_ELEVATION,
+    GEOM_IN_INTERFACE_BED_ELEVATION_MAX,
+    GEOM_IN_INVERSE_INTERFACE_LENGTH,
+    GEOM_IN_INVERSE_LENGTH,
+    GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE,
+    GEOM_IN_MANNING_N_SQUARED,
+    GEOM_IN_NUM_COLS,
+    GEOM_IN_STAGE_VOLUME_COEFFICIENT,
+    GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH,
+    GEOM_OV_BANKFULL_PERIMETER,
+    GEOM_OV_FLOODPLAIN_AREA_THRESHOLD,
+    GEOM_OV_FLOODPLAIN_DEPTH_THRESHOLD,
+    GEOM_OV_FLOODPLAIN_SIDE_SLOPE,
+    GEOM_OV_FLOODPLAIN_WIDTH,
+    GEOM_OV_NUM_COLS,
+    GEOM_OV_RIVER_WIDTH,
+    InertialGeometry,
     compute_cfl_area_and_top_width,
     compute_cross_section_from_depth,
     compute_overbank_depth,
@@ -70,51 +92,8 @@ __all__ = [
 # Global option to toggle reverse flow across river reaches
 ALLOW_REVERSE_FLOW: bool = False
 
-# Column indices for in-bank channel geometry (geom_inbank)
-GEOM_IN_INVERSE_LENGTH: int = 0
-GEOM_IN_BED_ELEVATION: int = 1
-GEOM_IN_BANKFULL_DEPTH: int = 2
-GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE: int = 3
-GEOM_IN_BANKFULL_VOLUME: int = 4
-GEOM_IN_STAGE_VOLUME_COEFFICIENT: int = 5
-GEOM_IN_INTERFACE_BED_ELEVATION_MAX: int = 6
-GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH: int = 7
-GEOM_IN_MANNING_N_SQUARED: int = 8
-GEOM_IN_INVERSE_INTERFACE_LENGTH: int = 9
-GEOM_IN_NUM_COLS: int = 10
-
-# Column indices for overbank floodplain geometry (geom_overbank)
-GEOM_OV_FLOODPLAIN_WIDTH: int = 0
-GEOM_OV_RIVER_WIDTH: int = 1
-GEOM_OV_BANKFULL_PERIMETER: int = 2
-GEOM_OV_FLOODPLAIN_SIDE_SLOPE: int = 3
-GEOM_OV_FLOODPLAIN_DEPTH_THRESHOLD: int = 4
-GEOM_OV_FLOODPLAIN_AREA_THRESHOLD: int = 5
-GEOM_OV_NUM_COLS: int = 6
-
-# Column indices for CFL stability parameters (geom_cfl)
-GEOM_CFL_MANNING_COEFFICIENT: int = 0
-GEOM_CFL_CONSTANT: int = 1
-GEOM_CFL_NUM_COLS: int = 2
-
 # Threshold of reach count above which parallel multi-threading outperforms serial execution
 INERTIAL_PARALLEL_THRESHOLD: int = 5000
-
-
-class InertialGeometry(NamedTuple):
-    """Encapsulates static geometric and roughness lookup tables for inertial reaches.
-
-    Attributes:
-        geom_inbank: Compact 2D array of in-bank channel geometry attributes (meters, dimensionless).
-        geom_overbank: Secondary 2D array of overbank floodplain geometry attributes (meters, dimensionless).
-        geom_cfl: 2D array of CFL stability condition parameters per reach.
-        pit_slope_inertial: Baseline bed slope assigned to terminal pit/boundary reaches (m/m).
-    """
-
-    geom_inbank: TwoDArrayFloat32
-    geom_overbank: TwoDArrayFloat32
-    geom_cfl: TwoDArrayFloat32
-    pit_slope_inertial: ArrayFloat32
 
 
 class KinematicTopology(NamedTuple):
