@@ -864,7 +864,7 @@ class Reporter:
         Loops over the reporter configuration and creates the necessary files and data structures,
         that are then used while the model is run to add data to.
 
-        Hydrological runs always report river outflow discharge (m³/s), including
+        Runs always report river outflow discharge (m³/s), including
         exported spinup history, for annual channel geometry updates.
 
         For full documentation of the report configuration, see the documentation.
