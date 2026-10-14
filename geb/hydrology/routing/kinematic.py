@@ -8,7 +8,7 @@ from geb.geb_types import (
     ArrayFloat64,
 )
 
-from .inertial_substeps import (
+from .inertial_kernel import (
     RetentionCoupling,
     WaterbodyCoupling,
     compute_retention_routing,

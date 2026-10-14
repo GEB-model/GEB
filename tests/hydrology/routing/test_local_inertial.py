@@ -2806,7 +2806,7 @@ def test_inertial_substeps_parallel_and_serial_equivalence() -> None:
     substepping kernel produce numerically identical results, and that dispatching works across the
     threshold boundary.
     """
-    from geb.hydrology.routing.inertial_substeps import (
+    from geb.hydrology.routing.inertial_kernel import (
         INERTIAL_PARALLEL_THRESHOLD,
         RetentionCoupling,
         SubstepBuffers,
@@ -4467,7 +4467,7 @@ def test_evaluate_reach_cfl_pure_wave_celerity_and_overbank_capping() -> None:
         GEOM_OV_NUM_COLS,
         GEOM_OV_RIVER_WIDTH,
     )
-    from geb.hydrology.routing.inertial_substeps import _evaluate_reach_cfl_dt
+    from geb.hydrology.routing.inertial_kernel import _evaluate_reach_cfl_dt
 
     geom_inbank: np.ndarray = np.zeros((1, GEOM_IN_NUM_COLS), dtype=np.float32)
     geom_overbank: np.ndarray = np.zeros((1, GEOM_OV_NUM_COLS), dtype=np.float32)

@@ -19,7 +19,7 @@ from .geometry import (
     InertialGeometry,
     build_inertial_geometry,
 )
-from .inertial_substeps import (
+from .inertial_kernel import (
     INERTIAL_PARALLEL_THRESHOLD,
     RetentionCoupling,
     RoutingStepDiagnostics,

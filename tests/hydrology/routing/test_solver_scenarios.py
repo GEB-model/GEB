@@ -22,7 +22,7 @@ from geb.hydrology.routing.geometry import (
     GEOM_IN_BANKFULL_VOLUME,
     build_inertial_geometry,
 )
-from geb.hydrology.routing.inertial_substeps import _compute_reach_stage_from_vol
+from geb.hydrology.routing.inertial_kernel import _compute_reach_stage_from_vol
 from geb.hydrology.routing.solver import solve_inertial_momentum
 from tests.testconfig import output_folder
 

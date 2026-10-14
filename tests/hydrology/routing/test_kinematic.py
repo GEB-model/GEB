@@ -241,7 +241,7 @@ def test_serial_and_parallel_kinematic_kernels_equivalence() -> None:
     Verifies that the serial and parallel compiled variants of the kinematic wave routing
     step produce numerically identical results, and that dispatching logic operates correctly.
     """
-    from geb.hydrology.routing.inertial_substeps import (
+    from geb.hydrology.routing.inertial_kernel import (
         RetentionCoupling,
         WaterbodyCoupling,
     )

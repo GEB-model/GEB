@@ -511,6 +511,7 @@ def test_write_discharge_dashboard(tmp_path: Path) -> None:
     assert "_gebStations" in html_content
     assert "Station search" in html_content
     assert writer.bundles[0] in html_content
+    assert "<script id=\"geb-chart-data\" type=\"application/json\">" in html_content
 
 
 def test_build_station_chart_data_with_bankfull_discharge() -> None:
