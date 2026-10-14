@@ -30,6 +30,7 @@ from geb.workflows import balance_check
 from geb.workflows.extreme_value_analysis import ReturnPeriodModel
 from geb.workflows.io import read_geom, read_table
 
+from .geometry import estimate_outflow_height, get_lake_factor
 from .kinematic import update_node_kinematic as update_node_kinematic
 from .local_inertial import LocalInertial as LocalInertial
 
@@ -1243,12 +1244,43 @@ class Routing(Module):
                     bankfull_river_elev
                 )
             )
-        waterbody_outflow_linear: ArrayInt32 = (
-            self.hydrology.waterbodies.var.waterbody_outflow_linear_mapping
-        )
-        waterbody_outflow_bed_elev: ArrayFloat32 = bankfull_river_elev[
-            waterbody_outflow_linear
-        ].astype(np.float32)
+            waterbody_outflow_linear: ArrayInt32 = (
+                self.hydrology.waterbodies.var.waterbody_outflow_linear_mapping
+            )
+            waterbody_outflow_bed_elev: ArrayFloat32 = bankfull_river_elev[
+                waterbody_outflow_linear
+            ].astype(np.float32)
+
+            lake_a_factor: np.float32 = np.float32(
+                self.model.config["parameters"]["lake_outflow_multiplier"]
+            )
+            outflow_river_width: ArrayFloat32 = bankfull_top_width_m[
+                waterbody_outflow_linear
+            ]
+            waterbody_lake_factor: ArrayFloat32 = get_lake_factor(
+                river_width=outflow_river_width,
+                lake_a_factor=lake_a_factor,
+            )
+            average_discharge: ArrayFloat32 = np.maximum(
+                self.hydrology.waterbodies.var.average_discharge_m3_per_s,
+                np.float32(0.1),
+            )
+            waterbody_outflow_height: ArrayFloat32 = estimate_outflow_height(
+                lake_capacity=self.hydrology.waterbodies.var.capacity,
+                lake_factor=waterbody_lake_factor,
+                lake_area=self.hydrology.waterbodies.var.lake_area,
+                avg_outflow=average_discharge,
+            )
+            self.hydrology.waterbodies.var.outflow_height = waterbody_outflow_height
+            self.hydrology.waterbodies.lake_storage = waterbody_outflow_height[
+                self.hydrology.waterbodies.is_lake
+            ].astype(np.float64) * self.hydrology.waterbodies.var.lake_area[
+                self.hydrology.waterbodies.is_lake
+            ].astype(np.float64)
+        else:
+            waterbody_outflow_bed_elev = np.zeros(0, dtype=np.float32)
+            waterbody_lake_factor = np.zeros(0, dtype=np.float32)
+            waterbody_outflow_height = np.zeros(0, dtype=np.float32)
 
         self.router = LocalInertial(
             dt=3600,
@@ -1270,8 +1302,8 @@ class Routing(Module):
             bankfull_depth_m=bankfull_depth_m,
             floodplain_width_m=floodplain_width_m,
             waterbody_lake_area=self.hydrology.waterbodies.var.lake_area,
-            waterbody_lake_factor=self.hydrology.waterbodies.var.lake_factor,
-            waterbody_outflow_height=self.hydrology.waterbodies.var.outflow_height,
+            waterbody_lake_factor=waterbody_lake_factor,
+            waterbody_outflow_height=waterbody_outflow_height,
             waterbody_outflow_bed_elev=waterbody_outflow_bed_elev,
             river_storage_alpha=self.var.river_storage_alpha,
             river_storage_beta=self.var.river_storage_beta,

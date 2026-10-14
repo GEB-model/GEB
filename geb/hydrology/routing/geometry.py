@@ -7,6 +7,7 @@ from numba import njit
 
 from geb.geb_types import (
     ArrayFloat32,
+    ArrayFloat64,
     ArrayInt32,
     TwoDArrayFloat32,
 )
@@ -39,6 +40,9 @@ __all__: list[str] = [
     "compute_cross_section_from_depth",
     "compute_overbank_depth",
     "compute_static_geometry",
+    "estimate_lake_outflow",
+    "estimate_outflow_height",
+    "get_lake_factor",
 ]
 
 # Column indices for in-bank channel geometry (geom_inbank)
@@ -513,3 +517,82 @@ def compute_cfl_area_and_top_width(
 
     area = bankfull_area_m2 + overbank_area
     return area, top_width
+
+
+def get_lake_factor(
+    river_width: ArrayFloat32,
+    overflow_coefficient_mu: np.float32 = np.float32(0.612),
+    lake_a_factor: np.float32 = np.float32(1.0),
+    reference_depth_m: np.float32 = np.float32(1.0),
+) -> ArrayFloat32:
+    """Calculates the parabolic weir rating discharge multiplier for lake outlets.
+
+    For a parabolic weir notch with equation z = c * x^2, the notch curvature is
+    c = 4 * h_ref / b_w^2, where b_w is the outlet river width at reference depth h_ref.
+    The discharge formula is Q = mu * sqrt(g / c) * h^2 = lake_factor * h^2.
+
+    References:
+        http://rcswww.urz.tu-dresden.de/~daigner/pdf/ueberf.pdf
+
+    Args:
+        river_width: Width of the outlet river (meters).
+        overflow_coefficient_mu: Weir discharge coefficient (dimensionless, 0.612 for parabola).
+        lake_a_factor: Calibration multiplier factor for lake outflow (dimensionless).
+        reference_depth_m: Reference flow depth for parabolic notch curvature (meters).
+
+    Returns:
+        A lake-specific constant factor used in the parabolic lake outflow equations (m/s).
+    """
+    gravity: np.float32 = np.float32(9.80665)
+    return (
+        lake_a_factor
+        * overflow_coefficient_mu
+        * (river_width * np.float32(0.5))
+        * np.sqrt(gravity / reference_depth_m)
+    )
+
+
+def estimate_outflow_height(
+    lake_capacity: ArrayFloat64,
+    lake_factor: ArrayFloat32,
+    lake_area: ArrayFloat32,
+    avg_outflow: ArrayFloat32,
+) -> ArrayFloat32:
+    """Estimates the weir sill height of a lake above bottom from capacity, area, and average outflow.
+
+    Args:
+        lake_capacity: Capacity of the lake (m3).
+        lake_factor: Parabolic weir discharge rating factor (m/s).
+        lake_area: Surface area of the lake (m2).
+        avg_outflow: Long-term average outflow discharge (m3/s).
+
+    Returns:
+        Weir sill outflow height above the lake bottom (meters).
+    """
+    height_above_outflow: ArrayFloat32 = np.sqrt(avg_outflow / lake_factor).astype(
+        np.float32
+    )
+    lake_height_when_full: ArrayFloat32 = (lake_capacity / lake_area).astype(np.float32)
+    outflow_height: ArrayFloat32 = np.maximum(
+        lake_height_when_full - height_above_outflow, np.float32(0.0)
+    )
+    return outflow_height
+
+
+def estimate_lake_outflow(
+    lake_factor: ArrayFloat32,
+    height_above_outflow: ArrayFloat32,
+) -> ArrayFloat32:
+    """Estimates the outflow from a lake given its head above the weir sill for a parabolic weir.
+
+    References:
+        http://rcswww.urz.tu-dresden.de/~daigner/pdf/ueberf.pdf
+
+    Args:
+        lake_factor: Parabolic weir discharge rating factor (m/s).
+        height_above_outflow: Head of lake surface above weir sill (meters).
+
+    Returns:
+        Outflow discharge (m3/s).
+    """
+    return lake_factor * (height_above_outflow * height_above_outflow)
