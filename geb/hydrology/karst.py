@@ -112,14 +112,14 @@ class Karst(Module):
         return captured_runoff_m, captured_soil_m
 
     def step(self, inflow_m: ArrayFloat64) -> ArrayFloat64:
-        """Store daily inflow and return recharge to MODFLOW.
+        """Delay karst recharge with a standard linear reservoir.
 
         Notes:
-            Uses a linear reservoir: outflow = storage / release time.
-            We solve dS/dt = inflow - S/T exactly for one day of steady inflow.
-            V2Karst uses the same reservoir concept (section 2.3.4, equation 18):
-            https://gmd.copernicus.org/articles/11/4933/2018/#section2.3.4
-            Our daily integration differs from the paper's discrete equation.
+            Storage and outflow follow S = K * Q, where K is release_time_days.
+            We solve dS/dt = inflow - S/K exactly over one day, assuming inflow
+            arrives evenly. Released water goes to MODFLOW.
+            See the MIKE SHE explanation of linear reservoirs:
+            https://mikeshe-mike-platform-prod.eu.mike-cloud.com/2026/WM/SZ/LinearReservoir/
 
         Args:
             inflow_m: Water entering karst over the day (m), per grid cell.
