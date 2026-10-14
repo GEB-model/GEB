@@ -2033,7 +2033,12 @@ class Hydrography(BuildModelBase):
 
     @build_method(required=True)
     def setup_gtsm_station_data(self, scenario: int, percentile: float) -> None:
-        """This function sets up COAST-RP and the GTSM station data (surge and waterlevel) for the model."""
+        """Set up COAST-RP and GTSM station data for the model.
+
+        Args:
+            scenario: SSP scenario identifier used for AR6 projections (for example, 245).
+            percentile: AR6 projection quantile as a fraction between 0 and 1.
+        """
         if not self.geom["routing/subbasins"]["is_coastal"].any():
             self.logger.info("No coastal basins found, skipping GTSM hydrographs setup")
             return
