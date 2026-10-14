@@ -19,10 +19,11 @@ import folium
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import scipy.stats
 import shapely
 from branca.element import Figure
 from folium import MacroElement, TileLayer
-from jinja2 import Environment
+from jinja2 import Environment, Template
 from jinja2.utils import htmlsafe_json_dumps
 from pandas.api.typing import NaTType
 
@@ -59,9 +60,12 @@ _ESRI_TOPO_ATTR = (
 
 StationMarkerIndex = dict[str, str | list[str]]
 
+LAKE_WATERBODY_TYPE: int = 1
 RESERVOIR_WATERBODY_TYPE: int = 2
+CONTROL_LAKE_WATERBODY_TYPE: int = 3
 
 _WATERBODY_STYLE: dict[int, dict[str, str]] = {
+    LAKE_WATERBODY_TYPE: {"color": "#38BDF8", "label": "Lake"},
     RESERVOIR_WATERBODY_TYPE: {"color": "#FF8A65", "label": "Reservoir"},
 }
 
@@ -207,10 +211,33 @@ class _JavascriptMacro(MacroElement):
         # second pass cannot interpret station text as a template.
         environment: Environment = Environment()
         environment.filters["script_json"] = _script_json
-        self._template = environment.from_string(
-            "{%- macro script(this, kwargs) -%}\n"
-            + script_path.read_text(encoding="utf-8")
-            + "\n{%- endmacro -%}"
+        file_content: str = script_path.read_text(encoding="utf-8")
+        if "{%- macro" in file_content:
+            self._template = environment.from_string(file_content)
+        else:
+            self._template = environment.from_string(
+                "{%- macro script(this, kwargs) -%}\n"
+                + file_content
+                + "\n{%- endmacro -%}"
+            )
+
+
+class _StationsPaneMacro(MacroElement):
+    """Initialize a dedicated Leaflet pane for station markers and snapping overlays."""
+
+    def __init__(self) -> None:
+        """Initialize the stationsPane macro element."""
+        super().__init__()
+        self._template: Template = Template(
+            """
+            {%- macro script(this, kwargs) -%}
+            if (!{{ this._parent.get_name() }}.getPane("stationsPane")) {
+                var stationsPane = {{ this._parent.get_name() }}.createPane("stationsPane");
+                stationsPane.style.zIndex = 620;
+                stationsPane.style.pointerEvents = "auto";
+            }
+            {%- endmacro -%}
+            """
         )
 
 
@@ -437,17 +464,22 @@ def write_discharge_dashboard(
         )
     map_center: list[float] = [(min_lat + max_lat) / 2, (min_lon + max_lon) / 2]
     discharge_map = folium.Map(location=map_center, tiles=None, prefer_canvas=True)
-    TileLayer(
+    _StationsPaneMacro().add_to(discharge_map)
+    topo_tile: TileLayer = TileLayer(
         tiles=_ESRI_TOPO_TILES,
         attr=_ESRI_TOPO_ATTR,
         name="Topographic Map",
-    ).add_to(discharge_map)
-    TileLayer(
+        cross_origin=True,
+    )
+    topo_tile.add_to(discharge_map)
+    sat_tile: TileLayer = TileLayer(
         tiles="Esri.WorldImagery",
         name="Satellite imagery",
         show=False,
         max_zoom=19,
-    ).add_to(discharge_map)
+        cross_origin=True,
+    )
+    sat_tile.add_to(discharge_map)
     discharge_map.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]], padding=(30, 30))
     catchment_layer: folium.FeatureGroup = folium.FeatureGroup(
         name="Catchment",
@@ -468,14 +500,10 @@ def write_discharge_dashboard(
             "payload": encoded_catchment,
         },
     ).add_to(discharge_map)
-    _add_river_layers(
-        discharge_map,
-        rivers,
-    )
 
     metric_layers: list[tuple[folium.FeatureGroup, cm.LinearColormap, str]] = [
         (
-            folium.FeatureGroup(name=cfg["name"], show=cfg["show"]),
+            folium.FeatureGroup(name=cfg["name"], show=cfg["show"], control=False),
             cm.LinearColormap(
                 colors=cfg["colors"],
                 vmin=cfg["vmin"],
@@ -501,7 +529,7 @@ def write_discharge_dashboard(
             caption="Station / routing upstream area",
         )
         layer_upstream = folium.FeatureGroup(
-            name="Station / routing upstream area", show=False
+            name="Station / routing upstream area", show=False, control=False
         )
 
     characteristic_layers: list[tuple[folium.FeatureGroup, dict[str, Any]]] = []
@@ -518,6 +546,7 @@ def write_discharge_dashboard(
                 folium.FeatureGroup(
                     name=f"GRDC-Caravan · {characteristic['label']}",
                     show=False,
+                    control=False,
                 ),
                 characteristic,
             )
@@ -526,6 +555,7 @@ def write_discharge_dashboard(
         availability_layer = folium.FeatureGroup(
             name="GRDC-Caravan · Data availability",
             show=False,
+            control=False,
         )
         characteristic_records = {
             str(station["id"]): station for station in characteristic_data["stations"]
@@ -606,7 +636,12 @@ def write_discharge_dashboard(
         "caravanUnavailableColor": _CARAVAN_UNAVAILABLE_COLOR,
     }
     _JavascriptMacro("stations.js", stations_macro_data).add_to(discharge_map)
+    river_layer: folium.FeatureGroup = _add_river_layers(
+        discharge_map,
+        rivers,
+    )
 
+    exclusion_summary: dict[str, Any] | None = None
     if excluded_stations is not None and not excluded_stations.empty:
         area_distance_count: int = 0
         excluded_layer: folium.FeatureGroup = folium.FeatureGroup(
@@ -648,6 +683,7 @@ def write_discharge_dashboard(
                 tooltip=record["tooltip"],
                 popup=folium.Popup(excluded_popup, max_width=850),
             )
+            marker.options["pane"] = "stationsPane"
             marker.add_to(excluded_layer)
             station_marker_index.append(
                 {
@@ -660,18 +696,13 @@ def write_discharge_dashboard(
         station_count: int = len(
             mapped_station_scores.index.union(excluded_stations.index)
         )
-        cast(Figure, discharge_map.get_root()).html.add_child(
-            folium.Element(
-                f"<div id='{excluded_layer.get_name()}_legend' style='display:none;position:fixed;top:12px;left:55px;z-index:1000;background:white;padding:8px;border:1px solid #ccc'>"
-                f"<b>{station_count} stations shown</b><br>"
-                f"<span style='color:#DC2626'>● Area / distance exclusions: {area_distance_count}</span><br>"
-                f"<span style='color:#D97706'>● Other exclusions: {len(excluded_stations) - area_distance_count}</span>"
-                "<br>Hover or click a station for its exclusion reason.</div>"
-            )
-        )
-        _JavascriptMacro("exclusions.js", excluded_layer.get_name()).add_to(
-            discharge_map
-        )
+        exclusion_summary = {
+            "totalStations": station_count,
+            "excludedCount": len(excluded_stations),
+            "areaDistanceCount": area_distance_count,
+            "otherCount": len(excluded_stations) - area_distance_count,
+            "layer": excluded_layer.get_name(),
+        }
     if snapping_stations:
         snapping_layer.add_to(discharge_map)
         snapping_json_bytes: bytes = json.dumps(
@@ -690,14 +721,80 @@ def write_discharge_dashboard(
             },
         ).add_to(discharge_map)
 
+    waterbody_layers: list[folium.FeatureGroup] = []
+    if waterbodies is not None and not waterbodies.empty:
+        waterbody_layers = _add_waterbody_layers(discharge_map, waterbodies)
+
+    basemaps_data: list[dict[str, Any]] = [
+        {
+            "id": "topo",
+            "name": "Topographic",
+            "layer": topo_tile.get_name(),
+            "active": True,
+        },
+        {
+            "id": "satellite",
+            "name": "Satellite",
+            "layer": sat_tile.get_name(),
+            "active": False,
+        },
+    ]
+    overlays_data: list[dict[str, Any]] = [
+        {
+            "id": "catchment",
+            "name": "Catchment",
+            "layer": catchment_layer.get_name(),
+            "active": True,
+        },
+        {
+            "id": "rivers",
+            "name": "Rivers",
+            "layer": river_layer.get_name(),
+            "active": True,
+        },
+    ]
+    for wb_layer in waterbody_layers:
+        overlays_data.append(
+            {
+                "id": wb_layer.get_name(),
+                "name": getattr(wb_layer, "layer_name", wb_layer.get_name()),
+                "layer": wb_layer.get_name(),
+                "active": False,
+            }
+        )
+    if excluded_stations is not None and not excluded_stations.empty:
+        overlays_data.append(
+            {
+                "id": "exclusions",
+                "name": f"Excluded stations ({len(excluded_stations)})",
+                "layer": excluded_layer.get_name(),
+                "active": False,
+            }
+        )
+    if snapping_stations:
+        overlays_data.append(
+            {
+                "id": "snapping",
+                "name": "Station snapping details",
+                "layer": snapping_layer.get_name(),
+                "active": False,
+            }
+        )
+
     _inject_station_layer_legend_script(
         discharge_map=discharge_map,
+        mapped_station_scores=mapped_station_scores,
         metric_layers=metric_layers,
         upstream_layer=layer_upstream,
         characteristic_layers=characteristic_layers,
         availability_layer=availability_layer,
         caravan_available_count=caravan_available_count,
         station_count=len(mapped_station_scores),
+        basemaps=basemaps_data,
+        overlays=overlays_data,
+        excluded_stations=station_marker_index,
+        exclusion_summary=exclusion_summary,
+        snapping_layer=snapping_layer.get_name() if snapping_stations else None,
     )
 
     chart_macro_data: dict[str, Any] = {
@@ -706,13 +803,7 @@ def write_discharge_dashboard(
         "timeline": chart_timeline,
     }
     _JavascriptMacro("charts.js", chart_macro_data).add_to(discharge_map)
-    _JavascriptMacro("search.js", station_marker_index).add_to(discharge_map)
-
-    if waterbodies is not None and not waterbodies.empty:
-        _add_reservoir_layer(discharge_map, waterbodies)
-
     _JavascriptMacro("units.js", {}).add_to(discharge_map)
-    folium.LayerControl(collapsed=False).add_to(discharge_map)
     if (
         "exclusion_reason" in mapped_station_scores
         and mapped_station_scores["exclusion_reason"].notna().any()
@@ -1766,6 +1857,74 @@ def _build_characteristic_layer_data(
     }
 
 
+def _calculate_distribution_summary(
+    values: pd.Series | np.ndarray,
+    vmin: float,
+    vmax: float,
+    num_bins: int = 20,
+) -> dict[str, Any]:
+    """Calculate summary statistics, histogram bins, and KDE density points for a metric series.
+
+    Args:
+        values: Numeric series or array of metric values (dimensionless or metric units).
+        vmin: Minimum bound for the colormap.
+        vmax: Maximum bound for the colormap.
+        num_bins: Number of histogram bins. Defaults to 20.
+
+    Returns:
+        Dictionary with count, median, mean, min, max, p25, p75, bin edges, counts, and density points.
+    """
+    clean_series: pd.Series = pd.to_numeric(pd.Series(values), errors="coerce").dropna()
+    clean_array: np.ndarray = clean_series.to_numpy(dtype=float)
+    clean_array = clean_array[np.isfinite(clean_array)]
+    if len(clean_array) == 0:
+        return {
+            "count": 0,
+            "median": None,
+            "mean": None,
+            "min": None,
+            "max": None,
+            "p25": None,
+            "p75": None,
+            "bins": [],
+            "counts": [],
+            "density_points": [0.0] * 80,
+        }
+    clipped_array: np.ndarray = np.clip(clean_array, vmin, vmax)
+    hist_counts, bin_edges = np.histogram(
+        clipped_array, bins=num_bins, range=(vmin, vmax)
+    )
+
+    density_points: list[float] = [0.0] * 80
+    if len(clean_array) >= 2 and float(np.var(clean_array)) > 1e-12:
+        try:
+            kde: scipy.stats.gaussian_kde = scipy.stats.gaussian_kde(clean_array)
+            kde.set_bandwidth(bw_method=float(kde.factor * 0.55))
+            x_grid: np.ndarray = np.linspace(vmin, vmax, 80)
+            density: np.ndarray = kde(x_grid)
+            dmax: float = float(density.max())
+            normalized_density: np.ndarray = density / dmax if dmax > 0.0 else density
+            density_points = [round(float(d), 4) for d in normalized_density]
+        except Exception:
+            density_points = [0.0] * 80
+    elif len(clean_array) > 0 and vmax > vmin:
+        idx: int = int(np.clip((clean_array[0] - vmin) / (vmax - vmin) * 79, 0, 79))
+        density_points[idx] = 1.0
+
+    return {
+        "count": int(len(clean_array)),
+        "median": round(float(np.median(clean_array)), 3),
+        "mean": round(float(np.mean(clean_array)), 3),
+        "min": round(float(np.min(clean_array)), 3),
+        "max": round(float(np.max(clean_array)), 3),
+        "p25": round(float(np.percentile(clean_array, 25)), 3),
+        "p75": round(float(np.percentile(clean_array, 75)), 3),
+        "bins": [round(float(b), 4) for b in bin_edges],
+        "counts": [int(c) for c in hist_counts],
+        "density_points": density_points,
+    }
+
+
 def _prepare_characteristic_values(
     values: pd.Series,
 ) -> tuple[dict[str, int | list[float]], pd.Series] | None:
@@ -1796,10 +1955,14 @@ def _prepare_characteristic_values(
     percentile_ranks.loc[valid_values.index] = (
         (average_ranks - 1.0) / (len(valid_values) - 1.0) * 100.0
     )
-    statistics: dict[str, int | list[float]] = {
+    distribution_summary: dict[str, Any] = _calculate_distribution_summary(
+        percentile_ranks.dropna(), vmin=0.0, vmax=100.0
+    )
+    statistics: dict[str, Any] = {
         "reference_values": [round(float(value), 2) for value in reference_values],
         "missing_count": int(len(numeric_values) - len(valid_values)),
         "ranked_count": int(len(valid_values)),
+        "distribution": distribution_summary,
     }
     return statistics, percentile_ranks
 
@@ -1932,23 +2095,39 @@ def _build_station_marker_payload(
 
 def _inject_station_layer_legend_script(
     discharge_map: folium.Map,
+    mapped_station_scores: gpd.GeoDataFrame,
     metric_layers: list[tuple[folium.FeatureGroup, cm.LinearColormap, str]],
     upstream_layer: folium.FeatureGroup | None,
     characteristic_layers: list[tuple[folium.FeatureGroup, dict[str, Any]]],
     availability_layer: folium.FeatureGroup | None,
     caravan_available_count: int,
     station_count: int,
+    basemaps: list[dict[str, Any]],
+    overlays: list[dict[str, Any]],
+    excluded_stations: list[StationMarkerIndex],
+    exclusion_summary: dict[str, Any] | None = None,
+    snapping_layer: str | None = None,
 ) -> None:
-    """Add one dynamic legend and enforce one active station-value layer.
+    """Add unified dynamic station legend with metric selector and distribution plots.
+
+    Topographic layers remain in the main layer control, while mutually
+    exclusive station evaluation metrics and catchment characteristics are
+    switched inside this legend control.
 
     Args:
         discharge_map: Performance map receiving the legend control.
+        mapped_station_scores: Per-station evaluation metrics table.
         metric_layers: Metric feature groups, colormaps, and source columns.
         upstream_layer: Optional upstream-area-ratio feature group.
         characteristic_layers: GRDC-Caravan feature groups and metadata.
         availability_layer: Optional GRDC-Caravan coverage feature group.
         caravan_available_count: Stations matched to GRDC-Caravan.
         station_count: Total evaluated stations.
+        basemaps: Basemap definitions with layer IDs, labels, and initial active state.
+        overlays: Topographic overlay layer definitions with names, labels, and initial states.
+        excluded_stations: Serialized excluded station markers for search resolution.
+        exclusion_summary: Optional summary counts of excluded stations and reasons.
+        snapping_layer: Optional name of the station snapping details feature group.
     """
     configs_by_column: dict[str, dict[str, Any]] = {
         str(config["col"]): config for config in _METRIC_LAYER_CONFIGS
@@ -1956,28 +2135,55 @@ def _inject_station_layer_legend_script(
     legend_configs: list[dict[str, Any]] = []
     for layer, _, column in metric_layers:
         config: dict[str, Any] = configs_by_column[column]
+        series: pd.Series = (
+            mapped_station_scores[column].dropna()
+            if column in mapped_station_scores.columns
+            else pd.Series(dtype=float)
+        )
+        dist_summary: dict[str, Any] = _calculate_distribution_summary(
+            series,
+            vmin=float(config["vmin"]),
+            vmax=float(config["vmax"]),
+        )
         legend_entry: dict[str, Any] = {
             "layer": layer.get_name(),
             "kind": "continuous",
             "name": config["name"],
+            "category": "Hydrological Skill Scores",
             "colors": config["colors"],
             "minimum": config["vmin"],
             "maximum": config["vmax"],
+            "distribution": dist_summary,
             "show": config["show"],
         }
         if "ticks" in config:
             legend_entry["ticks"] = config["ticks"]
         legend_configs.append(legend_entry)
     if upstream_layer is not None:
+        upstream_series: pd.Series = (
+            mapped_station_scores[
+                "discharge_observations_to_GEB_upstream_area_ratio"
+            ].dropna()
+            if "discharge_observations_to_GEB_upstream_area_ratio"
+            in mapped_station_scores.columns
+            else pd.Series(dtype=float)
+        )
+        upstream_dist: dict[str, Any] = _calculate_distribution_summary(
+            upstream_series,
+            vmin=0.0,
+            vmax=2.0,
+        )
         legend_configs.append(
             {
                 "layer": upstream_layer.get_name(),
                 "kind": "continuous",
-                "name": "Upstream Area Ratio",
+                "name": "Station / routing upstream area ratio",
+                "category": "Station Catchment Area",
                 "colors": _RATIO_METRIC_COLORS,
                 "minimum": 0.0,
                 "maximum": 2.0,
                 "ticks": [0.0, 0.5, 1.0, 1.5, 2.0],
+                "distribution": upstream_dist,
                 "show": False,
             }
         )
@@ -1986,13 +2192,15 @@ def _inject_station_layer_legend_script(
             {
                 "layer": layer.get_name(),
                 "kind": "characteristic",
-                "name": characteristic["label"],
+                "name": f"GRDC-Caravan · {characteristic['label']}",
+                "category": "Catchment Characteristics",
                 "colors": _CHARACTERISTIC_COLORS,
                 "minimum": 0.0,
                 "maximum": 100.0,
                 "reference_values": characteristic["reference_values"],
                 "ranked_count": characteristic["ranked_count"],
                 "missing_count": characteristic["missing_count"],
+                "distribution": characteristic.get("distribution"),
                 "show": False,
             }
         )
@@ -2002,6 +2210,7 @@ def _inject_station_layer_legend_script(
                 "layer": availability_layer.get_name(),
                 "kind": "availability",
                 "name": "GRDC-Caravan data availability",
+                "category": "Catchment Characteristics",
                 "available_count": caravan_available_count,
                 "unavailable_count": station_count - caravan_available_count,
                 "available_color": _CARAVAN_AVAILABLE_COLOR,
@@ -2009,13 +2218,21 @@ def _inject_station_layer_legend_script(
                 "show": False,
             }
         )
-    _JavascriptMacro("legend.js", legend_configs).add_to(discharge_map)
+    unified_menu_payload: dict[str, Any] = {
+        "metrics": legend_configs,
+        "basemaps": basemaps,
+        "overlays": overlays,
+        "excludedStations": excluded_stations,
+        "exclusionSummary": exclusion_summary,
+        "snappingLayer": snapping_layer,
+    }
+    _JavascriptMacro("legend.js", unified_menu_payload).add_to(discharge_map)
 
 
 def _add_river_layers(
     discharge_map: folium.Map,
     rivers: gpd.GeoDataFrame,
-) -> None:
+) -> folium.FeatureGroup:
     """Show all active rivers, with upstream areas formatted in the browser.
 
     Notes:
@@ -2028,6 +2245,9 @@ def _add_river_layers(
     Args:
         discharge_map: Map receiving the river network.
         rivers: Active WGS84 river segments indexed by river ID, with areas in m².
+
+    Returns:
+        Created river feature group layer.
     """
     cols: list[str] = ["uparea_m2", "geometry"]
     if "width_m" in rivers.columns:
@@ -2050,7 +2270,7 @@ def _add_river_layers(
     encoded_payload: str = base64.b64encode(compressed_bytes).decode("ascii")
 
     river_layer: folium.FeatureGroup = folium.FeatureGroup(
-        name="Active rivers",
+        name="Rivers",
         show=True,
     )
     river_layer.add_to(discharge_map)
@@ -2061,33 +2281,44 @@ def _add_river_layers(
             "payload": encoded_payload,
         },
     ).add_to(discharge_map)
+    return river_layer
 
 
-def _add_reservoir_layer(
+def _add_waterbody_layers(
     discharge_map: folium.Map,
     waterbodies: gpd.GeoDataFrame,
-) -> None:
-    """Add reservoir point layers to the discharge map.
+) -> list[folium.FeatureGroup]:
+    """Add lake and reservoir point layers to the discharge map.
 
     Args:
         discharge_map: Folium map receiving waterbody layers.
         waterbodies: Waterbody GeoDataFrame with polygon geometries and
-            ``waterbody_type`` identifiers. Only reservoirs are shown.
+            ``waterbody_type`` identifiers. Lakes and reservoirs are shown.
+
+    Returns:
+        List of created lake and reservoir feature group layers.
     """
     waterbody_layers: dict[int, folium.FeatureGroup] = {
-        waterbody_type: folium.FeatureGroup(name=style["label"] + "s", show=True)
+        waterbody_type: folium.FeatureGroup(name=style["label"] + "s", show=False)
         for waterbody_type, style in _WATERBODY_STYLE.items()
     }
-    reservoir_mask: pd.Series = (
-        waterbodies["waterbody_type"].astype(int) == RESERVOIR_WATERBODY_TYPE
+    waterbody_types: pd.Series = waterbodies["waterbody_type"].astype(int)
+    mask: pd.Series = waterbody_types.isin(
+        [LAKE_WATERBODY_TYPE, RESERVOIR_WATERBODY_TYPE, CONTROL_LAKE_WATERBODY_TYPE]
     )
-    reservoirs: gpd.GeoDataFrame = waterbodies.loc[reservoir_mask].copy()
-    if reservoirs.empty:
-        return
+    selected_waterbodies: gpd.GeoDataFrame = waterbodies.loc[mask].copy()
+    if selected_waterbodies.empty:
+        return []
 
-    waterbodies_wgs84: gpd.GeoDataFrame = reservoirs.to_crs(epsg=4326)
+    waterbodies_wgs84: gpd.GeoDataFrame = selected_waterbodies.to_crs(epsg=4326)
     for _, waterbody_row in waterbodies_wgs84.iterrows():
-        waterbody_style: dict[str, str] = _WATERBODY_STYLE[RESERVOIR_WATERBODY_TYPE]
+        raw_type: int = int(waterbody_row["waterbody_type"])
+        resolved_type: int = (
+            LAKE_WATERBODY_TYPE
+            if raw_type in (LAKE_WATERBODY_TYPE, CONTROL_LAKE_WATERBODY_TYPE)
+            else RESERVOIR_WATERBODY_TYPE
+        )
+        waterbody_style: dict[str, str] = _WATERBODY_STYLE[resolved_type]
 
         centroid = waterbody_row.geometry.centroid
         area_m2: float | None = (
@@ -2124,10 +2355,14 @@ def _add_reservoir_layer(
             popup=folium.Popup("".join(popup_lines), max_width=200),
             tooltip=f"{waterbody_style['label']} {waterbody_row.get('waterbody_id', '')}",
             z_index=500,
-        ).add_to(waterbody_layers[RESERVOIR_WATERBODY_TYPE])
+        ).add_to(waterbody_layers[resolved_type])
 
+    added_layers: list[folium.FeatureGroup] = []
     for waterbody_layer in waterbody_layers.values():
-        waterbody_layer.add_to(discharge_map)
+        if len(waterbody_layer._children) > 0:
+            waterbody_layer.add_to(discharge_map)
+            added_layers.append(waterbody_layer)
+    return added_layers
 
 
 def _build_snapping_station(

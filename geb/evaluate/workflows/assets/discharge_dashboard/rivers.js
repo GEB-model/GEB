@@ -19,7 +19,9 @@
   }
 
   decompress(payload).then(function(geoJsonData) {
-    var features = geoJsonData.features || [];
+    requestAnimationFrame(function() {
+      setTimeout(function() {
+        var features = geoJsonData.features || [];
 
     // Compute min and max width across all river segments
     var minWidth = Infinity;
@@ -113,5 +115,7 @@
       }
     });
     riverLayer.addTo(layerGroup);
+      }, 0);
+    });
   });
 })();
