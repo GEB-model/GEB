@@ -20,6 +20,8 @@ from networkx.classes.digraph import DiGraph
 from pyflwdir import FlwdirRaster
 from rasterio.enums import MergeAlg
 from scipy.ndimage import value_indices
+from scipy import interpolate
+
 from shapely.geometry import LineString, shape
 
 from geb.build.data_catalog import DataCatalog
@@ -2037,26 +2039,76 @@ class Hydrography(BuildModelBase):
             os.path.join("input", self.files["geom"]["gtsm/stations"])
         )
 
-        # iterate over stations and find the neares
+        # iterate over stations and find the nearest
         # set table for model
+
+        # Geographic coordinates of all AR6 locations
+        ar6_lon = ar6_sea_level_rise["lon"].values
+        ar6_lat = ar6_sea_level_rise["lat"].values
+        ar6_ids = ar6_sea_level_rise["locations"].values
+        result = []
         for station_id, row in gtsm_stations.iterrows():
             station_lon = row.geometry.x
             station_lat = row.geometry.y
-            # find the nearest grid point in ar6_sea_level_rise
-            nearest_lon = ar6_sea_level_rise["lon"].iloc[
-                (ar6_sea_level_rise["lon"] - station_lon).abs().argmin()
-            ]
-            nearest_lat = ar6_sea_level_rise["lat"].iloc[
-                (ar6_sea_level_rise["lat"] - station_lat).abs().argmin()
-            ]
-            # get the sea level rise for this station
-            sea_level_rise_for_station = ar6_sea_level_rise[
-                (ar6_sea_level_rise["lon"] == nearest_lon)
-                & (ar6_sea_level_rise["lat"] == nearest_lat)
-            ].copy()
-            a = 0
 
-        self.set_table(ar6_sea_level_rise, name="ar6/sea_level_rise")
+            # Haversine distance to every AR6 location (km)
+            lat1 = np.radians(ar6_lat)
+            lat2 = np.radians(station_lat)
+            dlat = lat1 - lat2
+            dlon = np.radians(ar6_lon - station_lon)
+
+            a = (
+                np.sin(dlat / 2) ** 2
+                + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2
+            )
+            distance = 6371 * 2 * np.arcsin(np.sqrt(np.clip(a, 0, 1)))
+
+            # Ignore locations with invalid coordinates
+            distance[~(np.isfinite(ar6_lat) & np.isfinite(ar6_lon))] = np.inf
+
+            idx = np.argmin(distance)
+            nearest_location_id = ar6_ids[idx]
+
+            # Extract sea-level change at the nearest AR6 location
+            sea_levels = ar6_sea_level_rise.sel(locations=nearest_location_id)[
+                "sea_level_change"
+            ].values
+            years = ar6_sea_level_rise.sel(locations=nearest_location_id)[
+                "years"
+            ].values
+
+            # subtract the sea level change at 2020 to get the change relative to 2020
+            sea_levels = sea_levels - sea_levels[years == 2020]
+            # convert to meters
+            sea_levels = sea_levels / 1000.0
+
+            # fit nonlinear trend all years
+            interpolater = interpolate.interp1d(
+                x=years,
+                y=sea_levels,
+                fill_value="extrapolate",
+                bounds_error=False,
+            )
+
+            interpolated_values = interpolater(np.arange(2000, 2101))
+            result.append(
+                pd.DataFrame(
+                    data=interpolated_values,
+                    index=np.arange(2000, 2101),
+                    columns=[station_id],
+                )
+            )
+        ar6_sea_level_rise_stations = pd.concat(result, axis=1)
+        # check all stations are present
+        missing_stations = set(gtsm_stations.index) - set(
+            ar6_sea_level_rise_stations.columns
+        )
+        if missing_stations:
+            raise ValueError(
+                f"Missing AR6 sea level rise data for stations: {missing_stations}. "
+                "Ensure that the GTSM stations are within the bounds of the AR6 data."
+            )
+        self.set_table(ar6_sea_level_rise_stations, name="ar6/sea_level_rise")
 
     @build_method(required=False)
     def setup_inflow(
