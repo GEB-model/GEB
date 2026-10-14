@@ -183,6 +183,8 @@ setup_flood_damage_model:
   region: global
 
 setup_sea_level_projections:
+  scenario: 245
+  percentile: 0.9
 
 setup_forcing:
   forcing_source: ERA5-Land

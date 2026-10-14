@@ -47,6 +47,7 @@ from geb.geb_types import (
     TwoDArrayUint8,
 )
 from geb.hydrology.waterbodies import LAKE, LAKE_CONTROL, RESERVOIR
+from geb.workflows.io import read_table
 from geb.workflows.raster import (
     calculate_height_m,
     calculate_width_m,
@@ -1903,6 +1904,7 @@ class Hydrography(BuildModelBase):
         )
         self.logger.info("GTSM station surge levels set")
 
+    @build_method(required=True)
     def setup_gtsm_sea_level_rise(self) -> None:
         """Sets up the GTSM sea level rise data for the model.
 
@@ -2023,6 +2025,38 @@ class Hydrography(BuildModelBase):
         self.setup_gtsm_surge_levels()
         self.setup_gtsm_sea_level_rise()
         self.setup_coast_rp()
+
+    @build_method(required=True)
+    def setup_sea_level_projections(self, scenario, percentile) -> None:
+        """Sets up the AR6 sea level projections for the model."""
+        self.logger.info("Setting up AR6 sea level rise data")
+        ar6_sea_level_rise = self.data_catalog.fetch("ar6").read(scenario, percentile)
+
+        # load gtsm station data
+        gtsm_stations = gpd.read_parquet(
+            os.path.join("input", self.files["geom"]["gtsm/stations"])
+        )
+
+        # iterate over stations and find the neares
+        # set table for model
+        for station_id, row in gtsm_stations.iterrows():
+            station_lon = row.geometry.x
+            station_lat = row.geometry.y
+            # find the nearest grid point in ar6_sea_level_rise
+            nearest_lon = ar6_sea_level_rise["lon"].iloc[
+                (ar6_sea_level_rise["lon"] - station_lon).abs().argmin()
+            ]
+            nearest_lat = ar6_sea_level_rise["lat"].iloc[
+                (ar6_sea_level_rise["lat"] - station_lat).abs().argmin()
+            ]
+            # get the sea level rise for this station
+            sea_level_rise_for_station = ar6_sea_level_rise[
+                (ar6_sea_level_rise["lon"] == nearest_lon)
+                & (ar6_sea_level_rise["lat"] == nearest_lat)
+            ].copy()
+            a = 0
+
+        self.set_table(ar6_sea_level_rise, name="ar6/sea_level_rise")
 
     @build_method(required=False)
     def setup_inflow(
