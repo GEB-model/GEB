@@ -545,102 +545,6 @@ def test_local_inertial_sudden_flood_wave(
     )
 
 
-def _make_two_cell_router(
-    dt: int,
-    activation_threshold_m3_per_s: float,
-    max_storage_m3: float,
-    controlled: bool,
-    release_threshold_factor: float = 0.9,
-) -> tuple[LocalInertial, np.ndarray, np.ndarray, np.ndarray]:
-    """Build a minimal two-cell LocalInertial router with a single retention basin.
-
-    Returns:
-        Tuple of (router, mask, controlled_threshold, uncontrolled_threshold).
-    """
-    ldd = np.array([[2], [5]], dtype=np.uint8)
-    mask = np.ones((2, 1), dtype=bool)
-
-    river_network = create_river_network(ldd, mask, transform=Affine.identity())
-
-    n_cells = mask.sum()
-    retention_node_id = np.array([-1, 0], dtype=np.int32)
-    retention_max_storage_m3 = np.array([max_storage_m3], dtype=np.float32)
-    controlled_retention = np.array([controlled], dtype=bool)
-
-    if controlled:
-        threshold_controlled = np.array(
-            [activation_threshold_m3_per_s], dtype=np.float32
-        )
-        threshold_uncontrolled = np.array([0.0], dtype=np.float32)
-    else:
-        threshold_controlled = np.array([0.0], dtype=np.float32)
-        threshold_uncontrolled = np.array(
-            [activation_threshold_m3_per_s], dtype=np.float32
-        )
-
-    router = _make_local_inertial(
-        dt=dt,
-        river_network=river_network,
-        river_length=np.ones(n_cells, dtype=np.float32),
-        waterbody_ids=np.full(n_cells, -1, dtype=np.int32),
-        is_waterbody_outflow=np.zeros(n_cells, dtype=bool),
-        retention_max_storage_m3=retention_max_storage_m3,
-        retention_node_id=retention_node_id,
-        controlled_retention=controlled_retention,
-        retention_basin_release_threshold_factor=release_threshold_factor,
-        use_kinematic=np.ones(n_cells, dtype=bool),
-    )
-    return router, mask, threshold_controlled, threshold_uncontrolled
-
-
-def _run_retention_step(
-    router: LocalInertial,
-    mask: np.ndarray,
-    upstream_discharge_m3_per_s: float,
-    initial_retention_storage_m3: float = 0.0,
-    retention_activation_threshold_m3_s: np.ndarray | None = None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Run a single LocalInertial step for the two-cell retention test network.
-
-    Returns:
-        Tuple of (outflow, retention_inflow, retention_storage_out).
-    """
-    Q_prev = np.array(
-        [upstream_discharge_m3_per_s, upstream_discharge_m3_per_s * 0.99999],
-        dtype=np.float32,
-    )
-    sideflow = np.array(
-        [upstream_discharge_m3_per_s * router.dt, 0.0], dtype=np.float32
-    )
-    river_storage = np.zeros(mask.sum(), dtype=np.float64)
-    retention_storage = np.array([initial_retention_storage_m3], dtype=np.float32)
-    if retention_activation_threshold_m3_s is None:
-        retention_activation_threshold_m3_s = np.zeros(1, dtype=np.float32)
-
-    (
-        Q_out,
-        river_storage_out,
-        actual_evap,
-        over_abs,
-        wb_storage_out,
-        wb_inflow_out,
-        outflow_at_pits,
-        retention_storage_out,
-        retention_inflow,
-        retention_outflow,
-    ) = router.step(
-        Q_prev_m3_s=Q_prev,
-        river_storage_m3=river_storage,
-        sideflow_m3=sideflow,
-        evaporation_m3=np.zeros_like(sideflow),
-        waterbody_storage_m3=np.zeros(0, dtype=np.float64),
-        outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
-        retention_storage_m3=retention_storage,
-        retention_activation_threshold_m3_s=retention_activation_threshold_m3_s,
-    )
-    return retention_storage_out, retention_inflow, retention_outflow
-
-
 def test_local_inertial_momentum_persistence(
     mask: npt.NDArray[np.bool_],
     ldd: npt.NDArray[np.uint8],
@@ -1335,7 +1239,9 @@ def test_local_inertial_terminal_waterbody_on_pit() -> None:
     assert np.isclose(total_initial, total_final, atol=1e-3)
 
     # Step 2: verify terminal_wb_outflow_accum_m3 is properly reset between steps
-    total_step2_initial: float = float(np.sum(wb_storage_out) + np.sum(river_storage_out))
+    total_step2_initial: float = float(
+        np.sum(wb_storage_out) + np.sum(river_storage_out)
+    )
     (
         Q_out2,
         river_storage_out2,
@@ -2802,7 +2708,7 @@ def test_local_inertial_waterbody_parameters_required(
         router_cls(**incomplete_kwargs)
 
     # 2. Mismatched array length against n_wb should raise AssertionError
-    with pytest.raises(AssertionError, match="waterbody_lake_area size"):
+    with pytest.raises(ValueError, match="waterbody_lake_area size"):
         LocalInertial(
             dt=3600,
             river_network=flw,
@@ -2898,13 +2804,13 @@ def test_inertial_substeps_parallel_and_serial_equivalence() -> None:
             lake_factor=np.zeros(0, dtype=np.float32),
             outflow_height=np.zeros(0, dtype=np.float32),
             outflow_bed_elev=np.zeros(0, dtype=np.float32),
-            inertial_wb_ds_k=router._inertial_wb_ds_k,
-            inertial_wb_ds_id=router._inertial_wb_ds_id,
-            lake_outflow_target_k=router._lake_outflow_target_k,
-            lake_outflow_wb_id=router._lake_outflow_wb_id,
-            wb_to_wb_src_wb=router._wb_to_wb_src_wb,
-            wb_to_wb_tgt_wb=router._wb_to_wb_tgt_wb,
-            wb_terminal_wb_ids=router._wb_terminal_wb_ids,
+            inertial_wb_ds_k=router._wb_links.inertial_wb_ds_k,
+            inertial_wb_ds_id=router._wb_links.inertial_wb_ds_id,
+            lake_outflow_target_k=router._wb_links.lake_outflow_target_k,
+            lake_outflow_wb_id=router._wb_links.lake_outflow_wb_id,
+            wb_to_wb_src_wb=router._wb_links.wb_to_wb_src_wb,
+            wb_to_wb_tgt_wb=router._wb_links.wb_to_wb_tgt_wb,
+            wb_terminal_wb_ids=router._wb_links.wb_terminal_wb_ids,
         )
 
         ret_coupling = RetentionCoupling(
@@ -3370,7 +3276,7 @@ def test_local_inertial_short_reach_cfl_stability() -> None:
     k0: int = int(np.where(router._river_ids[router.n_kinematic :] == 0)[0][0])
     sqrt_g: float = math.sqrt(9.80665)
     expected_cfl_const_0: float = 0.7 * 50.0 / sqrt_g
-    actual_cfl_const_0: float = float(router._geom_cfl[k0, GEOM_CFL_CONSTANT])
+    actual_cfl_const_0: float = float(router._geometry.geom_cfl[k0, GEOM_CFL_CONSTANT])
     assert actual_cfl_const_0 == pytest.approx(expected_cfl_const_0, rel=1e-3)
 
     # Run a flood wave step through the network and verify stable completion
@@ -4721,9 +4627,9 @@ def test_local_inertial_cascading_waterbody_to_waterbody_transfer() -> None:
         waterbody_outflow_bed_elev=np.array([5.0, 0.0], dtype=np.float32),
     )
 
-    assert len(router._wb_to_wb_src_wb) == 1
-    assert router._wb_to_wb_src_wb[0] == 0
-    assert router._wb_to_wb_tgt_wb[0] == 1
+    assert len(router._wb_links.wb_to_wb_src_wb) == 1
+    assert router._wb_links.wb_to_wb_src_wb[0] == 0
+    assert router._wb_links.wb_to_wb_tgt_wb[0] == 1
 
     # Lake 0 has 50,000 m3 (head above sill = 4 m), Lake 1 starts dry
     wb_storage_init: np.ndarray = np.array([50000.0, 0.0], dtype=np.float64)

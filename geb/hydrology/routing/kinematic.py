@@ -324,14 +324,16 @@ def _run_kinematic_step(
         ValueError: If non-finite discharge is computed in any kinematic wave reach.
     """
     kin.kin_inflow_m3_s.fill(np.float32(0.0))
+    has_wb_to_kin: bool = len(kin.wb_to_kin_target_reach) > 0
+    n_headwater: int = kin.n_kin_headwater
 
     # Route headwater reaches in parallel across threads.
     # Headwaters have no upstream river reaches feeding them, making them mutually
     # independent. They can be computed concurrently without race conditions.
-    for i in prange(kin.n_kin_headwater):
+    for i in prange(n_headwater):
         # Collect local lateral runoff and waterbody releases (upstream river inflow is 0).
         node_sideflow: np.float32 = sideflow_m3[i]
-        if len(kin.wb_to_kin_target_reach) > 0:
+        if has_wb_to_kin:
             node_sideflow += kin.kin_wb_inflow_m3[i]
             kin.kin_wb_inflow_m3[i] = np.float32(0.0)
 
@@ -377,9 +379,9 @@ def _run_kinematic_step(
     # Route connected reaches in downstream topological order.
     # Because reaches are sorted topologically, all upstream reaches feeding reach `i`
     # have already finished and deposited their outflow into kin_inflow_m3_s[i].
-    for i in range(kin.n_kin_headwater, kin.n_kinematic):
+    for i in range(n_headwater, kin.n_kinematic):
         node_sideflow: np.float32 = sideflow_m3[i]
-        if len(kin.wb_to_kin_target_reach) > 0:
+        if has_wb_to_kin:
             node_sideflow += kin.kin_wb_inflow_m3[i]
             kin.kin_wb_inflow_m3[i] = np.float32(0.0)
 

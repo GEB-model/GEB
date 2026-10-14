@@ -17,8 +17,10 @@ __all__: list[str] = [
     "InertialTopology",
     "KinematicTopology",
     "RetentionCoupling",
+    "RetentionLinks",
     "RoutingTopology",
     "WaterbodyCoupling",
+    "WaterbodyLinks",
     "build_routing_topology",
     "compute_retention_routing",
 ]
@@ -73,7 +75,6 @@ class InertialTopology(NamedTuple):
         ds_inertial_k: Downstream reach index within inertial domain (-1 if boundary).
         ds_stage_idx: Unified index into stage buffer for downstream water level lookup.
         ds_bed_elevation: Downstream boundary bed elevation (meters).
-        inertial_topo_order: Topologically ordered sequence of reach indices.
     """
 
     inertial_up_offsets: ArrayInt32
@@ -83,7 +84,40 @@ class InertialTopology(NamedTuple):
     ds_inertial_k: ArrayInt32
     ds_stage_idx: ArrayInt32
     ds_bed_elevation: ArrayFloat32
-    inertial_topo_order: ArrayInt32
+
+
+class RetentionLinks(NamedTuple):
+    """Linkage mapping between inertial reaches and retention basins.
+
+    Attributes:
+        inertial_retention_k: Inertial reach indices with coupled retention basins.
+        inertial_retention_id: Retention basin identifiers coupled to inertial reaches.
+    """
+
+    inertial_retention_k: ArrayInt32
+    inertial_retention_id: ArrayInt32
+
+
+class WaterbodyLinks(NamedTuple):
+    """Static linkage mapping between river reaches and waterbodies.
+
+    Attributes:
+        inertial_wb_ds_k: Inertial reaches discharging into downstream waterbodies.
+        inertial_wb_ds_id: Waterbody IDs receiving discharges from inertial reaches.
+        lake_outflow_target_k: Inertial reach indices receiving lake releases.
+        lake_outflow_wb_id: Waterbody IDs supplying releases to inertial reaches.
+        wb_to_wb_src_wb: Source waterbody IDs for inter-waterbody transfer links.
+        wb_to_wb_tgt_wb: Destination waterbody IDs for inter-waterbody transfer links.
+        wb_terminal_wb_ids: Waterbody IDs discharging out of domain (terminal pits).
+    """
+
+    inertial_wb_ds_k: ArrayInt32
+    inertial_wb_ds_id: ArrayInt32
+    lake_outflow_target_k: ArrayInt32
+    lake_outflow_wb_id: ArrayInt32
+    wb_to_wb_src_wb: ArrayInt32
+    wb_to_wb_tgt_wb: ArrayInt32
+    wb_terminal_wb_ids: ArrayInt32
 
 
 class RoutingTopology(NamedTuple):
@@ -95,24 +129,9 @@ class RoutingTopology(NamedTuple):
         interface_bed_elev_max: Max interface bed elevation between reach and its downstream node (meters).
         inv_dx_interface: Reciprocal of spatial interface length (1/meters).
         inertial_up_count: Tributary junction in-degree count for CFL scaling.
-        inertial_retention_k: Inertial reach indices with coupled retention basins.
-        inertial_retention_id: Retention basin identifiers coupled to inertial reaches.
         inertial_boundary_outflow_k: Reach indices exiting the hydrodynamic domain for mass balance tracking.
-        ds_boundary_type: Boundary condition code array.
-        ds_inertial_k: Downstream reach indices within inertial subdomain.
-        ds_waterbody_id: Downstream waterbody indices for lake-terminating reaches.
-        ds_stage_idx: Unified index into stage buffer for downstream water level lookup.
-        ds_bed_elevation: Bed elevation array at downstream boundaries (meters).
-        inertial_wb_ds_k: Inertial reaches discharging into downstream waterbodies.
-        inertial_wb_ds_id: Waterbody IDs receiving discharges from inertial reaches.
-        lake_outflow_target_k: Inertial reach indices receiving lake releases.
-        lake_outflow_wb_id: Waterbody IDs supplying releases to inertial reaches.
-        wb_to_wb_src_wb: Source waterbody IDs for inter-waterbody transfer links.
-        wb_to_wb_tgt_wb: Destination waterbody IDs for inter-waterbody transfer links.
-        wb_terminal_wb_ids: Waterbody IDs discharging out of domain (pits).
-        inertial_up_offsets: CSR offsets for upstream inertial reaches.
-        inertial_up_indices: CSR indices for upstream inertial reaches.
-        inertial_up_reach_idx: Direct single-junction upstream inertial reach indices.
+        retention_links: Linkage mapping between inertial reaches and retention basins.
+        waterbody_links: Linkage mapping between river reaches and waterbodies.
     """
 
     topology: InertialTopology
@@ -120,24 +139,9 @@ class RoutingTopology(NamedTuple):
     interface_bed_elev_max: ArrayFloat32
     inv_dx_interface: ArrayFloat32
     inertial_up_count: ArrayInt32
-    inertial_retention_k: ArrayInt32
-    inertial_retention_id: ArrayInt32
     inertial_boundary_outflow_k: ArrayInt32
-    ds_boundary_type: ArrayInt32
-    ds_inertial_k: ArrayInt32
-    ds_waterbody_id: ArrayInt32
-    ds_stage_idx: ArrayInt32
-    ds_bed_elevation: ArrayFloat32
-    inertial_wb_ds_k: ArrayInt32
-    inertial_wb_ds_id: ArrayInt32
-    lake_outflow_target_k: ArrayInt32
-    lake_outflow_wb_id: ArrayInt32
-    wb_to_wb_src_wb: ArrayInt32
-    wb_to_wb_tgt_wb: ArrayInt32
-    wb_terminal_wb_ids: ArrayInt32
-    inertial_up_offsets: ArrayInt32
-    inertial_up_indices: ArrayInt32
-    inertial_up_reach_idx: ArrayInt32
+    retention_links: RetentionLinks
+    waterbody_links: WaterbodyLinks
 
 
 def build_routing_topology(
@@ -158,7 +162,6 @@ def build_routing_topology(
     wb_outflow_indices: ArrayInt32,
     river_storage_alpha_kin: ArrayFloat32,
     river_storage_beta_kin: ArrayFloat32,
-    inertial_topo_order: ArrayInt32,
 ) -> RoutingTopology:
     """Constructs CSR connectivity graphs, boundary classifications, and cross-domain links.
 
@@ -180,7 +183,6 @@ def build_routing_topology(
         wb_outflow_indices: Permuted indices of waterbody outlet reaches.
         river_storage_alpha_kin: Storage equation alpha parameter array for kinematic reaches.
         river_storage_beta_kin: Storage equation beta parameter array for kinematic reaches.
-        inertial_topo_order: Topologically sorted indices within the inertial domain.
 
     Returns:
         Structured RoutingTopology containing all precomputed topology objects.
@@ -236,23 +238,23 @@ def build_routing_topology(
         bed_elevation_inertial, ds_bed_elevation
     )
 
+    is_internal: ArrayBool = ds_boundary_type == 0
+    ds_k_internal: ArrayInt32 = ds_inertial_k[is_internal]
     inv_dx_interface: ArrayFloat32 = np.empty(n_inertial, dtype=np.float32)
-    for k in range(n_inertial):
-        if ds_boundary_type[k] == 0:
-            ds_k = ds_inertial_k[k]
-            dx: np.float32 = np.float32(0.5) * (
-                river_length_inertial[k] + river_length_inertial[ds_k]
-            )
-        else:
-            dx = river_length_inertial[k]
-        inv_dx_interface[k] = np.float32(1.0) / max(dx, np.float32(1.0))
+    inv_dx_interface[~is_internal] = np.float32(1.0) / np.maximum(
+        river_length_inertial[~is_internal], np.float32(1.0)
+    )
+    dx_internal: ArrayFloat32 = np.float32(0.5) * (
+        river_length_inertial[is_internal] + river_length_inertial[ds_k_internal]
+    )
+    inv_dx_interface[is_internal] = np.float32(1.0) / np.maximum(
+        dx_internal, np.float32(1.0)
+    )
 
     ds_stage_idx: ArrayInt32 = np.full(n_inertial, -1, dtype=np.int32)
-    for k in range(n_inertial):
-        if ds_boundary_type[k] == 0:
-            ds_stage_idx[k] = ds_inertial_k[k]
-        elif ds_boundary_type[k] == 2:
-            ds_stage_idx[k] = n_inertial + ds_waterbody_id[k]
+    ds_stage_idx[is_internal] = ds_inertial_k[is_internal]
+    is_lake: ArrayBool = ds_boundary_type == 2
+    ds_stage_idx[is_lake] = n_inertial + ds_waterbody_id[is_lake]
 
     max_up: int = upstream_matrix.shape[1]
     inertial_up_offsets: list[int] = [0]
@@ -277,24 +279,19 @@ def build_routing_topology(
     inertial_up_offsets_arr: ArrayInt32 = np.array(inertial_up_offsets, dtype=np.int32)
     inertial_up_indices_arr: ArrayInt32 = np.array(inertial_up_indices, dtype=np.int32)
 
-    ret_inertial_k: list[int] = []
-    ret_inertial_id: list[int] = []
-    for k in range(n_inertial):
-        ret_id: int = int(retention_node_id_perm[n_kinematic + k])
-        if ret_id != -1:
-            ret_inertial_k.append(k)
-            ret_inertial_id.append(ret_id)
-    inertial_retention_k: ArrayInt32 = np.array(ret_inertial_k, dtype=np.int32)
-    inertial_retention_id: ArrayInt32 = np.array(ret_inertial_id, dtype=np.int32)
+    inertial_retention_k: ArrayInt32 = np.flatnonzero(
+        retention_node_id_perm[n_kinematic : n_kinematic + n_inertial] != -1
+    ).astype(np.int32)
+    inertial_retention_id: ArrayInt32 = retention_node_id_perm[
+        n_kinematic + inertial_retention_k
+    ]
+    retention_links: RetentionLinks = RetentionLinks(
+        inertial_retention_k=inertial_retention_k,
+        inertial_retention_id=inertial_retention_id,
+    )
 
-    wb_ds_k: list[int] = []
-    wb_ds_id: list[int] = []
-    for k in range(n_inertial):
-        if ds_boundary_type[k] == 2:
-            wb_ds_k.append(k)
-            wb_ds_id.append(int(ds_waterbody_id[k]))
-    inertial_wb_ds_k: ArrayInt32 = np.array(wb_ds_k, dtype=np.int32)
-    inertial_wb_ds_id: ArrayInt32 = np.array(wb_ds_id, dtype=np.int32)
+    inertial_wb_ds_k: ArrayInt32 = np.flatnonzero(is_lake).astype(np.int32)
+    inertial_wb_ds_id: ArrayInt32 = ds_waterbody_id[inertial_wb_ds_k]
 
     lake_outflow_targets: list[int] = []
     lake_outflow_wbs: list[int] = []
@@ -392,12 +389,19 @@ def build_routing_topology(
         )
         inertial_up_count[k] = n_in + n_kin
 
-    inertial_boundary_outflow_k_list: list[int] = [
-        k for k in range(n_inertial) if ds_boundary_type[k] != 0
-    ]
-    inertial_boundary_outflow_k: ArrayInt32 = np.array(
-        inertial_boundary_outflow_k_list, dtype=np.int32
+    waterbody_links: WaterbodyLinks = WaterbodyLinks(
+        inertial_wb_ds_k=inertial_wb_ds_k,
+        inertial_wb_ds_id=inertial_wb_ds_id,
+        lake_outflow_target_k=lake_outflow_target_k,
+        lake_outflow_wb_id=lake_outflow_wb_id,
+        wb_to_wb_src_wb=wb_to_wb_src_wb,
+        wb_to_wb_tgt_wb=wb_to_wb_tgt_wb,
+        wb_terminal_wb_ids=wb_terminal_wb_ids,
     )
+
+    inertial_boundary_outflow_k: ArrayInt32 = np.flatnonzero(
+        ds_boundary_type != 0
+    ).astype(np.int32)
 
     topology: InertialTopology = InertialTopology(
         inertial_up_offsets=inertial_up_offsets_arr,
@@ -407,7 +411,6 @@ def build_routing_topology(
         ds_inertial_k=ds_inertial_k,
         ds_stage_idx=ds_stage_idx,
         ds_bed_elevation=ds_bed_elevation,
-        inertial_topo_order=inertial_topo_order,
     )
 
     kinematic_topology: KinematicTopology = KinematicTopology(
@@ -434,24 +437,9 @@ def build_routing_topology(
         interface_bed_elev_max=interface_bed_elev_max,
         inv_dx_interface=inv_dx_interface,
         inertial_up_count=inertial_up_count,
-        inertial_retention_k=inertial_retention_k,
-        inertial_retention_id=inertial_retention_id,
         inertial_boundary_outflow_k=inertial_boundary_outflow_k,
-        ds_boundary_type=ds_boundary_type,
-        ds_inertial_k=ds_inertial_k,
-        ds_waterbody_id=ds_waterbody_id,
-        ds_stage_idx=ds_stage_idx,
-        ds_bed_elevation=ds_bed_elevation,
-        inertial_wb_ds_k=inertial_wb_ds_k,
-        inertial_wb_ds_id=inertial_wb_ds_id,
-        lake_outflow_target_k=lake_outflow_target_k,
-        lake_outflow_wb_id=lake_outflow_wb_id,
-        wb_to_wb_src_wb=wb_to_wb_src_wb,
-        wb_to_wb_tgt_wb=wb_to_wb_tgt_wb,
-        wb_terminal_wb_ids=wb_terminal_wb_ids,
-        inertial_up_offsets=inertial_up_offsets_arr,
-        inertial_up_indices=inertial_up_indices_arr,
-        inertial_up_reach_idx=inertial_up_reach_idx,
+        retention_links=retention_links,
+        waterbody_links=waterbody_links,
     )
 
 

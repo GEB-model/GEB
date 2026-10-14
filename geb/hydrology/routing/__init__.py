@@ -1,6 +1,7 @@
 """Routing algorithms for river networks."""
 
 import warnings
+from collections import defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -9,7 +10,7 @@ import numpy as np
 import pandas as pd
 import pyflwdir
 from affine import Affine
-from numba import njit
+from numba import njit, prange
 from tqdm import tqdm
 
 from geb.geb_types import (
@@ -61,71 +62,48 @@ def get_discharge_per_river(
         ValueError: If source is "file" and folder is None.
         ValueError: If source is "memory" and variables_to_report is None.
     """
-    if source == "file" and folder is None:
-        raise ValueError("folder must be provided if source is 'file'")
-    elif source == "memory" and variables_to_report is None:
-        raise ValueError("variables_to_report must be provided if source is 'memory'")
-
-    def create_df_from_report_variable(
-        river_id: int | str, variables_to_report: dict[str, Any]
-    ) -> pd.Series:
-        river_data = variables_to_report[f"river_outflow_hourly_m3_per_s_{river_id}"]
-        return pd.Series(
-            river_data["_data_array"][: river_data["_var_index"]],
-            index=river_data["_time_array"][: river_data["_var_index"]].astype(
-                "datetime64[s]"
-            ),
-        )
-
-    consolidated_table: pd.DataFrame | None = None
+    outflow_table: pd.DataFrame
     if source == "file":
-        assert folder is not None
-        consolidated_file: Path = folder / "river_outflow_hourly_m3_per_s.parquet"
-        if consolidated_file.exists():
-            consolidated_table = read_table(consolidated_file)
+        if folder is None:
+            raise ValueError("folder must be provided if source is 'file'")
+        outflow_table = read_table(folder / "river_outflow_hourly_m3_per_s.parquet")
+    elif source == "memory":
+        if variables_to_report is None:
+            raise ValueError(
+                "variables_to_report must be provided if source is 'memory'"
+            )
+        prefix: str = "river_outflow_hourly_m3_per_s_"
+        outflow_table = pd.DataFrame(
+            {
+                key.removeprefix(prefix): pd.Series(
+                    val["_data_array"][: val["_var_index"]],
+                    index=val["_time_array"][: val["_var_index"]].astype(
+                        "datetime64[s]"
+                    ),
+                )
+                for key, val in variables_to_report.items()
+                if key.startswith(prefix)
+            }
+        )
+    else:
+        raise ValueError(f"Unsupported source '{source}': expected 'file' or 'memory'")
 
-    def read_outflow_series_from_file(key: int | str) -> pd.Series:
-        assert folder is not None
-        key_str: str = str(key)
-        if consolidated_table is not None and key_str in consolidated_table.columns:
-            return consolidated_table[key_str]
-        # Legacy fallback: individual parquet file
-        return read_table(folder / f"river_outflow_hourly_m3_per_s_{key}.parquet")[
-            f"river_outflow_hourly_m3_per_s_{key}"
-        ]
+    outflow_table.columns = outflow_table.columns.astype(str)
 
-    discharge_data = {}
+    discharge_data: dict[int, pd.Series] = {}
     for river_id in rivers.index:
         assert isinstance(river_id, int)
         xys: list[tuple[int, int]] = get_river_representative_xys(river_id, all_rivers)
         if len(xys) == 1:
-            if source == "file":
-                discharge_data[river_id] = read_outflow_series_from_file(river_id)
-            else:
-                assert variables_to_report is not None
-                discharge_data[river_id] = create_df_from_report_variable(
-                    river_id, variables_to_report
-                )
+            discharge_data[river_id] = outflow_table[str(river_id)]
         else:
-            total_discharge_part = None
-            for i in range(len(xys)):
-                if source == "file":
-                    discharge_part = read_outflow_series_from_file(f"{river_id}_{i}")
-                else:
-                    assert variables_to_report is not None
-                    discharge_part = create_df_from_report_variable(
-                        f"{river_id}_{i}", variables_to_report
-                    )
-                if total_discharge_part is None:
-                    total_discharge_part = discharge_part
-                else:
-                    total_discharge_part += discharge_part
-            discharge_data[river_id] = total_discharge_part
+            reach_keys: list[str] = [f"{river_id}_{i}" for i in range(len(xys))]
+            discharge_data[river_id] = outflow_table[reach_keys].sum(axis=1)
 
     if not discharge_data:
         return pd.DataFrame()
 
-    return pd.concat(discharge_data, axis=1)
+    return pd.DataFrame(discharge_data)
 
 
 def get_river_representative_xys(
@@ -191,6 +169,130 @@ def get_channel_ratio(
 
     assert not np.isnan(channel_ratio).any()
     return channel_ratio
+
+
+@njit(fastmath=True, parallel=True)
+def _compute_potential_river_evaporation(
+    alpha: ArrayFloat32,
+    beta: ArrayFloat32,
+    discharge_m3_s: ArrayFloat32,
+    river_length: ArrayFloat32,
+    cell_area: ArrayFloat32,
+    is_wb: ArrayBool,
+    ref_et: ArrayFloat32,
+    out: ArrayFloat32,
+) -> None:
+    """Computes potential evaporation in river reaches across the grid in parallel without allocations.
+
+    Args:
+        alpha: Channel width coefficient array.
+        beta: Channel width exponent array.
+        discharge_m3_s: Instantaneous discharge array (m³/s).
+        river_length: Channel length per cell (meters).
+        cell_area: Planform area per grid cell (m²).
+        is_wb: Boolean mask of lake/waterbody cells.
+        ref_et: Reference evapotranspiration rate array for water per cell (meters).
+        out: Pre-allocated output array receiving potential evaporation volume (m³).
+    """
+    n: int = alpha.shape[0]
+    for i in prange(n):
+        if is_wb[i]:
+            out[i] = np.float32(0.0)
+        else:
+            w: np.float32 = alpha[i] * (np.abs(discharge_m3_s[i]) ** beta[i])
+            channel_area: np.float32 = min(cell_area[i], w * river_length[i])
+            out[i] = ref_et[i] * channel_area
+
+
+@njit(fastmath=True)
+def _accumulate_waterbody_runoff_and_evaporation(
+    active_wb_cells: ArrayInt32,
+    wb_cell_indices: ArrayInt32,
+    side_flow: ArrayFloat32,
+    ref_et: ArrayFloat32,
+    wb_cell_counts: ArrayInt32,
+    lake_area: ArrayFloat32,
+    wb_storage: ArrayFloat64,
+    return_flow_m3_to_wb: ArrayFloat32,
+    wb_pot_evap_buf: ArrayFloat32,
+    wb_act_evap_buf: ArrayFloat32,
+) -> None:
+    """Accumulates lateral runoff and computes evaporation for waterbodies in-place without allocations.
+
+    Args:
+        active_wb_cells: Waterbody ID for each waterbody grid cell.
+        wb_cell_indices: Linear grid cell indices corresponding to waterbodies.
+        side_flow: Lateral sideflow array in m³ per grid cell (modified in-place).
+        ref_et: Reference evapotranspiration rate array for water (meters).
+        wb_cell_counts: Total number of active grid cells per waterbody.
+        lake_area: Surface area per waterbody (m²).
+        wb_storage: Waterbody storage array in m³ (modified in-place).
+        return_flow_m3_to_wb: Prescribed return flow volume per waterbody (m³).
+        wb_pot_evap_buf: Reusable buffer for intermediate potential evaporation (m³).
+        wb_act_evap_buf: Reusable buffer for output actual evaporation (m³).
+    """
+    n_active: int = active_wb_cells.shape[0]
+    n_wb: int = wb_storage.shape[0]
+
+    for w in range(n_wb):
+        if w < return_flow_m3_to_wb.shape[0]:
+            wb_storage[w] += return_flow_m3_to_wb[w]
+        wb_pot_evap_buf[w] = np.float32(0.0)
+
+    for k in range(n_active):
+        w_id: int = active_wb_cells[k]
+        c_idx: int = wb_cell_indices[k]
+        wb_storage[w_id] += side_flow[c_idx]
+        side_flow[c_idx] = np.float32(0.0)
+        wb_pot_evap_buf[w_id] += ref_et[c_idx]
+
+    for w in range(n_wb):
+        if wb_cell_counts[w] > 0:
+            pot_evap: np.float64 = (
+                np.float64(wb_pot_evap_buf[w]) / np.float64(wb_cell_counts[w])
+            ) * np.float64(lake_area[w])
+            act_evap: np.float64 = min(pot_evap, wb_storage[w])
+            wb_storage[w] -= act_evap
+            wb_act_evap_buf[w] = np.float32(act_evap)
+        else:
+            wb_act_evap_buf[w] = np.float32(0.0)
+
+
+@njit(fastmath=True)
+def _compute_retention_basin_evaporation(
+    retention_cell_indices: ArrayInt32,
+    retention_cell_basin_ids: ArrayInt32,
+    retention_basin_area: ArrayFloat32,
+    ref_et: ArrayFloat32,
+    retention_storage: ArrayFloat32,
+    pot_evap_buf: ArrayFloat32,
+    act_evap_buf: ArrayFloat32,
+) -> None:
+    """Computes retention basin evaporation in-place without array allocations.
+
+    Args:
+        retention_cell_indices: Linear grid cell indices for retention basin nodes.
+        retention_cell_basin_ids: Retention basin ID for each retention node.
+        retention_basin_area: Nominal water surface area per retention basin (m²).
+        ref_et: Reference evapotranspiration rate array for water per cell (meters).
+        retention_storage: Retention basin storage array in m³ (modified in-place).
+        pot_evap_buf: Reusable buffer for intermediate potential evaporation (m³).
+        act_evap_buf: Reusable buffer for output actual evaporation (m³).
+    """
+    n_basins: int = retention_storage.shape[0]
+    for b in range(n_basins):
+        pot_evap_buf[b] = np.float32(0.0)
+
+    n_cells: int = retention_cell_indices.shape[0]
+    for k in range(n_cells):
+        b_id: int = retention_cell_basin_ids[k]
+        c_idx: int = retention_cell_indices[k]
+        pot_evap_buf[b_id] += ref_et[c_idx] * retention_basin_area[b_id]
+
+    for b in range(n_basins):
+        act_evap: np.float32 = min(pot_evap_buf[b], retention_storage[b])
+        retention_storage[b] -= act_evap
+        act_evap_buf[b] = act_evap
 
 
 def create_river_network(
@@ -372,13 +474,10 @@ def prune_starved_river_cells(
         return river_ids
 
     # Upstream mapping tracking cells that drain into each node
-    up_map: dict[int, list[int]] = {}
+    up_map: defaultdict[int, list[int]] = defaultdict(list)
     for u, d in enumerate(idxs_ds):
         if d != -1 and d != u:
-            d_int: int = int(d)
-            if d_int not in up_map:
-                up_map[d_int] = []
-            up_map[d_int].append(int(u))
+            up_map[int(d)].append(int(u))
 
     def has_valid_river_inflow(cell: int) -> bool:
         for u in up_map.get(cell, ()):
@@ -430,6 +529,8 @@ class Routing(Module):
             model: The GEB model instance.
             hydrology: The hydrology submodel instance.
 
+        Raises:
+            ValueError: If inflow is configured on a waterbody cell.
         """
         super().__init__(model)
 
@@ -498,7 +599,55 @@ class Routing(Module):
         )
         self.retention_basin_is_active = self.retention_basin_data["active"]
 
+        if not self.retention_basin_data.empty:
+            self._retention_basin_area: ArrayFloat32 = (
+                self.retention_max_storage_m3 / np.float32(3.0)
+            ).astype(np.float32)
+            self._retention_cell_mask: ArrayBool = self.retention_basin_ids != -1
+            self._retention_cell_indices: ArrayInt32 = np.where(
+                self._retention_cell_mask
+            )[0].astype(np.int32)
+            self._retention_cell_basin_ids: ArrayInt32 = self.retention_basin_ids[
+                self._retention_cell_indices
+            ]
+        else:
+            self._retention_basin_area = np.zeros(0, dtype=np.float32)
+            self._retention_cell_mask = np.zeros(0, dtype=bool)
+            self._retention_cell_indices = np.zeros(0, dtype=np.int32)
+            self._retention_cell_basin_ids = np.zeros(0, dtype=np.int32)
+
+        # Initialize reusable buffers to avoid heap allocations in hourly step()
+        self._pot_evap_buf: ArrayFloat32 = self.grid.full_compressed(
+            0, dtype=np.float32
+        )
+        self._side_flow_buf: ArrayFloat32 = self.grid.full_compressed(
+            0, dtype=np.float32
+        )
+        self._over_abstraction_daily: ArrayFloat32 = self.grid.full_compressed(
+            0, dtype=np.float32
+        )
+        self._evaporation_in_rivers_m3: ArrayFloat32 = self.grid.full_compressed(
+            0, dtype=np.float32
+        )
+        self._pot_evap_ret_buf: ArrayFloat32 = np.zeros(
+            len(self.retention_basin_data), dtype=np.float32
+        )
+        self._retention_act_evap_buf: ArrayFloat32 = np.zeros(
+            len(self.retention_basin_data), dtype=np.float32
+        )
+        self._wb_cell_mask: ArrayBool = np.zeros(0, dtype=bool)
+        self._not_wb_cell_mask: ArrayBool = np.zeros(0, dtype=bool)
+        self._wb_cell_indices: ArrayInt32 = np.zeros(0, dtype=np.int32)
+        self._active_wb_cells: ArrayInt32 = np.zeros(0, dtype=np.int32)
+        self._wb_cell_counts: ArrayInt32 = np.zeros(0, dtype=np.int32)
+        self._wb_pot_evap_buf: ArrayFloat32 = np.zeros(0, dtype=np.float32)
+        self._wb_act_evap_buf: ArrayFloat32 = np.zeros(0, dtype=np.float32)
+        self._wb_outflow_rate_buf: ArrayFloat32 = np.zeros(0, dtype=np.float32)
+        self._reservoir_indices: ArrayInt32 = np.zeros(0, dtype=np.int32)
+        self.var.discharge_m3_s = self.grid.full_compressed(0, dtype=np.float32)
+
         self.inflow = {}
+        self._inflow_list: list[tuple[int, ArrayFloat32]] = []
         self.inflow_idx: int = -1  # index for the current time step in the inflow data
         if "routing/inflow_m3_per_s" in self.model.files["table"]:
             inflow_per_location: pd.DataFrame = read_table(
@@ -519,7 +668,12 @@ class Routing(Module):
                 location: pd.Series = inflow_locations.loc[inflow_id]
                 y: int = location["y"]
                 x: int = location["x"]
-                self.inflow[(y, x)] = inflow.to_numpy(dtype=np.float32)
+                cell_idx: int = self.grid.linear_mapping[y, x]
+                if self.grid.var.waterbody_ids[cell_idx] != -1:
+                    raise ValueError("Inflow cannot be added to waterbody cells.")
+                inflow_arr = inflow.to_numpy(dtype=np.float32)
+                self.inflow[(y, x)] = inflow_arr
+                self._inflow_list.append((cell_idx, inflow_arr))
 
             assert self.model.current_time == inflow_per_location.index[0]
 
@@ -599,21 +753,11 @@ class Routing(Module):
         )
         rivers["hydrography_xy_no_waterbodies_removed"] = rivers["hydrography_xy"]
 
-        def remove_masked_river_cells(
-            xys: list[tuple[int, int]], mask: list[bool]
-        ) -> np.ndarray[tuple[int], np.dtype[Any]]:
-            array: np.ndarray[tuple[int], np.dtype[Any]] = np.empty(
-                sum(mask), dtype=object
-            )
-            i: int = 0
-            for xy, m in zip(xys, mask):
-                if m:
-                    array[i] = np.array(xy, dtype=object)
-                    i += 1
-            return array
-
         rivers["hydrography_xy"] = [
-            remove_masked_river_cells(xys, mask)
+            np.array(
+                [np.array(xy, dtype=object) for xy, m in zip(xys, mask) if m],
+                dtype=object,
+            )
             for xys, mask in zip(rivers["hydrography_xy"], active_cell_mask)
         ]
 
@@ -1239,6 +1383,16 @@ class Routing(Module):
             self.model.files["grid"]["routing/bankfull_river_elevation_m"]
         )
         if self.hydrology.waterbodies.n > 0:
+            self._wb_cell_mask: ArrayBool = self.grid.var.waterbody_ids != -1
+            self._wb_cell_indices: ArrayInt32 = np.where(self._wb_cell_mask)[0].astype(
+                np.int32
+            )
+            self._active_wb_cells: ArrayInt32 = self.grid.var.waterbody_ids[
+                self._wb_cell_indices
+            ]
+            self._wb_cell_counts: ArrayInt32 = np.bincount(
+                self._active_wb_cells, minlength=self.hydrology.waterbodies.n
+            ).astype(np.int32)
             bankfull_river_elev = (
                 self.hydrology.waterbodies.flatten_waterbody_elevations(
                     bankfull_river_elev
@@ -1278,9 +1432,26 @@ class Routing(Module):
                 self.hydrology.waterbodies.is_lake
             ].astype(np.float64)
         else:
+            self._wb_cell_mask = np.zeros_like(self.var.river_ids, dtype=bool)
+            self._wb_cell_indices = np.zeros(0, dtype=np.int32)
+            self._active_wb_cells = np.zeros(0, dtype=np.int32)
+            self._wb_cell_counts = np.zeros(0, dtype=np.int32)
             waterbody_outflow_bed_elev = np.zeros(0, dtype=np.float32)
             waterbody_lake_factor = np.zeros(0, dtype=np.float32)
             waterbody_outflow_height = np.zeros(0, dtype=np.float32)
+
+        self._not_wb_cell_mask: ArrayBool = ~self._wb_cell_mask
+        self._wb_pot_evap_buf = np.zeros(self.hydrology.waterbodies.n, dtype=np.float32)
+        self._wb_act_evap_buf = np.zeros(self.hydrology.waterbodies.n, dtype=np.float32)
+        self._wb_outflow_rate_buf = np.zeros(
+            self.hydrology.waterbodies.n, dtype=np.float32
+        )
+        if self.hydrology.waterbodies.n > 0:
+            self._reservoir_indices = np.where(self.hydrology.waterbodies.is_reservoir)[
+                0
+            ].astype(np.int32)
+        else:
+            self._reservoir_indices = np.zeros(0, dtype=np.int32)
 
         self.router = LocalInertial(
             dt=3600,
@@ -1642,7 +1813,9 @@ class Routing(Module):
                 self.var.retention_basin_storage_m3.copy()
             )
 
-        channel_abstraction_m3_per_hour: np.ndarray = channel_abstraction_m3 / 24
+        channel_abstraction_m3_per_hour: ArrayFloat32 = (
+            channel_abstraction_m3 / 24
+        ).astype(np.float32)
         assert (
             channel_abstraction_m3_per_hour[self.grid.var.waterbody_ids != -1] == 0.0
         ).all(), (
@@ -1650,7 +1823,9 @@ class Routing(Module):
             "but found non-zero value."
         )
 
-        return_flow_m3_per_hour: np.ndarray = return_flow * self.grid.var.cell_area / 24
+        return_flow_m3_per_hour: ArrayFloat32 = (
+            return_flow * self.grid.var.cell_area / 24
+        ).astype(np.float32)
 
         # add return flow to the water bodies
         return_flow_m3_to_waterbodies_per_hour: np.ndarray = np.bincount(
@@ -1659,20 +1834,17 @@ class Routing(Module):
         )
         return_flow_m3_per_hour[self.grid.var.waterbody_ids != -1] = 0.0
 
-        self.var.discharge_m3_s_per_substep = np.full_like(
-            self.var.discharge_m3_s_per_substep,
-            fill_value=np.nan,
+        net_base_sideflow_per_hour: ArrayFloat32 = (
+            return_flow_m3_per_hour - channel_abstraction_m3_per_hour
         )
-        self.var.retention_basin_storage_m3_per_substep = np.full_like(
-            self.var.discharge_m3_s_per_substep,
-            fill_value=np.nan,
-        )
+
+        self.var.discharge_m3_s_per_substep.fill(np.nan)
+        self.var.retention_basin_storage_m3_per_substep.fill(np.nan)
 
         if __debug__:
             # these are for balance checks, the sum of all routing steps
-            evaporation_in_rivers_m3: ArrayFloat32 = self.grid.full_compressed(
-                0, dtype=np.float32
-            )
+            evaporation_in_rivers_m3: ArrayFloat32 = self._evaporation_in_rivers_m3
+            evaporation_in_rivers_m3.fill(0.0)
             waterbody_evaporation_m3: ArrayFloat32 = np.zeros(
                 self.hydrology.waterbodies.n, dtype=np.float32
             )
@@ -1691,9 +1863,8 @@ class Routing(Module):
                 self.var.retention_basin_storage_m3, dtype=np.float32
             )
 
-        over_abstraction_m3: ArrayFloat32 = self.grid.full_compressed(
-            0, dtype=np.float32
-        )
+        over_abstraction_m3: ArrayFloat32 = self._over_abstraction_daily
+        over_abstraction_m3.fill(0.0)
 
         # update alpha and beta once per day
         if self.model.in_spinup:
@@ -1756,83 +1927,41 @@ class Routing(Module):
             # increment inflow index for next hour
             self.inflow_idx += 1
 
-            total_runoff_m3: np.ndarray = (
-                total_runoff_m[hour, :] * self.grid.var.cell_area
+            np.multiply(
+                total_runoff_m[hour, :],
+                self.grid.var.cell_area,
+                out=self._side_flow_buf,
             )
 
-            # then split the runoff into runoff directly to water bodies
-            # and runoff to the channel network
-            self.hydrology.waterbodies.var.storage += np.bincount(
-                self.grid.var.waterbody_ids[self.grid.var.waterbody_ids != -1],
-                weights=total_runoff_m3[self.grid.var.waterbody_ids != -1],
-            )
-
-            # after adding the runoff to the water bodies, we set the runoff to zero
-            # in those grid cells
-            total_runoff_m3[self.grid.var.waterbody_ids != -1] = 0.0
-
-            self.hydrology.waterbodies.var.storage += (
-                return_flow_m3_to_waterbodies_per_hour
-            )
-
-            potential_evaporation_per_waterbody_m3 = (
-                np.bincount(
-                    self.grid.var.waterbody_ids[self.grid.var.waterbody_ids != -1],
-                    weights=reference_evapotranspiration_water_m[
-                        hour, self.grid.var.waterbody_ids != -1
-                    ],
+            # then split the runoff into runoff directly to water bodies,
+            # calculate waterbody evaporation, and route remaining runoff to channel network
+            if len(self._active_wb_cells) > 0:
+                _accumulate_waterbody_runoff_and_evaporation(
+                    active_wb_cells=self._active_wb_cells,
+                    wb_cell_indices=self._wb_cell_indices,
+                    side_flow=self._side_flow_buf,
+                    ref_et=reference_evapotranspiration_water_m[hour],
+                    wb_cell_counts=self._wb_cell_counts,
+                    lake_area=self.hydrology.waterbodies.var.lake_area,
+                    wb_storage=self.hydrology.waterbodies.var.storage,
+                    return_flow_m3_to_wb=return_flow_m3_to_waterbodies_per_hour,
+                    wb_pot_evap_buf=self._wb_pot_evap_buf,
+                    wb_act_evap_buf=self._wb_act_evap_buf,
                 )
-                / np.bincount(
-                    self.grid.var.waterbody_ids[self.grid.var.waterbody_ids != -1]
-                )
-                * self.hydrology.waterbodies.var.lake_area
-            )
-
-            actual_evaporation_from_waterbodies_per_hour_m3 = np.minimum(
-                potential_evaporation_per_waterbody_m3,
-                self.hydrology.waterbodies.var.storage,
-            )
-
-            self.hydrology.waterbodies.var.storage -= (
-                actual_evaporation_from_waterbodies_per_hour_m3
-            )
 
             # Calculate potential evaporation for retention basins
             if not self.retention_basin_data.empty:
-                retention_basin_area = (
-                    self.retention_max_storage_m3
-                    / np.float32(3.0)  # assumed depth of 3 meters
-                ).astype(np.float32)
-                retention_mask = self.retention_basin_ids != -1
-
-                # aggregate potential ET for retention basins
-                # Since each basin is exactly one cell, we can map the ET values directly
-                potential_evaporation_per_retention_basin_m3 = np.zeros(
-                    len(retention_basin_area), dtype=np.float32
-                )
-                basin_ids = self.retention_basin_ids[retention_mask]
-                potential_evaporation_per_retention_basin_m3[basin_ids] = (
-                    reference_evapotranspiration_water_m[hour, retention_mask]
-                    * retention_basin_area[basin_ids]
-                )
-
-                assert not np.isnan(potential_evaporation_per_retention_basin_m3).any()
-
-                actual_evaporation_from_retention_basins_m3 = np.minimum(
-                    potential_evaporation_per_retention_basin_m3,
-                    self.var.retention_basin_storage_m3,
-                ).astype(np.float32)
-
-                assert not np.isnan(potential_evaporation_per_retention_basin_m3).any()
-                assert not np.isnan(actual_evaporation_from_retention_basins_m3).any()
-
-                self.var.retention_basin_storage_m3 -= (
-                    actual_evaporation_from_retention_basins_m3
+                _compute_retention_basin_evaporation(
+                    retention_cell_indices=self._retention_cell_indices,
+                    retention_cell_basin_ids=self._retention_cell_basin_ids,
+                    retention_basin_area=self._retention_basin_area,
+                    ref_et=reference_evapotranspiration_water_m[hour],
+                    retention_storage=self.var.retention_basin_storage_m3,
+                    pot_evap_buf=self._pot_evap_ret_buf,
+                    act_evap_buf=self._retention_act_evap_buf,
                 )
                 if __debug__:
-                    retention_evaporation_m3 += (
-                        actual_evaporation_from_retention_basins_m3
-                    )
+                    retention_evaporation_m3 += self._retention_act_evap_buf
 
             outflow_per_waterbody_m3, command_area_release_m3_routing_step = (
                 self.hydrology.waterbodies.substep(
@@ -1846,59 +1975,42 @@ class Routing(Module):
                 command_area_release_m3_routing_step
             )
 
-            valid_prescribed_outflow = ~np.isnan(outflow_per_waterbody_m3)
-            if valid_prescribed_outflow.any():
-                assert (
-                    outflow_per_waterbody_m3[valid_prescribed_outflow]
-                    <= self.hydrology.waterbodies.var.storage[
-                        valid_prescribed_outflow
-                    ].astype(np.float32)
-                ).all(), "Prescribed reservoir outflow cannot be greater than storage"
+            if __debug__:
+                valid_prescribed_outflow = ~np.isnan(outflow_per_waterbody_m3)
+                if valid_prescribed_outflow.any():
+                    assert (
+                        outflow_per_waterbody_m3[valid_prescribed_outflow]
+                        <= self.hydrology.waterbodies.var.storage[
+                            valid_prescribed_outflow
+                        ].astype(np.float32)
+                    ).all(), (
+                        "Prescribed reservoir outflow cannot be greater than storage"
+                    )
 
-            side_flow_channel_m3_per_hour = (
-                total_runoff_m3
-                + return_flow_m3_per_hour
-                - channel_abstraction_m3_per_hour
-            )
-            assert (
-                side_flow_channel_m3_per_hour[self.grid.var.waterbody_ids != -1] == 0
-            ).all()
+            self._side_flow_buf += net_base_sideflow_per_hour
+            if __debug__:
+                assert (self._side_flow_buf[self._wb_cell_mask] == 0).all()
 
-            for (y, x), inflow in self.inflow.items():
-                cell_index: int = self.grid.linear_mapping[y, x]
-                if self.grid.var.waterbody_ids[cell_index] != -1:
-                    raise ValueError("Inflow cannot be added to waterbody cells.")
-
+            for cell_index, inflow in self._inflow_list:
                 inflow_m3 = inflow[self.inflow_idx] * np.float32(3600)
-
-                side_flow_channel_m3_per_hour[cell_index] += inflow_m3
-
+                self._side_flow_buf[cell_index] += inflow_m3
                 if __debug__:
                     total_inflow_m3 += inflow_m3
 
-            assert not np.isnan(
-                self.var.discharge_in_rivers_m3_s_substep[
-                    self.grid.var.waterbody_ids == -1
-                ]
-            ).all()
+            if __debug__:
+                assert not np.isnan(
+                    self.var.discharge_in_rivers_m3_s_substep[self._not_wb_cell_mask]
+                ).all()
 
-            river_width: ArrayFloat32 = get_river_width(
-                self.var.river_width_alpha,
-                self.var.river_width_beta,
-                self.var.discharge_in_rivers_m3_s_substep,
-            )
-            # the ratio of each grid cell that is currently covered by a river
-            channel_ratio: ArrayFloat32 = get_channel_ratio(
+            _compute_potential_river_evaporation(
+                alpha=self.var.river_width_alpha,
+                beta=self.var.river_width_beta,
+                discharge_m3_s=self.var.discharge_in_rivers_m3_s_substep,
                 river_length=self.grid.var.river_length,
-                river_width=np.where(self.grid.var.waterbody_ids == -1, river_width, 0),
                 cell_area=self.grid.var.cell_area,
-            )
-
-            # calculate evaporation from rivers per timestep usting the current channel ratio
-            potential_evaporation_in_rivers_m3_per_hour = (
-                reference_evapotranspiration_water_m[hour]
-                * channel_ratio
-                * self.grid.var.cell_area
+                is_wb=self._wb_cell_mask,
+                ref_et=reference_evapotranspiration_water_m[hour],
+                out=self._pot_evap_buf,
             )
 
             (
@@ -1915,8 +2027,8 @@ class Routing(Module):
             ) = self.router.step(
                 Q_prev_m3_s=self.var.discharge_in_rivers_m3_s_substep,
                 river_storage_m3=self.var.river_storage_m3,
-                sideflow_m3=side_flow_channel_m3_per_hour.astype(np.float32),
-                evaporation_m3=potential_evaporation_in_rivers_m3_per_hour,
+                sideflow_m3=self._side_flow_buf,
+                evaporation_m3=self._pot_evap_buf,
                 waterbody_storage_m3=self.hydrology.waterbodies.var.storage,
                 outflow_per_waterbody_m3=outflow_per_waterbody_m3,
                 retention_storage_m3=self.var.retention_basin_storage_m3,
@@ -1934,61 +2046,60 @@ class Routing(Module):
             assert (actual_evaporation_in_rivers_m3_per_hour >= 0.0).all()
 
             # the reservoir operators need to track the inflow to the reservoirs
-            self.model.agents.reservoir_operators.track_inflow(
-                waterbody_inflow_m3[self.model.hydrology.waterbodies.is_reservoir]
-            )
-
-            # ensure that discharge is nan for water bodies
-            assert np.isnan(
-                self.var.discharge_in_rivers_m3_s_substep[
-                    self.grid.var.waterbody_ids != -1
-                ]
-            ).all()
-
-            # ensure that discharge is not nan for river cells
-            assert not np.isnan(
-                self.var.discharge_in_rivers_m3_s_substep[
-                    self.grid.var.waterbody_ids == -1
-                ]
-            ).any()
-
-            discharge_m3_s_substep = self.var.discharge_in_rivers_m3_s_substep.copy()
-
-            # check if discharge is not higher than the highest discharge ever recorded
-            if np.nanmax(discharge_m3_s_substep) > 400_000:
-                raise ValueError(
-                    f"Discharge is higher than the highest discharge ever recorded. Max discharge: {np.nanmax(discharge_m3_s_substep)}"
+            if len(self._reservoir_indices) > 0:
+                self.model.agents.reservoir_operators.track_inflow(
+                    waterbody_inflow_m3[self._reservoir_indices]
                 )
 
-            # set waterbody outflow points to the outflow of the waterbody
-            discharge_m3_s_substep = self.hydrology.waterbodies.map_to_grid_outflow(
-                outflow_per_waterbody_m3 / 3600, out=discharge_m3_s_substep
-            )
-            discharge_m3_s_substep = fill_discharge_in_waterbodies(
-                discharge_m3_s=discharge_m3_s_substep,
-                upstream_matrix_from_up_to_downstream=self.router.upstream_matrix_from_up_to_downstream,
-                idxs_up_to_downstream=self.router.idxs_up_to_downstream,
-            )
+            if __debug__:
+                # ensure that discharge is nan for water bodies
+                assert np.isnan(
+                    self.var.discharge_in_rivers_m3_s_substep[self._wb_cell_mask]
+                ).all()
+
+                # ensure that discharge is not nan for river cells
+                assert not np.isnan(
+                    self.var.discharge_in_rivers_m3_s_substep[self._not_wb_cell_mask]
+                ).any()
+
+            discharge_row: ArrayFloat32 = self.var.discharge_m3_s_per_substep[hour, :]
+            discharge_row[:] = self.var.discharge_in_rivers_m3_s_substep
+
+            # check if discharge is not higher than the highest discharge ever recorded
+            if np.nanmax(discharge_row) > 400_000:
+                raise ValueError(
+                    f"Discharge is higher than the highest discharge ever recorded. Max discharge: {np.nanmax(discharge_row)}"
+                )
+
+            # set waterbody outflow points to the outflow of the waterbody and fill waterbody reaches
+            if self.hydrology.waterbodies.n > 0:
+                np.divide(
+                    outflow_per_waterbody_m3,
+                    np.float32(3600),
+                    out=self._wb_outflow_rate_buf,
+                )
+                self.hydrology.waterbodies.map_to_grid_outflow(
+                    self._wb_outflow_rate_buf, out=discharge_row
+                )
+                fill_discharge_in_waterbodies(
+                    discharge_m3_s=discharge_row,
+                    upstream_matrix_from_up_to_downstream=self.router.upstream_matrix_from_up_to_downstream,
+                    idxs_up_to_downstream=self.router.idxs_up_to_downstream,
+                )
 
             # after filling the gaps, we should not have any nans in the river cells
-            assert not np.isnan(discharge_m3_s_substep[self.var.river_ids != -1]).any()
+            assert not np.isnan(discharge_row[self.var.river_ids != -1]).any()
 
-            self.var.discharge_m3_s_per_substep[hour, :] = discharge_m3_s_substep
+            ret_row: ArrayFloat32 = self.var.retention_basin_storage_m3_per_substep[
+                hour, :
+            ]
+            ret_row.fill(0.0)
+            if not self.retention_basin_data.empty:
+                ret_row[self._retention_cell_mask] = (
+                    self.var.retention_basin_storage_m3[self._retention_cell_basin_ids]
+                )
 
-            retention_basin_storage_m3_substep = self.grid.full_compressed(
-                0, dtype=np.float32
-            )
-            retention_mask = self.retention_basin_ids != -1
-            retention_basin_storage_m3_substep[retention_mask] = (
-                self.var.retention_basin_storage_m3[
-                    self.retention_basin_ids[retention_mask]
-                ]
-            )
-            self.var.retention_basin_storage_m3_per_substep[hour, :] = (
-                retention_basin_storage_m3_substep
-            )
-
-            self.var.sum_of_all_discharge_steps += discharge_m3_s_substep
+            self.var.sum_of_all_discharge_steps += discharge_row
             self.var.discharge_step_count += 1
 
             if __debug__:
@@ -2002,9 +2113,7 @@ class Routing(Module):
                 ).all()
                 # Discharge at outlets and lakes and reservoirs
                 outflow_at_pits_m3 += outflow_at_pits_m3_routing_step
-                waterbody_evaporation_m3 += (
-                    actual_evaporation_from_waterbodies_per_hour_m3
-                )
+                waterbody_evaporation_m3 += self._wb_act_evap_buf
                 evaporation_in_rivers_m3 += actual_evaporation_in_rivers_m3_per_hour
                 over_abstraction_m3 += over_abstraction_m3_routing_step
                 command_area_release_m3 += command_area_release_m3_routing_step
@@ -2012,7 +2121,11 @@ class Routing(Module):
                 retention_inflow_m3 += retention_inflow_m3_hour
                 retention_outflow_m3 += retention_outflow_m3_hour
 
-        self.var.discharge_m3_s = self.var.discharge_m3_s_per_substep.mean(axis=0)
+        np.mean(
+            self.var.discharge_m3_s_per_substep,
+            axis=0,
+            out=self.var.discharge_m3_s,
+        )
 
         # Update return periods on January 1st of each year, with the exception when the first
         # day of the year is the start of the spinup period. In that case, we don't have any

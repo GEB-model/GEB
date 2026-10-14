@@ -48,10 +48,8 @@ from .topology import (
 __all__ = [
     "ALLOW_REVERSE_FLOW",
     "INERTIAL_PARALLEL_THRESHOLD",
-    "RetentionCoupling",
     "RoutingStepDiagnostics",
     "SubstepBuffers",
-    "WaterbodyCoupling",
     "_compute_reach_stage_from_vol",
     "_compute_stage_from_storage_inertial",
     "_evaluate_reach_cfl_dt",
@@ -61,7 +59,8 @@ __all__ = [
     "_run_inertial_substeps_serial",
     "_scatter_outputs",
     "compute_inertial_substeps_cfl",
-    "compute_retention_routing",
+    "_compute_inertial_substeps_cfl_serial",
+    "_compute_inertial_substeps_cfl_parallel",
 ]
 
 # Global option to toggle reverse flow across river reaches
@@ -278,7 +277,7 @@ def _compute_stage_from_storage_inertial(
         geom_overbank: Precomputed overbank geometry lookup table.
         stage_buf: Target stage buffer storing reach water surface elevations (meters).
     """
-    for reach_idx in range(n_inertial):
+    for reach_idx in prange(n_inertial):
         reach_volume_m3: np.float32 = max(
             np.float32(river_storage_m3_inertial[reach_idx]), np.float32(0.0)
         )
@@ -428,8 +427,7 @@ def _evaluate_reach_cfl_dt(
     return min(dt_cfl, dt_f32)
 
 
-@njit(cache=True)
-def compute_inertial_substeps_cfl(
+def _compute_inertial_substeps_cfl(
     dt_f32: np.float32,
     inv_dt_f32: np.float32,
     n_inertial: int,
@@ -620,6 +618,15 @@ def compute_inertial_substeps_cfl(
         limiting_flow=limiting_flow,
         limiting_storage=limiting_storage,
     )
+
+
+_compute_inertial_substeps_cfl_serial = njit(fastmath=True, parallel=False)(
+    _compute_inertial_substeps_cfl
+)
+_compute_inertial_substeps_cfl_parallel = njit(fastmath=True, parallel=True)(
+    _compute_inertial_substeps_cfl
+)
+compute_inertial_substeps_cfl = _compute_inertial_substeps_cfl_parallel
 
 
 @njit(inline="always")

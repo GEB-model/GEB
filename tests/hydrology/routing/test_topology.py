@@ -64,7 +64,6 @@ def test_build_routing_topology_kinematic_and_inertial_split() -> None:
     wb_outflow_indices = np.zeros(0, dtype=np.int32)
     river_storage_alpha_kin = np.array([1.0], dtype=np.float32)
     river_storage_beta_kin = np.array([0.6], dtype=np.float32)
-    inertial_topo_order = np.array([0], dtype=np.int32)
 
     topo = build_routing_topology(
         n_kinematic=n_kinematic,
@@ -84,9 +83,10 @@ def test_build_routing_topology_kinematic_and_inertial_split() -> None:
         wb_outflow_indices=wb_outflow_indices,
         river_storage_alpha_kin=river_storage_alpha_kin,
         river_storage_beta_kin=river_storage_beta_kin,
-        inertial_topo_order=inertial_topo_order,
     )
 
     assert topo.kinematic_topology.n_kinematic == 1
     assert len(topo.topology.inertial_up_offsets) == 2
     assert topo.kinematic_topology.n_kin_headwater == 1
+    assert isinstance(topo.retention_links.inertial_retention_k, np.ndarray)
+    assert isinstance(topo.waterbody_links.inertial_wb_ds_k, np.ndarray)
