@@ -132,7 +132,7 @@ class Karst(Module):
             "release_time_days"
         ]
         # Release a fraction of the stored water each day: 1 - exp(-1 / release time).
-        # With a release time of 10 days, about 9.5% leaves the existing store today.
+        # With a release time of 10 days, about 9.5% leaves the existing store every day.
         release_fraction: np.float64 = -np.expm1(-1.0 / release_time_days)
 
         # Add release from existing storage and from today's inflow.

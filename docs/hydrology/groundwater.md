@@ -39,13 +39,11 @@ The groundwater simulation proceeds in the following steps during each model tim
 
 ## Karst
 
-Karst is included in every hydrology run. WOKAM estimates rock coverage using
-82.5% for continuous, 40% for discontinuous and 65% for mixed rocks. These
-are assumptions, not measured karst connectivity ([WOKAM paper](https://doi.org/10.1007/s10040-020-02139-5)).
+Karst is included in every run. WOKAM estimates karst rock coverage using
+82.5% for continuous, 40% for discontinuous and 65% for mixed karst formations ([WOKAM paper](https://doi.org/10.1007/s10040-020-02139-5)).
 
-The karst share of soil drainage, runoff and interflow enters one store before
-reaching MODFLOW. Sealed land and open water are excluded. Water is delayed,
-not lost; zero-coverage cells keep their existing flows.
+The karst share of soil drainage, runoff and interflow enters a seperate linear karst store before
+reaching MODFLOW. Sealed land and open water are excluded.
 
 ```yaml
 hydrology:
@@ -54,14 +52,7 @@ hydrology:
     release_time_days: 10.0
 ```
 
-`capture_fraction` applies to runoff and interflow. Soil drainage uses mapped
-coverage. After 10 dry days, 37% of stored water remains; this default is a
-starting estimate. Storage is saved in checkpoints and the water balance.
-
-To upgrade, remove `hydrology.karst.enabled` if present and include
-`setup_karst` in custom builds. Run `geb update -b build.yml::setup_karst`,
-then rerun spinup and simulation. Rerun spinup after changing karst settings
-or coverage.
+Run `setup_karst` to build the karst storage. 
 
 ## Code
 

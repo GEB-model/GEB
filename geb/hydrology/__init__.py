@@ -145,11 +145,7 @@ class Hydrology(Data, Module):
     """
 
     def __init__(self, model: GEBModel) -> None:
-        """Set up the hydrology components.
-
-        Args:
-            model: The GEB model instance.
-        """
+        """Create the hydrology module."""
         Data.__init__(self, model)
         Module.__init__(self, model)
 
@@ -240,10 +236,13 @@ class Hydrology(Data, Module):
         return (self.karst.storage_m * self.grid.var.cell_area).sum(dtype=np.float64)
 
     def get_current_storage(self) -> np.float64:
-        """Sum stored water, including karst.
+        """Get the current water storage in the hydrological system.
+
+        Uses float64 to ensure that the storage is calculated accurately. If float32
+        is used, the storage can be under- or overestimated due to rounding errors.
 
         Returns:
-            Total stored water (m3).
+            Total water storage in the hydrological system (m3).
         """
         return (
             self.get_landsurface_storage_m3()
@@ -255,9 +254,9 @@ class Hydrology(Data, Module):
         )
 
     def step(self) -> None:
-        """Run one day of hydrology, including karst storage and recharge.
+        """Perform a single time step of the hydrological model.
 
-        Updates water storage (m) and daily flows (m/day).
+        Calculates the water balance and updates all hydrological components.
         """
         timer: TimingModule = TimingModule("Hydrology")
 
