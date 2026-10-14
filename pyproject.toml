@@ -81,7 +81,8 @@ dependencies = [
     "copernicusmarine>=2.2.3",
     "requests>=2.32.5",
     "simplejson>=3.20.2",
-    "eccodes==2.44.0",  # pin until https://github.com/ecmwf/eccodes-python/issues/150 is fixed
+    "eccodes>=2.49.0",
+    "eccodeslib>=2.49.0.30; sys_platform != 'win32'",
     "pystac>=1.14.3",
     "hda>=2.39",
     "huggingface-hub>=1.18.0",
