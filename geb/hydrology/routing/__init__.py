@@ -45,86 +45,100 @@ def get_discharge_per_river(
     folder: Path | None = None,
     variables_to_report: dict[str, Any] | None = None,
 ) -> pd.DataFrame:
-    """Get the discharge for each river from the output files.
+    """Read recorded river discharge, keeping the reporting-time branch layout.
+
+    Notes:
+        Reservoir activation can change the representative cells of a river.
+        Historical report names therefore determine which branches to sum.
 
     Args:
-        rivers: A GeoDataFrame containing the rivers in the model, with columns "is_downstream_outflow", "is_upstream_of_downstream_basin", and "hydrography_xy".
-        all_rivers: A DataFrame containing all rivers in the model, with columns "represented_in_grid", "hydrography_xy", and "downstream_ID".
-        source: The source of the discharge data. Can be "file" or "memory".
-        folder: The folder where the discharge files are stored.
-        variables_to_report: A dictionary containing the variables to report.
+        rivers: Rivers to read, indexed by integer river ID.
+        all_rivers: Full river network, retained for caller compatibility.
+        source: Whether to read files or in-memory report buffers.
+        folder: Directory containing consolidated or legacy discharge files.
+        variables_to_report: In-memory discharge report buffers (m³/s).
 
     Returns:
-        A DataFrame with the discharge for each river, with columns "discharge_m3_per_s" and "hydrography_xy".
+        Discharge (m³/s) indexed by time, with one column per river ID.
 
     Raises:
-        ValueError: If source is "file" and folder is None.
-        ValueError: If source is "memory" and variables_to_report is None.
+        ValueError: If the source or its required arguments are invalid.
+        KeyError: If a requested river has no recorded discharge.
     """
+    if source not in ("file", "memory"):
+        raise ValueError(f"Unknown discharge source: {source}")
     if source == "file" and folder is None:
         raise ValueError("folder must be provided if source is 'file'")
-    elif source == "memory" and variables_to_report is None:
+    if source == "memory" and variables_to_report is None:
         raise ValueError("variables_to_report must be provided if source is 'memory'")
 
-    def create_df_from_report_variable(
-        river_id: int | str, variables_to_report: dict[str, Any]
-    ) -> pd.Series:
-        river_data = variables_to_report[f"river_outflow_hourly_m3_per_s_{river_id}"]
-        return pd.Series(
-            river_data["_data_array"][: river_data["_var_index"]],
-            index=river_data["_time_array"][: river_data["_var_index"]].astype(
-                "datetime64[s]"
-            ),
-        )
-
+    prefix: str = "river_outflow_hourly_m3_per_s_"
     consolidated_table: pd.DataFrame | None = None
-    if source == "file":
+    available_keys: set[str]
+    if source == "memory":
+        assert variables_to_report is not None
+        available_keys = {
+            name.removeprefix(prefix)
+            for name in variables_to_report
+            if name.startswith(prefix)
+        }
+    else:
         assert folder is not None
         consolidated_file: Path = folder / "river_outflow_hourly_m3_per_s.parquet"
         if consolidated_file.exists():
             consolidated_table = read_table(consolidated_file)
+        available_keys = {
+            path.stem.removeprefix(prefix) for path in folder.glob(f"{prefix}*.parquet")
+        }
+        if consolidated_table is not None:
+            available_keys.update(str(column) for column in consolidated_table.columns)
 
-    def read_outflow_series_from_file(key: int | str) -> pd.Series:
-        assert folder is not None
-        key_str: str = str(key)
-        if consolidated_table is not None and key_str in consolidated_table.columns:
-            return consolidated_table[key_str]
-        # Legacy fallback: individual parquet file
-        return read_table(folder / f"river_outflow_hourly_m3_per_s_{key}.parquet")[
-            f"river_outflow_hourly_m3_per_s_{key}"
-        ]
+    # Index the saved layout once, rather than scanning all reports for every river.
+    keys_by_river: dict[str, list[str]] = {}
+    key: str
+    for key in sorted(available_keys):
+        keys_by_river.setdefault(key.split("_", 1)[0], []).append(key)
 
-    discharge_data = {}
+    discharge_data: dict[int, pd.Series] = {}
+    river_id: int
     for river_id in rivers.index:
-        assert isinstance(river_id, int)
-        xys: list[tuple[int, int]] = get_river_representative_xys(river_id, all_rivers)
-        if len(xys) == 1:
-            if source == "file":
-                discharge_data[river_id] = read_outflow_series_from_file(river_id)
-            else:
+        river_key: str = str(river_id)
+        if river_key not in keys_by_river:
+            raise KeyError(f"No recorded discharge for river {river_id}")
+        # A direct report takes precedence over legacy branch files if both exist.
+        report_keys: list[str] = (
+            [river_key] if river_key in available_keys else keys_by_river[river_key]
+        )
+        total_discharge: pd.Series | None = None
+        for key in report_keys:
+            discharge_part: pd.Series
+            if source == "memory":
                 assert variables_to_report is not None
-                discharge_data[river_id] = create_df_from_report_variable(
-                    river_id, variables_to_report
+                river_data: dict[str, Any] = variables_to_report[f"{prefix}{key}"]
+                sample_count: int = river_data["_var_index"]
+                discharge_part = pd.Series(
+                    river_data["_data_array"][:sample_count],
+                    index=river_data["_time_array"][:sample_count].astype(
+                        "datetime64[s]"
+                    ),
                 )
-        else:
-            total_discharge_part = None
-            for i in range(len(xys)):
-                if source == "file":
-                    discharge_part = read_outflow_series_from_file(f"{river_id}_{i}")
-                else:
-                    assert variables_to_report is not None
-                    discharge_part = create_df_from_report_variable(
-                        f"{river_id}_{i}", variables_to_report
-                    )
-                if total_discharge_part is None:
-                    total_discharge_part = discharge_part
-                else:
-                    total_discharge_part += discharge_part
-            discharge_data[river_id] = total_discharge_part
+            elif consolidated_table is not None and key in consolidated_table.columns:
+                discharge_part = consolidated_table[key]
+            else:
+                assert folder is not None
+                discharge_part = read_table(folder / f"{prefix}{key}.parquet")[
+                    f"{prefix}{key}"
+                ]
+            total_discharge = (
+                discharge_part
+                if total_discharge is None
+                else total_discharge + discharge_part
+            )
+        assert total_discharge is not None
+        discharge_data[river_id] = total_discharge
 
     if not discharge_data:
         return pd.DataFrame()
-
     return pd.concat(discharge_data, axis=1)
 
 
@@ -2385,13 +2399,10 @@ class Routing(Module):
             )
 
             if self.model.current_timestep > 0:
-                sample_key: str = (
-                    f"river_outflow_hourly_m3_per_s_{active_rivers.index[0]}"
-                )
-                if (
-                    self.variables_to_report is not None
-                    and sample_key in self.variables_to_report
-                    and self.variables_to_report[sample_key]["_var_index"] > 0
+                if self.variables_to_report is not None and any(
+                    name.startswith("river_outflow_hourly_m3_per_s_")
+                    and report.get("_var_index", 0) > 0
+                    for name, report in self.variables_to_report.items()
                 ):
                     discharge_by_river_run: pd.DataFrame = get_discharge_per_river(
                         rivers=active_rivers,
