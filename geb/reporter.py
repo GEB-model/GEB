@@ -851,10 +851,13 @@ class Reporter:
 
         There are also several pre-defined report configurations that can be activated by adding
         special keys to the report configuration. Multi-station/entity reporters export to a single consolidated parquet file:
-        - _discharge_stations: if set to True, discharge at all discharge stations is reported.
+        - _discharge_stations: hourly discharge at all discharge stations.
+        - _discharge_stations_daily: daily mean discharge at all discharge stations.
         - _retention_basins: if set to True, discharge and storage for all retention basins are reported as single parquet files.
         - _meteorological_stations: if set to True, meteorological variables at all meteorological stations are reported as a single parquet file.
-        - _outflow_points: if set to True, outflow at all outflow points is reported as a single parquet file.
+        - _outflow_points: hourly outflow at all outflow points, in one parquet file.
+        - _outflow_points_daily: daily mean outflow at all outflow points, in a separate parquet file.
+        Hourly and daily options may both be enabled simultaneously.
         - _water_circle: if set to True, a standard set of variables to monitor the water circle is reported.
         - _water_balance: if set to True, a standard set of variables to monitor the water balance is reported.
         - _water_storage: if set to True, a standard set of variables to monitor water storage is reported.
@@ -907,8 +910,14 @@ class Reporter:
             to_delete: list[str] = []
             for module_name, module_values in list(self.variables_to_report.items()):
                 if module_name.startswith("_"):
-                    if module_name == "_discharge_stations":
+                    if module_name in (
+                        "_discharge_stations",
+                        "_discharge_stations_daily",
+                    ):
                         if module_values is True:
+                            daily = module_name.endswith("_daily")
+                            resolution = "daily" if daily else "hourly"
+                            sampler = "sample_xy_daily_mean" if daily else "sample_xy"
                             stations = read_geom(
                                 self.model.files["geom"][
                                     "discharge/discharge_snapped_locations"
@@ -918,14 +927,14 @@ class Reporter:
                             station_reporters = {}
                             for station_ID, station_info in stations.iterrows():
                                 xy_grid = station_info["snapped_grid_pixel_xy"]
-                                station_reporters[
-                                    f"discharge_hourly_m3_per_s_{station_ID}"
-                                ] = {
+                                name = f"discharge_{resolution}_m3_per_s_{station_ID}"
+                                station_reporters[name] = {
                                     "varname": "grid.var.discharge_m3_s_per_substep",
                                     "type": "grid",
-                                    "function": f"sample_xy,{xy_grid[0]},{xy_grid[1]}",
-                                    "substeps": 24,
+                                    "function": f"{sampler},{xy_grid[0]},{xy_grid[1]}",
                                 }
+                                if not daily:
+                                    station_reporters[name]["substeps"] = 24
                             self.variables_to_report = multi_level_merge(
                                 self.variables_to_report,
                                 {"hydrology.routing": station_reporters},
@@ -997,8 +1006,11 @@ class Reporter:
                                     self.variables_to_report,
                                     {"hydrology.landsurface": station_reporters},
                                 )
-                    elif module_name == "_outflow_points":
+                    elif module_name in ("_outflow_points", "_outflow_points_daily"):
                         if module_values is True:
+                            daily = module_name.endswith("_daily")
+                            resolution = "daily" if daily else "hourly"
+                            sampler = "sample_xy_daily_mean" if daily else "sample_xy"
                             routing = self.model.hydrology.routing
                             rivers = routing.get_active_rivers()
                             all_rivers = routing.var.rivers
@@ -1013,16 +1025,16 @@ class Reporter:
                                 for i, xy in enumerate(xys):
                                     # if there are multiple branches, we append a suffix to the name
                                     suffix = f"_{i}" if len(xys) > 1 else ""
-                                    outflow_reporters[
-                                        f"river_outflow_hourly_m3_per_s_{river_ID}{suffix}"
-                                    ] = {
+                                    name = f"river_outflow_{resolution}_m3_per_s_{river_ID}{suffix}"
+                                    outflow_reporters[name] = {
                                         "varname": "grid.var.discharge_m3_s_per_substep",
                                         "type": "grid",
-                                        "function": f"sample_xy,{xy[0]},{xy[1]}",
-                                        "substeps": 24,
-                                        "_group": "river_outflow_hourly_m3_per_s",
+                                        "function": f"{sampler},{xy[0]},{xy[1]}",
+                                        "_group": f"river_outflow_{resolution}_m3_per_s",
                                         "_group_key": f"{river_ID}{suffix}",
                                     }
+                                    if not daily:
+                                        outflow_reporters[name]["substeps"] = 24
                             self.variables_to_report = multi_level_merge(
                                 self.variables_to_report,
                                 {"hydrology.routing": outflow_reporters},
@@ -1284,12 +1296,11 @@ class Reporter:
             ValueError: If the function name is not recognised.
             IndexError: If a sampled coordinate lies outside the model domain.
         """
-        # in the first timestep, we create the array that will hold the actual data
-        if value.ndim == 2:
+        function, *args = config["function"].split(",")
+        # Daily means reduce the substep dimension to one reported value per day.
+        if value.ndim == 2 and function != "sample_xy_daily_mean":
             substeps: int = value.shape[0]
             config["substeps"] = substeps
-
-        function, *args = config["function"].split(",")
         if function == "mean":
             return np.mean(value, axis=-1)
         elif function == "nanmean":
@@ -1298,7 +1309,7 @@ class Reporter:
             return np.sum(value, axis=-1)
         elif function == "nansum":
             return np.nansum(value, axis=-1)
-        elif function in ("sample_xy", "sample_lonlat"):
+        elif function in ("sample_xy", "sample_lonlat", "sample_xy_daily_mean"):
             # for sample_xy, args are pixel coordinates, which we
             # first need to convert to their pixel index in x and y
             if function == "sample_lonlat":
@@ -1337,8 +1348,9 @@ class Reporter:
             if idx == -1:
                 raise IndexError(f"Coordinate ({px}, {py}) is not a valid cell.")
 
-            # extract the value at that index
-            return value[..., idx]
+            # extract the value at that index, averaging hourly samples if requested
+            sampled = value[..., idx]
+            return np.mean(sampled) if function == "sample_xy_daily_mean" else sampled
         elif function in (
             "weightedmean",
             "weightednanmean",
