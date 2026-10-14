@@ -2,7 +2,9 @@
 
 import copy
 import datetime
+import gzip
 import json
+import pickle
 import re
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -880,6 +882,21 @@ class Reporter:
             fast_rmtree(self.report_folder)
         self.report_folder.mkdir(parents=True, exist_ok=True)
 
+        # The reporting interval is independent of the currently restored segment.
+        if self.model.multiverse_name is not None:
+            self.report_start = self.model.simulation_start
+            self.report_end = self.model.simulation_end
+        elif self.model.in_spinup:
+            self.report_start = self.model.spinup_start
+            self.report_end = self.model.run_start - self.model.timestep_length
+        else:
+            self.report_start = self.model.run_start
+            self.report_end = (
+                self.model.run_end
+                if isinstance(self.model.timestep_length, datetime.timedelta)
+                else self.model.simulation_end
+            )
+
         if (
             self.model.mode == "w"
             and "report" in self.model.config
@@ -1056,6 +1073,12 @@ class Reporter:
         else:
             self.is_activated = False
 
+        self._definitions = {
+            (module_name, name): self._definition(config)
+            for module_name, configs in self.variables_to_report.items()
+            for name, config in configs.items()
+        }
+
     def maybe_report_value(
         self,
         module_name: str,
@@ -1081,13 +1104,12 @@ class Reporter:
         """
         if "frequency" in config:
             current_time = self.model.current_time
-            current_timestep = self.model.current_timestep
-            # here we return None if the value is not to be reported on this timestep
+            # Initial/final refer to the entire run, not the resumed segment.
             if config["frequency"] == "initial":
-                if current_timestep != 0:
+                if current_time != self.report_start:
                     return None
             elif config["frequency"] == "final":
-                if current_timestep != self.model.n_timesteps - 1:
+                if current_time != self.report_end:
                     return None
             elif "every" in config["frequency"]:
                 every = config["frequency"]["every"]
@@ -1180,7 +1202,7 @@ class Reporter:
             time_substeps = None
             value = np.expand_dims(value, axis=-1)
 
-        if config["_index"] == 0:  # first time writing data
+        if "_chunk_data" not in config:  # first time writing data
             if config["type"] == "HRU":
                 raster = self.hydrology.HRU
             else:
@@ -1358,7 +1380,7 @@ class Reporter:
             config: Reporter configuration dict for this variable (mutated in-place
                 to track zarr store, index, and buffer).
         """
-        if config["_index"] == 0:
+        if "_chunk_data" not in config:
             time: ArrayInt64 = create_time_array(
                 start=self.model.current_time,
                 end=self.model.simulation_end,
@@ -1582,7 +1604,270 @@ class Reporter:
         # Create a slice tuple with Ellipsis for all dimensions except the target axis
         selection: list[slice | int] = [slice(None)] * len(zarr_array.shape)
         selection[axis] = chunk_index
-        zarr_array.blocks[tuple(selection)] = buffer
+        # Blocks require a complete chunk; partial checkpoints/final chunks
+        # must use ordinary indexing (including if they are not at the array edge).
+        if (
+            buffer.shape[axis] == zarr_array.chunks[axis]
+            and (chunk_index + 1) * zarr_array.chunks[axis] <= zarr_array.shape[axis]
+        ):
+            zarr_array.blocks[tuple(selection)] = buffer
+        else:
+            selection[axis] = slice(
+                chunk_index * zarr_array.chunks[axis],
+                chunk_index * zarr_array.chunks[axis] + buffer.shape[axis],
+            )
+            zarr_array[tuple(selection)] = buffer
+
+    def flush(self) -> None:
+        """Persist valid partial Zarr buffers without finalizing the reports."""
+        for configs in self.variables_to_report.values():
+            for name, config in configs.items():
+                if "_chunk_data" not in config:
+                    continue
+                axis = 2 if config["type"] in ("grid", "HRU") else 0
+                buffer = config["_chunk_data"]
+                length = config["_index"] % buffer.shape[axis]
+                if length:
+                    selection = [slice(None)] * buffer.ndim
+                    selection[axis] = slice(0, length)
+                    self._flush_chunk_data(
+                        config["_root_group"],
+                        name,
+                        buffer[tuple(selection)],
+                        config["_index"] // buffer.shape[axis],
+                        axis,
+                    )
+
+    @staticmethod
+    def _definition(config: dict) -> dict:
+        """Keep only the user/resolved definition, not the runtime buffers."""
+        return {
+            key: copy.deepcopy(value)
+            for key, value in config.items()
+            if not key.startswith("_") or key in ("_group", "_group_key")
+        }
+
+    def save_checkpoint_state(self, checkpoint_path: Path) -> None:
+        """Save reporting positions and Parquet history alongside a model checkpoint."""
+        if not self.is_activated:
+            return
+        self.flush()
+        state: dict[str, Any] = {
+            "version": 1,
+            "report_start": self.report_start,
+            "report_end": self.report_end,
+            "variables": {},
+        }
+        for module_name, configs in self.variables_to_report.items():
+            for name, config in configs.items():
+                entry: dict[str, Any] = {
+                    "definition": self._definitions[(module_name, name)],
+                    "substeps": config.get("substeps"),
+                }
+                if "_chunk_data" in config:
+                    array = config["_root_group"][name]
+                    axis = 2 if config["type"] in ("grid", "HRU") else 0
+                    chunk_size = config["_chunk_data"].shape[axis]
+                    valid = config["_index"] % chunk_size
+                    sl = [slice(None)] * config["_chunk_data"].ndim
+                    sl[axis] = slice(0, valid)
+                    entry.update(
+                        kind="zarr",
+                        index=config["_index"],
+                        buffer_shape=config["_chunk_data"].shape,
+                        buffer_dtype=config["_chunk_data"].dtype.str,
+                        prefix=config["_chunk_data"][tuple(sl)],
+                        shape=array.shape,
+                        dtype=np.dtype(array.dtype).str,
+                        chunks=array.chunks,
+                        dimensions=tuple(array.metadata.dimension_names),
+                        time=np.asarray(config["_root_group"]["time"][:]).copy(),
+                        attributes=dict(array.attrs),
+                    )
+                elif "_data_array" in config:
+                    index = config["_var_index"]
+                    entry.update(
+                        kind="parquet",
+                        index=index,
+                        time=np.asarray(config["_time_array"]).copy(),
+                        dtype=config["_data_array"].dtype.str,
+                        values=config["_data_array"][:index],
+                    )
+                else:
+                    entry["kind"] = "uninitialized"
+                state["variables"][(module_name, name)] = entry
+
+        checkpoint_path.mkdir(parents=True, exist_ok=True)
+        path = checkpoint_path / "reporter_state.pkl.gz"
+        temporary = path.with_name(path.name + ".tmp")
+        with gzip.open(temporary, "wb", compresslevel=1) as f:
+            pickle.dump(state, f, protocol=pickle.HIGHEST_PROTOCOL)
+        temporary.replace(path)
+
+    def restore_checkpoint_state(self, checkpoint_path: Path) -> None:
+        """Reopen Zarr data and restore Parquet history from a checkpoint.
+
+        Existing report stores must contain the history up to the checkpoint;
+        only the partial boundary chunk is included in the checkpoint itself.
+        """
+        if not self.is_activated:
+            return
+        state_path = checkpoint_path / "reporter_state.pkl.gz"
+        if not state_path.exists():
+            raise FileNotFoundError(
+                f"Reporter checkpoint state not found at {state_path}. "
+                "Existing checkpoints without reporter state cannot safely "
+                "resume reporting."
+            )
+        with gzip.open(state_path, "rb") as f:
+            state = pickle.load(f)  # noqa: S301 - trusted local GEB checkpoint
+        if state["version"] != 1 or (state["report_start"], state["report_end"]) != (
+            self.report_start,
+            self.report_end,
+        ):
+            raise ValueError(
+                "Reporter checkpoint version or reporting interval differs."
+            )
+
+        expected = {
+            (module_name, name)
+            for module_name, configs in self.variables_to_report.items()
+            for name in configs
+        }
+        if expected != set(state["variables"]):
+            raise ValueError(
+                "Reporter variable definitions differ from the checkpoint."
+            )
+
+        # Validate definitions and required historical stores before deleting
+        # any later outputs from a previous continuation.
+        for (module_name, name), entry in state["variables"].items():
+            if self._definitions[(module_name, name)] != entry["definition"]:
+                raise ValueError(f"Reporter definition changed: {module_name}.{name}")
+            if (
+                entry["kind"] == "zarr"
+                and not (self.report_folder / module_name / (name + ".zarr")).exists()
+            ):
+                raise FileNotFoundError(
+                    f"Missing historical Zarr store: {module_name}.{name}"
+                )
+
+        for (module_name, name), entry in state["variables"].items():
+            config = self.variables_to_report[module_name][name]
+            if entry["substeps"] is not None:
+                config["substeps"] = entry["substeps"]
+
+            # A previous completed segment may have exported stale Parquet files.
+            parquet_file = (
+                self.report_folder
+                / module_name
+                / (config.get("_group", name) + ".parquet")
+            )
+            if parquet_file.exists():
+                parquet_file.unlink()
+
+            path = self.report_folder / module_name / (name + ".zarr")
+            if entry["kind"] == "uninitialized":
+                # Roll back files which a later run may have created.
+                if path.exists():
+                    fast_rmtree(path)
+                continue
+
+            if entry["kind"] == "parquet":
+                config["_time_array"] = entry["time"]
+                index = int(entry["index"])
+                if index > len(entry["time"]) or len(entry["values"]) != index:
+                    raise ValueError(
+                        f"Invalid Parquet progress for {module_name}.{name}"
+                    )
+                config["_data_array"] = np.empty(
+                    len(entry["time"]), dtype=np.dtype(entry["dtype"])
+                )
+                config["_data_array"][:index] = entry["values"]
+                config["_var_index"] = index
+                continue
+
+            if entry["kind"] != "zarr" or not path.exists():
+                raise FileNotFoundError(f"Missing restored Zarr store: {path}")
+            store = zarr.storage.LocalStore(path, read_only=False)
+            root = zarr.open_group(store, mode="a")
+            array = root[name]
+            if (
+                array.shape != tuple(entry["shape"])
+                or np.dtype(array.dtype).str != entry["dtype"]
+                or array.chunks != tuple(entry["chunks"])
+                or tuple(array.metadata.dimension_names) != tuple(entry["dimensions"])
+                or dict(array.attrs) != entry["attributes"]
+                or not np.array_equal(np.asarray(root["time"][:]), entry["time"])
+            ):
+                raise ValueError(f"Restored Zarr schema differs: {module_name}.{name}")
+            if config["type"] in ("grid", "HRU"):
+                raster = (
+                    self.hydrology.HRU
+                    if config["type"] == "HRU"
+                    else self.hydrology.grid
+                )
+                if not (
+                    np.array_equal(np.asarray(root["x"][:]), raster.lon)
+                    and np.array_equal(np.asarray(root["y"][:]), raster.lat)
+                ):
+                    raise ValueError(
+                        f"Restored Zarr coordinates differ: {module_name}.{name}"
+                    )
+
+            index = int(entry["index"])
+            axis = 2 if config["type"] in ("grid", "HRU") else 0
+            if not 0 <= index <= array.shape[axis]:
+                raise ValueError(f"Invalid Zarr progress for {module_name}.{name}")
+            buffer = np.empty(entry["buffer_shape"], dtype=entry["buffer_dtype"])
+            # Recreate the usual fill pattern without serializing open Zarr objects.
+            fill, _ = get_fill_value(np.empty(0, dtype=array.dtype))
+            buffer.fill(fill if fill is not None else False)
+            valid = index % buffer.shape[axis]
+            sl = [slice(None)] * buffer.ndim
+            sl[axis] = slice(0, valid)
+            if entry["prefix"].shape != buffer[tuple(sl)].shape:
+                raise ValueError(
+                    f"Invalid Zarr checkpoint prefix: {module_name}.{name}"
+                )
+            buffer[tuple(sl)] = entry["prefix"]
+
+            # Remove subsequent Zarr v3 LocalStore chunks, including the boundary
+            # chunk; rewrite its checkpoint-time prefix below. This also handles
+            # restarting an older checkpoint after later outputs were produced.
+            chunks_dir = path / name / "c"
+            if chunks_dir.exists():
+                cutoff = index // buffer.shape[axis]
+                for chunk_file in chunks_dir.rglob("*"):
+                    if not chunk_file.is_file():
+                        continue
+                    components = chunk_file.relative_to(chunks_dir).parts
+                    if len(components) != array.ndim:
+                        raise ValueError(f"Unexpected Zarr chunk path: {chunk_file}")
+                    if int(components[axis]) >= cutoff:
+                        chunk_file.unlink()
+                # Avoid leaving directory entries from a later continuation.
+                for chunk_dir in sorted(
+                    (p for p in chunks_dir.rglob("*") if p.is_dir()),
+                    key=lambda p: len(p.parts),
+                    reverse=True,
+                ):
+                    if not any(chunk_dir.iterdir()):
+                        chunk_dir.rmdir()
+                if not any(chunks_dir.iterdir()):
+                    chunks_dir.rmdir()
+
+            config.update(
+                path=str(path),
+                _store=store,
+                _root_group=root,
+                _index=index,
+                _chunk_data=buffer,
+            )
+            if valid:
+                self._flush_chunk_data(
+                    root, name, buffer[tuple(sl)], index // buffer.shape[axis], axis
+                )
 
     def finalize(self) -> None:
         """At the end of the model run, all previously collected data is reported to disk.
@@ -1602,7 +1887,7 @@ class Reporter:
             # Flush any remaining buffers
             for module_name, configs in self.variables_to_report.items():
                 for name, config in configs.items():
-                    if "function" in config and config["function"] is None:
+                    if "_chunk_data" in config:
                         if config["type"] == "agents":
                             chunk_time_size: int = config["_chunk_data"].shape[0]
                         elif config["type"] in ("grid", "HRU"):
@@ -1647,7 +1932,7 @@ class Reporter:
 
             for module_name, module_configs in self.variables_to_report.items():
                 for name, config in module_configs.items():
-                    if "_time_array" not in config or config["_data_array"] is None:
+                    if "_data_array" not in config or config["_var_index"] == 0:
                         continue
                     if "_group" in config:
                         if config.get("extra_attributes"):
@@ -1660,10 +1945,10 @@ class Reporter:
                     else:
                         # Convert Unix timestamps (seconds) to datetime
                         time_values: pd.DatetimeIndex = pd.to_datetime(
-                            config["_time_array"], unit="s"
+                            config["_time_array"][: config["_var_index"]], unit="s"
                         )
                         df = pd.DataFrame(
-                            {name: config["_data_array"]},
+                            {name: config["_data_array"][: config["_var_index"]]},
                             index=pd.Index(time_values, name="time"),
                         )
 
@@ -1682,9 +1967,19 @@ class Reporter:
                 if not group_configs:
                     continue
                 first_config: dict[str, Any] = next(iter(group_configs.values()))
-                time_values = pd.to_datetime(first_config["_time_array"], unit="s")
+                first_time = first_config["_time_array"][: first_config["_var_index"]]
+                for group_key, cfg in group_configs.items():
+                    if not np.array_equal(
+                        cfg["_time_array"][: cfg["_var_index"]], first_time
+                    ):
+                        raise ValueError(
+                            f"Grouped reporter {module_name}.{group_name} has "
+                            f"different collected dates for {group_key}."
+                        )
+                time_values = pd.to_datetime(first_time, unit="s")
                 columns_data: dict[str, Any] = {
-                    key: cfg["_data_array"] for key, cfg in group_configs.items()
+                    key: cfg["_data_array"][: cfg["_var_index"]]
+                    for key, cfg in group_configs.items()
                 }
                 df = pd.DataFrame(
                     columns_data,

@@ -744,6 +744,9 @@ class GEBModel(Module):
             checkpoint_path=checkpoint_path,
         )
 
+        if continue_from_checkpoint is not None:
+            self.reporter.restore_checkpoint_state(checkpoint_path)
+
         if initialize_only:
             return
 
@@ -933,6 +936,9 @@ class GEBModel(Module):
             load_data_from_store=load_data_from_store,
             checkpoint_path=checkpoint_path,
         )
+
+        if continue_from_checkpoint is not None:
+            self.reporter.restore_checkpoint_state(checkpoint_path)
 
         if initialize_only:
             return
@@ -1130,7 +1136,7 @@ class GEBModel(Module):
 
         checkpoints: list[tuple[datetime.datetime, Path]] = []
         for p in folder.iterdir():
-            if p.is_dir():
+            if p.is_dir() and not (p / ".incomplete").exists():
                 try:
                     checkpoints.append((self.parse_checkpoint_timestamp(p), p))
                 except ValueError:
@@ -1166,7 +1172,15 @@ class GEBModel(Module):
         if dt is None:
             dt = self.current_time
         checkpoint_path: Path = self.get_checkpoint_path(dt)
+        checkpoint_path.mkdir(parents=True, exist_ok=True)
+        incomplete = checkpoint_path / ".incomplete"
+        incomplete.touch()
+        (checkpoint_path / ".complete").unlink(missing_ok=True)
         self.store.save(checkpoint_path)
+        if hasattr(self, "reporter"):
+            self.reporter.save_checkpoint_state(checkpoint_path)
+        incomplete.unlink(missing_ok=True)
+        (checkpoint_path / ".complete").touch()
         self.logger.info(f"Saved checkpoint for {dt} at {checkpoint_path}")
         return checkpoint_path
 
@@ -1208,6 +1222,8 @@ class GEBModel(Module):
 
         if not path.exists():
             raise FileNotFoundError(f"Checkpoint folder not found: {path}")
+        if (path / ".incomplete").exists():
+            raise RuntimeError(f"Checkpoint was not fully saved: {path}")
 
         return self.parse_checkpoint_timestamp(path), path
 
