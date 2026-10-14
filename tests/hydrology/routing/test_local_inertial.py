@@ -24,6 +24,9 @@ from geb.hydrology.routing import (
 from geb.hydrology.routing.local_inertial import LocalInertial
 from tests.testconfig import output_folder
 
+output_folder_local_inertial: Path = output_folder / "local_inertial"
+output_folder_local_inertial.mkdir(exist_ok=True, parents=True)
+
 
 def _make_local_inertial(
     dt: float | int,
@@ -1613,7 +1616,9 @@ def test_floodplain_damping_scenarios_and_plots() -> None:
     axes[2].legend()
 
     plt.tight_layout()
-    fig_path = output_folder / "test_floodplain_attenuation_scenarios.png"
+    fig_path = (
+        output_folder_local_inertial / "test_floodplain_attenuation_scenarios.png"
+    )
     plt.savefig(fig_path, dpi=150)
     plt.close(fig)
 
@@ -1744,7 +1749,7 @@ def test_floodplain_convective_pulse_dynamics_and_plots() -> None:
     ax2.legend()
 
     plt.tight_layout()
-    fig_path = output_folder / "test_floodplain_pulse_wave_dynamics.png"
+    fig_path = output_folder_local_inertial / "test_floodplain_pulse_wave_dynamics.png"
     plt.savefig(fig_path, dpi=150)
     plt.close(fig)
 

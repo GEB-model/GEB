@@ -1,5 +1,7 @@
 """Tests for the RunoffConcentrator module."""
 
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -10,6 +12,9 @@ from geb.hydrology.runoff_concentration import (
 )
 
 from ...testconfig import output_folder
+
+output_folder_runoff_concentrator: Path = output_folder / "runoff_concentrator"
+output_folder_runoff_concentrator.mkdir(exist_ok=True, parents=True)
 
 
 def test_triangular_weights_normalization() -> None:
@@ -173,7 +178,7 @@ def test_triangular_weights_peak_sum() -> None:
     plt.title(f"Triangular Weight Distributions (Lag={lag_time_hours}h)")
     plt.legend()
     plt.grid(True)
-    plt.savefig(output_folder / "triangular_weights_scenarios.svg")
+    plt.savefig(output_folder_runoff_concentrator / "triangular_weights_scenarios.svg")
     plt.close()
 
 
@@ -224,7 +229,7 @@ def test_apply_triangular_visualization() -> None:
     plt.grid(True)
 
     plt.tight_layout()
-    plt.savefig(output_folder / "runoff_concentration_response.svg")
+    plt.savefig(output_folder_runoff_concentrator / "runoff_concentration_response.svg")
     plt.close()
 
 
@@ -260,7 +265,7 @@ def test_apply_triangular_varying_buffer_lengths_visualization() -> None:
     plt.grid(True)
     plt.xlim(0, 72)
     plt.tight_layout()
-    plt.savefig(output_folder / "runoff_varying_peaks_pulse.svg")
+    plt.savefig(output_folder_runoff_concentrator / "runoff_varying_peaks_pulse.svg")
     plt.close()
 
 
@@ -310,7 +315,7 @@ def test_apply_triangular_varying_peaks_event_visualization() -> None:
     plt.grid(True)
     plt.xlim(0, 72)
     plt.tight_layout()
-    plt.savefig(output_folder / "runoff_varying_peaks_event.svg")
+    plt.savefig(output_folder_runoff_concentrator / "runoff_varying_peaks_event.svg")
     plt.close()
 
 
@@ -360,5 +365,5 @@ def test_apply_triangular_successive_events_visualization() -> None:
     plt.grid(True)
     plt.xlim(0, 96)
     plt.tight_layout()
-    plt.savefig(output_folder / "runoff_successive_events.svg")
+    plt.savefig(output_folder_runoff_concentrator / "runoff_successive_events.svg")
     plt.close()
