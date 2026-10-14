@@ -10,7 +10,6 @@ import numpy as np
 from numba import njit, prange
 
 from geb.geb_types import (
-    ArrayBool,
     ArrayFloat32,
     ArrayFloat64,
     ArrayInt32,
@@ -41,6 +40,9 @@ from .solver import solve_inertial_momentum
 from .topology import (
     InertialTopology,
     KinematicTopology,
+    RetentionCoupling,
+    WaterbodyCoupling,
+    compute_retention_routing,
 )
 
 __all__ = [
@@ -93,68 +95,6 @@ class RoutingStepDiagnostics(NamedTuple):
     celerity: np.float32
     limiting_flow: np.float32
     limiting_storage: np.float32
-
-
-class WaterbodyCoupling(NamedTuple):
-    """Encapsulates coupled lake and reservoir state arrays, rating parameters, and linkage maps.
-
-    Attributes:
-        storage_m3: Current water storage volume per waterbody (m³).
-        prescribed_outflow_m3: Prescribed outflow volume per waterbody for macro timestep (m³).
-        inflow_m3: Cumulative inflow volume accumulator per waterbody (m³).
-        lake_area: Surface area per waterbody (m²).
-        lake_factor: Rating curve weir discharge multiplier per waterbody.
-        outflow_height: Weir sill elevation height above bed per waterbody (meters).
-        outflow_bed_elev: Bed elevation at waterbody outlet (meters).
-        inertial_wb_ds_k: Inertial reach indices that terminate into downstream waterbodies.
-        inertial_wb_ds_id: Waterbody identifier receiving inflow from each terminal reach.
-        lake_outflow_target_k: Inertial reach index receiving waterbody outflow releases.
-        lake_outflow_wb_id: Source waterbody identifier discharging into each target reach.
-        wb_to_wb_src_wb: Source waterbody IDs discharging into downstream waterbodies.
-        wb_to_wb_tgt_wb: Target waterbody IDs receiving cascading waterbody releases.
-        wb_terminal_wb_ids: Waterbody IDs discharging directly across domain boundaries.
-    """
-
-    storage_m3: ArrayFloat64
-    prescribed_outflow_m3: ArrayFloat32
-    inflow_m3: ArrayFloat32
-    lake_area: ArrayFloat32
-    lake_factor: ArrayFloat32
-    outflow_height: ArrayFloat32
-    outflow_bed_elev: ArrayFloat32
-    inertial_wb_ds_k: ArrayInt32
-    inertial_wb_ds_id: ArrayInt32
-    lake_outflow_target_k: ArrayInt32
-    lake_outflow_wb_id: ArrayInt32
-    wb_to_wb_src_wb: ArrayInt32
-    wb_to_wb_tgt_wb: ArrayInt32
-    wb_terminal_wb_ids: ArrayInt32
-
-
-class RetentionCoupling(NamedTuple):
-    """Encapsulates flood retention basin state arrays, capacities, and control parameters.
-
-    Attributes:
-        storage_m3: Current retention basin storage volume array (m³).
-        inflow_m3: Cumulative diverted inflow volume accumulator per retention basin (m³).
-        outflow_m3: Cumulative released outflow volume accumulator per retention basin (m³).
-        max_storage_m3: Maximum storage capacity per retention basin (m³).
-        inertial_retention_k: Inertial reach indices connected to retention basins.
-        inertial_retention_id: Retention basin identifier linked to each connected reach.
-        controlled_retention: Flag defining controlled vs uncontrolled intake dynamics.
-        activation_threshold_m3_s: Discharge threshold triggering retention basin diversion (m³/s).
-        release_threshold_factor: Capacity fraction triggering controlled basin release.
-    """
-
-    storage_m3: ArrayFloat32
-    inflow_m3: ArrayFloat32
-    outflow_m3: ArrayFloat32
-    max_storage_m3: ArrayFloat32
-    inertial_retention_k: ArrayInt32
-    inertial_retention_id: ArrayInt32
-    controlled_retention: ArrayBool
-    activation_threshold_m3_s: ArrayFloat32
-    release_threshold_factor: np.float32
 
 
 class SubstepBuffers(NamedTuple):
@@ -679,117 +619,6 @@ def compute_inertial_substeps_cfl(
         celerity=celerity,
         limiting_flow=limiting_flow,
         limiting_storage=limiting_storage,
-    )
-
-
-@njit(cache=True)
-def compute_retention_routing(
-    dt: np.float32,
-    river_volume_m3: np.float32,
-    discharge_before_diversion_m3_s: np.float32,
-    is_rising_limb: bool,
-    retention_storage_m3: np.float32,
-    retention_max_storage_m3: np.float32,
-    controlled_retention: bool,
-    activation_threshold_m3_s: np.float32,
-    release_threshold_factor: np.float32,
-    inflow_limit_m3: np.float32,
-    max_outflow_limit_m3: np.float32,
-) -> tuple[np.float32, np.float32, np.float32, np.float32]:
-    """Calculate the water diversion and release for a single retention basin node.
-
-    This function computes how much water is diverted from the river into a
-    retention basin (during high flows) or released from the basin back into
-    the river (during low flows) based on predefined thresholds.
-
-    Notes:
-        Diversions only occur when the river's discharge rate exceeds the activation threshold.
-        For controlled retention basins, diversion can only occur on a rising limb of the hydrograph.
-        Releases only occur when the storage is non-empty and the initial discharge rate is below
-        the release threshold. High flows and low flows are handled as mutually exclusive states.
-
-    Args:
-        dt: The length of the routing time step (seconds).
-        river_volume_m3: The current available volume of water in the river cell (m3).
-        discharge_before_diversion_m3_s: The initial discharge rate in the river cell before diversion (m3/s).
-        is_rising_limb: Flag indicating if the discharge is currently rising compared to the previous time step.
-        retention_storage_m3: The current amount of water stored in the retention basin (m3).
-        retention_max_storage_m3: The maximum storage capacity of the retention basin (m3).
-        controlled_retention: Flag indicating whether the retention basin is controlled.
-        activation_threshold_m3_s: The discharge threshold above which water is diverted into the basin (m3/s).
-        release_threshold_factor: The multiplier applied to the activation threshold to determine the release threshold.
-        inflow_limit_m3: The physical limit of water volume that can enter the basin during this step (m3).
-        max_outflow_limit_m3: The maximum volume of water that the basin can release during this step (m3).
-
-    Returns:
-        A tuple containing:
-            diverted_volume_m3: The volume of water diverted into the basin (m3).
-            outflow_volume_m3: The volume of water released from the basin (m3).
-            updated_retention_storage_m3: The updated retention storage (m3).
-            final_river_volume_m3: The updated available water volume in the river cell (m3).
-
-    Raises:
-        ValueError: If `dt` is <= 0 or if `retention_max_storage_m3` is negative.
-    """
-    if dt <= np.float32(0.0):
-        raise ValueError("Time step dt must be positive.")
-    if retention_max_storage_m3 < np.float32(0.0):
-        raise ValueError("Maximum retention storage must be non-negative.")
-
-    # Determine available storage in the retention basin. Can not be negative.
-    available_storage_m3: np.float32 = max(
-        np.float32(0.0),
-        retention_max_storage_m3 - retention_storage_m3,
-    )
-
-    diverted_volume_m3: np.float32 = np.float32(0.0)
-    outflow_volume_m3: np.float32 = np.float32(0.0)
-
-    # Determine the release threshold
-    release_threshold_m3_s: np.float32 = (
-        activation_threshold_m3_s * release_threshold_factor
-    )
-
-    # During high flow, divert water into the retention basin
-    if discharge_before_diversion_m3_s > activation_threshold_m3_s:
-        if not controlled_retention or is_rising_limb:
-            discharge_above_activation_threshold_m3_s: np.float32 = (
-                discharge_before_diversion_m3_s - activation_threshold_m3_s
-            )
-            diverted_volume_m3 = min(
-                river_volume_m3,
-                available_storage_m3,
-                inflow_limit_m3,
-                discharge_above_activation_threshold_m3_s * dt,
-            )
-
-    # During low flow, release water from the retention basin to the river
-    elif discharge_before_diversion_m3_s <= release_threshold_m3_s:
-        if retention_storage_m3 > np.float32(0.0):
-            # We ensure the release does not cause the river flow rate to exceed the release threshold.
-            allowed_extra_outflow_m3: np.float32 = (
-                release_threshold_m3_s - discharge_before_diversion_m3_s
-            ) * dt
-            outflow_volume_m3 = min(
-                allowed_extra_outflow_m3,
-                max_outflow_limit_m3,
-            )
-            outflow_volume_m3 = max(np.float32(0.0), outflow_volume_m3)
-            outflow_volume_m3 = min(outflow_volume_m3, retention_storage_m3)
-
-    # Update retention storage and remaining river volume.
-    updated_retention_storage_m3: np.float32 = (
-        retention_storage_m3 + diverted_volume_m3 - outflow_volume_m3
-    )
-    final_river_volume_m3: np.float32 = (
-        river_volume_m3 - diverted_volume_m3 + outflow_volume_m3
-    )
-
-    return (
-        diverted_volume_m3,
-        outflow_volume_m3,
-        updated_retention_storage_m3,
-        final_river_volume_m3,
     )
 
 
@@ -1463,6 +1292,7 @@ def _run_inertial_substeps(
 
     buffers.discharge_vol_sum_inertial.fill(0.0)
     buffers.wb_extra_lateral_accum_m3.fill(0.0)
+    buffers.terminal_wb_outflow_accum_m3.fill(0.0)
 
     # Initialize reach water stages from current storage to ensure physical consistency
     _compute_stage_from_storage_inertial(

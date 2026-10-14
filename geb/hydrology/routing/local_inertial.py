@@ -21,10 +21,8 @@ from .geometry import (
 )
 from .inertial_kernel import (
     INERTIAL_PARALLEL_THRESHOLD,
-    RetentionCoupling,
     RoutingStepDiagnostics,
     SubstepBuffers,
-    WaterbodyCoupling,
     _compute_stage_from_storage_inertial,
     _gather_inputs,
     _run_inertial_substeps_parallel,
@@ -41,7 +39,9 @@ from .kinematic import (
 from .topology import (
     InertialTopology,
     KinematicTopology,
+    RetentionCoupling,
     RoutingTopology,
+    WaterbodyCoupling,
     build_routing_topology,
 )
 
@@ -1113,6 +1113,7 @@ class LocalInertial:
             self._evaporation_perm[:] = evaporation_m3
 
         self._substep_buffers.wb_extra_lateral_accum_m3.fill(0.0)
+        self._substep_buffers.terminal_wb_outflow_accum_m3.fill(0.0)
 
         inertial_start: int = self.n_kinematic
         inertial_end: int = self.n_kinematic + self.n_inertial

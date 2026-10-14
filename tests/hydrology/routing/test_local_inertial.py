@@ -1334,6 +1334,34 @@ def test_local_inertial_terminal_waterbody_on_pit() -> None:
     )
     assert np.isclose(total_initial, total_final, atol=1e-3)
 
+    # Step 2: verify terminal_wb_outflow_accum_m3 is properly reset between steps
+    total_step2_initial: float = float(np.sum(wb_storage_out) + np.sum(river_storage_out))
+    (
+        Q_out2,
+        river_storage_out2,
+        _,
+        _,
+        wb_storage_out2,
+        _,
+        outflow_at_pits2,
+        _,
+        _,
+        _,
+    ) = router.step(
+        Q_prev_m3_s=Q_out,
+        river_storage_m3=river_storage_out.copy(),
+        sideflow_m3=np.zeros(n_cells, dtype=np.float32),
+        evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        waterbody_storage_m3=wb_storage_out.copy(),
+        outflow_per_waterbody_m3=wb_outflow,
+        retention_storage_m3=np.zeros(0, dtype=np.float32),
+        retention_activation_threshold_m3_s=np.zeros(0, dtype=np.float32),
+    )
+    total_step2_final: float = float(
+        np.sum(wb_storage_out2) + np.sum(river_storage_out2) + outflow_at_pits2
+    )
+    assert np.isclose(total_step2_initial, total_step2_final, atol=1e-3)
+
 
 def test_compound_channel_floodplain_attenuation_and_mass_balance() -> None:
     """Tests flood wave attenuation and strict mass conservation in a compound channel network."""
@@ -2813,12 +2841,14 @@ def test_inertial_substeps_parallel_and_serial_equivalence() -> None:
     """
     from geb.hydrology.routing.inertial_kernel import (
         INERTIAL_PARALLEL_THRESHOLD,
-        RetentionCoupling,
         SubstepBuffers,
-        WaterbodyCoupling,
         _run_inertial_substeps,
         _run_inertial_substeps_parallel,
         _run_inertial_substeps_serial,
+    )
+    from geb.hydrology.routing.topology import (
+        RetentionCoupling,
+        WaterbodyCoupling,
     )
 
     assert INERTIAL_PARALLEL_THRESHOLD == 5000

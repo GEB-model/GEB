@@ -8,12 +8,12 @@ from geb.geb_types import (
     ArrayFloat64,
 )
 
-from .inertial_kernel import (
+from .topology import (
+    KinematicTopology,
     RetentionCoupling,
     WaterbodyCoupling,
     compute_retention_routing,
 )
-from .topology import KinematicTopology
 
 __all__: list[str] = [
     "KINEMATIC_PARALLEL_THRESHOLD",

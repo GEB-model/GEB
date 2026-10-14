@@ -241,17 +241,17 @@ def test_serial_and_parallel_kinematic_kernels_equivalence() -> None:
     Verifies that the serial and parallel compiled variants of the kinematic wave routing
     step produce numerically identical results, and that dispatching logic operates correctly.
     """
-    from geb.hydrology.routing.inertial_kernel import (
-        RetentionCoupling,
-        WaterbodyCoupling,
-    )
     from geb.hydrology.routing.kinematic import (
         KINEMATIC_PARALLEL_THRESHOLD,
         _run_kinematic_step,
         _run_kinematic_step_parallel,
         _run_kinematic_step_serial,
     )
-    from geb.hydrology.routing.topology import KinematicTopology
+    from geb.hydrology.routing.topology import (
+        KinematicTopology,
+        RetentionCoupling,
+        WaterbodyCoupling,
+    )
 
     assert KINEMATIC_PARALLEL_THRESHOLD == 5000
 
