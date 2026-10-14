@@ -35,14 +35,12 @@ class GroundWater(BuildModelBase):
             WOKAM gives ranges, not exact fractions. Use their
             midpoints for continuous (0.825) and discontinuous (0.4) rocks,
             and assume 0.65 for mixed rocks. Inactive grid cells are NaN.
-
-        Returns:
-            None; saves ``groundwater/karst_fraction`` (0–1).
+            Saves ``groundwater/karst_fraction`` as a fraction between 0 and 1.
 
         Raises:
             ValueError: If a coordinate reference system is missing, the grid
                 is rotated, or WOKAM has unknown rock classes.
-        """  # noqa: DOC202
+        """
         polygons: gpd.GeoDataFrame = self.data_catalog.fetch("wokam").read()
         mask: xr.DataArray = self.grid["mask"]
         if polygons.crs is None or mask.rio.crs is None:
