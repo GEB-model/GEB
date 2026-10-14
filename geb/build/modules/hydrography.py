@@ -2026,7 +2026,7 @@ class Hydrography(BuildModelBase):
 
         ar6_sea_level_rise_stations: pd.DataFrame = pd.DataFrame(
             data=interpolated_values.T,
-            index=target_years,
+            index=pd.to_datetime([f"{year}-01-01" for year in target_years]),
             columns=gtsm_stations.index,
         )
         self.set_table(ar6_sea_level_rise_stations, name="ar6/sea_level_rise")
