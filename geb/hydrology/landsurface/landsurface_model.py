@@ -1079,6 +1079,7 @@ class LandSurfaceVariables(Bucket):
     deep_soil_temperature_C: ArrayFloat32
     thermal_conductivity_saturated_unfrozen_W_per_m_K: TwoDArrayFloat32
     thermal_conductivity_saturated_frozen_W_per_m_K: TwoDArrayFloat32
+    yearly_actual_evapotranspiration_m3_agents: ArrayFloat64
 
 
 class LandSurface(Module):
@@ -2422,6 +2423,31 @@ class LandSurface(Module):
         local_variables_to_report = set(self.local_variables_to_report) | (
             crop_prediction_feature_names
         )
+
+        # Accumulate actual ET volume over farmer-owned HRUs throughout the year.
+        # Keep the accumulator in model state so checkpoints preserve its value.
+        # Only the year-end result is reported, avoiding daily disk output.
+        if "yearly_actual_evapotranspiration_m3_agents" in local_variables_to_report:
+            if not hasattr(self.var, "yearly_actual_evapotranspiration_m3_agents"):
+                self.var.yearly_actual_evapotranspiration_m3_agents = np.zeros(
+                    self.var.owned_hru_count.size, dtype=np.float64
+                )
+            elif (
+                self.model.current_time.month == 1 and self.model.current_time.day == 1
+            ):
+                self.var.yearly_actual_evapotranspiration_m3_agents.fill(0.0)
+
+            self.var.yearly_actual_evapotranspiration_m3_agents += np.bincount(
+                self.var.land_owner_ids,
+                weights=(
+                    actual_evapotranspiration_m[self.var.owned_land].astype(np.float64)
+                    * self.HRU.var.cell_area[self.var.owned_land]
+                ),
+                minlength=self.var.owned_hru_count.size,
+            )
+            yearly_actual_evapotranspiration_m3_agents = (
+                self.var.yearly_actual_evapotranspiration_m3_agents
+            )
 
         # Export daily agent variables
         topsoil_layers = slice(0, 3)
