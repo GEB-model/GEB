@@ -38,6 +38,7 @@ from geb.workflows.methods import multi_level_merge
 from geb.workflows.raster import coord_to_pixel
 
 if TYPE_CHECKING:
+    from geb.hydrology.routing import Routing
     from geb.model import GEBModel
 
 WATER_CIRCLE_REPORT_CONFIG: dict[str, str | dict[str, str | dict[str, str]]] = {
@@ -863,6 +864,9 @@ class Reporter:
         Loops over the reporter configuration and creates the necessary files and data structures,
         that are then used while the model is run to add data to.
 
+        Hydrological runs always report river outflow discharge (m³/s), including
+        exported spinup history, for annual channel geometry updates.
+
         For full documentation of the report configuration, see the documentation.
 
         There are also several pre-defined report configurations that can be activated by adding
@@ -871,7 +875,6 @@ class Reporter:
         - _bankfull_depths: if set to True, bankfull depths across rivers and at discharge stations are reported.
         - _retention_basins: if set to True, discharge and storage for all retention basins are reported as single parquet files.
         - _meteorological_stations: if set to True, meteorological variables at all meteorological stations are reported as a single parquet file.
-        - _outflow_points: if set to True, outflow at all outflow points is reported as a single parquet file.
         - _water_circle: if set to True, a standard set of variables to monitor the water circle is reported.
         - _water_balance: if set to True, a standard set of variables to monitor the water balance is reported.
         - _water_storage: if set to True, a standard set of variables to monitor water storage is reported.
@@ -890,6 +893,45 @@ class Reporter:
 
         self.variables_to_report = copy.deepcopy(self.model.config["report"])
         del self.variables_to_report["_config"]
+
+        # Ignore the removed option in older configurations: routing requires this history.
+        self.variables_to_report.pop("_outflow_points", None)
+        if self.model.mode == "w" and self.model.simulate_hydrology:
+            routing: Routing = self.model.hydrology.routing
+            rivers: gpd.GeoDataFrame = routing.get_active_rivers()
+            all_rivers: gpd.GeoDataFrame = routing.var.rivers
+
+            outflow_reporters: dict[str, dict[str, Any]] = {}
+
+            river_ID: int
+            i: int
+            xy: tuple[int, int]
+            for river_ID in rivers.index:
+                assert isinstance(river_ID, int)
+                xys: list[tuple[int, int]] = get_river_representative_xys(
+                    river_ID, all_rivers
+                )
+                for i, xy in enumerate(xys):
+                    # if there are multiple branches, we append a suffix to the name
+                    suffix: str = f"_{i}" if len(xys) > 1 else ""
+                    outflow_reporters[
+                        f"river_outflow_hourly_m3_per_s_{river_ID}{suffix}"
+                    ] = {
+                        "varname": "var.discharge_m3_s_per_substep",
+                        "type": "grid",
+                        "function": f"sample_xy,{xy[0]},{xy[1]}",
+                        "substeps": 24,
+                        "_group": "river_outflow_hourly_m3_per_s",
+                        "_group_key": f"{river_ID}{suffix}",
+                    }
+            self.variables_to_report = multi_level_merge(
+                self.variables_to_report,
+                {"hydrology.routing": outflow_reporters},
+            )
+            self.variables_to_report = multi_level_merge(
+                self.variables_to_report,
+                OUTFLOW_PLOT_CONTEXT_REPORT_CONFIG,
+            )
 
         if self.model.simulate_hydrology:
             self.hydrology = model.hydrology
@@ -1017,40 +1059,6 @@ class Reporter:
                                     self.variables_to_report,
                                     {"hydrology.landsurface": station_reporters},
                                 )
-                    elif module_name == "_outflow_points":
-                        if module_values is True:
-                            routing = self.model.hydrology.routing
-                            rivers = routing.get_active_rivers()
-                            all_rivers = routing.var.rivers
-
-                            outflow_reporters = {}
-
-                            for river_ID, river in rivers.iterrows():
-                                assert isinstance(river_ID, int)
-                                xys: list[tuple[int, int]] = (
-                                    get_river_representative_xys(river_ID, all_rivers)
-                                )
-                                for i, xy in enumerate(xys):
-                                    # if there are multiple branches, we append a suffix to the name
-                                    suffix = f"_{i}" if len(xys) > 1 else ""
-                                    outflow_reporters[
-                                        f"river_outflow_hourly_m3_per_s_{river_ID}{suffix}"
-                                    ] = {
-                                        "varname": "var.discharge_m3_s_per_substep",
-                                        "type": "grid",
-                                        "function": f"sample_xy,{xy[0]},{xy[1]}",
-                                        "substeps": 24,
-                                        "_group": "river_outflow_hourly_m3_per_s",
-                                        "_group_key": f"{river_ID}{suffix}",
-                                    }
-                            self.variables_to_report = multi_level_merge(
-                                self.variables_to_report,
-                                {"hydrology.routing": outflow_reporters},
-                            )
-                            self.variables_to_report = multi_level_merge(
-                                self.variables_to_report,
-                                OUTFLOW_PLOT_CONTEXT_REPORT_CONFIG,
-                            )
                     elif module_name == "_water_circle":
                         if module_values is True:
                             self.variables_to_report = multi_level_merge(

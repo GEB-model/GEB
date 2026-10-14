@@ -1,4 +1,5 @@
 # dev
+- Always collect and export river-outflow history for hydrological runs. Remove the `report._outflow_points` option; old configurations containing it remain compatible, but its value is ignored. Routing needs this history for annual flood return-period and channel geometry updates; disabling the report previously caused a `KeyError` on January 1. No input rebuild is needed; rerun failed spinups or spinups without discharge history.
 - Use FathomDEM as default instead of FABDEM.
 - Integrated interactive chart data bundles directly into the single discharge dashboard HTML file.
 - Implement capillary rise in the Ross solver.

@@ -2,6 +2,13 @@
 
 The report module provides functionality for to report model data to disk. This can be configured in `model.yml` under the `report` key. The structure is as follows:
 
+Hydrological runs always report river outflow; this cannot be disabled.
+The former `report._outflow_points` option has been removed and is ignored in old configurations. Routing needs the recorded river discharge (m³/s) to estimate
+flood return periods and update channel geometry each year. During spinup, it
+reads this history from memory; during simulation, it also reads the spinup's
+`hydrology.routing/river_outflow_hourly_m3_per_s.parquet` file. If a previous spinup ran with
+this report disabled, rerun spinup to generate the missing discharge history.
+
 ``` yaml
 report:
     module_name:
