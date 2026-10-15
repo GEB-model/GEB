@@ -482,6 +482,12 @@ class Floods(Module):
             crs=flood_depth.rio.crs,
         )  # save the flood depth to a zarr file
 
+        # For the sensitivity analysis runs, the flood depth is read from a pre-computed zarr file
+        # filename = "/net/sys/pscst201/BETA-IVM-HPC@ada-nodes/adq582/GEB/models/geul_IbF_warning/base/output/flood_maps/20210714T000000 - 20210716T000000.zarr"
+        # flood_depth: xr.DataArray = read_zarr(
+        #     filename
+        # )  # read the flood depth from the zarr file
+
         # This check is done to compute damages (using ERA5) only after multiverse is finished
         if self.model.multiverse_name is None:
             print("Multiverse no longer active, now compute flood damages...")

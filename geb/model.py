@@ -310,6 +310,15 @@ class GEBModel(Module, HazardDriver):
                 set(forecast_issue_dates)
             )  # only keep unique dates
 
+            # get warning system settings from the config
+            warning_config = self.model.config["general"]["forecasts"]
+            prob_threshold = warning_config["probability_threshold"]
+            buildings_hit_threshold = warning_config["buildings_hit_threshold"]
+            communication_efficiency = warning_config["communication_efficiency"]
+            responsive_ratio = self.model.config["agent_settings"]["households"][
+                "responsive_ratio"
+            ]
+
             for dt in forecast_issue_dates:
                 if (
                     dt == self.current_time
@@ -328,20 +337,23 @@ class GEBModel(Module, HazardDriver):
                         print(
                             f"\nRunning flood early warning system for date time {self.current_time.isoformat()}..."
                         )
-                        self.agents.households.water_level_warning_strategy3(
-                            date_time=self.current_time
+                        self.agents.households.water_level_warning_strategy(
+                            date_time=self.current_time,
+                            prob_threshold=prob_threshold,
+                            buildings_hit_threshold=buildings_hit_threshold,
+                            communication_efficiency=communication_efficiency,
                         )
                         # self.agents.households.create_flood_probability_maps(
                         #     date_time=self.current_time, strategy=1, exceedance=True
                         # )
-                        # self.agents.households.water_level_warning_strategy(
-                        #     date_time=self.current_time
-                        # )
                         # self.agents.households.critical_infrastructure_warning_strategy(
                         #     date_time=self.current_time
                         # )
+                        self.agents.households.identify_flood_aware_households()
+
                         self.agents.households.household_decision_making(
-                            date_time=self.current_time
+                            date_time=self.current_time,
+                            responsive_ratio=responsive_ratio,
                         )
                         self.agents.households.update_households_geodataframe_w_warning_variables(
                             date_time=self.current_time
@@ -687,10 +699,10 @@ class GEBModel(Module, HazardDriver):
         Returns:
             Name of the current model run. If in spinup mode, the spinup name is returned.
         """
-        if self.in_spinup:
-            return self.config["general"]["spinup_name"]
-        else:
-            return self.config["general"]["name"]
+        # if self.in_spinup:
+        #     return self.config["general"]["spinup_name"]
+        # else:
+        return self.config["general"]["name"]
 
     @property
     def multiverse_name(self) -> str | None:

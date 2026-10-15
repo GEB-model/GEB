@@ -2228,8 +2228,10 @@ class Hydrology:
             self.model.output_folder / "buildings_w_postal_codes.geoparquet"
         )
 
-        # Folder where to get the households gdf from
-        households_folder: Path = self.model.output_folder / "action_maps"
+        # Folder where to get the households gdf from (varies with each run when doing sensitivity analysis, so it is included self.model.run_name)
+        households_folder: Path = (
+            self.model.output_folder / self.model.run_name / "action_maps"
+        )
 
         def create_warning_performance_plots(
             hits: gpd.GeoDataFrame,
@@ -2275,7 +2277,7 @@ class Hydrology:
 
             # Define extent based on observed flood extent
             minx, miny, maxx, maxy = catchment_borders.total_bounds
-            margin = 500
+            margin = 1000
 
             fig, ax = plt.subplots(figsize=(10, 10))
 
@@ -2357,20 +2359,30 @@ class Hydrology:
                 alpha=0.5,
             )
 
-            # Basemap
+            # Cached basemap
+            OSM_basemap_path = (
+                self.model.output_folder
+                / "default/evaluate/warnings/basemaps/geul_basemap_OSM_France_28992.tif"
+            )
+
             if visualization_type == "OSM":
                 # Extent
                 ax.set_xlim(minx - margin, maxx + margin)
                 ax.set_ylim(miny - margin, maxy + margin)
-                ax.set_aspect("equal", adjustable="datalim")
+                ax.set_aspect("equal")
+                # ax.set_aspect("equal", adjustable="datalim")
 
                 ctx.add_basemap(
                     ax,
                     crs=target_crs,
-                    source=ctx.providers.OpenStreetMap.Mapnik,
+                    source=OSM_basemap_path,
                     zoom=12,
-                    alpha=0.5,
+                    alpha=0.4,
                 )
+
+            # source=ctx.providers.Esri.WorldStreetMap
+            # source=ctx.providers.OpenStreetMap.Mapnik
+            # source=ctx.providers.OpenStreetMap.HOT
 
             ax.set_title(
                 f"Lead Time: {leadtime_hours:.0f} hours",
@@ -2546,7 +2558,7 @@ class Hydrology:
             # Save it for reference
             flooded_area.to_parquet(
                 performance_folder
-                / "postal_codes_considered_flooded_by_fraction.geoparquet"
+                / f"postal_codes_considered_flooded_by_fraction_{buildings_hit_threshold_flooded * 100:.0f}.geoparquet"
             )
             print(
                 "Number of flooded postal codes based on criteria:",
@@ -2703,7 +2715,7 @@ class Hydrology:
                 print(f"Overall Hit Rate: {HR:.0%}")
 
                 FAR = n_false_alarms / (n_hits + n_false_alarms)
-                print(f"False Alarm Rate: {FAR:.0%}")
+                print(f"False Alarm Ratio: {FAR:.0%}")
 
                 CSI = n_hits / (n_hits + n_misses + n_false_alarms)
                 print(f"Critical Success Index: {CSI:.0%}")

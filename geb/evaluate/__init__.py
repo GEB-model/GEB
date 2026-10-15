@@ -92,6 +92,11 @@ class Evaluate(Hydrology, MeteorologicalForecasts):
     @property
     def output_folder_evaluate(self) -> Path:
         """Returns the output folder for evaluation results."""
+        # Folder for evaluation results
         folder: Path = self.model.output_folder / "evaluate"
+
+        # For the sensitivity analysis runs, uncomment below, as the output folder is different for each run
+        # folder: Path = self.model.output_folder / self.model.run_name / "evaluate"
+
         folder.mkdir(parents=True, exist_ok=True)
         return folder
