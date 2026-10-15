@@ -1,5 +1,4 @@
 # v1.0.0b37
-- Remove farmers without land in the active grid and compact their IDs and attribute arrays together. `geb update-version -b build.yml` repairs existing inputs; rerun spinup and simulation afterward.
 - Enrich HydroLAKES with GDW reservoirs and AMBER lake classifications; activate reservoirs from their construction year while preserving water storage and recorded discharge layouts. Rebuild `setup_waterbodies`, then rerun spinup and simulation.
 - Stop when automatic input migrations fail.
 
