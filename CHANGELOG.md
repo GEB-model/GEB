@@ -1,5 +1,6 @@
 # v1.0.0b36
 - Add karst storage to all hydrology runs, with a default release time of 10 days. Update inputs and rerun spinup.
+- Reforestation (`agent_settings.government.plant_forest`) now changes only soil organic carbon (basin forest mean, never decreasing) and bulk density (measured forest / previous land use ratio) of converted HRUs and recalculates the soil hydraulic properties from them, keeping sand, silt and clay. A run with `plant_forest` enabled now requires a spinup made with `plant_forest` enabled; otherwise the model stops and asks to redo the spinup.
 
 # v1.0.0b35
 - River-outflow history is now automatically always reported (i.e.we remove the `report._outflow_points` option; old configurations containing it remain compatible, but its value is ignored.
