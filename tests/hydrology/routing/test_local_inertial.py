@@ -3153,9 +3153,6 @@ def test_local_inertial_volume_limiter_subcritical_preservation() -> None:
         GEOM_IN_STAGE_VOLUME_COEFFICIENT,
         GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH,
         GEOM_OV_BANKFULL_PERIMETER,
-        GEOM_OV_FLOODPLAIN_AREA_THRESHOLD,
-        GEOM_OV_FLOODPLAIN_DEPTH_THRESHOLD,
-        GEOM_OV_FLOODPLAIN_SIDE_SLOPE,
         GEOM_OV_FLOODPLAIN_WIDTH,
         GEOM_OV_NUM_COLS,
         GEOM_OV_RIVER_WIDTH,
@@ -3181,9 +3178,6 @@ def test_local_inertial_volume_limiter_subcritical_preservation() -> None:
     geom_overbank: np.ndarray = np.zeros((1, GEOM_OV_NUM_COLS), dtype=np.float32)
     geom_overbank[0, GEOM_OV_RIVER_WIDTH] = np.float32(20.0)
     geom_overbank[0, GEOM_OV_FLOODPLAIN_WIDTH] = np.float32(0.0)
-    geom_overbank[0, GEOM_OV_FLOODPLAIN_SIDE_SLOPE] = np.float32(0.0)
-    geom_overbank[0, GEOM_OV_FLOODPLAIN_DEPTH_THRESHOLD] = np.float32(5.0)
-    geom_overbank[0, GEOM_OV_FLOODPLAIN_AREA_THRESHOLD] = np.float32(100.0)
     geom_overbank[0, GEOM_OV_BANKFULL_PERIMETER] = np.float32(25.0)
 
     inv_dt_substep: np.float32 = np.float32(0.1)  # dt = 10s

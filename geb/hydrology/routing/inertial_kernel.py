@@ -27,9 +27,6 @@ from .geometry import (
     GEOM_IN_INVERSE_LENGTH,
     GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE,
     GEOM_IN_STAGE_VOLUME_COEFFICIENT,
-    GEOM_OV_FLOODPLAIN_AREA_THRESHOLD,
-    GEOM_OV_FLOODPLAIN_DEPTH_THRESHOLD,
-    GEOM_OV_FLOODPLAIN_SIDE_SLOPE,
     GEOM_OV_FLOODPLAIN_WIDTH,
     GEOM_OV_RIVER_WIDTH,
     InertialGeometry,
@@ -243,13 +240,6 @@ def _compute_reach_stage_from_vol(
         overbank_volume_m3=overbank_volume,
         inverse_reach_length=geom_inbank[reach_idx, GEOM_IN_INVERSE_LENGTH],
         floodplain_width_m=geom_overbank[reach_idx, GEOM_OV_FLOODPLAIN_WIDTH],
-        floodplain_side_slope=geom_overbank[reach_idx, GEOM_OV_FLOODPLAIN_SIDE_SLOPE],
-        floodplain_depth_threshold_m=geom_overbank[
-            reach_idx, GEOM_OV_FLOODPLAIN_DEPTH_THRESHOLD
-        ],
-        floodplain_area_threshold_m2=geom_overbank[
-            reach_idx, GEOM_OV_FLOODPLAIN_AREA_THRESHOLD
-        ],
     )
     return (
         geom_inbank[reach_idx, GEOM_IN_BED_ELEVATION]
@@ -333,15 +323,6 @@ def _compute_reach_cfl_depths(
                 inverse_shape_exponent_plus_one=inv_shape_exponent_plus_one,
                 bankfull_area_m2=bankfull_area_m2,
                 bankfull_volume_m3=geom_inbank[reach_idx, GEOM_IN_BANKFULL_VOLUME],
-                floodplain_side_slope=geom_overbank[
-                    reach_idx, GEOM_OV_FLOODPLAIN_SIDE_SLOPE
-                ],
-                floodplain_depth_threshold_m=geom_overbank[
-                    reach_idx, GEOM_OV_FLOODPLAIN_DEPTH_THRESHOLD
-                ],
-                floodplain_area_threshold_m2=geom_overbank[
-                    reach_idx, GEOM_OV_FLOODPLAIN_AREA_THRESHOLD
-                ],
             )
         )
         h_vol = wetted_cross_sectional_area_m2 / max(

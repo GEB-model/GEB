@@ -61,10 +61,6 @@ def test_compute_cfl_area_and_top_width_and_overbank_depth() -> None:
         bankfull_area_arr,
         bankfull_volume_arr,
         bankfull_perimeter_arr,
-        floodplain_side_slope_arr,
-        floodplain_depth_threshold_arr,
-        floodplain_area_threshold_arr,
-        sqrt_one_plus_floodplain_slope_squared_arr,
         width_over_sqrt_bankfull_depth_arr,
     ) = compute_static_geometry(
         river_length=np.array([reach_length_m], dtype=np.float32),
@@ -90,26 +86,22 @@ def test_compute_cfl_area_and_top_width_and_overbank_depth() -> None:
         inverse_shape_exponent_plus_one=inverse_shape_exponent_plus_one[0],
         bankfull_area_m2=bankfull_area,
         bankfull_volume_m3=bankfull_volume,
-        floodplain_side_slope=floodplain_side_slope_arr[0],
-        floodplain_depth_threshold_m=floodplain_depth_threshold_arr[0],
-        floodplain_area_threshold_m2=floodplain_area_threshold_arr[0],
     )
     assert np.isclose(area_in, bankfull_area * 0.5, atol=1e-4)
     assert np.isclose(top_width_in, expected_top_width, atol=1e-4)
 
-    # Overbank test with trapezoidal floodplain widening:
-    # W_bf=20.0, h_bf=2.0, W_fp=80.0 -> eff_z_fp = 80 / (2 * 2) = 20.0
-    # Overbank volume = 20,000 m3 -> overbank area = 20 m2
-    # h_fp = sqrt(20 / 20) = 1.0 m; Top width = 20 + 2 * 20 * 1.0 = 60 m; Area = a_bf + 20 m2
+    # Overbank test with flat floodplain bench W_fp + 2:1 valley slope:
+    # W_fp = 80.0 m, overbank_area = 20 m2
+    # Quadratic: 2 * h^2 + 80 * h - 20 = 0 -> h = (-80 + sqrt(6400 + 160)) / 4 ≈ 0.24845 m
+    # Top width: W_bf + W_fp + 4 * h = 20.0 + 80.0 + 4 * h ≈ 100.9938 m; Area = a_bf + 20 m2
+    expected_h_ob = float((-80.0 + math.sqrt(80.0**2 + 8.0 * 20.0)) / 4.0)
+    expected_w_ob = float(20.0 + 80.0 + 4.0 * expected_h_ob)
     h_fp_ob = compute_overbank_depth(
         overbank_volume_m3=np.float32(20000.0),
         inverse_reach_length=inverse_reach_length[0],
         floodplain_width_m=floodplain_width_m,
-        floodplain_side_slope=floodplain_side_slope_arr[0],
-        floodplain_depth_threshold_m=floodplain_depth_threshold_arr[0],
-        floodplain_area_threshold_m2=floodplain_area_threshold_arr[0],
     )
-    assert np.isclose(h_fp_ob, 1.0, atol=1e-4)
+    assert np.isclose(h_fp_ob, expected_h_ob, atol=1e-4)
 
     area_ob, top_width_ob = compute_cfl_area_and_top_width(
         volume_m3=np.float32(bankfull_volume + 20000.0),
@@ -121,12 +113,27 @@ def test_compute_cfl_area_and_top_width_and_overbank_depth() -> None:
         inverse_shape_exponent_plus_one=inverse_shape_exponent_plus_one[0],
         bankfull_area_m2=bankfull_area,
         bankfull_volume_m3=bankfull_volume,
-        floodplain_side_slope=floodplain_side_slope_arr[0],
-        floodplain_depth_threshold_m=floodplain_depth_threshold_arr[0],
-        floodplain_area_threshold_m2=floodplain_area_threshold_arr[0],
     )
     assert np.isclose(area_ob, bankfull_area + 20.0, atol=1e-4)
-    assert np.isclose(top_width_ob, 60.0, atol=1e-4)
+    assert np.isclose(top_width_ob, expected_w_ob, atol=1e-4)
+
+    # Zero overbank volume test -> depth is 0
+    h_fp_zero = compute_overbank_depth(
+        overbank_volume_m3=np.float32(0.0),
+        inverse_reach_length=inverse_reach_length[0],
+        floodplain_width_m=floodplain_width_m,
+    )
+    assert h_fp_zero == 0.0
+
+    # Zero floodplain width test (W_fp = 0): 2:1 slope from river bank (z = 2.0)
+    # Quadratic: 2 * h^2 - 20 = 0 -> h = sqrt(20 / 2) = sqrt(10) ≈ 3.16228 m
+    expected_h_no_fp = float(math.sqrt(20.0 / 2.0))
+    h_fp_no_fp = compute_overbank_depth(
+        overbank_volume_m3=np.float32(20000.0),
+        inverse_reach_length=inverse_reach_length[0],
+        floodplain_width_m=np.float32(0.0),
+    )
+    assert np.isclose(h_fp_no_fp, expected_h_no_fp, atol=1e-4)
 
 
 def test_compute_cross_section_from_depth() -> None:
@@ -142,10 +149,6 @@ def test_compute_cross_section_from_depth() -> None:
         bankfull_area_arr,
         bankfull_volume_arr,
         bankfull_perimeter_arr,
-        floodplain_side_slope_arr,
-        floodplain_depth_threshold_arr,
-        floodplain_area_threshold_arr,
-        sqrt_one_plus_floodplain_slope_squared_arr,
         width_over_sqrt_bankfull_depth_arr,
     ) = compute_static_geometry(
         river_length=np.array([1000.0], dtype=np.float32),
@@ -234,10 +237,6 @@ def test_compute_cross_section_divided_channel_conveyance_monotonicity() -> None
         bankfull_area_arr,
         bankfull_volume_arr,
         bankfull_perimeter_arr,
-        floodplain_side_slope_arr,
-        floodplain_depth_threshold_arr,
-        floodplain_area_threshold_arr,
-        sqrt_one_plus_floodplain_slope_squared_arr,
         width_over_sqrt_bankfull_depth_arr,
     ) = compute_static_geometry(
         river_length=np.array([5000.0], dtype=np.float32),
@@ -288,7 +287,7 @@ def test_compute_static_geometry_validation() -> None:
         bankfull_depth=valid_depth,
         floodplain_width=valid_fp_width,
     )
-    assert len(results) == 10
+    assert len(results) == 6
 
     # Happy path with zero floodplain width
     zero_fp_results = compute_static_geometry(
@@ -298,7 +297,8 @@ def test_compute_static_geometry_validation() -> None:
         bankfull_depth=valid_depth,
         floodplain_width=np.array([0.0], dtype=np.float32),
     )
-    assert zero_fp_results[6][0] == 0.0  # h_fp_max
+    assert len(zero_fp_results) == 6
+    assert np.isclose(zero_fp_results[0][0], np.float32(1.0 / 1000.0))
 
     # Mismatched shapes
     with pytest.raises(ValueError, match="All input arrays must have the same shape"):
@@ -1930,6 +1930,10 @@ def test_routing_calculate_bankfull_width() -> None:
         },
         index=[0, 1],
     )
+    import types
+
+    grid_var = types.SimpleNamespace(upstream_area=np.zeros(3, dtype=np.float32))
+    routing.grid = types.SimpleNamespace(var=grid_var)  # ty:ignore[invalid-assignment]
     routing.var = var
 
     # Cold start (use_simulated_bankfull_q=False): observed width preserved, unobserved gets default_missing

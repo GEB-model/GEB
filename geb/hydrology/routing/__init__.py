@@ -1118,9 +1118,21 @@ class Routing(Module):
                 self.var.observed_average_river_width,
             ).astype(np.float32)
         else:
+            upstream_area_km2: ArrayFloat32 = (
+                self.grid.var.upstream_area / np.float32(1e6)
+            ).astype(np.float32)
+            estimated_width_from_area: ArrayFloat32 = np.maximum(
+                np.float32(1.3)
+                * (np.maximum(upstream_area_km2, np.float32(0.0)) ** np.float32(0.45)),
+                np.float32(self.default_missing_channel_width),
+            )
             return np.where(
                 np.isnan(self.var.observed_average_river_width),
-                np.float32(self.default_missing_channel_width),
+                np.where(
+                    self.var.river_ids == -1,
+                    np.float32(self.default_missing_channel_width),
+                    estimated_width_from_area,
+                ),
                 self.var.observed_average_river_width,
             ).astype(np.float32)
 
@@ -1870,51 +1882,14 @@ class Routing(Module):
                 default_alpha=self.config["river_width"]["parameters"]["default_alpha"],
                 beta=self.config["river_width"]["parameters"]["beta"],
             )
-            if self.var.discharge_step_count >= 24:
-                use_simulated_bankfull_q: bool = self.has_simulated_bankfull_q
-                dynamic_width: ArrayFloat32
-                if use_simulated_bankfull_q:
-                    dynamic_width = self.calculate_bankfull_width(
-                        use_simulated_bankfull_q=True
-                    )
-                else:
-                    avg_discharge: ArrayFloat32 = (
-                        self.var.sum_of_all_discharge_steps
-                        / max(self.var.discharge_step_count, 1)
-                    ).astype(np.float32)
-                    width_params_step: dict[str, Any] = self.config["river_width"][
-                        "parameters"
-                    ]
-                    default_alpha_val: np.float32 = np.float32(
-                        width_params_step["default_alpha"]
-                    )
-                    default_beta_val: np.float32 = np.float32(width_params_step["beta"])
-                    use_obs_flag: bool = bool(
-                        self.config["river_depth"]["parameters"][
-                            "use_observed_width_as_bankfull"
-                        ]
-                    )
-                    alpha_w: ArrayFloat32 | np.float32 = (
-                        default_alpha_val
-                        if use_obs_flag
-                        else self.var.river_width_alpha
-                    )
-                    beta_w: ArrayFloat32 | np.float32 = (
-                        default_beta_val if use_obs_flag else self.var.river_width_beta
-                    )
-                    dynamic_width = np.where(
-                        np.isnan(self.var.observed_average_river_width),
-                        np.maximum(
-                            alpha_w
-                            * (np.maximum(avg_discharge, np.float32(1e-4)) ** beta_w),
-                            np.float32(self.default_missing_channel_width),
-                        ),
-                        self.var.observed_average_river_width,
-                    ).astype(np.float32)
+            if self.has_simulated_bankfull_q:
+                dynamic_width: ArrayFloat32 = self.calculate_bankfull_width(
+                    use_simulated_bankfull_q=True
+                )
                 self.var.river_width = dynamic_width
                 dynamic_depth_m: ArrayFloat32 = self.calculate_bankfull_depth(
                     bankfull_top_width_m=dynamic_width,
-                    use_simulated_bankfull_q=use_simulated_bankfull_q,
+                    use_simulated_bankfull_q=True,
                 )
                 self.router.update_channel_geometry(dynamic_width, dynamic_depth_m)
 

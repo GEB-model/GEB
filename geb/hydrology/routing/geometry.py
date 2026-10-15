@@ -28,9 +28,6 @@ __all__: list[str] = [
     "GEOM_IN_STAGE_VOLUME_COEFFICIENT",
     "GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH",
     "GEOM_OV_BANKFULL_PERIMETER",
-    "GEOM_OV_FLOODPLAIN_AREA_THRESHOLD",
-    "GEOM_OV_FLOODPLAIN_DEPTH_THRESHOLD",
-    "GEOM_OV_FLOODPLAIN_SIDE_SLOPE",
     "GEOM_OV_FLOODPLAIN_WIDTH",
     "GEOM_OV_NUM_COLS",
     "GEOM_OV_RIVER_WIDTH",
@@ -62,10 +59,7 @@ GEOM_IN_NUM_COLS: int = 10
 GEOM_OV_FLOODPLAIN_WIDTH: int = 0
 GEOM_OV_RIVER_WIDTH: int = 1
 GEOM_OV_BANKFULL_PERIMETER: int = 2
-GEOM_OV_FLOODPLAIN_SIDE_SLOPE: int = 3
-GEOM_OV_FLOODPLAIN_DEPTH_THRESHOLD: int = 4
-GEOM_OV_FLOODPLAIN_AREA_THRESHOLD: int = 5
-GEOM_OV_NUM_COLS: int = 6
+GEOM_OV_NUM_COLS: int = 3
 
 # Column indices for CFL stability parameters (geom_cfl)
 GEOM_CFL_MANNING_COEFFICIENT: int = 0
@@ -102,10 +96,6 @@ def compute_static_geometry(
     ArrayFloat32,
     ArrayFloat32,
     ArrayFloat32,
-    ArrayFloat32,
-    ArrayFloat32,
-    ArrayFloat32,
-    ArrayFloat32,
 ]:
     """Precomputes reach-static cross-sectional geometric constants.
 
@@ -123,10 +113,6 @@ def compute_static_geometry(
             - bankfull_area: Bankfull cross-sectional area (m²).
             - bankfull_volume: Bankfull channel storage volume (m³).
             - bankfull_perimeter: Bankfull wetted perimeter (meters).
-            - floodplain_side_slope: Effective floodplain side-slope parameter z_fp (dimensionless).
-            - floodplain_depth_threshold: Floodplain depth threshold for vertical expansion (meters).
-            - floodplain_area_threshold: Floodplain area threshold for vertical expansion (m²).
-            - sqrt_one_plus_floodplain_slope_squared: Precalculated factor sqrt(1 + z_fp²) (dimensionless).
             - width_over_sqrt_bankfull_depth: Precalculated factor W_bf / sqrt(h_bf) for r=0.5 (m^(1/2)).
 
     Raises:
@@ -157,31 +143,17 @@ def compute_static_geometry(
     inverse_shape_exponent_plus_one: ArrayFloat32 = np.float32(1.0) / (
         shape_exponent + np.float32(1.0)
     )
+    # Cross-sectional area for a power-law channel: A = W * h / (r + 1)
     bankfull_area: ArrayFloat32 = (
         river_width * bankfull_depth * inverse_shape_exponent_plus_one
     )
     bankfull_volume: ArrayFloat32 = river_length * bankfull_area
+    # Parabolic approximation for wetted perimeter
     bankfull_perimeter: ArrayFloat32 = (
         river_width
         + np.float32(8.0 / 3.0) * (bankfull_depth * bankfull_depth) / river_width
     )
-
-    reference_depth: ArrayFloat32 = np.maximum(bankfull_depth, np.float32(0.5))
-    floodplain_side_slope: ArrayFloat32 = np.maximum(
-        floodplain_width / (np.float32(2.0) * reference_depth), np.float32(2.0)
-    )
-    floodplain_depth_threshold: ArrayFloat32 = np.where(
-        floodplain_width > np.float32(0.0),
-        floodplain_width / (np.float32(2.0) * floodplain_side_slope),
-        np.float32(0.0),
-    ).astype(np.float32)
-    floodplain_area_threshold: ArrayFloat32 = floodplain_side_slope * (
-        floodplain_depth_threshold * floodplain_depth_threshold
-    )
-    sqrt_one_plus_floodplain_slope_squared: ArrayFloat32 = np.sqrt(
-        np.float32(1.0) + floodplain_side_slope * floodplain_side_slope
-    ).astype(np.float32)
-
+    # Fast shortcut for standard parabolic channels (r = 0.5)
     width_over_sqrt_bankfull_depth: ArrayFloat32 = river_width / np.sqrt(bankfull_depth)
 
     return (
@@ -190,10 +162,6 @@ def compute_static_geometry(
         bankfull_area,
         bankfull_volume,
         bankfull_perimeter,
-        floodplain_side_slope,
-        floodplain_depth_threshold,
-        floodplain_area_threshold,
-        sqrt_one_plus_floodplain_slope_squared,
         width_over_sqrt_bankfull_depth,
     )
 
@@ -241,10 +209,6 @@ def build_inertial_geometry(
         _bankfull_area,
         bankfull_volume,
         bankfull_perimeter,
-        fp_side_slope,
-        fp_depth_threshold,
-        fp_area_threshold,
-        _sqrt_one_plus_fp_slope_sq,
         width_over_sqrt_bankfull_depth,
     ) = compute_static_geometry(
         river_length=river_length,
@@ -254,6 +218,7 @@ def build_inertial_geometry(
         floodplain_width=floodplain_width,
     )
 
+    # Precompute coefficient so calculating depth from volume in the loop is just coeff * V^(1 / (r + 1))
     stage_vol_coeff: ArrayFloat32 = (
         bankfull_depth / (bankfull_volume**inv_shape_exponent_plus_one)
     ).astype(np.float32)
@@ -286,9 +251,6 @@ def build_inertial_geometry(
     geom_overbank[:, GEOM_OV_FLOODPLAIN_WIDTH] = floodplain_width
     geom_overbank[:, GEOM_OV_RIVER_WIDTH] = river_width
     geom_overbank[:, GEOM_OV_BANKFULL_PERIMETER] = bankfull_perimeter
-    geom_overbank[:, GEOM_OV_FLOODPLAIN_SIDE_SLOPE] = fp_side_slope
-    geom_overbank[:, GEOM_OV_FLOODPLAIN_DEPTH_THRESHOLD] = fp_depth_threshold
-    geom_overbank[:, GEOM_OV_FLOODPLAIN_AREA_THRESHOLD] = fp_area_threshold
 
     # Precompute CFL stability parameters
     geom_cfl: TwoDArrayFloat32 = np.empty(
@@ -298,11 +260,14 @@ def build_inertial_geometry(
         bed_elevation - ds_bed_elevation,
         np.float32(0.0),
     )
+    # Minimum slope floor keeps Manning's equation stable in flat or backwater reaches
     eff_slope: ArrayFloat32 = np.maximum(bed_drop * inv_reach_length, np.float32(1e-4))
     manning_n: ArrayFloat32 = np.sqrt(manning_n_sq)
+    # Normal depth factor: (n / (W * sqrt(S)))^0.6
     geom_cfl[:, GEOM_CFL_MANNING_COEFFICIENT] = (
         (manning_n / (river_width * np.sqrt(eff_slope))) ** np.float32(0.6)
     ).astype(np.float32)
+    # CFL time-step limit: dt <= safety_factor * dx / sqrt(g * h)
     cfl_safety_factor: np.float32 = np.float32(0.85)
     sqrt_g: np.float32 = np.sqrt(np.float32(9.80665))
     cfl_dx: ArrayFloat32 = river_length
@@ -323,35 +288,42 @@ def compute_overbank_depth(
     overbank_volume_m3: np.float32,
     inverse_reach_length: np.float32,
     floodplain_width_m: np.float32,
-    floodplain_side_slope: np.float32,
-    floodplain_depth_threshold_m: np.float32,
-    floodplain_area_threshold_m2: np.float32,
 ) -> np.float32:
     """Calculates floodplain inundation depth for water volume exceeding bankfull storage.
+
+    Assumes a flat floodplain bench of width floodplain_width_m at bankfull elevation, flanked
+    by valley side slopes of 2:1 (z = 2.0 horizontal : 1 vertical on each side).
+
+    The floodplain storage area at inundation depth h above bankfull is:
+        A = floodplain_width_m * h + 2 * h^2
+    Solving the quadratic 2 * h^2 + floodplain_width_m * h - A = 0 gives:
+        h = 2 * A / (floodplain_width_m + sqrt(floodplain_width_m^2 + 8 * A))
 
     Args:
         overbank_volume_m3: Water volume above bankfull capacity (m³).
         inverse_reach_length: Precomputed inverse reach length 1 / L (1/meters).
         floodplain_width_m: Additional floodplain width beyond bankfull channel (meters).
-        floodplain_side_slope: Precomputed effective floodplain side-slope parameter z_fp (dimensionless).
-        floodplain_depth_threshold_m: Precomputed floodplain depth threshold for vertical expansion (meters).
-        floodplain_area_threshold_m2: Precomputed floodplain area threshold for vertical expansion (m²).
 
     Returns:
-        Floodplain inundation depth (meters).
+        Floodplain inundation depth above bankfull elevation (meters).
     """
+    # Water stays inside the river banks.
+    if overbank_volume_m3 <= np.float32(0.0):
+        return np.float32(0.0)
+
     overbank_area: np.float32 = overbank_volume_m3 * inverse_reach_length
-    if (
-        floodplain_width_m > np.float32(0.0)
-        and overbank_area > floodplain_area_threshold_m2
-    ):
-        return floodplain_depth_threshold_m + (
-            overbank_area - floodplain_area_threshold_m2
-        ) / max(floodplain_width_m, np.float32(1e-3))
-    elif floodplain_side_slope > np.float32(0.0):
-        return np.sqrt(overbank_area / floodplain_side_slope)
-    else:
-        return overbank_area / max(floodplain_width_m, np.float32(1e-3))
+    base_width: np.float32 = floodplain_width_m
+    # Solve 2*h^2 + W_fp*h - A = 0 for depth h.
+    # Using 2*A / (W + sqrt(W^2 + 8*A)) avoids precision loss for shallow floods
+    # and neatly handles W_fp = 0 without dividing by zero.
+    return (
+        np.float32(2.0)
+        * overbank_area
+        / (
+            base_width
+            + np.sqrt(base_width * base_width + np.float32(8.0) * overbank_area)
+        )
+    )
 
 
 @njit(inline="always")
@@ -444,9 +416,6 @@ def compute_cfl_area_and_top_width(
     inverse_shape_exponent_plus_one: np.float32,
     bankfull_area_m2: np.float32,
     bankfull_volume_m3: np.float32,
-    floodplain_side_slope: np.float32,
-    floodplain_depth_threshold_m: np.float32,
-    floodplain_area_threshold_m2: np.float32,
 ) -> tuple[np.float32, np.float32]:
     """Calculates flow area and top width directly from storage volume for CFL evaluation.
 
@@ -460,9 +429,6 @@ def compute_cfl_area_and_top_width(
         inverse_shape_exponent_plus_one: Precomputed 1 / (r + 1) (dimensionless).
         bankfull_area_m2: Precomputed bankfull cross-sectional area (m²).
         bankfull_volume_m3: Precomputed bankfull channel storage volume (m³).
-        floodplain_side_slope: Precomputed effective floodplain side-slope parameter z_fp (dimensionless).
-        floodplain_depth_threshold_m: Precomputed floodplain depth threshold for vertical expansion (meters).
-        floodplain_area_threshold_m2: Precomputed floodplain area threshold for vertical expansion (m²).
 
     Returns:
         A tuple containing:
@@ -470,16 +436,21 @@ def compute_cfl_area_and_top_width(
             - top_width: Free surface top width (meters).
     """
     if volume_m3 <= bankfull_volume_m3 or bankfull_depth_m <= np.float32(0.0):
+        # Dry channel: return a tiny width so celerity c = sqrt(g * A / W) doesn't divide by zero.
         if volume_m3 <= np.float32(0.0):
             top_width: np.float32 = max(
                 bankfull_width_m * np.float32(0.01), np.float32(1e-3)
             )
             return np.float32(0.0), top_width
 
+        # Water stays inside the channel.
+        # Depth scales directly with volume as (V / V_bankfull)^(1 / (r + 1)),
+        # which saves converting volume to depth in meters.
         volume_ratio: np.float32 = volume_m3 / max(bankfull_volume_m3, np.float32(1e-6))
         depth_ratio: np.float32 = volume_ratio**inverse_shape_exponent_plus_one
         area: np.float32 = volume_m3 * inverse_reach_length
 
+        # Parabolic channel (r = 0.5): sqrt is faster than a general power.
         if shape_exponent == np.float32(0.5):
             top_width = max(
                 bankfull_width_m * np.sqrt(depth_ratio),
@@ -492,25 +463,29 @@ def compute_cfl_area_and_top_width(
             )
         return area, top_width
 
+    # Water spills onto the floodplain (flat bench of width W_fp, then 2:1 side slopes).
     overbank_volume: np.float32 = volume_m3 - bankfull_volume_m3
     overbank_area: np.float32 = overbank_volume * inverse_reach_length
+    base_width: np.float32 = floodplain_width_m
 
-    if (
-        floodplain_width_m > np.float32(0.0)
-        and overbank_area > floodplain_area_threshold_m2
-    ):
-        top_width = bankfull_width_m + floodplain_width_m
-    elif floodplain_side_slope > np.float32(0.0):
-        floodplain_depth: np.float32 = np.sqrt(overbank_area / floodplain_side_slope)
-        top_width = (
-            bankfull_width_m
-            + np.float32(2.0) * floodplain_side_slope * floodplain_depth
+    # Solve 2*h^2 + W_fp*h - A = 0 for depth h.
+    # The 2*A / (W + sqrt(W^2 + 8*A)) form is cleaner than (-b + sqrt(...)) / 2a
+    # because it stays accurate for tiny flood depths and works when W_fp is zero.
+    floodplain_depth: np.float32 = (
+        np.float32(2.0)
+        * overbank_area
+        / (
+            base_width
+            + np.sqrt(base_width * base_width + np.float32(8.0) * overbank_area)
         )
-    else:
-        floodplain_depth = overbank_area / max(floodplain_width_m, np.float32(1e-3))
-        top_width = bankfull_width_m
+    )
 
-    area = bankfull_area_m2 + overbank_area
+    # River channel + flat floodplain bench + two 2:1 side slopes (2 * 2 * h = 4 * h).
+    # Keeping the channel width ensures top_width is never zero, even if W_fp is zero.
+    top_width: np.float32 = (
+        bankfull_width_m + floodplain_width_m + np.float32(4.0) * floodplain_depth
+    )
+    area: np.float32 = bankfull_area_m2 + overbank_area
     return area, top_width
 
 
@@ -539,6 +514,7 @@ def get_lake_factor(
         A lake-specific constant factor used in the parabolic lake outflow equations (m/s).
     """
     gravity: np.float32 = np.float32(9.80665)
+    # Parabolic weir rating: Q = mu * (W / 2) * sqrt(g / h_ref) * h^2
     return (
         lake_a_factor
         * overflow_coefficient_mu
@@ -564,10 +540,13 @@ def estimate_outflow_height(
     Returns:
         Weir sill outflow height above the lake bottom (meters).
     """
+    # Head above the weir needed to pass average outflow: Q = factor * h^2
     height_above_outflow: ArrayFloat32 = np.sqrt(avg_outflow / lake_factor).astype(
         np.float32
     )
     lake_height_when_full: ArrayFloat32 = (lake_capacity / lake_area).astype(np.float32)
+
+    # Place weir crest so lake sits at average capacity under average flow
     outflow_height: ArrayFloat32 = np.maximum(
         lake_height_when_full - height_above_outflow, np.float32(0.0)
     )
@@ -590,4 +569,5 @@ def estimate_lake_outflow(
     Returns:
         Outflow discharge (m3/s).
     """
+    # Parabolic weir rating: Q = factor * h^2
     return lake_factor * (height_above_outflow * height_above_outflow)
