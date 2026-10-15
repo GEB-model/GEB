@@ -1,9 +1,10 @@
-# v1.0.0b36
-- Add karst storage to all hydrology runs, with a default release time of 10 days. Update inputs and rerun spinup.
-
 # v1.0.0b37
+- Remove farmers without land in the active grid and compact their IDs and attribute arrays together. `geb update-version -b build.yml` repairs existing inputs; rerun spinup and simulation afterward.
 - Enrich HydroLAKES with GDW reservoirs and AMBER lake classifications; activate reservoirs from their construction year while preserving water storage and recorded discharge layouts. Rebuild `setup_waterbodies`, then rerun spinup and simulation.
 - Stop when automatic input migrations fail.
+
+# v1.0.0b36
+- Add karst storage to all hydrology runs, with a default release time of 10 days. Update inputs and rerun spinup.
 
 # v1.0.0b35
 - River-outflow history is now automatically always reported (i.e.we remove the `report._outflow_points` option; old configurations containing it remain compatible, but its value is ignored.

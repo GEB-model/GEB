@@ -92,3 +92,43 @@ def test_waterbody_input_migration(
         call({method_name: {}}) for method_name in method_names
     ]
     builder.set_version.assert_called_once_with(target_version)
+
+
+@pytest.mark.parametrize("repair_fails", [False, True])
+def test_farmer_repair_failure_propagates(
+    monkeypatch: pytest.MonkeyPatch, repair_fails: bool
+) -> None:
+    """Mark farmer inputs current only when compaction succeeds.
+
+    Args:
+        monkeypatch: Fixture isolating the migration registry and package version.
+        repair_fails: Whether farmer compaction raises an input error.
+
+    Returns:
+        None.
+
+    Raises:
+        AssertionError: If a failed repair updates the input version.
+    """  # noqa: DOC202, DOC502
+    monkeypatch.setattr(version_updates, "__version__", "1.0.0b37")
+    monkeypatch.setattr(
+        version_updates, "VERSION_UPDATES", {"1.0.0b37": ["[remove-inactive-farmers]"]}
+    )
+    builder: Mock = Mock()
+    if repair_fails:
+        builder.remove_inactive_farmers.side_effect = ValueError("Invalid farmer IDs")
+        with pytest.raises(RuntimeError, match="error occurred during auto-update"):
+            version_updates.get_and_maybe_do_version_updates(
+                "1.0.0b36", logging.getLogger(__name__), builder, {}
+            )
+        builder.set_version.assert_not_called()
+        builder.set_current_version.assert_not_called()
+    else:
+        assert (
+            version_updates.get_and_maybe_do_version_updates(
+                "1.0.0b36", logging.getLogger(__name__), builder, {}
+            )
+            == []
+        )
+        builder.set_version.assert_called_once_with("1.0.0b37")
+    builder.remove_inactive_farmers.assert_called_once_with()
