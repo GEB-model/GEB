@@ -336,30 +336,51 @@ class Government(AgentBaseClass):
             )
         }
 
+        # All new values are first computed into candidate arrays and only
+        # written to the model once the pedotransfer functions have succeeded,
+        # so a failure cannot leave the model with half-converted soils.
+
         # 1) Soil organic carbon: set to the basin forest mean per soil layer,
         # floored at the HRU's own value so conversion can never *decrease*
         # organic carbon (without the floor, HRUs already richer than the
         # forest mean would lose carbon).
-        soc[:, suitability_HRU] = np.maximum(forest_mean_soc[:, np.newaxis], soc_before)
-
-        # 2) Bulk density: the HRU's own value scaled by the measured forest to
-        # previous-land-use ratio for its soil layer. Not clipped -- the
-        # measured ratio is used as-is in both directions.
-        bulk_density[:, suitability_HRU] *= bulk_density_ratio[:, selected_land_use]
-
-        # 3) Sand, silt and clay content: intentionally left unchanged.
+        soc_after = np.maximum(forest_mean_soc[:, np.newaxis], soc_before)
 
         # Afforestation must not decrease soil organic carbon anywhere.
-        assert (soc[:, suitability_HRU] >= soc_before).all(), (
+        assert (soc_after >= soc_before).all(), (
             "reforestation decreased soil organic carbon in at least one HRU"
         )
 
-        # 4) Recalculate the soil hydraulic properties from the updated SOC and
+        # 2) Bulk density: the HRU's own value scaled by the measured forest to
+        # previous-land-use ratio for its soil layer, bounded per layer by the
+        # lowest and highest bulk density already present in the basin. The
+        # bound keeps converted soils inside the range the pedotransfer
+        # functions already handle at initialization (a very high bulk density
+        # gives a negative saturated water content in thetas_toth).
+        bulk_density_scaled = (
+            bulk_density_before * bulk_density_ratio[:, selected_land_use]
+        )
+        bulk_density_after = np.clip(
+            bulk_density_scaled,
+            bulk_density.min(axis=1, keepdims=True),
+            bulk_density.max(axis=1, keepdims=True),
+        )
+        n_bulk_density_bounded = int((bulk_density_after != bulk_density_scaled).sum())
+        if n_bulk_density_bounded > 0:
+            self.model.logger.warning(
+                "Reforestation: bulk density of %d HRU-layers was bounded to the "
+                "basin range for its soil layer.",
+                n_bulk_density_bounded,
+            )
+
+        # 3) Sand, silt and clay content: intentionally left unchanged.
+
+        # 4) Recalculate the soil hydraulic properties from the new SOC and
         # bulk density, using the unchanged sand/silt/clay.
-        is_top_soil_subset = get_is_top_soil_mask(soc[:, suitability_HRU].shape)
+        is_top_soil_subset = get_is_top_soil_mask(soc_after.shape)
         soil_hydraulic_properties = calculate_soil_hydraulic_properties(
-            organic_carbon_percentage=soc[:, suitability_HRU],
-            bulk_density_kg_per_dm3=bulk_density[:, suitability_HRU],
+            organic_carbon_percentage=soc_after,
+            bulk_density_kg_per_dm3=bulk_density_after,
             sand_percentage=hydrology.HRU.var.sand_percentage[:, suitability_HRU],
             silt_percentage=hydrology.HRU.var.silt_percentage[:, suitability_HRU],
             clay_percentage=hydrology.HRU.var.clay_percentage[:, suitability_HRU],
@@ -371,6 +392,10 @@ class Government(AgentBaseClass):
                 "saturated_hydraulic_conductivity_multiplier"
             ],
         )
+
+        # The pedotransfer functions succeeded: write everything to the model.
+        soc[:, suitability_HRU] = soc_after
+        bulk_density[:, suitability_HRU] = bulk_density_after
         hydrology.HRU.var.water_content_saturated_m[:, suitability_HRU] = (
             soil_hydraulic_properties.water_content_saturated_m
         )
