@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 VERSION_UPDATES: dict[str, list[str]] = {
     "1.0.0b37": [
         "[update-method;setup_weirs]",
+        "[manual] AMBER weirs now control river flow. Remove any old setup_weirs.height_m option and rerun setup_weirs, then rerun spinup and simulation with the same hydrology.routing.weirs setting (default true).",
     ],
     "1.0.0b36": [
         "[update-method;setup_karst]",

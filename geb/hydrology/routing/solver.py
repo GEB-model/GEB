@@ -11,9 +11,11 @@ from geb.geb_types import ArrayFloat64, TwoDArrayFloat32
 from geb.hydrology.routing.geometry import (
     GEOM_IN_BANKFULL_DEPTH,
     GEOM_IN_BANKFULL_VOLUME,
+    GEOM_IN_BED_ELEVATION,
     GEOM_IN_INVERSE_LENGTH,
     GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE,
     GEOM_IN_MANNING_N_SQUARED,
+    GEOM_IN_WEIR_HEIGHT,
     GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH,
     GEOM_OV_BANKFULL_PERIMETER,
     GEOM_OV_RIVER_WIDTH,
@@ -22,7 +24,61 @@ from geb.hydrology.routing.geometry import (
 
 __all__ = [
     "solve_inertial_momentum",
+    "rectangular_weir_discharge",
 ]
+
+
+@njit(inline="always")
+def rectangular_weir_discharge(
+    upstream_stage_m: np.float32,
+    downstream_stage_m: np.float32,
+    crest_elevation_m: np.float32,
+    width_m: np.float32,
+) -> np.float32:
+    """Calculate signed rectangular weir flow, including downstream submergence.
+
+    Use Aigner's Table 2: Q = (2/3) * 0.577 * sqrt(2g) * b * H**1.5.
+    Treat each structure as an idealized broad-crested overflow with negligible
+    approach velocity head. Crest shape and width are prescribed by the model.
+    The broad-crested reduction follows USACE CHETN-IV-94 (2013), Eq. 4,
+    normalized for its rounded coefficients to give exactly zero at equal heads.
+
+    References:
+        https://rcswww.urz.tu-dresden.de/~daigner/pdf/ueberf.pdf
+        https://usace.contentdm.oclc.org/digital/api/collection/p266001coll1/id/4443/download
+
+    Args:
+        upstream_stage_m: Water elevation on the upstream side (meters).
+        downstream_stage_m: Water elevation on the downstream side (meters).
+        crest_elevation_m: Crest elevation in the same vertical datum (meters).
+        width_m: Effective rectangular crest width (meters).
+
+    Returns:
+        Signed flow (m³/s), positive downstream; zero below the crest or when
+        either the head or water-level difference is at most 0.1 mm.
+        Inputs are finite elevations and a positive width from validated geometry.
+    """
+    difference_m: np.float32 = upstream_stage_m - downstream_stage_m
+    head_m: np.float32 = max(upstream_stage_m, downstream_stage_m) - crest_elevation_m
+    if head_m <= np.float32(1e-4) or abs(difference_m) <= np.float32(1e-4):
+        return np.float32(0.0)
+    discharge: np.float32 = (
+        np.float32(2.0 / 3.0 * 0.577)
+        * np.sqrt(np.float32(2.0 * 9.80665))
+        * width_m
+        * head_m
+        * np.sqrt(head_m)
+    )
+    # Tailwater affects flow once its head exceeds 67% of the higher head.
+    # With d = (higher level - lower level) / (0.33 * head), the reduction
+    # 1 - (1 - d)**3 equals d * (3 - d * (3 - d)). This form avoids losing
+    # precision by subtracting nearly equal numbers at deeply submerged crests.
+    relative_drop: np.float32 = abs(difference_m) / (np.float32(0.33) * head_m)
+    if relative_drop < np.float32(1.0):
+        discharge *= relative_drop * (
+            np.float32(3.0) - relative_drop * (np.float32(3.0) - relative_drop)
+        )
+    return discharge if difference_m > 0 else -discharge
 
 
 @njit(inline="always")
@@ -39,12 +95,17 @@ def solve_inertial_momentum(
     can_reverse: bool,
     river_storage_m3_inertial: ArrayFloat64,
     inv_dt_substep: np.float32,
+    upstream_stage_m: np.float32 = np.float32(0.0),
+    downstream_stage_m: np.float32 = np.float32(0.0),
 ) -> np.float32:
     """Evaluates the 1D local inertial momentum equation for a single reach interface.
 
     Solves the momentum equation neglecting advective acceleration:
 
         dQ/dt + g * A * dz/dx + (g * n^2 * |Q| * Q) / (R^(4/3) * A) = 0
+
+    At a weir, replace momentum flow with the rectangular overflow rating.
+    River storage and the ordinary channel geometry are unchanged.
 
     Discretized semi-implicitly in friction (Bates et al. 2010):
 
@@ -63,10 +124,41 @@ def solve_inertial_momentum(
         can_reverse: Whether adverse-slope reverse flow is permitted.
         river_storage_m3_inertial: Upstream reach storage volume array (m³).
         inv_dt_substep: Reciprocal of substep timestep duration 1 / dt (1/s).
+        upstream_stage_m: Upstream water elevation (meters); required at weirs.
+        downstream_stage_m: Downstream water elevation (meters); required at weirs.
 
     Returns:
         Discharge Q^{t+dt} at end of substep (m³/s).
     """
+    weir_height_m: np.float32 = geom_inbank[reach_idx, GEOM_IN_WEIR_HEIGHT]
+    if weir_height_m > np.float32(0.0):
+        crest_m: np.float32 = (
+            geom_inbank[reach_idx, GEOM_IN_BED_ELEVATION] + weir_height_m
+        )
+        weir_discharge: np.float32 = rectangular_weir_discharge(
+            upstream_stage_m,
+            downstream_stage_m,
+            crest_m,
+            geom_overbank[reach_idx, GEOM_OV_RIVER_WIDTH],
+        )
+        if weir_discharge < 0:
+            # The kernel limits the shared downstream donor volume for reverse flow.
+            return weir_discharge if can_reverse else np.float32(0.0)
+        # Only storage above the crest can spill. The volume relation is
+        # V(h) = V_bankfull * (h / h_bankfull)**(shape + 1); geometry validation
+        # keeps the crest within the banks where this relation applies.
+        # The 95% cap matches ordinary routing's protection against over-draining.
+        crest_volume_m3: np.float32 = geom_inbank[
+            reach_idx, GEOM_IN_BANKFULL_VOLUME
+        ] * (weir_height_m / geom_inbank[reach_idx, GEOM_IN_BANKFULL_DEPTH]) ** (
+            np.float32(1.0)
+            / geom_inbank[reach_idx, GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE]
+        )
+        available_m3: np.float32 = np.float32(
+            max(river_storage_m3_inertial[reach_idx] - crest_volume_m3, 0.0)
+        )
+        return min(weir_discharge, np.float32(0.95) * available_m3 * inv_dt_substep)
+
     if effective_depth < min_wet_depth_m:
         return np.float32(0.0)
 

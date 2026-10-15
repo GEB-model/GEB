@@ -102,12 +102,11 @@ def test_metric_distance_limit(latitude: float, distance_m: float) -> None:
         "other_type",
         "no_rivers",
         "unsuitable",
-        "duplicate",
         "no_cells",
     ],
 )
 def test_excluded_weirs(case: str) -> None:
-    """Reject unsupported and ambiguous records without relocating structures.
+    """Reject unsupported records without changing the weir grid.
 
     Args:
         case: Exclusion scenario applied to otherwise valid inputs.
@@ -128,11 +127,6 @@ def test_excluded_weirs(case: str) -> None:
         rivers = rivers.iloc[:0]
     elif case == "unsuitable":
         valid.values[:] = False
-    elif case == "duplicate":
-        points = gpd.GeoDataFrame(
-            pd.concat([points, points.assign(amber_id="b")], ignore_index=True),
-            crs=4326,
-        )
     elif case == "no_cells":
         rivers.at[7, "hydrography_xy"] = []
     fractions: xr.DataArray
@@ -142,8 +136,6 @@ def test_excluded_weirs(case: str) -> None:
     assert not records.included.any()
     assert records.exclusion_reason.ne("").all()
     assert records.grid_row.eq(-1).all()
-    if case == "duplicate":
-        assert records.exclusion_reason.eq("multiple weirs on one connection").all()
 
 
 @pytest.mark.parametrize("case", ["missing_crs", "invalid_grid", "invalid_cells"])
@@ -261,9 +253,10 @@ def test_weir_migration(monkeypatch: pytest.MonkeyPatch) -> None:
     """  # noqa: DOC202, DOC502
     monkeypatch.setattr(version_updates, "__version__", "1.0.0b37")
     builder: Mock = Mock()
-    version_updates.get_and_maybe_do_version_updates(
-        "1.0.0b36", logging.getLogger(__name__), builder, {"setup_weirs": {}}
-    )
+    with pytest.raises(RuntimeError, match="rerun spinup and simulation"):
+        version_updates.get_and_maybe_do_version_updates(
+            "1.0.0b36", logging.getLogger(__name__), builder, {"setup_weirs": {}}
+        )
     builder.update.assert_called_once_with({"setup_weirs": {}})
     builder.set_version.assert_called_once_with("1.0.0b37")
 
@@ -331,3 +324,76 @@ def test_recorded_heights_are_ignored(recorded_height: float | None) -> None:
     )
     assert records.included.tolist() == [True]
     assert fractions.values[0, 0] == records.bankfull_depth_fraction.iloc[0] == 0.5
+
+
+@pytest.mark.parametrize("second_cell_valid", [False, True])
+def test_collisions_keep_first_and_try_second_cell(second_cell_valid: bool) -> None:
+    """Keep colliding weirs on their river and try only one alternative cell.
+
+    Args:
+        second_cell_valid: Whether the second-closest cell supports a weir.
+    """
+    points: gpd.GeoDataFrame
+    rivers: gpd.GeoDataFrame
+    original_grid: xr.DataArray
+    points, rivers, original_grid = make_inputs()
+    longitude: float = float(original_grid.x.values[0])
+    latitude: float = float(original_grid.y.values[0])
+    valid: xr.DataArray = xr.DataArray(
+        [[True, second_cell_valid, True]],
+        dims=("y", "x"),
+        coords={"x": [longitude, longitude + 0.01, longitude + 0.02], "y": [latitude]},
+    ).rio.write_crs(4326)
+    rivers.at[7, "hydrography_xy"] = [(0, 0), (1, 0), (2, 0)]
+    rivers.geometry = [
+        LineString([(longitude, latitude), (longitude + 0.02, latitude)])
+    ]
+    points = gpd.GeoDataFrame(
+        pd.concat(
+            [points.assign(amber_id=identifier) for identifier in ["a", "b", "c"]],
+            ignore_index=True,
+        ),
+        crs=4326,
+    )
+    fractions: xr.DataArray
+    records: gpd.GeoDataFrame
+    fractions, records = snap_amber_weirs(points, rivers, valid)
+    assert records.included.tolist() == [True, second_cell_valid, False]
+    assert records.snap_rank.tolist() == [1, 2 if second_cell_valid else 0, 0]
+    assert records.grid_column.tolist() == [0, 1 if second_cell_valid else -1, -1]
+    assert records.loc[records.included, "river_id"].eq(7).all()
+    assert fractions.values[0, 2] == 0  # Do not search farther along the segment.
+    assert fractions.values.sum() == 0.5 * (1 + second_cell_valid)
+    assert records.distance_to_cell_m.iloc[0] == pytest.approx(100, abs=1e-5)
+    assert records.geometry.equals(points.geometry)
+    assert records.exclusion_reason.iloc[-1] == (
+        "cell already used" if second_cell_valid else "unsuitable river connection"
+    )
+    reversed_fractions: xr.DataArray
+    reversed_records: gpd.GeoDataFrame
+    reversed_fractions, reversed_records = snap_amber_weirs(
+        points.iloc[::-1], rivers, valid
+    )
+    np.testing.assert_array_equal(fractions.values, reversed_fractions.values)
+    pd.testing.assert_frame_equal(
+        records.set_index("amber_id").sort_index(),
+        reversed_records.set_index("amber_id").sort_index(),
+    )
+
+
+def test_one_cell_collision_keeps_first_weir() -> None:
+    """Keep one weir when the river has no distinct alternative cell."""
+    points: gpd.GeoDataFrame
+    rivers: gpd.GeoDataFrame
+    valid: xr.DataArray
+    points, rivers, valid = make_inputs()
+    rivers.at[7, "hydrography_xy"] = [(0, 0), (0, 0)]
+    points = gpd.GeoDataFrame(
+        pd.concat([points, points.assign(amber_id="b")], ignore_index=True), crs=4326
+    )
+    fractions: xr.DataArray
+    records: gpd.GeoDataFrame
+    fractions, records = snap_amber_weirs(points, rivers, valid)
+    assert records.included.tolist() == [True, False]
+    assert records.exclusion_reason.tolist() == ["", "cell already used"]
+    assert fractions.values.sum() == 0.5

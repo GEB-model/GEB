@@ -1499,7 +1499,20 @@ class Routing(Module):
             river_storage_beta=self.var.river_storage_beta,
             in_spinup=self.model.in_spinup,
             weir_bankfull_depth_fraction=weir_fraction,
+            weirs_enabled=self.config.get("weirs", True),
         )
+        if weir_fraction is not None:
+            excluded_weirs: int = int(
+                np.count_nonzero(weir_fraction)
+                - np.count_nonzero(self.router.weir_bankfull_depth_fraction)
+            )
+            if excluded_weirs:
+                self.model.logger.warning(
+                    "%s built AMBER weirs no longer have an internal river connection "
+                    "and are excluded from routing. Check waterbody/river inputs and "
+                    "rerun setup_weirs after rebuilding the river network.",
+                    excluded_weirs,
+                )
 
         if self.model.in_spinup:
             # Power-law bankfull storage V_bf = length * (W_bf * h_bf / (r + 1)) (m³)
@@ -2187,6 +2200,19 @@ class Routing(Module):
         if __debug__:
             self.var.retention_inflow_m3_daily = retention_inflow_m3
             self.var.retention_outflow_m3_daily = retention_outflow_m3
+
+        if np.any(self.router.weir_bankfull_depth_fraction) and (
+            self.model.current_time.day == 1
+            or self.model.current_timestep == self.model.n_timesteps - 1
+        ):
+            from .plots import plot_weir_water_levels
+
+            plot_weir_water_levels(
+                self.router,
+                self.var.river_ids,
+                self.model.output_folder / "weirs",
+                self.model.current_time.date(),
+            )
 
         self.report(locals())
 

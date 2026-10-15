@@ -259,6 +259,11 @@ class RoutingConfig(BaseModel):
         "kinematic_wave",
         description="Routing algorithm: 'accuflux' or 'kinematic_wave'.",
     )
+    weirs: bool = Field(
+        True,
+        strict=True,
+        description="Apply rectangular overflow at snapped AMBER weirs.",
+    )
     minimum_river_slope_m_per_m: float = Field(
         1e-4,
         gt=0.0,

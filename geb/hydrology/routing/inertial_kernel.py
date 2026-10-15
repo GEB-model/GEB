@@ -27,13 +27,14 @@ from .geometry import (
     GEOM_IN_INVERSE_LENGTH,
     GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE,
     GEOM_IN_STAGE_VOLUME_COEFFICIENT,
+    GEOM_IN_WEIR_HEIGHT,
     GEOM_OV_FLOODPLAIN_WIDTH,
     GEOM_OV_RIVER_WIDTH,
     InertialGeometry,
     compute_cfl_area_and_top_width,
     compute_overbank_depth,
 )
-from .solver import solve_inertial_momentum
+from .solver import rectangular_weir_discharge, solve_inertial_momentum
 from .topology import (
     InertialTopology,
     KinematicTopology,
@@ -755,6 +756,7 @@ def _solve_momentum_loop(
         effective_depth: np.float32 = np.float32(0.0)
         water_slope: np.float32 = np.float32(0.0)
 
+        water_stage_ds: np.float32 = water_stage_node
         reach_can_reverse: bool = False
         if boundary_type == 0 or boundary_type == 2:
             # Internal reach or lake boundary
@@ -844,6 +846,8 @@ def _solve_momentum_loop(
             can_reverse=reach_can_reverse,
             river_storage_m3_inertial=river_storage_m3_inertial,
             inv_dt_substep=inv_dt_substep,
+            upstream_stage_m=water_stage_node,
+            downstream_stage_m=water_stage_ds,
         )
         updated_discharge_m3_s_inertial[reach_idx] = discharge
 
@@ -1351,6 +1355,80 @@ def _accumulate_downstream_waterbody_inflows(
                 wb.storage_m3[waterbody_id] += inflow_vol
 
 
+@njit(inline="always")
+def _limit_weir_timestep(
+    dt_s: np.float32,
+    geom: InertialGeometry,
+    topo: InertialTopology,
+    buffers: SubstepBuffers,
+) -> np.float32:
+    """Limit explicit weir exchange to a small fraction of the level difference.
+
+    Exchange Q changes the level difference at a rate Q * (1/A_up + 1/A_down),
+    where A = dV/d(level) is each reach's surface storage area. Limit this
+    estimated change to 20% of the current level difference to reduce overshoot
+    at submerged crests. This is a numerical safeguard, not a hydraulic loss;
+    ordinary channel CFL limits and conservative volume limits still apply.
+
+    Args:
+        dt_s: Candidate routing timestep (seconds).
+        geom: Static reach geometry, including crest heights (meters).
+        topo: River connectivity.
+        buffers: Current water elevations (meters) and scratch arrays.
+
+    Returns:
+        Candidate timestep shortened for weir exchange (seconds).
+    """
+    reach: np.int32
+    cell: int | np.int32
+    for reach in geom.weir_indices:
+        height_m: np.float32 = geom.geom_inbank[reach, GEOM_IN_WEIR_HEIGHT]
+        downstream: int = topo.ds_inertial_k[reach]
+        upstream_stage: np.float32 = buffers.stage_buf[reach]
+        downstream_stage: np.float32 = buffers.stage_buf[downstream]
+        crest_m: np.float32 = geom.geom_inbank[reach, GEOM_IN_BED_ELEVATION] + height_m
+        flow: np.float32 = rectangular_weir_discharge(
+            upstream_stage,
+            downstream_stage,
+            crest_m,
+            geom.geom_overbank[reach, GEOM_OV_RIVER_WIDTH],
+        )
+        if flow == 0 or (flow < 0 and not ALLOW_REVERSE_FLOW):
+            continue
+        inverse_storage_area: np.float32 = np.float32(0.0)
+        for cell in (reach, downstream):
+            depth_m: np.float32 = max(
+                buffers.stage_buf[cell] - geom.geom_inbank[cell, GEOM_IN_BED_ELEVATION],
+                np.float32(0.0),
+            )
+            bankfull_m: np.float32 = geom.geom_inbank[cell, GEOM_IN_BANKFULL_DEPTH]
+            width_m: np.float32 = geom.geom_overbank[cell, GEOM_OV_RIVER_WIDTH]
+            if depth_m <= bankfull_m:
+                exponent: np.float32 = np.float32(1.0) / geom.geom_inbank[
+                    cell, GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE
+                ] - np.float32(1.0)
+                width_m *= (max(depth_m, np.float32(1e-4)) / bankfull_m) ** exponent
+            else:
+                # Match _compute_reach_stage_from_vol: above bankfull, storage
+                # increments are L * (W_floodplain * h + 2*h**2). The bankfull
+                # channel volume is fixed, so its width is not added again.
+                width_m = geom.geom_overbank[
+                    cell, GEOM_OV_FLOODPLAIN_WIDTH
+                ] + np.float32(4.0) * (depth_m - bankfull_m)
+            # Dry or newly flooded cells can have vanishing storage width.
+            # Keep a small floor for a finite exchange timestep.
+            inverse_storage_area += geom.geom_inbank[
+                cell, GEOM_IN_INVERSE_LENGTH
+            ] / max(width_m, np.float32(1e-3))
+        exchange_dt: np.float32 = (
+            np.float32(0.2)
+            * abs(upstream_stage - downstream_stage)
+            / (abs(flow) * inverse_storage_area)
+        )
+        dt_s = min(dt_s, exchange_dt)
+    return dt_s
+
+
 def _run_inertial_substeps(
     num_inertial_substeps: int,
     dt_f32: np.float32,
@@ -1435,6 +1513,7 @@ def _run_inertial_substeps(
         ):
             dt_substep = time_remaining
 
+        dt_substep = _limit_weir_timestep(dt_substep, geom, topo, buffers)
         inv_dt_substep: np.float32 = np.float32(1.0) / dt_substep
         g_dt_substep: np.float32 = gravity_acceleration * dt_substep
         dt_substep_f64: float = float(dt_substep)

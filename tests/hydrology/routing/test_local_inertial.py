@@ -55,6 +55,7 @@ def _make_local_inertial(
     river_storage_alpha: np.ndarray | None = None,
     river_storage_beta: np.ndarray | None = None,
     weir_bankfull_depth_fraction: ArrayFloat32 | None = None,
+    weirs_enabled: bool = True,
 ) -> LocalInertial:
     """Helper to instantiate LocalInertial for unit tests with explicit required arrays.
 
@@ -152,6 +153,7 @@ def _make_local_inertial(
         river_storage_beta=river_storage_beta,
         in_spinup=True,
         weir_bankfull_depth_fraction=weir_bankfull_depth_fraction,
+        weirs_enabled=weirs_enabled,
     )
     router.initialize_stage(
         waterbody_storage_m3=np.zeros(n_wb, dtype=np.float64) if n_wb > 0 else None

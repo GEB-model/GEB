@@ -14,6 +14,65 @@ where $Q$ is the discharge ($\text{m}^3/\text{s}$), $g$ is the gravitational acc
 
 For full river basins, the boundary condition is defined by the ocean water level, which we keep stable at 0 m above sea level. If only part of a basin is selected, we approximate the conditions at the boundary by setting the water surface slope of the boundary grid cell equal to that of the grid cell immediately upstream.
 
+## AMBER weirs
+
+`setup_weirs` selects and snaps only AMBER weirs to internal river connections.
+See the [build workflow](../getting_started/build/data_catalog.md#snap-amber-weirs-to-the-model-grid).
+The crest is placed at the upstream reach's bed elevation plus **0.5 times
+its current bankfull depth**. Recorded AMBER heights are ignored. Effective
+crest width equals modeled bankfull river width. Both dimensions follow channel
+geometry updates, including spinup calibration; the fraction itself is fixed.
+
+At these interfaces, `solve_inertial_momentum` replaces the ordinary momentum
+flux with the rectangular formula in
+[Aigner, Table 2](https://rcswww.urz.tu-dresden.de/~daigner/pdf/ueberf.pdf):
+
+$$
+Q_f = \frac{2}{3}\,0.577\,\sqrt{2g}\,b\,H^{3/2}.
+$$
+
+Here $b$ is crest width (m) and $H$ is upstream water elevation above the crest
+(m). This is an idealized broad-crested overflow with negligible approach
+velocity head; 0.577 is not a calibrated coefficient for every AMBER structure.
+A free-overflow law alone would overestimate flow when the downstream river
+submerges the crest. We therefore multiply $Q_f$ by a broad-crested reduction
+from [USACE CHETN-IV-94 (2013), Eq. 4](https://usace.contentdm.oclc.org/digital/api/collection/p266001coll1/id/4443/download):
+
+$$
+r = \frac{\max(\eta_d-z_c,0)}{H},\qquad
+f(r) = \begin{cases}
+1, & r\leq0.67,\\
+1-\left(\frac{r-0.67}{0.33}\right)^3, & 0.67<r\leq1.
+\end{cases}
+$$
+
+The denominator 0.33 normalizes the source's rounded coefficient 27.8 so
+flow is exactly zero at equal levels. In code, the equivalent expression
+$d(3-d(3-d))$, with $d=(\eta_u-\eta_d)/(0.33H)$ for forward submerged flow,
+avoids subtracting nearly equal numbers. Flow is zero below the crest and for
+level differences of 0.1 mm or less. The rating is signed using the higher
+water surface as the headwater, but the existing routing policy currently
+disables reverse flow: an adverse gradient gives zero flux.
+
+The same flux leaves one reach and enters the next through the existing
+continuity calculation. A storage cap keeps water below the crest in the
+upstream reach. Ordinary channel CFL limits are supplemented by a weir exchange
+time limit based on the water-level difference and both reaches' surface
+storage areas, using the same storage-to-level relationship as continuity.
+The safety factor of 0.2 reduces explicit exchange overshoot; it is a numerical
+choice, not an extra loss coefficient.
+River storage geometry remains unchanged; the crest is an interface control,
+not a raised bed or a new reservoir. Backwater uses the existing river and
+floodplain storage; no additional impoundment area is inferred from AMBER.
+
+This is a simple regional parameterization. Actual crest dimensions, approach
+losses, gate operations, fish passes and separate floodplain bypasses are not
+represented. The assumed half-bankfull crest and full-channel width require
+sensitivity testing and comparison with observed water levels/discharge before
+interpreting European-scale impacts. Monthly and final-day profile PNGs and CSVs
+are written to `<general.output_folder>/<run_name>/weirs/`; set
+`hydrology.routing.weirs: false` in a separate spinup/run to produce a comparison.
+
 ## Kinematic Wave Routing
 
 For all other grid cells, channel flow is modelled using the kinematic wave approximation of the Saint-Venant equations[@chow1988applied] as implemented in CWatM[@burek2020development]. The governing equations are the continuity equation and a simplified momentum power law linking channel area ($A$) to discharge ($Q$):

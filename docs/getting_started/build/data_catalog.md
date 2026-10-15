@@ -28,8 +28,7 @@ workflows; fetching it does not place structures on the river network.
 
 ### Snap AMBER weirs to the model grid
 
-Run `setup_weirs` after `setup_waterbodies` to prepare weir locations for future
-routing work. The default build includes this step. For custom build files:
+Run `setup_weirs` after `setup_waterbodies` to place AMBER weirs in river routing. The default build includes this step. For custom build files:
 
 ```yaml
 setup_waterbodies: {}
@@ -54,16 +53,48 @@ Outputs are `grid/routing/weir_bankfull_depth_fraction.zarr` (0.5 at weirs,
 zero elsewhere; dimensionless) and `geom/routing/weirs.geoparquet`. The latter
 retains original point locations, recorded heights as metadata, the assigned
 `bankfull_depth_fraction`, source IDs, source-to-line distances, snapped
-coordinates, grid row and column, and inclusion/exclusion reasons. Multiple weirs mapping to the same
-connection are all excluded for review; they are never shifted to other cells.
+coordinates, grid row and column, and inclusion/exclusion reasons. Each cell
+represents one weir on its downstream interface. If the closest cell is occupied,
+keep the existing weir and try the second-closest distinct cell on the same river
+segment. Exclude the new weir if that cell is occupied or unsuitable; do not
+search farther along the segment or switch rivers. Process weirs by AMBER ID
+for reproducible assignments.
+
+`snap_rank` is 1 for the closest cell, 2 for the fallback and 0 for exclusions.
+`distance_to_cell_m` records the source-to-cell-center distance. The 250 m limit
+still applies to the river line; a coarse cell center can be farther away.
 Distant points and unsuitable connections are also recorded.
 Non-weir structure types are ignored.
-
-These are build inputs only. River flow and storage calculations are unchanged
-until a weir-flow law is implemented in the routing solver.
-
 
 Routing converts these fractions to heights in meters using the current channel
 bankfull depths (`router.weir_height_m`). For example, a 4 m bankfull depth gives
 a 2 m weir. Heights follow channel geometry updates. The old fixed-height grid
-is ignored. The discharge formula has not yet been implemented.
+is ignored. River flow at each included interface uses rectangular overflow with
+coefficient 0.577 and a downstream submergence reduction; see
+[weir hydraulics](../../hydrology/routing.md#amber-weirs).
+
+After preparing inputs, **rerun spinup before running the model**:
+
+```sh
+geb update -b build.yml::setup_weirs
+geb spinup
+geb run
+```
+
+Run these commands from the model directory, using your usual configuration and
+working-directory options. Keep the same `hydrology.routing.weirs` setting in
+spinup and run. It defaults to `true`; set it to `false` for a comparison run,
+using separate run names/output directories and a separate matching spinup.
+
+On the first day of each month and the final simulation day, routing writes
+end-of-day profiles to `output/<run_name>/weirs/water_levels_YYYY-MM-DD.png`
+and a matching CSV (relative to `general.output_folder`). The CSV contains
+all supported weirs, river/grid identifiers, crest elevations, upstream/downstream
+water levels, head above the crest and water-level drop. The PNG shows up to
+three local profiles, pairing absolute river elevations with water depth above
+each cell's own bed. Filled water, highlighted crests and depth/head annotations
+make shallow water visible. Profiles follow up to two reaches on either side,
+taking the widest upstream branch at confluences. An additional `_profiles.csv`
+exports the selected profiles for replotting. Disabled-weir runs show the same proposed crests as dashed lines.
+Compare matching dates between runs to distinguish weir effects from other
+controls on river levels. These are model predictions, not measured water levels.

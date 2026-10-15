@@ -25,6 +25,7 @@ __all__: list[str] = [
     "GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE",
     "GEOM_IN_MANNING_N_SQUARED",
     "GEOM_IN_NUM_COLS",
+    "GEOM_IN_WEIR_HEIGHT",
     "GEOM_IN_STAGE_VOLUME_COEFFICIENT",
     "GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH",
     "GEOM_OV_BANKFULL_PERIMETER",
@@ -53,7 +54,8 @@ GEOM_IN_INTERFACE_BED_ELEVATION_MAX: int = 6
 GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH: int = 7
 GEOM_IN_MANNING_N_SQUARED: int = 8
 GEOM_IN_INVERSE_INTERFACE_LENGTH: int = 9
-GEOM_IN_NUM_COLS: int = 10
+GEOM_IN_WEIR_HEIGHT: int = 10
+GEOM_IN_NUM_COLS: int = 11
 
 # Column indices for overbank floodplain geometry (geom_overbank)
 GEOM_OV_FLOODPLAIN_WIDTH: int = 0
@@ -74,6 +76,7 @@ class InertialGeometry(NamedTuple):
         geom_inbank: Compact 2D array of in-bank channel geometry attributes (meters, dimensionless).
         geom_overbank: Secondary 2D array of overbank floodplain geometry attributes (meters, dimensionless).
         geom_cfl: 2D array of CFL stability condition parameters per reach.
+        weir_indices: Indices of reaches with active weir interfaces.
         pit_slope_inertial: Baseline bed slope assigned to terminal pit/boundary reaches (m/m).
     """
 
@@ -81,6 +84,7 @@ class InertialGeometry(NamedTuple):
     geom_overbank: TwoDArrayFloat32
     geom_cfl: TwoDArrayFloat32
     pit_slope_inertial: ArrayFloat32
+    weir_indices: ArrayInt32
 
 
 def compute_static_geometry(
@@ -179,6 +183,7 @@ def build_inertial_geometry(
     inv_dx_interface: ArrayFloat32,
     up_count: ArrayInt32,
     pit_slope: ArrayFloat32,
+    weir_height_m: ArrayFloat32 | None = None,
 ) -> InertialGeometry:
     """Precomputes reach-static channel cross-sections, thresholds, and CFL parameters.
 
@@ -199,9 +204,16 @@ def build_inertial_geometry(
         inv_dx_interface: Inverse spatial step at reach boundaries (1/meters).
         up_count: Count of upstream tributaries entering each reach (dimensionless).
         pit_slope: Default channel slope for boundary pit reaches (dimensionless).
+        weir_height_m: Crest heights above the local bed (meters), zero without
+            a weir. Must not exceed bankfull_depth, since the crest-storage
+            relation assumes an in-bank crest. None disables weirs.
 
     Returns:
         Structured InertialGeometry containing the packed 2D geometric matrices.
+
+    Raises:
+        ValueError: If weir heights have the wrong shape, are nonfinite or
+            fall outside zero to bankfull depth.
     """
     (
         inv_reach_length,
@@ -243,6 +255,18 @@ def build_inertial_geometry(
     )
     geom_inbank[:, GEOM_IN_MANNING_N_SQUARED] = manning_n_sq
     geom_inbank[:, GEOM_IN_INVERSE_INTERFACE_LENGTH] = inv_dx_interface
+    if weir_height_m is not None and (
+        weir_height_m.shape != river_length.shape
+        or not np.isfinite(weir_height_m).all()
+        or np.any(weir_height_m < 0)
+        or np.any(weir_height_m > bankfull_depth)
+    ):
+        raise ValueError(
+            "Weir heights must match river cells, be finite and lie between zero and bankfull depth."
+        )
+    geom_inbank[:, GEOM_IN_WEIR_HEIGHT] = (
+        0.0 if weir_height_m is None else weir_height_m
+    )
 
     # Precompute overbank floodplain geometry
     geom_overbank: TwoDArrayFloat32 = np.empty(
@@ -280,6 +304,9 @@ def build_inertial_geometry(
         geom_overbank=geom_overbank,
         geom_cfl=geom_cfl,
         pit_slope_inertial=pit_slope,
+        weir_indices=np.flatnonzero(geom_inbank[:, GEOM_IN_WEIR_HEIGHT] > 0).astype(
+            np.int32
+        ),
     )
 
 

@@ -1587,8 +1587,11 @@ class Hydrography(BuildModelBase):
 
         Only weirs within 250 m of a represented river line are considered.
         Recorded AMBER heights are ignored, including missing heights. Other
-        structure types, waterbody connections and ambiguous placements are
-        excluded. This build step does not change flow.
+        structure types and waterbody connections are excluded. If the closest
+        cell is occupied, try the second-closest distinct cell on the same river
+        segment. Keep existing placements when the fallback is also unavailable.
+        The build stores locations and height fractions; rectangular
+        overflow is applied later during spinup and simulation.
 
         Returns:
             None. Writes routing/weir_bankfull_depth_fraction (dimensionless)

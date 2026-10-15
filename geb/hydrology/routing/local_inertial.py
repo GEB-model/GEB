@@ -148,6 +148,7 @@ class LocalInertial:
         in_spinup: bool,
         min_slope: float = 1e-4,
         weir_bankfull_depth_fraction: ArrayFloat32 | None = None,
+        weirs_enabled: bool = True,
     ) -> None:
         """Initializes the LocalInertial router object.
 
@@ -178,6 +179,7 @@ class LocalInertial:
             river_storage_beta: Kinematic wave beta parameter per reach (dimensionless).
             min_slope: Minimum allowable slope for ocean/pit boundary boundaries (dimensionless).
             in_spinup: Whether the model is in spinup mode.
+            weirs_enabled: Whether snapped weirs control flow. Disable for comparison runs.
             weir_bankfull_depth_fraction: Grid-order fractions (dimensionless):
                 0.5 at weirs, zero elsewhere. None means no weirs. Recorded
                 AMBER heights are ignored.
@@ -241,6 +243,7 @@ class LocalInertial:
         self.retention_max_storage_m3 = retention_max_storage_m3
         self.controlled_retention = controlled_retention
         self.bankfull_depth = bankfull_depth_m
+        self.weirs_enabled: bool = weirs_enabled
         self.weir_bankfull_depth_fraction: ArrayFloat32 = (
             np.zeros_like(bankfull_depth_m)
             if weir_bankfull_depth_fraction is None
@@ -449,6 +452,16 @@ class LocalInertial:
 
         self._routing_topology: RoutingTopology = routing_topo
         self._topology: InertialTopology = routing_topo.topology
+        # Only river-to-river interfaces support weirs. Runtime pruning may remove
+        # a connection that was valid during the build.
+        supported_weirs: ArrayBool = np.zeros_like(
+            self.weir_bankfull_depth_fraction, dtype=bool
+        )
+        supported_weirs[
+            self.sorted_idxs[self.n_kinematic : self.n_kinematic + self.n_inertial]
+        ] = self._topology.ds_boundary_type == 0
+        self.weir_bankfull_depth_fraction[~supported_weirs] = 0.0
+
         self._kinematic_topology: KinematicTopology = routing_topo.kinematic_topology
         self._inertial_boundary_outflow_k: ArrayInt32 = (
             routing_topo.inertial_boundary_outflow_k
@@ -695,6 +708,10 @@ class LocalInertial:
             inv_dx_interface=self._routing_topology.inv_dx_interface,
             up_count=self._routing_topology.inertial_up_count,
             pit_slope=self._pit_slope[inertial_start:inertial_end],
+            weir_height_m=self.weir_height_m[
+                self.sorted_idxs[inertial_start:inertial_end]
+            ]
+            * np.float32(self.weirs_enabled),
         )
 
     def update_channel_geometry(

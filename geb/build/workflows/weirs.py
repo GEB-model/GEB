@@ -1,4 +1,4 @@
-"""Place AMBER weirs on internal river connections without changing routing."""
+"""Prepare AMBER weir locations and height fractions for river routing."""
 
 from collections.abc import Hashable
 
@@ -28,7 +28,10 @@ def snap_amber_weirs(
         Match the river line within 250 m before selecting its nearest model cell.
         Distances use a WGS84 azimuthal equidistant projection centered on each
         source point. The distance limit applies to the line, not the grid center.
-        Conflicting weirs on one cell are all excluded rather than relocated.
+        One weir controls each cell's downstream interface. If its closest cell
+        is occupied, try only the second-closest distinct cell on the same river
+        segment. A wider search could move the structure far from its source.
+        Process by AMBER ID so assignments do not depend on input row order.
 
     Args:
         barriers: AMBER points with amber_id and dam_type. Recorded heights
@@ -41,7 +44,8 @@ def snap_amber_weirs(
     Returns:
         Bankfull-depth fraction grid (0.5 at weirs, zero elsewhere; dimensionless)
         and source-point records
-        with distances (meters), snapped coordinates (degrees), grid indices and
+        with distances (meters), snapped coordinates (degrees), grid indices,
+        snap_rank (1 for closest, 2 for second-closest, 0 for exclusions) and
         exclusion reasons. Excluded records have grid indices of -1.
 
     Raises:
@@ -86,6 +90,8 @@ def snap_amber_weirs(
     ).compute()
     records["bankfull_depth_fraction"] = np.nan
     records["distance_to_river_m"] = np.nan
+    records["distance_to_cell_m"] = np.nan
+    records["snap_rank"] = np.int64(0)
     records["grid_row"] = np.int64(-1)
     records["grid_column"] = np.int64(-1)
     records["river_id"] = pd.Series(pd.NA, index=records.index, dtype="Int64")
@@ -99,7 +105,10 @@ def snap_amber_weirs(
     row_count, column_count = valid_cells.shape
     record_index: Hashable
     barrier: pd.Series
-    for record_index, barrier in records.iterrows():
+    processing_order: pd.Index = (
+        records["amber_id"].astype(str).sort_values(kind="stable").index
+    )
+    for record_index, barrier in records.loc[processing_order].iterrows():
         point: Point = barrier.geometry
         # This generous search box avoids projecting the full river network per point.
         longitude_buffer: float = 0.01 / max(np.cos(np.deg2rad(point.y)), 0.01)
@@ -155,16 +164,37 @@ def snap_amber_weirs(
         closest_point: Point = nearest_points(
             Point(0, 0), projected_lines[nearest_position]
         )[1]
-        nearest_cell: int = int(
-            np.argmin(
-                np.hypot(projected_x - closest_point.x, projected_y - closest_point.y)
-            )
+        cell_distances_m: npt.NDArray[np.float64] = np.hypot(
+            projected_x - closest_point.x, projected_y - closest_point.y
         )
+        nearest_cell: int = int(np.argmin(cell_distances_m))
         column: int = int(cells[nearest_cell, 0])
         row: int = int(cells[nearest_cell, 1])
+        snap_rank: int = 1
+        if fractions.values[row, column] != 0:
+            # Match the old waterworks method: retain the first weir and try
+            # one neighboring placement, without jumping to another river.
+            alternatives: npt.NDArray[np.int64] = np.flatnonzero(
+                np.any(cells != (column, row), axis=1)
+            )
+            if not alternatives.size:
+                records.at[record_index, "exclusion_reason"] = "cell already used"
+                continue
+            nearest_cell = int(alternatives[np.argmin(cell_distances_m[alternatives])])
+            column, row = map(int, cells[nearest_cell])
+            snap_rank = 2
+        if fractions.values[row, column] != 0:
+            records.at[record_index, "exclusion_reason"] = "cell already used"
+            continue
         if not valid_cells[row, column]:
             records.at[record_index, "exclusion_reason"] = "unsuitable river connection"
             continue
+        fractions.values[row, column] = 0.5
+        records.at[record_index, "bankfull_depth_fraction"] = 0.5
+        records.at[record_index, "snap_rank"] = snap_rank
+        records.at[record_index, "distance_to_cell_m"] = float(
+            np.hypot(projected_x[nearest_cell], projected_y[nearest_cell])
+        )
         records.at[record_index, "grid_row"] = row
         records.at[record_index, "grid_column"] = column
         records.at[record_index, "river_id"] = candidates.index[nearest_position]
@@ -173,14 +203,4 @@ def snap_amber_weirs(
         )
         records.at[record_index, "snapped_latitude"] = float(valid_river_cells.y[row])
         records.at[record_index, "included"] = True
-    conflicts: pd.Series = records.included & records.duplicated(
-        ["grid_row", "grid_column"], keep=False
-    )
-    records.loc[conflicts, "included"] = False
-    records.loc[conflicts, "exclusion_reason"] = "multiple weirs on one connection"
-    # Reject every ambiguous placement, making the result independent of atlas order.
-    records.loc[~records.included, ["grid_row", "grid_column"]] = -1
-    records.loc[records.included, "bankfull_depth_fraction"] = 0.5
-    for record_index, barrier in records.loc[records.included].iterrows():
-        fractions.values[int(barrier.grid_row), int(barrier.grid_column)] = 0.5
     return fractions, records
