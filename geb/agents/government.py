@@ -393,67 +393,29 @@ class Government(AgentBaseClass):
             ],
         )
 
-        # The pedotransfer functions succeeded: write everything to the model.
-        soc[:, suitability_HRU] = soc_after
-        bulk_density[:, suitability_HRU] = bulk_density_after
-        hydrology.HRU.var.water_content_saturated_m[:, suitability_HRU] = (
-            soil_hydraulic_properties.water_content_saturated_m
-        )
-        hydrology.HRU.var.water_content_field_capacity_m[:, suitability_HRU] = (
-            soil_hydraulic_properties.water_content_field_capacity_m
-        )
-        hydrology.HRU.var.water_content_wilting_point_m[:, suitability_HRU] = (
-            soil_hydraulic_properties.water_content_wilting_point_m
-        )
-        hydrology.HRU.var.water_content_residual_m[:, suitability_HRU] = (
-            soil_hydraulic_properties.water_content_residual_m
-        )
-        hydrology.HRU.var.saturated_hydraulic_conductivity_m_per_s[
-            :, suitability_HRU
-        ] = soil_hydraulic_properties.saturated_hydraulic_conductivity_m_per_s
-        hydrology.HRU.var.bubbling_pressure_m_positive[:, suitability_HRU] = (
-            soil_hydraulic_properties.bubbling_pressure_m_positive
-        )
-        hydrology.HRU.var.lambda_pore_size_distribution[:, suitability_HRU] = (
-            soil_hydraulic_properties.lambda_pore_size_distribution
-        )
-        # Soil thermal properties (solid heat capacity, solid thermal
-        # conductivity and the saturated unfrozen/frozen conductivities) are
-        # deliberately left alone. They are not soil hydraulic properties, so
-        # they keep the values calculated at model initialization.
+        # 5) Soil water: the new saturated and residual water contents may no
+        # longer bracket each HRU's current water content. Staged on copies,
+        # so it can be checked before anything is written.
+        cell_area = hydrology.HRU.var.cell_area[suitability_HRU]
+        water_content = hydrology.HRU.var.water_content_m[:, suitability_HRU].copy()
+        topwater = hydrology.HRU.var.topwater_m[suitability_HRU].copy()
+        saturated = soil_hydraulic_properties.water_content_saturated_m
+        residual = soil_hydraulic_properties.water_content_residual_m
 
-        self._log_soil_change_summary(
-            suitability_HRU=suitability_HRU,
-            soc_before=soc_before,
-            soc_after=soc[:, suitability_HRU],
-            bulk_density_before=bulk_density_before,
-            bulk_density_after=bulk_density[:, suitability_HRU],
-            derived_before=derived_before,
-        )
+        # Water above the new saturation is routed to topwater (water conserved).
+        excess = np.maximum(0.0, water_content - saturated)
+        water_content -= excess
+        topwater += excess.sum(axis=0)
 
-        water_sat = hydrology.HRU.var.water_content_saturated_m
-        water_res = hydrology.HRU.var.water_content_residual_m
-        wc = hydrology.HRU.var.water_content_m
-
-        # Case 1: wc > new saturation — route excess to topwater (water conserved).
-        excess = np.maximum(0.0, wc[:, suitability_HRU] - water_sat[:, suitability_HRU])
-        wc[:, suitability_HRU] -= excess
-        hydrology.HRU.var.topwater_m[suitability_HRU] += excess.sum(axis=0)
-
-        # Case 2: wc < new residual. Raise every layer to its residual, then pay
-        # for that water: first from topwater, then from whatever surplus above
-        # residual the same HRU still holds in its other layers. Anything that
-        # cannot be covered from either source would be water created out of
-        # nothing, so it is logged rather than passing silently.
-        water_content = wc[:, suitability_HRU]
-        residual = water_res[:, suitability_HRU]
+        # Water below the new residual is raised to the residual, paid for
+        # first from topwater, then from whatever surplus above residual the
+        # same HRU holds in its other layers.
         deficit_per_layer = np.maximum(0.0, residual - water_content)
         water_content += deficit_per_layer
         outstanding = deficit_per_layer.sum(axis=0)
 
-        topwater = hydrology.HRU.var.topwater_m[suitability_HRU]
         from_topwater = np.minimum(outstanding, topwater)
-        hydrology.HRU.var.topwater_m[suitability_HRU] = topwater - from_topwater
+        topwater -= from_topwater
         outstanding -= from_topwater
 
         surplus_per_layer = np.maximum(0.0, water_content - residual)
@@ -469,33 +431,57 @@ class Government(AgentBaseClass):
         water_content -= share * from_other_layers
         outstanding -= from_other_layers
 
-        wc[:, suitability_HRU] = water_content
+        # HRUs that cannot pay for their new residual water content from
+        # topwater or their other layers would need water created out of
+        # nothing. They are not converted (this round); everything about them
+        # stays as it was.
+        funded = outstanding <= 0.0
+        n_unfunded = int((~funded).sum())
+        if n_unfunded > 0:
+            self.model.logger.warning(
+                "Reforestation: %d HRUs not converted because they hold too "
+                "little water to reach the new residual water content of forest "
+                "soil.",
+                n_unfunded,
+            )
+        converted_indices = np.flatnonzero(suitability_HRU)[funded]
+        suitability_HRU = np.zeros_like(suitability_HRU)
+        suitability_HRU[converted_indices] = True
 
-        created_water_m3 = float(
-            (outstanding * hydrology.HRU.var.cell_area[suitability_HRU]).sum()
+        # Everything succeeded: write the funded HRUs to the model.
+        soc[:, suitability_HRU] = soc_after[:, funded]
+        bulk_density[:, suitability_HRU] = bulk_density_after[:, funded]
+        for name in derived_before:
+            getattr(hydrology.HRU.var, name)[:, suitability_HRU] = getattr(
+                soil_hydraulic_properties, name
+            )[:, funded]
+        hydrology.HRU.var.water_content_m[:, suitability_HRU] = water_content[:, funded]
+        hydrology.HRU.var.topwater_m[suitability_HRU] = topwater[funded]
+        # Soil thermal properties (solid heat capacity, solid thermal
+        # conductivity and the saturated unfrozen/frozen conductivities) are
+        # deliberately left alone. They are not soil hydraulic properties, so
+        # they keep the values calculated at model initialization.
+
+        self._log_soil_change_summary(
+            suitability_HRU=suitability_HRU,
+            soc_before=soc_before[:, funded],
+            soc_after=soc[:, suitability_HRU],
+            bulk_density_before=bulk_density_before[:, funded],
+            bulk_density_after=bulk_density[:, suitability_HRU],
+            derived_before={
+                name: before[:, funded] for name, before in derived_before.items()
+            },
         )
+
+        cell_area = cell_area[funded]
         self.model.logger.info(
             "Reforestation soil water adjustment: %.4f m3 routed from soil to "
             "topwater, %.4f m3 drawn from topwater and %.4f m3 from surplus in "
             "other layers to reach the new residual water content.",
-            float(
-                (
-                    excess.sum(axis=0) * hydrology.HRU.var.cell_area[suitability_HRU]
-                ).sum()
-            ),
-            float((from_topwater * hydrology.HRU.var.cell_area[suitability_HRU]).sum()),
-            float(
-                (from_other_layers * hydrology.HRU.var.cell_area[suitability_HRU]).sum()
-            ),
+            float((excess.sum(axis=0)[funded] * cell_area).sum()),
+            float((from_topwater[funded] * cell_area).sum()),
+            float((from_other_layers[funded] * cell_area).sum()),
         )
-        if created_water_m3 > 0.0:
-            self.model.logger.warning(
-                "Reforestation created %.4f m3 of water: %d HRUs could not reach "
-                "their new residual water content from topwater or from surplus "
-                "in their other soil layers.",
-                created_water_m3,
-                int((outstanding > 0).sum()),
-            )
 
         self.remove_farmers_from_converted_forest_areas(suitability_HRU)
 
