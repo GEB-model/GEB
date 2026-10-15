@@ -88,9 +88,9 @@ def test_waterworks_input_migration(monkeypatch: pytest.MonkeyPatch) -> None:
     Raises:
         AssertionError: If rebuilding barriers or rerunning simulations is omitted.
     """  # noqa: DOC202, DOC502
-    monkeypatch.setattr(version_updates, "__version__", "1.0.0b38")
+    monkeypatch.setattr(version_updates, "__version__", "1.0.0b37")
     updates: list[str] = version_updates.get_and_maybe_do_version_updates(
-        "1.0.0b37",
+        "1.0.0b36",
         logging.getLogger(__name__),
     )
     assert any("Re-run `setup_weirs`" in update for update in updates)

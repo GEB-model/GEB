@@ -53,8 +53,7 @@ def test_version_update_failure_propagates(
         ("1.0.0b31", "1.0.0b32", ["setup_waterbodies"], None),
         ("1.0.0b32", "1.0.0b33", ["setup_groundwater"], None),
         ("1.0.0b33", "1.0.0b34", ["setup_waterbodies"], None),
-        ("1.0.0b36", "1.0.0b37", ["setup_waterbodies"], "Rerun spinup"),
-        ("1.0.0b37", "1.0.0b38", ["setup_waterbodies", "setup_weirs"], "rerun spinup"),
+        ("1.0.0b36", "1.0.0b37", ["setup_waterbodies", "setup_weirs"], "rerun spinup"),
     ],
 )
 def test_waterbody_input_migration(

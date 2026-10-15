@@ -1,9 +1,7 @@
-# v1.0.0b38
+# dev
 - Store snapped barrier grid coordinates so the waterworks dashboard can join source points to runtime reports; excluded barriers retain indices of -1.
 - Add GDW and AMBER river barriers, including fixed crests and water-level-dependent AMBER dam openings. Rebuild `setup_waterbodies` and `setup_weirs`, then rerun spinup and simulation. Disable barriers with `hydrology.routing.weirs: false`.
 - Report hourly barrier inflow, outflow and opening fractions, and add barrier diagnostics and a linked waterworks dashboard to discharge evaluation. Reporting defaults to enabled through `report._waterworks`.
-
-# v1.0.0b37
 - Enrich HydroLAKES with GDW reservoirs and AMBER lake classifications; activate reservoirs from their construction year while preserving water storage and recorded discharge layouts. Rebuild `setup_waterbodies`, then rerun spinup and simulation.
 - Stop when automatic input migrations fail.
 
