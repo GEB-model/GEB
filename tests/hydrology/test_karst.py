@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from geb.geb_types import TwoDArrayFloat32
+from geb.config_schema import KarstConfig
 from geb.hydrology.karst import Karst
 from geb.hydrology.landcovers import ALL_LAND_COVER_TYPES
 
@@ -19,7 +19,9 @@ def karst() -> Karst:
         A karst module with equal HRU areas and otherwise isolated dependencies.
     """
     model: MagicMock = MagicMock()
-    model.config = {"hydrology": {}}
+    model.config = {
+        "hydrology": {"karst": {"capture_fraction": 1.0, "release_time_days": 10.0}}
+    }
     model.files = {"grid": {"groundwater/karst_fraction": "karst.zarr"}}
     model.in_spinup = True
     hydrology: MagicMock = MagicMock()
@@ -148,42 +150,39 @@ def test_karst_preserves_loaded_storage(karst: Karst) -> None:
     "settings",
     [None, {}, {"capture_fraction": 0.5}, {"release_time_days": 20.0}],
 )
-def test_karst_config_defaults(karst: Karst, settings: dict[str, float] | None) -> None:
-    """Resolve missing defaults and preserve explicitly configured values.
+def test_karst_requires_config(karst: Karst, settings: dict[str, float] | None) -> None:
+    """Require explicit karst settings when calculating recharge.
 
     Args:
         karst: Isolated karst module.
-        settings: Explicit settings, or None to omit the section. Capture is
-            dimensionless and release time is in days.
+        settings: Incomplete settings, or None to omit the section.
     """
     karst.model.config = {"hydrology": {}}
     if settings is not None:
         karst.model.config["hydrology"]["karst"] = settings
     initialized: Karst = Karst(karst.model, karst.hydrology)
-    expected_capture: float = (settings or {}).get("capture_fraction", 1.0)
-    expected_days: float = (settings or {}).get("release_time_days", 10.0)
-    runoff_m: TwoDArrayFloat32 = np.ones((1, 6), dtype=np.float32)
-    recharge_m: np.ndarray = initialized.step(
-        runoff_m, np.zeros((1, 6), dtype=np.float32), np.zeros(6, dtype=np.float32)
-    )[0]
-    np.testing.assert_allclose(
-        recharge_m,
-        np.array([expected_capture, expected_capture / 3])
-        * (1.0 - expected_days * (1.0 - np.exp(-1.0 / expected_days))),
-        rtol=1e-6,
-    )
+    with pytest.raises(KeyError):
+        initialized.step(
+            np.zeros((1, 6), dtype=np.float32),
+            np.zeros((1, 6), dtype=np.float32),
+            np.zeros(6, dtype=np.float32),
+        )
 
 
 @pytest.mark.parametrize(
     "settings", [{"capture_fraction": 1.1}, {"release_time_days": 0.0}]
 )
 def test_karst_rejects_invalid_config(karst: Karst, settings: dict[str, float]) -> None:
-    """Reject invalid karst settings during initialization.
+    """Reject invalid karst settings through the configuration schema.
 
     Args:
         karst: Isolated karst module.
         settings: Invalid capture fraction (dimensionless) or release time (days).
     """
-    karst.model.config = {"hydrology": {"karst": settings}}
+    complete_settings: dict[str, float] = {
+        "capture_fraction": 1.0,
+        "release_time_days": 10.0,
+        **settings,
+    }
     with pytest.raises(ValueError):
-        Karst(karst.model, karst.hydrology)
+        KarstConfig.model_validate(complete_settings)

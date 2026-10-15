@@ -1,6 +1,3 @@
-# dev
-- Fill karst coverage in a NumPy array before assigning it to the output grid, preserving updates for lazy input masks without an explicit load.
-
 # v1.0.0b36
 - Add karst storage to all hydrology runs, with a default release time of 10 days. Update inputs and rerun spinup.
 

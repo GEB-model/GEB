@@ -306,13 +306,11 @@ class KarstConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     capture_fraction: float = Field(
-        1.0,
         ge=0.0,
         le=1.0,
         description="Fraction of runoff and interflow captured on karst land (0–1).",
     )
     release_time_days: float = Field(
-        10.0,
         gt=0.0,
         allow_inf_nan=False,
         description="Exponential release time (days): after this many dry days, exp(-1) of the initial storage remains (about 36.8%).",
@@ -325,9 +323,7 @@ class HydrologyConfig(BaseModel):
     routing: RoutingConfig = Field(
         default_factory=RoutingConfig, description="Routing configuration."
     )
-    karst: KarstConfig = Field(
-        default_factory=KarstConfig, description="Karst recharge settings."
-    )
+    karst: KarstConfig = Field(description="Karst recharge settings.")
     evaluation: HydrologyEvaluationConfig = Field(
         default_factory=HydrologyEvaluationConfig,
         description="Hydrology evaluation configuration.",

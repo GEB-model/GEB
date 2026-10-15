@@ -4,7 +4,6 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from geb.config_schema import KarstConfig
 from geb.geb_types import ArrayFloat32, ArrayFloat64, TwoDArrayFloat32
 from geb.module import Module
 
@@ -26,11 +25,6 @@ class Karst(Module):
             hydrology: The hydrology module sharing the grid and saved storage.
         """
         super().__init__(model, create_var=False)
-        # parse_config validates a temporary model without adding schema defaults.
-        karst_config: KarstConfig = KarstConfig.model_validate(
-            model.config["hydrology"].get("karst", {})
-        )
-        model.config["hydrology"]["karst"] = karst_config.model_dump()
         self.hydrology = hydrology
         self.grid = hydrology.grid
         self.karst_fraction: ArrayFloat32 = self.grid.load2d(
