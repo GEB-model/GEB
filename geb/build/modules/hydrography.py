@@ -34,6 +34,7 @@ from geb.build.workflows.river_snapping import (
     SnappingResults,
     snap_point_to_river_network,
 )
+from geb.build.workflows.weirs import snap_amber_weirs
 from geb.geb_types import (
     ArrayBool,
     ArrayFloat32,
@@ -1578,6 +1579,60 @@ class Hydrography(BuildModelBase):
         self.set_geom(
             low_elevation_coastal_zone_mask,
             name="coastal/low_elevation_coastal_zone_mask",
+        )
+
+    @build_method(required=False, depends_on=["setup_waterbodies"])
+    def setup_weirs(self) -> None:
+        """Save known-height AMBER weirs on internal river connections.
+
+        Only weirs within 250 m of a represented river line are considered.
+        Other structure types, waterbody connections, missing heights and
+        ambiguous placements are excluded. This build step does not change flow.
+
+        Returns:
+            None. Writes routing/weir_height_m (meters) and routing/weirs
+            source-point diagnostics, including grid indices and exclusion reasons.
+
+        Raises:
+            ValueError: If source geometry or river grid indices are invalid.
+        """  # noqa: DOC202, DOC502
+        region: gpd.GeoDataFrame = self.region.to_crs(4326)
+        barriers: gpd.GeoDataFrame = self.data_catalog.fetch("amber_barriers").read(
+            bbox=tuple(region.total_bounds)
+        )
+        barriers = barriers.loc[barriers.intersects(region.union_all())].copy()
+        waterbody_ids: xr.DataArray = self.grid["waterbodies/waterbody_id"]
+        river_cells: xr.DataArray = (
+            ~self.grid["mask"]
+            & (self.grid["routing/river_ids"] != -1)
+            & (waterbody_ids == -1)
+        )
+        downstream_cells: npt.NDArray[np.int64] = (
+            self.grid["flow_raster_idxs_ds"].values.ravel().astype(np.int64)
+        )
+        internal_connection: npt.NDArray[np.bool_] = (
+            (downstream_cells >= 0)
+            & (downstream_cells < downstream_cells.size)
+            & (downstream_cells != np.arange(downstream_cells.size))
+        )
+        # Both cells must route water as rivers; never attach a weir to an outlet.
+        internal_connection &= np.take(
+            river_cells.values.ravel(), downstream_cells, mode="clip"
+        )
+        valid_cells: xr.DataArray = river_cells & internal_connection.reshape(
+            river_cells.shape
+        )
+        heights: xr.DataArray
+        records: gpd.GeoDataFrame
+        heights, records = snap_amber_weirs(
+            barriers, self.geom["routing/rivers"], valid_cells
+        )
+        self.set_grid(heights, name="routing/weir_height_m")
+        self.set_geom(records, name="routing/weirs")
+        self.logger.info(
+            "AMBER weirs: %s included; exclusions: %s",
+            int(records.included.sum()),
+            records.loc[~records.included, "exclusion_reason"].value_counts().to_dict(),
         )
 
     @build_method(required=True, depends_on=["setup_hydrography", "setup_elevation"])

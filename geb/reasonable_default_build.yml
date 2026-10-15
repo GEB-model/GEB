@@ -42,6 +42,8 @@ setup_vegetation:
 
 setup_waterbodies:
 
+setup_weirs:
+
 setup_groundwater:
 
 setup_karst:

@@ -1,4 +1,5 @@
 # dev
+- Add `setup_weirs` to snap known-height AMBER weirs to internal river connections within 250 m of the source river line. Save heights and placement diagnostics; exclude ambiguous placements. Run `setup_weirs` to add these inputs to existing builds. Routing is unchanged.
 - Add the AMBER V1 European barrier dataset to the data catalog, with cached GeoParquet points, cleaned types and heights, and geographic filtering when reading.
 
 # v1.0.0b36
