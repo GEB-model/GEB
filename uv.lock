@@ -1410,7 +1410,7 @@ http = [
 
 [[package]]
 name = "geb"
-version = "1.0.0b36"
+version = "1.0.0b37"
 source = { editable = "." }
 dependencies = [
     { name = "affine" },

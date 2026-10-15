@@ -24,6 +24,7 @@ from geb.geb_types import (
     TwoDArrayInt32,
     TwoDArrayUint8,
 )
+from geb.hydrology.waterbodies import OFF, RESERVOIR
 from geb.module import Module
 from geb.store import Bucket
 from geb.workflows import balance_check
@@ -44,86 +45,100 @@ def get_discharge_per_river(
     folder: Path | None = None,
     variables_to_report: dict[str, Any] | None = None,
 ) -> pd.DataFrame:
-    """Get the discharge for each river from the output files.
+    """Read recorded river discharge, keeping the reporting-time branch layout.
+
+    Notes:
+        Reservoir activation can change the representative cells of a river.
+        Historical report names therefore determine which branches to sum.
 
     Args:
-        rivers: A GeoDataFrame containing the rivers in the model, with columns "is_downstream_outflow", "is_upstream_of_downstream_basin", and "hydrography_xy".
-        all_rivers: A DataFrame containing all rivers in the model, with columns "represented_in_grid", "hydrography_xy", and "downstream_ID".
-        source: The source of the discharge data. Can be "file" or "memory".
-        folder: The folder where the discharge files are stored.
-        variables_to_report: A dictionary containing the variables to report.
+        rivers: Rivers to read, indexed by integer river ID.
+        all_rivers: Full river network, retained for caller compatibility.
+        source: Whether to read files or in-memory report buffers.
+        folder: Directory containing consolidated or legacy discharge files.
+        variables_to_report: In-memory discharge report buffers (m³/s).
 
     Returns:
-        A DataFrame with the discharge for each river, with columns "discharge_m3_per_s" and "hydrography_xy".
+        Discharge (m³/s) indexed by time, with one column per river ID.
 
     Raises:
-        ValueError: If source is "file" and folder is None.
-        ValueError: If source is "memory" and variables_to_report is None.
+        ValueError: If the source or its required arguments are invalid.
+        KeyError: If a requested river has no recorded discharge.
     """
+    if source not in ("file", "memory"):
+        raise ValueError(f"Unknown discharge source: {source}")
     if source == "file" and folder is None:
         raise ValueError("folder must be provided if source is 'file'")
-    elif source == "memory" and variables_to_report is None:
+    if source == "memory" and variables_to_report is None:
         raise ValueError("variables_to_report must be provided if source is 'memory'")
 
-    def create_df_from_report_variable(
-        river_id: int | str, variables_to_report: dict[str, Any]
-    ) -> pd.Series:
-        river_data = variables_to_report[f"river_outflow_hourly_m3_per_s_{river_id}"]
-        return pd.Series(
-            river_data["_data_array"][: river_data["_var_index"]],
-            index=river_data["_time_array"][: river_data["_var_index"]].astype(
-                "datetime64[s]"
-            ),
-        )
-
+    prefix: str = "river_outflow_hourly_m3_per_s_"
     consolidated_table: pd.DataFrame | None = None
-    if source == "file":
+    available_keys: set[str]
+    if source == "memory":
+        assert variables_to_report is not None
+        available_keys = {
+            name.removeprefix(prefix)
+            for name in variables_to_report
+            if name.startswith(prefix)
+        }
+    else:
         assert folder is not None
         consolidated_file: Path = folder / "river_outflow_hourly_m3_per_s.parquet"
         if consolidated_file.exists():
             consolidated_table = read_table(consolidated_file)
+        available_keys = {
+            path.stem.removeprefix(prefix) for path in folder.glob(f"{prefix}*.parquet")
+        }
+        if consolidated_table is not None:
+            available_keys.update(str(column) for column in consolidated_table.columns)
 
-    def read_outflow_series_from_file(key: int | str) -> pd.Series:
-        assert folder is not None
-        key_str: str = str(key)
-        if consolidated_table is not None and key_str in consolidated_table.columns:
-            return consolidated_table[key_str]
-        # Legacy fallback: individual parquet file
-        return read_table(folder / f"river_outflow_hourly_m3_per_s_{key}.parquet")[
-            f"river_outflow_hourly_m3_per_s_{key}"
-        ]
+    # Index the saved layout once, rather than scanning all reports for every river.
+    keys_by_river: dict[str, list[str]] = {}
+    key: str
+    for key in sorted(available_keys):
+        keys_by_river.setdefault(key.split("_", 1)[0], []).append(key)
 
-    discharge_data = {}
+    discharge_data: dict[int, pd.Series] = {}
+    river_id: int
     for river_id in rivers.index:
-        assert isinstance(river_id, int)
-        xys: list[tuple[int, int]] = get_river_representative_xys(river_id, all_rivers)
-        if len(xys) == 1:
-            if source == "file":
-                discharge_data[river_id] = read_outflow_series_from_file(river_id)
-            else:
+        river_key: str = str(river_id)
+        if river_key not in keys_by_river:
+            raise KeyError(f"No recorded discharge for river {river_id}")
+        # A direct report takes precedence over legacy branch files if both exist.
+        report_keys: list[str] = (
+            [river_key] if river_key in available_keys else keys_by_river[river_key]
+        )
+        total_discharge: pd.Series | None = None
+        for key in report_keys:
+            discharge_part: pd.Series
+            if source == "memory":
                 assert variables_to_report is not None
-                discharge_data[river_id] = create_df_from_report_variable(
-                    river_id, variables_to_report
+                river_data: dict[str, Any] = variables_to_report[f"{prefix}{key}"]
+                sample_count: int = river_data["_var_index"]
+                discharge_part = pd.Series(
+                    river_data["_data_array"][:sample_count],
+                    index=river_data["_time_array"][:sample_count].astype(
+                        "datetime64[s]"
+                    ),
                 )
-        else:
-            total_discharge_part = None
-            for i in range(len(xys)):
-                if source == "file":
-                    discharge_part = read_outflow_series_from_file(f"{river_id}_{i}")
-                else:
-                    assert variables_to_report is not None
-                    discharge_part = create_df_from_report_variable(
-                        f"{river_id}_{i}", variables_to_report
-                    )
-                if total_discharge_part is None:
-                    total_discharge_part = discharge_part
-                else:
-                    total_discharge_part += discharge_part
-            discharge_data[river_id] = total_discharge_part
+            elif consolidated_table is not None and key in consolidated_table.columns:
+                discharge_part = consolidated_table[key]
+            else:
+                assert folder is not None
+                discharge_part = read_table(folder / f"{prefix}{key}.parquet")[
+                    f"{prefix}{key}"
+                ]
+            total_discharge = (
+                discharge_part
+                if total_discharge is None
+                else total_discharge + discharge_part
+            )
+        assert total_discharge is not None
+        discharge_data[river_id] = total_discharge
 
     if not discharge_data:
         return pd.DataFrame()
-
     return pd.concat(discharge_data, axis=1)
 
 
@@ -428,8 +443,7 @@ class Routing(Module):
         Args:
             model: The GEB model instance.
             hydrology: The hydrology submodel instance.
-
-        """
+        """  # noqa: DOC502
         super().__init__(model)
 
         self.config = model.config["hydrology"]["routing"]
@@ -534,22 +548,37 @@ class Routing(Module):
     def load_rivers(
         self,
         grid_linear_mapping: TwoDArrayInt32,
+        active_waterbody_ids: ArrayInt32 | None = None,
     ) -> tuple[gpd.GeoDataFrame, ArrayInt32, ArrayInt32]:
-        """Load the river network geometries.
+        """Load river geometries with only currently active waterbodies removed.
 
         Args:
             grid_linear_mapping: A 2D array mapping grid cells to linear indices.
+            active_waterbody_ids: IDs of waterbodies active in the model. Before
+                waterbodies are loaded, use their construction years instead.
 
         Returns:
             A GeoDataFrame containing the river network geometries, the updated river IDs and the original river IDs before removing waterbodies.
         """
-        raw_wb_id = self.grid.load2d(
+        raw_wb_id: TwoDArrayInt32 = self.grid.load2d(
             self.model.files["grid"]["waterbodies/waterbody_id"], compress=False
         )
-        wb_geom_file = self.model.files["geom"]["waterbodies/waterbody_data"]
-        wb_data_df = read_geom(wb_geom_file).set_index("waterbody_id")
-        active_ids = wb_data_df.index[wb_data_df["waterbody_type"] != 0].values
-        is_waterbody: TwoDArrayBool = np.isin(raw_wb_id, active_ids)
+        if active_waterbody_ids is None:
+            wb_geom_file: Path = self.model.files["geom"]["waterbodies/waterbody_data"]
+            wb_data_df: pd.DataFrame = read_geom(wb_geom_file).set_index("waterbody_id")
+            # Lakes and reservoirs with unknown dates are active from the start.
+            construction_years: pd.Series = wb_data_df.get(
+                "gdw_construction_year", pd.Series(0, index=wb_data_df.index)
+            ).fillna(0)
+            enabled: pd.Series = wb_data_df["waterbody_type"] != OFF
+            built: pd.Series = (wb_data_df["waterbody_type"] != RESERVOIR) | (
+                construction_years <= self.model.current_time.year
+            )
+            active_mask: ArrayBool = (enabled & built).to_numpy()
+            active_waterbody_ids = wb_data_df.index.to_numpy(dtype=np.int32)[
+                active_mask
+            ]
+        is_waterbody: TwoDArrayBool = np.isin(raw_wb_id, active_waterbody_ids)
 
         rivers: gpd.GeoDataFrame = read_geom(self.model.files["geom"]["routing/rivers"])
         rivers["return_period_2_years_daily_m3_per_s"] = np.nan
@@ -569,7 +598,9 @@ class Routing(Module):
             self.model.files["grid"]["waterbodies/waterbody_outflow_points"],
             compress=False,
         )
-        is_active_outflow: TwoDArrayBool = np.isin(raw_wb_outflows, active_ids)
+        is_active_outflow: TwoDArrayBool = np.isin(
+            raw_wb_outflows, active_waterbody_ids
+        )
         active_wb_outflows: TwoDArrayInt32 = np.where(
             is_active_outflow, raw_wb_outflows, -1
         ).astype(np.int32)
@@ -601,6 +632,15 @@ class Routing(Module):
         def remove_masked_river_cells(
             xys: list[tuple[int, int]], mask: list[bool]
         ) -> np.ndarray[tuple[int], np.dtype[Any]]:
+            """Keep coordinates for cells still represented as river channels.
+
+            Args:
+                xys: Grid column and row pairs.
+                mask: Whether each coordinate remains a river cell.
+
+            Returns:
+                Coordinates of the retained cells.
+            """
             array: np.ndarray[tuple[int], np.dtype[Any]] = np.empty(
                 sum(mask), dtype=object
             )
@@ -636,6 +676,33 @@ class Routing(Module):
             )
         )
         return rivers, river_ids_compressed, river_ids_no_waterbodies_removed
+
+    def update_river_cells(self) -> None:
+        """Update river cells when reservoirs become active.
+
+        Reload the river cells, but keep saved discharge statistics and water storage.
+        """
+        active_waterbody_ids: ArrayInt32 = (
+            self.hydrology.waterbodies.var.waterbodies.index.to_numpy(dtype=np.int32)[
+                self.hydrology.waterbodies.is_active
+            ]
+        )
+        rivers: gpd.GeoDataFrame
+        rivers, self.var.river_ids, self.var.river_ids_no_waterbodies_removed = (
+            self.load_rivers(self.grid.linear_mapping, active_waterbody_ids)
+        )
+        # Only replace cell locations. Keep the other river properties.
+        column: str
+        for column in (
+            "hydrography_xy",
+            "hydrography_xy_no_waterbodies_removed",
+            "hydrography_upstream_area_m2",
+            "hydrography_upstream_area_m2_no_waterbodies_removed",
+            "represented_in_grid",
+            "hydrography_linear",
+        ):
+            self.var.rivers[column] = rivers[column]
+        self.var.active_rivers = self.get_active_rivers()
 
     def _update_rivers_geometry(
         self,
@@ -1172,7 +1239,7 @@ class Routing(Module):
 
         return bankfull_depth_m
 
-    def set_router(self) -> None:
+    def set_router(self, initialize_storage: bool = True) -> None:
         """Initialize the local inertial routing algorithm with derived river geometry.
 
         Derives cross-sectional channel geometry (bankfull width, depth via hydraulic continuity
@@ -1186,7 +1253,20 @@ class Routing(Module):
             that waterbody footprints are flattened and state variables (either synthesized during
             spinup or restored from checkpoint storage) are available before deriving
             setting up the local inertial routing solver.
-        """
+
+        Args:
+            initialize_storage: Initialize river storage during spinup. Set False
+                when rebuilding connections after reservoir construction.
+
+        Returns:
+            None.
+
+        Raises:
+            ValueError: If channel geometry is invalid.
+        """  # noqa: DOC202, DOC502
+        # A new reservoir changes which cells are rivers. Update these before
+        # creating the solver, including when loading a saved model.
+        self.update_river_cells()
         is_waterbody_outflow: ArrayBool = self.grid.var.waterbody_outflow_points != -1
         retention_basin_release_threshold_factor: float = self.config[
             "retention_basins"
@@ -1278,7 +1358,7 @@ class Routing(Module):
             in_spinup=self.model.in_spinup,
         )
 
-        if self.model.in_spinup:
+        if self.model.in_spinup and initialize_storage:
             # Power-law bankfull storage V_bf = length * (W_bf * h_bf / (r + 1)) (m³)
             bankfull_volume: ArrayFloat64 = self.grid.var.river_length.astype(
                 np.float64
@@ -1320,7 +1400,7 @@ class Routing(Module):
             water_stage_m=self.var.water_stage_m,
             river_storage_m3=self.var.river_storage_m3,
             waterbody_storage_m3=self.hydrology.waterbodies.var.storage,
-            in_spinup=self.model.in_spinup,
+            in_spinup=self.model.in_spinup and initialize_storage,
         )
 
     def spinup(self) -> None:
@@ -1624,6 +1704,7 @@ class Routing(Module):
         return_flow_m3_to_waterbodies_per_hour: np.ndarray = np.bincount(
             self.grid.var.waterbody_ids[self.grid.var.waterbody_ids != -1],
             weights=return_flow_m3_per_hour[self.grid.var.waterbody_ids != -1],
+            minlength=self.hydrology.waterbodies.n,
         )
         return_flow_m3_per_hour[self.grid.var.waterbody_ids != -1] = 0.0
 
@@ -1733,6 +1814,7 @@ class Routing(Module):
             self.hydrology.waterbodies.var.storage += np.bincount(
                 self.grid.var.waterbody_ids[self.grid.var.waterbody_ids != -1],
                 weights=total_runoff_m3[self.grid.var.waterbody_ids != -1],
+                minlength=self.hydrology.waterbodies.n,
             )
 
             # after adding the runoff to the water bodies, we set the runoff to zero
@@ -1743,15 +1825,24 @@ class Routing(Module):
                 return_flow_m3_to_waterbodies_per_hour
             )
 
+            evaporation_sum_m: np.ndarray = np.bincount(
+                self.grid.var.waterbody_ids[self.grid.var.waterbody_ids != -1],
+                weights=reference_evapotranspiration_water_m[
+                    hour, self.grid.var.waterbody_ids != -1
+                ],
+                minlength=self.hydrology.waterbodies.n,
+            )
+            waterbody_cell_count: ArrayInt64 = np.bincount(
+                self.grid.var.waterbody_ids[self.grid.var.waterbody_ids != -1],
+                minlength=self.hydrology.waterbodies.n,
+            )
+            # Future reservoirs have no cells or evaporation.
             potential_evaporation_per_waterbody_m3 = (
-                np.bincount(
-                    self.grid.var.waterbody_ids[self.grid.var.waterbody_ids != -1],
-                    weights=reference_evapotranspiration_water_m[
-                        hour, self.grid.var.waterbody_ids != -1
-                    ],
-                )
-                / np.bincount(
-                    self.grid.var.waterbody_ids[self.grid.var.waterbody_ids != -1]
+                np.divide(
+                    evaporation_sum_m,
+                    waterbody_cell_count,
+                    out=np.zeros(self.hydrology.waterbodies.n, dtype=np.float64),
+                    where=waterbody_cell_count > 0,
                 )
                 * self.hydrology.waterbodies.var.lake_area
             )
@@ -1893,7 +1984,6 @@ class Routing(Module):
             self.var.water_stage_m = self.router.get_water_stage(
                 out=self.var.water_stage_m
             )
-
             if not (actual_evaporation_in_rivers_m3_per_hour >= 0.0).all():
                 raise ValueError(
                     f"Negative evaporation detected, min evaporation: {actual_evaporation_in_rivers_m3_per_hour.min()}, min discharge: {self.var.discharge_in_rivers_m3_s_substep.min()}. "
@@ -1901,9 +1991,19 @@ class Routing(Module):
 
             assert (actual_evaporation_in_rivers_m3_per_hour >= 0.0).all()
 
-            # the reservoir operators need to track the inflow to the reservoirs
+            # Dam operators need past river flows when the reservoir opens.
+            operator_inflow_m3: ArrayFloat32 = waterbody_inflow_m3.copy()
+            future_reservoirs: ArrayBool = ~self.hydrology.waterbodies.is_active
+            operator_inflow_m3[future_reservoirs] = (
+                self.var.discharge_in_rivers_m3_s_substep[
+                    self.hydrology.waterbodies.var.waterbody_outflow_linear_mapping[
+                        future_reservoirs
+                    ]
+                ]
+                * 3600
+            )
             self.model.agents.reservoir_operators.track_inflow(
-                waterbody_inflow_m3[self.model.hydrology.waterbodies.is_reservoir]
+                operator_inflow_m3[self.model.hydrology.waterbodies.is_reservoir]
             )
 
             # ensure that discharge is nan for water bodies
@@ -1942,7 +2042,6 @@ class Routing(Module):
             assert not np.isnan(discharge_m3_s_substep[self.var.river_ids != -1]).any()
 
             self.var.discharge_m3_s_per_substep[hour, :] = discharge_m3_s_substep
-
             retention_basin_storage_m3_substep = self.grid.full_compressed(
                 0, dtype=np.float32
             )
@@ -2161,13 +2260,10 @@ class Routing(Module):
             )
 
             if self.model.current_timestep > 0:
-                sample_key: str = (
-                    f"river_outflow_hourly_m3_per_s_{active_rivers.index[0]}"
-                )
-                if (
-                    self.variables_to_report is not None
-                    and sample_key in self.variables_to_report
-                    and self.variables_to_report[sample_key]["_var_index"] > 0
+                if self.variables_to_report is not None and any(
+                    name.startswith("river_outflow_hourly_m3_per_s_")
+                    and report.get("_var_index", 0) > 0
+                    for name, report in self.variables_to_report.items()
                 ):
                     discharge_by_river_run: pd.DataFrame = get_discharge_per_river(
                         rivers=active_rivers,

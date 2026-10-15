@@ -5,8 +5,11 @@ import math
 import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
+import pytest
 
 from geb.hydrology.waterbodies import (
+    LAKE,
+    RESERVOIR,
     estimate_lake_outflow,
     estimate_outflow_height,
     get_lake_factor,
@@ -285,17 +288,35 @@ def test_flatten_waterbody_elevations() -> None:
     assert flattened[3] == 120.0
 
 
-def test_off_waterbodies_filtered_out_at_spinup() -> None:
-    """Test that waterbodies with waterbody_type == 0 (OFF) are excluded during spinup."""
+@pytest.mark.parametrize("input_type", [LAKE, RESERVOIR, 3])
+def test_off_waterbodies_filtered_out_at_spinup(input_type: int) -> None:
+    """Filter disabled lakes and initialize saved reservoir storage.
+
+    Args:
+        input_type: First waterbody's input type (dimensionless integer code).
+
+    Returns:
+        None.
+
+    Raises:
+        AssertionError: If runtime classification or initialization is incorrect.
+    """  # noqa: DOC202, DOC502
+    from datetime import datetime
     from unittest.mock import MagicMock
 
     import geopandas as gpd
     import pandas as pd
 
-    from geb.hydrology.waterbodies import LAKE, OFF, RESERVOIR, WaterBodies
+    from geb.hydrology.waterbodies import (
+        OFF,
+        RESERVOIR,
+        WaterBodies,
+        WaterBodyVariables,
+    )
 
     mock_model = MagicMock()
     mock_model.in_spinup = False
+    mock_model.current_time = datetime(2000, 1, 1)
     mock_model.config = {
         "general": {"hydrological_year_start_month": 10},
         "parameters": {"lake_outflow_multiplier": np.float32(1.0)},
@@ -324,7 +345,7 @@ def test_off_waterbodies_filtered_out_at_spinup() -> None:
 
     wb_data = gpd.GeoDataFrame(
         {
-            "waterbody_type": [LAKE, OFF, RESERVOIR],
+            "waterbody_type": [input_type, OFF, RESERVOIR],
             "average_area": [1e6, 2e6, 3e6],
             "volume_total": [5e6, 1e7, 2e7],
             "average_discharge": [10.0, 20.0, 30.0],
@@ -334,6 +355,7 @@ def test_off_waterbodies_filtered_out_at_spinup() -> None:
 
     wb = WaterBodies(model=mock_model, hydrology=mock_hydrology)
     wb.grid = mock_grid
+    wb.var = WaterBodyVariables()
     wb.model.files = {
         "grid": {
             "waterbodies/waterbody_id": "dummy_grid_path",
@@ -350,6 +372,10 @@ def test_off_waterbodies_filtered_out_at_spinup() -> None:
         mp.setattr(
             "geb.hydrology.waterbodies.read_geom", lambda path: wb_data.reset_index()
         )
+        if input_type == 3:
+            with pytest.raises(ValueError, match="Rebuild setup_waterbodies"):
+                wb.spinup()
+            return
         wb.spinup()
 
     # Active waterbodies should only be 10 (LAKE) and 30 (RESERVOIR) -> mapped to 0 and 1
@@ -361,6 +387,15 @@ def test_off_waterbodies_filtered_out_at_spinup() -> None:
     assert wb.grid.var.waterbody_ids[0] != -1
     assert wb.grid.var.waterbody_ids[1] != -1
     assert wb.grid.var.waterbody_ids[3] != -1
+
+    first_index: int = int(np.flatnonzero(wb.var.waterbodies.index == 10)[0])
+    assert wb.var.waterbodies.loc[10, "waterbody_type"] == input_type
+    assert wb.var.waterbody_type[first_index] == input_type
+    if input_type == RESERVOIR:
+        assert wb.is_reservoir[first_index]
+        assert wb.var.storage[first_index] == pytest.approx(2.5e6)
+        assert wb.var.construction_year[first_index] == 0
+        assert wb.is_active[first_index]
 
 
 def test_identify_waterbody_outflows_and_absorb_trapped_river_cells() -> None:

@@ -1,69 +1,110 @@
 # Waterbody setup
 
-Use `setup_waterbodies` to add lakes and reservoirs. For river barriers, see
-[Weirs and gates](../../hydrology/weirs.md).
+Use `setup_waterbodies` to add lakes and reservoirs. The default settings work
+for most models.
+
+## Default setup
+
+GEB reads lakes from HydroLAKES and dam data from Global Dam Watch (GDW). It:
+
+- keeps waterbodies inside the model region;
+- links GDW dams to HydroLAKES waterbodies;
+- adds missing GDW reservoirs when possible;
+- creates waterbody and command-area grids; and
+- stores waterbody data and GDW checks.
+
+The main outputs are:
+
+- `waterbodies/waterbody_id` and `waterbodies/sub_waterbody_id`;
+- `waterbodies/command_area` and `waterbodies/subcommand_areas`;
+- `waterbodies/waterbody_data`;
+- `waterbodies/gdw_checks`; and
+- `reports/waterbodies/gdw_checks.csv`.
+
+Grid cells without a waterbody or command area have the value `-1`.
+
+HydroLAKES uses these types:
+
+- `1`: natural lake;
+- `2`: reservoir; and
+- `3`: controlled lake.
+
+## GDW matching
+
+GEB first matches the GDW lake ID to the HydroLAKES ID. If that fails, the dam
+must be inside or on the edge of one lake. GEB does not use the nearest lake.
+
+The `match_method` field shows the result:
+
+| Value | Meaning |
+| --- | --- |
+| `id` | The GDW and HydroLAKES IDs match. |
+| `point_in_polygon` | The dam is inside one lake. |
+| `multiple_lakes` | The dam touches several lakes. |
+| `unmatched` | No lake was found. |
+| `gdw_polygon` | A GDW outline was added as a reservoir. |
+| `gdw_point` | A dam was added on one river cell. |
+
+Review rows marked `point_outside_lake` or `id_differs`. The table keeps the GDW
+name, type, purpose, construction year, capacity, area, and discharge.
+
+GEB changes a controlled lake to a reservoir when one suitable GDW dam is linked
+to it and GDW provides a valid capacity. The dam must be inside the lake and its
+lake ID must not conflict. The check table marks this as
+`changed_to_reservoir`.
+
+GEB can also add an unmatched GDW dam as a reservoir. It needs a valid capacity,
+area, discharge, and either an outline or a usable river cell. Other unmatched
+dam points remain in the diagnostic table.
+
+Sources: [GDW v1.0](https://figshare.com/articles/dataset/25988293) and the
+[GDW publication](https://doi.org/10.1038/s41597-024-03752-9). GDW uses the
+CC BY 4.0 licence.
+
+AMBER dams intersecting exactly one natural or controlled lake promote it to a
+reservoir when HydroLAKES provides a positive, finite volume (m³).
+
+## Construction year
+
+A reservoir starts operating on January 1 of its GDW construction year. Before
+that date, its cells behave as river cells. Natural lakes and reservoirs without
+a known year are always active.
+
+Rebuild waterbodies and rerun spinup and the simulation to use construction
+years. This does not rebuild historic land cover.
+
+## Custom setup
+
+### Command areas
+
+Set `command_areas` to a vector file with polygons and a `waterbody_id` column.
+GEB joins these areas to reservoirs and creates the command-area grids.
+
+```yaml
+setup_waterbodies:
+  command_areas: data/command_areas.gpkg
+```
+
+### Reservoir capacity
+
+Set `custom_reservoir_capacity` to a CSV or Excel file with `waterbody_id` and
+`volume_total` (m³) columns.
+
+```yaml
+setup_waterbodies:
+  custom_reservoir_capacity: data/custom_reservoir_capacity.csv
+```
+
+To use all defaults:
 
 ```yaml
 setup_waterbodies: {}
 ```
 
-## Data sources
+## Controlled lakes without GDW data
 
-- **HydroLAKES:** lake outlines, size, and volume.
-- **Global Dam Watch (GDW):** dams, reservoir capacity, purpose, and construction year.
-- **AMBER:** European barriers, including dams and weirs.
-
-## Lakes or reservoirs?
-
-GEB treats lakes and reservoirs differently: lake outflow follows the water
-level, while reservoir releases follow operating rules. The build therefore
-needs to decide which type to use for each waterbody.
-
-HydroLAKES provides the starting classification, with three source types:
-
-| Type | Meaning |
-| --- | --- |
-| 1 | Natural lake |
-| 2 | Reservoir |
-| 3 | Controlled lake |
-
-A controlled lake is a lake whose water level is regulated by a structure.
-This label alone does not tell GEB whether to use reservoir operating rules.
-GEB checks GDW and AMBER dam data to make that decision.
-
-GEB stores only two model types: **1 = lake** and **2 = reservoir**. It keeps
-the original HydroLAKES type separately.
-The saved fields are `waterbody_type` and `hydrolakes_type`, respectively.
-
-GEB starts with the HydroLAKES waterbodies, and links data from the Global Dam Watch (GDW) and AMBER datasets based on joint IDs and/or proximity. The main purpose of this data integration is the change of type from lake to controlled lake, or reservoir: 
-
-1. **Keep known reservoirs.** Hydrolakes waterbodies already labelled as reservoirs remain reservoirs.
-2. **Checks with GDW** A suitable linked GDW dam with a valid
-   capacity converts a Hydrolakes controlled lake to a reservoir.
-3. **Check lakes with AMBER.** An AMBER dam inside or on the edge of a natural or controlled lake can make it a reservoir. 
-4. **Add missing reservoirs.** GDW can supply reservoirs absent from
-   HydroLAKES when valid capacity, area, discharge, and a usable location are
-   available.
-
-GDW dams are matched by lake ID first, then by location inside a lake. 
-
-## Optional settings
-
-Under `setup_waterbodies`, you can set:
-
-| Setting | Use |
-| --- | --- |
-| `mode` | `on` (default), `off`, `lakes_only`, or `reservoirs_only` |
-| `command_areas` | Irrigation-area polygons with a `waterbody_id` column |
-| `calculate_command_areas` | Set to `true` to derive irrigation areas from the river network |
-| `custom_reservoir_capacity` | CSV or Excel file with `waterbody_id` and `volume_total` (m³) |
-
-## Check the result
-
-Review `reports/waterbodies/gdw_checks.csv` for GDW dam checks (compared to HydroLakes), such as `point_outside_lake` and `id_differs`.
-
-Waterbody IDs are saved in `waterbodies/waterbody_id`; cells without a
-waterbody have the value `-1`.
-
-See [Lakes and reservoirs](../../hydrology/waterbodies.md) for storage, release
-rules, and construction years.
+The build classifies controlled lakes as lakes unless a suitable linked GDW
+dam qualifies them as reservoirs. A missing GDW match does not justify
+reservoir classification. Saved `waterbody_type` values are 1 (lake) or 2 (reservoir);
+`hydrolakes_type` preserves the original source classification. Rebuild
+`setup_waterbodies` for existing inputs that still contain type 3.

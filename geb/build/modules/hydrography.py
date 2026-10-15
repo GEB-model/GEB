@@ -34,6 +34,10 @@ from geb.build.workflows.river_snapping import (
     SnappingResults,
     snap_point_to_river_network,
 )
+from geb.build.workflows.waterbodies_preprocessing import (
+    load_and_enrich_waterbodies,
+    snap_waterbody_points,
+)
 from geb.geb_types import (
     ArrayBool,
     ArrayFloat32,
@@ -46,7 +50,7 @@ from geb.geb_types import (
     TwoDArrayInt64,
     TwoDArrayUint8,
 )
-from geb.hydrology.waterbodies import LAKE, LAKE_CONTROL, RESERVOIR
+from geb.hydrology.waterbodies import LAKE, RESERVOIR
 from geb.workflows.raster import (
     calculate_height_m,
     calculate_width_m,
@@ -1591,6 +1595,10 @@ class Hydrography(BuildModelBase):
         """Set up waterbodies, reservoirs, and command areas.
 
         Configure waterbodies and their associated command areas for the model grid.
+        GDW adds dam data and missing reservoirs. Unmatched GDW points remain available in the diagnostic table. It flags differences
+        between its dam types and HydroLAKES lake/reservoir classifications.
+        AMBER dams intersecting one lake polygon promote natural or controlled
+        lakes to reservoirs, using positive HydroLAKES volume as capacity (m3).
         This includes rasterizing lake and reservoir identifiers, optionally
         assigning command areas from preset data or by deriving them from the river
         routing network, and updating reservoir storage capacities.
@@ -1608,14 +1616,19 @@ class Hydrography(BuildModelBase):
                 data in the data catalog. If None, the default reservoir capacities
                 from the waterbody dataset are used. The table must have
                 ``waterbody_id`` as the index and a ``volume_total`` column defining
-                the reservoir capacity.
+                the reservoir capacity (m3).
+
+        Returns:
+            None.
 
         Raises:
             ValueError: If the custom_reservoir_capacity file is not a .csv or .xlsx file.
             ValueError: If command_areas and calculate_command_areas are both provided.
             ValueError: If mode is not "on", "off", "lakes_only", or "reservoirs_only".
             ValueError: If command areas are requested but mode is "off" or "lakes_only".
-        """
+            ValueError: If source waterbody IDs or types are invalid.
+            ValueError: If a dam cannot be snapped or its river cell is occupied.
+        """  # noqa: DOC202
         if mode not in ["on", "off", "lakes_only", "reservoirs_only"]:
             raise ValueError(
                 f"Invalid mode: {mode}. Must be 'on', 'off', 'lakes_only', or 'reservoirs_only'."
@@ -1634,34 +1647,22 @@ class Hydrography(BuildModelBase):
                 "Command areas cannot be used or calculated when waterbodies are disabled or set to lakes only."
             )
 
-        waterbodies: gpd.GeoDataFrame = self.data_catalog.fetch("hydrolakes").read(
-            bbox=self.bounds,
-            columns=[
-                "waterbody_id",
-                "waterbody_type",
-                "volume_total",
-                "average_discharge",
-                "average_area",
-                "geometry",
-            ],
+        waterbodies: gpd.GeoDataFrame
+        dam_checks: gpd.GeoDataFrame
+        waterbodies, dam_checks = load_and_enrich_waterbodies(
+            self.data_catalog, self.region, mode
         )
-        hydrolakes_to_geb: dict[int, np.int32] = {
-            1: np.int32(LAKE),
-            2: np.int32(RESERVOIR),
-            3: np.int32(LAKE_CONTROL),
-        }
-        assert set(waterbodies["waterbody_type"]).issubset(hydrolakes_to_geb.keys())
-        waterbodies["waterbody_type"] = waterbodies["waterbody_type"].map(
-            hydrolakes_to_geb
-        )
-        assert waterbodies["waterbody_type"].dtype == np.int32
+        if mode != "off":
+            self.set_geom(dam_checks, name="waterbodies/gdw_checks")
+            checks_path: Path = self.root / "reports" / "waterbodies" / "gdw_checks.csv"
+            checks_path.parent.mkdir(parents=True, exist_ok=True)
+            dam_checks.drop(columns="geometry").to_csv(checks_path, index=False)
+            self.logger.info(
+                "GDW match results: %s",
+                dam_checks["match_method"].value_counts().to_dict(),
+            )
 
-        if (
-            mode == "off"
-        ):  # to keep the dtypes consistent we still load the waterbodies, but we will remove all rows to disable them
-            # remove all rows
-            waterbodies = waterbodies.iloc[0:0]
-        elif mode == "lakes_only":
+        if mode == "lakes_only":
             waterbodies = waterbodies[waterbodies["waterbody_type"] == LAKE]
         elif mode == "reservoirs_only":
             waterbodies = waterbodies[waterbodies["waterbody_type"] == RESERVOIR]
@@ -1669,22 +1670,8 @@ class Hydrography(BuildModelBase):
         # only select waterbodies that intersect with the region
         waterbodies = waterbodies[waterbodies.intersects(self.region.union_all())]
 
-        # Sample lake surface elevation directly from original_d8_elevation at representative points
-        if not waterbodies.empty:
-            original_d8_elevation: xr.DataArray = self.other[
-                "drainage/original_d8_elevation"
-            ]
-            rep_points = waterbodies.geometry.representative_point()
-            xs = xr.DataArray(rep_points.x.values, dims="points")
-            ys = xr.DataArray(rep_points.y.values, dims="points")
-            waterbodies["elevation"] = original_d8_elevation.sel(
-                x=xs, y=ys, method="nearest"
-            ).values.astype(np.float32)
-
-        waterbodies["volume_flood"] = waterbodies["volume_total"]
-
         waterbody_id: xr.DataArray = rasterize_like(
-            gdf=waterbodies,
+            gdf=waterbodies[waterbodies.geometry.geom_type != "Point"],
             column="waterbody_id",
             raster=self.grid["mask"],
             nodata=-1,
@@ -1692,11 +1679,35 @@ class Hydrography(BuildModelBase):
             all_touched=True,
         )
 
+        if (waterbodies.geometry.geom_type == "Point").any():
+            snap_waterbody_points(
+                waterbodies,
+                waterbody_id,
+                self.geom["routing/rivers"],
+                self.grid["routing/upstream_area_m2"],
+                self.other["drainage/original_d8_upstream_area_m2"],
+            )
+        # Sample lake surface elevation directly from original_d8_elevation at representative points
+        if not waterbodies.empty:
+            original_d8_elevation: xr.DataArray = self.other[
+                "drainage/original_d8_elevation"
+            ]
+            rep_points: gpd.GeoSeries = waterbodies.geometry.representative_point()
+            xs: xr.DataArray = xr.DataArray(rep_points.x.values, dims="points")
+            ys: xr.DataArray = xr.DataArray(rep_points.y.values, dims="points")
+            waterbodies["elevation"] = original_d8_elevation.sel(
+                x=xs, y=ys, method="nearest"
+            ).values.astype(np.float32)
+
+        waterbodies["volume_flood"] = waterbodies["volume_total"]
+
         waterbody_id_array: TwoDArrayInt32 = waterbody_id.values.copy()
         if np.any(waterbody_id_array != -1):
             river_ids: TwoDArrayInt32 = self.grid["routing/river_ids"].values
-            flow_raster_idxs_ds = self.grid["flow_raster_idxs_ds"].compute()
-            flow_raster = FlwdirRaster(
+            flow_raster_idxs_ds: xr.DataArray = self.grid[
+                "flow_raster_idxs_ds"
+            ].compute()
+            flow_raster: FlwdirRaster = FlwdirRaster(
                 flow_raster_idxs_ds.values.ravel(),
                 shape=flow_raster_idxs_ds.shape,
                 transform=np.array(flow_raster_idxs_ds.rio.transform(recalc=True)),
@@ -1760,7 +1771,7 @@ class Hydrography(BuildModelBase):
                 by="waterbody_id", as_index=False
             )
 
-            # Set lakes with command area to reservoirs and reservoirs without command area to lakes
+            # Command areas require reservoir operations for irrigation releases.
             ids_with_command: set[int] = set(command_areas_gdf["waterbody_id"])
             waterbodies.loc[
                 waterbodies["waterbody_id"].isin(ids_with_command),
@@ -1848,11 +1859,11 @@ class Hydrography(BuildModelBase):
         if mode in ("on", "reservoirs_only") and custom_reservoir_capacity:
             if custom_reservoir_capacity.endswith(".xlsx"):
                 custom_reservoir_capacity_df: pd.DataFrame = pd.read_excel(
-                    custom_reservoir_capacity
+                    custom_reservoir_capacity, index_col="waterbody_id"
                 )
             elif custom_reservoir_capacity.endswith(".csv"):
                 custom_reservoir_capacity_df: pd.DataFrame = pd.read_csv(
-                    custom_reservoir_capacity
+                    custom_reservoir_capacity, index_col="waterbody_id"
                 )
             else:
                 raise ValueError(
@@ -1866,6 +1877,8 @@ class Hydrography(BuildModelBase):
             waterbodies.set_index("waterbody_id", inplace=True)
             waterbodies.update(custom_reservoir_capacity_df)
             waterbodies.reset_index(inplace=True)
+
+        waterbodies["volume_flood"] = waterbodies["volume_total"]
 
         assert "waterbody_id" in waterbodies.columns, "waterbody_id is required"
         assert "waterbody_type" in waterbodies.columns, "waterbody_type is required"

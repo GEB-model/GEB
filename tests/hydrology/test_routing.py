@@ -122,7 +122,11 @@ def _make_local_inertial(
     if river_storage_beta is None:
         river_storage_beta = np.full(n_cells, 0.6, dtype=np.float32)
 
-    n_wb: int = int(is_waterbody_outflow.sum())
+    n_wb: int = (
+        waterbody_lake_area.size
+        if waterbody_lake_area is not None
+        else int(is_waterbody_outflow.sum())
+    )
     if waterbody_lake_area is None:
         waterbody_lake_area = np.ones(n_wb, dtype=np.float32) * np.float32(1e6)
     if waterbody_lake_factor is None:
@@ -3603,7 +3607,7 @@ def test_local_inertial_waterbody_parameters_required(
         router_cls(**incomplete_kwargs)
 
     # 2. Mismatched array length against n_wb should raise AssertionError
-    with pytest.raises(AssertionError, match="waterbody_lake_area size"):
+    with pytest.raises(AssertionError, match="waterbody_lake_factor size"):
         LocalInertial(
             dt=3600,
             river_network=flw,
@@ -3623,7 +3627,7 @@ def test_local_inertial_waterbody_parameters_required(
             shape_exponent=shape_exp,
             bankfull_depth_m=bk_depth,
             floodplain_width_m=fp_width,
-            waterbody_lake_area=np.ones(2, dtype=np.float32),  # n_wb is 0
+            waterbody_lake_area=np.ones(2, dtype=np.float32),  # Two future reservoirs.
             waterbody_lake_factor=np.zeros(0, dtype=np.float32),
             waterbody_outflow_height=np.zeros(0, dtype=np.float32),
             waterbody_outflow_bed_elev=np.zeros(0, dtype=np.float32),
@@ -6220,7 +6224,17 @@ def test_routing_unobserved_channel_width_depth_estimation() -> None:
 def test_routing_set_router_estimates_width_from_simulated_q2(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Verify that set_router estimates width from Q2 for unobserved channels when Q2 is present."""
+    """Verify that set_router estimates unobserved channel widths from simulated Q2.
+
+    Args:
+        monkeypatch: Fixture for replacing the solver and its diagnostic export.
+
+    Returns:
+        None.
+
+    Raises:
+        AssertionError: If channel widths do not match hydraulic geometry (m).
+    """  # noqa: DOC202, DOC502
     from geb.hydrology.routing import Routing, RoutingVariables
 
     routing = Routing.__new__(Routing)
@@ -6312,6 +6326,8 @@ def test_routing_set_router_estimates_width_from_simulated_q2(
         "geb.hydrology.routing.LocalInertial",
         lambda **kwargs: MockRouter(),
     )
+
+    monkeypatch.setattr(Routing, "update_river_cells", lambda self: None)
 
     # Call set_router
     routing.set_router()
@@ -7511,6 +7527,8 @@ def test_load_rivers_prunes_starved_channels_and_updates_represented_in_grid(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Verify that load_rivers prunes starved channels downstream of non-outflow waterbody cells."""
+    from datetime import datetime
+
     import pyflwdir
     from shapely.geometry import Point
 
@@ -7547,6 +7565,7 @@ def test_load_rivers_prunes_starved_channels_and_updates_represented_in_grid(
     class MockModel:
         import logging
 
+        current_time: datetime = datetime(1990, 1, 1)
         logger = logging.getLogger("test")
         files = {
             "grid": {

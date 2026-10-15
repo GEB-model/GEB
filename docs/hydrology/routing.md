@@ -61,3 +61,11 @@ Lakes and reservoirs are integrated using HydroLAKES[@messager2016estimating]. N
 ## Code
 
 ::: geb.hydrology.routing
+
+
+## Reservoir construction years
+
+Reservoir cells route water as rivers before January 1 of their GDW construction
+year. Activation transfers existing river water into reservoir storage and
+rebuilds routing connections. Lakes and reservoirs with unknown years remain
+active. Rebuild `setup_waterbodies`, then rerun spinup and simulation.
