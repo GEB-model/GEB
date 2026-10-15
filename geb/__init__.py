@@ -5,7 +5,6 @@ import logging
 import os
 import platform
 import warnings
-from importlib.metadata import version
 from importlib.resources import files
 from pathlib import Path
 from typing import cast
@@ -19,9 +18,8 @@ from dotenv import load_dotenv
 from llvmlite import binding
 from numba import config, njit, prange, threading_layer
 
+from geb.version import __version__ as __version__
 from geb.workflows.io import fetch_and_save
-
-__version__: str = version("GEB")
 
 # set environment variable for GEB package directory
 GEB_PACKAGE_DIR = cast(Path, files("geb"))

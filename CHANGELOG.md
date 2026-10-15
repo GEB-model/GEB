@@ -1,3 +1,6 @@
+# dev
+- Save model version in store metadata (checkpoint.json) and verify model version compatibility on loading, warning if spinup needs to be rerun.
+
 # v1.0.0b36
 - Add karst storage to all hydrology runs, with a default release time of 10 days. Update inputs and rerun spinup.
 
