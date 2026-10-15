@@ -1,8 +1,8 @@
-# dev
-- Read historical river discharge using the recorded branch names after reservoir activation changes river representation, fixing annual return-period updates during spinup and simulation. No input rebuild is needed; rerun failed spinups.
-- Filter runtime weirs and instream dams against active river connections after reservoir activation and channel pruning, excluding waterbody interfaces and outlets with a warning. No input rebuild is needed; rerun failed spinups.
-- Rebuild farms, farmer household and behaviour data, crop parameters, crop calendars, crop prices, and well prices through `geb update-version`. Rerun spinup, simulation, and evaluation afterwards. Existing input versions do not need to be downgraded.
-- Fix spinup failures near reservoirs built after the spinup starts. Keep their river channels until construction, then update the river cells when the reservoir becomes active. No input rebuild is needed; rerun failed spinups and simulations.
+# v1.0.0b36
+- Add karst storage to all hydrology runs, with a default release time of 10 days. Update inputs and rerun spinup.
+
+# v1.0.0b35
+- River-outflow history is now automatically always reported (i.e.we remove the `report._outflow_points` option; old configurations containing it remain compatible, but its value is ignored.
 - Use FathomDEM as default instead of FABDEM.
 - Integrated interactive chart data bundles directly into the single discharge dashboard HTML file.
 - Implement capillary rise in the Ross solver.

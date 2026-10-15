@@ -48,6 +48,8 @@ setup_weirs:
 
 setup_groundwater:
 
+setup_karst:
+
 setup_well_prices_by_reference_year_global:
   WHY_10: 82.0209974 # $/m
   WHY_20: 164 # $/m

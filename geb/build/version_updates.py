@@ -13,15 +13,9 @@ if TYPE_CHECKING:
     from geb.build import GEBModel as GEBModelBuild
 
 VERSION_UPDATES: dict[str, list[str]] = {
-    "1.0.0b37": [
-        "[update-method;setup_well_prices_by_reference_year_global]",
-        "[update-method;setup_create_farms]",
-        "[update-method;setup_farmer_household_characteristics]",
-        "[update-method;setup_crops]",
-        "[update-method;setup_farmer_crop_calendar]",
-        "[update-method;setup_farmer_characteristics]",
-        "[update-method;setup_crop_prices]",
-        "[manual] Rerun spinup, simulation, and evaluation after rebuilding farmers.",
+    "1.0.0b36": [
+        "[update-method;setup_karst]",
+        "[manual] Karst is included in every hydrology run. Add setup_karst to custom build.yml files unless inherited from reasonable_default_build.yml, then rerun spinup and simulation.",
     ],
     "1.0.0b35": [
         "[update-method;setup_elevation]",
