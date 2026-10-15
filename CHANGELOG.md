@@ -1,3 +1,6 @@
+# dev
+- Add the AMBER V1 European barrier dataset to the data catalog, with cached GeoParquet points, cleaned types and heights, and geographic filtering when reading.
+
 # v1.0.0b36
 - Add karst storage to all hydrology runs, with a default release time of 10 days. Update inputs and rerun spinup.
 
