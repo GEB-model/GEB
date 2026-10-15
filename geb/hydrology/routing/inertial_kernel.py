@@ -873,6 +873,9 @@ def _apply_reverse_flow_limits(
         dt_substep_f64: Duration of current adaptive sub-timestep as float64 (seconds).
         inv_dt_substep: Reciprocal of substep duration (1/s).
     """
+    if not ALLOW_REVERSE_FLOW:
+        return
+
     has_reverse_flow: bool = False
     buffers.rev_demand_buf.fill(0.0)
     for reach_idx in range(n_inertial):
@@ -938,7 +941,7 @@ def _apply_confluence_inflow_limits(
         buffers: Pre-allocated workspace scratch buffers.
         dt_substep_f32: Current adaptive sub-timestep duration (seconds).
     """
-    for reach_idx in range(n_inertial):
+    for reach_idx in prange(n_inertial):
         upstream_reach_k: int = topo.inertial_up_reach_idx[reach_idx]
         has_multiple_inertial: bool = upstream_reach_k < -1
         has_inertial_and_kinematic: bool = (
@@ -1259,7 +1262,7 @@ def _evaluate_cfl_dt_all(
     total_flow_rate_buf = buffers.total_flow_rate_buf
     min_dt_buf = buffers.min_dt_buf
 
-    for reach_idx in range(n_inertial):
+    for reach_idx in prange(n_inertial):
         upstream_reach_idx: int = inertial_up_reach_idx[reach_idx]
         incoming_upstream_inertial: np.float32 = np.float32(0.0)
         rev_outflow_upstream: np.float32 = np.float32(0.0)
@@ -1563,9 +1566,8 @@ def _run_inertial_substeps(
 
         if t_elapsed < dt_f32:
             min_dt_next: np.float32 = dt_f32
-            for r_idx in range(n_inertial):
-                if buffers.min_dt_buf[r_idx] < min_dt_next:
-                    min_dt_next = buffers.min_dt_buf[r_idx]
+            for r_idx in prange(n_inertial):
+                min_dt_next = min(min_dt_next, buffers.min_dt_buf[r_idx])
             dt_substep = min_dt_next
 
     # Calculate average discharge over the time step
