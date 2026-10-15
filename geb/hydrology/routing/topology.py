@@ -14,6 +14,10 @@ from geb.geb_types import (
 )
 
 __all__: list[str] = [
+    "BOUNDARY_INTERNAL",
+    "BOUNDARY_LAKE",
+    "BOUNDARY_OCEAN",
+    "BOUNDARY_PIT",
     "InertialTopology",
     "KinematicTopology",
     "RetentionCoupling",
@@ -24,6 +28,21 @@ __all__: list[str] = [
     "build_routing_topology",
     "compute_retention_routing",
 ]
+
+# Downstream boundary classification codes for hydrodynamic inertial reaches.
+# Note: Code 1 was reserved in earlier routing designs for kinematic boundary connections
+# prior to the architectural separation of kinematic and inertial domains into distinct subdomains.
+BOUNDARY_INTERNAL: int = 0
+"""Internal hydrodynamic reach discharging into another inertial reach."""
+
+BOUNDARY_LAKE: int = 2
+"""Reach discharging into a downstream lake or reservoir waterbody."""
+
+BOUNDARY_PIT: int = 3
+"""Inland terminal sink or basin boundary edge draining via free slope drawdown."""
+
+BOUNDARY_OCEAN: int = 4
+"""Coastal terminal sink discharging into the ocean at sea level (0.0 m datum)."""
 
 
 class KinematicTopology(NamedTuple):
@@ -165,6 +184,12 @@ def build_routing_topology(
 ) -> RoutingTopology:
     """Constructs CSR connectivity graphs, boundary classifications, and cross-domain links.
 
+    Notes:
+        River reaches are topologically ordered such that kinematic wave reaches occupy indices
+        `0` to `n_kinematic - 1`, and hydrodynamic local inertial reaches occupy indices
+        `n_kinematic` to `n_kinematic + n_inertial - 1`. Reaches are mapped to boundary types:
+        internal reaches (0), lakes (2), inland pits (3), and ocean pits (4).
+
     Args:
         n_kinematic: Number of kinematic reaches.
         n_inertial: Number of local inertial hydrodynamic reaches.
@@ -188,8 +213,23 @@ def build_routing_topology(
         Structured RoutingTopology containing all precomputed topology objects.
 
     Raises:
-        ValueError: If a reach is neither a pit nor connected to a valid downstream reach.
+        ValueError: If reaches have invalid configuration, non-positive lengths, or illegal connections.
     """
+    if n_kinematic < 0:
+        raise ValueError("n_kinematic must be non-negative.")
+    if n_inertial < 0:
+        raise ValueError("n_inertial must be non-negative.")
+    if n_kin_headwater < 0 or n_kin_headwater > n_kinematic:
+        raise ValueError(
+            f"n_kin_headwater ({n_kin_headwater}) must be between 0 and n_kinematic ({n_kinematic})."
+        )
+    if np.any(river_length_perm <= 0.0):
+        raise ValueError("River channel lengths must be strictly positive.")
+
+    # Step 1: Classify downstream boundaries for all hydrodynamic inertial reaches.
+    # We inspect the downstream connection for each inertial reach to determine whether
+    # it discharges into another inertial reach (internal), a lake/reservoir, an inland
+    # drainage pit, or an open ocean boundary.
     ds_boundary_type: ArrayInt32 = np.empty(n_inertial, dtype=np.int32)
     ds_inertial_k: ArrayInt32 = np.full(n_inertial, -1, dtype=np.int32)
     ds_waterbody_id: ArrayInt32 = np.full(n_inertial, -1, dtype=np.int32)
@@ -199,28 +239,36 @@ def build_routing_topology(
         i: int = n_kinematic + k
         ds: int = int(ds_node[i])
         bed_node: float = float(bed_elevation_perm[i])
-        r_len: float = max(float(river_length_perm[i]), 1.0)
+        reach_length_m: float = float(river_length_perm[i])
 
         if is_pit_perm[i]:
             if is_ocean_pit_perm[i]:
-                ds_boundary_type[k] = 4
+                # Ocean outlet: water drops to sea level (0.0 m datum).
+                ds_boundary_type[k] = BOUNDARY_OCEAN
                 ds_bed_elevation[k] = np.float32(bed_node)
             else:
-                ds_boundary_type[k] = 3
+                # Inland pit: extrapolate downstream bed elevation along the reach slope.
+                ds_boundary_type[k] = BOUNDARY_PIT
                 eff_slope: float = float(pit_slope_perm[i])
-                ds_bed_elevation[k] = np.float32(bed_node - eff_slope * r_len)
+                ds_bed_elevation[k] = np.float32(bed_node - eff_slope * reach_length_m)
         elif ds != -1:
             bed_ds: float = float(bed_elevation_perm[ds])
             ds_bed_elevation[k] = np.float32(bed_ds)
             wb_ds: int = int(waterbody_ids_perm[ds])
             if wb_ds != -1:
-                ds_boundary_type[k] = 2
+                # Reach discharges directly into a downstream lake or reservoir waterbody.
+                ds_boundary_type[k] = BOUNDARY_LAKE
                 ds_waterbody_id[k] = wb_ds
             else:
-                assert not use_kinematic_perm[ds], (
-                    f"Inertial reach at sorted index {i} cannot discharge into a kinematic reach."
-                )
-                ds_boundary_type[k] = 0
+                # Inertial reach flows into another river reach.
+                # Discharging into a kinematic reach is strictly forbidden because kinematic wave
+                # routing cannot propagate backwater waves across the domain interface.
+                if use_kinematic_perm[ds]:
+                    raise ValueError(
+                        f"Inertial reach at sorted index {i} cannot discharge into a kinematic reach (downstream index {ds}). "
+                        "Kinematic wave routing does not support downstream backwater boundary conditions."
+                    )
+                ds_boundary_type[k] = BOUNDARY_INTERNAL
                 ds_k: int = ds - n_kinematic
                 ds_inertial_k[k] = ds_k
         else:
@@ -234,28 +282,48 @@ def build_routing_topology(
     river_length_inertial: ArrayFloat32 = river_length_perm[
         n_kinematic : n_kinematic + n_inertial
     ]
+
+    # Step 2: Compute maximum interface bed elevation (hydraulic sill).
+    # In the local inertial approximation, the flow depth at the cell interface is governed by
+    # max(water_stage_node, water_stage_ds) - max(bed_node, bed_ds). If the water stage does
+    # not exceed this highest bed elevation, the interface is dry and flow is blocked.
     interface_bed_elev_max: ArrayFloat32 = np.maximum(
         bed_elevation_inertial, ds_bed_elevation
     )
 
-    is_internal: ArrayBool = ds_boundary_type == 0
+    # Step 3: Compute reciprocal of the interface distance (inv_dx_interface).
+    # For internal reaches, the cell interface lies midway between the centers of two reaches:
+    # dx_internal = 0.5 * (length_node + length_ds).
+    # For boundary reaches (lake, pit, ocean), the interface is at the cell boundary: dx = length_node.
+    # Precomputing 1 / dx replaces repeated divisions with fast multiplications in the momentum kernel.
+    is_internal: ArrayBool = ds_boundary_type == BOUNDARY_INTERNAL
     ds_k_internal: ArrayInt32 = ds_inertial_k[is_internal]
     inv_dx_interface: ArrayFloat32 = np.empty(n_inertial, dtype=np.float32)
-    inv_dx_interface[~is_internal] = np.float32(1.0) / np.maximum(
-        river_length_inertial[~is_internal], np.float32(1.0)
+    inv_dx_interface[~is_internal] = (
+        np.float32(1.0) / river_length_inertial[~is_internal]
     )
     dx_internal: ArrayFloat32 = np.float32(0.5) * (
         river_length_inertial[is_internal] + river_length_inertial[ds_k_internal]
     )
-    inv_dx_interface[is_internal] = np.float32(1.0) / np.maximum(
-        dx_internal, np.float32(1.0)
-    )
+    inv_dx_interface[is_internal] = np.float32(1.0) / dx_internal
 
+    # Step 4: Map downstream stage lookup index (ds_stage_idx).
+    # The solver workspace `stage_buf` stores river reach stages in indices [0 : n_inertial)
+    # and lake water levels in indices [n_inertial : n_inertial + n_waterbodies).
+    # Mapping lake boundaries to offset `n_inertial + ds_waterbody_id` allows the momentum solver
+    # to retrieve downstream water stage for both river reaches and lakes via a single branchless lookup.
     ds_stage_idx: ArrayInt32 = np.full(n_inertial, -1, dtype=np.int32)
     ds_stage_idx[is_internal] = ds_inertial_k[is_internal]
-    is_lake: ArrayBool = ds_boundary_type == 2
+    is_lake: ArrayBool = ds_boundary_type == BOUNDARY_LAKE
     ds_stage_idx[is_lake] = n_inertial + ds_waterbody_id[is_lake]
 
+    # Step 5: Build CSR graph for upstream inertial tributaries.
+    # A reach can have 0 (headwater), 1 (linear channel), or >= 2 (confluence) upstream tributaries.
+    # To optimize memory access and CPU cache utilization during momentum substepping:
+    # - If cnt == 1: store the direct upstream reach index (>= 0) in `inertial_up_reach_idx`.
+    #   This bypasses CSR indirection entirely for ~90% of river reaches.
+    # - If cnt > 1: encode the CSR starting offset as a negative sentinel `-(start_count + 2) < -1`.
+    #   This differentiates multi-tributary confluences from headwaters (-1) and single reaches (>= 0).
     max_up: int = upstream_matrix.shape[1]
     inertial_up_offsets: list[int] = [0]
     inertial_up_indices: list[int] = []
@@ -267,6 +335,7 @@ def build_routing_topology(
             up_node: int = int(upstream_matrix[i, j])
             if up_node == -1:
                 break
+            # Exclude waterbodies (handled by lake outflow links) and kinematic reaches (handled separately)
             if waterbody_ids_perm[up_node] == -1 and not use_kinematic_perm[up_node]:
                 inertial_up_indices.append(up_node - n_kinematic)
         cnt: int = len(inertial_up_indices) - start_count
@@ -279,6 +348,9 @@ def build_routing_topology(
     inertial_up_offsets_arr: ArrayInt32 = np.array(inertial_up_offsets, dtype=np.int32)
     inertial_up_indices_arr: ArrayInt32 = np.array(inertial_up_indices, dtype=np.int32)
 
+    # Step 6: Identify inertial reaches coupled to flood retention basins.
+    # Only a small fraction of cells contain retention basins; filtering active pairs avoids
+    # scanning the entire reach array during retention diversion and release calculations.
     inertial_retention_k: ArrayInt32 = np.flatnonzero(
         retention_node_id_perm[n_kinematic : n_kinematic + n_inertial] != -1
     ).astype(np.int32)
@@ -290,6 +362,13 @@ def build_routing_topology(
         inertial_retention_id=inertial_retention_id,
     )
 
+    # Step 7: Classify waterbody linkages across model domains.
+    # River reaches entering lakes are gathered for inflow accumulation.
+    # Waterbody outlets are routed according to what lies downstream:
+    # (a) Terminal pit: waterbody discharges outside the model domain.
+    # (b) Another waterbody: water transfers to a cascading downstream lake/reservoir.
+    # (c) Kinematic reach: water discharges into a kinematic wave river cell.
+    # (d) Inertial reach: water discharges into a hydrodynamic local inertial river cell.
     inertial_wb_ds_k: ArrayInt32 = np.flatnonzero(is_lake).astype(np.int32)
     inertial_wb_ds_id: ArrayInt32 = ds_waterbody_id[inertial_wb_ds_k]
 
@@ -312,6 +391,7 @@ def build_routing_topology(
             wb_term_ids.append(wb_id)
         elif waterbody_ids_perm[ds] != -1:
             target_wb: int = int(waterbody_ids_perm[ds])
+            # If target_wb == wb_id, it is internal to the same waterbody level pool (no transfer link needed)
             if target_wb != wb_id:
                 wb_to_wb_src.append(wb_id)
                 wb_to_wb_tgt.append(target_wb)
@@ -321,6 +401,10 @@ def build_routing_topology(
         elif n_kinematic <= ds < n_kinematic + n_inertial:
             lake_outflow_targets.append(ds - n_kinematic)
             lake_outflow_wbs.append(wb_id)
+        else:
+            raise ValueError(
+                f"Waterbody outlet at node {wb_node} (waterbody ID {wb_id}) has invalid downstream node index {ds}."
+            )
 
     lake_outflow_target_k: ArrayInt32 = np.array(lake_outflow_targets, dtype=np.int32)
     lake_outflow_wb_id: ArrayInt32 = np.array(lake_outflow_wbs, dtype=np.int32)
@@ -331,6 +415,11 @@ def build_routing_topology(
     kin_wb_inflow_m3: ArrayFloat32 = np.zeros(n_kinematic, dtype=np.float32)
     wb_terminal_wb_ids: ArrayInt32 = np.array(wb_term_ids, dtype=np.int32)
 
+    # Step 8: Build downstream connectivity for kinematic wave reaches.
+    # Kinematic reaches route downstream sequentially. If a kinematic reach drains into
+    # another kinematic reach, outflow is deposited directly into `kin_inflow_m3_s`.
+    # If it drains into an inertial reach, `kin_ds_reach` remains -1; the receiving inertial
+    # reach pulls this discharge as boundary inflow via `inertial_up_kin_*` during substepping.
     kin_ds_wb_id: ArrayInt32 = np.full(n_kinematic, -1, dtype=np.int32)
     kin_ds_reach: ArrayInt32 = np.full(n_kinematic, -1, dtype=np.int32)
     for i in range(n_kinematic):
@@ -342,6 +431,9 @@ def build_routing_topology(
                 kin_ds_reach[i] = ds
     kin_inflow_m3_s: ArrayFloat32 = np.zeros(n_kinematic, dtype=np.float32)
 
+    # Step 9: Build CSR graph for upstream kinematic reaches feeding inertial reaches.
+    # At the kinematic-inertial domain boundary, upstream kinematic reaches supply lateral
+    # boundary inflow to the receiving hydrodynamic reaches.
     inertial_kin_offsets: list[int] = [0]
     inertial_kin_indices: list[int] = []
     inertial_up_kin_reach_idx: ArrayInt32 = np.full(n_inertial, -1, dtype=np.int32)
@@ -367,27 +459,13 @@ def build_routing_topology(
     inertial_up_kin_offsets: ArrayInt32 = np.array(inertial_kin_offsets, dtype=np.int32)
     inertial_up_kin_indices: ArrayInt32 = np.array(inertial_kin_indices, dtype=np.int32)
 
-    inertial_up_count: ArrayInt32 = np.zeros(n_inertial, dtype=np.int32)
-    for k in range(n_inertial):
-        n_in: int = (
-            1
-            if inertial_up_reach_idx[k] >= 0
-            else (
-                inertial_up_offsets_arr[k + 1] - (-inertial_up_reach_idx[k] - 2)
-                if inertial_up_reach_idx[k] < -1
-                else 0
-            )
-        )
-        n_kin: int = (
-            1
-            if inertial_up_kin_reach_idx[k] >= 0
-            else (
-                inertial_up_kin_offsets[k + 1] - (-inertial_up_kin_reach_idx[k] - 2)
-                if inertial_up_kin_reach_idx[k] < -1
-                else 0
-            )
-        )
-        inertial_up_count[k] = n_in + n_kin
+    # Step 10: Compute total upstream in-degree count per inertial reach.
+    # The total number of incoming tributaries (both inertial and kinematic) is determined directly
+    # from CSR row lengths (offsets[k + 1] - offsets[k]). This in-degree count is used for
+    # confluence stability and inflow tracking.
+    inertial_up_count: ArrayInt32 = (
+        np.diff(inertial_up_offsets_arr) + np.diff(inertial_up_kin_offsets)
+    ).astype(np.int32)
 
     waterbody_links: WaterbodyLinks = WaterbodyLinks(
         inertial_wb_ds_k=inertial_wb_ds_k,
@@ -399,8 +477,11 @@ def build_routing_topology(
         wb_terminal_wb_ids=wb_terminal_wb_ids,
     )
 
+    # Step 11: Identify reaches discharging across domain boundaries.
+    # Reaches with ds_boundary_type != 0 discharge out of the hydrodynamic network (lake, pit, ocean).
+    # Tracking these indices allows exact mass balance summation without scanning internal reaches.
     inertial_boundary_outflow_k: ArrayInt32 = np.flatnonzero(
-        ds_boundary_type != 0
+        ds_boundary_type != BOUNDARY_INTERNAL
     ).astype(np.int32)
 
     topology: InertialTopology = InertialTopology(
@@ -448,7 +529,7 @@ class WaterbodyCoupling(NamedTuple):
 
     Attributes:
         storage_m3: Current water storage volume per waterbody (m³).
-        prescribed_outflow_m3: Prescribed outflow volume per waterbody for macro timestep (m³).
+        prescribed_outflow_m3: Outflow volume prescribed by human operations or dams (m³).
         inflow_m3: Cumulative inflow volume accumulator per waterbody (m³).
         lake_area: Surface area per waterbody (m²).
         lake_factor: Rating curve weir discharge multiplier per waterbody.
@@ -533,23 +614,23 @@ def compute_retention_routing(
 
     Args:
         dt: The length of the routing time step (seconds).
-        river_volume_m3: The current available volume of water in the river cell (m3).
-        discharge_before_diversion_m3_s: The initial discharge rate in the river cell before diversion (m3/s).
+        river_volume_m3: The current available volume of water in the river cell (m³).
+        discharge_before_diversion_m3_s: The initial discharge rate in the river cell before diversion (m³/s).
         is_rising_limb: Flag indicating if the discharge is currently rising compared to the previous time step.
-        retention_storage_m3: The current amount of water stored in the retention basin (m3).
-        retention_max_storage_m3: The maximum storage capacity of the retention basin (m3).
+        retention_storage_m3: The current amount of water stored in the retention basin (m³).
+        retention_max_storage_m3: The maximum storage capacity of the retention basin (m³).
         controlled_retention: Flag indicating whether the retention basin is controlled.
-        activation_threshold_m3_s: The discharge threshold above which water is diverted into the basin (m3/s).
+        activation_threshold_m3_s: The discharge threshold above which water is diverted into the basin (m³/s).
         release_threshold_factor: The multiplier applied to the activation threshold to determine the release threshold.
-        inflow_limit_m3: The physical limit of water volume that can enter the basin during this step (m3).
-        max_outflow_limit_m3: The maximum volume of water that the basin can release during this step (m3).
+        inflow_limit_m3: The physical limit of water volume that can enter the basin during this step (m³).
+        max_outflow_limit_m3: The maximum volume of water that the basin can release during this step (m³).
 
     Returns:
         A tuple containing:
-            diverted_volume_m3: The volume of water diverted into the basin (m3).
-            outflow_volume_m3: The volume of water released from the basin (m3).
-            updated_retention_storage_m3: The updated retention storage (m3).
-            final_river_volume_m3: The updated available water volume in the river cell (m3).
+            diverted_volume_m3: The volume of water diverted into the basin (m³).
+            outflow_volume_m3: The volume of water released from the basin (m³).
+            updated_retention_storage_m3: The updated retention storage (m³).
+            final_river_volume_m3: The updated available water volume in the river cell (m³).
 
     Raises:
         ValueError: If `dt` is <= 0 or if `retention_max_storage_m3` is negative.
@@ -559,7 +640,7 @@ def compute_retention_routing(
     if retention_max_storage_m3 < np.float32(0.0):
         raise ValueError("Maximum retention storage must be non-negative.")
 
-    # Determine available storage in the retention basin. Can not be negative.
+    # Available capacity in the retention basin. Cannot be negative.
     available_storage_m3: np.float32 = max(
         np.float32(0.0),
         retention_max_storage_m3 - retention_storage_m3,
@@ -568,28 +649,34 @@ def compute_retention_routing(
     diverted_volume_m3: np.float32 = np.float32(0.0)
     outflow_volume_m3: np.float32 = np.float32(0.0)
 
-    # Determine the release threshold
+    # Determine release threshold below which stored water can safely return to the river
     release_threshold_m3_s: np.float32 = (
         activation_threshold_m3_s * release_threshold_factor
     )
 
-    # During high flow, divert water into the retention basin
+    # High flow regime: divert peak discharge above activation threshold into the basin
     if discharge_before_diversion_m3_s > activation_threshold_m3_s:
+        # Controlled basins only divert on the rising limb of the hydrograph to shave the peak
         if not controlled_retention or is_rising_limb:
             discharge_above_activation_threshold_m3_s: np.float32 = (
                 discharge_before_diversion_m3_s - activation_threshold_m3_s
             )
-            diverted_volume_m3 = min(
-                river_volume_m3,
-                available_storage_m3,
-                inflow_limit_m3,
-                discharge_above_activation_threshold_m3_s * dt,
+            # Divert at most available water in river cell, available basin capacity,
+            # physical intake limit, or the discharge volume above activation threshold.
+            diverted_volume_m3 = max(
+                np.float32(0.0),
+                min(
+                    river_volume_m3,
+                    available_storage_m3,
+                    inflow_limit_m3,
+                    discharge_above_activation_threshold_m3_s * dt,
+                ),
             )
 
-    # During low flow, release water from the retention basin to the river
+    # Low flow regime: release stored water back to river without exceeding release threshold
     elif discharge_before_diversion_m3_s <= release_threshold_m3_s:
         if retention_storage_m3 > np.float32(0.0):
-            # We ensure the release does not cause the river flow rate to exceed the release threshold.
+            # Limit release so resulting river discharge does not exceed the release threshold
             allowed_extra_outflow_m3: np.float32 = (
                 release_threshold_m3_s - discharge_before_diversion_m3_s
             ) * dt
@@ -600,7 +687,7 @@ def compute_retention_routing(
             outflow_volume_m3 = max(np.float32(0.0), outflow_volume_m3)
             outflow_volume_m3 = min(outflow_volume_m3, retention_storage_m3)
 
-    # Update retention storage and remaining river volume.
+    # Update retention storage and remaining river volume conserving total mass.
     updated_retention_storage_m3: np.float32 = (
         retention_storage_m3 + diverted_volume_m3 - outflow_volume_m3
     )
