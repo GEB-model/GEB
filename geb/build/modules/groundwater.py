@@ -2,12 +2,15 @@
 
 import geopandas as gpd
 import numpy as np
+import shapely
 import xarray as xr
+from affine import Affine
 
 from geb.build.methods import build_method
 from geb.workflows.io import get_window
 from geb.workflows.raster import (
     convert_nodata,
+    full_like,
     interpolate_na_2d,
     pad_cells,
     rasterize_like,
@@ -23,6 +26,79 @@ class GroundWater(BuildModelBase):
     def __init__(self) -> None:
         """Initialize the GroundWater class."""
         pass
+
+    @build_method(required=True)
+    def setup_karst(self) -> None:
+        """Estimate the karst fraction of each grid cell from polygon coverage.
+
+        Notes:
+            Uses the coverage fractions supplied by the karst map adapter.
+            Fills a NumPy array before assigning it to the output grid so that
+            updates also persist when the input mask is Dask-backed.
+            Saves ``groundwater/karst_fraction`` (0–1), with NaN in inactive cells.
+
+        Raises:
+            ValueError: If active-cell coverage is nonfinite or outside 0–1.
+        """
+        karst_polygons: gpd.GeoDataFrame = self.data_catalog.fetch("wokam").read()
+        mask: xr.DataArray = self.grid["mask"]
+        transform: Affine = mask.rio.transform(recalc=True)
+        mask_values: np.ndarray = mask.to_numpy()
+        coverage_values: np.ndarray = np.zeros(mask.shape, dtype=np.float32)
+        coverage_values[mask_values] = np.nan
+        coverage: xr.DataArray = full_like(mask, 0.0, nodata=np.nan, dtype=np.float32)
+        coverage.attrs["units"] = "1"
+        coverage.attrs.update(karst_polygons.attrs)
+        karst_polygons = karst_polygons.to_crs(mask.rio.crs)
+        bounds: tuple[float, float, float, float] = mask.rio.bounds(recalc=True)
+        karst_polygons = karst_polygons.cx[
+            bounds[0] : bounds[2], bounds[1] : bounds[3]
+        ].copy()
+        if not karst_polygons.empty:
+            # Merge polygons with the same fraction to avoid counting overlap twice.
+            karst_polygons = karst_polygons.dissolve(by="karst_fraction").to_crs(6933)
+            rows: np.ndarray
+            columns: np.ndarray
+            rows, columns = np.where(~mask_values)
+            cell_x: np.ndarray = transform.c + columns * transform.a
+            cell_y: np.ndarray = transform.f + rows * transform.e
+            # Calculate areas in an equal-area projection, rather than degrees.
+            cells: gpd.GeoSeries = gpd.GeoSeries(
+                shapely.box(cell_x, cell_y, cell_x + transform.a, cell_y + transform.e),
+                crs=mask.rio.crs,
+            ).to_crs(6933)
+            cell_indices: np.ndarray
+            polygon_indices: np.ndarray
+            cell_indices, polygon_indices = karst_polygons.sindex.query(
+                cells, predicate="intersects"
+            )
+            polygon_karst_fraction: np.ndarray = karst_polygons.index.to_numpy(
+                dtype=np.float64
+            )
+            overlap_area_m2: np.ndarray = shapely.area(
+                shapely.intersection(
+                    cells.array[cell_indices],
+                    karst_polygons.geometry.array[polygon_indices],
+                )
+            )
+            karst_area_m2: np.ndarray = np.bincount(
+                cell_indices,
+                weights=overlap_area_m2 * polygon_karst_fraction[polygon_indices],
+                minlength=len(cells),
+            )
+            coverage_values[rows, columns] = np.clip(
+                karst_area_m2 / cells.area.to_numpy(), 0.0, 1.0
+            ).astype(np.float32)
+        active_coverage: np.ndarray = coverage_values[~mask_values]
+        if (
+            not np.isfinite(active_coverage).all()
+            or ((active_coverage < 0) | (active_coverage > 1)).any()
+        ):
+            raise ValueError(
+                "Active karst coverage must be finite and between 0 and 1."
+            )
+        coverage.data = coverage_values
+        self.set_grid(coverage, name="groundwater/karst_fraction")
 
     @build_method(depends_on=["setup_elevation"], required=True)
     def setup_groundwater(

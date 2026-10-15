@@ -131,7 +131,7 @@ class FathomDem(Adapter):
         token: str | None = os.getenv("ZENODO_ACCESS_TOKEN")
         if token is None:
             raise ValueError(
-                "Environment variable 'ZENODO_ACCESS_TOKEN' is required to access FathomDEM on Zenodo."
+                "Environment variable 'ZENODO_ACCESS_TOKEN' is required to access FathomDEM on Zenodo. Please create a personal access token on https://zenodo.org/account/settings/applications and set it in your environment or .env file."
             )
         return token
 

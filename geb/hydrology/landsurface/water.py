@@ -3,8 +3,7 @@
 import numpy as np
 from numba import njit
 
-from geb.geb_types import ArrayFloat32, Shape, TwoDArrayFloat64
-from geb.hydrology import TwoDArrayFloat32
+from geb.geb_types import ArrayFloat32, Shape, TwoDArrayFloat32, TwoDArrayFloat64
 
 from ..landcovers import OPEN_WATER, PADDY_IRRIGATED, SEALED
 from .energy import (
