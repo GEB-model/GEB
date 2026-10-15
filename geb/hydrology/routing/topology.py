@@ -30,18 +30,16 @@ __all__: list[str] = [
 ]
 
 # Downstream boundary classification codes for hydrodynamic inertial reaches.
-# Note: Code 1 was reserved in earlier routing designs for kinematic boundary connections
-# prior to the architectural separation of kinematic and inertial domains into distinct subdomains.
 BOUNDARY_INTERNAL: int = 0
 """Internal hydrodynamic reach discharging into another inertial reach."""
 
-BOUNDARY_LAKE: int = 2
+BOUNDARY_LAKE: int = 1
 """Reach discharging into a downstream lake or reservoir waterbody."""
 
-BOUNDARY_PIT: int = 3
+BOUNDARY_PIT: int = 2
 """Inland terminal sink or basin boundary edge draining via free slope drawdown."""
 
-BOUNDARY_OCEAN: int = 4
+BOUNDARY_OCEAN: int = 3
 """Coastal terminal sink discharging into the ocean at sea level (0.0 m datum)."""
 
 
@@ -90,7 +88,7 @@ class InertialTopology(NamedTuple):
         inertial_up_offsets: CSR row offsets for upstream inertial tributary connections.
         inertial_up_indices: CSR column reach indices for upstream inertial tributaries.
         inertial_up_reach_idx: Optimized direct reach index array for single-tributary junctions.
-        ds_boundary_type: Boundary condition classification code per reach (0=internal, 2=lake, 3=pit, 4=ocean).
+        ds_boundary_type: Boundary condition classification code per reach (0=internal, 1=lake, 2=pit, 3=ocean).
         ds_inertial_k: Downstream reach index within inertial domain (-1 if boundary).
         ds_stage_idx: Unified index into stage buffer for downstream water level lookup.
         ds_bed_elevation: Downstream boundary bed elevation (meters).
@@ -188,7 +186,7 @@ def build_routing_topology(
         River reaches are topologically ordered such that kinematic wave reaches occupy indices
         `0` to `n_kinematic - 1`, and hydrodynamic local inertial reaches occupy indices
         `n_kinematic` to `n_kinematic + n_inertial - 1`. Reaches are mapped to boundary types:
-        internal reaches (0), lakes (2), inland pits (3), and ocean pits (4).
+        internal reaches (0), lakes (1), inland pits (2), and ocean pits (3).
 
     Args:
         n_kinematic: Number of kinematic reaches.

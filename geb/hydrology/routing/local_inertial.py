@@ -37,6 +37,7 @@ from .kinematic import (
     _transfer_waterbody_outflows,
 )
 from .topology import (
+    BOUNDARY_INTERNAL,
     InertialTopology,
     KinematicTopology,
     RetentionCoupling,
@@ -598,7 +599,9 @@ class LocalInertial:
 
         check_spinup: bool = self.in_spinup if in_spinup is None else in_spinup
         if check_spinup and self.n_inertial > 0:
-            internal_inertial_mask: ArrayBool = self._topology.ds_boundary_type == 0
+            internal_inertial_mask: ArrayBool = (
+                self._topology.ds_boundary_type == BOUNDARY_INTERNAL
+            )
             if np.any(internal_inertial_mask):
                 k_up: ArrayInt32 = np.where(internal_inertial_mask)[0].astype(np.int32)
                 k_ds: ArrayInt32 = self._topology.ds_inertial_k[k_up]

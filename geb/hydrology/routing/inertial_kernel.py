@@ -35,6 +35,10 @@ from .geometry import (
 )
 from .solver import solve_inertial_momentum
 from .topology import (
+    BOUNDARY_INTERNAL,
+    BOUNDARY_LAKE,
+    BOUNDARY_OCEAN,
+    BOUNDARY_PIT,
     InertialTopology,
     KinematicTopology,
     RetentionCoupling,
@@ -756,7 +760,7 @@ def _solve_momentum_loop(
         water_slope: np.float32 = np.float32(0.0)
 
         reach_can_reverse: bool = False
-        if boundary_type == 0 or boundary_type == 2:
+        if boundary_type == BOUNDARY_INTERNAL or boundary_type == BOUNDARY_LAKE:
             # Internal reach or lake boundary
             ds_idx: int = ds_stage_idx[reach_idx]
             water_stage_ds: np.float32 = stage_buf[ds_idx]
@@ -769,13 +773,13 @@ def _solve_momentum_loop(
             water_slope = (water_stage_ds - water_stage_node) * inv_interface_len
             reach_can_reverse = bool(
                 ALLOW_REVERSE_FLOW
-                and boundary_type == 0
+                and boundary_type == BOUNDARY_INTERNAL
                 and water_stage_ds > bed_elev_node
             )
-        elif boundary_type == 3 or boundary_type == 4:
+        elif boundary_type == BOUNDARY_PIT or boundary_type == BOUNDARY_OCEAN:
             # Open boundary reaches (no downstream water level available):
-            #   - boundary_type 3: inland outlet / domain edge (pit)
-            #   - boundary_type 4: coastal outlet to the sea (ocean pit)
+            #   - BOUNDARY_PIT: inland outlet / domain edge (pit)
+            #   - BOUNDARY_OCEAN: coastal outlet to the sea (ocean pit)
             bed_elev_node = geom_inbank[reach_idx, GEOM_IN_BED_ELEVATION]
             effective_depth = max(water_stage_node - bed_elev_node, np.float32(0.0))
 
@@ -821,7 +825,7 @@ def _solve_momentum_loop(
             outflow_slope: np.float32 = max(
                 max_upstream_slope, drawdown_slope, base_slope
             )
-            if boundary_type == 4:
+            if boundary_type == BOUNDARY_OCEAN:
                 # (d) Ocean outlet: drop to sea level
                 sea_stage: np.float32 = np.float32(0.0)
                 if water_stage_node > sea_stage:
