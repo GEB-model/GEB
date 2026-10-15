@@ -1,1 +1,1 @@
-"""Workflow helpers for GEB evaluation."""
+"""Support functions used by GEB evaluation commands."""

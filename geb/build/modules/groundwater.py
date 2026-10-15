@@ -2,13 +2,17 @@
 
 import geopandas as gpd
 import numpy as np
+import shapely
 import xarray as xr
+from affine import Affine
 
 from geb.build.methods import build_method
 from geb.workflows.io import get_window
 from geb.workflows.raster import (
     convert_nodata,
+    full_like,
     interpolate_na_2d,
+    pad_cells,
     rasterize_like,
     resample_like,
 )
@@ -22,6 +26,79 @@ class GroundWater(BuildModelBase):
     def __init__(self) -> None:
         """Initialize the GroundWater class."""
         pass
+
+    @build_method(required=True)
+    def setup_karst(self) -> None:
+        """Estimate the karst fraction of each grid cell from polygon coverage.
+
+        Notes:
+            Uses the coverage fractions supplied by the karst map adapter.
+            Fills a NumPy array before assigning it to the output grid so that
+            updates also persist when the input mask is Dask-backed.
+            Saves ``groundwater/karst_fraction`` (0–1), with NaN in inactive cells.
+
+        Raises:
+            ValueError: If active-cell coverage is nonfinite or outside 0–1.
+        """
+        karst_polygons: gpd.GeoDataFrame = self.data_catalog.fetch("wokam").read()
+        mask: xr.DataArray = self.grid["mask"]
+        transform: Affine = mask.rio.transform(recalc=True)
+        mask_values: np.ndarray = mask.to_numpy()
+        coverage_values: np.ndarray = np.zeros(mask.shape, dtype=np.float32)
+        coverage_values[mask_values] = np.nan
+        coverage: xr.DataArray = full_like(mask, 0.0, nodata=np.nan, dtype=np.float32)
+        coverage.attrs["units"] = "1"
+        coverage.attrs.update(karst_polygons.attrs)
+        karst_polygons = karst_polygons.to_crs(mask.rio.crs)
+        bounds: tuple[float, float, float, float] = mask.rio.bounds(recalc=True)
+        karst_polygons = karst_polygons.cx[
+            bounds[0] : bounds[2], bounds[1] : bounds[3]
+        ].copy()
+        if not karst_polygons.empty:
+            # Merge polygons with the same fraction to avoid counting overlap twice.
+            karst_polygons = karst_polygons.dissolve(by="karst_fraction").to_crs(6933)
+            rows: np.ndarray
+            columns: np.ndarray
+            rows, columns = np.where(~mask_values)
+            cell_x: np.ndarray = transform.c + columns * transform.a
+            cell_y: np.ndarray = transform.f + rows * transform.e
+            # Calculate areas in an equal-area projection, rather than degrees.
+            cells: gpd.GeoSeries = gpd.GeoSeries(
+                shapely.box(cell_x, cell_y, cell_x + transform.a, cell_y + transform.e),
+                crs=mask.rio.crs,
+            ).to_crs(6933)
+            cell_indices: np.ndarray
+            polygon_indices: np.ndarray
+            cell_indices, polygon_indices = karst_polygons.sindex.query(
+                cells, predicate="intersects"
+            )
+            polygon_karst_fraction: np.ndarray = karst_polygons.index.to_numpy(
+                dtype=np.float64
+            )
+            overlap_area_m2: np.ndarray = shapely.area(
+                shapely.intersection(
+                    cells.array[cell_indices],
+                    karst_polygons.geometry.array[polygon_indices],
+                )
+            )
+            karst_area_m2: np.ndarray = np.bincount(
+                cell_indices,
+                weights=overlap_area_m2 * polygon_karst_fraction[polygon_indices],
+                minlength=len(cells),
+            )
+            coverage_values[rows, columns] = np.clip(
+                karst_area_m2 / cells.area.to_numpy(), 0.0, 1.0
+            ).astype(np.float32)
+        active_coverage: np.ndarray = coverage_values[~mask_values]
+        if (
+            not np.isfinite(active_coverage).all()
+            or ((active_coverage < 0) | (active_coverage > 1)).any()
+        ):
+            raise ValueError(
+                "Active karst coverage must be finite and between 0 and 1."
+            )
+        coverage.data = coverage_values
+        self.set_grid(coverage, name="groundwater/karst_fraction")
 
     @build_method(depends_on=["setup_elevation"], required=True)
     def setup_groundwater(
@@ -45,16 +122,45 @@ class GroundWater(BuildModelBase):
         aquifer_top_elevation = convert_nodata(
             self.grid["landsurface/elevation_m"], new_nodata=np.nan
         )
-        aquifer_top_elevation = self.set_grid(
-            aquifer_top_elevation, name="groundwater/aquifer_top_elevation"
+
+        # Create an extended template grid (one cell larger in each direction)
+        # to store groundwater heads and aquifer properties for all cells surrounding the model domain,
+        # which are used as boundary conditions in the groundwater model.
+        extended_template: xr.DataArray = pad_cells(aquifer_top_elevation, 1, 1, 1, 1)
+        extended_bounds: tuple[float, float, float, float] = (
+            extended_template.rio.bounds(recalc=True)
         )
 
-        # load total thickness
+        # Determine outside boundary cells surrounding the active model domain on the extended grid.
+        # An inactive cell on the extended grid is an external boundary cell if any of its 4 orthogonal neighbors is active.
+        is_active_model: np.ndarray = ~np.isnan(aquifer_top_elevation.values)
+        extended_active: np.ndarray = np.zeros(
+            (extended_template.shape[0], extended_template.shape[1]), dtype=bool
+        )
+        extended_active[1:-1, 1:-1] = is_active_model
+
+        touches_active: np.ndarray = np.zeros_like(extended_active, dtype=bool)
+        touches_active[:-1, :] |= extended_active[1:, :]
+        touches_active[1:, :] |= extended_active[:-1, :]
+        touches_active[:, :-1] |= extended_active[:, 1:]
+        touches_active[:, 1:] |= extended_active[:, :-1]
+
+        boundary_mask_data: np.ndarray = ~extended_active & touches_active
+        extended_boundary_mask: xr.DataArray = xr.DataArray(
+            boundary_mask_data,
+            coords=extended_template.coords,
+            dims=extended_template.dims,
+            name="boundary_mask",
+        )
+        extended_boundary_mask.attrs["_FillValue"] = None
+        self.set_other(extended_boundary_mask, name="groundwater/boundary_mask")
+
+        # Load total thickness over the extended bounds
         total_thickness = self.data_catalog.fetch(
             "total_groundwater_thickness_globgm"
         ).read()
         total_thickness = total_thickness.isel(
-            get_window(total_thickness.x, total_thickness.y, self.bounds, buffer=2)
+            get_window(total_thickness.x, total_thickness.y, extended_bounds, buffer=2)
         )
 
         total_thickness = np.clip(
@@ -67,7 +173,7 @@ class GroundWater(BuildModelBase):
             "thickness_confining_layer_globgm"
         ).read()
         confining_layer = confining_layer.isel(
-            get_window(confining_layer.x, confining_layer.y, self.bounds, buffer=2)
+            get_window(confining_layer.x, confining_layer.y, extended_bounds, buffer=2)
         )
 
         if not (confining_layer == 0).all() and not force_one_layer:  # two-layer-model
@@ -120,20 +226,13 @@ class GroundWater(BuildModelBase):
                 compat="equals",
             )
 
-        layer_boundary_elevation = (
-            resample_like(
-                relative_layer_boundary_elevation,
-                aquifer_top_elevation,
-                method="bilinear",
-            )
-        ) + aquifer_top_elevation
-        layer_boundary_elevation.attrs["_FillValue"] = np.nan
-
-        self.set_grid(
-            layer_boundary_elevation, name="groundwater/layer_boundary_elevation"
+        extended_relative_boundaries: xr.DataArray = resample_like(
+            relative_layer_boundary_elevation,
+            extended_template,
+            method="bilinear",
         )
 
-        # load hydraulic conductivity
+        # load hydraulic conductivity over the extended bounds
         hydraulic_conductivity = self.data_catalog.fetch(
             "hydraulic_conductivity_globgm"
         ).read()
@@ -141,30 +240,35 @@ class GroundWater(BuildModelBase):
             get_window(
                 hydraulic_conductivity.x,
                 hydraulic_conductivity.y,
-                self.bounds,
+                extended_bounds,
                 buffer=2,
             )
         )
 
         # because hydraulic conductivity is log-normally distributed, we interpolate the log values
         # after log transformation and then back-transform after interpolation
-        hydraulic_conductivity_log: xr.DataArray = np.log(hydraulic_conductivity)
-        hydraulic_conductivity_log: xr.DataArray = resample_like(
-            hydraulic_conductivity_log,
-            aquifer_top_elevation,
+        raw_k_log: xr.DataArray = np.log(hydraulic_conductivity)
+        extended_k_log: xr.DataArray = resample_like(
+            raw_k_log,
+            extended_template,
             method="bilinear",
         )
-        hydraulic_conductivity: xr.DataArray = np.exp(hydraulic_conductivity_log)  # ty:ignore[invalid-assignment]  See: https://github.com/numpy/numpy/issues/21737
+        extended_k: xr.DataArray = np.exp(extended_k_log)  # ty:ignore[invalid-assignment]
 
         if two_layers:
-            hydraulic_conductivity = xr.concat(
-                [hydraulic_conductivity, hydraulic_conductivity],
+            extended_k = xr.concat(
+                [extended_k, extended_k],
                 dim=xr.Variable("layer", ["upper", "lower"]),
                 compat="equals",
             )
         else:
-            hydraulic_conductivity = hydraulic_conductivity.expand_dims(layer=["upper"])
-        self.set_grid(hydraulic_conductivity, name="groundwater/hydraulic_conductivity")
+            extended_k = extended_k.expand_dims(layer=["upper"])
+
+        extended_k.attrs["_FillValue"] = np.nan
+        self.set_other(
+            extended_k,
+            name="groundwater/boundary_hydraulic_conductivity",
+        )
 
         # load specific yield
         specific_yield = self.data_catalog.fetch("specific_yield_aquifer_globgm").read()
@@ -189,7 +293,7 @@ class GroundWater(BuildModelBase):
         self.set_grid(specific_yield, name="groundwater/specific_yield")
 
         why_map: gpd.GeoDataFrame = self.data_catalog.fetch("why_map").read()
-        why_map: gpd.GeoDataFrame = why_map[
+        why_map = why_map[
             why_map["HYGEO2"] != 88
         ]  # remove areas under continuous ice cover
         why_map["aquifer_classification"] = why_map["HYGEO2"] // 10
@@ -202,73 +306,138 @@ class GroundWater(BuildModelBase):
             nodata=-1,
             all_touched=False,
         )
-        why_map_grid: xr.DataArray = interpolate_na_2d(why_map_grid)
-
+        why_map_grid = interpolate_na_2d(why_map_grid)
         self.set_grid(why_map_grid, name="groundwater/why_map")
 
         # the GLOBGM DEM has a slight offset, which we fix here before loading it
-
         reference_globgm_map = self.data_catalog.fetch("head_upper_layer_globgm").read()
 
         dem_globgm = self.data_catalog.fetch("dem_globgm").read()
-
         dem_globgm = dem_globgm.assign_coords(
             x=reference_globgm_map.x.values,
             y=reference_globgm_map.y.values,
         )
-
         dem_globgm = dem_globgm.isel(
-            get_window(dem_globgm.x, dem_globgm.y, self.bounds, buffer=2)
+            get_window(dem_globgm.x, dem_globgm.y, extended_bounds, buffer=2)
         )
         dem = convert_nodata(self.grid["landsurface/elevation_m"], new_nodata=np.nan)
 
         # heads
         head_upper_layer = self.data_catalog.fetch("head_upper_layer_globgm").read()
         head_upper_layer = head_upper_layer.isel(
-            get_window(head_upper_layer.x, head_upper_layer.y, self.bounds, buffer=2),
+            get_window(
+                head_upper_layer.x, head_upper_layer.y, extended_bounds, buffer=2
+            ),
         )
-
         head_upper_layer = convert_nodata(head_upper_layer, new_nodata=np.nan)
 
-        relative_head_upper_layer = head_upper_layer - dem_globgm
+        # Resample raw GLOBGM heads to the extended grid so surrounding boundary cells have values
+        extended_head_upper: xr.DataArray = resample_like(
+            head_upper_layer,
+            extended_template,
+            method="bilinear",
+        )
+        # Ocean/offshore cells in GLOBGM are NaN; assign 0 m sea level
+        extended_head_upper = xr.where(
+            np.isnan(extended_head_upper), 0.0, extended_head_upper
+        )
 
+        relative_head_upper_layer = head_upper_layer - dem_globgm
         relative_head_upper_layer = resample_like(
             relative_head_upper_layer, aquifer_top_elevation, method="bilinear"
         )
-
-        head_upper_layer = dem + relative_head_upper_layer
+        head_upper_layer_resampled = dem + relative_head_upper_layer
 
         head_lower_layer = self.data_catalog.fetch("head_lower_layer_globgm").read()
         head_lower_layer = head_lower_layer.isel(
-            get_window(head_lower_layer.x, head_lower_layer.y, self.bounds, buffer=2),
+            get_window(
+                head_lower_layer.x, head_lower_layer.y, extended_bounds, buffer=2
+            ),
         )
-
         head_lower_layer = convert_nodata(head_lower_layer, new_nodata=np.nan)
 
-        relative_head_lower_layer = head_lower_layer - dem_globgm
+        extended_head_lower: xr.DataArray = resample_like(
+            head_lower_layer,
+            extended_template,
+            method="bilinear",
+        )
+        extended_head_lower = xr.where(
+            np.isnan(extended_head_lower), 0.0, extended_head_lower
+        )
 
+        relative_head_lower_layer = head_lower_layer - dem_globgm
         relative_head_lower_layer = resample_like(
             relative_head_lower_layer, aquifer_top_elevation, method="bilinear"
         )
 
         # TODO: Make sure head in lower layer is not lower than topography, but why is this needed?
+        relative_layer_boundary_elevation_inner = extended_relative_boundaries.isel(
+            x=slice(1, -1), y=slice(1, -1)
+        )
         relative_head_lower_layer = xr.where(
             relative_head_lower_layer
-            < layer_boundary_elevation.isel(boundary=-1) - dem,
-            layer_boundary_elevation.isel(boundary=-1) - dem,
+            < relative_layer_boundary_elevation_inner.isel(boundary=-1),
+            relative_layer_boundary_elevation_inner.isel(boundary=-1),
             relative_head_lower_layer,
         )
-        head_lower_layer = dem + relative_head_lower_layer
+        head_lower_layer_resampled = dem + relative_head_lower_layer
+
+        # Splice high-resolution DEM-corrected heads into interior of extended heads,
+        # preserving the direct GLOBGM heads (and 0 m sea level boundaries) for all surrounding boundary cells.
+        valid_inner_upper: np.ndarray = ~np.isnan(head_upper_layer_resampled.values)
+        valid_inner_lower: np.ndarray = ~np.isnan(head_lower_layer_resampled.values)
+        upper_vals: np.ndarray = extended_head_upper.values.copy()
+        lower_vals: np.ndarray = extended_head_lower.values.copy()
+        upper_vals[1:-1, 1:-1][valid_inner_upper] = head_upper_layer_resampled.values[
+            valid_inner_upper
+        ]
+        lower_vals[1:-1, 1:-1][valid_inner_lower] = head_lower_layer_resampled.values[
+            valid_inner_lower
+        ]
+
+        extended_head_upper = xr.DataArray(
+            upper_vals.astype(np.float32),
+            coords=extended_template.coords,
+            dims=extended_template.dims,
+        )
+        extended_head_lower = xr.DataArray(
+            lower_vals.astype(np.float32),
+            coords=extended_template.coords,
+            dims=extended_template.dims,
+        )
 
         if two_layers:
-            # combine upper and lower layer head in one dataarray
-            heads = xr.concat(
-                [head_upper_layer, head_lower_layer],
+            boundary_heads: xr.DataArray = xr.concat(
+                [extended_head_upper, extended_head_lower],
                 dim=xr.Variable("layer", ["upper", "lower"]),
                 compat="equals",
             )
         else:
-            heads = head_lower_layer.expand_dims(layer=["upper"])
+            boundary_heads = extended_head_lower.expand_dims(layer=["upper"])
 
-        assert heads.shape == hydraulic_conductivity.shape
-        self.set_grid(heads, name="groundwater/heads")
+        boundary_heads.attrs["_FillValue"] = np.nan
+        self.set_other(boundary_heads, name="groundwater/boundary_heads")
+
+        # Extended top elevation (DEM) and layer boundary elevations:
+        # For interior cells: use aquifer_top_elevation (from high-res DEM)
+        # For boundary cells: set 1.0 m above constant boundary head
+        extended_top_values = np.full(
+            (extended_template.shape[0], extended_template.shape[1]),
+            np.nan,
+            dtype=np.float32,
+        )
+        extended_top_values[1:-1, 1:-1] = aquifer_top_elevation.values
+        extended_top_values[boundary_mask_data] = (
+            boundary_heads.isel(layer=0).values[boundary_mask_data] + 1.0
+        )
+        extended_top = xr.DataArray(
+            extended_top_values,
+            coords=extended_template.coords,
+            dims=extended_template.dims,
+        )
+        boundary_layer_boundary_elevation = extended_relative_boundaries + extended_top
+        boundary_layer_boundary_elevation.attrs["_FillValue"] = np.nan
+        self.set_other(
+            boundary_layer_boundary_elevation,
+            name="groundwater/boundary_layer_boundary_elevation",
+        )

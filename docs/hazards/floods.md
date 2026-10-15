@@ -6,10 +6,9 @@ The floods module in GEB uses the Super-Fast INundation of CoastS (SFINCS) hydro
 
 SFINCS works by dividing the area of interest into a grid of cells. For each cell, it calculates water depth and flow at successive time steps based on the elevation (topography), surface roughness (manning's), and incoming water (forcing) from rain (precipitation), rivers (discharge), or the coast (surge and storm tide).
 
-Multiple flood types can be simulated:
+Multiple flood types can be simulated in GEB:
 
 - **Fluvial (riverine)**: Flooding from river overflow when discharge exceeds river channel capacity
-- **Pluvial (precipitation)**: Surface (overland) flooding from intense rainfall overcoming local infiltration capacity
 - **Coastal**: Inundation from elevated sea levels due to storm surge and tides
 - **Return period**: Probability flood maps showing expected flooding for specific return periods (e.g., 1-in-100 year event)
 
@@ -24,7 +23,7 @@ Rivers are represented in the model in one of two ways:
 - **With subgrid**: River channels are "burned" into a high-resolution subgrid, preserving their width and depth.
 - **Without subgrid**: Rivers are directly carved into the main computational grid, modifying the elevation and roughness values of affected cells.
 
-The model automatically identifies flood-prone areas inside the region using Height Above Nearest Drainage (HAND) analysis (*REF). This method calculates how high each location sits above the nearest stream or drainage channel, helping to define which areas are prione to flooding.
+The model automatically identifies flood-prone areas inside the region using Height Above Nearest Drainage (HAND) analysis [@nobre2016hand]. This method calculates how high each location sits above the nearest stream or drainage channel, helping to define which areas are prione to flooding.
 
 ### Static input data
 
@@ -33,7 +32,7 @@ The static components of a SFINCS model remain constant across different flood s
 - **Digital Elevation Model (DEM)**: Multiple DEMs from different sources can be merged, with priority given to user defined 1st and subsequent source. For example in a riverine flood, the priority by default is given to inland elevation (FABDEM V1-2) and then if needed sometimes the outflows reach a part where topobathy is needed (2nd source: GEBCO version ?) 
 - **Manning's roughness coefficient**: Represents surface friction that slows down water flow. Different land cover types (forests, urban developed areas, cropland etc.,) have different roughness values. By default the ESA Landcover 2021 is used.
 - **Model domain (mask)**: Defines which grid cells are active in the simulation. This is determined based on the subbasins being modeled (delineated via the hydrological part) and made faster using the aforementioned HAND method.
-- **River network**: The geometry (centerlines) by default use the MERIT-BASINS global product based on 90-m MERIT-HYDRO DEM. The width is derived in two parts, firstly satellite observed widths (resolution = 30m or larger) are given priority which comes from the MERIT-SWORD dataset (latest version 0.4)(*add ref). Secondly, whereever there is no satellite data available (<30m tributaries) a gap-filling method via the power-law equation is used to derive widths (*add ref). The depth of rivers are derived from discharge estimates and using the Manning's open channel flow equation.
+- **River network**: By default, the geometry (centerlines) uses the global MERIT-BASINS product based on the 90 m MERIT-HYDRO DEM. River width and depth are estimated by the hydrological model's routing module (`geb.hydrology.routing`).
 
 ### (Dynamic) forcing data
 
@@ -47,12 +46,6 @@ Riverine (fluvial) forcing represents water entering the model domain through ri
 - **All inflow point forcing**: Discharge is applied at multiple start points (headwater points) throughout the river network, including tributaries.
 
 Discharge values comes from GEB hydrological module, which simulates rainfall-runoff processes across the region. For return period mapping, synthetic design hydrographs are generated based on extreme value analysis of long-term discharge records.
-
-#### Precipitation Forcing
-
-Direct precipitation forcing adds rainfall directly onto the SFINCS model grid. This is particularly important for pluvial (rainfall-induced) flooding, where surface runoff and local flooding cause inundation independently of river overflow.
-
-Precipitation data can be taken from observed rainfall records, climate model outputs, or synthetic design storms. The SFINCS model routes this rainfall across the landscape based on topography and surface properties. This is an external input coming from sources outside GEB.
 
 #### Coastal forcing
 
@@ -95,13 +88,37 @@ Simulations can run on either CPU (default) or GPU (optional) hardware. GPU exec
 
 The model includes a spinup period (typically 24 hours) before the main simulation begins. During spinup, the model reaches a balanced initial state, ensuring that results are not affected by artificial conditions (too extreme amounts of water entering) at the start of the simulation.
 
+### Basin selection for a model run
+Flood simulations for basins can be executed in various ways. The following settings determine the selection of basins in a flood simulation:
+```yaml
+hazards:
+  floods:
+    simulate: true
+    subbasins: auto
+```
+Description:
+- **`auto`** (default): Simulates subbasins whose discharge exceeds the bankfull threshold during the event, along with their downstream subbasins.
+- **`all`**: Simulates all subbasins.
+- **List of COMID values**: Simulates only the listed subbasins (for example, `[23011134, 23011135]`).
 ### Flood events
 
 Flood event simulations model specific historical or synthetic flood scenarios over a defined time period (e.g., a major storm lasting several days). These simulations use time-varying forcing data:
 
 - Rivers discharge varies according to the hydrograph for that event
-- Precipitation falls according to the rainfall pattern
 - Coastal water levels vary following observed or modeled sea level conditions
+
+#### Detecting historical flood events 
+
+GEB also supports automatic detection of historical flood events. If the discharge at a certain location exceeds a certain threshold, the historical flood will be automatically simulated using SFINCS. The user does not need to manually provide start and end times of the flood. For this to work, enable flood simulation and set the following parameters in the config file:
+
+```yaml
+hazards:
+  floods:
+    simulate: true
+    detect_floods_from_discharge: true
+    discharge_threshold: 30  # discharge threshold in m3/s for flood detection
+    threshold_location: [0.0, 0.0]  # [lon, lat] of the location where the discharge threshold is applied; replace with a location in your model domain.
+```
 
 
 ### Return period maps
@@ -124,8 +141,8 @@ For each subbasin in the routing network, GEB constructs a SFINCS model domain t
 
 The return period mapping process follows these steps:
 
-1.  **Discharge Estimation**: GEB uses discharge time series from a long-term spinup or routing simulation to estimate peak flows for specific return periods (e.g., 10, 50, 100 years).
-2.  **Hydrograph Generation**: For each subbasin of interest, a design hydrograph is generated for the estimated return period peak.
+1.  **Discharge Estimation**: GEB uses discharge time series from a long-term spinup or routing simulation to estimate peak flows for specific return periods (e.g., 10, 50, 100 years). It is recommended to use atleast 40 years of discharge (either "spinup" or "run"), and by default the estimation uses a joined time series of both "spinup" + "run" discharge.
+2.  **Hydrograph Generation**: For each subbasin of interest, a design hydrograph is generated for the estimated return period peak. The shape of this hydrograph can be selected by the user, see [Hydrograph shape](#hydrograph-shape).
 3.  **Boundary Conditions**: These hydrographs are applied as discharge forcing at the "inflow nodes" (upstream points) of the focused subbasin.
 4.  **Local Hydrodynamic Modeling**: A separate SFINCS simulation is executed for each pairing.
 5.  **Mosaicking**: The maximum flood depth maps from all individual simulations are then combined into a single, consistent flood visibility map for the entire region.
@@ -156,12 +173,40 @@ Metrics may include:
 - Comparison against observed flood extents
 - Event-based skill scores (binary class statistics)
 
-## Future Enhancements
+## Hydrograph shape
 
-The shape of the riverine return period hydrograph will use historical hydrograph shape, currently a triangular shape is assumed based on the user input. 
+The peak discharge of a riverine return period event ($Q_N$) is estimated from the long-term discharge record using a peaks-over-threshold (POT) analysis with a Generalized Pareto Distribution. GEB offers three methods to construct the design hydrograph around $Q_N$, which can be selected with `hydrograph_shape.method` in the [configuration](../getting_started/configuration.md):
+
+- **`triangular`** (default): A symmetric hydrograph that rises linearly from zero to $Q_N$ and then falls linearly back to zero. The duration of the rising (and falling) limb is set by the user (by default 72 hours). This method is simple, requires no historical events, and works for any return period [@cotrim2026paneuropean].
+- **`direct`**: The shape is derived from the modelled discharge record. GEB identifies all historical events whose peak lies within a tolerance of $Q_N$ (default ±10%), extracts the discharge time series around each peak, and averages these to a mean event shape. The mean shape is then scaled so that its peak is exactly $Q_N$. Because it is based on events of similar magnitude, this is the most realistic shape, but for rare return periods (e.g., 1-in-100 years) there are often too few comparable events in the record. If fewer than three events are found, an error is raised.
+- **`anchor`**: Same as `direct`, but the mean shape is extracted from events near the 2-year return period discharge ($Q_2$), which occur frequently enough to obtain a robust average shape. This shape is then scaled up to $Q_N$ of the requested return period, following the normalise-and-rescale idea of the HGRAPHER method [@dullaart2023enabling], in which an average normalised event shape is scaled to the return-period level. This is the recommended alternative to `triangular` when the record is too short for `direct`. Note that it assumes that the shape of extreme events is similar to that of frequent events.
+
+For `direct` and `anchor`, the time window extracted around each peak is controlled by `window_days` (days before and after the peak, default 3.5, so 7 days in total) and the selection of events by `tolerance` (default 0.1).
+
+```yaml
+hazards:
+  floods:
+    hydrograph_shape:
+      method: anchor    # triangular (default), direct, or anchor
+      window_days: 3.5  # days before and after the peak
+      tolerance: 0.1    # ± 10% tolerance around the anchor discharge used to select events
+```
+
+When `hazards.floods.write_figures` is enabled, a diagnostic figure is written for each river and return period (in the `hydrograph_shapes` figure folder) for the `direct` and `anchor` methods.
+
+<figure markdown="span">
+  ![Comparison of hydrograph shape methods](../images/hydrograph_shape_comparison.png)
+  <figcaption>**Hydrograph shape methods compared** for the Geul catchment (2-, 10- and 100-year return periods, 1960-2020 simulated discharge). The triangular hydrograph rises slowly over 72 hours, whereas the historical shapes show the sharp, short peak that is typical for this river. For the 2-year event `direct` and `anchor` are identical by definition, and for the 100-year event `direct` is not available because too few comparable historical events exist.</figcaption>
+</figure>
+
+<figure markdown="span">
+  ![Anchor hydrograph shape diagnostic](../images/hydrograph_shape_anchor_example.png)
+  <figcaption>**Diagnostic figure for the `anchor` method** (Geul, 100-year return period). Gray lines are the historical events with a peak within ±10% of Q<sub>2</sub> (yellow band), the dashed blue line is their mean shape, and the purple line is that shape scaled to the 100-year peak discharge.</figcaption>
+</figure>
+
 <figure markdown="span">
   ![triangular shape](../images/hydrograph_riverine.jpg)
-  <figcaption>Example riverine return period plot.</figcaption>
+  <figcaption>Example riverine return period plot (triangular shape).</figcaption>
 </figure>
 
 ## Code

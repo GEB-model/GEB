@@ -46,7 +46,7 @@ def find_neighbors_numba(
     n_neighbor: int,
     radius: float | int,
     bits: int,
-    dtype: np.uint32 | np.uint64,
+    dtype: type[np.uint32] | type[np.uint64],
     minx: float | int,
     maxx: float | int,
     miny: float | int,
@@ -87,7 +87,7 @@ def find_neighbors_numba(
         (map_search_source_to_target.size, n_neighbor), nanvalue, dtype=dtype
     )
     n_unique_hashcodes = search_target_unique_hashcodes.size
-    for u in nb.prange(search_source_unique_hashcodes.size):  # ty: ignore[not-iterable]
+    for u in nb.prange(search_source_unique_hashcodes.size):
         search_source_hashcode = search_source_unique_hashcodes[u]
         x, y = geohash.decode(
             search_source_hashcode, bits, minx=minx, maxx=maxx, miny=miny, maxy=maxy
@@ -508,11 +508,14 @@ if __name__ == "__main__":
         agent_neighbors = agent_neighbors[agent_neighbors != 4294967295]
         assert np.unique(agent_neighbors).size == agent_neighbors.size
         geohash_coord = geohash.decode(
-            geohash.encode_precision(*locations[agent], bits), bits
+            geohash.encode_precision(locations[agent, 0], locations[agent, 1], bits),
+            bits,
         )
         shifts = geohash.get_shifts(geohash_coord[0], geohash_coord[1], radius, bits)
         neighbor_geohashes = geohash.shift_multiple(
-            geohash.encode_precision(*locations[agent], bits), bits, shifts
+            geohash.encode_precision(locations[agent, 0], locations[agent, 1], bits),
+            bits,
+            shifts,
         )
         neighbor_geohashes = np.sort(neighbor_geohashes)
         for j, neighbor_geohash in enumerate(neighbor_geohashes):

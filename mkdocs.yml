@@ -102,7 +102,6 @@ nav:
       - Flood evaluation: getting_started/evaluation/flood.md
       - Energy evaluation: getting_started/evaluation/energy.md
     
-    - MCP server: getting_started/mcp_server.md
     - Reporting: getting_started/reporting.md
   - Model:
     - Overview: model/index.md
@@ -132,6 +131,7 @@ nav:
     - Runoff concentration: hydrology/runoff_concentration.md
     - Routing: hydrology/routing.md
     - Waterbodies: hydrology/waterbodies.md
+    - Weirs and gates: hydrology/weirs.md
     - HRUs: hydrology/HRUs.md
   - Hazards:
     - Overview: hazards/index.md

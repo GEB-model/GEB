@@ -181,7 +181,10 @@ class MeritBasins(Adapter):
                     )
 
                     download_from_google_drive(
-                        file_id=file_id, file_path=file_path, session=session
+                        file_id=file_id,
+                        file_path=file_path,
+                        logger=self.logger,
+                        session=session,
                     )
 
                     if ext == "shp":

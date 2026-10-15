@@ -10,8 +10,8 @@ import xarray as xr
 from scipy.sparse import csr_matrix
 
 from geb.geb_types import (
+    ArrayFloat,
     ArrayFloat32,
-    ArrayFloat64,
     ArrayInt32,
     TwoDArrayBool,
     TwoDArrayFloat32,
@@ -26,10 +26,10 @@ if TYPE_CHECKING:
 
 
 def generate_bilinear_interpolation_weights(
-    src_x: ArrayFloat64,
-    src_y: ArrayFloat64,
-    tgt_x: ArrayFloat64,
-    tgt_y: ArrayFloat64,
+    src_x: ArrayFloat,
+    src_y: ArrayFloat,
+    tgt_x: ArrayFloat,
+    tgt_y: ArrayFloat,
     mask: TwoDArrayBool | None = None,
     src_mask: TwoDArrayBool | None = None,
 ) -> tuple[ArrayInt32, ArrayFloat32]:
@@ -284,6 +284,11 @@ class ForcingLoader(ABC):
         self._supports_forecast = supports_forecast
         self.forecast_issue_datetime: datetime | None = None
         self.ds_forecast: xr.DataArray | None = None
+
+    @property
+    def source(self) -> str:
+        """The original source name of the forcing dataset (e.g. 'ERA5-Land', 'MSWEP')."""
+        return self.reader.source
 
     def _load_forcing_mask(self) -> xr.DataArray:
         """Load the forcing-grid keep mask if it is available.

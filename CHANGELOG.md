@@ -1,13 +1,86 @@
-# dev
+# v1.0.0b36
+- Add karst storage to all hydrology runs, with a default release time of 10 days. Update inputs and rerun spinup.
+
+# v1.0.0b35
+- River-outflow history is now automatically always reported (i.e.we remove the `report._outflow_points` option; old configurations containing it remain compatible, but its value is ignored.
+- Use FathomDEM as default instead of FABDEM.
+- Integrated interactive chart data bundles directly into the single discharge dashboard HTML file.
+- Implement capillary rise in the Ross solver.
+- Fixed rare floating-point precision underflow in `infiltration` during profile saturation recharge subtraction that caused slightly negative `topwater_m` and false `direct_runoff` in the land surface model.
+- Fixed a build failure when a coastline is already a single `LineString` and cannot be passed to `shapely.ops.linemerge`.
+
+# v1.0.0b34
+- Fix for trapped waterbody cells. Only classify waterbody as trapped if they are both down- and upstream of the same waterbody.
+- Pruned starved river cells originating from active non-outflow waterbody cells to avoid zero-discharge hydrodynamic river reaches.
+
+# v1.0.0b33
+- Implement groundwater fluxes at catchment boundaries. This is especially important when modelling small catchments. Previously there was essentially a wall around the catchment, while groundwater can now enter or leave the catchment based on prescribed heads based on GLOBGM (by default). Oceans have a groundwater head of 0 now,
+- Fixed SFINCS subgrid build crashing with `Lengths of inputs do not match` when a subgrid tile only contains a sliver of a river for which no river bed level can be estimated; such tiles are now left unburned.
+
+# v1.0.0b32
+- Removed defaults from ParametersConfig in configuration schema so that all parameters must be explicitly set via reasonable_default_config.yml or model.yml, and added groundwater_hydraulic_conductivity_multiplier to the schema.
+- Detect waterbody outflow points in model build process rather than the run.
+- Added non-negativity checks for topwater, surface runoff, and other land surface water storages and fluxes in `LandSurface` validation under `__debug__`, exporting diagnostic snapshots as `diagnostic_landsurface_water_error_cell_{index}.npz` on failure.
+- Added `use_observed_width_as_bankfull` configuration flag to routing river depth parameters (default `true`) allowing observed channel widths to be used directly as bankfull widths with depth scaled by hydraulic continuity, while preserving previous reach-specific alpha scaling behind the flag for easy reversion.
+- Fixed bankfull depth hydraulic continuity scaling to use baseline default hydraulic geometry parameters (alpha and beta) when calculating expected channel width, correctly scaling channel depth inversely with observed widths without flow ratio cancellation or depth explosion.
+- Precomputed waterbody outflow points in `setup_waterbodies` exported as `grid/waterbodies/waterbody_outflow_points`, breaking ties using minimum elevation.
+- Detected and absorbed trapped river cells (cells between non-outflow waterbody cells that drain into and reconnect with waterbodies) into the upstream waterbody ID in `setup_waterbodies`, preventing stranded river cells with starved flows and depth estimation errors.
+- Fixed channel shape exponent in routing to properly model parabolic channels (shape_exponent = 0.5) and scaled hydraulic geometry mean channel depth to centerline bankfull depth (h_centerline = 1.5 * h_mean), preserving bankfull flow area and channel conveyance.
+- Assert realistic calculated bankfull river depth
+- Removed obsolete river width and depth estimations from SFINCS root model build, directly using river widths, depths, and Manning roughness estimated by routing.
+- Inherit upstream observed channel widths for unrepresented river reaches, combining multiple upstream widths at confluences via Leopold-Maddock power-law summation (W = (sum W_i^(1/beta))^beta) and scaling channel depth using hydraulic continuity.
+- Maintain channel conveyance and wave celerity during overbank flood events.
+- Lowered the lowland river Manning roughness floor from 0.025 to 0.020 for flat and large rivers.
+- Added include_rivers_not_represented_in_grid option to get_active_rivers and select_active_rivers so bankfull discharge, width, and depth are reported for all unrepresented river segments.
+- Added update_channel_geometry to LocalInertial routing solver ensuring both bankfull depth and river width are properly updated and synchronized during simulation.
+- Fixed bankfull river width and depth estimation for rivers without observed width so that bankfull geometry is estimated from simulated discharge (Q_2) and geomorphic power law parameters (alpha and beta) rather than falling back to the default channel width.
+- Added special reporter `_bankfull_depths` to export yearly bankfull depth across the river network as `bankfull_depths_m.geoparquet`, and yearly bankfull depth and discharge at discharge stations as consolidated parquet tables.
+- Added support in reporter for exporting from (geo)dataframes.
+- Added bankfull discharge reference line visualization in the discharge dashboard interactive time-series plots.
+- Added interactive popup time-series plots for river segments in the discharge dashboard displaying yearly bankfull discharge, channel width, and channel depth over time.
+- Dynamically scale river line widths and colors in the discharge evaluation dashboard based on simulated end-of-run channel width (linear scaling) and depth (light-to-dark blue gradient).
+- Added bankfull river depth estimation via hydraulic continuity derived from simulated 2-year flood discharge (Q_2) based on Andreadis et al. 2013. For channels with too observed width, the depth is scaled inversely with width to conserve volume.
+- For flood simulatons use channel depth and width from the hydrological model directly. Remove options power_law and mannings in flood simulatons.
+- Improve local inertial boundary conditions.
+- Fixed cascading waterbody-to-waterbody routing transfers in local inertial routing so connected natural lakes dynamically transfer releases each substep.
+- Allow ReturnPeriodModel to work with zero discharge by returning zero for these special cases.
+
+# v1.0.0b31
+- Reduce size of discharge evaluation HTML dashboard. 
+- Vectorized GPD bootstrap goodness-of-fit testing in extreme value analysis, speeding up threshold selection by ~80x and removing early stopping parameters.
+- Use np.float64 in accumulation of soil moisture in water balance check. This caused an error if rare cases that was just an accumulation error.
+- Use a fixed 95th percentile threshold for significantly faster return period estimation for bankful discharge estimation.
+- Removed the MCP server (`geb server`), documentation, and the `mcp` dependency.
+- Resolved all ty check errors.
+- Made the MSWEP_URL environment variable optional when all required MSWEP precipitation data is already available locally.
+- Implement two-layer snowpack.
+- Fixed unit inconsistency in kinematic wave routing evaporation limiter where volumetric flow rates and per-length rates were mixed.
+- Add retry logic for chunk downloads and limit concurrent connections in Destination Earth ERA5 adapter to prevent connection errors.
+- Export multi-entity special reporters (such as retention basins, meteorological stations, and outflow points) as single consolidated Parquet files.
+- Disable station time-series and return-period figure exports by default in discharge evaluation; enable them with `--export-timeseries-plots true` and `--export-return-period-plots true`.
+- Major re-organization of the hydrological evaluation code. This considerably shortened `evaluate/hydrology.py`, and all of its former contents are now distributed in various workflow scripts. 
+- Changed discharge skill score calculation, from package-calculated skill scores to the raw skill score formulas.
+- Add `--export-timeseries-plots false` to discharge evaluation to skip static station time-series images while keeping the dashboard and skill-score plots.
+- Added the calculation of seasonal discharge metrics
+- Improved how GRDC stations are matched (in `build/workflows/discharge_snapping.py`) 
+- Implemented a GRDC timezone correction, as GRDC data represents the local timezone. 
+- Integrated GRDC-Caravan dataset to get more insight into the relationship between catchment properties and skill score. 
+- The discharge dashboard is considerably improved. For example, a) it now shows stations NOT included in the hydrological evaluation, including the exclusion reason b) it visualizes the discharge station snapping procedure and c) it shows the GRDC caravan catchment attributes.
+- River slope is now configurable using `minimum_river_slope_m_per_m`.
+- Added an option to create a data package for scientific publication, which can be uploaded at Zenodo (includes station metadata, raw simulaton files and skill scores) 
 - Implemented the `early_warning.py` module outside of `households.py`, launching the latest GEB-IbF system, including options for: area and building based warnings; warning communication weighted by socio-economic factor; time-dependent damage reduction.
 - Users need to run `setup_warning_communication_weights` to enable the warning communication efficiency based on socioeconomic factors.
 - Parameterization of settings in the `model.yml`. Increased overall efficiency and usability of the early warning system.
 - Improved the setup for `critical_infrastructure_warning_strategy`, which now depends on asset type instead of strategy id.
 - Added the option to download and process hindcasts using the MARS API. For that, `setup_forecasts` has additional arguments: forecast_product, hindcast_cycle_start, hindcast_cycle_end and n_hindcast_years.
+- Added a cost-benefit analysis for governments to raise flood protection standards based on household damage reductions. Enable this by setting `agent_settings.government.adaptation.mode: cba` in the model config.
 - Added `geb evaluate hydrodynamics.animate_flood` to render 2D flood-depth animations from SFINCS outputs. To enable per-timestep maps, set `hazards.floods.flood_map_output_interval_seconds` (e.g., `3600` for hourly) and rerun the model; then run `geb evaluate hydrodynamics.animate_flood --run-name default` (see `--help` for options).
+- Added a cost-benefit analysis for governments to raise flood protection standards based on household damage reductions. Enable this by setting `agent_settings.government.adaptation.mode: cba` in the model config.
+- Added `geb evaluate hydrodynamics.animate_flood` to render 2D flood-depth animations from SFINCS outputs. To enable per-timestep maps, set `hazards.floods.flood_map_output_interval_seconds` (e.g., `3600` for hourly) and rerun the model; then run `geb evaluate hydrodynamics.animate_flood --run-name default` (see `--help` for options).
+- Added `setup_flood_protection_standards` build method to process FLOPROS flood protection standards. Subsequently these flood protection standards are used to initialize the flood protection standards for each subbasin in the model domain.
 
 # v1.0.0b30
-- Implement evaporation for retention basins using a constant area based on maximum storage and a depth of 3 meters.
+- Implement evaporation for retention basins using a constant area based on maximum storage and a depth of 3 meters.,
 - Added optional external discharge skill-score comparisons for Google Streamflow, GloFAS, and PCR-GLOBWB/Utrecht.
 - Expanded discharge metrics with original/modified KGE, KGE components, NSE, Pearson r², RMSE, and RRMSE.
 - Added skill-score maps, boxplots, external KGE comparisons, upstream-area diagnostics, and dashboard summaries.
@@ -72,6 +145,7 @@ Important notes:
 # v1.0.0b26
 - Write new model version after each version update in `geb update-version`. This way, when the model is updated multiple versions ahead, and one of the updates fails, the version updates that succeeded are still "saved".
 - Recently, there have been a lot of supply chain effects, where packages contained malicious code or instructions. To avoid most of these issues, but at the same time get relatively new updates (including those with important security updates) we limit any package updates to packages that are at least 3 days old in the uv.lock file. Here we use uv's exclude-newer option.
+- Move to using a two-layer snowpack instead of one.
 - Update routing to include retention basins. By default no retention basins are set (all -1), however a dataset can be passed to set up retention basins. These basins can retain water during flood peaks, and slowly release water during low-flow periods. Set up using `setup_retention_basins`.
 - Fix case where river discharge was 0 in waterbodies (OK), but led to division by zero error in determining alpha for river widths ([#819](https://github.com/GEB-model/GEB/issues/819)).
 - Use MIRCA-OS crop calendars rather than MIRCA2000 ([#813](https://github.com/GEB-model/GEB/issues/813)).
@@ -83,8 +157,8 @@ Important notes:
 
 # v1.0.0b25
 - Fix cases where subgrid elevation could be nan in coastal areas and DEM was not available. This ultimately leads to an error in the land surface model (propagating nans).
+- Remove unused config reading in `geb update-version` that prevented using working directory update version too.
 - Include a delta approach to account for changes in precipitation and temperature under climate change in creating return period maps. To adjust forcing data to future climate, add the `representative_forcing_year` argument to `setup_forcing` in the build.yml to indicate the year for which you want to fast-forward the forcing data.
-- Fix a bug where update-version would not write newly created files to `files.yml`.
 
 # v1.0.0b24
 - Add `mode="off"` option to `setup_waterbodies` to completely disable waterbodies, or `mode: "lakes_only"` or `mode: "reservoirs_only"`.
@@ -507,4 +581,3 @@ To support this version:
 To support this version:
 
 - Re-run `setup_forcing` and `setup_spei`
-

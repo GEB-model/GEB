@@ -14,6 +14,7 @@ GEOPARQUET_FILES_TO_MERGE = [
     "input/geom/routing/rivers.geoparquet",
     "input/geom/routing/subbasins.geoparquet",
     "input/geom/discharge/discharge_snapped_locations.geoparquet",
+    "input/geom/discharge/station_locations.geoparquet",
     "input/geom/waterbodies/waterbody_data.geoparquet",
 ]
 

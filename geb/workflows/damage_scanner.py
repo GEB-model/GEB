@@ -49,7 +49,7 @@ def compute_all_numba(
     n_curves = curve_y.shape[0]
     out = np.empty((n_obj, n_curves))
 
-    for i in prange(n_obj):  # ty: ignore[not-iterable]
+    for i in prange(n_obj):
         v = values[i]
         cov = coverage[i]
         m = max_damage_arr[i]
@@ -147,6 +147,7 @@ def VectorScannerMultiCurves(
     covs = (c for sub in filtered["coverage"].array for c in sub)
 
     inundation_parts = np.fromiter(vals, dtype=np.float64)
+    assert cell_area_m2 is not None
     coverage_parts = np.fromiter(covs, dtype=np.float64) * cell_area_m2
 
     # Clip hazard values for stable searchsorted

@@ -32,7 +32,7 @@ class ECMWFGeopotential(Adapter):
             The adapter instance.
         """
         if not self.is_ready:
-            fetch_and_save(url=url, file_path=self.path)
+            fetch_and_save(url=url, file_path=self.path, logger=self.logger)
         return self
 
     def read(self, *args: Any, **kwargs: Any) -> xr.DataArray:

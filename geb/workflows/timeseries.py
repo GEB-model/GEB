@@ -18,10 +18,17 @@ def regularize_discharge_timeseries(discharge: pd.DataFrame) -> pd.DataFrame:
     Raises:
         ValueError: If the time steps in the discharge timeseries are not regular.
     """
+    if not isinstance(discharge.index, pd.DatetimeIndex):
+        discharge.index = pd.to_datetime(discharge.index)
+    assert isinstance(discharge.index, pd.DatetimeIndex)
+
+    if discharge.index.tz is not None:
+        discharge.index = discharge.index.tz_convert("UTC").tz_localize(None)
+
     steps = np.diff(discharge.index)
     minimum_step = steps.min()
     # check if all time steps are multiples of the minimum step (i.e. regular time steps)
-    if not (steps % minimum_step == pd.Timedelta(0)).all():
+    if not ((steps / minimum_step) % 1 == 0).all():
         raise ValueError(
             "discharge_observations time steps are not regular. Please ensure the index is a regular time series."
         )

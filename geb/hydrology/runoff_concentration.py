@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from numba import njit
 
-from geb.geb_types import ArrayFloat32, TwoDArrayFloat32
+from geb.geb_types import ArrayFloat, ArrayFloat32, TwoDArrayFloat, TwoDArrayFloat32
 from geb.module import Module
 from geb.workflows import balance_check
 
@@ -63,9 +63,9 @@ def triangular_weights(peak_hour: float, lag_time_hours: int) -> ArrayFloat32:
 
 @njit(cache=True)
 def apply_triangular(
-    hourly_inflow_m: TwoDArrayFloat32,  # shape (24, n_cells)
-    weights: ArrayFloat32,  # shape (lag_time_hours,)
-    buffer_m: TwoDArrayFloat32,  # shape (lag_time_hours, n_cells)
+    hourly_inflow_m: TwoDArrayFloat,  # shape (24, n_cells)
+    weights: ArrayFloat,  # shape (lag_time_hours,)
+    buffer_m: TwoDArrayFloat,  # shape (lag_time_hours, n_cells)
 ) -> None:
     """Apply triangular weighting to distribute hourly inflow into a buffer.
 

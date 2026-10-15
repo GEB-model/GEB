@@ -182,23 +182,33 @@ class Adapter:
 
     @property
     def logger(self) -> logging.Logger:
-        """Get a logger for the adapter.
+        """Get the logger for the adapter.
 
         Returns:
-            A logging.Logger instance with the adapter's class name as the logger name.
+            The logging.Logger instance assigned to this adapter.
 
         Raises:
-            ValueError: If the logger is not set.
+            ValueError: If the logger has not been set on the adapter.
         """
-        if not hasattr(self, "_logger"):
-            raise ValueError("Logger is not set")
+        if not hasattr(self, "_logger") or self._logger is None:
+            raise ValueError(
+                f"Logger is not set on {self.__class__.__name__}. "
+                "Ensure the adapter is accessed through DataCatalog or that adapter.logger has been explicitly assigned."
+            )
         return self._logger
 
     @logger.setter
     def logger(self, logger: logging.Logger) -> None:
-        """Set a logger for the adapter.
+        """Set the logger for the adapter.
 
         Args:
             logger: A logging.Logger instance to be used by the adapter.
+
+        Raises:
+            TypeError: If the provided logger is not an instance of logging.Logger.
         """
-        self._logger = logger
+        if not isinstance(logger, logging.Logger):
+            raise TypeError(
+                f"Expected an instance of logging.Logger, but got {type(logger).__name__}."
+            )
+        self._logger: logging.Logger = logger

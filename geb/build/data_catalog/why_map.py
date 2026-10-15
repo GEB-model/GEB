@@ -41,7 +41,7 @@ class WhyMap(Adapter):
         """
         if not self.is_ready:
             download_path: Path = self.root / url.split("/")[-1]
-            fetch_and_save(url, download_path)
+            fetch_and_save(url, download_path, logger=self.logger)
 
             with zipfile.ZipFile(download_path, "r") as zip_ref:
                 zip_ref.extractall(self.root)
