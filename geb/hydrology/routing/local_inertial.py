@@ -1018,12 +1018,12 @@ class LocalInertial:
             self._substep_buffers.terminal_wb_outflow_accum_m3[0]
         )
 
-        if (
-            self.n_inertial > 0
-            and diagnostics is not None
-            and diagnostics.limiting_reach_idx >= 0
-        ):
-            self._print_limiting_substep(diagnostics)
+        # if (
+        #     self.n_inertial > 0
+        #     and diagnostics is not None
+        #     and diagnostics.limiting_reach_idx >= 0
+        # ):
+        #     self._print_limiting_substep(diagnostics)
 
         if __debug__:
             storage_inertial_after: float = float(
