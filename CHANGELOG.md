@@ -1,4 +1,7 @@
-# dev
+# v1.0.0b36
+- Add karst storage to all hydrology runs, with a default release time of 10 days. Update inputs and rerun spinup.
+
+# v1.0.0b35
 - River-outflow history is now automatically always reported (i.e.we remove the `report._outflow_points` option; old configurations containing it remain compatible, but its value is ignored.
 - Use FathomDEM as default instead of FABDEM.
 - Integrated interactive chart data bundles directly into the single discharge dashboard HTML file.
