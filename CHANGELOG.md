@@ -1,4 +1,5 @@
 # dev
+- River-outflow history is now automatically always reported (i.e.we remove the `report._outflow_points` option; old configurations containing it remain compatible, but its value is ignored.
 - Use FathomDEM as default instead of FABDEM.
 - Integrated interactive chart data bundles directly into the single discharge dashboard HTML file.
 - Implement capillary rise in the Ross solver.
