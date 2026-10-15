@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from geb.config_schema import KarstConfig
 from geb.geb_types import ArrayFloat32, ArrayFloat64, TwoDArrayFloat32
 from geb.module import Module
 
@@ -26,8 +27,14 @@ class Karst(Module):
 
         Raises:
             ValueError: If coverage is missing or contains values outside 0–1.
+                Also raised if karst configuration values are invalid.
         """
         super().__init__(model, create_var=False)
+        # parse_config validates a temporary model without adding schema defaults.
+        karst_config: KarstConfig = KarstConfig.model_validate(
+            model.config["hydrology"].get("karst", {})
+        )
+        model.config["hydrology"]["karst"] = karst_config.model_dump()
         self.hydrology = hydrology
         self.grid = hydrology.grid
         if "groundwater/karst_fraction" not in model.files["grid"]:

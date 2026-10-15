@@ -5,8 +5,9 @@ from unittest.mock import MagicMock
 
 import geopandas as gpd
 import numpy as np
+import pytest
 import xarray as xr
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, box
 
 from geb.build.methods import build_method
 from geb.build.modules.groundwater import GroundWater
@@ -105,3 +106,84 @@ def test_setup_groundwater_creates_boundary_heads() -> None:
     ]
     assert boundary_layer_elev.shape == (2, 5, 5)
     assert not np.isnan(boundary_layer_elev.values[:, boundary_mask.values]).any()
+
+
+@pytest.mark.parametrize("reverse_x", [False, True])
+@pytest.mark.parametrize("reverse_y", [False, True])
+@pytest.mark.parametrize("scenario", ["overlap", "outside", "empty", "inactive"])
+def test_setup_karst_spatial_coverage(
+    reverse_x: bool, reverse_y: bool, scenario: str
+) -> None:
+    """Save weighted polygon coverage in the correct active grid cells.
+
+    Args:
+        reverse_x: Whether to reverse the grid's horizontal coordinate order.
+        reverse_y: Whether to reverse the grid's vertical coordinate order.
+        scenario: Overlapping polygons, polygons outside the grid, an empty
+            catalog, or a grid with no active cells.
+    """
+    build_method.logger = logging.getLogger("test")
+    # Equal-area coordinates make rectangle overlap fractions exact and independent
+    # of the projection implementation used by the coverage calculation.
+    mask: xr.DataArray = xr.DataArray(
+        [[False, False, False, True], [False, False, False, False]],
+        coords={"y": [15.0, 5.0], "x": [5.0, 15.0, 25.0, 35.0]},
+        dims=("y", "x"),
+    ).rio.write_crs("EPSG:6933")
+    # Northern cells: full continuous, full discontinuous, half mixed, inactive.
+    # Southern cells: full continuous, half discontinuous, half continuous plus
+    # half mixed, and no overlap. Fractions are independent of input row order.
+    expected: xr.DataArray = xr.DataArray(
+        [[0.825, 0.4, 0.325, np.nan], [0.825, 0.2, 0.5 * 0.825 + 0.5 * 0.65, 0.0]],
+        coords=mask.coords,
+        dims=mask.dims,
+    )
+    # Input order and labels deliberately differ from spatial order and rock codes.
+    # Two overlapping class-1 polygons must be dissolved before area is counted.
+    polygons: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {"rock_type": [5, 3, 1, 4, 2, 1, 1, 4, 2]},
+        geometry=[
+            box(10, 0, 15, 10),
+            box(0, 0, 10, 10),
+            box(0, 10, 7, 20),
+            box(20, 10, 25, 20),
+            box(10, 10, 20, 20),
+            box(3, 10, 10, 20),
+            box(20, 0, 25, 10),
+            box(25, 0, 30, 10),
+            box(30, 10, 40, 20),
+        ],
+        index=[90, 12, 71, 3, 50, 21, 8, 31, 19],
+        crs=mask.rio.crs,
+    )
+    if scenario == "empty":
+        polygons = polygons.iloc[:0].copy()
+        expected.values[~mask.values] = 0.0
+    elif scenario == "inactive":
+        mask.values[:] = True
+        expected.values[:] = np.nan
+    elif scenario == "outside":
+        polygons.geometry = polygons.translate(xoff=1000.0)
+        expected.values[~mask.values] = 0.0
+    if reverse_x:
+        mask = mask.isel(x=slice(None, None, -1))
+        expected = expected.isel(x=slice(None, None, -1))
+    if reverse_y:
+        mask = mask.isel(y=slice(None, None, -1))
+        expected = expected.isel(y=slice(None, None, -1))
+    model: MagicMock = MagicMock()
+    model.logger = logging.getLogger("test")
+    model.grid = {"mask": mask}
+    model.data_catalog.fetch.return_value.read.return_value = polygons
+
+    GroundWater.setup_karst(model)
+
+    model.data_catalog.fetch.assert_called_once_with("wokam")
+    model.set_grid.assert_called_once()
+    assert model.set_grid.call_args.kwargs["name"] == "groundwater/karst_fraction"
+    saved: xr.DataArray = model.set_grid.call_args.args[0]
+    xr.testing.assert_allclose(saved, expected, rtol=1e-7, atol=1e-8)
+    np.testing.assert_array_equal(np.isnan(saved.values), mask.values)
+    assert saved.dtype == np.float32
+    assert saved.rio.crs == mask.rio.crs
+    assert saved.attrs["units"] == "1"

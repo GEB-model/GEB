@@ -25,13 +25,7 @@ def test_hydrology_karst_integration(
         monkeypatch: Fixture replacing unrelated whole-model balance checks.
         coverage: Karst area fraction of the grid cell (0–1).
         tmp_path: Temporary checkpoint directory.
-
-    Returns:
-        None.
-
-    Raises:
-        AssertionError: If routing, storage or checkpoint conservation is incorrect.
-    """  # noqa: DOC202, DOC502
+    """
     capture_fraction: float = 0.5
     release_time_days: float = 10.0
     soil_recharge_m: float = 0.002
@@ -184,3 +178,60 @@ def test_hydrology_karst_integration(
         hydrology.get_karst_storage_m3()
     with pytest.raises(ValueError, match="Rerun spinup"):
         hydrology.karst.step(np.zeros(1, dtype=np.float64))
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [None, {}, {"capture_fraction": 0.5}, {"release_time_days": 20.0}],
+)
+def test_karst_config_defaults(settings: dict[str, float] | None) -> None:
+    """Apply omitted karst defaults before capture and release.
+
+    Args:
+        settings: Explicit karst settings, or None to omit the section.
+            Release time is in days and capture fraction is dimensionless.
+    """
+    model: MagicMock = MagicMock()
+    model.config = {"hydrology": {}}
+    if settings is not None:
+        model.config["hydrology"]["karst"] = settings
+    model.files = {"grid": {"groundwater/karst_fraction": "karst.zarr"}}
+    model.in_spinup = True
+    hydrology: MagicMock = MagicMock()
+    hydrology.grid.load2d.return_value = np.ones(1, dtype=np.float32)
+    hydrology.HRU.var.land_use_type = np.zeros(1, dtype=np.int32)
+    hydrology.to_HRU.return_value = np.ones(1, dtype=np.float32)
+    karst: Karst = Karst(model, hydrology)
+    expected_capture_fraction: float = (settings or {}).get("capture_fraction", 1.0)
+    expected_release_days: float = (settings or {}).get("release_time_days", 10.0)
+    captured_m: np.ndarray
+    soil_m: np.ndarray
+    captured_m, soil_m = karst.capture(
+        np.ones((1, 1), dtype=np.float32),
+        np.zeros((1, 1), dtype=np.float32),
+        np.zeros(1, dtype=np.float32),
+    )
+    np.testing.assert_allclose(captured_m, [expected_capture_fraction])
+    released_m: np.ndarray = karst.step((captured_m + soil_m).astype(np.float64))
+    np.testing.assert_allclose(
+        released_m,
+        [
+            expected_capture_fraction
+            * (1.0 + expected_release_days * np.expm1(-1.0 / expected_release_days))
+        ],
+    )
+
+
+@pytest.mark.parametrize(
+    "settings", [{"capture_fraction": 1.1}, {"release_time_days": 0.0}]
+)
+def test_karst_rejects_invalid_config(settings: dict[str, float]) -> None:
+    """Reject invalid karst settings during initialization.
+
+    Args:
+        settings: Invalid capture fraction (dimensionless) or release time (days).
+    """
+    model: MagicMock = MagicMock()
+    model.config = {"hydrology": {"karst": settings}}
+    with pytest.raises(ValueError):
+        Karst(model, MagicMock())
