@@ -113,12 +113,12 @@ def test_elevation_validation(
 
 
 def test_farmer_migration(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Repair farmers when migrating an existing b36 input to b39.
+    """Repair farmers when migrating an existing b36 input to b37.
 
     Args:
         monkeypatch: Fixture for isolating the current package version.
     """
-    monkeypatch.setattr(version_updates, "__version__", "1.0.0b39")
+    monkeypatch.setattr(version_updates, "__version__", "1.0.0b37")
     builder: Mock = Mock()
     with pytest.raises(RuntimeError, match="Rerun spinup"):
         version_updates.get_and_maybe_do_version_updates(
@@ -128,4 +128,4 @@ def test_farmer_migration(monkeypatch: pytest.MonkeyPatch) -> None:
             logger=logging.getLogger(__name__),
         )
     builder.remove_inactive_farmers.assert_called_once_with()
-    builder.set_version.assert_called_with("1.0.0b39")
+    builder.set_version.assert_called_with("1.0.0b37")

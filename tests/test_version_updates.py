@@ -62,9 +62,9 @@ def test_farmer_repair_failure_propagates(
     Raises:
         AssertionError: If a failed repair updates the input version.
     """  # noqa: DOC202, DOC502
-    monkeypatch.setattr(version_updates, "__version__", "1.0.0b39")
+    monkeypatch.setattr(version_updates, "__version__", "1.0.0b37")
     monkeypatch.setattr(
-        version_updates, "VERSION_UPDATES", {"1.0.0b39": ["[remove-inactive-farmers]"]}
+        version_updates, "VERSION_UPDATES", {"1.0.0b37": ["[remove-inactive-farmers]"]}
     )
     builder: Mock = Mock()
     if repair_fails:
@@ -82,5 +82,5 @@ def test_farmer_repair_failure_propagates(
             )
             == []
         )
-        builder.set_version.assert_called_once_with("1.0.0b39")
+        builder.set_version.assert_called_once_with("1.0.0b37")
     builder.remove_inactive_farmers.assert_called_once_with()

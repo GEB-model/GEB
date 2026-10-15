@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from geb.build import GEBModel as GEBModelBuild
 
 VERSION_UPDATES: dict[str, list[str]] = {
-    "1.0.0b39": [
+    "1.0.0b37": [
         "[remove-inactive-farmers]",
         "[manual] Rerun spinup and simulation after repairing farmer IDs; saved states use the previous farmer IDs.",
     ],

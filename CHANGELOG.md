@@ -1,4 +1,4 @@
-# v1.0.0b39
+# dev
 - Remove farmers without land in the active grid and compact their IDs and attribute arrays together. `geb update-version -b build.yml` repairs existing inputs; rerun spinup and simulation afterward because saved states use the old farmer IDs.
 - Stop when automatic input migrations fail.
 
