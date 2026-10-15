@@ -708,6 +708,7 @@ class HRUVariables(Bucket):
     lambda_pore_size_distribution: TwoDArrayFloat32
     saturated_hydraulic_conductivity_m_per_s: TwoDArrayFloat32
     organic_matter_percentage: TwoDArrayFloat32
+    soil_organic_carbon_percentage: TwoDArrayFloat32
     bulk_density_kg_per_dm3: TwoDArrayFloat32
     thermal_conductivity_saturated_unfrozen_W_per_m_K: TwoDArrayFloat32
     thermal_conductivity_saturated_frozen_W_per_m_K: TwoDArrayFloat32

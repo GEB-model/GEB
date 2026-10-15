@@ -1,13 +1,15 @@
 """Soil water flow functions."""
 
+from typing import NamedTuple
+
 import numpy as np
 from numba import njit
 
-from geb.geb_types import ArrayFloat32, Shape, TwoDArrayFloat64
+from geb.geb_types import ArrayFloat32, Shape, TwoDArrayBool, TwoDArrayFloat64
 from geb.hydrology import TwoDArrayFloat32
 
 from ..landcovers import OPEN_WATER, PADDY_IRRIGATED, SEALED
-from .constants import N_SOIL_LAYERS
+from .constants import N_SOIL_LAYERS, N_TOP_SOIL_LAYERS
 from .energy import (
     apply_rain_heat_advection,
     get_temperature_and_frozen_fraction_from_enthalpy_scalar,
@@ -1301,3 +1303,160 @@ def kv_cosby(
     kv = ks_in_hr * INCH_TO_M / HOUR_TO_S
 
     return kv.astype(np.float32)
+
+
+def get_is_top_soil_mask(
+    shape: tuple[int, int],
+) -> np.ndarray[Shape, np.dtype[np.bool_]]:
+    """Build the top-soil mask shared by all pedotransfer calls.
+
+    The first ``N_TOP_SOIL_LAYERS`` layers (top 30 cm) are considered top soil.
+
+    Args:
+        shape: Shape of the soil layer arrays, (N_SOIL_LAYERS, N_HRUs).
+
+    Returns:
+        Boolean array of the given shape, True for top soil layers.
+    """
+    is_top_soil = np.zeros(shape, dtype=bool)
+    is_top_soil[:N_TOP_SOIL_LAYERS] = True
+    return is_top_soil
+
+
+class SoilHydraulicProperties(NamedTuple):
+    """The soil hydraulic properties derived from the five primary soil properties.
+
+    The five primary soil properties are soil organic carbon content, bulk
+    density, and sand, silt and clay content. See :func:`calculate_soil_hydraulic_properties`.
+
+    Thermal properties are deliberately not included. They are not hydraulic
+    properties, and are calculated once at model initialization only.
+    """
+
+    water_content_saturated_m: TwoDArrayFloat32
+    water_content_field_capacity_m: TwoDArrayFloat32
+    water_content_wilting_point_m: TwoDArrayFloat32
+    water_content_residual_m: TwoDArrayFloat32
+    saturated_hydraulic_conductivity_m_per_s: TwoDArrayFloat32
+    bubbling_pressure_m_positive: TwoDArrayFloat32
+    lambda_pore_size_distribution: TwoDArrayFloat32
+
+
+def calculate_soil_hydraulic_properties(
+    organic_carbon_percentage: TwoDArrayFloat32,
+    bulk_density_kg_per_dm3: TwoDArrayFloat32,
+    sand_percentage: TwoDArrayFloat32,
+    silt_percentage: TwoDArrayFloat32,
+    clay_percentage: TwoDArrayFloat32,
+    is_top_soil: TwoDArrayBool,
+    soil_layer_height_m: TwoDArrayFloat32,
+    saturated_hydraulic_conductivity_multiplier: np.float32 = np.float32(1.0),
+) -> SoilHydraulicProperties:
+    """Derive all soil hydraulic properties from the five primary soil properties.
+
+    The five primary properties are soil organic carbon content, bulk density,
+    and sand, silt and clay content. Every soil hydraulic property
+    (saturated/field capacity/wilting point/residual water content, saturated
+    hydraulic conductivity, bubbling (air-entry) pressure and the Brooks-Corey
+    pore-size distribution index) is a pedotransfer function of only those five
+    properties, plus static layer geometry.
+
+    This is called both at model initialization (with the properties as
+    loaded from the soil maps) and whenever an HRU's primary soil properties
+    change afterwards, e.g. when the government agent converts an HRU to
+    forest and updates its organic carbon content and bulk density
+    (see ``Government.prepare_modified_soil_maps_for_forest``).
+
+    Soil thermal properties are deliberately out of scope here. They are not
+    hydraulic properties, so they are calculated inline at model
+    initialization and are not recalculated when an HRU is converted.
+
+    Args:
+        organic_carbon_percentage: soil organic carbon content [%].
+        bulk_density_kg_per_dm3: bulk density [kg/dm3].
+        sand_percentage: sand percentage [%].
+        silt_percentage: silt percentage [%].
+        clay_percentage: clay percentage [%].
+        is_top_soil: top soil flag, see :func:`get_is_top_soil_mask`.
+        soil_layer_height_m: thickness of each soil layer [m].
+        saturated_hydraulic_conductivity_multiplier: calibration multiplier
+            applied to the saturated hydraulic conductivity. Defaults to 1.0
+            (no change).
+
+    Returns:
+        The derived soil hydraulic properties.
+    """
+    thetas: TwoDArrayFloat32 = thetas_toth(
+        organic_carbon_percentage=organic_carbon_percentage,
+        bulk_density_kg_per_dm3=bulk_density_kg_per_dm3,
+        is_top_soil=is_top_soil,
+        clay=clay_percentage,
+        silt=silt_percentage,
+    )
+
+    thetar: TwoDArrayFloat32 = thetar_brakensiek(
+        sand=sand_percentage,
+        clay=clay_percentage,
+        thetas=thetas,
+    )
+    bubbling_pressure_m_positive = get_bubbling_pressure_m_positive(
+        clay=clay_percentage,
+        sand=sand_percentage,
+        thetas=thetas,
+    )
+    lambda_pore_size_distribution = get_pore_size_index_brakensiek(
+        sand=sand_percentage,
+        thetas=thetas,
+        clay=clay_percentage,
+    )
+
+    # θ saturation, field capacity, wilting point and residual moisture content
+    thetafc: TwoDArrayFloat32 = get_soil_moisture_at_pressure(
+        np.float32(-1.0),  # assuming field capacity is at -100 cm (pF 2) -> 1m
+        bubbling_pressure_m_positive,
+        thetas,
+        thetar,
+        lambda_pore_size_distribution,
+    )
+
+    thetawp: TwoDArrayFloat32 = get_soil_moisture_at_pressure(
+        np.float32(
+            -(10**2.2)
+        ),  # assuming wilting point is at -10^4.2 cm (pF 4.2) -> -10^2.2 m
+        bubbling_pressure_m_positive,
+        thetas,
+        thetar,
+        lambda_pore_size_distribution,
+    )
+
+    water_content_saturated_m = np.asfortranarray(thetas * soil_layer_height_m)
+    water_content_field_capacity_m = np.asfortranarray(thetafc * soil_layer_height_m)
+    water_content_wilting_point_m = np.asfortranarray(thetawp * soil_layer_height_m)
+    water_content_residual_m = np.asfortranarray(thetar * soil_layer_height_m)
+
+    assert (water_content_residual_m > 0).all()
+    assert (water_content_wilting_point_m > water_content_residual_m).all()
+    assert (water_content_field_capacity_m > water_content_wilting_point_m).all()
+    assert (water_content_saturated_m > water_content_field_capacity_m).all()
+    assert (water_content_saturated_m < soil_layer_height_m).all()
+
+    saturated_hydraulic_conductivity_m_per_s = np.asfortranarray(
+        kv_wosten(
+            silt=silt_percentage,
+            clay=clay_percentage,
+            bulk_density_kg_per_dm3=bulk_density_kg_per_dm3,
+            organic_carbon_percentage=organic_carbon_percentage,
+            is_topsoil=is_top_soil,
+        )
+        * saturated_hydraulic_conductivity_multiplier
+    )
+
+    return SoilHydraulicProperties(
+        water_content_saturated_m=water_content_saturated_m,
+        water_content_field_capacity_m=water_content_field_capacity_m,
+        water_content_wilting_point_m=water_content_wilting_point_m,
+        water_content_residual_m=water_content_residual_m,
+        saturated_hydraulic_conductivity_m_per_s=saturated_hydraulic_conductivity_m_per_s,
+        bubbling_pressure_m_positive=bubbling_pressure_m_positive,
+        lambda_pore_size_distribution=lambda_pore_size_distribution,
+    )
