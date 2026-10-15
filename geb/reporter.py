@@ -1091,42 +1091,6 @@ class Reporter:
                                 self.variables_to_report,
                                 {"hydrology.routing": waterworks_reporters},
                             )
-                    elif module_name == "_outflow_points":
-                        if module_values is True:
-                            routing = self.model.hydrology.routing
-                            rivers = routing.get_active_rivers()
-                            all_rivers = routing.var.rivers
-
-                            outflow_reporters = {}
-
-                            for outflow_river_id, river in rivers.iterrows():
-                                assert isinstance(outflow_river_id, int)
-                                xys: list[tuple[int, int]] = (
-                                    get_river_representative_xys(
-                                        outflow_river_id, all_rivers
-                                    )
-                                )
-                                for i, xy in enumerate(xys):
-                                    # if there are multiple branches, we append a suffix to the name
-                                    suffix = f"_{i}" if len(xys) > 1 else ""
-                                    outflow_reporters[
-                                        f"river_outflow_hourly_m3_per_s_{outflow_river_id}{suffix}"
-                                    ] = {
-                                        "varname": "var.discharge_m3_s_per_substep",
-                                        "type": "grid",
-                                        "function": f"sample_xy,{xy[0]},{xy[1]}",
-                                        "substeps": 24,
-                                        "_group": "river_outflow_hourly_m3_per_s",
-                                        "_group_key": f"{outflow_river_id}{suffix}",
-                                    }
-                            self.variables_to_report = multi_level_merge(
-                                self.variables_to_report,
-                                {"hydrology.routing": outflow_reporters},
-                            )
-                            self.variables_to_report = multi_level_merge(
-                                self.variables_to_report,
-                                OUTFLOW_PLOT_CONTEXT_REPORT_CONFIG,
-                            )
                     elif module_name == "_water_circle":
                         if module_values is True:
                             self.variables_to_report = multi_level_merge(
