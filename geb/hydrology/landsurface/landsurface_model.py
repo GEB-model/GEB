@@ -69,14 +69,10 @@ from .snow_glaciers import (
 from .water import (
     FORCING_SOURCE_SIGMA_DEFAULTS,
     add_water_to_topwater_and_evaporate_open_water,
+    calculate_soil_hydraulic_properties,
     generate_rainfall_lookup_table,
-    get_bubbling_pressure_m_positive,
-    get_pore_size_index_brakensiek,
-    get_soil_moisture_at_pressure,
+    get_is_top_soil_mask,
     infiltration,
-    kv_wosten,
-    thetar_brakensiek,
-    thetas_toth,
 )
 
 # Constants for soil radiation
@@ -1921,7 +1917,10 @@ class LandSurface(Module):
         self.HRU.var.soil_layer_height_m = load_soil_layers_to_HRU(
             self.model.files["subgrid"]["soil/soil_layer_height_m"]
         )
-        organic_carbon_percentage = load_soil_layers_to_HRU(
+        # Persisted (not just a local variable) so that it can later be updated
+        # for individual HRUs, e.g. when the government agent converts an HRU to
+        # forest, and the soil hydraulic properties recalculated from it.
+        self.HRU.var.soil_organic_carbon_percentage = load_soil_layers_to_HRU(
             self.model.files["subgrid"]["soil/soil_organic_carbon_percentage"],
         )
         self.HRU.var.bulk_density_kg_per_dm3 = load_soil_layers_to_HRU(
@@ -1944,10 +1943,9 @@ class LandSurface(Module):
 
         # Prepare soil properties for pedotransfer functions, accounting for compaction in sealed areas
         # Top 30 cm is considered topsoil for unsealed areas (layers 0, 1, 2)
-        is_top_soil: TwoDArrayBool = np.zeros_like(
-            self.HRU.var.clay_percentage, dtype=bool
+        is_top_soil: TwoDArrayBool = get_is_top_soil_mask(
+            self.HRU.var.clay_percentage.shape
         )
-        is_top_soil[0:3, :] = True
         # For sealed surfaces, top layer lacks topsoil organic/root structure
         is_top_soil[:, is_sealed] = False
 
@@ -1961,83 +1959,59 @@ class LandSurface(Module):
         )
 
         organic_carbon_pedotransfer: TwoDArrayFloat32 = np.copy(
-            organic_carbon_percentage
+            self.HRU.var.soil_organic_carbon_percentage
         )
         # Construction/paving reduces top-layer organic matter
         organic_carbon_pedotransfer[0, is_sealed] = np.float32(0.1)
 
-        thetas: TwoDArrayFloat32 = thetas_toth(
+        # All soil hydraulic properties are pedotransfer functions of only the
+        # five primary soil properties (soil organic carbon, bulk density, sand,
+        # silt and clay) plus static layer geometry. This same function is
+        # called again later for individual HRUs whenever those primary
+        # properties change, e.g. on reforestation
+        # (see Government.prepare_modified_soil_maps_for_forest).
+        # The calibration multiplier is applied below, after the sealed-surface
+        # compaction, to keep the original order of operations.
+        soil_hydraulic_properties = calculate_soil_hydraulic_properties(
             organic_carbon_percentage=organic_carbon_pedotransfer,
             bulk_density_kg_per_dm3=self.HRU.var.bulk_density_kg_per_dm3,
+            sand_percentage=self.HRU.var.sand_percentage,
+            silt_percentage=self.HRU.var.silt_percentage,
+            clay_percentage=self.HRU.var.clay_percentage,
             is_top_soil=is_top_soil,
-            clay=self.HRU.var.clay_percentage,
-            silt=self.HRU.var.silt_percentage,
+            soil_layer_height_m=self.HRU.var.soil_layer_height_m,
+            saturated_hydraulic_conductivity_multiplier=np.float32(1.0),
         )
 
-        thetar: TwoDArrayFloat32 = thetar_brakensiek(
-            sand=self.HRU.var.sand_percentage,
-            clay=self.HRU.var.clay_percentage,
-            thetas=thetas,
+        self.HRU.var.water_content_saturated_m = (
+            soil_hydraulic_properties.water_content_saturated_m
         )
-        self.HRU.var.bubbling_pressure_m_positive = get_bubbling_pressure_m_positive(
-            clay=self.HRU.var.clay_percentage,
-            sand=self.HRU.var.sand_percentage,
-            thetas=thetas,
+        self.HRU.var.water_content_field_capacity_m = (
+            soil_hydraulic_properties.water_content_field_capacity_m
         )
-        self.HRU.var.lambda_pore_size_distribution = get_pore_size_index_brakensiek(
-            sand=self.HRU.var.sand_percentage,
-            thetas=thetas,
-            clay=self.HRU.var.clay_percentage,
+        self.HRU.var.water_content_wilting_point_m = (
+            soil_hydraulic_properties.water_content_wilting_point_m
         )
-
-        # θ saturation, field capacity, wilting point and residual moisture content
-        thetafc: TwoDArrayFloat32 = get_soil_moisture_at_pressure(
-            np.float32(-1.0),  # assuming field capacity is at -100 cm (pF 2) -> 1m
-            self.HRU.var.bubbling_pressure_m_positive,
-            thetas,
-            thetar,
-            self.HRU.var.lambda_pore_size_distribution,
+        self.HRU.var.water_content_residual_m = (
+            soil_hydraulic_properties.water_content_residual_m
         )
-
-        thetawp: TwoDArrayFloat32 = get_soil_moisture_at_pressure(
-            np.float32(
-                -(10**2.2)
-            ),  # assuming wilting point is at -10^4.2 cm (pF 4.2) -> -10^2.2 m
-            self.HRU.var.bubbling_pressure_m_positive,
-            thetas,
-            thetar,
-            self.HRU.var.lambda_pore_size_distribution,
+        self.HRU.var.bubbling_pressure_m_positive = (
+            soil_hydraulic_properties.bubbling_pressure_m_positive
+        )
+        self.HRU.var.lambda_pore_size_distribution = (
+            soil_hydraulic_properties.lambda_pore_size_distribution
+        )
+        self.HRU.var.saturated_hydraulic_conductivity_m_per_s = (
+            soil_hydraulic_properties.saturated_hydraulic_conductivity_m_per_s
+        )
+        # Apply structural compaction multiplier for sealed topsoil (destruction of macropores)
+        self.HRU.var.saturated_hydraulic_conductivity_m_per_s[0, is_sealed] *= (
+            np.float32(0.1)
         )
 
-        self.HRU.var.water_content_saturated_m = np.asfortranarray(
-            thetas * self.HRU.var.soil_layer_height_m
-        )
-        self.HRU.var.water_content_field_capacity_m = np.asfortranarray(
-            thetafc * self.HRU.var.soil_layer_height_m
-        )
-        self.HRU.var.water_content_wilting_point_m = np.asfortranarray(
-            thetawp * self.HRU.var.soil_layer_height_m
-        )
-        self.HRU.var.water_content_residual_m = np.asfortranarray(
-            thetar * self.HRU.var.soil_layer_height_m
-        )
-
-        assert (self.HRU.var.water_content_residual_m > 0).all()
-        assert (
-            self.HRU.var.water_content_wilting_point_m
-            > self.HRU.var.water_content_residual_m
-        ).all()
-        assert (
-            self.HRU.var.water_content_field_capacity_m
-            > self.HRU.var.water_content_wilting_point_m
-        ).all()
-        assert (
-            self.HRU.var.water_content_saturated_m
-            > self.HRU.var.water_content_field_capacity_m
-        ).all()
-        assert (
-            self.HRU.var.water_content_saturated_m < self.HRU.var.soil_layer_height_m
-        ).all()
+        self.HRU.var.saturated_hydraulic_conductivity_m_per_s *= self.model.config[
+            "parameters"
+        ]["saturated_hydraulic_conductivity_multiplier"]  # calibration parameter
 
         self.HRU.var.water_content_m = np.asfortranarray(
             np.where(
@@ -2056,32 +2030,6 @@ class LandSurface(Module):
         self.HRU.var.daily_reference_evapotranspiration_grass_m = (
             self.HRU.full_compressed(0.003, dtype=np.float32)
         )
-
-        # self.HRU.var.saturated_hydraulic_conductivity_m_per_s: TwoDArrayFloat32 = (
-        #     kv_brakensiek(thetas=thetas, clay=self.HRU.var.clay, sand=self.HRU.var.sand)
-        # )
-
-        # self.HRU.var.saturated_hydraulic_conductivity_m_per_s: TwoDArrayFloat32 = kv_cosby(
-        #     sand=self.HRU.var.sand, clay=self.HRU.var.clay
-        # )
-
-        self.HRU.var.saturated_hydraulic_conductivity_m_per_s = np.asfortranarray(
-            kv_wosten(
-                silt=self.HRU.var.silt_percentage,
-                clay=self.HRU.var.clay_percentage,
-                bulk_density_kg_per_dm3=self.HRU.var.bulk_density_kg_per_dm3,
-                organic_carbon_percentage=organic_carbon_pedotransfer,
-                is_topsoil=is_top_soil,
-            )
-        )
-        # Apply structural compaction multiplier for sealed topsoil (destruction of macropores)
-        self.HRU.var.saturated_hydraulic_conductivity_m_per_s[0, is_sealed] *= (
-            np.float32(0.1)
-        )
-
-        self.HRU.var.saturated_hydraulic_conductivity_m_per_s *= self.model.config[
-            "parameters"
-        ]["saturated_hydraulic_conductivity_multiplier"]  # calibration parameter
 
         self.HRU.var.wetting_front_depth_m = np.full_like(self.HRU.var.topwater_m, 0.0)
         self.HRU.var.wetting_front_moisture_deficit = np.full_like(
