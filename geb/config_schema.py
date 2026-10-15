@@ -790,11 +790,6 @@ class ReportConfig(BaseModel):
         alias="_meteorological_stations",
         description="Whether to report meteorological stations.",
     )
-    outflow_points: bool = Field(
-        True,
-        alias="_outflow_points",
-        description="Whether to report outflow points.",
-    )
 
 
 class ParametersConfig(BaseModel):

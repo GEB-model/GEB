@@ -256,7 +256,6 @@ report:
   _bankfull_depths: true
   _retention_basins: false
   _meteorological_stations: true
-  _outflow_points: true
 
 parameters:
   mannings_n_multiplier: 1.0
