@@ -1,237 +1,189 @@
-"""Test karst routing, water conservation and saved storage."""
+"""Unit tests for karst capture, release and storage conservation."""
 
-from pathlib import Path
-from typing import cast
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 
-from geb.hydrology import Hydrology
-from geb.hydrology.HRUs import GridVariables
+from geb.geb_types import TwoDArrayFloat32
 from geb.hydrology.karst import Karst
-from geb.store import Store
+from geb.hydrology.landcovers import ALL_LAND_COVER_TYPES
+
+
+@pytest.fixture
+def karst() -> Karst:
+    """Create a karst module with six land covers across two grid cells.
+
+    Returns:
+        A karst module with equal HRU areas and otherwise isolated dependencies.
+    """
+    model: MagicMock = MagicMock()
+    model.config = {"hydrology": {}}
+    model.files = {"grid": {"groundwater/karst_fraction": "karst.zarr"}}
+    model.in_spinup = True
+    hydrology: MagicMock = MagicMock()
+    hydrology.grid.var = SimpleNamespace()
+    hydrology.grid.load2d.return_value = np.ones(2, dtype=np.float32)
+    hydrology.HRU.var.land_use_type = np.array(ALL_LAND_COVER_TYPES)
+    hydrology.to_HRU.side_effect = lambda *, data: np.repeat(data, 3)
+    hydrology.to_grid.side_effect = lambda *, HRU_data: HRU_data.reshape(2, 3).mean(
+        axis=1
+    )
+    return Karst(model, hydrology)
 
 
 @pytest.mark.parametrize("coverage", [0.0, 0.6, 1.0])
-def test_hydrology_karst_integration(
-    monkeypatch: pytest.MonkeyPatch,
-    coverage: float,
-    tmp_path: Path,
-) -> None:
-    """Delay karst recharge and conserve water at zero and full coverage.
+@pytest.mark.parametrize("capture_fraction", [0.0, 0.5, 1.0])
+def test_karst_step(karst: Karst, coverage: float, capture_fraction: float) -> None:
+    """Capture only eligible land flows and conserve water across both grids.
 
     Args:
-        monkeypatch: Fixture replacing unrelated whole-model balance checks.
-        coverage: Karst area fraction of the grid cell (0–1).
-        tmp_path: Temporary checkpoint directory.
+        karst: Isolated karst module with all six land-cover types.
+        coverage: Dimensionless karst coverage (0–1).
+        capture_fraction: Dimensionless runoff and interflow capture (0–1).
     """
-    capture_fraction: float = 0.5
-    release_time_days: float = 10.0
-    soil_recharge_m: float = 0.002
-    monkeypatch.setattr("geb.hydrology.balance_check", MagicMock())
-    hydrology: Hydrology = Hydrology.__new__(Hydrology)
-    hydrology.model = MagicMock()
-    hydrology.model.config = {
-        "hydrology": {
-            "karst": {
-                "capture_fraction": capture_fraction,
-                "release_time_days": release_time_days,
-            }
-        },
-        "hazards": {"floods": {"simulate": False}},
-    }
-    hydrology.model.timing = False
-    hydrology.model.reporter.variables_to_report = {
-        "hydrology": {
-            "karst_recharge": {"varname": ".karst_recharge_m"},
-            "karst_capture": {"varname": ".karst_capture_m"},
-            "karst_soil_recharge": {"varname": ".karst_soil_recharge_m"},
-        }
-    }
-    hydrology.model.agents.reservoir_operators.command_area_release_m3 = np.zeros(1)
-    hydrology.HRU = MagicMock()
-    hydrology.HRU.var.land_use_type = np.arange(6)
-    hydrology.HRU.var.cell_area = np.ones(6)
-    hydrology.grid = MagicMock()
-    hydrology.model.hydrology = hydrology
-    store: Store = Store(hydrology.model)
-    hydrology.grid.var = cast(GridVariables, store.create_bucket("hydrology.grid.var"))
-    hydrology.grid.var.cell_area = np.array([6.0], dtype=np.float32)
-    hydrology.grid.var.capillar = np.zeros(1, dtype=np.float32)
-    hydrology.grid.compressed_size = 1
-    hydrology.model.in_spinup = True
-    hydrology.model.files = {"grid": {"groundwater/karst_fraction": "karst.zarr"}}
-    hydrology.grid.load2d.return_value = np.array([coverage], dtype=np.float32)
-    hydrology.karst = Karst(hydrology.model, hydrology)
-    hydrology.to_HRU = MagicMock(return_value=np.full(6, coverage, dtype=np.float32))
-    hydrology.to_grid = MagicMock(
-        side_effect=lambda *, HRU_data: HRU_data.mean(axis=-1, keepdims=True)
+    # Different coverage and initial storage in each cell expose swapped indices.
+    karst.karst_fraction[:] = [coverage, coverage / 2]
+    karst.storage_m[:] = [0.01, 0.02]
+    karst.model.config["hydrology"]["karst"]["capture_fraction"] = capture_fraction
+    runoff_m: np.ndarray = np.full((24, 6), 0.001, dtype=np.float32)
+    interflow_m: np.ndarray = np.full((24, 6), 0.0005, dtype=np.float32)
+    soil_m: np.ndarray = np.full(6, 0.002, dtype=np.float32)
+    previous_storage_m: np.ndarray = karst.storage_m.copy()
+    # Sealed and open-water HRUs (the last two) must retain all their input flows.
+    eligible_fraction: np.ndarray = np.array(
+        [coverage, coverage, coverage, coverage / 2, 0.0, 0.0]
     )
-    hydrology.get_landsurface_storage_m3 = MagicMock(return_value=np.float64(0))
-    hydrology.get_overland_flow_buffer_storage_m3 = MagicMock(
-        return_value=np.float64(0)
+    expected_capture_m: np.ndarray = 0.036 * eligible_fraction * capture_fraction
+    expected_soil_m: np.ndarray = 0.002 * eligible_fraction
+    expected_inflow_m: np.ndarray = np.array(
+        [
+            0.036 * coverage * capture_fraction + 0.002 * coverage,
+            (0.036 * coverage * capture_fraction + 0.002 * coverage) / 6,
+        ]
     )
-    hydrology.get_routing_storage_m3 = MagicMock(return_value=np.float64(0))
-    hydrology.get_waterbodies_storage_m3 = MagicMock(return_value=np.float64(0))
-    hydrology.get_groundwater_storage_m3 = MagicMock(return_value=np.float64(0))
-    hydrology.waterbodies = MagicMock()
-    hydrology.landsurface = MagicMock()
-    hydrology.landsurface.step.return_value = (
-        np.zeros((24, 1), dtype=np.float32),
-        np.full((24, 6), 0.0005, dtype=np.float32),
-        np.full((24, 6), 0.001, dtype=np.float32),
-        np.full(6, soil_recharge_m, dtype=np.float32),
-        np.zeros(6, dtype=np.float32),
-        np.zeros(1),
-        np.zeros(1),
-        np.zeros(1),
-        0.0,
-        np.zeros(6),
-        np.zeros(6),
-        np.float64(0),
-    )
-    hydrology.groundwater = MagicMock()
-    hydrology.groundwater.step.return_value = np.zeros(1, dtype=np.float32)
-    hydrology.groundwater.boundary_inflow_m3 = np.float64(0)
-    hydrology.groundwater.boundary_outflow_m3 = np.float64(0)
-    hydrology.runoff_concentrator = MagicMock()
-    hydrology.runoff_concentrator.step.return_value = np.zeros(
-        (24, 1), dtype=np.float32
-    )
-    hydrology.routing = MagicMock()
-    hydrology.routing.step.return_value = (0.0, 0.0, 0.0)
-    hydrology.hillslope_erosion = MagicMock()
-    hydrology.report = MagicMock()
+    recharge_m: np.ndarray
+    captured_m: np.ndarray
+    captured_soil_m: np.ndarray
+    recharge_m, captured_m, captured_soil_m = karst.step(runoff_m, interflow_m, soil_m)
 
-    hydrology.step()
-
-    assert all(
-        call.kwargs["HRU_data"].dtype == np.float32
-        for call in hydrology.to_grid.call_args_list
-    )
-    recharge: np.ndarray = hydrology.groundwater.step.call_args.kwargs[
-        "groundwater_recharge_m"
-    ]
-    runoff: np.ndarray = hydrology.runoff_concentrator.step.call_args.kwargs["runoff_m"]
-    interflow: np.ndarray = hydrology.runoff_concentrator.step.call_args.kwargs[
-        "interflow_m"
-    ]
+    np.testing.assert_allclose(captured_m, expected_capture_m, rtol=1e-6)
+    np.testing.assert_allclose(captured_soil_m, expected_soil_m, rtol=1e-6)
     np.testing.assert_allclose(
-        recharge
-        + runoff.sum(axis=0)
-        + interflow.sum(axis=0)
-        + hydrology.grid.var.karst_storage_m,
-        [0.036 + soil_recharge_m],
+        runoff_m,
+        np.broadcast_to(0.001 * (1 - eligible_fraction * capture_fraction), (24, 6)),
         rtol=1e-6,
     )
-    expected_capture_m: float = 0.036 * coverage * capture_fraction
-    expected_soil_capture_m: float = soil_recharge_m * coverage
-    expected_inflow_m: float = (expected_capture_m + expected_soil_capture_m) * 4 / 6
-    expected_release_m: float = expected_inflow_m * (
-        1.0 - release_time_days * -np.expm1(-1.0 / release_time_days)
-    )
     np.testing.assert_allclose(
-        recharge,
-        [soil_recharge_m - expected_soil_capture_m * 4 / 6 + expected_release_m],
+        interflow_m,
+        np.broadcast_to(0.0005 * (1 - eligible_fraction * capture_fraction), (24, 6)),
         rtol=1e-6,
     )
-    captured: np.ndarray = hydrology.report.call_args.args[0]["karst_capture_m"]
-    np.testing.assert_allclose(captured[:4], expected_capture_m, rtol=1e-6)
-    np.testing.assert_array_equal(captured[4:], 0)
-    soil_captured: np.ndarray = hydrology.report.call_args.args[0][
-        "karst_soil_recharge_m"
-    ]
-    np.testing.assert_allclose(soil_captured[:4], expected_soil_capture_m)
-    np.testing.assert_array_equal(soil_captured[4:], 0)
+    np.testing.assert_allclose(soil_m, 0.002 - expected_soil_m, rtol=1e-6)
+    # Analytical solution for a one-day step with constant inflow and K = 10 days.
+    expected_storage_m: np.ndarray = previous_storage_m * np.exp(-0.1) + (
+        10.0 * expected_inflow_m * (1 - np.exp(-0.1))
+    )
+    np.testing.assert_allclose(karst.storage_m, expected_storage_m, rtol=1e-6)
     np.testing.assert_allclose(
-        hydrology.get_current_storage(),
-        (expected_inflow_m - expected_release_m) * 6,
+        recharge_m,
+        previous_storage_m + expected_inflow_m - expected_storage_m,
+        rtol=1e-6,
+    )
+    assert recharge_m.dtype == np.float64
+    assert karst.storage_m.dtype == np.float64
+    assert captured_m.dtype == captured_soil_m.dtype == np.float32
+    # Each cell represents three equal-area HRUs; all original water is accounted for.
+    np.testing.assert_allclose(
+        (runoff_m.sum(axis=0) + interflow_m.sum(axis=0) + soil_m)
+        .reshape(2, 3)
+        .mean(axis=1)
+        + recharge_m
+        + karst.storage_m,
+        previous_storage_m + 0.038,
         rtol=1e-6,
     )
 
-    # Dry days must keep releasing stored water, even with capture set to zero.
-    hydrology.model.config["hydrology"]["karst"]["capture_fraction"] = 0.0
-    dry_inputs: list[np.ndarray | float] = list(hydrology.landsurface.step.return_value)
-    dry_inputs[3] = np.zeros(6, dtype=np.float32)
-    hydrology.landsurface.step.return_value = tuple(dry_inputs)
+
+def test_karst_dry_recession(karst: Karst) -> None:
+    """Release existing storage on dry days even when capture is disabled.
+
+    Args:
+        karst: Isolated karst module.
+    """
+    karst.model.config["hydrology"]["karst"]["capture_fraction"] = 0.0
+    karst.storage_m[:] = [0.1, 0.2]
+    initial_storage_m: np.ndarray = karst.storage_m.copy()
+    cumulative_recharge_m: np.ndarray = np.zeros(2)
     for day in range(1, 31):
-        hydrology.step()
+        recharge_m: np.ndarray = karst.step(
+            np.zeros((24, 6), dtype=np.float32),
+            np.zeros((24, 6), dtype=np.float32),
+            np.zeros(6, dtype=np.float32),
+        )[0]
+        cumulative_recharge_m += recharge_m
         np.testing.assert_allclose(
-            hydrology.grid.var.karst_storage_m,
-            np.array([expected_inflow_m - expected_release_m])
-            * np.exp(-day / release_time_days),
-            rtol=1e-6,
-            atol=1e-15,
+            karst.storage_m, initial_storage_m * np.exp(-day / 10.0)
         )
-        if day == 15:
-            saved_storage_m: np.ndarray = hydrology.grid.var.karst_storage_m.copy()
-            store.save(tmp_path / "checkpoint", metadata={})
-            store.load(tmp_path / "checkpoint")
-            np.testing.assert_array_equal(
-                hydrology.grid.var.karst_storage_m, saved_storage_m
-            )
+        np.testing.assert_allclose(
+            karst.storage_m + cumulative_recharge_m, initial_storage_m
+        )
 
-    # Missing checkpoint storage must give a clear error before any water is routed.
-    del hydrology.grid.var.karst_storage_m
-    with pytest.raises(ValueError, match="Rerun spinup"):
-        hydrology.get_karst_storage_m3()
-    with pytest.raises(ValueError, match="Rerun spinup"):
-        hydrology.karst.step(np.zeros(1, dtype=np.float64))
+
+def test_karst_preserves_loaded_storage(karst: Karst) -> None:
+    """Reuse checkpoint storage when initializing outside spinup.
+
+    Args:
+        karst: Isolated karst module.
+    """
+    karst.storage_m[:] = [0.1, 0.2]
+    karst.model.in_spinup = False
+    restored: Karst = Karst(karst.model, karst.hydrology)
+    assert restored.storage_m is karst.storage_m
+    np.testing.assert_array_equal(restored.storage_m, [0.1, 0.2])
 
 
 @pytest.mark.parametrize(
     "settings",
     [None, {}, {"capture_fraction": 0.5}, {"release_time_days": 20.0}],
 )
-def test_karst_config_defaults(settings: dict[str, float] | None) -> None:
-    """Apply omitted karst defaults before capture and release.
+def test_karst_config_defaults(karst: Karst, settings: dict[str, float] | None) -> None:
+    """Resolve missing defaults and preserve explicitly configured values.
 
     Args:
-        settings: Explicit karst settings, or None to omit the section.
-            Release time is in days and capture fraction is dimensionless.
+        karst: Isolated karst module.
+        settings: Explicit settings, or None to omit the section. Capture is
+            dimensionless and release time is in days.
     """
-    model: MagicMock = MagicMock()
-    model.config = {"hydrology": {}}
+    karst.model.config = {"hydrology": {}}
     if settings is not None:
-        model.config["hydrology"]["karst"] = settings
-    model.files = {"grid": {"groundwater/karst_fraction": "karst.zarr"}}
-    model.in_spinup = True
-    hydrology: MagicMock = MagicMock()
-    hydrology.grid.load2d.return_value = np.ones(1, dtype=np.float32)
-    hydrology.HRU.var.land_use_type = np.zeros(1, dtype=np.int32)
-    hydrology.to_HRU.return_value = np.ones(1, dtype=np.float32)
-    karst: Karst = Karst(model, hydrology)
-    expected_capture_fraction: float = (settings or {}).get("capture_fraction", 1.0)
-    expected_release_days: float = (settings or {}).get("release_time_days", 10.0)
-    captured_m: np.ndarray
-    soil_m: np.ndarray
-    captured_m, soil_m = karst.capture(
-        np.ones((1, 1), dtype=np.float32),
-        np.zeros((1, 1), dtype=np.float32),
-        np.zeros(1, dtype=np.float32),
-    )
-    np.testing.assert_allclose(captured_m, [expected_capture_fraction])
-    released_m: np.ndarray = karst.step((captured_m + soil_m).astype(np.float64))
+        karst.model.config["hydrology"]["karst"] = settings
+    initialized: Karst = Karst(karst.model, karst.hydrology)
+    expected_capture: float = (settings or {}).get("capture_fraction", 1.0)
+    expected_days: float = (settings or {}).get("release_time_days", 10.0)
+    runoff_m: TwoDArrayFloat32 = np.ones((1, 6), dtype=np.float32)
+    recharge_m: np.ndarray = initialized.step(
+        runoff_m, np.zeros((1, 6), dtype=np.float32), np.zeros(6, dtype=np.float32)
+    )[0]
     np.testing.assert_allclose(
-        released_m,
-        [
-            expected_capture_fraction
-            * (1.0 + expected_release_days * np.expm1(-1.0 / expected_release_days))
-        ],
+        recharge_m,
+        np.array([expected_capture, expected_capture / 3])
+        * (1.0 - expected_days * (1.0 - np.exp(-1.0 / expected_days))),
+        rtol=1e-6,
     )
 
 
 @pytest.mark.parametrize(
     "settings", [{"capture_fraction": 1.1}, {"release_time_days": 0.0}]
 )
-def test_karst_rejects_invalid_config(settings: dict[str, float]) -> None:
+def test_karst_rejects_invalid_config(karst: Karst, settings: dict[str, float]) -> None:
     """Reject invalid karst settings during initialization.
 
     Args:
+        karst: Isolated karst module.
         settings: Invalid capture fraction (dimensionless) or release time (days).
     """
-    model: MagicMock = MagicMock()
-    model.config = {"hydrology": {"karst": settings}}
+    karst.model.config = {"hydrology": {"karst": settings}}
     with pytest.raises(ValueError):
-        Karst(model, MagicMock())
+        Karst(karst.model, karst.hydrology)

@@ -42,7 +42,7 @@ The groundwater simulation proceeds in the following steps during each model tim
 Karst is included in every run. WOKAM estimates karst rock coverage using
 82.5% for continuous, 40% for discontinuous and 65% for mixed karst formations ([WOKAM paper](https://doi.org/10.1007/s10040-020-02139-5)).
 
-The karst share of soil drainage, runoff and interflow enters a seperate linear karst store before
+The karst share of soil drainage, runoff and interflow enters a separate linear karst store before
 reaching MODFLOW. Sealed land and open water are excluded.
 
 ```yaml
@@ -52,7 +52,10 @@ hydrology:
     release_time_days: 10.0
 ```
 
-Run `setup_karst` to build the karst storage. 
+`release_time_days` is the exponential release time: after this many days
+without inflow, `exp(-1)` (about 36.8%) of the initial storage remains.
+
+Run `setup_karst` to build the karst coverage map, then rerun spinup and simulation.
 
 ## Code
 

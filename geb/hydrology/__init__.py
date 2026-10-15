@@ -29,7 +29,6 @@ import numpy as np
 from geb.geb_types import (
     ArrayFloat32,
     ArrayFloat64,
-    TwoDArrayFloat32 as TwoDArrayFloat32,
 )
 from geb.hydrology.HRUs import Data
 from geb.module import Module
@@ -289,7 +288,8 @@ class Hydrology(Data, Module):
 
         karst_capture_m: ArrayFloat32
         karst_soil_recharge_m: ArrayFloat32
-        karst_capture_m, karst_soil_recharge_m = self.karst.capture(
+        karst_recharge_m: ArrayFloat64
+        karst_recharge_m, karst_capture_m, karst_soil_recharge_m = self.karst.step(
             overland_runoff_m, interflow_m, groundwater_recharge_m
         )
 
@@ -299,10 +299,6 @@ class Hydrology(Data, Module):
         capillar_rise_m = self.to_grid(HRU_data=capillar_rise_m)
         self.grid.var.capillar = capillar_rise_m
 
-        karst_inflow_m: ArrayFloat64 = self.to_grid(
-            HRU_data=karst_capture_m + karst_soil_recharge_m
-        ).astype(np.float64)
-        karst_recharge_m: ArrayFloat64 = self.karst.step(karst_inflow_m)
         groundwater_recharge_m += karst_recharge_m.astype(np.float32)
 
         if self.model.config["hazards"]["floods"]["simulate"]:

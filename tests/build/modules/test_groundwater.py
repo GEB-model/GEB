@@ -108,15 +108,17 @@ def test_setup_groundwater_creates_boundary_heads() -> None:
     assert not np.isnan(boundary_layer_elev.values[:, boundary_mask.values]).any()
 
 
+@pytest.mark.parametrize("lazy_mask", [False, True])
 @pytest.mark.parametrize("reverse_x", [False, True])
 @pytest.mark.parametrize("reverse_y", [False, True])
 @pytest.mark.parametrize("scenario", ["overlap", "outside", "empty", "inactive"])
 def test_setup_karst_spatial_coverage(
-    reverse_x: bool, reverse_y: bool, scenario: str
+    reverse_x: bool, reverse_y: bool, scenario: str, lazy_mask: bool
 ) -> None:
     """Save weighted polygon coverage in the correct active grid cells.
 
     Args:
+        lazy_mask: Whether to use a Dask-backed mask, as in a loaded model.
         reverse_x: Whether to reverse the grid's horizontal coordinate order.
         reverse_y: Whether to reverse the grid's vertical coordinate order.
         scenario: Overlapping polygons, polygons outside the grid, an empty
@@ -141,7 +143,7 @@ def test_setup_karst_spatial_coverage(
     # Input order and labels deliberately differ from spatial order and rock codes.
     # Two overlapping class-1 polygons must be dissolved before area is counted.
     polygons: gpd.GeoDataFrame = gpd.GeoDataFrame(
-        {"rock_type": [5, 3, 1, 4, 2, 1, 1, 4, 2]},
+        {"karst_fraction": [0.4, 0.825, 0.825, 0.65, 0.4, 0.825, 0.825, 0.65, 0.4]},
         geometry=[
             box(10, 0, 15, 10),
             box(0, 0, 10, 10),
@@ -156,6 +158,7 @@ def test_setup_karst_spatial_coverage(
         index=[90, 12, 71, 3, 50, 21, 8, 31, 19],
         crs=mask.rio.crs,
     )
+    polygons.attrs["source"] = "Synthetic karst map"
     if scenario == "empty":
         polygons = polygons.iloc[:0].copy()
         expected.values[~mask.values] = 0.0
@@ -171,6 +174,8 @@ def test_setup_karst_spatial_coverage(
     if reverse_y:
         mask = mask.isel(y=slice(None, None, -1))
         expected = expected.isel(y=slice(None, None, -1))
+    if lazy_mask:
+        mask = mask.chunk({"y": 1, "x": 2})
     model: MagicMock = MagicMock()
     model.logger = logging.getLogger("test")
     model.grid = {"mask": mask}
@@ -187,3 +192,4 @@ def test_setup_karst_spatial_coverage(
     assert saved.dtype == np.float32
     assert saved.rio.crs == mask.rio.crs
     assert saved.attrs["units"] == "1"
+    assert saved.attrs["source"] == "Synthetic karst map"

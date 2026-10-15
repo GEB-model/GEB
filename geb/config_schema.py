@@ -315,7 +315,7 @@ class KarstConfig(BaseModel):
         10.0,
         gt=0.0,
         allow_inf_nan=False,
-        description="Time for karst storage to fall to 37% without new inflow (days).",
+        description="Exponential release time (days): after this many dry days, exp(-1) of the initial storage remains (about 36.8%).",
     )
 
 

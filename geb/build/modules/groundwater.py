@@ -29,41 +29,33 @@ class GroundWater(BuildModelBase):
 
     @build_method(required=True)
     def setup_karst(self) -> None:
-        """Use WOKAM to estimate how much of each grid cell is karst.
+        """Estimate the karst fraction of each grid cell from polygon coverage.
 
         Notes:
-            Uses WOKAM range midpoints for continuous and discontinuous rocks,
-            and assumes 65% for mixed rocks. Saves ``groundwater/karst_fraction``
-            (0–1), with NaN in inactive cells.
+            Uses the coverage fractions supplied by the karst map adapter.
+            Saves ``groundwater/karst_fraction`` (0–1), with NaN in inactive cells.
 
         Raises:
-            ValueError: If a coordinate reference system is missing, the grid
-                is rotated, or WOKAM has unknown rock classes.
+            ValueError: If active-cell coverage is nonfinite or outside 0–1.
         """
-        # WOKAM codes: 1/3 continuous, 2/5 discontinuous, 4 mixed rocks.
-        rock_fractions: dict[int, float] = {1: 0.825, 2: 0.4, 3: 0.825, 4: 0.65, 5: 0.4}
-        polygons: gpd.GeoDataFrame = self.data_catalog.fetch("wokam").read()
+        karst_polygons: gpd.GeoDataFrame = self.data_catalog.fetch("wokam").read()
         mask: xr.DataArray = self.grid["mask"]
-        if polygons.crs is None or mask.rio.crs is None:
-            raise ValueError("WOKAM polygons and the model grid must have a CRS.")
-        if not polygons["rock_type"].isin(rock_fractions).all():
-            raise ValueError("WOKAM contains unknown rock classes.")
         transform: Affine = mask.rio.transform(recalc=True)
-        if transform.b != 0 or transform.d != 0:
-            raise ValueError("Karst coverage requires an unrotated model grid.")
         # Load before editing values; edits to a lazy array's .values are discarded.
         coverage: xr.DataArray = full_like(
             mask, 0.0, nodata=np.nan, dtype=np.float32
         ).load()
         coverage.values[mask.values] = np.nan
         coverage.attrs["units"] = "1"
-        coverage.attrs["source"] = "WHYMAP WOKAM, BGR, IAH, KIT, UNESCO, 2017"
-        polygons = polygons.to_crs(mask.rio.crs)
+        coverage.attrs.update(karst_polygons.attrs)
+        karst_polygons = karst_polygons.to_crs(mask.rio.crs)
         bounds: tuple[float, float, float, float] = mask.rio.bounds(recalc=True)
-        polygons = polygons.cx[bounds[0] : bounds[2], bounds[1] : bounds[3]].copy()
-        if not polygons.empty:
-            # Merge polygons of the same rock type to avoid counting overlap twice.
-            polygons = polygons.dissolve(by="rock_type").to_crs(6933)
+        karst_polygons = karst_polygons.cx[
+            bounds[0] : bounds[2], bounds[1] : bounds[3]
+        ].copy()
+        if not karst_polygons.empty:
+            # Merge polygons with the same fraction to avoid counting overlap twice.
+            karst_polygons = karst_polygons.dissolve(by="karst_fraction").to_crs(6933)
             rows: np.ndarray
             columns: np.ndarray
             rows, columns = np.where(~mask.values)
@@ -76,25 +68,34 @@ class GroundWater(BuildModelBase):
             ).to_crs(6933)
             cell_indices: np.ndarray
             polygon_indices: np.ndarray
-            cell_indices, polygon_indices = polygons.sindex.query(
+            cell_indices, polygon_indices = karst_polygons.sindex.query(
                 cells, predicate="intersects"
             )
-            rock_fraction: np.ndarray = polygons.index.map(rock_fractions).to_numpy(
+            polygon_karst_fraction: np.ndarray = karst_polygons.index.to_numpy(
                 dtype=np.float64
             )
             overlap_area_m2: np.ndarray = shapely.area(
                 shapely.intersection(
-                    cells.array[cell_indices], polygons.geometry.array[polygon_indices]
+                    cells.array[cell_indices],
+                    karst_polygons.geometry.array[polygon_indices],
                 )
             )
             karst_area_m2: np.ndarray = np.bincount(
                 cell_indices,
-                weights=overlap_area_m2 * rock_fraction[polygon_indices],
+                weights=overlap_area_m2 * polygon_karst_fraction[polygon_indices],
                 minlength=len(cells),
             )
             coverage.values[rows, columns] = np.clip(
                 karst_area_m2 / cells.area.to_numpy(), 0.0, 1.0
             ).astype(np.float32)
+        active_coverage: np.ndarray = coverage.values[~mask.values]
+        if (
+            not np.isfinite(active_coverage).all()
+            or ((active_coverage < 0) | (active_coverage > 1)).any()
+        ):
+            raise ValueError(
+                "Active karst coverage must be finite and between 0 and 1."
+            )
         self.set_grid(coverage, name="groundwater/karst_fraction")
 
     @build_method(depends_on=["setup_elevation"], required=True)
