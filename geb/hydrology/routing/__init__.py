@@ -460,6 +460,8 @@ class Routing(Module):
             self.model.files["grid"]["routing/ldd"],
         )
 
+        self.load_weirs()
+
         mask: TwoDArrayBool = ~self.grid.mask
 
         ldd_uncompressed: TwoDArrayUint8 = np.full_like(mask, 255, dtype=self.ldd.dtype)
@@ -544,6 +546,65 @@ class Routing(Module):
 
         if self.model.in_spinup:
             self.spinup()
+
+    def load_weirs(self) -> None:
+        """Load barrier heights and which AMBER dams can open.
+
+        Notes:
+            With routing.weirs disabled, input files are not read or modified.
+            Lakes and reservoirs keep their own flow rules.
+
+        Returns:
+            None. Sets weir heights (m) and instream-dam flags in grid cell order.
+        """  # noqa: DOC202
+        self.instream_dam: ArrayBool = np.zeros_like(self.ldd, dtype=bool)
+        if not self.config.get("weirs", True):
+            # Zero heights remove the raised river sills from routing.
+            self.weir_height_m: ArrayFloat32 = np.zeros_like(self.ldd, dtype=np.float32)
+            return
+
+        self.weir_height_m = self.grid.load2d(
+            self.model.files["grid"]["routing/weir_height_m"]
+        )
+        dam_grid: Path | None = self.model.files["grid"].get("routing/instream_dam")
+        if dam_grid is None:
+            # Read the old grid name too, so existing builds still work.
+            dam_grid = self.model.files["grid"].get("routing/gated_dam")
+        if dam_grid is not None:
+            self.instream_dam = self.grid.load2d(dam_grid)
+
+    def get_active_weirs(self) -> tuple[ArrayFloat32, ArrayBool]:
+        """Select barriers with an active river cell on both sides.
+
+        Returns:
+            Filtered heights (m) and dam flags, preserving stored inputs for
+            subsequent router rebuilds after reservoir activation or river pruning.
+
+        Raises:
+            ValueError: If barrier arrays do not match the active river grid.
+        """
+        heights: ArrayFloat32 = self.weir_height_m
+        dams: ArrayBool = self.instream_dam
+        if heights.shape != self.var.river_ids.shape or dams.shape != heights.shape:
+            raise ValueError("Barrier arrays must match the active river grid.")
+        if not np.any(heights) and not np.any(dams):
+            return heights.copy(), dams.copy()
+
+        cells: ArrayInt64 = np.flatnonzero(self.river_network.mask)
+        downstream: ArrayInt64 = self.river_network.idxs_ds[cells]
+        # The extra False entry handles the network's missing-neighbor index (-1).
+        river: ArrayBool = np.zeros(self.river_network.size + 1, dtype=bool)
+        river[cells] = self.var.river_ids != -1
+        supported: ArrayBool = river[cells] & river[downstream] & (downstream != cells)
+        excluded_count: int = int(
+            np.count_nonzero(~supported & ((heights != 0) | dams))
+        )
+        if excluded_count:
+            self.model.logger.warning(
+                "Disabled %s river barriers without an active river cell on each side.",
+                excluded_count,
+            )
+        return np.where(supported, heights, 0), dams & supported
 
     def load_rivers(
         self,
@@ -703,6 +764,39 @@ class Routing(Module):
         ):
             self.var.rivers[column] = rivers[column]
         self.var.active_rivers = self.get_active_rivers()
+
+    def save_weirs(self) -> None:
+        """Save barrier heights (m) and which dams can open to weir_heights.csv.
+
+        Returns:
+            None.
+
+        Raises:
+            OSError: If the output file cannot be written.
+        """  # noqa: DOC202, DOC502
+        heights: ArrayFloat32 = self.router._weir_height_inertial
+        weir_mask: ArrayBool = heights > 0
+        cells: ArrayInt32 = self.router._inertial_cells[weir_mask]
+        input_heights: ArrayFloat32 = self.weir_height_m[cells]
+        locations: TwoDArrayFloat32 = self.grid.lonlat[cells]
+        grid_rows: np.ndarray
+        grid_columns: np.ndarray
+        grid_rows, grid_columns = np.where(~self.grid.mask)
+        weirs: pd.DataFrame = pd.DataFrame(
+            {
+                "grid_cell_index": cells,
+                "grid_row": grid_rows[cells],
+                "grid_column": grid_columns[cells],
+                "longitude_deg": locations[:, 0],
+                "latitude_deg": locations[:, 1],
+                "river_id": self.var.river_ids[cells],
+                "input_height_m": input_heights,
+                "effective_height_m": heights[weir_mask],
+                "instream_dam": self.router._instream_dam_inertial[weir_mask],
+                "bankfull_depth_m": self.router.bankfull_depth[cells],
+            }
+        )
+        weirs.to_csv(self.model.output_folder / "weir_heights.csv", index=False)
 
     def _update_rivers_geometry(
         self,
@@ -1263,6 +1357,7 @@ class Routing(Module):
 
         Raises:
             ValueError: If channel geometry is invalid.
+            OSError: If weir diagnostics cannot be written.
         """  # noqa: DOC202, DOC502
         # A new reservoir changes which cells are rivers. Update these before
         # creating the solver, including when loading a saved model.
@@ -1330,6 +1425,9 @@ class Routing(Module):
             waterbody_outflow_linear
         ].astype(np.float32)
 
+        weir_heights: ArrayFloat32
+        instream_dams: ArrayBool
+        weir_heights, instream_dams = self.get_active_weirs()
         self.router = LocalInertial(
             dt=3600,
             river_network=self.river_network,
@@ -1356,7 +1454,11 @@ class Routing(Module):
             river_storage_alpha=self.var.river_storage_alpha,
             river_storage_beta=self.var.river_storage_beta,
             in_spinup=self.model.in_spinup,
+            weir_height_m=weir_heights,
+            instream_dam=instream_dams,
         )
+
+        self.save_weirs()
 
         if self.model.in_spinup and initialize_storage:
             # Power-law bankfull storage V_bf = length * (W_bf * h_bf / (r + 1)) (m³)
@@ -1664,6 +1766,11 @@ class Routing(Module):
     ]:
         """Perform a daily routing step with multiple substeps.
 
+        Notes:
+            When waterworks reporting is enabled, sample barrier outflow and
+            upstream river inflow (m³/s) each hour and the modeled opening
+            fraction at the end of that hour. Diagnostics do not affect flow.
+
         Args:
             total_runoff_m: Total runoff in meters for each grid cell for each hour.
                 Shape is (24, n_cells).
@@ -1681,6 +1788,26 @@ class Routing(Module):
         Raises:
             ValueError: If inflow is added to waterbody cells.
         """
+        from .waterworks import sample_waterworks
+
+        report_waterworks: bool = any(
+            name.startswith("waterworks_") for name in self.variables_to_report
+        )
+        waterworks_indices: ArrayInt32 = (
+            np.flatnonzero(self.router._weir_height_inertial > 0).astype(np.int32)
+            if report_waterworks
+            else np.empty(0, dtype=np.int32)
+        )
+        waterworks_open_fraction: TwoDArrayFloat32 = np.empty(
+            (24, len(waterworks_indices)), dtype=np.float32
+        )
+        waterworks_outflow_m3_s: TwoDArrayFloat32 = np.empty_like(
+            waterworks_open_fraction
+        )
+        waterworks_inflow_m3_s: TwoDArrayFloat32 = np.empty_like(
+            waterworks_open_fraction
+        )
+
         if __debug__:
             pre_waterbody_storage: np.ndarray = (
                 self.hydrology.waterbodies.var.storage.copy()
@@ -2042,6 +2169,18 @@ class Routing(Module):
             assert not np.isnan(discharge_m3_s_substep[self.var.river_ids != -1]).any()
 
             self.var.discharge_m3_s_per_substep[hour, :] = discharge_m3_s_substep
+            if report_waterworks:
+                (
+                    waterworks_open_fraction[hour],
+                    waterworks_outflow_m3_s[hour],
+                    waterworks_inflow_m3_s[hour],
+                ) = sample_waterworks(
+                    self.router,
+                    self.var.river_storage_m3,
+                    discharge_m3_s_substep,
+                    waterworks_indices,
+                )
+
             retention_basin_storage_m3_substep = self.grid.full_compressed(
                 0, dtype=np.float32
             )

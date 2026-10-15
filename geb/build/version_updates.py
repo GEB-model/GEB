@@ -13,6 +13,11 @@ if TYPE_CHECKING:
     from geb.build import GEBModel as GEBModelBuild
 
 VERSION_UPDATES: dict[str, list[str]] = {
+    "1.0.0b38": [
+        "[update-method;setup_waterbodies]",
+        "[update-method;setup_weirs]",
+        "[manual] Add setup_weirs after setup_waterbodies in custom build files, then rerun spinup and simulation to include GDW and AMBER river barriers.",
+    ],
     "1.0.0b37": [
         "[remove-inactive-farmers]",
         "[update-method;setup_waterbodies]",

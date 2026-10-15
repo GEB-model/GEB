@@ -9,6 +9,10 @@ import numpy as np
 from geb.geb_types import ArrayFloat
 from geb.store import DynamicArray
 
+# Routing fills in these heights once the river depth is known.
+USE_BANKFULL_HEIGHT: float = -2.0
+USE_HALF_BANKFULL_HEIGHT: float = -3.0
+
 
 class TimingModule:
     """A timing module to measure the time taken for different parts of a workflow."""

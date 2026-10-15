@@ -108,3 +108,43 @@ dam qualifies them as reservoirs. A missing GDW match does not justify
 reservoir classification. Saved `waterbody_type` values are 1 (lake) or 2 (reservoir);
 `hydrolakes_type` preserves the original source classification. Rebuild
 `setup_waterbodies` for existing inputs that still contain type 3.
+
+
+## River barriers
+
+Add `setup_weirs` after `setup_waterbodies` in custom build files. The default
+build already includes it. It places GDW and AMBER barriers on valid river links,
+skipping structures already represented by lakes or reservoirs. AMBER points
+must be within 250 m of a represented river; AMBER culverts are excluded.
+
+Positive recorded heights are used in meters. Missing or invalid heights use
+bankfull depth for GDW structures and AMBER dams, weirs, sluices and locks;
+other AMBER types use half bankfull depth. Set `crest_height_m` to a positive,
+finite height (m) to override missing heights:
+
+```yaml
+setup_weirs:
+  crest_height_m: null
+```
+
+`routing/weir_height_m` stores positive heights (m), zero for no barrier, `-2`
+for bankfull depth and `-3` for half bankfull depth. Routing resolves these
+markers after calculating channel geometry. Fixed barriers raise the flow crest
+without changing channel storage. AMBER instream dams open gradually from 10%
+at 65% bankfull depth to 100% at 90% bankfull depth.
+
+Barriers are enabled by default. To disable them, use:
+
+```yaml
+hydrology:
+  routing:
+    weirs: false
+```
+
+Rerun spinup and simulation with the same setting. Lakes, reservoirs and AMBER
+lake classification are unaffected by this switch.
+
+Rebuild `setup_waterbodies` and `setup_weirs` when updating existing inputs, then
+rerun spinup and simulation. Each run writes effective heights and cell locations
+to `output/<run>/weir_heights.csv`. Build diagnostics retain included and excluded
+source points in `input/geom/routing/barriers.geoparquet`.

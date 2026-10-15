@@ -38,6 +38,7 @@ from geb.build.workflows.waterbodies_preprocessing import (
     load_and_enrich_waterbodies,
     snap_waterbody_points,
 )
+from geb.build.workflows.weirs import create_weir_grids
 from geb.geb_types import (
     ArrayBool,
     ArrayFloat32,
@@ -1584,6 +1585,100 @@ class Hydrography(BuildModelBase):
             name="coastal/low_elevation_coastal_zone_mask",
         )
 
+    @build_method(required=True, depends_on=["setup_waterbodies"])
+    def setup_weirs(
+        self,
+        crest_height_m: float | None = None,
+    ) -> None:
+        """Add GDW and AMBER barriers as weirs.
+
+        AMBER points farther than 250 m from the nearest river are excluded.
+        Save all barrier locations and exclusion reasons to routing/barriers.
+
+        Args:
+            crest_height_m: Height to use when the recorded height is missing (m).
+                Use the recorded height if it is available and greater than zero.
+                Missing, zero, negative or infinite heights use this value, or
+                bankfull for AMBER dams, weirs, sluices and locks; half bankfull
+                for fords, ramps and unknown types. Missing GDW height values will use
+                bankfull. AMBER river dams open as the upstream water rises;
+                other barriers stay fixed. Skip culverts, and barriers already
+                included in a lake or reservoir.
+
+        Returns:
+            None.
+
+        Raises:
+            ValueError: If the height override is invalid.
+        """  # noqa: DOC202, DOC502
+        gdw_points: gpd.GeoDataFrame = gpd.GeoDataFrame()
+        if "waterbodies/gdw_checks" in self.geom:
+            # Bracket access reads the file; .get() only returns its path.
+            gdw_points = self.geom["waterbodies/gdw_checks"]
+        region: gpd.GeoDataFrame = self.region.to_crs(4326)
+        amber_points: gpd.GeoDataFrame = self.data_catalog.fetch("amber_barriers").read(
+            bbox=tuple(region.total_bounds)
+        )
+        amber_points = amber_points.loc[
+            amber_points.intersects(region.union_all())
+        ].copy()
+        if "waterbodies/waterbody_data" in self.geom:
+            # Check the lake outlines so a dam on the edge is not counted twice.
+            dams_in_waterbodies: gpd.GeoDataFrame = gpd.sjoin(
+                amber_points.loc[amber_points["dam_type"].eq("Dam"), ["geometry"]],
+                self.geom["waterbodies/waterbody_data"][
+                    ["waterbody_id", "geometry"]
+                ].to_crs(4326),
+                how="inner",
+                predicate="intersects",
+            )
+            dam_waterbody_ids: pd.Series = (
+                dams_in_waterbodies["waterbody_id"].groupby(level=0).first()
+            )
+            amber_points["waterbody_id"] = np.nan
+            amber_points.loc[dam_waterbody_ids.index, "waterbody_id"] = (
+                dam_waterbody_ids
+            )
+        waterbody_id: xr.DataArray = self.grid["waterbodies/waterbody_id"]
+        valid_river_cells: xr.DataArray = (
+            ~self.grid["mask"]
+            & (self.grid["routing/river_ids"] != -1)
+            & (waterbody_id == -1)
+        )
+        downstream_cells: ArrayInt64 = (
+            self.grid["flow_raster_idxs_ds"].values.ravel().astype(np.int64)
+        )
+        cell_indices: ArrayInt64 = np.arange(downstream_cells.size)
+        # A weir needs a river cell on each side.
+        has_downstream_river: npt.NDArray[np.bool_] = (
+            (downstream_cells >= 0)
+            & (downstream_cells < downstream_cells.size)
+            & (downstream_cells != cell_indices)
+        )
+        has_downstream_river &= np.take(
+            valid_river_cells.values.ravel(), downstream_cells, mode="clip"
+        )
+        valid_river_cells = valid_river_cells & has_downstream_river.reshape(
+            valid_river_cells.shape
+        )
+        weir_height_grid: xr.DataArray
+        instream_dam_grid: xr.DataArray
+        barrier_records: gpd.GeoDataFrame
+        weir_height_grid, instream_dam_grid, barrier_records = create_weir_grids(
+            gdw_points=gdw_points,
+            amber_points=amber_points,
+            crest_height_m=crest_height_m,
+            waterbody_id=waterbody_id,
+            rivers=self.geom["routing/rivers"],
+            upstream_area_grid=self.grid["routing/upstream_area_m2"],
+            upstream_area_subgrid=self.other["drainage/original_d8_upstream_area_m2"],
+            valid_river_cells=valid_river_cells,
+            logger=self.logger,
+        )
+        self.set_grid(weir_height_grid, name="routing/weir_height_m")
+        self.set_grid(instream_dam_grid, name="routing/instream_dam")
+        self.set_geom(barrier_records, name="routing/barriers")
+
     @build_method(required=True, depends_on=["setup_hydrography", "setup_elevation"])
     def setup_waterbodies(
         self,
@@ -1595,7 +1690,8 @@ class Hydrography(BuildModelBase):
         """Set up waterbodies, reservoirs, and command areas.
 
         Configure waterbodies and their associated command areas for the model grid.
-        GDW adds dam data and missing reservoirs. Unmatched GDW points remain available in the diagnostic table. It flags differences
+        GDW adds dam data and missing reservoirs. Points outside GDW polygons
+        are handled by setup_weirs. It flags differences
         between its dam types and HydroLAKES lake/reservoir classifications.
         AMBER dams intersecting one lake polygon promote natural or controlled
         lakes to reservoirs, using positive HydroLAKES volume as capacity (m3).
