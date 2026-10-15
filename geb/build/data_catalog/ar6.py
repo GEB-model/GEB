@@ -34,14 +34,14 @@ class AR6(Adapter):
             fetch_and_save(url=url, file_path=self.path, logger=self.logger)
         return self
 
-    def read(self, scenario: str | int, percentile: float) -> xr.DataArray:
+    def read(self, scenario: str | int, percentile: float) -> xr.Dataset:
         """Read the AR6 data.
 
         Args:
             scenario: The SSP scenario to read (e.g., 119, 126, 245, 370, 585).
             percentile: The percentile to read (e.g., 0.5, 0.95, 1.0).
         Returns:
-            The AR6 data as a DataArray.
+            The AR6 data as a Dataset.
         Raises:
             FileNotFoundError: If the specified file is not found in the zip archive.
         """

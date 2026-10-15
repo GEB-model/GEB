@@ -2026,14 +2026,19 @@ class Hydrography(BuildModelBase):
 
         ar6_sea_level_rise_stations: pd.DataFrame = pd.DataFrame(
             data=interpolated_values.T,
-            index=target_years,
+            index=pd.to_datetime([f"{year}-01-01" for year in target_years]),
             columns=gtsm_stations.index,
         )
         self.set_table(ar6_sea_level_rise_stations, name="ar6/sea_level_rise")
 
     @build_method(required=True)
     def setup_gtsm_station_data(self, scenario: int, percentile: float) -> None:
-        """This function sets up COAST-RP and the GTSM station data (surge and waterlevel) for the model."""
+        """Set up COAST-RP and GTSM station data for the model.
+
+        Args:
+            scenario: SSP scenario identifier used for AR6 projections (for example, 245).
+            percentile: AR6 projection quantile as a fraction between 0 and 1.
+        """
         if not self.geom["routing/subbasins"]["is_coastal"].any():
             self.logger.info("No coastal basins found, skipping GTSM hydrographs setup")
             return
