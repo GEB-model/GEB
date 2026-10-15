@@ -66,7 +66,7 @@ __all__ = [
 ALLOW_REVERSE_FLOW: bool = False
 
 # Threshold of reach count above which parallel multi-threading outperforms serial execution
-INERTIAL_PARALLEL_THRESHOLD: int = 5000
+INERTIAL_PARALLEL_THRESHOLD: int = 10000
 
 
 class RoutingStepDiagnostics(NamedTuple):
@@ -127,6 +127,7 @@ class SubstepBuffers(NamedTuple):
     terminal_wb_outflow_accum_m3: ArrayFloat32
     substep_discharge_inertial: ArrayFloat32 = np.empty(0, dtype=np.float32)
     kinematic_inflow_rate_inertial: ArrayFloat32 = np.empty(0, dtype=np.float32)
+    block_min_buf: ArrayFloat32 = np.empty(0, dtype=np.float32)
 
 
 @njit(fastmath=True, parallel=True)
@@ -1119,7 +1120,7 @@ def _route_inertial_retention(
 
 
 @njit(inline="always")
-def _update_continuity_and_stages(
+def _update_continuity_and_cfl(
     n_inertial: int,
     substep_discharge_m3_s: ArrayFloat32,
     kinematic_inflow_rate: ArrayFloat32,
@@ -1133,8 +1134,14 @@ def _update_continuity_and_stages(
     buffers: SubstepBuffers,
     dt_substep: np.float32,
     substep_fraction_f32: np.float32,
-) -> None:
-    """Updates river storage mass balance, evaporation, abstraction, and water stage.
+    dt_f32: np.float32,
+    inv_dt_substep: np.float32,
+    gravity_acceleration: np.float32,
+    block_min_buf: ArrayFloat32,
+) -> np.float32:
+    """Updates mass continuity, abstraction, evaporation, water stage, and evaluates CFL timestep limits.
+
+    Tracks the minimum CFL timestep inline using thread-block local reduction to avoid separate memory passes.
 
     Args:
         n_inertial: Number of reaches in local inertial domain.
@@ -1150,105 +1157,13 @@ def _update_continuity_and_stages(
         buffers: Pre-allocated workspace scratch buffers.
         dt_substep: Duration of current adaptive sub-timestep (seconds).
         substep_fraction_f32: Fraction of macro timestep represented by current substep.
-    """
-    inertial_up_reach_idx = topo.inertial_up_reach_idx
-    inertial_up_offsets = topo.inertial_up_offsets
-    inertial_up_indices = topo.inertial_up_indices
-
-    geom_inbank = geom.geom_inbank
-    geom_overbank = geom.geom_overbank
-
-    wb_release_volume_substep = buffers.wb_release_volume_substep
-    discharge_vol_sum_inertial = buffers.discharge_vol_sum_inertial
-    stage_buf = buffers.stage_buf
-
-    for reach_idx in prange(n_inertial):
-        # Sum upstream inflows
-        inflow_rate: np.float32 = kinematic_inflow_rate[reach_idx]
-
-        upstream_reach_idx: int = inertial_up_reach_idx[reach_idx]
-        if upstream_reach_idx >= 0:
-            inflow_rate += substep_discharge_m3_s[upstream_reach_idx]
-        elif upstream_reach_idx < -1:
-            start_up: int = -upstream_reach_idx - 2
-            end_up: int = inertial_up_offsets[reach_idx + 1]
-            for idx in range(start_up, end_up):
-                inflow_rate += substep_discharge_m3_s[inertial_up_indices[idx]]
-
-        outflow_rate: np.float32 = substep_discharge_m3_s[reach_idx]
-
-        net_flow_volume: np.float32 = (
-            inflow_rate - outflow_rate
-        ) * dt_substep + wb_release_volume_substep[reach_idx]
-        sideflow_volume: np.float32 = (
-            sideflow_m3_inertial[reach_idx] * substep_fraction_f32
-        )
-        current_storage: float = river_storage_m3_inertial[reach_idx]
-
-        if sideflow_volume < np.float32(0.0):
-            abstraction_demand: np.float32 = -sideflow_volume
-            available_for_abstraction: np.float32 = max(
-                np.float32(current_storage) + net_flow_volume, np.float32(0.0)
-            )
-            if abstraction_demand > available_for_abstraction:
-                over_abstraction_m3_inertial[reach_idx] += (
-                    abstraction_demand - available_for_abstraction
-                )
-                sideflow_volume = -available_for_abstraction
-
-        new_storage: float = max(
-            current_storage + float(net_flow_volume + sideflow_volume), 0.0
-        )
-
-        evaporation_volume: np.float32 = (
-            evaporation_m3_inertial[reach_idx] * substep_fraction_f32
-        )
-        actual_evaporation: np.float32 = min(
-            evaporation_volume, np.float32(new_storage)
-        )
-        actual_evaporation_m3_inertial[reach_idx] += actual_evaporation
-        new_storage -= float(actual_evaporation)
-
-        river_storage_m3_inertial[reach_idx] = new_storage
-        discharge_vol_sum_inertial[reach_idx] += outflow_rate * dt_substep
-
-        # Calculate water stage from updated storage volume
-        reach_volume: np.float32 = np.float32(new_storage)
-        stage_buf[reach_idx] = _compute_reach_stage_from_vol(
-            reach_idx, reach_volume, geom_inbank, geom_overbank
-        )
-
-
-@njit(inline="always")
-def _evaluate_cfl_dt_all(
-    n_inertial: int,
-    substep_discharge_m3_s: ArrayFloat32,
-    kinematic_inflow_rate: ArrayFloat32,
-    sideflow_m3_inertial: ArrayFloat32,
-    river_storage_m3_inertial: ArrayFloat64,
-    geom: InertialGeometry,
-    topo: InertialTopology,
-    buffers: SubstepBuffers,
-    dt_f32: np.float32,
-    inv_dt_substep: np.float32,
-    substep_fraction_f32: np.float32,
-    gravity_acceleration: np.float32,
-) -> None:
-    """Evaluates adaptive CFL stability timestep constraints across all inertial reaches.
-
-    Args:
-        n_inertial: Number of reaches in local inertial domain.
-        substep_discharge_m3_s: Primary reach discharge array (m³/s).
-        kinematic_inflow_rate: Upstream inflow rates from kinematic domain (m³/s).
-        sideflow_m3_inertial: Macro-timestep lateral sideflow volume (m³).
-        river_storage_m3_inertial: Primary reach water storage volume array (m³).
-        geom: Static channel and floodplain geometry lookup tables.
-        topo: Network connectivity and topological ordering structure.
-        buffers: Pre-allocated workspace scratch buffers.
         dt_f32: Macro routing timestep duration (seconds).
         inv_dt_substep: Reciprocal of substep duration (1/s).
-        substep_fraction_f32: Fraction of macro timestep represented by current substep.
         gravity_acceleration: Gravitational acceleration constant (m/s²).
+        block_min_buf: Thread-block reduction workspace scratch buffer.
+
+    Returns:
+        Minimum CFL stability timestep duration across all domain reaches (seconds).
     """
     inertial_up_reach_idx = topo.inertial_up_reach_idx
     inertial_up_offsets = topo.inertial_up_offsets
@@ -1259,78 +1174,149 @@ def _evaluate_cfl_dt_all(
     geom_cfl = geom.geom_cfl
 
     wb_release_volume_substep = buffers.wb_release_volume_substep
+    discharge_vol_sum_inertial = buffers.discharge_vol_sum_inertial
+    stage_buf = buffers.stage_buf
     total_flow_rate_buf = buffers.total_flow_rate_buf
     min_dt_buf = buffers.min_dt_buf
 
-    for reach_idx in prange(n_inertial):
-        upstream_reach_idx: int = inertial_up_reach_idx[reach_idx]
-        incoming_upstream_inertial: np.float32 = np.float32(0.0)
-        rev_outflow_upstream: np.float32 = np.float32(0.0)
+    n_blocks: int = min(len(block_min_buf), n_inertial)
+    if n_blocks <= 0:
+        n_blocks = 1
+    block_size: int = (n_inertial + n_blocks - 1) // n_blocks
 
-        if upstream_reach_idx >= 0:
-            q_up: np.float32 = substep_discharge_m3_s[upstream_reach_idx]
-            if q_up >= np.float32(0.0):
-                incoming_upstream_inertial += q_up
-            else:
-                rev_outflow_upstream += -q_up
-        elif upstream_reach_idx < -1:
-            start_up: int = -upstream_reach_idx - 2
-            end_up: int = inertial_up_offsets[reach_idx + 1]
-            for idx in range(start_up, end_up):
-                u_reach: int = inertial_up_indices[idx]
-                q_up = substep_discharge_m3_s[u_reach]
+    for b in prange(n_blocks):
+        start_idx: int = b * block_size
+        end_idx: int = min(start_idx + block_size, n_inertial)
+        b_min: np.float32 = dt_f32
+
+        for reach_idx in range(start_idx, end_idx):
+            # Accumulate upstream tributary flux (decomposed into forward inflow and reverse outflow)
+            upstream_reach_idx: int = inertial_up_reach_idx[reach_idx]
+            incoming_upstream_inertial: np.float32 = np.float32(0.0)
+            rev_outflow_upstream: np.float32 = np.float32(0.0)
+
+            if upstream_reach_idx >= 0:
+                q_up: np.float32 = substep_discharge_m3_s[upstream_reach_idx]
                 if q_up >= np.float32(0.0):
                     incoming_upstream_inertial += q_up
                 else:
                     rev_outflow_upstream += -q_up
+            elif upstream_reach_idx < -1:
+                start_up: int = -upstream_reach_idx - 2
+                end_up: int = inertial_up_offsets[reach_idx + 1]
+                for idx in range(start_up, end_up):
+                    u_reach: int = inertial_up_indices[idx]
+                    q_up = substep_discharge_m3_s[u_reach]
+                    if q_up >= np.float32(0.0):
+                        incoming_upstream_inertial += q_up
+                    else:
+                        rev_outflow_upstream += -q_up
 
-        outflow_rate: np.float32 = substep_discharge_m3_s[reach_idx]
-        if outflow_rate >= np.float32(0.0):
-            outflow_downstream: np.float32 = outflow_rate
-            incoming_downstream_rev: np.float32 = np.float32(0.0)
-        else:
-            outflow_downstream = np.float32(0.0)
-            incoming_downstream_rev = -outflow_rate
+            outflow_rate: np.float32 = substep_discharge_m3_s[reach_idx]
+            if outflow_rate >= np.float32(0.0):
+                outflow_downstream: np.float32 = outflow_rate
+                incoming_downstream_rev: np.float32 = np.float32(0.0)
+            else:
+                outflow_downstream = np.float32(0.0)
+                incoming_downstream_rev = -outflow_rate
 
-        incoming_kinematic: np.float32 = kinematic_inflow_rate[reach_idx]
-        wb_inflow_rate: np.float32 = (
-            wb_release_volume_substep[reach_idx] * inv_dt_substep
-        )
+            incoming_kinematic: np.float32 = kinematic_inflow_rate[reach_idx]
+            wb_inflow_rate: np.float32 = (
+                wb_release_volume_substep[reach_idx] * inv_dt_substep
+            )
 
-        sideflow_rate: np.float32 = (
-            sideflow_m3_inertial[reach_idx] * substep_fraction_f32
-        ) * inv_dt_substep
-        if sideflow_rate >= np.float32(0.0):
-            sideflow_in: np.float32 = sideflow_rate
-            sideflow_out: np.float32 = np.float32(0.0)
-        else:
-            sideflow_in = np.float32(0.0)
-            sideflow_out = -sideflow_rate
+            sideflow_rate: np.float32 = (
+                sideflow_m3_inertial[reach_idx] * substep_fraction_f32
+            ) * inv_dt_substep
+            if sideflow_rate >= np.float32(0.0):
+                sideflow_in: np.float32 = sideflow_rate
+                sideflow_out: np.float32 = np.float32(0.0)
+            else:
+                sideflow_in = np.float32(0.0)
+                sideflow_out = -sideflow_rate
 
-        total_incoming_rate: np.float32 = (
-            incoming_kinematic
-            + incoming_upstream_inertial
-            + incoming_downstream_rev
-            + wb_inflow_rate
-            + sideflow_in
-        )
-        total_outgoing_rate: np.float32 = (
-            outflow_downstream + rev_outflow_upstream + sideflow_out
-        )
+            # 1. Continuity & storage update
+            inflow_rate: np.float32 = (
+                incoming_kinematic + incoming_upstream_inertial - rev_outflow_upstream
+            )
+            net_flow_volume: np.float32 = (
+                inflow_rate - outflow_rate
+            ) * dt_substep + wb_release_volume_substep[reach_idx]
+            sideflow_volume: np.float32 = (
+                sideflow_m3_inertial[reach_idx] * substep_fraction_f32
+            )
+            current_storage: float = river_storage_m3_inertial[reach_idx]
 
-        flow_mag: np.float32 = max(total_incoming_rate, total_outgoing_rate)
-        total_flow_rate_buf[reach_idx] = flow_mag
+            if sideflow_volume < np.float32(0.0):
+                abstraction_demand: np.float32 = -sideflow_volume
+                available_for_abstraction: np.float32 = max(
+                    np.float32(current_storage) + net_flow_volume, np.float32(0.0)
+                )
+                if abstraction_demand > available_for_abstraction:
+                    over_abstraction_m3_inertial[reach_idx] += (
+                        abstraction_demand - available_for_abstraction
+                    )
+                    sideflow_volume = -available_for_abstraction
 
-        min_dt_buf[reach_idx] = _evaluate_reach_cfl_dt(
-            reach_idx=reach_idx,
-            total_flow_rate=flow_mag,
-            current_volume_m3=river_storage_m3_inertial[reach_idx],
-            geom_inbank=geom_inbank,
-            geom_overbank=geom_overbank,
-            geom_cfl=geom_cfl,
-            gravity_acceleration=gravity_acceleration,
-            dt_f32=dt_f32,
-        )
+            new_storage: float = max(
+                current_storage + float(net_flow_volume + sideflow_volume), 0.0
+            )
+
+            evaporation_volume: np.float32 = (
+                evaporation_m3_inertial[reach_idx] * substep_fraction_f32
+            )
+            actual_evaporation: np.float32 = min(
+                evaporation_volume, np.float32(new_storage)
+            )
+            actual_evaporation_m3_inertial[reach_idx] += actual_evaporation
+            new_storage -= float(actual_evaporation)
+
+            river_storage_m3_inertial[reach_idx] = new_storage
+            discharge_vol_sum_inertial[reach_idx] += outflow_rate * dt_substep
+
+            # Calculate water stage from updated storage volume
+            reach_volume: np.float32 = np.float32(new_storage)
+            stage_buf[reach_idx] = _compute_reach_stage_from_vol(
+                reach_idx, reach_volume, geom_inbank, geom_overbank
+            )
+
+            # 2. Dynamic CFL stability evaluation
+            total_incoming_rate: np.float32 = (
+                incoming_kinematic
+                + incoming_upstream_inertial
+                + incoming_downstream_rev
+                + wb_inflow_rate
+                + sideflow_in
+            )
+            total_outgoing_rate: np.float32 = (
+                outflow_downstream + rev_outflow_upstream + sideflow_out
+            )
+
+            flow_mag: np.float32 = max(total_incoming_rate, total_outgoing_rate)
+            total_flow_rate_buf[reach_idx] = flow_mag
+
+            reach_dt: np.float32 = _evaluate_reach_cfl_dt(
+                reach_idx=reach_idx,
+                total_flow_rate=flow_mag,
+                current_volume_m3=new_storage,
+                geom_inbank=geom_inbank,
+                geom_overbank=geom_overbank,
+                geom_cfl=geom_cfl,
+                gravity_acceleration=gravity_acceleration,
+                dt_f32=dt_f32,
+            )
+            min_dt_buf[reach_idx] = reach_dt
+            if reach_dt < b_min:
+                b_min = reach_dt
+
+        block_min_buf[b] = b_min
+
+    min_dt_next: np.float32 = dt_f32
+    for b in range(n_blocks):
+        if block_min_buf[b] < min_dt_next:
+            min_dt_next = block_min_buf[b]
+
+    return min_dt_next
 
 
 @njit(inline="always")
@@ -1427,6 +1413,9 @@ def _run_inertial_substeps(
     )
 
     dt_substep: np.float32 = dt_f32 / np.float32(num_inertial_substeps)
+    block_min_buf: ArrayFloat32 = buffers.block_min_buf
+    if block_min_buf.size == 0:
+        block_min_buf = np.empty(64, dtype=np.float32)
 
     t_elapsed: np.float32 = np.float32(0.0)
     substep_count: int = 0
@@ -1521,8 +1510,8 @@ def _run_inertial_substeps(
             dt_substep=dt_substep,
         )
 
-        # 5. Continuity, Storage & Water Stage Update
-        _update_continuity_and_stages(
+        # 5. Continuity, Storage, Water Stage Update & Dynamic CFL Evaluation with Inline Reduction
+        min_dt_next: np.float32 = _update_continuity_and_cfl(
             n_inertial=n_inertial,
             substep_discharge_m3_s=substep_discharge_m3_s,
             kinematic_inflow_rate=kinematic_inflow_rate,
@@ -1536,25 +1525,13 @@ def _run_inertial_substeps(
             buffers=buffers,
             dt_substep=dt_substep,
             substep_fraction_f32=substep_fraction_f32,
-        )
-
-        # 6. Dynamic Stability & CFL Evaluation
-        _evaluate_cfl_dt_all(
-            n_inertial=n_inertial,
-            substep_discharge_m3_s=substep_discharge_m3_s,
-            kinematic_inflow_rate=kinematic_inflow_rate,
-            sideflow_m3_inertial=sideflow_m3_inertial,
-            river_storage_m3_inertial=river_storage_m3_inertial,
-            geom=geom,
-            topo=topo,
-            buffers=buffers,
             dt_f32=dt_f32,
             inv_dt_substep=inv_dt_substep,
-            substep_fraction_f32=substep_fraction_f32,
             gravity_acceleration=gravity_acceleration,
+            block_min_buf=block_min_buf,
         )
 
-        # 7. Accumulate inflows into downstream waterbodies
+        # 6. Accumulate inflows into downstream waterbodies
         _accumulate_downstream_waterbody_inflows(
             substep_discharge_m3_s=substep_discharge_m3_s,
             wb=wb,
@@ -1565,9 +1542,6 @@ def _run_inertial_substeps(
         substep_count += 1
 
         if t_elapsed < dt_f32:
-            min_dt_next: np.float32 = dt_f32
-            for r_idx in prange(n_inertial):
-                min_dt_next = min(min_dt_next, buffers.min_dt_buf[r_idx])
             dt_substep = min_dt_next
 
     # Calculate average discharge over the time step

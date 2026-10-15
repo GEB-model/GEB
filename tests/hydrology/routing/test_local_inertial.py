@@ -2757,7 +2757,7 @@ def test_inertial_substeps_parallel_and_serial_equivalence() -> None:
         WaterbodyCoupling,
     )
 
-    assert INERTIAL_PARALLEL_THRESHOLD == 5000
+    assert INERTIAL_PARALLEL_THRESHOLD == 10000
 
     n_reaches: int = 25
     ldd_grid: npt.NDArray[np.uint8] = np.full((n_reaches, 1), 2, dtype=np.uint8)
