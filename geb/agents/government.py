@@ -337,7 +337,9 @@ class Government(AgentBaseClass):
         # updated) primary properties, using the same pedotransfer functions
         # used at model initialization.
         if not suitability_HRU.any():
-            self.model.logger.info("Reforestation: no eligible HRUs, no planting applied.")
+            self.model.logger.info(
+                "Reforestation: no eligible HRUs, no planting applied."
+            )
             return
         forest_mean_soc = self._compute_forest_mean_soc(land_use_type_before)
         bulk_density_ratio = self._compute_bulk_density_ratios(land_use_type_before)
