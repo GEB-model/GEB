@@ -21,8 +21,9 @@ def snap_amber_weirs(
     barriers: gpd.GeoDataFrame,
     rivers: gpd.GeoDataFrame,
     valid_river_cells: xr.DataArray,
+    height_m: float = 1.0,
 ) -> tuple[xr.DataArray, gpd.GeoDataFrame]:
-    """Snap known-height AMBER weirs to the nearest represented river link.
+    """Snap AMBER weirs with a uniform height to the nearest represented river link.
 
     Notes:
         Match the river line within 250 m before selecting its nearest model cell.
@@ -31,11 +32,14 @@ def snap_amber_weirs(
         Conflicting weirs on one cell are all excluded rather than relocated.
 
     Args:
-        barriers: AMBER points with amber_id, dam_type and dam_hgt_m (meters).
+        barriers: AMBER points with amber_id and dam_type. Recorded heights
+            are retained as metadata when present but never used for placement.
         rivers: River lines with represented_in_grid and hydrography_xy columns.
             hydrography_xy contains model column/row pairs.
         valid_river_cells: Boolean y/x grid in EPSG:4326; True where both sides
             of the downstream connection are active river cells outside waterbodies.
+        height_m: Uniform crest height above the modeled river bed (meters).
+            Must be positive and finite; defaults to 1 meter.
 
     Returns:
         Weir height grid (meters; zero without a weir) and source-point records
@@ -44,10 +48,12 @@ def snap_amber_weirs(
 
     Raises:
         ValueError: If required fields, coordinate systems, geometries or grid
-            indices are invalid.
+            indices are invalid, or height_m is not positive and finite.
     """
-    if not {"amber_id", "dam_type", "dam_hgt_m"}.issubset(barriers.columns):
-        raise ValueError("AMBER snapping requires IDs, barrier types and heights.")
+    if not np.isfinite(height_m) or height_m <= 0:
+        raise ValueError("Weir height_m must be positive and finite (meters).")
+    if not {"amber_id", "dam_type"}.issubset(barriers.columns):
+        raise ValueError("AMBER snapping requires IDs and barrier types.")
     if not {"represented_in_grid", "hydrography_xy"}.issubset(rivers.columns):
         raise ValueError("River snapping requires represented rivers and grid cells.")
     if barriers.crs is None or rivers.crs is None:
@@ -82,6 +88,7 @@ def snap_amber_weirs(
     heights: xr.DataArray = full_like(
         valid_river_cells, fill_value=0.0, nodata=np.nan, dtype=np.float32
     ).compute()
+    records["weir_height_m"] = np.nan
     records["distance_to_river_m"] = np.nan
     records["grid_row"] = np.int64(-1)
     records["grid_column"] = np.int64(-1)
@@ -97,10 +104,6 @@ def snap_amber_weirs(
     record_index: Hashable
     barrier: pd.Series
     for record_index, barrier in records.iterrows():
-        height_m: float = float(pd.to_numeric(barrier.dam_hgt_m, errors="coerce"))
-        if not np.isfinite(height_m) or height_m <= 0:
-            records.at[record_index, "exclusion_reason"] = "missing or invalid height"
-            continue
         point: Point = barrier.geometry
         # This generous search box avoids projecting the full river network per point.
         longitude_buffer: float = 0.01 / max(np.cos(np.deg2rad(point.y)), 0.01)
@@ -181,8 +184,7 @@ def snap_amber_weirs(
     records.loc[conflicts, "exclusion_reason"] = "multiple weirs on one connection"
     # Reject every ambiguous placement, making the result independent of atlas order.
     records.loc[~records.included, ["grid_row", "grid_column"]] = -1
+    records.loc[records.included, "weir_height_m"] = height_m
     for record_index, barrier in records.loc[records.included].iterrows():
-        heights.values[int(barrier.grid_row), int(barrier.grid_column)] = float(
-            barrier.dam_hgt_m
-        )
+        heights.values[int(barrier.grid_row), int(barrier.grid_column)] = height_m
     return heights, records

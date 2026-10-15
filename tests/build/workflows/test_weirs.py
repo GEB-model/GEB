@@ -87,7 +87,7 @@ def test_metric_distance_limit(latitude: float, distance_m: float) -> None:
     heights, records = snap_amber_weirs(points, rivers, valid)
     assert records.included.tolist() == [distance_m <= 250.0]
     assert records.distance_to_river_m.iloc[0] == pytest.approx(distance_m, abs=1e-5)
-    assert heights.values[0, 0] == (2.0 if distance_m <= 250.0 else 0.0)
+    assert heights.values[0, 0] == (1.0 if distance_m <= 250.0 else 0.0)
     assert records.geometry.iloc[0] == points.geometry.iloc[0]
     if distance_m <= 250.0:
         assert records.grid_column.iloc[0] == records.grid_row.iloc[0] == 0
@@ -99,7 +99,6 @@ def test_metric_distance_limit(latitude: float, distance_m: float) -> None:
 @pytest.mark.parametrize(
     "case",
     [
-        "missing_height",
         "other_type",
         "no_rivers",
         "unsuitable",
@@ -123,9 +122,7 @@ def test_excluded_weirs(case: str) -> None:
     rivers: gpd.GeoDataFrame
     valid: xr.DataArray
     points, rivers, valid = make_inputs()
-    if case == "missing_height":
-        points["dam_hgt_m"] = np.nan
-    elif case == "other_type":
+    if case == "other_type":
         points["dam_type"] = "Dam"
     elif case == "no_rivers":
         rivers = rivers.iloc[:0]
@@ -233,8 +230,8 @@ def test_setup_weirs_saved_inputs(
         grid.attrs["_FillValue"] = None if grid.dtype == bool else -1
         builder.set_grid(grid.chunk({"x": 1, "y": 1}), name=name)
     builder.write_file_library()
-    builder.update({"setup_weirs": {}})
-    builder.update({"setup_weirs": {}})
+    builder.update({"setup_weirs": {"height_m": 1.75}})
+    builder.update({"setup_weirs": {"height_m": 1.75}})
     heights: xr.DataArray = read_zarr(tmp_path / "grid/routing/weir_height_m.zarr")
     records: gpd.GeoDataFrame = gpd.read_parquet(
         tmp_path / "geom/routing/weirs.geoparquet"
@@ -242,6 +239,10 @@ def test_setup_weirs_saved_inputs(
     assert bool((heights.values > 0).any()) == (case == "valid")
     assert records.included.tolist() == ([] if case == "empty" else [case == "valid"])
     assert records.crs.to_epsg() == 4326
+    if case == "valid":
+        assert heights.values[0, 0] == 1.75
+        assert records.weir_height_m.iloc[0] == 1.75
+        assert records.dam_hgt_m.iloc[0] == 2.0
 
 
 def test_weir_migration(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -287,7 +288,7 @@ def test_distance_limit_applies_to_line() -> None:
     heights, records = snap_amber_weirs(points, rivers, valid)
     assert records.included.tolist() == [True]
     assert records.distance_to_river_m.iloc[0] < 1.0
-    assert heights.values.sum() == 2.0
+    assert heights.values.sum() == 1.0
     assert (
         Geod(ellps="WGS84").inv(
             points.geometry.iloc[0].x,
@@ -297,3 +298,55 @@ def test_distance_limit_applies_to_line() -> None:
         )[2]
         > 250.0
     )
+
+
+@pytest.mark.parametrize("recorded_height", [None, np.nan, -2.0, 0.0, 2.0, 100.0])
+def test_recorded_heights_are_ignored(recorded_height: float | None) -> None:
+    """Include weirs regardless of the recorded height using the assigned height.
+
+    Args:
+        recorded_height: Source height (meters), including absent or invalid values.
+
+    Returns:
+        None.
+
+    Raises:
+        AssertionError: If source height affects placement or the assigned height.
+    """  # noqa: DOC202, DOC502
+    points: gpd.GeoDataFrame
+    rivers: gpd.GeoDataFrame
+    valid: xr.DataArray
+    points, rivers, valid = make_inputs()
+    points["dam_hgt_m"] = recorded_height
+    heights: xr.DataArray
+    records: gpd.GeoDataFrame
+    heights, records = snap_amber_weirs(points, rivers, valid)
+    assert records.included.tolist() == [True]
+    assert heights.values[0, 0] == records.weir_height_m.iloc[0] == 1.0
+    # Source height is metadata, so its entire column may be absent as well.
+    heights, records = snap_amber_weirs(
+        gpd.GeoDataFrame(points.drop(columns="dam_hgt_m")), rivers, valid, height_m=3.0
+    )
+    assert records.included.tolist() == [True]
+    assert heights.values[0, 0] == records.weir_height_m.iloc[0] == 3.0
+
+
+@pytest.mark.parametrize("height_m", [0.0, -1.0, np.nan, np.inf])
+def test_invalid_assigned_height(height_m: float) -> None:
+    """Reject assigned heights that cannot define a positive finite crest.
+
+    Args:
+        height_m: Invalid uniform height (meters).
+
+    Returns:
+        None.
+
+    Raises:
+        AssertionError: If an invalid height is accepted.
+    """  # noqa: DOC202, DOC502
+    points: gpd.GeoDataFrame
+    rivers: gpd.GeoDataFrame
+    valid: xr.DataArray
+    points, rivers, valid = make_inputs()
+    with pytest.raises(ValueError, match="positive and finite"):
+        snap_amber_weirs(points, rivers, valid, height_m=height_m)

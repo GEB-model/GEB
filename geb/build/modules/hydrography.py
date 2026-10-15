@@ -1582,20 +1582,28 @@ class Hydrography(BuildModelBase):
         )
 
     @build_method(required=False, depends_on=["setup_waterbodies"])
-    def setup_weirs(self) -> None:
-        """Save known-height AMBER weirs on internal river connections.
+    def setup_weirs(self, height_m: float = 1.0) -> None:
+        """Save uniform-height AMBER weirs on internal river connections.
 
         Only weirs within 250 m of a represented river line are considered.
-        Other structure types, waterbody connections, missing heights and
-        ambiguous placements are excluded. This build step does not change flow.
+        Recorded AMBER heights are ignored, including missing heights. Other
+        structure types, waterbody connections and ambiguous placements are
+        excluded. This build step does not change flow.
+
+        Args:
+            height_m: Uniform crest height above the modeled river bed (meters).
+                Must be positive and finite; defaults to 1 meter.
 
         Returns:
             None. Writes routing/weir_height_m (meters) and routing/weirs
             source-point diagnostics, including grid indices and exclusion reasons.
 
         Raises:
-            ValueError: If source geometry or river grid indices are invalid.
+            ValueError: If source geometry or river grid indices are invalid,
+                or height_m is not positive and finite.
         """  # noqa: DOC202, DOC502
+        if not np.isfinite(height_m) or height_m <= 0:
+            raise ValueError("Weir height_m must be positive and finite (meters).")
         region: gpd.GeoDataFrame = self.region.to_crs(4326)
         barriers: gpd.GeoDataFrame = self.data_catalog.fetch("amber_barriers").read(
             bbox=tuple(region.total_bounds)
@@ -1625,7 +1633,7 @@ class Hydrography(BuildModelBase):
         heights: xr.DataArray
         records: gpd.GeoDataFrame
         heights, records = snap_amber_weirs(
-            barriers, self.geom["routing/rivers"], valid_cells
+            barriers, self.geom["routing/rivers"], valid_cells, height_m=height_m
         )
         self.set_grid(heights, name="routing/weir_height_m")
         self.set_geom(records, name="routing/weirs")
