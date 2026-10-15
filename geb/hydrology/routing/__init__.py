@@ -1463,6 +1463,15 @@ class Routing(Module):
         else:
             self._reservoir_indices = np.zeros(0, dtype=np.int32)
 
+        # Bankfull depth is derived at runtime, so build inputs store fractions.
+        weir_fraction_file: Path | None = self.model.files["grid"].get(
+            "routing/weir_bankfull_depth_fraction"
+        )
+        weir_fraction: ArrayFloat32 | None = (
+            self.grid.load2d(weir_fraction_file)
+            if weir_fraction_file is not None
+            else None
+        )
         self.router = LocalInertial(
             dt=3600,
             river_network=self.river_network,
@@ -1489,6 +1498,7 @@ class Routing(Module):
             river_storage_alpha=self.var.river_storage_alpha,
             river_storage_beta=self.var.river_storage_beta,
             in_spinup=self.model.in_spinup,
+            weir_bankfull_depth_fraction=weir_fraction,
         )
 
         if self.model.in_spinup:

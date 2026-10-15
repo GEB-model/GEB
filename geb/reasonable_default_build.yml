@@ -43,7 +43,6 @@ setup_vegetation:
 setup_waterbodies:
 
 setup_weirs:
-  height_m: 1.0 # Uniform height above the modeled river bed; AMBER heights are ignored.
 
 setup_groundwater:
 

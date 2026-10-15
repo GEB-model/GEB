@@ -21,9 +21,8 @@ def snap_amber_weirs(
     barriers: gpd.GeoDataFrame,
     rivers: gpd.GeoDataFrame,
     valid_river_cells: xr.DataArray,
-    height_m: float = 1.0,
 ) -> tuple[xr.DataArray, gpd.GeoDataFrame]:
-    """Snap AMBER weirs with a uniform height to the nearest represented river link.
+    """Snap AMBER weirs and assign half-bankfull-depth crest heights.
 
     Notes:
         Match the river line within 250 m before selecting its nearest model cell.
@@ -38,20 +37,17 @@ def snap_amber_weirs(
             hydrography_xy contains model column/row pairs.
         valid_river_cells: Boolean y/x grid in EPSG:4326; True where both sides
             of the downstream connection are active river cells outside waterbodies.
-        height_m: Uniform crest height above the modeled river bed (meters).
-            Must be positive and finite; defaults to 1 meter.
 
     Returns:
-        Weir height grid (meters; zero without a weir) and source-point records
+        Bankfull-depth fraction grid (0.5 at weirs, zero elsewhere; dimensionless)
+        and source-point records
         with distances (meters), snapped coordinates (degrees), grid indices and
         exclusion reasons. Excluded records have grid indices of -1.
 
     Raises:
         ValueError: If required fields, coordinate systems, geometries or grid
-            indices are invalid, or height_m is not positive and finite.
+            indices are invalid.
     """
-    if not np.isfinite(height_m) or height_m <= 0:
-        raise ValueError("Weir height_m must be positive and finite (meters).")
     if not {"amber_id", "dam_type"}.issubset(barriers.columns):
         raise ValueError("AMBER snapping requires IDs and barrier types.")
     if not {"represented_in_grid", "hydrography_xy"}.issubset(rivers.columns):
@@ -85,10 +81,10 @@ def snap_amber_weirs(
     if not represented.geom_type.isin(["LineString", "MultiLineString"]).all():
         raise ValueError("Represented rivers must have line geometries.")
     # Materialize the output: assigning through .values on Dask returns a copy.
-    heights: xr.DataArray = full_like(
+    fractions: xr.DataArray = full_like(
         valid_river_cells, fill_value=0.0, nodata=np.nan, dtype=np.float32
     ).compute()
-    records["weir_height_m"] = np.nan
+    records["bankfull_depth_fraction"] = np.nan
     records["distance_to_river_m"] = np.nan
     records["grid_row"] = np.int64(-1)
     records["grid_column"] = np.int64(-1)
@@ -184,7 +180,7 @@ def snap_amber_weirs(
     records.loc[conflicts, "exclusion_reason"] = "multiple weirs on one connection"
     # Reject every ambiguous placement, making the result independent of atlas order.
     records.loc[~records.included, ["grid_row", "grid_column"]] = -1
-    records.loc[records.included, "weir_height_m"] = height_m
+    records.loc[records.included, "bankfull_depth_fraction"] = 0.5
     for record_index, barrier in records.loc[records.included].iterrows():
-        heights.values[int(barrier.grid_row), int(barrier.grid_column)] = height_m
-    return heights, records
+        fractions.values[int(barrier.grid_row), int(barrier.grid_column)] = 0.5
+    return fractions, records

@@ -147,6 +147,7 @@ class LocalInertial:
         river_storage_beta: ArrayFloat32,
         in_spinup: bool,
         min_slope: float = 1e-4,
+        weir_bankfull_depth_fraction: ArrayFloat32 | None = None,
     ) -> None:
         """Initializes the LocalInertial router object.
 
@@ -177,6 +178,9 @@ class LocalInertial:
             river_storage_beta: Kinematic wave beta parameter per reach (dimensionless).
             min_slope: Minimum allowable slope for ocean/pit boundary boundaries (dimensionless).
             in_spinup: Whether the model is in spinup mode.
+            weir_bankfull_depth_fraction: Grid-order fractions (dimensionless):
+                0.5 at weirs, zero elsewhere. None means no weirs. Recorded
+                AMBER heights are ignored.
 
         Raises:
             KeyError: If a local inertial pit reach has a river ID not found in rivers_gdf.
@@ -237,6 +241,18 @@ class LocalInertial:
         self.retention_max_storage_m3 = retention_max_storage_m3
         self.controlled_retention = controlled_retention
         self.bankfull_depth = bankfull_depth_m
+        self.weir_bankfull_depth_fraction: ArrayFloat32 = (
+            np.zeros_like(bankfull_depth_m)
+            if weir_bankfull_depth_fraction is None
+            else weir_bankfull_depth_fraction.copy()
+        )
+        if (
+            self.weir_bankfull_depth_fraction.shape != bankfull_depth_m.shape
+            or not np.isin(self.weir_bankfull_depth_fraction, [0.0, 0.5]).all()
+        ):
+            raise ValueError(
+                "Weir fractions must match river cells and contain only 0 or 0.5."
+            )
 
         n_nodes_total = is_pit.size
         is_ocean_pit_orig = np.zeros(n_nodes_total, dtype=np.bool_)
@@ -641,6 +657,20 @@ class LocalInertial:
         )
 
         return stage_out
+
+    @property
+    def weir_height_m(self) -> ArrayFloat32:
+        """Return weir heights as half the current bankfull depth.
+
+        Returns:
+            Heights above the modeled river bed (meters), in grid order; zero
+            without a weir. Values follow channel geometry updates automatically.
+        """
+        return np.where(
+            self.weir_bankfull_depth_fraction > 0,
+            self.weir_bankfull_depth_fraction * self.bankfull_depth,
+            np.float32(0.0),
+        )
 
     def _compute_static_geometry(self) -> None:
         """Precomputes reach-static channel cross-sections, thresholds, and CFL parameters."""

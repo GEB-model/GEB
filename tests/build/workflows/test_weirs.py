@@ -82,12 +82,12 @@ def test_metric_distance_limit(latitude: float, distance_m: float) -> None:
     rivers: gpd.GeoDataFrame
     valid: xr.DataArray
     points, rivers, valid = make_inputs(distance_m, latitude)
-    heights: xr.DataArray
+    fractions: xr.DataArray
     records: gpd.GeoDataFrame
-    heights, records = snap_amber_weirs(points, rivers, valid)
+    fractions, records = snap_amber_weirs(points, rivers, valid)
     assert records.included.tolist() == [distance_m <= 250.0]
     assert records.distance_to_river_m.iloc[0] == pytest.approx(distance_m, abs=1e-5)
-    assert heights.values[0, 0] == (1.0 if distance_m <= 250.0 else 0.0)
+    assert fractions.values[0, 0] == (0.5 if distance_m <= 250.0 else 0.0)
     assert records.geometry.iloc[0] == points.geometry.iloc[0]
     if distance_m <= 250.0:
         assert records.grid_column.iloc[0] == records.grid_row.iloc[0] == 0
@@ -135,10 +135,10 @@ def test_excluded_weirs(case: str) -> None:
         )
     elif case == "no_cells":
         rivers.at[7, "hydrography_xy"] = []
-    heights: xr.DataArray
+    fractions: xr.DataArray
     records: gpd.GeoDataFrame
-    heights, records = snap_amber_weirs(points, rivers, valid)
-    assert not heights.values.any()
+    fractions, records = snap_amber_weirs(points, rivers, valid)
+    assert not fractions.values.any()
     assert not records.included.any()
     assert records.exclusion_reason.ne("").all()
     assert records.grid_row.eq(-1).all()
@@ -230,18 +230,20 @@ def test_setup_weirs_saved_inputs(
         grid.attrs["_FillValue"] = None if grid.dtype == bool else -1
         builder.set_grid(grid.chunk({"x": 1, "y": 1}), name=name)
     builder.write_file_library()
-    builder.update({"setup_weirs": {"height_m": 1.75}})
-    builder.update({"setup_weirs": {"height_m": 1.75}})
-    heights: xr.DataArray = read_zarr(tmp_path / "grid/routing/weir_height_m.zarr")
+    builder.update({"setup_weirs": {}})
+    builder.update({"setup_weirs": {}})
+    fractions: xr.DataArray = read_zarr(
+        tmp_path / "grid/routing/weir_bankfull_depth_fraction.zarr"
+    )
     records: gpd.GeoDataFrame = gpd.read_parquet(
         tmp_path / "geom/routing/weirs.geoparquet"
     )
-    assert bool((heights.values > 0).any()) == (case == "valid")
+    assert bool((fractions.values > 0).any()) == (case == "valid")
     assert records.included.tolist() == ([] if case == "empty" else [case == "valid"])
     assert records.crs.to_epsg() == 4326
     if case == "valid":
-        assert heights.values[0, 0] == 1.75
-        assert records.weir_height_m.iloc[0] == 1.75
+        assert fractions.values[0, 0] == 0.5
+        assert records.bankfull_depth_fraction.iloc[0] == 0.5
         assert records.dam_hgt_m.iloc[0] == 2.0
 
 
@@ -283,12 +285,12 @@ def test_distance_limit_applies_to_line() -> None:
     rivers.geometry = [LineString([(-0.01, 52.0), (0.02, 52.0)])]
     valid = valid.assign_coords(x=[-0.01, 0.02], y=[52.0, 51.99])
     valid.values[0, :] = True
-    heights: xr.DataArray
+    fractions: xr.DataArray
     records: gpd.GeoDataFrame
-    heights, records = snap_amber_weirs(points, rivers, valid)
+    fractions, records = snap_amber_weirs(points, rivers, valid)
     assert records.included.tolist() == [True]
     assert records.distance_to_river_m.iloc[0] < 1.0
-    assert heights.values.sum() == 1.0
+    assert fractions.values.sum() == 0.5
     assert (
         Geod(ellps="WGS84").inv(
             points.geometry.iloc[0].x,
@@ -318,35 +320,14 @@ def test_recorded_heights_are_ignored(recorded_height: float | None) -> None:
     valid: xr.DataArray
     points, rivers, valid = make_inputs()
     points["dam_hgt_m"] = recorded_height
-    heights: xr.DataArray
+    fractions: xr.DataArray
     records: gpd.GeoDataFrame
-    heights, records = snap_amber_weirs(points, rivers, valid)
+    fractions, records = snap_amber_weirs(points, rivers, valid)
     assert records.included.tolist() == [True]
-    assert heights.values[0, 0] == records.weir_height_m.iloc[0] == 1.0
+    assert fractions.values[0, 0] == records.bankfull_depth_fraction.iloc[0] == 0.5
     # Source height is metadata, so its entire column may be absent as well.
-    heights, records = snap_amber_weirs(
-        gpd.GeoDataFrame(points.drop(columns="dam_hgt_m")), rivers, valid, height_m=3.0
+    fractions, records = snap_amber_weirs(
+        gpd.GeoDataFrame(points.drop(columns="dam_hgt_m")), rivers, valid
     )
     assert records.included.tolist() == [True]
-    assert heights.values[0, 0] == records.weir_height_m.iloc[0] == 3.0
-
-
-@pytest.mark.parametrize("height_m", [0.0, -1.0, np.nan, np.inf])
-def test_invalid_assigned_height(height_m: float) -> None:
-    """Reject assigned heights that cannot define a positive finite crest.
-
-    Args:
-        height_m: Invalid uniform height (meters).
-
-    Returns:
-        None.
-
-    Raises:
-        AssertionError: If an invalid height is accepted.
-    """  # noqa: DOC202, DOC502
-    points: gpd.GeoDataFrame
-    rivers: gpd.GeoDataFrame
-    valid: xr.DataArray
-    points, rivers, valid = make_inputs()
-    with pytest.raises(ValueError, match="positive and finite"):
-        snap_amber_weirs(points, rivers, valid, height_m=height_m)
+    assert fractions.values[0, 0] == records.bankfull_depth_fraction.iloc[0] == 0.5

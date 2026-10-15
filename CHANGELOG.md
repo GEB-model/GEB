@@ -1,6 +1,6 @@
 # dev
-- Assign a uniform 1 m height to snapped AMBER weirs by default, configurable through `setup_weirs.height_m`. Ignore recorded AMBER heights, including missing values. Rerun `setup_weirs` to replace existing height inputs.
-- Add `setup_weirs` to snap AMBER weirs to internal river connections within 250 m of the source river line. Save heights and placement diagnostics; exclude ambiguous placements. Run `setup_weirs` to add these inputs to existing builds. Routing is unchanged.
+- Set AMBER weir heights to 0.5 times modeled bankfull depth, ignoring recorded heights. Store dimensionless fractions and derive meter heights in routing. Remove `setup_weirs.height_m` from custom build files and rerun `setup_weirs` to replace fixed-height inputs; weir-flow calculations remain unchanged.
+- Add `setup_weirs` to snap AMBER weirs to internal river connections within 250 m of the source river line. Save bankfull-depth fractions and placement diagnostics; exclude ambiguous placements. Run `setup_weirs` to add these inputs to existing builds. Routing is unchanged.
 - Add the AMBER V1 European barrier dataset to the data catalog, with cached GeoParquet points, cleaned types and heights, and geographic filtering when reading.
 
 # v1.0.0b36

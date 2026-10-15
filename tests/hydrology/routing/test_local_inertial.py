@@ -54,6 +54,7 @@ def _make_local_inertial(
     waterbody_outflow_bed_elev: np.ndarray | None = None,
     river_storage_alpha: np.ndarray | None = None,
     river_storage_beta: np.ndarray | None = None,
+    weir_bankfull_depth_fraction: ArrayFloat32 | None = None,
 ) -> LocalInertial:
     """Helper to instantiate LocalInertial for unit tests with explicit required arrays.
 
@@ -150,6 +151,7 @@ def _make_local_inertial(
         river_storage_alpha=river_storage_alpha,
         river_storage_beta=river_storage_beta,
         in_spinup=True,
+        weir_bankfull_depth_fraction=weir_bankfull_depth_fraction,
     )
     router.initialize_stage(
         waterbody_storage_m3=np.zeros(n_wb, dtype=np.float64) if n_wb > 0 else None
@@ -4801,3 +4803,80 @@ def test_local_inertial_outflow_boundary_directly_downstream_of_waterbody() -> N
         np.sum(wb_storage_out) + np.sum(river_storage_out) + outflow_at_pits
     )
     assert np.isclose(total_initial, total_final, rtol=1e-4)
+
+
+@pytest.mark.parametrize("with_weirs", [False, True])
+def test_weir_heights_follow_bankfull_depth(
+    mask: npt.NDArray[np.bool_], ldd: npt.NDArray[np.uint8], with_weirs: bool
+) -> None:
+    """Derive half-bankfull heights and follow channel geometry updates.
+
+    Args:
+        mask: Active network cells.
+        ldd: Drainage directions.
+        with_weirs: Whether one cell has an AMBER weir fraction.
+
+    Returns:
+        None.
+
+    Raises:
+        AssertionError: If heights are not half the current bankfull depth.
+    """  # noqa: DOC202, DOC502
+    network: pyflwdir.FlwdirRaster = create_river_network(
+        ldd, mask, transform=Affine.identity()
+    )
+    cell_count: int = int(mask.sum())
+    depths: ArrayFloat32 = np.linspace(2.0, 8.0, cell_count, dtype=np.float32)
+    fractions: ArrayFloat32 | None = (
+        np.zeros(cell_count, dtype=np.float32) if with_weirs else None
+    )
+    if fractions is not None:
+        fractions[0] = 0.5
+    widths: ArrayFloat32 = np.full(cell_count, 20.0, dtype=np.float32)
+    router: LocalInertial = _make_local_inertial(
+        dt=15,
+        river_network=network,
+        river_length=np.full(cell_count, 100.0, dtype=np.float32),
+        river_width=widths,
+        bankfull_depth_m=depths,
+        weir_bankfull_depth_fraction=fractions,
+    )
+    expected: ArrayFloat32 = np.zeros(cell_count, dtype=np.float32)
+    if with_weirs:
+        expected[0] = 0.5 * depths[0]
+    np.testing.assert_array_equal(router.weir_height_m, expected)
+    router.update_channel_geometry(widths, depths * 2.0)
+    np.testing.assert_array_equal(router.weir_height_m, expected * 2.0)
+
+
+@pytest.mark.parametrize("invalid_fraction", [-1.0, 0.25, np.nan, np.inf])
+def test_invalid_weir_fractions(
+    mask: npt.NDArray[np.bool_], ldd: npt.NDArray[np.uint8], invalid_fraction: float
+) -> None:
+    """Reject corrupt fraction inputs instead of interpreting them as heights.
+
+    Args:
+        mask: Active network cells.
+        ldd: Drainage directions.
+        invalid_fraction: Unsupported or nonfinite fraction (dimensionless).
+
+    Returns:
+        None.
+
+    Raises:
+        AssertionError: If corrupt fraction inputs are accepted.
+    """  # noqa: DOC202, DOC502
+    network: pyflwdir.FlwdirRaster = create_river_network(
+        ldd, mask, transform=Affine.identity()
+    )
+    cell_count: int = int(mask.sum())
+    with pytest.raises(ValueError, match="only 0 or 0.5"):
+        _make_local_inertial(
+            dt=15,
+            river_network=network,
+            river_length=np.full(cell_count, 100.0, dtype=np.float32),
+            river_width=np.full(cell_count, 20.0, dtype=np.float32),
+            weir_bankfull_depth_fraction=np.full(
+                cell_count, invalid_fraction, dtype=np.float32
+            ),
+        )
