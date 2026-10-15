@@ -6,16 +6,16 @@ selected countries, and returns the result as an xarray Dataset.
 
 from __future__ import annotations
 
-import json
 import warnings
 from functools import cache
 from typing import Any
-from urllib.request import urlopen
 
 import h5py
 import numpy as np
 import xarray as xr
 from scipy.io import loadmat
+import geopandas as gpd
+import shapely
 
 from geb.build.data_catalog.base import Adapter
 
@@ -59,84 +59,67 @@ class CLIMRISK(Adapter):
 
     def read(
         self,
-        countries: list[str] | None = None,
+        rcp: str | None,
+        function: str | None,
+        percentile: str | None,
+        region: gpd.GeoDataFrame | None = None,
         ssp: str = "2",
-        rcp: str = "70",
-        function: str = "K",
-        p: str = "90",
         reference_year: int = 2020,
-    ) -> xr.Dataset:
-        """Load CLIMRISK data for selected countries and scenario settings.
+        obtain_population: bool = False,
+    ) -> xr.DataArray:
+        """Load CLIMRISK data for the part of the grid covered by a region.
 
-        The returned dataset contains GDP damage data, cropped to the bounding
-        rectangle of the selected countries and masked to those countries.
+        Finds country codes at grid-cell centers within ``region``, crops the
+        data to their bounding box (padded by one cell), and masks cells
+        belonging to other countries. Returns population data when
+        ``obtain_population`` is true; otherwise, returns GDP damage data.
 
         Args:
-            countries: Country names to include. Defaults to Mexico.
-            ssp: SSP scenario identifier, such as ``"2"``.
-            rcp: RCP scenario identifier. Supported values are ``"26"``,
-                ``"45"``, and ``"70"``.
-            function: Damage function identifier. Supported values are
-                ``"K"``, ``"KU"``, ``"KPU"``, ``"RU"``, and ``"RPU"``.
-            p: Damage percentile. Supported values are ``"10"``, ``"50"``,
-                and ``"90"``.
+            rcp: RCP identifier. Supported values are ``"19"``, ``"26"``,
+                ``"34"``, ``"45"``, ``"60"``, ``"70"``, and ``"85"``.
+                Defaults to ``"70"`` when omitted for damage data.
+            function: Damage function identifier: ``"K"``, ``"KU"``,
+                ``"KPU"``, ``"RU"``, or ``"RPU"``. Defaults to ``"K"``
+                when omitted. ``"GDP"`` selects the GDP data file.
+            percentile: Damage percentile: ``"10"``, ``"50"``, or ``"90"``.
+                Defaults to ``"90"`` when omitted for damage data.
+            region: Non-empty GeoDataFrame defining the study region. It must
+                have a CRS and is reprojected to EPSG:4326 for grid matching.
+            ssp: SSP scenario identifier, from ``"1"`` through ``"5"``.
+                Defaults to ``"2"``.
             reference_year: First year to include, from 2010 through 2100.
+            obtain_population: If true, return population data instead of
+                damage data.
 
         Returns:
-            An xarray Dataset containing GDP damage data, country codes, and
-            spatial metadata.
+            An xarray DataArray with ``year``, ``lon``, and ``lat`` dimensions.
+            Its name is ``"population"`` or ``"GDP"`` depending on the
+            selected data. A ``country`` coordinate contains country-grid codes.
 
         Raises:
-            FileNotFoundError: If the adapter path or a required data file
-                does not exist.
-            ValueError: If an input is invalid or no grid cells match the
-                requested countries.
-            RuntimeError: If the country database cannot be fetched or parsed.
+            FileNotFoundError: If the adapter path or a required map file is
+                missing.
+            ValueError: If the region, scenario parameters, or required data
+                variables are invalid, or no country-grid cells are found
+                within the region.
         """
         if not self.path.exists():
             raise FileNotFoundError(
                 f"The local path {self.path} does not exist. "
                 "Please download and extract the data first."
             )
+        if region is None or region.empty:
+            raise ValueError("Provide a non-empty region GeoDataFrame.")
+        if region.crs is None:
+            raise ValueError("The region GeoDataFrame must have a CRS.")
 
-        if countries is None:
-            countries = ["Mexico"]
-        if not countries:
-            raise ValueError("At least one country must be specified.")
-        valid = {"10", "50", "90"}
-
-        if p not in ["10", "50", "90"]:
-            raise ValueError(f"Possible climrisk percentiles: 10, 50, 90; got {p!r}.")
         if ssp not in ["1", "2", "3", "4", "5"]:
             raise ValueError(f"Possible climrisk SSPs: 1, 2, 3, 4, 5; got {ssp!r}.")
-        if rcp not in ["19", "26", "34", "45", "60", "70", "85"]:
-            raise ValueError(f"Possible climrisk RCPs: 19, 26, 34, 45, 60, 70, 85; got {rcp!r}.")
         if not 2010 <= reference_year <= 2100:
             raise ValueError(
                 "reference_year must be between 2010 and 2100; "
                 f"got {reference_year}."
             )
-
-        # Multiple function identifiers share the same CLIMRISK output file.
-        file_groups: dict[str, tuple[str, str]] = {
-            "GDP": ("Kompas_", "K_KU"), 
-            "K": ("Kompas_", "K_KU"),
-            "KU": ("Kompas_", "K_KU"),
-            "KPU": ("Kompas_", "K_KU"),
-            "RU": ("", "RU_RPU"),
-            "RPU": ("", "RU_RPU"),
-        }
-        if function not in file_groups:
-            raise ValueError(f"Possible climrisk damage functions: K, KU, KPU, RU, RPU; got {function!r}.")
-
-        file_prefix: str
-        function_abbreviation: str
-        file_prefix, function_abbreviation = file_groups[function]
-
-        # ISO numeric codes are strings so leading zeros are preserved.
-        # The MATLAB country map stores them as numbers, so convert for matching.
-        country_codes: list[str] = self.get_country_codes(countries)
-        country_code_numbers: list[int] = [int(code) for code in country_codes]
 
         country_file = self.path / "KompasCountry.mat"
         if not country_file.exists():
@@ -147,20 +130,12 @@ class CLIMRISK(Adapter):
             raise ValueError(
                 f"The country map file has no 'CountryMap': {country_file}"
             )
-
-        if function=="GDP":
-            damage_file = (
-                self.path
-                / f"SSP{ssp}26_Kompas_results_p10"
-                / f"SSP{ssp}26_K_KU_results10.mat"
-            )
-        else:
-            scenario: str = f"{ssp}{rcp}"
-            damage_file = (
-                self.path
-                / f"SSP{scenario}_{file_prefix}results_p{p}"
-                / f"SSP{scenario}_{function_abbreviation}_results{p}.mat"
-            )
+        # The MATLAB map's latitude order is opposite to the ascending
+        # latitude coordinate used to label the xarray data.
+        country_grid: np.ndarray = (
+            np.flip(country_data["CountryMap"], axis=0)
+            .transpose(1, 0)
+        )
 
         # These coordinates describe the grid represented by the source arrays.
         dimensions: tuple[str, str, str] = ("year", "lon", "lat")
@@ -168,61 +143,128 @@ class CLIMRISK(Adapter):
         longitudes: np.ndarray = np.arange(-179.75, 180.25, 0.5)
         latitudes: np.ndarray = np.arange(-89.75, 90.25, 0.5)
 
-        with h5py.File(damage_file, "r") as file:
-            if function=="GDP":
-                damage_key: str = f"CLIMRISK_DOLLARS_K_GRID_WORLD_S"
-                proportion_key: str = f"CLIMRISK_PROP_K_GRID_WORLD_S"
-            else:
-                damage_key: str = f"CLIMRISK_DOLLARS_{function}_GRID_WORLD_S"
-                proportion_key: str = f"CLIMRISK_PROP_{function}_GRID_WORLD_S"
-
-            if damage_key not in file or proportion_key not in file:
+        if obtain_population:
+            population_file = self.path / "OECD_POP_SSP2_SPATIAL13R.mat"
+            if not population_file.exists():
+                raise FileNotFoundError(f"Population map file not found: {population_file}")
+            population_data: dict[str, Any] = loadmat(population_file)
+            if "POP_MAP" not in population_data:
                 raise ValueError(
-                    f"Expected variables {damage_key!r} and {proportion_key!r} "
-                    f"were not found in {damage_file}."
+                    f"The population map file has no 'POP_MAP': {population_file}"
                 )
-
-            with warnings.catch_warnings():
-                # Zero proportions can cause divide-by-zero values in the
-                # source formula; suppress the warning while retaining results.
-                warnings.simplefilter("ignore", RuntimeWarning)
-                damage_dollars: np.ndarray = file[damage_key][:]
-                damage_proportion: np.ndarray = file[proportion_key][:].clip(
-                    max=100
-                )
-                with np.errstate(divide="ignore", invalid="ignore"):
-                    if function=="GDP":
-                        gdp_damage: np.darray = (
-                            damage_dollars
-                            *100/damage_proportion
-                        )
-                    else:
-                        gdp_damage: np.ndarray = (
-                            damage_dollars
-                            * (100 - damage_proportion)
-                            / damage_proportion
-                        )
-
             # The MATLAB map's latitude order is opposite to the ascending
             # latitude coordinate used to label the xarray data.
-            country_grid: np.ndarray = np.flip(
-                country_data["CountryMap"], axis=0
+            population_grid: np.ndarray = (
+                np.flip(population_data["POP_MAP"], axis=0)
+                .transpose(2, 1, 0)
             )
-
-            gdp_damage: xr.DataArray = xr.DataArray(
-                data=gdp_damage,
+            climrisk_data: xr.DataArray = xr.DataArray(
+                data=population_grid,
                 dims=dimensions,
                 coords={
                     "year": years,
                     "lon": longitudes,
                     "lat": latitudes,
-                    "country": (("lat", "lon"), country_grid),
+                    "country": (("lon", "lat"), country_grid),
                 },
-                name="GDP",
+                name="population"
             )
+        else:
+            if percentile is None: percentile = "90"
+            if rcp is None: rcp = "70"
+            if function is None: function = "K"
+            if percentile not in ["10", "50", "90"]:
+                raise ValueError(f"Possible climrisk percentiles: 10, 50, 90; got {percentile!r}.")
+            if rcp not in ["19", "26", "34", "45", "60", "70", "85"]:
+                raise ValueError(f"Possible climrisk RCPs: 19, 26, 34, 45, 60, 70, 85; got {rcp!r}.")
+    
+            # Multiple function identifiers share the same CLIMRISK output file.
+            file_groups: dict[str, tuple[str, str]] = {
+                "GDP": ("Kompas_", "K_KU"), 
+                "K": ("Kompas_", "K_KU"),
+                "KU": ("Kompas_", "K_KU"),
+                "KPU": ("Kompas_", "K_KU"),
+                "RU": ("", "RU_RPU"),
+                "RPU": ("", "RU_RPU"),
+            }
+            if function not in file_groups:
+                raise ValueError(f"Possible climrisk damage functions: K, KU, KPU, RU, RPU; got {function!r}.")
+    
+            file_prefix: str
+            function_abbreviation: str
+            file_prefix, function_abbreviation = file_groups[function]
+    
+            if function=="GDP":
+                damage_file = (
+                    self.path
+                    / f"SSP{ssp}26_Kompas_results_p10"
+                    / f"SSP{ssp}26_K_KU_results10.mat"
+                )
+            else:
+                scenario: str = f"{ssp}{rcp}"
+                damage_file = (
+                    self.path
+                    / f"SSP{scenario}_{file_prefix}results_p{percentile}"
+                    / f"SSP{scenario}_{function_abbreviation}_results{percentile}.mat"
+                )
+    
+            with h5py.File(damage_file, "r") as file:
+                if function=="GDP":
+                    damage_key: str = f"CLIMRISK_DOLLARS_K_GRID_WORLD_S"
+                    proportion_key: str = f"CLIMRISK_PROP_K_GRID_WORLD_S"
+                else:
+                    damage_key: str = f"CLIMRISK_DOLLARS_{function}_GRID_WORLD_S"
+                    proportion_key: str = f"CLIMRISK_PROP_{function}_GRID_WORLD_S"
+    
+                if damage_key not in file or proportion_key not in file:
+                    raise ValueError(
+                        f"Expected variables {damage_key!r} and {proportion_key!r} "
+                        f"were not found in {damage_file}."
+                    )
+    
+                with warnings.catch_warnings():
+                    # Zero proportions can cause divide-by-zero values in the
+                    # source formula; suppress the warning while retaining results.
+                    warnings.simplefilter("ignore", RuntimeWarning)
+                    damage_dollars: np.ndarray = file[damage_key][:]
+                    damage_proportion: np.ndarray = file[proportion_key][:].clip(
+                        max=100
+                    )
+                    with np.errstate(divide="ignore", invalid="ignore"):
+                        if function=="GDP":
+                            gdp_damage: np.ndarray = (
+                                damage_dollars
+                                *100/damage_proportion
+                            )
+                        else:
+                            gdp_damage: np.ndarray = (
+                                damage_dollars
+                                * (100 - damage_proportion)
+                                / damage_proportion
+                            )
+    
+                climrisk_data: xr.DataArray = xr.DataArray(
+                    data=gdp_damage,
+                    dims=dimensions,
+                    coords={
+                        "year": years,
+                        "lon": longitudes,
+                        "lat": latitudes,
+                        "country": (("lon", "lat"), country_grid),
+                    },
+                    name="GDP",
+                )
+
+        # Obtain country codes where the study region is located
+        region_geometry = region.to_crs("EPSG:4326").geometry.union_all()
+        lon_grid, lat_grid = np.meshgrid(longitudes, latitudes, indexing="ij")
+        inside = shapely.intersects_xy(region_geometry, lon_grid, lat_grid)
+        codes = country_grid[inside]
+        codes = codes[np.isfinite(codes) & (codes > 0)]
+        country_code_numbers = np.unique(codes).astype(int).tolist()
 
         # Find the smallest rectangular crop containing all requested countries.
-        country_mask: xr.DataArray = gdp_damage["country"].isin(
+        country_mask: xr.DataArray = climrisk_data["country"].isin(
             country_code_numbers
         )
         matching_longitudes: np.ndarray = np.flatnonzero(
@@ -231,17 +273,14 @@ class CLIMRISK(Adapter):
         matching_latitudes: np.ndarray = np.flatnonzero(
             country_mask.any(dim="lon").to_numpy()
         )
-
-        if matching_longitudes.size == 0 or matching_latitudes.size == 0:
-            raise ValueError(
-                f"No grid cells found for the requested countries: {countries}"
-            )
+        if not country_code_numbers or not matching_longitudes.size or not matching_latitudes.size:
+            raise ValueError("No country-grid cells were found within the region.")
 
         # Pad values by one cell to avoid out of boundary errors in basins located at the extremes of our regions
-        first_longitude_index: int = int( min(matching_longitudes[0]-1, 0))
-        last_longitude_index: int = int( max(matching_longitudes[-1], longitudes.shape[0]-1))
-        first_latitude_index: int = int( min(matching_latitudes[0], 0))
-        last_latitude_index: int = int( max(matching_latitudes[-1], latitudes.shape[0]-1))
+        first_longitude_index: int = int( max(matching_longitudes[0]-1, 0))
+        last_longitude_index: int = int( min(matching_longitudes[-1]+1, longitudes.shape[0]-1))
+        first_latitude_index: int = int( max(matching_latitudes[0]-1, 0))
+        last_latitude_index: int = int( min(matching_latitudes[-1]+1, latitudes.shape[0]-1))
 
         longitude_bounds: tuple[float, float] = (
             float(longitudes[first_longitude_index]),
@@ -253,18 +292,17 @@ class CLIMRISK(Adapter):
         )
 
         # Crop inclusively, then mask other countries inside the bounding box.
-        gdp_damage = gdp_damage.sel(
+        climrisk_data = climrisk_data.sel(
             {
                 "lon":slice(*longitude_bounds),
                 "lat":slice(*latitude_bounds),
                 "year":slice(reference_year, 2100),
             }
         )
-        gdp_damage = gdp_damage.where(
-            gdp_damage["country"].isin(country_code_numbers)
+        climrisk_data = climrisk_data.where(
+            climrisk_data["country"].isin(country_code_numbers)
         )
-
-        gdp_damage.attrs.update(
+        climrisk_data.attrs.update(
             {
                 "lon_origin": longitude_bounds[0],
                 "lon_resolution": 0.5,
@@ -273,114 +311,10 @@ class CLIMRISK(Adapter):
                 "_FillValue": np.nan
             }
         )
-        gdp_damage = xr.apply_ufunc(
+        climrisk_data = xr.apply_ufunc(
             np.nan_to_num,
-            gdp_damage,
+            climrisk_data,
             kwargs={"nan": np.nan, "posinf": np.nan, "neginf": np.nan},
             dask="allowed",
         )
-
-        return gdp_damage.astype(np.float32)
-
-    @staticmethod
-    @cache
-    def _load_country_name_to_code() -> dict[str, str]:
-        """Fetch and parse the ISO 3166-1 country database.
-
-        The parsed mapping is cached after a successful fetch, avoiding
-        repeated network requests during this process.
-
-        Returns:
-            Mapping from case-folded country names to three-character numeric
-            ISO codes.
-
-        Raises:
-            RuntimeError: If the database cannot be fetched or has an invalid
-                format.
-        """
-        try:
-            # The context manager closes the network response even if reading
-            # or parsing the downloaded data fails.
-            with urlopen(CLIMRISK.ISO_COUNTRY_DATABASE_URL, timeout=15) as response:
-                payload: bytes = response.read()
-
-            # Decode the response as UTF-8, then parse the JSON document.
-            database: Any = json.loads(payload.decode("utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise RuntimeError(
-                "Could not fetch or parse the ISO country database at "
-                f"{CLIMRISK.ISO_COUNTRY_DATABASE_URL}."
-            ) from error
-
-        # Check the top-level structure before accessing its country records.
-        records_value: Any = database.get("3166-1") if isinstance(database, dict) else None
-        if not isinstance(records_value, list):
-            raise RuntimeError("The ISO country database has an unexpected format.")
-
-        country_records: list[Any] = records_value
-        name_to_code: dict[str, str] = {}
-
-        # Check that all values are valid
-        for country_record in country_records:
-            if not isinstance(country_record, dict):
-                raise RuntimeError(
-                    "The ISO country database contains an invalid country record."
-                )
-
-            numeric_value: Any = country_record.get("numeric")
-            if not isinstance(numeric_value, (str, int)):
-                raise RuntimeError(
-                    "The ISO country database contains an invalid numeric code."
-                )
-
-            numeric_code: str = str(numeric_value)
-            if not numeric_code.isdecimal() or len(numeric_code) > 3:
-                raise RuntimeError(
-                    "The ISO country database contains an invalid numeric code."
-                )
-
-            # ISO numeric codes are three digits; padding preserves leading
-            # zeros if a code was represented as an integer in the JSON.
-            numeric_code = numeric_code.zfill(3)
-
-            # Index all available name variants so callers can use either the
-            # short name, official name, or common name.
-            for field_name in ("name", "official_name", "common_name"):
-                country_name: Any = country_record.get(field_name)
-                if isinstance(country_name, str):
-                    name_to_code[country_name.casefold()] = numeric_code
-
-        return name_to_code
-
-    @staticmethod
-    def get_country_codes(country_names: list[str]) -> list[str]:
-        """Convert country names to ISO 3166-1 numeric codes.
-
-        Name matching is case-insensitive. Input order and duplicates are
-        preserved, and codes remain strings so leading zeros are retained.
-
-        Args:
-            country_names: Country names to convert.
-
-        Returns:
-            Three-character ISO numeric codes for the supplied countries.
-
-        Raises:
-            ValueError: If a name is empty, is not a string, or is
-                unrecognized.
-            RuntimeError: If the country database cannot be fetched or parsed.
-        """
-        name_to_code: dict[str, str] = CLIMRISK._load_country_name_to_code()
-        country_codes: list[str] = []
-
-        for country_name in country_names:
-            if not isinstance(country_name, str) or not country_name.strip():
-                raise ValueError(f"Invalid country name: {country_name!r}")
-
-            normalized_name: str = country_name.strip().casefold()
-            if normalized_name not in name_to_code:
-                raise ValueError(f"Unrecognized country name: {country_name}")
-
-            country_codes.append(name_to_code[normalized_name])
-
-        return country_codes
+        return climrisk_data.astype(np.float32)

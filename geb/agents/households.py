@@ -1542,53 +1542,63 @@ class Households(AgentBaseClass):
         if not hasattr(self, "factor_change"):
             self.country_wide: bool =self.model.config["agent_settings"]["climrisk"]["country_wide"]
             ssp: str = self.model.config["agent_settings"]["climrisk"]["ssp"]
-            rcp: str = self.model.config["agent_settings"]["climrisk"]["rcp"]
             function: str = self.model.config["agent_settings"]["climrisk"]["function"]
-            p: str = self.model.config["agent_settings"]["climrisk"]["p"]
-
-            if p not in ["10", "50", "90"]:
-                raise ValueError(f"Possible climrisk percentiles: 10, 50, 90; got {p!r}.")
             if ssp not in ["1", "2", "3", "4", "5"]:
                 raise ValueError(f"Possible climrisk SSPs: 1, 2, 3, 4, 5; got {ssp!r}.")
-            if rcp not in ["19", "26", "34", "45", "60", "70", "85"]:
-                raise ValueError(f"Possible climrisk RCPs: 19, 26, 34, 45, 60, 70, 85; got {rcp!r}.")
             if function not in ["GDP", "K", "KU", "KPU", "RU", "RPU"]:
                 raise ValueError(f"Possible climrisk damage functions: K, KU, KPU, RU, RPU; got {function!r}.")
+            if function != "GDP":
+                rcp: str = self.model.config["agent_settings"]["climrisk"]["rcp"]
+                percentile: str = self.model.config["agent_settings"]["climrisk"]["percentile"]
+                if percentile not in ["10", "50", "90"]:
+                    raise ValueError(f"Possible climrisk percentiles: 10, 50, 90; got {percentile!r}.")
+                if rcp not in ["19", "26", "34", "45", "60", "70", "85"]:
+                    raise ValueError(f"Possible climrisk RCPs: 19, 26, 34, 45, 60, 70, 85; got {rcp!r}.")
 
             if function=="GDP":
-                ssp_map_name:str = f"SSP{ssp}{rcp}_{function}.zarr"
+                ssp_map_name:str = f"SSP{ssp}_{function}.zarr"
             else:
-                ssp_map_name:str = f"SSP{ssp}{rcp}_{function}_p{p}.zarr"
+                ssp_map_name:str = f"SSP{ssp}{rcp}_{function}_p{percentile}.zarr"
             ssp_map_path: Path = (
                 self.model.input_folder / "other" / "ssp_maps" / ssp_map_name
+            )
+            population_map_name:str = f"SSP{ssp}_POP.zarr"
+            population_map_path: Path = (
+                self.model.input_folder / "other" / "ssp_maps" / population_map_name
             )
 
             # Pending: Load as DynamicArray into the var Bucket
             # flood_map in line 635 is also an xarray and it 
             # is currently not loaded into the var bucket, an 
             # implementation should probably be set for both maps
-            try: ssp_map: xr.Dataset = xr.open_dataarray(ssp_map_path)
-            except: 
+            try: ssp_map: xr.DataArray= xr.open_dataarray(ssp_map_path)
+            except FileNotFoundError as e:
                 raise ValueError(
                     f"Requested file {ssp_map_name} has not been built. "
                     + f"Please build the model again passing the "
-                    + f"requested data to 'setup_climrisk'.")
+                    + f"requested data to 'setup_climrisk'."
+                ) from e
+            try: population_map: xr.Dataset = xr.open_dataarray(population_map_path)
+            except FileNotFoundError as e:
+                raise ValueError(
+                    f"Requested file {population_map_name} has not been built. "
+                    + f"Please build the model again using 'setup_climrisk'."
+                ) from e
 
             # Calculate factor change and growth rate
             # Contry-wide or cell-level growth rate
+            # For the growth rate of income we use GDP per capita
             if not self.country_wide:
-                self.growth_rate = (
-                    ssp_map.diff(dim="year")
-                    / ssp_map.shift({"year":1}))
+                gdp_pcap = ssp_map / population_map
             else: 
-                self.growth_rate = (
-                    ssp_map.sum(["lon", "lat"]).diff(dim="year")
-                    / ssp_map.sum(["lon", "lat"]).shift({"year":1}))
-            # flood_risk_module._building_damages_all_return_periods
-            # has one value for every return period, so these are values 
-            # that  apply to all households regardless of their location. 
-            # Here we will use the GDP change for all Mexico.
-            # ssp_map has already been applied a mask for Mexico.
+                gdp_pcap = (
+                    ssp_map.sum(["lon", "lat"]) 
+                    / population_map.sum(["lon", "lat"])
+                )
+            self.growth_rate = (
+                gdp_pcap.diff(dim="year")
+                / gdp_pcap.shift({"year":1}))
+            # For damages and costs, we use a country-level GDP-based factor change.
             self.factor_change = (ssp_map.sum(["lon", "lat"])
                 / ssp_map.sel(
                     {"year": base_year}).sum(["lon", "lat"]))

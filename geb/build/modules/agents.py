@@ -1789,28 +1789,39 @@ class Agents(BuildModelBase):
 
     @build_method(required=True)
     def setup_climrisk(self,
-        countries: list[str] | None = None,
-        ssp: list[str] = ["2"],
-        rcp: list[str] = ["70"],
-        function: list[str] = ["K"],
-        p: list[str] = ["90"],
+        ssp: list[str] | None = None,
+        rcp: list[str] | None = None,
+        function: list[str] | None = None,
+        percentile: list[str] | None = None,
         reference_year: int = 2020,
     ) -> None:
-        """Sets up the CLIMRISK GDP projections for the model.
+        """Load CLIMRISK population and damage maps into the model.
+
+        For each SSP, stores a population map. It also stores maps for GDP with
+        damages for each RCP, damage function, and percentile combination.
+        ``"GDP"`` is a special function option that selects the GDP data
+        without damages.
 
         Args:
-            countries: Country names to include. Defaults to Mexico.
-            ssp: SSP scenario identifier, such as ``"2"``.
-            rcp: RCP scenario identifier. Supported values are as ``"26"``, ``"45"``, and ``"70"``.
-            function: Damage function identifier. Supported values are
-                ``"K"``, ``"KU"``, ``"KPU"``, ``"RU"``, and ``"RPU"``.
-            p: Damage percentile.
-            Supported values are
-                ``"10"``, ``"50"``, ``"90"``.
-            reference_year: First year to include, from 2010 through 2100.
-        """
+            ssp: SSP scenario identifiers, from ``"1"`` through ``"5``.
+                Defaults to ``["2"]``.
+            rcp: RCP identifiers. Defaults to ``["70"]``.
+            function: Damage functions (``"K"``, ``"KU"``, ``"KPU"``,
+                ``"RU"``, ``"RPU"``) or ``"GDP"``. Defaults to ``["K"]``.
+            percentile: Damage percentiles: ``"10"``, ``"50"``, or ``"90"``.
+                Defaults to ``["90"]``.
+            reference_year: First year to include in damage data, from 2010
+                through 2100. Defaults to 2020.
 
-        for name, value in {"ssp": ssp, "rcp": rcp, "function": function, "p": p}.items():
+        Raises:
+            TypeError: If a scenario argument is not a list of strings.
+        """
+        if ssp is None: ssp = ["2"]
+        if rcp is None: rcp = ["70"]
+        if function is None: function = ["K"]
+        if percentile is None: percentile = ["90"]
+
+        for name, value in {"ssp": ssp, "rcp": rcp, "function": function, "percentile": percentile}.items():
             if not isinstance(value, list):
                 raise TypeError(f"{name} must be a list, got {type(value).__name__}")
             if not all(isinstance(v, str) for v in value):
@@ -1818,18 +1829,41 @@ class Agents(BuildModelBase):
 
         self.logger.info("Processing climrisk data")
         for i in range(len(ssp)):
-            for j in range(len(rcp)):
-                for k in range(len(p)):
-                    for l in range(len(function)):
-                        self.logger.info(f"Processing combination: SSP{ssp[i]}-{rcp[j]}, Damage function {function[l]}, for countries: {countries}")
-                        climrisk = self.data_catalog.fetch("climrisk").read(
-                            countries=countries, ssp=ssp[i], rcp=rcp[j],function=function[l],
-                            p=p[k], reference_year=reference_year
-                        )
-                        if function[l]=="GDP":
-                            self.set_other(climrisk, name=f"ssp_maps/SSP{ssp[i]}{rcp[j]}_{function[l]}")
-                        else:
-                            self.set_other(climrisk, name=f"ssp_maps/SSP{ssp[i]}{rcp[j]}_{function[l]}_p{p[k]}")
+            self.logger.info(f"Processing population: SSP{ssp[i]}")
+            climrisk = self.data_catalog.fetch("climrisk").read(
+                region=self.region, 
+                ssp=ssp[i], 
+                rcp=None, 
+                function=None, 
+                percentile=None, 
+                obtain_population=True
+            )
+            self.set_other(climrisk, name=f"ssp_maps/SSP{ssp[i]}_POP")
+            for l in range(len(function)):
+                if function[l]=="GDP":
+                    self.logger.info(f"Processing GDP for combination: SSP{ssp[i]}")
+                    climrisk = self.data_catalog.fetch("climrisk").read(
+                        region=self.region, 
+                        ssp=ssp[i], 
+                        rcp=None,
+                        function=function[l],
+                        percentile=None, 
+                        reference_year=reference_year
+                    )
+                    self.set_other(climrisk, name=f"ssp_maps/SSP{ssp[i]}_{function[l]}")
+                else:
+                    for j in range(len(rcp)):
+                        for k in range(len(percentile)):
+                            self.logger.info(f"Processing GDP for combination: SSP{ssp[i]}-{rcp[j]}, Damage function {function[l]}")
+                            climrisk = self.data_catalog.fetch("climrisk").read(
+                                region=self.region, 
+                                ssp=ssp[i], 
+                                rcp=rcp[j],
+                                function=function[l],
+                                percentile=percentile[k], 
+                                reference_year=reference_year
+                            )
+                            self.set_other(climrisk, name=f"ssp_maps/SSP{ssp[i]}{rcp[j]}_{function[l]}_p{percentile[k]}")
         self.logger.info("All climrisk data processed.")
 
     @build_method(
