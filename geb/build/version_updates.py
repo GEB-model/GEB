@@ -13,6 +13,10 @@ if TYPE_CHECKING:
     from geb.build import GEBModel as GEBModelBuild
 
 VERSION_UPDATES: dict[str, list[str]] = {
+    "1.0.0b39": [
+        "[remove-inactive-farmers]",
+        "[manual] Rerun spinup and simulation after repairing farmer IDs; saved states use the previous farmer IDs.",
+    ],
     "1.0.0b36": [
         "[update-method;setup_karst]",
         "[manual] Karst is included in every hydrology run. Add setup_karst to custom build.yml files unless inherited from reasonable_default_build.yml, then rerun spinup and simulation.",
@@ -198,6 +202,18 @@ def get_and_maybe_do_version_updates(
                                 f"Re-run `{method_name}`: `geb update -b build.yml::{method_name}`."
                             )
 
+                    elif update_type == "remove-inactive-farmers":
+                        if update_type_arguments:
+                            raise ValueError(
+                                "remove-inactive-farmers takes no arguments."
+                            )
+                        if build_model is not None:
+                            build_model.remove_inactive_farmers()
+                        else:
+                            updates_to_print.append(
+                                "Run geb update-version with the build configuration to remove farmers without active land."
+                            )
+
                     elif update_type == "create-file":
                         if len(update_type_arguments) != 1:
                             raise ValueError(
@@ -265,7 +281,7 @@ def get_and_maybe_do_version_updates(
     elif not error_occurred:
         logger.info("Successfully auto-updated.")
     else:  # error occurred but no updates to print
-        logger.error(
+        raise RuntimeError(
             "An error occurred during auto-update. Please check the error message above and fix the issue. After fixing the issue, you can re-run the update command to perform the remaining updates and update the version file."
         )
 

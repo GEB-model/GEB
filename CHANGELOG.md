@@ -1,3 +1,7 @@
+# v1.0.0b39
+- Remove farmers without land in the active grid and compact their IDs and attribute arrays together. `geb update-version -b build.yml` repairs existing inputs; rerun spinup and simulation afterward because saved states use the old farmer IDs.
+- Stop when automatic input migrations fail.
+
 # v1.0.0b36
 - Add karst storage to all hydrology runs, with a default release time of 10 days. Update inputs and rerun spinup.
 
