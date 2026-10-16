@@ -1489,6 +1489,7 @@ class Routing(Module):
             river_storage_alpha=self.var.river_storage_alpha,
             river_storage_beta=self.var.river_storage_beta,
             in_spinup=self.model.in_spinup,
+            max_threads=self.config["max_threads"],
         )
 
         if self.model.in_spinup:

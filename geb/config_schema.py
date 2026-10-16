@@ -259,6 +259,15 @@ class RoutingConfig(BaseModel):
         "kinematic_wave",
         description="Routing algorithm: 'accuflux' or 'kinematic_wave'.",
     )
+    max_threads: int | None = Field(
+        None,
+        ge=1,
+        description=(
+            "Maximum number of CPU threads to allocate for the local inertial routing "
+            "substep solver. If None, automatically determined based on domain size, "
+            "available physical cores, and Slurm allocation."
+        ),
+    )
     minimum_river_slope_m_per_m: float = Field(
         1e-4,
         gt=0.0,

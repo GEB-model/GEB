@@ -1034,7 +1034,13 @@ def _apply_confluence_inflow_limits(
         buffers: Pre-allocated workspace scratch buffers.
         dt_substep_f32: Current adaptive sub-timestep duration (seconds).
     """
-    for reach_idx in prange(n_inertial):
+    confluence_reach_k: ArrayInt32 = topo.confluence_reach_k
+    n_confluences: int = len(confluence_reach_k)
+    if n_confluences == 0:
+        return
+
+    for conf_i in range(n_confluences):
+        reach_idx: int = confluence_reach_k[conf_i]
         upstream_reach_k: int = topo.inertial_up_reach_idx[reach_idx]
         has_multiple_inertial: bool = upstream_reach_k < -1
         has_inertial_and_kinematic: bool = (
@@ -1268,8 +1274,6 @@ def _update_continuity_and_cfl(
     wb_release_volume_substep = buffers.wb_release_volume_substep
     discharge_vol_sum_inertial = buffers.discharge_vol_sum_inertial
     stage_buf = buffers.stage_buf
-    total_flow_rate_buf = buffers.total_flow_rate_buf
-    min_dt_buf = buffers.min_dt_buf
 
     stride: int = (
         REDUCTION_BLOCK_STRIDE
@@ -1391,8 +1395,6 @@ def _update_continuity_and_cfl(
             )
 
             flow_mag: np.float32 = max(total_incoming_rate, total_outgoing_rate)
-            total_flow_rate_buf[reach_idx] = flow_mag
-
             reach_dt: np.float32 = _evaluate_reach_cfl_dt_from_depth(
                 reach_idx=reach_idx,
                 total_flow_rate=flow_mag,
@@ -1403,7 +1405,6 @@ def _update_continuity_and_cfl(
                 gravity_acceleration=gravity_acceleration,
                 dt_f32=dt_f32,
             )
-            min_dt_buf[reach_idx] = reach_dt
             if reach_dt < b_min:
                 b_min = reach_dt
 

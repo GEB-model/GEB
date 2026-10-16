@@ -1,6 +1,9 @@
 """1D local inertial river routing algorithm with kinematic routing for upstream reaches."""
 
+import os
+
 import geopandas as gpd
+import numba
 import numpy as np
 import pyflwdir
 import pyflwdir.core
@@ -50,6 +53,7 @@ from .topology import (
 
 __all__: list[str] = [
     "LocalInertial",
+    "determine_optimal_inertial_threads",
 ]
 
 
@@ -111,6 +115,80 @@ def _sum_indexed_discharge(discharge: ArrayFloat32, indices: ArrayInt32) -> np.f
     return total
 
 
+def determine_optimal_inertial_threads(
+    n_inertial: int,
+    max_threads: int | None = None,
+) -> int:
+    """Determines the optimal number of OpenMP worker threads for local inertial routing.
+
+    Balances parallel scaling efficiency against OpenMP fork-join dispatch overhead and
+    cross-core cache invalidation. In high-performance computing environments (e.g., Slurm),
+    respects allocated CPU quotas (via SLURM_CPUS_PER_TASK and CPU affinity masks)
+    while capping at physical core boundaries to prevent simultaneous multithreading (SMT)
+    hyperthread L1 cache thrashing.
+
+    Args:
+        n_inertial: Number of local inertial reaches in the network.
+        max_threads: Optional user-specified maximum thread limit. If provided, overrides
+            the automatic grain size heuristic while respecting available system resources.
+
+    Returns:
+        Optimal number of parallel worker threads (at least 1).
+
+    Raises:
+        ValueError: If max_threads is less than 1.
+    """
+    slurm_cpus_str: str | None = os.environ.get("SLURM_CPUS_PER_TASK")
+    slurm_cpus: int | None = (
+        int(slurm_cpus_str)
+        if slurm_cpus_str is not None and slurm_cpus_str.isdigit()
+        else None
+    )
+
+    affinity_cpus: int | None = None
+    if hasattr(os, "sched_getaffinity"):
+        try:
+            affinity_cpus = len(os.sched_getaffinity(0))
+        except NotImplementedError, OSError:
+            affinity_cpus = None
+
+    physical_cpus: int | None = None
+    try:
+        import psutil
+
+        physical_cpus = psutil.cpu_count(logical=False)
+    except Exception:
+        physical_cpus = None
+
+    logical_cpus: int = os.cpu_count() or 1
+
+    if slurm_cpus is not None and slurm_cpus > 0:
+        allocated_cpus: int = slurm_cpus
+    elif affinity_cpus is not None and affinity_cpus > 0:
+        allocated_cpus = affinity_cpus
+    else:
+        allocated_cpus = logical_cpus
+
+    allocated_cpus = max(1, allocated_cpus)
+
+    if max_threads is not None:
+        if max_threads < 1:
+            raise ValueError(f"max_threads must be at least 1, got {max_threads}")
+        return min(max_threads, allocated_cpus)
+
+    if physical_cpus is not None and physical_cpus > 0:
+        available_cpus: int = min(allocated_cpus, physical_cpus)
+    else:
+        available_cpus = allocated_cpus
+    available_cpus = max(1, available_cpus)
+
+    # Grain size heuristic: allocate at least ~2,000 reaches per thread to outweigh OpenMP overhead
+    grain_threads: int = max(1, n_inertial // 2000)
+    # Benchmark results show parallel speedup peaks around 16 cores before cross-CCX memory bus saturates
+    optimal_threads: int = min(grain_threads, 16, available_cpus)
+    return max(1, optimal_threads)
+
+
 class LocalInertial:
     """Local inertial river network router with CaMa-Flood style dead-storage floodplain geometry.
 
@@ -148,6 +226,7 @@ class LocalInertial:
         river_storage_beta: ArrayFloat32,
         in_spinup: bool,
         min_slope: float = 1e-4,
+        max_threads: int | None = None,
     ) -> None:
         """Initializes the LocalInertial router object.
 
@@ -178,6 +257,7 @@ class LocalInertial:
             river_storage_beta: Kinematic wave beta parameter per reach (dimensionless).
             min_slope: Minimum allowable slope for ocean/pit boundary boundaries (dimensionless).
             in_spinup: Whether the model is in spinup mode.
+            max_threads: Maximum number of parallel threads for local inertial routing (None for auto-detection).
 
         Raises:
             KeyError: If a local inertial pit reach has a river ID not found in rivers_gdf.
@@ -345,6 +425,11 @@ class LocalInertial:
         self.n_kin_headwater: int = n_kin_headwater
         self.n_kinematic: int = n_kinematic
         self.n_inertial: int = n_inertial
+        self.max_threads: int | None = max_threads
+        self._n_threads: int = determine_optimal_inertial_threads(
+            n_inertial=self.n_inertial,
+            max_threads=max_threads,
+        )
 
         # Sliced topological parameters
         river_length_perm: ArrayFloat32 = self.river_length[sorted_idxs]
@@ -999,25 +1084,54 @@ class LocalInertial:
                 if self.n_inertial >= INERTIAL_PARALLEL_THRESHOLD
                 else _run_inertial_substeps_serial
             )
-            run_inertial(
-                num_inertial_substeps=num_inertial_substeps,
-                dt_f32=dt_f32,
-                n_inertial=self.n_inertial,
-                substep_discharge_m3_s=substep_discharge_inertial,
-                river_storage_m3_inertial=river_storage_m3_inertial,
-                sideflow_m3_inertial=sideflow_m3_inertial,
-                evaporation_m3_inertial=evaporation_m3_inertial,
-                over_abstraction_m3_inertial=over_abstraction_m3_inertial,
-                actual_evaporation_m3_inertial=actual_evaporation_m3_inertial,
-                updated_discharge_m3_s_inertial=updated_discharge_m3_s_inertial,
-                kinematic_inflow_rate=kinematic_inflow_rate_inertial,
-                geom=self._geometry,
-                topo=self._topology,
-                wb=wb_coupling,
-                ret=ret_coupling,
-                buffers=self._substep_buffers,
-                initialize_stages=False,
-            )
+            if self.n_inertial >= INERTIAL_PARALLEL_THRESHOLD:
+                orig_threads: int = numba.get_num_threads()
+                need_restore: bool = orig_threads != self._n_threads
+                if need_restore:
+                    numba.set_num_threads(self._n_threads)
+                try:
+                    run_inertial(
+                        num_inertial_substeps=num_inertial_substeps,
+                        dt_f32=dt_f32,
+                        n_inertial=self.n_inertial,
+                        substep_discharge_m3_s=substep_discharge_inertial,
+                        river_storage_m3_inertial=river_storage_m3_inertial,
+                        sideflow_m3_inertial=sideflow_m3_inertial,
+                        evaporation_m3_inertial=evaporation_m3_inertial,
+                        over_abstraction_m3_inertial=over_abstraction_m3_inertial,
+                        actual_evaporation_m3_inertial=actual_evaporation_m3_inertial,
+                        updated_discharge_m3_s_inertial=updated_discharge_m3_s_inertial,
+                        kinematic_inflow_rate=kinematic_inflow_rate_inertial,
+                        geom=self._geometry,
+                        topo=self._topology,
+                        wb=wb_coupling,
+                        ret=ret_coupling,
+                        buffers=self._substep_buffers,
+                        initialize_stages=False,
+                    )
+                finally:
+                    if need_restore:
+                        numba.set_num_threads(orig_threads)
+            else:
+                run_inertial(
+                    num_inertial_substeps=num_inertial_substeps,
+                    dt_f32=dt_f32,
+                    n_inertial=self.n_inertial,
+                    substep_discharge_m3_s=substep_discharge_inertial,
+                    river_storage_m3_inertial=river_storage_m3_inertial,
+                    sideflow_m3_inertial=sideflow_m3_inertial,
+                    evaporation_m3_inertial=evaporation_m3_inertial,
+                    over_abstraction_m3_inertial=over_abstraction_m3_inertial,
+                    actual_evaporation_m3_inertial=actual_evaporation_m3_inertial,
+                    updated_discharge_m3_s_inertial=updated_discharge_m3_s_inertial,
+                    kinematic_inflow_rate=kinematic_inflow_rate_inertial,
+                    geom=self._geometry,
+                    topo=self._topology,
+                    wb=wb_coupling,
+                    ret=ret_coupling,
+                    buffers=self._substep_buffers,
+                    initialize_stages=False,
+                )
 
         terminal_wb_outflow_m3: np.float32 = (
             self._substep_buffers.terminal_wb_outflow_accum_m3[0]

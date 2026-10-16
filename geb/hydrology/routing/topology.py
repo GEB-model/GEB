@@ -92,6 +92,7 @@ class InertialTopology(NamedTuple):
         ds_inertial_k: Downstream reach index within inertial domain (-1 if boundary).
         ds_stage_idx: Unified index into stage buffer for downstream water level lookup.
         ds_bed_elevation: Downstream boundary bed elevation (meters).
+        confluence_reach_k: 1D array of reach indices with multiple upstream or kinematic tributaries.
     """
 
     inertial_up_offsets: ArrayInt32
@@ -101,6 +102,7 @@ class InertialTopology(NamedTuple):
     ds_inertial_k: ArrayInt32
     ds_stage_idx: ArrayInt32
     ds_bed_elevation: ArrayFloat32
+    confluence_reach_k: ArrayInt32
 
 
 class RetentionLinks(NamedTuple):
@@ -482,6 +484,15 @@ def build_routing_topology(
         ds_boundary_type != BOUNDARY_INTERNAL
     ).astype(np.int32)
 
+    has_mult_inertial: np.ndarray = inertial_up_reach_idx < -1
+    has_kin_tribs: np.ndarray = (
+        inertial_up_kin_offsets[1 : n_inertial + 1]
+        > inertial_up_kin_offsets[:n_inertial]
+    )
+    confluence_reach_k: ArrayInt32 = np.flatnonzero(
+        has_mult_inertial | has_kin_tribs
+    ).astype(np.int32)
+
     topology: InertialTopology = InertialTopology(
         inertial_up_offsets=inertial_up_offsets_arr,
         inertial_up_indices=inertial_up_indices_arr,
@@ -490,6 +501,7 @@ def build_routing_topology(
         ds_inertial_k=ds_inertial_k,
         ds_stage_idx=ds_stage_idx,
         ds_bed_elevation=ds_bed_elevation,
+        confluence_reach_k=confluence_reach_k,
     )
 
     kinematic_topology: KinematicTopology = KinematicTopology(

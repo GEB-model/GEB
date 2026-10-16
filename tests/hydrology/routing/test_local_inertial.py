@@ -10,6 +10,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import numba
 import numpy as np
 import numpy.typing as npt
 import pyflwdir
@@ -21,7 +22,10 @@ from geb.hydrology.routing import (
     RoutingVariables,
     create_river_network,
 )
-from geb.hydrology.routing.local_inertial import LocalInertial
+from geb.hydrology.routing.local_inertial import (
+    LocalInertial,
+    determine_optimal_inertial_threads,
+)
 from tests.testconfig import output_folder
 
 output_folder_local_inertial: Path = output_folder / "local_inertial"
@@ -54,6 +58,7 @@ def _make_local_inertial(
     waterbody_outflow_bed_elev: np.ndarray | None = None,
     river_storage_alpha: np.ndarray | None = None,
     river_storage_beta: np.ndarray | None = None,
+    max_threads: int | None = None,
 ) -> LocalInertial:
     """Helper to instantiate LocalInertial for unit tests with explicit required arrays.
 
@@ -150,6 +155,7 @@ def _make_local_inertial(
         river_storage_alpha=river_storage_alpha,
         river_storage_beta=river_storage_beta,
         in_spinup=True,
+        max_threads=max_threads,
     )
     router.initialize_stage(
         waterbody_storage_m3=np.zeros(n_wb, dtype=np.float64) if n_wb > 0 else None
@@ -4811,3 +4817,92 @@ def test_local_inertial_outflow_boundary_directly_downstream_of_waterbody() -> N
         np.sum(wb_storage_out) + np.sum(river_storage_out) + outflow_at_pits
     )
     assert np.isclose(total_initial, total_final, rtol=1e-4)
+
+
+def test_determine_optimal_inertial_threads_auto() -> None:
+    """Tests automatic thread allocation based on reach count and available cores."""
+    threads_small: int = determine_optimal_inertial_threads(n_inertial=100)
+    assert threads_small == 1
+
+    threads_1k: int = determine_optimal_inertial_threads(n_inertial=1000)
+    assert threads_1k == 1
+
+    threads_large: int = determine_optimal_inertial_threads(n_inertial=35000)
+    assert 1 <= threads_large <= 16
+
+
+def test_determine_optimal_inertial_threads_user_cap() -> None:
+    """Tests user max_threads constraints and input validation."""
+    threads_capped: int = determine_optimal_inertial_threads(
+        n_inertial=35000, max_threads=4
+    )
+    assert threads_capped == 4
+
+    threads_capped_1: int = determine_optimal_inertial_threads(
+        n_inertial=35000, max_threads=1
+    )
+    assert threads_capped_1 == 1
+
+    with pytest.raises(ValueError, match="max_threads must be at least 1"):
+        determine_optimal_inertial_threads(n_inertial=35000, max_threads=0)
+
+    with pytest.raises(ValueError, match="max_threads must be at least 1"):
+        determine_optimal_inertial_threads(n_inertial=35000, max_threads=-5)
+
+
+def test_determine_optimal_inertial_threads_slurm_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tests that SLURM_CPUS_PER_TASK is respected in HPC environments."""
+    monkeypatch.setenv("SLURM_CPUS_PER_TASK", "8")
+    threads_slurm_8: int = determine_optimal_inertial_threads(n_inertial=35000)
+    assert threads_slurm_8 == 8
+
+    monkeypatch.setenv("SLURM_CPUS_PER_TASK", "2")
+    threads_slurm_2: int = determine_optimal_inertial_threads(n_inertial=35000)
+    assert threads_slurm_2 == 2
+
+    # User cap lower than Slurm allocation
+    threads_user_low: int = determine_optimal_inertial_threads(
+        n_inertial=35000, max_threads=1
+    )
+    assert threads_user_low == 1
+
+    # User cap higher than Slurm allocation must be clamped to Slurm allocation
+    threads_user_high: int = determine_optimal_inertial_threads(
+        n_inertial=35000, max_threads=16
+    )
+    assert threads_user_high == 2
+
+
+def test_local_inertial_thread_isolation_during_step() -> None:
+    """Tests that LocalInertial.step isolates thread changes and preserves external Numba threads."""
+    n_cells: int = 1500
+    flw_raster = pyflwdir.from_array(
+        np.full((1, n_cells), 1, dtype=np.uint8),
+        ftype="ldd",
+    )
+    router: LocalInertial = _make_local_inertial(
+        dt=3600,
+        river_network=flw_raster,
+        river_length=np.full(n_cells, 1000.0, dtype=np.float32),
+        river_width=np.full(n_cells, 50.0, dtype=np.float32),
+        max_threads=2,
+    )
+    assert router._n_threads == 2
+
+    numba.set_num_threads(4)
+    assert numba.get_num_threads() == 4
+
+    router.step(
+        Q_prev_m3_s=np.full(n_cells, 10.0, dtype=np.float32),
+        river_storage_m3=np.full(n_cells, 50000.0, dtype=np.float64),
+        sideflow_m3=np.zeros(n_cells, dtype=np.float32),
+        evaporation_m3=np.zeros(n_cells, dtype=np.float32),
+        waterbody_storage_m3=np.zeros(0, dtype=np.float64),
+        outflow_per_waterbody_m3=np.zeros(0, dtype=np.float32),
+        retention_storage_m3=np.zeros(0, dtype=np.float32),
+        retention_activation_threshold_m3_s=np.zeros(0, dtype=np.float32),
+    )
+
+    assert numba.get_num_threads() == 4
