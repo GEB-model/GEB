@@ -16,12 +16,22 @@ For full river basins, the boundary condition is defined by the ocean water leve
 
 ## AMBER weirs
 
-`setup_weirs` selects and snaps only AMBER weirs to internal river connections.
+`setup_weirs` snaps all AMBER barrier types to internal river connections and
+represents them with the same rectangular weir equation, retaining source types
+as metadata. Gate operations and culvert hydraulics are not represented.
 See the [build workflow](../getting_started/build/data_catalog.md#snap-amber-weirs-to-the-model-grid).
-The crest is placed at the upstream reach's bed elevation plus **0.5 times
-its current bankfull depth**. Recorded AMBER heights are ignored. Effective
-crest width equals modeled bankfull river width. Both dimensions follow channel
-geometry updates, including spinup calibration; the fraction itself is fixed.
+Weirs are inactive during spinup. Channel dimensions are determined during spinup,
+saved in the checkpoint and held fixed during the run. Annual run discharge does
+not update channel dimensions or the spinup return-period estimates.
+The crest is placed at the upstream reach's bed elevation plus **0.75 times
+its spinup bankfull depth**. Recorded AMBER heights are ignored. Effective
+crest width is the channel width at crest height,
+$b = B(h_c/D)^r$. For parabolic channels ($r=0.5$), this gives
+$b = \sqrt{0.75}B \approx 0.866B$. Both dimensions use the saved spinup
+channel geometry and remain fixed throughout the run.
+
+After upgrading to 1.0.0b38, rerun `setup_weirs`, then spinup and simulation.
+Existing inputs keep their stored 0.5-depth crests until rebuilt.
 
 At these interfaces, `solve_inertial_momentum` replaces the ordinary momentum
 flux with the rectangular formula in
@@ -67,11 +77,12 @@ floodplain storage; no additional impoundment area is inferred from AMBER.
 
 This is a simple regional parameterization. Actual crest dimensions, approach
 losses, gate operations, fish passes and separate floodplain bypasses are not
-represented. The assumed half-bankfull crest and full-channel width require
+represented. The assumed three-quarter-bankfull crest and width at crest height require
 sensitivity testing and comparison with observed water levels/discharge before
-interpreting European-scale impacts. Monthly and final-day profile PNGs and CSVs
+interpreting European-scale impacts. Daily histories and fixed spatial snapshot PNGs, refreshed monthly and on the final day,
 are written to `<general.output_folder>/<run_name>/weirs/`; set
-`hydrology.routing.weirs: false` in a separate spinup/run to produce a comparison.
+`hydrology.routing.weirs: false` in a separate run to produce a comparison using
+the same weir-free spinup.
 
 ## Kinematic Wave Routing
 

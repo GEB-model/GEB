@@ -38,7 +38,9 @@ setup_weirs: {}
 For existing inputs, add the step to your build configuration and run
 `geb update -b build.yml::setup_weirs` or the input-version updater.
 
-The step selects only AMBER `Weir` records. Each weir's height is **0.5 times
+The step represents **all AMBER barrier types as weirs**, retaining their original
+types as metadata. All types use the same rectangular overflow equation; gate
+operations and culvert hydraulics are not represented. Each weir's height is **0.75 times
 its modeled bankfull depth**, above the local river bed. There is no fixed-meter
 height option. Recorded AMBER heights are ignored, including missing values.
 This fraction is a modeling assumption rather than a measured crest height.
@@ -49,7 +51,10 @@ local projection in meters. This is a line-distance limit, not a distance to the
 coarse model-cell center. The nearest cell on that river must have an active
 river cell downstream, with neither cell inside a lake or reservoir.
 
-Outputs are `grid/routing/weir_bankfull_depth_fraction.zarr` (0.5 at weirs,
+After upgrading to 1.0.0b38, rerun `setup_weirs`, then spinup and simulation.
+Existing inputs keep their stored 0.5-depth crests until rebuilt.
+
+Outputs are `grid/routing/weir_bankfull_depth_fraction.zarr` (0.75 at weirs,
 zero elsewhere; dimensionless) and `geom/routing/weirs.geoparquet`. The latter
 retains original point locations, recorded heights as metadata, the assigned
 `bankfull_depth_fraction`, source IDs, source-to-line distances, snapped
@@ -64,11 +69,16 @@ for reproducible assignments.
 `distance_to_cell_m` records the source-to-cell-center distance. The 250 m limit
 still applies to the river line; a coarse cell center can be farther away.
 Distant points and unsuitable connections are also recorded.
-Non-weir structure types are ignored.
+Rerun `setup_weirs` to include other barrier types in previously built inputs,
+then rerun spinup and simulation. Distance, collision and connection exclusions
+still apply, so not every source barrier necessarily receives its own model cell.
 
-Routing converts these fractions to heights in meters using the current channel
+Weirs are inactive during spinup, which determines channel geometry. The run
+restores the saved spinup dimensions and keeps them fixed, with weirs active
+unless `hydrology.routing.weirs` is false.
+Routing converts these fractions to heights in meters using the saved channel
 bankfull depths (`router.weir_height_m`). For example, a 4 m bankfull depth gives
-a 2 m weir. Heights follow channel geometry updates. The old fixed-height grid
+a 3 m weir. The old fixed-height grid
 is ignored. River flow at each included interface uses rectangular overflow with
 coefficient 0.577 and a downstream submergence reduction; see
 [weir hydraulics](../../hydrology/routing.md#amber-weirs).
@@ -82,19 +92,12 @@ geb run
 ```
 
 Run these commands from the model directory, using your usual configuration and
-working-directory options. Keep the same `hydrology.routing.weirs` setting in
-spinup and run. It defaults to `true`; set it to `false` for a comparison run,
-using separate run names/output directories and a separate matching spinup.
+working-directory options. The setting `hydrology.routing.weirs` applies only
+during the run and defaults to `true`. Set it to `false` for a comparison run,
+using separate run names/output directories and the same weir-free spinup.
 
-On the first day of each month and the final simulation day, routing writes
-end-of-day profiles to `output/<run_name>/weirs/water_levels_YYYY-MM-DD.png`
-and a matching CSV (relative to `general.output_folder`). The CSV contains
-all supported weirs, river/grid identifiers, crest elevations, upstream/downstream
-water levels, head above the crest and water-level drop. The PNG shows up to
-three local profiles, pairing absolute river elevations with water depth above
-each cell's own bed. Filled water, highlighted crests and depth/head annotations
-make shallow water visible. Profiles follow up to two reaches on either side,
-taking the widest upstream branch at confluences. An additional `_profiles.csv`
-exports the selected profiles for replotting. Disabled-weir runs show the same proposed crests as dashed lines.
-Compare matching dates between runs to distinguish weir effects from other
-controls on river levels. These are model predictions, not measured water levels.
+Routing retains a daily history for selected weirs and refreshes their spatial
+snapshots on the first day, monthly and on the final day. Each snapshot shows
+upstream and downstream water levels across several routing cells, plus the two
+adjacent channel cross-sections. See [weir diagnostics](../../hydrology/weirs.md#inspect-water-levels)
+for file names, plotted dimensions and comparison guidance.

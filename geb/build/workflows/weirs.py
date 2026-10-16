@@ -1,4 +1,4 @@
-"""Prepare AMBER weir locations and height fractions for river routing."""
+"""Represent AMBER barriers as weirs in river routing."""
 
 from collections.abc import Hashable
 
@@ -22,7 +22,7 @@ def snap_amber_weirs(
     rivers: gpd.GeoDataFrame,
     valid_river_cells: xr.DataArray,
 ) -> tuple[xr.DataArray, gpd.GeoDataFrame]:
-    """Snap AMBER weirs and assign half-bankfull-depth crest heights.
+    """Snap all AMBER barrier types as weirs at three quarters of bankfull depth.
 
     Notes:
         Match the river line within 250 m before selecting its nearest model cell.
@@ -32,6 +32,8 @@ def snap_amber_weirs(
         is occupied, try only the second-closest distinct cell on the same river
         segment. A wider search could move the structure far from its source.
         Process by AMBER ID so assignments do not depend on input row order.
+        Every barrier type uses the same overflow representation; the original
+        type is retained as metadata, including missing or unknown types.
 
     Args:
         barriers: AMBER points with amber_id and dam_type. Recorded heights
@@ -42,7 +44,7 @@ def snap_amber_weirs(
             of the downstream connection are active river cells outside waterbodies.
 
     Returns:
-        Bankfull-depth fraction grid (0.5 at weirs, zero elsewhere; dimensionless)
+        Bankfull-depth fraction grid (0.75 at weirs, zero elsewhere; dimensionless)
         and source-point records
         with distances (meters), snapped coordinates (degrees), grid indices,
         snap_rank (1 for closest, 2 for second-closest, 0 for exclusions) and
@@ -67,20 +69,17 @@ def snap_amber_weirs(
         or valid_river_cells.rio.crs.to_epsg() != 4326
     ):
         raise ValueError("Valid river cells must be a boolean y/x grid in EPSG:4326.")
-    records: gpd.GeoDataFrame = (
-        barriers.loc[barriers["dam_type"].str.strip().str.casefold().eq("weir")]
-        .to_crs(4326)
-        .reset_index(drop=True)
-    )
+    records: gpd.GeoDataFrame = barriers.to_crs(4326)
+    records.reset_index(drop=True, inplace=True)
     if records.geometry.isna().any() or not records.geom_type.eq("Point").all():
-        raise ValueError("AMBER weir geometries must be nonempty points.")
+        raise ValueError("AMBER barrier geometries must be nonempty points.")
     if (
         records.geometry.is_empty.any()
         or not (
             records.geometry.x.between(-180, 180) & records.geometry.y.between(-90, 90)
         ).all()
     ):
-        raise ValueError("AMBER weir coordinates must be finite WGS84 locations.")
+        raise ValueError("AMBER barrier coordinates must be finite WGS84 locations.")
     represented: gpd.GeoDataFrame = rivers.loc[rivers.represented_in_grid].to_crs(4326)
     if not represented.geom_type.isin(["LineString", "MultiLineString"]).all():
         raise ValueError("Represented rivers must have line geometries.")
@@ -189,8 +188,8 @@ def snap_amber_weirs(
         if not valid_cells[row, column]:
             records.at[record_index, "exclusion_reason"] = "unsuitable river connection"
             continue
-        fractions.values[row, column] = 0.5
-        records.at[record_index, "bankfull_depth_fraction"] = 0.5
+        fractions.values[row, column] = 0.75
+        records.at[record_index, "bankfull_depth_fraction"] = 0.75
         records.at[record_index, "snap_rank"] = snap_rank
         records.at[record_index, "distance_to_cell_m"] = float(
             np.hypot(projected_x[nearest_cell], projected_y[nearest_cell])

@@ -16,6 +16,7 @@ from geb.hydrology.routing.geometry import (
     GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE,
     GEOM_IN_MANNING_N_SQUARED,
     GEOM_IN_WEIR_HEIGHT,
+    GEOM_IN_WEIR_WIDTH,
     GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH,
     GEOM_OV_BANKFULL_PERIMETER,
     GEOM_OV_RIVER_WIDTH,
@@ -139,7 +140,7 @@ def solve_inertial_momentum(
             upstream_stage_m,
             downstream_stage_m,
             crest_m,
-            geom_overbank[reach_idx, GEOM_OV_RIVER_WIDTH],
+            geom_inbank[reach_idx, GEOM_IN_WEIR_WIDTH],
         )
         if weir_discharge < 0:
             # The kernel limits the shared downstream donor volume for reverse flow.

@@ -28,6 +28,7 @@ from .geometry import (
     GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE,
     GEOM_IN_STAGE_VOLUME_COEFFICIENT,
     GEOM_IN_WEIR_HEIGHT,
+    GEOM_IN_WEIR_WIDTH,
     GEOM_OV_FLOODPLAIN_WIDTH,
     GEOM_OV_RIVER_WIDTH,
     InertialGeometry,
@@ -116,7 +117,7 @@ class SubstepBuffers(NamedTuple):
     rev_demand_buf: ArrayFloat32
     wb_release_volume_substep: ArrayFloat32
     total_flow_rate_buf: ArrayFloat32
-    discharge_vol_sum_inertial: ArrayFloat32
+    discharge_vol_sum_inertial: ArrayFloat64
     retention_inflow_limit_sub_buf: ArrayFloat64
     retention_max_outflow_limit_sub_buf: ArrayFloat64
     wb_outflow_avail_buf: ArrayFloat64
@@ -1174,9 +1175,11 @@ def _update_continuity_and_stages(
 
         outflow_rate: np.float32 = substep_discharge_m3_s[reach_idx]
 
-        net_flow_volume: np.float32 = (
-            inflow_rate - outflow_rate
-        ) * dt_substep + wb_release_volume_substep[reach_idx]
+        # Match the float64 storage precision so the same interface flux
+        # cancels between neighboring reaches over many short weir substeps.
+        net_flow_volume: np.float64 = (
+            np.float64(inflow_rate) - np.float64(outflow_rate)
+        ) * np.float64(dt_substep) + np.float64(wb_release_volume_substep[reach_idx])
         sideflow_volume: np.float32 = (
             sideflow_m3_inertial[reach_idx] * substep_fraction_f32
         )
@@ -1184,8 +1187,8 @@ def _update_continuity_and_stages(
 
         if sideflow_volume < np.float32(0.0):
             abstraction_demand: np.float32 = -sideflow_volume
-            available_for_abstraction: np.float32 = max(
-                np.float32(current_storage) + net_flow_volume, np.float32(0.0)
+            available_for_abstraction: np.float32 = np.float32(
+                max(current_storage + net_flow_volume, 0.0)
             )
             if abstraction_demand > available_for_abstraction:
                 over_abstraction_m3_inertial[reach_idx] += (
@@ -1207,7 +1210,9 @@ def _update_continuity_and_stages(
         new_storage -= float(actual_evaporation)
 
         river_storage_m3_inertial[reach_idx] = new_storage
-        discharge_vol_sum_inertial[reach_idx] += outflow_rate * dt_substep
+        discharge_vol_sum_inertial[reach_idx] += np.float64(outflow_rate) * np.float64(
+            dt_substep
+        )
 
         # Calculate water stage from updated storage volume
         reach_volume: np.float32 = np.float32(new_storage)
@@ -1391,7 +1396,7 @@ def _limit_weir_timestep(
             upstream_stage,
             downstream_stage,
             crest_m,
-            geom.geom_overbank[reach, GEOM_OV_RIVER_WIDTH],
+            geom.geom_inbank[reach, GEOM_IN_WEIR_WIDTH],
         )
         if flow == 0 or (flow < 0 and not ALLOW_REVERSE_FLOW):
             continue
@@ -1499,12 +1504,14 @@ def _run_inertial_substeps(
 
     dt_substep: np.float32 = dt_f32 / np.float32(num_inertial_substeps)
 
-    t_elapsed: np.float32 = np.float32(0.0)
+    # Many short weir substeps otherwise accumulate float32 timing error and
+    # integrate sideflow over slightly more or less than the routing interval.
+    t_elapsed: float = 0.0
     substep_count: int = 0
     n_ret: int = ret.max_storage_m3.size
 
     while t_elapsed < dt_f32:
-        time_remaining: np.float32 = dt_f32 - t_elapsed
+        time_remaining: np.float32 = np.float32(float(dt_f32) - t_elapsed)
         if time_remaining <= np.float32(1e-4):
             break
 
@@ -1633,7 +1640,7 @@ def _run_inertial_substeps(
             dt_substep=dt_substep,
         )
 
-        t_elapsed += dt_substep
+        t_elapsed += dt_substep_f64
         substep_count += 1
 
         if t_elapsed < dt_f32:

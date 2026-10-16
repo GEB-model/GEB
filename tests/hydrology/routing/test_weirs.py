@@ -58,12 +58,15 @@ def test_no_flow_below_crest_or_equal_levels(stages: tuple[float, float]) -> Non
     )
 
 
-def make_weir_channel(enabled: bool, dt_s: int = 60) -> LocalInertial:
+def make_weir_channel(
+    enabled: bool, dt_s: int = 60, in_spinup: bool = False
+) -> LocalInertial:
     """Create a 12-reach test channel with one half-bankfull-depth weir.
 
     Args:
         enabled: Whether the weir controls discharge.
         dt_s: Macro routing timestep (seconds).
+        in_spinup: Whether to disable weir hydraulics for spinup.
 
     Returns:
         Router with 200 m reaches, 10 m width and 2 m bankfull depth.
@@ -85,7 +88,34 @@ def make_weir_channel(enabled: bool, dt_s: int = 60) -> LocalInertial:
         bankfull_river_elevation_m=np.linspace(1.1, 0, count, dtype=np.float32),
         weir_bankfull_depth_fraction=fractions,
         weirs_enabled=enabled,
+        in_spinup=in_spinup,
     )
+
+
+@pytest.mark.parametrize("in_spinup", [False, True])
+def test_weirs_only_control_flow_during_run(in_spinup: bool) -> None:
+    """Preserve weir inputs but apply hydraulic controls only outside spinup.
+
+    Args:
+        in_spinup: Whether the router is estimating weir-free spinup discharge.
+
+    Returns:
+        None. Checks active controls and exact weir-free spinup equivalence.
+
+    Raises:
+        AssertionError: If a spinup weir alters flow or a run omits its control.
+    """  # noqa: DOC202, DOC502
+    router: LocalInertial = make_weir_channel(True, in_spinup=in_spinup)
+    assert router.weir_bankfull_depth_fraction[6] == 0.5
+    assert router.weirs_enabled == (not in_spinup)
+    assert len(router._geometry.weir_indices) == (0 if in_spinup else 1)
+    if in_spinup:
+        reference: LocalInertial = make_weir_channel(False, in_spinup=True)
+        actual: tuple = run_channel(router, duration_s=600)
+        expected: tuple = run_channel(reference, duration_s=600)
+        np.testing.assert_array_equal(actual[0], expected[0])
+        np.testing.assert_array_equal(actual[1], expected[1])
+        np.testing.assert_array_equal(actual[2], expected[2])
 
 
 def run_channel(
@@ -216,7 +246,7 @@ def test_weir_timestep_convergence() -> None:
 
 @pytest.mark.parametrize("enabled", [True, False])
 def test_real_model_profile_exports(tmp_path: Path, enabled: bool) -> None:
-    """Export elevations and profiles for the same cells in both comparison runs.
+    """Export daily values and multi-cell snapshots for enabled and disabled weirs.
 
     Args:
         tmp_path: Temporary output directory.
@@ -239,6 +269,31 @@ def test_real_model_profile_exports(tmp_path: Path, enabled: bool) -> None:
     assert table.grid_cell.tolist() == [6]
     assert table.weir_height_m.tolist() == [1.0]
     assert table.weirs_enabled.tolist() == [enabled]
+    assert table.crest_width_m.iloc[0] == pytest.approx(10 * np.sqrt(0.5))
+    assert table.bankfull_width_m.iloc[0] == 10
+    assert table.downstream_bankfull_width_m.iloc[0] == 10
+    assert table.downstream_bankfull_depth_m.iloc[0] == 2
+    assert table.upstream_water_depth_m.iloc[0] == pytest.approx(
+        table.upstream_water_level_m.iloc[0] - table.bed_elevation_m.iloc[0]
+    )
+    assert table.downstream_water_depth_m.iloc[0] == pytest.approx(
+        table.downstream_water_level_m.iloc[0]
+        - table.downstream_bed_elevation_m.iloc[0]
+    )
+    detail: Path = tmp_path / "water_levels_weir_6.png"
+    assert detail.is_file() and detail.stat().st_size > 100
+    profile: pd.DataFrame = pd.read_csv(detail.with_suffix(".csv"))
+    assert profile.grid_cell.tolist() == list(range(2, 12))
+    assert profile.distance_upstream_edge_m.iloc[0] == -1000
+    assert profile.distance_downstream_edge_m.iloc[-1] == 1000
+    assert (
+        profile.loc[profile.grid_cell == 6, "distance_downstream_edge_m"].iloc[0] == 0
+    )
+    np.testing.assert_allclose(
+        profile.water_depth_m,
+        np.maximum(profile.water_level_m - profile.bed_elevation_m, 0),
+        atol=5e-7,
+    )
     assert table.upstream_head_m.iloc[0] == pytest.approx(
         max(table.upstream_water_level_m.iloc[0] - table.crest_elevation_m.iloc[0], 0),
         abs=5e-7,
@@ -248,17 +303,6 @@ def test_real_model_profile_exports(tmp_path: Path, enabled: bool) -> None:
         abs=5e-7,
     )
     assert table.crest_elevation_m.iloc[0] == pytest.approx(router.bed_elevation[6] + 1)
-    profiles: pd.DataFrame = pd.read_csv(
-        tmp_path / "water_levels_2000-01-01_profiles.csv"
-    )
-    assert profiles.grid_cell.tolist() == [4, 5, 6, 7, 8]
-    np.testing.assert_allclose(
-        profiles.water_depth_m,
-        profiles.water_level_m - profiles.bed_elevation_m,
-        atol=5e-7,
-    )
-    assert profiles.focal_grid_cell.eq(6).all()
-    assert profiles.water_depth_m.ge(0).all()
     router.weir_bankfull_depth_fraction[:] = 0
     assert (
         plot_weir_water_levels(
@@ -303,12 +347,13 @@ def test_momentum_weir_reverse_policy(can_reverse: bool) -> None:
     Args:
         can_reverse: Whether upstream directed flow is permitted.
     """
-    from geb.hydrology.routing.geometry import GEOM_IN_WEIR_HEIGHT
+    from geb.hydrology.routing.geometry import GEOM_IN_WEIR_HEIGHT, GEOM_IN_WEIR_WIDTH
     from geb.hydrology.routing.solver import solve_inertial_momentum
     from tests.hydrology.routing.test_solver import _create_single_reach_geometry
 
     inbank, overbank = _create_single_reach_geometry()
     inbank[0, GEOM_IN_WEIR_HEIGHT] = 1
+    inbank[0, GEOM_IN_WEIR_WIDTH] = 10 * np.sqrt(0.5)
     flow: np.float32 = solve_inertial_momentum(
         reach_idx=0,
         effective_depth=np.float32(1),
@@ -369,6 +414,7 @@ def test_unsupported_outlet_weir_is_ignored() -> None:
         river_width=router.river_width,
         bankfull_depth_m=router.bankfull_depth,
         weir_bankfull_depth_fraction=fractions,
+        in_spinup=False,
     )
     assert rebuilt.weir_height_m[-1] == 0
     assert rebuilt._geometry.weir_indices.size == 1
@@ -437,7 +483,10 @@ def test_weir_timestep_matches_storage_response(depth_m: float) -> None:
         inverse_area += (stage_plus - stage_minus) / (2 * perturbation_m3)
     flow: float = float(
         rectangular_weir_discharge(
-            stages[upstream], stages[downstream], np.float32(1.5), np.float32(10)
+            stages[upstream],
+            stages[downstream],
+            np.float32(1.5),
+            np.float32(10 * np.sqrt(0.5)),
         )
     )
     expected_dt: float = min(
@@ -474,3 +523,99 @@ def test_invalid_crest_geometry(height_m: float) -> None:
             pit_slope=np.array([0.001], dtype=np.float32),
             weir_height_m=np.array([height_m], dtype=np.float32),
         )
+
+
+@pytest.mark.parametrize("fraction", [0.5, 0.75])
+def test_crest_width_and_geometry_update(fraction: float) -> None:
+    """Use width at crest height and refresh both dimensions with geometry.
+
+    Args:
+        fraction: Crest fraction of bankfull depth, dimensionless.
+    """
+    from geb.hydrology.routing.geometry import GEOM_IN_WEIR_WIDTH
+
+    router: LocalInertial = make_weir_channel(True)
+    router.weir_bankfull_depth_fraction[6] = fraction
+    router.update_channel_geometry(router.river_width, router.bankfull_depth)
+    reach: int = int(router._geometry.weir_indices[0])
+    assert router.weir_height_m[6] == pytest.approx(2 * fraction)
+    assert router._geometry.geom_inbank[reach, GEOM_IN_WEIR_WIDTH] == pytest.approx(
+        10 * np.sqrt(fraction)
+    )
+    router.update_channel_geometry(router.river_width * 2, router.bankfull_depth * 2)
+    assert router.weir_height_m[6] == pytest.approx(4 * fraction)
+    assert router._geometry.geom_inbank[reach, GEOM_IN_WEIR_WIDTH] == pytest.approx(
+        20 * np.sqrt(fraction)
+    )
+
+
+def test_three_quarter_depth_weir_backwater() -> None:
+    """Conserve water and pass steady inflow over a three-quarter-depth crest."""
+    router: LocalInertial = make_weir_channel(True)
+    router.weir_bankfull_depth_fraction[6] = 0.75
+    router.update_channel_geometry(router.river_width, router.bankfull_depth)
+    stages: np.ndarray
+    storage: np.ndarray
+    flow: np.ndarray
+    stages, storage, flow = run_channel(router)
+    assert stages[6] > router.bed_elevation[6] + 1.5
+    assert storage.min() >= 0
+    assert np.mean(flow[-30:]) == pytest.approx(1, abs=0.03)
+
+
+def test_daily_weir_history_and_reset(tmp_path: Path) -> None:
+    """Keep non-rendered days, refresh one PNG and reset a repeated simulation.
+
+    Args:
+        tmp_path: Temporary diagnostic directory.
+
+    Returns:
+        None. Checks recorded dates, changing geometry and fixed file count.
+    """  # noqa: DOC202
+    from datetime import date
+
+    import pandas as pd
+
+    from geb.hydrology.routing.plots import plot_weir_water_levels
+
+    router: LocalInertial = make_weir_channel(True)
+    river_ids: np.ndarray = np.arange(12, dtype=np.int32)
+    plot_weir_water_levels(router, river_ids, tmp_path, date(2000, 1, 1), reset=True)
+    router.update_channel_geometry(router.river_width * 2, router.bankfull_depth * 2)
+    assert (
+        plot_weir_water_levels(
+            router, river_ids, tmp_path, date(2000, 1, 2), render=False
+        )
+        is None
+    )
+    paths: tuple[Path, Path] | None = plot_weir_water_levels(
+        router, river_ids, tmp_path, date(2000, 1, 3)
+    )
+    assert paths is not None
+    history: pd.DataFrame = pd.read_csv(paths[1])
+    assert history.date.tolist() == ["2000-01-01", "2000-01-02", "2000-01-03"]
+    assert history.grid_cell.tolist() == [6, 6, 6]
+    assert history.bankfull_width_m.tolist() == [10, 20, 20]
+    assert len(list(tmp_path.glob("*.png"))) == 1
+    plot_weir_water_levels(router, river_ids, tmp_path, date(2000, 1, 1), reset=True)
+    assert len(pd.read_csv(paths[1])) == 1
+
+
+@pytest.mark.parametrize(
+    "upstream,expected",
+    [(0, list(range(6))), (6, list(range(2, 12))), (11, list(range(7, 12)))],
+)
+def test_weir_profile_extent(upstream: int, expected: list[int]) -> None:
+    """Follow routing cells on both sides and stop at river boundaries.
+
+    Args:
+        upstream: Focal upstream reach index.
+        expected: Ordered reach indices expected in the side view.
+
+    Returns:
+        None. Checks profile extent, order and boundary handling.
+    """  # noqa: DOC202
+    from geb.hydrology.routing.plots import _weir_profile
+
+    router: LocalInertial = make_weir_channel(True)
+    assert _weir_profile(router, upstream).tolist() == expected

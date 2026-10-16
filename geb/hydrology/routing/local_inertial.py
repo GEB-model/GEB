@@ -179,9 +179,11 @@ class LocalInertial:
             river_storage_beta: Kinematic wave beta parameter per reach (dimensionless).
             min_slope: Minimum allowable slope for ocean/pit boundary boundaries (dimensionless).
             in_spinup: Whether the model is in spinup mode.
-            weirs_enabled: Whether snapped weirs control flow. Disable for comparison runs.
+            weirs_enabled: Whether snapped weirs control flow during the run.
+                Weirs are always inactive during spinup.
             weir_bankfull_depth_fraction: Grid-order fractions (dimensionless):
-                0.5 at weirs, zero elsewhere. None means no weirs. Recorded
+                0.75 at newly built weirs, zero elsewhere. Legacy 0.5 fractions
+                remain supported until setup_weirs is rerun. None means no weirs. Recorded
                 AMBER heights are ignored.
 
         Raises:
@@ -243,7 +245,8 @@ class LocalInertial:
         self.retention_max_storage_m3 = retention_max_storage_m3
         self.controlled_retention = controlled_retention
         self.bankfull_depth = bankfull_depth_m
-        self.weirs_enabled: bool = weirs_enabled
+        # Spinup discharge determines channel geometry without barrier feedback.
+        self.weirs_enabled: bool = weirs_enabled and not in_spinup
         self.weir_bankfull_depth_fraction: ArrayFloat32 = (
             np.zeros_like(bankfull_depth_m)
             if weir_bankfull_depth_fraction is None
@@ -251,10 +254,10 @@ class LocalInertial:
         )
         if (
             self.weir_bankfull_depth_fraction.shape != bankfull_depth_m.shape
-            or not np.isin(self.weir_bankfull_depth_fraction, [0.0, 0.5]).all()
+            or not np.isin(self.weir_bankfull_depth_fraction, [0.0, 0.5, 0.75]).all()
         ):
             raise ValueError(
-                "Weir fractions must match river cells and contain only 0 or 0.5."
+                "Weir fractions must match river cells and contain only 0, 0.5 (legacy), or 0.75."
             )
 
         n_nodes_total = is_pit.size
@@ -517,7 +520,7 @@ class LocalInertial:
             rev_demand_buf=np.empty(n_inertial, dtype=np.float32),
             wb_release_volume_substep=np.empty(n_inertial, dtype=np.float32),
             total_flow_rate_buf=np.empty(n_inertial, dtype=np.float32),
-            discharge_vol_sum_inertial=np.empty(n_inertial, dtype=np.float32),
+            discharge_vol_sum_inertial=np.empty(n_inertial, dtype=np.float64),
             retention_inflow_limit_sub_buf=np.empty(n_ret, dtype=np.float64),
             retention_max_outflow_limit_sub_buf=np.empty(n_ret, dtype=np.float64),
             wb_outflow_avail_buf=np.empty(n_wb, dtype=np.float64),
@@ -673,7 +676,7 @@ class LocalInertial:
 
     @property
     def weir_height_m(self) -> ArrayFloat32:
-        """Return weir heights as half the current bankfull depth.
+        """Return weir heights from their stored bankfull-depth fractions.
 
         Returns:
             Heights above the modeled river bed (meters), in grid order; zero

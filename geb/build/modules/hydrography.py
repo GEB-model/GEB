@@ -1583,11 +1583,12 @@ class Hydrography(BuildModelBase):
 
     @build_method(required=False, depends_on=["setup_waterbodies"])
     def setup_weirs(self) -> None:
-        """Save AMBER weirs with heights equal to half the modeled bankfull depth.
+        """Represent all AMBER barrier types as three-quarter-bankfull-depth weirs.
 
-        Only weirs within 250 m of a represented river line are considered.
-        Recorded AMBER heights are ignored, including missing heights. Other
-        structure types and waterbody connections are excluded. If the closest
+        All barrier types within 250 m of a represented river line are considered.
+        Original types and recorded heights are retained as metadata; all types
+        use the same assigned height and rectangular overflow representation.
+        Waterbody connections are excluded. If the closest
         cell is occupied, try the second-closest distinct cell on the same river
         segment. Keep existing placements when the fallback is also unavailable.
         The build stores locations and height fractions; rectangular
@@ -1595,7 +1596,7 @@ class Hydrography(BuildModelBase):
 
         Returns:
             None. Writes routing/weir_bankfull_depth_fraction (dimensionless)
-            with 0.5 at snapped weirs, and routing/weirs
+            with 0.75 at snapped weirs, and routing/weirs
             source-point diagnostics, including grid indices and exclusion reasons.
 
         Raises:
@@ -1635,7 +1636,7 @@ class Hydrography(BuildModelBase):
         self.set_grid(fractions, name="routing/weir_bankfull_depth_fraction")
         self.set_geom(records, name="routing/weirs")
         self.logger.info(
-            "AMBER weirs: %s included; exclusions: %s",
+            "AMBER barriers represented as weirs: %s included; exclusions: %s",
             int(records.included.sum()),
             records.loc[~records.included, "exclusion_reason"].value_counts().to_dict(),
         )

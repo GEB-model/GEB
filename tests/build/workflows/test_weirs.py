@@ -87,7 +87,7 @@ def test_metric_distance_limit(latitude: float, distance_m: float) -> None:
     fractions, records = snap_amber_weirs(points, rivers, valid)
     assert records.included.tolist() == [distance_m <= 250.0]
     assert records.distance_to_river_m.iloc[0] == pytest.approx(distance_m, abs=1e-5)
-    assert fractions.values[0, 0] == (0.5 if distance_m <= 250.0 else 0.0)
+    assert fractions.values[0, 0] == (0.75 if distance_m <= 250.0 else 0.0)
     assert records.geometry.iloc[0] == points.geometry.iloc[0]
     if distance_m <= 250.0:
         assert records.grid_column.iloc[0] == records.grid_row.iloc[0] == 0
@@ -99,7 +99,6 @@ def test_metric_distance_limit(latitude: float, distance_m: float) -> None:
 @pytest.mark.parametrize(
     "case",
     [
-        "other_type",
         "no_rivers",
         "unsuitable",
         "no_cells",
@@ -121,9 +120,7 @@ def test_excluded_weirs(case: str) -> None:
     rivers: gpd.GeoDataFrame
     valid: xr.DataArray
     points, rivers, valid = make_inputs()
-    if case == "other_type":
-        points["dam_type"] = "Dam"
-    elif case == "no_rivers":
+    if case == "no_rivers":
         rivers = rivers.iloc[:0]
     elif case == "unsuitable":
         valid.values[:] = False
@@ -136,6 +133,41 @@ def test_excluded_weirs(case: str) -> None:
     assert not records.included.any()
     assert records.exclusion_reason.ne("").all()
     assert records.grid_row.eq(-1).all()
+
+
+@pytest.mark.parametrize(
+    "barrier_type", ["Weir", "Dam", "Sluice", "Culvert", "Ford", "Ramp", "Other", None]
+)
+def test_all_barrier_types_use_weir_representation(barrier_type: str | None) -> None:
+    """Assign the same weir fraction regardless of the recorded barrier type.
+
+    Args:
+        barrier_type: AMBER classification, including an unknown or missing type.
+
+    Returns:
+        None. Checks placement, assigned height and preservation of source metadata.
+
+    Raises:
+        AssertionError: If a type is excluded or its metadata is changed.
+    """  # noqa: DOC202, DOC502
+    points: gpd.GeoDataFrame
+    rivers: gpd.GeoDataFrame
+    valid: xr.DataArray
+    points, rivers, valid = make_inputs()
+    points["dam_type"] = barrier_type
+    fractions: xr.DataArray
+    records: gpd.GeoDataFrame
+    fractions, records = snap_amber_weirs(points, rivers, valid)
+    assert records.included.tolist() == [True]
+    assert fractions.values[0, 0] == 0.75
+    assert records.dam_type.iloc[0] == barrier_type
+    # Non-weir types still obey the distance limit.
+    points, rivers, valid = make_inputs(distance_m=251.0)
+    points["dam_type"] = barrier_type
+    fractions, records = snap_amber_weirs(points, rivers, valid)
+    assert not fractions.values.any()
+    assert records.included.tolist() == [False]
+    assert records.exclusion_reason.tolist() == ["farther than 250 m"]
 
 
 @pytest.mark.parametrize("case", ["missing_crs", "invalid_grid", "invalid_cells"])
@@ -165,7 +197,9 @@ def test_invalid_inputs(case: str) -> None:
         snap_amber_weirs(points, rivers, valid)
 
 
-@pytest.mark.parametrize("case", ["valid", "waterbody", "masked", "outlet", "empty"])
+@pytest.mark.parametrize(
+    "case", ["valid", "other_type", "waterbody", "masked", "outlet", "empty"]
+)
 def test_setup_weirs_saved_inputs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
@@ -186,6 +220,8 @@ def test_setup_weirs_saved_inputs(
     rivers: gpd.GeoDataFrame
     valid: xr.DataArray
     points, rivers, valid = make_inputs()
+    if case == "other_type":
+        points["dam_type"] = "Dam"
     builder: GEBModel = GEBModel(logger=logging.getLogger(__name__), root=tmp_path)
     builder.files = builder.read_or_create_file_library()
     builder.set_geom(
@@ -230,13 +266,15 @@ def test_setup_weirs_saved_inputs(
     records: gpd.GeoDataFrame = gpd.read_parquet(
         tmp_path / "geom/routing/weirs.geoparquet"
     )
-    assert bool((fractions.values > 0).any()) == (case == "valid")
-    assert records.included.tolist() == ([] if case == "empty" else [case == "valid"])
+    included: bool = case in ("valid", "other_type")
+    assert bool((fractions.values > 0).any()) == included
+    assert records.included.tolist() == ([] if case == "empty" else [included])
     assert records.crs.to_epsg() == 4326
-    if case == "valid":
-        assert fractions.values[0, 0] == 0.5
-        assert records.bankfull_depth_fraction.iloc[0] == 0.5
+    if included:
+        assert fractions.values[0, 0] == 0.75
+        assert records.bankfull_depth_fraction.iloc[0] == 0.75
         assert records.dam_hgt_m.iloc[0] == 2.0
+        assert records.dam_type.iloc[0] == points.dam_type.iloc[0]
 
 
 def test_weir_migration(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -283,7 +321,7 @@ def test_distance_limit_applies_to_line() -> None:
     fractions, records = snap_amber_weirs(points, rivers, valid)
     assert records.included.tolist() == [True]
     assert records.distance_to_river_m.iloc[0] < 1.0
-    assert fractions.values.sum() == 0.5
+    assert fractions.values.sum() == 0.75
     assert (
         Geod(ellps="WGS84").inv(
             points.geometry.iloc[0].x,
@@ -317,13 +355,13 @@ def test_recorded_heights_are_ignored(recorded_height: float | None) -> None:
     records: gpd.GeoDataFrame
     fractions, records = snap_amber_weirs(points, rivers, valid)
     assert records.included.tolist() == [True]
-    assert fractions.values[0, 0] == records.bankfull_depth_fraction.iloc[0] == 0.5
+    assert fractions.values[0, 0] == records.bankfull_depth_fraction.iloc[0] == 0.75
     # Source height is metadata, so its entire column may be absent as well.
     fractions, records = snap_amber_weirs(
         gpd.GeoDataFrame(points.drop(columns="dam_hgt_m")), rivers, valid
     )
     assert records.included.tolist() == [True]
-    assert fractions.values[0, 0] == records.bankfull_depth_fraction.iloc[0] == 0.5
+    assert fractions.values[0, 0] == records.bankfull_depth_fraction.iloc[0] == 0.75
 
 
 @pytest.mark.parametrize("second_cell_valid", [False, True])
@@ -363,7 +401,7 @@ def test_collisions_keep_first_and_try_second_cell(second_cell_valid: bool) -> N
     assert records.grid_column.tolist() == [0, 1 if second_cell_valid else -1, -1]
     assert records.loc[records.included, "river_id"].eq(7).all()
     assert fractions.values[0, 2] == 0  # Do not search farther along the segment.
-    assert fractions.values.sum() == 0.5 * (1 + second_cell_valid)
+    assert fractions.values.sum() == 0.75 * (1 + second_cell_valid)
     assert records.distance_to_cell_m.iloc[0] == pytest.approx(100, abs=1e-5)
     assert records.geometry.equals(points.geometry)
     assert records.exclusion_reason.iloc[-1] == (
@@ -396,4 +434,4 @@ def test_one_cell_collision_keeps_first_weir() -> None:
     fractions, records = snap_amber_weirs(points, rivers, valid)
     assert records.included.tolist() == [True, False]
     assert records.exclusion_reason.tolist() == ["", "cell already used"]
-    assert fractions.values.sum() == 0.5
+    assert fractions.values.sum() == 0.75

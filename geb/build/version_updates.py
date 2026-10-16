@@ -13,6 +13,10 @@ if TYPE_CHECKING:
     from geb.build import GEBModel as GEBModelBuild
 
 VERSION_UPDATES: dict[str, list[str]] = {
+    "1.0.0b38": [
+        "[update-method;setup_weirs]",
+        "[manual] All AMBER barrier types are represented as weirs with crests at 0.75 bankfull depth and width at crest height. Rerun setup_weirs, then rerun spinup without weir effects and simulation with weirs. Channel dimensions are saved during spinup and fixed during the run. Existing 0.5-depth inputs retain their stored heights until updated.",
+    ],
     "1.0.0b37": [
         "[update-method;setup_weirs]",
         "[manual] AMBER weirs now control river flow. Remove any old setup_weirs.height_m option and rerun setup_weirs, then rerun spinup and simulation with the same hydrology.routing.weirs setting (default true).",

@@ -56,6 +56,7 @@ def _make_local_inertial(
     river_storage_beta: np.ndarray | None = None,
     weir_bankfull_depth_fraction: ArrayFloat32 | None = None,
     weirs_enabled: bool = True,
+    in_spinup: bool = True,
 ) -> LocalInertial:
     """Helper to instantiate LocalInertial for unit tests with explicit required arrays.
 
@@ -151,7 +152,7 @@ def _make_local_inertial(
         waterbody_outflow_bed_elev=waterbody_outflow_bed_elev,
         river_storage_alpha=river_storage_alpha,
         river_storage_beta=river_storage_beta,
-        in_spinup=True,
+        in_spinup=in_spinup,
         weir_bankfull_depth_fraction=weir_bankfull_depth_fraction,
         weirs_enabled=weirs_enabled,
     )
@@ -4872,7 +4873,7 @@ def test_invalid_weir_fractions(
         ldd, mask, transform=Affine.identity()
     )
     cell_count: int = int(mask.sum())
-    with pytest.raises(ValueError, match="only 0 or 0.5"):
+    with pytest.raises(ValueError, match=r"only 0, 0.5 \(legacy\), or 0.75"):
         _make_local_inertial(
             dt=15,
             river_network=network,

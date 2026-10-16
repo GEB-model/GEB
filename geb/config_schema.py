@@ -262,7 +262,7 @@ class RoutingConfig(BaseModel):
     weirs: bool = Field(
         True,
         strict=True,
-        description="Apply rectangular overflow at snapped AMBER weirs.",
+        description="Apply rectangular overflow at snapped AMBER barriers during the run; weirs are always inactive during spinup.",
     )
     minimum_river_slope_m_per_m: float = Field(
         1e-4,

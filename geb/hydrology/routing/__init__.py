@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import geopandas as gpd
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 import pyflwdir
 from affine import Affine
@@ -368,6 +369,7 @@ class RoutingVariables(Bucket):
     active_rivers: gpd.GeoDataFrame
     observed_average_river_width: ArrayFloat32
     river_width: ArrayFloat32
+    bankfull_depth_m: ArrayFloat32
     river_storage_m3: ArrayFloat64
     water_stage_m: ArrayFloat32
     discharge_in_rivers_m3_s_substep: ArrayFloat32
@@ -796,7 +798,11 @@ class Routing(Module):
             width_grid: Bankfull channel width per routing grid cell (meters).
             depth_grid: Bankfull channel depth per routing grid cell (meters).
             manning_grid: Channel Manning roughness per routing grid cell (s/m^(1/3)).
-        """
+
+        Returns:
+            None. Saves grid depths for checkpoints and updates reach attributes.
+        """  # noqa: DOC202
+        self.var.bankfull_depth_m = depth_grid.copy()
         valid_river_cell_mask: ArrayBool = self.var.river_ids != -1
         valid_reach_ids: ArrayInt32 = self.var.river_ids[valid_river_cell_mask]
         valid_widths: ArrayFloat32 = width_grid[valid_river_cell_mask]
@@ -1327,6 +1333,39 @@ class Routing(Module):
 
         return bankfull_depth_m
 
+    def get_bankfull_geometry(self) -> tuple[ArrayFloat32, ArrayFloat32]:
+        """Restore spinup channel dimensions or derive them during spinup.
+
+        Notes:
+            Older checkpoints without saved grid depths fall back to their saved
+            spinup return-period discharge. Run discharge never determines geometry.
+
+        Returns:
+            Bankfull top widths and depths in grid order (meters).
+
+        Raises:
+            ValueError: If saved dimensions are invalid or do not match the grid.
+        """
+        width_m: ArrayFloat32
+        depth_m: ArrayFloat32
+        if not self.model.in_spinup and hasattr(self.var, "bankfull_depth_m"):
+            width_m = self.var.river_width.copy()
+            depth_m = self.var.bankfull_depth_m.copy()
+            if (
+                width_m.shape != self.var.river_ids.shape
+                or depth_m.shape != self.var.river_ids.shape
+                or not np.isfinite(width_m).all()
+                or not np.isfinite(depth_m).all()
+                or np.any(width_m <= 0)
+                or np.any(depth_m <= 0)
+            ):
+                raise ValueError("Saved spinup channel dimensions are invalid.")
+            return width_m, depth_m
+        use_simulated_bankfull_q: bool = self.has_simulated_bankfull_q
+        width_m = self.calculate_bankfull_width(use_simulated_bankfull_q)
+        depth_m = self.calculate_bankfull_depth(width_m, use_simulated_bankfull_q)
+        return width_m, depth_m
+
     def set_router(self) -> None:
         """Initialize the local inertial routing algorithm with derived river geometry.
 
@@ -1341,7 +1380,13 @@ class Routing(Module):
             that waterbody footprints are flattened and state variables (either synthesized during
             spinup or restored from checkpoint storage) are available before deriving
             setting up the local inertial routing solver.
-        """
+
+        Returns:
+            None. Initializes the router using spinup-derived channel dimensions.
+
+        Raises:
+            ValueError: If saved channel dimensions or routing inputs are invalid.
+        """  # noqa: DOC202, DOC502
         is_waterbody_outflow: ArrayBool = self.grid.var.waterbody_outflow_points != -1
         retention_basin_release_threshold_factor: float = self.config[
             "retention_basins"
@@ -1351,13 +1396,10 @@ class Routing(Module):
         # non-river overland cells (river_ids == -1) use kinematic wave routing:
         use_kinematic: ArrayBool = self.var.river_ids == -1
 
-        # Bankfull channel width and depth (m):
-        # Use simulated 2-year return period discharge if it has already been estimated;
-        # otherwise, fall back to empirical downstream hydraulic geometry width inversion:
-        use_simulated_bankfull_q: bool = self.has_simulated_bankfull_q
-        bankfull_top_width_m: ArrayFloat32 = self.calculate_bankfull_width(
-            use_simulated_bankfull_q=use_simulated_bankfull_q
-        )
+        # Preserve the exact spinup cross-sections when activating weirs in a run.
+        bankfull_top_width_m: ArrayFloat32
+        bankfull_depth_m: ArrayFloat32
+        bankfull_top_width_m, bankfull_depth_m = self.get_bankfull_geometry()
         self.var.river_width = bankfull_top_width_m
 
         # Continuous power-law channel shape exponent r (dimensionless):
@@ -1369,11 +1411,6 @@ class Routing(Module):
         )
         shape_exponent: ArrayFloat32 = np.full(
             self.var.river_ids.shape, shape_exponent_val, dtype=np.float32
-        )
-
-        bankfull_depth_m: ArrayFloat32 = self.calculate_bankfull_depth(
-            bankfull_top_width_m=bankfull_top_width_m,
-            use_simulated_bankfull_q=use_simulated_bankfull_q,
         )
 
         # Update derived bankfull width and depth to self.var.rivers
@@ -1551,6 +1588,9 @@ class Routing(Module):
                 bankfull_river_elev + np.float32(0.01),
                 bankfull_river_elev,
             ).astype(np.float32)
+
+        if not self.model.in_spinup and self.controlled_retention.size:
+            self.set_retention_activation_thresholds()
 
         self.router.initialize_stage(
             water_stage_m=self.var.water_stage_m,
@@ -1915,6 +1955,7 @@ class Routing(Module):
                     use_simulated_bankfull_q=True,
                 )
                 self.router.update_channel_geometry(dynamic_width, dynamic_depth_m)
+                self.var.bankfull_depth_m = dynamic_depth_m.copy()
 
         for hour in range(24):
             # increment inflow index for next hour
@@ -2122,11 +2163,11 @@ class Routing(Module):
             out=self.var.discharge_m3_s,
         )
 
-        # Update return periods on January 1st of each year, with the exception when the first
-        # day of the year is the start of the spinup period. In that case, we don't have any
-        # data to fit with yet.
-        if self.model.current_day_of_year == 1 and (
-            self.model.current_timestep > 0 or not self.model.in_spinup
+        # Only weir-free spinup discharge may determine channel geometry.
+        if (
+            self.model.in_spinup
+            and self.model.current_day_of_year == 1
+            and self.model.current_timestep > 0
         ):
             self.update_return_periods()
 
@@ -2201,10 +2242,7 @@ class Routing(Module):
             self.var.retention_inflow_m3_daily = retention_inflow_m3
             self.var.retention_outflow_m3_daily = retention_outflow_m3
 
-        if np.any(self.router.weir_bankfull_depth_fraction) and (
-            self.model.current_time.day == 1
-            or self.model.current_timestep == self.model.n_timesteps - 1
-        ):
+        if np.any(self.router.weir_bankfull_depth_fraction):
             from .plots import plot_weir_water_levels
 
             plot_weir_water_levels(
@@ -2212,6 +2250,12 @@ class Routing(Module):
                 self.var.river_ids,
                 self.model.output_folder / "weirs",
                 self.model.current_time.date(),
+                render=(
+                    self.model.current_timestep == 0
+                    or self.model.current_time.day == 1
+                    or self.model.current_timestep == self.model.n_timesteps - 1
+                ),
+                reset=self.model.current_timestep == 0,
             )
 
         self.report(locals())
@@ -2280,12 +2324,17 @@ class Routing(Module):
 
         Estimates the 2-year flood return period discharge (and retention basin
         activation threshold discharge) for each active river segment using extreme
-        value analysis on daily simulated river outflow. Dynamically updates bankfull
-        channel width, bankfull depth, and the local inertial router geometry.
+        value analysis on daily spinup river outflow. During spinup, updates and
+        saves bankfull width, depth and router geometry. Explicit return-period
+        estimation outside spinup reads only spinup reports and leaves channel
+        geometry unchanged.
+
+        Returns:
+            None. Updates return-period estimates and retention thresholds.
 
         Raises:
             ValueError: If a retention basin has no associated grid cells.
-        """
+        """  # noqa: DOC202, DOC502
         activation_threshold_return_period_years: float = self.config[
             "retention_basins"
         ]["activation_threshold_return_period_years"]
@@ -2312,26 +2361,6 @@ class Routing(Module):
                 source="file",
                 folder=folder,
             )
-
-            if self.model.current_timestep > 0:
-                sample_key: str = (
-                    f"river_outflow_hourly_m3_per_s_{active_rivers.index[0]}"
-                )
-                if (
-                    self.variables_to_report is not None
-                    and sample_key in self.variables_to_report
-                    and self.variables_to_report[sample_key]["_var_index"] > 0
-                ):
-                    discharge_by_river_run: pd.DataFrame = get_discharge_per_river(
-                        rivers=active_rivers,
-                        all_rivers=self.var.rivers,
-                        source="memory",
-                        variables_to_report=self.variables_to_report,
-                    )
-
-                    discharge_by_river = pd.concat(
-                        [discharge_by_river, discharge_by_river_run], axis=0
-                    )
 
         discharge_by_river_daily: pd.DataFrame = discharge_by_river.resample(
             "D", label="left"
@@ -2373,28 +2402,49 @@ class Routing(Module):
                     self.default_minimum_discharge_m3_per_s,
                 )
 
-        # For channels without observed width, estimate bankfull width from the newly fitted 2-year return period discharge
-        # using downstream hydraulic geometry W = alpha * Q2^beta:
-        self.var.river_width = self.calculate_bankfull_width(
-            use_simulated_bankfull_q=True
-        )
+        if self.model.in_spinup:
+            # For channels without observed width, estimate bankfull width from the newly fitted 2-year return period discharge
+            # using downstream hydraulic geometry W = alpha * Q2^beta:
+            self.var.river_width = self.calculate_bankfull_width(
+                use_simulated_bankfull_q=True
+            )
 
-        # Dynamically update the local inertial router's bankfull depth in place
-        # using the newly fitted 2-year flood return periods:
-        updated_bankfull_depth: ArrayFloat32 = self.calculate_bankfull_depth(
-            bankfull_top_width_m=self.var.river_width,
-            use_simulated_bankfull_q=True,
-        )
-        self.router.update_channel_geometry(
-            river_width=self.var.river_width,
-            bankfull_depth_m=updated_bankfull_depth,
-        )
-        self._update_rivers_geometry(
-            width_grid=self.var.river_width,
-            depth_grid=updated_bankfull_depth,
-            manning_grid=self.grid.var.river_mannings,
-        )
+            # Dynamically update the local inertial router's bankfull depth in place
+            # using the newly fitted 2-year flood return periods:
+            updated_bankfull_depth: ArrayFloat32 = self.calculate_bankfull_depth(
+                bankfull_top_width_m=self.var.river_width,
+                use_simulated_bankfull_q=True,
+            )
+            self.router.update_channel_geometry(
+                river_width=self.var.river_width,
+                bankfull_depth_m=updated_bankfull_depth,
+            )
+            self._update_rivers_geometry(
+                width_grid=self.var.river_width,
+                depth_grid=updated_bankfull_depth,
+                manning_grid=self.grid.var.river_mannings,
+            )
 
+        self.set_retention_activation_thresholds()
+
+        return None
+
+    def set_retention_activation_thresholds(self) -> None:
+        """Set retention thresholds from the stored spinup return periods.
+
+        Returns:
+            None. Updates basin activation discharges (m3/s) without changing channels.
+
+        Raises:
+            ValueError: If a retention basin has no associated grid cells.
+        """  # noqa: DOC202
+        activation_threshold_return_period_years: float = self.config[
+            "retention_basins"
+        ]["activation_threshold_return_period_years"]
+        basin_id: int
+        basin_cells: npt.NDArray[np.int64]
+        river_id: np.int32
+        return_period_col: str
         for basin_id in range(len(self.retention_basin_data)):
             basin_cells = np.where(self.retention_basin_ids == basin_id)[0]
             if len(basin_cells) == 0:
@@ -2416,5 +2466,3 @@ class Routing(Module):
                         float(self.var.rivers.loc[river_id, return_period_col]),
                         self.default_minimum_discharge_m3_per_s,
                     )
-
-        return None

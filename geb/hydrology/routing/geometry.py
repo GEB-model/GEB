@@ -26,6 +26,7 @@ __all__: list[str] = [
     "GEOM_IN_MANNING_N_SQUARED",
     "GEOM_IN_NUM_COLS",
     "GEOM_IN_WEIR_HEIGHT",
+    "GEOM_IN_WEIR_WIDTH",
     "GEOM_IN_STAGE_VOLUME_COEFFICIENT",
     "GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH",
     "GEOM_OV_BANKFULL_PERIMETER",
@@ -55,7 +56,8 @@ GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH: int = 7
 GEOM_IN_MANNING_N_SQUARED: int = 8
 GEOM_IN_INVERSE_INTERFACE_LENGTH: int = 9
 GEOM_IN_WEIR_HEIGHT: int = 10
-GEOM_IN_NUM_COLS: int = 11
+GEOM_IN_WEIR_WIDTH: int = 11
+GEOM_IN_NUM_COLS: int = 12
 
 # Column indices for overbank floodplain geometry (geom_overbank)
 GEOM_OV_FLOODPLAIN_WIDTH: int = 0
@@ -206,7 +208,8 @@ def build_inertial_geometry(
         pit_slope: Default channel slope for boundary pit reaches (dimensionless).
         weir_height_m: Crest heights above the local bed (meters), zero without
             a weir. Must not exceed bankfull_depth, since the crest-storage
-            relation assumes an in-bank crest. None disables weirs.
+            relation assumes an in-bank crest. None disables weirs. The overflow
+            width is computed at this height from the channel cross-section.
 
     Returns:
         Structured InertialGeometry containing the packed 2D geometric matrices.
@@ -266,6 +269,13 @@ def build_inertial_geometry(
         )
     geom_inbank[:, GEOM_IN_WEIR_HEIGHT] = (
         0.0 if weir_height_m is None else weir_height_m
+    )
+
+    # A rectangular opening spans the channel at the crest, not at bankfull.
+    # Rebuilding geometry updates this width consistently with crest height.
+    geom_inbank[:, GEOM_IN_WEIR_WIDTH] = (
+        river_width
+        * (geom_inbank[:, GEOM_IN_WEIR_HEIGHT] / bankfull_depth) ** shape_exponent
     )
 
     # Precompute overbank floodplain geometry
