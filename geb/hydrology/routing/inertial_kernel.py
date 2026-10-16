@@ -1448,6 +1448,7 @@ def _run_inertial_substeps(
     wb: WaterbodyCoupling,
     ret: RetentionCoupling,
     buffers: SubstepBuffers,
+    initialize_stages: bool = True,
 ) -> int:
     """Advances dynamic local inertial routing across adaptive substeps.
 
@@ -1477,6 +1478,7 @@ def _run_inertial_substeps(
         wb: Waterbody coupling parameters, links, and storage state arrays.
         ret: Flood retention basin state arrays, capacities, and control parameters.
         buffers: Pre-allocated workspace scratch buffers.
+        initialize_stages: Whether to calculate reach stages from storage initially (set False if already computed in macro CFL).
 
     Returns:
         Total number of internal adaptive substeps executed.
@@ -1491,13 +1493,14 @@ def _run_inertial_substeps(
     buffers.wb_release_volume_substep.fill(0.0)
 
     # Initialize reach water stages from current storage to ensure physical consistency
-    _compute_stage_from_storage_inertial(
-        n_inertial,
-        river_storage_m3_inertial,
-        geom.geom_inbank,
-        geom.geom_overbank,
-        buffers.stage_buf,
-    )
+    if initialize_stages:
+        _compute_stage_from_storage_inertial(
+            n_inertial,
+            river_storage_m3_inertial,
+            geom.geom_inbank,
+            geom.geom_overbank,
+            buffers.stage_buf,
+        )
 
     dt_substep: np.float32 = dt_f32 / np.float32(num_inertial_substeps)
     block_min_buf: ArrayFloat32 = buffers.block_min_buf

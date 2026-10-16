@@ -16,7 +16,9 @@ __all__: list[str] = [
     "GEOM_CFL_CONSTANT",
     "GEOM_CFL_MANNING_COEFFICIENT",
     "GEOM_CFL_NUM_COLS",
+    "GEOM_IN_BANKFULL_AREA",
     "GEOM_IN_BANKFULL_DEPTH",
+    "GEOM_IN_BANKFULL_PERIMETER",
     "GEOM_IN_BANKFULL_VOLUME",
     "GEOM_IN_BED_ELEVATION",
     "GEOM_IN_INTERFACE_BED_ELEVATION_MAX",
@@ -25,6 +27,8 @@ __all__: list[str] = [
     "GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE",
     "GEOM_IN_MANNING_N_SQUARED",
     "GEOM_IN_NUM_COLS",
+    "GEOM_IN_RIVER_WIDTH",
+    "GEOM_IN_SHAPE_EXPONENT",
     "GEOM_IN_STAGE_VOLUME_COEFFICIENT",
     "GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH",
     "GEOM_OV_BANKFULL_PERIMETER",
@@ -53,7 +57,11 @@ GEOM_IN_INTERFACE_BED_ELEVATION_MAX: int = 6
 GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH: int = 7
 GEOM_IN_MANNING_N_SQUARED: int = 8
 GEOM_IN_INVERSE_INTERFACE_LENGTH: int = 9
-GEOM_IN_NUM_COLS: int = 10
+GEOM_IN_BANKFULL_AREA: int = 10
+GEOM_IN_SHAPE_EXPONENT: int = 11
+GEOM_IN_RIVER_WIDTH: int = 12
+GEOM_IN_BANKFULL_PERIMETER: int = 13
+GEOM_IN_NUM_COLS: int = 14
 
 # Column indices for overbank floodplain geometry (geom_overbank)
 GEOM_OV_FLOODPLAIN_WIDTH: int = 0
@@ -243,6 +251,14 @@ def build_inertial_geometry(
     )
     geom_inbank[:, GEOM_IN_MANNING_N_SQUARED] = manning_n_sq
     geom_inbank[:, GEOM_IN_INVERSE_INTERFACE_LENGTH] = inv_dx_interface
+    geom_inbank[:, GEOM_IN_BANKFULL_AREA] = bankfull_volume * inv_reach_length
+    geom_inbank[:, GEOM_IN_SHAPE_EXPONENT] = np.where(
+        inv_shape_exponent_plus_one == np.float32(1.0 / 1.5),
+        np.float32(0.5),
+        (np.float32(1.0) / inv_shape_exponent_plus_one) - np.float32(1.0),
+    ).astype(np.float32)
+    geom_inbank[:, GEOM_IN_RIVER_WIDTH] = river_width
+    geom_inbank[:, GEOM_IN_BANKFULL_PERIMETER] = bankfull_perimeter
 
     # Precompute overbank floodplain geometry
     geom_overbank: TwoDArrayFloat32 = np.empty(

@@ -10,18 +10,25 @@ import pytest
 
 from geb.geb_types import ArrayFloat64, TwoDArrayFloat32
 from geb.hydrology.routing.geometry import (
+    GEOM_IN_BANKFULL_AREA,
     GEOM_IN_BANKFULL_DEPTH,
+    GEOM_IN_BANKFULL_PERIMETER,
     GEOM_IN_BANKFULL_VOLUME,
     GEOM_IN_INVERSE_LENGTH,
     GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE,
     GEOM_IN_MANNING_N_SQUARED,
     GEOM_IN_NUM_COLS,
+    GEOM_IN_RIVER_WIDTH,
+    GEOM_IN_SHAPE_EXPONENT,
     GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH,
     GEOM_OV_BANKFULL_PERIMETER,
     GEOM_OV_NUM_COLS,
     GEOM_OV_RIVER_WIDTH,
 )
-from geb.hydrology.routing.solver import solve_inertial_momentum
+from geb.hydrology.routing.solver import (
+    evaluate_hydraulic_radius_pow_4_3,
+    solve_inertial_momentum,
+)
 
 
 def _create_single_reach_geometry(
@@ -59,6 +66,14 @@ def _create_single_reach_geometry(
         bankfull_width_m / np.sqrt(bankfull_depth_m)
     )
     geom_inbank[0, GEOM_IN_MANNING_N_SQUARED] = np.float32(manning_n**2)
+    geom_inbank[0, GEOM_IN_BANKFULL_AREA] = np.float32(
+        bankfull_volume_m3 * (1.0 / reach_length_m)
+    )
+    geom_inbank[0, GEOM_IN_SHAPE_EXPONENT] = np.float32(0.5)
+    geom_inbank[0, GEOM_IN_RIVER_WIDTH] = np.float32(bankfull_width_m)
+    geom_inbank[0, GEOM_IN_BANKFULL_PERIMETER] = np.float32(
+        bankfull_width_m + 2.0 * bankfull_depth_m
+    )
 
     geom_overbank[0, GEOM_OV_RIVER_WIDTH] = np.float32(bankfull_width_m)
     geom_overbank[0, GEOM_OV_BANKFULL_PERIMETER] = np.float32(
@@ -288,3 +303,33 @@ def test_zero_upstream_storage_produces_zero_discharge() -> None:
         inv_dt_substep=np.float32(1.0 / 10.0),
     )
     assert q == np.float32(0.0)
+
+
+def test_evaluate_hydraulic_radius_pow_4_3_happy_path() -> None:
+    """Tests that hydraulic radius exponentiation matches analytical values across normal depths."""
+    test_radii: list[float] = [0.01, 0.05, 0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 20.0, 28.0]
+    for r in test_radii:
+        r_f32: np.float32 = np.float32(r)
+        approx_val: np.float32 = evaluate_hydraulic_radius_pow_4_3(r_f32)
+        exact_val: float = r ** (4.0 / 3.0)
+        rel_error: float = abs(float(approx_val) - exact_val) / exact_val
+        # Across normal river depths >= 0.01 m, error must be well under 0.25%
+        assert rel_error < 0.0025
+
+
+def test_evaluate_hydraulic_radius_pow_4_3_boundary_conditions() -> None:
+    """Tests boundary conditions for lookup table exponentiation."""
+    # Zero hydraulic radius produces zero
+    assert evaluate_hydraulic_radius_pow_4_3(np.float32(0.0)) == np.float32(0.0)
+
+    # Minimum wet depth (0.1 mm) has bounded relative error (< 10%)
+    min_wet: np.float32 = np.float32(1e-4)
+    approx_min: np.float32 = evaluate_hydraulic_radius_pow_4_3(min_wet)
+    exact_min: float = 1e-4 ** (4.0 / 3.0)
+    assert abs(float(approx_min) - exact_min) / exact_min < 0.10
+
+    # At table boundary (30.0 m) produces accurate (30.0)^(4/3)
+    r_30: np.float32 = np.float32(30.0)
+    approx_30: np.float32 = evaluate_hydraulic_radius_pow_4_3(r_30)
+    exact_30: float = 30.0 ** (4.0 / 3.0)
+    assert abs(float(approx_30) - exact_30) / exact_30 < 0.001

@@ -1016,6 +1016,7 @@ class LocalInertial:
                 wb=wb_coupling,
                 ret=ret_coupling,
                 buffers=self._substep_buffers,
+                initialize_stages=False,
             )
 
         terminal_wb_outflow_m3: np.float32 = (

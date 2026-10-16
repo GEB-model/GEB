@@ -3141,7 +3141,9 @@ def test_local_inertial_volume_limiter_subcritical_preservation() -> None:
        discharge is smoothly clamped so storage volume remains positive.
     """
     from geb.hydrology.routing.geometry import (
+        GEOM_IN_BANKFULL_AREA,
         GEOM_IN_BANKFULL_DEPTH,
+        GEOM_IN_BANKFULL_PERIMETER,
         GEOM_IN_BANKFULL_VOLUME,
         GEOM_IN_BED_ELEVATION,
         GEOM_IN_INTERFACE_BED_ELEVATION_MAX,
@@ -3150,6 +3152,8 @@ def test_local_inertial_volume_limiter_subcritical_preservation() -> None:
         GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE,
         GEOM_IN_MANNING_N_SQUARED,
         GEOM_IN_NUM_COLS,
+        GEOM_IN_RIVER_WIDTH,
+        GEOM_IN_SHAPE_EXPONENT,
         GEOM_IN_STAGE_VOLUME_COEFFICIENT,
         GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH,
         GEOM_OV_BANKFULL_PERIMETER,
@@ -3174,6 +3178,12 @@ def test_local_inertial_volume_limiter_subcritical_preservation() -> None:
     )
     geom_inbank[0, GEOM_IN_MANNING_N_SQUARED] = np.float32(0.03**2)
     geom_inbank[0, GEOM_IN_INVERSE_INTERFACE_LENGTH] = np.float32(1.0 / 1000.0)
+    geom_inbank[0, GEOM_IN_BANKFULL_AREA] = (
+        geom_inbank[0, GEOM_IN_BANKFULL_VOLUME] * geom_inbank[0, GEOM_IN_INVERSE_LENGTH]
+    )
+    geom_inbank[0, GEOM_IN_SHAPE_EXPONENT] = np.float32(0.5)
+    geom_inbank[0, GEOM_IN_RIVER_WIDTH] = np.float32(20.0)
+    geom_inbank[0, GEOM_IN_BANKFULL_PERIMETER] = np.float32(25.0)
 
     geom_overbank: np.ndarray = np.zeros((1, GEOM_OV_NUM_COLS), dtype=np.float32)
     geom_overbank[0, GEOM_OV_RIVER_WIDTH] = np.float32(20.0)

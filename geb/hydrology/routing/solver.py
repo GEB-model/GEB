@@ -7,22 +7,55 @@ acceleration term (Bates et al. 2010).
 import numpy as np
 from numba import njit
 
-from geb.geb_types import ArrayFloat64, TwoDArrayFloat32
+from geb.geb_types import ArrayFloat32, ArrayFloat64, TwoDArrayFloat32
 from geb.hydrology.routing.geometry import (
+    GEOM_IN_BANKFULL_AREA,
     GEOM_IN_BANKFULL_DEPTH,
-    GEOM_IN_BANKFULL_VOLUME,
-    GEOM_IN_INVERSE_LENGTH,
+    GEOM_IN_BANKFULL_PERIMETER,
     GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE,
     GEOM_IN_MANNING_N_SQUARED,
+    GEOM_IN_RIVER_WIDTH,
+    GEOM_IN_SHAPE_EXPONENT,
     GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH,
-    GEOM_OV_BANKFULL_PERIMETER,
-    GEOM_OV_RIVER_WIDTH,
     compute_cross_section_from_depth,
 )
 
 __all__ = [
+    "evaluate_hydraulic_radius_pow_4_3",
     "solve_inertial_momentum",
 ]
+
+R_LUT_SIZE: int = 1024
+R_LUT_MAX: np.float32 = np.float32(30.0)
+_U_MAX: np.float32 = np.float32(np.sqrt(30.0))
+_INV_DU: np.float32 = np.float32((R_LUT_SIZE - 1) / _U_MAX)
+
+# Precomputed global lookup table for Rh^(4/3) using u = sqrt(Rh).
+# Table size is 1024 float32 entries = exactly 4 KB, fitting entirely in CPU L1 data cache.
+_U_GRID: ArrayFloat32 = np.linspace(0.0, _U_MAX, R_LUT_SIZE, dtype=np.float32)
+R_POW_4_3_TABLE: ArrayFloat32 = (_U_GRID ** np.float32(8.0 / 3.0)).astype(np.float32)
+
+
+@njit(inline="always")
+def evaluate_hydraulic_radius_pow_4_3(hydraulic_radius: np.float32) -> np.float32:
+    """Evaluates Rh^(4/3) via square-root scaled lookup table with linear interpolation.
+
+    Uses substitution u = sqrt(Rh) and Rh^(4/3) = u^(8/3). The table spans [0, 30.0] meters
+    with 1024 entries (4 KB), fitting entirely inside the CPU L1 data cache.
+
+    Args:
+        hydraulic_radius: Hydraulic radius of the river reach (meters).
+
+    Returns:
+        Approximation of hydraulic_radius^(4/3) (m^(4/3)).
+    """
+    u: np.float32 = np.sqrt(hydraulic_radius)
+    scaled: np.float32 = min(u * _INV_DU, np.float32(R_LUT_SIZE - 1))
+    idx: int = min(int(scaled), R_LUT_SIZE - 2)
+    frac: np.float32 = scaled - np.float32(idx)
+    return R_POW_4_3_TABLE[idx] + frac * (
+        R_POW_4_3_TABLE[idx + 1] - R_POW_4_3_TABLE[idx]
+    )
 
 
 @njit(inline="always")
@@ -74,28 +107,25 @@ def solve_inertial_momentum(
     inv_shape_exponent_plus_one: np.float32 = geom_inbank[
         reach_idx, GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE
     ]
-    # Preserve exact 0.5 for standard parabolic channels to match geometry lookup branches
-    shape_exponent: np.float32 = (
-        np.float32(0.5)
-        if inv_shape_exponent_plus_one == np.float32(1.0 / 1.5)
-        else (np.float32(1.0) / inv_shape_exponent_plus_one) - np.float32(1.0)
-    )
-    bankfull_area: np.float32 = (
-        geom_inbank[reach_idx, GEOM_IN_BANKFULL_VOLUME]
-        * geom_inbank[reach_idx, GEOM_IN_INVERSE_LENGTH]
-    )
+    shape_exponent: np.float32 = geom_inbank[reach_idx, GEOM_IN_SHAPE_EXPONENT]
+    bankfull_area: np.float32 = geom_inbank[reach_idx, GEOM_IN_BANKFULL_AREA]
+    bankfull_width_m: np.float32 = geom_inbank[reach_idx, GEOM_IN_RIVER_WIDTH]
+    bankfull_perimeter_m: np.float32 = geom_inbank[
+        reach_idx, GEOM_IN_BANKFULL_PERIMETER
+    ]
+
     (
         cross_sectional_area,
         interface_top_width,
         interface_p_wetted,
     ) = compute_cross_section_from_depth(
         effective_depth_m=effective_depth,
-        bankfull_width_m=geom_overbank[reach_idx, GEOM_OV_RIVER_WIDTH],
+        bankfull_width_m=bankfull_width_m,
         shape_exponent=shape_exponent,
         bankfull_depth_m=bankfull_depth_m,
         inverse_shape_exponent_plus_one=inv_shape_exponent_plus_one,
         bankfull_area_m2=bankfull_area,
-        bankfull_perimeter_m=geom_overbank[reach_idx, GEOM_OV_BANKFULL_PERIMETER],
+        bankfull_perimeter_m=bankfull_perimeter_m,
         width_over_sqrt_bankfull_depth=geom_inbank[
             reach_idx, GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH
         ],
@@ -105,8 +135,9 @@ def solve_inertial_momentum(
     hydraulic_radius: np.float32 = cross_sectional_area / max(
         interface_p_wetted, np.float32(1e-6)
     )
+    rh_pow_4_3: np.float32 = evaluate_hydraulic_radius_pow_4_3(hydraulic_radius)
     friction_denom_term: np.float32 = max(
-        cross_sectional_area * (hydraulic_radius ** np.float32(4.0 / 3.0)),
+        cross_sectional_area * rh_pow_4_3,
         np.float32(1e-12),
     )
     gravity_dt_manning_n_sq: np.float32 = (
