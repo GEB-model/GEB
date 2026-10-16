@@ -26,6 +26,7 @@ from geb.hydrology.routing.geometry import (
     GEOM_OV_RIVER_WIDTH,
 )
 from geb.hydrology.routing.solver import (
+    evaluate_discharge_pow_0_6,
     evaluate_hydraulic_radius_pow_4_3,
     solve_inertial_momentum,
 )
@@ -333,3 +334,44 @@ def test_evaluate_hydraulic_radius_pow_4_3_boundary_conditions() -> None:
     approx_30: np.float32 = evaluate_hydraulic_radius_pow_4_3(r_30)
     exact_30: float = 30.0 ** (4.0 / 3.0)
     assert abs(float(approx_30) - exact_30) / exact_30 < 0.001
+
+
+def test_evaluate_discharge_pow_0_6_happy_path() -> None:
+    """Tests that discharge exponentiation Q^(0.6) matches analytical values across normal flows."""
+    test_discharges: list[float] = [
+        0.001,
+        0.01,
+        0.1,
+        1.0,
+        10.0,
+        100.0,
+        1000.0,
+        5000.0,
+        25000.0,
+        90000.0,
+    ]
+    for q in test_discharges:
+        q_f32: np.float32 = np.float32(q)
+        approx_val: np.float32 = evaluate_discharge_pow_0_6(q_f32)
+        exact_val: float = q**0.6
+        rel_error: float = abs(float(approx_val) - exact_val) / exact_val
+        # Relative error must stay well below 0.4% across the entire operational range
+        assert rel_error < 0.004
+
+
+def test_evaluate_discharge_pow_0_6_boundary_conditions() -> None:
+    """Tests boundary conditions for Q^(0.6) lookup table."""
+    # Zero or negative discharge produces zero
+    assert evaluate_discharge_pow_0_6(np.float32(0.0)) == np.float32(0.0)
+    assert evaluate_discharge_pow_0_6(np.float32(-10.0)) == np.float32(0.0)
+
+    # At table boundary (100,000 m³/s) matches exact power accurately
+    q_max: np.float32 = np.float32(100_000.0)
+    approx_max: np.float32 = evaluate_discharge_pow_0_6(q_max)
+    exact_max: float = 100_000.0**0.6
+    assert abs(float(approx_max) - exact_max) / exact_max < 0.001
+
+    # Beyond table boundary clamps cleanly without crashing
+    q_beyond: np.float32 = np.float32(200_000.0)
+    approx_beyond: np.float32 = evaluate_discharge_pow_0_6(q_beyond)
+    assert approx_beyond > 0.0

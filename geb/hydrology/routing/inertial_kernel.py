@@ -32,7 +32,7 @@ from .geometry import (
     InertialGeometry,
     compute_overbank_depth,
 )
-from .solver import solve_inertial_momentum
+from .solver import evaluate_discharge_pow_0_6, solve_inertial_momentum
 from .topology import (
     BOUNDARY_INTERNAL,
     BOUNDARY_LAKE,
@@ -413,7 +413,7 @@ def _evaluate_reach_cfl_dt_from_depth(
     if total_flow_rate > np.float32(0.0):
         raw_depth_from_flow: np.float32 = geom_cfl[
             reach_idx, GEOM_CFL_MANNING_COEFFICIENT
-        ] * (total_flow_rate ** np.float32(0.6))
+        ] * evaluate_discharge_pow_0_6(total_flow_rate)
         bankfull_depth_m: np.float32 = geom_inbank[reach_idx, GEOM_IN_BANKFULL_DEPTH]
         if raw_depth_from_flow > bankfull_depth_m and bankfull_depth_m > np.float32(
             0.0
@@ -430,12 +430,10 @@ def _evaluate_reach_cfl_dt_from_depth(
     if h_gov <= np.float32(0.0):
         return dt_f32
 
-    wave_celerity: np.float32 = np.sqrt(gravity_acceleration * h_gov)
-    dt_cfl: np.float32 = (
-        geom_cfl[reach_idx, GEOM_CFL_CONSTANT]
-        * np.sqrt(gravity_acceleration)
-        / max(wave_celerity, np.float32(1e-3))
-    )
+    # Algebraic simplification: (C_cfl * sqrt(g)) / sqrt(g * h_gov) = C_cfl / sqrt(h_gov).
+    # Minimum celerity clamp of 1e-3 m/s corresponds to sqrt(h_gov) >= 1e-3 / sqrt(g) = 3.193394e-4 m^(1/2).
+    sqrt_h: np.float32 = max(np.sqrt(h_gov), np.float32(3.193394e-4))
+    dt_cfl: np.float32 = geom_cfl[reach_idx, GEOM_CFL_CONSTANT] / sqrt_h
     return min(dt_cfl, dt_f32)
 
 

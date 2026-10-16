@@ -21,6 +21,7 @@ from geb.hydrology.routing.geometry import (
 )
 
 __all__ = [
+    "evaluate_discharge_pow_0_6",
     "evaluate_hydraulic_radius_pow_4_3",
     "solve_inertial_momentum",
 ]
@@ -34,6 +35,40 @@ _INV_DU: np.float32 = np.float32((R_LUT_SIZE - 1) / _U_MAX)
 # Table size is 1024 float32 entries = exactly 4 KB, fitting entirely in CPU L1 data cache.
 _U_GRID: ArrayFloat32 = np.linspace(0.0, _U_MAX, R_LUT_SIZE, dtype=np.float32)
 R_POW_4_3_TABLE: ArrayFloat32 = (_U_GRID ** np.float32(8.0 / 3.0)).astype(np.float32)
+
+# Precomputed global lookup table for Q^(0.6) using fourth-root scaling u = sqrt(sqrt(Q)).
+# Table size is 1024 float32 entries = exactly 4 KB, fitting entirely in CPU L1 data cache.
+# Fourth-root scaling provides < 0.38% relative error across 0.001 to 100,000 m³/s.
+Q_LUT_SIZE: int = 1024
+Q_LUT_MAX: np.float32 = np.float32(100_000.0)
+_U_Q_MAX: np.float32 = np.float32(100_000.0**0.25)
+_INV_DU_Q: np.float32 = np.float32((Q_LUT_SIZE - 1) / _U_Q_MAX)
+_U_GRID_Q: ArrayFloat32 = np.linspace(0.0, _U_Q_MAX, Q_LUT_SIZE, dtype=np.float32)
+Q_POW_0_6_TABLE: ArrayFloat32 = (_U_GRID_Q ** np.float32(2.4)).astype(np.float32)
+
+
+@njit(inline="always")
+def evaluate_discharge_pow_0_6(discharge: np.float32) -> np.float32:
+    """Evaluates Q^(0.6) via fourth-root scaled lookup table with linear interpolation.
+
+    Uses substitution u = sqrt(sqrt(Q)) and Q^(0.6) = u^(2.4). The table spans [0, 100000.0] m³/s
+    with 1024 entries (4 KB), fitting entirely inside the CPU L1 data cache.
+
+    Args:
+        discharge: Flow rate or discharge magnitude (m³/s).
+
+    Returns:
+        Approximation of discharge^(0.6) ((m³/s)^0.6).
+    """
+    if discharge <= np.float32(0.0):
+        return np.float32(0.0)
+    u: np.float32 = np.sqrt(np.sqrt(discharge))
+    scaled: np.float32 = min(u * _INV_DU_Q, np.float32(Q_LUT_SIZE - 1))
+    idx: int = min(int(scaled), Q_LUT_SIZE - 2)
+    frac: np.float32 = scaled - np.float32(idx)
+    return Q_POW_0_6_TABLE[idx] + frac * (
+        Q_POW_0_6_TABLE[idx + 1] - Q_POW_0_6_TABLE[idx]
+    )
 
 
 @njit(inline="always")
