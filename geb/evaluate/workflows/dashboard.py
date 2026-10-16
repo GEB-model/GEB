@@ -679,8 +679,13 @@ def write_discharge_dashboard(
                     f"<div class='geb-popup' data-station-id='{html.escape(str(station_id), quote=True)}'>"
                     "Loading interactive charts...</div>"
                 )
+            marker_location: list[float] = (
+                record["locations"][1]
+                if len(record["locations"]) > 1
+                else record["locations"][0]
+            )
             marker: folium.CircleMarker = folium.CircleMarker(
-                location=record["locations"][0],
+                location=marker_location,
                 radius=7 if area_distance_failure else 5,
                 color=record["color"],
                 fill=True,
@@ -2008,9 +2013,19 @@ def _build_station_marker_payload(
             5.0 + math.sqrt(upstream_area_geb) / largest_upstream_area_sqrt * 5.0,
             2,
         )
+        latitude: float = float(row.geometry.y)
+        longitude: float = float(row.geometry.x)
+        if (
+            "original_subgrid_latitude" in row
+            and "original_subgrid_longitude" in row
+            and pd.notna(row["original_subgrid_latitude"])
+            and pd.notna(row["original_subgrid_longitude"])
+        ):
+            latitude = float(row["original_subgrid_latitude"])
+            longitude = float(row["original_subgrid_longitude"])
         coords: list[float] = [
-            round(float(row.geometry.y), 5),
-            round(float(row.geometry.x), 5),
+            round(latitude, 5),
+            round(longitude, 5),
         ]
         tz_offset: float | None = (
             float(row["timezone_utc_offset"])

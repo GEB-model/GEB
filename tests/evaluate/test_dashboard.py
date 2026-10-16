@@ -463,6 +463,40 @@ def test_build_station_marker_payload() -> None:
     assert layer_upstream.get_name() not in stations[1]["m"]  # ratio was NaN
 
 
+def test_build_station_marker_payload_uses_high_res_snapped_location() -> None:
+    """Test that station markers use high-res original_subgrid coordinates when available."""
+    gdf = gpd.GeoDataFrame(
+        {
+            "station_name": ["Station A"],
+            "upstream_area_GEB": [100.0],
+            "original_subgrid_latitude": [50.12345],
+            "original_subgrid_longitude": [8.12345],
+        },
+        geometry=[sg.Point(8.0, 50.0)],
+        index=pd.Index(["st_1"]),
+    )
+    metric_layers = [
+        (
+            folium.FeatureGroup(name="KGE", show=True),
+            cm.LinearColormap(colors=["red", "green"], vmin=0.0, vmax=1.0),
+            "KGE",
+        )
+    ]
+    payload = _build_station_marker_payload(
+        mapped_station_scores=gdf,
+        metric_layers=metric_layers,
+        layer_upstream=None,
+        colormap_upstream=None,
+        characteristic_layers=[],
+        availability_layer=None,
+        characteristic_records={},
+        largest_upstream_area_sqrt=20.0,
+    )
+    raw_json = gzip.decompress(base64.b64decode(payload)).decode("utf-8")
+    stations = json.loads(raw_json)
+    assert stations[0]["coords"] == [50.12345, 8.12345]
+
+
 def test_write_discharge_dashboard(tmp_path: Path) -> None:
     """Test generating a single self-contained dashboard HTML file with inlined chart bundles."""
     dashboard_file: Path = tmp_path / "discharge_evaluation_map.html"
@@ -864,3 +898,42 @@ def test_write_discharge_dashboard_with_lakes_and_reservoirs(tmp_path: Path) -> 
     assert '"name": "Reservoirs", "layer":' in html_content
     assert '"active": false' in html_content
     assert '"crossOrigin": true' in html_content
+
+
+def test_plot_skill_score_maps(tmp_path: Path) -> None:
+    """Test fast generation of skill score maps with basemap caching."""
+    from geb.evaluate.workflows.discharge_plots import plot_skill_score_maps
+
+    region: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        geometry=[sg.box(5.0, 50.0, 7.0, 52.0)],
+        crs="EPSG:4326",
+    )
+    scores: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "station_name": ["St_1", "St_2"],
+            "KGE": [0.8, 0.7],
+            "KGE_correlation": [0.85, 0.75],
+            "KGE_bias_ratio": [1.05, 0.95],
+            "KGE_variability_ratio": [0.98, 1.02],
+            "NSE": [0.75, 0.65],
+            "R2": [0.8, 0.7],
+            "RRMSE": [0.2, 0.3],
+        },
+        geometry=[sg.Point(5.5, 50.5), sg.Point(6.5, 51.5)],
+        crs="EPSG:4326",
+    )
+    logger: logging.Logger = logging.getLogger("test_maps")
+
+    plot_skill_score_maps(
+        mapped_station_scores=scores,
+        region_geom=region,
+        output_folder=tmp_path,
+        logger=logger,
+        dpi=100,
+    )
+
+    maps_dir: Path = tmp_path / "skill_score_maps"
+    assert maps_dir.exists()
+    assert (maps_dir / "skill_score_map_kge_components.svg").exists()
+    assert (maps_dir / "skill_score_map_kge.svg").exists()
+    assert (maps_dir / "skill_score_map_nse.svg").exists()
