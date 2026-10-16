@@ -31,6 +31,9 @@ if TYPE_CHECKING:
 VESDRE_CLIP_FILE: Path = Path(
     "/scistor/ivm/rpo100/GEB/output_scripts/Meuse_JCAR_CI_IBF_project/flood_extents/Clip_Vesdre_flood_extent.gpkg"
 )
+MEUSE_CLIP_FILE: Path = Path(
+    "/scistor/ivm/rpo100/GEB/output_scripts/Meuse_JCAR_CI_IBF_project/flood_extents/Clip_Meuse_flood_extent.gpkg"
+)
 
 
 def calculate_critical_success_index(
@@ -341,7 +344,7 @@ def calculate_performance_metrics(
         misses_masked = misses.where(misses == 1)
 
         if visualization_type == "OSM":
-            margin = 0.5
+            margin = 0.02
             fig, ax = plt.subplots(figsize=(10, 10))
 
             # Set plot extent including margin
@@ -358,22 +361,22 @@ def calculate_performance_metrics(
                 constant_values=1,
             )
 
-            # Clouds: white, opaque
-            cloud_cmap = mcolors.ListedColormap(["white"])
-            cloud_mask.where(cloud_mask == 1).plot(
-                ax=ax, cmap=cloud_cmap, add_colorbar=False, add_labels=False, zorder=1.1
-            )
+            # # Clouds: white, opaque
+            # cloud_cmap = mcolors.ListedColormap(["white"])
+            # cloud_mask.where(cloud_mask == 1).plot(
+            #     ax=ax, cmap=cloud_cmap, add_colorbar=False, add_labels=False, zorder=1.1
+            # )
 
-            # Invalid: grey, half transparent
-            invalid_cmap = mcolors.ListedColormap(["grey"])
-            invalid_mask_plotting.where(invalid_mask_plotting == 1).plot(
-                ax=ax,
-                cmap=invalid_cmap,
-                add_colorbar=False,
-                add_labels=False,
-                alpha=0.5,
-                zorder=1.2,
-            )
+            # # Invalid: grey, half transparent
+            # invalid_cmap = mcolors.ListedColormap(["grey"])
+            # invalid_mask_plotting.where(invalid_mask_plotting == 1).plot(
+            #     ax=ax,
+            #     cmap=invalid_cmap,
+            #     add_colorbar=False,
+            #     add_labels=False,
+            #     alpha=0.5,
+            #     zorder=1.2,
+            # )
 
             ax.imshow(
                 simulation_masked,  # False alarms (where obs is 0)
@@ -407,20 +410,20 @@ def calculate_performance_metrics(
                 zorder=4,
             )
 
-            subbasins.boundary.plot(
-                ax=ax,
-                color="black",
-                linestyle="--",
-                linewidth=1.5,
-                zorder=5,
-                alpha=0.5,
-            )
+            # subbasins.boundary.plot(
+            #     ax=ax,
+            #     color="black",
+            #     linestyle="--",
+            #     linewidth=1.5,
+            #     zorder=5,
+            #     alpha=0.5,
+            # )
             # Add a base map
             ctx.add_basemap(
                 ax,
                 crs=target_crs,
-                source="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-                zoom=12,
+                source="https://a.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png",
+                # zoom=14,
                 zorder=0,
                 alpha=0.9,
             )
@@ -450,12 +453,19 @@ def calculate_performance_metrics(
                 green_patch,
                 orange_patch,
                 red_patch,
-                cloud_patch,
-                invalid_patch,
-                catchment_patch,
+                # cloud_patch,
+                # invalid_patch,
+                # catchment_patch,
             ]
             # Assuming you have a list of corresponding labels, e.g.:
-            labels = ["Green", "Orange", "Red", "Cloud", "Invalid", "Catchment"]
+            labels = [
+                "Hits",
+                "False Alarms",
+                "Misses",
+                # "Cloud",
+                # "Invalid",
+                # "Catchment"
+            ]
 
             import matplotlib.text as mtext
 
@@ -1416,6 +1426,16 @@ class Hydrodynamics:
                             f"Vesdre clip file not found at {VESDRE_CLIP_FILE}."
                         )
                     clip_file = VESDRE_CLIP_FILE
+                if "maas" in obs_file.name.lower():
+                    self.model.logger.info(
+                        "Observation file contains 'maas' in its name, "
+                        "clipping flood maps to the Maas extent."
+                    )
+                    if not MEUSE_CLIP_FILE.exists():
+                        raise FileNotFoundError(
+                            f"Meuse clip file not found at {MEUSE_CLIP_FILE}."
+                        )
+                    clip_file = MEUSE_CLIP_FILE
 
                 # Find all flood maps corresponding to the event
                 # Use recursive glob to handle both forecast and non-forecast folder structures
