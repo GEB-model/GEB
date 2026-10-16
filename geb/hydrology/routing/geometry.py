@@ -8,7 +8,6 @@ from numba import njit
 from geb.geb_types import (
     ArrayFloat32,
     ArrayFloat64,
-    ArrayInt32,
     TwoDArrayFloat32,
 )
 
@@ -189,7 +188,6 @@ def build_inertial_geometry(
     interface_bed_elevation_max: ArrayFloat32,
     manning_n_sq: ArrayFloat32,
     inv_dx_interface: ArrayFloat32,
-    up_count: ArrayInt32,
     pit_slope: ArrayFloat32,
 ) -> InertialGeometry:
     """Precomputes reach-static channel cross-sections, thresholds, and CFL parameters.
@@ -209,7 +207,6 @@ def build_inertial_geometry(
         interface_bed_elevation_max: Max upstream interface bed elevation (meters).
         manning_n_sq: Square of Manning roughness coefficient n^2 (s^2 / m^(2/3)).
         inv_dx_interface: Inverse spatial step at reach boundaries (1/meters).
-        up_count: Count of upstream tributaries entering each reach (dimensionless).
         pit_slope: Default channel slope for boundary pit reaches (dimensionless).
 
     Returns:

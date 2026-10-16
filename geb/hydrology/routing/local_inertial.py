@@ -752,7 +752,6 @@ class LocalInertial:
             interface_bed_elevation_max=self._routing_topology.interface_bed_elev_max,
             manning_n_sq=self._manning_n_sq_inertial,
             inv_dx_interface=self._routing_topology.inv_dx_interface,
-            up_count=self._routing_topology.inertial_up_count,
             pit_slope=self._pit_slope[inertial_start:inertial_end],
         )
 

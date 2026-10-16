@@ -380,7 +380,6 @@ def test_retention_uncontrolled_uses_uncontrolled_threshold() -> None:
     """An uncontrolled retention basin uses the uncontrolled activation-threshold array."""
     dt = 1
     discharge_m3_per_s = 8.0
-    controlled_threshold = 999.0
     uncontrolled_threshold = 6.0
     expected_diversion_m3 = (discharge_m3_per_s - uncontrolled_threshold) * dt
 

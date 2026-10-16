@@ -13,8 +13,6 @@ from geb.hydrology.routing.geometry import (
     GEOM_IN_BANKFULL_AREA,
     GEOM_IN_BANKFULL_DEPTH,
     GEOM_IN_BANKFULL_PERIMETER,
-    GEOM_IN_BANKFULL_VOLUME,
-    GEOM_IN_INVERSE_LENGTH,
     GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE,
     GEOM_IN_MANNING_N_SQUARED,
     GEOM_IN_NUM_COLS,
@@ -32,7 +30,6 @@ from geb.hydrology.routing.solver import (
 def _create_single_reach_geometry(
     bankfull_width_m: float = 10.0,
     bankfull_depth_m: float = 2.0,
-    reach_length_m: float = 1000.0,
     manning_n: float = 0.035,
 ) -> TwoDArrayFloat32:
     """Helper to create in-bank geometry table for a single test reach.
@@ -40,7 +37,6 @@ def _create_single_reach_geometry(
     Args:
         bankfull_width_m: Bankfull channel width (meters).
         bankfull_depth_m: Bankfull channel depth (meters).
-        reach_length_m: Reach length (meters).
         manning_n: Manning roughness coefficient (s / m^(1/3)).
 
     Returns:
@@ -51,21 +47,16 @@ def _create_single_reach_geometry(
     # Parabolic shape exponent 0.5 -> inv_shape_exponent_plus_one = 1 / 1.5
     inv_shape_plus_one: float = 1.0 / 1.5
     bankfull_area_m2: float = bankfull_width_m * bankfull_depth_m * inv_shape_plus_one
-    bankfull_volume_m3: float = bankfull_area_m2 * reach_length_m
 
     geom_inbank[0, GEOM_IN_BANKFULL_DEPTH] = np.float32(bankfull_depth_m)
     geom_inbank[0, GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE] = np.float32(
         inv_shape_plus_one
     )
-    geom_inbank[0, GEOM_IN_BANKFULL_VOLUME] = np.float32(bankfull_volume_m3)
-    geom_inbank[0, GEOM_IN_INVERSE_LENGTH] = np.float32(1.0 / reach_length_m)
     geom_inbank[0, GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH] = np.float32(
         bankfull_width_m / np.sqrt(bankfull_depth_m)
     )
     geom_inbank[0, GEOM_IN_MANNING_N_SQUARED] = np.float32(manning_n**2)
-    geom_inbank[0, GEOM_IN_BANKFULL_AREA] = np.float32(
-        bankfull_volume_m3 * (1.0 / reach_length_m)
-    )
+    geom_inbank[0, GEOM_IN_BANKFULL_AREA] = np.float32(bankfull_area_m2)
     geom_inbank[0, GEOM_IN_SHAPE_EXPONENT] = np.float32(0.5)
     geom_inbank[0, GEOM_IN_RIVER_WIDTH] = np.float32(bankfull_width_m)
     geom_inbank[0, GEOM_IN_BANKFULL_PERIMETER] = np.float32(

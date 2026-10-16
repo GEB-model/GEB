@@ -524,7 +524,6 @@ def test_routing_calculate_bankfull_depth_integration() -> None:
     var.river_width_beta = np.full(4, 0.5, dtype=np.float32)
     widths = np.array([10.0, 50.0, 100.0, 200.0], dtype=np.float32)
     var.observed_average_river_width = widths.copy()
-    shape_exponent = np.full(4, 0.5, dtype=np.float32)
 
     # Scenario 1: rivers GeoDataFrame has return_period_2_years_daily_m3_per_s and use_simulated_bankfull_q=True
     rivers_df: gpd.GeoDataFrame = gpd.GeoDataFrame(

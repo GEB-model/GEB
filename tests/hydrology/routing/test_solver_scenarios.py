@@ -17,7 +17,7 @@ import numpy as np
 from matplotlib.cm import ScalarMappable
 from matplotlib.colors import Normalize
 
-from geb.geb_types import ArrayFloat32, ArrayInt32
+from geb.geb_types import ArrayFloat32
 from geb.hydrology.routing.geometry import (
     GEOM_IN_BANKFULL_VOLUME,
     build_inertial_geometry,
@@ -109,8 +109,6 @@ def run_channel_routing_simulation(
         n_reaches, np.float32(manning_n**2), dtype=np.float32
     )
     inv_dx_interface: ArrayFloat32 = np.float32(1.0) / lengths
-    up_count: ArrayInt32 = np.ones(n_reaches, dtype=np.int32)
-    up_count[0] = 0
     raw_bed_drop: float = float(bed_elevation_m[0] - bed_elevation_m[-1])
     bed_slope: float = (
         raw_bed_drop / max(n_reaches * reach_length_m, 1.0)
@@ -132,7 +130,6 @@ def run_channel_routing_simulation(
         interface_bed_elevation_max=interface_bed_elevation_max,
         manning_n_sq=manning_n_sq,
         inv_dx_interface=inv_dx_interface,
-        up_count=up_count,
         pit_slope=pit_slope,
     )
 

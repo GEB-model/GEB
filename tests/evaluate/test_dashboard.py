@@ -650,7 +650,6 @@ def test_write_dashboard_charts_from_saved_scores_with_bankfull(
         "discharge/discharge_observations_hourly": obs_hourly_file,
     }
     logger = logging.getLogger("test")
-    dashboard_path = tmp_path / "dashboard.html"
 
     chart_files, chart_bundles, _ = _write_dashboard_charts_from_saved_scores(
         table_files=table_files,

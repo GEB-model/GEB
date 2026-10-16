@@ -1279,25 +1279,10 @@ def test_compound_channel_floodplain_attenuation_and_mass_balance() -> None:
     """Tests flood wave attenuation and strict mass conservation in a compound channel network."""
     # 5-cell river channel
     ldd = np.array([[2], [2], [2], [2], [5]], dtype=np.uint8)
-    mask = np.ones((5, 1), dtype=bool)
     river_network = pyflwdir.from_array(ldd, ftype="ldd", transform=Affine.identity())
     n_cells: int = 5
 
-    # 1. Base channel without floodplain (narrow rectangular/trapezoidal)
-    router_simple = _make_local_inertial(
-        dt=3600,
-        river_network=river_network,
-        river_length=np.full(n_cells, 2000.0, dtype=np.float32),
-        river_width=np.full(n_cells, 15.0, dtype=np.float32),
-        shape_exponent=0.5,
-        bankfull_depth_m=10.0,
-        floodplain_width_m=np.zeros(n_cells, dtype=np.float32),
-        bankfull_river_elevation_m=np.array(
-            [40.0, 30.0, 20.0, 10.0, 0.0], dtype=np.float32
-        ),
-    )
-
-    # 2. Compound channel with wide floodplain (100 m wide floodplain activated above 1.5 m depth)
+    # Compound channel with wide floodplain (100 m wide floodplain activated above 1.5 m depth)
     router_compound = _make_local_inertial(
         dt=3600,
         river_network=river_network,
@@ -1370,7 +1355,6 @@ def test_floodplain_damping_scenarios_and_plots() -> None:
 
     ldd = np.full((n_cells, 1), 2, dtype=np.uint8)
     ldd[-1, 0] = 5
-    mask = np.ones((n_cells, 1), dtype=bool)
     river_network = pyflwdir.from_array(ldd, ftype="ldd", transform=Affine.identity())
     river_ids = np.arange(n_cells, dtype=np.int32)
     bed_elevation = np.linspace(20.0, 2.0, n_cells, dtype=np.float32)
@@ -1577,7 +1561,6 @@ def test_floodplain_convective_pulse_dynamics_and_plots() -> None:
 
     ldd = np.full((n_cells, 1), 2, dtype=np.uint8)
     ldd[-1, 0] = 5
-    mask = np.ones((n_cells, 1), dtype=bool)
     river_network = pyflwdir.from_array(ldd, ftype="ldd", transform=Affine.identity())
     river_ids = np.arange(n_cells, dtype=np.int32)
     rivers_gdf = gpd.GeoDataFrame(
@@ -2175,8 +2158,6 @@ def test_kinematic_overland_flowing_into_downstream_inertial_reach() -> None:
     # Apply overland runoff (sideflow) to cell 0 (kinematic overland)
     sideflow = np.array([100.0 * 3600.0, 0.0, 0.0], dtype=np.float32)
     evaporation = np.zeros(n_cells, dtype=np.float32)
-    alpha = np.full(n_cells, 1.0, dtype=np.float32)
-    beta = np.full(n_cells, 0.6, dtype=np.float32)
 
     # Route for 5 hours
     for step in range(5):
@@ -2248,8 +2229,6 @@ def test_alternating_kinematic_inertial_network() -> None:
         [50.0 * 3600.0, 10.0 * 3600.0, 20.0 * 3600.0, 0.0], dtype=np.float32
     )
     evaporation = np.zeros(n_cells, dtype=np.float32)
-    alpha = np.full(n_cells, 1.0, dtype=np.float32)
-    beta = np.full(n_cells, 0.6, dtype=np.float32)
 
     for step in range(5):
         (
@@ -2319,8 +2298,6 @@ def test_local_inertial_unobserved_river_width_and_dynamic_width_update() -> Non
 
     sideflow = np.array([20.0 * 3600.0, 10.0 * 3600.0, 0.0], dtype=np.float32)
     evaporation = np.zeros(n_cells, dtype=np.float32)
-    alpha = np.full(n_cells, 1.0, dtype=np.float32)
-    beta = np.full(n_cells, 0.6, dtype=np.float32)
 
     # Initial steps
     for step in range(3):
@@ -2438,8 +2415,6 @@ def test_local_inertial_dynamic_lake_outflow_substepping() -> None:
     sideflow = np.zeros(n_cells, dtype=np.float32)
     evaporation = np.zeros(n_cells, dtype=np.float32)
     retention_storage = np.zeros(0, dtype=np.float32)
-    alpha = np.full(n_cells, 1.0, dtype=np.float32)
-    beta = np.full(n_cells, 0.6, dtype=np.float32)
 
     # Outflow for lake is NaN to trigger dynamic calculation
     outflow_per_waterbody = np.array([np.nan], dtype=np.float32)
@@ -2474,7 +2449,6 @@ def test_local_inertial_dynamic_lake_outflow_substepping() -> None:
 
 def test_local_inertial_already_permuted_equivalence() -> None:
     """Verifies that already_permuted=True produces identical outputs to already_permuted=False."""
-    n_cells: int = 3
     ldd = np.array([[8, 8, 5]], dtype=np.uint8)
     river_network = pyflwdir.from_array(ldd, ftype="ldd", transform=Affine.identity())
 
@@ -2514,8 +2488,6 @@ def test_local_inertial_already_permuted_equivalence() -> None:
     wb_storage = np.zeros(0, dtype=np.float64)
     wb_outflow = np.zeros(0, dtype=np.float32)
     ret_storage = np.zeros(0, dtype=np.float32)
-    alpha = np.full(n_cells, 1.0, dtype=np.float32)
-    beta = np.full(n_cells, 0.6, dtype=np.float32)
     ret_thresh = np.zeros(0, dtype=np.float32)
 
     # Standard call (already_permuted=False)
@@ -2537,8 +2509,6 @@ def test_local_inertial_already_permuted_equivalence() -> None:
     storage_perm = storage[p_idxs].copy()
     sideflow_perm = sideflow[p_idxs].copy()
     evaporation_perm = evaporation[p_idxs].copy()
-    alpha_perm = alpha[p_idxs].copy()
-    beta_perm = beta[p_idxs].copy()
 
     router_perm = _make_local_inertial(
         dt=3600,
@@ -2632,8 +2602,6 @@ def test_local_inertial_water_stage_state_variable() -> None:
     wb_storage = np.zeros(0, dtype=np.float64)
     wb_outflow = np.zeros(0, dtype=np.float32)
     ret_storage = np.zeros(0, dtype=np.float32)
-    alpha = np.full(n_cells, 1.0, dtype=np.float32)
-    beta = np.full(n_cells, 0.6, dtype=np.float32)
     ret_thresh = np.zeros(0, dtype=np.float32)
 
     router.step(
@@ -4331,9 +4299,7 @@ def test_router_save_and_restore(tmp_path: Path) -> None:
 
     # Validate restored variables match saved state
     np.testing.assert_allclose(rv_restored.river_width, dynamic_width)
-    np.testing.assert_allclose(
-        rv_restored.river_storage_m3, storage_A_copy := rv_saved.river_storage_m3
-    )
+    np.testing.assert_allclose(rv_restored.river_storage_m3, rv_saved.river_storage_m3)
     np.testing.assert_allclose(
         rv_restored.discharge_in_rivers_m3_s_substep,
         rv_saved.discharge_in_rivers_m3_s_substep,
@@ -4427,7 +4393,6 @@ def test_evaluate_reach_cfl_pure_wave_celerity_and_overbank_capping() -> None:
     geom_inbank[0, GEOM_IN_RIVER_WIDTH] = np.float32(10.0)
     geom_inbank[0, GEOM_IN_FLOODPLAIN_WIDTH] = np.float32(200.0)
 
-    g: np.float32 = np.float32(9.80665)
     cfl_constant: np.float32 = np.float32(0.7 * 1000.0 / np.sqrt(9.80665))
     geom_cfl[0, GEOM_CFL_CONSTANT] = cfl_constant
     # Keep manning coefficient small so volume depth governs
@@ -4441,7 +4406,6 @@ def test_evaluate_reach_cfl_pure_wave_celerity_and_overbank_capping() -> None:
         current_volume_m3=vol,
         geom_inbank=geom_inbank,
         geom_cfl=geom_cfl,
-        gravity_acceleration=g,
         dt_f32=np.float32(3600.0),
     )
     dt_high_q: np.float32 = _evaluate_reach_cfl_dt(
@@ -4450,7 +4414,6 @@ def test_evaluate_reach_cfl_pure_wave_celerity_and_overbank_capping() -> None:
         current_volume_m3=vol,
         geom_inbank=geom_inbank,
         geom_cfl=geom_cfl,
-        gravity_acceleration=g,
         dt_f32=np.float32(3600.0),
     )
     # Both should be identical because in-bank depth from volume governs,
@@ -4468,7 +4431,6 @@ def test_evaluate_reach_cfl_pure_wave_celerity_and_overbank_capping() -> None:
         current_volume_m3=0.0,
         geom_inbank=geom_inbank,
         geom_cfl=geom_cfl,
-        gravity_acceleration=g,
         dt_f32=np.float32(3600.0),
     )
     # The effective depth is moderated, so dt_flood_dry is safely above 10s rather than collapsing

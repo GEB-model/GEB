@@ -574,7 +574,6 @@ def write_discharge_dashboard(
         mapped_station_scores["upstream_area_GEB"].max()
     )
 
-    popup_width: int = 800
     station_marker_index: list[StationMarkerIndex] = []
     snapping_layer: folium.FeatureGroup = folium.FeatureGroup(
         name="Station snapping details (gauge → original subgrid pixel → routing grid)",

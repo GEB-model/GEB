@@ -379,7 +379,6 @@ def _evaluate_reach_cfl_dt_from_depth(
     h_vol: np.float32,
     geom_inbank: TwoDArrayFloat32,
     geom_cfl: TwoDArrayFloat32,
-    gravity_acceleration: np.float32,
     dt_f32: np.float32,
 ) -> np.float32:
     """Calculates Courant-Friedrichs-Lewy (CFL) stable timestep from precomputed volume depth.
@@ -390,7 +389,6 @@ def _evaluate_reach_cfl_dt_from_depth(
         h_vol: Precomputed hydraulic depth from storage volume (meters).
         geom_inbank: Compact in-bank geometry table.
         geom_cfl: Precomputed CFL stability parameters table.
-        gravity_acceleration: Gravitational acceleration (m/s²).
         dt_f32: Routing macro-timestep duration (seconds).
 
     Returns:
@@ -434,7 +432,6 @@ def _evaluate_reach_cfl_dt(
     current_volume_m3: float,
     geom_inbank: TwoDArrayFloat32,
     geom_cfl: TwoDArrayFloat32,
-    gravity_acceleration: np.float32,
     dt_f32: np.float32,
 ) -> np.float32:
     """Calculates Courant-Friedrichs-Lewy (CFL) stable timestep for a single reach.
@@ -450,7 +447,6 @@ def _evaluate_reach_cfl_dt(
         current_volume_m3: Current river reach storage volume (m³).
         geom_inbank: Compact in-bank geometry table.
         geom_cfl: Precomputed CFL stability parameters table.
-        gravity_acceleration: Gravitational acceleration (m/s²).
         dt_f32: Routing macro-timestep duration (seconds).
 
     Returns:
@@ -470,7 +466,6 @@ def _evaluate_reach_cfl_dt(
         h_vol=h_vol,
         geom_inbank=geom_inbank,
         geom_cfl=geom_cfl,
-        gravity_acceleration=gravity_acceleration,
         dt_f32=dt_f32,
     )
 
@@ -639,7 +634,6 @@ def _compute_inertial_substeps_cfl(
             h_vol=h_vol,
             geom_inbank=geom.geom_inbank,
             geom_cfl=geom.geom_cfl,
-            gravity_acceleration=gravity_acceleration,
             dt_f32=dt_f32,
         )
 
@@ -994,7 +988,6 @@ def _apply_reverse_flow_limits(
 
 @njit(inline="always")
 def _apply_confluence_inflow_limits(
-    n_inertial: int,
     substep_discharge_m3_s: ArrayFloat32,
     geom_inbank: TwoDArrayFloat32,
     topo: InertialTopology,
@@ -1014,7 +1007,6 @@ def _apply_confluence_inflow_limits(
     that capacity. Unrouted water remains in upstream reaches, ensuring 100% mass conservation.
 
     Args:
-        n_inertial: Number of reaches in local inertial domain.
         substep_discharge_m3_s: Primary reach discharge array updated in-place (m³/s).
         geom_inbank: Compact 2D in-bank reach geometry table.
         topo: Network connectivity and topological ordering structure.
@@ -1383,7 +1375,6 @@ def _update_continuity_and_cfl(
                 h_vol=h_vol,
                 geom_inbank=geom_inbank,
                 geom_cfl=geom_cfl,
-                gravity_acceleration=gravity_acceleration,
                 dt_f32=dt_f32,
             )
             if reach_dt < b_min:
@@ -1572,7 +1563,6 @@ def _run_inertial_substeps(
 
         # 4. Limit forward inflows at confluences to prevent stage overshooting
         _apply_confluence_inflow_limits(
-            n_inertial=n_inertial,
             substep_discharge_m3_s=substep_discharge_m3_s,
             geom_inbank=geom.geom_inbank,
             topo=topo,
