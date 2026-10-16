@@ -12,6 +12,12 @@
     sp.style.zIndex = "620";
     sp.style.pointerEvents = "auto";
   }
+  if (!map._paneRenderers) {
+    map._paneRenderers = {};
+  }
+  if (!map._paneRenderers["stationsPane"]) {
+    map._paneRenderers["stationsPane"] = L.svg({pane: "stationsPane"}).addTo(map);
+  }
 
   function escapeHtml(str) {
     return String(str).replace(/[&<>"']/g, function(c) {
@@ -58,6 +64,7 @@
       if (station.m && station.m[layerName] !== undefined) {
         var radius = (layerName === upstreamLayer) ? 10 : station.r;
         marker = L.circleMarker(station.coords, {
+          pane: 'stationsPane',
           radius: radius,
           color: 'black',
           weight: 1.2,
@@ -73,6 +80,7 @@
         var avColor = isAv ? caravanAvailableColor : caravanUnavailableColor;
         var avLabel = isAv ? 'available' : 'not available';
         marker = L.circleMarker(station.coords, {
+          pane: 'stationsPane',
           radius: station.r,
           color: 'black',
           weight: 1.2,
@@ -86,6 +94,7 @@
       } else if (station.ch && station.ch[layerName]) {
         var chData = station.ch[layerName];
         marker = L.circleMarker(station.coords, {
+          pane: 'stationsPane',
           radius: station.r,
           color: 'black',
           weight: 1.2,
@@ -98,6 +107,7 @@
         marker.bindTooltip(station._baseTooltip + '<br>' + chData[1]);
       } else if (isCharLayer) {
         marker = L.circleMarker(station.coords, {
+          pane: 'stationsPane',
           radius: station.r,
           color: 'black',
           weight: 1,

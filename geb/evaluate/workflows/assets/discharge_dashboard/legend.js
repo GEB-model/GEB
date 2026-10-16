@@ -26,6 +26,7 @@
     if (window._gebCurrentTheme === newTheme) return;
 
     var currentPopup = map._popup;
+    var wasOpen = Boolean(currentPopup && map.hasLayer(currentPopup));
     var popupSource = currentPopup ? currentPopup._source : null;
     var popupLatLng = currentPopup ? currentPopup.getLatLng() : null;
 
@@ -44,7 +45,7 @@
 
     window.dispatchEvent(new CustomEvent("gebThemeChange", {detail: {theme: newTheme}}));
 
-    if (currentPopup && !map.hasLayer(currentPopup)) {
+    if (wasOpen && !map.hasLayer(currentPopup)) {
       if (popupSource && popupSource.openPopup) {
         popupSource.openPopup();
       } else if (popupLatLng) {
@@ -59,6 +60,12 @@
     var sp = map.createPane("stationsPane");
     sp.style.zIndex = "620";
     sp.style.pointerEvents = "auto";
+  }
+  if (!map._paneRenderers) {
+    map._paneRenderers = {};
+  }
+  if (!map._paneRenderers["stationsPane"]) {
+    map._paneRenderers["stationsPane"] = L.svg({pane: "stationsPane"}).addTo(map);
   }
 
   var configByLayer = {};

@@ -231,10 +231,15 @@ class _StationsPaneMacro(MacroElement):
         self._template: Template = Template(
             """
             {%- macro script(this, kwargs) -%}
-            if (!{{ this._parent.get_name() }}.getPane("stationsPane")) {
-                var stationsPane = {{ this._parent.get_name() }}.createPane("stationsPane");
+            var map = {{ this._parent.get_name() }};
+            if (!map.getPane("stationsPane")) {
+                var stationsPane = map.createPane("stationsPane");
                 stationsPane.style.zIndex = 620;
                 stationsPane.style.pointerEvents = "auto";
+                if (!map._paneRenderers) {
+                    map._paneRenderers = {};
+                }
+                map._paneRenderers["stationsPane"] = L.svg({pane: "stationsPane"}).addTo(map);
             }
             {%- endmacro -%}
             """
@@ -683,6 +688,7 @@ def write_discharge_dashboard(
                 tooltip=record["tooltip"],
                 popup=folium.Popup(excluded_popup, max_width=850),
             )
+            marker.options["pane"] = "stationsPane"
             marker.add_to(excluded_layer)
             station_marker_index.append(
                 {

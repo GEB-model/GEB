@@ -115,6 +115,17 @@
       }
     });
     riverLayer.addTo(layerGroup);
+    if (window._gebStations) {
+      window._gebStations.forEach(function(station) {
+        if (station._markers) {
+          station._markers.forEach(function(m) {
+            if (m.bringToFront) {
+              try { m.bringToFront(); } catch(e) {}
+            }
+          });
+        }
+      });
+    }
       }, 0);
     });
   });
