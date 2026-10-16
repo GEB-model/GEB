@@ -66,6 +66,10 @@ __all__ = [
 # Global option to toggle reverse flow across river reaches
 ALLOW_REVERSE_FLOW: bool = False
 
+# Cache line padding for thread-block reductions: 16 float32s = 64 bytes (1 L1 cache line)
+REDUCTION_BLOCK_STRIDE: int = 16
+REDUCTION_NUM_BLOCKS: int = 64
+
 # Threshold of reach count above which parallel multi-threading outperforms serial execution
 INERTIAL_PARALLEL_THRESHOLD: int = 10000
 
@@ -794,7 +798,6 @@ def _solve_momentum_loop(
     n_inertial: int,
     substep_discharge_m3_s: ArrayFloat32,
     river_storage_m3_inertial: ArrayFloat64,
-    updated_discharge_m3_s_inertial: ArrayFloat32,
     geom: InertialGeometry,
     topo: InertialTopology,
     wb: WaterbodyCoupling,
@@ -808,9 +811,8 @@ def _solve_momentum_loop(
 
     Args:
         n_inertial: Number of reaches in local inertial domain.
-        substep_discharge_m3_s: Primary reach discharge array from previous substep (m³/s).
+        substep_discharge_m3_s: Primary reach discharge array updated in-place (m³/s).
         river_storage_m3_inertial: Primary reach water storage volume array (m³).
-        updated_discharge_m3_s_inertial: Destination buffer storing updated substep discharge (m³/s).
         geom: Static channel and floodplain geometry lookup tables.
         topo: Network connectivity and topological ordering structure.
         wb: Waterbody coupling parameters and storage state arrays.
@@ -936,13 +938,13 @@ def _solve_momentum_loop(
             river_storage_m3_inertial=river_storage_m3_inertial,
             inv_dt_substep=inv_dt_substep,
         )
-        updated_discharge_m3_s_inertial[reach_idx] = discharge
+        substep_discharge_m3_s[reach_idx] = discharge
 
 
 @njit(inline="always")
 def _apply_reverse_flow_limits(
     n_inertial: int,
-    updated_discharge_m3_s_inertial: ArrayFloat32,
+    substep_discharge_m3_s: ArrayFloat32,
     river_storage_m3_inertial: ArrayFloat64,
     topo: InertialTopology,
     buffers: SubstepBuffers,
@@ -953,7 +955,7 @@ def _apply_reverse_flow_limits(
 
     Args:
         n_inertial: Number of reaches in local inertial domain.
-        updated_discharge_m3_s_inertial: Updated substep discharge array (m³/s).
+        substep_discharge_m3_s: Primary reach discharge array updated in-place (m³/s).
         river_storage_m3_inertial: Reach water storage volume array (m³).
         topo: Network connectivity and topological ordering structure.
         buffers: Pre-allocated workspace scratch buffers.
@@ -964,43 +966,49 @@ def _apply_reverse_flow_limits(
         return
 
     has_reverse_flow: bool = False
+    for reach_idx in range(n_inertial):
+        if substep_discharge_m3_s[reach_idx] < np.float32(0.0):
+            has_reverse_flow = True
+            break
+
+    if not has_reverse_flow:
+        return
+
     buffers.rev_demand_buf.fill(0.0)
     for reach_idx in range(n_inertial):
-        q_cand: np.float32 = updated_discharge_m3_s_inertial[reach_idx]
+        q_cand: np.float32 = substep_discharge_m3_s[reach_idx]
         if q_cand < np.float32(0.0):
             ds_reach: int = topo.ds_inertial_k[reach_idx]
             if ds_reach >= 0:
                 buffers.rev_demand_buf[ds_reach] += -q_cand
-                has_reverse_flow = True
 
-    if has_reverse_flow:
-        for reach_idx in range(n_inertial):
-            q_cand = updated_discharge_m3_s_inertial[reach_idx]
-            if q_cand < np.float32(0.0):
-                ds_reach = topo.ds_inertial_k[reach_idx]
-                if ds_reach >= 0:
-                    tot_rev_demand: np.float32 = buffers.rev_demand_buf[ds_reach]
-                    ds_storage: float = river_storage_m3_inertial[ds_reach]
-                    q_ds: np.float32 = updated_discharge_m3_s_inertial[ds_reach]
-                    ds_fwd_vol: float = (
-                        float(q_ds) * dt_substep_f64 if q_ds > np.float32(0.0) else 0.0
+    for reach_idx in range(n_inertial):
+        q_cand = substep_discharge_m3_s[reach_idx]
+        if q_cand < np.float32(0.0):
+            ds_reach = topo.ds_inertial_k[reach_idx]
+            if ds_reach >= 0:
+                tot_rev_demand: np.float32 = buffers.rev_demand_buf[ds_reach]
+                ds_storage: float = river_storage_m3_inertial[ds_reach]
+                q_ds: np.float32 = substep_discharge_m3_s[ds_reach]
+                ds_fwd_vol: float = (
+                    float(q_ds) * dt_substep_f64 if q_ds > np.float32(0.0) else 0.0
+                )
+                ds_avail_vol: float = max(ds_storage - ds_fwd_vol, 0.0)
+                if ds_avail_vol > 0.0 and tot_rev_demand > np.float32(0.0):
+                    max_tot_rev_rate: np.float32 = (
+                        np.float32(0.95) * np.float32(ds_avail_vol) * inv_dt_substep
                     )
-                    ds_avail_vol: float = max(ds_storage - ds_fwd_vol, 0.0)
-                    if ds_avail_vol > 0.0 and tot_rev_demand > np.float32(0.0):
-                        max_tot_rev_rate: np.float32 = (
-                            np.float32(0.95) * np.float32(ds_avail_vol) * inv_dt_substep
-                        )
-                        if tot_rev_demand > max_tot_rev_rate:
-                            scale: np.float32 = max_tot_rev_rate / tot_rev_demand
-                            updated_discharge_m3_s_inertial[reach_idx] = q_cand * scale
-                    else:
-                        updated_discharge_m3_s_inertial[reach_idx] = np.float32(0.0)
+                    if tot_rev_demand > max_tot_rev_rate:
+                        scale: np.float32 = max_tot_rev_rate / tot_rev_demand
+                        substep_discharge_m3_s[reach_idx] = q_cand * scale
+                else:
+                    substep_discharge_m3_s[reach_idx] = np.float32(0.0)
 
 
 @njit(inline="always")
 def _apply_confluence_inflow_limits(
     n_inertial: int,
-    updated_discharge_m3_s_inertial: ArrayFloat32,
+    substep_discharge_m3_s: ArrayFloat32,
     geom_inbank: TwoDArrayFloat32,
     geom_overbank: TwoDArrayFloat32,
     topo: InertialTopology,
@@ -1021,7 +1029,7 @@ def _apply_confluence_inflow_limits(
 
     Args:
         n_inertial: Number of reaches in local inertial domain.
-        updated_discharge_m3_s_inertial: Updated substep discharge array (m³/s).
+        substep_discharge_m3_s: Primary reach discharge array updated in-place (m³/s).
         geom_inbank: Compact 2D in-bank reach geometry table.
         geom_overbank: Secondary 2D overbank floodplain geometry table.
         topo: Network connectivity and topological ordering structure.
@@ -1047,7 +1055,7 @@ def _apply_confluence_inflow_limits(
             end_up_idx: int = topo.inertial_up_offsets[reach_idx + 1]
             for up_i in range(start_up_idx, end_up_idx):
                 u_k: int = topo.inertial_up_indices[up_i]
-                q_up: np.float32 = updated_discharge_m3_s_inertial[u_k]
+                q_up: np.float32 = substep_discharge_m3_s[u_k]
                 if q_up > np.float32(0.0):
                     tot_inertial_inflow += q_up
                     u_stage: np.float32 = buffers.stage_buf[u_k]
@@ -1055,7 +1063,7 @@ def _apply_confluence_inflow_limits(
                         max_up_stage = u_stage
         else:
             u_k_single: int = upstream_reach_k
-            q_up_single: np.float32 = updated_discharge_m3_s_inertial[u_k_single]
+            q_up_single: np.float32 = substep_discharge_m3_s[u_k_single]
             if q_up_single > np.float32(0.0):
                 tot_inertial_inflow = q_up_single
                 max_up_stage = buffers.stage_buf[u_k_single]
@@ -1105,7 +1113,7 @@ def _apply_confluence_inflow_limits(
         surface_area_c: np.float32 = top_width_c * reach_length_c
         delta_v_cap: np.float32 = surface_area_c * delta_z_max
 
-        q_out_c: np.float32 = updated_discharge_m3_s_inertial[reach_idx]
+        q_out_c: np.float32 = substep_discharge_m3_s[reach_idx]
         outflow_vol_c: np.float32 = (
             q_out_c * dt_substep_f32 if q_out_c > np.float32(0.0) else np.float32(0.0)
         )
@@ -1124,14 +1132,14 @@ def _apply_confluence_inflow_limits(
                 end_up_idx_s = topo.inertial_up_offsets[reach_idx + 1]
                 for up_i in range(start_up_idx_s, end_up_idx_s):
                     u_k_idx: int = topo.inertial_up_indices[up_i]
-                    q_cand: np.float32 = updated_discharge_m3_s_inertial[u_k_idx]
+                    q_cand: np.float32 = substep_discharge_m3_s[u_k_idx]
                     if q_cand > np.float32(0.0):
-                        updated_discharge_m3_s_inertial[u_k_idx] = q_cand * scale
+                        substep_discharge_m3_s[u_k_idx] = q_cand * scale
             else:
                 u_k_single_idx: int = upstream_reach_k
-                q_cand_s: np.float32 = updated_discharge_m3_s_inertial[u_k_single_idx]
+                q_cand_s: np.float32 = substep_discharge_m3_s[u_k_single_idx]
                 if q_cand_s > np.float32(0.0):
-                    updated_discharge_m3_s_inertial[u_k_single_idx] = q_cand_s * scale
+                    substep_discharge_m3_s[u_k_single_idx] = q_cand_s * scale
 
 
 @njit(inline="always")
@@ -1265,7 +1273,12 @@ def _update_continuity_and_cfl(
     total_flow_rate_buf = buffers.total_flow_rate_buf
     min_dt_buf = buffers.min_dt_buf
 
-    n_blocks: int = min(len(block_min_buf), n_inertial)
+    stride: int = (
+        REDUCTION_BLOCK_STRIDE
+        if len(block_min_buf) >= REDUCTION_NUM_BLOCKS * REDUCTION_BLOCK_STRIDE
+        else 1
+    )
+    n_blocks: int = min(len(block_min_buf) // stride, n_inertial)
     if n_blocks <= 0:
         n_blocks = 1
     block_size: int = (n_inertial + n_blocks - 1) // n_blocks
@@ -1396,12 +1409,13 @@ def _update_continuity_and_cfl(
             if reach_dt < b_min:
                 b_min = reach_dt
 
-        block_min_buf[b] = b_min
+        block_min_buf[b * stride] = b_min
 
     min_dt_next: np.float32 = dt_f32
     for b in range(n_blocks):
-        if block_min_buf[b] < min_dt_next:
-            min_dt_next = block_min_buf[b]
+        block_dt: np.float32 = block_min_buf[b * stride]
+        if block_dt < min_dt_next:
+            min_dt_next = block_dt
 
     return min_dt_next
 
@@ -1504,8 +1518,10 @@ def _run_inertial_substeps(
 
     dt_substep: np.float32 = dt_f32 / np.float32(num_inertial_substeps)
     block_min_buf: ArrayFloat32 = buffers.block_min_buf
-    if block_min_buf.size == 0:
-        block_min_buf = np.empty(64, dtype=np.float32)
+    if block_min_buf.size < REDUCTION_NUM_BLOCKS * REDUCTION_BLOCK_STRIDE:
+        block_min_buf = np.empty(
+            REDUCTION_NUM_BLOCKS * REDUCTION_BLOCK_STRIDE, dtype=np.float32
+        )
 
     t_elapsed: np.float32 = np.float32(0.0)
     substep_count: int = 0
@@ -1537,7 +1553,8 @@ def _run_inertial_substeps(
                 np.float64(ret_out_lim) * substep_fraction_f64
             )
 
-        buffers.wb_release_volume_substep.fill(0.0)
+        if len(wb.lake_outflow_target_k) > 0:
+            buffers.wb_release_volume_substep.fill(0.0)
 
         # 1. Update waterbody water levels and calculate continuous releases
         _update_waterbodies_substep(
@@ -1548,12 +1565,11 @@ def _run_inertial_substeps(
             buffers=buffers,
         )
 
-        # 2. Solve 1D inertial momentum equation
+        # 2. Solve 1D inertial momentum equation directly into substep_discharge_m3_s in-place
         _solve_momentum_loop(
             n_inertial=n_inertial,
             substep_discharge_m3_s=substep_discharge_m3_s,
             river_storage_m3_inertial=river_storage_m3_inertial,
-            updated_discharge_m3_s_inertial=updated_discharge_m3_s_inertial,
             geom=geom,
             topo=topo,
             wb=wb,
@@ -1567,7 +1583,7 @@ def _run_inertial_substeps(
         # 3. Scale reverse flows proportionally if total demand exceeds available storage
         _apply_reverse_flow_limits(
             n_inertial=n_inertial,
-            updated_discharge_m3_s_inertial=updated_discharge_m3_s_inertial,
+            substep_discharge_m3_s=substep_discharge_m3_s,
             river_storage_m3_inertial=river_storage_m3_inertial,
             topo=topo,
             buffers=buffers,
@@ -1578,15 +1594,13 @@ def _run_inertial_substeps(
         # 4. Limit forward inflows at confluences to prevent stage overshooting
         _apply_confluence_inflow_limits(
             n_inertial=n_inertial,
-            updated_discharge_m3_s_inertial=updated_discharge_m3_s_inertial,
+            substep_discharge_m3_s=substep_discharge_m3_s,
             geom_inbank=geom.geom_inbank,
             geom_overbank=geom.geom_overbank,
             topo=topo,
             buffers=buffers,
             dt_substep_f32=dt_substep,
         )
-
-        substep_discharge_m3_s[:] = updated_discharge_m3_s_inertial[:]
 
         # 4. Route diversions and releases for retention basins
         _route_inertial_retention(

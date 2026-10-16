@@ -497,7 +497,7 @@ class LocalInertial:
             terminal_wb_outflow_accum_m3=np.zeros(1, dtype=np.float32),
             substep_discharge_inertial=np.empty(n_inertial, dtype=np.float32),
             kinematic_inflow_rate_inertial=np.empty(n_inertial, dtype=np.float32),
-            block_min_buf=np.empty(64, dtype=np.float32),
+            block_min_buf=np.empty(1024, dtype=np.float32),
         )
 
         self._waterbody_inflow_perm: ArrayFloat32 = np.empty(n_wb, dtype=np.float32)
