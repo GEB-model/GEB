@@ -317,12 +317,30 @@ class HydrologyEvaluationConfig(BaseModel):
     )
 
 
+class KarstConfig(BaseModel):
+    """Karst capture and release settings."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    capture_fraction: float = Field(
+        ge=0.0,
+        le=1.0,
+        description="Fraction of runoff and interflow captured on karst land (0–1).",
+    )
+    release_time_days: float = Field(
+        gt=0.0,
+        allow_inf_nan=False,
+        description="Exponential release time (days): after this many dry days, exp(-1) of the initial storage remains (about 36.8%).",
+    )
+
+
 class HydrologyConfig(BaseModel):
     """Configuration for hydrology."""
 
     routing: RoutingConfig = Field(
         default_factory=RoutingConfig, description="Routing configuration."
     )
+    karst: KarstConfig = Field(description="Karst recharge settings.")
     evaluation: HydrologyEvaluationConfig = Field(
         default_factory=HydrologyEvaluationConfig,
         description="Hydrology evaluation configuration.",
@@ -788,11 +806,6 @@ class ReportConfig(BaseModel):
         True,
         alias="_meteorological_stations",
         description="Whether to report meteorological stations.",
-    )
-    outflow_points: bool = Field(
-        True,
-        alias="_outflow_points",
-        description="Whether to report outflow points.",
     )
 
 

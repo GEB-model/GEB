@@ -68,6 +68,9 @@ hazards:
     simulate: false
 
 hydrology:
+  karst:
+    capture_fraction: 1.0 # Full capture; Wan et al. (2024), doi:10.1029/2023WR036182.
+    release_time_days: 10.0 # Starting value in days.
   routing:
     minimum_river_slope_m_per_m: 0.0001
     retention_basins:
@@ -254,7 +257,6 @@ report:
   _bankfull_depths: true
   _retention_basins: false
   _meteorological_stations: true
-  _outflow_points: true
 
 parameters:
   mannings_n_multiplier: 1.0
