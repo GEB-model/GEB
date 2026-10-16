@@ -22,13 +22,13 @@ from .geometry import (
     GEOM_IN_BANKFULL_DEPTH,
     GEOM_IN_BANKFULL_VOLUME,
     GEOM_IN_BED_ELEVATION,
+    GEOM_IN_FLOODPLAIN_WIDTH,
     GEOM_IN_INTERFACE_BED_ELEVATION_MAX,
     GEOM_IN_INVERSE_INTERFACE_LENGTH,
     GEOM_IN_INVERSE_LENGTH,
     GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE,
+    GEOM_IN_RIVER_WIDTH,
     GEOM_IN_STAGE_VOLUME_COEFFICIENT,
-    GEOM_OV_FLOODPLAIN_WIDTH,
-    GEOM_OV_RIVER_WIDTH,
     InertialGeometry,
     compute_overbank_depth,
 )
@@ -68,7 +68,7 @@ ALLOW_REVERSE_FLOW: bool = False
 
 # Cache line padding for thread-block reductions: 16 float32s = 64 bytes (1 L1 cache line)
 REDUCTION_BLOCK_STRIDE: int = 16
-REDUCTION_NUM_BLOCKS: int = 64
+REDUCTION_NUM_BLOCKS: int = 128
 
 # Threshold of reach count above which parallel multi-threading outperforms serial execution
 INERTIAL_PARALLEL_THRESHOLD: int = 10000
@@ -214,7 +214,6 @@ def _compute_reach_stage_and_cfl_depth(
     reach_idx: int,
     volume_m3: np.float32,
     geom_inbank: TwoDArrayFloat32,
-    geom_overbank: TwoDArrayFloat32,
 ) -> tuple[np.float32, np.float32]:
     """Computes reach water surface elevation and CFL hydraulic depth in a unified single pass.
 
@@ -227,7 +226,6 @@ def _compute_reach_stage_and_cfl_depth(
         reach_idx: Reach index within local inertial domain.
         volume_m3: Reach storage volume (m³).
         geom_inbank: Compact 2D in-bank reach geometry array (meters, dimensionless).
-        geom_overbank: Secondary 2D overbank floodplain geometry array (meters, dimensionless).
 
     Returns:
         A tuple of (water_stage_m, h_volume_m) in meters.
@@ -259,14 +257,14 @@ def _compute_reach_stage_and_cfl_depth(
 
     overbank_volume: np.float32 = volume_m3 - bankfull_volume_m3
     inv_reach_len: np.float32 = geom_inbank[reach_idx, GEOM_IN_INVERSE_LENGTH]
-    fp_width: np.float32 = geom_overbank[reach_idx, GEOM_OV_FLOODPLAIN_WIDTH]
+    fp_width: np.float32 = geom_inbank[reach_idx, GEOM_IN_FLOODPLAIN_WIDTH]
     floodplain_depth: np.float32 = compute_overbank_depth(
         overbank_volume_m3=overbank_volume,
         inverse_reach_length=inv_reach_len,
         floodplain_width_m=fp_width,
     )
     stage = bed_elevation + bankfull_depth_m + floodplain_depth
-    bf_width: np.float32 = geom_overbank[reach_idx, GEOM_OV_RIVER_WIDTH]
+    bf_width: np.float32 = geom_inbank[reach_idx, GEOM_IN_RIVER_WIDTH]
     top_width: np.float32 = bf_width + fp_width + np.float32(4.0) * floodplain_depth
     h_vol = (volume_m3 * inv_reach_len) / max(top_width, np.float32(1e-3))
     return stage, h_vol
@@ -277,7 +275,6 @@ def _compute_reach_stage_from_vol(
     reach_idx: int,
     volume_m3: np.float32,
     geom_inbank: TwoDArrayFloat32,
-    geom_overbank: TwoDArrayFloat32,
 ) -> np.float32:
     """Computes reach water surface elevation from storage volume.
 
@@ -285,7 +282,6 @@ def _compute_reach_stage_from_vol(
         reach_idx: Reach index within local inertial domain.
         volume_m3: Reach storage volume (m³).
         geom_inbank: Compact 2D in-bank reach geometry array (meters, dimensionless).
-        geom_overbank: Secondary 2D overbank floodplain geometry array (meters, dimensionless).
 
     Returns:
         Water surface elevation (meters).
@@ -294,7 +290,6 @@ def _compute_reach_stage_from_vol(
         reach_idx=reach_idx,
         volume_m3=volume_m3,
         geom_inbank=geom_inbank,
-        geom_overbank=geom_overbank,
     )
     return stage
 
@@ -304,7 +299,6 @@ def _compute_stage_from_storage_inertial(
     n_inertial: int,
     river_storage_m3_inertial: ArrayFloat64,
     geom_inbank: TwoDArrayFloat32,
-    geom_overbank: TwoDArrayFloat32,
     stage_buf: ArrayFloat32,
 ) -> None:
     """Computes reach water surface elevation directly from storage volumes.
@@ -313,7 +307,6 @@ def _compute_stage_from_storage_inertial(
         n_inertial: Number of local inertial reaches.
         river_storage_m3_inertial: Storage volume array for inertial reaches (m³).
         geom_inbank: Precomputed in-bank geometry lookup table.
-        geom_overbank: Precomputed overbank geometry lookup table.
         stage_buf: Target stage buffer storing reach water surface elevations (meters).
     """
     for reach_idx in prange(n_inertial):
@@ -321,7 +314,7 @@ def _compute_stage_from_storage_inertial(
             np.float32(river_storage_m3_inertial[reach_idx]), np.float32(0.0)
         )
         stage_buf[reach_idx] = _compute_reach_stage_from_vol(
-            reach_idx, reach_volume_m3, geom_inbank, geom_overbank
+            reach_idx, reach_volume_m3, geom_inbank
         )
 
 
@@ -331,7 +324,6 @@ def _compute_reach_cfl_depths(
     total_flow_rate: np.float32,
     current_volume_m3: float,
     geom_inbank: TwoDArrayFloat32,
-    geom_overbank: TwoDArrayFloat32,
     geom_cfl: TwoDArrayFloat32,
     gravity_acceleration: np.float32,
 ) -> tuple[np.float32, np.float32, np.float32, np.float32]:
@@ -342,7 +334,6 @@ def _compute_reach_cfl_depths(
         total_flow_rate: Peak flow rate through reach (m³/s).
         current_volume_m3: Current river storage volume (m³).
         geom_inbank: In-bank geometry lookup array.
-        geom_overbank: Overbank floodplain geometry array.
         geom_cfl: CFL parameter matrix.
         gravity_acceleration: Gravitational acceleration (m/s²).
 
@@ -355,7 +346,6 @@ def _compute_reach_cfl_depths(
             reach_idx=reach_idx,
             volume_m3=np.float32(current_volume_m3),
             geom_inbank=geom_inbank,
-            geom_overbank=geom_overbank,
         )
 
     h_flow: np.float32 = np.float32(0.0)
@@ -368,8 +358,8 @@ def _compute_reach_cfl_depths(
             0.0
         ):
             extra_depth: np.float32 = raw_depth_from_flow - bankfull_depth_m
-            bf_width: np.float32 = geom_overbank[reach_idx, GEOM_OV_RIVER_WIDTH]
-            fp_width: np.float32 = geom_overbank[reach_idx, GEOM_OV_FLOODPLAIN_WIDTH]
+            bf_width: np.float32 = geom_inbank[reach_idx, GEOM_IN_RIVER_WIDTH]
+            fp_width: np.float32 = geom_inbank[reach_idx, GEOM_IN_FLOODPLAIN_WIDTH]
             width_ratio: np.float32 = bf_width / max(bf_width + fp_width, bf_width)
             h_flow = bankfull_depth_m + (extra_depth * width_ratio)
         else:
@@ -386,7 +376,6 @@ def _evaluate_reach_cfl_dt_from_depth(
     total_flow_rate: np.float32,
     h_vol: np.float32,
     geom_inbank: TwoDArrayFloat32,
-    geom_overbank: TwoDArrayFloat32,
     geom_cfl: TwoDArrayFloat32,
     gravity_acceleration: np.float32,
     dt_f32: np.float32,
@@ -398,7 +387,6 @@ def _evaluate_reach_cfl_dt_from_depth(
         total_flow_rate: Characteristic incoming or conveyance flow rate (m³/s).
         h_vol: Precomputed hydraulic depth from storage volume (meters).
         geom_inbank: Compact in-bank geometry table.
-        geom_overbank: Overbank floodplain geometry table.
         geom_cfl: Precomputed CFL stability parameters table.
         gravity_acceleration: Gravitational acceleration (m/s²).
         dt_f32: Routing macro-timestep duration (seconds).
@@ -419,8 +407,8 @@ def _evaluate_reach_cfl_dt_from_depth(
             0.0
         ):
             extra_depth: np.float32 = raw_depth_from_flow - bankfull_depth_m
-            bf_width: np.float32 = geom_overbank[reach_idx, GEOM_OV_RIVER_WIDTH]
-            fp_width: np.float32 = geom_overbank[reach_idx, GEOM_OV_FLOODPLAIN_WIDTH]
+            bf_width: np.float32 = geom_inbank[reach_idx, GEOM_IN_RIVER_WIDTH]
+            fp_width: np.float32 = geom_inbank[reach_idx, GEOM_IN_FLOODPLAIN_WIDTH]
             width_ratio: np.float32 = bf_width / max(bf_width + fp_width, bf_width)
             h_flow = bankfull_depth_m + (extra_depth * width_ratio)
         else:
@@ -443,7 +431,6 @@ def _evaluate_reach_cfl_dt(
     total_flow_rate: np.float32,
     current_volume_m3: float,
     geom_inbank: TwoDArrayFloat32,
-    geom_overbank: TwoDArrayFloat32,
     geom_cfl: TwoDArrayFloat32,
     gravity_acceleration: np.float32,
     dt_f32: np.float32,
@@ -460,7 +447,6 @@ def _evaluate_reach_cfl_dt(
         total_flow_rate: Characteristic incoming or conveyance flow rate (m³/s).
         current_volume_m3: Current river reach storage volume (m³).
         geom_inbank: Compact in-bank geometry table.
-        geom_overbank: Overbank floodplain geometry table.
         geom_cfl: Precomputed CFL stability parameters table.
         gravity_acceleration: Gravitational acceleration (m/s²).
         dt_f32: Routing macro-timestep duration (seconds).
@@ -475,14 +461,12 @@ def _evaluate_reach_cfl_dt(
         reach_idx=reach_idx,
         volume_m3=np.float32(current_volume_m3),
         geom_inbank=geom_inbank,
-        geom_overbank=geom_overbank,
     )
     return _evaluate_reach_cfl_dt_from_depth(
         reach_idx=reach_idx,
         total_flow_rate=total_flow_rate,
         h_vol=h_vol,
         geom_inbank=geom_inbank,
-        geom_overbank=geom_overbank,
         geom_cfl=geom_cfl,
         gravity_acceleration=gravity_acceleration,
         dt_f32=dt_f32,
@@ -644,7 +628,6 @@ def compute_inertial_substeps_cfl(
             reach_idx=reach_idx,
             volume_m3=reach_vol_m3,
             geom_inbank=geom.geom_inbank,
-            geom_overbank=geom.geom_overbank,
         )
         buffers.stage_buf[reach_idx] = stage
 
@@ -654,7 +637,6 @@ def compute_inertial_substeps_cfl(
             total_flow_rate=total_flow_rate,
             h_vol=h_vol,
             geom_inbank=geom.geom_inbank,
-            geom_overbank=geom.geom_overbank,
             geom_cfl=geom.geom_cfl,
             gravity_acceleration=gravity_acceleration,
             dt_f32=dt_f32,
@@ -671,7 +653,6 @@ def compute_inertial_substeps_cfl(
         total_flow_rate=buffers.total_flow_rate_buf[limiting_reach_idx],
         current_volume_m3=river_storage_m3_inertial[limiting_reach_idx],
         geom_inbank=geom.geom_inbank,
-        geom_overbank=geom.geom_overbank,
         geom_cfl=geom.geom_cfl,
         gravity_acceleration=gravity_acceleration,
     )
@@ -827,7 +808,6 @@ def _solve_momentum_loop(
     inertial_up_indices = topo.inertial_up_indices
 
     geom_inbank = geom.geom_inbank
-    geom_overbank = geom.geom_overbank
     pit_slope_inertial = geom.pit_slope_inertial
 
     stage_buf = buffers.stage_buf
@@ -929,7 +909,6 @@ def _solve_momentum_loop(
             curr_discharge=substep_discharge_m3_s[reach_idx],
             min_wet_depth_m=min_wet_depth_m,
             geom_inbank=geom_inbank,
-            geom_overbank=geom_overbank,
             g_dt_substep=g_dt_substep,
             sqrt_gravity=sqrt_gravity,
             can_reverse=reach_can_reverse,
@@ -1008,7 +987,6 @@ def _apply_confluence_inflow_limits(
     n_inertial: int,
     substep_discharge_m3_s: ArrayFloat32,
     geom_inbank: TwoDArrayFloat32,
-    geom_overbank: TwoDArrayFloat32,
     topo: InertialTopology,
     buffers: SubstepBuffers,
     dt_substep_f32: np.float32,
@@ -1029,7 +1007,6 @@ def _apply_confluence_inflow_limits(
         n_inertial: Number of reaches in local inertial domain.
         substep_discharge_m3_s: Primary reach discharge array updated in-place (m³/s).
         geom_inbank: Compact 2D in-bank reach geometry table.
-        geom_overbank: Secondary 2D overbank floodplain geometry table.
         topo: Network connectivity and topological ordering structure.
         buffers: Pre-allocated workspace scratch buffers.
         dt_substep_f32: Current adaptive sub-timestep duration (seconds).
@@ -1094,8 +1071,8 @@ def _apply_confluence_inflow_limits(
 
         inv_length_c: np.float32 = geom_inbank[reach_idx, GEOM_IN_INVERSE_LENGTH]
         reach_length_c: np.float32 = np.float32(1.0) / inv_length_c
-        bf_width_c: np.float32 = geom_overbank[reach_idx, GEOM_OV_RIVER_WIDTH]
-        fp_width_c: np.float32 = geom_overbank[reach_idx, GEOM_OV_FLOODPLAIN_WIDTH]
+        bf_width_c: np.float32 = geom_inbank[reach_idx, GEOM_IN_RIVER_WIDTH]
+        fp_width_c: np.float32 = geom_inbank[reach_idx, GEOM_IN_FLOODPLAIN_WIDTH]
 
         if depth_c > bankfull_depth_c:
             top_width_c: np.float32 = bf_width_c + fp_width_c
@@ -1231,7 +1208,6 @@ def _update_continuity_and_cfl(
     topo: InertialTopology,
     buffers: SubstepBuffers,
     dt_substep: np.float32,
-    substep_fraction_f32: np.float32,
     dt_f32: np.float32,
     inv_dt_substep: np.float32,
     gravity_acceleration: np.float32,
@@ -1254,7 +1230,6 @@ def _update_continuity_and_cfl(
         topo: Network connectivity and topological ordering structure.
         buffers: Pre-allocated workspace scratch buffers.
         dt_substep: Duration of current adaptive sub-timestep (seconds).
-        substep_fraction_f32: Fraction of macro timestep represented by current substep.
         dt_f32: Macro routing timestep duration (seconds).
         inv_dt_substep: Reciprocal of substep duration (1/s).
         gravity_acceleration: Gravitational acceleration constant (m/s²).
@@ -1268,7 +1243,6 @@ def _update_continuity_and_cfl(
     inertial_up_indices = topo.inertial_up_indices
 
     geom_inbank = geom.geom_inbank
-    geom_overbank = geom.geom_overbank
     geom_cfl = geom.geom_cfl
 
     wb_release_volume_substep = buffers.wb_release_volume_substep
@@ -1284,6 +1258,8 @@ def _update_continuity_and_cfl(
     if n_blocks <= 0:
         n_blocks = 1
     block_size: int = (n_inertial + n_blocks - 1) // n_blocks
+
+    inv_dt_macro: np.float32 = np.float32(1.0) / dt_f32
 
     for b in prange(n_blocks):
         start_idx: int = b * block_size
@@ -1326,9 +1302,7 @@ def _update_continuity_and_cfl(
                 wb_release_volume_substep[reach_idx] * inv_dt_substep
             )
 
-            sideflow_rate: np.float32 = (
-                sideflow_m3_inertial[reach_idx] * substep_fraction_f32
-            ) * inv_dt_substep
+            sideflow_rate: np.float32 = sideflow_m3_inertial[reach_idx] * inv_dt_macro
             if sideflow_rate >= np.float32(0.0):
                 sideflow_in: np.float32 = sideflow_rate
                 sideflow_out: np.float32 = np.float32(0.0)
@@ -1343,9 +1317,7 @@ def _update_continuity_and_cfl(
             net_flow_volume: np.float32 = (
                 inflow_rate - outflow_rate
             ) * dt_substep + wb_release_volume_substep[reach_idx]
-            sideflow_volume: np.float32 = (
-                sideflow_m3_inertial[reach_idx] * substep_fraction_f32
-            )
+            sideflow_volume: np.float32 = sideflow_rate * dt_substep
             current_storage: float = river_storage_m3_inertial[reach_idx]
 
             if sideflow_volume < np.float32(0.0):
@@ -1364,8 +1336,8 @@ def _update_continuity_and_cfl(
             )
 
             evaporation_volume: np.float32 = (
-                evaporation_m3_inertial[reach_idx] * substep_fraction_f32
-            )
+                evaporation_m3_inertial[reach_idx] * inv_dt_macro
+            ) * dt_substep
             actual_evaporation: np.float32 = min(
                 evaporation_volume, np.float32(new_storage)
             )
@@ -1378,7 +1350,7 @@ def _update_continuity_and_cfl(
             # 1. Calculate water stage and CFL hydraulic depth in a single pass
             reach_volume: np.float32 = np.float32(new_storage)
             stage, h_vol = _compute_reach_stage_and_cfl_depth(
-                reach_idx, reach_volume, geom_inbank, geom_overbank
+                reach_idx, reach_volume, geom_inbank
             )
             stage_buf[reach_idx] = stage
 
@@ -1400,7 +1372,6 @@ def _update_continuity_and_cfl(
                 total_flow_rate=flow_mag,
                 h_vol=h_vol,
                 geom_inbank=geom_inbank,
-                geom_overbank=geom_overbank,
                 geom_cfl=geom_cfl,
                 gravity_acceleration=gravity_acceleration,
                 dt_f32=dt_f32,
@@ -1511,7 +1482,6 @@ def _run_inertial_substeps(
             n_inertial,
             river_storage_m3_inertial,
             geom.geom_inbank,
-            geom.geom_overbank,
             buffers.stage_buf,
         )
 
@@ -1595,7 +1565,6 @@ def _run_inertial_substeps(
             n_inertial=n_inertial,
             substep_discharge_m3_s=substep_discharge_m3_s,
             geom_inbank=geom.geom_inbank,
-            geom_overbank=geom.geom_overbank,
             topo=topo,
             buffers=buffers,
             dt_substep_f32=dt_substep,
@@ -1627,7 +1596,6 @@ def _run_inertial_substeps(
             topo=topo,
             buffers=buffers,
             dt_substep=dt_substep,
-            substep_fraction_f32=substep_fraction_f32,
             dt_f32=dt_f32,
             inv_dt_substep=inv_dt_substep,
             gravity_acceleration=gravity_acceleration,

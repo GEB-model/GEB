@@ -173,7 +173,6 @@ def run_channel_routing_simulation(
             k,
             np.float32(storage_m3[k]),
             geom.geom_inbank,
-            geom.geom_overbank,
         )
     sampled_stages.append(initial_stages.copy())
     sampled_times.append(0.0)
@@ -189,7 +188,6 @@ def run_channel_routing_simulation(
                 k,
                 np.float32(storage_m3[k]),
                 geom.geom_inbank,
-                geom.geom_overbank,
             )
 
         # 2. Solve interface discharges via solve_inertial_momentum
@@ -225,7 +223,6 @@ def run_channel_routing_simulation(
                 curr_discharge=curr_discharge_m3_s[k],
                 min_wet_depth_m=min_wet_depth_m,
                 geom_inbank=geom.geom_inbank,
-                geom_overbank=geom.geom_overbank,
                 g_dt_substep=g_dt_substep,
                 sqrt_gravity=sqrt_gravity,
                 can_reverse=True,

@@ -101,7 +101,6 @@ def solve_inertial_momentum(
     curr_discharge: np.float32,
     min_wet_depth_m: np.float32,
     geom_inbank: TwoDArrayFloat32,
-    geom_overbank: TwoDArrayFloat32,
     g_dt_substep: np.float32,
     sqrt_gravity: np.float32,
     can_reverse: bool,
@@ -125,7 +124,6 @@ def solve_inertial_momentum(
         curr_discharge: Instantaneous discharge at start of substep Q^t (m³/s).
         min_wet_depth_m: Minimum depth threshold below which reach is treated as dry (meters).
         geom_inbank: Compact 2D in-bank reach geometry table (meters, dimensionless).
-        geom_overbank: Secondary 2D overbank floodplain geometry table (meters, dimensionless).
         g_dt_substep: Gravitational acceleration times substep dt: g * dt (m/s).
         sqrt_gravity: Square root of gravitational acceleration sqrt(g) (m^(1/2)/s).
         can_reverse: Whether adverse-slope reverse flow is permitted.

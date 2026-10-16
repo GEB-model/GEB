@@ -19,6 +19,7 @@ __all__: list[str] = [
     "GEOM_IN_BANKFULL_AREA",
     "GEOM_IN_BANKFULL_DEPTH",
     "GEOM_IN_BANKFULL_PERIMETER",
+    "GEOM_IN_FLOODPLAIN_WIDTH",
     "GEOM_IN_BANKFULL_VOLUME",
     "GEOM_IN_BED_ELEVATION",
     "GEOM_IN_INTERFACE_BED_ELEVATION_MAX",
@@ -61,7 +62,10 @@ GEOM_IN_BANKFULL_AREA: int = 10
 GEOM_IN_SHAPE_EXPONENT: int = 11
 GEOM_IN_RIVER_WIDTH: int = 12
 GEOM_IN_BANKFULL_PERIMETER: int = 13
-GEOM_IN_NUM_COLS: int = 14
+GEOM_IN_FLOODPLAIN_WIDTH: int = 14
+GEOM_IN_NUM_COLS: int = (
+    16  # Padded to 16 columns (64 bytes) to strictly align with L1 CPU cache lines
+)
 
 # Column indices for overbank floodplain geometry (geom_overbank)
 GEOM_OV_FLOODPLAIN_WIDTH: int = 0
@@ -233,8 +237,8 @@ def build_inertial_geometry(
 
     n_inertial: int = river_length.shape[0]
 
-    # Precompute in-bank channel geometry
-    geom_inbank: TwoDArrayFloat32 = np.empty(
+    # Precompute in-bank channel geometry (padded to 64 bytes per reach for L1 cache-line alignment)
+    geom_inbank: TwoDArrayFloat32 = np.zeros(
         (n_inertial, GEOM_IN_NUM_COLS), dtype=np.float32
     )
     geom_inbank[:, GEOM_IN_INVERSE_LENGTH] = inv_reach_length
@@ -259,6 +263,7 @@ def build_inertial_geometry(
     ).astype(np.float32)
     geom_inbank[:, GEOM_IN_RIVER_WIDTH] = river_width
     geom_inbank[:, GEOM_IN_BANKFULL_PERIMETER] = bankfull_perimeter
+    geom_inbank[:, GEOM_IN_FLOODPLAIN_WIDTH] = floodplain_width
 
     # Precompute overbank floodplain geometry
     geom_overbank: TwoDArrayFloat32 = np.empty(

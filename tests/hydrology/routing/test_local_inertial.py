@@ -3209,7 +3209,6 @@ def test_local_inertial_volume_limiter_subcritical_preservation() -> None:
         curr_discharge=np.float32(20.0),
         min_wet_depth_m=np.float32(1e-3),
         geom_inbank=geom_inbank,
-        geom_overbank=geom_overbank,
         g_dt_substep=g_dt_substep,
         sqrt_gravity=sqrt_gravity,
         can_reverse=False,
@@ -3227,7 +3226,6 @@ def test_local_inertial_volume_limiter_subcritical_preservation() -> None:
         curr_discharge=np.float32(50.0),
         min_wet_depth_m=np.float32(1e-3),
         geom_inbank=geom_inbank,
-        geom_overbank=geom_overbank,
         g_dt_substep=g_dt_substep,
         sqrt_gravity=sqrt_gravity,
         can_reverse=False,
@@ -4411,26 +4409,23 @@ def test_evaluate_reach_cfl_pure_wave_celerity_and_overbank_capping() -> None:
         GEOM_CFL_NUM_COLS,
         GEOM_IN_BANKFULL_DEPTH,
         GEOM_IN_BANKFULL_VOLUME,
+        GEOM_IN_FLOODPLAIN_WIDTH,
         GEOM_IN_INVERSE_LENGTH,
         GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE,
         GEOM_IN_NUM_COLS,
-        GEOM_OV_FLOODPLAIN_WIDTH,
-        GEOM_OV_NUM_COLS,
-        GEOM_OV_RIVER_WIDTH,
+        GEOM_IN_RIVER_WIDTH,
     )
     from geb.hydrology.routing.inertial_kernel import _evaluate_reach_cfl_dt
 
     geom_inbank: np.ndarray = np.zeros((1, GEOM_IN_NUM_COLS), dtype=np.float32)
-    geom_overbank: np.ndarray = np.zeros((1, GEOM_OV_NUM_COLS), dtype=np.float32)
     geom_cfl: np.ndarray = np.zeros((1, GEOM_CFL_NUM_COLS), dtype=np.float32)
 
     geom_inbank[0, GEOM_IN_BANKFULL_DEPTH] = np.float32(2.0)
     geom_inbank[0, GEOM_IN_BANKFULL_VOLUME] = np.float32(20000.0)
     geom_inbank[0, GEOM_IN_INVERSE_LENGTH] = np.float32(1.0 / 1000.0)
     geom_inbank[0, GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE] = np.float32(1.0 / 1.5)
-
-    geom_overbank[0, GEOM_OV_RIVER_WIDTH] = np.float32(10.0)
-    geom_overbank[0, GEOM_OV_FLOODPLAIN_WIDTH] = np.float32(200.0)
+    geom_inbank[0, GEOM_IN_RIVER_WIDTH] = np.float32(10.0)
+    geom_inbank[0, GEOM_IN_FLOODPLAIN_WIDTH] = np.float32(200.0)
 
     g: np.float32 = np.float32(9.80665)
     cfl_constant: np.float32 = np.float32(0.7 * 1000.0 / np.sqrt(9.80665))
@@ -4445,7 +4440,6 @@ def test_evaluate_reach_cfl_pure_wave_celerity_and_overbank_capping() -> None:
         total_flow_rate=np.float32(1.0),
         current_volume_m3=vol,
         geom_inbank=geom_inbank,
-        geom_overbank=geom_overbank,
         geom_cfl=geom_cfl,
         gravity_acceleration=g,
         dt_f32=np.float32(3600.0),
@@ -4455,7 +4449,6 @@ def test_evaluate_reach_cfl_pure_wave_celerity_and_overbank_capping() -> None:
         total_flow_rate=np.float32(10.0),
         current_volume_m3=vol,
         geom_inbank=geom_inbank,
-        geom_overbank=geom_overbank,
         geom_cfl=geom_cfl,
         gravity_acceleration=g,
         dt_f32=np.float32(3600.0),
@@ -4474,7 +4467,6 @@ def test_evaluate_reach_cfl_pure_wave_celerity_and_overbank_capping() -> None:
         total_flow_rate=np.float32(100.0),
         current_volume_m3=0.0,
         geom_inbank=geom_inbank,
-        geom_overbank=geom_overbank,
         geom_cfl=geom_cfl,
         gravity_acceleration=g,
         dt_f32=np.float32(3600.0),

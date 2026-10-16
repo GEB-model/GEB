@@ -498,6 +498,7 @@ def test_routing_calculate_bankfull_depth_integration() -> None:
     routing = object.__new__(Routing)
     routing.model = DummyModel()  # ty:ignore[invalid-assignment]
     routing.config = {
+        "max_threads": None,
         "river_depth": {
             "parameters": {
                 "c": 0.27,
@@ -809,6 +810,7 @@ def test_routing_set_router_estimates_width_from_simulated_q2(
 
     routing = Routing.__new__(Routing)
     routing.config = {
+        "max_threads": None,
         "river_depth": {
             "parameters": {
                 "c": 0.27,
