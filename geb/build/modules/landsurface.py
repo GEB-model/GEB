@@ -249,7 +249,8 @@ class LandSurface(BuildModelBase):
                 if not isinstance(DEM["path"], str):
                     raise ValueError("DEM path must be a string.")
 
-                DEM_raster: xr.DataArray = xr.open_dataarray(Path(DEM["path"]))
+                # DEM_raster: xr.DataArray = xr.open_dataarray(Path(DEM["path"]))
+                DEM_raster: xr.DataArray = xr.open_dataset(Path(DEM["path"]))["1m_DEM"]
 
                 # Handle CRS for custom DEMs
                 # Zarrs need special handling to set the CRS
@@ -270,20 +271,38 @@ class LandSurface(BuildModelBase):
                     )
 
                 # Handle nodata for custom DEMs
+                # Handle nodata for custom DEMs
                 if "nodata" in DEM:
-                    DEM_raster.attrs["_FillValue"] = DEM["nodata"]
+                    nodata = DEM["nodata"]
                 else:
-                    if "_FillValue" not in DEM_raster.attrs:
+                    nodata = DEM_raster.rio.nodata
+
+                    if nodata is None:
+                        nodata = DEM_raster.attrs.get("_FillValue")
+
+                    if nodata is None:
                         raise ValueError(
                             f"DEM at path '{DEM['path']}' does not have a nodata value defined."
                         )
 
+                # Set the nodata value explicitly before converting it to NaN
+                DEM_raster = DEM_raster.rio.write_nodata(
+                    nodata,
+                    encoded=False,
+                )
+                # else:
+                #     if "_FillValue" not in DEM_raster.attrs:
+                #         raise ValueError(
+                #             f"DEM at path '{DEM['path']}' does not have a nodata value defined."
+                #         )
+
             if "band" in DEM_raster.dims:
-                DEM_raster: xr.DataArray = DEM_raster.isel(band=0)
+                    DEM_raster = DEM_raster.isel(band=0)
 
             DEM_raster = convert_nodata(
-                DEM_raster.astype(np.float32, keep_attrs=True), np.nan
-            )
+            DEM_raster.astype(np.float32, keep_attrs=True),
+            np.nan,
+             )
 
             DEM_raster = clip_with_geometry(
                 DEM_raster,

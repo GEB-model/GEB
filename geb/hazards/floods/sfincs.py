@@ -411,7 +411,10 @@ class SFINCSRootModel:
             DEM["elevation"] = clip_with_geometry(
                 DEM["elevation"]["elevation"],
                 gpd.GeoDataFrame(
-                    [self.subbasins.union_all().buffer(0.1)],
+                    # buffer in CRS units (metres for UTM); must cover the outflow
+                    # boundary cells that extend outside the subbasins (~177 m for
+                    # the Geul), otherwise subgrid tiles there have no DEM -> NaN depth
+                    [self.subbasins.union_all().buffer(300)],
                     columns=["geometry"],
                     crs=self.subbasins.crs,
                 ),
@@ -443,6 +446,28 @@ class SFINCSRootModel:
         del rivers
 
         flood_plain: gpd.GeoDataFrame = self.get_flood_plain()
+
+        # Clip the flood plain (incl. the river buffer) to the modelled subbasins,
+        # so no active cells end up on interpolated elevation outside the DEM
+        # coverage (ported from tsa221 GEB_P2_Latest).
+        subbasin_area = self.subbasins.to_crs(flood_plain.crs).union_all()
+        flood_plain = flood_plain[flood_plain.intersects(subbasin_area)].copy()
+        flood_plain["geometry"] = flood_plain.intersection(subbasin_area)
+
+        # Keep only polygonal parts; grazing intersections give lines/points whose
+        # union has no boundary, which breaks calculate_outflow_conditions.
+        flood_plain = flood_plain.explode(index_parts=False)
+        flood_plain = flood_plain[
+            flood_plain.geom_type.isin(("Polygon", "MultiPolygon"))
+        ]
+        flood_plain = flood_plain[~flood_plain.is_empty & flood_plain.geometry.notna()]
+        assert not flood_plain.empty, (
+            "Flood plain is empty after clipping to the subbasins"
+        )
+        assert flood_plain.union_all().boundary is not None, (
+            "Clipped flood plain unions to a geometry with no boundary"
+        )
+
         sf.mask.create_active(include_polygon=flood_plain, reset_mask=True)
 
         self.rivers["outflow_elevation"] = np.nan
@@ -488,6 +513,8 @@ class SFINCSRootModel:
                 outflow_points.geometry = outflow_points.buffer(
                     (self.outflow_boundary_width_m / 2) * 1.1
                 ).to_crs(self.crs)
+
+                outflow_points.to_file(self.path / "outflow_points.gpkg", driver="GPKG")
 
                 sf.mask.create_active(
                     include_polygon=outflow_points,
@@ -563,9 +590,19 @@ class SFINCSRootModel:
                         "Custom rivers to burn must have a 'depth' column when using custom rivers"
                     )
                 if "manning" not in rivers_to_burn.columns:
-                    raise ValueError(
-                        "Custom rivers to burn must have a 'manning' column when using custom rivers"
-                    )
+                    rivers_to_burn["manning"] = 0.02
+                    print("Manning's n not provided for custom rivers, setting to 0.02")
+
+                # Drop zero-length lines and exact duplicate geometries. hydromt's
+                # burn_river_rect fails with "Cannot linemerge" when the rivers in a
+                # subgrid tile join into a single line (e.g. a river + a 0 m 'repair' line).
+                n_before = len(rivers_to_burn)
+                rivers_to_burn = rivers_to_burn[rivers_to_burn.length > 0]
+                rivers_to_burn = rivers_to_burn[~rivers_to_burn.geometry.duplicated()]
+                print(
+                    f"Removed {n_before - len(rivers_to_burn)} zero-length/duplicate "
+                    f"custom rivers ({len(rivers_to_burn)} left)"
+                )
             else:
                 active_rivers = self.active_rivers.copy()
                 # iteratively get all outflow rivers from self.rivers
@@ -713,6 +750,37 @@ class SFINCSRootModel:
             self.logger.info(
                 f"Setting up SFINCS subgrid with {grid_size_multiplier} subgrid pixels..."
             )
+
+            print("NUMBER OF DEMs:", len(DEMs))
+
+            # for i, dem in enumerate(DEMs):
+            #     print(f"\n===== DEM {i} =====")
+            #     print("keys:", dem.keys())
+            #     print("nodata:", dem["nodata"])
+            #     print("reproj_method:", dem["reproj_method"])
+
+            #     elevation = dem["elevation"]
+
+            #     print("\nElevation Dataset:")
+            #     print(elevation)
+
+            #     print("\nVariables:", list(elevation.data_vars))
+
+            #     for name, da in elevation.data_vars.items():
+            #         values = da.values
+
+            #         print(f"\n  Variable: {name}")
+            #         print(f"    shape: {values.shape}")
+            #         print(f"    dtype: {values.dtype}")
+            #         print(f"    NaNs: {np.isnan(values).sum()}")
+            #         print(f"    total cells: {values.size}")
+
+            #         if np.issubdtype(values.dtype, np.number):
+            #             print(f"    min: {np.nanmin(values)}")
+            #             print(f"    max: {np.nanmax(values)}")
+
+            #             nodata = dem["nodata"]
+            #             print(f"    nodata cells: {np.sum(values == nodata)}")
 
             with np.errstate(invalid="ignore"):
                 # only burn rivers that are wider than the subgrid pixel size
@@ -1009,11 +1077,12 @@ class SFINCSRootModel:
                 # point is outside the grid, and if so, move it 1 m upstream along the river
                 if not self.mask.values[outflow_row, outflow_col]:
                     # move outflow point 1 m upstream. 0.000008983 degrees is approximately 1 m
+                    # (parentheses matter: without them a projected CRS interpolates at
+                    # 1 m from the river START instead of 1 m upstream of the outflow point)
                     outflow_point: Point | MultiPoint | GeometryCollection = (
                         river.interpolate(
-                            line_locate_point(river, outflow_point) - 0.000008983
-                            if self.is_geographic
-                            else 1.0
+                            line_locate_point(river, outflow_point)
+                            - (0.000008983 if self.is_geographic else 1.0)
                         )
                     )
                     if not isinstance(outflow_point, Point):
@@ -1095,11 +1164,12 @@ class SFINCSRootModel:
                 # point is outside the grid, and if so, move it 1 m upstream along the river
                 if not self.mask.values[outflow_row, outflow_col]:
                     # move outflow point 1 m upstream. 0.000008983 degrees is approximately 1 m
+                    # (parentheses matter: without them a projected CRS interpolates at
+                    # 1 m from the river START instead of 1 m upstream of the outflow point)
                     outflow_point: Point | MultiPoint | GeometryCollection = (
                         river.interpolate(
-                            line_locate_point(river, outflow_point) - 0.000008983
-                            if self.is_geographic
-                            else 1.0
+                            line_locate_point(river, outflow_point)
+                            - (0.000008983 if self.is_geographic else 1.0)
                         )
                     )
                     if not isinstance(outflow_point, Point):
