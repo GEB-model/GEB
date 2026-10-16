@@ -21,9 +21,6 @@ from geb.hydrology.routing.geometry import (
     GEOM_IN_RIVER_WIDTH,
     GEOM_IN_SHAPE_EXPONENT,
     GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH,
-    GEOM_OV_BANKFULL_PERIMETER,
-    GEOM_OV_NUM_COLS,
-    GEOM_OV_RIVER_WIDTH,
 )
 from geb.hydrology.routing.solver import (
     evaluate_discharge_pow_0_6,
@@ -37,8 +34,8 @@ def _create_single_reach_geometry(
     bankfull_depth_m: float = 2.0,
     reach_length_m: float = 1000.0,
     manning_n: float = 0.035,
-) -> tuple[TwoDArrayFloat32, TwoDArrayFloat32]:
-    """Helper to create inbank and overbank geometry tables for a single test reach.
+) -> TwoDArrayFloat32:
+    """Helper to create in-bank geometry table for a single test reach.
 
     Args:
         bankfull_width_m: Bankfull channel width (meters).
@@ -47,10 +44,9 @@ def _create_single_reach_geometry(
         manning_n: Manning roughness coefficient (s / m^(1/3)).
 
     Returns:
-        Tuple of (geom_inbank, geom_overbank) 2D arrays.
+        In-bank 2D reach geometry array.
     """
     geom_inbank: TwoDArrayFloat32 = np.zeros((1, GEOM_IN_NUM_COLS), dtype=np.float32)
-    geom_overbank: TwoDArrayFloat32 = np.zeros((1, GEOM_OV_NUM_COLS), dtype=np.float32)
 
     # Parabolic shape exponent 0.5 -> inv_shape_exponent_plus_one = 1 / 1.5
     inv_shape_plus_one: float = 1.0 / 1.5
@@ -76,17 +72,12 @@ def _create_single_reach_geometry(
         bankfull_width_m + 2.0 * bankfull_depth_m
     )
 
-    geom_overbank[0, GEOM_OV_RIVER_WIDTH] = np.float32(bankfull_width_m)
-    geom_overbank[0, GEOM_OV_BANKFULL_PERIMETER] = np.float32(
-        bankfull_width_m + 2.0 * bankfull_depth_m
-    )
-
-    return geom_inbank, geom_overbank
+    return geom_inbank
 
 
 def test_dry_bed_cutoff() -> None:
     """Tests that dry reach interfaces produce strictly zero discharge."""
-    geom_inbank, geom_overbank = _create_single_reach_geometry()
+    geom_inbank = _create_single_reach_geometry()
     storage: ArrayFloat64 = np.array([10000.0], dtype=np.float64)
 
     # Effective depth below minimum wet depth
@@ -108,7 +99,7 @@ def test_dry_bed_cutoff() -> None:
 
 def test_downhill_gravity_acceleration() -> None:
     """Tests forward flow acceleration down a downhill water surface slope."""
-    geom_inbank, geom_overbank = _create_single_reach_geometry(manning_n=0.03)
+    geom_inbank = _create_single_reach_geometry(manning_n=0.03)
     storage: ArrayFloat64 = np.array([50000.0], dtype=np.float64)
 
     # Downhill slope: dz/dx = -0.001
@@ -130,7 +121,7 @@ def test_downhill_gravity_acceleration() -> None:
 
 def test_adverse_slope_deceleration_and_reversal() -> None:
     """Tests backwater deceleration and reverse flow on an adverse uphill slope."""
-    geom_inbank, geom_overbank = _create_single_reach_geometry(manning_n=0.03)
+    geom_inbank = _create_single_reach_geometry(manning_n=0.03)
     storage: ArrayFloat64 = np.array([50000.0], dtype=np.float64)
 
     # Adverse slope: dz/dx = +0.002
@@ -152,7 +143,7 @@ def test_adverse_slope_deceleration_and_reversal() -> None:
 
 def test_reverse_flow_suppressed_when_can_reverse_false() -> None:
     """Tests that reverse flow is capped at 0 when can_reverse is False."""
-    geom_inbank, geom_overbank = _create_single_reach_geometry()
+    geom_inbank = _create_single_reach_geometry()
     storage: ArrayFloat64 = np.array([50000.0], dtype=np.float64)
 
     # Adverse slope would cause negative flow, but can_reverse=False
@@ -174,9 +165,9 @@ def test_reverse_flow_suppressed_when_can_reverse_false() -> None:
 
 def test_manning_friction_damping_monotonicity_and_stability() -> None:
     """Tests that higher Manning n increases friction damping monotonically without instability."""
-    geom_low_n, geom_ov_low = _create_single_reach_geometry(manning_n=0.015)
-    geom_high_n, geom_ov_high = _create_single_reach_geometry(manning_n=0.060)
-    geom_extreme_n, geom_ov_extreme = _create_single_reach_geometry(manning_n=0.50)
+    geom_low_n = _create_single_reach_geometry(manning_n=0.015)
+    geom_high_n = _create_single_reach_geometry(manning_n=0.060)
+    geom_extreme_n = _create_single_reach_geometry(manning_n=0.50)
     storage: ArrayFloat64 = np.array([100000.0], dtype=np.float64)
 
     q_low: np.float32 = solve_inertial_momentum(
@@ -225,7 +216,7 @@ def test_manning_friction_damping_monotonicity_and_stability() -> None:
 
 def test_critical_flow_froude_limiter() -> None:
     """Tests that supercritical runaway over a vertical drop is capped by Fr <= 1 celerity."""
-    geom_inbank, geom_overbank = _create_single_reach_geometry(manning_n=0.01)
+    geom_inbank = _create_single_reach_geometry(manning_n=0.01)
     storage: ArrayFloat64 = np.array([1000000.0], dtype=np.float64)
 
     # Extreme waterfall slope: dz/dx = -1.0
@@ -253,7 +244,7 @@ def test_critical_flow_froude_limiter() -> None:
 
 def test_upstream_storage_volume_limiter() -> None:
     """Tests that outflow cannot exceed 95% of available upstream reach volume per substep."""
-    geom_inbank, geom_overbank = _create_single_reach_geometry()
+    geom_inbank = _create_single_reach_geometry()
     dt_s: float = 10.0
     small_storage: ArrayFloat64 = np.array([50.0], dtype=np.float64)
 
@@ -277,7 +268,7 @@ def test_upstream_storage_volume_limiter() -> None:
 
 def test_zero_upstream_storage_produces_zero_discharge() -> None:
     """Tests that a reach with zero available storage produces zero forward discharge."""
-    geom_inbank, geom_overbank = _create_single_reach_geometry()
+    geom_inbank = _create_single_reach_geometry()
     zero_storage: ArrayFloat64 = np.array([0.0], dtype=np.float64)
 
     q: np.float32 = solve_inertial_momentum(

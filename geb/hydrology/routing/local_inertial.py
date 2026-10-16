@@ -26,12 +26,13 @@ from .inertial_kernel import (
     INERTIAL_PARALLEL_THRESHOLD,
     RoutingStepDiagnostics,
     SubstepBuffers,
+    _compute_inertial_substeps_cfl_parallel,
+    _compute_inertial_substeps_cfl_serial,
     _compute_stage_from_storage_inertial,
     _gather_inputs,
     _run_inertial_substeps_parallel,
     _run_inertial_substeps_serial,
     _scatter_outputs,
-    compute_inertial_substeps_cfl,
 )
 from .kinematic import (
     KINEMATIC_PARALLEL_THRESHOLD,
@@ -1059,59 +1060,46 @@ class LocalInertial:
                 self._substep_buffers.kinematic_inflow_rate_inertial
             )
 
-            diagnostics: RoutingStepDiagnostics = compute_inertial_substeps_cfl(
-                dt_f32=dt_f32,
-                inv_dt_f32=inv_dt_f32,
-                n_inertial=self.n_inertial,
-                kin=self._kinematic_topology,
-                previous_discharge_m3_s_inertial=previous_discharge_m3_s_inertial,
-                updated_discharge_m3_s=self._updated_discharge_perm,
-                river_storage_m3_inertial=river_storage_m3_inertial,
-                sideflow_m3_inertial=sideflow_m3_inertial,
-                kinematic_inflow_rate_inertial=kinematic_inflow_rate_inertial,
-                geom=self._geometry,
-                topo=self._topology,
-                wb=wb_coupling,
-                buffers=self._substep_buffers,
-            )
-
-            num_inertial_substeps: int = diagnostics.num_inertial_substeps
-            substep_discharge_inertial[:] = previous_discharge_m3_s_inertial[:]
-
-            run_inertial = (
-                _run_inertial_substeps_parallel
-                if self.n_inertial >= INERTIAL_PARALLEL_THRESHOLD
-                else _run_inertial_substeps_serial
-            )
-            if self.n_inertial >= INERTIAL_PARALLEL_THRESHOLD:
+            is_parallel_inertial: bool = self.n_inertial >= INERTIAL_PARALLEL_THRESHOLD
+            if is_parallel_inertial:
                 orig_threads: int = numba.get_num_threads()
                 need_restore: bool = orig_threads != self._n_threads
                 if need_restore:
                     numba.set_num_threads(self._n_threads)
-                try:
-                    run_inertial(
-                        num_inertial_substeps=num_inertial_substeps,
-                        dt_f32=dt_f32,
-                        n_inertial=self.n_inertial,
-                        substep_discharge_m3_s=substep_discharge_inertial,
-                        river_storage_m3_inertial=river_storage_m3_inertial,
-                        sideflow_m3_inertial=sideflow_m3_inertial,
-                        evaporation_m3_inertial=evaporation_m3_inertial,
-                        over_abstraction_m3_inertial=over_abstraction_m3_inertial,
-                        actual_evaporation_m3_inertial=actual_evaporation_m3_inertial,
-                        updated_discharge_m3_s_inertial=updated_discharge_m3_s_inertial,
-                        kinematic_inflow_rate=kinematic_inflow_rate_inertial,
-                        geom=self._geometry,
-                        topo=self._topology,
-                        wb=wb_coupling,
-                        ret=ret_coupling,
-                        buffers=self._substep_buffers,
-                        initialize_stages=False,
-                    )
-                finally:
-                    if need_restore:
-                        numba.set_num_threads(orig_threads)
             else:
+                need_restore = False
+
+            compute_cfl = (
+                _compute_inertial_substeps_cfl_parallel
+                if is_parallel_inertial
+                else _compute_inertial_substeps_cfl_serial
+            )
+            run_inertial = (
+                _run_inertial_substeps_parallel
+                if is_parallel_inertial
+                else _run_inertial_substeps_serial
+            )
+
+            try:
+                diagnostics: RoutingStepDiagnostics = compute_cfl(
+                    dt_f32=dt_f32,
+                    inv_dt_f32=inv_dt_f32,
+                    n_inertial=self.n_inertial,
+                    kin=self._kinematic_topology,
+                    previous_discharge_m3_s_inertial=previous_discharge_m3_s_inertial,
+                    updated_discharge_m3_s=self._updated_discharge_perm,
+                    river_storage_m3_inertial=river_storage_m3_inertial,
+                    sideflow_m3_inertial=sideflow_m3_inertial,
+                    kinematic_inflow_rate_inertial=kinematic_inflow_rate_inertial,
+                    geom=self._geometry,
+                    topo=self._topology,
+                    wb=wb_coupling,
+                    buffers=self._substep_buffers,
+                )
+
+                num_inertial_substeps: int = diagnostics.num_inertial_substeps
+                substep_discharge_inertial[:] = previous_discharge_m3_s_inertial[:]
+
                 run_inertial(
                     num_inertial_substeps=num_inertial_substeps,
                     dt_f32=dt_f32,
@@ -1131,6 +1119,9 @@ class LocalInertial:
                     buffers=self._substep_buffers,
                     initialize_stages=False,
                 )
+            finally:
+                if need_restore:
+                    numba.set_num_threads(orig_threads)
 
         terminal_wb_outflow_m3: np.float32 = (
             self._substep_buffers.terminal_wb_outflow_accum_m3[0]

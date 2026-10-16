@@ -58,6 +58,8 @@ __all__ = [
     "_gather_inputs",
     "_run_inertial_substeps",
     "_run_inertial_substeps_parallel",
+    "_compute_inertial_substeps_cfl_parallel",
+    "_compute_inertial_substeps_cfl_serial",
     "_run_inertial_substeps_serial",
     "_scatter_outputs",
     "compute_inertial_substeps_cfl",
@@ -473,8 +475,7 @@ def _evaluate_reach_cfl_dt(
     )
 
 
-@njit(cache=True)
-def compute_inertial_substeps_cfl(
+def _compute_inertial_substeps_cfl(
     dt_f32: np.float32,
     inv_dt_f32: np.float32,
     n_inertial: int,
@@ -548,7 +549,7 @@ def compute_inertial_substeps_cfl(
 
     gravity_acceleration: np.float32 = np.float32(9.80665)
 
-    for reach_idx in range(n_inertial):
+    for reach_idx in prange(n_inertial):
         # Accumulate inflow from upstream kinematic reaches.
         upstream_kinematic_inflow: np.float32 = np.float32(0.0)
         upstream_kinematic_reach: int = inertial_up_kin_reach_idx[reach_idx]
@@ -672,6 +673,15 @@ def compute_inertial_substeps_cfl(
         limiting_flow=limiting_flow,
         limiting_storage=limiting_storage,
     )
+
+
+_compute_inertial_substeps_cfl_serial = njit(parallel=False)(
+    _compute_inertial_substeps_cfl
+)
+_compute_inertial_substeps_cfl_parallel = njit(parallel=True)(
+    _compute_inertial_substeps_cfl
+)
+compute_inertial_substeps_cfl = _compute_inertial_substeps_cfl_parallel
 
 
 @njit(inline="always")
