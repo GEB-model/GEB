@@ -440,6 +440,26 @@ class SFINCSRootModel:
         del rivers
 
         flood_plain: gpd.GeoDataFrame = self.get_flood_plain()
+        # Clip the flood plain (incl. the river buffer) to the modelled subbasins,
+        # so no active cells end up on interpolated elevation outside the DEM coverage.
+        subbasin_area = self.subbasins.to_crs(flood_plain.crs).union_all()
+        flood_plain = flood_plain[flood_plain.intersects(subbasin_area)].copy()
+        flood_plain["geometry"] = flood_plain.intersection(subbasin_area)
+
+        # Keep only polygonal parts; grazing intersections give lines/points whose
+        # union has no boundary, which breaks calculate_outflow_conditions.
+        flood_plain = flood_plain.explode(index_parts=False)
+        flood_plain = flood_plain[
+            flood_plain.geom_type.isin(("Polygon", "MultiPolygon"))
+        ]
+        flood_plain = flood_plain[~flood_plain.is_empty & flood_plain.geometry.notna()]
+        assert not flood_plain.empty, (
+            "Flood plain is empty after clipping to the subbasins"
+        )
+        assert flood_plain.union_all().boundary is not None, (
+            "Clipped flood plain unions to a geometry with no boundary"
+        )
+
         sf.mask.create_active(include_polygon=flood_plain, reset_mask=True)
 
         self.rivers["outflow_elevation"] = np.nan
@@ -649,7 +669,7 @@ class SFINCSRootModel:
                     write_man_tif=True,
                     nr_subgrid_pixels=grid_size_multiplier,
                     nr_levels=20,
-                    nrmax=500,
+                    nrmax=2000,
                 )
 
         else:
