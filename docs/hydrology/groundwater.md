@@ -37,6 +37,26 @@ The groundwater simulation proceeds in the following steps during each model tim
     *   **Capillary Rise**: A portion of the drainage flux is partitioned into capillary rise (water moving back up to the unsaturated zone), though currently, the implementation assigns most drainage to river baseflow.
     *   **State Update**: The updated hydraulic heads are synchronized back to the GEB grid state.
 
+## Karst
+
+Karst is included in every run. WOKAM estimates karst rock coverage using
+82.5% for continuous, 40% for discontinuous and 65% for mixed karst formations ([WOKAM paper](https://doi.org/10.1007/s10040-020-02139-5)).
+
+The karst share of soil drainage, runoff and interflow enters a separate linear karst store before
+reaching MODFLOW. Sealed land and open water are excluded.
+
+```yaml
+hydrology:
+  karst:
+    capture_fraction: 1.0
+    release_time_days: 10.0
+```
+
+`release_time_days` is the exponential release time: after this many days
+without inflow, `exp(-1)` (about 36.8%) of the initial storage remains.
+
+Run `setup_karst` to build the karst coverage map, then rerun spinup and simulation.
+
 ## Code
 
 ::: geb.hydrology.groundwater
