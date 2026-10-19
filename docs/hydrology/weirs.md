@@ -36,7 +36,9 @@ become active during the run when `hydrology.routing.weirs: true` (the default).
 Set it to `false` for a run without weirs; both runs can use the same spinup.
 Use separate output directories or run names for comparisons.
 
-To include additional barrier types in existing models, rerun `setup_weirs` first.
+To apply the 150 m distance limit or include additional barrier types in existing
+models, rerun `setup_weirs` first. Existing snapped inputs keep their placements
+until rebuilt.
 Rerun spinup once after upgrading so the checkpoint contains channel dimensions
 estimated without weir effects. Older checkpoints without saved grid depths fall
 back to dimensions derived from their saved spinup return-period discharge.
@@ -44,7 +46,7 @@ The default karst release time is **10 days**, during both spinup and run.
 
 ## Placement and dimensions
 
-A weir must be within **250 m of a represented river line**. Its connection
+A weir must be within **150 m of a represented river line**. Its connection
 must join two river cells outside lakes and reservoirs. Each pixel has one
 hydraulic control on its downstream connection. When its closest pixel is
 occupied, a new weir tries the second-closest distinct pixel on the same river
@@ -74,7 +76,7 @@ routing-wide policy of no reverse flow, even at weirs.
 `input/geom/routing/weirs.geoparquet` retains original AMBER locations, snapped
 coordinates, inclusion flags and exclusion reasons. `snap_rank` shows whether
 an included weir used its closest pixel (1) or second-closest pixel (2).
-`distance_to_cell_m` records the source-to-cell-center distance: the 250 m
+`distance_to_cell_m` records the source-to-cell-center distance: the 150 m
 acceptance limit applies to the river line, so coarse pixels can be farther away.
 In QGIS, filter
 `included = true` to inspect the placements.

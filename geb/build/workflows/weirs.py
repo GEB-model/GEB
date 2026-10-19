@@ -14,7 +14,7 @@ from shapely.ops import nearest_points
 
 from geb.workflows.raster import full_like
 
-MAX_WEIR_DISTANCE_M: float = 250.0
+MAX_WEIR_DISTANCE_M: float = 150.0
 
 
 def snap_amber_weirs(
@@ -25,7 +25,7 @@ def snap_amber_weirs(
     """Snap all AMBER barrier types as weirs at three quarters of bankfull depth.
 
     Notes:
-        Match the river line within 250 m before selecting its nearest model cell.
+        Match the river line within 150 m before selecting its nearest model cell.
         Distances use a WGS84 azimuthal equidistant projection centered on each
         source point. The distance limit applies to the line, not the grid center.
         One weir controls each cell's downstream interface. If its closest cell
@@ -120,7 +120,9 @@ def snap_amber_weirs(
             )
         )
         if not candidate_positions.size:
-            records.at[record_index, "exclusion_reason"] = "no river within 250 m"
+            records.at[record_index, "exclusion_reason"] = (
+                f"no river within {MAX_WEIR_DISTANCE_M:g} m"
+            )
             continue
         candidates: gpd.GeoDataFrame = represented.iloc[np.sort(candidate_positions)]
         projection: Proj = Proj(
@@ -137,7 +139,9 @@ def snap_amber_weirs(
         records.at[record_index, "distance_to_river_m"] = distance_m
         # Allow micrometer-scale projection roundoff at the inclusive boundary.
         if not np.isfinite(distance_m) or distance_m > MAX_WEIR_DISTANCE_M + 1e-6:
-            records.at[record_index, "exclusion_reason"] = "farther than 250 m"
+            records.at[record_index, "exclusion_reason"] = (
+                f"farther than {MAX_WEIR_DISTANCE_M:g} m"
+            )
             continue
         river: pd.Series = candidates.iloc[nearest_position]
         if not len(river.hydrography_xy):

@@ -46,7 +46,7 @@ height option. Recorded AMBER heights are ignored, including missing values.
 This fraction is a modeling assumption rather than a measured crest height.
 Remove any previous `height_m` setting and rerun `setup_weirs` to replace older
 fixed-height inputs. A weir
-must lie within **250 m of the nearest represented river line**, measured in a
+must lie within **150 m of the nearest represented river line**, measured in a
 local projection in meters. This is a line-distance limit, not a distance to the
 coarse model-cell center. The nearest cell on that river must have an active
 river cell downstream, with neither cell inside a lake or reservoir.
@@ -66,7 +66,7 @@ search farther along the segment or switch rivers. Process weirs by AMBER ID
 for reproducible assignments.
 
 `snap_rank` is 1 for the closest cell, 2 for the fallback and 0 for exclusions.
-`distance_to_cell_m` records the source-to-cell-center distance. The 250 m limit
+`distance_to_cell_m` records the source-to-cell-center distance. The 150 m limit
 still applies to the river line; a coarse cell center can be farther away.
 Distant points and unsuitable connections are also recorded.
 Rerun `setup_weirs` to include other barrier types in previously built inputs,

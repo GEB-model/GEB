@@ -1,6 +1,7 @@
 """Rectangular weir ratings and conservative local inertial routing tests."""
 
 from pathlib import Path
+from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -440,62 +441,45 @@ def test_deeply_submerged_rating_keeps_precision(head_m: float) -> None:
     assert actual == pytest.approx(expected, rel=1e-6)
 
 
-@pytest.mark.parametrize("depth_m", [1.5, 2.05])
-def test_weir_timestep_matches_storage_response(depth_m: float) -> None:
-    """Check exchange stability against the actual stage-volume derivative.
+@pytest.mark.parametrize("depth_m", [0.0, 0.5, 1.5, 2.05])
+def test_weirs_use_normal_routing_timestep(
+    monkeypatch: pytest.MonkeyPatch, depth_m: float
+) -> None:
+    """Keep a channel-safe step intact, including dry and overbank conditions.
 
     Args:
-        depth_m: Initial water depth, inside or above the river banks (meters).
-    """
-    from geb.hydrology.routing.geometry import GEOM_IN_BANKFULL_VOLUME
-    from geb.hydrology.routing.inertial_kernel import (
-        _compute_reach_stage_from_vol,
-        _limit_weir_timestep,
-    )
+        monkeypatch: Fixture recording actual compiled-kernel substep counts.
+        depth_m: Initial channel depth (meters).
 
-    router: LocalInertial = make_weir_channel(True)
-    router.initialize_stage(water_stage_m=router.bed_elevation + np.float32(depth_m))
-    upstream: int = int(router._geometry.weir_indices[0])
-    downstream: int = int(router._topology.ds_inertial_k[upstream])
-    stages: np.ndarray = router._substep_buffers.stage_buf
-    inbank: np.ndarray = router._geometry.geom_inbank
-    overbank: np.ndarray = router._geometry.geom_overbank
-    inverse_area: float = 0
-    cell: int
-    for cell in (upstream, downstream):
-        bankfull_volume: float = float(inbank[cell, GEOM_IN_BANKFULL_VOLUME])
-        volume: float = (
-            bankfull_volume * (depth_m / 2) ** 1.5
-            if depth_m <= 2
-            else bankfull_volume + 200 * 2 * (depth_m - 2) ** 2
-        )
-        perturbation_m3: float = 0.02
-        stage_plus: float = float(
-            _compute_reach_stage_from_vol(
-                cell, np.float32(volume + perturbation_m3), inbank, overbank
-            )
-        )
-        stage_minus: float = float(
-            _compute_reach_stage_from_vol(
-                cell, np.float32(volume - perturbation_m3), inbank, overbank
-            )
-        )
-        inverse_area += (stage_plus - stage_minus) / (2 * perturbation_m3)
-    flow: float = float(
-        rectangular_weir_discharge(
-            stages[upstream],
-            stages[downstream],
-            np.float32(1.5),
-            np.float32(10 * np.sqrt(0.5)),
-        )
+    Returns:
+        None. Checks one executed substep and conservative, nonnegative storage.
+    """  # noqa: DOC202
+    from geb.hydrology.routing import local_inertial
+
+    original_kernel: Any = local_inertial._run_inertial_substeps_serial
+    substep_counts: list[int] = []
+
+    def counted_substeps(**kwargs: Any) -> int:
+        """Record executed routing steps while leaving calculations unchanged.
+
+        Args:
+            **kwargs: Original routing-kernel arguments in SI units.
+
+        Returns:
+            Number of executed adaptive routing substeps.
+        """
+        count: int = original_kernel(**kwargs)
+        substep_counts.append(count)
+        return count
+
+    monkeypatch.setattr(
+        local_inertial, "_run_inertial_substeps_serial", counted_substeps
     )
-    expected_dt: float = min(
-        3600, 0.2 * float(stages[upstream] - stages[downstream]) / (flow * inverse_area)
-    )
-    actual_dt: np.float32 = _limit_weir_timestep(
-        np.float32(3600), router._geometry, router._topology, router._substep_buffers
-    )
-    assert actual_dt == pytest.approx(expected_dt, rel=0.02)
+    router: LocalInertial = make_weir_channel(True, dt_s=1)
+    # One second is safely below the ordinary CFL limit of this 200 m channel.
+    # Near bankfull, the removed weir-only restriction subdivided even this step.
+    run_channel(router, duration_s=1, inflow_m3_s=0, initial_depth_m=depth_m)
+    assert substep_counts == [1]
 
 
 @pytest.mark.parametrize("height_m", [-0.1, np.nan, np.inf, 2.1])

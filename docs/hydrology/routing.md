@@ -66,11 +66,10 @@ disables reverse flow: an adverse gradient gives zero flux.
 
 The same flux leaves one reach and enters the next through the existing
 continuity calculation. A storage cap keeps water below the crest in the
-upstream reach. Ordinary channel CFL limits are supplemented by a weir exchange
-time limit based on the water-level difference and both reaches' surface
-storage areas, using the same storage-to-level relationship as continuity.
-The safety factor of 0.2 reduces explicit exchange overshoot; it is a numerical
-choice, not an extra loss coefficient.
+upstream reach. Weir overflow uses the same adaptive timestep as ordinary river routing,
+without an additional weir-specific timestep restriction. The ordinary channel
+CFL limit and conservative available-water limits remain active. Timesteps can
+therefore still shorten as channel depth and wave speed change.
 River storage geometry remains unchanged; the crest is an interface control,
 not a raised bed or a new reservoir. Backwater uses the existing river and
 floodplain storage; no additional impoundment area is inferred from AMBER.

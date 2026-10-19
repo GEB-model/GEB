@@ -64,9 +64,9 @@ def make_inputs(
 
 
 @pytest.mark.parametrize("latitude", [0.0, 52.0, 70.0])
-@pytest.mark.parametrize("distance_m", [0.0, 249.999, 250.0, 250.001, 1000.0])
+@pytest.mark.parametrize("distance_m", [0.0, 149.999, 150.0, 150.001, 200.0, 1000.0])
 def test_metric_distance_limit(latitude: float, distance_m: float) -> None:
-    """Apply the same 250-meter line-distance limit at different latitudes.
+    """Apply the same 150-meter line-distance limit at different latitudes.
 
     Args:
         latitude: Source latitude (degrees).
@@ -85,11 +85,11 @@ def test_metric_distance_limit(latitude: float, distance_m: float) -> None:
     fractions: xr.DataArray
     records: gpd.GeoDataFrame
     fractions, records = snap_amber_weirs(points, rivers, valid)
-    assert records.included.tolist() == [distance_m <= 250.0]
+    assert records.included.tolist() == [distance_m <= 150.0]
     assert records.distance_to_river_m.iloc[0] == pytest.approx(distance_m, abs=1e-5)
-    assert fractions.values[0, 0] == (0.75 if distance_m <= 250.0 else 0.0)
+    assert fractions.values[0, 0] == (0.75 if distance_m <= 150.0 else 0.0)
     assert records.geometry.iloc[0] == points.geometry.iloc[0]
-    if distance_m <= 250.0:
+    if distance_m <= 150.0:
         assert records.grid_column.iloc[0] == records.grid_row.iloc[0] == 0
         assert records.snapped_longitude.iloc[0] == valid.x.values[0]
     else:
@@ -162,12 +162,12 @@ def test_all_barrier_types_use_weir_representation(barrier_type: str | None) -> 
     assert fractions.values[0, 0] == 0.75
     assert records.dam_type.iloc[0] == barrier_type
     # Non-weir types still obey the distance limit.
-    points, rivers, valid = make_inputs(distance_m=251.0)
+    points, rivers, valid = make_inputs(distance_m=151.0)
     points["dam_type"] = barrier_type
     fractions, records = snap_amber_weirs(points, rivers, valid)
     assert not fractions.values.any()
     assert records.included.tolist() == [False]
-    assert records.exclusion_reason.tolist() == ["farther than 250 m"]
+    assert records.exclusion_reason.tolist() == ["farther than 150 m"]
 
 
 @pytest.mark.parametrize("case", ["missing_crs", "invalid_grid", "invalid_cells"])
@@ -329,7 +329,7 @@ def test_distance_limit_applies_to_line() -> None:
             records.snapped_longitude.iloc[0],
             records.snapped_latitude.iloc[0],
         )[2]
-        > 250.0
+        > 150.0
     )
 
 
