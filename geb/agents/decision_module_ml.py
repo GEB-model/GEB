@@ -12,10 +12,13 @@ from __future__ import annotations
 
 import calendar
 import copy
+import fcntl
 import hashlib
 import json
-from collections import deque
+import os
+import tempfile
 import time
+from collections import deque
 from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
@@ -397,6 +400,18 @@ class DecisionModuleML:
         )
         self.selection_rng = np.random.default_rng(self.selection_random_seed)
         self.log_crop_counts = bool(config.get("log_crop_counts", False))
+        self.profile_runtime_timing = bool(config.get("profile_runtime_timing", False))
+        cache_settings = config.get("historical_state_cache", {})
+        if isinstance(cache_settings, bool):
+            cache_settings = {"enabled": cache_settings}
+        if not isinstance(cache_settings, Mapping):
+            raise TypeError("historical_state_cache must be a mapping or a boolean.")
+        self.historical_state_cache_enabled = bool(cache_settings.get("enabled", True))
+        if cache_settings.get("mode", "auto") not in {"auto", "off", "refresh"}:
+            raise ValueError(
+                "historical_state_cache.mode must be auto, off or refresh."
+            )
+        self.historical_state_cache_mode = cache_settings.get("mode", "auto")
 
         # The training workflow stores whether crops 23/25 were omitted from every
         # FROM/TO decision row. Read that contract from the deployment bundle rather
@@ -1317,32 +1332,16 @@ class DecisionModuleML:
                 "be recovered from spin-up reporters. Restart from the spin-up "
                 "checkpoint with this version and create a new run checkpoint."
             )
-        initial_schedule_timer = time.perf_counter()
-        # The restored farmer state is authoritative at the spin-up/run boundary.
-        # A farmer may already be in the run-start calendar year, so preparing all
-        # farmers for ``run_start.year`` can point backwards. The first ML target is
-        # always the year immediately following that farmer's restored calendar.
-        self.schedule(
-            np.arange(self.n_farmers, dtype=np.int64),
-            target_years=(self.calendar_year + 1).astype(np.int32, copy=False),
-            _bootstrap=True,
-        )
-        self.model.logger.info(
-            "DecisionModuleML timing: initial decision scheduling=%.2f s.",
-            time.perf_counter() - initial_schedule_timer,
-        )
-        self._bootstrap_from_spinup_reports(run_start)
-
-        completed = np.flatnonzero(self.completed_prescribed_before_run).astype(
-            np.int64
-        )
-        if completed.size:
-            self.schedule(completed, activate=True)
-            self.model.logger.info(
-                "Activated %s initial ML decision(s) whose final prescribed calendar "
-                "completed during spin-up.",
-                completed.size,
-            )
+        # The history cache is shared by all stochastic runs in the same
+        # configured simulation root, rather than under a scenario-specific run name.
+        # An operational checkpoint is restored first and never uses this cache.
+        if (
+            self.historical_state_cache_enabled
+            and self.historical_state_cache_mode != "off"
+        ):
+            self._initialize_from_historical_cache(run_start)
+        else:
+            self._initialize_fresh_historical_state(run_start)
 
         self.model.logger.info(
             "Loaded final online crop-choice model from %s: persistent state=%sx%s, "
@@ -1401,10 +1400,307 @@ class DecisionModuleML:
             "spinup_daily_chunk_days",
             "spinup_bootstrap_max_buffer_mb",
             "spinup_encoder_window_batch_size",
+            "historical_state_cache",
+            "profile_runtime_timing",
         }
         settings = {k: v for k, v in self.config.items() if k not in execution_options}
         digest.update(json.dumps(settings, sort_keys=True, default=str).encode())
         return digest.hexdigest()
+
+    def _initialize_fresh_historical_state(self, run_start: pd.Timestamp) -> None:
+        """Perform the unchanged prescribed-history scheduling and reconstruction."""
+        initial_schedule_timer = time.perf_counter()
+        # The restored farmer state is authoritative at the spin-up/run boundary.
+        self.schedule(
+            np.arange(self.n_farmers, dtype=np.int64),
+            target_years=(self.calendar_year + 1).astype(np.int32, copy=False),
+            _bootstrap=True,
+        )
+        self.model.logger.info(
+            "DecisionModuleML timing: initial decision scheduling=%.2f s.",
+            time.perf_counter() - initial_schedule_timer,
+        )
+        self._historical_replay_active = True
+        try:
+            self._bootstrap_from_spinup_reports(run_start)
+        finally:
+            self._historical_replay_active = False
+        completed = np.flatnonzero(self.completed_prescribed_before_run).astype(
+            np.int64
+        )
+        if completed.size:
+            self.schedule(completed, activate=True)
+            self.model.logger.info(
+                "Activated %s initial ML decision(s) whose final prescribed calendar "
+                "completed during spin-up.",
+                completed.size,
+            )
+
+    @staticmethod
+    def _hash_array(digest: Any, array: Any) -> None:
+        """Hash the dtype, shape, and exact bytes without copying large arrays."""
+        values = np.asarray(array)
+        digest.update(values.dtype.str.encode("ascii"))
+        digest.update(str(values.shape).encode("ascii"))
+        if values.flags.c_contiguous:
+            digest.update(memoryview(values).cast("B"))
+        elif values.ndim:
+            for index in range(values.shape[0]):
+                digest.update(np.ascontiguousarray(values[index]).tobytes())
+        else:
+            digest.update(values.tobytes())
+
+    @staticmethod
+    def _hash_file(path: Path) -> str:
+        """Return the cryptographic digest of a saved cache array."""
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+                digest.update(block)
+        return digest.hexdigest()
+
+    def _historical_cache_fingerprint(self, run_start: pd.Timestamp) -> str:
+        """Identify historical sources and model state, excluding the stochastic seed.
+
+        Zarr file size/mtime metadata identifies the precise spin-up reporter
+        generation without rereading the full historical reporter contents.
+        Changed reporter contents with deliberately preserved metadata require
+        manual cache invalidation.
+        """
+        digest = hashlib.sha256()
+        digest.update(b"GEB-historical-ML-cache-v1\0")
+        # Invalidate a warm state when this reconstruction implementation
+        # changes, even if input data and trained artifacts remain the same.
+        digest.update(self._hash_file(Path(__file__)).encode("ascii"))
+        digest.update(str(run_start.isoformat()).encode("utf-8"))
+        digest.update(str(self.n_farmers).encode("ascii"))
+
+        # Trained artifact contents are always included; the random seed and
+        # inference-only settings must not partition the shared history cache.
+        for name in ("geb_crop_choice_bundle.joblib", "temporal_autoencoder.pt"):
+            digest.update(self._hash_file(self.model_directory / name).encode("ascii"))
+        excluded = {
+            "random_seed",
+            "selection_mode",
+            "log_crop_counts",
+            "model_directory",
+            "device",
+            "batch_size",
+            "daily_state_batch_size",
+            "spinup_daily_chunk_days",
+            "spinup_bootstrap_max_buffer_mb",
+            "spinup_encoder_window_batch_size",
+            "profile_runtime_timing",
+            "historical_state_cache",
+            "store_runtime_diagnostics",
+        }
+        history_settings = {k: v for k, v in self.config.items() if k not in excluded}
+        digest.update(
+            json.dumps(history_settings, sort_keys=True, default=str).encode()
+        )
+
+        for name in (
+            "crop_calendar",
+            "crop_calendar_base_array",
+            "crop_calendar_years",
+            "crop_calendar_active_year_index",
+            "region_id",
+            "locations",
+        ):
+            digest.update(name.encode())
+            self._hash_array(digest, getattr(self.farmers.var, name))
+
+        report_dir = self._spinup_report_directory().resolve()
+        digest.update(str(report_dir).encode())
+        required = set(self.raw_daily_names)
+        yield_settings = self.variable_config["decision_agent"].get(
+            "crop_decision_yield_ratio", {}
+        )
+        if "crop_decision_yield_ratio" in self.variable_config[
+            "decision_agent"
+        ] and yield_settings.get("enabled", True):
+            required.update(
+                (
+                    "crop_decision_active_year_index",
+                    "crop_decision_yield_ratio",
+                )
+            )
+        for name in sorted(required):
+            store = report_dir / self._reporter_name(name) / f"{name}.zarr"
+            if not store.is_dir():
+                raise FileNotFoundError(f"Historical ML reporter missing: {store}")
+            digest.update(name.encode())
+            # Stat only: hashing every Zarr data chunk at every start could
+            # eliminate much of the benefit of the warm-state cache.
+            for directory, dirs, files in os.walk(store):
+                dirs.sort()
+                for filename in sorted(files):
+                    file = Path(directory) / filename
+                    info = file.stat()
+                    digest.update(str(file.relative_to(store)).encode())
+                    digest.update(f"{info.st_size}:{info.st_mtime_ns}".encode())
+        return digest.hexdigest()
+
+    def _historical_cache_folder(self, fingerprint: str) -> Path:
+        """Use the shared *configured* root, not model.simulation_root/run_name."""
+        root = Path(self.model.config["general"]["simulation_root"]).expanduser()
+        return (root / "machine_learning" / "historical_state" / fingerprint).resolve()
+
+    def _load_historical_state_cache(
+        self, directory: Path, fingerprint: str, run_start: pd.Timestamp
+    ) -> bool:
+        """Validate every saved array before changing the live ML state."""
+        manifest_path = directory / "manifest.json"
+        if not manifest_path.is_file():
+            if directory.exists():
+                raise RuntimeError(f"Incomplete historical ML cache at {directory}.")
+            return False
+        timer = time.perf_counter()
+        manifest = json.loads(manifest_path.read_text())
+        if (
+            manifest.get("version") != 1
+            or manifest.get("fingerprint") != fingerprint
+            or manifest.get("run_start") != run_start.isoformat()
+            or manifest.get("n_farmers") != self.n_farmers
+            or sorted(manifest.get("arrays", {})) != sorted(self.CHECKPOINT_ARRAYS)
+        ):
+            raise RuntimeError(
+                f"Historical ML cache manifest is incompatible: {directory}"
+            )
+
+        # First pass: validate all checksums and descriptors; no live state is
+        # changed if a cache is incomplete, corrupt, or has an unexpected layout.
+        for name in self.CHECKPOINT_ARRAYS:
+            desc = manifest["arrays"][name]
+            expected = getattr(self, name)
+            if (
+                tuple(desc["shape"]) != expected.shape
+                or desc["dtype"] != expected.dtype.str
+            ):
+                raise RuntimeError(f"Historical ML cache array mismatch: {name}")
+            path = directory / f"{name}.npy"
+            if not path.is_file() or self._hash_file(path) != desc["sha256"]:
+                raise RuntimeError(f"Historical ML cache checksum failed: {path}")
+            probe = np.load(path, mmap_mode="r", allow_pickle=False)
+            try:
+                if probe.shape != expected.shape or probe.dtype != expected.dtype:
+                    raise RuntimeError(f"Historical ML cache header mismatch: {path}")
+            finally:
+                del probe
+
+        # Load directly into the arrays allocated during initialization. This
+        # avoids a second >20-GiB copy on Europe_010 and keeps arrays writable.
+        for name in self.CHECKPOINT_ARRAYS:
+            source = np.load(
+                directory / f"{name}.npy", mmap_mode="r", allow_pickle=False
+            )
+            try:
+                np.copyto(getattr(self, name), source, casting="no")
+            finally:
+                del source
+        day = manifest.get("last_daily_date")
+        self.last_daily_date = None if day is None else np.datetime64(day, "D")
+        self.latest_spei_month_ordinal = manifest.get("latest_spei_month_ordinal")
+        self.model.logger.info(
+            "Loaded shared historical ML cache from %s in %.2f s; no spin-up replay.",
+            directory,
+            time.perf_counter() - timer,
+        )
+        return True
+
+    def _save_historical_state_cache(
+        self, directory: Path, fingerprint: str, run_start: pd.Timestamp
+    ) -> None:
+        """Publish lossless .npy arrays atomically after the full historical replay."""
+        timer = time.perf_counter()
+        parent = directory.parent
+        temporary = Path(tempfile.mkdtemp(prefix=".ml-history-", dir=parent))
+        try:
+            descriptors = {}
+            for name in self.CHECKPOINT_ARRAYS:
+                value = getattr(self, name)
+                path = temporary / f"{name}.npy"
+                np.save(path, value, allow_pickle=False)
+                descriptors[name] = {
+                    "shape": list(value.shape),
+                    "dtype": value.dtype.str,
+                    "sha256": self._hash_file(path),
+                }
+            manifest = {
+                "version": 1,
+                "fingerprint": fingerprint,
+                "run_start": run_start.isoformat(),
+                "n_farmers": self.n_farmers,
+                "arrays": descriptors,
+                "last_daily_date": (
+                    None
+                    if self.last_daily_date is None
+                    else np.datetime_as_string(self.last_daily_date, unit="D")
+                ),
+                "latest_spei_month_ordinal": self.latest_spei_month_ordinal,
+            }
+            (temporary / "manifest.json").write_text(
+                json.dumps(manifest, indent=2, sort_keys=True)
+            )
+            # Same-filesystem rename: readers see either no cache or a fully
+            # populated directory, never an in-progress snapshot.
+            os.rename(temporary, directory)
+        finally:
+            if temporary.exists():
+                import shutil
+
+                shutil.rmtree(temporary)
+        self.model.logger.info(
+            "Saved shared historical ML cache to %s in %.2f s.",
+            directory,
+            time.perf_counter() - timer,
+        )
+
+    def _initialize_from_historical_cache(self, run_start: pd.Timestamp) -> None:
+        """Use a valid warm start or reconstruct exactly once under a writer lock."""
+        key_timer = time.perf_counter()
+        fingerprint = self._historical_cache_fingerprint(run_start)
+        directory = self._historical_cache_folder(fingerprint)
+        self.model.logger.info(
+            "Historical ML cache key calculated in %.2f s: %s",
+            time.perf_counter() - key_timer,
+            directory,
+        )
+        if (
+            self.historical_state_cache_mode != "refresh"
+            and self._load_historical_state_cache(directory, fingerprint, run_start)
+        ):
+            return
+        directory.parent.mkdir(parents=True, exist_ok=True)
+        with (directory.parent / ".writer.lock").open("a+b") as lock:
+            try:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise RuntimeError(
+                    "Another job is preparing the shared historical ML cache. "
+                    "Start this job after that preparation has finished, ideally "
+                    "using a Slurm dependency."
+                ) from exc
+            try:
+                if directory.is_dir():
+                    if self.historical_state_cache_mode == "refresh":
+                        # Refresh always uses an explicit new cache generation;
+                        # avoid destroying an in-use snapshot from another run.
+                        raise RuntimeError(
+                            f"Cache exists at {directory}; remove it manually "
+                            "before requesting historical_state_cache.mode=refresh."
+                        )
+                    if self._load_historical_state_cache(
+                        directory, fingerprint, run_start
+                    ):
+                        return
+                self.model.logger.info(
+                    "Shared historical ML cache miss: replaying once."
+                )
+                self._initialize_fresh_historical_state(run_start)
+                self._save_historical_state_cache(directory, fingerprint, run_start)
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
     def save_checkpoint_state(self) -> None:
         """Stage compact runtime state in the farmer Bucket for Store.save.
@@ -2639,13 +2935,13 @@ class DecisionModuleML:
             Tuple containing float32 sine and cosine seasonal coordinates for each date.
         """
         date_index = pd.DatetimeIndex(np.asarray(dates, dtype="datetime64[ns]"))
-        slots = np.asarray(
-            [
-                datetime(2000, int(month), int(day)).timetuple().tm_yday - 1
-                for month, day in zip(date_index.month, date_index.day)
-            ],
-            dtype=np.float32,
-        )
+        # Training maps each month/day onto leap year 2000. In non-leap
+        # years every date after February needs a one-day shift.
+        slots = (
+            date_index.dayofyear.to_numpy(dtype=np.int32)
+            - 1
+            + ((~date_index.is_leap_year) & (date_index.month.to_numpy() > 2))
+        ).astype(np.float32)
         angle = 2.0 * np.pi * slots / 366.0
         return np.sin(angle).astype(np.float32), np.cos(angle).astype(np.float32)
 
@@ -2679,7 +2975,8 @@ class DecisionModuleML:
         if elapsed_days <= 0 or elapsed_days > self.window_days:
             raise ValueError("elapsed_days must be within the ten-day block.")
         raw = np.asarray(self.continuous_raw_window[farmers], dtype=np.float32)
-        values = raw[:, :elapsed_days, :].copy()
+        # Advanced indexing in raw_window[farmers] already made a private copy.
+        values = raw[:, :elapsed_days, :]
         observed = np.isfinite(values)
         means = self.daily_mean[self.continuous_value_indices]
         scales = self.daily_scale[self.continuous_value_indices]
@@ -2737,13 +3034,19 @@ class DecisionModuleML:
             raise RuntimeError(
                 "Persistent block day counts do not match the requested commit length."
             )
+        block_started = time.perf_counter()
+        build_seconds = 0.0
+        neural_seconds = 0.0
         decay = np.float32(2.0 ** (-float(elapsed_days) / self.memory_half_life_days))
         # Recurrent-only updates are substantially lighter than complete RF
         # inference. Use the larger state batch during both bootstrap and live block
         # commits to reduce GPU/CPU launch overhead.
         for start in range(0, farmers.size, self.daily_state_batch_size):
             batch = farmers[start : start + self.daily_state_batch_size]
+            build_started = time.perf_counter()
             block_inputs = self._continuous_block_inputs(batch, elapsed_days)
+            build_seconds += time.perf_counter() - build_started
+            neural_started = time.perf_counter()
             window = self.torch.from_numpy(block_inputs).to(self.device)
             hidden = self.torch.from_numpy(self.continuous_hidden[:, batch, :]).to(
                 self.device
@@ -2756,6 +3059,19 @@ class DecisionModuleML:
                 )
             self.continuous_hidden[:, batch, :] = (
                 updated.cpu().numpy().astype(np.float32, copy=False)
+            )
+            neural_seconds += time.perf_counter() - neural_started
+        if self.profile_runtime_timing and not getattr(
+            self, "_historical_replay_active", False
+        ):
+            self.model.logger.info(
+                "DecisionModuleML live block timing: farmers=%s, days=%s, "
+                "build=%.3f s, transfer_neural_writeback=%.3f s, total=%.3f s.",
+                farmers.size,
+                elapsed_days,
+                build_seconds,
+                neural_seconds,
+                time.perf_counter() - block_started,
             )
         self.continuous_raw_window[farmers] = np.nan
         self.continuous_block_start_date[farmers] = np.datetime64("NaT", "D")
@@ -2780,22 +3096,30 @@ class DecisionModuleML:
             raise RuntimeError(
                 "DecisionModuleML requires a fixed farmer population during a run."
             )
-        farmer_values = {
-            "groundwater_depth": np.asarray(
-                self.farmers.groundwater_depth, dtype=np.float32
+        timer = time.perf_counter()
+        farmer_sources = {
+            "groundwater_depth": lambda: self.farmers.groundwater_depth,
+            "cumulative_water_deficit_current_day": lambda: (
+                self.farmers.var.cumulative_water_deficit_current_day
             ),
-            "cumulative_water_deficit_current_day": np.asarray(
-                self.farmers.var.cumulative_water_deficit_current_day,
-                dtype=np.float32,
-            ),
-            "risk_perception": np.asarray(
-                self.farmers.var.risk_perception, dtype=np.float32
-            ),
-            "crop_decision_spei": np.asarray(
-                self.farmers.var.crop_decision_spei, dtype=np.float32
-            ),
+            "risk_perception": lambda: self.farmers.var.risk_perception,
+            "crop_decision_spei": lambda: self.farmers.var.crop_decision_spei,
         }
+        farmer_values = {
+            name: np.asarray(farmer_sources[name](), dtype=np.float32)
+            for name in ML_FARMER_DAILY_FEATURES
+            if name in self.raw_daily_index
+        }
+        collect_elapsed = time.perf_counter() - timer
         self._capture_daily_values(timestamp, {**land_surface_values, **farmer_values})
+        if self.profile_runtime_timing:
+            self.model.logger.info(
+                "DecisionModuleML live input timing %s: farmer_features=%.3f s, "
+                "capture_total=%.3f s.",
+                timestamp.strftime("%Y-%m-%d"),
+                collect_elapsed,
+                time.perf_counter() - timer,
+            )
 
     def _capture_daily_values(
         self,
@@ -2819,6 +3143,7 @@ class DecisionModuleML:
                 an inconsistent internal day count.
             ValueError: If a daily predictor is not aligned with the farmer population.
         """
+        capture_started = time.perf_counter()
         current_date = np.datetime64(timestamp.date(), "D")
         if self.last_daily_date is not None:
             expected = self.last_daily_date + np.timedelta64(1, "D")
@@ -2866,6 +3191,8 @@ class DecisionModuleML:
 
         # Fill the retained raw block in bounded chunks. Avoid materializing an
         # n_farmers x n_daily_features matrix on every simulation day.
+        preparation_elapsed = time.perf_counter() - capture_started
+        writes_started = time.perf_counter()
         for start in range(0, active.size, self.daily_state_batch_size):
             batch = active[start : start + self.daily_state_batch_size]
             positions = self.continuous_window_days[batch].astype(np.int64)
@@ -2883,10 +3210,27 @@ class DecisionModuleML:
             self.continuous_window_days[batch] += 1
             self.continuous_interval_days[batch] += 1
 
+        writes_elapsed = time.perf_counter() - writes_started
         complete = active[self.continuous_window_days[active] == self.window_days]
+        blocks_started = time.perf_counter()
         if complete.size:
             self._commit_continuous_blocks(complete, self.window_days)
         self.last_daily_date = current_date
+        if self.profile_runtime_timing and (
+            np.datetime64(self.model.current_time.date(), "D") == current_date
+        ):
+            self.model.logger.info(
+                "DecisionModuleML live daily timing %s: farmers=%s, "
+                "prepare=%.3f s, window_writes=%.3f s, "
+                "block_commit=%.3f s, complete=%s, total=%.3f s.",
+                str(current_date),
+                active.size,
+                preparation_elapsed,
+                writes_elapsed,
+                time.perf_counter() - blocks_started,
+                complete.size,
+                time.perf_counter() - capture_started,
+            )
 
     def _spei_values_for_dates(
         self,
