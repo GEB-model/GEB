@@ -3834,9 +3834,9 @@ class CropFarmers(AgentBaseClass):
         """Refresh monthly SPEI when needed and expose its current daily value.
 
         The gridded SPEI input is monthly. GEB therefore samples farmers only
-        when the nearest-month timestamp changes, stores that farmer vector in
-        a compact circular monthly cache, and reuses it on intervening days.
-        Harvest-time SPEI uses the same exposed value.
+        when the nearest-month timestamp changes and reuses the value between
+        changes. ML runs use a circular cache; non-ML runs reuse the existing
+        daily farmer SPEI array. Harvest-time SPEI uses that same value.
 
         Raises:
             AssertionError: If sampled daily SPEI has an unexpected farmer dimension.
@@ -3863,7 +3863,18 @@ class CropFarmers(AgentBaseClass):
 
         spei_month_ordinal = spei_time.year * 12 + spei_time.month - 1
         runtime = self.decision_module_ml
-        if runtime is None or runtime.latest_spei_month_ordinal != spei_month_ordinal:
+        # Without ML, reuse the previous monthly SPEI vector instead of
+        # sampling the entire grid every day. The Bucket identity check also
+        # invalidates this cache when a checkpoint restores the farmer state.
+        if (
+            runtime is None
+            and getattr(self, "_non_ml_spei_month_ordinal", None) == spei_month_ordinal
+            and getattr(self, "_non_ml_spei_bucket", None) is self.var
+            and getattr(self, "_non_ml_spei_locations", None) is self.var.locations
+            and getattr(self, "_non_ml_spei_n", None) == self.var.n
+        ):
+            current_spei = np.asarray(self.var.crop_decision_spei[:], dtype=np.float32)
+        elif runtime is None or runtime.latest_spei_month_ordinal != spei_month_ordinal:
             current_spei = np.asarray(
                 sample_from_map(
                     array=self.model.hydrology.grid.spei_uncompressed,
@@ -3901,6 +3912,11 @@ class CropFarmers(AgentBaseClass):
             )
 
         self.var.crop_decision_spei[:] = current_spei
+        if runtime is None:
+            self._non_ml_spei_month_ordinal = spei_month_ordinal
+            self._non_ml_spei_bucket = self.var
+            self._non_ml_spei_locations = self.var.locations
+            self._non_ml_spei_n = self.var.n
 
     def save_harvest_spei(self, harvesting_farmers: npt.NDArray[np.bool_]) -> None:
         """Save harvest-day SPEI from the already sampled daily farmer values.
