@@ -77,6 +77,7 @@ from .workflows.utils import (
     make_relative_paths,
     read_flood_depth,
     run_sfincs_simulation,
+    select_most_downstream_point,
     select_most_upstream_point,
     to_sfincs_datetime,
 )
@@ -900,7 +901,8 @@ class SFINCSRootModel:
             outflow_gdf = gpd.GeoDataFrame({"geometry": [outflow_point]}, crs=self.crs)
             write_geom(outflow_gdf, self.path / "debug_outflow_point.geoparquet")
 
-        boundary = area.union_all().boundary
+        area_union = area.union_all()
+        boundary = area_union.boundary
         if not (
             self.active_rivers["is_downstream_outflow"]
             | (self.active_rivers["downstream_ID"] == -1)
@@ -922,13 +924,23 @@ class SFINCSRootModel:
                 # Last point of river
                 end_point = Point(river.coords[-1])
 
-                # Compute nearest points between end_point and boundary
-                _, nearest_boundary_point = nearest_points(end_point, boundary)
+                if area_union.covers(end_point):
+                    # Compute nearest points between end_point and boundary
+                    _, nearest_boundary_point = nearest_points(end_point, boundary)
 
-                # Extend river directly to that location
-                river = LineString(
-                    list(river.coords) + [nearest_boundary_point.coords[0]]
-                )
+                    # Extend river directly to that location
+                    river = LineString(
+                        list(river.coords) + [nearest_boundary_point.coords[0]]
+                    )
+                else:
+                    # The river continues beyond the boundary. Extending it to the
+                    # nearest boundary point would make the line double back on
+                    # itself, so that moving "upstream" would go the wrong way
+                    # (out of the region). Instead use the last point where the river
+                    # crosses the boundary.
+                    nearest_boundary_point = select_most_downstream_point(
+                        river, river.intersection(boundary)
+                    )
 
                 outflow_point = nearest_boundary_point
 
@@ -951,9 +963,8 @@ class SFINCSRootModel:
                     # move outflow point 1 m upstream. 0.000008983 degrees is approximately 1 m
                     outflow_point: Point | MultiPoint | GeometryCollection = (
                         river.interpolate(
-                            line_locate_point(river, outflow_point) - 0.000008983
-                            if self.is_geographic
-                            else 1.0
+                            line_locate_point(river, outflow_point)
+                            - (0.000008983 if self.is_geographic else 1.0)
                         )
                     )
                     if not isinstance(outflow_point, Point):
@@ -970,17 +981,15 @@ class SFINCSRootModel:
                     print(
                         f"Outflow point is outside of the model grid. Moving 1 m upstream along the river. Iteration {iteration_count}."
                     )
-                    if iteration_count > 100:
+                    if iteration_count > np.int32(self.estimated_cell_size_m):
                         export_diagnostics(outflow_point)
+                        # export original outflow point for debugging
+                        gpd.GeoDataFrame(
+                            [nearest_boundary_point], columns=["geometry"]
+                        ).to_file(self.path / "debug_outflow_point_original.gpkg")
                         raise ValueError(
                             "Calculated outflow point is outside of the model grid. Please check the river geometries and subbasins boundary."
                         )
-                    # # if still outside the grid, raise error for boundary rivers
-                    # if not self.mask.values[outflow_row, outflow_col]:
-                    #     export_diagnostics(outflow_point)
-                    #     raise ValueError(
-                    #         "Calculated outflow point is outside of the model grid. Please check the river geometries and subbasins boundary."
-                    #     )
 
                 self.rivers.at[river_idx, "outflow_elevation"] = 0
                 self.rivers.at[river_idx, "outflow_point_xy"] = np.array(
@@ -1051,9 +1060,8 @@ class SFINCSRootModel:
                     # move outflow point 1 m upstream. 0.000008983 degrees is approximately 1 m
                     outflow_point: Point | MultiPoint | GeometryCollection = (
                         river.interpolate(
-                            line_locate_point(river, outflow_point) - 0.000008983
-                            if self.is_geographic
-                            else 1.0
+                            line_locate_point(river, outflow_point)
+                            - (0.000008983 if self.is_geographic else 1.0)
                         )
                     )
                     if not isinstance(outflow_point, Point):

@@ -19,7 +19,8 @@ from hydromt_sfincs import SfincsModel, utils
 from hydromt_sfincs.components.config.config_variables import SfincsConfigVariables
 from matplotlib.colors import LinearSegmentedColormap
 from shapely import line_locate_point
-from shapely.geometry import GeometryCollection, LineString, Point
+from shapely.geometry import GeometryCollection, LineString, MultiPoint, Point
+from shapely.geometry.base import BaseGeometry
 
 from geb.geb_types import ArrayFloat32, ArrayInt64
 from geb.workflows.io import read_geom
@@ -671,6 +672,41 @@ def run_sfincs_simulation(
         )
     else:
         return return_code
+
+
+def select_most_downstream_point(
+    river: LineString, crossing: Point | MultiPoint | GeometryCollection | LineString
+) -> Point:
+    """Select the most downstream point from a geometry that intersects a river.
+
+    Args:
+        river: LineString of the river geometry, oriented in the flow direction.
+        crossing: Intersection geometry of the river with another geometry (for example
+            the region boundary). Can be a Point, or a collection of Points and LineStrings.
+
+    Returns:
+        The point with the largest distance along the river.
+
+    Raises:
+        ValueError: If the crossing geometry is empty.
+        TypeError: If an unsupported geometry type is found in crossing.
+    """
+    if crossing.is_empty:
+        raise ValueError("Cannot select a downstream point from an empty geometry.")
+
+    geometries: list[BaseGeometry] = (
+        list(crossing.geoms) if hasattr(crossing, "geoms") else [crossing]
+    )
+    points: list[Point] = []
+    for geom in geometries:
+        if isinstance(geom, Point):
+            points.append(geom)
+        elif isinstance(geom, LineString):
+            points.extend(Point(coord) for coord in geom.coords)
+        else:
+            raise TypeError(f"Unsupported geometry type in crossing: {type(geom)}")
+
+    return max(points, key=lambda point: line_locate_point(river, point))
 
 
 def select_most_upstream_point(
