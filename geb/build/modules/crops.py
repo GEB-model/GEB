@@ -2472,13 +2472,12 @@ class Crops(BuildModelBase):
                 farmer_crop_rainfed_fractions.sum() == 0
                 and farmer_crop_irrigated_fractions.sum() == 0
             ):
-                # The cropped-area fractions of this cell and the crop calendar share no
-                # crop. The fractions come from the cell itself or, if it has no data, from
-                # its nearest cells in the same MIRCA unit. The crop calendar is the one of
-                # the cell's MIRCA unit, or of the unit that replaces it through
-                # replace_crop_calendar_unit_code. With no overlap, no crop can be drawn
-                # from the fractions, so use the growing areas of the crop calendar as
-                # fractions instead.
+                # All crops that have a non-zero area fraction in this cell are missing from the
+                # crop calendar, so after masking, no fractions are left to assign crops from.
+                # The fractions come from the cell itself or, if it has no data, from its nearest
+                # cells in the same MIRCA unit. The crop calendar is the one of the cell's MIRCA
+                # unit, or of the unit that replaces it through replace_crop_calendar_unit_code.
+                # Fall back to the growing areas of the crop calendar as fractions instead.
                 self.logger.warning(
                     f"No crop in the area fractions of cell {linear_index} is in the crop "
                     f"calendar of MIRCA unit {MIRCA_unit_cell}; using the crop calendar areas instead."
