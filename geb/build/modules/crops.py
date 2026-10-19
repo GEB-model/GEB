@@ -23,7 +23,7 @@ from geb.agents.crop_farmers import (
 from geb.build.methods import build_method
 from geb.build.workflows.crop_calendars import parse_MIRCA_crop_calendar
 from geb.geb_types import ArrayBool, ArrayInt32, ArrayInt64, ArrayUint8, TwoDArrayInt32
-from geb.workflows.io import get_window
+from geb.workflows.io import get_window, read_array
 from geb.workflows.raster import (
     fillna_2d,
     get_linear_indices,
@@ -726,11 +726,305 @@ class Crops(BuildModelBase):
             "setup_crops_from_source is removed, use setup_crops instead."
         )
 
+    def _get_required_crop_price_ids(
+        self,
+        additional_models: list[int | str] | None,
+        models_root: str | Path | None,
+    ) -> set[int]:
+        """Get the union of crop IDs used by this and selected nearby models."""
+        calendar = self.array["agents/farmers/crop_calendar"]
+        if calendar.ndim not in (3, 4):
+            raise ValueError(f"Unexpected farmer crop calendar shape: {calendar.shape}")
+
+        crop_ids = set(np.unique(calendar[..., 0]).astype(int).tolist())
+        crop_ids.discard(-1)
+
+        if additional_models:
+            if models_root is None:
+                # GEB normally builds from .../Europe_XXX/base. Prefer the builder
+                # root when available, otherwise the current working directory.
+                base_candidates = [getattr(self, "root", None), Path.cwd()]
+                root_dir = None
+                for candidate in base_candidates:
+                    if candidate is None:
+                        continue
+                    candidate = Path(candidate).resolve()
+                    if candidate.name == "base" and candidate.parent.name.startswith(
+                        "Europe_"
+                    ):
+                        root_dir = candidate.parent.parent
+                        break
+                    if (
+                        candidate.name.startswith("Europe_")
+                        and (candidate / "base").is_dir()
+                    ):
+                        root_dir = candidate.parent
+                        break
+                if root_dir is None:
+                    raise ValueError(
+                        "Cannot locate the directory containing Europe_XXX models. "
+                        "Pass models_root to setup_crop_prices explicitly."
+                    )
+            else:
+                root_dir = Path(models_root).expanduser().resolve()
+
+            for model in additional_models:
+                model_name = str(model)
+                if model_name.isdigit():
+                    model_name = f"Europe_{int(model_name):03d}"
+                if not (model_name.startswith("Europe_") and model_name[7:].isdigit()):
+                    raise ValueError(f"Invalid Europe model identifier: {model!r}")
+                model_name = f"Europe_{int(model_name[7:]):03d}"
+
+                calendar_path = (
+                    root_dir
+                    / model_name
+                    / "base"
+                    / "input"
+                    / "array"
+                    / "agents"
+                    / "farmers"
+                    / "crop_calendar.zarr"
+                )
+                if not calendar_path.exists():
+                    raise FileNotFoundError(
+                        f"Crop calendar for {model_name} does not exist: {calendar_path}"
+                    )
+                other_calendar = read_array(calendar_path)
+                if other_calendar.ndim not in (3, 4):
+                    raise ValueError(
+                        f"Unexpected crop calendar shape for {model_name}: "
+                        f"{other_calendar.shape}"
+                    )
+                other_crop_ids = np.unique(other_calendar[..., 0]).astype(int)
+                crop_ids.update(other_crop_ids.tolist())
+                self.logger.info(
+                    "Including %d distinct crop IDs from %s",
+                    len(other_crop_ids[other_crop_ids >= 0]),
+                    model_name,
+                )
+
+        crop_ids = {crop_id for crop_id in crop_ids if crop_id >= 0}
+        known_ids = {int(key) for key in self.params["crops/crop_data"]["data"]}
+        unknown_ids = crop_ids - known_ids
+        if unknown_ids:
+            raise ValueError(
+                "Other model crop calendars contain IDs absent from the current "
+                f"model's crops/crop_data: {sorted(unknown_ids)}. "
+                "All combined models must use the same crop ID definitions."
+            )
+        return crop_ids
+
+    def _fill_missing_local_crop_prices(
+        self,
+        data: pd.DataFrame,
+        required_crop_names: set[str],
+        unique_regions: pd.DataFrame,
+    ) -> pd.DataFrame:
+        """Estimate missing local crop prices from comparable priced donor crops.
+
+        Donor crop prices are multiplied by the median recipient/donor price
+        ratio of crops observed in both places in the same year. Nearby trade
+        regions are preferred. Existing prices are never overwritten.
+        """
+        pricing_regions = list(data.index.get_level_values("region_id").unique())
+        iso3_by_region = unique_regions.set_index("region_id")["ISO3"].to_dict()
+        crop_columns = list(data.columns)
+        missing_crops = sorted(required_crop_names - set(crop_columns))
+        for crop in missing_crops:
+            data[crop] = np.nan
+        crop_columns = list(data.columns)
+
+        # Cache the region arrays; only small (year x crop) tables are involved.
+        region_arrays = {
+            region_id: data.loc[region_id, crop_columns].to_numpy(dtype=float).copy()
+            for region_id in pricing_regions
+        }
+        n_estimated = 0
+        for target_id in pricing_regions:
+            # Do not use newly estimated prices as donor observations.
+            reference_target = region_arrays[target_id]
+            target = reference_target.copy()
+            for crop in required_crop_names:
+                crop_index = crop_columns.index(crop)
+                for year_index, current_price in enumerate(
+                    reference_target[:, crop_index]
+                ):
+                    if np.isfinite(current_price):
+                        continue
+
+                    candidates_same_trade = []
+                    candidates_other = []
+                    target_row = reference_target[year_index]
+                    for donor_id in pricing_regions:
+                        if donor_id == target_id:
+                            continue
+                        donor_row = region_arrays[donor_id][year_index]
+                        donor_crop_price = donor_row[crop_index]
+                        if not np.isfinite(donor_crop_price) or donor_crop_price <= 0:
+                            continue
+
+                        common = (
+                            np.isfinite(target_row)
+                            & np.isfinite(donor_row)
+                            & (target_row > 0)
+                            & (donor_row > 0)
+                        )
+                        common[crop_index] = False
+                        if not common.any():
+                            continue
+                        local_multiplier = np.median(
+                            target_row[common] / donor_row[common]
+                        )
+                        estimated_price = donor_crop_price * local_multiplier
+                        if (
+                            TRADE_REGIONS.get(iso3_by_region.get(donor_id))
+                            == TRADE_REGIONS.get(iso3_by_region.get(target_id))
+                            and TRADE_REGIONS.get(iso3_by_region.get(target_id))
+                            is not None
+                        ):
+                            candidates_same_trade.append(estimated_price)
+                        else:
+                            candidates_other.append(estimated_price)
+
+                    candidates = candidates_same_trade or candidates_other
+                    if candidates:
+                        target[year_index, crop_index] = float(np.median(candidates))
+                        n_estimated += 1
+
+            data.loc[target_id, crop_columns] = target
+        if n_estimated:
+            self.logger.info(
+                "Estimated %d missing crop-price values using locally scaled donor prices",
+                n_estimated,
+            )
+        return data
+
+    def _fill_rice_prices_from_faostat_donors(
+        self,
+        data: pd.DataFrame,
+        faostat: pd.DataFrame,
+        donor_countries: list[str],
+        translate_crop_names: dict[str, str] | None = None,
+    ) -> pd.DataFrame:
+        """Fill missing rice prices using FAOSTAT countries outside the model.
+
+        The median ratio of shared crop prices converts each donor's rice price
+        into the destination region's price level. This also accounts for
+        differences in national currencies without mixing unconverted prices.
+        Remaining years are filled by the regular inflation/extrapolation step.
+        """
+        if not donor_countries:
+            return data
+
+        if "rice" not in data.columns:
+            data["rice"] = np.nan
+        if not data["rice"].isna().any():
+            return data
+
+        years = data.index.get_level_values("year").unique()
+        price_years = [column for column in faostat.columns if isinstance(column, int)]
+        comparators = [
+            crop for crop in data.columns if crop != "rice" and not crop.startswith("_")
+        ]
+        aliases = translate_crop_names or {}
+
+        # Each source-country table contains crops as rows and years as columns.
+        # Only FAOSTAT crop prices are read; no other model's regional prices
+        # or currency settings are imported.
+        donors = {}
+        for country in dict.fromkeys(donor_countries):
+            country_data = faostat.loc[faostat["ISO3"] == country]
+            if country_data.empty:
+                self.logger.warning("No FAOSTAT crop prices for rice donor %s", country)
+                continue
+            country_data = country_data.set_index("crop")
+            country_data.index = country_data.index.astype(str).str.casefold()
+
+            def source_prices(crop: str) -> pd.Series:
+                source_names = aliases.get(crop, [crop])
+                if isinstance(source_names, str):
+                    source_names = [source_names]
+                if crop == "rice":
+                    # Accept common FAOSTAT terminology when not explicitly mapped.
+                    source_names = [*source_names, "rice, paddy", "paddy rice"]
+                names = list(
+                    dict.fromkeys(
+                        name.casefold()
+                        for name in source_names
+                        if name.casefold() in country_data.index
+                    )
+                )
+                if not names:
+                    return pd.Series(np.nan, index=years, dtype=float)
+                prices = country_data.loc[names, price_years].astype(float)
+                return prices.mean(axis=0).reindex(years)
+
+            rice = source_prices("rice")
+            if not np.isfinite(rice.to_numpy()).any():
+                self.logger.warning(
+                    "FAOSTAT rice prices unavailable for donor %s", country
+                )
+                continue
+            shared = pd.DataFrame(
+                {crop: source_prices(crop) for crop in comparators}, index=years
+            )
+            donors[country] = (rice, shared)
+
+        if not donors:
+            self.logger.warning(
+                "No external FAOSTAT rice donors with price observations"
+            )
+            return data
+
+        n_filled = 0
+        for region_id in data.index.get_level_values("region_id").unique():
+            region_data = data.loc[region_id]
+            existing = region_data["rice"]
+            if existing.notna().all():
+                continue
+            local = region_data[comparators]
+            candidate_prices = []
+            for rice, shared in donors.values():
+                # The multiplier transfers prices into the recipient's own
+                # currency and price level, using shared crops in the same year.
+                ratios = local.div(shared)
+                ratios = ratios.where((local > 0) & (shared > 0))
+                year_scales = ratios.median(axis=1, skipna=True)
+                # When a year's comparable crops are missing, use observations
+                # from other years for this same donor–recipient pairing.
+                available_scales = year_scales.dropna()
+                if available_scales.empty:
+                    continue
+                year_scales = year_scales.fillna(available_scales.median())
+                candidate_prices.append(rice * year_scales)
+
+            if not candidate_prices:
+                continue
+            candidate = pd.concat(candidate_prices, axis=1).median(axis=1)
+            missing = existing.isna() & np.isfinite(candidate) & (candidate > 0)
+            if missing.any():
+                replacement = existing.copy()
+                replacement.loc[missing] = candidate.loc[missing]
+                data.loc[(region_id, slice(None)), "rice"] = replacement.to_numpy()
+                n_filled += int(missing.sum())
+
+        self.logger.info(
+            "External FAOSTAT rice donors %s supplied %d region-year price observations",
+            ", ".join(donors),
+            n_filled,
+        )
+        return data
+
     def process_crop_data(
         self,
         crop_prices: str | int | float,
         translate_crop_names: dict[str, str] | None = None,
         adjust_currency: bool = False,
+        all_model_crops: bool = False,
+        additional_models: list[int | str] | None = None,
+        models_root: str | Path | None = None,
+        rice_donor_countries: list[str] | None = None,
     ) -> dict[str, Any]:
         """Process crop price inputs into model-ready time series or constants.
 
@@ -739,6 +1033,15 @@ class Crops(BuildModelBase):
                 or a constant numeric price (USD/kg, nominal for the years in question).
             translate_crop_names: Optional mapping from model crop name to list/alias used in source.
             adjust_currency: Whether to convert to USD using currency conversion when available.
+            all_model_crops: Give every region prices for all crop IDs present anywhere
+                in this model's farmer crop calendar (rather than just its own crops).
+            additional_models: Other Europe model IDs whose crop calendars extend the
+                allowed crop list, e.g. [3] or ["Europe_003", "Europe_005"].
+                Setting this also enables all_model_crops.
+            models_root: Optional directory containing the Europe_XXX folders.
+                By default it is determined relative to the current model base.
+            rice_donor_countries: FAOSTAT countries used for missing rice prices.
+                Defaults to Italy, Spain, Greece, Portugal and France; [] disables it.
 
         Returns:
             A dictionary with either type='time_series' and per-region series or type='constant'.
@@ -753,6 +1056,18 @@ class Crops(BuildModelBase):
             3. Determines price variability and performs interpolation/extrapolation of crop prices.
             4. Formats the processed data into a nested dictionary structure.
         """
+        expand_crop_prices = all_model_crops or bool(additional_models)
+        required_crop_ids = (
+            self._get_required_crop_price_ids(additional_models, models_root)
+            if expand_crop_prices and crop_prices == "FAO_stat"
+            else set()
+        )
+        if required_crop_ids:
+            self.logger.info(
+                "Ensuring crop prices for %d crop IDs in every region",
+                len(required_crop_ids),
+            )
+
         if crop_prices == "FAO_stat":
             faostat = self.data_catalog.fetch("faostat_prices").read()
             assert isinstance(faostat, pd.DataFrame)
@@ -871,17 +1186,49 @@ class Crops(BuildModelBase):
                 for crop in self.params["crops/crop_data"]["data"].values()
             ]
 
+            # Include the base price column for flood/drought variants as well.
+            crop_data = self.params["crops/crop_data"]["data"]
+            crop_info_by_id = {
+                int(crop_id): info for crop_id, info in crop_data.items()
+            }
+            required_crop_names = {
+                crop_info_by_id[crop_id]["name"]
+                .removesuffix("_flood")
+                .removesuffix("_drought")
+                for crop_id in required_crop_ids
+            }
+
+            # Rice may be absent from every local country, even when it is in a
+            # combined model's possible crop choices. Use external FAOSTAT rice
+            # observations as anchors, scaled using other locally priced crops.
+            if "rice" in required_crop_names:
+                countries = (
+                    ["ITA", "ESP", "GRC", "PRT", "FRA"]
+                    if rice_donor_countries is None
+                    else rice_donor_countries
+                )
+                data = self._fill_rice_prices_from_faostat_donors(
+                    data, faostat, countries, translate_crop_names
+                )
+
             # Filter the columns of the data DataFrame
             data = data[
                 [
                     col
                     for col in data.columns
                     if col.lower() in crop_names
+                    or col in required_crop_names
                     or col in ("_crop_price_inflation", "_crop_price_LCU_USD")
                 ]
             ]
 
-            data: pd.DataFrame = self.inter_and_extrapolate_prices(data, unique_regions)
+            data: pd.DataFrame = self.inter_and_extrapolate_prices(
+                data, unique_regions, adjust_currency
+            )
+            if required_crop_names:
+                data = self._fill_missing_local_crop_prices(
+                    data, required_crop_names, unique_regions
+                )
 
             # Create a dictionary structure with regions as keys and crops as nested dictionaries
             # This is the required format for crop_farmers.py
@@ -900,6 +1247,9 @@ class Crops(BuildModelBase):
                 iso3_to_representative_region_id = dict(zip(iso3_codes, unique_regions))
 
             crop_calendar_array = self.array["agents/farmers/crop_calendar"]
+            calendar_crop_ids = crop_calendar_array[..., 0]
+            farmer_region_ids = self.array["agents/farmers/region_id"]
+            available_regions = set(data.index.get_level_values("region_id"))
 
             if crop_calendar_array.ndim == 4:
                 self.logger.info(
@@ -924,7 +1274,7 @@ class Crops(BuildModelBase):
                     selected_region_id = region_id
 
                 # Fetch the data for the selected region_id
-                if selected_region_id in data.index.get_level_values("region_id"):
+                if selected_region_id in available_regions:
                     region_data = data.loc[selected_region_id]
                 else:
                     # If data is not available for the region, fill with NaNs
@@ -934,29 +1284,21 @@ class Crops(BuildModelBase):
 
                 region_data.index.name = "year"  # Ensure index name is 'year'
 
-                farmer_region_mask = self.array["agents/farmers/region_id"] == region_id
-
-                if crop_calendar_array.ndim == 3:
-                    # Single-year setup: (farmer, crop_slot, crop_calendar_variable).
-                    crop_calendars_in_region = crop_calendar_array[farmer_region_mask]
-                elif crop_calendar_array.ndim == 4:
-                    # Multi-year setup: (year, farmer, crop_slot, crop_calendar_variable).
-                    # Region filtering must happen on the farmer axis, not on the year axis.
-                    crop_calendars_in_region = crop_calendar_array[
-                        :, farmer_region_mask
-                    ]
+                if expand_crop_prices:
+                    crops_in_region = required_crop_ids
                 else:
-                    raise ValueError(
-                        "agents/farmers/crop_calendar must have shape "
-                        "(farmer, 3, 4) or (year, farmer, 3, 4). "
-                        f"Got {crop_calendar_array.shape}."
-                    )
-
-                # Use all crops that occur in the region. In multi-year mode this means all
-                # crops that occur in any HRL year, so crop prices are available for all stacked
-                # crop calendars.
-                crops_in_region = crop_calendars_in_region[..., 0].ravel()
-                crops_in_region = np.unique(crops_in_region[crops_in_region != -1])
+                    farmer_region_mask = farmer_region_ids == region_id
+                    if crop_calendar_array.ndim == 3:
+                        crops_in_region = calendar_crop_ids[farmer_region_mask]
+                    elif crop_calendar_array.ndim == 4:
+                        crops_in_region = calendar_crop_ids[:, farmer_region_mask]
+                    else:
+                        raise ValueError(
+                            "agents/farmers/crop_calendar must have shape "
+                            "(farmer, 3, 4) or (year, farmer, 3, 4). "
+                            f"Got {crop_calendar_array.shape}."
+                        )
+                    crops_in_region = np.unique(crops_in_region[crops_in_region != -1])
 
                 # Ensuring all crops are present according to the crop_data keys
                 for crop_id, crop_info in crop_data.items():
@@ -1246,6 +1588,10 @@ class Crops(BuildModelBase):
         crop_prices: str | int | float = "FAO_stat",
         translate_crop_names: dict[str, str] | None = None,
         adjust_currency: bool = False,
+        all_model_crops: bool = False,
+        additional_models: list[int | str] | None = None,
+        models_root: str | Path | None = None,
+        rice_donor_countries: list[str] | None = None,
     ) -> None:
         """Set crop prices per crop and region for the model run.
 
@@ -1253,11 +1599,22 @@ class Crops(BuildModelBase):
             crop_prices: 'FAO_stat', file path, or constant (USD/kg, nominal).
             translate_crop_names: Optional mapping to aggregate/rename source crop columns.
             adjust_currency: Whether to convert to USD using currency conversion when available.
+            all_model_crops: Include all crops found anywhere within this model in
+                each region's crop prices.
+            additional_models: Other Europe model IDs whose crop calendar crops
+                must be available here, e.g. [3, 5]. Also enables all_model_crops.
+            models_root: Optional directory containing Europe_XXX model folders.
+            rice_donor_countries: Optional external FAOSTAT donors for missing rice
+                prices, e.g. ["ITA", "ESP"]. [] disables this fallback.
         """
         parsed_crop_prices = self.process_crop_data(
             crop_prices=crop_prices,
             translate_crop_names=translate_crop_names,
             adjust_currency=adjust_currency,
+            all_model_crops=all_model_crops,
+            additional_models=additional_models,
+            models_root=models_root,
+            rice_donor_countries=rice_donor_countries,
         )
         self.set_params(parsed_crop_prices, name="crops/crop_prices")
         self.set_params(parsed_crop_prices, name="crops/cultivation_costs")
