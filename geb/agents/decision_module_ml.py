@@ -254,6 +254,7 @@ class DecisionModuleML:
         self.farmers = farmers
         self.model = farmers.model
         self.config = config
+        self.profile_runtime_timing = bool(config.get("profile_runtime_timing", False))
         initialization_timer = time.perf_counter()
 
         if self.model.in_spinup:
@@ -349,10 +350,11 @@ class DecisionModuleML:
         expected_decay_rule = "multiply_carried_hidden_by_2**(-elapsed_days/half_life)"
         if self.bundle.get("memory_decay_rule") != expected_decay_rule:
             raise ValueError("The deployment bundle memory-decay rule is unsupported.")
-        self.model.logger.info(
-            "DecisionModuleML timing: deployment artifact load=%.2f s.",
-            time.perf_counter() - artifact_timer,
-        )
+        if self.profile_runtime_timing:
+            self.model.logger.info(
+                "DecisionModuleML timing: deployment artifact load=%.2f s.",
+                time.perf_counter() - artifact_timer,
+            )
 
         self.prediction_model = (
             str(
@@ -400,7 +402,6 @@ class DecisionModuleML:
         )
         self.selection_rng = np.random.default_rng(self.selection_random_seed)
         self.log_crop_counts = bool(config.get("log_crop_counts", False))
-        self.profile_runtime_timing = bool(config.get("profile_runtime_timing", False))
         cache_settings = config.get("historical_state_cache", {})
         if isinstance(cache_settings, bool):
             cache_settings = {"enabled": cache_settings}
@@ -1133,10 +1134,11 @@ class DecisionModuleML:
                     f"Conditional RF classes for crop {crop} fall outside its saved "
                     "calendar-class IDs."
                 )
-        self.model.logger.info(
-            "DecisionModuleML timing: checkpoint validation and encoder load=%.2f s.",
-            time.perf_counter() - encoder_timer,
-        )
+        if self.profile_runtime_timing:
+            self.model.logger.info(
+                "DecisionModuleML timing: checkpoint validation and encoder load=%.2f s.",
+                time.perf_counter() - encoder_timer,
+            )
 
         runtime_state_timer = time.perf_counter()
         self.n_farmers = int(farmers.var.n)
@@ -1297,12 +1299,13 @@ class DecisionModuleML:
                         source_indices[valid], farmer_indices[valid], 0, :3
                     ]
                 )
-        self.model.logger.info(
-            "DecisionModuleML timing: compact recurrent-state allocation/history "
-            "setup=%.2f s for %s farmers.",
-            time.perf_counter() - runtime_state_timer,
-            self.n_farmers,
-        )
+        if self.profile_runtime_timing:
+            self.model.logger.info(
+                "DecisionModuleML timing: compact recurrent-state allocation/history "
+                "setup=%.2f s for %s farmers.",
+                time.perf_counter() - runtime_state_timer,
+                self.n_farmers,
+            )
 
         supporting_inputs_timer = time.perf_counter()
         self.economic_data = {
@@ -1311,10 +1314,11 @@ class DecisionModuleML:
             if settings.get("enabled", True)
         }
         self.regional_farmer_values = self._build_regional_farmer_values()
-        self.model.logger.info(
-            "DecisionModuleML timing: economic/regional supporting inputs=%.2f s.",
-            time.perf_counter() - supporting_inputs_timer,
-        )
+        if self.profile_runtime_timing:
+            self.model.logger.info(
+                "DecisionModuleML timing: economic/regional supporting inputs=%.2f s.",
+                time.perf_counter() - supporting_inputs_timer,
+            )
 
         # Restore before scheduling or replay: those operations would overwrite
         # the saved prediction flags, pending dates and recurrent history.
@@ -1355,10 +1359,11 @@ class DecisionModuleML:
             self.prediction_model,
             self.selection_mode,
         )
-        self.model.logger.info(
-            "DecisionModuleML timing: total initialization=%.2f s.",
-            time.perf_counter() - initialization_timer,
-        )
+        if self.profile_runtime_timing:
+            self.model.logger.info(
+                "DecisionModuleML timing: total initialization=%.2f s.",
+                time.perf_counter() - initialization_timer,
+            )
 
     # Explicit state contract: add any new mutable inference state here.
     CHECKPOINT_ARRAYS = (
@@ -1416,10 +1421,11 @@ class DecisionModuleML:
             target_years=(self.calendar_year + 1).astype(np.int32, copy=False),
             _bootstrap=True,
         )
-        self.model.logger.info(
-            "DecisionModuleML timing: initial decision scheduling=%.2f s.",
-            time.perf_counter() - initial_schedule_timer,
-        )
+        if self.profile_runtime_timing:
+            self.model.logger.info(
+                "DecisionModuleML timing: initial decision scheduling=%.2f s.",
+                time.perf_counter() - initial_schedule_timer,
+            )
         self._historical_replay_active = True
         try:
             self._bootstrap_from_spinup_reports(run_start)
@@ -1661,11 +1667,12 @@ class DecisionModuleML:
         key_timer = time.perf_counter()
         fingerprint = self._historical_cache_fingerprint(run_start)
         directory = self._historical_cache_folder(fingerprint)
-        self.model.logger.info(
-            "Historical ML cache key calculated in %.2f s: %s",
-            time.perf_counter() - key_timer,
-            directory,
-        )
+        if self.profile_runtime_timing:
+            self.model.logger.info(
+                "Historical ML cache key calculated in %.2f s: %s",
+                time.perf_counter() - key_timer,
+                directory,
+            )
         if (
             self.historical_state_cache_mode != "refresh"
             and self._load_historical_state_cache(directory, fingerprint, run_start)
@@ -2077,10 +2084,11 @@ class DecisionModuleML:
             active_dataset.close()
             yield_dataset.close()
 
-        self.model.logger.info(
-            "DecisionModuleML timing: spin-up yield-history bootstrap=%.2f s.",
-            time.perf_counter() - yield_bootstrap_timer,
-        )
+        if self.profile_runtime_timing:
+            self.model.logger.info(
+                "DecisionModuleML timing: spin-up yield-history bootstrap=%.2f s.",
+                time.perf_counter() - yield_bootstrap_timer,
+            )
 
     def _prescribed_decision_dates(
         self,
@@ -2888,12 +2896,13 @@ class DecisionModuleML:
             ):
                 spei_history_dataset.close()
 
-        self.model.logger.info(
-            "DecisionModuleML timing: warm spin-up persistent-state bootstrap=%.2f s "
-            "(%s complete ten-day farmer-window(s) bulk committed).",
-            time.perf_counter() - timer,
-            bulk_window_count,
-        )
+        if self.profile_runtime_timing:
+            self.model.logger.info(
+                "DecisionModuleML timing: warm spin-up persistent-state bootstrap=%.2f s "
+                "(%s complete ten-day farmer-window(s) bulk committed).",
+                time.perf_counter() - timer,
+                bulk_window_count,
+            )
 
     def _bootstrap_from_spinup_reports(
         self,
@@ -2916,11 +2925,12 @@ class DecisionModuleML:
             )
         self._bootstrap_yield_history(run_start)
         self._bootstrap_daily_state(run_start)
-        self.model.logger.info(
-            "Initialized DecisionModuleML from completed spin-up reporters in %s (%.2f s).",
-            report_directory,
-            time.perf_counter() - timer,
-        )
+        if self.profile_runtime_timing:
+            self.model.logger.info(
+                "Initialized DecisionModuleML from completed spin-up reporters in %s (%.2f s).",
+                report_directory,
+                time.perf_counter() - timer,
+            )
 
     @staticmethod
     def _canonical_seasonal_coordinates(
@@ -3384,10 +3394,11 @@ class DecisionModuleML:
                             else finite_values.std(ddof=0)
                         )
                 output[f"{name}__regional_{statistic}"] = mapped
-        self.model.logger.info(
-            "DecisionModuleML timing: regional-farmer summary preparation=%.2f s.",
-            time.perf_counter() - timer,
-        )
+        if self.profile_runtime_timing:
+            self.model.logger.info(
+                "DecisionModuleML timing: regional-farmer summary preparation=%.2f s.",
+                time.perf_counter() - timer,
+            )
         return output
 
     def _asof_index(self, date_index: DateIndex, timestamp: datetime) -> int | None:
@@ -3923,12 +3934,13 @@ class DecisionModuleML:
                 if target_years is not None:
                     target_years = target_years[keep]
                 if farmers.size == 0:
-                    self.model.logger.info(
-                        "DecisionModuleML timing: schedule=%.2f s for %s requested "
-                        "farmer(s); all were frozen omitted-crop advances.",
-                        time.perf_counter() - schedule_timer,
-                        requested_farmer_count,
-                    )
+                    if self.profile_runtime_timing:
+                        self.model.logger.info(
+                            "DecisionModuleML timing: schedule=%.2f s for %s requested "
+                            "farmer(s); all were frozen omitted-crop advances.",
+                            time.perf_counter() - schedule_timer,
+                            requested_farmer_count,
+                        )
                     return
 
         already_scheduled = self.pending_target_year[farmers] >= 0
@@ -3954,12 +3966,13 @@ class DecisionModuleML:
             target_years = target_years[available]
         farmers = farmers[available]
         if farmers.size == 0:
-            self.model.logger.info(
-                "DecisionModuleML timing: schedule=%.2f s for %s requested farmer(s) "
-                "(activation only).",
-                time.perf_counter() - schedule_timer,
-                requested_farmer_count,
-            )
+            if self.profile_runtime_timing:
+                self.model.logger.info(
+                    "DecisionModuleML timing: schedule=%.2f s for %s requested farmer(s) "
+                    "(activation only).",
+                    time.perf_counter() - schedule_timer,
+                    requested_farmer_count,
+                )
             return
 
         current_date = np.datetime64(self.model.current_time.date(), "D")
@@ -4095,15 +4108,16 @@ class DecisionModuleML:
                     f"had already begun for farmers {affected.tolist()}."
                 )
 
-        self.model.logger.info(
-            "Prepared %s ML decision date(s) for %s through %s%s in %.2f s%s.",
-            farmers.size,
-            str(due_dates.min()),
-            str(due_dates.max()),
-            " and activated them" if activate else "",
-            time.perf_counter() - schedule_timer,
-            " (bootstrap)" if _bootstrap else "",
-        )
+        if self.profile_runtime_timing:
+            self.model.logger.info(
+                "Prepared %s ML decision date(s) for %s through %s%s in %.2f s%s.",
+                farmers.size,
+                str(due_dates.min()),
+                str(due_dates.max()),
+                " and activated them" if activate else "",
+                time.perf_counter() - schedule_timer,
+                " (bootstrap)" if _bootstrap else "",
+            )
 
     def _calendar_feasibility_mask(
         self,
@@ -4653,18 +4667,19 @@ class DecisionModuleML:
         schedule_timer = time.perf_counter()
         self.schedule(due)
         next_schedule_seconds = time.perf_counter() - schedule_timer
-        self.model.logger.info(
-            "DecisionModuleML timing on %s for %s decision(s): encoder=%.2f s, "
-            "tabular=%.2f s, forest/gate=%.2f s, argmax=%.2f s, install=%.2f s, "
-            "next-schedule=%.2f s, total=%.2f s.",
-            self.model.current_time.date(),
-            due.size,
-            encoder_seconds,
-            tabular_seconds,
-            forest_seconds,
-            selection_seconds,
-            install_seconds,
-            next_schedule_seconds,
-            time.perf_counter() - run_due_timer,
-        )
+        if self.profile_runtime_timing:
+            self.model.logger.info(
+                "DecisionModuleML timing on %s for %s decision(s): encoder=%.2f s, "
+                "tabular=%.2f s, forest/gate=%.2f s, argmax=%.2f s, install=%.2f s, "
+                "next-schedule=%.2f s, total=%.2f s.",
+                self.model.current_time.date(),
+                due.size,
+                encoder_seconds,
+                tabular_seconds,
+                forest_seconds,
+                selection_seconds,
+                install_seconds,
+                next_schedule_seconds,
+                time.perf_counter() - run_due_timer,
+            )
         return due
