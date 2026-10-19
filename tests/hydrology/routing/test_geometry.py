@@ -42,6 +42,7 @@ class DummyModel:
         self.files: dict[str, Any] = {
             "grid": {
                 "routing/floodplain_width_m": "dummy",
+                "routing/floodplain_side_slope_m_per_m": "dummy",
                 "routing/bankfull_river_elevation_m": "dummy",
             }
         }
@@ -81,25 +82,28 @@ def test_compute_cfl_area_and_top_width_and_overbank_depth() -> None:
         bankfull_width_m=bankfull_width_m,
         shape_exponent=shape_exponent,
         bankfull_depth_m=bankfull_depth_m,
-        floodplain_width_m=floodplain_width_m,
         inverse_reach_length=inverse_reach_length[0],
         inverse_shape_exponent_plus_one=inverse_shape_exponent_plus_one[0],
         bankfull_area_m2=bankfull_area,
         bankfull_volume_m3=bankfull_volume,
+        floodplain_width_m=np.float32(0.0),
+        floodplain_side_slope_m_per_m=np.float32(2.0),
     )
     assert np.isclose(area_in, bankfull_area * 0.5, atol=1e-4)
     assert np.isclose(top_width_in, expected_top_width, atol=1e-4)
 
-    # Overbank test with flat floodplain bench W_fp + 2:1 valley slope:
-    # W_fp = 80.0 m, overbank_area = 20 m2
-    # Quadratic: 2 * h^2 + 80 * h - 20 = 0 -> h = (-80 + sqrt(6400 + 160)) / 4 ≈ 0.24845 m
-    # Top width: W_bf + W_fp + 4 * h = 20.0 + 80.0 + 4 * h ≈ 100.9938 m; Area = a_bf + 20 m2
-    expected_h_ob = float((-80.0 + math.sqrt(80.0**2 + 8.0 * 20.0)) / 4.0)
-    expected_w_ob = float(20.0 + 80.0 + 4.0 * expected_h_ob)
+    # Overbank test without flat bench (W_fp = 0): valley side slopes (z = 2.0) rise from channel banks (W_bf = 20.0 m):
+    # overbank_area = 20 m2
+    # Quadratic: 2 * h^2 + 20 * h - 20 = 0 -> h = (-20 + sqrt(400 + 160)) / 4 ≈ 0.91608 m
+    # Top width: W_bf + 2 * z * h = 20.0 + 4 * h ≈ 23.6643 m; Area = a_bf + 20 m2
+    expected_h_ob = float((-20.0 + math.sqrt(20.0**2 + 4.0 * 2.0 * 20.0)) / (2.0 * 2.0))
+    expected_w_ob = float(20.0 + 4.0 * expected_h_ob)
     h_fp_ob = compute_overbank_depth(
         overbank_volume_m3=np.float32(20000.0),
         inverse_reach_length=inverse_reach_length[0],
-        floodplain_width_m=floodplain_width_m,
+        bankfull_width_m=bankfull_width_m,
+        floodplain_width_m=np.float32(0.0),
+        floodplain_side_slope_m_per_m=np.float32(2.0),
     )
     assert np.isclose(h_fp_ob, expected_h_ob, atol=1e-4)
 
@@ -108,32 +112,84 @@ def test_compute_cfl_area_and_top_width_and_overbank_depth() -> None:
         bankfull_width_m=bankfull_width_m,
         shape_exponent=shape_exponent,
         bankfull_depth_m=bankfull_depth_m,
-        floodplain_width_m=floodplain_width_m,
         inverse_reach_length=inverse_reach_length[0],
         inverse_shape_exponent_plus_one=inverse_shape_exponent_plus_one[0],
         bankfull_area_m2=bankfull_area,
         bankfull_volume_m3=bankfull_volume,
+        floodplain_width_m=np.float32(0.0),
+        floodplain_side_slope_m_per_m=np.float32(2.0),
     )
     assert np.isclose(area_ob, bankfull_area + 20.0, atol=1e-4)
     assert np.isclose(top_width_ob, expected_w_ob, atol=1e-4)
+
+    # Overbank test WITH flat bench (W_fp = 30.0 m): total base width W_base = 20 + 30 = 50.0 m
+    # Quadratic: 2 * h^2 + 50 * h - 20 = 0 -> h = (-50 + sqrt(2500 + 160)) / 4 ≈ 0.39384 m
+    # Top width: W_base + 2 * z * h = 50.0 + 4 * h ≈ 51.5754 m
+    expected_h_bench = float(
+        (-50.0 + math.sqrt(50.0**2 + 4.0 * 2.0 * 20.0)) / (2.0 * 2.0)
+    )
+    expected_w_bench = float(50.0 + 4.0 * expected_h_bench)
+    h_fp_bench = compute_overbank_depth(
+        overbank_volume_m3=np.float32(20000.0),
+        inverse_reach_length=inverse_reach_length[0],
+        bankfull_width_m=bankfull_width_m,
+        floodplain_width_m=np.float32(30.0),
+        floodplain_side_slope_m_per_m=np.float32(2.0),
+    )
+    assert np.isclose(h_fp_bench, expected_h_bench, atol=1e-4)
+
+    area_bench, top_width_bench = compute_cfl_area_and_top_width(
+        volume_m3=np.float32(bankfull_volume + 20000.0),
+        bankfull_width_m=bankfull_width_m,
+        shape_exponent=shape_exponent,
+        bankfull_depth_m=bankfull_depth_m,
+        inverse_reach_length=inverse_reach_length[0],
+        inverse_shape_exponent_plus_one=inverse_shape_exponent_plus_one[0],
+        bankfull_area_m2=bankfull_area,
+        bankfull_volume_m3=bankfull_volume,
+        floodplain_width_m=np.float32(30.0),
+        floodplain_side_slope_m_per_m=np.float32(2.0),
+    )
+    assert np.isclose(area_bench, bankfull_area + 20.0, atol=1e-4)
+    assert np.isclose(top_width_bench, expected_w_bench, atol=1e-4)
 
     # Zero overbank volume test -> depth is 0
     h_fp_zero = compute_overbank_depth(
         overbank_volume_m3=np.float32(0.0),
         inverse_reach_length=inverse_reach_length[0],
-        floodplain_width_m=floodplain_width_m,
+        bankfull_width_m=bankfull_width_m,
+        floodplain_width_m=np.float32(30.0),
+        floodplain_side_slope_m_per_m=np.float32(2.0),
     )
     assert h_fp_zero == 0.0
 
-    # Zero floodplain width test (W_fp = 0): 2:1 slope from river bank (z = 2.0)
-    # Quadratic: 2 * h^2 - 20 = 0 -> h = sqrt(20 / 2) = sqrt(10) ≈ 3.16228 m
-    expected_h_no_fp = float(math.sqrt(20.0 / 2.0))
-    h_fp_no_fp = compute_overbank_depth(
+    # Custom side-slope test (z = 4.0, i.e., 4:1 slope immediately from banks)
+    # 4 * h^2 + 20 * h - 20 = 0 -> h = (-20 + sqrt(400 + 320)) / 8 ≈ 0.85410 m
+    expected_h_z4 = float((-20.0 + math.sqrt(20.0**2 + 4.0 * 4.0 * 20.0)) / (2.0 * 4.0))
+    expected_w_z4 = float(20.0 + 2.0 * 4.0 * expected_h_z4)
+    h_fp_z4 = compute_overbank_depth(
         overbank_volume_m3=np.float32(20000.0),
         inverse_reach_length=inverse_reach_length[0],
+        bankfull_width_m=bankfull_width_m,
         floodplain_width_m=np.float32(0.0),
+        floodplain_side_slope_m_per_m=np.float32(4.0),
     )
-    assert np.isclose(h_fp_no_fp, expected_h_no_fp, atol=1e-4)
+    assert np.isclose(h_fp_z4, expected_h_z4, atol=1e-4)
+
+    area_z4, top_width_z4 = compute_cfl_area_and_top_width(
+        volume_m3=np.float32(bankfull_volume + 20000.0),
+        bankfull_width_m=bankfull_width_m,
+        shape_exponent=shape_exponent,
+        bankfull_depth_m=bankfull_depth_m,
+        inverse_reach_length=inverse_reach_length[0],
+        inverse_shape_exponent_plus_one=inverse_shape_exponent_plus_one[0],
+        bankfull_area_m2=bankfull_area,
+        bankfull_volume_m3=bankfull_volume,
+        floodplain_width_m=np.float32(0.0),
+        floodplain_side_slope_m_per_m=np.float32(4.0),
+    )
+    assert np.isclose(area_z4, bankfull_area + 20.0, atol=1e-4)
+    assert np.isclose(top_width_z4, expected_w_z4, atol=1e-4)
 
 
 def test_compute_cross_section_from_depth() -> None:
@@ -480,6 +536,7 @@ class DummyModel:
         self.files: dict[str, Any] = {
             "grid": {
                 "routing/floodplain_width_m": "dummy",
+                "routing/floodplain_side_slope_m_per_m": "dummy",
                 "routing/bankfull_river_elevation_m": "dummy",
             }
         }
@@ -655,21 +712,32 @@ def test_routing_updates_rivers_geometry() -> None:
     depth_grid = np.array([2.0, 4.0, 6.0, 8.0, 0.1], dtype=np.float32)
     manning_grid = np.array([0.03, 0.05, 0.02, 0.04, 0.05], dtype=np.float32)
 
+    floodplain_width_grid_m = np.array([50.0, 50.0, 80.0, 80.0, 0.0], dtype=np.float32)
+    floodplain_side_slope_grid_m_per_m = np.array(
+        [2.0, 2.0, 3.0, 3.0, 2.0], dtype=np.float32
+    )
+
     routing._update_rivers_geometry(
         width_grid=width_grid,
         depth_grid=depth_grid,
         manning_grid=manning_grid,
+        floodplain_width_grid_m=floodplain_width_grid_m,
+        floodplain_side_slope_grid_m_per_m=floodplain_side_slope_grid_m_per_m,
     )
 
     # Reach 10: mean width (20+30)/2 = 25, mean depth (2+4)/2 = 3, mean manning (0.03+0.05)/2 = 0.04
     assert np.isclose(routing.var.rivers.loc[10, "width"], 25.0)
     assert np.isclose(routing.var.rivers.loc[10, "depth"], 3.0)
     assert np.isclose(routing.var.rivers.loc[10, "manning"], 0.04)
+    assert np.isclose(routing.var.rivers.loc[10, "floodplain_width_m"], 50.0)
+    assert np.isclose(routing.var.rivers.loc[10, "floodplain_side_slope_m_per_m"], 2.0)
 
     # Reach 20: mean width 100, mean depth 7, mean manning (0.02+0.04)/2 = 0.03
     assert np.isclose(routing.var.rivers.loc[20, "width"], 100.0)
     assert np.isclose(routing.var.rivers.loc[20, "depth"], 7.0)
     assert np.isclose(routing.var.rivers.loc[20, "manning"], 0.03)
+    assert np.isclose(routing.var.rivers.loc[20, "floodplain_width_m"], 80.0)
+    assert np.isclose(routing.var.rivers.loc[20, "floodplain_side_slope_m_per_m"], 3.0)
 
 
 def test_routing_updates_rivers_geometry_missing_data_raises() -> None:
@@ -725,6 +793,8 @@ def test_routing_updates_rivers_geometry_missing_data_raises() -> None:
             width_grid=width_grid,
             depth_grid=depth_grid,
             manning_grid=manning_grid,
+            floodplain_width_grid_m=np.zeros_like(width_grid),
+            floodplain_side_slope_grid_m_per_m=np.full_like(width_grid, 2.0),
         )
 
 
@@ -966,6 +1036,8 @@ def test_unrepresented_river_geometry_confluence() -> None:
         width_grid=width_grid,
         depth_grid=depth_grid,
         manning_grid=manning_grid,
+        floodplain_width_grid_m=np.zeros_like(width_grid),
+        floodplain_side_slope_grid_m_per_m=np.full_like(width_grid, 2.0),
     )
 
     # Reach 30 must have combined bankfull discharge Q = 50 + 100 = 150 m3/s
@@ -1045,6 +1117,8 @@ def test_unrepresented_river_geometry_iterative_cascade() -> None:
         width_grid=width_grid,
         depth_grid=depth_grid,
         manning_grid=manning_grid,
+        floodplain_width_grid_m=np.zeros_like(width_grid),
+        floodplain_side_slope_grid_m_per_m=np.full_like(width_grid, 2.0),
     )
 
     # Both Reach 2 and Reach 3 should be resolved
@@ -1119,6 +1193,8 @@ def test_unrepresented_river_cascade_with_bankfull_multiplier() -> None:
         width_grid=width_grid,
         depth_grid=depth_grid,
         manning_grid=manning_grid,
+        floodplain_width_grid_m=np.zeros_like(width_grid),
+        floodplain_side_slope_grid_m_per_m=np.full_like(width_grid, 2.0),
     )
 
     # 1. Raw summed Q (64.0 m3/s) must be propagated to both reach 2 and 3 without compounding to 128 or 256
@@ -1198,6 +1274,8 @@ def test_unrepresented_river_isolated_no_upstream_retains_nan() -> None:
         width_grid=width_grid,
         depth_grid=depth_grid,
         manning_grid=manning_grid,
+        floodplain_width_grid_m=np.zeros_like(width_grid),
+        floodplain_side_slope_grid_m_per_m=np.full_like(width_grid, 2.0),
     )
 
     # Reach 10 is updated; Reach 99 has no upstream segments and must remain NaN
@@ -1265,6 +1343,8 @@ def test_unrepresented_river_confluence_with_isolated_headwater() -> None:
         width_grid=width_grid,
         depth_grid=depth_grid,
         manning_grid=manning_grid,
+        floodplain_width_grid_m=np.zeros_like(width_grid),
+        floodplain_side_slope_grid_m_per_m=np.full_like(width_grid, 2.0),
     )
 
     # Reach 20 retains NaN (isolated headwater)
@@ -1331,6 +1411,8 @@ def test_unrepresented_river_inherits_single_upstream_observed_width() -> None:
         width_grid=width_grid,
         depth_grid=depth_grid,
         manning_grid=manning_grid,
+        floodplain_width_grid_m=np.zeros_like(width_grid),
+        floodplain_side_slope_grid_m_per_m=np.full_like(width_grid, 2.0),
     )
 
     # Reach 20 must inherit the exact observed width of 80.0m (instead of 7.2 * 36^0.5 = 43.2m)
@@ -1400,6 +1482,8 @@ def test_unrepresented_river_confluence_both_observed_widths() -> None:
         width_grid=width_grid,
         depth_grid=depth_grid,
         manning_grid=manning_grid,
+        floodplain_width_grid_m=np.zeros_like(width_grid),
+        floodplain_side_slope_grid_m_per_m=np.full_like(width_grid, 2.0),
     )
 
     # Power law combination: sqrt(40^2 + 30^2) = sqrt(1600 + 900) = sqrt(2500) = 50.0m
@@ -1464,6 +1548,8 @@ def test_unrepresented_river_confluence_one_observed_one_unobserved() -> None:
         width_grid=width_grid,
         depth_grid=depth_grid,
         manning_grid=manning_grid,
+        floodplain_width_grid_m=np.zeros_like(width_grid),
+        floodplain_side_slope_grid_m_per_m=np.full_like(width_grid, 2.0),
     )
 
     # Combined width: sqrt(40^2 + 30^2) = 50.0m
@@ -1526,6 +1612,8 @@ def test_unrepresented_river_cascade_propagates_observed_width() -> None:
         width_grid=width_grid,
         depth_grid=depth_grid,
         manning_grid=manning_grid,
+        floodplain_width_grid_m=np.zeros_like(width_grid),
+        floodplain_side_slope_grid_m_per_m=np.full_like(width_grid, 2.0),
     )
 
     # Both Reach 2 and Reach 3 should inherit the 60.0m observed width and be marked observed
@@ -1585,6 +1673,8 @@ def test_unrepresented_river_non_positive_width_raises_assertion() -> None:
             width_grid=np.array([0.0], dtype=np.float32),
             depth_grid=np.array([1.0], dtype=np.float32),
             manning_grid=np.array([0.03], dtype=np.float32),
+            floodplain_width_grid_m=np.array([0.0], dtype=np.float32),
+            floodplain_side_slope_grid_m_per_m=np.array([2.0], dtype=np.float32),
         )
 
 

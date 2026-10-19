@@ -5,7 +5,7 @@ import xarray as xr
 from affine import Affine
 
 from geb.build.modules.hydrography import (
-    calculate_dem_floodplain_width,
+    calculate_dem_floodplain_geometry,
     calculate_stream_length,
 )
 
@@ -77,8 +77,8 @@ def test_calculate_stream_length_high_res_cardinal() -> None:
     assert 110000 < val_v < 112000
 
 
-def test_calculate_dem_floodplain_width() -> None:
-    """Test calculate_dem_floodplain_width extracts floodplain width per river reach using subbasins."""
+def test_calculate_dem_floodplain_geometry() -> None:
+    """Test calculate_dem_floodplain_geometry extracts floodplain width and side slope per reach."""
     import pyflwdir
 
     # 4x4 high-res grid with 2x2 coarsening factor (ldd_scale_factor=2) -> 2x2 low-res grid
@@ -136,7 +136,7 @@ def test_calculate_dem_floodplain_width() -> None:
     # Right column (col 1) has river segments; left column (col 0) is non-river
     river_raster_low_res = np.array([[-1, 101], [-1, 102]], dtype=np.int32)
 
-    fp_width = calculate_dem_floodplain_width(
+    fp_w_m, fp_slope_m_per_m = calculate_dem_floodplain_geometry(
         flow_raster_high_res=flw_high_res,
         elevation_high_res=elev_high_res,
         upstream_area_high_res_m2=upstream_area_high_res,
@@ -147,11 +147,18 @@ def test_calculate_dem_floodplain_width() -> None:
         ldd_scale_factor=2,
     )
 
-    assert fp_width.shape == (2, 2)
+    assert fp_w_m.shape == (2, 2)
     # Non-river cells must be NaN
-    assert np.isnan(fp_width.values[0, 0])
-    assert np.isnan(fp_width.values[1, 0])
+    assert np.isnan(fp_w_m.values[0, 0])
+    assert np.isnan(fp_w_m.values[1, 0])
     # River cells must have valid floodplain widths
-    assert not np.isnan(fp_width.values[0, 1])
-    assert not np.isnan(fp_width.values[1, 1])
-    assert (fp_width.values[:, 1] >= 0.0).all()
+    assert not np.isnan(fp_w_m.values[0, 1])
+    assert not np.isnan(fp_w_m.values[1, 1])
+    assert (fp_w_m.values[:, 1] >= 0.0).all()
+
+    assert fp_slope_m_per_m.shape == (2, 2)
+    assert np.isnan(fp_slope_m_per_m.values[0, 0])
+    assert np.isnan(fp_slope_m_per_m.values[1, 0])
+    assert not np.isnan(fp_slope_m_per_m.values[0, 1])
+    assert not np.isnan(fp_slope_m_per_m.values[1, 1])
+    assert (fp_slope_m_per_m.values[:, 1] >= 0.5).all()

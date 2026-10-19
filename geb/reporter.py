@@ -1206,6 +1206,38 @@ class Reporter:
                                     "_group": "bankfull_width_rivers_yearly_m",
                                     "_group_key": str(river_ID_int),
                                 }
+                                bankfull_reporters[
+                                    f"floodplain_width_river_yearly_m_{river_ID_int}"
+                                ] = {
+                                    "varname": "var.rivers",
+                                    "type": "geodataframe",
+                                    "function": (
+                                        f"sample_loc,{river_ID_int},floodplain_width_m"
+                                    ),
+                                    "frequency": {
+                                        "every": "year",
+                                        "month": 1,
+                                        "day": 1,
+                                    },
+                                    "_group": "floodplain_width_rivers_yearly_m",
+                                    "_group_key": str(river_ID_int),
+                                }
+                                bankfull_reporters[
+                                    f"floodplain_side_slope_river_yearly_m_per_m_{river_ID_int}"
+                                ] = {
+                                    "varname": "var.rivers",
+                                    "type": "geodataframe",
+                                    "function": (
+                                        f"sample_loc,{river_ID_int},floodplain_side_slope_m_per_m"
+                                    ),
+                                    "frequency": {
+                                        "every": "year",
+                                        "month": 1,
+                                        "day": 1,
+                                    },
+                                    "_group": "floodplain_side_slope_rivers_yearly_m_per_m",
+                                    "_group_key": str(river_ID_int),
+                                }
 
                             self.variables_to_report = multi_level_merge(
                                 self.variables_to_report,

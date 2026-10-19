@@ -183,8 +183,8 @@ def determine_optimal_inertial_threads(
         available_cpus = allocated_cpus
     available_cpus = max(1, available_cpus)
 
-    # Grain size heuristic: allocate at least ~2,000 reaches per thread to outweigh OpenMP overhead
-    grain_threads: int = max(1, n_inertial // 2000)
+    # Grain size heuristic: allocate at least ~1,000 reaches per thread to outweigh OpenMP overhead
+    grain_threads: int = max(1, n_inertial // 1000)
     # Benchmark results show parallel speedup peaks around 16 cores before cross-CCX memory bus saturates
     optimal_threads: int = min(grain_threads, 16, available_cpus)
     return max(1, optimal_threads)
@@ -219,6 +219,7 @@ class LocalInertial:
         shape_exponent: ArrayFloat32,
         bankfull_depth_m: ArrayFloat32,
         floodplain_width_m: ArrayFloat32,
+        floodplain_side_slope_m_per_m: ArrayFloat32,
         waterbody_lake_area: ArrayFloat32,
         waterbody_lake_factor: ArrayFloat32,
         waterbody_outflow_height: ArrayFloat32,
@@ -251,6 +252,7 @@ class LocalInertial:
             bankfull_depth_m: Bankfull channel depth before floodplain spilling (meters).
             floodplain_width_m: Floodplain width beyond channel (meters).
             waterbody_lake_area: Surface area of each waterbody (m²).
+            floodplain_side_slope_m_per_m: Valley side-slope ratio z (m/m horizontal:vertical).
             waterbody_lake_factor: Rating curve multiplier factor for lake outflow calculation.
             waterbody_outflow_height: Sill/outflow height above channel bed for each waterbody (meters).
             waterbody_outflow_bed_elev: Channel bed elevation at each waterbody outlet (meters).
@@ -454,6 +456,11 @@ class LocalInertial:
         self._floodplain_width_inertial: ArrayFloat32 = floodplain_width_m[
             sorted_idxs[inertial_start:inertial_end]
         ].astype(np.float32)
+        self._floodplain_side_slope_inertial_m_per_m: ArrayFloat32 = (
+            floodplain_side_slope_m_per_m[
+                sorted_idxs[inertial_start:inertial_end]
+            ].astype(np.float32)
+        )
         manning_n_inertial: ArrayFloat32 = manning_n[
             sorted_idxs[inertial_start:inertial_end]
         ].astype(np.float32)
@@ -748,6 +755,7 @@ class LocalInertial:
             bankfull_depth=bankfull_depth_inertial,
             floodplain_width=self._floodplain_width_inertial,
             bed_elevation=self._bed_elevation_inertial,
+            floodplain_side_slope_m_per_m=self._floodplain_side_slope_inertial_m_per_m,
             ds_bed_elevation=self._topology.ds_bed_elevation,
             interface_bed_elevation_max=self._routing_topology.interface_bed_elev_max,
             manning_n_sq=self._manning_n_sq_inertial,

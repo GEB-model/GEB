@@ -55,6 +55,7 @@ def run_channel_routing_simulation(
     bankfull_width_m: float = 20.0,
     bankfull_depth_m: float = 3.0,
     floodplain_width_m: float = 40.0,
+    floodplain_side_slope_m_per_m: float = 2.0,
     manning_n: float = 0.035,
     downstream_boundary_type: str = "free",
     downstream_stage_fn: Callable[[float], float] | None = None,
@@ -73,6 +74,7 @@ def run_channel_routing_simulation(
         bankfull_width_m: Bankfull channel width (meters).
         bankfull_depth_m: Bankfull channel depth before floodplain spilling (meters).
         floodplain_width_m: Additional floodplain storage width (meters).
+        floodplain_side_slope_m_per_m: Valley side-slope ratio z (m/m horizontal:vertical).
         manning_n: Manning roughness coefficient (s / m^(1/3)).
         downstream_boundary_type: 'free' for gravity drawdown, 'stage' for prescribed stage,
             or 'closed' / 'no_outflow' for a terminal wall with zero discharge.
@@ -119,6 +121,9 @@ def run_channel_routing_simulation(
         n_reaches, np.float32(bed_slope), dtype=np.float32
     )
 
+    fp_slopes: ArrayFloat32 = np.full(
+        n_reaches, floodplain_side_slope_m_per_m, dtype=np.float32
+    )
     geom = build_inertial_geometry(
         river_length=lengths,
         river_width=widths,
@@ -131,6 +136,7 @@ def run_channel_routing_simulation(
         manning_n_sq=manning_n_sq,
         inv_dx_interface=inv_dx_interface,
         pit_slope=pit_slope,
+        floodplain_side_slope_m_per_m=fp_slopes,
     )
 
     # Initialize reach storage volumes from initial depths

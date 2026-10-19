@@ -138,7 +138,7 @@ def calculate_stream_length(
     return stream_length
 
 
-def calculate_dem_floodplain_width(
+def calculate_dem_floodplain_geometry(
     flow_raster_high_res: FlwdirRaster,
     elevation_high_res: xr.DataArray,
     upstream_area_high_res_m2: xr.DataArray,
@@ -149,14 +149,16 @@ def calculate_dem_floodplain_width(
     ldd_scale_factor: int,
     a: float = 0.01,
     b: float = 0.30,
+    bench_stage_ratio: float = 0.30,
     stream_threshold_m2: float = 1_000_000.0,
-) -> xr.DataArray:
-    """Calculate effective floodplain width for each river reach based on DEM HAND scaling and subbasin attribution.
+) -> tuple[xr.DataArray, xr.DataArray]:
+    """Calculate effective floodplain width and valley side-slope ratio for each river reach.
 
     Uses GFPLAIN HAND hydrogeomorphic scaling (Nardi et al. 2018, 2019) to delineate active geomorphic
     floodplains on the high-resolution DEM, then calculates floodplain width by aggregating floodplain
-    area per river segment and distributing it over the total segment length. All grid cells within the
-    same river segment receive the same uniform floodplain width.
+    area per river segment and distributing it over the total segment length. Side-slope ratio z (horizontal:
+    vertical, dimensionless) is calculated from the segment-averaged floodplain width and characteristic flood
+    stage depth h(A) = a * A^b.
 
     Steps:
         1. Delineate high-resolution floodplain:
@@ -168,11 +170,12 @@ def calculate_dem_floodplain_width(
         3. Calculate floodplain area per river reach:
            Count high-resolution floodplain pixels draining into each low-resolution river cell, and multiply
            by the high-resolution pixel area (cell_area / ldd_scale_factor²) to obtain reach-level floodplain area (m²).
-        4. Aggregate by river segment and compute uniform width:
+        4. Aggregate by river segment and compute uniform width and side-slope ratio:
            For each river segment, sum the total floodplain area and total river length
            across all member cells. Divide total segment floodplain area by total segment
            length to compute width, clip the resulting width to [0, 100,000] m, and assign
-           this uniform width to all cells in the segment. Non-river cells remain NaN.
+           this uniform width to all cells in the segment. Compute side-slope ratio z = (W_fp / 2) / h_stage,
+           defaulting to 2.0 when no floodplain is detected (W_fp = 0). Non-river cells remain NaN.
 
     Args:
         flow_raster_high_res: High-resolution flow direction raster.
@@ -185,19 +188,34 @@ def calculate_dem_floodplain_width(
         ldd_scale_factor: Coarsening scale factor from high-resolution to model resolution.
         a: Leopold & Maddock power-law scale factor for stage threshold (m^(1-2b)). Default is 0.01.
         b: Leopold & Maddock power-law exponent for stage threshold. Default is 0.30.
+        bench_stage_ratio: Fraction of geomorphic stage threshold used for active alluvial bench delineation. Default is 0.30.
         stream_threshold_m2: Minimum upstream area threshold for initiating stream channels (m²).
 
     Returns:
-        Effective floodplain width for each grid cell in meters (NaN for non-river cells).
+        A tuple of (floodplain_width_m, floodplain_side_slope_m_per_m) as xr.DataArrays in meters
+        and m/m (dimensionless ratio horizontal:vertical) respectively (NaN for non-river cells).
     """
-    # Nardi et al. stage threshold scaling h(A) = a * A^b
-    scale_factor: np.float32 = np.float32(a ** (1.0 / b))
-    scaled_uparea = scale_factor * upstream_area_high_res_m2.values
-    scaled_upa_min: np.float32 = scale_factor * np.float32(stream_threshold_m2)
+    # Two-tier hydrogeomorphic delineation (Nardi et al. 2018, 2019):
+    # Tier 1 (Valley): Full geomorphic flood stage h_valley(A) = a * A^b
+    scale_factor_valley: np.float32 = np.float32(a ** (1.0 / b))
+    scaled_uparea_valley = scale_factor_valley * upstream_area_high_res_m2.values
+    scaled_upa_min: np.float32 = scale_factor_valley * np.float32(stream_threshold_m2)
 
-    floodplain_mask_high_res = flow_raster_high_res.floodplains(
+    valley_mask_high_res = flow_raster_high_res.floodplains(
         elevtn=elevation_high_res.values,
-        uparea=scaled_uparea,
+        uparea=scaled_uparea_valley,
+        upa_min=scaled_upa_min,
+        b=b,
+    )
+
+    # Tier 2 (Alluvial Bench): Low overbank stage h_bench(A) = (bench_stage_ratio * a) * A^b
+    a_bench: float = bench_stage_ratio * a
+    scale_factor_bench: np.float32 = np.float32(a_bench ** (1.0 / b))
+    scaled_uparea_bench = scale_factor_bench * upstream_area_high_res_m2.values
+
+    bench_mask_high_res = flow_raster_high_res.floodplains(
+        elevtn=elevation_high_res.values,
+        uparea=scaled_uparea_bench,
         upa_min=scaled_upa_min,
         b=b,
     )
@@ -206,12 +224,126 @@ def calculate_dem_floodplain_width(
     river_mask_flat = river_raster_low_res.ravel() != -1
     river_cell_indices = np.where(river_mask_flat)[0]
 
-    floodplain_width = xr.full_like(
+    floodplain_width_m = xr.full_like(
+        river_length_low_res, fill_value=np.nan, dtype=np.float32
+    )
+    floodplain_side_slope_m_per_m = xr.full_like(
         river_length_low_res, fill_value=np.nan, dtype=np.float32
     )
 
     if river_cell_indices.size == 0:
-        return floodplain_width
+        return floodplain_width_m, floodplain_side_slope_m_per_m
+
+    river_outflows_hd = idxs_outflow_low_res.values.ravel()[river_cell_indices]
+    subbasin_ids = np.arange(1, river_cell_indices.size + 1, dtype=np.uint32)
+
+    # Subbasins mapping every high-res pixel to the river reach it drains into
+    subbasins_hd = flow_raster_high_res.basins(idxs=river_outflows_hd, ids=subbasin_ids)
+
+    # Sum high-resolution bench and valley floodplain pixel counts per river reach
+    bench_pixels = bench_mask_high_res.ravel() == 1
+    bench_subbasins = subbasins_hd.ravel()[bench_pixels]
+    bench_pixel_counts = np.bincount(
+        bench_subbasins, minlength=river_cell_indices.size + 1
+    )
+
+    valley_pixels = valley_mask_high_res.ravel() == 1
+    valley_subbasins = subbasins_hd.ravel()[valley_pixels]
+    valley_pixel_counts = np.bincount(
+        valley_subbasins, minlength=river_cell_indices.size + 1
+    )
+
+    # Convert pixel counts to reach-level floodplain areas (m²)
+    cell_area_flat = cell_area_low_res.values.ravel()[river_cell_indices].astype(
+        np.float32
+    )
+    high_res_pixel_area = cell_area_flat / np.float32(ldd_scale_factor**2)
+
+    reach_bench_areas = (
+        bench_pixel_counts[1 : river_cell_indices.size + 1].astype(np.float32)
+        * high_res_pixel_area
+    )
+    reach_valley_areas = (
+        valley_pixel_counts[1 : river_cell_indices.size + 1].astype(np.float32)
+        * high_res_pixel_area
+    )
+
+    river_raster_flat = river_raster_low_res.ravel()
+    unique_segments = np.unique(river_raster_flat[river_mask_flat])
+
+    floodplain_width_m_data = np.full(
+        river_raster_low_res.size, np.nan, dtype=np.float32
+    )
+    floodplain_side_slope_m_per_m_data = np.full(
+        river_raster_low_res.size, np.nan, dtype=np.float32
+    )
+
+    for segment_id in unique_segments:
+        segment_mask = river_raster_flat == segment_id
+        total_seg_len = np.sum(
+            river_length_low_res.values.ravel()[segment_mask].astype(np.float32)
+        )
+        seg_reach_mask = river_raster_flat[river_cell_indices] == segment_id
+        total_seg_bench_area = np.sum(reach_bench_areas[seg_reach_mask])
+        total_seg_valley_area = np.sum(reach_valley_areas[seg_reach_mask])
+
+        if total_seg_len > 0:
+            seg_bench_width = np.clip(
+                total_seg_bench_area / total_seg_len,
+                np.float32(0.0),
+                np.float32(100_000.0),  # maximum flood plain width of 100 km
+            ).astype(np.float32)
+            seg_valley_width = np.clip(
+                total_seg_valley_area / total_seg_len,
+                np.float32(0.0),
+                np.float32(100_000.0),
+            ).astype(np.float32)
+        else:
+            seg_bench_width = np.float32(0.0)
+            seg_valley_width = np.float32(0.0)
+
+        # Valley width must be at least bench width
+        seg_valley_width = max(seg_valley_width, seg_bench_width)
+
+        # Geomorphic stage depth h(A) = a * A^b for this river segment
+        seg_outflow_idxs = river_outflows_hd[seg_reach_mask]
+        if seg_outflow_idxs.size > 0:
+            seg_max_uparea_m2 = np.nanmax(
+                upstream_area_high_res_m2.values.ravel()[seg_outflow_idxs]
+            )
+            h_stage: float = float(
+                a * (max(float(seg_max_uparea_m2), float(stream_threshold_m2)) ** b)
+            )
+        else:
+            h_stage = 1.0
+
+        # Elevation difference between valley stage and bench stage (meters)
+        dh_wall = max((1.0 - bench_stage_ratio) * h_stage, 0.01)
+        # Lateral expansion on each side beyond the flat bench (meters)
+        dw_wall = max(float(seg_valley_width - seg_bench_width) * 0.5, 0.0)
+
+        # Valley side-slope ratio z = dw_wall / dh_wall (meters horizontal / meter vertical)
+        # Defaults to 2.0 (2:1 slope) when no expansion is detected (dw_wall == 0).
+        if dw_wall > 0 and dh_wall > 0:
+            seg_side_slope_m_per_m = np.clip(
+                np.float32(dw_wall / dh_wall),
+                np.float32(0.5),
+                np.float32(100.0),
+            )
+        else:
+            seg_side_slope_m_per_m = np.float32(2.0)
+
+        floodplain_width_m_data[segment_mask] = seg_bench_width
+        floodplain_side_slope_m_per_m_data[segment_mask] = seg_side_slope_m_per_m
+
+    floodplain_width_m.data = floodplain_width_m_data.reshape(
+        river_raster_low_res.shape
+    )
+    floodplain_side_slope_m_per_m.data = floodplain_side_slope_m_per_m_data.reshape(
+        river_raster_low_res.shape
+    )
+
+    return floodplain_width_m, floodplain_side_slope_m_per_m
 
     river_outflows_hd = idxs_outflow_low_res.values.ravel()[river_cell_indices]
     subbasin_ids = np.arange(1, river_cell_indices.size + 1, dtype=np.uint32)
@@ -227,7 +359,6 @@ def calculate_dem_floodplain_width(
     )
 
     # Compute segment-aggregated floodplain width: W_flood_plain(segment) = sum(A_flood_plain) / sum(L_river)
-    # All grid cells within the same river segment receive the uniform segment-averaged floodplain width.
     cell_area_flat = cell_area_low_res.values.ravel()[river_cell_indices].astype(
         np.float32
     )
@@ -241,7 +372,12 @@ def calculate_dem_floodplain_width(
     river_raster_flat = river_raster_low_res.ravel()
     unique_segments = np.unique(river_raster_flat[river_mask_flat])
 
-    floodplain_width_data = np.full(river_raster_low_res.size, np.nan, dtype=np.float32)
+    floodplain_width_m_data = np.full(
+        river_raster_low_res.size, np.nan, dtype=np.float32
+    )
+    floodplain_side_slope_m_per_m_data = np.full(
+        river_raster_low_res.size, np.nan, dtype=np.float32
+    )
 
     for segment_id in unique_segments:
         segment_mask = river_raster_flat == segment_id
@@ -260,11 +396,40 @@ def calculate_dem_floodplain_width(
         else:
             seg_flood_plain_width = np.float32(0.0)
 
-        floodplain_width_data[segment_mask] = seg_flood_plain_width
+        # Geomorphic stage depth h(A) = a * A^b for this river segment
+        seg_outflow_idxs = river_outflows_hd[seg_reach_mask]
+        if seg_outflow_idxs.size > 0:
+            seg_max_uparea_m2 = np.nanmax(
+                upstream_area_high_res_m2.values.ravel()[seg_outflow_idxs]
+            )
+            h_stage: float = float(
+                a * (max(float(seg_max_uparea_m2), float(stream_threshold_m2)) ** b)
+            )
+        else:
+            h_stage = 1.0
 
-    floodplain_width.data = floodplain_width_data.reshape(river_raster_low_res.shape)
+        # Side-slope ratio z = (W_fp / 2) / h_stage (meters horizontal / meter vertical)
+        # Defaults to 2.0 (2:1 slope) when no floodplain is detected (W_fp = 0).
+        if seg_flood_plain_width > 0 and h_stage > 0:
+            seg_side_slope_m_per_m = np.clip(
+                np.float32((seg_flood_plain_width * 0.5) / h_stage),
+                np.float32(0.5),
+                np.float32(100.0),
+            )
+        else:
+            seg_side_slope_m_per_m = np.float32(2.0)
 
-    return floodplain_width
+        floodplain_width_m_data[segment_mask] = seg_flood_plain_width
+        floodplain_side_slope_m_per_m_data[segment_mask] = seg_side_slope_m_per_m
+
+    floodplain_width_m.data = floodplain_width_m_data.reshape(
+        river_raster_low_res.shape
+    )
+    floodplain_side_slope_m_per_m.data = floodplain_side_slope_m_per_m_data.reshape(
+        river_raster_low_res.shape
+    )
+
+    return floodplain_width_m, floodplain_side_slope_m_per_m
 
 
 def get_all_upstream_subbasin_ids(
@@ -1186,18 +1351,26 @@ class Hydrography(BuildModelBase):
             missing_val=-1,
         )
 
-        self.logger.info("Computing basin-attributed floodplain width per river reach")
-        floodplain_width = calculate_dem_floodplain_width(
-            flow_raster_high_res=flow_raster_original,
-            elevation_high_res=original_d8_elevation,
-            upstream_area_high_res_m2=original_d8_upstream_area_m2,
-            idxs_outflow_low_res=self.grid["idxs_outflow"],
-            river_raster_low_res=routing_river_raster,
-            cell_area_low_res=self.grid["cell_area"],
-            river_length_low_res=river_length,
-            ldd_scale_factor=self.ldd_scale_factor,
+        self.logger.info(
+            "Computing basin-attributed floodplain geometry per river reach"
         )
-        self.set_grid(floodplain_width, name="routing/floodplain_width_m")
+        floodplain_width_m, floodplain_side_slope_m_per_m = (
+            calculate_dem_floodplain_geometry(
+                flow_raster_high_res=flow_raster_original,
+                elevation_high_res=original_d8_elevation,
+                upstream_area_high_res_m2=original_d8_upstream_area_m2,
+                idxs_outflow_low_res=self.grid["idxs_outflow"],
+                river_raster_low_res=routing_river_raster,
+                cell_area_low_res=self.grid["cell_area"],
+                river_length_low_res=river_length,
+                ldd_scale_factor=self.ldd_scale_factor,
+            )
+        )
+        self.set_grid(floodplain_width_m, name="routing/floodplain_width_m")
+        self.set_grid(
+            floodplain_side_slope_m_per_m,
+            name="routing/floodplain_side_slope_m_per_m",
+        )
 
         missing_rivers: set[int] = set(rivers.index) - set(
             np.unique(routing_river_raster[routing_river_raster != -1]).tolist()

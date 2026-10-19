@@ -8,6 +8,8 @@
   var exclusionSummary = macroData.exclusionSummary || null;
   var snappingLayerName = macroData.snappingLayer || null;
   var map = {{this._parent.get_name()}};
+  var currentFrequency = "all";
+  window._gebCurrentFrequency = currentFrequency;
 
   // Theme setup
   var initialTheme = "light";
@@ -633,7 +635,123 @@
       medianLine + '</svg>';
   }
 
+  function recalculateStatistics(config) {
+    if (!config) return;
+    if (config.kind === "availability") {
+      var avCount = 0;
+      var unavCount = 0;
+      (window._gebStations || []).forEach(function(st) {
+        if (!st.ex && st._isVisible !== false) {
+          if (st.av === 1) avCount++;
+          else if (st.av === 0) unavCount++;
+        }
+      });
+      config.available_count = avCount;
+      config.unavailable_count = unavCount;
+      return;
+    }
+
+    var values = [];
+    (window._gebStations || []).forEach(function(st) {
+      if (st.ex || st._isVisible === false) return;
+      var val = undefined;
+      if (currentFrequency === "hourly" && st.vh && st.vh[config.layer] !== undefined) {
+        val = st.vh[config.layer];
+      } else if (st.v && st.v[config.layer] !== undefined) {
+        val = st.v[config.layer];
+      }
+      if (val !== undefined && val !== null && !isNaN(val) && isFinite(val)) {
+        values.push(Number(val));
+      }
+    });
+
+    var count = values.length;
+    if (count === 0) {
+      config.distribution = {
+        count: 0,
+        median: null,
+        mean: null,
+        min: null,
+        max: null,
+        p25: null,
+        p75: null,
+        density_points: []
+      };
+      return;
+    }
+
+    values.sort(function(a, b) { return a - b; });
+    var min = values[0];
+    var max = values[count - 1];
+    var sum = 0;
+    for (var i = 0; i < count; i++) {
+      sum += values[i];
+    }
+    var mean = sum / count;
+    var median = (count % 2 === 1)
+      ? values[Math.floor(count / 2)]
+      : (values[count / 2 - 1] + values[count / 2]) / 2;
+
+    var p25 = values[Math.floor(count * 0.25)];
+    var p75 = values[Math.floor(count * 0.75)];
+
+    var densityPoints = [];
+    var numPoints = 80;
+    var vmin = config.minimum;
+    var vmax = config.maximum;
+    var step = (vmax - vmin) / (numPoints - 1);
+
+    if (count >= 2) {
+      var sumSqDiff = 0;
+      for (var i = 0; i < count; i++) {
+        sumSqDiff += (values[i] - mean) * (values[i] - mean);
+      }
+      var variance = sumSqDiff / (count - 1);
+      var std = Math.sqrt(variance);
+      var iqr = p75 - p25;
+      var hFactor = (iqr > 0 && iqr < std * 1.34) ? (iqr / 1.34) : std;
+      if (hFactor <= 0) hFactor = std || 1.0;
+      var bandwidth = 0.55 * Math.pow(count, -0.2) * hFactor;
+      if (bandwidth <= 1e-4) bandwidth = (vmax - vmin) / 40;
+
+      var maxD = 0;
+      var sqrt2Pi = Math.sqrt(2 * Math.PI);
+      for (var j = 0; j < numPoints; j++) {
+        var t = vmin + j * step;
+        var sumK = 0;
+        for (var i = 0; i < count; i++) {
+          var u = (t - values[i]) / bandwidth;
+          sumK += Math.exp(-0.5 * u * u);
+        }
+        var d = sumK / (count * bandwidth * sqrt2Pi);
+        densityPoints.push(d);
+        if (d > maxD) maxD = d;
+      }
+      var normPoints = [];
+      for (var j = 0; j < numPoints; j++) {
+        normPoints.push(maxD > 0 ? Math.round((densityPoints[j] / maxD) * 10000) / 10000 : 0);
+      }
+      densityPoints = normPoints;
+    } else {
+      densityPoints = new Array(numPoints).fill(0);
+    }
+
+    config.distribution = {
+      count: count,
+      median: median,
+      mean: mean,
+      min: min,
+      max: max,
+      p25: p25,
+      p75: p75,
+      density_points: densityPoints
+    };
+  }
+
   function renderDistributionSection(config) {
+    if (window._gebStations && window._gebStations.length > 0) {
+      recalculateStatistics(config);
+    }
     if (config.kind === 'availability') {
       var totalAv = (config.available_count || 0) + (config.unavailable_count || 0);
       var avPct = totalAv > 0 ? Math.round((config.available_count / totalAv) * 100) : 0;
@@ -779,9 +897,19 @@
       "<div class=\"geb-station-search__status\"></div>" +
       "</div>" +
       "<div class=\"geb-menu-section\">" +
+      "<label class=\"geb-menu-label\">Observation Frequency</label>" +
+      "<div class=\"geb-freq-pill\">" +
+      "<button type=\"button\" class=\"geb-freq-btn" + (currentFrequency === "all" ? " active" : "") + "\" data-freq=\"all\" title=\"Show all stations\">All</button>" +
+      "<button type=\"button\" class=\"geb-freq-btn" + (currentFrequency === "daily" ? " active" : "") + "\" data-freq=\"daily\" title=\"Show only daily stations\">Daily</button>" +
+      "<button type=\"button\" class=\"geb-freq-btn" + (currentFrequency === "hourly" ? " active" : "") + "\" data-freq=\"hourly\" title=\"Show only hourly stations\">Hourly</button>" +
+      "</div>" +
+      "</div>" +
+      "<div class=\"geb-menu-section\">" +
       "<label for=\"geb-metric-dropdown\" class=\"geb-menu-label\">Station Variable</label>" +
       "<select id=\"geb-metric-dropdown\" class=\"geb-metric-dropdown\">" + selectOptions + "</select>" +
+      "<div id=\"geb-distribution-container\">" +
       (activeConfig ? renderDistributionSection(activeConfig) : "") +
+      "</div>" +
       "</div>" +
       "<div class=\"geb-menu-section geb-layers-section\">" +
       "<div class=\"geb-layers-header\">" +
@@ -868,41 +996,85 @@
     return [];
   }
 
-  function setStationVisible(station, visible) {
-    station._searchVisible = visible;
-    resolveMarkers(station).forEach(function(marker) {
-      marker.setStyle({
-        opacity: visible ? 1 : 0,
-        fillOpacity: visible ? (marker.options.fillOpacity || 0.9) : 0
-      });
-      marker.options.interactive = visible;
-      if (marker.getElement()) {
-        marker.getElement().style.pointerEvents = visible ? "" : "none";
-      }
-    });
-  }
-
   var lastQuery = "";
 
-  function applySearch(query) {
-    lastQuery = query;
-    var normalizedQuery = query.trim().toLowerCase();
+  function updateFilterAndDistribution() {
+    window._gebCurrentFrequency = currentFrequency;
+    var normalizedQuery = (lastQuery || "").trim().toLowerCase();
     var allStations = (window._gebStations || []).concat(excludedStationIndex || []);
     var matches = [];
+
     allStations.forEach(function(station) {
       var haystack = ((station.id || "") + " " + (station.name || "")).toLowerCase();
-      var visible = !normalizedQuery || haystack.indexOf(normalizedQuery) !== -1;
-      if (visible) matches.push(station);
-      setStationVisible(station, visible);
+      var searchMatch = !normalizedQuery || haystack.indexOf(normalizedQuery) !== -1;
+      station._searchMatch = searchMatch;
+
+      var freqMatch = true;
+      if (currentFrequency === "daily") {
+        freqMatch = (station.fq === "daily");
+      } else if (currentFrequency === "hourly") {
+        freqMatch = (station.fq === "hourly");
+      }
+      station._freqMatch = freqMatch;
+
+      var visible = searchMatch && freqMatch;
+      station._isVisible = visible;
+      station._searchVisible = visible;
+
+      resolveMarkers(station).forEach(function(marker) {
+        var fillColor = (currentFrequency === "hourly" && station.mh && activeConfig && station.mh[activeConfig.layer])
+          ? station.mh[activeConfig.layer]
+          : (station.m && activeConfig && station.m[activeConfig.layer]);
+
+        var styleOpts = {
+          opacity: visible ? 1 : 0,
+          fillOpacity: visible ? (marker.options.fillOpacity || 0.9) : 0
+        };
+        if (fillColor) {
+          styleOpts.fillColor = fillColor;
+        }
+        marker.setStyle(styleOpts);
+        marker.options.interactive = visible;
+        if (marker.getElement()) {
+          marker.getElement().style.pointerEvents = visible ? "" : "none";
+        }
+      });
+
+      if (visible) {
+        matches.push(station);
+      }
     });
 
     var statusEl = menuRoot.querySelector(".geb-station-search__status");
     if (statusEl) {
-      var text = normalizedQuery ? matches.length + " matching stations" : allStations.length + " stations";
+      var freqLabel = currentFrequency === "all" ? "" : (" " + currentFrequency);
+      var text = normalizedQuery
+        ? matches.length + " matching" + freqLabel + " stations"
+        : matches.length + freqLabel + " stations";
       if (normalizedQuery && matches.length) text += " · Enter opens match";
       statusEl.textContent = text;
     }
+
+    if (activeConfig) {
+      recalculateStatistics(activeConfig);
+      var distContainer = menuRoot.querySelector("#geb-distribution-container");
+      if (distContainer) {
+        distContainer.innerHTML = renderDistributionSection(activeConfig);
+        var violinBtn = distContainer.querySelector("#geb-export-violin");
+        if (violinBtn) {
+          violinBtn.addEventListener("click", function() {
+            exportViolinSvg(activeConfig, window._gebCurrentTheme || "light");
+          });
+        }
+      }
+    }
+
     return matches;
+  }
+
+  function applySearch(query) {
+    lastQuery = query;
+    return updateFilterAndDistribution();
   }
 
   function openFirstMatch(matches) {
@@ -931,6 +1103,25 @@
       btn.addEventListener("click", function(e) {
         L.DomEvent.stop(e);
         setDashboardTheme(btn.getAttribute("data-set-theme"));
+      });
+    });
+
+    var freqButtons = menuRoot.querySelectorAll(".geb-freq-btn");
+    freqButtons.forEach(function(btn) {
+      L.DomEvent.disableClickPropagation(btn);
+      btn.addEventListener("click", function(e) {
+        L.DomEvent.stop(e);
+        var targetFreq = btn.getAttribute("data-freq");
+        if (targetFreq === currentFrequency) return;
+        currentFrequency = targetFreq;
+        freqButtons.forEach(function(b) {
+          if (b.getAttribute("data-freq") === currentFrequency) {
+            b.classList.add("active");
+          } else {
+            b.classList.remove("active");
+          }
+        });
+        updateFilterAndDistribution();
       });
     });
 
@@ -995,8 +1186,12 @@
   }
 
   window.addEventListener("gebStationsReady", function() {
-    applySearch(lastQuery);
+    updateFilterAndDistribution();
   });
+
+  if (window._gebStations && window._gebStations.length > 0) {
+    updateFilterAndDistribution();
+  }
 
   if (activeConfig) {
     var initLayer = layerByName[activeConfig.layer];
@@ -1023,6 +1218,8 @@
     ".geb-menu-label{display:block;font-size:11px;font-weight:700;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.4px}" +
     ".geb-layers-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}" +
     ".geb-layers-header .geb-menu-label{margin-bottom:0}" +
+    ".geb-freq-pill{display:flex;width:100%;border-radius:6px;padding:2px;gap:2px;box-sizing:border-box}" +
+    ".geb-freq-btn{flex:1;background:transparent;border:none;font-size:11px;font-weight:600;padding:4px 6px;border-radius:4px;cursor:pointer;line-height:1.2;text-align:center;transition:background 0.15s,color 0.15s}" +
     ".geb-station-search__row{display:flex;gap:5px}" +
     ".geb-station-search__row input{flex:1;min-width:0;border-radius:5px;padding:5px 7px;font-size:12px}" +
     ".geb-station-search__row button{border:none;border-radius:5px;padding:5px 9px;font-size:11px;font-weight:600;cursor:pointer}" +
@@ -1057,6 +1254,10 @@
     "[data-geb-theme=\"dark\"] .geb-unified-toggle{background:#1e293b;color:#f8fafc}" +
     "[data-geb-theme=\"dark\"] .geb-menu-section{border-bottom:1px solid #1e293b}" +
     "[data-geb-theme=\"dark\"] .geb-menu-label{color:#94a3b8}" +
+    "[data-geb-theme=\"dark\"] .geb-freq-pill{background:#1e293b;border:1px solid #334155}" +
+    "[data-geb-theme=\"dark\"] .geb-freq-btn{color:#94a3b8}" +
+    "[data-geb-theme=\"dark\"] .geb-freq-btn.active{background:#38bdf8;color:#0f172a}" +
+    "[data-geb-theme=\"dark\"] .geb-freq-btn:hover:not(.active){color:#f8fafc}" +
     "[data-geb-theme=\"dark\"] .geb-station-search__row input{background:#1e293b;color:#f8fafc;border:1px solid #475569}" +
     "[data-geb-theme=\"dark\"] .geb-station-search__row button{background:#334155;color:#f8fafc}" +
     "[data-geb-theme=\"dark\"] .geb-station-search__status{color:#94a3b8}" +
@@ -1086,6 +1287,10 @@
     "[data-geb-theme=\"light\"] .geb-unified-toggle{background:#1e293b;color:#f8fafc}" +
     "[data-geb-theme=\"light\"] .geb-menu-section{border-bottom:1px solid #e2e8f0}" +
     "[data-geb-theme=\"light\"] .geb-menu-label{color:#334155}" +
+    "[data-geb-theme=\"light\"] .geb-freq-pill{background:#f1f5f9;border:1px solid #cbd5e1}" +
+    "[data-geb-theme=\"light\"] .geb-freq-btn{color:#64748b}" +
+    "[data-geb-theme=\"light\"] .geb-freq-btn.active{background:#0284c7;color:#ffffff}" +
+    "[data-geb-theme=\"light\"] .geb-freq-btn:hover:not(.active){color:#0f172a}" +
     "[data-geb-theme=\"light\"] .geb-station-search__row input{background:#f8fafc;color:#0f172a;border:1px solid #cbd5e1}" +
     "[data-geb-theme=\"light\"] .geb-station-search__row button{background:#1e293b;color:#f8fafc}" +
     "[data-geb-theme=\"light\"] .geb-station-search__status{color:#64748b}" +

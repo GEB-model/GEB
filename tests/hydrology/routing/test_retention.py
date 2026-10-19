@@ -35,6 +35,7 @@ def _make_local_inertial(
     shape_exponent: np.ndarray | float = 0.5,
     bankfull_depth_m: np.ndarray | float | None = None,
     floodplain_width_m: np.ndarray | None = None,
+    floodplain_side_slope_m_per_m: np.ndarray | float | None = None,
     waterbody_lake_area: np.ndarray | None = None,
     waterbody_lake_factor: np.ndarray | None = None,
     waterbody_outflow_height: np.ndarray | None = None,
@@ -94,6 +95,12 @@ def _make_local_inertial(
         floodplain_width_m = np.zeros(n_cells, dtype=np.float32)
     elif isinstance(floodplain_width_m, (int, float, np.floating)):
         floodplain_width_m = np.full(n_cells, floodplain_width_m, dtype=np.float32)
+    if floodplain_side_slope_m_per_m is None:
+        floodplain_side_slope_m_per_m = np.full(n_cells, 2.0, dtype=np.float32)
+    elif isinstance(floodplain_side_slope_m_per_m, (int, float, np.floating)):
+        floodplain_side_slope_m_per_m = np.full(
+            n_cells, floodplain_side_slope_m_per_m, dtype=np.float32
+        )
 
     if river_storage_alpha is None:
         river_storage_alpha = np.full(n_cells, 1.0, dtype=np.float32)
@@ -130,6 +137,7 @@ def _make_local_inertial(
         shape_exponent=shape_exponent,
         bankfull_depth_m=bankfull_depth_m,
         floodplain_width_m=floodplain_width_m,
+        floodplain_side_slope_m_per_m=floodplain_side_slope_m_per_m,
         waterbody_lake_area=waterbody_lake_area,
         waterbody_lake_factor=waterbody_lake_factor,
         waterbody_outflow_height=waterbody_outflow_height,

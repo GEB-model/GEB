@@ -13,6 +13,7 @@ from geb.hydrology.routing.geometry import (
     GEOM_IN_BANKFULL_AREA,
     GEOM_IN_BANKFULL_DEPTH,
     GEOM_IN_BANKFULL_PERIMETER,
+    GEOM_IN_FLOODPLAIN_SIDE_SLOPE_M_PER_M,
     GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE,
     GEOM_IN_MANNING_N_SQUARED,
     GEOM_IN_NUM_COLS,
@@ -62,6 +63,7 @@ def _create_single_reach_geometry(
     geom_inbank[0, GEOM_IN_BANKFULL_PERIMETER] = np.float32(
         bankfull_width_m + 2.0 * bankfull_depth_m
     )
+    geom_inbank[0, GEOM_IN_FLOODPLAIN_SIDE_SLOPE_M_PER_M] = np.float32(2.0)
 
     return geom_inbank
 

@@ -785,6 +785,8 @@ class Routing(Module):
         width_grid: ArrayFloat32,
         depth_grid: ArrayFloat32,
         manning_grid: ArrayFloat32,
+        floodplain_width_grid_m: ArrayFloat32,
+        floodplain_side_slope_grid_m_per_m: ArrayFloat32,
     ) -> None:
         """Update bankfull width, depth, and Manning's n on river reaches GeoDataFrame from routing grid arrays.
 
@@ -796,6 +798,8 @@ class Routing(Module):
             width_grid: Bankfull channel width per routing grid cell (meters).
             depth_grid: Bankfull channel depth per routing grid cell (meters).
             manning_grid: Channel Manning roughness per routing grid cell (s/m^(1/3)).
+            floodplain_width_grid_m: Floodplain width beyond channel per routing grid cell (meters).
+            floodplain_side_slope_grid_m_per_m: Valley side-slope ratio z per routing grid cell (m/m horizontal:vertical).
         """
         valid_river_cell_mask: ArrayBool = self.var.river_ids != -1
         valid_reach_ids: ArrayInt32 = self.var.river_ids[valid_river_cell_mask]
@@ -803,26 +807,30 @@ class Routing(Module):
         valid_depths: ArrayFloat32 = depth_grid[valid_river_cell_mask]
         valid_mannings: ArrayFloat32 = manning_grid[valid_river_cell_mask]
 
-        df_grid: pd.DataFrame = pd.DataFrame(
-            {
-                "river_id": valid_reach_ids,
-                "width": valid_widths,
-                "depth": valid_depths,
-                "manning": valid_mannings,
-                "river_width_alpha": self.var.river_width_alpha[valid_river_cell_mask],
-                "river_width_beta": self.var.river_width_beta[valid_river_cell_mask],
-            }
-        )
-
-        reach_means: pd.DataFrame = df_grid.groupby("river_id").mean()
-
+        grid_dict: dict[str, Any] = {
+            "river_id": valid_reach_ids,
+            "width": valid_widths,
+            "depth": valid_depths,
+            "manning": valid_mannings,
+            "river_width_alpha": self.var.river_width_alpha[valid_river_cell_mask],
+            "river_width_beta": self.var.river_width_beta[valid_river_cell_mask],
+        }
+        grid_dict["floodplain_width_m"] = floodplain_width_grid_m[valid_river_cell_mask]
+        grid_dict["floodplain_side_slope_m_per_m"] = floodplain_side_slope_grid_m_per_m[
+            valid_river_cell_mask
+        ]
         cols: list[str] = [
             "width",
             "depth",
             "manning",
             "river_width_alpha",
             "river_width_beta",
+            "floodplain_width_m",
+            "floodplain_side_slope_m_per_m",
         ]
+
+        df_grid: pd.DataFrame = pd.DataFrame(grid_dict)
+        reach_means: pd.DataFrame = df_grid.groupby("river_id").mean()
         self.var.rivers.loc[reach_means.index, cols] = reach_means[cols].astype(
             np.float64
         )
@@ -1376,18 +1384,30 @@ class Routing(Module):
             use_simulated_bankfull_q=use_simulated_bankfull_q,
         )
 
-        # Update derived bankfull width and depth to self.var.rivers
-        self._update_rivers_geometry(
-            width_grid=bankfull_top_width_m,
-            depth_grid=bankfull_depth_m,
-            manning_grid=self.grid.var.river_mannings,
-        )
-
-        # 4. Floodplain width beyond bankfull channel (m):
+        # 4. Floodplain width and side slope beyond bankfull channel:
         floodplain_width_m: ArrayFloat32 = np.nan_to_num(
             self.grid.load2d(self.model.files["grid"]["routing/floodplain_width_m"]),
             nan=0.0,
         ).astype(np.float32)
+
+        floodplain_side_slope_m_per_m: ArrayFloat32 = np.nan_to_num(
+            self.grid.load2d(
+                self.model.files["grid"]["routing/floodplain_side_slope_m_per_m"]
+            ),
+            nan=2.0,
+        ).astype(np.float32)
+
+        self.floodplain_width_m: ArrayFloat32 = floodplain_width_m
+        self.floodplain_side_slope_m_per_m: ArrayFloat32 = floodplain_side_slope_m_per_m
+
+        # Update derived bankfull width, depth, and floodplain geometry to self.var.rivers
+        self._update_rivers_geometry(
+            width_grid=bankfull_top_width_m,
+            depth_grid=bankfull_depth_m,
+            manning_grid=self.grid.var.river_mannings,
+            floodplain_width_grid_m=self.floodplain_width_m,
+            floodplain_side_slope_grid_m_per_m=self.floodplain_side_slope_m_per_m,
+        )
 
         bankfull_river_elev: ArrayFloat32 = self.grid.load2d(
             self.model.files["grid"]["routing/bankfull_river_elevation_m"]
@@ -1482,6 +1502,7 @@ class Routing(Module):
             shape_exponent=shape_exponent,
             bankfull_depth_m=bankfull_depth_m,
             floodplain_width_m=floodplain_width_m,
+            floodplain_side_slope_m_per_m=floodplain_side_slope_m_per_m,
             waterbody_lake_area=self.hydrology.waterbodies.var.lake_area,
             waterbody_lake_factor=waterbody_lake_factor,
             waterbody_outflow_height=waterbody_outflow_height,
@@ -2358,6 +2379,8 @@ class Routing(Module):
             width_grid=self.var.river_width,
             depth_grid=updated_bankfull_depth,
             manning_grid=self.grid.var.river_mannings,
+            floodplain_width_grid_m=self.floodplain_width_m,
+            floodplain_side_slope_grid_m_per_m=self.floodplain_side_slope_m_per_m,
         )
 
         for basin_id in range(len(self.retention_basin_data)):

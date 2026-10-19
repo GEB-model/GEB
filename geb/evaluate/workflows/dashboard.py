@@ -872,6 +872,10 @@ def attach_end_of_run_river_dimensions(
     routing_dir: Path = run_output_folder / "report" / "hydrology.routing"
     w_file: Path = routing_dir / "bankfull_width_rivers_yearly_m.parquet"
     d_file: Path = routing_dir / "bankfull_depth_rivers_yearly_m.parquet"
+    fp_w_file: Path = routing_dir / "floodplain_width_rivers_yearly_m.parquet"
+    fp_s_file: Path = (
+        routing_dir / "floodplain_side_slope_rivers_yearly_m_per_m.parquet"
+    )
 
     enriched_rivers: gpd.GeoDataFrame = rivers.copy()
     if w_file.exists():
@@ -894,6 +898,28 @@ def attach_end_of_run_river_dimensions(
             }
             enriched_rivers["depth_m"] = [
                 d_map.get(str(rid)) for rid in enriched_rivers.index
+            ]
+
+    if fp_w_file.exists():
+        df_fp_w: pd.DataFrame = pd.read_parquet(fp_w_file)
+        if not df_fp_w.empty:
+            last_fp_w: pd.Series = df_fp_w.iloc[-1]
+            fp_w_map: dict[str, float] = {
+                str(col): float(val) for col, val in last_fp_w.items() if pd.notna(val)
+            }
+            enriched_rivers["floodplain_width_m"] = [
+                fp_w_map.get(str(rid)) for rid in enriched_rivers.index
+            ]
+
+    if fp_s_file.exists():
+        df_fp_s: pd.DataFrame = pd.read_parquet(fp_s_file)
+        if not df_fp_s.empty:
+            last_fp_s: pd.Series = df_fp_s.iloc[-1]
+            fp_s_map: dict[str, float] = {
+                str(col): float(val) for col, val in last_fp_s.items() if pd.notna(val)
+            }
+            enriched_rivers["floodplain_side_slope_m_per_m"] = [
+                fp_s_map.get(str(rid)) for rid in enriched_rivers.index
             ]
 
     return enriched_rivers
@@ -1289,6 +1315,8 @@ def build_river_chart_data(
     bankfull_discharge: list[float],
     width: list[float],
     depth: list[float],
+    floodplain_width_m: float,
+    floodplain_side_slope_m_per_m: float,
 ) -> dict[str, Any]:
     """Prepare chart data for one river segment popup in the discharge dashboard.
 
@@ -1299,10 +1327,14 @@ def build_river_chart_data(
         bankfull_discharge: Bankfull discharge values (m³/s).
         width: Bankfull river width values (meters).
         depth: Bankfull river depth values (meters).
+        floodplain_width_m: Floodplain width beyond channel (meters).
+        floodplain_side_slope_m_per_m: Valley side-slope ratio z (m/m horizontal:vertical).
 
     Returns:
         River chart data dictionary.
     """
+    last_w: float = float(width[-1]) if len(width) > 0 else 0.0
+    last_d: float = float(depth[-1]) if len(depth) > 0 else 0.0
     return {
         "type": "river",
         "riverId": river_id,
@@ -1312,6 +1344,14 @@ def build_river_chart_data(
             "bankfullDischarge": bankfull_discharge,
             "width": width,
             "depth": depth,
+        },
+        "crossSection": {
+            "width": _as_finite_float(last_w),
+            "depth": _as_finite_float(last_d),
+            "floodplainWidth": _as_finite_float(floodplain_width_m),
+            "floodplainWidthM": _as_finite_float(floodplain_width_m),
+            "floodplainSideSlope": _as_finite_float(floodplain_side_slope_m_per_m),
+            "floodplainSideSlopeMPerM": _as_finite_float(floodplain_side_slope_m_per_m),
         },
     }
 
@@ -1335,12 +1375,24 @@ def add_river_charts_to_bundle_writer(
     q_file: Path = routing_dir / "bankfull_discharge_rivers_yearly_m3_per_s.parquet"
     d_file: Path = routing_dir / "bankfull_depth_rivers_yearly_m.parquet"
     w_file: Path = routing_dir / "bankfull_width_rivers_yearly_m.parquet"
-    if not (q_file.exists() and d_file.exists() and w_file.exists()):
+    fp_w_file: Path = routing_dir / "floodplain_width_rivers_yearly_m.parquet"
+    fp_s_file: Path = (
+        routing_dir / "floodplain_side_slope_rivers_yearly_m_per_m.parquet"
+    )
+    if not (
+        q_file.exists()
+        and d_file.exists()
+        and w_file.exists()
+        and fp_w_file.exists()
+        and fp_s_file.exists()
+    ):
         return
 
     df_q: pd.DataFrame = pd.read_parquet(q_file)
     df_d: pd.DataFrame = pd.read_parquet(d_file)
     df_w: pd.DataFrame = pd.read_parquet(w_file)
+    df_fp_w: pd.DataFrame = pd.read_parquet(fp_w_file)
+    df_fp_s: pd.DataFrame = pd.read_parquet(fp_s_file)
     all_river_charts: dict[str, Any] = {}
 
     for river_id in rivers.index:
@@ -1349,6 +1401,8 @@ def add_river_charts_to_bundle_writer(
             river_id_str not in df_q.columns
             or river_id_str not in df_d.columns
             or river_id_str not in df_w.columns
+            or river_id_str not in df_fp_w.columns
+            or river_id_str not in df_fp_s.columns
         ):
             continue
         q_series: pd.Series = df_q[river_id_str].dropna()
@@ -1373,6 +1427,13 @@ def add_river_charts_to_bundle_writer(
 
         uparea_km2: float = float(rivers.loc[river_id, "uparea_m2"]) / 1_000_000.0
 
+        s_fp_w: pd.Series = df_fp_w[river_id_str].dropna()
+        s_fp_s: pd.Series = df_fp_s[river_id_str].dropna()
+        if s_fp_w.empty or s_fp_s.empty:
+            continue
+        fp_w_val: float = float(s_fp_w.iloc[-1])
+        fp_s_val: float = float(s_fp_s.iloc[-1])
+
         river_chart_data: dict[str, Any] = build_river_chart_data(
             river_id=river_id_str,
             upstream_area_km2=uparea_km2,
@@ -1380,6 +1441,8 @@ def add_river_charts_to_bundle_writer(
             bankfull_discharge=q_list,
             width=w_list,
             depth=d_list,
+            floodplain_width_m=round(fp_w_val, 2),
+            floodplain_side_slope_m_per_m=round(fp_s_val, 2),
         )
         all_river_charts[f"river_{river_id_str}"] = river_chart_data
 
@@ -2036,12 +2099,36 @@ def _build_station_marker_payload(
             if pd.notna(row.get("exclusion_reason"))
             else None
         )
+        freq: str = "daily"
+        if "observation_frequency" in row and pd.notna(row["observation_frequency"]):
+            freq = str(row["observation_frequency"])
+        elif "KGE_hourly" in row and pd.notna(row["KGE_hourly"]):
+            freq = "hourly"
 
         metric_colors: dict[str, str] = {}
+        metric_values: dict[str, float] = {}
+        hourly_colors: dict[str, str] = {}
+        hourly_values: dict[str, float] = {}
+
         for layer, colormap, metric_name in metric_layers:
-            metric_val: float = row.get(metric_name, np.nan)
-            color: str = colormap(metric_val) if pd.notna(metric_val) else "gray"
-            metric_colors[layer.get_name()] = str(color)
+            daily_col: str = (
+                f"{metric_name}_daily" if f"{metric_name}_daily" in row else metric_name
+            )
+            metric_val: float = row.get(daily_col, row.get(metric_name, np.nan))
+            if pd.notna(metric_val) and np.isfinite(metric_val):
+                val_float: float = round(float(metric_val), 4)
+                metric_values[layer.get_name()] = val_float
+                metric_colors[layer.get_name()] = str(colormap(val_float))
+            else:
+                metric_colors[layer.get_name()] = "gray"
+
+            if freq == "hourly":
+                hourly_col: str = f"{metric_name}_hourly"
+                h_val: float = row.get(hourly_col, np.nan)
+                if pd.notna(h_val) and np.isfinite(h_val):
+                    h_val_float: float = round(float(h_val), 4)
+                    hourly_values[layer.get_name()] = h_val_float
+                    hourly_colors[layer.get_name()] = str(colormap(h_val_float))
 
         if (
             has_upstream
@@ -2059,6 +2146,7 @@ def _build_station_marker_payload(
                 )
                 if isinstance(color_upstream, str) and color_upstream != "nan":
                     metric_colors[layer_upstream.get_name()] = str(color_upstream)
+                    metric_values[layer_upstream.get_name()] = round(ratio_val, 4)
 
         av_val: int | None = None
         char_markers: dict[str, list[str]] = {}
@@ -2090,6 +2178,7 @@ def _build_station_marker_payload(
                     f"{characteristic['label']}: {formatted_value} ({rank_text})"
                 )
                 char_markers[layer.get_name()] = [fill_color, tooltip_text]
+                metric_values[layer.get_name()] = round(float(percentile), 2)
 
         station_dict: dict[str, Any] = {
             "id": station_id_str,
@@ -2098,12 +2187,18 @@ def _build_station_marker_payload(
             "r": circle_radius,
             "tz": tz_offset,
             "ex": exclusion_reason,
+            "fq": freq,
             "m": metric_colors,
+            "v": metric_values,
         }
         if av_val is not None:
             station_dict["av"] = av_val
         if char_markers:
             station_dict["ch"] = char_markers
+        if hourly_colors:
+            station_dict["mh"] = hourly_colors
+        if hourly_values:
+            station_dict["vh"] = hourly_values
 
         stations_data.append(station_dict)
 
@@ -2422,12 +2517,18 @@ def _build_snapping_station(
             if np.isfinite(area_m2) and area_m2 > 0
             else "missing"
         )
+        freq: str = "daily"
+        if "observation_frequency" in row and pd.notna(row["observation_frequency"]):
+            freq = str(row["observation_frequency"])
+        elif "KGE_hourly" in row and pd.notna(row["KGE_hourly"]):
+            freq = "hourly"
         return {
             "id": station_id,
             "locations": [[gauge_latitude, gauge_longitude]],
             "color": "#DC2626",
             "tooltip": f"{station_label}<br>EXCLUDED: {reason}",
             "popup": f"<b>{station_label}</b><br><b>EXCLUDED</b><br>{reason}<br>Station area: {area_label}<br>Gauge: {gauge_latitude:.5f}, {gauge_longitude:.5f}",
+            "fq": freq,
         }
     original_subgrid_longitude: float = float(row["original_subgrid_longitude"])
     original_subgrid_latitude: float = float(row["original_subgrid_latitude"])
@@ -2511,12 +2612,18 @@ def _build_snapping_station(
         [original_subgrid_latitude, original_subgrid_longitude],
         [routing_latitude, routing_longitude],
     ]
+    freq: str = "daily"
+    if "observation_frequency" in row and pd.notna(row["observation_frequency"]):
+        freq = str(row["observation_frequency"])
+    elif "KGE_hourly" in row and pd.notna(row["KGE_hourly"]):
+        freq = "hourly"
     return {
         "id": escaped_id,
         "locations": line_locations,
         "color": status_color,
         "tooltip": tooltip,
         "popup": popup_html,
+        "fq": freq,
     }
 
 

@@ -63,13 +63,16 @@
       var marker = null;
       if (station.m && station.m[layerName] !== undefined) {
         var radius = (layerName === upstreamLayer) ? 10 : station.r;
+        var fillColor = (window._gebCurrentFrequency === 'hourly' && station.mh && station.mh[layerName])
+          ? station.mh[layerName]
+          : station.m[layerName];
         marker = L.circleMarker(station.coords, {
           pane: 'stationsPane',
           radius: radius,
           color: 'black',
           weight: 1.2,
           fill: true,
-          fillColor: station.m[layerName],
+          fillColor: fillColor,
           fillOpacity: 0.9,
           zIndexOffset: 1000
         });
@@ -121,7 +124,8 @@
       }
 
       if (marker) {
-        if (station._searchVisible === false) {
+        var isVis = (station._searchVisible !== false) && (station._isVisible !== false);
+        if (!isVis) {
           marker.setStyle({opacity: 0, fillOpacity: 0});
           marker.options.interactive = false;
           if (marker.getElement()) {
@@ -148,6 +152,9 @@
       var escapedId = escapeHtml(station.id);
       var escapedName = escapeHtml(station.name);
       var baseTooltip = escapedId + ': ' + escapedName;
+      if (station.fq) {
+        baseTooltip += ' · ' + escapeHtml(station.fq);
+      }
       if (station.tz !== null && station.tz !== undefined) {
         baseTooltip += '<br><span data-geb-utc-offset-hours="' + station.tz + '"></span> fixed';
       }

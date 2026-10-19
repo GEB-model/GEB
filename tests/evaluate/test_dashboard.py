@@ -458,9 +458,52 @@ def test_build_station_marker_payload() -> None:
     assert metric_layers[0][0].get_name() in stations[0]["m"]
     assert layer_upstream.get_name() in stations[0]["m"]
 
+    assert stations[0]["fq"] == "daily"
+    assert stations[0]["v"][metric_layers[0][0].get_name()] == 0.85
+    assert stations[0]["v"][layer_upstream.get_name()] == 1.0
+
     assert stations[1]["id"] == "st_2"
     assert stations[1]["ex"] == "Too far"
     assert layer_upstream.get_name() not in stations[1]["m"]  # ratio was NaN
+
+
+def test_build_station_marker_payload_hourly() -> None:
+    """Test compressing station marker payload with hourly metrics."""
+    gdf = gpd.GeoDataFrame(
+        {
+            "station_name": ["Station Hourly"],
+            "upstream_area_GEB": [100.0],
+            "observation_frequency": ["hourly"],
+            "KGE": [0.80],
+            "KGE_daily": [0.80],
+            "KGE_hourly": [0.72],
+        },
+        geometry=[sg.Point(8.0, 50.0)],
+        index=pd.Index(["st_hourly"]),
+    )
+    metric_layers = [
+        (
+            folium.FeatureGroup(name="KGE", show=True),
+            cm.LinearColormap(colors=["red", "green"], vmin=0.0, vmax=1.0),
+            "KGE",
+        )
+    ]
+    payload = _build_station_marker_payload(
+        mapped_station_scores=gdf,
+        metric_layers=metric_layers,
+        layer_upstream=None,
+        colormap_upstream=None,
+        characteristic_layers=[],
+        availability_layer=None,
+        characteristic_records={},
+        largest_upstream_area_sqrt=20.0,
+    )
+    stations = json.loads(gzip.decompress(base64.b64decode(payload)).decode("utf-8"))
+    assert len(stations) == 1
+    assert stations[0]["fq"] == "hourly"
+    assert stations[0]["v"][metric_layers[0][0].get_name()] == 0.80
+    assert stations[0]["vh"][metric_layers[0][0].get_name()] == 0.72
+    assert metric_layers[0][0].get_name() in stations[0]["mh"]
 
 
 def test_build_station_marker_payload_uses_high_res_snapped_location() -> None:
@@ -679,6 +722,8 @@ def test_build_river_chart_data() -> None:
         bankfull_discharge=[30.0, 35.0],
         width=[15.0, 15.0],
         depth=[2.0, 2.2],
+        floodplain_width_m=0.0,
+        floodplain_side_slope_m_per_m=2.0,
     )
     assert river_data["type"] == "river"
     assert river_data["riverId"] == "10"
@@ -687,6 +732,11 @@ def test_build_river_chart_data() -> None:
     assert river_data["timeseries"]["bankfullDischarge"] == [30.0, 35.0]
     assert river_data["timeseries"]["width"] == [15.0, 15.0]
     assert river_data["timeseries"]["depth"] == [2.0, 2.2]
+    assert "crossSection" in river_data
+    assert river_data["crossSection"]["width"] == 15.0
+    assert river_data["crossSection"]["depth"] == 2.2
+    assert river_data["crossSection"]["floodplainWidth"] == 0.0
+    assert river_data["crossSection"]["floodplainSideSlope"] == 2.0
 
 
 def test_add_river_charts_to_bundle_writer(tmp_path: Path) -> None:
@@ -704,9 +754,15 @@ def test_add_river_charts_to_bundle_writer(tmp_path: Path) -> None:
     df_q = pd.DataFrame({"20": [40.0, 45.0]}, index=yearly_idx)
     df_d = pd.DataFrame({"20": [2.1, 2.3]}, index=yearly_idx)
     df_w = pd.DataFrame({"20": [25.0, 25.0]}, index=yearly_idx)
+    df_fp_w = pd.DataFrame({"20": [50.0, 50.0]}, index=yearly_idx)
+    df_fp_s = pd.DataFrame({"20": [3.0, 3.0]}, index=yearly_idx)
     df_q.to_parquet(routing_dir / "bankfull_discharge_rivers_yearly_m3_per_s.parquet")
     df_d.to_parquet(routing_dir / "bankfull_depth_rivers_yearly_m.parquet")
     df_w.to_parquet(routing_dir / "bankfull_width_rivers_yearly_m.parquet")
+    df_fp_w.to_parquet(routing_dir / "floodplain_width_rivers_yearly_m.parquet")
+    df_fp_s.to_parquet(
+        routing_dir / "floodplain_side_slope_rivers_yearly_m_per_m.parquet"
+    )
 
     rivers_gdf = gpd.GeoDataFrame(
         {"uparea_m2": [50_000_000.0], "geometry": [sg.LineString([(0, 0), (1, 1)])]},
@@ -730,6 +786,10 @@ def test_add_river_charts_to_bundle_writer(tmp_path: Path) -> None:
     assert decoded["river_20"]["timeseries"]["bankfullDischarge"] == [40.0, 45.0]
     assert decoded["river_20"]["timeseries"]["depth"] == [2.1, 2.3]
     assert decoded["river_20"]["timeseries"]["width"] == [25.0, 25.0]
+    assert decoded["river_20"]["crossSection"]["width"] == 25.0
+    assert decoded["river_20"]["crossSection"]["depth"] == 2.3
+    assert decoded["river_20"]["crossSection"]["floodplainWidth"] == 50.0
+    assert decoded["river_20"]["crossSection"]["floodplainSideSlope"] == 3.0
 
 
 def test_metric_layer_colormap_ranges() -> None:

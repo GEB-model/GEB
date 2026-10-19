@@ -710,13 +710,24 @@
     var qValues = ts.bankfullDischarge;
     var wValues = ts.width;
     var dValues = ts.depth;
+    var cs = data.crossSection || {};
+
+    var lastW = cs.width != null ? cs.width : (wValues && wValues.length > 0 ? wValues[wValues.length - 1] : 10.0);
+    var lastD = cs.depth != null ? cs.depth : (dValues && dValues.length > 0 ? dValues[dValues.length - 1] : 2.0);
+    var fpWidth = cs.floodplainWidthM != null ? cs.floodplainWidthM : (cs.floodplainWidth != null ? cs.floodplainWidth : 0.0);
+    var fpSlope = cs.floodplainSideSlopeMPerM != null ? cs.floodplainSideSlopeMPerM : (cs.floodplainSideSlope != null ? cs.floodplainSideSlope : 2.0);
+
+    var geomSummary = "Channel: " + lastW.toFixed(1) + " m × " + lastD.toFixed(2) + " m" + (fpWidth > 0 ? " · Floodplain bench: " + fpWidth.toFixed(1) + " m" : "") + " · Valley side slope: " + fpSlope.toFixed(1) + " m/m (H:V)";
 
     el.innerHTML = '<div class="geb-popup__title">River segment ' + escapeHtml(riverId) + '</div>' +
       '<div class="geb-popup__subtitle">Upstream area: ' + formatNumber(data.upstreamAreaKm2) + ' km² · Bankfull hydraulic geometry over time</div>' +
       '<div class="geb-popup__chart-title">Bankfull discharge</div>' +
       makeChartDiv('geb-river-q-' + safeRiverId, 175) +
-      '<div class="geb-popup__chart-title">Channel width and depth</div>' +
-      makeChartDiv('geb-river-geom-' + safeRiverId, 175);
+      '<div class="geb-popup__chart-title">Channel width and depth over time</div>' +
+      makeChartDiv('geb-river-geom-' + safeRiverId, 175) +
+      '<div class="geb-popup__chart-title">Channel and floodplain cross section (end of run)</div>' +
+      '<div style="font-size:11px;margin-bottom:4px;color:#64748b">' + escapeHtml(geomSummary) + '</div>' +
+      makeChartDiv('geb-river-cs-' + safeRiverId, 210);
 
     ensurePlotly(function(loaded) {
       if (loaded === false) {
@@ -806,9 +817,104 @@
       Plotly.newPlot(geomId, [wTrace, dTrace], geomLayout, geomConfig);
       activePlotlyElements[geomId] = true;
 
+      // Cross section coordinates: channel bed -> flat floodplain benches -> valley side slopes
+      var halfW = lastW * 0.5;
+      var halfBench = (lastW + fpWidth) * 0.5;
+      var wallHeight = Math.max(lastD * 0.5, 1.0);
+      var wallRun = fpSlope * wallHeight;
+
+      var xCoords = [];
+      var yCoords = [];
+
+      // Left valley wall
+      xCoords.push(-(halfBench + wallRun));
+      yCoords.push(lastD + wallHeight);
+      xCoords.push(-halfBench);
+      yCoords.push(lastD);
+
+      // Left flat floodplain bench
+      if (fpWidth > 0.0) {
+        xCoords.push(-halfW);
+        yCoords.push(lastD);
+      }
+
+      // Parabolic channel bed (21 points)
+      var nPts = 20;
+      for (var p = 0; p <= nPts; p++) {
+        var u = -1.0 + (2.0 * p / nPts);
+        xCoords.push(u * halfW);
+        yCoords.push(lastD * u * u);
+      }
+
+      // Right flat floodplain bench
+      if (fpWidth > 0.0) {
+        xCoords.push(halfW);
+        yCoords.push(lastD);
+      }
+
+      // Right valley wall
+      xCoords.push(halfBench);
+      yCoords.push(lastD);
+      xCoords.push(halfBench + wallRun);
+      yCoords.push(lastD + wallHeight);
+
+      var csConfig = {
+        responsive: true,
+        displaylogo: false,
+        modeBarButtonsToRemove: ["toImage", "select2d", "lasso2d"],
+        modeBarButtonsToAdd: [
+          {
+            name: "Download plot as SVG",
+            icon: svgCameraIcon,
+            click: function(gd) {
+              exportPlotlySvg(gd.id, getActiveTheme(), safeRiverId + "_cross_section");
+            }
+          }
+        ]
+      };
+
+      var groundTrace = {
+        x: xCoords,
+        y: yCoords,
+        name: "Ground profile",
+        type: "scatter",
+        mode: "lines",
+        line: {color: currentTheme === "dark" ? "#f59e0b" : "#b45309", width: 2.5},
+        hovertemplate: "Distance: %{x:,.2f} m<br>Elevation: %{y:,.2f} m<extra>Ground profile</extra>"
+      };
+
+      var bankfullLine = {
+        x: [-halfW, halfW],
+        y: [lastD, lastD],
+        name: "Bankfull stage (" + lastD.toFixed(2) + " m)",
+        type: "scatter",
+        mode: "lines",
+        line: {color: "#94a3b8", width: 1.5, dash: "dot"},
+        hovertemplate: "Bankfull stage: %{y:,.2f} m<extra></extra>"
+      };
+
+      var csLayout = getPlotlyLayout(currentTheme, {
+        height: 210,
+        hovermode: "closest",
+        xaxis: {
+          title: "Distance across river (m)",
+          zeroline: true,
+          zerolinecolor: currentTheme === "dark" ? "#334155" : "#cbd5e1"
+        },
+        yaxis: {
+          title: "Height above river bed (m)",
+          rangemode: "tozero"
+        }
+      });
+
+      var csId = "geb-river-cs-" + safeRiverId;
+      Plotly.newPlot(csId, [groundTrace, bankfullLine], csLayout, csConfig);
+      activePlotlyElements[csId] = true;
+
       setTimeout(function() {
         Plotly.Plots.resize(qId);
         Plotly.Plots.resize(geomId);
+        Plotly.Plots.resize(csId);
       }, 60);
     });
   }
