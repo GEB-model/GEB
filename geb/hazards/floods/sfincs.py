@@ -669,7 +669,7 @@ class SFINCSRootModel:
                     write_man_tif=True,
                     nr_subgrid_pixels=grid_size_multiplier,
                     nr_levels=20,
-                    nrmax=500,
+                    nrmax=2000,
                 )
 
         else:
