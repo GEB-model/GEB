@@ -946,7 +946,8 @@ class SFINCSRootModel:
                 # due to floating point precision, the intersection point
                 # may be just outside the model grid. We therefore check if the
                 # point is outside the grid, and if so, move it 1 m upstream along the river
-                if not self.mask.values[outflow_row, outflow_col]:
+                iteration_count = 0
+                while not self.mask.values[outflow_row, outflow_col]:
                     # move outflow point 1 m upstream. 0.000008983 degrees is approximately 1 m
                     outflow_point: Point | MultiPoint | GeometryCollection = (
                         river.interpolate(
@@ -965,13 +966,21 @@ class SFINCSRootModel:
                         (outflow_point.x, outflow_point.y),
                         self.mask.rio.transform().to_gdal(),
                     )
-
-                    # if still outside the grid, raise error for boundary rivers
-                    if not self.mask.values[outflow_row, outflow_col]:
+                    iteration_count += 1
+                    print(
+                        f"Outflow point is outside of the model grid. Moving 1 m upstream along the river. Iteration {iteration_count}."
+                    )
+                    if iteration_count > 100:
                         export_diagnostics(outflow_point)
                         raise ValueError(
                             "Calculated outflow point is outside of the model grid. Please check the river geometries and subbasins boundary."
                         )
+                    # # if still outside the grid, raise error for boundary rivers
+                    # if not self.mask.values[outflow_row, outflow_col]:
+                    #     export_diagnostics(outflow_point)
+                    #     raise ValueError(
+                    #         "Calculated outflow point is outside of the model grid. Please check the river geometries and subbasins boundary."
+                    #     )
 
                 self.rivers.at[river_idx, "outflow_elevation"] = 0
                 self.rivers.at[river_idx, "outflow_point_xy"] = np.array(
