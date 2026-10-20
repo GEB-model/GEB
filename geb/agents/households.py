@@ -79,6 +79,7 @@ class HouseholdVariables(Bucket):
     ead_usd_per_year: DynamicArray
     action_lead_time: DynamicArray
     buildings: gpd.GeoDataFrame
+    adaptation_cost_scaler: float
 
 class Households(AgentBaseClass):
     """This class implements the household agents."""
@@ -399,6 +400,9 @@ class Households(AgentBaseClass):
         )
         self.var.education_level = DynamicArray(education_level, max_n=self.max_n)
 
+        # Load adaptation and relocation cost scaler
+        self.var.adaptation_cost_scaler = self.model.config["agent_settings"]["households"]["adaptation_cost_scaler"]
+
         # initiate array for adaptation status [0=not adapted, 1=dryfloodproofing implemented]
         self.var.adapted = DynamicArray(np.zeros(self.n, np.int32), max_n=self.max_n)
 
@@ -508,8 +512,7 @@ class Households(AgentBaseClass):
         adaptation_costs = np.full(
             self.n,
             10_800  # adaptation costs Europe
-            * 1.11  # EUR to USD conversion factor (EUR -> USD 2020)
-            * 0.254820579,  # scaling factor based on GDP (EU -> Mexico 2020)
+            * self.var.adaptation_cost_scaler, # Scaling to local costs
             np.float32,
         )  # cost scaled to mexico
         r_loan = 0.03  # interest rate
@@ -1107,7 +1110,10 @@ class Households(AgentBaseClass):
         damages_do_not_adapt, damages_adapt = (
             self.flood_risk_module.calculate_building_flood_damages(dynamic=False, export_building_damages=True)
         )
-        if hasattr(self, "factor_change"):
+        if (
+            hasattr(self, "factor_change") 
+            and self.model.config["agent_settings"]["climrisk"]["project_costs"]
+        ):
             GDP_i_t = self.var.factor_change
         else:
             GDP_i_t = 1
@@ -1172,8 +1178,9 @@ class Households(AgentBaseClass):
                 distance_to_coastline_m=sampled_distance_to_coastline,
                 distance_to_river_m=sampled_distance_to_river,
                 distance_to_building_m=sampled_distances,
-                max_migration_costs=5e5
-                * GDP_i_t,  # max migration costs scaled to GDP change
+                max_migration_costs= 500_000 # European relocation costs
+                * GDP_i_t  # max migration costs scaled to GDP change
+                * self.var.adaptation_cost_scaler, # Scaling to local costs
                 T=15,
                 r=0.03,
                 sigma=1,
@@ -1540,25 +1547,25 @@ class Households(AgentBaseClass):
         # We consider 2020 to be the base year
         base_year=2020
         if not hasattr(self, "factor_change"):
-            self.country_wide: bool =self.model.config["agent_settings"]["climrisk"]["country_wide"]
+            self.country_wide: bool = self.model.config["agent_settings"]["climrisk"]["country_wide"]
             ssp: str = self.model.config["agent_settings"]["climrisk"]["ssp"]
-            function: str = self.model.config["agent_settings"]["climrisk"]["function"]
+            damage_function: str = self.model.config["agent_settings"]["climrisk"]["damage_function"]
             if ssp not in ["1", "2", "3", "4", "5"]:
                 raise ValueError(f"Possible climrisk SSPs: 1, 2, 3, 4, 5; got {ssp!r}.")
-            if function not in ["GDP", "K", "KU", "KPU", "RU", "RPU"]:
-                raise ValueError(f"Possible climrisk damage functions: K, KU, KPU, RU, RPU; got {function!r}.")
-            if function != "GDP":
+            if damage_function not in ["GDP", "K", "KU", "KPU", "RU", "RPU"]:
+                raise ValueError(f"Possible climrisk damage functions: K, KU, KPU, RU, RPU; got {damage_function!r}.")
+            if damage_function != "GDP":
                 rcp: str = self.model.config["agent_settings"]["climrisk"]["rcp"]
-                percentile: str = self.model.config["agent_settings"]["climrisk"]["percentile"]
-                if percentile not in ["10", "50", "90"]:
-                    raise ValueError(f"Possible climrisk percentiles: 10, 50, 90; got {percentile!r}.")
+                warming_percentile: str = self.model.config["agent_settings"]["climrisk"]["warming_percentile"]
+                if warming_percentile not in ["10", "50", "90"]:
+                    raise ValueError(f"Possible climrisk warming percentiles: 10, 50, 90; got {warming_percentile!r}.")
                 if rcp not in ["19", "26", "34", "45", "60", "70", "85"]:
                     raise ValueError(f"Possible climrisk RCPs: 19, 26, 34, 45, 60, 70, 85; got {rcp!r}.")
 
-            if function=="GDP":
-                ssp_map_name:str = f"SSP{ssp}_{function}.zarr"
+            if damage_function=="GDP":
+                ssp_map_name:str = f"SSP{ssp}_{damage_function}.zarr"
             else:
-                ssp_map_name:str = f"SSP{ssp}{rcp}_{function}_p{percentile}.zarr"
+                ssp_map_name:str = f"SSP{ssp}{rcp}_{damage_function}_p{warming_percentile}.zarr"
             ssp_map_path: Path = (
                 self.model.input_folder / "other" / "ssp_maps" / ssp_map_name
             )
@@ -1724,7 +1731,10 @@ class Households(AgentBaseClass):
                     and self.model.current_time.month == 1
                     and self.model.current_time.day == 1
                 ):
-                    if self.model.current_time.year >= 2021:
+                    if (
+                        (self.model.current_time.year >= 2021)
+                        and self.model.config["agent_settings"]["climrisk"]["project_income"]
+                    ):
                         self.update_monetary_variables_to_ssp()
                     if "flooded" not in self.buildings.columns:
                         self.update_building_attributes()

@@ -60,8 +60,8 @@ class CLIMRISK(Adapter):
     def read(
         self,
         rcp: str | None,
-        function: str | None,
-        percentile: str | None,
+        damage_function: str | None,
+        warming_percentile: str | None,
         region: gpd.GeoDataFrame | None = None,
         ssp: str = "2",
         reference_year: int = 2020,
@@ -78,10 +78,10 @@ class CLIMRISK(Adapter):
             rcp: RCP identifier. Supported values are ``"19"``, ``"26"``,
                 ``"34"``, ``"45"``, ``"60"``, ``"70"``, and ``"85"``.
                 Defaults to ``"70"`` when omitted for damage data.
-            function: Damage function identifier: ``"K"``, ``"KU"``,
+            damage_function: Damage function identifier: ``"K"``, ``"KU"``,
                 ``"KPU"``, ``"RU"``, or ``"RPU"``. Defaults to ``"K"``
                 when omitted. ``"GDP"`` selects the GDP data file.
-            percentile: Damage percentile: ``"10"``, ``"50"``, or ``"90"``.
+            warming_percentile: Global warming percentile: ``"10"``, ``"50"``, or ``"90"``.
                 Defaults to ``"90"`` when omitted for damage data.
             region: Non-empty GeoDataFrame defining the study region. It must
                 have a CRS and is reprojected to EPSG:4326 for grid matching.
@@ -170,11 +170,11 @@ class CLIMRISK(Adapter):
                 name="population"
             )
         else:
-            if percentile is None: percentile = "90"
+            if warming_percentile is None: warming_percentile = "90"
             if rcp is None: rcp = "70"
-            if function is None: function = "K"
-            if percentile not in ["10", "50", "90"]:
-                raise ValueError(f"Possible climrisk percentiles: 10, 50, 90; got {percentile!r}.")
+            if damage_function is None: damage_function = "K"
+            if warming_percentile not in ["10", "50", "90"]:
+                raise ValueError(f"Possible climrisk warming percentiles: 10, 50, 90; got {warming_percentile!r}.")
             if rcp not in ["19", "26", "34", "45", "60", "70", "85"]:
                 raise ValueError(f"Possible climrisk RCPs: 19, 26, 34, 45, 60, 70, 85; got {rcp!r}.")
     
@@ -187,14 +187,14 @@ class CLIMRISK(Adapter):
                 "RU": ("", "RU_RPU"),
                 "RPU": ("", "RU_RPU"),
             }
-            if function not in file_groups:
-                raise ValueError(f"Possible climrisk damage functions: K, KU, KPU, RU, RPU; got {function!r}.")
+            if damage_function not in file_groups:
+                raise ValueError(f"Possible climrisk damage functions: K, KU, KPU, RU, RPU; got {damage_function!r}.")
     
             file_prefix: str
-            function_abbreviation: str
-            file_prefix, function_abbreviation = file_groups[function]
+            damage_function_abbreviation: str
+            file_prefix, damage_function_abbreviation = file_groups[damage_function]
     
-            if function=="GDP":
+            if damage_function=="GDP":
                 damage_file = (
                     self.path
                     / f"SSP{ssp}26_Kompas_results_p10"
@@ -204,17 +204,17 @@ class CLIMRISK(Adapter):
                 scenario: str = f"{ssp}{rcp}"
                 damage_file = (
                     self.path
-                    / f"SSP{scenario}_{file_prefix}results_p{percentile}"
-                    / f"SSP{scenario}_{function_abbreviation}_results{percentile}.mat"
+                    / f"SSP{scenario}_{file_prefix}results_p{warming_percentile}"
+                    / f"SSP{scenario}_{damage_function_abbreviation}_results{warming_percentile}.mat"
                 )
     
             with h5py.File(damage_file, "r") as file:
-                if function=="GDP":
+                if damage_function=="GDP":
                     damage_key: str = f"CLIMRISK_DOLLARS_K_GRID_WORLD_S"
                     proportion_key: str = f"CLIMRISK_PROP_K_GRID_WORLD_S"
                 else:
-                    damage_key: str = f"CLIMRISK_DOLLARS_{function}_GRID_WORLD_S"
-                    proportion_key: str = f"CLIMRISK_PROP_{function}_GRID_WORLD_S"
+                    damage_key: str = f"CLIMRISK_DOLLARS_{damage_function}_GRID_WORLD_S"
+                    proportion_key: str = f"CLIMRISK_PROP_{damage_function}_GRID_WORLD_S"
     
                 if damage_key not in file or proportion_key not in file:
                     raise ValueError(
@@ -231,7 +231,7 @@ class CLIMRISK(Adapter):
                         max=100
                     )
                     with np.errstate(divide="ignore", invalid="ignore"):
-                        if function=="GDP":
+                        if damage_function=="GDP":
                             gdp_damage: np.ndarray = (
                                 damage_dollars
                                 *100/damage_proportion

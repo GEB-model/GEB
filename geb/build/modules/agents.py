@@ -1791,24 +1791,24 @@ class Agents(BuildModelBase):
     def setup_climrisk(self,
         ssp: list[str] | None = None,
         rcp: list[str] | None = None,
-        function: list[str] | None = None,
-        percentile: list[str] | None = None,
+        damage_function: list[str] | None = None,
+        warming_percentile: list[str] | None = None,
         reference_year: int = 2020,
     ) -> None:
         """Load CLIMRISK population and damage maps into the model.
 
         For each SSP, stores a population map. It also stores maps for GDP with
-        damages for each RCP, damage function, and percentile combination.
-        ``"GDP"`` is a special function option that selects the GDP data
+        damages for each RCP, damage function, and warming percentile combination.
+        ``"GDP"`` is a special damage function option that selects the GDP data
         without damages.
 
         Args:
             ssp: SSP scenario identifiers, from ``"1"`` through ``"5``.
                 Defaults to ``["2"]``.
             rcp: RCP identifiers. Defaults to ``["70"]``.
-            function: Damage functions (``"K"``, ``"KU"``, ``"KPU"``,
+            damage_function: Damage functions (``"K"``, ``"KU"``, ``"KPU"``,
                 ``"RU"``, ``"RPU"``) or ``"GDP"``. Defaults to ``["K"]``.
-            percentile: Damage percentiles: ``"10"``, ``"50"``, or ``"90"``.
+            warming_percentile: Global warming percentiles: ``"10"``, ``"50"``, or ``"90"``.
                 Defaults to ``["90"]``.
             reference_year: First year to include in damage data, from 2010
                 through 2100. Defaults to 2020.
@@ -1818,10 +1818,10 @@ class Agents(BuildModelBase):
         """
         if ssp is None: ssp = ["2"]
         if rcp is None: rcp = ["70"]
-        if function is None: function = ["K"]
-        if percentile is None: percentile = ["90"]
+        if damage_function is None: damage_function = ["K"]
+        if warming_percentile is None: warming_percentile = ["90"]
 
-        for name, value in {"ssp": ssp, "rcp": rcp, "function": function, "percentile": percentile}.items():
+        for name, value in {"ssp": ssp, "rcp": rcp, "damage_function": damage_function, "warming_percentile": warming_percentile}.items():
             if not isinstance(value, list):
                 raise TypeError(f"{name} must be a list, got {type(value).__name__}")
             if not all(isinstance(v, str) for v in value):
@@ -1834,36 +1834,36 @@ class Agents(BuildModelBase):
                 region=self.region, 
                 ssp=ssp[i], 
                 rcp=None, 
-                function=None, 
-                percentile=None, 
+                damage_function=None, 
+                warming_percentile=None, 
                 obtain_population=True
             )
             self.set_other(climrisk, name=f"ssp_maps/SSP{ssp[i]}_POP")
-            for l in range(len(function)):
-                if function[l]=="GDP":
+            for l in range(len(damage_function)):
+                if damage_function[l]=="GDP":
                     self.logger.info(f"Processing GDP for combination: SSP{ssp[i]}")
                     climrisk = self.data_catalog.fetch("climrisk").read(
                         region=self.region, 
                         ssp=ssp[i], 
                         rcp=None,
-                        function=function[l],
-                        percentile=None, 
+                        damage_function=damage_function[l],
+                        warming_percentile=None, 
                         reference_year=reference_year
                     )
-                    self.set_other(climrisk, name=f"ssp_maps/SSP{ssp[i]}_{function[l]}")
+                    self.set_other(climrisk, name=f"ssp_maps/SSP{ssp[i]}_{damage_function[l]}")
                 else:
                     for j in range(len(rcp)):
-                        for k in range(len(percentile)):
-                            self.logger.info(f"Processing GDP for combination: SSP{ssp[i]}-{rcp[j]}, Damage function {function[l]}")
+                        for k in range(len(warming_percentile)):
+                            self.logger.info(f"Processing GDP for combination: SSP{ssp[i]}-{rcp[j]}, Damage function {damage_function[l]}")
                             climrisk = self.data_catalog.fetch("climrisk").read(
                                 region=self.region, 
                                 ssp=ssp[i], 
                                 rcp=rcp[j],
-                                function=function[l],
-                                percentile=percentile[k], 
+                                damage_function=damage_function[l],
+                                warming_percentile=warming_percentile[k], 
                                 reference_year=reference_year
                             )
-                            self.set_other(climrisk, name=f"ssp_maps/SSP{ssp[i]}{rcp[j]}_{function[l]}_p{percentile[k]}")
+                            self.set_other(climrisk, name=f"ssp_maps/SSP{ssp[i]}{rcp[j]}_{damage_function[l]}_p{warming_percentile[k]}")
         self.logger.info("All climrisk data processed.")
 
     @build_method(

@@ -100,10 +100,11 @@ agent_settings:
     price_frequency: yearly
   households:
     adapt: false # If True household behavior is modeled, like DYNAMO-M
-    dry_floodproofing: true # If True households adapt their houses , like DYNAMO-M
+    dry_floodproofing: true # If True households adapt their houses, like DYNAMO-M
     relocate: true # If True households relocate based on EUT, like DYNAMO-M
     intention_behavior_gap: 0.12  # fraction of households that have the intention to relocate but do not do so
     adapt_to_actual_floods: false # If True households adapt their houses based on actual floods experienced
+    adaptation_cost_scaler: 1 # Scale adaptation and relocation costs, usually by relative GDP per capita with respect to the EU
     water_demand:
       method: default
     adjust_demand_factor: 1  # multiplier to adjust water demand up or down. 1 = no adjustment, 0.5 = half demand, 2 = double demand
@@ -228,6 +229,15 @@ agent_settings:
     interest_rate_factor: 1
     well_cost_factor: 1
     drought_threshold_factor: 1
+  
+  climrisk:
+    project_income: false # if true turn on household income growth, calculating it with GDP per capita growth
+    project_costs: false # if true turn on adaptation, relocation and asset damages costs growth, calculating it with the growth of the sum of the GDP for all countries that include the modelled region.
+    ssp: '2' # Shared Socioeconomic Pathway, choose from: '1', '2', '3', '4', '5'.
+    rcp: '70' # Representative Concentration Pathway, choose from: '19', '26', '34', '45', '60', '70', '85'.
+    damage_function: 'K' # Macroeconomic climate damages function, choose from: 'K' (Kompas), 'KU' (Kompas + Urban Heat Island), 'KPU' (Kompas + U + persistent damages), 'RU' (RICE + U), 'RPU' (RICE + PU). Choose 'GDP' to project growth without damages.
+    warming_percentile: '90' # Global warming percentile, choose from: '10', '50', '90'.
+    country_wide: false # If true project GDP homogenously for all the country
 
 logging:
   logfile: GEB.log  
