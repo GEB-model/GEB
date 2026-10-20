@@ -46,7 +46,7 @@ class AR6(Adapter):
             The AR6 data as a Dataset.
         Raises:
             FileNotFoundError: If the specified file is not found in the zip archive.
-            ValueError: If AR6 locations with invalid coordinates found.
+            ValueError: If AR6 locations with invalid coordinates are found.
         """
         file_in_zip = f"ar6-regional-confidence/regional/confidence_output_files/medium_confidence/ssp{scenario}/total_ssp{scenario}_medium_confidence_values.nc"
         # check if the file exists in the zip
