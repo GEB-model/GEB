@@ -1933,13 +1933,9 @@ class Hydrography(BuildModelBase):
         Args:
             scenario: SSP scenario identifier used to select the AR6 file (e.g., 245).
             percentile: AR6 quantile to select (fraction between 0 and 1).
-
-        Raises:
-            ValueError: If 2020 is not available in the AR6 data, or if no valid
-                AR6 locations are available.
         """
-        self.logger.info("Setting up AR6 sea level rise data")
-        ar6_sea_level_rise: xr.Dataset = self.data_catalog.fetch("ar6").read(
+        self.logger.info("Setting up sea level rise data")
+        sea_level_change_m: xr.Dataset = self.data_catalog.fetch("ar6").read(
             scenario, percentile
         )
 
@@ -1947,19 +1943,21 @@ class Hydrography(BuildModelBase):
             os.path.join("input", self.files["geom"]["gtsm/stations"])
         )
 
-        ar6_lon_deg: npt.NDArray[np.floating] = ar6_sea_level_rise["lon"].values
-        ar6_lat_deg: npt.NDArray[np.floating] = ar6_sea_level_rise["lat"].values
-
-        # Ignore AR6 locations with invalid coordinates
-        valid_location_indices: npt.NDArray[np.intp] = np.flatnonzero(
-            np.isfinite(ar6_lat_deg) & np.isfinite(ar6_lon_deg)
-        )
-        if valid_location_indices.size == 0:
-            raise ValueError("No AR6 locations with valid coordinates found.")
+        lon_deg: npt.NDArray[np.floating] = sea_level_change_m["lon"].values
+        lat_deg: npt.NDArray[np.floating] = sea_level_change_m["lat"].values
+        years: npt.NDArray[np.int64] = sea_level_change_m["years"].values
 
         def to_unit_vectors(
             lon_deg: npt.NDArray[np.floating], lat_deg: npt.NDArray[np.floating]
         ) -> npt.NDArray[np.floating]:
+            """Convert longitude and latitude in degrees to 3D unit vectors.
+
+            Args:
+                lon_deg: Longitude in degrees.
+                lat_deg: Latitude in degrees.
+            Returns:
+                3D unit vectors corresponding to the input coordinates.
+            """
             lon_rad: npt.NDArray[np.floating] = np.radians(lon_deg)
             lat_rad: npt.NDArray[np.floating] = np.radians(lat_deg)
             return np.column_stack(
@@ -1976,8 +1974,8 @@ class Hydrography(BuildModelBase):
         # (n_stations x n_locations) distance matrix.
         tree: cKDTree = cKDTree(
             to_unit_vectors(
-                ar6_lon_deg[valid_location_indices],
-                ar6_lat_deg[valid_location_indices],
+                lon_deg,
+                lat_deg,
             )
         )
         _, nearest_valid_index = tree.query(
@@ -1986,19 +1984,7 @@ class Hydrography(BuildModelBase):
                 gtsm_stations.geometry.y.to_numpy(),
             )
         )
-        nearest_location_indices: npt.NDArray[np.intp] = valid_location_indices[
-            nearest_valid_index
-        ]
-
-        sea_level_change_mm: xr.DataArray = ar6_sea_level_rise[
-            "sea_level_change"
-        ].transpose("locations", "years")
-        years: npt.NDArray[np.integer] = ar6_sea_level_rise["years"].values
-        reference_year_index: npt.NDArray[np.intp] = np.flatnonzero(years == 2020)
-        if reference_year_index.size != 1:
-            raise ValueError(
-                "AR6 data must contain exactly one entry for the year 2020."
-            )
+        nearest_location_indices: npt.NDArray[np.intp] = nearest_valid_index
 
         # Load only the nearest locations (stations may share a location)
         unique_location_indices: npt.NDArray[np.intp]
@@ -2006,30 +1992,35 @@ class Hydrography(BuildModelBase):
         unique_location_indices, inverse_indices = np.unique(
             nearest_location_indices, return_inverse=True
         )
-        sea_level_change_m: npt.NDArray[np.floating] = (
-            sea_level_change_mm.isel(locations=unique_location_indices).values
-        )[inverse_indices]
 
-        # Express relative to 2020 and convert from mm to m
-        sea_level_change_m = (
-            sea_level_change_m - sea_level_change_m[:, reference_year_index]
-        ) / 1000.0
+        sea_level_change_m_transposed: npt.NDArray[np.floating] = (
+            sea_level_change_m["sea_level_change"]
+            .transpose("locations", "years")
+            .isel(locations=unique_location_indices)
+            .values[inverse_indices]
+        )
+
+        unique_location_indices: npt.NDArray[np.intp]
+        inverse_indices: npt.NDArray[np.intp]
+        unique_location_indices, inverse_indices = np.unique(
+            nearest_location_indices, return_inverse=True
+        )
 
         target_years: npt.NDArray[np.int64] = np.arange(2000, 2101)
         interpolated_values: npt.NDArray[np.floating] = interpolate.interp1d(
             x=years,
-            y=sea_level_change_m,
+            y=sea_level_change_m_transposed,
             axis=1,
             fill_value="extrapolate",
             bounds_error=False,
         )(target_years)
 
-        ar6_sea_level_rise_stations: pd.DataFrame = pd.DataFrame(
+        sea_level_rise_stations: pd.DataFrame = pd.DataFrame(
             data=interpolated_values.T,
             index=pd.to_datetime([f"{year}-01-01" for year in target_years]),
             columns=gtsm_stations.index,
         )
-        self.set_table(ar6_sea_level_rise_stations, name="water_levels/sea_level_rise")
+        self.set_table(sea_level_rise_stations, name="water_levels/sea_level_rise")
 
     @build_method(required=True)
     def setup_gtsm_station_data(self, scenario: int, percentile: float) -> None:
@@ -2044,9 +2035,9 @@ class Hydrography(BuildModelBase):
             return
 
         # Continue with GTSM setup
-        self.setup_gtsm_water_levels()
-        self.setup_gtsm_surge_levels()
-        self.setup_coast_rp()
+        # self.setup_gtsm_water_levels()
+        # self.setup_gtsm_surge_levels()
+        # self.setup_coast_rp()
         self.setup_sea_level_projections(scenario, percentile)
 
     @build_method(required=False)

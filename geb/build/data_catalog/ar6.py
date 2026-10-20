@@ -4,6 +4,8 @@ import io
 import zipfile
 from typing import Any
 
+import numpy as np
+import numpy.typing as npt
 import xarray as xr
 
 from geb.workflows.io import fetch_and_save
@@ -44,6 +46,7 @@ class AR6(Adapter):
             The AR6 data as a Dataset.
         Raises:
             FileNotFoundError: If the specified file is not found in the zip archive.
+            ValueError: If the year 2020 is not found exactly once in the dataset.
         """
         file_in_zip = f"ar6-regional-confidence/regional/confidence_output_files/medium_confidence/ssp{scenario}/total_ssp{scenario}_medium_confidence_values.nc"
         # check if the file exists in the zip
@@ -57,4 +60,20 @@ class AR6(Adapter):
 
         ds = xr.open_dataset(io.BytesIO(data))
         ds = ds.sel(quantiles=percentile)
+
+        # Express relative to 2020 and convert from mm to m
+        ds["sea_level_change"] = (
+            ds["sea_level_change"] - ds["sea_level_change"].sel(years=2020)
+        ) / 1000.0
+
+        # assert all locations have valid coordinates
+        lon_deg: npt.NDArray[np.floating] = ds["lon"].values
+        lat_deg: npt.NDArray[np.floating] = ds["lat"].values
+
+        valid_location_indices: npt.NDArray[np.intp] = np.flatnonzero(
+            np.isfinite(lat_deg) & np.isfinite(lon_deg)
+        )
+        if valid_location_indices.size != lat_deg.size:
+            raise ValueError("No AR6 locations with valid coordinates found.")
+
         return ds
