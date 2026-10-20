@@ -2599,7 +2599,7 @@ class GEBModel(
             raise ValueError(f"SSP {self.ssp} not supported.")
 
     @property
-    def ssp_rcp_identifier(self) -> str:
+    def ssp_rcp(self) -> str:
         """Returns the SSP-RCP identifier.
 
         Raises:

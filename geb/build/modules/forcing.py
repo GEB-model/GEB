@@ -838,7 +838,7 @@ class Forcing(BuildModelBase):
         return da
 
     def setup_deltas_CMIP6(
-        self, representative_forcing_year: int, scenario: int
+        self, representative_forcing_year: int, ssp_rcp: int
     ) -> xr.DataArray:
         """Sets up the CMIP6 deltas for GEB.
 
@@ -846,7 +846,7 @@ class Forcing(BuildModelBase):
 
         Args:
             representative_forcing_year: The representative year for which to fetch the CMIP6 deltas. This is typically a year in the future (e.g., 2050) for which climate projections are available.
-            scenario: The SSP scenario to use (e.g., 245 for SSP2-4.5).
+            ssp_rcp: The SSP scenario to use (e.g., 245 for SSP2-4.5).
 
         Returns:
             The CMIP6 deltas as an xarray DataArray, which can be used to adjust the forcing data.
@@ -857,7 +857,7 @@ class Forcing(BuildModelBase):
             start_year=self.start_date.year - 1,
             end_year=self.end_date.year,
             representative_forcing_year=representative_forcing_year,
-            scenario=scenario,
+            ssp_rcp=ssp_rcp,
         ).read()
 
         return cmip6_deltas
@@ -868,7 +868,7 @@ class Forcing(BuildModelBase):
         variable_delta_name: str,
         operation: Literal["add", "multiply"],
         representative_forcing_year: int,
-        scenario: int,
+        ssp_rcp: int,
     ) -> xr.DataArray:
         """Applies CMIP6 deltas to a forcing variable DataArray.
 
@@ -877,7 +877,7 @@ class Forcing(BuildModelBase):
             variable_delta_name: The name of the variable delta in CMIP6 deltas (e.g. 'precipitation_delta' or 'near_surface_air_temperature_delta').
             operation: The operation to apply ('multiply' for precipitation, 'add' for temperatures).
             representative_forcing_year: The representative year for which to fetch the CMIP6 deltas.
-            scenario: The SSP scenario to use (e.g., 245 for SSP2-4.5).
+            ssp_rcp: The SSP scenario to use (e.g., 245 for SSP2-4.5).
         Returns:
             The delta-adjusted xarray DataArray.
 
@@ -886,7 +886,7 @@ class Forcing(BuildModelBase):
         """
         all_nans: int = da.isnull().sum().compute().item()
         cmip6_deltas: xr.DataArray = self.setup_deltas_CMIP6(
-            representative_forcing_year=representative_forcing_year, scenario=scenario
+            representative_forcing_year=representative_forcing_year, ssp_rcp=ssp_rcp
         )
         delta: xr.DataArray = cmip6_deltas.sel(variable=variable_delta_name)
         target_grid: xr.DataArray = da.isel(time=0, drop=True)
@@ -915,7 +915,7 @@ class Forcing(BuildModelBase):
         da: xr.DataArray,
         source: str,
         name: str = "climate/pr_kg_per_m2_per_s",
-        scenario: int | None = None,
+        ssp_rcp: int | None = None,
         representative_forcing_year: int | None = None,
         create_plots: bool = False,
         **kwargs: Any,
@@ -930,7 +930,7 @@ class Forcing(BuildModelBase):
             name: The name to assign to the DataArray in the model.
             representative_forcing_year: The representative year for which to fetch the CMIP6 deltas to adjust historical data to future conditions.
             create_plots: If True, create plots for the forcing data.
-            scenario: The SSP scenario to use (e.g., 245 for SSP2-4.5).
+            ssp_rcp: The SSP scenario to use (e.g., 245 for SSP2-4.5).
             **kwargs: Additional keyword arguments to pass to the set_other method.
 
         Returns:
@@ -942,7 +942,7 @@ class Forcing(BuildModelBase):
                 variable_delta_name="precipitation_delta",
                 operation="multiply",
                 representative_forcing_year=representative_forcing_year,
-                scenario=scenario,
+                ssp_rcp=ssp_rcp,
             )
 
         # ensure no negative values for precipitation, which may arise due to float precision or delta adjustment
@@ -1082,7 +1082,7 @@ class Forcing(BuildModelBase):
         name: str = "climate/tas_2m_K",
         representative_forcing_year: int | None = None,
         create_plots: bool = False,
-        scenario: int | None = None,
+        ssp_rcp: int | None = None,
         **kwargs: Any,
     ) -> xr.DataArray:
         """Sets the Near-Surface Air Temperature DataArray with appropriate attributes and scaling.
@@ -1095,7 +1095,7 @@ class Forcing(BuildModelBase):
             name: The name to assign to the DataArray in the model.
             representative_forcing_year: The representative year for which to fetch the CMIP6 deltas to adjust historical data to future conditions.
             create_plots: If True, create plots for the forcing data.
-            scenario: The SSP scenario to use (e.g., 245 for SSP2-4.5).
+            ssp_rcp: The SSP scenario to use (e.g., 245 for SSP2-4.5).
             **kwargs: Additional keyword arguments to pass to the set_other method.
 
         Returns:
@@ -1107,7 +1107,7 @@ class Forcing(BuildModelBase):
                 variable_delta_name="near_surface_air_temperature_delta",
                 operation="add",
                 representative_forcing_year=representative_forcing_year,
-                scenario=scenario,
+                ssp_rcp=ssp_rcp,
             )
 
         K_to_C = 273.15
@@ -1136,7 +1136,7 @@ class Forcing(BuildModelBase):
         name: str = "climate/dewpoint_tas_2m_K",
         representative_forcing_year: int | None = None,
         create_plots: bool = False,
-        scenario: int | None = None,
+        ssp_rcp: int | None = None,
         **kwargs: Any,
     ) -> xr.DataArray:
         """Sets the Near-Surface Dewpoint Temperature DataArray with appropriate attributes and scaling.
@@ -1149,7 +1149,7 @@ class Forcing(BuildModelBase):
             name: The name to assign to the DataArray in the model.
             representative_forcing_year: The representative year for which to fetch the CMIP6 deltas to adjust historical data to future conditions.
             create_plots: If True, create plots for the forcing data.
-            scenario: The SSP scenario to use (e.g., 245 for SSP2-4.5).
+            ssp_rcp: The SSP scenario to use (e.g., 245 for SSP2-4.5).
             **kwargs: Additional keyword arguments to pass to the set_other method.
 
         Returns:
@@ -1161,7 +1161,7 @@ class Forcing(BuildModelBase):
                 variable_delta_name="near_surface_air_temperature_delta",
                 operation="add",
                 representative_forcing_year=representative_forcing_year,
-                scenario=scenario,
+                ssp_rcp=ssp_rcp,
             )
 
         K_to_C: float = 273.15
@@ -1317,7 +1317,7 @@ class Forcing(BuildModelBase):
         self,
         create_plots: bool = False,
         representative_forcing_year: int | None = None,
-        scenario: int | None = None,
+        ssp_rcp: int | None = None,
         forcing_types: list[
             Literal[
                 "precipitation",
@@ -1346,7 +1346,7 @@ class Forcing(BuildModelBase):
             representative_forcing_year: The representative year for which to fetch the CMIP6 deltas.
             forcing_types: A list of forcing variable types to set up.
             source: The source name of the forcing data (default: 'ERA5-Land').
-            scenario: The SSP scenario to use for CMIP6 deltas (default: None).
+            ssp_rcp: The SSP scenario to use for CMIP6 deltas (default: None).
 
         Sets:
             The resulting forcing data is set as forcing data in the model with names of the form 'forcing/{variable_name}'.
@@ -1368,7 +1368,7 @@ class Forcing(BuildModelBase):
                 pr_hourly,
                 representative_forcing_year=representative_forcing_year,
                 create_plots=create_plots,
-                scenario=scenario,
+                ssp_rcp=ssp_rcp,
                 source=source,
             )
 
@@ -1379,7 +1379,7 @@ class Forcing(BuildModelBase):
                 tas,
                 representative_forcing_year=representative_forcing_year,
                 create_plots=create_plots,
-                scenario=scenario,
+                ssp_rcp=ssp_rcp,
                 source=source,
             )
         else:
@@ -1460,7 +1460,7 @@ class Forcing(BuildModelBase):
         create_plots: bool = False,
         representative_forcing_year: int | None = None,
         source: str = "MSWEP",
-        scenario: int | None = None,
+        ssp_rcp: int | None = None,
     ) -> None:
         """Sets up the MSWEP precipitation forcing data for GEB.
 
@@ -1468,7 +1468,7 @@ class Forcing(BuildModelBase):
             create_plots: If True, create plots for the forcing data.
             representative_forcing_year: The representative year for which to fetch the CMIP6 deltas to adjust historical data to future conditions.
             source: The source name of the precipitation forcing data (default: 'MSWEP').
-            scenario: The SSP scenario to use (e.g., 245 for SSP2-4.5).
+            ssp_rcp: The SSP scenario to use (e.g., 245 for SSP2-4.5).
 
         Sets:
             The resulting precipitation forcing data is set as forcing data in the model.
@@ -1489,7 +1489,7 @@ class Forcing(BuildModelBase):
         self.set_pr_kg_per_m2_per_s(
             pr_hourly,
             representative_forcing_year=representative_forcing_year,
-            scenario=scenario,
+            ssp_rcp=ssp_rcp,
             create_plots=create_plots,
             source=source,
         )
@@ -1524,11 +1524,14 @@ class Forcing(BuildModelBase):
                 f"Unknown forcing_source: '{forcing_source}', supported is 'ERA5-Land'"
             )
 
+        # get ssp rcp identifier for CMIP6 deltas
+        ssp_rcp: int = self.ssp_rcp
+
         if precipitation_source == "MSWEP":
             self.setup_forcing_MSWEP(
                 create_plots=create_plots,
                 representative_forcing_year=representative_forcing_year,
-                scenario=self.ssp_rcp_identifier,
+                ssp_rcp=ssp_rcp,
                 source=precipitation_source,
             )
             self.setup_forcing_ERA5(
@@ -1543,14 +1546,14 @@ class Forcing(BuildModelBase):
                     "wind_speed",
                 ],
                 source=forcing_source,
-                scenario=self.ssp_rcp_identifier,
+                ssp_rcp=ssp_rcp,
             )
         elif precipitation_source == "ERA5-Land":
             self.setup_forcing_ERA5(
                 create_plots=create_plots,
                 representative_forcing_year=representative_forcing_year,
                 source=forcing_source,
-                scenario=self.ssp_rcp_identifier,
+                ssp_rcp=ssp_rcp,
             )
         else:
             raise ValueError(

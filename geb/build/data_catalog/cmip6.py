@@ -293,7 +293,7 @@ class CMIP6(Adapter):
         bounds: tuple[float, float, float, float],
         start_year: int,
         end_year: int,
-        scenario: int,
+        ssp_rcp: int,
         representative_forcing_year: int,
         url: str | None = None,
     ) -> CMIP6:
@@ -305,10 +305,10 @@ class CMIP6(Adapter):
             start_year: The start year for calculating deltas.
             end_year: The end year for the data range.
             representative_forcing_year: The year to use as a representative future projection of forcing data (e.g., 2050).
-            scenario: The SSP scenario to use (e.g., 245 for SSP2-4.5).
+            ssp_rcp: The SSP scenario to use (e.g., 245 for SSP2-4.5).
             url: Not used for CMIP6, included for compatibility with base class.
         Raises:
-            ValueError: If the scenario is invalid or if the historical and future periods are not of equal length.
+            ValueError: If the SSP-RCP is invalid or if the historical and future periods are not of equal length.
         Returns:
             The current instance of the CMIP6 adapter.
         """
@@ -316,10 +316,10 @@ class CMIP6(Adapter):
             return self
 
         # translate the scenario string to the full SSP name
-        ssp_scenario = f"ssp{str(scenario).replace('', '_')[1:6]}"
+        ssp_scenario = f"ssp{str(ssp_rcp).replace('', '_')[1:6]}"
         if ssp_scenario not in available_scenarios:
             raise ValueError(
-                f"Invalid scenario '{scenario}'. Available scenarios are: {available_scenarios}"
+                f"Invalid SSP-RCP '{ssp_rcp}'. Available scenarios are: {available_scenarios}"
             )
 
         # CMIP6 "historical" experiments end in 2014 and the SSP scenarios start in 2015.
