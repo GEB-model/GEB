@@ -1923,7 +1923,7 @@ class Hydrography(BuildModelBase):
         # also set stations (only those that are in coast_rp)
         self.set_geom(stations, "gtsm/stations_coast_rp")
 
-    def setup_sea_level_projections_ar6(self, scenario: int, percentile: float) -> None:
+    def setup_sea_level_projections(self, scenario: int, percentile: float) -> None:
         """Sets up the AR6 sea level projections for the model.
 
         For each GTSM station the nearest AR6 location (great-circle distance) is
@@ -2029,7 +2029,7 @@ class Hydrography(BuildModelBase):
             index=pd.to_datetime([f"{year}-01-01" for year in target_years]),
             columns=gtsm_stations.index,
         )
-        self.set_table(ar6_sea_level_rise_stations, name="ar6/sea_level_rise")
+        self.set_table(ar6_sea_level_rise_stations, name="water_levels/sea_level_rise")
 
     @build_method(required=True)
     def setup_gtsm_station_data(self, scenario: int, percentile: float) -> None:
@@ -2047,7 +2047,7 @@ class Hydrography(BuildModelBase):
         self.setup_gtsm_water_levels()
         self.setup_gtsm_surge_levels()
         self.setup_coast_rp()
-        self.setup_sea_level_projections_ar6(scenario, percentile)
+        self.setup_sea_level_projections(scenario, percentile)
 
     @build_method(required=False)
     def setup_inflow(

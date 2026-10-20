@@ -719,7 +719,7 @@ class Floods(Module):
 
             # load sea level rise data
             sea_level_rise: pd.DataFrame = read_table(
-                self.model.files["table"]["ar6/sea_level_rise"]
+                self.model.files["table"]["water_levels/sea_level_rise"]
             )
 
             sfincs_coastal_root_model: SFINCSRootModel = self.build(
