@@ -2598,6 +2598,26 @@ class GEBModel(
         else:
             raise ValueError(f"SSP {self.ssp} not supported.")
 
+    @property
+    def ssp_rcp_identifier(self) -> str:
+        """Returns the SSP-RCP identifier.
+
+        Raises:
+            ValueError: If the SSP is not supported.
+        """
+        if self.ssp == "ssp1":
+            return 126
+        elif self.ssp == "ssp2":
+            return 245
+        elif self.ssp == "ssp3":
+            return 370
+        elif self.ssp == "ssp4":
+            return 434
+        elif self.ssp == "ssp5":
+            return 585
+        else:
+            raise ValueError(f"SSP {self.ssp} not supported.")
+
     @build_method(required=False)
     def setup_precipitation_scaling_factors_for_return_periods(
         self, risk_scaling_factors: list[tuple[float, float]]
