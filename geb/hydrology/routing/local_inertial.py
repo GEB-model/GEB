@@ -15,6 +15,7 @@ from geb.geb_types import (
     ArrayFloat64,
     ArrayInt32,
     ArrayInt64,
+    TwoDArrayFloat32,
     TwoDArrayInt32,
 )
 
@@ -218,8 +219,8 @@ class LocalInertial:
         rivers_gdf: gpd.GeoDataFrame,
         shape_exponent: ArrayFloat32,
         bankfull_depth_m: ArrayFloat32,
-        floodplain_width_m: ArrayFloat32,
         floodplain_side_slope_m_per_m: ArrayFloat32,
+        floodplain_profile_widths_m: TwoDArrayFloat32,
         waterbody_lake_area: ArrayFloat32,
         waterbody_lake_factor: ArrayFloat32,
         waterbody_outflow_height: ArrayFloat32,
@@ -250,9 +251,9 @@ class LocalInertial:
             rivers_gdf: Vector GeoDataFrame containing river geometry attributes.
             shape_exponent: Power-law cross-sectional shape exponent per reach (dimensionless).
             bankfull_depth_m: Bankfull channel depth before floodplain spilling (meters).
-            floodplain_width_m: Floodplain width beyond channel (meters).
-            waterbody_lake_area: Surface area of each waterbody (m²).
             floodplain_side_slope_m_per_m: Valley side-slope ratio z (m/m horizontal:vertical).
+            waterbody_lake_area: Surface area of each waterbody (m²).
+            floodplain_profile_widths_m: 10-point cross-sectional top widths at fixed depth levels (meters).
             waterbody_lake_factor: Rating curve multiplier factor for lake outflow calculation.
             waterbody_outflow_height: Sill/outflow height above channel bed for each waterbody (meters).
             waterbody_outflow_bed_elev: Channel bed elevation at each waterbody outlet (meters).
@@ -453,11 +454,13 @@ class LocalInertial:
         self._shape_exponent_inertial: ArrayFloat32 = shape_exponent[
             sorted_idxs[inertial_start:inertial_end]
         ].astype(np.float32)
-        self._floodplain_width_inertial: ArrayFloat32 = floodplain_width_m[
-            sorted_idxs[inertial_start:inertial_end]
-        ].astype(np.float32)
         self._floodplain_side_slope_inertial_m_per_m: ArrayFloat32 = (
             floodplain_side_slope_m_per_m[
+                sorted_idxs[inertial_start:inertial_end]
+            ].astype(np.float32)
+        )
+        self._floodplain_profile_widths_inertial: TwoDArrayFloat32 = (
+            floodplain_profile_widths_m[
                 sorted_idxs[inertial_start:inertial_end]
             ].astype(np.float32)
         )
@@ -675,6 +678,8 @@ class LocalInertial:
                 self._river_storage_perm[inertial_start:inertial_end],
                 self._geometry.geom_inbank,
                 self._stage_buf,
+                self._geometry.geom_floodplain_areas,
+                self._geometry.geom_floodplain_widths,
             )
 
         if self.n_wb > 0:
@@ -753,9 +758,9 @@ class LocalInertial:
             river_width=river_width_inertial,
             shape_exponent=self._shape_exponent_inertial,
             bankfull_depth=bankfull_depth_inertial,
-            floodplain_width=self._floodplain_width_inertial,
             bed_elevation=self._bed_elevation_inertial,
             floodplain_side_slope_m_per_m=self._floodplain_side_slope_inertial_m_per_m,
+            floodplain_profile_widths=self._floodplain_profile_widths_inertial,
             ds_bed_elevation=self._topology.ds_bed_elevation,
             interface_bed_elevation_max=self._routing_topology.interface_bed_elev_max,
             manning_n_sq=self._manning_n_sq_inertial,

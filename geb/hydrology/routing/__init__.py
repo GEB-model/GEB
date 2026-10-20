@@ -31,7 +31,7 @@ from geb.workflows import balance_check
 from geb.workflows.extreme_value_analysis import ReturnPeriodModel
 from geb.workflows.io import read_geom, read_table
 
-from .geometry import estimate_outflow_height, get_lake_factor
+from .geometry import NUM_FLOODPLAIN_LEVELS, estimate_outflow_height, get_lake_factor
 from .kinematic import update_node_kinematic as update_node_kinematic
 from .local_inertial import LocalInertial as LocalInertial
 
@@ -785,20 +785,20 @@ class Routing(Module):
         width_grid: ArrayFloat32,
         depth_grid: ArrayFloat32,
         manning_grid: ArrayFloat32,
-        floodplain_width_grid_m: ArrayFloat32,
+        floodplain_profile_widths_grid_m: TwoDArrayFloat32,
         floodplain_side_slope_grid_m_per_m: ArrayFloat32,
     ) -> None:
         """Update bankfull width, depth, and Manning's n on river reaches GeoDataFrame from routing grid arrays.
 
-        Aggregates bankfull width (meters), depth (meters), and Manning roughness across all grid cells
-        belonging to each river reach, assigning reach-average values directly
-        to self.var.rivers['width'], self.var.rivers['depth'], and self.var.rivers['manning'].
+        Aggregates bankfull width (meters), depth (meters), Manning roughness, and 10-point floodplain profile
+        widths across all grid cells belonging to each river reach, assigning reach-average values directly
+        to self.var.rivers.
 
         Args:
             width_grid: Bankfull channel width per routing grid cell (meters).
             depth_grid: Bankfull channel depth per routing grid cell (meters).
             manning_grid: Channel Manning roughness per routing grid cell (s/m^(1/3)).
-            floodplain_width_grid_m: Floodplain width beyond channel per routing grid cell (meters).
+            floodplain_profile_widths_grid_m: 10-point cross-sectional top widths at fixed depth levels per routing grid cell (meters).
             floodplain_side_slope_grid_m_per_m: Valley side-slope ratio z per routing grid cell (m/m horizontal:vertical).
         """
         valid_river_cell_mask: ArrayBool = self.var.river_ids != -1
@@ -815,7 +815,6 @@ class Routing(Module):
             "river_width_alpha": self.var.river_width_alpha[valid_river_cell_mask],
             "river_width_beta": self.var.river_width_beta[valid_river_cell_mask],
         }
-        grid_dict["floodplain_width_m"] = floodplain_width_grid_m[valid_river_cell_mask]
         grid_dict["floodplain_side_slope_m_per_m"] = floodplain_side_slope_grid_m_per_m[
             valid_river_cell_mask
         ]
@@ -825,9 +824,14 @@ class Routing(Module):
             "manning",
             "river_width_alpha",
             "river_width_beta",
-            "floodplain_width_m",
             "floodplain_side_slope_m_per_m",
         ]
+        for k in range(NUM_FLOODPLAIN_LEVELS):
+            col_k: str = f"floodplain_profile_width_{k}_m"
+            grid_dict[col_k] = floodplain_profile_widths_grid_m[
+                valid_river_cell_mask, k
+            ]
+            cols.append(col_k)
 
         df_grid: pd.DataFrame = pd.DataFrame(grid_dict)
         reach_means: pd.DataFrame = df_grid.groupby("river_id").mean()
@@ -1384,12 +1388,7 @@ class Routing(Module):
             use_simulated_bankfull_q=use_simulated_bankfull_q,
         )
 
-        # 4. Floodplain width and side slope beyond bankfull channel:
-        floodplain_width_m: ArrayFloat32 = np.nan_to_num(
-            self.grid.load2d(self.model.files["grid"]["routing/floodplain_width_m"]),
-            nan=0.0,
-        ).astype(np.float32)
-
+        # 4. Floodplain geometry beyond bankfull channel:
         floodplain_side_slope_m_per_m: ArrayFloat32 = np.nan_to_num(
             self.grid.load2d(
                 self.model.files["grid"]["routing/floodplain_side_slope_m_per_m"]
@@ -1397,15 +1396,24 @@ class Routing(Module):
             nan=2.0,
         ).astype(np.float32)
 
-        self.floodplain_width_m: ArrayFloat32 = floodplain_width_m
+        raw_profile_widths: TwoDArrayFloat32 = np.nan_to_num(
+            self.grid.load3d(
+                self.model.files["grid"]["routing/floodplain_profile_widths_m"],
+                compress=True,
+            ),
+            nan=0.0,
+        ).astype(np.float32)
+        floodplain_profile_widths_m: TwoDArrayFloat32 = raw_profile_widths.T
+
         self.floodplain_side_slope_m_per_m: ArrayFloat32 = floodplain_side_slope_m_per_m
+        self.floodplain_profile_widths_m: TwoDArrayFloat32 = floodplain_profile_widths_m
 
         # Update derived bankfull width, depth, and floodplain geometry to self.var.rivers
         self._update_rivers_geometry(
             width_grid=bankfull_top_width_m,
             depth_grid=bankfull_depth_m,
             manning_grid=self.grid.var.river_mannings,
-            floodplain_width_grid_m=self.floodplain_width_m,
+            floodplain_profile_widths_grid_m=self.floodplain_profile_widths_m,
             floodplain_side_slope_grid_m_per_m=self.floodplain_side_slope_m_per_m,
         )
 
@@ -1501,7 +1509,6 @@ class Routing(Module):
             rivers_gdf=self.var.rivers,
             shape_exponent=shape_exponent,
             bankfull_depth_m=bankfull_depth_m,
-            floodplain_width_m=floodplain_width_m,
             floodplain_side_slope_m_per_m=floodplain_side_slope_m_per_m,
             waterbody_lake_area=self.hydrology.waterbodies.var.lake_area,
             waterbody_lake_factor=waterbody_lake_factor,
@@ -1510,6 +1517,7 @@ class Routing(Module):
             river_storage_alpha=self.var.river_storage_alpha,
             river_storage_beta=self.var.river_storage_beta,
             in_spinup=self.model.in_spinup,
+            floodplain_profile_widths_m=floodplain_profile_widths_m,
             max_threads=self.config["max_threads"],
         )
 
@@ -2379,7 +2387,7 @@ class Routing(Module):
             width_grid=self.var.river_width,
             depth_grid=updated_bankfull_depth,
             manning_grid=self.grid.var.river_mannings,
-            floodplain_width_grid_m=self.floodplain_width_m,
+            floodplain_profile_widths_grid_m=self.floodplain_profile_widths_m,
             floodplain_side_slope_grid_m_per_m=self.floodplain_side_slope_m_per_m,
         )
 

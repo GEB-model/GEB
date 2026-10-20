@@ -681,13 +681,13 @@ def get_gross_irrigation_demand_m3(
             consumption_m: np.float32 = get_potential_irrigation_consumption_m(
                 topwater=topwater[field],
                 root_depth_m=root_depth_m[field],
-                soil_layer_height=soil_layer_height[:, field],
-                field_capacity=field_capacity[:, field],
-                wilting_point=wilting_point[:, field],
-                w=w[:, field],
-                ws=ws[:, field],
+                soil_layer_height=soil_layer_height[field, :],
+                field_capacity=field_capacity[field, :],
+                wilting_point=wilting_point[field, :],
+                w=w[field, :],
+                ws=ws[field, :],
                 saturated_hydraulic_conductivity_m_per_day=saturated_hydraulic_conductivity_m_per_day[
-                    :, field
+                    field, :
                 ],
                 fraction_irrigated_field=fraction_irrigated_field[farmer],
                 max_paddy_water_level_farmer=max_paddy_water_level[farmer],

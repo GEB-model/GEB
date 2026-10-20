@@ -23,7 +23,6 @@ from .geometry import (
     GEOM_IN_BANKFULL_VOLUME,
     GEOM_IN_BED_ELEVATION,
     GEOM_IN_FLOODPLAIN_SIDE_SLOPE_M_PER_M,
-    GEOM_IN_FLOODPLAIN_WIDTH,
     GEOM_IN_INTERFACE_BED_ELEVATION_MAX,
     GEOM_IN_INVERSE_INTERFACE_LENGTH,
     GEOM_IN_INVERSE_LENGTH,
@@ -31,7 +30,8 @@ from .geometry import (
     GEOM_IN_RIVER_WIDTH,
     GEOM_IN_STAGE_VOLUME_COEFFICIENT,
     InertialGeometry,
-    compute_overbank_depth,
+    compute_overbank_depth_and_top_width,
+    compute_top_width_from_overbank_depth,
 )
 from .solver import evaluate_discharge_pow_0_6, solve_inertial_momentum
 from .topology import (
@@ -217,18 +217,22 @@ def _compute_reach_stage_and_cfl_depth(
     reach_idx: int,
     volume_m3: np.float32,
     geom_inbank: TwoDArrayFloat32,
+    geom_floodplain_areas: TwoDArrayFloat32,
+    geom_floodplain_widths: TwoDArrayFloat32,
 ) -> tuple[np.float32, np.float32]:
     """Computes reach water surface elevation and CFL hydraulic depth in a unified single pass.
 
     For in-bank power-law channels, hydraulic depth is analytically:
         h_vol = channel_depth_m * (1 / (shape_exponent + 1))
     which eliminates redundant power-law and top-width calculations. For overbank flows,
-    the quadratic floodplain inundation depth is evaluated once and reused.
+    the 10-point cross-sectional floodplain profile is evaluated.
 
     Args:
         reach_idx: Reach index within local inertial domain.
         volume_m3: Reach storage volume (m³).
         geom_inbank: Compact 2D in-bank reach geometry array (meters, dimensionless).
+        geom_floodplain_areas: Precomputed cumulative cross-sectional areas at 10 fixed profile depth levels (m²).
+        geom_floodplain_widths: Precomputed total top widths at 10 fixed profile depth levels (meters).
 
     Returns:
         A tuple of (water_stage_m, h_volume_m) in meters.
@@ -261,21 +265,17 @@ def _compute_reach_stage_and_cfl_depth(
     overbank_volume: np.float32 = volume_m3 - bankfull_volume_m3
     inv_reach_len: np.float32 = geom_inbank[reach_idx, GEOM_IN_INVERSE_LENGTH]
     bf_width: np.float32 = geom_inbank[reach_idx, GEOM_IN_RIVER_WIDTH]
-    fp_width: np.float32 = geom_inbank[reach_idx, GEOM_IN_FLOODPLAIN_WIDTH]
     fp_slope_m_per_m: np.float32 = geom_inbank[
         reach_idx, GEOM_IN_FLOODPLAIN_SIDE_SLOPE_M_PER_M
     ]
-    floodplain_depth: np.float32 = compute_overbank_depth(
-        overbank_volume_m3=overbank_volume,
-        inverse_reach_length=inv_reach_len,
+    floodplain_depth, top_width = compute_overbank_depth_and_top_width(
+        overbank_area=overbank_volume * inv_reach_len,
         bankfull_width_m=bf_width,
-        floodplain_width_m=fp_width,
+        floodplain_areas=geom_floodplain_areas[reach_idx],
+        floodplain_widths=geom_floodplain_widths[reach_idx],
         floodplain_side_slope_m_per_m=fp_slope_m_per_m,
     )
     stage = bed_elevation + bankfull_depth_m + floodplain_depth
-    top_width: np.float32 = (
-        bf_width + fp_width + np.float32(2.0) * fp_slope_m_per_m * floodplain_depth
-    )
     h_vol = (volume_m3 * inv_reach_len) / max(top_width, np.float32(1e-3))
     return stage, h_vol
 
@@ -285,6 +285,8 @@ def _compute_reach_stage_from_vol(
     reach_idx: int,
     volume_m3: np.float32,
     geom_inbank: TwoDArrayFloat32,
+    geom_floodplain_areas: TwoDArrayFloat32,
+    geom_floodplain_widths: TwoDArrayFloat32,
 ) -> np.float32:
     """Computes reach water surface elevation from storage volume.
 
@@ -292,6 +294,8 @@ def _compute_reach_stage_from_vol(
         reach_idx: Reach index within local inertial domain.
         volume_m3: Reach storage volume (m³).
         geom_inbank: Compact 2D in-bank reach geometry array (meters, dimensionless).
+        geom_floodplain_areas: Precomputed cumulative cross-sectional areas at 10 fixed profile depth levels (m²).
+        geom_floodplain_widths: Precomputed total top widths at 10 fixed profile depth levels (meters).
 
     Returns:
         Water surface elevation (meters).
@@ -300,6 +304,8 @@ def _compute_reach_stage_from_vol(
         reach_idx=reach_idx,
         volume_m3=volume_m3,
         geom_inbank=geom_inbank,
+        geom_floodplain_areas=geom_floodplain_areas,
+        geom_floodplain_widths=geom_floodplain_widths,
     )
     return stage
 
@@ -310,6 +316,8 @@ def _compute_stage_from_storage_inertial(
     river_storage_m3_inertial: ArrayFloat64,
     geom_inbank: TwoDArrayFloat32,
     stage_buf: ArrayFloat32,
+    geom_floodplain_areas: TwoDArrayFloat32,
+    geom_floodplain_widths: TwoDArrayFloat32,
 ) -> None:
     """Computes reach water surface elevation directly from storage volumes.
 
@@ -318,13 +326,19 @@ def _compute_stage_from_storage_inertial(
         river_storage_m3_inertial: Storage volume array for inertial reaches (m³).
         geom_inbank: Precomputed in-bank geometry lookup table.
         stage_buf: Target stage buffer storing reach water surface elevations (meters).
+        geom_floodplain_areas: Precomputed cumulative cross-sectional areas at 10 fixed profile depth levels (m²).
+        geom_floodplain_widths: Precomputed total top widths at 10 fixed profile depth levels (meters).
     """
     for reach_idx in prange(n_inertial):
         reach_volume_m3: np.float32 = max(
             np.float32(river_storage_m3_inertial[reach_idx]), np.float32(0.0)
         )
         stage_buf[reach_idx] = _compute_reach_stage_from_vol(
-            reach_idx, reach_volume_m3, geom_inbank
+            reach_idx,
+            reach_volume_m3,
+            geom_inbank,
+            geom_floodplain_areas,
+            geom_floodplain_widths,
         )
 
 
@@ -336,6 +350,8 @@ def _compute_reach_cfl_depths(
     geom_inbank: TwoDArrayFloat32,
     geom_cfl: TwoDArrayFloat32,
     gravity_acceleration: np.float32,
+    geom_floodplain_areas: TwoDArrayFloat32,
+    geom_floodplain_widths: TwoDArrayFloat32,
 ) -> tuple[np.float32, np.float32, np.float32, np.float32]:
     """Calculates hydraulic depth components and wave celerity for CFL stability evaluation.
 
@@ -346,6 +362,8 @@ def _compute_reach_cfl_depths(
         geom_inbank: In-bank geometry lookup array.
         geom_cfl: CFL parameter matrix.
         gravity_acceleration: Gravitational acceleration (m/s²).
+        geom_floodplain_areas: Precomputed cumulative cross-sectional areas at 10 fixed profile depth levels (m²).
+        geom_floodplain_widths: Precomputed total top widths at 10 fixed profile depth levels (meters).
 
     Returns:
         A tuple of (h_volume, h_flow, h_governing, wave_celerity) in meters and m/s.
@@ -356,6 +374,8 @@ def _compute_reach_cfl_depths(
             reach_idx=reach_idx,
             volume_m3=np.float32(current_volume_m3),
             geom_inbank=geom_inbank,
+            geom_floodplain_areas=geom_floodplain_areas,
+            geom_floodplain_widths=geom_floodplain_widths,
         )
 
     h_flow: np.float32 = np.float32(0.0)
@@ -369,12 +389,14 @@ def _compute_reach_cfl_depths(
         ):
             extra_depth: np.float32 = raw_depth_from_flow - bankfull_depth_m
             bf_width: np.float32 = geom_inbank[reach_idx, GEOM_IN_RIVER_WIDTH]
-            fp_width: np.float32 = geom_inbank[reach_idx, GEOM_IN_FLOODPLAIN_WIDTH]
             fp_slope_m_per_m: np.float32 = geom_inbank[
                 reach_idx, GEOM_IN_FLOODPLAIN_SIDE_SLOPE_M_PER_M
             ]
-            top_width_flow: np.float32 = (
-                bf_width + fp_width + np.float32(2.0) * fp_slope_m_per_m * extra_depth
+            top_width_flow: np.float32 = compute_top_width_from_overbank_depth(
+                overbank_depth_m=extra_depth,
+                bankfull_width_m=bf_width,
+                floodplain_widths=geom_floodplain_widths[reach_idx],
+                side_slope_z=fp_slope_m_per_m,
             )
             width_ratio: np.float32 = bf_width / max(top_width_flow, bf_width)
             h_flow = bankfull_depth_m + (extra_depth * width_ratio)
@@ -394,6 +416,7 @@ def _evaluate_reach_cfl_dt_from_depth(
     geom_inbank: TwoDArrayFloat32,
     geom_cfl: TwoDArrayFloat32,
     dt_f32: np.float32,
+    geom_floodplain_widths: TwoDArrayFloat32,
 ) -> np.float32:
     """Calculates Courant-Friedrichs-Lewy (CFL) stable timestep from precomputed volume depth.
 
@@ -404,6 +427,7 @@ def _evaluate_reach_cfl_dt_from_depth(
         geom_inbank: Compact in-bank geometry table.
         geom_cfl: Precomputed CFL stability parameters table.
         dt_f32: Routing macro-timestep duration (seconds).
+        geom_floodplain_widths: Precomputed total top widths at 10 fixed profile depth levels (meters).
 
     Returns:
         Maximum CFL-stable timestep duration for this reach (seconds).
@@ -422,12 +446,14 @@ def _evaluate_reach_cfl_dt_from_depth(
         ):
             extra_depth: np.float32 = raw_depth_from_flow - bankfull_depth_m
             bf_width: np.float32 = geom_inbank[reach_idx, GEOM_IN_RIVER_WIDTH]
-            fp_width: np.float32 = geom_inbank[reach_idx, GEOM_IN_FLOODPLAIN_WIDTH]
             fp_slope_m_per_m: np.float32 = geom_inbank[
                 reach_idx, GEOM_IN_FLOODPLAIN_SIDE_SLOPE_M_PER_M
             ]
-            top_width_flow: np.float32 = (
-                bf_width + fp_width + np.float32(2.0) * fp_slope_m_per_m * extra_depth
+            top_width_flow: np.float32 = compute_top_width_from_overbank_depth(
+                overbank_depth_m=extra_depth,
+                bankfull_width_m=bf_width,
+                floodplain_widths=geom_floodplain_widths[reach_idx],
+                side_slope_z=fp_slope_m_per_m,
             )
             width_ratio: np.float32 = bf_width / max(top_width_flow, bf_width)
             h_flow = bankfull_depth_m + (extra_depth * width_ratio)
@@ -453,6 +479,8 @@ def _evaluate_reach_cfl_dt(
     geom_inbank: TwoDArrayFloat32,
     geom_cfl: TwoDArrayFloat32,
     dt_f32: np.float32,
+    geom_floodplain_areas: TwoDArrayFloat32,
+    geom_floodplain_widths: TwoDArrayFloat32,
 ) -> np.float32:
     """Calculates Courant-Friedrichs-Lewy (CFL) stable timestep for a single reach.
 
@@ -468,6 +496,8 @@ def _evaluate_reach_cfl_dt(
         geom_inbank: Compact in-bank geometry table.
         geom_cfl: Precomputed CFL stability parameters table.
         dt_f32: Routing macro-timestep duration (seconds).
+        geom_floodplain_areas: Precomputed cumulative cross-sectional areas at 10 fixed profile depth levels (m²).
+        geom_floodplain_widths: Precomputed total top widths at 10 fixed profile depth levels (meters).
 
     Returns:
         Maximum CFL-stable timestep duration for this reach (seconds).
@@ -479,6 +509,8 @@ def _evaluate_reach_cfl_dt(
         reach_idx=reach_idx,
         volume_m3=np.float32(current_volume_m3),
         geom_inbank=geom_inbank,
+        geom_floodplain_areas=geom_floodplain_areas,
+        geom_floodplain_widths=geom_floodplain_widths,
     )
     return _evaluate_reach_cfl_dt_from_depth(
         reach_idx=reach_idx,
@@ -487,6 +519,7 @@ def _evaluate_reach_cfl_dt(
         geom_inbank=geom_inbank,
         geom_cfl=geom_cfl,
         dt_f32=dt_f32,
+        geom_floodplain_widths=geom_floodplain_widths,
     )
 
 
@@ -539,6 +572,8 @@ def _compute_inertial_substeps_cfl(
 
     geom_inbank: TwoDArrayFloat32 = geom.geom_inbank
     geom_cfl: TwoDArrayFloat32 = geom.geom_cfl
+    geom_floodplain_areas: TwoDArrayFloat32 = geom.geom_floodplain_areas
+    geom_floodplain_widths: TwoDArrayFloat32 = geom.geom_floodplain_widths
 
     stage_buf: ArrayFloat32 = buffers.stage_buf
     min_dt_buf: ArrayFloat32 = buffers.min_dt_buf
@@ -657,6 +692,8 @@ def _compute_inertial_substeps_cfl(
             reach_idx=reach_idx,
             volume_m3=reach_vol_m3,
             geom_inbank=geom_inbank,
+            geom_floodplain_areas=geom_floodplain_areas,
+            geom_floodplain_widths=geom_floodplain_widths,
         )
         stage_buf[reach_idx] = stage
 
@@ -668,6 +705,7 @@ def _compute_inertial_substeps_cfl(
             geom_inbank=geom_inbank,
             geom_cfl=geom_cfl,
             dt_f32=dt_f32,
+            geom_floodplain_widths=geom_floodplain_widths,
         )
 
     # Find the most restrictive reach in the entire domain and compute the required sub-steps
@@ -683,6 +721,8 @@ def _compute_inertial_substeps_cfl(
         geom_inbank=geom_inbank,
         geom_cfl=geom_cfl,
         gravity_acceleration=gravity_acceleration,
+        geom_floodplain_areas=geom_floodplain_areas,
+        geom_floodplain_widths=geom_floodplain_widths,
     )
     limiting_flow: np.float32 = total_flow_rate_buf[limiting_reach_idx]
     limiting_storage: np.float32 = np.float32(
@@ -845,6 +885,8 @@ def _solve_momentum_loop(
     inertial_up_indices = topo.inertial_up_indices
 
     geom_inbank = geom.geom_inbank
+    geom_floodplain_areas = geom.geom_floodplain_areas
+    geom_floodplain_widths = geom.geom_floodplain_widths
     pit_slope_inertial = geom.pit_slope_inertial
 
     stage_buf = buffers.stage_buf
@@ -1023,6 +1065,7 @@ def _apply_reverse_flow_limits(
 def _apply_confluence_inflow_limits(
     substep_discharge_m3_s: ArrayFloat32,
     geom_inbank: TwoDArrayFloat32,
+    geom_floodplain_widths: TwoDArrayFloat32,
     topo: InertialTopology,
     buffers: SubstepBuffers,
     dt_substep_f32: np.float32,
@@ -1042,6 +1085,7 @@ def _apply_confluence_inflow_limits(
     Args:
         substep_discharge_m3_s: Primary reach discharge array updated in-place (m³/s).
         geom_inbank: Compact 2D in-bank reach geometry table.
+        geom_floodplain_widths: Precomputed total top widths at 10 fixed profile depth levels (meters).
         topo: Network connectivity and topological ordering structure.
         buffers: Pre-allocated workspace scratch buffers.
         dt_substep_f32: Current adaptive sub-timestep duration (seconds).
@@ -1107,10 +1151,17 @@ def _apply_confluence_inflow_limits(
         inv_length_c: np.float32 = geom_inbank[reach_idx, GEOM_IN_INVERSE_LENGTH]
         reach_length_c: np.float32 = np.float32(1.0) / inv_length_c
         bf_width_c: np.float32 = geom_inbank[reach_idx, GEOM_IN_RIVER_WIDTH]
-        fp_width_c: np.float32 = geom_inbank[reach_idx, GEOM_IN_FLOODPLAIN_WIDTH]
+        fp_slope_c: np.float32 = geom_inbank[
+            reach_idx, GEOM_IN_FLOODPLAIN_SIDE_SLOPE_M_PER_M
+        ]
 
         if depth_c > bankfull_depth_c:
-            top_width_c: np.float32 = bf_width_c + fp_width_c
+            top_width_c: np.float32 = compute_top_width_from_overbank_depth(
+                overbank_depth_m=depth_c - bankfull_depth_c,
+                bankfull_width_m=bf_width_c,
+                floodplain_widths=geom_floodplain_widths[reach_idx],
+                side_slope_z=fp_slope_c,
+            )
         else:
             depth_ratio: np.float32 = depth_c / max(bankfull_depth_c, np.float32(1e-3))
             inv_shape_exp_plus_one: np.float32 = geom_inbank[
@@ -1278,6 +1329,8 @@ def _update_continuity_and_cfl(
     inertial_up_indices = topo.inertial_up_indices
 
     geom_inbank = geom.geom_inbank
+    geom_floodplain_areas = geom.geom_floodplain_areas
+    geom_floodplain_widths = geom.geom_floodplain_widths
     geom_cfl = geom.geom_cfl
 
     wb_release_volume_substep = buffers.wb_release_volume_substep
@@ -1385,7 +1438,11 @@ def _update_continuity_and_cfl(
             # 1. Calculate water stage and CFL hydraulic depth in a single pass
             reach_volume: np.float32 = np.float32(new_storage)
             stage, h_vol = _compute_reach_stage_and_cfl_depth(
-                reach_idx, reach_volume, geom_inbank
+                reach_idx,
+                reach_volume,
+                geom_inbank,
+                geom_floodplain_areas,
+                geom_floodplain_widths,
             )
             stage_buf[reach_idx] = stage
 
@@ -1409,6 +1466,7 @@ def _update_continuity_and_cfl(
                 geom_inbank=geom_inbank,
                 geom_cfl=geom_cfl,
                 dt_f32=dt_f32,
+                geom_floodplain_widths=geom_floodplain_widths,
             )
             if reach_dt < b_min:
                 b_min = reach_dt
@@ -1517,6 +1575,8 @@ def _run_inertial_substeps(
             river_storage_m3_inertial,
             geom.geom_inbank,
             buffers.stage_buf,
+            geom.geom_floodplain_areas,
+            geom.geom_floodplain_widths,
         )
 
     dt_substep: np.float32 = dt_f32 / np.float32(num_inertial_substeps)
@@ -1598,6 +1658,7 @@ def _run_inertial_substeps(
         _apply_confluence_inflow_limits(
             substep_discharge_m3_s=substep_discharge_m3_s,
             geom_inbank=geom.geom_inbank,
+            geom_floodplain_widths=geom.geom_floodplain_widths,
             topo=topo,
             buffers=buffers,
             dt_substep_f32=dt_substep,

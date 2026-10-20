@@ -53,6 +53,7 @@ def _make_local_inertial(
     bankfull_depth_m: np.ndarray | float | None = None,
     floodplain_width_m: np.ndarray | None = None,
     floodplain_side_slope_m_per_m: np.ndarray | float | None = None,
+    floodplain_profile_widths_m: np.ndarray | None = None,
     waterbody_lake_area: np.ndarray | None = None,
     waterbody_lake_factor: np.ndarray | None = None,
     waterbody_outflow_height: np.ndarray | None = None,
@@ -120,6 +121,17 @@ def _make_local_inertial(
             n_cells, floodplain_side_slope_m_per_m, dtype=np.float32
         )
 
+    from geb.hydrology.routing.geometry import FLOODPLAIN_PROFILE_DEPTHS
+
+    if floodplain_profile_widths_m is None:
+        floodplain_profile_widths_m = np.zeros((n_cells, 10), dtype=np.float32)
+        for k, depth in enumerate(FLOODPLAIN_PROFILE_DEPTHS):
+            floodplain_profile_widths_m[:, k] = (
+                river_width
+                + floodplain_width_m
+                + np.float32(2.0) * floodplain_side_slope_m_per_m * np.float32(depth)
+            )
+
     if river_storage_alpha is None:
         river_storage_alpha = np.full(n_cells, 1.0, dtype=np.float32)
     if river_storage_beta is None:
@@ -154,8 +166,8 @@ def _make_local_inertial(
         min_slope=min_slope,
         shape_exponent=shape_exponent,
         bankfull_depth_m=bankfull_depth_m,
-        floodplain_width_m=floodplain_width_m,
         floodplain_side_slope_m_per_m=floodplain_side_slope_m_per_m,
+        floodplain_profile_widths_m=floodplain_profile_widths_m,
         waterbody_lake_area=waterbody_lake_area,
         waterbody_lake_factor=waterbody_lake_factor,
         waterbody_outflow_height=waterbody_outflow_height,
@@ -2709,8 +2721,8 @@ def test_local_inertial_waterbody_parameters_required(
             rivers_gdf=rivers_gdf,
             shape_exponent=shape_exp,
             bankfull_depth_m=bk_depth,
-            floodplain_width_m=fp_width,
             floodplain_side_slope_m_per_m=np.full(n_cells, 2.0, dtype=np.float32),
+            floodplain_profile_widths_m=np.zeros((n_cells, 10), dtype=np.float32),
             waterbody_lake_area=np.ones(2, dtype=np.float32),  # n_wb is 0
             waterbody_lake_factor=np.zeros(0, dtype=np.float32),
             waterbody_outflow_height=np.zeros(0, dtype=np.float32),
@@ -3139,10 +3151,6 @@ def test_local_inertial_volume_limiter_subcritical_preservation() -> None:
         GEOM_IN_SHAPE_EXPONENT,
         GEOM_IN_STAGE_VOLUME_COEFFICIENT,
         GEOM_IN_WIDTH_OVER_SQRT_BANKFULL_DEPTH,
-        GEOM_OV_BANKFULL_PERIMETER,
-        GEOM_OV_FLOODPLAIN_WIDTH,
-        GEOM_OV_NUM_COLS,
-        GEOM_OV_RIVER_WIDTH,
     )
     from geb.hydrology.routing.solver import solve_inertial_momentum
 
@@ -3167,11 +3175,6 @@ def test_local_inertial_volume_limiter_subcritical_preservation() -> None:
     geom_inbank[0, GEOM_IN_SHAPE_EXPONENT] = np.float32(0.5)
     geom_inbank[0, GEOM_IN_RIVER_WIDTH] = np.float32(20.0)
     geom_inbank[0, GEOM_IN_BANKFULL_PERIMETER] = np.float32(25.0)
-
-    geom_overbank: np.ndarray = np.zeros((1, GEOM_OV_NUM_COLS), dtype=np.float32)
-    geom_overbank[0, GEOM_OV_RIVER_WIDTH] = np.float32(20.0)
-    geom_overbank[0, GEOM_OV_FLOODPLAIN_WIDTH] = np.float32(0.0)
-    geom_overbank[0, GEOM_OV_BANKFULL_PERIMETER] = np.float32(25.0)
 
     inv_dt_substep: np.float32 = np.float32(0.1)  # dt = 10s
     g_dt_substep: np.float32 = np.float32(9.80665 * 10.0)
@@ -4213,6 +4216,12 @@ def test_router_save_and_restore(tmp_path: Path) -> None:
     )
     bankfull_depth: ArrayFloat32 = np.full(n_cells, 2.0, dtype=np.float32)
 
+    from geb.hydrology.routing.geometry import FLOODPLAIN_PROFILE_DEPTHS
+
+    fp_profile_widths_test = np.zeros((n_cells, 10), dtype=np.float32)
+    for k, depth in enumerate(FLOODPLAIN_PROFILE_DEPTHS):
+        fp_profile_widths_test[:, k] = 20.0 + 2.0 * 2.0 * depth
+
     router_A: LocalInertial = _make_local_inertial(
         dt=3600,
         river_network=river_network,
@@ -4223,6 +4232,7 @@ def test_router_save_and_restore(tmp_path: Path) -> None:
         bankfull_depth_m=bankfull_depth,
         use_kinematic=use_kinematic,
         rivers_gdf=rivers_gdf,
+        floodplain_profile_widths_m=fp_profile_widths_test,
     )
 
     storage_A: np.ndarray = np.array([50.0, 100.0, 150.0, 200.0], dtype=np.float64)
@@ -4326,6 +4336,7 @@ def test_router_save_and_restore(tmp_path: Path) -> None:
         bankfull_depth_m=bankfull_depth,
         use_kinematic=use_kinematic,
         rivers_gdf=rivers_gdf,
+        floodplain_profile_widths_m=fp_profile_widths_test,
     )
 
     # Restore stage and storage on Router B
@@ -4384,7 +4395,6 @@ def test_evaluate_reach_cfl_pure_wave_celerity_and_overbank_capping() -> None:
         GEOM_CFL_NUM_COLS,
         GEOM_IN_BANKFULL_DEPTH,
         GEOM_IN_BANKFULL_VOLUME,
-        GEOM_IN_FLOODPLAIN_WIDTH,
         GEOM_IN_INVERSE_LENGTH,
         GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE,
         GEOM_IN_NUM_COLS,
@@ -4400,12 +4410,19 @@ def test_evaluate_reach_cfl_pure_wave_celerity_and_overbank_capping() -> None:
     geom_inbank[0, GEOM_IN_INVERSE_LENGTH] = np.float32(1.0 / 1000.0)
     geom_inbank[0, GEOM_IN_INVERSE_SHAPE_EXPONENT_PLUS_ONE] = np.float32(1.0 / 1.5)
     geom_inbank[0, GEOM_IN_RIVER_WIDTH] = np.float32(10.0)
-    geom_inbank[0, GEOM_IN_FLOODPLAIN_WIDTH] = np.float32(200.0)
 
     cfl_constant: np.float32 = np.float32(0.7 * 1000.0 / np.sqrt(9.80665))
     geom_cfl[0, GEOM_CFL_CONSTANT] = cfl_constant
     # Keep manning coefficient small so volume depth governs
     geom_cfl[0, GEOM_CFL_MANNING_COEFFICIENT] = np.float32(0.1)
+
+    geom_floodplain_areas = np.zeros((1, 10), dtype=np.float32)
+    geom_floodplain_widths = np.zeros((1, 10), dtype=np.float32)
+    from geb.hydrology.routing.geometry import FLOODPLAIN_PROFILE_DEPTHS
+
+    for k, depth in enumerate(FLOODPLAIN_PROFILE_DEPTHS):
+        geom_floodplain_widths[0, k] = 10.0 + 200.0 + 2.0 * 2.0 * depth
+        geom_floodplain_areas[0, k] = (10.0 + 200.0) * depth + 2.0 * (depth**2)
 
     # 1. Constant stored volume: dt should NOT depend on flow rate Q (pure celerity c = sqrt(g*h))
     vol: float = 10000.0
@@ -4416,6 +4433,8 @@ def test_evaluate_reach_cfl_pure_wave_celerity_and_overbank_capping() -> None:
         geom_inbank=geom_inbank,
         geom_cfl=geom_cfl,
         dt_f32=np.float32(3600.0),
+        geom_floodplain_areas=geom_floodplain_areas,
+        geom_floodplain_widths=geom_floodplain_widths,
     )
     dt_high_q: np.float32 = _evaluate_reach_cfl_dt(
         reach_idx=0,
@@ -4424,6 +4443,8 @@ def test_evaluate_reach_cfl_pure_wave_celerity_and_overbank_capping() -> None:
         geom_inbank=geom_inbank,
         geom_cfl=geom_cfl,
         dt_f32=np.float32(3600.0),
+        geom_floodplain_areas=geom_floodplain_areas,
+        geom_floodplain_widths=geom_floodplain_widths,
     )
     # Both should be identical because in-bank depth from volume governs,
     # and advective velocity v does not reduce the local inertial timestep.
@@ -4441,6 +4462,8 @@ def test_evaluate_reach_cfl_pure_wave_celerity_and_overbank_capping() -> None:
         geom_inbank=geom_inbank,
         geom_cfl=geom_cfl,
         dt_f32=np.float32(3600.0),
+        geom_floodplain_areas=geom_floodplain_areas,
+        geom_floodplain_widths=geom_floodplain_widths,
     )
     # The effective depth is moderated, so dt_flood_dry is safely above 10s rather than collapsing
     assert dt_flood_dry > 10.0

@@ -124,12 +124,19 @@ def run_channel_routing_simulation(
     fp_slopes: ArrayFloat32 = np.full(
         n_reaches, floodplain_side_slope_m_per_m, dtype=np.float32
     )
+    from geb.hydrology.routing.geometry import (
+        FLOODPLAIN_PROFILE_DEPTHS,
+        NUM_FLOODPLAIN_LEVELS,
+    )
+
+    fp_profiles = np.zeros((n_reaches, NUM_FLOODPLAIN_LEVELS), dtype=np.float32)
+    for k, d in enumerate(FLOODPLAIN_PROFILE_DEPTHS):
+        fp_profiles[:, k] = widths + fp_widths + 2.0 * fp_slopes * d
     geom = build_inertial_geometry(
         river_length=lengths,
         river_width=widths,
         shape_exponent=shapes,
         bankfull_depth=bankfull_depths,
-        floodplain_width=fp_widths,
         bed_elevation=bed_elevation_m,
         ds_bed_elevation=ds_bed_elevation,
         interface_bed_elevation_max=interface_bed_elevation_max,
@@ -137,6 +144,7 @@ def run_channel_routing_simulation(
         inv_dx_interface=inv_dx_interface,
         pit_slope=pit_slope,
         floodplain_side_slope_m_per_m=fp_slopes,
+        floodplain_profile_widths=fp_profiles,
     )
 
     # Initialize reach storage volumes from initial depths
@@ -176,6 +184,8 @@ def run_channel_routing_simulation(
             k,
             np.float32(storage_m3[k]),
             geom.geom_inbank,
+            geom.geom_floodplain_areas,
+            geom.geom_floodplain_widths,
         )
     sampled_stages.append(initial_stages.copy())
     sampled_times.append(0.0)
@@ -191,6 +201,8 @@ def run_channel_routing_simulation(
                 k,
                 np.float32(storage_m3[k]),
                 geom.geom_inbank,
+                geom.geom_floodplain_areas,
+                geom.geom_floodplain_widths,
             )
 
         # 2. Solve interface discharges via solve_inertial_momentum

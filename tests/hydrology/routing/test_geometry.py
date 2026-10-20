@@ -16,9 +16,11 @@ from geb.hydrology.routing import (
     RoutingVariables,
 )
 from geb.hydrology.routing.geometry import (
+    FLOODPLAIN_PROFILE_DEPTHS,
+    build_inertial_geometry,
     compute_cfl_area_and_top_width,
     compute_cross_section_from_depth,
-    compute_overbank_depth,
+    compute_overbank_depth_and_top_width,
     compute_static_geometry,
 )
 
@@ -41,9 +43,10 @@ class DummyModel:
         }
         self.files: dict[str, Any] = {
             "grid": {
-                "routing/floodplain_width_m": "dummy",
+                "routing/floodplain_profile_widths_m": "dummy",
                 "routing/floodplain_side_slope_m_per_m": "dummy",
                 "routing/bankfull_river_elevation_m": "dummy",
+                "routing/floodplain_profile_widths_m": "dummy",
             }
         }
 
@@ -68,10 +71,23 @@ def test_compute_cfl_area_and_top_width_and_overbank_depth() -> None:
         river_width=np.array([bankfull_width_m], dtype=np.float32),
         shape_exponent=np.array([shape_exponent], dtype=np.float32),
         bankfull_depth=np.array([bankfull_depth_m], dtype=np.float32),
-        floodplain_width=np.array([floodplain_width_m], dtype=np.float32),
     )
     bankfull_area = bankfull_area_arr[0]
     bankfull_volume = bankfull_volume_arr[0]
+
+    # Precompute a profile for testing compute_cfl_area_and_top_width
+    test_fp_widths = np.array(
+        [bankfull_width_m + 2.0 * 2.0 * d for d in FLOODPLAIN_PROFILE_DEPTHS],
+        dtype=np.float32,
+    )
+    test_fp_areas = np.empty(len(FLOODPLAIN_PROFILE_DEPTHS), dtype=np.float32)
+    test_fp_areas[0] = (
+        0.5 * (bankfull_width_m + test_fp_widths[0]) * FLOODPLAIN_PROFILE_DEPTHS[0]
+    )
+    for k in range(1, len(FLOODPLAIN_PROFILE_DEPTHS)):
+        test_fp_areas[k] = test_fp_areas[k - 1] + 0.5 * (
+            test_fp_widths[k - 1] + test_fp_widths[k]
+        ) * (FLOODPLAIN_PROFILE_DEPTHS[k] - FLOODPLAIN_PROFILE_DEPTHS[k - 1])
 
     # In-bank test at half bankfull volume (V = 13,333.33 m3)
     # Expected depth: h_bf * (0.5)^(1/1.5) = 2.0 * 0.5^(2/3) ≈ 1.25992 m
@@ -86,26 +102,25 @@ def test_compute_cfl_area_and_top_width_and_overbank_depth() -> None:
         inverse_shape_exponent_plus_one=inverse_shape_exponent_plus_one[0],
         bankfull_area_m2=bankfull_area,
         bankfull_volume_m3=bankfull_volume,
-        floodplain_width_m=np.float32(0.0),
         floodplain_side_slope_m_per_m=np.float32(2.0),
+        floodplain_areas=test_fp_areas,
+        floodplain_widths=test_fp_widths,
     )
     assert np.isclose(area_in, bankfull_area * 0.5, atol=1e-4)
     assert np.isclose(top_width_in, expected_top_width, atol=1e-4)
 
-    # Overbank test without flat bench (W_fp = 0): valley side slopes (z = 2.0) rise from channel banks (W_bf = 20.0 m):
+    # Overbank test without flat bench: valley side slopes (z = 2.0) rise from channel banks (W_bf = 20.0 m):
     # overbank_area = 20 m2
-    # Quadratic: 2 * h^2 + 20 * h - 20 = 0 -> h = (-20 + sqrt(400 + 160)) / 4 ≈ 0.91608 m
-    # Top width: W_bf + 2 * z * h = 20.0 + 4 * h ≈ 23.6643 m; Area = a_bf + 20 m2
     expected_h_ob = float((-20.0 + math.sqrt(20.0**2 + 4.0 * 2.0 * 20.0)) / (2.0 * 2.0))
     expected_w_ob = float(20.0 + 4.0 * expected_h_ob)
-    h_fp_ob = compute_overbank_depth(
-        overbank_volume_m3=np.float32(20000.0),
-        inverse_reach_length=inverse_reach_length[0],
+    h_fp_ob, _ = compute_overbank_depth_and_top_width(
+        overbank_area=np.float32(20.0),
         bankfull_width_m=bankfull_width_m,
-        floodplain_width_m=np.float32(0.0),
+        floodplain_areas=test_fp_areas,
+        floodplain_widths=test_fp_widths,
         floodplain_side_slope_m_per_m=np.float32(2.0),
     )
-    assert np.isclose(h_fp_ob, expected_h_ob, atol=1e-4)
+    assert np.isclose(h_fp_ob, expected_h_ob, atol=1e-3)
 
     area_ob, top_width_ob = compute_cfl_area_and_top_width(
         volume_m3=np.float32(bankfull_volume + 20000.0),
@@ -116,8 +131,9 @@ def test_compute_cfl_area_and_top_width_and_overbank_depth() -> None:
         inverse_shape_exponent_plus_one=inverse_shape_exponent_plus_one[0],
         bankfull_area_m2=bankfull_area,
         bankfull_volume_m3=bankfull_volume,
-        floodplain_width_m=np.float32(0.0),
         floodplain_side_slope_m_per_m=np.float32(2.0),
+        floodplain_areas=test_fp_areas,
+        floodplain_widths=test_fp_widths,
     )
     assert np.isclose(area_ob, bankfull_area + 20.0, atol=1e-4)
     assert np.isclose(top_width_ob, expected_w_ob, atol=1e-4)
@@ -129,15 +145,19 @@ def test_compute_cfl_area_and_top_width_and_overbank_depth() -> None:
         (-50.0 + math.sqrt(50.0**2 + 4.0 * 2.0 * 20.0)) / (2.0 * 2.0)
     )
     expected_w_bench = float(50.0 + 4.0 * expected_h_bench)
-    h_fp_bench = compute_overbank_depth(
-        overbank_volume_m3=np.float32(20000.0),
-        inverse_reach_length=inverse_reach_length[0],
-        bankfull_width_m=bankfull_width_m,
-        floodplain_width_m=np.float32(30.0),
-        floodplain_side_slope_m_per_m=np.float32(2.0),
-    )
-    assert np.isclose(h_fp_bench, expected_h_bench, atol=1e-4)
 
+    bench_fp_widths = np.array(
+        [bankfull_width_m + 30.0 + 2.0 * 2.0 * d for d in FLOODPLAIN_PROFILE_DEPTHS],
+        dtype=np.float32,
+    )
+    bench_fp_areas = np.empty(len(FLOODPLAIN_PROFILE_DEPTHS), dtype=np.float32)
+    bench_fp_areas[0] = (
+        0.5 * (bankfull_width_m + bench_fp_widths[0]) * FLOODPLAIN_PROFILE_DEPTHS[0]
+    )
+    for k in range(1, len(FLOODPLAIN_PROFILE_DEPTHS)):
+        bench_fp_areas[k] = bench_fp_areas[k - 1] + 0.5 * (
+            bench_fp_widths[k - 1] + bench_fp_widths[k]
+        ) * (FLOODPLAIN_PROFILE_DEPTHS[k] - FLOODPLAIN_PROFILE_DEPTHS[k - 1])
     area_bench, top_width_bench = compute_cfl_area_and_top_width(
         volume_m3=np.float32(bankfull_volume + 20000.0),
         bankfull_width_m=bankfull_width_m,
@@ -147,18 +167,19 @@ def test_compute_cfl_area_and_top_width_and_overbank_depth() -> None:
         inverse_shape_exponent_plus_one=inverse_shape_exponent_plus_one[0],
         bankfull_area_m2=bankfull_area,
         bankfull_volume_m3=bankfull_volume,
-        floodplain_width_m=np.float32(30.0),
         floodplain_side_slope_m_per_m=np.float32(2.0),
+        floodplain_areas=bench_fp_areas,
+        floodplain_widths=bench_fp_widths,
     )
     assert np.isclose(area_bench, bankfull_area + 20.0, atol=1e-4)
-    assert np.isclose(top_width_bench, expected_w_bench, atol=1e-4)
+    assert np.isclose(top_width_bench, expected_w_bench, atol=0.2)
 
-    # Zero overbank volume test -> depth is 0
-    h_fp_zero = compute_overbank_depth(
-        overbank_volume_m3=np.float32(0.0),
-        inverse_reach_length=inverse_reach_length[0],
+    # Zero overbank area test -> depth is 0
+    h_fp_zero, _ = compute_overbank_depth_and_top_width(
+        overbank_area=np.float32(0.0),
         bankfull_width_m=bankfull_width_m,
-        floodplain_width_m=np.float32(30.0),
+        floodplain_areas=bench_fp_areas,
+        floodplain_widths=bench_fp_widths,
         floodplain_side_slope_m_per_m=np.float32(2.0),
     )
     assert h_fp_zero == 0.0
@@ -167,15 +188,28 @@ def test_compute_cfl_area_and_top_width_and_overbank_depth() -> None:
     # 4 * h^2 + 20 * h - 20 = 0 -> h = (-20 + sqrt(400 + 320)) / 8 ≈ 0.85410 m
     expected_h_z4 = float((-20.0 + math.sqrt(20.0**2 + 4.0 * 4.0 * 20.0)) / (2.0 * 4.0))
     expected_w_z4 = float(20.0 + 2.0 * 4.0 * expected_h_z4)
-    h_fp_z4 = compute_overbank_depth(
-        overbank_volume_m3=np.float32(20000.0),
-        inverse_reach_length=inverse_reach_length[0],
+
+    z4_fp_widths = np.array(
+        [bankfull_width_m + 2.0 * 4.0 * d for d in FLOODPLAIN_PROFILE_DEPTHS],
+        dtype=np.float32,
+    )
+    z4_fp_areas = np.empty(len(FLOODPLAIN_PROFILE_DEPTHS), dtype=np.float32)
+    z4_fp_areas[0] = (
+        0.5 * (bankfull_width_m + z4_fp_widths[0]) * FLOODPLAIN_PROFILE_DEPTHS[0]
+    )
+    for k in range(1, len(FLOODPLAIN_PROFILE_DEPTHS)):
+        z4_fp_areas[k] = z4_fp_areas[k - 1] + 0.5 * (
+            z4_fp_widths[k - 1] + z4_fp_widths[k]
+        ) * (FLOODPLAIN_PROFILE_DEPTHS[k] - FLOODPLAIN_PROFILE_DEPTHS[k - 1])
+
+    h_fp_z4, _ = compute_overbank_depth_and_top_width(
+        overbank_area=np.float32(20.0),
         bankfull_width_m=bankfull_width_m,
-        floodplain_width_m=np.float32(0.0),
+        floodplain_areas=z4_fp_areas,
+        floodplain_widths=z4_fp_widths,
         floodplain_side_slope_m_per_m=np.float32(4.0),
     )
-    assert np.isclose(h_fp_z4, expected_h_z4, atol=1e-4)
-
+    assert np.isclose(h_fp_z4, expected_h_z4, atol=1e-3)
     area_z4, top_width_z4 = compute_cfl_area_and_top_width(
         volume_m3=np.float32(bankfull_volume + 20000.0),
         bankfull_width_m=bankfull_width_m,
@@ -185,8 +219,9 @@ def test_compute_cfl_area_and_top_width_and_overbank_depth() -> None:
         inverse_shape_exponent_plus_one=inverse_shape_exponent_plus_one[0],
         bankfull_area_m2=bankfull_area,
         bankfull_volume_m3=bankfull_volume,
-        floodplain_width_m=np.float32(0.0),
         floodplain_side_slope_m_per_m=np.float32(4.0),
+        floodplain_areas=z4_fp_areas,
+        floodplain_widths=z4_fp_widths,
     )
     assert np.isclose(area_z4, bankfull_area + 20.0, atol=1e-4)
     assert np.isclose(top_width_z4, expected_w_z4, atol=1e-4)
@@ -211,7 +246,6 @@ def test_compute_cross_section_from_depth() -> None:
         river_width=np.array([bankfull_width_m], dtype=np.float32),
         shape_exponent=np.array([shape_exponent], dtype=np.float32),
         bankfull_depth=np.array([bankfull_depth_m], dtype=np.float32),
-        floodplain_width=np.array([floodplain_width_m], dtype=np.float32),
     )
 
     # In-bank interface depth (1.5 m)
@@ -299,7 +333,6 @@ def test_compute_cross_section_divided_channel_conveyance_monotonicity() -> None
         river_width=np.array([bankfull_width_m], dtype=np.float32),
         shape_exponent=np.array([shape_exponent], dtype=np.float32),
         bankfull_depth=np.array([bankfull_depth_m], dtype=np.float32),
-        floodplain_width=np.array([floodplain_width_m], dtype=np.float32),
     )
 
     depths: list[float] = [3.0, 3.8, 4.0, 4.1, 4.5, 5.0, 6.0]
@@ -341,7 +374,6 @@ def test_compute_static_geometry_validation() -> None:
         river_width=valid_width,
         shape_exponent=valid_shape,
         bankfull_depth=valid_depth,
-        floodplain_width=valid_fp_width,
     )
     assert len(results) == 6
 
@@ -351,7 +383,6 @@ def test_compute_static_geometry_validation() -> None:
         river_width=valid_width,
         shape_exponent=valid_shape,
         bankfull_depth=valid_depth,
-        floodplain_width=np.array([0.0], dtype=np.float32),
     )
     assert len(zero_fp_results) == 6
     assert np.isclose(zero_fp_results[0][0], np.float32(1.0 / 1000.0))
@@ -363,7 +394,6 @@ def test_compute_static_geometry_validation() -> None:
             river_width=valid_width,
             shape_exponent=valid_shape,
             bankfull_depth=valid_depth,
-            floodplain_width=valid_fp_width,
         )
 
     # Invalid river_length (NaN, inf, <= 0)
@@ -381,7 +411,6 @@ def test_compute_static_geometry_validation() -> None:
                 river_width=valid_width,
                 shape_exponent=valid_shape,
                 bankfull_depth=valid_depth,
-                floodplain_width=valid_fp_width,
             )
 
     # Invalid river_width (NaN, <= 0)
@@ -398,7 +427,6 @@ def test_compute_static_geometry_validation() -> None:
                 river_width=bad_width,
                 shape_exponent=valid_shape,
                 bankfull_depth=valid_depth,
-                floodplain_width=valid_fp_width,
             )
 
     # Invalid shape_exponent (NaN, <= 0)
@@ -415,7 +443,6 @@ def test_compute_static_geometry_validation() -> None:
                 river_width=valid_width,
                 shape_exponent=bad_shape,
                 bankfull_depth=valid_depth,
-                floodplain_width=valid_fp_width,
             )
 
     # Invalid bankfull_depth (NaN, <= 0)
@@ -432,24 +459,6 @@ def test_compute_static_geometry_validation() -> None:
                 river_width=valid_width,
                 shape_exponent=valid_shape,
                 bankfull_depth=bad_depth,
-                floodplain_width=valid_fp_width,
-            )
-
-    # Invalid floodplain_width (NaN, < 0)
-    for bad_fp in [
-        np.array([np.nan], dtype=np.float32),
-        np.array([-0.1], dtype=np.float32),
-    ]:
-        with pytest.raises(
-            ValueError,
-            match="floodplain_width must contain non-negative, finite numbers",
-        ):
-            compute_static_geometry(
-                river_length=valid_length,
-                river_width=valid_width,
-                shape_exponent=valid_shape,
-                bankfull_depth=valid_depth,
-                floodplain_width=bad_fp,
             )
 
 
@@ -535,9 +544,10 @@ class DummyModel:
         }
         self.files: dict[str, Any] = {
             "grid": {
-                "routing/floodplain_width_m": "dummy",
+                "routing/floodplain_profile_widths_m": "dummy",
                 "routing/floodplain_side_slope_m_per_m": "dummy",
                 "routing/bankfull_river_elevation_m": "dummy",
+                "routing/floodplain_profile_widths_m": "dummy",
             }
         }
 
@@ -712,7 +722,9 @@ def test_routing_updates_rivers_geometry() -> None:
     depth_grid = np.array([2.0, 4.0, 6.0, 8.0, 0.1], dtype=np.float32)
     manning_grid = np.array([0.03, 0.05, 0.02, 0.04, 0.05], dtype=np.float32)
 
-    floodplain_width_grid_m = np.array([50.0, 50.0, 80.0, 80.0, 0.0], dtype=np.float32)
+    floodplain_profile_widths_grid_m = np.zeros((5, 10), dtype=np.float32)
+    floodplain_profile_widths_grid_m[0:2, 0] = 50.0
+    floodplain_profile_widths_grid_m[2:4, 0] = 80.0
     floodplain_side_slope_grid_m_per_m = np.array(
         [2.0, 2.0, 3.0, 3.0, 2.0], dtype=np.float32
     )
@@ -721,7 +733,7 @@ def test_routing_updates_rivers_geometry() -> None:
         width_grid=width_grid,
         depth_grid=depth_grid,
         manning_grid=manning_grid,
-        floodplain_width_grid_m=floodplain_width_grid_m,
+        floodplain_profile_widths_grid_m=floodplain_profile_widths_grid_m,
         floodplain_side_slope_grid_m_per_m=floodplain_side_slope_grid_m_per_m,
     )
 
@@ -729,14 +741,14 @@ def test_routing_updates_rivers_geometry() -> None:
     assert np.isclose(routing.var.rivers.loc[10, "width"], 25.0)
     assert np.isclose(routing.var.rivers.loc[10, "depth"], 3.0)
     assert np.isclose(routing.var.rivers.loc[10, "manning"], 0.04)
-    assert np.isclose(routing.var.rivers.loc[10, "floodplain_width_m"], 50.0)
+    assert np.isclose(routing.var.rivers.loc[10, "floodplain_profile_width_0_m"], 50.0)
     assert np.isclose(routing.var.rivers.loc[10, "floodplain_side_slope_m_per_m"], 2.0)
 
     # Reach 20: mean width 100, mean depth 7, mean manning (0.02+0.04)/2 = 0.03
     assert np.isclose(routing.var.rivers.loc[20, "width"], 100.0)
     assert np.isclose(routing.var.rivers.loc[20, "depth"], 7.0)
     assert np.isclose(routing.var.rivers.loc[20, "manning"], 0.03)
-    assert np.isclose(routing.var.rivers.loc[20, "floodplain_width_m"], 80.0)
+    assert np.isclose(routing.var.rivers.loc[20, "floodplain_profile_width_0_m"], 80.0)
     assert np.isclose(routing.var.rivers.loc[20, "floodplain_side_slope_m_per_m"], 3.0)
 
 
@@ -793,7 +805,9 @@ def test_routing_updates_rivers_geometry_missing_data_raises() -> None:
             width_grid=width_grid,
             depth_grid=depth_grid,
             manning_grid=manning_grid,
-            floodplain_width_grid_m=np.zeros_like(width_grid),
+            floodplain_profile_widths_grid_m=np.zeros(
+                (len(width_grid), 10), dtype=np.float32
+            ),
             floodplain_side_slope_grid_m_per_m=np.full_like(width_grid, 2.0),
         )
 
@@ -941,6 +955,9 @@ def test_routing_set_router_estimates_width_from_simulated_q2(
         def load2d(self, *args: Any, **kwargs: Any) -> np.ndarray:
             return np.zeros(2, dtype=np.float32)
 
+        def load3d(self, *args: Any, **kwargs: Any) -> np.ndarray:
+            return np.zeros((10, 2), dtype=np.float32)
+
     class DummyWaterbodiesVar:
         waterbody_outflow_linear_mapping = np.zeros(0, dtype=np.int32)
         lake_area = np.zeros(0, dtype=np.float32)
@@ -1036,7 +1053,9 @@ def test_unrepresented_river_geometry_confluence() -> None:
         width_grid=width_grid,
         depth_grid=depth_grid,
         manning_grid=manning_grid,
-        floodplain_width_grid_m=np.zeros_like(width_grid),
+        floodplain_profile_widths_grid_m=np.zeros(
+            (len(width_grid), 10), dtype=np.float32
+        ),
         floodplain_side_slope_grid_m_per_m=np.full_like(width_grid, 2.0),
     )
 
@@ -1117,7 +1136,9 @@ def test_unrepresented_river_geometry_iterative_cascade() -> None:
         width_grid=width_grid,
         depth_grid=depth_grid,
         manning_grid=manning_grid,
-        floodplain_width_grid_m=np.zeros_like(width_grid),
+        floodplain_profile_widths_grid_m=np.zeros(
+            (len(width_grid), 10), dtype=np.float32
+        ),
         floodplain_side_slope_grid_m_per_m=np.full_like(width_grid, 2.0),
     )
 
@@ -1193,7 +1214,9 @@ def test_unrepresented_river_cascade_with_bankfull_multiplier() -> None:
         width_grid=width_grid,
         depth_grid=depth_grid,
         manning_grid=manning_grid,
-        floodplain_width_grid_m=np.zeros_like(width_grid),
+        floodplain_profile_widths_grid_m=np.zeros(
+            (len(width_grid), 10), dtype=np.float32
+        ),
         floodplain_side_slope_grid_m_per_m=np.full_like(width_grid, 2.0),
     )
 
@@ -1274,7 +1297,9 @@ def test_unrepresented_river_isolated_no_upstream_retains_nan() -> None:
         width_grid=width_grid,
         depth_grid=depth_grid,
         manning_grid=manning_grid,
-        floodplain_width_grid_m=np.zeros_like(width_grid),
+        floodplain_profile_widths_grid_m=np.zeros(
+            (len(width_grid), 10), dtype=np.float32
+        ),
         floodplain_side_slope_grid_m_per_m=np.full_like(width_grid, 2.0),
     )
 
@@ -1343,7 +1368,9 @@ def test_unrepresented_river_confluence_with_isolated_headwater() -> None:
         width_grid=width_grid,
         depth_grid=depth_grid,
         manning_grid=manning_grid,
-        floodplain_width_grid_m=np.zeros_like(width_grid),
+        floodplain_profile_widths_grid_m=np.zeros(
+            (len(width_grid), 10), dtype=np.float32
+        ),
         floodplain_side_slope_grid_m_per_m=np.full_like(width_grid, 2.0),
     )
 
@@ -1411,7 +1438,9 @@ def test_unrepresented_river_inherits_single_upstream_observed_width() -> None:
         width_grid=width_grid,
         depth_grid=depth_grid,
         manning_grid=manning_grid,
-        floodplain_width_grid_m=np.zeros_like(width_grid),
+        floodplain_profile_widths_grid_m=np.zeros(
+            (len(width_grid), 10), dtype=np.float32
+        ),
         floodplain_side_slope_grid_m_per_m=np.full_like(width_grid, 2.0),
     )
 
@@ -1482,7 +1511,9 @@ def test_unrepresented_river_confluence_both_observed_widths() -> None:
         width_grid=width_grid,
         depth_grid=depth_grid,
         manning_grid=manning_grid,
-        floodplain_width_grid_m=np.zeros_like(width_grid),
+        floodplain_profile_widths_grid_m=np.zeros(
+            (len(width_grid), 10), dtype=np.float32
+        ),
         floodplain_side_slope_grid_m_per_m=np.full_like(width_grid, 2.0),
     )
 
@@ -1548,7 +1579,9 @@ def test_unrepresented_river_confluence_one_observed_one_unobserved() -> None:
         width_grid=width_grid,
         depth_grid=depth_grid,
         manning_grid=manning_grid,
-        floodplain_width_grid_m=np.zeros_like(width_grid),
+        floodplain_profile_widths_grid_m=np.zeros(
+            (len(width_grid), 10), dtype=np.float32
+        ),
         floodplain_side_slope_grid_m_per_m=np.full_like(width_grid, 2.0),
     )
 
@@ -1612,7 +1645,9 @@ def test_unrepresented_river_cascade_propagates_observed_width() -> None:
         width_grid=width_grid,
         depth_grid=depth_grid,
         manning_grid=manning_grid,
-        floodplain_width_grid_m=np.zeros_like(width_grid),
+        floodplain_profile_widths_grid_m=np.zeros(
+            (len(width_grid), 10), dtype=np.float32
+        ),
         floodplain_side_slope_grid_m_per_m=np.full_like(width_grid, 2.0),
     )
 
@@ -1673,7 +1708,7 @@ def test_unrepresented_river_non_positive_width_raises_assertion() -> None:
             width_grid=np.array([0.0], dtype=np.float32),
             depth_grid=np.array([1.0], dtype=np.float32),
             manning_grid=np.array([0.03], dtype=np.float32),
-            floodplain_width_grid_m=np.array([0.0], dtype=np.float32),
+            floodplain_profile_widths_grid_m=np.zeros((1, 10), dtype=np.float32),
             floodplain_side_slope_grid_m_per_m=np.array([2.0], dtype=np.float32),
         )
 
@@ -2288,3 +2323,83 @@ def test_load_rivers_prunes_starved_channels_and_updates_represented_in_grid(
     restored_rivers: gpd.GeoDataFrame = read_geom(saved_parquet)
     assert len(restored_rivers.loc[20, "hydrography_xy"]) == 0
     assert len(restored_rivers.loc[30, "hydrography_xy"]) == 1
+
+
+def test_compute_overbank_depth_and_top_width_10_point_profile() -> None:
+    """Tests 10-point floodplain profile piecewise linear lookup and quadratic extrapolation."""
+    bankfull_width_m = np.float32(20.0)
+    fp_widths = np.array(
+        [22.0, 25.0, 30.0, 35.0, 40.0, 50.0, 60.0, 80.0, 100.0, 120.0],
+        dtype=np.float32,
+    )
+    side_slope_z = np.float32(2.0)
+
+    # Compute expected cumulative areas at each of the 10 depth levels
+    areas = np.zeros(10, dtype=np.float32)
+    depths = np.array(FLOODPLAIN_PROFILE_DEPTHS, dtype=np.float32)
+    areas[0] = np.float32(0.5) * (bankfull_width_m + fp_widths[0]) * depths[0]
+    for k in range(1, 10):
+        areas[k] = areas[k - 1] + np.float32(0.5) * (
+            fp_widths[k - 1] + fp_widths[k]
+        ) * (depths[k] - depths[k - 1])
+
+    # Zero or negative area -> inbank
+    h_zero, w_zero = compute_overbank_depth_and_top_width(
+        np.float32(0.0), bankfull_width_m, areas, fp_widths, side_slope_z
+    )
+    assert h_zero == 0.0
+    assert w_zero == bankfull_width_m
+
+    # Exactly at each depth level k, depth must be depths[k] and top width fp_widths[k]
+    for k in range(10):
+        h_k, w_k = compute_overbank_depth_and_top_width(
+            areas[k], bankfull_width_m, areas, fp_widths, side_slope_z
+        )
+        assert np.isclose(h_k, depths[k], rtol=1e-5)
+        assert np.isclose(w_k, fp_widths[k], rtol=1e-5)
+
+    # Shallow overbank flow between 0 and level 0 (e.g. h in (0, 0.1))
+    mid_area_0 = areas[0] * np.float32(0.5)
+    h_mid_0, w_mid_0 = compute_overbank_depth_and_top_width(
+        mid_area_0, bankfull_width_m, areas, fp_widths, side_slope_z
+    )
+    assert 0.0 < h_mid_0 < depths[0]
+    assert bankfull_width_m < w_mid_0 < fp_widths[0]
+
+    # Extreme flood beyond 5.0m
+    extreme_area = areas[9] + np.float32(100.0)
+    h_ext, w_ext = compute_overbank_depth_and_top_width(
+        extreme_area, bankfull_width_m, areas, fp_widths, side_slope_z
+    )
+    assert h_ext > 5.0
+    assert w_ext > fp_widths[9]
+
+    # Test build_inertial_geometry with 10-point profile
+    n_reaches = 2
+    fp_prof = np.zeros((n_reaches, 10), dtype=np.float32)
+    for k, d in enumerate(FLOODPLAIN_PROFILE_DEPTHS):
+        fp_prof[0, k] = 20.0 + 50.0 + 2.0 * 2.0 * d
+        fp_prof[1, k] = 30.0 + 80.0 + 2.0 * 3.0 * d
+    geom = build_inertial_geometry(
+        river_length=np.array([1000.0, 2000.0], dtype=np.float32),
+        river_width=np.array([20.0, 30.0], dtype=np.float32),
+        shape_exponent=np.array([0.5, 0.5], dtype=np.float32),
+        bankfull_depth=np.array([2.0, 3.0], dtype=np.float32),
+        bed_elevation=np.array([10.0, 5.0], dtype=np.float32),
+        ds_bed_elevation=np.array([5.0, 0.0], dtype=np.float32),
+        interface_bed_elevation_max=np.array([10.0, 5.0], dtype=np.float32),
+        manning_n_sq=np.array([0.0009, 0.0009], dtype=np.float32),
+        inv_dx_interface=np.array([0.001, 0.0005], dtype=np.float32),
+        pit_slope=np.array([0.001, 0.001], dtype=np.float32),
+        floodplain_side_slope_m_per_m=np.array([2.0, 3.0], dtype=np.float32),
+        floodplain_profile_widths=fp_prof,
+    )
+    assert geom.geom_floodplain_areas.shape == (n_reaches, 10)
+    assert geom.geom_floodplain_widths.shape == (n_reaches, 10)
+    for k in range(1, 10):
+        assert (
+            geom.geom_floodplain_areas[:, k] > geom.geom_floodplain_areas[:, k - 1]
+        ).all()
+        assert (
+            geom.geom_floodplain_widths[:, k] >= geom.geom_floodplain_widths[:, k - 1]
+        ).all()

@@ -714,10 +714,9 @@
 
     var lastW = cs.width != null ? cs.width : (wValues && wValues.length > 0 ? wValues[wValues.length - 1] : 10.0);
     var lastD = cs.depth != null ? cs.depth : (dValues && dValues.length > 0 ? dValues[dValues.length - 1] : 2.0);
-    var fpWidth = cs.floodplainWidthM != null ? cs.floodplainWidthM : (cs.floodplainWidth != null ? cs.floodplainWidth : 0.0);
     var fpSlope = cs.floodplainSideSlopeMPerM != null ? cs.floodplainSideSlopeMPerM : (cs.floodplainSideSlope != null ? cs.floodplainSideSlope : 2.0);
 
-    var geomSummary = "Channel: " + lastW.toFixed(1) + " m × " + lastD.toFixed(2) + " m" + (fpWidth > 0 ? " · Floodplain bench: " + fpWidth.toFixed(1) + " m" : "") + " · Valley side slope: " + fpSlope.toFixed(1) + " m/m (H:V)";
+    var geomSummary = "Channel: " + lastW.toFixed(1) + " m × " + lastD.toFixed(2) + " m · Floodplain: 10-point profile (0.1–5.0 m) · Valley side slope: " + fpSlope.toFixed(1) + " m/m (H:V)";
 
     el.innerHTML = '<div class="geb-popup__title">River segment ' + escapeHtml(riverId) + '</div>' +
       '<div class="geb-popup__subtitle">Upstream area: ' + formatNumber(data.upstreamAreaKm2) + ' km² · Bankfull hydraulic geometry over time</div>' +
@@ -817,25 +816,27 @@
       Plotly.newPlot(geomId, [wTrace, dTrace], geomLayout, geomConfig);
       activePlotlyElements[geomId] = true;
 
-      // Cross section coordinates: channel bed -> flat floodplain benches -> valley side slopes
+      // Cross section coordinates: channel bed -> multi-point floodplain profile -> valley side slopes
       var halfW = lastW * 0.5;
-      var halfBench = (lastW + fpWidth) * 0.5;
-      var wallHeight = Math.max(lastD * 0.5, 1.0);
-      var wallRun = fpSlope * wallHeight;
-
       var xCoords = [];
       var yCoords = [];
 
-      // Left valley wall
-      xCoords.push(-(halfBench + wallRun));
-      yCoords.push(lastD + wallHeight);
-      xCoords.push(-halfBench);
-      yCoords.push(lastD);
+      var profileWidths = cs.profileWidths;
+      var profileDepths = cs.profileDepths || [0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0];
 
-      // Left flat floodplain bench
-      if (fpWidth > 0.0) {
-        xCoords.push(-halfW);
-        yCoords.push(lastD);
+      var topK = profileDepths.length - 1;
+      var topHalfW = profileWidths[topK] * 0.5;
+      var wallHeight = Math.max(lastD * 0.5, 1.0);
+      var wallRun = fpSlope * wallHeight;
+
+      // Left valley slope above 5m
+      xCoords.push(-(topHalfW + wallRun));
+      yCoords.push(lastD + profileDepths[topK] + wallHeight);
+
+      // Left floodplain profile (from level topK down to 0)
+      for (var k = topK; k >= 0; k--) {
+        xCoords.push(-profileWidths[k] * 0.5);
+        yCoords.push(lastD + profileDepths[k]);
       }
 
       // Parabolic channel bed (21 points)
@@ -846,17 +847,15 @@
         yCoords.push(lastD * u * u);
       }
 
-      // Right flat floodplain bench
-      if (fpWidth > 0.0) {
-        xCoords.push(halfW);
-        yCoords.push(lastD);
+      // Right floodplain profile (from level 0 up to topK)
+      for (var k = 0; k <= topK; k++) {
+        xCoords.push(profileWidths[k] * 0.5);
+        yCoords.push(lastD + profileDepths[k]);
       }
 
-      // Right valley wall
-      xCoords.push(halfBench);
-      yCoords.push(lastD);
-      xCoords.push(halfBench + wallRun);
-      yCoords.push(lastD + wallHeight);
+      // Right valley slope above 5m
+      xCoords.push(topHalfW + wallRun);
+      yCoords.push(lastD + profileDepths[topK] + wallHeight);
 
       var csConfig = {
         responsive: true,

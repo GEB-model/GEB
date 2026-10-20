@@ -43,6 +43,7 @@ from geb.evaluate.workflows.discharge_station_checks import (
     find_excluded_stations,
 )
 from geb.hydrology.routing import select_active_rivers
+from geb.hydrology.routing.geometry import FLOODPLAIN_PROFILE_DEPTHS
 from geb.workflows.extreme_value_analysis import ReturnPeriodModel
 from geb.workflows.io import read_geom
 
@@ -872,7 +873,6 @@ def attach_end_of_run_river_dimensions(
     routing_dir: Path = run_output_folder / "report" / "hydrology.routing"
     w_file: Path = routing_dir / "bankfull_width_rivers_yearly_m.parquet"
     d_file: Path = routing_dir / "bankfull_depth_rivers_yearly_m.parquet"
-    fp_w_file: Path = routing_dir / "floodplain_width_rivers_yearly_m.parquet"
     fp_s_file: Path = (
         routing_dir / "floodplain_side_slope_rivers_yearly_m_per_m.parquet"
     )
@@ -898,17 +898,6 @@ def attach_end_of_run_river_dimensions(
             }
             enriched_rivers["depth_m"] = [
                 d_map.get(str(rid)) for rid in enriched_rivers.index
-            ]
-
-    if fp_w_file.exists():
-        df_fp_w: pd.DataFrame = pd.read_parquet(fp_w_file)
-        if not df_fp_w.empty:
-            last_fp_w: pd.Series = df_fp_w.iloc[-1]
-            fp_w_map: dict[str, float] = {
-                str(col): float(val) for col, val in last_fp_w.items() if pd.notna(val)
-            }
-            enriched_rivers["floodplain_width_m"] = [
-                fp_w_map.get(str(rid)) for rid in enriched_rivers.index
             ]
 
     if fp_s_file.exists():
@@ -1315,8 +1304,8 @@ def build_river_chart_data(
     bankfull_discharge: list[float],
     width: list[float],
     depth: list[float],
-    floodplain_width_m: float,
     floodplain_side_slope_m_per_m: float,
+    floodplain_profile_widths: list[float],
 ) -> dict[str, Any]:
     """Prepare chart data for one river segment popup in the discharge dashboard.
 
@@ -1327,14 +1316,18 @@ def build_river_chart_data(
         bankfull_discharge: Bankfull discharge values (m³/s).
         width: Bankfull river width values (meters).
         depth: Bankfull river depth values (meters).
-        floodplain_width_m: Floodplain width beyond channel (meters).
         floodplain_side_slope_m_per_m: Valley side-slope ratio z (m/m horizontal:vertical).
+        floodplain_profile_widths: 10-point cross-sectional widths at fixed depth levels (meters).
 
     Returns:
         River chart data dictionary.
     """
     last_w: float = float(width[-1]) if len(width) > 0 else 0.0
     last_d: float = float(depth[-1]) if len(depth) > 0 else 0.0
+    profile_widths: list[float] = [
+        round(float(w), 2) for w in floodplain_profile_widths
+    ]
+
     return {
         "type": "river",
         "riverId": river_id,
@@ -1348,10 +1341,10 @@ def build_river_chart_data(
         "crossSection": {
             "width": _as_finite_float(last_w),
             "depth": _as_finite_float(last_d),
-            "floodplainWidth": _as_finite_float(floodplain_width_m),
-            "floodplainWidthM": _as_finite_float(floodplain_width_m),
             "floodplainSideSlope": _as_finite_float(floodplain_side_slope_m_per_m),
             "floodplainSideSlopeMPerM": _as_finite_float(floodplain_side_slope_m_per_m),
+            "profileDepths": [float(d) for d in FLOODPLAIN_PROFILE_DEPTHS],
+            "profileWidths": profile_widths,
         },
     }
 
@@ -1375,24 +1368,27 @@ def add_river_charts_to_bundle_writer(
     q_file: Path = routing_dir / "bankfull_discharge_rivers_yearly_m3_per_s.parquet"
     d_file: Path = routing_dir / "bankfull_depth_rivers_yearly_m.parquet"
     w_file: Path = routing_dir / "bankfull_width_rivers_yearly_m.parquet"
-    fp_w_file: Path = routing_dir / "floodplain_width_rivers_yearly_m.parquet"
     fp_s_file: Path = (
         routing_dir / "floodplain_side_slope_rivers_yearly_m_per_m.parquet"
     )
+    fp_profile_files: list[Path] = [
+        routing_dir / f"floodplain_profile_width_{k}_rivers_yearly_m.parquet"
+        for k in range(len(FLOODPLAIN_PROFILE_DEPTHS))
+    ]
     if not (
         q_file.exists()
         and d_file.exists()
         and w_file.exists()
-        and fp_w_file.exists()
         and fp_s_file.exists()
+        and all(f.exists() for f in fp_profile_files)
     ):
         return
 
     df_q: pd.DataFrame = pd.read_parquet(q_file)
     df_d: pd.DataFrame = pd.read_parquet(d_file)
     df_w: pd.DataFrame = pd.read_parquet(w_file)
-    df_fp_w: pd.DataFrame = pd.read_parquet(fp_w_file)
     df_fp_s: pd.DataFrame = pd.read_parquet(fp_s_file)
+    dfs_fp_profile: list[pd.DataFrame] = [pd.read_parquet(f) for f in fp_profile_files]
     all_river_charts: dict[str, Any] = {}
 
     for river_id in rivers.index:
@@ -1401,8 +1397,8 @@ def add_river_charts_to_bundle_writer(
             river_id_str not in df_q.columns
             or river_id_str not in df_d.columns
             or river_id_str not in df_w.columns
-            or river_id_str not in df_fp_w.columns
             or river_id_str not in df_fp_s.columns
+            or any(river_id_str not in df.columns for df in dfs_fp_profile)
         ):
             continue
         q_series: pd.Series = df_q[river_id_str].dropna()
@@ -1427,12 +1423,19 @@ def add_river_charts_to_bundle_writer(
 
         uparea_km2: float = float(rivers.loc[river_id, "uparea_m2"]) / 1_000_000.0
 
-        s_fp_w: pd.Series = df_fp_w[river_id_str].dropna()
         s_fp_s: pd.Series = df_fp_s[river_id_str].dropna()
-        if s_fp_w.empty or s_fp_s.empty:
+        if s_fp_s.empty:
             continue
-        fp_w_val: float = float(s_fp_w.iloc[-1])
         fp_s_val: float = float(s_fp_s.iloc[-1])
+
+        profile_vals: list[float] = []
+        for df_k in dfs_fp_profile:
+            s_k: pd.Series = df_k[river_id_str].dropna()
+            if s_k.empty:
+                break
+            profile_vals.append(float(s_k.iloc[-1]))
+        if len(profile_vals) != len(FLOODPLAIN_PROFILE_DEPTHS):
+            continue
 
         river_chart_data: dict[str, Any] = build_river_chart_data(
             river_id=river_id_str,
@@ -1441,8 +1444,8 @@ def add_river_charts_to_bundle_writer(
             bankfull_discharge=q_list,
             width=w_list,
             depth=d_list,
-            floodplain_width_m=round(fp_w_val, 2),
             floodplain_side_slope_m_per_m=round(fp_s_val, 2),
+            floodplain_profile_widths=[round(v, 2) for v in profile_vals],
         )
         all_river_charts[f"river_{river_id_str}"] = river_chart_data
 

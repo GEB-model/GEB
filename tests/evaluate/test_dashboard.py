@@ -715,6 +715,7 @@ def test_build_river_chart_data() -> None:
     """Test that build_river_chart_data correctly structures the river payload."""
     from geb.evaluate.workflows.dashboard import build_river_chart_data
 
+    profile_widths = [20.0, 25.0, 30.0, 35.0, 40.0, 50.0, 60.0, 80.0, 100.0, 120.0]
     river_data: dict[str, Any] = build_river_chart_data(
         river_id="10",
         upstream_area_km2=125.5,
@@ -722,8 +723,8 @@ def test_build_river_chart_data() -> None:
         bankfull_discharge=[30.0, 35.0],
         width=[15.0, 15.0],
         depth=[2.0, 2.2],
-        floodplain_width_m=0.0,
         floodplain_side_slope_m_per_m=2.0,
+        floodplain_profile_widths=profile_widths,
     )
     assert river_data["type"] == "river"
     assert river_data["riverId"] == "10"
@@ -735,7 +736,7 @@ def test_build_river_chart_data() -> None:
     assert "crossSection" in river_data
     assert river_data["crossSection"]["width"] == 15.0
     assert river_data["crossSection"]["depth"] == 2.2
-    assert river_data["crossSection"]["floodplainWidth"] == 0.0
+    assert river_data["crossSection"]["profileWidths"] == profile_widths
     assert river_data["crossSection"]["floodplainSideSlope"] == 2.0
 
 
@@ -754,15 +755,20 @@ def test_add_river_charts_to_bundle_writer(tmp_path: Path) -> None:
     df_q = pd.DataFrame({"20": [40.0, 45.0]}, index=yearly_idx)
     df_d = pd.DataFrame({"20": [2.1, 2.3]}, index=yearly_idx)
     df_w = pd.DataFrame({"20": [25.0, 25.0]}, index=yearly_idx)
-    df_fp_w = pd.DataFrame({"20": [50.0, 50.0]}, index=yearly_idx)
     df_fp_s = pd.DataFrame({"20": [3.0, 3.0]}, index=yearly_idx)
     df_q.to_parquet(routing_dir / "bankfull_discharge_rivers_yearly_m3_per_s.parquet")
     df_d.to_parquet(routing_dir / "bankfull_depth_rivers_yearly_m.parquet")
     df_w.to_parquet(routing_dir / "bankfull_width_rivers_yearly_m.parquet")
-    df_fp_w.to_parquet(routing_dir / "floodplain_width_rivers_yearly_m.parquet")
     df_fp_s.to_parquet(
         routing_dir / "floodplain_side_slope_rivers_yearly_m_per_m.parquet"
     )
+    for k in range(10):
+        df_k = pd.DataFrame(
+            {"20": [50.0 + k * 10.0, 50.0 + k * 10.0]}, index=yearly_idx
+        )
+        df_k.to_parquet(
+            routing_dir / f"floodplain_profile_width_{k}_rivers_yearly_m.parquet"
+        )
 
     rivers_gdf = gpd.GeoDataFrame(
         {"uparea_m2": [50_000_000.0], "geometry": [sg.LineString([(0, 0), (1, 1)])]},
@@ -788,7 +794,9 @@ def test_add_river_charts_to_bundle_writer(tmp_path: Path) -> None:
     assert decoded["river_20"]["timeseries"]["width"] == [25.0, 25.0]
     assert decoded["river_20"]["crossSection"]["width"] == 25.0
     assert decoded["river_20"]["crossSection"]["depth"] == 2.3
-    assert decoded["river_20"]["crossSection"]["floodplainWidth"] == 50.0
+    assert len(decoded["river_20"]["crossSection"]["profileWidths"]) == 10
+    assert decoded["river_20"]["crossSection"]["profileWidths"][0] == 50.0
+    assert decoded["river_20"]["crossSection"]["profileWidths"][9] == 140.0
     assert decoded["river_20"]["crossSection"]["floodplainSideSlope"] == 3.0
 
 
