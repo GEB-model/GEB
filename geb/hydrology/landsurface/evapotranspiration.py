@@ -16,10 +16,10 @@ from .constants import N_SOIL_LAYERS
 
 @njit(cache=True, inline="always")
 def get_critical_soil_moisture_content(
-    p: np.float32,
-    wfc_m: ArrayFloat32,
-    wwp_m: ArrayFloat32,
-) -> ArrayFloat32:
+    p: float | np.floating,
+    wfc_m: float | np.floating,
+    wwp_m: float | np.floating,
+) -> np.float32:
     """Calculate the critical soil moisture content.
 
     The critical soil moisture content is defined as the quantity of stored soil moisture below
@@ -83,7 +83,7 @@ def get_root_mass_ratios(
 
 @njit(cache=True, inline="always")
 def get_transpiration_factor(
-    w_m: np.float32, wwp_m: np.float32, wcrit_m: np.float32
+    w_m: float | np.floating, wwp_m: float | np.floating, wcrit_m: float | np.floating
 ) -> np.float32:
     """Calculate the transpiration factor based on the available water in the soil.
 
@@ -110,12 +110,12 @@ def get_transpiration_factor(
         return np.float32(0)
     if factor > np.float32(1):
         return np.float32(1)
-    return factor
+    return np.float32(factor)
 
 
 @njit(cache=True, inline="always")
 def get_root_ratios(
-    root_depth_m: np.float32, soil_layer_height_m: npt.NDArray[np.float32]
+    root_depth_m: float | np.floating, soil_layer_height_m: npt.NDArray[np.float32]
 ) -> npt.NDArray[np.float32]:
     """Calculate the root ratios for each soil layer based on the effective root depth.
 
@@ -141,8 +141,8 @@ def get_root_ratios(
 
 @njit(cache=True, inline="always")
 def get_fraction_easily_available_soil_water(
-    crop_group_number: np.float32,
-    reference_evapotranspiration_grass_full_day_m: np.float32,
+    crop_group_number: float | np.floating,
+    reference_evapotranspiration_grass_full_day_m: float | np.floating,
 ) -> np.float32:
     """Calculate the fraction of easily available soil water.
 
@@ -180,19 +180,19 @@ def get_fraction_easily_available_soil_water(
 
 @njit(cache=True, inline="always")
 def calculate_transpiration(
-    soil_is_frozen: bool,
+    soil_is_frozen: bool | np.bool_,
     wwp_m: npt.NDArray[np.float32],  # [m]
     wfc_m: npt.NDArray[np.float32],  # [m]
     wres_m: npt.NDArray[np.float32],  # [m]
     soil_layer_height_m: npt.NDArray[np.float32],  # [m]
-    land_use_type: np.int32,
-    root_depth_m: np.float32,  # [m]
-    crop_group_number: np.float32,
-    potential_transpiration_m: np.float32,  # [m]
-    reference_evapotranspiration_grass_m_hour: np.float32,  # [m]
+    land_use_type: int | np.integer,
+    root_depth_m: float | np.floating,  # [m]
+    crop_group_number: float | np.floating,
+    potential_transpiration_m: float | np.floating,  # [m]
+    daily_reference_evapotranspiration_grass_m: float | np.floating,  # [m]
     w_m: npt.NDArray[np.float32],  # [m]
-    topwater_m: np.float32,  # [m]
-    minimum_effective_root_depth_m: np.float32,  # [m]
+    topwater_m: float | np.floating,  # [m]
+    minimum_effective_root_depth_m: float | np.floating,  # [m]
 ) -> tuple[np.float32, np.float32]:
     """Calculate transpiration for a single soil cell.
 
@@ -207,7 +207,7 @@ def calculate_transpiration(
         crop_group_number: Crop group number for this HRU, pre-resolved from land use type
             and crop map (see WOFOST 6.0).
         potential_transpiration_m: Potential transpiration [m].
-        reference_evapotranspiration_grass_m_hour: Reference evapotranspiration for grass [m/hour]. This is an hourly value that will be converted to a daily value for the calculation.
+        daily_reference_evapotranspiration_grass_m: Daily reference evapotranspiration for grass for a full day [m].
         w_m: Soil water content [m], shape (N_SOIL_LAYERS,).
         topwater_m: Topwater [m], which is the water available for evaporation and transpiration for paddy irrigated fields.
         minimum_effective_root_depth_m: Minimum effective root depth [m], used to ensure that the effective root depth is not less than this value. Crops can extract water up to this depth.
@@ -218,10 +218,13 @@ def calculate_transpiration(
             - topwater_m: Updated topwater [m] after transpiration.
     """
     transpiration: np.float32 = np.float32(0.0)
+    topwater_m: np.float32 = np.float32(topwater_m)
     if potential_transpiration_m <= np.float32(0.0):
         return transpiration, topwater_m
 
-    remaining_potential_transpiration: np.float32 = potential_transpiration_m
+    remaining_potential_transpiration: np.float32 = np.float32(
+        potential_transpiration_m
+    )
     if land_use_type == PADDY_IRRIGATED:
         transpiration_from_topwater: np.float32 = min(
             topwater_m, remaining_potential_transpiration
@@ -234,8 +237,7 @@ def calculate_transpiration(
         # vegetation-specific factor for easily available soil water
         fraction_easily_available_soil_water: np.float32 = get_fraction_easily_available_soil_water(
             crop_group_number=crop_group_number,
-            reference_evapotranspiration_grass_full_day_m=reference_evapotranspiration_grass_m_hour
-            * np.float32(24.0),
+            reference_evapotranspiration_grass_full_day_m=daily_reference_evapotranspiration_grass_m,
         )
 
         effective_root_depth: np.float32 = np.maximum(
@@ -390,10 +392,10 @@ def calculate_transpiration(
 
 @njit(cache=True, inline="always")
 def calculate_bare_soil_evaporation(
-    soil_is_frozen: bool,
-    land_use_type: np.int32,
-    potential_direct_evaporation_m: np.float32,
-    open_water_evaporation_m: np.float32,
+    soil_is_frozen: bool | np.bool_,
+    land_use_type: int | np.integer,
+    potential_direct_evaporation_m: float | np.floating,
+    open_water_evaporation_m: float | np.floating,
     w_m: npt.NDArray[np.float32],
     wres_m: npt.NDArray[np.float32],
     ws_m: npt.NDArray[np.float32],

@@ -1,0 +1,685 @@
+"""Unit tests for discharge dashboard timeseries generation and main index alignment."""
+
+import base64
+import gzip
+import json
+import logging
+from pathlib import Path
+from typing import Any
+
+import branca.colormap as cm
+import folium
+import geopandas as gpd
+import numpy as np
+import pandas as pd
+import pytest
+import shapely.geometry as sg
+
+from geb.evaluate.workflows.dashboard import (
+    StationChartBundleWriter,
+    _as_finite_float,
+    _build_station_marker_payload,
+    _build_timeseries_data,
+    _decode_varint_deltas,
+    _encode_varint_deltas,
+    _to_int_deltas,
+    build_station_chart_data,
+    determine_main_time_index,
+    serialize_main_timeline,
+    write_discharge_dashboard,
+)
+
+
+def _create_mock_routing_output(
+    tmp_path: Path,
+    station_id: int | str,
+    timestamps: pd.DatetimeIndex,
+    values: list[float] | np.ndarray,
+) -> Path:
+    """Helper to write mock simulated discharge parquet file.
+
+    Args:
+        tmp_path: Temporary output folder.
+        station_id: Station identifier.
+        timestamps: Simulated discharge DatetimeIndex.
+        values: Simulated discharge values (m3/s).
+
+    Returns:
+        Path to the root output folder.
+    """
+    routing_dir: Path = tmp_path / "report" / "hydrology.routing"
+    routing_dir.mkdir(parents=True, exist_ok=True)
+    simulated_series: pd.Series = pd.Series(
+        values,
+        index=timestamps,
+        name=f"discharge_hourly_m3_per_s_{station_id}",
+    )
+    simulated_df: pd.DataFrame = simulated_series.to_frame()
+    simulated_df.to_parquet(
+        routing_dir / f"discharge_hourly_m3_per_s_{station_id}.parquet"
+    )
+    return tmp_path
+
+
+def test_to_int_deltas() -> None:
+    """Test delta encoding of integer series with resets after missing values."""
+    values = [1000, 1050, 1040, None, None, 2500, 2510]
+    deltas = _to_int_deltas(values)
+    assert deltas == [1000, 50, -10, None, None, 2500, 10]
+
+
+def test_varint_deltas_roundtrip_and_sentinel() -> None:
+    """Test Base64 Varint encoding and decoding with sentinel 0 for missing data."""
+    # Test cases include None, zero, small positive/negative deltas, large deltas
+    test_values: list[int | None] = [
+        None,
+        None,
+        12500,
+        0,
+        5,
+        -3,
+        0,
+        -100,
+        None,
+        200,
+        -200,
+        32767,
+        -32768,
+        500000,
+        -500000,
+    ]
+    encoded: str = _encode_varint_deltas(test_values)
+    assert isinstance(encoded, str)
+    decoded: list[int | None] = _decode_varint_deltas(encoded)
+    assert decoded == test_values
+
+    # Verify sentinel 0 is used for missing data
+    assert _decode_varint_deltas(_encode_varint_deltas([None])) == [None]
+    assert _decode_varint_deltas(_encode_varint_deltas([0])) == [0]
+    assert _decode_varint_deltas(_encode_varint_deltas([-1, 1])) == [-1, 1]
+
+
+def test_build_timeseries_data_with_main_index() -> None:
+    """Test timeseries window slicing to main index with delta integer cents scaling."""
+    main_index: pd.DatetimeIndex = pd.date_range(
+        "2020-01-01 12:00:00", "2020-01-05 12:00:00", freq="D"
+    )
+    # Station data only covers Jan 2 to Jan 4, with a missing observation on Jan 3.
+    station_index: pd.DatetimeIndex = pd.date_range(
+        "2020-01-02 12:00:00", "2020-01-04 12:00:00", freq="D"
+    )
+    comparison_df: pd.DataFrame = pd.DataFrame(
+        {
+            "discharge_observations": [12.3456, np.nan, 34.5678],
+            "discharge_simulations": [11.1111, 22.2222, 33.3333],
+        },
+        index=station_index,
+    )
+
+    data = _build_timeseries_data(comparison_df, main_time_index=main_index)
+
+    # main index mode should omit redundant "time" array and window slice to active period.
+    assert "time" not in data
+    assert data["start"] == 1  # Jan 2 is index 1 of main_index
+    assert data["scale"] == 100
+    assert data["deltas"] == "varint"
+
+    # Delta integer cents: Jan 2 is anchor (1235), Jan 3 is None, Jan 4 is anchor reset (3457)
+    assert _decode_varint_deltas(data["observed"]) == [1235, None, 3457]
+    # Simulated has no missing values: anchor 1111, then deltas 1111, 1111
+    assert _decode_varint_deltas(data["simulated"]) == [1111, 1111, 1111]
+
+
+def test_build_timeseries_data_without_main_index() -> None:
+    """Test fallback when no main index is supplied provides integer epoch timestamps."""
+    station_index: pd.DatetimeIndex = pd.date_range(
+        "2020-01-01 12:00:00", "2020-01-02 12:00:00", freq="D"
+    )
+    comparison_df: pd.DataFrame = pd.DataFrame(
+        {
+            "discharge_observations": [10.555, 20.666],
+            "discharge_simulations": [10.111, 20.222],
+        },
+        index=station_index,
+    )
+
+    data = _build_timeseries_data(comparison_df, main_time_index=None)
+
+    assert "time" in data
+    assert data["time"] == [1577880000000, 1577966400000]
+    assert data["scale"] == 100
+    assert data["deltas"] == "varint"
+    assert _decode_varint_deltas(data["observed"]) == [1056, 1011]
+    assert _decode_varint_deltas(data["simulated"]) == [1011, 1011]
+
+
+def test_build_timeseries_data_invalid_index() -> None:
+    """Test ValueError raised when dataframe does not use DatetimeIndex."""
+    df_no_dt = pd.DataFrame(
+        {"discharge_observations": [1.0], "discharge_simulations": [1.0]},
+        index=[1],
+    )
+    with pytest.raises(ValueError, match="DateTimeIndex"):
+        _build_timeseries_data(df_no_dt)
+
+
+def test_determine_main_time_index_daily(tmp_path: Path) -> None:
+    """Test main index generation for daily observations."""
+    sim_timestamps: pd.DatetimeIndex = pd.date_range(
+        "2020-01-01 00:30:00", "2020-01-10 23:30:00", freq="h"
+    )
+    _create_mock_routing_output(
+        tmp_path,
+        station_id=123,
+        timestamps=sim_timestamps,
+        values=np.ones(len(sim_timestamps)),
+    )
+
+    obs_index: pd.DatetimeIndex = pd.date_range(
+        "2020-01-03 12:00:00", "2020-01-08 12:00:00", freq="D"
+    )
+
+    main_idx = determine_main_time_index(
+        observations_index=obs_index,
+        simulation_output_folder=tmp_path,
+        frequency="daily",
+    )
+
+    assert main_idx is not None
+    assert len(main_idx) == 6
+    assert main_idx[0] == pd.Timestamp("2020-01-03 12:00:00")
+    assert main_idx[-1] == pd.Timestamp("2020-01-08 12:00:00")
+
+
+def test_determine_main_time_index_hourly(tmp_path: Path) -> None:
+    """Test main index generation for hourly observations."""
+    sim_timestamps: pd.DatetimeIndex = pd.date_range(
+        "2020-01-01 00:30:00", "2020-01-03 23:30:00", freq="h"
+    )
+    _create_mock_routing_output(
+        tmp_path,
+        station_id=123,
+        timestamps=sim_timestamps,
+        values=np.ones(len(sim_timestamps)),
+    )
+
+    obs_index: pd.DatetimeIndex = pd.date_range(
+        "2020-01-01 12:30:00", "2020-01-02 12:30:00", freq="h"
+    )
+
+    main_idx = determine_main_time_index(
+        observations_index=obs_index,
+        simulation_output_folder=tmp_path,
+        frequency="hourly",
+    )
+
+    assert main_idx is not None
+    assert len(main_idx) == 25
+    assert main_idx[0] == pd.Timestamp("2020-01-01 12:30:00")
+    assert main_idx[-1] == pd.Timestamp("2020-01-02 12:30:00")
+
+
+def test_determine_main_time_index_edge_cases(tmp_path: Path) -> None:
+    """Test edge cases such as empty observations or invalid frequency."""
+    empty_index = pd.DatetimeIndex([])
+    assert (
+        determine_main_time_index(
+            observations_index=empty_index,
+            simulation_output_folder=tmp_path,
+            frequency="daily",
+        )
+        is None
+    )
+
+    obs_index: pd.DatetimeIndex = pd.date_range(
+        "2020-01-01 12:00:00", "2020-01-05 12:00:00", freq="D"
+    )
+    with pytest.raises(ValueError, match="Unsupported frequency"):
+        determine_main_time_index(
+            observations_index=obs_index,
+            simulation_output_folder=tmp_path,
+            frequency="monthly",
+        )
+
+    # Missing simulation routing directory returns None
+    non_existent = tmp_path / "does_not_exist"
+    assert (
+        determine_main_time_index(
+            observations_index=obs_index,
+            simulation_output_folder=non_existent,
+            frequency="daily",
+        )
+        is None
+    )
+
+
+def test_build_station_chart_data_includes_timeseries() -> None:
+    """Test that build_station_chart_data returns chart payload with timeseries data."""
+    station_index: pd.DatetimeIndex = pd.date_range(
+        "2020-01-01 12:00:00", "2020-01-03 12:00:00", freq="D"
+    )
+    comparison_df: pd.DataFrame = pd.DataFrame(
+        {
+            "discharge_observations": [10.0, 20.0, 30.0],
+            "discharge_simulations": [11.0, 21.0, 31.0],
+        },
+        index=station_index,
+    )
+    logger: logging.Logger = logging.getLogger("test")
+
+    chart_data = build_station_chart_data(
+        discharge_comparison=comparison_df,
+        station_name="Test Station",
+        upstream_area_ratio=1.05432,
+        timezone_utc_offset=1.0,
+        metrics={"KGE": 0.854321, "NSE": 0.826789},
+        frequency="daily",
+        logger=logger,
+        include_return_period_plots=False,
+        main_time_index=station_index,
+    )
+
+    assert chart_data["stationName"] == "Test Station"
+    assert chart_data["metrics"]["KGE"] == 0.85
+    assert chart_data["metrics"]["NSE"] == 0.83
+    assert chart_data["metrics"]["upstreamAreaRatio"] == 1.05
+    assert "timeseries" in chart_data
+    assert chart_data["timeseries"]["scale"] == 100
+    assert chart_data["timeseries"]["deltas"] == "varint"
+    assert _decode_varint_deltas(chart_data["timeseries"]["observed"]) == [
+        1000,
+        1000,
+        1000,
+    ]
+    assert _decode_varint_deltas(chart_data["timeseries"]["simulated"]) == [
+        1100,
+        1000,
+        1000,
+    ]
+
+
+def test_as_finite_float() -> None:
+    """Test _as_finite_float rounds to 2 decimals and handles non-finite values."""
+    assert _as_finite_float(0.854321) == 0.85
+    assert _as_finite_float(0.856789) == 0.86
+    assert _as_finite_float(10.0) == 10.0
+    assert _as_finite_float(None) is None
+    assert _as_finite_float(float("nan")) is None
+    assert _as_finite_float(float("inf")) is None
+    assert _as_finite_float(float("-inf")) is None
+    # Custom decimal precision
+    assert _as_finite_float(0.12345, decimals=3) == 0.123
+
+
+def test_station_chart_bundle_writer() -> None:
+    """Test that StationChartBundleWriter chunks stations into compressed in-memory bundles."""
+    writer: StationChartBundleWriter = StationChartBundleWriter(
+        max_stations_per_bundle=2,
+    )
+
+    data1: dict[str, Any] = {"stationName": "St1", "val": 10}
+    data2: dict[str, Any] = {"stationName": "St2", "val": 20}
+    data3: dict[str, Any] = {"stationName": "St3", "val": 30}
+
+    writer.add_station("st1", data1)
+    writer.add_station("st2", data2)
+    # 2 stations should trigger bundle flush
+    assert len(writer.station_bundle_indices) == 2
+    assert writer.station_bundle_indices["st1"] == 0
+    assert writer.station_bundle_indices["st2"] == 0
+    assert len(writer.bundles) == 1
+
+    writer.add_station("st3", data3)
+    indices: dict[str, int] = writer.finish()
+
+    assert len(indices) == 3
+    assert indices["st3"] == 1
+    assert len(writer.bundles) == 2
+
+    # Verify bundle 0 content
+    b0_data: dict[str, Any] = json.loads(
+        gzip.decompress(base64.b64decode(writer.bundles[0])).decode("utf-8")
+    )
+    assert b0_data == {"st1": data1, "st2": data2}
+
+    # Verify bundle 1 content
+    b1_data: dict[str, Any] = json.loads(
+        gzip.decompress(base64.b64decode(writer.bundles[1])).decode("utf-8")
+    )
+    assert b1_data == {"st3": data3}
+
+
+def test_serialize_main_timeline() -> None:
+    """Test serializing regular DatetimeIndex to compact start/step/count dictionary."""
+    daily_index: pd.DatetimeIndex = pd.date_range(
+        "2020-01-01 12:00:00", "2020-01-05 12:00:00", freq="D"
+    )
+    spec: dict[str, int] = serialize_main_timeline(daily_index)
+    assert spec["start"] == int(
+        daily_index[0].to_datetime64().astype("datetime64[ms]").astype("int64")
+    )
+    assert spec["step"] == 86400000  # 1 day in ms
+    assert spec["count"] == 5
+
+    # Hourly index
+    hourly_index: pd.DatetimeIndex = pd.date_range(
+        "2020-01-01 00:30:00", "2020-01-01 05:30:00", freq="h"
+    )
+    h_spec: dict[str, int] = serialize_main_timeline(hourly_index)
+    assert h_spec["step"] == 3600000  # 1 hour in ms
+    assert h_spec["count"] == 6
+
+    # Empty index raises ValueError
+    with pytest.raises(ValueError, match="cannot be empty"):
+        serialize_main_timeline(pd.DatetimeIndex([]))
+
+
+def test_build_timeseries_data_observation_window_pruning() -> None:
+    """Test that leading and trailing missing observation periods are pruned."""
+    main_index: pd.DatetimeIndex = pd.date_range(
+        "2020-01-01 12:00:00", "2020-01-10 12:00:00", freq="D"
+    )
+    # Station comparison spans Jan 1 to Jan 10, but observations only exist Jan 3 to Jan 5
+    station_index: pd.DatetimeIndex = main_index.copy()
+    obs_vals = [
+        np.nan,
+        np.nan,
+        15.0,
+        20.0,
+        25.0,
+        np.nan,
+        np.nan,
+        np.nan,
+        np.nan,
+        np.nan,
+    ]
+    sim_vals = [10.0, 11.0, 14.0, 19.0, 24.0, 28.0, 30.0, 32.0, 35.0, 38.0]
+    comparison_df: pd.DataFrame = pd.DataFrame(
+        {
+            "discharge_observations": obs_vals,
+            "discharge_simulations": sim_vals,
+        },
+        index=station_index,
+    )
+
+    data = _build_timeseries_data(comparison_df, main_time_index=main_index)
+
+    # Pruned window should start at Jan 3 (index 2 of main_index) and end at Jan 5 (length 3)
+    assert data["start"] == 2
+    assert _decode_varint_deltas(data["observed"]) == [1500, 500, 500]
+    assert _decode_varint_deltas(data["simulated"]) == [1400, 500, 500]
+
+
+def test_build_station_marker_payload() -> None:
+    """Test compressing station marker payload and recovering station attributes."""
+    gdf = gpd.GeoDataFrame(
+        {
+            "station_name": ["Station A", "Station B"],
+            "upstream_area_GEB": [100.0, 400.0],
+            "discharge_observations_to_GEB_upstream_area_ratio": [1.0, np.nan],
+            "KGE": [0.85, -0.2],
+            "timezone_utc_offset": [1.0, 2.0],
+            "exclusion_reason": [None, "Too far"],
+        },
+        geometry=[sg.Point(8.0, 50.0), sg.Point(8.5, 50.5)],
+        index=pd.Index(["st_1", "st_2"]),
+    )
+    metric_layers = [
+        (
+            folium.FeatureGroup(name="KGE", show=True),
+            cm.LinearColormap(colors=["red", "green"], vmin=0.0, vmax=1.0),
+            "KGE",
+        )
+    ]
+    layer_upstream = folium.FeatureGroup(name="Upstream", show=False)
+    colormap_upstream = cm.LinearColormap(colors=["blue", "yellow"], vmin=0.5, vmax=1.5)
+
+    payload = _build_station_marker_payload(
+        mapped_station_scores=gdf,
+        metric_layers=metric_layers,
+        layer_upstream=layer_upstream,
+        colormap_upstream=colormap_upstream,
+        characteristic_layers=[],
+        availability_layer=None,
+        characteristic_records={},
+        largest_upstream_area_sqrt=20.0,
+    )
+    assert isinstance(payload, str)
+    raw_json = gzip.decompress(base64.b64decode(payload)).decode("utf-8")
+    stations = json.loads(raw_json)
+    assert len(stations) == 2
+    assert stations[0]["id"] == "st_1"
+    assert stations[0]["name"] == "Station A"
+    assert stations[0]["coords"] == [50.0, 8.0]
+    assert stations[0]["r"] == 7.5  # 5 + sqrt(100)/20 * 5 = 7.5
+    assert stations[0]["tz"] == 1.0
+    assert stations[0]["ex"] is None
+    assert metric_layers[0][0].get_name() in stations[0]["m"]
+    assert layer_upstream.get_name() in stations[0]["m"]
+
+    assert stations[1]["id"] == "st_2"
+    assert stations[1]["ex"] == "Too far"
+    assert layer_upstream.get_name() not in stations[1]["m"]  # ratio was NaN
+
+
+def test_write_discharge_dashboard(tmp_path: Path) -> None:
+    """Test generating a single self-contained dashboard HTML file with inlined chart bundles."""
+    dashboard_file: Path = tmp_path / "discharge_evaluation_map.html"
+    region: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        geometry=[sg.box(7.0, 49.0, 9.0, 51.0)],
+        crs="EPSG:4326",
+    )
+    rivers: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "uparea_m2": [5000000.0],
+        },
+        geometry=[sg.LineString([(7.5, 49.5), (8.5, 50.5)])],
+        index=pd.Index(["riv_1"]),
+        crs="EPSG:4326",
+    )
+    scores: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "station_name": ["Station Test"],
+            "upstream_area_GEB": [1000000.0],
+            "discharge_observations_to_GEB_upstream_area_ratio": [1.02],
+            "KGE": [0.88],
+            "timezone_utc_offset": [1.0],
+        },
+        geometry=[sg.Point(8.0, 50.0)],
+        index=pd.Index(["test_st"]),
+        crs="EPSG:4326",
+    )
+
+    writer: StationChartBundleWriter = StationChartBundleWriter()
+    writer.add_station(
+        "test_st", {"stationName": "Station Test", "metrics": {"KGE": 0.88}}
+    )
+    station_indices: dict[str, int] = writer.finish()
+
+    write_discharge_dashboard(
+        mapped_station_scores=scores,
+        output_path=dashboard_file,
+        region_geom=region,
+        rivers=rivers,
+        chart_bundles=writer.bundles,
+        station_bundle_indices=station_indices,
+    )
+    assert dashboard_file.exists()
+    assert not (tmp_path / "discharge_evaluation_map_charts").exists()
+    html_content: str = dashboard_file.read_text(encoding="utf-8")
+    assert "DecompressionStream" in html_content
+    assert "_gebStations" in html_content
+    assert "Station search" in html_content
+    assert writer.bundles[0] in html_content
+
+
+def test_build_station_chart_data_with_bankfull_discharge() -> None:
+    """Test that build_station_chart_data includes bankfullDischarge in timeseries."""
+    import logging
+
+    from geb.evaluate.workflows.dashboard import build_station_chart_data
+
+    idx = pd.date_range("2020-01-01", periods=5, freq="D")
+    df = pd.DataFrame(
+        {
+            "discharge_observations": [10.0, 12.0, 14.0, 11.0, 9.0],
+            "discharge_simulations": [11.0, 13.0, 13.5, 10.5, 9.5],
+        },
+        index=idx,
+    )
+    logger = logging.getLogger("test")
+    chart_data = build_station_chart_data(
+        discharge_comparison=df,
+        station_name="Test Station",
+        upstream_area_ratio=1.0,
+        timezone_utc_offset=0.0,
+        metrics={"KGE": 0.95},
+        frequency="daily",
+        logger=logger,
+        include_return_period_plots=False,
+        bankfull_discharge=25.5,
+    )
+    assert "timeseries" in chart_data
+    assert chart_data["timeseries"]["bankfullDischarge"] == 25.5
+
+
+def test_write_dashboard_charts_from_saved_scores_with_bankfull(
+    tmp_path: Path,
+) -> None:
+    """Test that _write_dashboard_charts_from_saved_scores picks up bankfull discharge."""
+    import logging
+
+    from geb.evaluate.workflows.dashboard import (
+        _write_dashboard_charts_from_saved_scores,
+    )
+
+    run_output = tmp_path / "run"
+    routing_dir = run_output / "report" / "hydrology.routing"
+    routing_dir.mkdir(parents=True)
+
+    # Write simulated hourly discharge for station
+    hourly_idx = pd.date_range("2020-01-01 00:30:00", periods=48, freq="h")
+    sim_df = pd.DataFrame(
+        {"discharge_hourly_m3_per_s_101": [10.0] * 48},
+        index=hourly_idx,
+    )
+    sim_df.to_parquet(routing_dir / "discharge_hourly_m3_per_s_101.parquet")
+
+    # Write bankfull discharge table
+    yearly_idx = pd.date_range("2020-01-01", periods=2, freq="YS")
+    bf_df = pd.DataFrame(
+        {"101": [30.0, 35.0]},
+        index=yearly_idx,
+    )
+    bf_df.to_parquet(routing_dir / "bankfull_discharge_yearly_m3_per_s.parquet")
+
+    # Observation table
+    obs_file = tmp_path / "obs_daily.parquet"
+    daily_idx = pd.date_range("2020-01-01 12:00:00", periods=2, freq="D")
+    obs_df = pd.DataFrame(
+        {"101": [9.5, 10.5]},
+        index=daily_idx,
+    )
+    obs_df.to_parquet(obs_file)
+
+    scores = gpd.GeoDataFrame(
+        {
+            "station_name": ["Station 101"],
+            "discharge_observations_to_GEB_upstream_area_ratio": [1.1],
+            "timezone_utc_offset": [0.0],
+            "KGE_daily": [0.9],
+        },
+        index=pd.Index(["101"]),
+        geometry=[sg.Point(8.0, 50.0)],
+        crs="EPSG:4326",
+    )
+
+    obs_hourly_file = tmp_path / "obs_hourly.parquet"
+    pd.DataFrame(index=pd.DatetimeIndex([], name="time")).to_parquet(obs_hourly_file)
+
+    table_files = {
+        "discharge/discharge_observations_daily": obs_file,
+        "discharge/discharge_observations_hourly": obs_hourly_file,
+    }
+    logger = logging.getLogger("test")
+    dashboard_path = tmp_path / "dashboard.html"
+
+    chart_files, chart_bundles, _ = _write_dashboard_charts_from_saved_scores(
+        table_files=table_files,
+        logger=logger,
+        mapped_station_scores=scores,
+        run_output_folder=run_output,
+        correct_discharge_observations=True,
+        include_return_period_plots=False,
+    )
+    assert "101" in chart_files
+    bundle_idx: int = chart_files["101"]
+    encoded: str = chart_bundles[bundle_idx]
+    decoded = json.loads(gzip.decompress(base64.b64decode(encoded)).decode("utf-8"))
+    assert decoded["101"]["timeseries"]["bankfullDischarge"] == 38.5
+    assert "bankfull" in decoded["101"]["timeseries"]
+    assert len(decoded["101"]["timeseries"]["bankfull"]) > 0
+
+
+def test_build_river_chart_data() -> None:
+    """Test that build_river_chart_data correctly structures the river payload."""
+    from geb.evaluate.workflows.dashboard import build_river_chart_data
+
+    river_data: dict[str, Any] = build_river_chart_data(
+        river_id="10",
+        upstream_area_km2=125.5,
+        time=["2020-01-01", "2021-01-01"],
+        bankfull_discharge=[30.0, 35.0],
+        width=[15.0, 15.0],
+        depth=[2.0, 2.2],
+    )
+    assert river_data["type"] == "river"
+    assert river_data["riverId"] == "10"
+    assert river_data["upstreamAreaKm2"] == 125.5
+    assert river_data["timeseries"]["time"] == ["2020-01-01", "2021-01-01"]
+    assert river_data["timeseries"]["bankfullDischarge"] == [30.0, 35.0]
+    assert river_data["timeseries"]["width"] == [15.0, 15.0]
+    assert river_data["timeseries"]["depth"] == [2.0, 2.2]
+
+
+def test_add_river_charts_to_bundle_writer(tmp_path: Path) -> None:
+    """Test that add_river_charts_to_bundle_writer adds river data into bundles."""
+    from geb.evaluate.workflows.dashboard import (
+        StationChartBundleWriter,
+        add_river_charts_to_bundle_writer,
+    )
+
+    run_output = tmp_path / "run"
+    routing_dir = run_output / "report" / "hydrology.routing"
+    routing_dir.mkdir(parents=True)
+
+    yearly_idx = pd.date_range("2020-01-01", periods=2, freq="YS")
+    df_q = pd.DataFrame({"20": [40.0, 45.0]}, index=yearly_idx)
+    df_d = pd.DataFrame({"20": [2.1, 2.3]}, index=yearly_idx)
+    df_w = pd.DataFrame({"20": [25.0, 25.0]}, index=yearly_idx)
+    df_q.to_parquet(routing_dir / "bankfull_discharge_rivers_yearly_m3_per_s.parquet")
+    df_d.to_parquet(routing_dir / "bankfull_depth_rivers_yearly_m.parquet")
+    df_w.to_parquet(routing_dir / "bankfull_width_rivers_yearly_m.parquet")
+
+    rivers_gdf = gpd.GeoDataFrame(
+        {"uparea_m2": [50_000_000.0], "geometry": [sg.LineString([(0, 0), (1, 1)])]},
+        index=pd.Index([20]),
+        crs="EPSG:4326",
+    )
+
+    writer = StationChartBundleWriter(max_stations_per_bundle=50)
+    add_river_charts_to_bundle_writer(
+        chart_writer=writer,
+        run_output_folder=run_output,
+        rivers=rivers_gdf,
+    )
+    files = writer.finish()
+    assert "river_20" in files
+    bundle_idx: int = files["river_20"]
+    encoded: str = writer.bundles[bundle_idx]
+    decoded = json.loads(gzip.decompress(base64.b64decode(encoded)).decode("utf-8"))
+    assert decoded["river_20"]["type"] == "river"
+    assert decoded["river_20"]["upstreamAreaKm2"] == 50.0
+    assert decoded["river_20"]["timeseries"]["bankfullDischarge"] == [40.0, 45.0]
+    assert decoded["river_20"]["timeseries"]["depth"] == [2.1, 2.3]
+    assert decoded["river_20"]["timeseries"]["width"] == [25.0, 25.0]

@@ -1,30 +1,55 @@
-"""Functions for creating interactive Folium discharge evaluation maps."""
+"""Build discharge dashboard maps and station chart files.
 
-import hashlib
+This module contains functions for the map, station charts, and map layers.
+JavaScript files in assets/discharge_dashboard control the interactive features.
+_JavascriptMacro adds these scripts and their data to the HTML file.
+"""
+
+import base64
+import gzip
 import html
 import json
+import logging
 import math
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple, cast
+from typing import Any, NamedTuple, cast
 
 import branca.colormap as cm
 import folium
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import shapely
+from branca.element import Figure
 from folium import MacroElement, TileLayer
-from jinja2 import Template
+from jinja2 import Environment
+from jinja2.utils import htmlsafe_json_dumps
+from pandas.api.typing import NaTType
 
+from geb.evaluate.workflows import discharge_characteristics, discharge_helpers
+from geb.evaluate.workflows.discharge_characteristics import (
+    DASHBOARD_CATCHMENT_CHARACTERISTICS,
+    CatchmentCharacteristic,
+)
+from geb.evaluate.workflows.discharge_helpers import load_station_discharge_comparison
+from geb.evaluate.workflows.discharge_metrics import (
+    DischargeMetrics,
+    use_daily_discharge_scores,
+)
+from geb.evaluate.workflows.discharge_station_checks import (
+    GEOD,
+    find_dashboard_excluded_stations,
+    find_excluded_stations,
+)
+from geb.hydrology.routing import select_active_rivers
 from geb.workflows.extreme_value_analysis import ReturnPeriodModel
 from geb.workflows.io import read_geom
-
-if TYPE_CHECKING:
-    from geb.model import GEBModel
 
 _ESRI_TOPO_TILES = (
     "https://server.arcgisonline.com/ArcGIS/rest/services/"
     "World_Topo_Map/MapServer/tile/{z}/{y}/{x}"
 )
+
 _ESRI_TOPO_ATTR = (
     "Sources: Esri, HERE, Garmin, Intermap, INCREMENT P, GEBCO, USGS, FAO, "
     "NPS, NRCan, GeoBase, IGN, Kadaster NL, Ordnance Survey, Esri Japan, "
@@ -32,12 +57,32 @@ _ESRI_TOPO_ATTR = (
     "user community"
 )
 
-
 StationMarkerIndex = dict[str, str | list[str]]
+
 RESERVOIR_WATERBODY_TYPE: int = 2
+
 _WATERBODY_STYLE: dict[int, dict[str, str]] = {
     RESERVOIR_WATERBODY_TYPE: {"color": "#FF8A65", "label": "Reservoir"},
 }
+
+_CHARACTERISTIC_COLORS: list[str] = [
+    "#440154",
+    "#414487",
+    "#2A788E",
+    "#22A884",
+    "#7AD151",
+    "#FDE725",
+]
+
+_CARAVAN_AVAILABLE_COLOR: str = "#1B9E77"
+
+_CARAVAN_UNAVAILABLE_COLOR: str = "#9CA3AF"
+
+_CHARACTERISTIC_COLORMAP: cm.LinearColormap = cm.LinearColormap(
+    colors=_CHARACTERISTIC_COLORS,
+    vmin=0.0,
+    vmax=100.0,
+)
 
 
 class DischargeDashboardGeometries(NamedTuple):
@@ -46,34 +91,6 @@ class DischargeDashboardGeometries(NamedTuple):
     region: gpd.GeoDataFrame
     rivers: gpd.GeoDataFrame
     waterbodies: gpd.GeoDataFrame
-
-
-def load_discharge_dashboard_geometries(
-    model: GEBModel,
-) -> DischargeDashboardGeometries:
-    """Load and filter geometries used by the discharge dashboard.
-
-    Args:
-        model: GEB model containing the geometry file registry.
-
-    Returns:
-        Region boundary, dashboard river network, and waterbody geometries.
-    """
-    region_geom: gpd.GeoDataFrame = read_geom(model.files["geom"]["mask"])
-    all_rivers: gpd.GeoDataFrame = read_geom(model.files["geom"]["routing/rivers"])
-    excluded_rivers: pd.Series = (
-        all_rivers["is_downstream_outflow"]
-        | all_rivers["is_upstream_of_downstream_basin"]
-        | all_rivers["is_further_downstream_outflow"]
-    )
-    waterbodies: gpd.GeoDataFrame = read_geom(
-        model.files["geom"]["waterbodies/waterbody_data"]
-    )
-    return DischargeDashboardGeometries(
-        region=region_geom,
-        rivers=all_rivers.loc[~excluded_rivers].copy(),
-        waterbodies=waterbodies,
-    )
 
 
 _METRIC_LAYER_CONFIGS: list[dict] = [
@@ -145,750 +162,290 @@ _METRIC_LAYER_CONFIGS: list[dict] = [
 
 
 class _JavascriptMacro(MacroElement):
-    """Small Folium macro wrapper for dashboard JavaScript.
+    """Embed a packaged dashboard script and its data in the exported HTML."""
 
-    Args:
-        script: JavaScript inserted in Folium's script block.
-    """
-
-    def __init__(self, script: str) -> None:
-        """Create a Folium macro from a script string.
+    def __init__(self, filename: str, data: Any) -> None:
+        """Load a dashboard script with data available to its Jinja template.
 
         Args:
-            script: JavaScript inserted in Folium's script block.
+            filename: JavaScript filename in assets/discharge_dashboard.
+            data: Script data serialized for safe embedding in Folium templates.
+
         """
         super().__init__()
-        self._template = Template(
-            "{%- macro script(this, kwargs) -%}\n" + script + "\n{%- endmacro -%}"
+        self.data: Any = data
+        script_path: Path = (
+            Path(__file__).parent / "assets" / "discharge_dashboard" / filename
+        )
+        # Folium renders scripts twice; escape data on the first pass so the
+        # second pass cannot interpret station text as a template.
+        environment: Environment = Environment()
+        environment.filters["script_json"] = _script_json
+        self._template = environment.from_string(
+            "{%- macro script(this, kwargs) -%}\n"
+            + script_path.read_text(encoding="utf-8")
+            + "\n{%- endmacro -%}"
         )
 
 
-def _as_finite_float(value: float | int | np.floating | None) -> float | None:
-    """Convert a numeric value to a finite JSON-friendly float.
+def create_discharge_dashboard(
+    evaluation_folder: Path,
+    run_output_folder: Path,
+    geometry_files: dict[str, Path],
+    table_files: dict[str, Path],
+    minimum_upstream_area_km2: float,
+    logger: logging.Logger,
+    correct_discharge_observations: bool = False,
+    output_filename: str = "discharge_evaluation_map.html",
+    include_return_period_plots: bool = True,
+) -> dict[str, str]:
+    """Create only the discharge evaluation dashboard.
+
+    This reuses ``evaluation_metrics.geoparquet`` from a previous
+    ``evaluate_discharge`` run. Data for the interactive Plotly charts are
+    rebuilt from the reported discharge time series. Static station plots
+    and skill-score plots are not regenerated.
+    Excluded stations retain diagnostic KGE and time series with a warning.
 
     Args:
-        value: Value to convert (dimensionless unless documented by the caller).
+        evaluation_folder: Folder containing saved discharge evaluation metrics.
+        run_output_folder: Output folder of the selected simulation run.
+        geometry_files: Model geometry paths keyed by dataset name.
+        table_files: Model observation table paths keyed by dataset name.
+        minimum_upstream_area_km2: Minimum routing area for evaluation (km²).
+        logger: Model logger for progress and diagnostics.
+        correct_discharge_observations: Whether to correct simulated discharge
+            by the observed-to-GEB upstream-area ratio (dimensionless), matching
+            the option in ``evaluate_discharge``.
+        output_filename: Dashboard HTML filename written inside the discharge
+            evaluation output folder, or an absolute output path.
+        include_return_period_plots: Whether to calculate and plot return-period
+            curves in station popups. Defaults to True.
 
     Returns:
-        Finite float value, or None for missing, NaN, or infinite values.
-    """
-    if value is None:
-        return None
-    float_value: float = float(value)
-    return float_value if np.isfinite(float_value) else None
-
-
-def _timestamp_to_isoformat(timestamp: Any) -> str:
-    """Convert a dashboard timestamp to an ISO-formatted string.
-
-    Args:
-        timestamp: Timestamp-like value from a discharge time-series index.
-
-    Returns:
-        ISO-formatted timestamp string.
+        Dictionary with the created dashboard path.
 
     Raises:
-        ValueError: If ``timestamp`` is missing or cannot be represented as a
-            timestamp.
+        FileNotFoundError: If saved discharge evaluation metrics do not exist.
+        ValueError: If ``output_filename`` is empty or
+            saved metrics use obsolete snapping.
     """
-    timestamp_value: pd.Timestamp = cast(pd.Timestamp, pd.Timestamp(timestamp))
-    if pd.isna(timestamp_value):
-        raise ValueError("Dashboard chart timestamps must not contain missing values.")
-    return timestamp_value.isoformat()
+    if not output_filename:
+        raise ValueError("output_filename must not be empty.")
+    output_path: Path = Path(output_filename)
 
-
-def _build_timeseries_payload(
-    validation_df: pd.DataFrame,
-) -> dict[str, list[str] | list[float | None]]:
-    """Build the popup payload for one discharge time-series chart.
-
-    Args:
-        validation_df: Observed/simulated discharge dataframe (m3/s).
-    Returns:
-        Dictionary with ISO timestamps and discharge values (m3/s).
-
-    Raises:
-        ValueError: If ``validation_df`` is not indexed by timestamps.
-    """
-    if not isinstance(validation_df.index, pd.DatetimeIndex):
-        raise ValueError("validation_df must use a DateTimeIndex for dashboard charts.")
-
-    return {
-        "time": [
-            _timestamp_to_isoformat(timestamp)
-            for timestamp in pd.DatetimeIndex(validation_df.index)
-        ],
-        "observed": [
-            _as_finite_float(value)
-            for value in validation_df["discharge_observations"].to_numpy()
-        ],
-        "simulated": [
-            _as_finite_float(value)
-            for value in validation_df["discharge_simulations"].to_numpy()
-        ],
-    }
-
-
-def _build_return_period_payload(
-    series: pd.Series,
-    return_periods_years: list[int | float],
-) -> dict[str, list[float | None]]:
-    """Build fitted return-period values for one discharge series.
-
-    Args:
-        series: Regular discharge time series (m3/s).
-        return_periods_years: Return periods to estimate (years).
-
-    Returns:
-        Dictionary with return periods (years) and fitted discharge values (m3/s).
-        Returns empty lists if the fit fails or the series is too short.
-    """
-    try:
-        model = ReturnPeriodModel(
-            series=series,
-            return_periods=return_periods_years,
-            fixed_shape=0.0,
-            selection_strategy="first_significant",
+    metrics_path: Path = evaluation_folder / "evaluation_metrics.geoparquet"
+    if not metrics_path.exists():
+        raise FileNotFoundError(
+            "No discharge evaluation metrics found. Run "
+            "`geb evaluate hydrology.evaluate_discharge` before creating "
+            "only the dashboard."
         )
-        return {
-            "returnPeriod": [
-                _as_finite_float(value)
-                for value in model.rl_table["T_years"].to_numpy(dtype=float)
-            ],
-            "discharge": [
-                _as_finite_float(value)
-                for value in model.rl_table["GPD_POT_RL"].to_numpy(dtype=float)
-            ],
-        }
-    except Exception:
-        return {"returnPeriod": [], "discharge": []}
 
-
-def build_discharge_dashboard_chart_data(
-    validation_df: pd.DataFrame,
-    station_name: str,
-    upstream_area_ratio: float,
-    metrics: dict[str, float],
-    frequency: str,
-) -> dict[str, Any]:
-    """Build compact interactive chart data for one discharge dashboard popup.
-
-    Args:
-        validation_df: Observed/simulated discharge dataframe (m3/s).
-        station_name: Human-readable station name.
-        upstream_area_ratio: Observed-to-model upstream-area ratio (dimensionless).
-        metrics: Discharge skill metrics such as ``KGE``, ``NSE``, and ``R2``
-            (dimensionless).
-        frequency: Data frequency label, for example ``"daily"`` or ``"hourly"``.
-
-    Returns:
-        Compact chart payload with discharge values (m3/s).
-    """
-    return_periods_years: list[int | float] = [2, 5, 10, 25, 50, 100]
-    simulated_series: pd.Series = validation_df["discharge_simulations"].copy()
-    simulated_series[validation_df["discharge_observations"].isna()] = np.nan
-    return {
-        "stationName": station_name,
-        "frequency": frequency,
-        "metrics": {
-            "KGE": _as_finite_float(metrics.get("KGE")),
-            "KGE_modified": _as_finite_float(metrics.get("KGE_modified")),
-            "KGE_correlation": _as_finite_float(metrics.get("KGE_correlation")),
-            "KGE_bias_ratio": _as_finite_float(metrics.get("KGE_bias_ratio")),
-            "KGE_variability_ratio": _as_finite_float(
-                metrics.get("KGE_variability_ratio")
-            ),
-            "NSE": _as_finite_float(metrics.get("NSE")),
-            "R2": _as_finite_float(metrics.get("R2")),
-            "RMSE": _as_finite_float(metrics.get("RMSE")),
-            "RRMSE": _as_finite_float(metrics.get("RRMSE")),
-            "upstreamAreaRatio": _as_finite_float(upstream_area_ratio),
-        },
-        "timeseries": _build_timeseries_payload(validation_df),
-        "returnPeriods": {
-            "observed": _build_return_period_payload(
-                validation_df["discharge_observations"], return_periods_years
-            ),
-            "simulated": _build_return_period_payload(
-                simulated_series, return_periods_years
-            ),
-        },
-    }
-
-
-def write_discharge_dashboard_chart_data(
-    dashboard_path: Path,
-    station_id: str,
-    chart_data: dict[str, Any],
-) -> str:
-    """Write one exact station chart payload for lazy browser loading.
-
-    Args:
-        dashboard_path: Output path of the dashboard HTML file.
-        station_id: Station identifier used to derive a stable asset filename.
-        chart_data: Complete interactive chart payload.
-
-    Returns:
-        POSIX-style payload path relative to the dashboard HTML.
-    """
-    chart_folder: Path = dashboard_path.parent / f"{dashboard_path.stem}_charts"
-    chart_folder.mkdir(parents=True, exist_ok=True)
-    station_hash: str = hashlib.sha256(station_id.encode()).hexdigest()[:16]
-    chart_path: Path = chart_folder / f"{station_hash}.js"
-    chart_path.write_text(
-        "window._gebStationChartPayload="
-        + json.dumps(chart_data, separators=(",", ":"))
-        + ";",
-        encoding="utf-8",
+    mapped_station_scores: gpd.GeoDataFrame = gpd.read_parquet(metrics_path)
+    snapped_locations: gpd.GeoDataFrame = read_geom(
+        geometry_files["discharge/discharge_snapped_locations"]
     )
-    return chart_path.relative_to(dashboard_path.parent).as_posix()
-
-
-def _inject_popup_chart_script(
-    m: folium.Map,
-    station_chart_files: dict[str, str],
-) -> None:
-    """Add lazy-rendered interactive station plots to dashboard popups.
-
-    Args:
-        m: Folium map to inject the macro into.
-        station_chart_files: Mapping of station IDs to exact chart payload files
-            relative to the dashboard HTML.
-
-    """
-    chart_files_json: str = json.dumps(station_chart_files, separators=(",", ":"))
-    _JavascriptMacro(
-        "window._stationChartFiles=" + chart_files_json + ";\n" + """
-(function(){
-  var plotlyUrl = 'https://cdn.plot.ly/plotly-2.35.2.min.js';
-  var colors = { observed: '#facc15', simulated: '#38bdf8' };
-  var stationChartCache = {};
-  var layoutBase = {
-    autosize: true,
-    height: 260,
-    margin: {l: 50, r: 18, t: 18, b: 42},
-    paper_bgcolor: '#020617',
-    plot_bgcolor: '#020617',
-    font: {color: '#e2e8f0', size: 11},
-    legend: {orientation: 'h', x: 0, y: 1.15},
-    xaxis: {gridcolor: '#1f2937', zerolinecolor: '#334155'},
-    yaxis: {gridcolor: '#1f2937', zerolinecolor: '#334155', rangemode: 'tozero'}
-  };
-
-  function ensurePlotly(callback) {
-    if (window.Plotly) { callback(); return; }
-    var script = document.createElement('script');
-    script.src = plotlyUrl;
-    script.onload = callback;
-    script.onerror = function() { callback(false); };
-    document.head.appendChild(script);
-  }
-
-  function escapeHtml(value) {
-    return String(value).replace(/[&<>"']/g, function(character) {
-      return ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'})[character];
-    });
-  }
-
-  function formatNumber(value) {
-    return Number.isFinite(value) ? value.toFixed(2) : 'n/a';
-  }
-
-  function metricHtml(label, value) {
-    return '<span><b>' + label + '</b> ' + formatNumber(value) + '</span>';
-  }
-
-  function makeChartDiv(id) {
-    return '<div id="' + id + '" class="geb-popup__chart"></div>';
-  }
-
-  function loadStationData(stationId, callback) {
-    if (stationChartCache[stationId]) {
-      callback(stationChartCache[stationId]);
-      return;
-    }
-    var chartFile = window._stationChartFiles[stationId];
-    if (!chartFile) {
-      callback(null);
-      return;
-    }
-    var script = document.createElement('script');
-    script.src = chartFile;
-    script.onload = function() {
-      var data = window._gebStationChartPayload;
-      delete window._gebStationChartPayload;
-      if (data) stationChartCache[stationId] = data;
-      script.remove();
-      callback(data || null);
-    };
-    script.onerror = function() {
-      script.remove();
-      callback(null);
-    };
-    document.head.appendChild(script);
-  }
-
-  function finiteNumbers(values, minimumValue) {
-    return (values || []).map(Number).filter(function(value) {
-      return Number.isFinite(value) && (minimumValue === undefined || value >= minimumValue);
-    });
-  }
-
-  function linearRange(values) {
-    var numbers = finiteNumbers(values);
-    if (!numbers.length) return undefined;
-    var minimum = Math.min.apply(null, numbers);
-    var maximum = Math.max.apply(null, numbers);
-    if (minimum === maximum) {
-      var padding = Math.max(Math.abs(minimum) * 0.05, 1);
-      return [minimum - padding, maximum + padding];
-    }
-    return [minimum, maximum];
-  }
-
-  function logRange(values) {
-    var numbers = finiteNumbers(values, Number.MIN_VALUE);
-    if (!numbers.length) return undefined;
-    var minimum = Math.min.apply(null, numbers);
-    var maximum = Math.max.apply(null, numbers);
-    if (minimum === maximum) {
-      return [Math.log10(minimum) - 0.05, Math.log10(maximum) + 0.05];
-    }
-    return [Math.log10(minimum), Math.log10(maximum)];
-  }
-
-  function dateRange(values) {
-    var times = (values || []).map(function(value) {
-      return new Date(value).getTime();
-    }).filter(Number.isFinite);
-    if (!times.length) return undefined;
-    return [new Date(Math.min.apply(null, times)), new Date(Math.max.apply(null, times))];
-  }
-
-  function sortedUniqueNumbers(values) {
-    var seen = {};
-    return finiteNumbers(values).filter(function(value) {
-      var key = String(value);
-      if (seen[key]) return false;
-      seen[key] = true;
-      return true;
-    }).sort(function(firstValue, secondValue) {
-      return firstValue - secondValue;
-    });
-  }
-
-  function formatTick(value) {
-    return Number.isInteger(value) ? String(value) : value.toPrecision(3);
-  }
-
-  function renderCharts(stationId, data) {
-    var safeStationId = encodeURIComponent(stationId);
-    var common = {responsive: true, displaylogo: false, modeBarButtonsToRemove: ['select2d', 'lasso2d']};
-    // SVG is reliable for daily series; WebGL keeps full-resolution hourly
-    // series responsive without changing the underlying scientific data.
-    var timeseriesTraceType = data.frequency === 'hourly' ? 'scattergl' : 'scatter';
-    function trace(name, x, y, kind, mode, hoverTemplate) {
-      return {
-        x: x,
-        y: y,
-        name: name,
-        type: kind,
-        mode: mode,
-        connectgaps: false,
-        hovertemplate: hoverTemplate,
-        line: {color: colors[name.toLowerCase()], width: 1.5},
-        marker: {color: colors[name.toLowerCase()], size: 5}
-      };
-    }
-    var timeRange = dateRange(data.timeseries.time);
-    var observedReturnPeriodRange = linearRange(data.returnPeriods.observed.returnPeriod);
-    var simulatedReturnPeriodRange = linearRange(data.returnPeriods.simulated.returnPeriod);
-    var returnPeriodValues = [];
-    if (observedReturnPeriodRange) returnPeriodValues = returnPeriodValues.concat(observedReturnPeriodRange);
-    if (simulatedReturnPeriodRange) returnPeriodValues = returnPeriodValues.concat(simulatedReturnPeriodRange);
-    var returnPeriodRange = logRange(returnPeriodValues);
-    var returnPeriodTicks = sortedUniqueNumbers(
-      data.returnPeriods.observed.returnPeriod.concat(data.returnPeriods.simulated.returnPeriod)
-    );
-    Plotly.newPlot('geb-time-' + safeStationId, [
-      trace('Observed', data.timeseries.time, data.timeseries.observed, timeseriesTraceType, 'lines', '%{x|%b %Y}<br>%{y:,.0f} m3/s<extra>Observed</extra>'),
-      trace('Simulated', data.timeseries.time, data.timeseries.simulated, timeseriesTraceType, 'lines', '%{x|%b %Y}<br>%{y:,.0f} m3/s<extra>Simulated</extra>')
-    ], Object.assign({}, layoutBase, {hovermode: 'x unified', xaxis: Object.assign({}, layoutBase.xaxis, {type: 'date', range: timeRange}), yaxis: Object.assign({}, layoutBase.yaxis, {title: 'Discharge (m3/s)'})}), common);
-    Plotly.newPlot('geb-return-' + safeStationId, [
-      trace('Observed', data.returnPeriods.observed.returnPeriod, data.returnPeriods.observed.discharge, 'scatter', 'lines+markers', '%{x:g}-year<br>%{y:,.0f} m3/s<extra>Observed</extra>'),
-      trace('Simulated', data.returnPeriods.simulated.returnPeriod, data.returnPeriods.simulated.discharge, 'scatter', 'lines+markers', '%{x:g}-year<br>%{y:,.0f} m3/s<extra>Simulated</extra>')
-    ], Object.assign({}, layoutBase, {hovermode: 'x unified', xaxis: Object.assign({}, layoutBase.xaxis, {type: 'log', range: returnPeriodRange, tickmode: 'array', tickvals: returnPeriodTicks, ticktext: returnPeriodTicks.map(formatTick), title: 'Return period (years)'}), yaxis: Object.assign({}, layoutBase.yaxis, {title: 'Discharge (m3/s)'})}), common);
-  }
-
-  function renderStation(el, stationId) {
-    if (el.dataset.rendered === 'true') return;
-    el.dataset.rendered = 'true';
-    loadStationData(stationId, function(data) {
-      if (!data) {
-        el.innerHTML = '<div class="geb-popup__error">No interactive chart data is available.</div>';
-        return;
-      }
-    var metrics = data.metrics || {};
-    var safeStationId = encodeURIComponent(stationId);
-    el.innerHTML = '<div class="geb-popup__title">' + escapeHtml(data.stationName || stationId) + '</div>' +
-      '<div class="geb-popup__subtitle">Station ' + escapeHtml(stationId) + ' · ' + escapeHtml(data.frequency || 'discharge') + '</div>' +
-      '<div class="geb-popup__metrics">' + metricHtml('KGE', metrics.KGE) + metricHtml('mKGE', metrics.KGE_modified) +
-      metricHtml('r', metrics.KGE_correlation) + metricHtml('β', metrics.KGE_bias_ratio) +
-      metricHtml('α', metrics.KGE_variability_ratio) + metricHtml('NSE', metrics.NSE) +
-      metricHtml('r²', metrics.R2) + metricHtml('RMSE', metrics.RMSE) +
-      metricHtml('RRMSE', metrics.RRMSE) + metricHtml('Area ratio', metrics.upstreamAreaRatio) + '</div>' +
-      '<div class="geb-popup__chart-title">Return periods</div>' + makeChartDiv('geb-return-' + safeStationId) +
-      '<div class="geb-popup__chart-title">Discharge time series</div>' + makeChartDiv('geb-time-' + safeStationId);
-    ensurePlotly(function(loaded) {
-      if (loaded === false) {
-        el.innerHTML = '<div class="geb-popup__error">Interactive charts require access to cdn.plot.ly.</div>';
-        return;
-      }
-      renderCharts(stationId, data);
-    });
-    });
-  }
-
-  var style = document.createElement('style');
-  style.textContent = '.geb-popup{width:820px;max-width:86vw;color:#0f172a;font-family:Inter,system-ui,sans-serif}.geb-popup__title{color:#0f172a;font-size:18px;font-weight:750}.geb-popup__subtitle{color:#475569;font-size:12px;margin-bottom:8px}.geb-popup__metrics{display:flex;gap:12px;flex-wrap:wrap;margin:6px 0 10px}.geb-popup__metrics span{background:#111827;border:1px solid #263244;border-radius:6px;color:#e2e8f0;padding:5px 8px}.geb-popup__chart{height:260px;background:#020617;border:1px solid #263244;border-radius:8px;margin-bottom:10px}.geb-popup__chart-title{color:#334155;font-weight:700;font-size:13px;margin:10px 0 4px}.geb-popup__error{color:#b91c1c;padding:18px}.geb-popup img{width:100%;height:auto;display:block}';
-  document.head.appendChild(style);
-
-"""
-        "{{this._parent.get_name()}}.on('popupopen', function(e) {\n"
-        "  var content = e.popup.getContent();\n"
-        "  if (!content || !content.querySelector) return;\n"
-        "  var el = content.querySelector('[data-station-id]');\n"
-        "  if (!el) return;\n"
-        "  var sid = el.getAttribute('data-station-id');\n"
-        "  renderStation(el, sid);\n"
-        "});\n"
-        "})();\n"
-    ).add_to(m)
-
-
-def _inject_station_search_script(
-    m: folium.Map,
-    station_markers: list[StationMarkerIndex],
-) -> None:
-    """Add a station ID/name search control.
-
-    Args:
-        m: Folium map receiving the search control.
-        station_markers: Station metadata and Folium marker variable names.
-    """
-    marker_index_js = json.dumps(station_markers, separators=(",", ":"))
-    _JavascriptMacro(
-        "var gebStationIndex="
-        + marker_index_js
-        + ";\n"
-        + """
-(function(){
-  var map = {{this._parent.get_name()}};
-
-  function resolveMarkers(station) {
-    if (station._markers) return station._markers;
-    station._markers = station.markers.map(function(name) {
-      try { return window[name] || eval(name); } catch(error) { return null; }
-    }).filter(Boolean);
-    return station._markers;
-  }
-
-  function setStationVisible(station, visible) {
-    resolveMarkers(station).forEach(function(marker) {
-      marker.setStyle({
-        opacity: visible ? 1 : 0,
-        fillOpacity: visible ? 0.9 : 0
-      });
-      marker.options.interactive = visible;
-      if (marker.getElement()) {
-        marker.getElement().style.pointerEvents = visible ? '' : 'none';
-      }
-    });
-  }
-
-  function applySearch(query) {
-    var normalizedQuery = query.trim().toLowerCase();
-    var matches = [];
-    gebStationIndex.forEach(function(station) {
-      var haystack = (station.id + ' ' + station.name).toLowerCase();
-      var visible = !normalizedQuery || haystack.indexOf(normalizedQuery) !== -1;
-      if (visible) matches.push(station);
-      setStationVisible(station, visible);
-    });
-    updateStatus(normalizedQuery, matches);
-    return matches;
-  }
-
-  function updateStatus(query, matches) {
-    var text = query ? matches.length + ' matching stations' : gebStationIndex.length + ' stations';
-    if (query && matches.length) {
-      text += ' · Enter opens first match';
-    }
-    status.textContent = text;
-  }
-
-  function openFirstMatch(matches) {
-    if (!matches.length) return;
-    var marker = resolveMarkers(matches[0])[0];
-    if (!marker) return;
-    map.setView(marker.getLatLng(), Math.max(map.getZoom(), 8));
-    marker.openPopup();
-  }
-
-  var control = L.control({position: 'topright'});
-  control.onAdd = function() {
-    var root = L.DomUtil.create('div', 'geb-station-search');
-    root.innerHTML = '<label for="geb-station-search-input">Station search</label>' +
-      '<div class="geb-station-search__row"><input id="geb-station-search-input" type="search" placeholder="ID or name">' +
-      '<button type="button" title="Clear station search">Clear</button></div>' +
-      '<div class="geb-station-search__status"></div>';
-    L.DomEvent.disableClickPropagation(root);
-    L.DomEvent.disableScrollPropagation(root);
-    return root;
-  };
-  control.addTo(map);
-
-  var root = document.querySelector('.geb-station-search');
-  var input = root.querySelector('input');
-  var button = root.querySelector('button');
-  var status = root.querySelector('.geb-station-search__status');
-
-  input.addEventListener('input', function() { applySearch(input.value); });
-  input.addEventListener('keydown', function(event) {
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      openFirstMatch(applySearch(input.value));
-    }
-  });
-  button.addEventListener('click', function() {
-    input.value = '';
-    input.focus();
-    applySearch('');
-  });
-
-  var style = document.createElement('style');
-  style.textContent = '.geb-station-search{background:#020617;color:#e2e8f0;border:1px solid #263244;border-radius:8px;padding:10px;width:250px;box-shadow:0 12px 30px rgba(0,0,0,.35);font-family:Inter,system-ui,sans-serif}.geb-station-search label{display:block;font-size:12px;font-weight:750;margin-bottom:6px}.geb-station-search__row{display:flex;gap:6px}.geb-station-search input{min-width:0;flex:1;background:#111827;color:#f8fafc;border:1px solid #334155;border-radius:6px;padding:6px 8px}.geb-station-search button{background:#1f2937;color:#f8fafc;border:1px solid #475569;border-radius:6px;padding:6px 8px;cursor:pointer}.geb-station-search__status{color:#94a3b8;font-size:11px;margin-top:6px}';
-  document.head.appendChild(style);
-  updateStatus('', gebStationIndex);
-})();
-"""
-    ).add_to(m)
-
-
-def _add_station_marker(
-    layer: folium.FeatureGroup,
-    coords: list[float],
-    radius: float,
-    fill_color: str,
-    popup_html: str,
-    popup_width: int,
-    tooltip: str,
-) -> str:
-    """Add a station marker and return its JavaScript variable name.
-
-    Args:
-        layer: Folium layer receiving the marker.
-        coords: Marker coordinates as ``[latitude, longitude]`` (degrees).
-        radius: Marker radius (pixels).
-        fill_color: Marker fill color.
-        popup_html: Popup placeholder HTML.
-        popup_width: Popup width (pixels).
-        tooltip: Marker tooltip text.
-
-    Returns:
-        Folium JavaScript variable name for the marker.
-    """
-    marker = folium.CircleMarker(
-        location=coords,
-        radius=radius,
-        color="black",
-        fill=True,
-        fill_color=fill_color,
-        fill_opacity=0.9,
-        popup=folium.Popup(popup_html, max_width=popup_width),
-        tooltip=tooltip,
-        z_index=1000,
+    # Keep stations that failed snapping or visualization on the dashboard
+    # while excluding them from evaluation summaries.
+    excluded_stations: gpd.GeoDataFrame = find_excluded_stations(
+        snapped_locations,
+        run_output_folder / "report",
     )
-    marker.add_to(layer)
-    return marker.get_name()
+    if not excluded_stations.empty:
+        mapped_station_scores["exclusion_reason"] = excluded_stations[
+            "exclusion_reason"
+        ].reindex(mapped_station_scores.index)
+    diagnostic_path: Path = metrics_path.with_name("diagnostic_metrics.geoparquet")
+    if diagnostic_path.exists():
+        mapped_excluded_scores: gpd.GeoDataFrame = gpd.read_parquet(diagnostic_path)
+        mapped_station_scores = gpd.GeoDataFrame(
+            pd.concat(
+                [
+                    mapped_station_scores,
+                    mapped_excluded_scores.loc[
+                        ~mapped_excluded_scores.index.isin(mapped_station_scores.index)
+                    ],
+                ]
+            ),
+            geometry="geometry",
+            crs=mapped_station_scores.crs,
+        )
+    # Remove this extra guard in January 2027, after old builds are updated.
+    if not mapped_station_scores.empty and (
+        "snapping_method" not in mapped_station_scores.columns
+        or not (
+            mapped_station_scores["snapping_method"] == "original_subgrid_pixel_v1"
+        ).all()
+    ):
+        raise ValueError(
+            "Saved discharge metrics predate original-subgrid-pixel snapping. Rebuild hydrography "
+            "and discharge observations, rerun station discharge reporting and "
+            "hydrology.evaluate_discharge before creating the dashboard."
+        )
+    excluded_stations = find_dashboard_excluded_stations(
+        mapped_station_scores,
+        excluded_stations,
+        snapped_locations,
+        Path(geometry_files["discharge/discharge_snapped_locations"]),
+        minimum_upstream_area_km2,
+    )
+    n_stations: int = len(mapped_station_scores)
 
+    logger.info("Creating discharge dashboard for %d stations.", n_stations)
 
-def _add_metric_station_markers(
-    row: pd.Series,
-    metric_layers: list[tuple[folium.FeatureGroup, cm.LinearColormap, str]],
-    coords: list[float],
-    circle_radius: float,
-    popup_html: str,
-    popup_width: int,
-    tooltip: str,
-) -> list[str]:
-    """Add one station marker to each metric layer.
-
-    Args:
-        row: Evaluation metrics for one station (dimensionless).
-        metric_layers: Layers, colormaps, and metric names to render.
-        coords: Marker coordinates as ``[latitude, longitude]`` (degrees).
-        circle_radius: Marker radius (pixels).
-        popup_html: Popup placeholder HTML.
-        popup_width: Popup width (pixels).
-        tooltip: Marker tooltip text.
-
-    Returns:
-        Folium JavaScript variable names for the created markers.
-    """
-    marker_names: list[str] = []
-    for layer, colormap, metric_name in metric_layers:
-        metric_value: float = row[metric_name]
-        fill_color: str = colormap(metric_value) if pd.notna(metric_value) else "gray"
-        marker_names.append(
-            _add_station_marker(
-                layer=layer,
-                coords=coords,
-                radius=circle_radius,
-                fill_color=fill_color,
-                popup_html=popup_html,
-                popup_width=popup_width,
-                tooltip=tooltip,
+    dashboard_station_scores: gpd.GeoDataFrame = mapped_station_scores.copy()
+    use_daily_discharge_scores(dashboard_station_scores)
+    dashboard_characteristics: pd.DataFrame | None = None
+    if not dashboard_station_scores.empty:
+        dashboard_characteristics = (
+            discharge_characteristics.load_dashboard_catchment_characteristics(
+                mapped_station_scores=dashboard_station_scores,
+                logger=logger,
             )
         )
-    return marker_names
 
-
-def _add_waterbody_layers(
-    discharge_map: folium.Map,
-    waterbodies: gpd.GeoDataFrame,
-) -> None:
-    """Add reservoir point layers to the discharge map.
-
-    Args:
-        discharge_map: Folium map receiving waterbody layers.
-        waterbodies: Waterbody GeoDataFrame with polygon geometries and
-            ``waterbody_type`` identifiers. Only reservoirs are rendered.
-    """
-    waterbody_layers: dict[int, folium.FeatureGroup] = {
-        waterbody_type: folium.FeatureGroup(name=style["label"] + "s", show=True)
-        for waterbody_type, style in _WATERBODY_STYLE.items()
-    }
-    reservoir_mask: pd.Series = (
-        waterbodies["waterbody_type"].astype(int) == RESERVOIR_WATERBODY_TYPE
+    logger.info("Loading dashboard geometries...")
+    dashboard_geometries: DischargeDashboardGeometries = (
+        load_discharge_dashboard_geometries(geometry_files)
     )
-    reservoirs: gpd.GeoDataFrame = waterbodies.loc[reservoir_mask].copy()
-    if reservoirs.empty:
-        return
+    enriched_rivers: gpd.GeoDataFrame = attach_end_of_run_river_dimensions(
+        rivers=dashboard_geometries.rivers,
+        run_output_folder=run_output_folder,
+    )
 
-    waterbodies_wgs84: gpd.GeoDataFrame = reservoirs.to_crs(epsg=4326)
-    for _, waterbody_row in waterbodies_wgs84.iterrows():
-        waterbody_style: dict[str, str] = _WATERBODY_STYLE[RESERVOIR_WATERBODY_TYPE]
-
-        centroid = waterbody_row.geometry.centroid
-        area_km2: float | None = (
-            float(waterbody_row["average_area"]) / 1e6
-            if "average_area" in waterbody_row.index
-            else None
+    dashboard_path: Path = evaluation_folder / output_path
+    logger.info("Preparing interactive chart data...")
+    station_bundle_indices, chart_bundles, chart_timelines = (
+        _write_dashboard_charts_from_saved_scores(
+            table_files=table_files,
+            logger=logger,
+            mapped_station_scores=mapped_station_scores,
+            run_output_folder=run_output_folder,
+            correct_discharge_observations=correct_discharge_observations,
+            include_return_period_plots=include_return_period_plots,
+            rivers=enriched_rivers,
         )
-        volume_km3: float | None = (
-            float(waterbody_row["volume_total"]) / 1e9
-            if "volume_total" in waterbody_row.index
-            else None
-        )
-        popup_lines: list[str] = [
-            f"<b>{waterbody_style['label']}</b> "
-            f"(ID {waterbody_row.get('waterbody_id', '?')})<br>"
-        ]
-        if area_km2 is not None:
-            popup_lines.append(f"Area: {area_km2:.1f} km²<br>")
-        if volume_km3 is not None:
-            popup_lines.append(f"Volume: {volume_km3:.3f} km³<br>")
+    )
 
-        folium.CircleMarker(
-            location=[centroid.y, centroid.x],
-            radius=5,
-            color="black",
-            weight=0.5,
-            fill=True,
-            fill_color=waterbody_style["color"],
-            fill_opacity=0.8,
-            popup=folium.Popup("".join(popup_lines), max_width=200),
-            tooltip=f"{waterbody_style['label']} {waterbody_row.get('waterbody_id', '')}",
-            z_index=500,
-        ).add_to(waterbody_layers[RESERVOIR_WATERBODY_TYPE])
-
-    for waterbody_layer in waterbody_layers.values():
-        waterbody_layer.add_to(discharge_map)
+    logger.info("Creating the dashboard HTML file...")
+    write_discharge_dashboard(
+        mapped_station_scores=dashboard_station_scores,
+        output_path=dashboard_path,
+        region_geom=dashboard_geometries.region,
+        rivers=enriched_rivers,
+        chart_bundles=chart_bundles,
+        station_bundle_indices=station_bundle_indices,
+        waterbodies=dashboard_geometries.waterbodies,
+        station_characteristics=dashboard_characteristics,
+        excluded_stations=excluded_stations,
+        chart_timeline=chart_timelines,
+    )
+    logger.info("Discharge evaluation dashboard created: %s", dashboard_path)
+    return {"dashboard": str(dashboard_path)}
 
 
-def create_discharge_folium_map(
-    evaluation_gdf: gpd.GeoDataFrame,
+def write_discharge_dashboard(
+    mapped_station_scores: gpd.GeoDataFrame,
     output_path: Path,
     region_geom: gpd.GeoDataFrame,
     rivers: gpd.GeoDataFrame,
-    station_chart_files: dict[str, str],
+    chart_bundles: list[str],
+    station_bundle_indices: dict[str, int],
     waterbodies: gpd.GeoDataFrame | None = None,
-    minimum_river_upstream_area_km2: float = 5000.0,
+    station_characteristics: pd.DataFrame | None = None,
+    excluded_stations: gpd.GeoDataFrame | None = None,
+    chart_timeline: list[int] | dict[str, Any] | None = None,
+    run_output_folder: Path | None = None,
 ) -> folium.Map:
-    """Create an interactive Folium discharge evaluation map.
+    """Save the discharge map with station charts, score layers, and snapping characteristics (e.g., station IDs, upstream areas).
 
-    Stations are shown as circle markers coloured by each discharge metric
-    (switchable via layer control) and sized by upstream area.  An optional
-    upstream-area-ratio layer is included when all stations have the ratio
-    available.  Station popup charts are lazy-rendered with Plotly when the
-    popup is opened. Reservoirs are rendered as dot markers when ``waterbodies``
-    is provided; lakes are skipped because they make large dashboards slow.
+    Charts and snapping features load on demand. Station size reflects upstream
+    area; score and attribute layers share a dynamic legend.
 
     Args:
-        evaluation_gdf: Per-station GeoDataFrame with discharge metric columns,
+        mapped_station_scores: Per-station GeoDataFrame with discharge metric columns,
             ``upstream_area_GEB``,
             ``discharge_observations_to_GEB_upstream_area_ratio``, and a
             point geometry.
         output_path: Full path (including filename) where the HTML file is
             saved.
         region_geom: Basin/region boundary GeoDataFrame used to fit the map
-            extent and render the catchment outline.
-        rivers: River network GeoDataFrame (geometry only; rivers are rendered
-            at uniform width).
-        station_chart_files: Exact interactive chart payload files keyed by
-            station ID string.
+            extent and draw the catchment outline.
+        rivers: WGS84 river network shown on the map.
+        chart_bundles: List of inlined Base64-encoded compressed chart bundle payloads.
+        station_bundle_indices: Mapping from station ID string to its integer bundle index.
         waterbodies: Optional GeoDataFrame with columns ``waterbody_type``
             (2 = reservoir) and polygon geometries. Centroids are used for dot
             placement.
-        minimum_river_upstream_area_km2: Minimum upstream area (km²) for
-            rivers shown on the map. Larger values reduce file size.  Rivers
-            with an ``uparea_m2`` column smaller than this threshold are
-            dropped before rendering.  Set to ``0`` to include all rivers.
+        station_characteristics: Optional station table containing ``station_ID`` and
+            the selected GRDC-Caravan attributes in display units.
+        excluded_stations: Stations omitted from summary scores, with an exclusion
+            reason. Available charts remain accessible for diagnostic use.
+        chart_timeline: Optional shared integer timestamp array (epoch ms) or
+            dictionary of timelines by frequency for popup time-series charts.
+            Defaults to None.
+        run_output_folder: Optional simulation output folder used to attach
+            end-of-run simulated river dimensions if not already present on
+            rivers. Defaults to None.
 
     Returns:
         The Folium map object (already saved to ``output_path``).
     """
+    if run_output_folder is not None and (
+        "width_m" not in rivers.columns or "depth_m" not in rivers.columns
+    ):
+        rivers = attach_end_of_run_river_dimensions(
+            rivers=rivers,
+            run_output_folder=run_output_folder,
+        )
     min_lon, min_lat, max_lon, max_lat = region_geom.total_bounds
+    if excluded_stations is not None and not excluded_stations.empty:
+        mapped_station_scores = mapped_station_scores.copy()
+        # Apply current exclusion reasons when displaying previously saved scores.
+        excluded_ids: pd.Index = mapped_station_scores.index.intersection(
+            excluded_stations.index
+        )
+        mapped_station_scores.loc[excluded_ids, "exclusion_reason"] = (
+            excluded_stations.loc[excluded_ids, "exclusion_reason"]
+        )
     map_center: list[float] = [(min_lat + max_lat) / 2, (min_lon + max_lon) / 2]
-    discharge_map = folium.Map(
-        location=map_center,
-        tiles=TileLayer(
-            tiles=_ESRI_TOPO_TILES,
-            attr=_ESRI_TOPO_ATTR,
-            name="Topographic Map",
-        ),
-    )
+    discharge_map = folium.Map(location=map_center, tiles=None, prefer_canvas=True)
+    TileLayer(
+        tiles=_ESRI_TOPO_TILES,
+        attr=_ESRI_TOPO_ATTR,
+        name="Topographic Map",
+    ).add_to(discharge_map)
+    TileLayer(
+        tiles="Esri.WorldImagery",
+        name="Satellite imagery",
+        show=False,
+        max_zoom=19,
+    ).add_to(discharge_map)
     discharge_map.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]], padding=(30, 30))
-
-    folium.GeoJson(
-        region_geom,
+    catchment_layer: folium.FeatureGroup = folium.FeatureGroup(
         name="Catchment",
-        style_function=lambda x: {"fillColor": "none", "color": "black", "weight": 2},
-        z_index=1,
+        show=True,
+    )
+    catchment_layer.add_to(discharge_map)
+    catchment_geom: gpd.GeoDataFrame = region_geom.copy()
+    catchment_geom["geometry"] = shapely.set_precision(
+        catchment_geom["geometry"], grid_size=1e-5
+    )
+    catchment_json_bytes: bytes = catchment_geom.to_json(drop_id=True).encode("utf-8")
+    compressed_catchment: bytes = gzip.compress(catchment_json_bytes, compresslevel=9)
+    encoded_catchment: str = base64.b64encode(compressed_catchment).decode("ascii")
+    _JavascriptMacro(
+        "catchment.js",
+        {
+            "layer": catchment_layer.get_name(),
+            "payload": encoded_catchment,
+        },
     ).add_to(discharge_map)
-
-    rivers_for_map: gpd.GeoDataFrame = rivers
-    if minimum_river_upstream_area_km2 > 0 and "uparea_m2" in rivers_for_map.columns:
-        rivers_for_map = rivers_for_map[
-            rivers_for_map["uparea_m2"] >= minimum_river_upstream_area_km2 * 1e6
-        ]
-    folium.GeoJson(
-        rivers_for_map[["geometry"]].to_json(),
-        name="Rivers",
-        style_function=lambda x: {"color": "#4A90D9", "weight": 1.0, "opacity": 0.6},
-        z_index=2,
-    ).add_to(discharge_map)
+    _add_river_layers(
+        discharge_map,
+        rivers,
+    )
 
     metric_layers: list[tuple[folium.FeatureGroup, cm.LinearColormap, str]] = [
         (
@@ -907,95 +464,1812 @@ def create_discharge_folium_map(
     layer_upstream: folium.FeatureGroup | None = None
     colormap_upstream: cm.LinearColormap | None = None
     if (
-        not evaluation_gdf["discharge_observations_to_GEB_upstream_area_ratio"]
+        not mapped_station_scores["discharge_observations_to_GEB_upstream_area_ratio"]
         .isna()
-        .any()
+        .all()
     ):
         colormap_upstream = cm.LinearColormap(
             colors=["red", "orange", "yellow", "blue", "green"],
             vmin=0.5,
             vmax=2.0,
-            caption="Upstream Area Ratio",
+            caption="Station / routing upstream area",
         )
-        layer_upstream = folium.FeatureGroup(name="Upstream Area Ratio", show=False)
+        layer_upstream = folium.FeatureGroup(
+            name="Station / routing upstream area", show=False
+        )
+
+    characteristic_layers: list[tuple[folium.FeatureGroup, dict[str, Any]]] = []
+    availability_layer: folium.FeatureGroup | None = None
+    characteristic_records: dict[str, dict[str, Any]] = {}
+    caravan_available_count: int = 0
+    if station_characteristics is not None:
+        characteristic_data: dict[str, Any] = _build_characteristic_layer_data(
+            mapped_station_scores=mapped_station_scores,
+            station_characteristics=station_characteristics,
+        )
+        characteristic_layers = [
+            (
+                folium.FeatureGroup(
+                    name=f"GRDC-Caravan · {characteristic['label']}",
+                    show=False,
+                ),
+                characteristic,
+            )
+            for characteristic in characteristic_data["characteristics"]
+        ]
+        availability_layer = folium.FeatureGroup(
+            name="GRDC-Caravan · Data availability",
+            show=False,
+        )
+        characteristic_records = {
+            str(station["id"]): station for station in characteristic_data["stations"]
+        }
+        caravan_available_count = sum(
+            bool(station["caravan_available"])
+            for station in characteristic_data["stations"]
+        )
 
     largest_upstream_area_sqrt: float = math.sqrt(
-        evaluation_gdf["upstream_area_GEB"].max()
+        mapped_station_scores["upstream_area_GEB"].max()
     )
 
-    popup_width = 800
+    popup_width: int = 800
     station_marker_index: list[StationMarkerIndex] = []
+    snapping_layer: folium.FeatureGroup = folium.FeatureGroup(
+        name="Station snapping details (gauge → original subgrid pixel → routing grid)",
+        show=False,
+    )
+    snapping_columns: set[str] = {
+        "station_longitude",
+        "station_latitude",
+        "routing_grid_longitude",
+        "routing_grid_latitude",
+        "original_subgrid_longitude",
+        "original_subgrid_latitude",
+        "upstream_area_GRDC",
+        "upstream_area_GEB",
+        "upstream_area_GEB_original_subgrid",
+        "station_to_original_subgrid_distance_m",
+        "snapped_river_id",
+        "snapping_method",
+        "timezone_utc_offset",
+    }
+    snapping_available: bool = snapping_columns.issubset(mapped_station_scores.columns)
+    snapping_stations: list[dict[str, Any]] = []
 
-    for station_id, row in evaluation_gdf.iterrows():
-        coords: list[float] = [row.geometry.y, row.geometry.x]
-        station_id_str: str = str(station_id)
-        station_name: str = (
-            str(row["station_name"])
-            if "station_name" in row.index and pd.notna(row["station_name"])
-            else station_id_str
-        )
-        escaped_station_id: str = html.escape(station_id_str, quote=True)
-        popup_html = (
-            f"<div class='geb-popup' data-station-id='{escaped_station_id}' "
-            f"style='width:{popup_width}px;'>Loading interactive charts...</div>"
-        )
-        tooltip = f"{station_id_str}: {station_name}"
-
-        # Scale circle radius by upstream area (range 5–10 px).
-        circle_radius: float = (
-            5 + math.sqrt(row["upstream_area_GEB"]) / largest_upstream_area_sqrt * 5
-        )
-        station_marker_names: list[str] = _add_metric_station_markers(
-            row=row,
-            metric_layers=metric_layers,
-            coords=coords,
-            circle_radius=circle_radius,
-            popup_html=popup_html,
-            popup_width=popup_width,
-            tooltip=tooltip,
-        )
-
-        if layer_upstream is not None and colormap_upstream is not None:
-            color_upstream = colormap_upstream(
-                float(row["discharge_observations_to_GEB_upstream_area_ratio"])
+    if snapping_available:
+        for station_id, row in mapped_station_scores.iterrows():
+            snapping_record: dict[str, Any] = _build_snapping_station(
+                station_id=str(station_id),
+                station_name=str(row["station_name"]),
+                row=row,
             )
-            if isinstance(color_upstream, str) and color_upstream != "nan":
-                station_marker_names.append(
-                    _add_station_marker(
-                        layer=layer_upstream,
-                        coords=coords,
-                        radius=10,
-                        fill_color=color_upstream,
-                        popup_html=popup_html,
-                        popup_width=popup_width,
-                        tooltip=tooltip,
-                    )
-                )
+            snapping_stations.append(snapping_record)
 
-        station_marker_index.append(
-            {
-                "id": station_id_str,
-                "name": station_name,
-                "markers": station_marker_names,
-            }
-        )
-
-    for layer, colormap, _ in metric_layers:
-        colormap.add_to(discharge_map)
+    for layer, _, _ in metric_layers:
         layer.add_to(discharge_map)
 
-    if layer_upstream is not None and colormap_upstream is not None:
-        colormap_upstream.add_to(discharge_map)
+    if layer_upstream is not None:
         layer_upstream.add_to(discharge_map)
 
-    _inject_popup_chart_script(discharge_map, station_chart_files)
-    _inject_station_search_script(discharge_map, station_marker_index)
+    for characteristic_layer, _ in characteristic_layers:
+        characteristic_layer.add_to(discharge_map)
 
-    # Waterbodies: render reservoirs only; lakes make the dashboard too heavy.
+    if availability_layer is not None:
+        availability_layer.add_to(discharge_map)
+
+    stations_payload: str = _build_station_marker_payload(
+        mapped_station_scores=mapped_station_scores,
+        metric_layers=metric_layers,
+        layer_upstream=layer_upstream,
+        colormap_upstream=colormap_upstream,
+        characteristic_layers=characteristic_layers,
+        availability_layer=availability_layer,
+        characteristic_records=characteristic_records,
+        largest_upstream_area_sqrt=largest_upstream_area_sqrt,
+    )
+    stations_macro_data: dict[str, Any] = {
+        "payload": stations_payload,
+        "upstreamLayer": (
+            layer_upstream.get_name() if layer_upstream is not None else None
+        ),
+        "availabilityLayer": (
+            availability_layer.get_name() if availability_layer is not None else None
+        ),
+        "caravanAvailableColor": _CARAVAN_AVAILABLE_COLOR,
+        "caravanUnavailableColor": _CARAVAN_UNAVAILABLE_COLOR,
+    }
+    _JavascriptMacro("stations.js", stations_macro_data).add_to(discharge_map)
+
+    if excluded_stations is not None and not excluded_stations.empty:
+        area_distance_count: int = 0
+        excluded_layer: folium.FeatureGroup = folium.FeatureGroup(
+            name=f"Excluded stations ({len(excluded_stations)})", show=False
+        )
+        for station_id, row in excluded_stations.iterrows():
+            record: dict[str, Any] = _build_snapping_station(
+                str(station_id), str(row["station_name"]), row
+            )
+            area_distance_failure: bool = str(row["exclusion_reason"]).startswith(
+                (
+                    "Missing station",
+                    "Missing upstream",
+                    "Routing upstream",
+                    "Routing pixel",
+                    "No valid river",
+                )
+            )
+            area_distance_count += int(area_distance_failure)
+            record["color"] = "#DC2626" if area_distance_failure else "#D97706"
+            if (
+                station_id not in mapped_station_scores.index
+                and len(record["locations"]) == 3
+            ):
+                snapping_stations.append(record)
+            excluded_popup: str = record["popup"]
+            if str(station_id) in station_bundle_indices:
+                excluded_popup += (
+                    "<hr><b>Diagnostic only — excluded from evaluation.</b>"
+                    f"<div class='geb-popup' data-station-id='{html.escape(str(station_id), quote=True)}'>"
+                    "Loading interactive charts...</div>"
+                )
+            marker: folium.CircleMarker = folium.CircleMarker(
+                location=record["locations"][0],
+                radius=7 if area_distance_failure else 5,
+                color=record["color"],
+                fill=True,
+                fill_opacity=0.8,
+                tooltip=record["tooltip"],
+                popup=folium.Popup(excluded_popup, max_width=850),
+            )
+            marker.add_to(excluded_layer)
+            station_marker_index.append(
+                {
+                    "id": str(station_id),
+                    "name": str(row["station_name"]),
+                    "markers": [marker.get_name()],
+                }
+            )
+        excluded_layer.add_to(discharge_map)
+        station_count: int = len(
+            mapped_station_scores.index.union(excluded_stations.index)
+        )
+        cast(Figure, discharge_map.get_root()).html.add_child(
+            folium.Element(
+                f"<div id='{excluded_layer.get_name()}_legend' style='display:none;position:fixed;top:12px;left:55px;z-index:1000;background:white;padding:8px;border:1px solid #ccc'>"
+                f"<b>{station_count} stations shown</b><br>"
+                f"<span style='color:#DC2626'>● Area / distance exclusions: {area_distance_count}</span><br>"
+                f"<span style='color:#D97706'>● Other exclusions: {len(excluded_stations) - area_distance_count}</span>"
+                "<br>Hover or click a station for its exclusion reason.</div>"
+            )
+        )
+        _JavascriptMacro("exclusions.js", excluded_layer.get_name()).add_to(
+            discharge_map
+        )
+    if snapping_stations:
+        snapping_layer.add_to(discharge_map)
+        snapping_json_bytes: bytes = json.dumps(
+            snapping_stations, separators=(",", ":")
+        ).encode("utf-8")
+        compressed_snapping: bytes = gzip.compress(snapping_json_bytes, compresslevel=9)
+        encoded_snapping_payload: str = base64.b64encode(compressed_snapping).decode(
+            "ascii"
+        )
+        # The inactive overlay stays empty; JavaScript creates visible features lazily.
+        _JavascriptMacro(
+            "snapping.js",
+            {
+                "layer": snapping_layer.get_name(),
+                "payload": encoded_snapping_payload,
+            },
+        ).add_to(discharge_map)
+
+    _inject_station_layer_legend_script(
+        discharge_map=discharge_map,
+        metric_layers=metric_layers,
+        upstream_layer=layer_upstream,
+        characteristic_layers=characteristic_layers,
+        availability_layer=availability_layer,
+        caravan_available_count=caravan_available_count,
+        station_count=len(mapped_station_scores),
+    )
+
+    chart_macro_data: dict[str, Any] = {
+        "bundles": chart_bundles,
+        "stations": station_bundle_indices,
+        "timeline": chart_timeline,
+    }
+    _JavascriptMacro("charts.js", chart_macro_data).add_to(discharge_map)
+    _JavascriptMacro("search.js", station_marker_index).add_to(discharge_map)
+
     if waterbodies is not None and not waterbodies.empty:
-        _add_waterbody_layers(discharge_map, waterbodies)
+        _add_reservoir_layer(discharge_map, waterbodies)
 
+    _JavascriptMacro("units.js", {}).add_to(discharge_map)
     folium.LayerControl(collapsed=False).add_to(discharge_map)
+    if (
+        "exclusion_reason" in mapped_station_scores
+        and mapped_station_scores["exclusion_reason"].notna().any()
+    ):
+        cast(Figure, discharge_map.get_root()).html.add_child(
+            folium.Element(
+                "<div style='position:fixed;bottom:25px;left:15px;z-index:1000;background:white;padding:10px;max-width:350px'>"
+                "<b>Diagnostic scores included</b><br>Excluded stations retain KGE and time series for inspection. "
+                "They do not contribute to evaluation summaries. See station warnings.</div>"
+            )
+        )
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     discharge_map.save(str(output_path))
     return discharge_map
+
+
+def load_discharge_dashboard_geometries(
+    geometry_files: dict[str, Path],
+) -> DischargeDashboardGeometries:
+    """Load the geometries used by the discharge dashboard.
+
+    Args:
+        geometry_files: Model geometry paths keyed by dataset name.
+
+    Returns:
+        Region boundary, river network, and waterbodies.
+    """
+    region_geom: gpd.GeoDataFrame = read_geom(geometry_files["mask"])
+    all_rivers: gpd.GeoDataFrame = read_geom(geometry_files["routing/rivers"])
+    waterbodies: gpd.GeoDataFrame = read_geom(
+        geometry_files["waterbodies/waterbody_data"]
+    )
+    return DischargeDashboardGeometries(
+        region=region_geom,
+        rivers=select_active_rivers(
+            all_rivers, include_rivers_not_represented_in_grid=True
+        ),
+        waterbodies=waterbodies,
+    )
+
+
+def attach_end_of_run_river_dimensions(
+    rivers: gpd.GeoDataFrame,
+    run_output_folder: Path,
+) -> gpd.GeoDataFrame:
+    """Attach end-of-run simulated river width and depth to the river network.
+
+    Args:
+        rivers: Active river segments GeoDataFrame indexed by river ID.
+        run_output_folder: Output folder of the simulation run containing
+            hydrology routing reports.
+
+    Returns:
+        Copy of the rivers GeoDataFrame with 'width_m' and 'depth_m' columns attached if available.
+    """
+    routing_dir: Path = run_output_folder / "report" / "hydrology.routing"
+    w_file: Path = routing_dir / "bankfull_width_rivers_yearly_m.parquet"
+    d_file: Path = routing_dir / "bankfull_depth_rivers_yearly_m.parquet"
+
+    enriched_rivers: gpd.GeoDataFrame = rivers.copy()
+    if w_file.exists():
+        df_w: pd.DataFrame = pd.read_parquet(w_file)
+        if not df_w.empty:
+            last_w: pd.Series = df_w.iloc[-1]
+            w_map: dict[str, float] = {
+                str(col): float(val) for col, val in last_w.items() if pd.notna(val)
+            }
+            enriched_rivers["width_m"] = [
+                w_map.get(str(rid)) for rid in enriched_rivers.index
+            ]
+
+    if d_file.exists():
+        df_d: pd.DataFrame = pd.read_parquet(d_file)
+        if not df_d.empty:
+            last_d: pd.Series = df_d.iloc[-1]
+            d_map: dict[str, float] = {
+                str(col): float(val) for col, val in last_d.items() if pd.notna(val)
+            }
+            enriched_rivers["depth_m"] = [
+                d_map.get(str(rid)) for rid in enriched_rivers.index
+            ]
+
+    return enriched_rivers
+
+
+def serialize_main_timeline(
+    main_time_index: pd.DatetimeIndex,
+) -> dict[str, int]:
+    """Serialize a regular continuous DatetimeIndex into a compact start/step/count dictionary.
+
+    Args:
+        main_time_index: Continuous regular DatetimeIndex.
+
+    Returns:
+        Dictionary with integer start (epoch ms), step (ms), and count.
+
+    Raises:
+        ValueError: If main_time_index is empty.
+    """
+    if main_time_index.empty:
+        raise ValueError("main_time_index cannot be empty.")
+    start_ms: int = int(
+        main_time_index[0].to_datetime64().astype("datetime64[ms]").astype("int64")
+    )
+    step_ms: int = (
+        int((main_time_index[1] - main_time_index[0]).total_seconds() * 1000)
+        if len(main_time_index) > 1
+        else 0
+    )
+    return {
+        "start": start_ms,
+        "step": step_ms,
+        "count": len(main_time_index),
+    }
+
+
+def determine_main_time_index(
+    observations_index: pd.DatetimeIndex,
+    simulation_output_folder: Path,
+    frequency: str,
+    period_start: pd.Timestamp | None = None,
+    period_end: pd.Timestamp | None = None,
+) -> pd.DatetimeIndex | None:
+    """Determine a continuous main time index spanning the evaluation period.
+
+    Notes:
+        Ensures all station charts share an identical, aligned time grid for a
+        given frequency (e.g. daily midpoint at 12:00:00, or hourly at half-hour).
+
+    Args:
+        observations_index: DatetimeIndex of the station observations table.
+        simulation_output_folder: Path to model run output folder containing
+            the hydrology routing report files.
+        frequency: Observation frequency label ("daily" or "hourly").
+        period_start: Optional evaluation period start timestamp.
+        period_end: Optional evaluation period end timestamp.
+
+    Returns:
+        Continuous main DatetimeIndex, or None if simulation files or
+        observations are unavailable.
+
+    Raises:
+        ValueError: If frequency is not "daily" or "hourly".
+    """
+    if frequency not in ("daily", "hourly"):
+        raise ValueError(
+            f"Unsupported frequency '{frequency}'. Expected 'daily' or 'hourly'."
+        )
+
+    if observations_index.empty:
+        return None
+
+    routing_dir: Path = simulation_output_folder / "report" / "hydrology.routing"
+    if not routing_dir.exists():
+        return None
+
+    first_parquet_file: Path | None = next(
+        routing_dir.glob("discharge_hourly_m3_per_s_*.parquet"), None
+    )
+    if first_parquet_file is None:
+        return None
+
+    # Read the simulation index from the first available station routing file.
+    simulated_index: pd.Index = pd.read_parquet(first_parquet_file).index
+    if not isinstance(simulated_index, pd.DatetimeIndex) or simulated_index.empty:
+        return None
+
+    if frequency == "daily":
+        # Match GEB daily aggregation: noon (12:00:00) midpoint timestamps.
+        sim_start: pd.Timestamp = simulated_index.min().floor("D") + pd.Timedelta(
+            hours=12
+        )
+        sim_end: pd.Timestamp = simulated_index.max().floor("D") + pd.Timedelta(
+            hours=12
+        )
+        freq_step: str = "D"
+    else:
+        # Match GEB hourly timestamp convention (half-hour HH:30:00).
+        sim_start = simulated_index.min()
+        sim_end = simulated_index.max()
+        freq_step = "h"
+
+    start_timestamp: pd.Timestamp = max(observations_index.min(), sim_start)
+    end_timestamp: pd.Timestamp = min(observations_index.max(), sim_end)
+
+    if period_start is not None:
+        aligned_period_start: pd.Timestamp = (
+            cast(
+                pd.Timestamp,
+                period_start.floor("D") + pd.Timedelta(hours=12),
+            )
+            if frequency == "daily"
+            else period_start
+        )
+        start_timestamp = max(start_timestamp, aligned_period_start)
+
+    if period_end is not None:
+        aligned_period_end: pd.Timestamp = (
+            cast(
+                pd.Timestamp,
+                period_end.floor("D") + pd.Timedelta(hours=12),
+            )
+            if frequency == "daily"
+            else period_end
+        )
+        end_timestamp = min(end_timestamp, aligned_period_end)
+
+    if start_timestamp > end_timestamp:
+        return None
+
+    return pd.date_range(start=start_timestamp, end=end_timestamp, freq=freq_step)
+
+
+def _write_dashboard_charts_from_saved_scores(
+    table_files: dict[str, Path],
+    logger: logging.Logger,
+    mapped_station_scores: gpd.GeoDataFrame,
+    run_output_folder: Path,
+    correct_discharge_observations: bool,
+    include_return_period_plots: bool = True,
+    rivers: gpd.GeoDataFrame | None = None,
+) -> tuple[dict[str, int], list[str], dict[str, Any] | list[int] | None]:
+    """Save interactive chart data for stations with saved evaluation scores.
+
+    Args:
+        table_files: Model observation table paths keyed by dataset name.
+        logger: Model logger for progress and diagnostics.
+        mapped_station_scores: Saved per-station discharge evaluation metrics.
+        run_output_folder: Model output folder for the selected run.
+        correct_discharge_observations: Whether to correct simulated discharge
+            by the observed-to-GEB upstream-area ratio (dimensionless), matching
+            the option in evaluate_discharge.
+        include_return_period_plots: Whether to calculate and plot return-period
+            curves in station popups. Defaults to True.
+        rivers: Optional river network GeoDataFrame for attaching bankfull
+            charts. Defaults to None.
+
+    Returns:
+        Tuple containing station-to-bundle index mapping, inlined compressed
+        bundle payloads, and common observation time-series index.
+
+    Raises:
+        ValueError: If ``mapped_station_scores`` is missing required columns.
+    """
+    if mapped_station_scores.empty:
+        return {}, [], {}
+    required_columns: set[str] = {
+        "station_name",
+        "discharge_observations_to_GEB_upstream_area_ratio",
+    }
+    missing_columns: set[str] = required_columns.difference(
+        mapped_station_scores.columns
+    )
+    if missing_columns:
+        raise ValueError(
+            "Saved discharge evaluation metrics are missing columns: "
+            + ", ".join(sorted(missing_columns))
+        )
+
+    observations_by_frequency: dict[str, pd.DataFrame] = (
+        discharge_helpers.load_discharge_observations(table_files)
+    )
+    saved_scores_by_station_id: dict[str, pd.Series] = {
+        str(station_id): station_row
+        for station_id, station_row in mapped_station_scores.iterrows()
+    }
+
+    # Count total work up front for progress reporting.
+    total_work: int = sum(
+        sum(
+            str(station_id) in saved_scores_by_station_id
+            for station_id in observations.columns
+        )
+        for observations in observations_by_frequency.values()
+        if not observations.empty
+    )
+    logger.info(
+        "Processing %d station-frequency combinations...",
+        total_work,
+    )
+
+    chart_writer: StationChartBundleWriter = StationChartBundleWriter(
+        max_stations_per_bundle=50,
+    )
+    bankfull_df: pd.DataFrame | None = None
+    bankfull_file: Path = (
+        run_output_folder
+        / "report"
+        / "hydrology.routing"
+        / "bankfull_discharge_yearly_m3_per_s.parquet"
+    )
+    if bankfull_file.exists():
+        bankfull_df = pd.read_parquet(bankfull_file)
+
+    chart_timelines: dict[str, Any] = {}
+    processed: int = 0
+    for (
+        frequency_label,
+        observations_by_station,
+    ) in observations_by_frequency.items():
+        if observations_by_station.empty:
+            continue
+        main_time_index: pd.DatetimeIndex | None = determine_main_time_index(
+            observations_index=cast(pd.DatetimeIndex, observations_by_station.index),
+            simulation_output_folder=run_output_folder,
+            frequency=frequency_label,
+        )
+        if main_time_index is not None:
+            chart_timelines[frequency_label] = serialize_main_timeline(main_time_index)
+        for station_id in observations_by_station.columns:
+            station_id_text: str = str(station_id)
+            if station_id_text not in saved_scores_by_station_id:
+                continue
+            station_row: pd.Series = saved_scores_by_station_id[station_id_text]
+            upstream_area_ratio: float = float(
+                station_row["discharge_observations_to_GEB_upstream_area_ratio"]
+            )
+            observed_discharge_series: pd.Series = observations_by_station[station_id]
+
+            timezone_utc_offset: float = float(station_row["timezone_utc_offset"])
+            discharge_comparison: pd.DataFrame = load_station_discharge_comparison(
+                output_folder=run_output_folder,
+                station_id=station_id,
+                observed_discharge=observed_discharge_series,
+                apply_upstream_area_correction=correct_discharge_observations,
+                upstream_area_ratio=upstream_area_ratio,
+                timezone_utc_offset=timezone_utc_offset,
+            )
+            metrics: dict[str, float] = {
+                metric_name: float(station_row[f"{metric_name}_{frequency_label}"])
+                for metric_name in DischargeMetrics._fields
+                if f"{metric_name}_{frequency_label}" in station_row.index
+            }
+
+            bankfull_discharge: pd.Series | None = None
+            if bankfull_df is not None and station_id_text in bankfull_df.columns:
+                col_series: pd.Series = bankfull_df[station_id_text].dropna()
+                if not col_series.empty:
+                    if correct_discharge_observations and upstream_area_ratio > 0:
+                        col_series = col_series * upstream_area_ratio
+                    bankfull_discharge = col_series
+
+            chart_writer.add_station(
+                station_id=station_id_text,
+                chart_data=build_station_chart_data(
+                    discharge_comparison=discharge_comparison,
+                    station_name=str(station_row["station_name"]),
+                    upstream_area_ratio=upstream_area_ratio,
+                    timezone_utc_offset=timezone_utc_offset,
+                    metrics=metrics,
+                    frequency=frequency_label,
+                    logger=logger,
+                    include_return_period_plots=include_return_period_plots,
+                    main_time_index=main_time_index,
+                    bankfull_discharge=bankfull_discharge,
+                ),
+            )
+
+            processed += 1
+            if processed % 100 == 0:
+                logger.info(
+                    "  %d / %d processed...",
+                    processed,
+                    total_work,
+                )
+
+    if rivers is not None and not rivers.empty:
+        add_river_charts_to_bundle_writer(
+            chart_writer=chart_writer,
+            run_output_folder=run_output_folder,
+            rivers=rivers,
+        )
+
+    station_dashboard_chart_files: dict[str, int] = chart_writer.finish()
+    chart_bundles: list[str] = chart_writer.bundles
+    logger.info(
+        "Chart data built for %d stations in %d bundle(s).",
+        len(station_dashboard_chart_files),
+        len(chart_bundles),
+    )
+    return station_dashboard_chart_files, chart_bundles, chart_timelines
+
+
+class StationChartBundleWriter:
+    """Accumulates station chart data in compressed in-memory JavaScript bundles.
+
+    Notes:
+        Grouping station chart data into bundles of up to max_stations_per_bundle
+        stations allows integrating chart data directly into a single dashboard HTML
+        file without decompressing all stations at page load. Each bundle is
+        decompressed lazily on demand when a user clicks a station marker, keeping
+        map loading and initial rendering fast and responsive.
+
+    Args:
+        max_stations_per_bundle: Maximum number of stations to bundle into a
+            single compressed bundle. Defaults to 50.
+    """
+
+    def __init__(
+        self,
+        max_stations_per_bundle: int = 50,
+    ) -> None:
+        """Initialize the bundle writer.
+
+        Args:
+            max_stations_per_bundle: Maximum number of stations to bundle into a
+                single compressed bundle. Defaults to 50.
+        """
+        self.max_stations_per_bundle: int = max_stations_per_bundle
+        self.bundles: list[str] = []
+        self.station_bundle_indices: dict[str, int] = {}
+        self._current_bundle: dict[str, Any] = {}
+
+    def add_station(self, station_id: str, chart_data: dict[str, Any]) -> None:
+        """Add chart data for one station and flush to a bundle if full.
+
+        Args:
+            station_id: Station identifier.
+            chart_data: Data for the interactive station charts.
+        """
+        self._current_bundle[station_id] = chart_data
+        if len(self._current_bundle) >= self.max_stations_per_bundle:
+            self._flush_bundle()
+
+    def add_bundle(self, bundle_data: dict[str, Any]) -> None:
+        """Compress and store a dictionary of chart data (e.g. rivers) in a bundle.
+
+        Args:
+            bundle_data: Mapping from chart keys to chart payloads.
+        """
+        if not bundle_data:
+            return
+        json_bytes: bytes = json.dumps(bundle_data, separators=(",", ":")).encode(
+            "utf-8"
+        )
+        compressed_bytes: bytes = gzip.compress(json_bytes, compresslevel=9)
+        encoded_payload: str = base64.b64encode(compressed_bytes).decode("ascii")
+        bundle_index: int = len(self.bundles)
+        self.bundles.append(encoded_payload)
+        for key in bundle_data:
+            self.station_bundle_indices[key] = bundle_index
+
+    def finish(self) -> dict[str, int]:
+        """Flush any remaining station data and return station-to-bundle index mapping.
+
+        Returns:
+            Dictionary mapping station identifiers to their integer bundle index.
+        """
+        if self._current_bundle:
+            self._flush_bundle()
+        return self.station_bundle_indices
+
+    def _flush_bundle(self) -> None:
+        """Compress accumulated stations into a Base64-compressed bundle."""
+        if not self._current_bundle:
+            return
+        json_bytes: bytes = json.dumps(
+            self._current_bundle, separators=(",", ":")
+        ).encode("utf-8")
+        compressed_bytes: bytes = gzip.compress(json_bytes, compresslevel=9)
+        encoded_payload: str = base64.b64encode(compressed_bytes).decode("ascii")
+        bundle_index: int = len(self.bundles)
+        self.bundles.append(encoded_payload)
+        for station_id in self._current_bundle:
+            self.station_bundle_indices[station_id] = bundle_index
+        self._current_bundle.clear()
+
+
+def build_river_chart_data(
+    river_id: str,
+    upstream_area_km2: float,
+    time: list[str],
+    bankfull_discharge: list[float],
+    width: list[float],
+    depth: list[float],
+) -> dict[str, Any]:
+    """Prepare chart data for one river segment popup in the discharge dashboard.
+
+    Args:
+        river_id: River segment identifier.
+        upstream_area_km2: Upstream catchment area (km²).
+        time: ISO-formatted timestamp strings for each yearly step.
+        bankfull_discharge: Bankfull discharge values (m³/s).
+        width: Bankfull river width values (meters).
+        depth: Bankfull river depth values (meters).
+
+    Returns:
+        River chart data dictionary.
+    """
+    return {
+        "type": "river",
+        "riverId": river_id,
+        "upstreamAreaKm2": _as_finite_float(upstream_area_km2),
+        "timeseries": {
+            "time": time,
+            "bankfullDischarge": bankfull_discharge,
+            "width": width,
+            "depth": depth,
+        },
+    }
+
+
+def add_river_charts_to_bundle_writer(
+    chart_writer: StationChartBundleWriter,
+    run_output_folder: Path,
+    rivers: gpd.GeoDataFrame,
+) -> None:
+    """Add river segment bankfull chart data to the chart bundle writer.
+
+    Args:
+        chart_writer: Chart bundle writer accumulating interactive charts.
+        run_output_folder: Output folder of the selected simulation run.
+        rivers: Active river segments GeoDataFrame.
+    """
+    routing_dir: Path = run_output_folder / "report" / "hydrology.routing"
+    if not routing_dir.exists():
+        return
+
+    q_file: Path = routing_dir / "bankfull_discharge_rivers_yearly_m3_per_s.parquet"
+    d_file: Path = routing_dir / "bankfull_depth_rivers_yearly_m.parquet"
+    w_file: Path = routing_dir / "bankfull_width_rivers_yearly_m.parquet"
+    if not (q_file.exists() and d_file.exists() and w_file.exists()):
+        return
+
+    df_q: pd.DataFrame = pd.read_parquet(q_file)
+    df_d: pd.DataFrame = pd.read_parquet(d_file)
+    df_w: pd.DataFrame = pd.read_parquet(w_file)
+    all_river_charts: dict[str, Any] = {}
+
+    for river_id in rivers.index:
+        river_id_str: str = str(river_id)
+        if (
+            river_id_str not in df_q.columns
+            or river_id_str not in df_d.columns
+            or river_id_str not in df_w.columns
+        ):
+            continue
+        q_series: pd.Series = df_q[river_id_str].dropna()
+        d_series: pd.Series = df_d[river_id_str].dropna()
+        w_series: pd.Series = df_w[river_id_str].dropna()
+        if q_series.empty or d_series.empty or w_series.empty:
+            continue
+
+        common_idx: pd.Index = q_series.index.intersection(d_series.index).intersection(
+            w_series.index
+        )
+        if common_idx.empty:
+            continue
+        q_aligned: pd.Series = q_series.loc[common_idx]
+        d_aligned: pd.Series = d_series.loc[common_idx]
+        w_aligned: pd.Series = w_series.loc[common_idx]
+
+        time_list: list[str] = [t.strftime("%Y-%m-%d") for t in common_idx]
+        q_list: list[float] = [round(float(v), 2) for v in q_aligned.values]
+        d_list: list[float] = [round(float(v), 2) for v in d_aligned.values]
+        w_list: list[float] = [round(float(v), 2) for v in w_aligned.values]
+
+        uparea_km2: float = float(rivers.loc[river_id, "uparea_m2"]) / 1_000_000.0
+
+        river_chart_data: dict[str, Any] = build_river_chart_data(
+            river_id=river_id_str,
+            upstream_area_km2=uparea_km2,
+            time=time_list,
+            bankfull_discharge=q_list,
+            width=w_list,
+            depth=d_list,
+        )
+        all_river_charts[f"river_{river_id_str}"] = river_chart_data
+
+    chart_writer.add_bundle(all_river_charts)
+
+
+def build_station_chart_data(
+    discharge_comparison: pd.DataFrame,
+    station_name: str,
+    upstream_area_ratio: float,
+    timezone_utc_offset: float,
+    metrics: dict[str, float],
+    frequency: str,
+    logger: logging.Logger,
+    include_return_period_plots: bool = True,
+    main_time_index: pd.DatetimeIndex | None = None,
+    bankfull_discharge: float | pd.Series | None = None,
+) -> dict[str, Any]:
+    """Prepare chart data for one station popup in the discharge dashboard.
+
+    Args:
+        discharge_comparison: Observed/simulated discharge dataframe (m3/s).
+        station_name: Human-readable station name.
+        upstream_area_ratio: Observed-to-model upstream-area ratio (dimensionless).
+        timezone_utc_offset: Fixed station UTC offset used to construct local
+            calendar days (hours). The source offset does not vary for daylight
+            saving time.
+        metrics: Discharge skill metrics such as ``KGE``, ``NSE``, and ``R2``
+            (dimensionless).
+        frequency: Data frequency label, for example ``"daily"`` or ``"hourly"``.
+        logger: Model logger for return-period fit diagnostics.
+        include_return_period_plots: Whether to fit and include return-period
+            curves. Defaults to True.
+        main_time_index: Optional main DatetimeIndex shared across all stations
+            to align time series onto a single dashboard timeline.
+        bankfull_discharge: Optional simulated bankfull discharge (m3/s) as a
+            scalar or yearly time series.
+
+    Returns:
+        Chart data with discharge values (m3/s).
+
+    Raises:
+        ValueError: If discharge_comparison does not use a DateTimeIndex.
+    """
+    if not isinstance(discharge_comparison.index, pd.DatetimeIndex):
+        raise ValueError(
+            "discharge_comparison must use a DateTimeIndex for dashboard charts."
+        )
+
+    chart_metrics: dict[str, float | None] = {
+        "KGE": _as_finite_float(metrics.get("KGE")),
+        "KGE_modified": _as_finite_float(metrics.get("KGE_modified")),
+        "KGE_correlation": _as_finite_float(metrics.get("KGE_correlation")),
+        "KGE_bias_ratio": _as_finite_float(metrics.get("KGE_bias_ratio")),
+        "KGE_variability_ratio": _as_finite_float(metrics.get("KGE_variability_ratio")),
+        "NSE": _as_finite_float(metrics.get("NSE")),
+        "R2": _as_finite_float(metrics.get("R2")),
+        "RMSE": _as_finite_float(metrics.get("RMSE")),
+        "RRMSE": _as_finite_float(metrics.get("RRMSE")),
+        "upstreamAreaRatio": _as_finite_float(upstream_area_ratio),
+        "timezoneUtcOffset": _as_finite_float(timezone_utc_offset),
+    }
+    for key, value in metrics.items():
+        if key not in chart_metrics:
+            chart_metrics[key] = _as_finite_float(value)
+
+    chart_data: dict[str, Any] = {
+        "stationName": station_name,
+        "frequency": frequency,
+        "metrics": chart_metrics,
+        "timeseries": _build_timeseries_data(
+            discharge_comparison=discharge_comparison,
+            main_time_index=main_time_index,
+            bankfull_discharge=bankfull_discharge,
+        ),
+    }
+    if include_return_period_plots:
+        # Fit only on request: fitting every station dominates dashboard creation.
+        return_periods_years: list[int | float] = [2, 5, 10, 25, 50, 100]
+        simulated_series: pd.Series = discharge_comparison[
+            "discharge_simulations"
+        ].copy()
+        simulated_series[discharge_comparison["discharge_observations"].isna()] = np.nan
+        chart_data["returnPeriods"] = {
+            "observed": _build_return_period_data(
+                discharge_comparison["discharge_observations"],
+                return_periods_years,
+                logger,
+            ),
+            "simulated": _build_return_period_data(
+                simulated_series, return_periods_years, logger
+            ),
+        }
+    return chart_data
+
+
+def _scale_series_to_int_cents(series: pd.Series) -> list[int | None]:
+    """Scale discharge values to integer cents (100 * m3/s) with None for NaNs.
+
+    Args:
+        series: Discharge series (m3/s).
+
+    Returns:
+        List of scaled integer values, or None for non-finite values.
+    """
+    vals: np.ndarray = series.to_numpy(dtype=float)
+    valid_mask: np.ndarray = np.isfinite(vals)
+    res: np.ndarray = np.full(len(vals), None, dtype=object)
+    res[valid_mask] = np.round(vals[valid_mask] * 100.0).astype(int)
+    return res.tolist()
+
+
+def _to_int_deltas(values: list[int | None]) -> list[int | None]:
+    """Encode integer values as deltas relative to the preceding value.
+
+    Notes:
+        When a value follows a missing value (None) or appears at the start of
+        the series, the absolute value is stored as an anchor. Subsequent finite
+        values store the relative delta (current - previous).
+
+    Args:
+        values: Sequence of integer values (cents, 100 * m3/s) or None for missing data.
+
+    Returns:
+        Delta-encoded sequence with initial absolute values and relative differences.
+    """
+    deltas: list[int | None] = []
+    previous_value: int | None = None
+    for value in values:
+        if value is None:
+            deltas.append(None)
+            previous_value = None
+        elif previous_value is None:
+            deltas.append(value)
+            previous_value = value
+        else:
+            deltas.append(value - previous_value)
+            previous_value = value
+    return deltas
+
+
+def _encode_varint_deltas(values: list[int | None]) -> str:
+    """Encode delta integers into a compact Base64-encoded Varint stream.
+
+    Notes:
+        Signed integer deltas are folded using ZigZag encoding ((v << 1) ^ (v >> 31)).
+        To reserve zero as a sentinel for missing data (None), valid values
+        are shifted by +1 (code = zigzag + 1). Values are then serialized
+        into 7-bit LEB128 Varint bytes and Base64-encoded.
+
+    Args:
+        values: Sequence of integer delta values (cents, 100 * m3/s) or None for missing data.
+
+    Returns:
+        Base64-encoded ASCII string containing the Varint byte stream.
+    """
+    buffer: bytearray = bytearray()
+    for value in values:
+        if value is None:
+            # Sentinel 0 reserved for missing data (None)
+            buffer.append(0)
+        else:
+            zigzag: int = (value << 1) ^ (value >> 31)
+            code: int = zigzag + 1
+            while True:
+                byte_val: int = code & 0x7F
+                code >>= 7
+                if code:
+                    buffer.append(byte_val | 0x80)
+                else:
+                    buffer.append(byte_val)
+                    break
+    return base64.b64encode(buffer).decode("ascii")
+
+
+def _decode_varint_deltas(b64_encoded: str) -> list[int | None]:
+    """Decode a Base64-encoded Varint stream back to integer deltas.
+
+    Notes:
+        Reads LEB128 Varint bytes. A code of 0 represents missing data (None).
+        Codes greater than 0 are shifted back (zigzag = code - 1) and ZigZag-decoded
+        to recover the original signed delta integer.
+
+    Args:
+        b64_encoded: Base64-encoded ASCII string representing the Varint byte stream.
+
+    Returns:
+        List of integer delta values (cents, 100 * m3/s) or None for missing data.
+    """
+    raw_bytes: bytes = base64.b64decode(b64_encoded)
+    deltas: list[int | None] = []
+    index: int = 0
+    total_bytes: int = len(raw_bytes)
+    while index < total_bytes:
+        code: int = 0
+        shift: int = 0
+        while True:
+            byte_val: int = raw_bytes[index]
+            index += 1
+            code |= (byte_val & 0x7F) << shift
+            if (byte_val & 0x80) == 0:
+                break
+            shift += 7
+        if code == 0:
+            deltas.append(None)
+        else:
+            zigzag: int = code - 1
+            delta_val: int = (zigzag >> 1) ^ -(zigzag & 1)
+            deltas.append(delta_val)
+    return deltas
+
+
+def _build_timeseries_data(
+    discharge_comparison: pd.DataFrame,
+    main_time_index: pd.DatetimeIndex | None = None,
+    bankfull_discharge: float | pd.Series | None = None,
+) -> dict[str, Any]:
+    """Prepare data for one discharge time-series chart in a popup.
+
+    Notes:
+        If main_time_index is provided, the dataframe is windowed to the
+        overlapping active period and aligned with the shared dashboard timeline
+        using a start index offset, eliminating leading and trailing missing values.
+        Missing observation values within the window are represented as None
+        (serialized to JSON null). Discharge values are scaled by 100, stored
+        as integers, delta-encoded, and serialized to a Base64-encoded Varint stream
+        with a 0 sentinel for missing data to minimize JSON payload size.
+
+    Args:
+        discharge_comparison: Observed/simulated discharge dataframe (m3/s).
+        main_time_index: Optional main DatetimeIndex shared across all stations.
+            When provided, redundant leading/trailing nulls and the "time" array
+            are omitted, storing only the start index offset.
+        bankfull_discharge: Optional simulated bankfull discharge (m3/s) as a
+            scalar or yearly time series.
+
+    Returns:
+        Dictionary with delta-encoded integer observed/simulated values, start index,
+        and scale factor.
+
+    Raises:
+        ValueError: If discharge_comparison is not indexed by timestamps.
+    """
+    if not isinstance(discharge_comparison.index, pd.DatetimeIndex):
+        raise ValueError(
+            "discharge_comparison must use a DateTimeIndex for dashboard charts."
+        )
+
+    bankfull_scalar: float | None = None
+    bankfull_deltas: list[int | None] | None = None
+
+    if main_time_index is not None and not discharge_comparison.empty:
+        obs_col: pd.Series = discharge_comparison["discharge_observations"]
+        valid_obs: pd.Series = obs_col.dropna()
+        if not valid_obs.empty:
+            active_start: pd.Timestamp = valid_obs.index[0]
+            active_end: pd.Timestamp = valid_obs.index[-1]
+        else:
+            active_start = discharge_comparison.index[0]
+            active_end = discharge_comparison.index[-1]
+
+        common_start: pd.Timestamp = max(active_start, main_time_index[0])
+        common_end: pd.Timestamp = min(active_end, main_time_index[-1])
+        if common_start <= common_end:
+            start_index: int = int(cast(int, main_time_index.get_loc(common_start)))
+            end_index: int = int(cast(int, main_time_index.get_loc(common_end))) + 1
+            window_slice: pd.DatetimeIndex = main_time_index[start_index:end_index]
+            comparison: pd.DataFrame = discharge_comparison.reindex(window_slice)
+        else:
+            comparison = discharge_comparison.iloc[0:0]
+            start_index = 0
+
+        if isinstance(bankfull_discharge, pd.Series):
+            valid_bf: pd.Series = bankfull_discharge.dropna()
+            if not valid_bf.empty:
+                bankfull_scalar = float(valid_bf.iloc[-1])
+                if not comparison.empty:
+                    aligned_bf: pd.Series = valid_bf.reindex(
+                        comparison.index, method="ffill"
+                    ).bfill()
+                    bankfull_deltas = _to_int_deltas(
+                        _scale_series_to_int_cents(aligned_bf)
+                    )
+        elif bankfull_discharge is not None:
+            bankfull_scalar = float(bankfull_discharge)
+
+        res: dict[str, Any] = {
+            "start": start_index,
+            "scale": 100,
+            "deltas": "varint",
+            "observed": _encode_varint_deltas(
+                _to_int_deltas(
+                    _scale_series_to_int_cents(comparison["discharge_observations"])
+                )
+            ),
+            "simulated": _encode_varint_deltas(
+                _to_int_deltas(
+                    _scale_series_to_int_cents(comparison["discharge_simulations"])
+                )
+            ),
+            "bankfullDischarge": _as_finite_float(bankfull_scalar),
+        }
+        if bankfull_deltas is not None:
+            res["bankfull"] = _encode_varint_deltas(bankfull_deltas)
+        return res
+
+    comparison = discharge_comparison
+    if isinstance(bankfull_discharge, pd.Series):
+        valid_bf_s: pd.Series = bankfull_discharge.dropna()
+        if not valid_bf_s.empty:
+            bankfull_scalar = float(valid_bf_s.iloc[-1])
+            if not comparison.empty:
+                aligned_bf_s: pd.Series = valid_bf_s.reindex(
+                    comparison.index, method="ffill"
+                ).bfill()
+                bankfull_deltas = _to_int_deltas(
+                    _scale_series_to_int_cents(aligned_bf_s)
+                )
+    elif bankfull_discharge is not None:
+        bankfull_scalar = float(bankfull_discharge)
+
+    res_no_main: dict[str, Any] = {
+        "time": comparison.index.astype("datetime64[ms]").astype("int64").tolist(),
+        "scale": 100,
+        "deltas": "varint",
+        "observed": _encode_varint_deltas(
+            _to_int_deltas(
+                _scale_series_to_int_cents(comparison["discharge_observations"])
+            )
+        ),
+        "simulated": _encode_varint_deltas(
+            _to_int_deltas(
+                _scale_series_to_int_cents(comparison["discharge_simulations"])
+            )
+        ),
+        "bankfullDischarge": _as_finite_float(bankfull_scalar),
+    }
+    if bankfull_deltas is not None:
+        res_no_main["bankfull"] = _encode_varint_deltas(bankfull_deltas)
+    return res_no_main
+
+
+def _build_return_period_data(
+    series: pd.Series,
+    return_periods_years: list[int | float],
+    logger: logging.Logger,
+) -> dict[str, list[float | None]]:
+    """Build fitted return-period values for one discharge series.
+
+    Args:
+        series: Regular discharge time series (m3/s).
+        return_periods_years: Return periods to estimate (years).
+        logger: Model logger for fit diagnostics.
+
+    Returns:
+        Dictionary with return periods (years) and fitted discharge values (m3/s).
+        Returns empty lists if the fit fails or the series is too short.
+    """
+    model: ReturnPeriodModel = ReturnPeriodModel(
+        series=series,
+        return_periods=return_periods_years,
+        fixed_shape=0.0,
+        selection_strategy="first_significant",
+        min_exceed=1,
+    )
+    return {
+        "returnPeriod": [
+            _as_finite_float(value)
+            for value in model.rl_table["T_years"].to_numpy(dtype=float)
+        ],
+        "discharge": [
+            _as_finite_float(value)
+            for value in model.rl_table["GPD_POT_RL"].to_numpy(dtype=float)
+        ],
+    }
+
+
+def _timestamp_to_isoformat(timestamp: Any) -> str:
+    """Convert a dashboard timestamp to an ISO-formatted string.
+
+    Args:
+        timestamp: Timestamp-like value from a discharge time-series index.
+
+    Returns:
+        ISO-formatted timestamp string.
+
+    Raises:
+        ValueError: If ``timestamp`` is missing or cannot be represented as a
+            timestamp.
+    """
+    timestamp_value: pd.Timestamp | NaTType = pd.Timestamp(timestamp)
+    if not isinstance(timestamp_value, pd.Timestamp):
+        raise ValueError("Dashboard chart timestamps must not contain missing values.")
+    return timestamp_value.isoformat()
+
+
+def _build_characteristic_layer_data(
+    mapped_station_scores: gpd.GeoDataFrame,
+    station_characteristics: pd.DataFrame,
+) -> dict[str, Any]:
+    """Build characteristic-layer metadata aligned to evaluated stations.
+
+    Args:
+        mapped_station_scores: Evaluated stations indexed by station identifier.
+        station_characteristics: Curated GRDC-Caravan values in display units, with
+            a unique ``station_ID`` column.
+
+    Returns:
+        Catchment attribute settings and values for each station.
+
+    Raises:
+        ValueError: If station identifiers or usable characteristic data are
+            unavailable.
+    """
+    if "station_ID" not in station_characteristics.columns:
+        raise ValueError("Dashboard characteristics have no station_ID column.")
+    if "grdc_caravan_matched" not in station_characteristics.columns:
+        raise ValueError("Dashboard characteristics have no GRDC-Caravan match status.")
+    if station_characteristics["station_ID"].duplicated().any():
+        raise ValueError("Dashboard characteristics contain duplicate station IDs.")
+    if mapped_station_scores.index.astype(str).duplicated().any():
+        raise ValueError("Dashboard evaluation contains duplicate station IDs.")
+
+    characteristics_by_station: pd.DataFrame = station_characteristics.copy()
+    characteristics_by_station["station_ID"] = characteristics_by_station[
+        "station_ID"
+    ].astype(str)
+    characteristics_by_station = characteristics_by_station.set_index("station_ID")
+    evaluation_station_ids: pd.Index = pd.Index(
+        mapped_station_scores.index.astype(str), name="station_ID"
+    )
+    # Restrict distributions to displayed stations so percentile colours and
+    # legend counts describe exactly the points visible on the dashboard.
+    characteristics_by_station = characteristics_by_station.reindex(
+        evaluation_station_ids
+    )
+    characteristic_configs: list[dict[str, Any]] = []
+    percentile_by_characteristic: dict[str, pd.Series] = {}
+    usable_characteristics: list[CatchmentCharacteristic] = []
+    for characteristic in DASHBOARD_CATCHMENT_CHARACTERISTICS:
+        if characteristic.column not in characteristics_by_station.columns:
+            continue
+        prepared_values: tuple[dict[str, int | list[float]], pd.Series] | None = (
+            _prepare_characteristic_values(
+                characteristics_by_station[characteristic.column]
+            )
+        )
+        if prepared_values is None:
+            continue
+        statistics, percentile_ranks = prepared_values
+        percentile_by_characteristic[characteristic.column] = percentile_ranks
+        characteristic_configs.append(
+            {
+                "column": characteristic.column,
+                "label": characteristic.label,
+                **statistics,
+            }
+        )
+        usable_characteristics.append(characteristic)
+    station_records: list[dict[str, Any]] = []
+    for station_id, characteristic_row in characteristics_by_station.iterrows():
+        values: dict[str, float | None] = {}
+        percentiles: dict[str, float | None] = {}
+        for characteristic in usable_characteristics:
+            values[characteristic.column] = _as_finite_float(
+                characteristic_row[characteristic.column]
+            )
+            percentiles[characteristic.column] = _as_finite_float(
+                percentile_by_characteristic[characteristic.column].loc[station_id]
+            )
+        station_records.append(
+            {
+                "id": str(station_id),
+                "caravan_available": bool(characteristic_row["grdc_caravan_matched"])
+                if pd.notna(characteristic_row["grdc_caravan_matched"])
+                else False,
+                "values": values,
+                "percentiles": percentiles,
+            }
+        )
+    return {
+        "characteristics": characteristic_configs,
+        "stations": station_records,
+    }
+
+
+def _prepare_characteristic_values(
+    values: pd.Series,
+) -> tuple[dict[str, int | list[float]], pd.Series] | None:
+    """Prepare legend values and percentile ranks for one characteristic.
+
+    Map colours use empirical percentile ranks rather than raw-value intervals,
+    so skewed variables retain spatial contrast. Zero is a valid observed value
+    and is ranked consistently with every other finite value.
+
+    Args:
+        values: Catchment characteristic values in display units.
+
+    Returns:
+        Legend statistics and aligned percentile ranks, or `None` when fewer
+        than two distinct finite values are available.
+    """
+    numeric_values: pd.Series = pd.to_numeric(values, errors="coerce")
+    finite_values: pd.Series = numeric_values.where(np.isfinite(numeric_values))
+    valid_values: pd.Series = finite_values.dropna()
+    if len(valid_values) < 2 or valid_values.nunique() < 2:
+        return None
+
+    reference_values: np.ndarray = np.nanpercentile(
+        valid_values.to_numpy(dtype=float), [0.0, 25.0, 50.0, 75.0, 100.0]
+    )
+    percentile_ranks: pd.Series = pd.Series(np.nan, index=values.index, dtype=float)
+    average_ranks: pd.Series = valid_values.rank(method="average")
+    percentile_ranks.loc[valid_values.index] = (
+        (average_ranks - 1.0) / (len(valid_values) - 1.0) * 100.0
+    )
+    statistics: dict[str, int | list[float]] = {
+        "reference_values": [round(float(value), 2) for value in reference_values],
+        "missing_count": int(len(numeric_values) - len(valid_values)),
+        "ranked_count": int(len(valid_values)),
+    }
+    return statistics, percentile_ranks
+
+
+def _build_station_marker_payload(
+    mapped_station_scores: gpd.GeoDataFrame,
+    metric_layers: list[tuple[folium.FeatureGroup, cm.LinearColormap, str]],
+    layer_upstream: folium.FeatureGroup | None,
+    colormap_upstream: cm.LinearColormap | None,
+    characteristic_layers: list[tuple[folium.FeatureGroup, dict[str, Any]]],
+    availability_layer: folium.FeatureGroup | None,
+    characteristic_records: dict[str, dict[str, Any]],
+    largest_upstream_area_sqrt: float,
+) -> str:
+    """Build compressed Base64 Gzip payload of evaluated station markers for the browser.
+
+    Args:
+        mapped_station_scores: Evaluated station GeoDataFrame.
+        metric_layers: Metric feature groups, colormaps, and source columns.
+        layer_upstream: Optional upstream area ratio feature group.
+        colormap_upstream: Colormap for upstream area ratio.
+        characteristic_layers: GRDC-Caravan characteristic feature groups and metadata.
+        availability_layer: Optional GRDC-Caravan availability feature group.
+        characteristic_records: Characteristic lookup dictionary by station ID.
+        largest_upstream_area_sqrt: Square root of maximum upstream area (meters).
+
+    Returns:
+        Base64-encoded gzip-compressed JSON payload string.
+    """
+    stations_data: list[dict[str, Any]] = []
+    has_upstream: bool = layer_upstream is not None and colormap_upstream is not None
+
+    for station_id, row in mapped_station_scores.iterrows():
+        station_id_str: str = str(station_id)
+        station_name: str = str(row["station_name"])
+        upstream_area_geb: float = float(row["upstream_area_GEB"])
+        circle_radius: float = round(
+            5.0 + math.sqrt(upstream_area_geb) / largest_upstream_area_sqrt * 5.0,
+            2,
+        )
+        coords: list[float] = [
+            round(float(row.geometry.y), 5),
+            round(float(row.geometry.x), 5),
+        ]
+        tz_offset: float | None = (
+            float(row["timezone_utc_offset"])
+            if "timezone_utc_offset" in row and pd.notna(row["timezone_utc_offset"])
+            else None
+        )
+        exclusion_reason: str | None = (
+            str(row["exclusion_reason"])
+            if pd.notna(row.get("exclusion_reason"))
+            else None
+        )
+
+        metric_colors: dict[str, str] = {}
+        for layer, colormap, metric_name in metric_layers:
+            metric_val: float = row.get(metric_name, np.nan)
+            color: str = colormap(metric_val) if pd.notna(metric_val) else "gray"
+            metric_colors[layer.get_name()] = str(color)
+
+        if (
+            has_upstream
+            and "discharge_observations_to_GEB_upstream_area_ratio" in row
+            and pd.notna(row["discharge_observations_to_GEB_upstream_area_ratio"])
+        ):
+            ratio_val: float = float(
+                row["discharge_observations_to_GEB_upstream_area_ratio"]
+            )
+            if np.isfinite(ratio_val):
+                assert colormap_upstream is not None
+                assert layer_upstream is not None
+                color_upstream: str | tuple[int, int, int, int] = colormap_upstream(
+                    ratio_val
+                )
+                if isinstance(color_upstream, str) and color_upstream != "nan":
+                    metric_colors[layer_upstream.get_name()] = str(color_upstream)
+
+        av_val: int | None = None
+        char_markers: dict[str, list[str]] = {}
+        if availability_layer is not None and station_id_str in characteristic_records:
+            station_record: dict[str, Any] = characteristic_records[station_id_str]
+            av_val = int(bool(station_record.get("caravan_available", False)))
+            for layer, characteristic in characteristic_layers:
+                col_name: str = str(characteristic["column"])
+                value: float | None = station_record["values"].get(col_name)
+                if value is None:
+                    continue
+                percentile: float | None = station_record["percentiles"].get(col_name)
+                if percentile is None:
+                    continue
+                abs_val: float = abs(value)
+                decimals: int = (
+                    0
+                    if abs_val >= 1000.0
+                    else 1
+                    if abs_val >= 100.0
+                    else 2
+                    if abs_val >= 10.0
+                    else 3
+                )
+                formatted_value: str = f"{value:,.{decimals}f}"
+                fill_color: str = _CHARACTERISTIC_COLORMAP(percentile)
+                rank_text: str = f"percentile rank {percentile:.0f}"
+                tooltip_text: str = (
+                    f"{characteristic['label']}: {formatted_value} ({rank_text})"
+                )
+                char_markers[layer.get_name()] = [fill_color, tooltip_text]
+
+        station_dict: dict[str, Any] = {
+            "id": station_id_str,
+            "name": station_name,
+            "coords": coords,
+            "r": circle_radius,
+            "tz": tz_offset,
+            "ex": exclusion_reason,
+            "m": metric_colors,
+        }
+        if av_val is not None:
+            station_dict["av"] = av_val
+        if char_markers:
+            station_dict["ch"] = char_markers
+
+        stations_data.append(station_dict)
+
+    json_bytes: bytes = json.dumps(stations_data, separators=(",", ":")).encode("utf-8")
+    compressed: bytes = gzip.compress(json_bytes, compresslevel=9)
+    return base64.b64encode(compressed).decode("ascii")
+
+
+def _inject_station_layer_legend_script(
+    discharge_map: folium.Map,
+    metric_layers: list[tuple[folium.FeatureGroup, cm.LinearColormap, str]],
+    upstream_layer: folium.FeatureGroup | None,
+    characteristic_layers: list[tuple[folium.FeatureGroup, dict[str, Any]]],
+    availability_layer: folium.FeatureGroup | None,
+    caravan_available_count: int,
+    station_count: int,
+) -> None:
+    """Add one dynamic legend and enforce one active station-value layer.
+
+    Args:
+        discharge_map: Performance map receiving the legend control.
+        metric_layers: Metric feature groups, colormaps, and source columns.
+        upstream_layer: Optional upstream-area-ratio feature group.
+        characteristic_layers: GRDC-Caravan feature groups and metadata.
+        availability_layer: Optional GRDC-Caravan coverage feature group.
+        caravan_available_count: Stations matched to GRDC-Caravan.
+        station_count: Total evaluated stations.
+    """
+    configs_by_column: dict[str, dict[str, Any]] = {
+        str(config["col"]): config for config in _METRIC_LAYER_CONFIGS
+    }
+    legend_configs: list[dict[str, Any]] = []
+    for layer, _, column in metric_layers:
+        config: dict[str, Any] = configs_by_column[column]
+        legend_configs.append(
+            {
+                "layer": layer.get_name(),
+                "kind": "continuous",
+                "name": config["name"],
+                "colors": config["colors"],
+                "minimum": config["vmin"],
+                "maximum": config["vmax"],
+                "show": config["show"],
+            }
+        )
+    if upstream_layer is not None:
+        legend_configs.append(
+            {
+                "layer": upstream_layer.get_name(),
+                "kind": "continuous",
+                "name": "Upstream Area Ratio",
+                "colors": ["red", "orange", "yellow", "blue", "green"],
+                "minimum": 0.5,
+                "maximum": 2.0,
+                "show": False,
+            }
+        )
+    for layer, characteristic in characteristic_layers:
+        legend_configs.append(
+            {
+                "layer": layer.get_name(),
+                "kind": "characteristic",
+                "name": characteristic["label"],
+                "colors": _CHARACTERISTIC_COLORS,
+                "minimum": 0.0,
+                "maximum": 100.0,
+                "reference_values": characteristic["reference_values"],
+                "ranked_count": characteristic["ranked_count"],
+                "missing_count": characteristic["missing_count"],
+                "show": False,
+            }
+        )
+    if availability_layer is not None:
+        legend_configs.append(
+            {
+                "layer": availability_layer.get_name(),
+                "kind": "availability",
+                "name": "GRDC-Caravan data availability",
+                "available_count": caravan_available_count,
+                "unavailable_count": station_count - caravan_available_count,
+                "available_color": _CARAVAN_AVAILABLE_COLOR,
+                "unavailable_color": _CARAVAN_UNAVAILABLE_COLOR,
+                "show": False,
+            }
+        )
+    _JavascriptMacro("legend.js", legend_configs).add_to(discharge_map)
+
+
+def _add_river_layers(
+    discharge_map: folium.Map,
+    rivers: gpd.GeoDataFrame,
+) -> None:
+    """Show all active rivers, with upstream areas formatted in the browser.
+
+    Notes:
+        River geometries are simplified to ~10m tolerance and coordinate precision
+        is rounded to ~1m (1e-5 deg) to drop GeoJSON payload size by ~70%. The GeoJSON
+        is gzip-compressed and Base64-encoded to keep the HTML file size minimal. A
+        Folium FeatureGroup is added to the map so Folium's LayerControl retains its
+        layer checkbox, and Leaflet renders the GeoJSON client-side.
+
+    Args:
+        discharge_map: Map receiving the river network.
+        rivers: Active WGS84 river segments indexed by river ID, with areas in m².
+    """
+    cols: list[str] = ["uparea_m2", "geometry"]
+    if "width_m" in rivers.columns:
+        cols.append("width_m")
+    if "depth_m" in rivers.columns:
+        cols.append("depth_m")
+    river_data: gpd.GeoDataFrame = rivers[cols].copy()
+    river_data["river_id"] = rivers.index.astype(str)
+    river_data["uparea_m2"] = river_data["uparea_m2"].round(1)
+    if "width_m" in river_data.columns:
+        river_data["width_m"] = river_data["width_m"].round(2)
+    if "depth_m" in river_data.columns:
+        river_data["depth_m"] = river_data["depth_m"].round(2)
+    simplified_geom: gpd.GeoSeries = river_data["geometry"].simplify(0.0001)
+    river_data["geometry"] = shapely.set_precision(simplified_geom, grid_size=1e-5)
+    river_geojson: str = river_data.to_json(drop_id=True)
+    compressed_bytes: bytes = gzip.compress(
+        river_geojson.encode("utf-8"), compresslevel=9
+    )
+    encoded_payload: str = base64.b64encode(compressed_bytes).decode("ascii")
+
+    river_layer: folium.FeatureGroup = folium.FeatureGroup(
+        name="Active rivers",
+        show=True,
+    )
+    river_layer.add_to(discharge_map)
+    _JavascriptMacro(
+        "rivers.js",
+        {
+            "layer": river_layer.get_name(),
+            "payload": encoded_payload,
+        },
+    ).add_to(discharge_map)
+
+
+def _add_reservoir_layer(
+    discharge_map: folium.Map,
+    waterbodies: gpd.GeoDataFrame,
+) -> None:
+    """Add reservoir point layers to the discharge map.
+
+    Args:
+        discharge_map: Folium map receiving waterbody layers.
+        waterbodies: Waterbody GeoDataFrame with polygon geometries and
+            ``waterbody_type`` identifiers. Only reservoirs are shown.
+    """
+    waterbody_layers: dict[int, folium.FeatureGroup] = {
+        waterbody_type: folium.FeatureGroup(name=style["label"] + "s", show=True)
+        for waterbody_type, style in _WATERBODY_STYLE.items()
+    }
+    reservoir_mask: pd.Series = (
+        waterbodies["waterbody_type"].astype(int) == RESERVOIR_WATERBODY_TYPE
+    )
+    reservoirs: gpd.GeoDataFrame = waterbodies.loc[reservoir_mask].copy()
+    if reservoirs.empty:
+        return
+
+    waterbodies_wgs84: gpd.GeoDataFrame = reservoirs.to_crs(epsg=4326)
+    for _, waterbody_row in waterbodies_wgs84.iterrows():
+        waterbody_style: dict[str, str] = _WATERBODY_STYLE[RESERVOIR_WATERBODY_TYPE]
+
+        centroid = waterbody_row.geometry.centroid
+        area_m2: float | None = (
+            float(waterbody_row["average_area"])
+            if "average_area" in waterbody_row.index
+            else None
+        )
+        volume_m3: float | None = (
+            float(waterbody_row["volume_total"])
+            if "volume_total" in waterbody_row.index
+            else None
+        )
+        popup_lines: list[str] = [
+            f"<b>{waterbody_style['label']}</b> "
+            f"(ID {waterbody_row.get('waterbody_id', '?')})<br>"
+        ]
+        if area_m2 is not None:
+            popup_lines.append(
+                f"Area: <span data-geb-area-m2='{area_m2}'></span> km²<br>"
+            )
+        if volume_m3 is not None:
+            popup_lines.append(
+                f"Volume: <span data-geb-volume-m3='{volume_m3}'></span> km³<br>"
+            )
+
+        folium.CircleMarker(
+            location=[centroid.y, centroid.x],
+            radius=5,
+            color="black",
+            weight=0.5,
+            fill=True,
+            fill_color=waterbody_style["color"],
+            fill_opacity=0.8,
+            popup=folium.Popup("".join(popup_lines), max_width=200),
+            tooltip=f"{waterbody_style['label']} {waterbody_row.get('waterbody_id', '')}",
+            z_index=500,
+        ).add_to(waterbody_layers[RESERVOIR_WATERBODY_TYPE])
+
+    for waterbody_layer in waterbody_layers.values():
+        waterbody_layer.add_to(discharge_map)
+
+
+def _build_snapping_station(
+    station_id: str,
+    station_name: str,
+    row: pd.Series,
+) -> dict[str, Any]:
+    """Prepare station data to show snapping details when requested.
+
+    Excluded stations show the reason alongside their snapping diagnostics.
+
+    Args:
+        station_id: Gauging station identifier.
+        station_name: Human-readable station name.
+        row: Evaluation row with snapping metadata.
+
+    Returns:
+        Coordinates, tooltip, status color, and popup text.
+    """
+    gauge_longitude: float = float(row["station_longitude"])
+    gauge_latitude: float = float(row["station_latitude"])
+    if any(
+        pd.isna(row.get(column))
+        for column in (
+            "original_subgrid_longitude",
+            "original_subgrid_latitude",
+            "routing_grid_longitude",
+            "routing_grid_latitude",
+        )
+    ):
+        reason: str = html.escape(
+            str(row.get("exclusion_reason", "No valid river match."))
+        )
+        station_label: str = f"{html.escape(station_name)} ({html.escape(station_id)})"
+        area_m2: float = float(row.get("upstream_area_GRDC", np.nan))
+        area_label: str = (
+            f"<span data-geb-area-m2='{area_m2}'></span> km²"
+            if np.isfinite(area_m2) and area_m2 > 0
+            else "missing"
+        )
+        return {
+            "id": station_id,
+            "locations": [[gauge_latitude, gauge_longitude]],
+            "color": "#DC2626",
+            "tooltip": f"{station_label}<br>EXCLUDED: {reason}",
+            "popup": f"<b>{station_label}</b><br><b>EXCLUDED</b><br>{reason}<br>Station area: {area_label}<br>Gauge: {gauge_latitude:.5f}, {gauge_longitude:.5f}",
+        }
+    original_subgrid_longitude: float = float(row["original_subgrid_longitude"])
+    original_subgrid_latitude: float = float(row["original_subgrid_latitude"])
+    routing_longitude: float = float(row["routing_grid_longitude"])
+    routing_latitude: float = float(row["routing_grid_latitude"])
+    station_area_m2: float = float(row["upstream_area_GRDC"])
+    routing_area_m2: float = float(row["upstream_area_GEB"])
+    original_subgrid_area_m2: float = float(row["upstream_area_GEB_original_subgrid"])
+    station_to_routing_distance_m: float = GEOD.inv(
+        gauge_longitude,
+        gauge_latitude,
+        routing_longitude,
+        routing_latitude,
+    )[2]
+    station_to_original_subgrid_distance_m: float = float(
+        row["station_to_original_subgrid_distance_m"]
+    )
+    original_subgrid_to_routing_distance_m: float = GEOD.inv(
+        original_subgrid_longitude,
+        original_subgrid_latitude,
+        routing_longitude,
+        routing_latitude,
+    )[2]
+    station_routing_area_ratio: float = (
+        station_area_m2 / routing_area_m2 if routing_area_m2 > 0 else float("nan")
+    )
+    original_subgrid_station_area_ratio: float = (
+        original_subgrid_area_m2 / station_area_m2
+        if station_area_m2 > 0
+        else float("nan")
+    )
+    routing_original_subgrid_area_ratio: float = (
+        routing_area_m2 / original_subgrid_area_m2
+        if original_subgrid_area_m2 > 0
+        else float("nan")
+    )
+    timezone_offset_hours: float = float(row["timezone_utc_offset"])
+    area_warning: bool = not 0.9 <= routing_original_subgrid_area_ratio <= 1.1
+    status_label: str = "ROUTING AREA WARNING" if area_warning else "PASS"
+    status_color: str = "#EA580C" if area_warning else "#16A34A"
+    exclusion_reason: str = (
+        str(row.get("exclusion_reason", ""))
+        if pd.notna(row.get("exclusion_reason", ""))
+        else ""
+    )
+    if exclusion_reason:
+        status_label = "EXCLUDED"
+        status_color = "#DC2626"
+    escaped_name: str = html.escape(station_name)
+    escaped_id: str = html.escape(station_id)
+    popup_html: str = (
+        f"<b>{escaped_name}</b> ({escaped_id})<br>"
+        f"<b>Snapping details: <span style='color:{status_color}'>{status_label}</span></b><br>"
+        f"Gauging station: {gauge_latitude:.5f}, {gauge_longitude:.5f}<br>"
+        f"Selected original subgrid: {original_subgrid_latitude:.5f}, {original_subgrid_longitude:.5f}<br>"
+        f"Routing pixel: {routing_latitude:.5f}, {routing_longitude:.5f}<br>"
+        f"River ID: {int(row['snapped_river_id'])}<br>"
+        f"Gauge–routing distance: <span data-geb-distance-m='{station_to_routing_distance_m}'></span> km<br>"
+        f"Gauge–original subgrid distance: <span data-geb-distance-m='{station_to_original_subgrid_distance_m}'></span> km<br>"
+        f"Original subgrid–routing distance: <span data-geb-distance-m='{original_subgrid_to_routing_distance_m}'></span> km<br>"
+        f"Station area: <span data-geb-area-m2='{station_area_m2}'></span> km²<br>"
+        f"Original subgrid area: <span data-geb-area-m2='{original_subgrid_area_m2}'></span> km²<br>"
+        f"Routing area: <span data-geb-area-m2='{routing_area_m2}'></span> km²<br>"
+        f"Original subgrid/station area ratio: {original_subgrid_station_area_ratio:.2f}<br>"
+        f"Routing/original subgrid area ratio: {routing_original_subgrid_area_ratio:.2f}<br>"
+        f"Station/routing area ratio: {station_routing_area_ratio:.2f}<br>"
+        f"Daily aggregation offset: <span data-geb-utc-offset-hours='{timezone_offset_hours}'></span> (fixed; no DST)<br>"
+        "Observation day: local midnight to midnight<br>"
+        f"{html.escape(exclusion_reason)}"
+    )
+    tooltip: str = (
+        f"{escaped_id}: {escaped_name}<br>Snapping details: {status_label}"
+        f"<br>Original subgrid/Station area: {original_subgrid_station_area_ratio:.2f}; "
+        f"routing/original subgrid: {routing_original_subgrid_area_ratio:.2f}"
+        f"<br>Gauge–routing: <span data-geb-distance-m='{station_to_routing_distance_m}'></span> km"
+        f"<br><span data-geb-utc-offset-hours='{timezone_offset_hours}'></span> fixed"
+        "<br>Daily window: local midnight to midnight"
+    )
+    line_locations: list[list[float]] = [
+        [gauge_latitude, gauge_longitude],
+        [original_subgrid_latitude, original_subgrid_longitude],
+        [routing_latitude, routing_longitude],
+    ]
+    return {
+        "id": escaped_id,
+        "locations": line_locations,
+        "color": status_color,
+        "tooltip": tooltip,
+        "popup": popup_html,
+    }
+
+
+def _script_json(value: Any) -> str:
+    """Serialize script data without HTML or Jinja template delimiters.
+
+    Args:
+        value: JSON-compatible dashboard data.
+
+    Returns:
+        JSON that remains safe when Folium processes the script templates more than once.
+    """
+    return (
+        str(htmlsafe_json_dumps(value))
+        .replace("{{", "\\u007b\\u007b")
+        .replace("{%", "\\u007b%")
+        .replace("{#", "\\u007b#")
+    )
+
+
+def _as_finite_float(
+    value: float | int | np.floating | None, decimals: int = 2
+) -> float | None:
+    """Convert a numeric value to a rounded finite JSON-friendly float.
+
+    Args:
+        value: Value to convert (dimensionless unless documented by the caller).
+        decimals: Number of decimal places to round to. Defaults to 2.
+
+    Returns:
+        Finite float value rounded to the specified decimals, or None for missing,
+        NaN, or infinite values.
+    """
+    # JSON has no NaN or infinity literals; null also creates gaps in Plotly charts.
+    if value is None:
+        return None
+    float_value: float = float(value)
+    return round(float_value, decimals) if np.isfinite(float_value) else None

@@ -27,7 +27,6 @@ from geb.geb_types import (
     T_ArrayNumber,
     T_OneorTwoDArray,
     ThreeDArray,
-    ThreeDArrayFloat32,
     ThreeDArrayWithScalar,
     TwoDArray,
     TwoDArrayBool,
@@ -132,7 +131,7 @@ def _to_grid_1d(
     """
     n_grid_cells: int = grid_to_HRU.size
     out: ArrayFloat32 = np.empty(n_grid_cells, dtype=np.float32)
-    for i in prange(n_grid_cells):  # ty:ignore[not-iterable]
+    for i in prange(n_grid_cells):
         start: int = cell_start_indices[i]
         end: int = grid_to_HRU[i]
         s: np.float32 = np.float32(0.0)
@@ -167,7 +166,7 @@ def _to_grid_2d(
     n_rows: int = data.shape[0]
     n_grid_cells: int = grid_to_HRU.size
     out: TwoDArrayFloat32 = np.empty((n_rows, n_grid_cells), dtype=np.float32)
-    for i in prange(n_grid_cells):  # ty:ignore[not-iterable]
+    for i in prange(n_grid_cells):
         start: int = cell_start_indices[i]
         end: int = grid_to_HRU[i]
         for t in range(n_rows):
@@ -228,9 +227,16 @@ def to_grid(
     cell_start_indices[0] = 0
     cell_start_indices[1:] = grid_to_HRU[:-1]
     if data.ndim == 1:
-        return _to_grid_1d(data, cell_start_indices, grid_to_HRU, land_use_ratio)
+        return _to_grid_1d(
+            cast(ArrayFloat32, data), cell_start_indices, grid_to_HRU, land_use_ratio
+        )
     elif data.ndim == 2:
-        return _to_grid_2d(data, cell_start_indices, grid_to_HRU, land_use_ratio)
+        return _to_grid_2d(
+            cast(TwoDArrayFloat32, data),
+            cell_start_indices,
+            grid_to_HRU,
+            land_use_ratio,
+        )
     else:
         raise NotImplementedError("Only 1D and 2D arrays are supported")
 
@@ -251,7 +257,7 @@ def to_HRU(
     Returns:
         output_data: Data converted to HRUs (1D array of size n_HRUs).
     """
-    return data[HRU_to_grid]  # ty:ignore[invalid-return-type]
+    return data[HRU_to_grid]  # ty:ignore[invalid-argument-type]
 
 
 class BaseVariables:
@@ -278,6 +284,7 @@ class GridVariables(Bucket):
 
     heads: TwoDArrayFloat64
     capillar: ArrayFloat32
+    karst_storage_m: ArrayFloat64
     layer_boundary_elevation: TwoDArrayFloat32
     elevation: ArrayFloat32
     specific_yield: TwoDArrayFloat32
@@ -293,17 +300,16 @@ class GridVariables(Bucket):
     discharge_m3_s: ArrayFloat32
     discharge_in_rivers_m3_s_substep: ArrayFloat32
     waterbody_outflow_points: ArrayInt32
-    interception_capacity_grassland: ThreeDArrayFloat32
-    forest_crop_factor_per_10_days: ThreeDArrayFloat32
     discharge_m3_s_per_substep: TwoDArrayFloat32
     retention_basin_storage_m3_per_substep: TwoDArrayFloat32
-    discharge_m3_s_substep: ArrayFloat32
     river_width_alpha: ArrayFloat32
     river_width_beta: ArrayFloat32
     overland_flow_buffer: TwoDArrayFloat32
     overland_flow_buffer_weights: ArrayFloat32
-    buffer: TwoDArrayFloat64
     retention_basin_storage_m3: ArrayFloat32
+    river_storage_m3: ArrayFloat64
+    river_slope_m_per_m: ArrayFloat32
+    water_stage_m: ArrayFloat32
 
 
 class Grid(BaseVariables):
@@ -672,11 +678,13 @@ class Grid(BaseVariables):
 class HRUVariables(Bucket):
     """This class contains functions to handle variables on the HRU scale."""
 
+    daily_reference_evapotranspiration_grass_m: ArrayFloat32
     variable_runoff_shape_beta: ArrayFloat32
     interception_storage_m: ArrayFloat32
-    snow_temperature_C: ArrayFloat32
-    liquid_water_in_snow_m: ArrayFloat64
-    snow_water_equivalent_m: ArrayFloat64
+    snow_enthalpy_J_per_m2: TwoDArrayFloat32
+    liquid_water_in_snow_m: TwoDArrayFloat64
+    snow_water_equivalent_m: TwoDArrayFloat64
+    snow_density_kg_per_m3: TwoDArrayFloat32
     topwater_m: ArrayFloat32
     reservoir_command_areas: ArrayInt32
     cell_area: ArrayFloat32
@@ -711,12 +719,11 @@ class HRUVariables(Bucket):
     bulk_density_kg_per_dm3: TwoDArrayFloat32
     thermal_conductivity_saturated_unfrozen_W_per_m_K: TwoDArrayFloat32
     thermal_conductivity_saturated_frozen_W_per_m_K: TwoDArrayFloat32
+    thermal_conductivity_dry_soil_W_per_m_K: TwoDArrayFloat32
     crop_group_number_forest: ArrayFloat32
     crop_group_number_grassland_like: ArrayFloat32
     leaf_area_index_forest: TwoDArrayFloat32
     leaf_area_index_grassland_like: TwoDArrayFloat32
-    interception_capacity_forest_m: TwoDArrayFloat32
-    interception_capacity_grassland_like_m: TwoDArrayFloat32
     cell_length: ArrayFloat32
     water_depth_in_field: ArrayFloat32
     slope_m_per_m: ArrayFloat32
@@ -1242,7 +1249,7 @@ class HRUs(BaseVariables):
         use_nan: bool = np.isnan(nodatavalue)
 
         if method == "last":
-            for y in prange(ysize):  # ty:ignore[not-iterable]
+            for y in prange(ysize):
                 for x in range(xsize):
                     for sy in range(scaling):
                         for sx in range(scaling):
@@ -1260,7 +1267,7 @@ class HRUs(BaseVariables):
         elif method == "mean":
             outarray[:] = 0.0
             counts: ArrayInt32 = np.zeros(outarray.size, dtype=np.int32)
-            for y in prange(ysize):  # ty:ignore[not-iterable]
+            for y in prange(ysize):
                 for x in range(xsize):
                     for sy in range(scaling):
                         for sx in range(scaling):
@@ -1277,7 +1284,7 @@ class HRUs(BaseVariables):
                                     if val != nodatavalue:
                                         outarray[HRU] += val
                                         counts[HRU] += 1
-            for i in prange(outarray.size):  # ty:ignore[not-iterable]
+            for i in prange(outarray.size):
                 if counts[i] > 0:
                     outarray[i] /= counts[i]
                 else:
@@ -1477,14 +1484,14 @@ class Data:
         """
         assert not isinstance(data, list)
         if data.ndim == 1:
-            output_data = to_HRU(data, self.HRU.var.HRU_to_grid)  # ty:ignore[invalid-argument-type]
+            output_data = to_HRU(data, self.HRU.var.HRU_to_grid)
         elif data.ndim == 2 and how == "first":
             output_data = data[self.HRU.var.HRU_to_grid, :]
         elif data.ndim == 2 and how == "last":
             output_data = data[:, self.HRU.var.HRU_to_grid]
         else:
             raise NotImplementedError
-        return output_data  # ty:ignore[invalid-return-type]
+        return cast(T_OneorTwoDArray, output_data)
 
     def to_grid(self, *, HRU_data: np.ndarray) -> np.ndarray:
         """Convert HRU data to grid scale using a weighted mean.

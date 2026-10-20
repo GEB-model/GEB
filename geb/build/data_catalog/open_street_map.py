@@ -96,7 +96,12 @@ class OpenStreetMap(Adapter):
                 filepath: Path = Path(tmp.name)
 
                 fetch_and_save(
-                    url, filepath, overwrite=True, show_progress=False, verbose=False
+                    url,
+                    filepath,
+                    logger=self.logger,
+                    overwrite=True,
+                    show_progress=False,
+                    verbose=False,
                 )
 
                 for feature_type in feature_types:

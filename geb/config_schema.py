@@ -82,6 +82,19 @@ class ShapeConfig(BaseModel):
     )
 
 
+class FloodProtectionStandardConfig(BaseModel):
+    """Configuration for flood protection standard settings."""
+
+    mode: Literal["auto", "manual"] = Field(
+        "manual",
+        description="Flood protection standard mode: 'auto' (derive from data) or 'manual' (use configured value)",
+    )
+    manual_value: int = Field(
+        10,
+        description="Flood protection standard return period used when mode is 'manual' (years).",
+    )
+
+
 class FloodsConfig(BaseModel):
     """Configuration for flood simulation."""
 
@@ -117,6 +130,10 @@ class FloodsConfig(BaseModel):
     return_periods: list[int] = Field(
         [2, 5, 10, 25, 50, 100, 250, 500, 1000],
         description="Return periods for flood maps.",
+    )
+    flood_protection_standard: FloodProtectionStandardConfig = Field(
+        default_factory=FloodProtectionStandardConfig,
+        description="Flood protection standard settings.",
     )
     p_value_threshold: float = Field(
         0.05,
@@ -187,12 +204,51 @@ class RiverWidthConfig(BaseModel):
     )
 
 
+class RiverDepthParameters(BaseModel):
+    """Parameters for river depth calculation."""
+
+    c: float = Field(
+        description="Power law coefficient c for mean channel depth = c * Q^d."
+    )
+    d: float = Field(
+        description="Power law exponent d for mean channel depth = c * Q^d."
+    )
+    min_depth_m: float = Field(
+        ge=0.0,
+        description="Minimum allowable bankfull depth (m).",
+    )
+    shape_exponent: float = Field(
+        gt=0.0,
+        description="Power-law cross-sectional shape exponent r (0.5 for parabolic channel).",
+    )
+    use_observed_width_as_bankfull: bool = Field(
+        True,
+        description=(
+            "Whether to use observed channel width directly as bankfull width and scale depth "
+            "accordingly using baseline expected channel width. If False, reverts to previous "
+            "machinery using reach-specific alpha for expected width."
+        ),
+    )
+
+
 class RiverDepthConfig(BaseModel):
     """Configuration for river depth."""
 
-    method: Literal["manning", "power_law"] = Field(
-        "manning",
-        description="Method for river depth calculation: 'manning' or 'power_law'. If power law, alpha and beta must be set additionally in the parameters.",
+    parameters: RiverDepthParameters = Field(
+        description="Parameters for river depth calculation.",
+    )
+
+
+class RetentionBasinsConfig(BaseModel):
+    """Configuration for retention basins in routing."""
+
+    release_threshold_factor: float = Field(
+        0.2,
+        description="Factor to multiply the activation threshold by to get the release threshold.",
+    )
+    activation_threshold_return_period_years: float = Field(
+        2.0,
+        description="Return period in years used to calculate the activation threshold for retention basins.",
     )
 
 
@@ -203,6 +259,13 @@ class RoutingConfig(BaseModel):
         "kinematic_wave",
         description="Routing algorithm: 'accuflux' or 'kinematic_wave'.",
     )
+    minimum_river_slope_m_per_m: float = Field(
+        1e-4,
+        gt=0.0,
+        description=(
+            "Minimum channel slope used to parameterize kinematic-wave routing (m/m)."
+        ),
+    )
     retention_basin_release_threshold_factor: float = Field(
         0.9,
         description="Factor to multiply the activation threshold by to get the release threshold.",
@@ -210,9 +273,7 @@ class RoutingConfig(BaseModel):
     river_width: RiverWidthConfig = Field(
         default_factory=RiverWidthConfig, description="River width configuration."
     )
-    river_depth: RiverDepthConfig = Field(
-        default_factory=RiverDepthConfig, description="River depth configuration."
-    )
+    river_depth: RiverDepthConfig = Field(description="River depth configuration.")
 
 
 class DischargeEvaluationConfig(BaseModel):
@@ -224,13 +285,9 @@ class DischargeEvaluationConfig(BaseModel):
         description="Minimum modeled upstream area for stations included in discharge evaluation (km2).",
     )
     minimum_timeseries_length_years: float = Field(
-        10.0,
+        5.0,
         ge=0.0,
-        description="Minimum paired observation-simulation timeseries length for stations included in discharge evaluation (years).",
-    )
-    external_evaluation_folder: str | None = Field(
-        None,
-        description="Optional folder with external discharge evaluation CSV files. Relative paths are resolved from the model folder.",
+        description="Minimum total paired observation-simulation data for stations included in discharge evaluation (years; continuity is not required).",
     )
 
 
@@ -243,12 +300,30 @@ class HydrologyEvaluationConfig(BaseModel):
     )
 
 
+class KarstConfig(BaseModel):
+    """Karst capture and release settings."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    capture_fraction: float = Field(
+        ge=0.0,
+        le=1.0,
+        description="Fraction of runoff and interflow captured on karst land (0–1).",
+    )
+    release_time_days: float = Field(
+        gt=0.0,
+        allow_inf_nan=False,
+        description="Exponential release time (days): after this many dry days, exp(-1) of the initial storage remains (about 36.8%).",
+    )
+
+
 class HydrologyConfig(BaseModel):
     """Configuration for hydrology."""
 
     routing: RoutingConfig = Field(
         default_factory=RoutingConfig, description="Routing configuration."
     )
+    karst: KarstConfig = Field(description="Karst recharge settings.")
     evaluation: HydrologyEvaluationConfig = Field(
         default_factory=HydrologyEvaluationConfig,
         description="Hydrology evaluation configuration.",
@@ -261,6 +336,55 @@ class MarketConfig(BaseModel):
     dynamic_market: bool = Field(False, description="Whether to use dynamic market.")
     price_frequency: Literal["yearly"] = Field(
         "yearly", description="Frequency of price updates."
+    )
+
+
+class GovernmentAdaptationConfig(BaseModel):
+    """Configuration for government-led adaptation policy."""
+
+    enabled: bool = Field(
+        False, description="Whether to enable government adaptation policy."
+    )
+    mode: Literal["cba", "threshold"] = Field(
+        "cba",
+        description="Adaptation policy mode: 'cba' (cost-benefit analysis) or 'threshold'.",
+    )
+    EAD_threshold: float = Field(
+        1000000.0,
+        description="Expected annual damage threshold that can trigger adaptation action.",
+    )
+    equity_indicator_threshold: float = Field(
+        0.5,
+        description="Equity indicator threshold between 0 and 1.",
+    )
+    ecosystem_indicator_threshold: float = Field(
+        0.5,
+        description="Ecosystem indicator threshold between 0 and 1.",
+    )
+    adaptation_fraction: float = Field(
+        0.1,
+        description="Fraction of households selected for adaptation action.",
+    )
+    dike_elevation_cost_per_meter_usd: float = Field(
+        6800.0,
+        description="Unit cost for raising a dike by 1 meter over 1 meter length (USD/m).",
+    )
+    dike_maintenance_cost_per_year_usd: float = Field(
+        80.0,
+        description="Annual maintenance cost for a dike segment of 1 meter length (USD/year).",
+    )
+
+
+class GovernmentConfig(BaseModel):
+    """Configuration for government agent."""
+
+    plant_forest: bool = Field(
+        False,
+        description="Whether to enable forest-planting policy for reforestation scenarios.",
+    )
+    adaptation: GovernmentAdaptationConfig = Field(
+        default_factory=GovernmentAdaptationConfig,
+        description="Government adaptation policy configuration.",
     )
 
 
@@ -557,6 +681,10 @@ class SensitivityAnalysisConfig(BaseModel):
 class AgentSettingsConfig(BaseModel):
     """Configuration for agents."""
 
+    government: GovernmentConfig = Field(
+        default_factory=GovernmentConfig, description="Government agent configuration."
+    )
+
     market: MarketConfig = Field(
         default_factory=MarketConfig, description="Market agent configuration."
     )
@@ -633,28 +761,58 @@ class ReportConfig(BaseModel):
     water_circle: bool = Field(
         False, alias="_water_circle", description="Whether to report water circle."
     )
+    water_balance: bool = Field(
+        False, alias="_water_balance", description="Whether to report water balance."
+    )
+    water_storage: bool = Field(
+        False, alias="_water_storage", description="Whether to report water storage."
+    )
+    energy_balance: bool = Field(
+        False, alias="_energy_balance", description="Whether to report energy balance."
+    )
     discharge_stations: bool = Field(
         True,
         alias="_discharge_stations",
         description="Whether to report discharge stations.",
     )
-    outflow_points: bool = Field(
-        True, alias="_outflow_points", description="Whether to report outflow points."
+    bankfull_depths: bool = Field(
+        True,
+        alias="_bankfull_depths",
+        description="Whether to report bankfull depths each year.",
+    )
+    retention_basins: bool = Field(
+        False,
+        alias="_retention_basins",
+        description="Whether to report retention basins.",
+    )
+    meteorological_stations: bool = Field(
+        True,
+        alias="_meteorological_stations",
+        description="Whether to report meteorological stations.",
     )
 
 
 class ParametersConfig(BaseModel):
     """Configuration for parameters."""
 
-    mannings_n_multiplier: float = Field(1.0, description="Manning's n multiplier.")
-    crop_factor_multiplier: float = Field(1.0, description="Crop factor multiplier.")
+    mannings_n_multiplier: float = Field(description="Manning's n multiplier.")
+    bankfull_discharge_multiplier: float = Field(
+        gt=0.0,
+        description="Calibration multiplier for bankfull discharge (Q_bf) used to determine channel geometry and overbank spill capacity.",
+    )
+    crop_factor_multiplier: float = Field(description="Crop factor multiplier.")
     saturated_hydraulic_conductivity_multiplier: float = Field(
-        1.0, description="Saturated hydraulic conductivity multiplier."
+        description="Saturated hydraulic conductivity multiplier."
     )
-    reservoir_release_factor: float = Field(
-        0.1, description="Reservoir release factor."
+    groundwater_hydraulic_conductivity_multiplier: float = Field(
+        description="Groundwater hydraulic conductivity multiplier."
     )
-    lake_outflow_multiplier: float = Field(1.0, description="Lake outflow multiplier.")
+    reservoir_release_factor: float = Field(description="Reservoir release factor.")
+    lake_outflow_multiplier: float = Field(description="Lake outflow multiplier.")
+    interflow_multiplier: float = Field(description="Interflow multiplier.")
+    variable_runoff_shape_beta_multiplier: float = Field(
+        description="Scale factor for the variable runoff shape parameter beta."
+    )
 
 
 class PlantFATEConfig(BaseModel):
@@ -710,9 +868,6 @@ class CalibrationParameterConfig(BaseModel):
 class CalibrationConfig(BaseModel):
     """Configuration for calibration."""
 
-    spinup_time: date = Field(..., description="Spinup start time (YYYY-MM-DD).")
-    start_time: date = Field(..., description="Calibration start time (YYYY-MM-DD).")
-    end_time: date = Field(..., description="Calibration end time (YYYY-MM-DD).")
     path: str = Field("calibration", description="Path to calibration output.")
     gpus: int = Field(0, description="Number of GPUs to use.")
     scenario: str = Field("no-adaptation", description="Scenario name.")
@@ -749,9 +904,7 @@ class Config(BaseModel):
     report: ReportConfig = Field(
         default_factory=ReportConfig, description="Reporting configuration."
     )
-    parameters: ParametersConfig = Field(
-        default_factory=ParametersConfig, description="Parameters configuration."
-    )
+    parameters: ParametersConfig = Field(description="Parameters configuration.")
     plantFATE: PlantFATEConfig = Field(
         default_factory=PlantFATEConfig, description="PlantFATE configuration."
     )

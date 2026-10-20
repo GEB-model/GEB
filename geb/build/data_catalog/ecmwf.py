@@ -31,7 +31,7 @@ def format_path(path: Path, **kwargs: str | int) -> Path:
     return path
 
 
-def format_date(date_obj: datetime) -> str:
+def format_date(date_obj: pd.Timestamp | datetime) -> str:
     """Format a date or datetime object to a string in 'YYYYMMDDTHHMMSS' format.
 
     Args:
@@ -43,13 +43,15 @@ def format_date(date_obj: datetime) -> str:
     Raises:
         ValueError: If the input is not a date or datetime object.
     """
-    if isinstance(date_obj, datetime):
+    if isinstance(date_obj, (datetime, pd.Timestamp)):
         return date_obj.strftime("%Y%m%dT%H%M%S")
     else:
         raise ValueError("Input must be a date or datetime object.")
 
 
-def generate_forecast_steps(forecast_date: datetime, forecast_horizon: int) -> str:
+def generate_forecast_steps(
+    forecast_date: pd.Timestamp | datetime, forecast_horizon: int
+) -> str:
     """Generate ECMWF forecast step string based on the forecast date and horizon.
 
     ECMWF does not have a consistent 1h timestep for the entire operational archive. Asking hourly data to the server when it does not exist, will result in an error.
@@ -224,7 +226,10 @@ class ECMWFForecasts(Adapter):
                         "For historical data before 2010, please use hindcast data instead."
                     )
         elif forecast_product == "hindcast":
-            # If downloading hindcast data, check if the forecast start date is less then 20 years apart from the forecast cycle date, otherwise there will be no data available
+            if n_hindcast_years is None:
+                raise ValueError(
+                    "n_hindcast_years must be specified when forecast_product is 'hindcast'."
+                )
             if n_hindcast_years > 20:
                 raise ValueError(
                     "ECMWF hindcast data is only available for up to 20 years before the forecast cycle date. Please adjust the n_hindcast_years parameter in your build.yml file to be 20 or less."

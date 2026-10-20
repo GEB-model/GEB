@@ -60,3 +60,23 @@ def test_cli_evaluate_help_lists_methods() -> None:
     assert "Available methods:" in result.output
     for method_name in AVAILABLE_EVALUATION_METHODS:
         assert method_name in result.output
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Test doesn't work in GitHub Actions.")
+def test_cli_run_checkpoint_options() -> None:
+    """Test that run command has save-checkpoint and continue-from-checkpoint options."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["run", "--help"])
+    assert result.exit_code == 0
+    assert "--save-checkpoint" in result.output
+    assert "--continue-from-checkpoint" in result.output
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Test doesn't work in GitHub Actions.")
+def test_cli_spinup_checkpoint_options() -> None:
+    """Test that spinup command has save-checkpoint and continue-from-checkpoint options."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["spinup", "--help"])
+    assert result.exit_code == 0
+    assert "--save-checkpoint" in result.output
+    assert "--continue-from-checkpoint" in result.output

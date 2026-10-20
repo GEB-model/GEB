@@ -8,7 +8,7 @@ import pandas as pd
 import xarray as xr
 from numba import njit
 
-from geb.geb_types import ArrayInt32, TwoDArrayBool, TwoDArrayInt32
+from geb.geb_types import ArrayFloat64, ArrayInt32, TwoDArrayBool, TwoDArrayInt32
 from geb.workflows.raster import pixels_to_coords
 
 
@@ -254,7 +254,9 @@ def create_farm_distributions(
 
 @njit(cache=True, parallel=False)
 def create_farms_numba(
-    cultivated_land: TwoDArrayInt32, ids: ArrayInt32, farm_sizes: ArrayInt32
+    cultivated_land: TwoDArrayInt32 | TwoDArrayBool,
+    ids: ArrayInt32,
+    farm_sizes: ArrayInt32,
 ) -> TwoDArrayInt32:
     """Creates random farms considering the farm size distribution.
 
@@ -403,7 +405,7 @@ def create_farms(
 
 def fit_n_farms_to_sizes(
     n: int,
-    estimate: ArrayInt32,
+    estimate: ArrayInt32 | ArrayFloat64,
     farm_sizes: ArrayInt32,
     mean: int,
     offset: int,
@@ -684,7 +686,7 @@ def get_farm_distribution(
             n, estimate, farm_sizes, mean, offset
         )
         assert n == n_farms.sum()
-        estimated_area_int: int = (n_farms * farm_sizes).sum()
+        estimated_area_int: int = int((n_farms * farm_sizes).sum())
         assert estimated_area_int == target_area
         assert (n_farms >= 0).all()
         assert target_area == (n_farms * farm_sizes).sum()

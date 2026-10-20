@@ -1,6 +1,7 @@
 """Tests for the Reporter module utilities in GEB."""
 
 import datetime
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -67,10 +68,10 @@ class TestDailyFrequency:
         assert _to_datetimes(result)[0] == start
 
     def test_daily_with_substeps(self) -> None:
-        """Verify that substeps subdivide each day evenly.
+        """Verify that substeps subdivide each day evenly at interval midpoints.
 
-        With timestep=1 day and substeps=4, each day should contribute 4
-        entries at 0h, 6h, 12h, and 18h.
+        With timestep=1 day and substeps=4 (6h interval), each day should contribute 4
+        midpoint entries at 3h, 9h, 15h, and 21h.
         """
         start = datetime.datetime(2020, 1, 1)
         end = datetime.datetime(2020, 1, 3)
@@ -83,11 +84,27 @@ class TestDailyFrequency:
         dts = _to_datetimes(result)
         # 3 days × 4 substeps = 12 entries
         assert len(dts) == 12
-        assert dts[0] == datetime.datetime(2020, 1, 1, 0, 0, 0)
-        assert dts[1] == datetime.datetime(2020, 1, 1, 6, 0, 0)
-        assert dts[2] == datetime.datetime(2020, 1, 1, 12, 0, 0)
-        assert dts[3] == datetime.datetime(2020, 1, 1, 18, 0, 0)
-        assert dts[4] == datetime.datetime(2020, 1, 2, 0, 0, 0)
+        assert dts[0] == datetime.datetime(2020, 1, 1, 3, 0, 0)
+        assert dts[1] == datetime.datetime(2020, 1, 1, 9, 0, 0)
+        assert dts[2] == datetime.datetime(2020, 1, 1, 15, 0, 0)
+        assert dts[3] == datetime.datetime(2020, 1, 1, 21, 0, 0)
+        assert dts[4] == datetime.datetime(2020, 1, 2, 3, 0, 0)
+        assert dts[-1] == datetime.datetime(2020, 1, 3, 21, 0, 0)
+
+    def test_daily_with_hourly_substeps_midpoint(self) -> None:
+        """Verify that 24 hourly substeps per day are centered at HH:30:00."""
+        start = datetime.datetime(2020, 1, 1)
+        end = datetime.datetime(2020, 1, 1)
+        timestep = datetime.timedelta(days=1)
+        conf: dict = {"frequency": {"every": "day"}}
+
+        result = create_time_array(start, end, timestep, conf, substeps=24)
+
+        dts = _to_datetimes(result)
+        assert len(dts) == 24
+        assert dts[0] == datetime.datetime(2020, 1, 1, 0, 30, 0)
+        assert dts[1] == datetime.datetime(2020, 1, 1, 1, 30, 0)
+        assert dts[23] == datetime.datetime(2020, 1, 1, 23, 30, 0)
 
     def test_daily_with_relativedelta_timestep(self) -> None:
         """Verify that a relativedelta(days=1) timestep produces correct daily entries."""
@@ -394,3 +411,581 @@ class TestCachingAndReadOnly:
 
         assert len(result_5) == 5
         assert len(result_10) == 10
+
+
+class TestSpecialExportersSingleFile:
+    """Tests verifying single parquet file export for special exporters and error handling."""
+
+    def test_discharge_stations_export_individual_files(self, tmp_path: Path) -> None:
+        """Verify that discharge validation stations export as individual files with attributes preserved."""
+        from unittest.mock import MagicMock
+
+        import geopandas as gpd
+        import pandas as pd
+        from shapely.geometry import Point
+
+        from geb.reporter import Reporter
+
+        report_dir: Path = tmp_path / "report"
+        model: MagicMock = MagicMock()
+        model.config = {
+            "report": {
+                "_config": {"compression_level": 1, "chunk_target_size_bytes": 1000000},
+                "_discharge_stations": True,
+            }
+        }
+        model.mode = "w"
+        model.simulate_hydrology = False
+        stations_gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
+            {
+                "snapped_grid_pixel_xy": [[10, 20], [30, 40]],
+                "snapped_grid_pixel_lonlat": [[5.1, 52.1], [5.2, 52.2]],
+                "GEB_upstream_area_from_grid": [1000.0, 2000.0],
+            },
+            index=[101, 102],
+            geometry=[Point(5.1, 52.1), Point(5.2, 52.2)],
+        )
+        stations_file: Path = tmp_path / "stations.geoparquet"
+        stations_gdf.to_parquet(stations_file)
+        model.files = {"geom": {"discharge/discharge_snapped_locations": stations_file}}
+
+        reporter: Reporter = Reporter(model, report_dir, clean=True)
+        routing_reporters: dict = reporter.variables_to_report["hydrology.routing"]
+        assert "discharge_hourly_m3_per_s_101" in routing_reporters
+        assert "_group" not in routing_reporters["discharge_hourly_m3_per_s_101"]
+
+        time_array: np.ndarray = np.array([1609459200, 1609462800], dtype=np.int64)
+        routing_reporters["discharge_hourly_m3_per_s_101"]["_time_array"] = time_array
+        routing_reporters["discharge_hourly_m3_per_s_101"]["_data_array"] = np.array(
+            [10.5, 11.0], dtype=np.float32
+        )
+        routing_reporters["discharge_hourly_m3_per_s_102"]["_time_array"] = time_array
+        routing_reporters["discharge_hourly_m3_per_s_102"]["_data_array"] = np.array(
+            [20.5, 21.0], dtype=np.float32
+        )
+
+        reporter.finalize()
+
+        file_101: Path = (
+            report_dir / "hydrology.routing" / "discharge_hourly_m3_per_s_101.parquet"
+        )
+        file_102: Path = (
+            report_dir / "hydrology.routing" / "discharge_hourly_m3_per_s_102.parquet"
+        )
+        assert file_101.exists()
+        assert file_102.exists()
+
+        df_101: pd.DataFrame = pd.read_parquet(file_101)
+        assert list(df_101.columns) == ["discharge_hourly_m3_per_s_101"]
+        assert df_101.attrs["station_location"]["pixel_xy"] == [10, 20]
+
+    def test_grouped_variables_export_single_file(self, tmp_path: Path) -> None:
+        """Verify that variables with _group export into a single consolidated parquet file."""
+        from unittest.mock import MagicMock
+
+        import pandas as pd
+
+        from geb.reporter import Reporter
+
+        report_dir: Path = tmp_path / "report"
+        model: MagicMock = MagicMock()
+        model.config = {
+            "report": {
+                "_config": {"compression_level": 1, "chunk_target_size_bytes": 1000000},
+                "hydrology.routing": {
+                    "retention_basin_discharge_m3_per_s_1": {
+                        "varname": "grid.var.discharge_m3_s_per_substep",
+                        "type": "grid",
+                        "substeps": 24,
+                        "_group": "retention_basin_discharge_m3_per_s",
+                        "_group_key": "1",
+                    },
+                    "retention_basin_discharge_m3_per_s_2": {
+                        "varname": "grid.var.discharge_m3_s_per_substep",
+                        "type": "grid",
+                        "substeps": 24,
+                        "_group": "retention_basin_discharge_m3_per_s",
+                        "_group_key": "2",
+                    },
+                },
+            }
+        }
+        model.mode = "w"
+        model.simulate_hydrology = False
+        model.files = {}
+
+        reporter: Reporter = Reporter(model, report_dir, clean=True)
+        routing_reporters: dict = reporter.variables_to_report["hydrology.routing"]
+
+        time_array: np.ndarray = np.array([1609459200, 1609462800], dtype=np.int64)
+        routing_reporters["retention_basin_discharge_m3_per_s_1"]["_time_array"] = (
+            time_array
+        )
+        routing_reporters["retention_basin_discharge_m3_per_s_1"]["_data_array"] = (
+            np.array([1.0, 2.0], dtype=np.float32)
+        )
+        routing_reporters["retention_basin_discharge_m3_per_s_2"]["_time_array"] = (
+            time_array
+        )
+        routing_reporters["retention_basin_discharge_m3_per_s_2"]["_data_array"] = (
+            np.array([3.0, 4.0], dtype=np.float32)
+        )
+
+        reporter.finalize()
+
+        output_file: Path = (
+            report_dir
+            / "hydrology.routing"
+            / "retention_basin_discharge_m3_per_s.parquet"
+        )
+        assert output_file.exists()
+        assert not (
+            report_dir
+            / "hydrology.routing"
+            / "retention_basin_discharge_m3_per_s_1.parquet"
+        ).exists()
+
+        df: pd.DataFrame = pd.read_parquet(output_file)
+        assert list(df.columns) == ["1", "2"]
+        assert len(df) == 2
+
+    def test_grouped_variables_with_extra_attributes_raises(
+        self, tmp_path: Path
+    ) -> None:
+        """Verify that having extra_attributes on a grouped variable raises a clear ValueError."""
+        from unittest.mock import MagicMock
+
+        from geb.reporter import Reporter
+
+        report_dir: Path = tmp_path / "report"
+        model: MagicMock = MagicMock()
+        model.config = {
+            "report": {
+                "_config": {"compression_level": 1, "chunk_target_size_bytes": 1000000},
+                "hydrology.routing": {
+                    "test_var": {
+                        "varname": "var.test",
+                        "type": "grid",
+                        "_group": "test_group",
+                        "_group_key": "k1",
+                        "extra_attributes": {"key": "value"},
+                    }
+                },
+            }
+        }
+        model.mode = "w"
+        model.simulate_hydrology = False
+        model.files = {}
+
+        reporter: Reporter = Reporter(model, report_dir, clean=True)
+        rep = reporter.variables_to_report["hydrology.routing"]["test_var"]
+        rep["_time_array"] = np.array([1609459200], dtype=np.int64)
+        rep["_data_array"] = np.array([1.0], dtype=np.float32)
+
+        with pytest.raises(
+            ValueError,
+            match="Exporting grouped variables to a single parquet file does not support extra_attributes",
+        ):
+            reporter.finalize()
+
+    def test_grouped_variables_missing_group_key_raises(self, tmp_path: Path) -> None:
+        """Verify that a grouped variable without _group_key raises KeyError."""
+        from unittest.mock import MagicMock
+
+        from geb.reporter import Reporter
+
+        report_dir: Path = tmp_path / "report"
+        model: MagicMock = MagicMock()
+        model.config = {
+            "report": {
+                "_config": {"compression_level": 1, "chunk_target_size_bytes": 1000000},
+                "hydrology.routing": {
+                    "test_var": {
+                        "varname": "var.test",
+                        "type": "grid",
+                        "_group": "test_group",
+                    }
+                },
+            }
+        }
+        model.mode = "w"
+        model.simulate_hydrology = False
+        model.files = {}
+
+        reporter: Reporter = Reporter(model, report_dir, clean=True)
+        rep = reporter.variables_to_report["hydrology.routing"]["test_var"]
+        rep["_time_array"] = np.array([1609459200], dtype=np.int64)
+        rep["_data_array"] = np.array([1.0], dtype=np.float32)
+
+        with pytest.raises(
+            KeyError,
+            match="missing required '_group_key'",
+        ):
+            reporter.finalize()
+
+    def test_geodataframe_export_whole(self, tmp_path: Path) -> None:
+        """Verify that a whole GeoDataFrame variable is exported to a geoparquet file with time column."""
+        import datetime
+        from unittest.mock import MagicMock
+
+        import geopandas as gpd
+        from shapely.geometry import LineString
+
+        from geb.reporter import Reporter
+
+        report_dir: Path = tmp_path / "report"
+        model: MagicMock = MagicMock()
+        model.config = {
+            "report": {
+                "_config": {"compression_level": 1, "chunk_target_size_bytes": 1000000},
+                "hydrology.routing": {
+                    "bankfull_depths_m": {
+                        "varname": "var.rivers",
+                        "type": "geodataframe",
+                        "function": None,
+                        "frequency": {"every": "year", "month": 1, "day": 1},
+                    }
+                },
+            }
+        }
+        model.mode = "w"
+        model.simulate_hydrology = False
+        model.files = {}
+        model.current_time = datetime.datetime(2020, 1, 1)
+
+        reporter: Reporter = Reporter(model, report_dir, clean=True)
+
+        rivers_gdf_y1: gpd.GeoDataFrame = gpd.GeoDataFrame(
+            {"depth": [1.5, 2.0], "width": [10.0, 15.0]},
+            index=[1, 2],
+            geometry=[LineString([(0, 0), (1, 1)]), LineString([(1, 1), (2, 2)])],
+            crs="EPSG:4326",
+        )
+        conf = reporter.variables_to_report["hydrology.routing"]["bankfull_depths_m"]
+        reporter.process_value(
+            "hydrology.routing", "bankfull_depths_m", rivers_gdf_y1, conf
+        )
+
+        model.current_time = datetime.datetime(2021, 1, 1)
+        rivers_gdf_y2: gpd.GeoDataFrame = gpd.GeoDataFrame(
+            {"depth": [1.6, 2.1], "width": [10.0, 15.0]},
+            index=[1, 2],
+            geometry=[LineString([(0, 0), (1, 1)]), LineString([(1, 1), (2, 2)])],
+            crs="EPSG:4326",
+        )
+        reporter.process_value(
+            "hydrology.routing", "bankfull_depths_m", rivers_gdf_y2, conf
+        )
+
+        reporter.finalize()
+
+        output_file: Path = (
+            report_dir / "hydrology.routing" / "bankfull_depths_m.geoparquet"
+        )
+        assert output_file.exists()
+        assert not (
+            report_dir / "hydrology.routing" / "bankfull_depths_m.zarr"
+        ).exists()
+        gdf_res: gpd.GeoDataFrame = gpd.read_parquet(output_file)
+        assert len(gdf_res) == 4
+        assert "time" in gdf_res.columns
+        assert gdf_res.crs.to_epsg() == 4326
+
+    def test_dataframe_export_whole(self, tmp_path: Path) -> None:
+        """Verify that a whole DataFrame variable is exported to a parquet file with time column and without an empty zarr directory."""
+        import datetime
+        from unittest.mock import MagicMock
+
+        import pandas as pd
+
+        from geb.reporter import Reporter
+
+        report_dir: Path = tmp_path / "report"
+        model: MagicMock = MagicMock()
+        model.config = {
+            "report": {
+                "_config": {"compression_level": 1, "chunk_target_size_bytes": 1000000},
+                "economy": {
+                    "firm_data": {
+                        "varname": "var.firms",
+                        "type": "dataframe",
+                        "function": None,
+                        "frequency": {"every": "year", "month": 1, "day": 1},
+                    }
+                },
+            }
+        }
+        model.mode = "w"
+        model.simulate_hydrology = False
+        model.files = {}
+        model.current_time = datetime.datetime(2020, 1, 1)
+
+        reporter: Reporter = Reporter(model, report_dir, clean=True)
+
+        df_y1: pd.DataFrame = pd.DataFrame(
+            {"revenue": [100.0, 200.0], "capital": [50.0, 75.0]},
+            index=[1, 2],
+        )
+        conf: dict = reporter.variables_to_report["economy"]["firm_data"]
+        reporter.process_value("economy", "firm_data", df_y1, conf)
+
+        model.current_time = datetime.datetime(2021, 1, 1)
+        df_y2: pd.DataFrame = pd.DataFrame(
+            {"revenue": [110.0, 220.0], "capital": [55.0, 80.0]},
+            index=[1, 2],
+        )
+        reporter.process_value("economy", "firm_data", df_y2, conf)
+
+        reporter.finalize()
+
+        output_file: Path = report_dir / "economy" / "firm_data.parquet"
+        assert output_file.exists()
+        assert not (report_dir / "economy" / "firm_data.zarr").exists()
+        df_res: pd.DataFrame = pd.read_parquet(output_file)
+        assert len(df_res) == 4
+        assert "time" in df_res.columns
+
+    def test_geodataframe_rejects_plain_dataframe(self, tmp_path: Path) -> None:
+        """Verify that a report configured as geodataframe rejects a plain DataFrame.
+
+        Args:
+            tmp_path: Pytest temporary directory fixture.
+        """
+        import datetime
+        from unittest.mock import MagicMock
+
+        import pandas as pd
+        import pytest
+
+        from geb.reporter import Reporter
+
+        report_dir: Path = tmp_path / "report"
+        model: MagicMock = MagicMock()
+        model.config = {
+            "report": {
+                "_config": {"compression_level": 1, "chunk_target_size_bytes": 1000000},
+                "hydrology.routing": {
+                    "bankfull_depths_m": {
+                        "varname": "var.rivers",
+                        "type": "geodataframe",
+                        "function": None,
+                        "frequency": {"every": "year", "month": 1, "day": 1},
+                    }
+                },
+            }
+        }
+        model.mode = "w"
+        model.simulate_hydrology = False
+        model.files = {}
+        model.current_time = datetime.datetime(2020, 1, 1)
+
+        reporter: Reporter = Reporter(model, report_dir, clean=True)
+        plain_df: pd.DataFrame = pd.DataFrame(
+            {"depth": [1.5, 2.0], "width": [10.0, 15.0]},
+            index=[1, 2],
+        )
+        conf: dict = reporter.variables_to_report["hydrology.routing"][
+            "bankfull_depths_m"
+        ]
+
+        with pytest.raises(ValueError, match="must be a GeoDataFrame"):
+            reporter.process_value(
+                "hydrology.routing", "bankfull_depths_m", plain_df, conf
+            )
+
+    def test_geodataframe_export_sample_loc(self, tmp_path: Path) -> None:
+        """Verify that sample_loc extracts scalar values from a GeoDataFrame into time series."""
+        import datetime
+        from unittest.mock import MagicMock
+
+        import geopandas as gpd
+        import pandas as pd
+        from shapely.geometry import Point
+
+        from geb.reporter import Reporter
+
+        report_dir: Path = tmp_path / "report"
+        model: MagicMock = MagicMock()
+        model.config = {
+            "report": {
+                "_config": {"compression_level": 1, "chunk_target_size_bytes": 1000000},
+                "hydrology.routing": {
+                    "bankfull_depth_station_101": {
+                        "varname": "var.rivers",
+                        "type": "geodataframe",
+                        "function": "sample_loc,1,depth",
+                        "frequency": {"every": "year", "month": 1, "day": 1},
+                    }
+                },
+            }
+        }
+        model.mode = "w"
+        model.simulate_hydrology = False
+        model.files = {}
+        model.current_time = datetime.datetime(2020, 1, 1)
+        model.simulation_end = datetime.datetime(2021, 1, 1)
+        model.timestep_length = datetime.timedelta(days=1)
+
+        reporter: Reporter = Reporter(model, report_dir, clean=True)
+
+        rivers_gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
+            {"depth": [2.5]},
+            index=[1],
+            geometry=[Point(0, 0)],
+            crs="EPSG:4326",
+        )
+        conf = reporter.variables_to_report["hydrology.routing"][
+            "bankfull_depth_station_101"
+        ]
+        reporter.process_value(
+            "hydrology.routing", "bankfull_depth_station_101", rivers_gdf, conf
+        )
+
+        model.current_time = datetime.datetime(2021, 1, 1)
+        rivers_gdf_y2: gpd.GeoDataFrame = gpd.GeoDataFrame(
+            {"depth": [2.8]},
+            index=[1],
+            geometry=[Point(0, 0)],
+            crs="EPSG:4326",
+        )
+        reporter.process_value(
+            "hydrology.routing", "bankfull_depth_station_101", rivers_gdf_y2, conf
+        )
+
+        reporter.finalize()
+
+        output_file: Path = (
+            report_dir / "hydrology.routing" / "bankfull_depth_station_101.parquet"
+        )
+        assert output_file.exists()
+        df_res: pd.DataFrame = pd.read_parquet(output_file)
+        assert len(df_res) == 2
+        assert list(df_res["bankfull_depth_station_101"]) == [2.5, 2.8]
+
+    def test_bankfull_depths_special_reporter(self, tmp_path: Path) -> None:
+        """Verify that _bankfull_depths configures river and station-level reporters correctly."""
+        import datetime
+        from unittest.mock import MagicMock
+
+        import geopandas as gpd
+        import pandas as pd
+        from shapely.geometry import LineString, Point
+
+        from geb.reporter import Reporter
+
+        report_dir: Path = tmp_path / "report"
+        model: MagicMock = MagicMock()
+        model.config = {
+            "report": {
+                "_config": {"compression_level": 1, "chunk_target_size_bytes": 1000000},
+                "_bankfull_depths": True,
+            }
+        }
+        model.mode = "w"
+        model.simulate_hydrology = False
+        stations_gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
+            {
+                "snapped_river_id": [10, 20],
+            },
+            index=[101, 102],
+            geometry=[Point(5.1, 52.1), Point(5.2, 52.2)],
+        )
+        stations_file: Path = tmp_path / "stations.geoparquet"
+        stations_gdf.to_parquet(stations_file)
+        model.files = {"geom": {"discharge/discharge_snapped_locations": stations_file}}
+        model.current_time = datetime.datetime(2020, 1, 1)
+        model.simulation_end = datetime.datetime(2021, 1, 1)
+        model.timestep_length = datetime.timedelta(days=1)
+
+        rivers_gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
+            {
+                "depth": [1.5, 2.5],
+                "width": [10.0, 20.0],
+                "return_period_2_years_daily_m3_per_s": [50.0, 120.0],
+            },
+            index=[10, 20],
+            geometry=[LineString([(0, 0), (1, 1)]), LineString([(1, 1), (2, 2)])],
+            crs="EPSG:4326",
+        )
+        model.hydrology.routing.get_active_rivers.return_value = rivers_gdf
+
+        reporter: Reporter = Reporter(model, report_dir, clean=True)
+        routing_reps = reporter.variables_to_report["hydrology.routing"]
+        assert "bankfull_depths_m" in routing_reps
+        # River gauges
+        assert "bankfull_depth_yearly_m_101" in routing_reps
+        assert "bankfull_width_yearly_m_101" in routing_reps
+        assert "bankfull_discharge_yearly_m3_per_s_101" in routing_reps
+        assert (
+            routing_reps["bankfull_depth_yearly_m_101"]["_group"]
+            == "bankfull_depth_yearly_m"
+        )
+        assert (
+            routing_reps["bankfull_discharge_yearly_m3_per_s_101"]["_group"]
+            == "bankfull_discharge_yearly_m3_per_s"
+        )
+        # River segments
+        assert "bankfull_depth_river_yearly_m_10" in routing_reps
+        assert "bankfull_width_river_yearly_m_10" in routing_reps
+        assert "bankfull_discharge_river_yearly_m3_per_s_10" in routing_reps
+        assert (
+            routing_reps["bankfull_depth_river_yearly_m_10"]["_group"]
+            == "bankfull_depth_rivers_yearly_m"
+        )
+        assert (
+            routing_reps["bankfull_discharge_river_yearly_m3_per_s_10"]["_group"]
+            == "bankfull_discharge_rivers_yearly_m3_per_s"
+        )
+
+        for name, cfg in routing_reps.items():
+            reporter.process_value("hydrology.routing", name, rivers_gdf, cfg)
+
+        reporter.finalize()
+
+        assert (
+            report_dir / "hydrology.routing" / "bankfull_depths_m.geoparquet"
+        ).exists()
+        assert (
+            report_dir / "hydrology.routing" / "bankfull_depth_yearly_m.parquet"
+        ).exists()
+        assert (
+            report_dir
+            / "hydrology.routing"
+            / "bankfull_discharge_yearly_m3_per_s.parquet"
+        ).exists()
+        assert (
+            report_dir / "hydrology.routing" / "bankfull_depth_rivers_yearly_m.parquet"
+        ).exists()
+        assert (
+            report_dir
+            / "hydrology.routing"
+            / "bankfull_discharge_rivers_yearly_m3_per_s.parquet"
+        ).exists()
+
+        df_depth = pd.read_parquet(
+            report_dir / "hydrology.routing" / "bankfull_depth_yearly_m.parquet"
+        )
+        assert list(df_depth.columns) == ["101", "102"]
+        assert float(df_depth.iloc[0]["101"]) == 1.5
+
+        df_depth_rivers = pd.read_parquet(
+            report_dir / "hydrology.routing" / "bankfull_depth_rivers_yearly_m.parquet"
+        )
+        assert list(df_depth_rivers.columns) == ["10", "20"]
+        assert float(df_depth_rivers.iloc[0]["10"]) == 1.5
+
+        df_q = pd.read_parquet(
+            report_dir
+            / "hydrology.routing"
+            / "bankfull_discharge_yearly_m3_per_s.parquet"
+        )
+        assert list(df_q.columns) == ["101", "102"]
+        assert float(df_q.iloc[0]["101"]) == 50.0
+
+        df_q_rivers = pd.read_parquet(
+            report_dir
+            / "hydrology.routing"
+            / "bankfull_discharge_rivers_yearly_m3_per_s.parquet"
+        )
+        assert list(df_q_rivers.columns) == ["10", "20"]
+        assert float(df_q_rivers.iloc[0]["10"]) == 50.0

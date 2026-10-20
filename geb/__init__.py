@@ -1,6 +1,7 @@
 """GEB simulates the environment, the individual behaviour of people, households and organizations - including their interactions - at small and large scale."""
 
 import faulthandler
+import logging
 import os
 import platform
 import warnings
@@ -104,6 +105,7 @@ def load_numba_threading_layer(version: str = "2022.1.0") -> None:
         fetch_and_save(
             url=tbb_url,
             file_path=tbb_path / tbb_compressed_file,
+            logger=logging.getLogger("geb"),
         )
 
         # uncompress the TBB library
@@ -139,7 +141,7 @@ def load_numba_threading_layer(version: str = "2022.1.0") -> None:
     def test_threading_layer() -> npt.NDArray[np.int32]:
         array = np.zeros(10, dtype=np.int32)
         """Test function to check if TBB is loaded correctly."""
-        for i in prange(10):  # ty: ignore[not-iterable]
+        for i in prange(10):
             array[i] = i
         return array
 

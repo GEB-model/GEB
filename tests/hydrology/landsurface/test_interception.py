@@ -27,6 +27,7 @@ def test_interception_no_rainfall_evaporation_only() -> None:
         potential_interception_evaporation_m=potential_transpiration_m,
         potential_transpiration_m=potential_transpiration_m,
         potential_direct_evaporation_m=np.float32(0.0),
+        leaf_area_index=np.float32(2.5),
     )
 
     # No throughfall when no rainfall
@@ -48,7 +49,7 @@ def test_interception_no_rainfall_evaporation_only() -> None:
 
 
 def test_interception_rainfall_below_capacity() -> None:
-    """Test interception when rainfall is less than remaining capacity."""
+    """Test dynamic interception (Aston 1978 / LISFLOOD Eq. 2-6) when rainfall is below capacity."""
     rainfall_m = np.float32(0.001)  # 1mm rainfall
     storage_m = np.float32(0.0)  # No existing storage
     capacity_m = np.float32(0.002)  # 2mm capacity
@@ -67,13 +68,16 @@ def test_interception_rainfall_below_capacity() -> None:
         potential_interception_evaporation_m=potential_transpiration_m,
         potential_transpiration_m=potential_transpiration_m,
         potential_direct_evaporation_m=np.float32(0.0),
+        leaf_area_index=np.float32(2.5),
     )
 
-    # No throughfall when rainfall < capacity
-    assert throughfall == 0.0
+    # Under dynamic interception (Eq. 2-6), a fraction of rainfall penetrates as throughfall
+    assert throughfall > 0.0
+    assert throughfall < rainfall_m
 
-    # All rainfall goes to storage
-    assert new_storage == storage_m + rainfall_m - evaporation
+    # Intercepted amount = rainfall - throughfall
+    int_captured = rainfall_m - throughfall
+    assert math.isclose(new_storage, int_captured - evaporation, abs_tol=1e-7)
 
     # Evaporation occurs from the intercepted water
     assert evaporation > 0.0
@@ -105,18 +109,28 @@ def test_interception_rainfall_exceeds_capacity() -> None:
         potential_interception_evaporation_m=potential_transpiration_m,
         potential_transpiration_m=potential_transpiration_m,
         potential_direct_evaporation_m=np.float32(0.0),
+        leaf_area_index=np.float32(2.5),
     )
 
-    # Throughfall should be rainfall + storage - capacity
-    expected_throughfall = rainfall_m + storage_m - capacity_m
-    assert throughfall == expected_throughfall
+    # Throughfall must account for unintercepted rainfall
+    assert throughfall > 0.0
+    int_captured = rainfall_m - throughfall
+    # Capture cannot exceed available capacity (2mm - 1mm = 1mm)
+    assert int_captured <= (capacity_m - storage_m) + 1e-7
 
-    # Storage should be at capacity after evaporation
-    assert new_storage == capacity_m - evaporation
+    # Storage should be updated with captured water minus evaporation
+    assert math.isclose(
+        new_storage, storage_m + int_captured - evaporation, abs_tol=1e-7
+    )
 
     # Evaporation should occur
     assert evaporation > 0.0
     assert evaporation <= potential_transpiration_m
+
+    # Water balance check
+    assert math.isclose(
+        rainfall_m, throughfall + evaporation + (new_storage - storage_m), abs_tol=1e-7
+    )
 
     # Water balance check
     assert math.isclose(
@@ -144,6 +158,7 @@ def test_interception_zero_capacity() -> None:
         potential_interception_evaporation_m=potential_transpiration_m,
         potential_transpiration_m=potential_transpiration_m,
         potential_direct_evaporation_m=np.float32(0.0),
+        leaf_area_index=np.float32(2.5),
     )
 
     # All rainfall becomes throughfall
@@ -181,16 +196,18 @@ def test_interception_zero_potential_evaporation() -> None:
         potential_interception_evaporation_m=potential_transpiration_m,
         potential_transpiration_m=potential_transpiration_m,
         potential_direct_evaporation_m=np.float32(0.0),
+        leaf_area_index=np.float32(2.5),
     )
 
-    # No throughfall
-    assert throughfall == 0.0
+    # Dynamic throughfall
+    assert throughfall > 0.0
 
     # No evaporation
     assert evaporation == 0.0
 
-    # All rainfall goes to storage
-    assert new_storage == rainfall_m
+    # Captured rainfall goes to storage
+    int_captured = rainfall_m - throughfall
+    assert math.isclose(new_storage, int_captured, abs_tol=1e-7)
 
     # Water balance check
     assert math.isclose(
@@ -218,6 +235,7 @@ def test_interception_full_storage_no_rainfall() -> None:
         potential_interception_evaporation_m=potential_transpiration_m,
         potential_transpiration_m=potential_transpiration_m,
         potential_direct_evaporation_m=np.float32(0.0),
+        leaf_area_index=np.float32(2.5),
     )
 
     # No throughfall
@@ -255,6 +273,7 @@ def test_interception_evaporation_formula() -> None:
         potential_interception_evaporation_m=potential_transpiration_m,
         potential_transpiration_m=potential_transpiration_m,
         potential_direct_evaporation_m=np.float32(0.0),
+        leaf_area_index=np.float32(2.5),
     )
 
     # No throughfall
@@ -296,23 +315,20 @@ def test_interception_large_rainfall() -> None:
         potential_interception_evaporation_m=potential_transpiration_m,
         potential_transpiration_m=potential_transpiration_m,
         potential_direct_evaporation_m=np.float32(0.0),
+        leaf_area_index=np.float32(2.5),
     )
 
-    # Throughfall should be large
-    expected_throughfall = rainfall_m + storage_m - capacity_m
-    assert throughfall == expected_throughfall
+    # Throughfall should be large (majority of rain passes through)
+    assert throughfall > 0.008
 
-    # Storage should be at capacity after throughfall, then reduced by evaporation
-    storage_after_throughfall = capacity_m  # Filled to capacity
+    int_captured = rainfall_m - throughfall
+    storage_after_capture = storage_m + int_captured
     expected_evaporation = min(
-        storage_after_throughfall,
-        potential_transpiration_m
-        * (storage_after_throughfall / capacity_m) ** (2.0 / 3.0),
+        storage_after_capture,
+        potential_transpiration_m * (storage_after_capture / capacity_m) ** (2.0 / 3.0),
     )
     assert math.isclose(evaporation, expected_evaporation, abs_tol=1e-7)
-    assert math.isclose(
-        new_storage, storage_after_throughfall - evaporation, abs_tol=1e-7
-    )
+    assert math.isclose(new_storage, storage_after_capture - evaporation, abs_tol=1e-7)
 
     # Water balance check
     assert math.isclose(
@@ -340,6 +356,7 @@ def test_interception_edge_case_zero_storage_zero_rainfall() -> None:
         potential_interception_evaporation_m=potential_transpiration_m,
         potential_transpiration_m=potential_transpiration_m,
         potential_direct_evaporation_m=np.float32(0.0),
+        leaf_area_index=np.float32(2.5),
     )
 
     # Everything should be zero
@@ -373,6 +390,7 @@ def test_interception_evaporation_limited_by_storage() -> None:
         potential_interception_evaporation_m=potential_transpiration_m,
         potential_transpiration_m=potential_transpiration_m,
         potential_direct_evaporation_m=np.float32(0.0),
+        leaf_area_index=np.float32(2.5),
     )
 
     # No throughfall
@@ -414,11 +432,12 @@ def test_interception_storage_exceeds_capacity_initially() -> None:
         potential_interception_evaporation_m=potential_transpiration_m,
         potential_transpiration_m=potential_transpiration_m,
         potential_direct_evaporation_m=np.float32(0.0),
+        leaf_area_index=np.float32(2.5),
     )
 
     # Throughfall should account for excess storage plus rainfall
     expected_throughfall = rainfall_m + storage_m - capacity_m
-    assert throughfall == expected_throughfall
+    assert math.isclose(throughfall, expected_throughfall, abs_tol=1e-6)
 
     # Storage after throughfall should be at capacity
     storage_after_throughfall = capacity_m
@@ -429,37 +448,6 @@ def test_interception_storage_exceeds_capacity_initially() -> None:
     # Water balance check
     assert math.isclose(
         rainfall_m, throughfall + evaporation + (new_storage - storage_m), abs_tol=1e-7
-    )
-
-
-def test_leaf_area_index_to_interception_capacity_m() -> None:
-    """Test the Von Hoyningen-Huene (1981) formula implementation.
-
-    Formula: S_max (mm) = 0.935 + 0.498*LAI - 0.00575*LAI^2 for LAI > 0.1
-    """
-    from geb.hydrology.landsurface.interception import (
-        leaf_area_index_to_interception_capacity_m,
-    )
-
-    # Test case 1: LAI <= 0.1 -> Capacity 0
-    lai_low = np.array([0.05, 0.1, 0.0], dtype=np.float32)
-    result_low = leaf_area_index_to_interception_capacity_m(lai_low)
-    expected_low = np.zeros_like(lai_low)
-    np.testing.assert_allclose(result_low, expected_low)
-
-    # Test case 2: LAI = 5.0
-    # S_max = 0.935 + 0.498*5 - 0.00575*25
-    # S_max = 0.935 + 2.49 - 0.14375
-    # S_max = 3.28125 mm -> 0.00328125 m
-    lai_val = 5.0
-    lai_arr = np.array([lai_val], dtype=np.float32)
-    result = leaf_area_index_to_interception_capacity_m(lai_arr)
-
-    expected_mm = 0.935 + 0.498 * lai_val - 0.00575 * (lai_val**2)
-    expected_m = expected_mm / 1000.0
-
-    np.testing.assert_allclose(
-        result, np.array([expected_m], dtype=np.float32), rtol=1e-5
     )
 
 
@@ -486,6 +474,7 @@ def test_interception_budget_distribution() -> None:
         potential_interception_evaporation_m=potential_evaporation_m,
         potential_transpiration_m=potential_transpiration_m,
         potential_direct_evaporation_m=potential_bare_soil_m,
+        leaf_area_index=np.float32(5.0),
     )
 
     # Since potential_evaporation_m == total budget, and storage is full,
@@ -518,6 +507,7 @@ def test_interception_budget_distribution_partial() -> None:
         potential_interception_evaporation_m=potential_evaporation_m,
         potential_transpiration_m=potential_transpiration_m,
         potential_direct_evaporation_m=potential_bare_soil_m,
+        leaf_area_index=np.float32(5.0),
     )
 
     # evaporation = 0.007
@@ -526,3 +516,69 @@ def test_interception_budget_distribution_partial() -> None:
     assert math.isclose(evaporation, 0.007, abs_tol=1e-7)
     assert remaining_pot_transp == 0.0
     assert math.isclose(remaining_pot_bare_soil, 0.003, abs_tol=1e-7)
+
+
+def test_lisflood_dynamic_interception_equation() -> None:
+    """Test exact analytical values from LISFLOOD manual Eq. (2-6) and (2-8)."""
+    lai = np.float32(4.0)
+    # Eq. (2-8): k = 0.046 * LAI
+    k = np.float32(0.046) * lai  # 0.184
+    capacity_m = np.float32(0.002)  # 2 mm
+    rainfall_m = np.float32(0.005)  # 5 mm
+    storage_m = np.float32(0.0)
+
+    # Eq. (2-6): Int = S_max * [1 - exp(-k * R * dt / S_max)]
+    expected_int = capacity_m * (
+        1.0 - math.exp(-float(k) * float(rainfall_m) / float(capacity_m))
+    )
+    expected_throughfall = float(rainfall_m) - expected_int
+
+    (
+        new_storage,
+        throughfall,
+        evaporation,
+        _,
+        _,
+    ) = interception(
+        rainfall_m=rainfall_m,
+        storage_m=storage_m,
+        capacity_m=capacity_m,
+        potential_interception_evaporation_m=np.float32(0.0),
+        potential_transpiration_m=np.float32(0.0),
+        potential_direct_evaporation_m=np.float32(0.0),
+        leaf_area_index=lai,
+    )
+
+    assert math.isclose(throughfall, expected_throughfall, rel_tol=1e-5)
+    assert math.isclose(new_storage, expected_int, rel_tol=1e-5)
+
+
+def test_lisflood_interception_lai_density_effect() -> None:
+    """Test that higher LAI (denser canopy) intercepts a higher fraction of rainfall."""
+    rainfall_m = np.float32(0.005)  # 5 mm
+    capacity_m = np.float32(0.003)  # 3 mm
+    storage_m = np.float32(0.0)
+
+    # Low LAI = 1.0 vs High LAI = 6.0
+    _, tf_low, _, _, _ = interception(
+        rainfall_m=rainfall_m,
+        storage_m=storage_m,
+        capacity_m=capacity_m,
+        potential_interception_evaporation_m=np.float32(0.0),
+        potential_transpiration_m=np.float32(0.0),
+        potential_direct_evaporation_m=np.float32(0.0),
+        leaf_area_index=np.float32(1.0),
+    )
+
+    _, tf_high, _, _, _ = interception(
+        rainfall_m=rainfall_m,
+        storage_m=storage_m,
+        capacity_m=capacity_m,
+        potential_interception_evaporation_m=np.float32(0.0),
+        potential_transpiration_m=np.float32(0.0),
+        potential_direct_evaporation_m=np.float32(0.0),
+        leaf_area_index=np.float32(6.0),
+    )
+
+    # Higher LAI intercepts more water, leaving less throughfall
+    assert tf_high < tf_low

@@ -1,79 +1,69 @@
-# Waterbodies
+# Waterbody setup
 
-Use `setup_waterbodies` to add lakes and reservoirs to your model. In most cases, you can use the defaults. Customize only if you need to (a) provide reservoir command areas, or (b) override reservoir capacity.
-
-## What `setup_waterbodies` produces
-
-After running, the model stores:
-
-- `waterbodies/waterbody_id`: waterbody ID per coarse grid cell (`-1` means no waterbody).
-- `waterbodies/sub_waterbody_id`: waterbody ID per subgrid cell (`-1` means no waterbody).
-- `waterbodies/command_area`: waterbody ID per coarse grid cell where command areas exist (`-1` means no command area).
-- `waterbodies/subcommand_areas`: waterbody ID per subgrid cell where command areas exist (`-1` means no command area).
-- `waterbodies/waterbody_data`: a table (GeoDataFrame) with waterbody attributes used by the hydrology model.
-
-## Default setup
-
-By default, `setup_waterbodies`:
-
-- Reads waterbodies from the `hydrolakes` dataset.
-- Keeps only waterbodies that intersect your model region.
-- Converts HydroLAKES waterbody types into GEB types:
-
-  - `1` = `LAKE`
-  - `2` = `RESERVOIR`
-  - `3` = `LAKE_CONTROL`
-
-- Initializes `volume_flood` to match `volume_total`.
-
-If you do not provide command areas, the command area rasters are still created but filled with `-1` everywhere.
-
-## Custom setup
-
-You can override parts of the default setup with the following options.
-
-### Command areas
-
-`command_areas` should be a path to a vector file (e.g., GeoPackage) containing polygons with a `waterbody_id` column.
-
-If you provide `command_areas`, GEB will:
-
-- Dissolve command areas by `waterbody_id`.
-- Mark any waterbody that has a command area as a reservoir.
-- Rasterize command areas to `waterbodies/command_area` and `waterbodies/subcommand_areas`.
-
-Command areas that do not match any reservoir in the current region are removed.
-
-### Custom reservoir capacity
-
-`custom_reservoir_capacity` should be an excel-file ('.xlsx') or csv-file ('.csv').
-
-If you provide `custom_reservoir_capacity`, GEB will override reservoir capacity by matching on `waterbody_id`.
-
-Expected columns in the file:
-
-- `waterbody_id`
-- `volume_total` (m3)
-
-## Examples
-
-### Use the defaults (no changes)
+Use `setup_waterbodies` to add lakes and reservoirs. For river barriers, see
+[Weirs and gates](../../hydrology/weirs.md).
 
 ```yaml
 setup_waterbodies: {}
 ```
 
-### Add command areas
+## Data sources
 
-```yaml
-setup_waterbodies:
-  command_areas: data/command_areas.gpkg
-```
+- **HydroLAKES:** lake outlines, size, and volume.
+- **Global Dam Watch (GDW):** dams, reservoir capacity, purpose, and construction year.
+- **AMBER:** European barriers, including dams and weirs.
 
-### Override reservoir capacity
+## Lakes or reservoirs?
 
-```yaml
-setup_waterbodies:
-  custom_reservoir_capacity: data/custom_reservoir_capacity.gpkg
-```
+GEB treats lakes and reservoirs differently: lake outflow follows the water
+level, while reservoir releases follow operating rules. The build therefore
+needs to decide which type to use for each waterbody.
 
+HydroLAKES provides the starting classification, with three source types:
+
+| Type | Meaning |
+| --- | --- |
+| 1 | Natural lake |
+| 2 | Reservoir |
+| 3 | Controlled lake |
+
+A controlled lake is a lake whose water level is regulated by a structure.
+This label alone does not tell GEB whether to use reservoir operating rules.
+GEB checks GDW and AMBER dam data to make that decision.
+
+GEB stores only two model types: **1 = lake** and **2 = reservoir**. It keeps
+the original HydroLAKES type separately.
+The saved fields are `waterbody_type` and `hydrolakes_type`, respectively.
+
+GEB starts with the HydroLAKES waterbodies, and links data from the Global Dam Watch (GDW) and AMBER datasets based on joint IDs and/or proximity. The main purpose of this data integration is the change of type from lake to controlled lake, or reservoir: 
+
+1. **Keep known reservoirs.** Hydrolakes waterbodies already labelled as reservoirs remain reservoirs.
+2. **Checks with GDW** A suitable linked GDW dam with a valid
+   capacity converts a Hydrolakes controlled lake to a reservoir.
+3. **Check lakes with AMBER.** An AMBER dam inside or on the edge of a natural or controlled lake can make it a reservoir. 
+4. **Add missing reservoirs.** GDW can supply reservoirs absent from
+   HydroLAKES when valid capacity, area, discharge, and a usable location are
+   available.
+
+GDW dams are matched by lake ID first, then by location inside a lake. 
+
+## Optional settings
+
+Under `setup_waterbodies`, you can set:
+
+| Setting | Use |
+| --- | --- |
+| `mode` | `on` (default), `off`, `lakes_only`, or `reservoirs_only` |
+| `command_areas` | Irrigation-area polygons with a `waterbody_id` column |
+| `calculate_command_areas` | Set to `true` to derive irrigation areas from the river network |
+| `custom_reservoir_capacity` | CSV or Excel file with `waterbody_id` and `volume_total` (m³) |
+
+## Check the result
+
+Review `reports/waterbodies/gdw_checks.csv` for GDW dam checks (compared to HydroLakes), such as `point_outside_lake` and `id_differs`.
+
+Waterbody IDs are saved in `waterbodies/waterbody_id`; cells without a
+waterbody have the value `-1`.
+
+See [Lakes and reservoirs](../../hydrology/waterbodies.md) for storage, release
+rules, and construction years.

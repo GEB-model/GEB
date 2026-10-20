@@ -37,7 +37,7 @@ class OpenStreetMapCoastlines(Adapter):
             RuntimeError: If the data download fails.
         """
         self.url = url
-        success = fetch_and_save(self.url, self.path)
+        success = fetch_and_save(self.url, self.path, logger=self.logger)
         if not success:
             raise RuntimeError("Failed to download OSM coastlines data.")
         return self
@@ -84,7 +84,7 @@ class OpenStreetMapLandPolygons(Adapter):
             RuntimeError: If the data download fails.
         """
         self.url = url
-        success = fetch_and_save(self.url, self.path)
+        success = fetch_and_save(self.url, self.path, logger=self.logger)
         if not success:
             raise RuntimeError("Failed to download OSM land polygons data.")
         return self
