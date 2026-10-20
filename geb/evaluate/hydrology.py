@@ -2386,7 +2386,7 @@ class Hydrology:
 
             ax.set_title(
                 f"Lead Time: {leadtime_hours:.0f} hours",
-                fontsize=16,
+                fontsize=20,
             )
             ax.set_xlabel("x (m)")
             ax.set_ylabel("y (m)")
@@ -2434,7 +2434,7 @@ class Hydrology:
                 catchment_patch,
             ]
 
-            legend = ax.legend(handles=legend_handles, loc="upper right", fontsize=14)
+            legend = ax.legend(handles=legend_handles, loc="upper right", fontsize=16)
 
             # Box with metrics
             ax.text(
@@ -2447,7 +2447,7 @@ class Hydrology:
                     f"CSI  = {CSI * 100:.1f} %"
                 ),
                 transform=ax.transAxes,
-                fontsize=14,
+                fontsize=20,
                 bbox=dict(
                     facecolor="white",
                     edgecolor="grey",
