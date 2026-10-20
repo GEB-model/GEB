@@ -335,7 +335,7 @@ class CMIP6(Adapter):
                     years=years_future,
                     variable=variable,
                     bounds=bounds,
-                    experiment="ssp5_8_5",
+                    experiment="ssp2_4_5",
                     model="gfdl_esm4",
                 )
 
