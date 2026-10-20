@@ -1510,7 +1510,6 @@ class Forcing(BuildModelBase):
                 If None, precipitation_source will default to forcing_source.
             create_plots: If True, create plots for the forcing data.
             representative_forcing_year: The representative year for which to fetch the CMIP6 deltas to adjust historical data to future conditions.
-            scenario: The SSP scenario to use for CMIP6 deltas (default: None).
         Sets:
             The resulting forcing data is set as forcing data in the model with names of the form 'forcing/{variable_name}'.
 
