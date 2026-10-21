@@ -66,9 +66,7 @@ class Government(AgentBaseClass):
 
     def spinup(self) -> None:
         """This function is called during model spinup."""
-        # Set to True once forest is planted during spinup, so a later run with
-        # plant_forest enabled can check that its spinup included the forest.
-        self.var.forest_planted_in_spinup = False
+        pass
 
     def set_irrigation_limit(self) -> None:
         """Set the irrigation limit for crop farmers based on the configuration.
@@ -152,35 +150,14 @@ class Government(AgentBaseClass):
         subbasins.to_parquet(output_path, index=False)
 
     def step(self) -> None:
-        """This function is run each timestep.
-
-        Raises:
-            RuntimeError: If a run has plant_forest enabled but its spinup was
-                made without planting forest.
-        """
+        """This function is run each timestep."""
         adaptation_enabled = self.config["adaptation"]["enabled"]
         if (
             self.model.current_timestep == 0
             and self.config["plant_forest"]
             and not adaptation_enabled
         ):
-            # The forest soils must evolve through the whole spinup, so a run
-            # cannot start reforestation on top of a spinup made without it.
-            # Spinups made before this flag existed are treated the same way.
-            if not self.model.in_spinup and not getattr(
-                self.var, "forest_planted_in_spinup", False
-            ):
-                message = (
-                    "Reforestation (agent_settings.government.plant_forest) is "
-                    "enabled for this run, but the spinup was made without "
-                    "reforestation. Redo the spinup with plant_forest enabled "
-                    "('geb spinup'), then start the run again."
-                )
-                print(message)
-                raise RuntimeError(message)
             self.prepare_modified_soil_maps_for_forest()
-            if self.model.in_spinup:
-                self.var.forest_planted_in_spinup = True
 
         self.adaptation()
         self.set_irrigation_limit()
