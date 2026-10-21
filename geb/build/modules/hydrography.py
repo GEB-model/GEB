@@ -2025,7 +2025,7 @@ class Hydrography(BuildModelBase):
         )
         self.set_table(sea_level_rise_stations, name="water_levels/sea_level_rise")
 
-    @build_method(required=True)
+    @build_method(depends_on=["set_ssp"], required=True)
     def setup_coastal_water_levels(self, percentile: float = 0.5) -> None:
         """Set up water levels and station data for the model.
 
