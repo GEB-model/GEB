@@ -62,17 +62,19 @@ class Karst(Module):
         runoff_m: TwoDArrayFloat32,
         interflow_m: TwoDArrayFloat32,
         soil_recharge_m: ArrayFloat32,
-    ) -> tuple[ArrayFloat64, ArrayFloat32, ArrayFloat32]:
-        """Capture land flows and release delayed recharge to groundwater.
+    ) -> tuple[ArrayFloat64, ArrayFloat32, ArrayFloat32, ArrayFloat64]:
+        """Capture land flows, release delayed recharge, and handle capacity overflow.
 
         Notes:
             Updates the input arrays in place to remove captured water. Sealed
-            land and open water contribute no karst recharge. The store follows
+            land and open water contribute no karst recharge. Hillslope runoff
+            and interflow are captured up to max_runoff_capture_m_per_day, with
+            excess overflowing to surface stream routes. The store follows
             dS/dt = inflow - S/K, with constant inflow over the daily step.
-            It has no maximum capacity: it delays recharge without representing
-            saturation or overflow. A capacity would require an overflow route.
-            K is the release time in days; after K dry days, exp(-1) of the
-            initial storage remains (about 36.8%).
+            When max_storage_m is configured, any stored water exceeding the
+            capacity ceiling overflows to surface discharge. K is the release
+            time in days; after K dry days, exp(-1) of the initial storage remains
+            (about 36.8%).
 
         Args:
             runoff_m: Hourly runoff depths (m), per HRU.
@@ -81,25 +83,57 @@ class Karst(Module):
 
         Returns:
             Daily recharge released to groundwater (m), per grid cell; captured
-            runoff plus interflow (m), per HRU; and captured soil drainage (m),
-            per HRU.
+            runoff plus interflow (m), per HRU; captured soil drainage (m),
+            per HRU; and storage overflow released to discharge (m), per grid cell.
         """
-        non_sealed_land_fraction: ArrayFloat32 = self.hydrology.to_HRU(
-            data=self.karst_fraction
-        ) * (
+        # In karst terrain, surface runoff and interflow generated on hillslopes drain towards
+        # dry valleys, sinkholes, and permeable karst depressions on non-sealed land.
+        karst_presence: ArrayFloat32 = (
+            self.hydrology.to_HRU(data=self.karst_fraction) > np.float32(0.0)
+        ).astype(np.float32) * (
             (self.hydrology.HRU.var.land_use_type != SEALED)
             & (self.hydrology.HRU.var.land_use_type != OPEN_WATER)
         )
-        capture_fraction: ArrayFloat32 = non_sealed_land_fraction * np.float32(
+        total_surface_flow_m: ArrayFloat32 = runoff_m.sum(axis=0) + interflow_m.sum(
+            axis=0
+        )
+        base_capture_fraction: np.float32 = np.float32(
             self.model.config["hydrology"]["karst"]["capture_fraction"]
         )
+        max_capture_m: float | None = self.model.config["hydrology"]["karst"][
+            "max_runoff_capture_m_per_day"
+        ]
+        if max_capture_m is not None:
+            # Swallow up to max_runoff_capture_m_per_day into karst features.
+            potential_capture_m: ArrayFloat32 = (
+                np.minimum(
+                    total_surface_flow_m * base_capture_fraction,
+                    np.float32(max_capture_m),
+                )
+                * karst_presence
+            )
+            # Effective capture fraction scales with the swallowing capacity ceiling.
+            surface_capture_fraction: ArrayFloat32 = np.divide(
+                potential_capture_m,
+                total_surface_flow_m,
+                out=np.zeros_like(potential_capture_m),
+                where=total_surface_flow_m > np.float32(0.0),
+            )
+        else:
+            surface_capture_fraction = karst_presence * base_capture_fraction
+
         captured_runoff_m: ArrayFloat32 = (
-            runoff_m.sum(axis=0) + interflow_m.sum(axis=0)
-        ) * capture_fraction
-        captured_soil_m: ArrayFloat32 = soil_recharge_m * non_sealed_land_fraction
+            total_surface_flow_m * surface_capture_fraction
+        )
+
+        # Deep soil drainage percolates directly into the underlying bedrock. Where soluble
+        # karst formations underlie the soil (karst_fraction > 0), unsealed soil recharge drains
+        # completely into the karst aquifer system rather than being artificially restricted by surface outcrop fractions.
+        captured_soil_m: ArrayFloat32 = soil_recharge_m * karst_presence
+
         # Remove captured water from its original route to avoid counting it twice.
-        runoff_m *= np.float32(1.0) - capture_fraction
-        interflow_m *= np.float32(1.0) - capture_fraction
+        runoff_m *= np.float32(1.0) - surface_capture_fraction
+        interflow_m *= np.float32(1.0) - surface_capture_fraction
         soil_recharge_m -= captured_soil_m
         inflow_m: ArrayFloat64 = self.hydrology.to_grid(
             HRU_data=captured_runoff_m + captured_soil_m
@@ -120,4 +154,17 @@ class Karst(Module):
 
         # Retain water that was captured but has not yet drained to groundwater.
         storage_m += inflow_m - recharge_m
-        return recharge_m, captured_runoff_m, captured_soil_m
+
+        # If a storage capacity ceiling is configured, release excess water as overflow to river discharge.
+        max_storage_m: float | None = self.model.config["hydrology"]["karst"][
+            "max_storage_m"
+        ]
+        if max_storage_m is not None:
+            overflow_m: ArrayFloat64 = np.maximum(
+                storage_m - np.float64(max_storage_m), 0.0
+            )
+            storage_m -= overflow_m
+        else:
+            overflow_m = np.zeros_like(storage_m)
+
+        return recharge_m, captured_runoff_m, captured_soil_m, overflow_m

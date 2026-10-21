@@ -2054,9 +2054,10 @@ class LandSurface(Module):
             ]
         )  # calibration parameter
 
-        karst_fraction_hru: ArrayFloat32 = self.hydrology.to_HRU(
-            data=self.hydrology.karst.karst_fraction
-        ) * (
+        karst_presence_hru: ArrayFloat32 = (
+            self.hydrology.to_HRU(data=self.hydrology.karst.karst_fraction)
+            > np.float32(0.0)
+        ).astype(np.float32) * (
             (self.HRU.var.land_use_type != SEALED)
             & (self.HRU.var.land_use_type != OPEN_WATER)
         )
@@ -2070,7 +2071,7 @@ class LandSurface(Module):
                 )
                 - np.float32(1.0)
             )
-            * karst_fraction_hru
+            * karst_presence_hru
         )
         self.HRU.var.vertical_saturated_hydraulic_conductivity_m_per_s = (
             self.HRU.var.horizontal_saturated_hydraulic_conductivity_m_per_s
