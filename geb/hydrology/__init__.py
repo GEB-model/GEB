@@ -289,12 +289,19 @@ class Hydrology(Data, Module):
         karst_capture_m: ArrayFloat32
         karst_soil_recharge_m: ArrayFloat32
         karst_recharge_m: ArrayFloat64
-        karst_recharge_m, karst_capture_m, karst_soil_recharge_m = self.karst.step(
-            overland_runoff_m, interflow_m, groundwater_recharge_m
-        )
+        karst_overflow_m: ArrayFloat64
+        (
+            karst_recharge_m,
+            karst_capture_m,
+            karst_soil_recharge_m,
+            karst_overflow_m,
+        ) = self.karst.step(overland_runoff_m, interflow_m, groundwater_recharge_m)
 
         interflow_m = self.to_grid(HRU_data=interflow_m)
         overland_runoff_m = self.to_grid(HRU_data=overland_runoff_m)
+        overland_runoff_m += (
+            karst_overflow_m[np.newaxis, :] / np.float32(24.0)
+        ).astype(np.float32)
         groundwater_recharge_m = self.to_grid(HRU_data=groundwater_recharge_m)
         capillar_rise_m = self.to_grid(HRU_data=capillar_rise_m)
         self.grid.var.capillar = capillar_rise_m

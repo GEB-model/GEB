@@ -162,7 +162,8 @@ def land_surface_model(
     actual_irrigation_consumption_m: ArrayFloat32,
     groundwater_depth_m: ArrayFloat32,
     groundwater_toplayer_conductivity_m_per_day: ArrayFloat32,
-    saturated_hydraulic_conductivity_m_per_s: TwoDArrayFloat32,
+    horizontal_saturated_hydraulic_conductivity_m_per_s: TwoDArrayFloat32,
+    vertical_saturated_hydraulic_conductivity_m_per_s: TwoDArrayFloat32,
     wetting_front_depth_m: ArrayFloat32,
     wetting_front_suction_head_m: ArrayFloat32,
     wetting_front_moisture_deficit: ArrayFloat32,
@@ -263,7 +264,8 @@ def land_surface_model(
         crop_factor: Crop factor for each HRU. Dimensionless.
         actual_irrigation_consumption_m: Actual irrigation consumption in meters.
         groundwater_depth_m: Depth of groundwater table below surface in meters.
-        saturated_hydraulic_conductivity_m_per_s: Saturated hydraulic conductivity in m/s.
+        horizontal_saturated_hydraulic_conductivity_m_per_s: Horizontal saturated hydraulic conductivity in m/s.
+        vertical_saturated_hydraulic_conductivity_m_per_s: Vertical saturated hydraulic conductivity in m/s.
         wetting_front_depth_m: Wetting front depth in meters.
         wetting_front_suction_head_m: Wetting front suction head [m].
         wetting_front_moisture_deficit: Moisture deficit at the wetting front [-].
@@ -664,7 +666,7 @@ def land_surface_model(
                 seed=(unix_time_seconds + hour * np.int64(3600)) ^ np.int64(i),
                 ws=water_content_saturated_m[i, :],
                 wres=water_content_residual_m[i, :],
-                saturated_hydraulic_conductivity_m_per_s=saturated_hydraulic_conductivity_m_per_s[
+                saturated_hydraulic_conductivity_m_per_s=vertical_saturated_hydraulic_conductivity_m_per_s[
                     i, :
                 ],
                 groundwater_toplayer_conductivity_m_per_s=groundwater_toplayer_conductivity_m_per_s[
@@ -724,7 +726,10 @@ def land_surface_model(
                 water_content_field_capacity_m=water_content_field_capacity_m[i, :],
                 soil_enthalpy_J_per_m2=soil_enthalpy_J_per_m2[i, :],
                 solid_heat_capacity_J_per_m2_K=solid_heat_capacity_J_per_m2_K[i, :],
-                saturated_hydraulic_conductivity_m_per_s=saturated_hydraulic_conductivity_m_per_s[
+                vertical_saturated_hydraulic_conductivity_m_per_s=vertical_saturated_hydraulic_conductivity_m_per_s[
+                    i, :
+                ],
+                horizontal_saturated_hydraulic_conductivity_m_per_s=horizontal_saturated_hydraulic_conductivity_m_per_s[
                     i, :
                 ],
                 interface_dist_m=delta_z[i, :],
@@ -1006,7 +1011,8 @@ class LandSurfaceInputs(NamedTuple):
     actual_irrigation_consumption_m: ArrayFloat32
     groundwater_depth_m: ArrayFloat32
     groundwater_toplayer_conductivity_m_per_day: ArrayFloat32
-    saturated_hydraulic_conductivity_m_per_s: TwoDArrayFloat32
+    horizontal_saturated_hydraulic_conductivity_m_per_s: TwoDArrayFloat32
+    vertical_saturated_hydraulic_conductivity_m_per_s: TwoDArrayFloat32
     wetting_front_depth_m: ArrayFloat32
     wetting_front_suction_head_m: ArrayFloat32
     wetting_front_moisture_deficit: ArrayFloat32
@@ -1244,7 +1250,8 @@ class LandSurface(Module):
             actual_irrigation_consumption_m=actual_irrigation_consumption_m,
             groundwater_depth_m=groundwater_depth_m,
             groundwater_toplayer_conductivity_m_per_day=groundwater_toplayer_conductivity_m_per_day,
-            saturated_hydraulic_conductivity_m_per_s=self.HRU.var.saturated_hydraulic_conductivity_m_per_s,
+            horizontal_saturated_hydraulic_conductivity_m_per_s=self.HRU.var.horizontal_saturated_hydraulic_conductivity_m_per_s,
+            vertical_saturated_hydraulic_conductivity_m_per_s=self.HRU.var.vertical_saturated_hydraulic_conductivity_m_per_s,
             thermal_conductivity_dry_soil_W_per_m_K=self.HRU.var.thermal_conductivity_dry_soil_W_per_m_K,
             wetting_front_depth_m=self.HRU.var.wetting_front_depth_m,
             wetting_front_suction_head_m=self.HRU.var.wetting_front_suction_head_m,
@@ -2029,7 +2036,7 @@ class LandSurface(Module):
             self.HRU.full_compressed(0.003, dtype=np.float32)
         )
 
-        self.HRU.var.saturated_hydraulic_conductivity_m_per_s = kv_wosten(
+        self.HRU.var.horizontal_saturated_hydraulic_conductivity_m_per_s = kv_wosten(
             silt=self.HRU.var.silt_percentage,
             clay=self.HRU.var.clay_percentage,
             bulk_density_kg_per_dm3=self.HRU.var.bulk_density_kg_per_dm3,
@@ -2037,13 +2044,44 @@ class LandSurface(Module):
             is_topsoil=is_top_soil,
         )
         # Apply structural compaction multiplier for sealed topsoil (destruction of macropores)
-        self.HRU.var.saturated_hydraulic_conductivity_m_per_s[is_sealed, 0] *= (
-            np.float32(0.1)
-        )
+        self.HRU.var.horizontal_saturated_hydraulic_conductivity_m_per_s[
+            is_sealed, 0
+        ] *= np.float32(0.1)
 
-        self.HRU.var.saturated_hydraulic_conductivity_m_per_s *= self.model.config[
-            "parameters"
-        ]["saturated_hydraulic_conductivity_multiplier"]  # calibration parameter
+        self.HRU.var.horizontal_saturated_hydraulic_conductivity_m_per_s *= (
+            self.model.config["parameters"][
+                "saturated_hydraulic_conductivity_multiplier"
+            ]
+        )  # calibration parameter
+
+        karst_presence_hru: ArrayFloat32 = (
+            self.hydrology.to_HRU(data=self.hydrology.karst.karst_fraction)
+            > np.float32(0.0)
+        ).astype(np.float32) * (
+            (self.HRU.var.land_use_type != SEALED)
+            & (self.HRU.var.land_use_type != OPEN_WATER)
+        )
+        karst_vertical_multiplier: ArrayFloat32 = (
+            np.float32(1.0)
+            + (
+                np.float32(
+                    self.model.config["hydrology"]["karst"][
+                        "vertical_conductivity_multiplier"
+                    ]
+                )
+                - np.float32(1.0)
+            )
+            * karst_presence_hru
+        )
+        self.HRU.var.vertical_saturated_hydraulic_conductivity_m_per_s = (
+            self.HRU.var.horizontal_saturated_hydraulic_conductivity_m_per_s
+            * np.float32(
+                self.model.config["parameters"][
+                    "vertical_saturated_hydraulic_conductivity_multiplier"
+                ]
+            )
+            * karst_vertical_multiplier[:, np.newaxis]
+        )
 
         self.HRU.var.wetting_front_depth_m = np.full_like(self.HRU.var.topwater_m, 0.0)
         self.HRU.var.wetting_front_moisture_deficit = np.full_like(

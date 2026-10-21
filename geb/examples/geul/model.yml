@@ -42,6 +42,7 @@ parameters:
   bankfull_discharge_multiplier: 1.0
   crop_factor_multiplier: 1.0
   saturated_hydraulic_conductivity_multiplier: 1.0
+  vertical_saturated_hydraulic_conductivity_multiplier: 1.0
   groundwater_hydraulic_conductivity_multiplier: 1.0
   reservoir_release_factor: 0.1
   lake_outflow_multiplier: 1.0

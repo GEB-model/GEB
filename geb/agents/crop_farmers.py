@@ -1420,7 +1420,7 @@ class CropFarmers(AgentBaseClass):
             wilting_point=self.HRU.var.water_content_wilting_point_m,
             w=self.HRU.var.water_content_m,
             ws=self.HRU.var.water_content_saturated_m,
-            saturated_hydraulic_conductivity_m_per_day=self.HRU.var.saturated_hydraulic_conductivity_m_per_s
+            saturated_hydraulic_conductivity_m_per_day=self.HRU.var.vertical_saturated_hydraulic_conductivity_m_per_s
             * np.float32(86400),
             remaining_irrigation_limit_m3_reservoir=self.var.remaining_irrigation_limit_m3_reservoir.data,
             remaining_irrigation_limit_m3_channel=self.var.remaining_irrigation_limit_m3_channel.data,

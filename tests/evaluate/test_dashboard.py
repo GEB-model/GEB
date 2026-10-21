@@ -29,6 +29,7 @@ from geb.evaluate.workflows.dashboard import (
     serialize_main_timeline,
     write_discharge_dashboard,
 )
+from geb.evaluate.workflows.discharge_metrics import use_native_discharge_scores
 
 
 def _create_mock_routing_output(
@@ -501,9 +502,11 @@ def test_build_station_marker_payload_hourly() -> None:
     stations = json.loads(gzip.decompress(base64.b64decode(payload)).decode("utf-8"))
     assert len(stations) == 1
     assert stations[0]["fq"] == "hourly"
-    assert stations[0]["v"][metric_layers[0][0].get_name()] == 0.80
+    assert stations[0]["v"][metric_layers[0][0].get_name()] == 0.72
     assert stations[0]["vh"][metric_layers[0][0].get_name()] == 0.72
+    assert stations[0]["vd"][metric_layers[0][0].get_name()] == 0.80
     assert metric_layers[0][0].get_name() in stations[0]["mh"]
+    assert metric_layers[0][0].get_name() in stations[0]["md"]
 
 
 def test_build_station_marker_payload_uses_high_res_snapped_location() -> None:
@@ -1043,3 +1046,19 @@ def test_reservoir_construction_layers(year: float, period: str, color: str) -> 
     assert "Construction year:" in popup_html
     if pd.notna(year) and year > 0:
         assert f"Construction year: {int(year)}" in popup_html
+
+
+def test_use_native_discharge_scores() -> None:
+    """Test setting unsuffixed score columns using native observation frequency."""
+    df: pd.DataFrame = pd.DataFrame(
+        {
+            "observation_frequency": ["hourly", "daily", "daily"],
+            "KGE_hourly": [0.72, np.nan, 0.50],
+            "KGE_daily": [0.85, 0.65, 0.60],
+        },
+        index=pd.Index(["st_1", "st_2", "st_3"]),
+    )
+    use_native_discharge_scores(df)
+    assert df.loc["st_1", "KGE"] == 0.72
+    assert df.loc["st_2", "KGE"] == 0.65
+    assert df.loc["st_3", "KGE"] == 0.60

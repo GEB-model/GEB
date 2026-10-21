@@ -536,6 +536,8 @@ class Routing(Module):
 
     var: RoutingVariables
     inflow: dict[tuple[int, int], ArrayFloat32]
+    floodplain_profile_widths_m: TwoDArrayFloat32
+    floodplain_side_slope_m_per_m: ArrayFloat32
 
     def __init__(self, model: GEBModel, hydrology: Hydrology) -> None:
         """Initialize the Routing module.
@@ -874,11 +876,18 @@ class Routing(Module):
         valid_depths: ArrayFloat32 = depth_grid[valid_river_cell_mask]
         valid_mannings: ArrayFloat32 = manning_grid[valid_river_cell_mask]
 
+        raw_slope: ArrayFloat32 = self.grid.var.river_slope_m_per_m
+        matched_slope: ArrayFloat32 = (
+            raw_slope
+            if raw_slope.shape == valid_river_cell_mask.shape
+            else raw_slope[: len(valid_river_cell_mask)]
+        )
         grid_dict: dict[str, Any] = {
             "river_id": valid_reach_ids,
             "width": valid_widths,
             "depth": valid_depths,
             "manning": valid_mannings,
+            "slope": matched_slope[valid_river_cell_mask],
             "river_width_alpha": self.var.river_width_alpha[valid_river_cell_mask],
             "river_width_beta": self.var.river_width_beta[valid_river_cell_mask],
         }
@@ -889,6 +898,7 @@ class Routing(Module):
             "width",
             "depth",
             "manning",
+            "slope",
             "river_width_alpha",
             "river_width_beta",
             "floodplain_side_slope_m_per_m",
@@ -906,9 +916,12 @@ class Routing(Module):
             np.float64
         )
 
-        self.var.rivers.loc[reach_means.index, ["river_depth_c", "river_depth_d"]] = [
+        self.var.rivers.loc[
+            reach_means.index, ["river_depth_c", "river_depth_d", "river_depth_e"]
+        ] = [
             float(self.config["river_depth"]["parameters"]["c"]),
             float(self.config["river_depth"]["parameters"]["d"]),
+            float(self.config["river_depth"]["parameters"]["e"]),
         ]
 
         has_observed_cell: ArrayBool = ~np.isnan(
@@ -1021,6 +1034,7 @@ class Routing(Module):
             combined_beta: float = float((weights * valid_up["river_width_beta"]).sum())
             combined_c: float = float((weights * valid_up["river_depth_c"]).sum())
             combined_d: float = float((weights * valid_up["river_depth_d"]).sum())
+            combined_e: float = float((weights * valid_up["river_depth_e"]).sum())
             combined_manning: float = float((weights * valid_up["manning"]).sum())
 
             # Calibrated bankfull discharge for deriving geometry
@@ -1066,7 +1080,16 @@ class Routing(Module):
                 if use_observed_width_as_bankfull
                 else combined_alpha * (bankfull_q**combined_beta)
             )
-            expected_mean_channel_depth: float = combined_c * (bankfull_q**combined_d)
+            slope_val: float = (
+                float(valid_up["slope"].mean())
+                if "slope" in valid_up and valid_up["slope"].notnull().any()
+                else float(self.config["minimum_river_slope_m_per_m"])
+            )
+            eff_slope: float = max(slope_val, 3e-5)
+            slope_factor: float = eff_slope**combined_e
+            expected_mean_channel_depth: float = (
+                combined_c * (bankfull_q**combined_d) * slope_factor
+            )
             continuity_ratio: float = (
                 w_expected / estimated_width
                 if is_observed and w_expected > 0.0
@@ -1096,6 +1119,7 @@ class Routing(Module):
                     "river_width_beta",
                     "river_depth_c",
                     "river_depth_d",
+                    "river_depth_e",
                     "return_period_2_years_daily_m3_per_s",
                     "width_is_observed",
                 ],
@@ -1107,6 +1131,7 @@ class Routing(Module):
                 float(combined_beta),
                 float(combined_c),
                 float(combined_d),
+                float(combined_e),
                 float(raw_summed_q),
                 bool(is_observed),
             ]
@@ -1141,6 +1166,9 @@ class Routing(Module):
         Uses observed widths where available. For unobserved channels, estimates width
         via downstream hydraulic geometry (W = alpha * Q2^beta) if simulated 2-year flood
         discharge is available, or defaults to default_missing_channel_width otherwise.
+        Constrains bankfull channel width to the floodplain width at level 0
+        (floodplain_profile_widths_m[:, 0]) with a floor of default_missing_channel_width
+        so river width does not exceed the valley profile.
 
         Args:
             use_simulated_bankfull_q: Whether to estimate unobserved widths using
@@ -1187,7 +1215,7 @@ class Routing(Module):
                 alpha * (np.maximum(bankfull_discharge_m3_s, np.float32(0.0)) ** beta),
                 np.float32(self.default_missing_channel_width),
             )
-            return np.where(
+            raw_width = np.where(
                 np.isnan(self.var.observed_average_river_width),
                 np.where(
                     self.var.river_ids == -1,
@@ -1205,7 +1233,7 @@ class Routing(Module):
                 * (np.maximum(upstream_area_km2, np.float32(0.0)) ** np.float32(0.45)),
                 np.float32(self.default_missing_channel_width),
             )
-            return np.where(
+            raw_width = np.where(
                 np.isnan(self.var.observed_average_river_width),
                 np.where(
                     self.var.river_ids == -1,
@@ -1215,6 +1243,18 @@ class Routing(Module):
                 self.var.observed_average_river_width,
             ).astype(np.float32)
 
+        # Limit bankfull channel width to the floodplain width at level 0 (d0 = 0.1 m).
+        # We enforce a floor of default_missing_channel_width so channels are not clamped below the minimum width.
+        max_floodplain_width: ArrayFloat32 = np.maximum(
+            self.floodplain_profile_widths_m[:, 0],
+            np.float32(self.default_missing_channel_width),
+        )
+        return np.where(
+            self.var.river_ids == -1,
+            raw_width,
+            np.minimum(raw_width, max_floodplain_width),
+        ).astype(np.float32)
+
     def calculate_bankfull_depth(
         self,
         bankfull_top_width_m: ArrayFloat32,
@@ -1222,9 +1262,25 @@ class Routing(Module):
     ) -> ArrayFloat32:
         """Calculate bankfull channel depth across the routing grid using hydraulic continuity.
 
-        Derives bankfull depth (meters) using based on Andreadis et al. (2013).
+        Derives bankfull depth (meters) based on the coupled hydraulic geometry of Bjerklie et al. (2003)
+        (doi:10.1016/S0022-1694(03)00129-X), which models mean channel depth as a joint power law of
+        bankfull discharge and reach slope:
+            h_mean_expected = c * Q^d * max(S, S_min)^e
+        where default c=0.15, d=0.21, e=-0.20.
 
-        https://agupubs.onlinelibrary.wiley.com/doi/full/10.1002/wrcr.20440
+        Coupled derivation of width and depth from Bjerklie et al. (2003):
+            1. Bankfull Width (Table 3):
+               Single-variate regression across USGS streamgages yields:
+                   Q = 0.11 * W^1.62  =>  W = 3.91 * Q^0.62 (default_alpha = 3.91, beta = 0.62)
+            2. Bankfull Depth (Eq. 17 & Table 4):
+               The universal discharge relation is:
+                   Q = 7.22 * W^1.02 * Y^1.74 * S^0.35
+               Substituting Bjerklie width W = 3.91 * Q^0.62:
+                   Q = 7.22 * (3.91 * Q^0.62)^1.02 * Y^1.74 * S^0.35 = 28.94 * Q^0.632 * Y^1.74 * S^0.35
+                   Y^1.74 = (1 / 28.94) * Q^0.368 * S^(-0.35) = 0.03455 * Q^0.368 * S^(-0.35)
+                   Y = (0.03455)^(1 / 1.74) * Q^(0.368 / 1.74) * S^(-0.35 / 1.74) = 0.15 * Q^0.21 * S^(-0.20)
+               This coupled formulation ensures that channel conveyance reproduces the universal discharge equation
+               without cross-sectional distortion in both steep and flat rivers.
 
         When use_simulated_bankfull_q is True, simulated 2-year flood discharge Q_2 (from
         self.var.rivers['return_period_2_years_daily_m3_per_s']) is mapped to grid cells.
@@ -1232,19 +1288,19 @@ class Routing(Module):
         width inversion is used.
 
         Notes:
-            Under continuity, expected channel dimensions follow downstream hydraulic geometry
-            (Andreadis et al. 2013):
+            Under continuity, expected channel dimensions follow downstream hydraulic geometry:
                 W_expected = alpha * Q^beta
-                h_mean_expected = c * Q^d
+                h_mean_expected = c * Q^d * max(S, S_min)^e
             When use_observed_width_as_bankfull is True (default), W_expected is computed using baseline
-            default parameters (default_alpha, beta), and mean channel depth scales inversely with observed width:
-                h_mean_continuity = (W_expected / W_obs) * h_mean_expected.
+            default parameters (default_alpha, beta), and mean channel depth scales inversely with actual width
+            (W_actual) whenever width is observed or constrained by the floodplain (W_actual < W_expected):
+                h_mean_continuity = (W_expected / W_actual) * h_mean_expected.
             When use_observed_width_as_bankfull is False, reverts to previous machinery where W_expected
             is computed using reach-specific river_width_alpha.
             For a parabolic channel cross-section (shape_exponent r = 0.5), maximum centerline
             bankfull depth is related to mean depth by:
                 h_centerline = (r + 1) * h_mean = 1.5 * h_mean.
-            This ensures that bankfull cross-sectional area A_bf = (1 / (r + 1)) * W_obs * h_centerline = W_obs * h_mean
+            This ensures that bankfull cross-sectional area A_bf = (1 / (r + 1)) * W_actual * h_centerline = W_actual * h_mean
             accurately reproduces the expected bankfull flow area from hydraulic geometry.
 
         Args:
@@ -1266,6 +1322,7 @@ class Routing(Module):
         depth_params: dict[str, Any] = self.config["river_depth"]["parameters"]
         depth_c: np.float32 = np.float32(depth_params["c"])
         depth_d: np.float32 = np.float32(depth_params["d"])
+        depth_e: np.float32 = np.float32(depth_params["e"])
         min_depth_m: np.float32 = np.float32(depth_params["min_depth_m"])
         shape_exponent_val: np.float32 = np.float32(depth_params["shape_exponent"])
         use_observed_width_as_bankfull: bool = bool(
@@ -1322,8 +1379,20 @@ class Routing(Module):
             else alpha * (bankfull_discharge_m3_s**beta)
         )
 
-        expected_mean_channel_depth_m: ArrayFloat32 = depth_c * (
-            bankfull_discharge_m3_s**depth_d
+        raw_slope_grid: ArrayFloat32 = self.grid.var.river_slope_m_per_m
+        effective_slope: ArrayFloat32 = np.maximum(
+            (
+                raw_slope_grid
+                if raw_slope_grid.shape == bankfull_discharge_m3_s.shape
+                else raw_slope_grid[: len(bankfull_discharge_m3_s)]
+            ),
+            np.float32(3e-5),
+        )
+        slope_factor: ArrayFloat32 = effective_slope**depth_e
+        expected_mean_channel_depth_m: ArrayFloat32 = (
+            depth_c
+            * (np.maximum(bankfull_discharge_m3_s, np.float32(0.0)) ** depth_d)
+            * slope_factor
         )
 
         # Determine which cells have observed channel width:
@@ -1331,12 +1400,17 @@ class Routing(Module):
             self.var.river_ids != -1
         )
 
-        # Continuity depth scaled by observed width: h_mean = (W_expected / W_obs) * expected_mean_channel_depth.
-        # When an observed channel width is available, mean depth scales inversely with width.
-        # For channels without observed width, width is estimated directly from hydraulic geometry (W = W_expected),
-        # so the scaling ratio W_expected / W_obs is 1.0.
+        # Scale depth via hydraulic continuity: h_mean = (W_expected / W_actual) * expected_mean_channel_depth.
+        # When an observed channel width is available, or when channel width is constrained by the
+        # floodplain width (bankfull_top_width_m < w_expected), mean depth scales inversely with width
+        # to preserve bankfull flow conveyance area A_bf = W * h_mean.
+        # For unconstrained channels without observed width, W_actual == W_expected, so the ratio is 1.0.
+        is_scaled: ArrayBool = (is_observed | (bankfull_top_width_m < w_expected)) & (
+            self.var.river_ids != -1
+        )
+
         continuity_ratio: ArrayFloat32 = np.where(
-            is_observed,
+            is_scaled,
             (w_expected / np.maximum(bankfull_top_width_m, np.float32(1e-3))).astype(
                 np.float32
             ),
@@ -1383,12 +1457,12 @@ class Routing(Module):
                 f"  - River ID: {river_id}",
                 f"  - Grid index: {max_idx}",
                 f"  - Bankfull depth: {float(bankfull_depth_m[max_idx]):.2f} m",
-                f"  - Bankfull top width (W_obs): {float(bankfull_top_width_m[max_idx]):.2f} m",
+                f"  - Bankfull top width (W_actual): {float(bankfull_top_width_m[max_idx]):.2f} m",
                 f"  - Observed average river width: {observed_width_m}",
                 f"  - Bankfull discharge (Q): {float(bankfull_discharge_m3_s[max_idx]):.2f} m3/s",
                 f"  - Discharge proxy (Q_proxy): {float(q_proxy[max_idx]):.2f} m3/s",
                 f"  - Expected top width (W_expected): {float(w_expected[max_idx]):.2f} m",
-                f"  - Continuity ratio (W_expected / W_obs): {float(continuity_ratio[max_idx]):.4f}",
+                f"  - Continuity ratio (W_expected / W_actual): {float(continuity_ratio[max_idx]):.4f}",
                 f"  - Expected mean depth (c * Q^d): {float(expected_mean_channel_depth_m[max_idx]):.2f} m",
                 f"  - Continuity mean depth: {float(continuity_mean_channel_depth_m[max_idx]):.2f} m",
                 f"  - Shape factor (r + 1): {float(shape_factor):.2f}",
@@ -1437,6 +1511,22 @@ class Routing(Module):
         )
         use_kinematic: ArrayBool = self.var.river_ids == -1
 
+        # Floodplain geometry beyond bankfull channel:
+        raw_profile_widths: TwoDArrayFloat32 = np.nan_to_num(
+            self.grid.load3d(
+                self.model.files["grid"]["routing/floodplain_profile_widths_m"],
+                compress=True,
+            ),
+            nan=0.0,
+        ).astype(np.float32)
+        self.floodplain_profile_widths_m = raw_profile_widths.T
+        self.floodplain_side_slope_m_per_m = np.nan_to_num(
+            self.grid.load2d(
+                self.model.files["grid"]["routing/floodplain_side_slope_m_per_m"]
+            ),
+            nan=2.0,
+        ).astype(np.float32)
+
         # Bankfull channel width and depth (m):
         # Use simulated 2-year return period discharge if it has already been estimated;
         # otherwise, fall back to empirical downstream hydraulic geometry width inversion:
@@ -1461,26 +1551,6 @@ class Routing(Module):
             bankfull_top_width_m=bankfull_top_width_m,
             use_simulated_bankfull_q=use_simulated_bankfull_q,
         )
-
-        # 4. Floodplain geometry beyond bankfull channel:
-        floodplain_side_slope_m_per_m: ArrayFloat32 = np.nan_to_num(
-            self.grid.load2d(
-                self.model.files["grid"]["routing/floodplain_side_slope_m_per_m"]
-            ),
-            nan=2.0,
-        ).astype(np.float32)
-
-        raw_profile_widths: TwoDArrayFloat32 = np.nan_to_num(
-            self.grid.load3d(
-                self.model.files["grid"]["routing/floodplain_profile_widths_m"],
-                compress=True,
-            ),
-            nan=0.0,
-        ).astype(np.float32)
-        floodplain_profile_widths_m: TwoDArrayFloat32 = raw_profile_widths.T
-
-        self.floodplain_side_slope_m_per_m: ArrayFloat32 = floodplain_side_slope_m_per_m
-        self.floodplain_profile_widths_m: TwoDArrayFloat32 = floodplain_profile_widths_m
 
         # Update derived bankfull width, depth, and floodplain geometry to self.var.rivers
         self._update_rivers_geometry(
@@ -1591,7 +1661,7 @@ class Routing(Module):
             rivers_gdf=self.var.rivers,
             shape_exponent=shape_exponent,
             bankfull_depth_m=bankfull_depth_m,
-            floodplain_side_slope_m_per_m=floodplain_side_slope_m_per_m,
+            floodplain_side_slope_m_per_m=self.floodplain_side_slope_m_per_m,
             waterbody_lake_area=self.hydrology.waterbodies.var.lake_area[
                 self._routing_waterbody_indices
             ],
@@ -1607,7 +1677,7 @@ class Routing(Module):
             river_storage_alpha=self.var.river_storage_alpha,
             river_storage_beta=self.var.river_storage_beta,
             in_spinup=self.model.in_spinup,
-            floodplain_profile_widths_m=floodplain_profile_widths_m,
+            floodplain_profile_widths_m=self.floodplain_profile_widths_m,
             max_threads=self.config["max_threads"],
         )
 
@@ -1840,8 +1910,8 @@ class Routing(Module):
 
             river_width = alpha * discharge^beta
 
-        for alpha a global value of 7.2 is used, and beta is set to a constant value, usualy 0.50
-        based on https://doi.org/10.1002/esp.403 (eq. 15).
+        for alpha a default value of 3.91 is used, and beta is set to 0.62 based on
+        Bjerklie et al. (2003) (doi:10.1016/S0022-1694(03)00129-X, Table 3).
 
         Re-arranging for alpha gives:
 
@@ -1853,7 +1923,7 @@ class Routing(Module):
         Args:
             beta: The beta parameter for the kinematic wave routing.
             default_alpha: The default alpha value to use for rivers without an observed average river width,
-                default is 7.2.
+                default is 3.91.
 
         Returns:
             A tuple containing:

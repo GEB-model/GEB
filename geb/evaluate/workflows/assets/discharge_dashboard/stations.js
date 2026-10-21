@@ -65,7 +65,9 @@
         var radius = (layerName === upstreamLayer) ? 10 : station.r;
         var fillColor = (window._gebCurrentFrequency === 'hourly' && station.mh && station.mh[layerName])
           ? station.mh[layerName]
-          : station.m[layerName];
+          : (window._gebCurrentFrequency === 'daily' && station.md && station.md[layerName])
+            ? station.md[layerName]
+            : station.m[layerName];
         marker = L.circleMarker(station.coords, {
           pane: 'stationsPane',
           radius: radius,

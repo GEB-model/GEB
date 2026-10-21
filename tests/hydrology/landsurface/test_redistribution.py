@@ -72,7 +72,8 @@ def test_distribute_soil_water_ross_basic() -> None:
         water_content_field_capacity_m=wfc,
         soil_enthalpy_J_per_m2=e_new,
         solid_heat_capacity_J_per_m2_K=hc,
-        saturated_hydraulic_conductivity_m_per_s=ksat,
+        vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
+        horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
         interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
         bubbling_pressure_m_positive=bubbling_pressure_m_positive,
@@ -145,7 +146,8 @@ def test_distribute_soil_water_ross_active_layer_masking() -> None:
         water_content_field_capacity_m=wfc,
         soil_enthalpy_J_per_m2=e_new,
         solid_heat_capacity_J_per_m2_K=hc,
-        saturated_hydraulic_conductivity_m_per_s=ksat,
+        vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
+        horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
         interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
         bubbling_pressure_m_positive=bubbling_pressure_m_positive,
@@ -218,7 +220,8 @@ def test_distribute_soil_water_ross_extreme_dry_wet() -> None:
         water_content_field_capacity_m=wfc,
         soil_enthalpy_J_per_m2=e_tmp,
         solid_heat_capacity_J_per_m2_K=hc,
-        saturated_hydraulic_conductivity_m_per_s=ksat,
+        vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
+        horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
         interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
         bubbling_pressure_m_positive=bubbling_pressure_m_positive,
@@ -287,7 +290,8 @@ def test_distribute_soil_water_ross_interflow_matrix() -> None:
         water_content_field_capacity_m=wfc,
         soil_enthalpy_J_per_m2=e_no_interflow,
         solid_heat_capacity_J_per_m2_K=hc,
-        saturated_hydraulic_conductivity_m_per_s=ksat,
+        vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
+        horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
         interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
         bubbling_pressure_m_positive=bubbling_pressure_m_positive,
@@ -315,7 +319,8 @@ def test_distribute_soil_water_ross_interflow_matrix() -> None:
         water_content_field_capacity_m=wfc,
         soil_enthalpy_J_per_m2=e_with_interflow,
         solid_heat_capacity_J_per_m2_K=hc,
-        saturated_hydraulic_conductivity_m_per_s=ksat,
+        vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
+        horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
         interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
         bubbling_pressure_m_positive=bubbling_pressure_m_positive,
@@ -380,7 +385,8 @@ def test_distribute_soil_water_ross_interflow_dry_soil() -> None:
         water_content_field_capacity_m=wfc,
         soil_enthalpy_J_per_m2=enth.copy(),
         solid_heat_capacity_J_per_m2_K=hc,
-        saturated_hydraulic_conductivity_m_per_s=ksat,
+        vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
+        horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
         interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
         bubbling_pressure_m_positive=bubbling_pressure_m_positive,
@@ -447,7 +453,8 @@ def test_distribute_soil_water_ross_frozen_barrier() -> None:
         water_content_field_capacity_m=wfc,
         soil_enthalpy_J_per_m2=e_new,
         solid_heat_capacity_J_per_m2_K=hc,
-        saturated_hydraulic_conductivity_m_per_s=ksat,
+        vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
+        horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
         interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
         bubbling_pressure_m_positive=bubbling_pressure_m_positive,
@@ -542,7 +549,8 @@ def test_ross_redistribution_scenarios(ksat: float, gw_ksat: float) -> None:
                 water_content_field_capacity_m=wfc,
                 soil_enthalpy_J_per_m2=current_enth,
                 solid_heat_capacity_J_per_m2_K=hc,
-                saturated_hydraulic_conductivity_m_per_s=ksat_arr,
+                vertical_saturated_hydraulic_conductivity_m_per_s=ksat_arr,
+                horizontal_saturated_hydraulic_conductivity_m_per_s=ksat_arr,
                 interface_dist_m=interface_dist_m,
                 soil_layer_height=soil_layer_height_m,
                 bubbling_pressure_m_positive=bubbling_pressure_m_positive_val,
@@ -653,7 +661,8 @@ def test_distribute_soil_water_ross_percolation_to_groundwater() -> None:
         water_content_field_capacity_m=wfc,
         soil_enthalpy_J_per_m2=e_new,
         solid_heat_capacity_J_per_m2_K=hc,
-        saturated_hydraulic_conductivity_m_per_s=ksat,
+        vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
+        horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
         interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
         bubbling_pressure_m_positive=bubbling_pressure_m_positive,
@@ -747,7 +756,8 @@ def test_distribute_soil_water_ross_active_wetting_front_lateral_flow() -> None:
         water_content_field_capacity_m=wfc,
         soil_enthalpy_J_per_m2=e_active,
         solid_heat_capacity_J_per_m2_K=hc,
-        saturated_hydraulic_conductivity_m_per_s=ksat,
+        vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
+        horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
         interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
         bubbling_pressure_m_positive=bubbling_pressure_m_positive,
@@ -782,7 +792,8 @@ def test_distribute_soil_water_ross_active_wetting_front_lateral_flow() -> None:
         water_content_field_capacity_m=wfc,
         soil_enthalpy_J_per_m2=e_inactive,
         solid_heat_capacity_J_per_m2_K=hc,
-        saturated_hydraulic_conductivity_m_per_s=ksat,
+        vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
+        horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
         interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
         bubbling_pressure_m_positive=bubbling_pressure_m_positive,
@@ -831,7 +842,8 @@ def test_distribute_soil_water_ross_active_wetting_front_lateral_flow() -> None:
         water_content_field_capacity_m=wfc,
         soil_enthalpy_J_per_m2=e_fc,
         solid_heat_capacity_J_per_m2_K=hc,
-        saturated_hydraulic_conductivity_m_per_s=ksat,
+        vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
+        horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
         interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
         bubbling_pressure_m_positive=bubbling_pressure_m_positive,
@@ -946,7 +958,8 @@ def test_distribute_soil_water_ross_capillary_rise_shallow_gw() -> None:
         water_content_field_capacity_m=wfc,
         soil_enthalpy_J_per_m2=enth,
         solid_heat_capacity_J_per_m2_K=hc,
-        saturated_hydraulic_conductivity_m_per_s=ksat,
+        vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
+        horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
         interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
         bubbling_pressure_m_positive=bubbling_pressure_m_positive,
@@ -1019,7 +1032,8 @@ def test_distribute_soil_water_ross_capillary_rise_deep_gw_shutoff() -> None:
         water_content_field_capacity_m=wfc,
         soil_enthalpy_J_per_m2=enth,
         solid_heat_capacity_J_per_m2_K=hc,
-        saturated_hydraulic_conductivity_m_per_s=ksat,
+        vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
+        horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
         interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
         bubbling_pressure_m_positive=bubbling_pressure_m_positive,
@@ -1085,7 +1099,8 @@ def test_distribute_soil_water_ross_capillary_rise_supply_limited() -> None:
         water_content_field_capacity_m=wfc,
         soil_enthalpy_J_per_m2=enth.copy(),
         solid_heat_capacity_J_per_m2_K=hc,
-        saturated_hydraulic_conductivity_m_per_s=ksat,
+        vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
+        horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
         interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
         bubbling_pressure_m_positive=bubbling_pressure_m_positive,
@@ -1120,7 +1135,8 @@ def test_distribute_soil_water_ross_capillary_rise_supply_limited() -> None:
         water_content_field_capacity_m=wfc,
         soil_enthalpy_J_per_m2=enth.copy(),
         solid_heat_capacity_J_per_m2_K=hc,
-        saturated_hydraulic_conductivity_m_per_s=ksat,
+        vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
+        horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
         interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
         bubbling_pressure_m_positive=bubbling_pressure_m_positive,
@@ -1160,7 +1176,8 @@ def test_distribute_soil_water_ross_capillary_rise_supply_limited() -> None:
         water_content_field_capacity_m=wfc,
         soil_enthalpy_J_per_m2=enth.copy(),
         solid_heat_capacity_J_per_m2_K=hc,
-        saturated_hydraulic_conductivity_m_per_s=ksat,
+        vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
+        horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
         interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
         bubbling_pressure_m_positive=bubbling_pressure_m_positive,
@@ -1736,7 +1753,8 @@ def test_distribute_soil_water_ross_wet_bottom_dry_upper_layers_no_spurious_capi
         water_content_field_capacity_m=wfc,
         soil_enthalpy_J_per_m2=e_new,
         solid_heat_capacity_J_per_m2_K=hc,
-        saturated_hydraulic_conductivity_m_per_s=ksat,
+        vertical_saturated_hydraulic_conductivity_m_per_s=ksat,
+        horizontal_saturated_hydraulic_conductivity_m_per_s=ksat,
         interface_dist_m=interface_dist_m,
         soil_layer_height=soil_layer_height_m,
         bubbling_pressure_m_positive=bubbling_pressure_m_positive,
@@ -1764,3 +1782,88 @@ def test_distribute_soil_water_ross_wet_bottom_dry_upper_layers_no_spurious_capi
     )
     actual_storage_change_m: np.float32 = np.sum(w_new) - np.sum(w_initial)
     assert actual_storage_change_m == pytest.approx(expected_storage_change_m, abs=1e-7)
+
+
+def test_distribute_soil_water_ross_vertical_vs_lateral_ksat_decoupling() -> None:
+    """Verify vertical ksat does not affect interflow, and lateral ksat does not affect vertical flux."""
+    timestep_length_s = np.float32(3600.0)
+    w_initial = np.array([0.02, 0.02, 0.02, 0.02, 0.02, 0.02], dtype=np.float32)
+    wr = np.array([0.005, 0.005, 0.005, 0.005, 0.005, 0.005], dtype=np.float32)
+    wfc = np.array([0.015, 0.015, 0.015, 0.015, 0.015, 0.015], dtype=np.float32)
+    ws = np.array([0.025, 0.025, 0.025, 0.025, 0.025, 0.025], dtype=np.float32)
+    enth = np.full(6, 1e7, dtype=np.float32)
+    hc = np.full(6, 1e6, dtype=np.float32)
+    base_ksat = np.full(6, 1e-6, dtype=np.float32)
+    vertical_ksat_karst = base_ksat * np.float32(10.0)
+    interface_dist_m = np.full(5, 0.1, dtype=np.float32)
+    soil_layer_height_m = np.full(6, 0.1, dtype=np.float32)
+    bubbling_pressure_m_positive = np.full(6, 0.1, dtype=np.float32)
+    lambda_ = np.full(6, 0.2, dtype=np.float32)
+    pore_size_index = np.full(6, 13.0, dtype=np.float32)
+
+    # 1. Base simulation (equal vertical and lateral ksat)
+    w1 = w_initial.copy()
+    e1 = enth.copy()
+    res_base = distribute_soil_water_ross(
+        timestep_length_s=timestep_length_s,
+        water_content_m=w1,
+        water_content_residual_m=wr,
+        water_content_saturated_m=ws,
+        water_content_field_capacity_m=wfc,
+        soil_enthalpy_J_per_m2=e1,
+        solid_heat_capacity_J_per_m2_K=hc,
+        vertical_saturated_hydraulic_conductivity_m_per_s=base_ksat,
+        horizontal_saturated_hydraulic_conductivity_m_per_s=base_ksat,
+        interface_dist_m=interface_dist_m,
+        soil_layer_height=soil_layer_height_m,
+        bubbling_pressure_m_positive=bubbling_pressure_m_positive,
+        lambda_=lambda_,
+        pore_size_index=pore_size_index,
+        slope_m_per_m=np.float32(0.05),
+        hillslope_length_m=np.float32(100.0),
+        interflow_multiplier=np.float32(1.0),
+        green_ampt_active_layer_idx=np.int32(-1),
+        topwater_m=np.float32(0.0),
+        gw_ksat_m_per_s=np.float32(1e-6),
+        groundwater_depth_m=np.float32(1.0),
+        deep_soil_temperature_C=np.float32(10.0),
+    )
+
+    # 2. Simulation with 10x vertical ksat (karst) but identical lateral ksat
+    w2 = w_initial.copy()
+    e2 = enth.copy()
+    res_karst_vertical = distribute_soil_water_ross(
+        timestep_length_s=timestep_length_s,
+        water_content_m=w2,
+        water_content_residual_m=wr,
+        water_content_saturated_m=ws,
+        water_content_field_capacity_m=wfc,
+        soil_enthalpy_J_per_m2=e2,
+        solid_heat_capacity_J_per_m2_K=hc,
+        vertical_saturated_hydraulic_conductivity_m_per_s=vertical_ksat_karst,
+        horizontal_saturated_hydraulic_conductivity_m_per_s=base_ksat,
+        interface_dist_m=interface_dist_m,
+        soil_layer_height=soil_layer_height_m,
+        bubbling_pressure_m_positive=bubbling_pressure_m_positive,
+        lambda_=lambda_,
+        pore_size_index=pore_size_index,
+        slope_m_per_m=np.float32(0.05),
+        hillslope_length_m=np.float32(100.0),
+        interflow_multiplier=np.float32(1.0),
+        green_ampt_active_layer_idx=np.int32(-1),
+        topwater_m=np.float32(0.0),
+        gw_ksat_m_per_s=np.float32(1e-6),
+        groundwater_depth_m=np.float32(1.0),
+        deep_soil_temperature_C=np.float32(10.0),
+    )
+
+    # Vertical drainage to groundwater should increase under 10x vertical ksat
+    assert res_karst_vertical[2] > res_base[2], (
+        "Percolation to groundwater did not increase with 10x vertical ksat"
+    )
+    # Lateral outflow should be practically unchanged (any minor variation only from subtle vertical moisture change)
+    # Both lateral outflows must be positive
+    assert res_base[5] > 0.0
+    assert res_karst_vertical[5] > 0.0
+    # Crucially, lateral outflow must NOT scale with the 10x vertical factor
+    assert res_karst_vertical[5] < res_base[5] * 2.0

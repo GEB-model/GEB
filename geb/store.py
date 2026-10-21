@@ -1373,8 +1373,7 @@ class Store:
         """Check that the model version of the store matches the current model version.
 
         Reads the stored model version from `checkpoint.json`. If the version is not available,
-        logs a warning. If the current model version is newer than the version in the store,
-        warns that the spinup must be rerun.
+        or if the store was created with an older or newer model version, raises a RuntimeError.
 
         Notes:
             Version comparison adheres to packaging.version.Version semantics.
@@ -1393,11 +1392,10 @@ class Store:
             stored_version = metadata.get("model_version")
 
         if stored_version is None:
-            # I will make this strict later.
-            self.model.logger.warning(
-                f"Model version is not available from the store at {path}."
+            raise RuntimeError(
+                f"Model version is not available from the store at {path}. "
+                "Spinup needs to be run again, then rerun spinup and simulation."
             )
-            return
 
         current_version: Version = Version(__version__)
         stored_version_parsed: Version = Version(stored_version)

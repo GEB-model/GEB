@@ -586,14 +586,14 @@ def test_store_checkpoint_metadata() -> None:
 
 
 def test_store_version_check_model_newer_than_store(tmp_path: Path) -> None:
-    """Test warning when current model version is newer than store version."""
+    """Test RuntimeError when current model version is newer than store version."""
     import json
     from typing import Any, cast
 
+    import pytest
+
     from geb.model import GEBModel
     from geb.store import Store
-
-    warnings_logged: list[str] = []
 
     class DummyModel:
         def __init__(self) -> None:
@@ -605,7 +605,7 @@ def test_store_version_check_model_newer_than_store(tmp_path: Path) -> None:
                 {
                     "debug": lambda *args: None,
                     "info": lambda *args: None,
-                    "warning": lambda *args: warnings_logged.append(str(args[-1])),
+                    "warning": lambda *args: None,
                 },
             )()
 
@@ -617,23 +617,19 @@ def test_store_version_check_model_newer_than_store(tmp_path: Path) -> None:
 
     model: DummyModel = DummyModel()
     store: Store = Store(cast(GEBModel, model))
-    store.load(store_dir)
-
-    assert any(
-        "older model version" in msg and "spinup" in msg.lower()
-        for msg in warnings_logged
-    )
+    with pytest.raises(RuntimeError, match="older model version"):
+        store.load(store_dir)
 
 
 def test_store_version_check_store_newer_than_model(tmp_path: Path) -> None:
-    """Test warning when store version is newer than current model version."""
+    """Test RuntimeError when store version is newer than current model version."""
     import json
     from typing import Any, cast
 
+    import pytest
+
     from geb.model import GEBModel
     from geb.store import Store
-
-    warnings_logged: list[str] = []
 
     class DummyModel:
         def __init__(self) -> None:
@@ -645,7 +641,7 @@ def test_store_version_check_store_newer_than_model(tmp_path: Path) -> None:
                 {
                     "debug": lambda *args: None,
                     "info": lambda *args: None,
-                    "warning": lambda *args: warnings_logged.append(str(args[-1])),
+                    "warning": lambda *args: None,
                 },
             )()
 
@@ -657,20 +653,19 @@ def test_store_version_check_store_newer_than_model(tmp_path: Path) -> None:
 
     model: DummyModel = DummyModel()
     store: Store = Store(cast(GEBModel, model))
-    store.load(store_dir)
-
-    assert any("newer model version" in msg for msg in warnings_logged)
+    with pytest.raises(RuntimeError, match="newer model version"):
+        store.load(store_dir)
 
 
 def test_store_version_check_missing_version(tmp_path: Path) -> None:
-    """Test warning when model version is not available from the store."""
+    """Test RuntimeError when model version is not available from the store."""
     import json
     from typing import Any, cast
 
+    import pytest
+
     from geb.model import GEBModel
     from geb.store import Store
-
-    warnings_logged: list[str] = []
 
     class DummyModel:
         def __init__(self) -> None:
@@ -682,7 +677,7 @@ def test_store_version_check_missing_version(tmp_path: Path) -> None:
                 {
                     "debug": lambda *args: None,
                     "info": lambda *args: None,
-                    "warning": lambda *args: warnings_logged.append(str(args[-1])),
+                    "warning": lambda *args: None,
                 },
             )()
 
@@ -694,9 +689,8 @@ def test_store_version_check_missing_version(tmp_path: Path) -> None:
 
     model: DummyModel = DummyModel()
     store: Store = Store(cast(GEBModel, model))
-    store.load(store_dir)
-
-    assert any("Model version is not available" in msg for msg in warnings_logged)
+    with pytest.raises(RuntimeError, match="Model version is not available"):
+        store.load(store_dir)
 
 
 def test_model_checkpoint_helpers(tmp_path: Path) -> None:
