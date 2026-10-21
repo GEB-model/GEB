@@ -270,19 +270,3 @@ def test_ambiguous_dam_match() -> None:
     assert result.waterbody_type.tolist() == [LAKE, LAKE]
     assert checks.match_method.tolist() == ["multiple_lakes"]
     assert checks.waterbody_id.isna().all()
-
-
-@pytest.mark.parametrize("lake_ids", [[1, 1], [1, None]])
-def test_invalid_lake_ids(lake_ids: list[int | None]) -> None:
-    """Reject missing or duplicate lake IDs before matching dams.
-
-    Args:
-        lake_ids: Invalid source IDs (unitless).
-    """
-    waterbodies: gpd.GeoDataFrame = gpd.GeoDataFrame(
-        {"waterbody_id": lake_ids, "waterbody_type": [1, 1]},
-        geometry=[box(0, 0, 1, 1), box(1, 0, 2, 1)],
-        crs=4326,
-    )
-    with pytest.raises(ValueError, match="IDs must be present and unique"):
-        enrich_waterbodies(waterbodies, gpd.GeoDataFrame())

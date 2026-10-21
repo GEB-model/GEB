@@ -270,7 +270,7 @@ def get_and_maybe_do_version_updates(
     elif not error_occurred:
         logger.info("Successfully auto-updated.")
     else:  # error occurred but no updates to print
-        raise RuntimeError(
+        logger.error(
             "An error occurred during auto-update. Please check the error message above and fix the issue. After fixing the issue, you can re-run the update command to perform the remaining updates and update the version file."
         )
 

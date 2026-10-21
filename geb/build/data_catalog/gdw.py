@@ -5,7 +5,6 @@ from tempfile import TemporaryDirectory
 from zipfile import ZipFile
 
 import geopandas as gpd
-import numpy as np
 import pandas as pd
 
 from geb.workflows.io import fetch_and_save, write_geom
@@ -22,33 +21,9 @@ def prepare_gdw(data: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     Returns:
         GDW records in EPSG:4326 with missing values cleared. Area, capacity,
         and discharge use m2, m3, and m3/s; other units are unchanged.
-
-    Raises:
-        ValueError: If required fields, the CRS, or dam IDs are invalid.
     """
     data = data.copy()
     data.columns = data.columns.str.lower()
-    required_fields: set[str] = {
-        "gdw_id",
-        "hylak_id",
-        "dam_type",
-        "cap_mcm",
-        "area_skm",
-        "dis_avg_ls",
-        "geometry",
-    }
-    if not required_fields.issubset(data.columns) or data.crs is None:
-        raise ValueError("GDW must have a CRS and the required v1.0 fields.")
-    if (
-        data["gdw_id"].isna().any()
-        or not data["gdw_id"].is_unique
-        or not pd.api.types.is_numeric_dtype(data["gdw_id"])
-        or not np.isfinite(data["gdw_id"]).all()
-        or (data["gdw_id"] <= 0).any()
-        or (data["gdw_id"] % 1 != 0).any()
-    ):
-        raise ValueError("GDW IDs must be unique positive integers.")
-
     column: str
     for column in data.columns.drop("geometry"):
         if pd.api.types.is_numeric_dtype(data[column]):

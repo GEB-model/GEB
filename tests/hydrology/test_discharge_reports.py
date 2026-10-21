@@ -53,3 +53,37 @@ def test_recorded_layout(source: str, recorded_branches: int, tmp_path: Path) ->
     expected: np.ndarray = np.array([1.0, 2.0]) * sum(range(1, recorded_branches + 1))
     np.testing.assert_array_equal(result[24027753], expected)
     np.testing.assert_array_equal(result.index.to_numpy(), times[:2].to_numpy())
+
+
+@pytest.mark.parametrize("combined_has_branches", [False, True])
+def test_combined_report_precedes_old_files(
+    tmp_path: Path, combined_has_branches: bool
+) -> None:
+    """Use the combined report's layout and fall back only for rivers absent from it.
+
+    Args:
+        tmp_path: Temporary report directory.
+        combined_has_branches: Whether the combined file stores two branches.
+    """
+    times: pd.DatetimeIndex = pd.date_range("1990-01-01", periods=2, freq="h")
+    columns: dict[str, list[float]] = (
+        {"123_0": [1.0, 2.0], "123_1": [2.0, 4.0]}
+        if combined_has_branches
+        else {"123": [3.0, 6.0]}
+    )
+    pd.DataFrame(columns, index=times).to_parquet(
+        tmp_path / "river_outflow_hourly_m3_per_s.parquet"
+    )
+    old_key: str = "123" if combined_has_branches else "123_0"
+    prefix: str = "river_outflow_hourly_m3_per_s_"
+    pd.DataFrame({f"{prefix}{old_key}": [999.0, 999.0]}, index=times).to_parquet(
+        tmp_path / f"{prefix}{old_key}.parquet"
+    )
+    pd.DataFrame({f"{prefix}456": [7.0, 8.0]}, index=times).to_parquet(
+        tmp_path / f"{prefix}456.parquet"
+    )
+    result: pd.DataFrame = get_discharge_per_river(
+        gpd.GeoDataFrame(index=[123, 456]), folder=tmp_path
+    )
+    np.testing.assert_array_equal(result[123], [3.0, 6.0])
+    np.testing.assert_array_equal(result[456], [7.0, 8.0])

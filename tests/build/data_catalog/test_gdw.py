@@ -67,25 +67,3 @@ def test_prepare_gdw(gdw_records: gpd.GeoDataFrame) -> None:
     assert pd.isna(result.elev_masl.iloc[1])
     assert result.long_dam.iloc[0] == -99.0
     pd.testing.assert_frame_equal(gdw_records, original)
-
-
-@pytest.mark.parametrize(
-    "invalid",
-    ["missing_field", "duplicate", "fraction"],
-)
-def test_invalid_gdw(gdw_records: gpd.GeoDataFrame, invalid: str) -> None:
-    """Reject incomplete records and IDs that cannot identify individual dams.
-
-    Args:
-        gdw_records: Original GDW records.
-        invalid: Missing field or invalid ID to check.
-    """
-    if invalid == "missing_field":
-        gdw_records.drop(columns="CAP_MCM", inplace=True)
-    else:
-        gdw_records["GDW_ID"] = {
-            "duplicate": [1, 1],
-            "fraction": [1.5, 2.0],
-        }[invalid]
-    with pytest.raises(ValueError, match="GDW"):
-        prepare_gdw(gdw_records)

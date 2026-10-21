@@ -44,16 +44,16 @@ def get_discharge_per_river(
     folder: Path | None = None,
     variables_to_report: dict[str, Any] | None = None,
 ) -> pd.DataFrame:
-    """Read discharge using the river branches saved in the reports.
+    """Read discharge for each river, adding its recorded branches.
 
-    Notes:
-        Reservoir activation can change the representative cells of a river.
-        Historical report names therefore determine which branches to sum.
+    GEB records discharge at locations selected at the start of the run.
+    A river has one report or several upstream branch reports, whose flows are
+    added.
 
     Args:
         rivers: Rivers to read, indexed by integer river ID.
         source: Whether to read files or in-memory report buffers.
-        folder: Directory containing consolidated or legacy discharge files.
+        folder: Report directory.
         variables_to_report: In-memory discharge report buffers (m³/s).
 
     Returns:
@@ -71,66 +71,83 @@ def get_discharge_per_river(
         raise ValueError("variables_to_report must be provided if source is 'memory'")
 
     prefix: str = "river_outflow_hourly_m3_per_s_"
-    consolidated_table: pd.DataFrame | None = None
-    available_keys: set[str]
+    combined_reports: pd.DataFrame | None = None
+    report_names: set[str]
     if source == "memory":
         assert variables_to_report is not None
-        available_keys = {
+        report_names = {
             name.removeprefix(prefix)
             for name in variables_to_report
             if name.startswith(prefix)
         }
     else:
         assert folder is not None
-        consolidated_file: Path = folder / "river_outflow_hourly_m3_per_s.parquet"
-        if consolidated_file.exists():
-            consolidated_table = read_table(consolidated_file)
-        available_keys = {
+        combined_file: Path = folder / "river_outflow_hourly_m3_per_s.parquet"
+        if combined_file.exists():
+            combined_reports = read_table(combined_file)
+        report_names = {
             path.stem.removeprefix(prefix) for path in folder.glob(f"{prefix}*.parquet")
         }
-        if consolidated_table is not None:
-            available_keys.update(str(column) for column in consolidated_table.columns)
+        if combined_reports is not None:
+            report_names.update(str(column) for column in combined_reports.columns)
 
-    # Index the saved layout once, rather than scanning all reports for every river.
-    keys_by_river: dict[str, list[str]] = {}
-    key: str
-    for key in sorted(available_keys):
-        keys_by_river.setdefault(key.split("_", 1)[0], []).append(key)
+    # Reports 123_0 and 123_1 both belong to river 123. Group them once here.
+    reports_by_river: dict[str, list[str]] = {}
+    report_name: str
+    for report_name in sorted(report_names):
+        reports_by_river.setdefault(report_name.split("_", 1)[0], []).append(
+            report_name
+        )
 
     discharge_data: dict[int, pd.Series] = {}
     river_id: int
     for river_id in rivers.index:
-        river_key: str = str(river_id)
-        if river_key not in keys_by_river:
+        river_id_text: str = str(river_id)
+        if river_id_text not in reports_by_river:
             raise KeyError(f"No recorded discharge for river {river_id}")
-        # A direct report takes precedence over legacy branch files if both exist.
-        report_keys: list[str] = (
-            [river_key] if river_key in available_keys else keys_by_river[river_key]
-        )
+        river_reports: list[str] = reports_by_river[river_id_text]
+        # Old files may remain, so prefer this river's reports in the combined file.
+        if combined_reports is not None:
+            combined_names: list[str] = [
+                report_name
+                for report_name in river_reports
+                if report_name in combined_reports.columns
+            ]
+            if combined_names:
+                river_reports = combined_names
+        # Use 123 on its own, or add its branches. Never count both.
+        if river_id_text in river_reports:
+            river_reports = [river_id_text]
         total_discharge: pd.Series | None = None
-        for key in report_keys:
-            discharge_part: pd.Series
+        for report_name in river_reports:
+            report_discharge: pd.Series
             if source == "memory":
                 assert variables_to_report is not None
-                river_data: dict[str, Any] = variables_to_report[f"{prefix}{key}"]
+                river_data: dict[str, Any] = variables_to_report[
+                    f"{prefix}{report_name}"
+                ]
+                # Read only completed timesteps; the rest of the buffer is unused.
                 sample_count: int = river_data["_var_index"]
-                discharge_part = pd.Series(
+                report_discharge = pd.Series(
                     river_data["_data_array"][:sample_count],
                     index=river_data["_time_array"][:sample_count].astype(
                         "datetime64[s]"
                     ),
                 )
-            elif consolidated_table is not None and key in consolidated_table.columns:
-                discharge_part = consolidated_table[key]
+            elif (
+                combined_reports is not None and report_name in combined_reports.columns
+            ):
+                report_discharge = combined_reports[report_name]
             else:
                 assert folder is not None
-                discharge_part = read_table(folder / f"{prefix}{key}.parquet")[
-                    f"{prefix}{key}"
-                ]
+                report_discharge = read_table(
+                    folder / f"{prefix}{report_name}.parquet"
+                )[f"{prefix}{report_name}"]
+            # Add branch flows at the same timestamps.
             total_discharge = (
-                discharge_part
+                report_discharge
                 if total_discharge is None
-                else total_discharge + discharge_part
+                else total_discharge + report_discharge
             )
         assert total_discharge is not None
         discharge_data[river_id] = total_discharge
