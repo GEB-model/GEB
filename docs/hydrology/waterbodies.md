@@ -44,6 +44,6 @@ Lakes and reservoirs without a known construction year are always active.
 
 ## Data and setup
 
-GEB combines HydroLAKES with GDW to identify reservoirs and add dam metadata
-and construction years. See [Waterbody setup](../getting_started/build/waterbodies.md)
-for classification and build settings, and [Weirs and gates](weirs.md) for river barriers.
+GEB uses HydroLAKES for lakes and Global Dam Watch (GDW) for dam information
+and additional reservoirs. See [Waterbody setup](../getting_started/build/waterbodies.md)
+for build instructions.

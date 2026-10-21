@@ -1610,8 +1610,7 @@ class Hydrography(BuildModelBase):
                 waterbody_id and volume_total (m3).
 
         Raises:
-            ValueError: If options conflict, input data are invalid, or a dam
-                cannot be placed on an unoccupied river cell.
+            ValueError: If options conflict or input data are invalid.
         """
         if mode not in ["on", "off", "lakes_only", "reservoirs_only"]:
             raise ValueError(
@@ -1636,16 +1635,6 @@ class Hydrography(BuildModelBase):
         waterbodies, dam_checks = load_and_enrich_waterbodies(
             self.data_catalog, self.region, mode
         )
-        if mode != "off":
-            self.set_geom(dam_checks, name="waterbodies/gdw_checks")
-            checks_path: Path = self.report_dir / "waterbodies" / "gdw_checks.csv"
-            checks_path.parent.mkdir(parents=True, exist_ok=True)
-            dam_checks.drop(columns="geometry").to_csv(checks_path, index=False)
-            self.logger.info(
-                "GDW match results: %s",
-                dam_checks["match_method"].value_counts().to_dict(),
-            )
-
         if mode == "lakes_only":
             waterbodies = waterbodies[waterbodies["waterbody_type"] == LAKE]
         elif mode == "reservoirs_only":
@@ -1661,13 +1650,31 @@ class Hydrography(BuildModelBase):
         )
 
         if (waterbodies.geometry.geom_type == "Point").any():
-            snap_waterbody_points(
+            skipped: dict[int, str] = snap_waterbody_points(
                 waterbodies,
                 waterbody_id,
                 self.geom["routing/rivers"],
                 self.grid["routing/upstream_area_m2"],
                 self.other["drainage/original_d8_upstream_area_m2"],
             )
+            gdw_id: int
+            reason: str
+            for gdw_id, reason in skipped.items():
+                skipped_dam: pd.Series = dam_checks["gdw_id"].eq(gdw_id)
+                dam_checks.loc[skipped_dam, "addition_reason"] = reason
+                dam_checks.loc[skipped_dam, "waterbody_id"] = pd.NA
+                self.logger.warning("Skipping GDW reservoir %s: %s", gdw_id, reason)
+
+        if mode != "off":
+            self.set_geom(dam_checks, name="waterbodies/gdw_checks")
+            checks_path: Path = self.report_dir / "waterbodies" / "gdw_checks.csv"
+            checks_path.parent.mkdir(parents=True, exist_ok=True)
+            dam_checks.drop(columns="geometry").to_csv(checks_path, index=False)
+            self.logger.info(
+                "GDW match results: %s",
+                dam_checks["match_method"].value_counts().to_dict(),
+            )
+
         # Sample lake surface elevation directly from original_d8_elevation at representative points
         if not waterbodies.empty:
             original_d8_elevation: xr.DataArray = self.other[

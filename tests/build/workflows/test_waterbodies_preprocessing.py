@@ -82,10 +82,10 @@ def test_add_reservoir(capacity: float, has_polygon: bool, dam_type: str) -> Non
 
 @pytest.mark.parametrize("case", ["valid", "occupied", "distant"])
 def test_snap_reservoir(case: str) -> None:
-    """Use the real river snapper and reject occupied or distant cells."""
+    """Skip occupied or distant cells and keep processing other reservoirs."""
     waterbodies: gpd.GeoDataFrame = gpd.GeoDataFrame(
-        {"waterbody_id": [GDW_ID_OFFSET + 42], "gdw_id": [42]},
-        geometry=[Point(1 if case == "distant" else 0.01, 0.01)],
+        {"waterbody_id": [GDW_ID_OFFSET + 42, GDW_ID_OFFSET + 43], "gdw_id": [42, 43]},
+        geometry=[Point(1 if case == "distant" else 0.01, 0.01), Point(0, -0.1)],
         crs=4326,
     )
     upstream_area: xr.DataArray = xr.DataArray(
@@ -107,20 +107,22 @@ def test_snap_reservoir(case: str) -> None:
     )
     if case == "occupied":
         waterbody_id.values[0, 0] = 1
-    if case != "valid":
-        with pytest.raises(
-            ValueError, match="occupied" if case == "occupied" else "Could not snap"
-        ):
-            snap_waterbody_points(
-                waterbodies, waterbody_id, rivers, upstream_area, upstream_area
-            )
-    else:
-        snap_waterbody_points(
-            waterbodies, waterbody_id, rivers, upstream_area, upstream_area
-        )
+    skipped: dict[int, str] = snap_waterbody_points(
+        waterbodies, waterbody_id, rivers, upstream_area, upstream_area
+    )
+    assert waterbody_id.values[1, 0] == GDW_ID_OFFSET + 43
+    assert waterbodies.loc[1, "geometry"] == Point(0, -0.1)
+    if case == "valid":
+        assert skipped == {}
+        assert len(waterbodies) == 2
         assert waterbody_id.values[0, 0] == GDW_ID_OFFSET + 42
-        assert np.count_nonzero(waterbody_id.values != -1) == 1
-        assert waterbodies.geometry.iloc[0] == Point(0, 0)
+        assert waterbodies.loc[0, "geometry"] == Point(0, 0)
+    else:
+        assert skipped == {
+            42: "occupied_waterbody_cell" if case == "occupied" else "could_not_snap"
+        }
+        assert waterbodies.waterbody_id.tolist() == [GDW_ID_OFFSET + 43]
+        assert waterbody_id.values[0, 0] == (1 if case == "occupied" else -1)
 
 
 @pytest.mark.parametrize(

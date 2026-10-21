@@ -348,8 +348,8 @@ def snap_waterbody_points(
     rivers: gpd.GeoDataFrame,
     upstream_area_grid: xr.DataArray,
     upstream_area_subgrid: xr.DataArray,
-) -> None:
-    """Place reservoirs without outlines in single river cells.
+) -> dict[int, str]:
+    """Place reservoirs without outlines in river cells, skipping unsuitable locations.
 
     Args:
         waterbodies: Reservoir data and geometry, updated in place.
@@ -358,9 +358,10 @@ def snap_waterbody_points(
         upstream_area_grid: Model grid drainage area (m2).
         upstream_area_subgrid: Original drainage area (m2).
 
-    Raises:
-        ValueError: If snapping fails or the river cell already has a waterbody.
+    Returns:
+        Skipped GDW IDs and their reasons. Skipped reservoirs are removed in place.
     """
+    skipped: dict[int, str] = {}
     row_index: int
     reservoir: pd.Series
     for row_index, reservoir in waterbodies.loc[
@@ -373,16 +374,19 @@ def snap_waterbody_points(
             upstream_area_subgrid=upstream_area_subgrid,
         )
         if snapped is None:
-            raise ValueError(f"Could not snap GDW dam {reservoir.gdw_id} to a river.")
+            skipped[int(reservoir.gdw_id)] = "could_not_snap"
+            waterbodies.drop(index=row_index, inplace=True)
+            continue
         column: int
         row: int
         column, row = snapped.snapped_grid_pixel_xy
         if waterbody_id.values[row, column] != -1:
-            raise ValueError(
-                f"GDW dam {reservoir.gdw_id} snaps to an occupied waterbody cell."
-            )
+            skipped[int(reservoir.gdw_id)] = "occupied_waterbody_cell"
+            waterbodies.drop(index=row_index, inplace=True)
+            continue
         # The cell locates storage; GDW supplies the actual reservoir area.
         waterbody_id.values[row, column] = reservoir.waterbody_id
         waterbodies.at[row_index, "geometry"] = Point(
             *snapped.snapped_grid_pixel_lonlat
         )
+    return skipped
