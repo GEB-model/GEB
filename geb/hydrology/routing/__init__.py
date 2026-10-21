@@ -1258,14 +1258,19 @@ class Routing(Module):
         return bankfull_depth_m
 
     def set_router(self, initialize_storage: bool = True) -> None:
-        """Prepare river routing for the current waterbodies and stored state.
+        """Initialize the local inertial routing algorithm with derived river geometry.
 
-        Set channel dimensions and connections after waterbody initialization,
-        reservoir activation, or checkpoint loading.
+        Derives cross-sectional channel geometry (bankfull width, depth via hydraulic continuity
+        or geomorphic power law, shape exponent, and floodplain width) and instantiates the
+        LocalInertial solver with waterbody and retention basin boundary conditions. Then seeds
+        or synchronizes the solver's internal stage and storage states.
 
-        Args:
-            initialize_storage: Initialize river storage during spinup. Set False
-                when rebuilding connections after reservoir construction.
+        Notes:
+            Called during model setup after checkpoint loading (self.store.load)
+            and waterbody initialization, but before simulation stepping begins. This ensures
+            that waterbody footprints are flattened and state variables (either synthesized during
+            spinup or restored from checkpoint storage) are available before deriving
+            setting up the local inertial routing solver.
         """
         # Keep routing consistent with the reservoirs operating this year.
         self.update_river_cells()
