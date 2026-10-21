@@ -342,7 +342,7 @@ class CMIP6(Adapter):
                 self._retrieve(request, str(historical_data_path))
 
             # future data
-            future_data_path = self.root / f"cmip6_future_{variable}.zip"
+            future_data_path = self.root / f"cmip6_{ssp_scenario}_{variable}.zip"
             if not future_data_path.exists():
                 request = self.construct_request(
                     years=years_future,
