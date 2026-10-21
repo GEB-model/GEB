@@ -1936,7 +1936,7 @@ class Hydrography(BuildModelBase):
         # get the scenario from the model configuration
         scenario = self.ssp_rcp
         self.logger.info(
-            f"Setting up sea level rise data for {scenario}, using {percentile} percentile of AR6 projections"
+            f"Setting up sea level rise data for scenario {scenario}, using {percentile} percentile of AR6 projections"
         )
         sea_level_change_m: xr.Dataset = self.data_catalog.fetch("ar6").read(
             scenario, percentile
