@@ -36,7 +36,7 @@ from geb.evaluate.workflows.discharge_metrics import (
     DischargeMetrics,
     calculate_discharge_metrics,
     calculate_seasonal_discharge_metrics,
-    use_daily_discharge_scores,
+    use_native_discharge_scores,
 )
 from geb.evaluate.workflows.discharge_station_checks import (
     find_dashboard_excluded_stations,
@@ -585,7 +585,7 @@ def evaluate_discharge(
             rivers=dashboard_geometries.rivers,
             run_output_folder=run_output_folder,
         )
-        use_daily_discharge_scores(dashboard_station_scores)
+        use_native_discharge_scores(dashboard_station_scores)
         dashboard_characteristics: pd.DataFrame | None = (
             discharge_characteristics.load_dashboard_catchment_characteristics(
                 mapped_station_scores=dashboard_station_scores,

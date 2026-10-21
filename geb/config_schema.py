@@ -192,8 +192,14 @@ class HazardsConfig(BaseModel):
 class RiverWidthParameters(BaseModel):
     """Parameters for river width calculation."""
 
-    default_alpha: float = Field(7.2, description="Default alpha parameter.")
-    beta: float = Field(0.5, description="Beta parameter.")
+    default_alpha: float = Field(
+        3.91,
+        description="Default alpha parameter for bankfull width = alpha * Q^beta (Bjerklie et al. 2003).",
+    )
+    beta: float = Field(
+        0.62,
+        description="Beta parameter for bankfull width = alpha * Q^beta (Bjerklie et al. 2003).",
+    )
 
 
 class RiverWidthConfig(BaseModel):
@@ -208,10 +214,13 @@ class RiverDepthParameters(BaseModel):
     """Parameters for river depth calculation."""
 
     c: float = Field(
-        description="Power law coefficient c for mean channel depth = c * Q^d."
+        description="Power law coefficient c for mean channel depth = c * Q^d * S^e."
     )
     d: float = Field(
-        description="Power law exponent d for mean channel depth = c * Q^d."
+        description="Power law discharge exponent d for mean channel depth = c * Q^d * S^e."
+    )
+    e: float = Field(
+        description="Power law slope exponent e for mean channel depth = c * Q^d * S^e (Bjerklie et al. 2005)."
     )
     min_depth_m: float = Field(
         ge=0.0,
@@ -323,6 +332,11 @@ class KarstConfig(BaseModel):
         gt=0.0,
         allow_inf_nan=False,
         description="Exponential release time (days): after this many dry days, exp(-1) of the initial storage remains (about 36.8%).",
+    )
+    vertical_conductivity_multiplier: float = Field(
+        10.0,
+        ge=1.0,
+        description="Multiplier for vertical saturated hydraulic conductivity in karst areas (>= 1.0).",
     )
 
 
@@ -812,6 +826,9 @@ class ParametersConfig(BaseModel):
     crop_factor_multiplier: float = Field(description="Crop factor multiplier.")
     saturated_hydraulic_conductivity_multiplier: float = Field(
         description="Saturated hydraulic conductivity multiplier."
+    )
+    vertical_saturated_hydraulic_conductivity_multiplier: float = Field(
+        description="Vertical saturated hydraulic conductivity multiplier."
     )
     groundwater_hydraulic_conductivity_multiplier: float = Field(
         description="Groundwater hydraulic conductivity multiplier."

@@ -713,7 +713,8 @@ class HRUVariables(Bucket):
     sand_percentage: TwoDArrayFloat32
     bubbling_pressure_m_positive: TwoDArrayFloat32
     lambda_pore_size_distribution: TwoDArrayFloat32
-    saturated_hydraulic_conductivity_m_per_s: TwoDArrayFloat32
+    horizontal_saturated_hydraulic_conductivity_m_per_s: TwoDArrayFloat32
+    vertical_saturated_hydraulic_conductivity_m_per_s: TwoDArrayFloat32
     organic_matter_percentage: TwoDArrayFloat32
     bulk_density_kg_per_dm3: TwoDArrayFloat32
     thermal_conductivity_saturated_unfrozen_W_per_m_K: TwoDArrayFloat32

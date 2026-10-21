@@ -250,3 +250,36 @@ def use_daily_discharge_scores(station_scores: pd.DataFrame) -> None:
         daily_column: str = f"{metric_name}_daily"
         if daily_column in station_scores.columns:
             station_scores[metric_name] = station_scores[daily_column]
+
+
+def use_native_discharge_scores(station_scores: pd.DataFrame) -> None:
+    """Copy native observation-frequency scores to unsuffixed columns for the dashboard.
+
+    For stations with an hourly observation frequency, the hourly skill scores
+    are copied to the unsuffixed metric columns (e.g., ``KGE``). For daily
+    stations or stations where hourly scores are unavailable, the daily skill scores
+    are used as fallback.
+
+    Args:
+        station_scores: Discharge evaluation table modified in place.
+    """
+    if station_scores.empty:
+        return
+    for metric_name in DischargeMetrics._fields:
+        hourly_col: str = f"{metric_name}_hourly"
+        daily_col: str = f"{metric_name}_daily"
+
+        def _get_native_value(row: pd.Series) -> float:
+            freq: str = str(row.get("observation_frequency", ""))
+            if freq == "hourly" and hourly_col in row and pd.notna(row[hourly_col]):
+                return float(row[hourly_col])
+            if daily_col in row and pd.notna(row[daily_col]):
+                return float(row[daily_col])
+            if metric_name in row and pd.notna(row[metric_name]):
+                return float(row[metric_name])
+            if hourly_col in row and pd.notna(row[hourly_col]):
+                return float(row[hourly_col])
+            return float("nan")
+
+        native_scores: pd.Series = station_scores.apply(_get_native_value, axis=1)
+        station_scores[metric_name] = native_scores

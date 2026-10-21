@@ -655,10 +655,22 @@
     (window._gebStations || []).forEach(function(st) {
       if (st.ex || st._isVisible === false) return;
       var val = undefined;
-      if (currentFrequency === "hourly" && st.vh && st.vh[config.layer] !== undefined) {
-        val = st.vh[config.layer];
-      } else if (st.v && st.v[config.layer] !== undefined) {
-        val = st.v[config.layer];
+      if (currentFrequency === "hourly") {
+        if (st.vh && st.vh[config.layer] !== undefined) {
+          val = st.vh[config.layer];
+        } else if (st.fq === "hourly" && st.v && st.v[config.layer] !== undefined) {
+          val = st.v[config.layer];
+        }
+      } else if (currentFrequency === "daily") {
+        if (st.vd && st.vd[config.layer] !== undefined) {
+          val = st.vd[config.layer];
+        } else if (st.fq === "daily" && st.v && st.v[config.layer] !== undefined) {
+          val = st.v[config.layer];
+        }
+      } else {
+        if (st.v && st.v[config.layer] !== undefined) {
+          val = st.v[config.layer];
+        }
       }
       if (val !== undefined && val !== null && !isNaN(val) && isFinite(val)) {
         values.push(Number(val));
@@ -1024,7 +1036,9 @@
       resolveMarkers(station).forEach(function(marker) {
         var fillColor = (currentFrequency === "hourly" && station.mh && activeConfig && station.mh[activeConfig.layer])
           ? station.mh[activeConfig.layer]
-          : (station.m && activeConfig && station.m[activeConfig.layer]);
+          : (currentFrequency === "daily" && station.md && activeConfig && station.md[activeConfig.layer])
+            ? station.md[activeConfig.layer]
+            : (station.m && activeConfig && station.m[activeConfig.layer]);
 
         var styleOpts = {
           opacity: visible ? 1 : 0,

@@ -35,7 +35,7 @@ from geb.evaluate.workflows.discharge_characteristics import (
 from geb.evaluate.workflows.discharge_helpers import load_station_discharge_comparison
 from geb.evaluate.workflows.discharge_metrics import (
     DischargeMetrics,
-    use_daily_discharge_scores,
+    use_native_discharge_scores,
 )
 from geb.evaluate.workflows.discharge_station_checks import (
     GEOD,
@@ -354,7 +354,7 @@ def create_discharge_dashboard(
     logger.info("Creating discharge dashboard for %d stations.", n_stations)
 
     dashboard_station_scores: gpd.GeoDataFrame = mapped_station_scores.copy()
-    use_daily_discharge_scores(dashboard_station_scores)
+    use_native_discharge_scores(dashboard_station_scores)
     dashboard_characteristics: pd.DataFrame | None = None
     if not dashboard_station_scores.empty:
         dashboard_characteristics = (
@@ -1162,6 +1162,13 @@ def _write_dashboard_charts_from_saved_scores(
                 for metric_name in DischargeMetrics._fields
                 if f"{metric_name}_{frequency_label}" in station_row.index
             }
+            if frequency_label == "hourly":
+                for metric_name in DischargeMetrics._fields:
+                    daily_metric_key: str = f"{metric_name}_daily"
+                    if daily_metric_key in station_row.index and pd.notna(
+                        station_row[daily_metric_key]
+                    ):
+                        metrics[daily_metric_key] = float(station_row[daily_metric_key])
 
             bankfull_discharge: pd.Series | None = None
             if bankfull_df is not None and station_id_text in bankfull_df.columns:
@@ -2112,12 +2119,24 @@ def _build_station_marker_payload(
         metric_values: dict[str, float] = {}
         hourly_colors: dict[str, str] = {}
         hourly_values: dict[str, float] = {}
+        daily_colors: dict[str, str] = {}
+        daily_values: dict[str, float] = {}
 
         for layer, colormap, metric_name in metric_layers:
-            daily_col: str = (
-                f"{metric_name}_daily" if f"{metric_name}_daily" in row else metric_name
+            native_col: str = (
+                f"{metric_name}_{freq}"
+                if f"{metric_name}_{freq}" in row
+                else (
+                    f"{metric_name}_hourly"
+                    if freq == "hourly" and f"{metric_name}_hourly" in row
+                    else (
+                        f"{metric_name}_daily"
+                        if f"{metric_name}_daily" in row
+                        else metric_name
+                    )
+                )
             )
-            metric_val: float = row.get(daily_col, row.get(metric_name, np.nan))
+            metric_val: float = row.get(native_col, row.get(metric_name, np.nan))
             if pd.notna(metric_val) and np.isfinite(metric_val):
                 val_float: float = round(float(metric_val), 4)
                 metric_values[layer.get_name()] = val_float
@@ -2132,6 +2151,13 @@ def _build_station_marker_payload(
                     h_val_float: float = round(float(h_val), 4)
                     hourly_values[layer.get_name()] = h_val_float
                     hourly_colors[layer.get_name()] = str(colormap(h_val_float))
+
+            daily_col: str = f"{metric_name}_daily"
+            d_val: float = row.get(daily_col, np.nan)
+            if pd.notna(d_val) and np.isfinite(d_val):
+                d_val_float: float = round(float(d_val), 4)
+                daily_values[layer.get_name()] = d_val_float
+                daily_colors[layer.get_name()] = str(colormap(d_val_float))
 
         if (
             has_upstream
@@ -2202,6 +2228,10 @@ def _build_station_marker_payload(
             station_dict["mh"] = hourly_colors
         if hourly_values:
             station_dict["vh"] = hourly_values
+        if daily_colors:
+            station_dict["md"] = daily_colors
+        if daily_values:
+            station_dict["vd"] = daily_values
 
         stations_data.append(station_dict)
 
