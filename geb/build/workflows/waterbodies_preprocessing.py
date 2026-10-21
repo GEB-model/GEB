@@ -14,7 +14,7 @@ from geb.build.workflows.river_snapping import (
 )
 from geb.hydrology.waterbodies import RESERVOIR
 
-GDW_ID_OFFSET: int = 2_000_000  # to prevent overlap with excisting hydrolakes IDs
+GDW_ID_OFFSET: int = 2_000_000  # Avoid overlap with existing HydroLAKES IDs.
 GDW_FIELDS: list[str] = [
     "gdw_id",
     "dam_name",
@@ -48,7 +48,6 @@ def load_and_enrich_waterbodies(
     Returns:
         Waterbodies and dam matching results. Capacity, area, and discharge
         use m3, m2, and m3/s.
-
     """
     region = region.to_crs(4326)
     region_shape: BaseGeometry = region.union_all()
@@ -91,7 +90,7 @@ def enrich_waterbodies(
     reservoir_shapes: gpd.GeoDataFrame | None = None,
     region_shape: BaseGeometry | None = None,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
-    """Classify waterbodies, add GDW metadata, and add reservoirs missing in Hydrolakes.
+    """Classify waterbodies, add GDW metadata, and add reservoirs missing from HydroLAKES.
 
     Controlled lakes become reservoirs. Natural lakes become reservoirs when
     an intersecting GDW Dam or Lake Control Dam has a matching or missing
