@@ -1,5 +1,10 @@
 # dev
+- Update routing and floodplain profiles. Rebuild `setup_gtsm_station_data`, `setup_hydrography`, `setup_floodplains`, and `setup_waterbodies`, then rerun spinup and simulation.
+- Add GDW reservoirs. All HydroLAKES controlled lakes are modelled as reservoirs, and natural lakes are converted to reservoirs when an intersecting GDW Dam or Lake Control Dam has a matching or missing HydroLAKES ID.
+- Activate reservoirs from their GDW construction year; before then, their cells route water as rivers.
 - Fixed `assign_crops` build failure when a cell's rounded rainfed (or irrigated) farmer count had no available crop fractions; those farmers are now assigned to the other group.
+- Save model version in store metadata (checkpoint.json) and verify model version compatibility on loading, warning if spinup needs to be rerun.
+
 # v1.0.0b36
 - Fixed CMIP6 download requesting historical years 2015-2016 and future years starting in 2017, which left a two-year gap and made the delta calculation fail. Historical now covers 1950-2014 and future 2015-2100; cached `cmip6_future_*.zip` files must be deleted and redownloaded.
 - Add karst storage to all hydrology runs, with a default release time of 10 days. Update inputs and rerun spinup.

@@ -68,8 +68,8 @@ def _sum_landsurface_storage(
         liquid_water_in_snow_m: Liquid water held in the snowpack per HRU and
             snow layer, shape ``(n_hru, n_snow_layers)`` (m).
         interception_storage_m: Interception storage per HRU (m).
-        water_content_m: Soil water content per layer and HRU, shape
-            ``(n_layers, n_hru)`` (m). NaN values are ignored.
+        water_content_m: Soil water content per HRU and layer, shape
+            ``(n_hru, n_layers)`` (m). NaN values are ignored.
         topwater_m: Ponded topwater per HRU (m).
         cell_area: Area of each HRU (m2).
 
@@ -78,7 +78,7 @@ def _sum_landsurface_storage(
     """
     n_hru = snow_water_equivalent_m.shape[0]
     n_snow_layers = snow_water_equivalent_m.shape[1]
-    n_layers = water_content_m.shape[0]
+    n_layers = water_content_m.shape[1]
     total = np.float64(0.0)
     for i in numba.prange(n_hru):
         snow_water = np.float64(0.0)
@@ -89,7 +89,7 @@ def _sum_landsurface_storage(
 
         soil_water = np.float64(0.0)
         for layer in range(n_layers):
-            wc = water_content_m[layer, i]
+            wc = water_content_m[i, layer]
             if not np.isnan(wc):
                 soil_water += np.float64(wc)
         hru_storage = (
@@ -289,12 +289,19 @@ class Hydrology(Data, Module):
         karst_capture_m: ArrayFloat32
         karst_soil_recharge_m: ArrayFloat32
         karst_recharge_m: ArrayFloat64
-        karst_recharge_m, karst_capture_m, karst_soil_recharge_m = self.karst.step(
-            overland_runoff_m, interflow_m, groundwater_recharge_m
-        )
+        karst_overflow_m: ArrayFloat64
+        (
+            karst_recharge_m,
+            karst_capture_m,
+            karst_soil_recharge_m,
+            karst_overflow_m,
+        ) = self.karst.step(overland_runoff_m, interflow_m, groundwater_recharge_m)
 
         interflow_m = self.to_grid(HRU_data=interflow_m)
         overland_runoff_m = self.to_grid(HRU_data=overland_runoff_m)
+        overland_runoff_m += (
+            karst_overflow_m[np.newaxis, :] / np.float32(24.0)
+        ).astype(np.float32)
         groundwater_recharge_m = self.to_grid(HRU_data=groundwater_recharge_m)
         capillar_rise_m = self.to_grid(HRU_data=capillar_rise_m)
         self.grid.var.capillar = capillar_rise_m

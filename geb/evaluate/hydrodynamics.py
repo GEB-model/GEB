@@ -461,7 +461,7 @@ def calculate_performance_metrics(
                     return []
 
             # Create a single legend
-            legend = ax.legend(
+            ax.legend(
                 handles=handles,
                 labels=labels,
                 facecolor=(1.0, 1.0, 1.0, 0.8),

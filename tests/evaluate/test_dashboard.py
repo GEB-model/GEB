@@ -5,7 +5,7 @@ import gzip
 import json
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import branca.colormap as cm
 import folium
@@ -20,6 +20,7 @@ from geb.evaluate.workflows.dashboard import (
     _as_finite_float,
     _build_station_marker_payload,
     _build_timeseries_data,
+    _calculate_distribution_summary,
     _decode_varint_deltas,
     _encode_varint_deltas,
     _to_int_deltas,
@@ -28,6 +29,7 @@ from geb.evaluate.workflows.dashboard import (
     serialize_main_timeline,
     write_discharge_dashboard,
 )
+from geb.evaluate.workflows.discharge_metrics import use_native_discharge_scores
 
 
 def _create_mock_routing_output(
@@ -457,9 +459,88 @@ def test_build_station_marker_payload() -> None:
     assert metric_layers[0][0].get_name() in stations[0]["m"]
     assert layer_upstream.get_name() in stations[0]["m"]
 
+    assert stations[0]["fq"] == "daily"
+    assert stations[0]["v"][metric_layers[0][0].get_name()] == 0.85
+    assert stations[0]["v"][layer_upstream.get_name()] == 1.0
+
     assert stations[1]["id"] == "st_2"
     assert stations[1]["ex"] == "Too far"
     assert layer_upstream.get_name() not in stations[1]["m"]  # ratio was NaN
+
+
+def test_build_station_marker_payload_hourly() -> None:
+    """Test compressing station marker payload with hourly metrics."""
+    gdf = gpd.GeoDataFrame(
+        {
+            "station_name": ["Station Hourly"],
+            "upstream_area_GEB": [100.0],
+            "observation_frequency": ["hourly"],
+            "KGE": [0.80],
+            "KGE_daily": [0.80],
+            "KGE_hourly": [0.72],
+        },
+        geometry=[sg.Point(8.0, 50.0)],
+        index=pd.Index(["st_hourly"]),
+    )
+    metric_layers = [
+        (
+            folium.FeatureGroup(name="KGE", show=True),
+            cm.LinearColormap(colors=["red", "green"], vmin=0.0, vmax=1.0),
+            "KGE",
+        )
+    ]
+    payload = _build_station_marker_payload(
+        mapped_station_scores=gdf,
+        metric_layers=metric_layers,
+        layer_upstream=None,
+        colormap_upstream=None,
+        characteristic_layers=[],
+        availability_layer=None,
+        characteristic_records={},
+        largest_upstream_area_sqrt=20.0,
+    )
+    stations = json.loads(gzip.decompress(base64.b64decode(payload)).decode("utf-8"))
+    assert len(stations) == 1
+    assert stations[0]["fq"] == "hourly"
+    assert stations[0]["v"][metric_layers[0][0].get_name()] == 0.72
+    assert stations[0]["vh"][metric_layers[0][0].get_name()] == 0.72
+    assert stations[0]["vd"][metric_layers[0][0].get_name()] == 0.80
+    assert metric_layers[0][0].get_name() in stations[0]["mh"]
+    assert metric_layers[0][0].get_name() in stations[0]["md"]
+
+
+def test_build_station_marker_payload_uses_high_res_snapped_location() -> None:
+    """Test that station markers use high-res original_subgrid coordinates when available."""
+    gdf = gpd.GeoDataFrame(
+        {
+            "station_name": ["Station A"],
+            "upstream_area_GEB": [100.0],
+            "original_subgrid_latitude": [50.12345],
+            "original_subgrid_longitude": [8.12345],
+        },
+        geometry=[sg.Point(8.0, 50.0)],
+        index=pd.Index(["st_1"]),
+    )
+    metric_layers = [
+        (
+            folium.FeatureGroup(name="KGE", show=True),
+            cm.LinearColormap(colors=["red", "green"], vmin=0.0, vmax=1.0),
+            "KGE",
+        )
+    ]
+    payload = _build_station_marker_payload(
+        mapped_station_scores=gdf,
+        metric_layers=metric_layers,
+        layer_upstream=None,
+        colormap_upstream=None,
+        characteristic_layers=[],
+        availability_layer=None,
+        characteristic_records={},
+        largest_upstream_area_sqrt=20.0,
+    )
+    raw_json = gzip.decompress(base64.b64decode(payload)).decode("utf-8")
+    stations = json.loads(raw_json)
+    assert stations[0]["coords"] == [50.12345, 8.12345]
 
 
 def test_write_discharge_dashboard(tmp_path: Path) -> None:
@@ -511,6 +592,19 @@ def test_write_discharge_dashboard(tmp_path: Path) -> None:
     assert "_gebStations" in html_content
     assert "Station search" in html_content
     assert writer.bundles[0] in html_content
+    assert '<script id="geb-chart-data" type="application/json">' in html_content
+    assert "stationsPane" in html_content
+    assert "geb-metric-dropdown" in html_content
+    assert "geb-violin-svg" in html_content
+    assert "data-geb-theme" in html_content
+    assert "geb-theme-btn" in html_content
+    assert "geb-export-violin" in html_content
+    assert "geb-export-map-btn" in html_content
+    assert "Download plot as SVG" in html_content
+    assert "Download table (CSV)" in html_content
+    assert "Download GeoJSON" in html_content
+    assert "exportStationGeoJson" in html_content
+    assert "Rivers" in html_content
 
 
 def test_build_station_chart_data_with_bankfull_discharge() -> None:
@@ -602,7 +696,6 @@ def test_write_dashboard_charts_from_saved_scores_with_bankfull(
         "discharge/discharge_observations_hourly": obs_hourly_file,
     }
     logger = logging.getLogger("test")
-    dashboard_path = tmp_path / "dashboard.html"
 
     chart_files, chart_bundles, _ = _write_dashboard_charts_from_saved_scores(
         table_files=table_files,
@@ -625,6 +718,7 @@ def test_build_river_chart_data() -> None:
     """Test that build_river_chart_data correctly structures the river payload."""
     from geb.evaluate.workflows.dashboard import build_river_chart_data
 
+    profile_widths = [20.0, 25.0, 30.0, 35.0, 40.0, 50.0, 60.0, 80.0, 100.0, 120.0]
     river_data: dict[str, Any] = build_river_chart_data(
         river_id="10",
         upstream_area_km2=125.5,
@@ -632,6 +726,8 @@ def test_build_river_chart_data() -> None:
         bankfull_discharge=[30.0, 35.0],
         width=[15.0, 15.0],
         depth=[2.0, 2.2],
+        floodplain_side_slope_m_per_m=2.0,
+        floodplain_profile_widths=profile_widths,
     )
     assert river_data["type"] == "river"
     assert river_data["riverId"] == "10"
@@ -640,6 +736,11 @@ def test_build_river_chart_data() -> None:
     assert river_data["timeseries"]["bankfullDischarge"] == [30.0, 35.0]
     assert river_data["timeseries"]["width"] == [15.0, 15.0]
     assert river_data["timeseries"]["depth"] == [2.0, 2.2]
+    assert "crossSection" in river_data
+    assert river_data["crossSection"]["width"] == 15.0
+    assert river_data["crossSection"]["depth"] == 2.2
+    assert river_data["crossSection"]["profileWidths"] == profile_widths
+    assert river_data["crossSection"]["floodplainSideSlope"] == 2.0
 
 
 def test_add_river_charts_to_bundle_writer(tmp_path: Path) -> None:
@@ -657,9 +758,20 @@ def test_add_river_charts_to_bundle_writer(tmp_path: Path) -> None:
     df_q = pd.DataFrame({"20": [40.0, 45.0]}, index=yearly_idx)
     df_d = pd.DataFrame({"20": [2.1, 2.3]}, index=yearly_idx)
     df_w = pd.DataFrame({"20": [25.0, 25.0]}, index=yearly_idx)
+    df_fp_s = pd.DataFrame({"20": [3.0, 3.0]}, index=yearly_idx)
     df_q.to_parquet(routing_dir / "bankfull_discharge_rivers_yearly_m3_per_s.parquet")
     df_d.to_parquet(routing_dir / "bankfull_depth_rivers_yearly_m.parquet")
     df_w.to_parquet(routing_dir / "bankfull_width_rivers_yearly_m.parquet")
+    df_fp_s.to_parquet(
+        routing_dir / "floodplain_side_slope_rivers_yearly_m_per_m.parquet"
+    )
+    for k in range(10):
+        df_k = pd.DataFrame(
+            {"20": [50.0 + k * 10.0, 50.0 + k * 10.0]}, index=yearly_idx
+        )
+        df_k.to_parquet(
+            routing_dir / f"floodplain_profile_width_{k}_rivers_yearly_m.parquet"
+        )
 
     rivers_gdf = gpd.GeoDataFrame(
         {"uparea_m2": [50_000_000.0], "geometry": [sg.LineString([(0, 0), (1, 1)])]},
@@ -683,3 +795,270 @@ def test_add_river_charts_to_bundle_writer(tmp_path: Path) -> None:
     assert decoded["river_20"]["timeseries"]["bankfullDischarge"] == [40.0, 45.0]
     assert decoded["river_20"]["timeseries"]["depth"] == [2.1, 2.3]
     assert decoded["river_20"]["timeseries"]["width"] == [25.0, 25.0]
+    assert decoded["river_20"]["crossSection"]["width"] == 25.0
+    assert decoded["river_20"]["crossSection"]["depth"] == 2.3
+    assert len(decoded["river_20"]["crossSection"]["profileWidths"]) == 10
+    assert decoded["river_20"]["crossSection"]["profileWidths"][0] == 50.0
+    assert decoded["river_20"]["crossSection"]["profileWidths"][9] == 140.0
+    assert decoded["river_20"]["crossSection"]["floodplainSideSlope"] == 3.0
+
+
+def test_metric_layer_colormap_ranges() -> None:
+    """Test that KGE, mKGE, NSE, and ratio metric colormaps are properly configured.
+
+    Ensures that efficiency metrics use 7 colors spanning from -0.5 to 1.0 with
+    yellow at 0.25 and purple at 1.0, while ratio metrics apply the mirrored
+    color scale centered at 1.0.
+    """
+    from geb.evaluate.workflows.dashboard import (
+        _EFFICIENCY_METRIC_COLORS,
+        _METRIC_LAYER_CONFIGS,
+        _RATIO_METRIC_COLORS,
+    )
+    from geb.evaluate.workflows.discharge_metrics import (
+        SKILL_SCORE_PLOT_CONFIG_BY_COLUMN,
+    )
+
+    dashboard_configs_by_col: dict[str, dict] = {
+        cfg["col"]: cfg for cfg in _METRIC_LAYER_CONFIGS
+    }
+
+    # Verify dashboard configurations for efficiency metrics
+    for metric_col in ("KGE", "KGE_modified", "NSE"):
+        cfg: dict = dashboard_configs_by_col[metric_col]
+        vmin: float = cfg["vmin"]
+        vmax: float = cfg["vmax"]
+        assert vmin == -0.5
+        assert vmax == 1.0
+        assert cfg["colors"] == _EFFICIENCY_METRIC_COLORS
+        assert len(cfg["colors"]) == 7
+        # Index 3 is yellow (#fee08b) at the exact 0.25 midpoint
+        midpoint: float = (vmin + vmax) / 2.0
+        assert midpoint == 0.25
+        assert cfg["colors"][3] == "#fee08b"
+        assert cfg["colors"][4] == "#1a9850"  # green
+        assert cfg["colors"][5] == "#762a83"  # purple
+        assert cfg["colors"][6] == "#ffffff"  # white at maximum (1.0)
+
+    # Verify dashboard configurations for ratio metrics (bias and variability)
+    for ratio_col in ("KGE_bias_ratio", "KGE_variability_ratio"):
+        ratio_cfg: dict = dashboard_configs_by_col[ratio_col]
+        assert ratio_cfg["vmin"] == 0.0
+        assert ratio_cfg["vmax"] == 2.0
+        assert ratio_cfg["colors"] == _RATIO_METRIC_COLORS
+        assert len(ratio_cfg["colors"]) == 5
+        # Red (< 1.0 underestimation)
+        assert ratio_cfg["colors"][0] == "#d7191c"
+        assert ratio_cfg["colors"][1] == "#fdae61"
+        # Center index 2 is green (#1a9850) at optimum 1.0
+        assert ratio_cfg["colors"][2] == "#1a9850"
+        # Blue (> 1.0 overestimation)
+        assert ratio_cfg["colors"][3] == "#92c5de"
+        assert ratio_cfg["colors"][4] == "#0571b0"
+
+    # Verify static plot configurations for KGE and NSE
+    for metric_col in ("KGE", "NSE"):
+        plot_cfg: dict[str, object] = SKILL_SCORE_PLOT_CONFIG_BY_COLUMN[metric_col]
+        plot_vmin: float = float(cast(float, plot_cfg["vmin"]))
+        plot_vmax: float = float(cast(float, plot_cfg["vmax"]))
+        assert plot_vmin == -0.5
+        assert plot_vmax == 1.0
+        plot_midpoint: float = (plot_vmin + plot_vmax) / 2.0
+        assert plot_midpoint == 0.25
+
+
+def test_calculate_distribution_summary() -> None:
+    """Test calculating distribution statistics and histogram bins."""
+    data: pd.Series = pd.Series([0.2, 0.4, 0.6, 0.8, 1.0, np.nan, np.inf])
+    dist: dict[str, Any] = _calculate_distribution_summary(
+        data, vmin=0.0, vmax=1.0, num_bins=5
+    )
+    assert dist["count"] == 5
+    assert dist["median"] == 0.6
+    assert dist["mean"] == 0.6
+    assert dist["min"] == 0.2
+    assert dist["max"] == 1.0
+    assert len(dist["bins"]) == 6
+    assert len(dist["counts"]) == 5
+    assert sum(dist["counts"]) == 5
+    assert len(dist["density_points"]) == 80
+
+    empty_dist: dict[str, Any] = _calculate_distribution_summary(
+        pd.Series([], dtype=float), vmin=0.0, vmax=1.0
+    )
+    assert empty_dist["count"] == 0
+    assert empty_dist["median"] is None
+    assert len(empty_dist["density_points"]) == 80
+
+
+def test_write_discharge_dashboard_with_lakes_and_reservoirs(tmp_path: Path) -> None:
+    """Test dashboard rendering with lakes, reservoirs, and excluded station subpanels."""
+    dashboard_file: Path = tmp_path / "discharge_evaluation_map_lakes.html"
+    region: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        geometry=[sg.box(7.0, 49.0, 9.0, 51.0)],
+        crs="EPSG:4326",
+    )
+    rivers: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {"uparea_m2": [5000000.0]},
+        geometry=[sg.LineString([(7.5, 49.5), (8.5, 50.5)])],
+        index=pd.Index(["riv_1"]),
+        crs="EPSG:4326",
+    )
+    scores: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "station_name": ["Station Test"],
+            "upstream_area_GEB": [1000000.0],
+            "discharge_observations_to_GEB_upstream_area_ratio": [1.02],
+            "KGE": [0.88],
+            "timezone_utc_offset": [1.0],
+        },
+        geometry=[sg.Point(8.0, 50.0)],
+        index=pd.Index(["test_st"]),
+        crs="EPSG:4326",
+    )
+    waterbodies: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "waterbody_type": [1, 2],
+            "waterbody_id": [101, 102],
+            "average_area": [1500000.0, 3200000.0],
+            "volume_total": [5000000.0, 12000000.0],
+        },
+        geometry=[
+            sg.Polygon([(7.2, 49.2), (7.3, 49.2), (7.3, 49.3), (7.2, 49.3)]),
+            sg.Polygon([(8.2, 50.2), (8.3, 50.2), (8.3, 50.3), (8.2, 50.3)]),
+        ],
+        crs="EPSG:4326",
+    )
+    excluded_stations: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "station_name": ["Excluded Station 1"],
+            "exclusion_reason": ["Missing station observations"],
+            "station_longitude": [7.8],
+            "station_latitude": [49.8],
+            "discharge_observations_to_GEB_upstream_area_ratio": [np.nan],
+            "upstream_area_GEB": [np.nan],
+        },
+        geometry=[sg.Point(7.8, 49.8)],
+        index=pd.Index(["ex_1"]),
+        crs="EPSG:4326",
+    )
+    writer: StationChartBundleWriter = StationChartBundleWriter()
+    writer.add_station(
+        "test_st", {"stationName": "Station Test", "metrics": {"KGE": 0.88}}
+    )
+    station_indices: dict[str, int] = writer.finish()
+
+    write_discharge_dashboard(
+        mapped_station_scores=scores,
+        output_path=dashboard_file,
+        region_geom=region,
+        rivers=rivers,
+        waterbodies=waterbodies,
+        excluded_stations=excluded_stations,
+        chart_bundles=writer.bundles,
+        station_bundle_indices=station_indices,
+    )
+    assert dashboard_file.exists()
+    html_content: str = dashboard_file.read_text(encoding="utf-8")
+    assert "Lakes" in html_content
+    assert "Reservoirs" in html_content
+    assert "Rivers" in html_content
+    assert "geb-exclusion-subpanel" in html_content
+    assert '"name": "Lakes", "layer":' in html_content
+    assert '"name": "Reservoirs", "layer":' in html_content
+    assert '"active": false' in html_content
+    assert '"crossOrigin": true' in html_content
+
+
+def test_plot_skill_score_maps(tmp_path: Path) -> None:
+    """Test fast generation of skill score maps with basemap caching."""
+    from geb.evaluate.workflows.discharge_plots import plot_skill_score_maps
+
+    region: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        geometry=[sg.box(5.0, 50.0, 7.0, 52.0)],
+        crs="EPSG:4326",
+    )
+    scores: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "station_name": ["St_1", "St_2"],
+            "KGE": [0.8, 0.7],
+            "KGE_correlation": [0.85, 0.75],
+            "KGE_bias_ratio": [1.05, 0.95],
+            "KGE_variability_ratio": [0.98, 1.02],
+            "NSE": [0.75, 0.65],
+            "R2": [0.8, 0.7],
+            "RRMSE": [0.2, 0.3],
+        },
+        geometry=[sg.Point(5.5, 50.5), sg.Point(6.5, 51.5)],
+        crs="EPSG:4326",
+    )
+    logger: logging.Logger = logging.getLogger("test_maps")
+
+    plot_skill_score_maps(
+        mapped_station_scores=scores,
+        region_geom=region,
+        output_folder=tmp_path,
+        logger=logger,
+        dpi=100,
+    )
+
+    maps_dir: Path = tmp_path / "skill_score_maps"
+    assert maps_dir.exists()
+    assert (maps_dir / "skill_score_map_kge_components.svg").exists()
+    assert (maps_dir / "skill_score_map_kge.svg").exists()
+    assert (maps_dir / "skill_score_map_nse.svg").exists()
+
+
+@pytest.mark.parametrize(
+    ("year", "period", "color"),
+    [
+        (1994, "existing before spinup", "#FF8A65"),
+        (1995, "constructed during spinup", "#8B5CF6"),
+        (1999, "constructed during spinup", "#8B5CF6"),
+        (2000, "constructed during simulation", "#E11D48"),
+        (2008, "constructed during simulation", "#E11D48"),
+        (2009, "constructed after simulation", "#94A3B8"),
+        (0, "construction year unknown", "#FF8A65"),
+        (np.nan, "construction year unknown", "#FF8A65"),
+    ],
+)
+def test_reservoir_construction_layers(year: float, period: str, color: str) -> None:
+    """Check construction periods at the spinup and simulation boundaries."""
+    from geb.evaluate.workflows.dashboard import _add_waterbody_layers
+
+    waterbodies: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "waterbody_type": [2],
+            "waterbody_id": [1338],
+            "gdw_construction_year": [year],
+        },
+        geometry=[sg.Point(-7.5, 38.2)],
+        crs="EPSG:4326",
+    )
+    layers: list[folium.FeatureGroup] = _add_waterbody_layers(
+        folium.Map(), waterbodies, (1995, 2000, 2008)
+    )
+    assert len(layers) == 1
+    assert layers[0].layer_name == f"Reservoirs · {period}"
+    marker: folium.CircleMarker = next(iter(layers[0]._children.values()))
+    assert marker.options["fillColor"] == color
+    popup_html: str = layers[0].get_root().render()
+    assert "Construction year:" in popup_html
+    if pd.notna(year) and year > 0:
+        assert f"Construction year: {int(year)}" in popup_html
+
+
+def test_use_native_discharge_scores() -> None:
+    """Test setting unsuffixed score columns using native observation frequency."""
+    df: pd.DataFrame = pd.DataFrame(
+        {
+            "observation_frequency": ["hourly", "daily", "daily"],
+            "KGE_hourly": [0.72, np.nan, 0.50],
+            "KGE_daily": [0.85, 0.65, 0.60],
+        },
+        index=pd.Index(["st_1", "st_2", "st_3"]),
+    )
+    use_native_discharge_scores(df)
+    assert df.loc["st_1", "KGE"] == 0.72
+    assert df.loc["st_2", "KGE"] == 0.65
+    assert df.loc["st_3", "KGE"] == 0.60

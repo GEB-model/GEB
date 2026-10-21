@@ -19,10 +19,11 @@ import folium
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import scipy.stats
 import shapely
 from branca.element import Figure
 from folium import MacroElement, TileLayer
-from jinja2 import Environment
+from jinja2 import Environment, Template
 from jinja2.utils import htmlsafe_json_dumps
 from pandas.api.typing import NaTType
 
@@ -34,7 +35,7 @@ from geb.evaluate.workflows.discharge_characteristics import (
 from geb.evaluate.workflows.discharge_helpers import load_station_discharge_comparison
 from geb.evaluate.workflows.discharge_metrics import (
     DischargeMetrics,
-    use_daily_discharge_scores,
+    use_native_discharge_scores,
 )
 from geb.evaluate.workflows.discharge_station_checks import (
     GEOD,
@@ -42,6 +43,7 @@ from geb.evaluate.workflows.discharge_station_checks import (
     find_excluded_stations,
 )
 from geb.hydrology.routing import select_active_rivers
+from geb.hydrology.routing.geometry import FLOODPLAIN_PROFILE_DEPTHS
 from geb.workflows.extreme_value_analysis import ReturnPeriodModel
 from geb.workflows.io import read_geom
 
@@ -59,9 +61,12 @@ _ESRI_TOPO_ATTR = (
 
 StationMarkerIndex = dict[str, str | list[str]]
 
+LAKE_WATERBODY_TYPE: int = 1
 RESERVOIR_WATERBODY_TYPE: int = 2
+CONTROL_LAKE_WATERBODY_TYPE: int = 3
 
 _WATERBODY_STYLE: dict[int, dict[str, str]] = {
+    LAKE_WATERBODY_TYPE: {"color": "#38BDF8", "label": "Lake"},
     RESERVOIR_WATERBODY_TYPE: {"color": "#FF8A65", "label": "Reservoir"},
 }
 
@@ -93,69 +98,95 @@ class DischargeDashboardGeometries(NamedTuple):
     waterbodies: gpd.GeoDataFrame
 
 
+_EFFICIENCY_METRIC_COLORS: list[str] = [
+    "#d73027",  # deep red (-0.50)
+    "#f46d43",  # red-orange (-0.25)
+    "#fdae61",  # amber (0.00, mean flow baseline)
+    "#fee08b",  # yellow (0.25)
+    "#1a9850",  # green (0.50)
+    "#762a83",  # purple (0.75)
+    "#ffffff",  # white (1.00, exceptional)
+]
+
+_RATIO_METRIC_COLORS: list[str] = [
+    "#d7191c",  # deep red (0.00, severe underestimation / smaller area)
+    "#fdae61",  # orange/amber (0.50, moderate underestimation)
+    "#1a9850",  # green (1.00, optimal 1:1 match)
+    "#92c5de",  # light blue (1.50, moderate overestimation)
+    "#0571b0",  # dark blue (2.00, severe overestimation / larger area)
+]
+
 _METRIC_LAYER_CONFIGS: list[dict] = [
     {
         "col": "KGE",
         "name": "KGE",
-        "colors": ["red", "orange", "yellow", "blue", "green"],
-        "vmin": -1.0,
+        "colors": _EFFICIENCY_METRIC_COLORS,
+        "vmin": -0.5,
         "vmax": 1.0,
+        "ticks": [-0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0],
         "show": True,
     },
     {
         "col": "KGE_modified",
         "name": "mKGE",
-        "colors": ["red", "orange", "yellow", "blue", "green"],
-        "vmin": -1.0,
+        "colors": _EFFICIENCY_METRIC_COLORS,
+        "vmin": -0.5,
         "vmax": 1.0,
+        "ticks": [-0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0],
         "show": False,
     },
     {
         "col": "KGE_correlation",
         "name": "KGE correlation",
-        "colors": ["red", "orange", "yellow", "blue", "green"],
+        "colors": _EFFICIENCY_METRIC_COLORS,
         "vmin": 0.0,
         "vmax": 1.0,
+        "ticks": [0.0, 0.25, 0.5, 0.75, 1.0],
         "show": False,
     },
     {
         "col": "KGE_bias_ratio",
         "name": "KGE bias (β)",
-        "colors": ["red", "orange", "green", "orange", "red"],
+        "colors": _RATIO_METRIC_COLORS,
         "vmin": 0.0,
         "vmax": 2.0,
+        "ticks": [0.0, 0.5, 1.0, 1.5, 2.0],
         "show": False,
     },
     {
         "col": "KGE_variability_ratio",
         "name": "KGE variability (α)",
-        "colors": ["red", "orange", "green", "orange", "red"],
+        "colors": _RATIO_METRIC_COLORS,
         "vmin": 0.0,
         "vmax": 2.0,
+        "ticks": [0.0, 0.5, 1.0, 1.5, 2.0],
         "show": False,
     },
     {
         "col": "NSE",
         "name": "NSE",
-        "colors": ["red", "orange", "yellow", "blue", "green"],
-        "vmin": -1.0,
+        "colors": _EFFICIENCY_METRIC_COLORS,
+        "vmin": -0.5,
         "vmax": 1.0,
+        "ticks": [-0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0],
         "show": False,
     },
     {
         "col": "R2",
         "name": "Pearson r²",
-        "colors": ["red", "orange", "yellow", "blue", "green"],
+        "colors": _EFFICIENCY_METRIC_COLORS,
         "vmin": 0.0,
         "vmax": 1.0,
+        "ticks": [0.0, 0.25, 0.5, 0.75, 1.0],
         "show": False,
     },
     {
         "col": "RRMSE",
         "name": "RRMSE",
-        "colors": ["green", "blue", "yellow", "orange", "red"],
+        "colors": list(reversed(_EFFICIENCY_METRIC_COLORS)),
         "vmin": 0.0,
         "vmax": 1.0,
+        "ticks": [0.0, 0.25, 0.5, 0.75, 1.0],
         "show": False,
     },
 ]
@@ -181,10 +212,38 @@ class _JavascriptMacro(MacroElement):
         # second pass cannot interpret station text as a template.
         environment: Environment = Environment()
         environment.filters["script_json"] = _script_json
-        self._template = environment.from_string(
-            "{%- macro script(this, kwargs) -%}\n"
-            + script_path.read_text(encoding="utf-8")
-            + "\n{%- endmacro -%}"
+        file_content: str = script_path.read_text(encoding="utf-8")
+        if "{%- macro" in file_content:
+            self._template = environment.from_string(file_content)
+        else:
+            self._template = environment.from_string(
+                "{%- macro script(this, kwargs) -%}\n"
+                + file_content
+                + "\n{%- endmacro -%}"
+            )
+
+
+class _StationsPaneMacro(MacroElement):
+    """Initialize a dedicated Leaflet pane for station markers and snapping overlays."""
+
+    def __init__(self) -> None:
+        """Initialize the stationsPane macro element."""
+        super().__init__()
+        self._template: Template = Template(
+            """
+            {%- macro script(this, kwargs) -%}
+            var map = {{ this._parent.get_name() }};
+            if (!map.getPane("stationsPane")) {
+                var stationsPane = map.createPane("stationsPane");
+                stationsPane.style.zIndex = 620;
+                stationsPane.style.pointerEvents = "auto";
+                if (!map._paneRenderers) {
+                    map._paneRenderers = {};
+                }
+                map._paneRenderers["stationsPane"] = L.svg({pane: "stationsPane"}).addTo(map);
+            }
+            {%- endmacro -%}
+            """
         )
 
 
@@ -198,6 +257,7 @@ def create_discharge_dashboard(
     correct_discharge_observations: bool = False,
     output_filename: str = "discharge_evaluation_map.html",
     include_return_period_plots: bool = True,
+    reservoir_period: tuple[int, int, int] | None = None,
 ) -> dict[str, str]:
     """Create only the discharge evaluation dashboard.
 
@@ -221,6 +281,7 @@ def create_discharge_dashboard(
             evaluation output folder, or an absolute output path.
         include_return_period_plots: Whether to calculate and plot return-period
             curves in station popups. Defaults to True.
+        reservoir_period: Spinup start, simulation start, and simulation end years.
 
     Returns:
         Dictionary with the created dashboard path.
@@ -295,7 +356,7 @@ def create_discharge_dashboard(
     logger.info("Creating discharge dashboard for %d stations.", n_stations)
 
     dashboard_station_scores: gpd.GeoDataFrame = mapped_station_scores.copy()
-    use_daily_discharge_scores(dashboard_station_scores)
+    use_native_discharge_scores(dashboard_station_scores)
     dashboard_characteristics: pd.DataFrame | None = None
     if not dashboard_station_scores.empty:
         dashboard_characteristics = (
@@ -337,6 +398,7 @@ def create_discharge_dashboard(
         chart_bundles=chart_bundles,
         station_bundle_indices=station_bundle_indices,
         waterbodies=dashboard_geometries.waterbodies,
+        reservoir_period=reservoir_period,
         station_characteristics=dashboard_characteristics,
         excluded_stations=excluded_stations,
         chart_timeline=chart_timelines,
@@ -357,6 +419,7 @@ def write_discharge_dashboard(
     excluded_stations: gpd.GeoDataFrame | None = None,
     chart_timeline: list[int] | dict[str, Any] | None = None,
     run_output_folder: Path | None = None,
+    reservoir_period: tuple[int, int, int] | None = None,
 ) -> folium.Map:
     """Save the discharge map with station charts, score layers, and snapping characteristics (e.g., station IDs, upstream areas).
 
@@ -388,6 +451,7 @@ def write_discharge_dashboard(
         run_output_folder: Optional simulation output folder used to attach
             end-of-run simulated river dimensions if not already present on
             rivers. Defaults to None.
+        reservoir_period: Spinup start, simulation start, and simulation end years.
 
     Returns:
         The Folium map object (already saved to ``output_path``).
@@ -411,17 +475,22 @@ def write_discharge_dashboard(
         )
     map_center: list[float] = [(min_lat + max_lat) / 2, (min_lon + max_lon) / 2]
     discharge_map = folium.Map(location=map_center, tiles=None, prefer_canvas=True)
-    TileLayer(
+    _StationsPaneMacro().add_to(discharge_map)
+    topo_tile: TileLayer = TileLayer(
         tiles=_ESRI_TOPO_TILES,
         attr=_ESRI_TOPO_ATTR,
         name="Topographic Map",
-    ).add_to(discharge_map)
-    TileLayer(
+        cross_origin=True,
+    )
+    topo_tile.add_to(discharge_map)
+    sat_tile: TileLayer = TileLayer(
         tiles="Esri.WorldImagery",
         name="Satellite imagery",
         show=False,
         max_zoom=19,
-    ).add_to(discharge_map)
+        cross_origin=True,
+    )
+    sat_tile.add_to(discharge_map)
     discharge_map.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]], padding=(30, 30))
     catchment_layer: folium.FeatureGroup = folium.FeatureGroup(
         name="Catchment",
@@ -442,14 +511,10 @@ def write_discharge_dashboard(
             "payload": encoded_catchment,
         },
     ).add_to(discharge_map)
-    _add_river_layers(
-        discharge_map,
-        rivers,
-    )
 
     metric_layers: list[tuple[folium.FeatureGroup, cm.LinearColormap, str]] = [
         (
-            folium.FeatureGroup(name=cfg["name"], show=cfg["show"]),
+            folium.FeatureGroup(name=cfg["name"], show=cfg["show"], control=False),
             cm.LinearColormap(
                 colors=cfg["colors"],
                 vmin=cfg["vmin"],
@@ -469,13 +534,13 @@ def write_discharge_dashboard(
         .all()
     ):
         colormap_upstream = cm.LinearColormap(
-            colors=["red", "orange", "yellow", "blue", "green"],
-            vmin=0.5,
+            colors=_RATIO_METRIC_COLORS,
+            vmin=0.0,
             vmax=2.0,
             caption="Station / routing upstream area",
         )
         layer_upstream = folium.FeatureGroup(
-            name="Station / routing upstream area", show=False
+            name="Station / routing upstream area", show=False, control=False
         )
 
     characteristic_layers: list[tuple[folium.FeatureGroup, dict[str, Any]]] = []
@@ -492,6 +557,7 @@ def write_discharge_dashboard(
                 folium.FeatureGroup(
                     name=f"GRDC-Caravan · {characteristic['label']}",
                     show=False,
+                    control=False,
                 ),
                 characteristic,
             )
@@ -500,6 +566,7 @@ def write_discharge_dashboard(
         availability_layer = folium.FeatureGroup(
             name="GRDC-Caravan · Data availability",
             show=False,
+            control=False,
         )
         characteristic_records = {
             str(station["id"]): station for station in characteristic_data["stations"]
@@ -513,7 +580,6 @@ def write_discharge_dashboard(
         mapped_station_scores["upstream_area_GEB"].max()
     )
 
-    popup_width: int = 800
     station_marker_index: list[StationMarkerIndex] = []
     snapping_layer: folium.FeatureGroup = folium.FeatureGroup(
         name="Station snapping details (gauge → original subgrid pixel → routing grid)",
@@ -580,7 +646,12 @@ def write_discharge_dashboard(
         "caravanUnavailableColor": _CARAVAN_UNAVAILABLE_COLOR,
     }
     _JavascriptMacro("stations.js", stations_macro_data).add_to(discharge_map)
+    river_layer: folium.FeatureGroup = _add_river_layers(
+        discharge_map,
+        rivers,
+    )
 
+    exclusion_summary: dict[str, Any] | None = None
     if excluded_stations is not None and not excluded_stations.empty:
         area_distance_count: int = 0
         excluded_layer: folium.FeatureGroup = folium.FeatureGroup(
@@ -613,8 +684,13 @@ def write_discharge_dashboard(
                     f"<div class='geb-popup' data-station-id='{html.escape(str(station_id), quote=True)}'>"
                     "Loading interactive charts...</div>"
                 )
+            marker_location: list[float] = (
+                record["locations"][1]
+                if len(record["locations"]) > 1
+                else record["locations"][0]
+            )
             marker: folium.CircleMarker = folium.CircleMarker(
-                location=record["locations"][0],
+                location=marker_location,
                 radius=7 if area_distance_failure else 5,
                 color=record["color"],
                 fill=True,
@@ -622,6 +698,7 @@ def write_discharge_dashboard(
                 tooltip=record["tooltip"],
                 popup=folium.Popup(excluded_popup, max_width=850),
             )
+            marker.options["pane"] = "stationsPane"
             marker.add_to(excluded_layer)
             station_marker_index.append(
                 {
@@ -634,18 +711,13 @@ def write_discharge_dashboard(
         station_count: int = len(
             mapped_station_scores.index.union(excluded_stations.index)
         )
-        cast(Figure, discharge_map.get_root()).html.add_child(
-            folium.Element(
-                f"<div id='{excluded_layer.get_name()}_legend' style='display:none;position:fixed;top:12px;left:55px;z-index:1000;background:white;padding:8px;border:1px solid #ccc'>"
-                f"<b>{station_count} stations shown</b><br>"
-                f"<span style='color:#DC2626'>● Area / distance exclusions: {area_distance_count}</span><br>"
-                f"<span style='color:#D97706'>● Other exclusions: {len(excluded_stations) - area_distance_count}</span>"
-                "<br>Hover or click a station for its exclusion reason.</div>"
-            )
-        )
-        _JavascriptMacro("exclusions.js", excluded_layer.get_name()).add_to(
-            discharge_map
-        )
+        exclusion_summary = {
+            "totalStations": station_count,
+            "excludedCount": len(excluded_stations),
+            "areaDistanceCount": area_distance_count,
+            "otherCount": len(excluded_stations) - area_distance_count,
+            "layer": excluded_layer.get_name(),
+        }
     if snapping_stations:
         snapping_layer.add_to(discharge_map)
         snapping_json_bytes: bytes = json.dumps(
@@ -664,14 +736,82 @@ def write_discharge_dashboard(
             },
         ).add_to(discharge_map)
 
+    waterbody_layers: list[folium.FeatureGroup] = []
+    if waterbodies is not None and not waterbodies.empty:
+        waterbody_layers = _add_waterbody_layers(
+            discharge_map, waterbodies, reservoir_period
+        )
+
+    basemaps_data: list[dict[str, Any]] = [
+        {
+            "id": "topo",
+            "name": "Topographic",
+            "layer": topo_tile.get_name(),
+            "active": True,
+        },
+        {
+            "id": "satellite",
+            "name": "Satellite",
+            "layer": sat_tile.get_name(),
+            "active": False,
+        },
+    ]
+    overlays_data: list[dict[str, Any]] = [
+        {
+            "id": "catchment",
+            "name": "Catchment",
+            "layer": catchment_layer.get_name(),
+            "active": True,
+        },
+        {
+            "id": "rivers",
+            "name": "Rivers",
+            "layer": river_layer.get_name(),
+            "active": True,
+        },
+    ]
+    for wb_layer in waterbody_layers:
+        overlays_data.append(
+            {
+                "id": wb_layer.get_name(),
+                "name": getattr(wb_layer, "layer_name", wb_layer.get_name()),
+                "layer": wb_layer.get_name(),
+                "active": False,
+            }
+        )
+    if excluded_stations is not None and not excluded_stations.empty:
+        overlays_data.append(
+            {
+                "id": "exclusions",
+                "name": f"Excluded stations ({len(excluded_stations)})",
+                "layer": excluded_layer.get_name(),
+                "active": False,
+            }
+        )
+    if snapping_stations:
+        overlays_data.append(
+            {
+                "id": "snapping",
+                "name": "Station snapping details",
+                "layer": snapping_layer.get_name(),
+                "active": False,
+            }
+        )
+
     _inject_station_layer_legend_script(
         discharge_map=discharge_map,
+        mapped_station_scores=mapped_station_scores,
         metric_layers=metric_layers,
         upstream_layer=layer_upstream,
         characteristic_layers=characteristic_layers,
         availability_layer=availability_layer,
         caravan_available_count=caravan_available_count,
         station_count=len(mapped_station_scores),
+        basemaps=basemaps_data,
+        overlays=overlays_data,
+        excluded_stations=station_marker_index,
+        exclusion_summary=exclusion_summary,
+        snapping_layer=snapping_layer.get_name() if snapping_stations else None,
     )
 
     chart_macro_data: dict[str, Any] = {
@@ -680,13 +820,7 @@ def write_discharge_dashboard(
         "timeline": chart_timeline,
     }
     _JavascriptMacro("charts.js", chart_macro_data).add_to(discharge_map)
-    _JavascriptMacro("search.js", station_marker_index).add_to(discharge_map)
-
-    if waterbodies is not None and not waterbodies.empty:
-        _add_reservoir_layer(discharge_map, waterbodies)
-
     _JavascriptMacro("units.js", {}).add_to(discharge_map)
-    folium.LayerControl(collapsed=False).add_to(discharge_map)
     if (
         "exclusion_reason" in mapped_station_scores
         and mapped_station_scores["exclusion_reason"].notna().any()
@@ -746,6 +880,9 @@ def attach_end_of_run_river_dimensions(
     routing_dir: Path = run_output_folder / "report" / "hydrology.routing"
     w_file: Path = routing_dir / "bankfull_width_rivers_yearly_m.parquet"
     d_file: Path = routing_dir / "bankfull_depth_rivers_yearly_m.parquet"
+    fp_s_file: Path = (
+        routing_dir / "floodplain_side_slope_rivers_yearly_m_per_m.parquet"
+    )
 
     enriched_rivers: gpd.GeoDataFrame = rivers.copy()
     if w_file.exists():
@@ -768,6 +905,17 @@ def attach_end_of_run_river_dimensions(
             }
             enriched_rivers["depth_m"] = [
                 d_map.get(str(rid)) for rid in enriched_rivers.index
+            ]
+
+    if fp_s_file.exists():
+        df_fp_s: pd.DataFrame = pd.read_parquet(fp_s_file)
+        if not df_fp_s.empty:
+            last_fp_s: pd.Series = df_fp_s.iloc[-1]
+            fp_s_map: dict[str, float] = {
+                str(col): float(val) for col, val in last_fp_s.items() if pd.notna(val)
+            }
+            enriched_rivers["floodplain_side_slope_m_per_m"] = [
+                fp_s_map.get(str(rid)) for rid in enriched_rivers.index
             ]
 
     return enriched_rivers
@@ -1021,6 +1169,13 @@ def _write_dashboard_charts_from_saved_scores(
                 for metric_name in DischargeMetrics._fields
                 if f"{metric_name}_{frequency_label}" in station_row.index
             }
+            if frequency_label == "hourly":
+                for metric_name in DischargeMetrics._fields:
+                    daily_metric_key: str = f"{metric_name}_daily"
+                    if daily_metric_key in station_row.index and pd.notna(
+                        station_row[daily_metric_key]
+                    ):
+                        metrics[daily_metric_key] = float(station_row[daily_metric_key])
 
             bankfull_discharge: pd.Series | None = None
             if bankfull_df is not None and station_id_text in bankfull_df.columns:
@@ -1163,6 +1318,8 @@ def build_river_chart_data(
     bankfull_discharge: list[float],
     width: list[float],
     depth: list[float],
+    floodplain_side_slope_m_per_m: float,
+    floodplain_profile_widths: list[float],
 ) -> dict[str, Any]:
     """Prepare chart data for one river segment popup in the discharge dashboard.
 
@@ -1173,10 +1330,18 @@ def build_river_chart_data(
         bankfull_discharge: Bankfull discharge values (m³/s).
         width: Bankfull river width values (meters).
         depth: Bankfull river depth values (meters).
+        floodplain_side_slope_m_per_m: Valley side-slope ratio z (m/m horizontal:vertical).
+        floodplain_profile_widths: 10-point cross-sectional widths at fixed depth levels (meters).
 
     Returns:
         River chart data dictionary.
     """
+    last_w: float = float(width[-1]) if len(width) > 0 else 0.0
+    last_d: float = float(depth[-1]) if len(depth) > 0 else 0.0
+    profile_widths: list[float] = [
+        round(float(w), 2) for w in floodplain_profile_widths
+    ]
+
     return {
         "type": "river",
         "riverId": river_id,
@@ -1186,6 +1351,14 @@ def build_river_chart_data(
             "bankfullDischarge": bankfull_discharge,
             "width": width,
             "depth": depth,
+        },
+        "crossSection": {
+            "width": _as_finite_float(last_w),
+            "depth": _as_finite_float(last_d),
+            "floodplainSideSlope": _as_finite_float(floodplain_side_slope_m_per_m),
+            "floodplainSideSlopeMPerM": _as_finite_float(floodplain_side_slope_m_per_m),
+            "profileDepths": [float(d) for d in FLOODPLAIN_PROFILE_DEPTHS],
+            "profileWidths": profile_widths,
         },
     }
 
@@ -1209,12 +1382,27 @@ def add_river_charts_to_bundle_writer(
     q_file: Path = routing_dir / "bankfull_discharge_rivers_yearly_m3_per_s.parquet"
     d_file: Path = routing_dir / "bankfull_depth_rivers_yearly_m.parquet"
     w_file: Path = routing_dir / "bankfull_width_rivers_yearly_m.parquet"
-    if not (q_file.exists() and d_file.exists() and w_file.exists()):
+    fp_s_file: Path = (
+        routing_dir / "floodplain_side_slope_rivers_yearly_m_per_m.parquet"
+    )
+    fp_profile_files: list[Path] = [
+        routing_dir / f"floodplain_profile_width_{k}_rivers_yearly_m.parquet"
+        for k in range(len(FLOODPLAIN_PROFILE_DEPTHS))
+    ]
+    if not (
+        q_file.exists()
+        and d_file.exists()
+        and w_file.exists()
+        and fp_s_file.exists()
+        and all(f.exists() for f in fp_profile_files)
+    ):
         return
 
     df_q: pd.DataFrame = pd.read_parquet(q_file)
     df_d: pd.DataFrame = pd.read_parquet(d_file)
     df_w: pd.DataFrame = pd.read_parquet(w_file)
+    df_fp_s: pd.DataFrame = pd.read_parquet(fp_s_file)
+    dfs_fp_profile: list[pd.DataFrame] = [pd.read_parquet(f) for f in fp_profile_files]
     all_river_charts: dict[str, Any] = {}
 
     for river_id in rivers.index:
@@ -1223,6 +1411,8 @@ def add_river_charts_to_bundle_writer(
             river_id_str not in df_q.columns
             or river_id_str not in df_d.columns
             or river_id_str not in df_w.columns
+            or river_id_str not in df_fp_s.columns
+            or any(river_id_str not in df.columns for df in dfs_fp_profile)
         ):
             continue
         q_series: pd.Series = df_q[river_id_str].dropna()
@@ -1247,6 +1437,20 @@ def add_river_charts_to_bundle_writer(
 
         uparea_km2: float = float(rivers.loc[river_id, "uparea_m2"]) / 1_000_000.0
 
+        s_fp_s: pd.Series = df_fp_s[river_id_str].dropna()
+        if s_fp_s.empty:
+            continue
+        fp_s_val: float = float(s_fp_s.iloc[-1])
+
+        profile_vals: list[float] = []
+        for df_k in dfs_fp_profile:
+            s_k: pd.Series = df_k[river_id_str].dropna()
+            if s_k.empty:
+                break
+            profile_vals.append(float(s_k.iloc[-1]))
+        if len(profile_vals) != len(FLOODPLAIN_PROFILE_DEPTHS):
+            continue
+
         river_chart_data: dict[str, Any] = build_river_chart_data(
             river_id=river_id_str,
             upstream_area_km2=uparea_km2,
@@ -1254,6 +1458,8 @@ def add_river_charts_to_bundle_writer(
             bankfull_discharge=q_list,
             width=w_list,
             depth=d_list,
+            floodplain_side_slope_m_per_m=round(fp_s_val, 2),
+            floodplain_profile_widths=[round(v, 2) for v in profile_vals],
         )
         all_river_charts[f"river_{river_id_str}"] = river_chart_data
 
@@ -1740,6 +1946,74 @@ def _build_characteristic_layer_data(
     }
 
 
+def _calculate_distribution_summary(
+    values: pd.Series | np.ndarray,
+    vmin: float,
+    vmax: float,
+    num_bins: int = 20,
+) -> dict[str, Any]:
+    """Calculate summary statistics, histogram bins, and KDE density points for a metric series.
+
+    Args:
+        values: Numeric series or array of metric values (dimensionless or metric units).
+        vmin: Minimum bound for the colormap.
+        vmax: Maximum bound for the colormap.
+        num_bins: Number of histogram bins. Defaults to 20.
+
+    Returns:
+        Dictionary with count, median, mean, min, max, p25, p75, bin edges, counts, and density points.
+    """
+    clean_series: pd.Series = pd.to_numeric(pd.Series(values), errors="coerce").dropna()
+    clean_array: np.ndarray = clean_series.to_numpy(dtype=float)
+    clean_array = clean_array[np.isfinite(clean_array)]
+    if len(clean_array) == 0:
+        return {
+            "count": 0,
+            "median": None,
+            "mean": None,
+            "min": None,
+            "max": None,
+            "p25": None,
+            "p75": None,
+            "bins": [],
+            "counts": [],
+            "density_points": [0.0] * 80,
+        }
+    clipped_array: np.ndarray = np.clip(clean_array, vmin, vmax)
+    hist_counts, bin_edges = np.histogram(
+        clipped_array, bins=num_bins, range=(vmin, vmax)
+    )
+
+    density_points: list[float] = [0.0] * 80
+    if len(clean_array) >= 2 and float(np.var(clean_array)) > 1e-12:
+        try:
+            kde: scipy.stats.gaussian_kde = scipy.stats.gaussian_kde(clean_array)
+            kde.set_bandwidth(bw_method=float(kde.factor * 0.55))
+            x_grid: np.ndarray = np.linspace(vmin, vmax, 80)
+            density: np.ndarray = kde(x_grid)
+            dmax: float = float(density.max())
+            normalized_density: np.ndarray = density / dmax if dmax > 0.0 else density
+            density_points = [round(float(d), 4) for d in normalized_density]
+        except Exception:
+            density_points = [0.0] * 80
+    elif len(clean_array) > 0 and vmax > vmin:
+        idx: int = int(np.clip((clean_array[0] - vmin) / (vmax - vmin) * 79, 0, 79))
+        density_points[idx] = 1.0
+
+    return {
+        "count": int(len(clean_array)),
+        "median": round(float(np.median(clean_array)), 3),
+        "mean": round(float(np.mean(clean_array)), 3),
+        "min": round(float(np.min(clean_array)), 3),
+        "max": round(float(np.max(clean_array)), 3),
+        "p25": round(float(np.percentile(clean_array, 25)), 3),
+        "p75": round(float(np.percentile(clean_array, 75)), 3),
+        "bins": [round(float(b), 4) for b in bin_edges],
+        "counts": [int(c) for c in hist_counts],
+        "density_points": density_points,
+    }
+
+
 def _prepare_characteristic_values(
     values: pd.Series,
 ) -> tuple[dict[str, int | list[float]], pd.Series] | None:
@@ -1770,10 +2044,14 @@ def _prepare_characteristic_values(
     percentile_ranks.loc[valid_values.index] = (
         (average_ranks - 1.0) / (len(valid_values) - 1.0) * 100.0
     )
-    statistics: dict[str, int | list[float]] = {
+    distribution_summary: dict[str, Any] = _calculate_distribution_summary(
+        percentile_ranks.dropna(), vmin=0.0, vmax=100.0
+    )
+    statistics: dict[str, Any] = {
         "reference_values": [round(float(value), 2) for value in reference_values],
         "missing_count": int(len(numeric_values) - len(valid_values)),
         "ranked_count": int(len(valid_values)),
+        "distribution": distribution_summary,
     }
     return statistics, percentile_ranks
 
@@ -1814,9 +2092,19 @@ def _build_station_marker_payload(
             5.0 + math.sqrt(upstream_area_geb) / largest_upstream_area_sqrt * 5.0,
             2,
         )
+        latitude: float = float(row.geometry.y)
+        longitude: float = float(row.geometry.x)
+        if (
+            "original_subgrid_latitude" in row
+            and "original_subgrid_longitude" in row
+            and pd.notna(row["original_subgrid_latitude"])
+            and pd.notna(row["original_subgrid_longitude"])
+        ):
+            latitude = float(row["original_subgrid_latitude"])
+            longitude = float(row["original_subgrid_longitude"])
         coords: list[float] = [
-            round(float(row.geometry.y), 5),
-            round(float(row.geometry.x), 5),
+            round(latitude, 5),
+            round(longitude, 5),
         ]
         tz_offset: float | None = (
             float(row["timezone_utc_offset"])
@@ -1828,12 +2116,55 @@ def _build_station_marker_payload(
             if pd.notna(row.get("exclusion_reason"))
             else None
         )
+        freq: str = "daily"
+        if "observation_frequency" in row and pd.notna(row["observation_frequency"]):
+            freq = str(row["observation_frequency"])
+        elif "KGE_hourly" in row and pd.notna(row["KGE_hourly"]):
+            freq = "hourly"
 
         metric_colors: dict[str, str] = {}
+        metric_values: dict[str, float] = {}
+        hourly_colors: dict[str, str] = {}
+        hourly_values: dict[str, float] = {}
+        daily_colors: dict[str, str] = {}
+        daily_values: dict[str, float] = {}
+
         for layer, colormap, metric_name in metric_layers:
-            metric_val: float = row.get(metric_name, np.nan)
-            color: str = colormap(metric_val) if pd.notna(metric_val) else "gray"
-            metric_colors[layer.get_name()] = str(color)
+            native_col: str = (
+                f"{metric_name}_{freq}"
+                if f"{metric_name}_{freq}" in row
+                else (
+                    f"{metric_name}_hourly"
+                    if freq == "hourly" and f"{metric_name}_hourly" in row
+                    else (
+                        f"{metric_name}_daily"
+                        if f"{metric_name}_daily" in row
+                        else metric_name
+                    )
+                )
+            )
+            metric_val: float = row.get(native_col, row.get(metric_name, np.nan))
+            if pd.notna(metric_val) and np.isfinite(metric_val):
+                val_float: float = round(float(metric_val), 4)
+                metric_values[layer.get_name()] = val_float
+                metric_colors[layer.get_name()] = str(colormap(val_float))
+            else:
+                metric_colors[layer.get_name()] = "gray"
+
+            if freq == "hourly":
+                hourly_col: str = f"{metric_name}_hourly"
+                h_val: float = row.get(hourly_col, np.nan)
+                if pd.notna(h_val) and np.isfinite(h_val):
+                    h_val_float: float = round(float(h_val), 4)
+                    hourly_values[layer.get_name()] = h_val_float
+                    hourly_colors[layer.get_name()] = str(colormap(h_val_float))
+
+            daily_col: str = f"{metric_name}_daily"
+            d_val: float = row.get(daily_col, np.nan)
+            if pd.notna(d_val) and np.isfinite(d_val):
+                d_val_float: float = round(float(d_val), 4)
+                daily_values[layer.get_name()] = d_val_float
+                daily_colors[layer.get_name()] = str(colormap(d_val_float))
 
         if (
             has_upstream
@@ -1851,6 +2182,7 @@ def _build_station_marker_payload(
                 )
                 if isinstance(color_upstream, str) and color_upstream != "nan":
                     metric_colors[layer_upstream.get_name()] = str(color_upstream)
+                    metric_values[layer_upstream.get_name()] = round(ratio_val, 4)
 
         av_val: int | None = None
         char_markers: dict[str, list[str]] = {}
@@ -1882,6 +2214,7 @@ def _build_station_marker_payload(
                     f"{characteristic['label']}: {formatted_value} ({rank_text})"
                 )
                 char_markers[layer.get_name()] = [fill_color, tooltip_text]
+                metric_values[layer.get_name()] = round(float(percentile), 2)
 
         station_dict: dict[str, Any] = {
             "id": station_id_str,
@@ -1890,12 +2223,22 @@ def _build_station_marker_payload(
             "r": circle_radius,
             "tz": tz_offset,
             "ex": exclusion_reason,
+            "fq": freq,
             "m": metric_colors,
+            "v": metric_values,
         }
         if av_val is not None:
             station_dict["av"] = av_val
         if char_markers:
             station_dict["ch"] = char_markers
+        if hourly_colors:
+            station_dict["mh"] = hourly_colors
+        if hourly_values:
+            station_dict["vh"] = hourly_values
+        if daily_colors:
+            station_dict["md"] = daily_colors
+        if daily_values:
+            station_dict["vd"] = daily_values
 
         stations_data.append(station_dict)
 
@@ -1906,23 +2249,39 @@ def _build_station_marker_payload(
 
 def _inject_station_layer_legend_script(
     discharge_map: folium.Map,
+    mapped_station_scores: gpd.GeoDataFrame,
     metric_layers: list[tuple[folium.FeatureGroup, cm.LinearColormap, str]],
     upstream_layer: folium.FeatureGroup | None,
     characteristic_layers: list[tuple[folium.FeatureGroup, dict[str, Any]]],
     availability_layer: folium.FeatureGroup | None,
     caravan_available_count: int,
     station_count: int,
+    basemaps: list[dict[str, Any]],
+    overlays: list[dict[str, Any]],
+    excluded_stations: list[StationMarkerIndex],
+    exclusion_summary: dict[str, Any] | None = None,
+    snapping_layer: str | None = None,
 ) -> None:
-    """Add one dynamic legend and enforce one active station-value layer.
+    """Add unified dynamic station legend with metric selector and distribution plots.
+
+    Topographic layers remain in the main layer control, while mutually
+    exclusive station evaluation metrics and catchment characteristics are
+    switched inside this legend control.
 
     Args:
         discharge_map: Performance map receiving the legend control.
+        mapped_station_scores: Per-station evaluation metrics table.
         metric_layers: Metric feature groups, colormaps, and source columns.
         upstream_layer: Optional upstream-area-ratio feature group.
         characteristic_layers: GRDC-Caravan feature groups and metadata.
         availability_layer: Optional GRDC-Caravan coverage feature group.
         caravan_available_count: Stations matched to GRDC-Caravan.
         station_count: Total evaluated stations.
+        basemaps: Basemap definitions with layer IDs, labels, and initial active state.
+        overlays: Topographic overlay layer definitions with names, labels, and initial states.
+        excluded_stations: Serialized excluded station markers for search resolution.
+        exclusion_summary: Optional summary counts of excluded stations and reasons.
+        snapping_layer: Optional name of the station snapping details feature group.
     """
     configs_by_column: dict[str, dict[str, Any]] = {
         str(config["col"]): config for config in _METRIC_LAYER_CONFIGS
@@ -1930,26 +2289,55 @@ def _inject_station_layer_legend_script(
     legend_configs: list[dict[str, Any]] = []
     for layer, _, column in metric_layers:
         config: dict[str, Any] = configs_by_column[column]
-        legend_configs.append(
-            {
-                "layer": layer.get_name(),
-                "kind": "continuous",
-                "name": config["name"],
-                "colors": config["colors"],
-                "minimum": config["vmin"],
-                "maximum": config["vmax"],
-                "show": config["show"],
-            }
+        series: pd.Series = (
+            mapped_station_scores[column].dropna()
+            if column in mapped_station_scores.columns
+            else pd.Series(dtype=float)
         )
+        dist_summary: dict[str, Any] = _calculate_distribution_summary(
+            series,
+            vmin=float(config["vmin"]),
+            vmax=float(config["vmax"]),
+        )
+        legend_entry: dict[str, Any] = {
+            "layer": layer.get_name(),
+            "kind": "continuous",
+            "name": config["name"],
+            "category": "Hydrological Skill Scores",
+            "colors": config["colors"],
+            "minimum": config["vmin"],
+            "maximum": config["vmax"],
+            "distribution": dist_summary,
+            "show": config["show"],
+        }
+        if "ticks" in config:
+            legend_entry["ticks"] = config["ticks"]
+        legend_configs.append(legend_entry)
     if upstream_layer is not None:
+        upstream_series: pd.Series = (
+            mapped_station_scores[
+                "discharge_observations_to_GEB_upstream_area_ratio"
+            ].dropna()
+            if "discharge_observations_to_GEB_upstream_area_ratio"
+            in mapped_station_scores.columns
+            else pd.Series(dtype=float)
+        )
+        upstream_dist: dict[str, Any] = _calculate_distribution_summary(
+            upstream_series,
+            vmin=0.0,
+            vmax=2.0,
+        )
         legend_configs.append(
             {
                 "layer": upstream_layer.get_name(),
                 "kind": "continuous",
-                "name": "Upstream Area Ratio",
-                "colors": ["red", "orange", "yellow", "blue", "green"],
-                "minimum": 0.5,
+                "name": "Station / routing upstream area ratio",
+                "category": "Station Catchment Area",
+                "colors": _RATIO_METRIC_COLORS,
+                "minimum": 0.0,
                 "maximum": 2.0,
+                "ticks": [0.0, 0.5, 1.0, 1.5, 2.0],
+                "distribution": upstream_dist,
                 "show": False,
             }
         )
@@ -1958,13 +2346,15 @@ def _inject_station_layer_legend_script(
             {
                 "layer": layer.get_name(),
                 "kind": "characteristic",
-                "name": characteristic["label"],
+                "name": f"GRDC-Caravan · {characteristic['label']}",
+                "category": "Catchment Characteristics",
                 "colors": _CHARACTERISTIC_COLORS,
                 "minimum": 0.0,
                 "maximum": 100.0,
                 "reference_values": characteristic["reference_values"],
                 "ranked_count": characteristic["ranked_count"],
                 "missing_count": characteristic["missing_count"],
+                "distribution": characteristic.get("distribution"),
                 "show": False,
             }
         )
@@ -1974,6 +2364,7 @@ def _inject_station_layer_legend_script(
                 "layer": availability_layer.get_name(),
                 "kind": "availability",
                 "name": "GRDC-Caravan data availability",
+                "category": "Catchment Characteristics",
                 "available_count": caravan_available_count,
                 "unavailable_count": station_count - caravan_available_count,
                 "available_color": _CARAVAN_AVAILABLE_COLOR,
@@ -1981,13 +2372,21 @@ def _inject_station_layer_legend_script(
                 "show": False,
             }
         )
-    _JavascriptMacro("legend.js", legend_configs).add_to(discharge_map)
+    unified_menu_payload: dict[str, Any] = {
+        "metrics": legend_configs,
+        "basemaps": basemaps,
+        "overlays": overlays,
+        "excludedStations": excluded_stations,
+        "exclusionSummary": exclusion_summary,
+        "snappingLayer": snapping_layer,
+    }
+    _JavascriptMacro("legend.js", unified_menu_payload).add_to(discharge_map)
 
 
 def _add_river_layers(
     discharge_map: folium.Map,
     rivers: gpd.GeoDataFrame,
-) -> None:
+) -> folium.FeatureGroup:
     """Show all active rivers, with upstream areas formatted in the browser.
 
     Notes:
@@ -2000,6 +2399,9 @@ def _add_river_layers(
     Args:
         discharge_map: Map receiving the river network.
         rivers: Active WGS84 river segments indexed by river ID, with areas in m².
+
+    Returns:
+        Created river feature group layer.
     """
     cols: list[str] = ["uparea_m2", "geometry"]
     if "width_m" in rivers.columns:
@@ -2022,7 +2424,7 @@ def _add_river_layers(
     encoded_payload: str = base64.b64encode(compressed_bytes).decode("ascii")
 
     river_layer: folium.FeatureGroup = folium.FeatureGroup(
-        name="Active rivers",
+        name="Rivers",
         show=True,
     )
     river_layer.add_to(discharge_map)
@@ -2033,33 +2435,67 @@ def _add_river_layers(
             "payload": encoded_payload,
         },
     ).add_to(discharge_map)
+    return river_layer
 
 
-def _add_reservoir_layer(
+def _add_waterbody_layers(
     discharge_map: folium.Map,
     waterbodies: gpd.GeoDataFrame,
-) -> None:
-    """Add reservoir point layers to the discharge map.
+    reservoir_period: tuple[int, int, int] | None = None,
+) -> list[folium.FeatureGroup]:
+    """Show lakes and distinguish reservoirs by construction period.
 
     Args:
         discharge_map: Folium map receiving waterbody layers.
         waterbodies: Waterbody GeoDataFrame with polygon geometries and
-            ``waterbody_type`` identifiers. Only reservoirs are shown.
-    """
-    waterbody_layers: dict[int, folium.FeatureGroup] = {
-        waterbody_type: folium.FeatureGroup(name=style["label"] + "s", show=True)
-        for waterbody_type, style in _WATERBODY_STYLE.items()
-    }
-    reservoir_mask: pd.Series = (
-        waterbodies["waterbody_type"].astype(int) == RESERVOIR_WATERBODY_TYPE
-    )
-    reservoirs: gpd.GeoDataFrame = waterbodies.loc[reservoir_mask].copy()
-    if reservoirs.empty:
-        return
+            ``waterbody_type`` identifiers and GDW construction years.
+        reservoir_period: Spinup start, simulation start, and simulation end years.
+            Without these years, reservoirs share one layer.
 
-    waterbodies_wgs84: gpd.GeoDataFrame = reservoirs.to_crs(epsg=4326)
+    Returns:
+        List of created lake and reservoir feature group layers.
+    """
+    waterbody_layers: dict[str, folium.FeatureGroup] = {}
+    waterbody_types: pd.Series = waterbodies["waterbody_type"].astype(int)
+    mask: pd.Series = waterbody_types.isin(
+        [LAKE_WATERBODY_TYPE, RESERVOIR_WATERBODY_TYPE, CONTROL_LAKE_WATERBODY_TYPE]
+    )
+    selected_waterbodies: gpd.GeoDataFrame = waterbodies.loc[mask].copy()
+    if selected_waterbodies.empty:
+        return []
+
+    waterbodies_wgs84: gpd.GeoDataFrame = selected_waterbodies.to_crs(epsg=4326)
     for _, waterbody_row in waterbodies_wgs84.iterrows():
-        waterbody_style: dict[str, str] = _WATERBODY_STYLE[RESERVOIR_WATERBODY_TYPE]
+        raw_type: int = int(waterbody_row["waterbody_type"])
+        resolved_type: int = (
+            LAKE_WATERBODY_TYPE
+            if raw_type in (LAKE_WATERBODY_TYPE, CONTROL_LAKE_WATERBODY_TYPE)
+            else RESERVOIR_WATERBODY_TYPE
+        )
+        waterbody_style: dict[str, str] = _WATERBODY_STYLE[resolved_type]
+
+        layer_name: str = waterbody_style["label"] + "s"
+        color: str = waterbody_style["color"]
+        construction_year: float = waterbody_row.get("gdw_construction_year", np.nan)
+        if resolved_type == RESERVOIR_WATERBODY_TYPE and reservoir_period is not None:
+            spinup_year, start_year, end_year = reservoir_period
+            if pd.isna(construction_year) or construction_year <= 0:
+                layer_name = "Reservoirs · construction year unknown"
+            elif construction_year < spinup_year:
+                layer_name = "Reservoirs · existing before spinup"
+            elif construction_year < start_year:
+                layer_name = "Reservoirs · constructed during spinup"
+                color = "#8B5CF6"
+            elif construction_year <= end_year:
+                layer_name = "Reservoirs · constructed during simulation"
+                color = "#E11D48"
+            else:
+                layer_name = "Reservoirs · constructed after simulation"
+                color = "#94A3B8"
+        if layer_name not in waterbody_layers:
+            waterbody_layers[layer_name] = folium.FeatureGroup(
+                name=layer_name, show=False
+            )
 
         centroid = waterbody_row.geometry.centroid
         area_m2: float | None = (
@@ -2076,6 +2512,13 @@ def _add_reservoir_layer(
             f"<b>{waterbody_style['label']}</b> "
             f"(ID {waterbody_row.get('waterbody_id', '?')})<br>"
         ]
+        if resolved_type == RESERVOIR_WATERBODY_TYPE:
+            if pd.notna(construction_year) and construction_year > 0:
+                popup_lines.append(f"Construction year: {int(construction_year)}<br>")
+            else:
+                popup_lines.append("Construction year: unknown<br>")
+            if reservoir_period is not None:
+                popup_lines.append(f"{layer_name.split(' · ', 1)[1].capitalize()}<br>")
         if area_m2 is not None:
             popup_lines.append(
                 f"Area: <span data-geb-area-m2='{area_m2}'></span> km²<br>"
@@ -2091,15 +2534,19 @@ def _add_reservoir_layer(
             color="black",
             weight=0.5,
             fill=True,
-            fill_color=waterbody_style["color"],
+            fill_color=color,
             fill_opacity=0.8,
             popup=folium.Popup("".join(popup_lines), max_width=200),
             tooltip=f"{waterbody_style['label']} {waterbody_row.get('waterbody_id', '')}",
             z_index=500,
-        ).add_to(waterbody_layers[RESERVOIR_WATERBODY_TYPE])
+        ).add_to(waterbody_layers[layer_name])
 
+    added_layers: list[folium.FeatureGroup] = []
     for waterbody_layer in waterbody_layers.values():
-        waterbody_layer.add_to(discharge_map)
+        if len(waterbody_layer._children) > 0:
+            waterbody_layer.add_to(discharge_map)
+            added_layers.append(waterbody_layer)
+    return added_layers
 
 
 def _build_snapping_station(
@@ -2140,12 +2587,18 @@ def _build_snapping_station(
             if np.isfinite(area_m2) and area_m2 > 0
             else "missing"
         )
+        freq: str = "daily"
+        if "observation_frequency" in row and pd.notna(row["observation_frequency"]):
+            freq = str(row["observation_frequency"])
+        elif "KGE_hourly" in row and pd.notna(row["KGE_hourly"]):
+            freq = "hourly"
         return {
             "id": station_id,
             "locations": [[gauge_latitude, gauge_longitude]],
             "color": "#DC2626",
             "tooltip": f"{station_label}<br>EXCLUDED: {reason}",
             "popup": f"<b>{station_label}</b><br><b>EXCLUDED</b><br>{reason}<br>Station area: {area_label}<br>Gauge: {gauge_latitude:.5f}, {gauge_longitude:.5f}",
+            "fq": freq,
         }
     original_subgrid_longitude: float = float(row["original_subgrid_longitude"])
     original_subgrid_latitude: float = float(row["original_subgrid_latitude"])
@@ -2229,12 +2682,18 @@ def _build_snapping_station(
         [original_subgrid_latitude, original_subgrid_longitude],
         [routing_latitude, routing_longitude],
     ]
+    freq: str = "daily"
+    if "observation_frequency" in row and pd.notna(row["observation_frequency"]):
+        freq = str(row["observation_frequency"])
+    elif "KGE_hourly" in row and pd.notna(row["KGE_hourly"]):
+        freq = "hourly"
     return {
         "id": escaped_id,
         "locations": line_locations,
         "color": status_color,
         "tooltip": tooltip,
         "popup": popup_html,
+        "fq": freq,
     }
 
 

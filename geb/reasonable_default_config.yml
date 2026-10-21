@@ -68,21 +68,46 @@ hazards:
 
 hydrology:
   karst:
-    capture_fraction: 1.0 # Full capture; Wan et al. (2024), doi:10.1029/2023WR036182.
+    capture_fraction: 1.0 # Fraction of surface runoff and interflow captured on karst land below the swallowing ceiling.
+    max_runoff_capture_m_per_day: 0.025 # Maximum daily runoff and interflow captured by dry valleys and karst depressions (m/day, 25 mm/day).
+    max_storage_m: 0.05 # Maximum water depth stored in karst aquifer delay storage (m, 50 mm). Excess overflows to stream discharge.
     release_time_days: 10.0 # Starting value in days.
+    vertical_conductivity_multiplier: 10.0 # Multiplier for vertical hydraulic conductivity in karst soils.
   routing:
+    max_threads: null
     minimum_river_slope_m_per_m: 0.0001
     retention_basins:
       release_threshold_factor: 0.2
       activation_threshold_return_period_years: 2
     river_width:
       parameters:
-        default_alpha: 7.2
-        beta: 0.5
+        default_alpha: 3.91 # Bjerklie et al. (2003) doi:10.1016/S0022-1694(03)00129-X (Table 3, inverted Q = 0.11 * W^1.62)
+        beta: 0.62          # Bjerklie et al. (2003) Table 3 exponent (1 / 1.62 = 0.617)
     river_depth:
+      # Coupled bankfull width and depth derivation from Bjerklie et al. (2003):
+      #
+      # 1. Bankfull Width (Bjerklie et al. 2003, doi:10.1016/S0022-1694(03)00129-X, Table 3):
+      #    Single-variate regression from USGS streamgages: Q = 0.11 * W^1.62
+      #    Inverting for W: W = (1 / 0.11)^(1 / 1.62) * Q^(1 / 1.62) = 3.91 * Q^0.62
+      #    Hence: default_alpha = 3.91, beta = 0.62.
+      #
+      # 2. Bankfull Depth (Bjerklie et al. 2003, Eq. 17 & Table 4):
+      #    Universal discharge equation: Q = 7.22 * W^1.02 * Y^1.74 * S^0.35
+      #    Substituting Bjerklie width W = 3.91 * Q^0.62:
+      #      Q = 7.22 * (3.91 * Q^0.62)^1.02 * Y^1.74 * S^0.35
+      #      Q = 7.22 * (3.91^1.02) * Q^(0.62 * 1.02) * Y^1.74 * S^0.35
+      #      Q = 7.22 * 4.009 * Q^0.632 * Y^1.74 * S^0.35 = 28.94 * Q^0.632 * Y^1.74 * S^0.35
+      #      Y^1.74 = (1 / 28.94) * Q^(1 - 0.632) * S^(-0.35) = 0.03455 * Q^0.368 * S^(-0.35)
+      #      Y = (0.03455)^(1 / 1.74) * Q^(0.368 / 1.74) * S^(-0.35 / 1.74)
+      #      Y = 0.15 * Q^0.21 * S^(-0.20)
+      #    Hence: c = 0.15, d = 0.21, e = -0.20.
+      #
+      # Coupling width and depth through this shared framework guarantees that channel conveyance
+      # reproduces the universal discharge equation without cross-sectional distortion in both steep and flat rivers.
       parameters:
-        c: 0.27  # https://agupubs.onlinelibrary.wiley.com/doi/full/10.1002/wrcr.20440
-        d: 0.30  # https://agupubs.onlinelibrary.wiley.com/doi/full/10.1002/wrcr.20440
+        c: 0.15   # Bjerklie et al. (2003) coupled inversion (Eq. 17 & Table 4)
+        d: 0.21   # Bjerklie et al. (2003)
+        e: -0.20  # Bjerklie et al. (2003) slope exponent
         min_depth_m: 0.1
         shape_exponent: 0.5
         use_observed_width_as_bankfull: true
@@ -260,8 +285,9 @@ report:
 parameters:
   mannings_n_multiplier: 1.0
   bankfull_discharge_multiplier: 1.0
-  crop_factor_multiplier: 1.0
+  crop_factor_multiplier: 1.5
   saturated_hydraulic_conductivity_multiplier: 1.0
+  vertical_saturated_hydraulic_conductivity_multiplier: 1.0
   groundwater_hydraulic_conductivity_multiplier: 1.0
   reservoir_release_factor: 0.1
   lake_outflow_multiplier: 1.0

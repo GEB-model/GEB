@@ -58,6 +58,9 @@ where $r$ is the channel shape exponent ($r = 0.5$ for a parabolic cross-section
 
 Lakes and reservoirs are integrated using HydroLAKES[@messager2016estimating]. Natural lake outflows follow a parabolic head-discharge relationship[@aigner2008dresdner; @burek2020development], whereas controlled reservoirs are managed via agent-based operational rules (see [Reservoir Operators](../agents/reservoir_operators.md)).
 
+Reservoirs start operating in their construction year, when GDW provides one.
+See [Waterbody setup](../getting_started/build/waterbodies.md) for build instructions.
+
 ## Code
 
 ::: geb.hydrology.routing

@@ -15,8 +15,10 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 from numpy.typing import NDArray
+from packaging.version import Version
 
 from geb.geb_types import ArrayStr
+from geb.version import __version__
 from geb.workflows.io import (
     read_array,
     read_geom,
@@ -1349,31 +1351,84 @@ class Store:
                 # re-raise any exception from the worker thread
                 future.result()
 
-        if metadata is None and hasattr(self.model, "current_time"):
-            metadata = {
-                "timestamp": self.model.current_time.isoformat(),
-                "run_name": self.model.run_name,
-                "in_spinup": self.model.in_spinup,
-                "created_at": datetime.now().isoformat(),
-            }
-        if metadata is not None:
-            metadata_file: Path = path / "checkpoint.json"
-            with open(metadata_file, "w") as f:
-                json.dump(metadata, f, indent=2)
+        metadata_dict: dict[str, Any]
+        if metadata is None:
+            metadata_dict = {}
+            if hasattr(self.model, "current_time"):
+                metadata_dict["timestamp"] = self.model.current_time.isoformat()
+            if hasattr(self.model, "run_name"):
+                metadata_dict["run_name"] = self.model.run_name
+            if hasattr(self.model, "in_spinup"):
+                metadata_dict["in_spinup"] = self.model.in_spinup
+            metadata_dict["created_at"] = datetime.now().isoformat()
+        else:
+            metadata_dict = metadata.copy()
+
+        metadata_dict.setdefault("model_version", __version__)
+        metadata_file: Path = path / "checkpoint.json"
+        with open(metadata_file, "w") as f:
+            json.dump(metadata_dict, f, indent=2)
+
+    def _check_model_version(self, path: Path) -> None:
+        """Check that the model version of the store matches the current model version.
+
+        Reads the stored model version from `checkpoint.json`. If the version is not available,
+        or if the store was created with an older or newer model version, raises a RuntimeError.
+
+        Notes:
+            Version comparison adheres to packaging.version.Version semantics.
+
+        Args:
+            path: Directory path where the store data is saved.
+
+        Raises:
+            RuntimeError: If the current model version is newer than the version in the store.
+        """
+        stored_version: str | None = None
+        metadata_file: Path = path / "checkpoint.json"
+        if metadata_file.exists():
+            with open(metadata_file) as f:
+                metadata: dict[str, Any] = json.load(f)
+            stored_version = metadata.get("model_version")
+
+        if stored_version is None:
+            raise RuntimeError(
+                f"Model version is not available from the store at {path}. "
+                "Spinup needs to be run again, then rerun spinup and simulation."
+            )
+
+        current_version: Version = Version(__version__)
+        stored_version_parsed: Version = Version(stored_version)
+
+        if current_version > stored_version_parsed:
+            raise RuntimeError(
+                f"The store at {path} was created with an older model version ({stored_version}) "
+                f"than the current model version ({__version__}). Spinup needs to be run again, "
+                "then rerun spinup and simulation."
+            )
+        elif current_version < stored_version_parsed:
+            raise RuntimeError(
+                f"The store at {path} was created with a newer model version ({stored_version}) "
+                f"than the current model version ({__version__})."
+            )
 
     def load(self, path: None | Path = None, omit: None | str = None) -> None:
         """Load the store data from disk into the model.
 
         If no path is provided, it defaults to the store path of the model.
+        Checks the model version stored with the checkpoint before restoring buckets.
 
         Args:
             path: A Path object representing the directory to load the model data from. Defaults to None.
                 In this case, a default path is used. In most cases this should not be changed, but can
                 be useful for special cases such as forecasting and testing.
             omit: An optional string. If provided, any bucket whose name contains this string will be skipped during loading.
+
         """
         if path is None:
             path = self.path
+
+        self._check_model_version(path)
 
         for bucket_folder in path.iterdir():
             # Mac OS X creates a .DS_Store file in directories, and checkpoint.json is metadata

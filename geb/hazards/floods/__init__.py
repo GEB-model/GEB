@@ -1027,7 +1027,6 @@ class Floods(Module):
             A pandas DataFrame containing the discharge time series for each river, indexed by timestamp.
         """
         rivers: gpd.GeoDataFrame = self.model.hydrology.routing.get_active_rivers()
-        all_rivers = self.model.hydrology.routing.var.rivers
 
         # if spinup is requested, at least discard the first 10 years of data.
         if run_name == self.model.config["general"]["spinup_name"]:
@@ -1038,13 +1037,11 @@ class Floods(Module):
                 / "report"
                 / "hydrology.routing",
                 rivers=rivers,
-                all_rivers=all_rivers,
             )
             start_time = discharge.index[0] + pd.DateOffset(years=10)
         else:
             discharge = get_discharge_per_river(
                 rivers=rivers,
-                all_rivers=all_rivers,
                 source="memory",
                 variables_to_report=self.hydrology.routing.variables_to_report,
             )
@@ -1077,14 +1074,12 @@ class Floods(Module):
         rivers: gpd.GeoDataFrame = (
             self.model.hydrology.routing.get_active_and_downstream_outflow_rivers()
         )
-        all_rivers = self.model.hydrology.routing.var.rivers
 
         spinup_name = self.model.config["general"]["spinup_name"]
         output_root = self.model.report_folder.parent.parent
         spinup_discharge = get_discharge_per_river(
             folder=output_root / spinup_name / "report" / "hydrology.routing",
             rivers=rivers,
-            all_rivers=all_rivers,
         )
 
         start_time = spinup_discharge.index[0] + pd.DateOffset(years=10)
@@ -1102,7 +1097,6 @@ class Floods(Module):
             run_discharge = get_discharge_per_river(
                 folder=run_folder,
                 rivers=rivers,
-                all_rivers=all_rivers,
             )
             discharge = pd.concat([spinup_discharge, run_discharge])
             discharge.index.freq = pd.infer_freq(discharge.index)

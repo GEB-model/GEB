@@ -863,21 +863,38 @@ def plot_skill_score_maps(
     output_folder: Path,
     logger: logging.Logger,
     score_differences_by_model: dict[str, pd.DataFrame] | None = None,
+    dpi: int = 150,
 ) -> None:
     """Plot per-station skill scores on a satellite basemap, one map per metric.
 
-    Saves SVG and PNG files under ``output_folder/skill_score_maps/``.
+    Saves SVG files under output_folder/skill_score_maps/.
 
     Args:
         mapped_station_scores: Per-station metrics with point geometry in any CRS.
         region_geom: Basin/region boundary overlaid on each map.
-        output_folder: Root folder under which ``skill_score_maps/`` is created.
+        output_folder: Root folder under which skill_score_maps/ is created.
         logger: Logger to use for progress messages.
         score_differences_by_model: Optional matched GEB-vs-external station tables with
-            ``KGE_difference`` values (dimensionless).
+            KGE_difference values (dimensionless).
+        dpi: Output resolution for rasterized basemap tiles embedded in the SVG (dots per inch).
     """
     maps_folder: Path = output_folder / "skill_score_maps"
     maps_folder.mkdir(parents=True, exist_ok=True)
+
+    # Pre-project stations and region once to avoid repeated CRS transforms for each map.
+    projected_stations: gpd.GeoDataFrame = (
+        mapped_station_scores
+        if mapped_station_scores.crs == "EPSG:3857"
+        else mapped_station_scores.to_crs("EPSG:3857")
+    )
+    projected_region: gpd.GeoDataFrame = (
+        region_geom
+        if region_geom.crs == "EPSG:3857"
+        else region_geom.to_crs("EPSG:3857")
+    )
+
+    # Cache pre-fetched basemap tile image and extent so all maps reuse identical tiles without network overhead.
+    basemap_cache: tuple[np.ndarray, tuple[float, float, float, float]] | None = None
 
     kge_metric_columns: tuple[str, ...] = (
         "KGE",
@@ -893,11 +910,13 @@ def plot_skill_score_maps(
             SKILL_SCORE_PLOT_CONFIG_BY_COLUMN[column_name]
             for column_name in kge_metric_columns
         )
-        _draw_score_maps(
-            mapped_station_scores=mapped_station_scores,
+        basemap_cache = _draw_score_maps(
+            mapped_station_scores=projected_stations,
             metric_configs=kge_metric_configs,
             output_path=maps_folder / "skill_score_map_kge_components",
-            region_geom=region_geom,
+            region_geom=projected_region,
+            basemap_cache=basemap_cache,
+            dpi=dpi,
         )
         logger.info("Saved KGE component skill score map.")
 
@@ -920,11 +939,13 @@ def plot_skill_score_maps(
             if metric_config["vmax"] is None
             else float(cast(float, metric_config["vmax"]))
         )
-        _draw_score_maps(
-            mapped_station_scores=mapped_station_scores,
+        basemap_cache = _draw_score_maps(
+            mapped_station_scores=projected_stations,
             metric_configs=({**metric_config, "vmax": vmax},),
             output_path=maps_folder / f"skill_score_map_{metric_column.lower()}",
-            region_geom=region_geom,
+            region_geom=projected_region,
+            basemap_cache=basemap_cache,
+            dpi=dpi,
         )
         logger.info("Saved skill score map for %s.", metric_column)
 
@@ -949,56 +970,28 @@ def plot_skill_score_maps(
                 ),
                 crs="EPSG:4326",
             )
-        unmatched_station_scores: gpd.GeoDataFrame = gpd.GeoDataFrame(
-            mapped_station_scores.loc[
-                ~mapped_station_scores.index.isin(model_score_differences.index)
-            ].copy(),
-            geometry="geometry",
-            crs=mapped_station_scores.crs,
-        )
-        unmatched_station_scores["KGE_difference"] = np.nan
-        matched_station_count: int = len(model_score_differences)
-        if not unmatched_station_scores.empty:
-            # Difference maps otherwise hide whole regions where the external
-            # source has no station match, which can look like a plotting error.
-            model_score_differences = pd.concat(
-                [model_score_differences, unmatched_station_scores],
-                axis=0,
-                copy=False,
+        else:
+            model_score_differences = gpd.GeoDataFrame(
+                model_score_differences,
+                geometry="geometry",
+                crs=mapped_station_scores.crs,
             )
-            logger.info(
-                "%s difference map shows %d matched stations and %d unmatched "
-                "eligible GEB stations.",
-                model_name,
-                matched_station_count,
-                len(unmatched_station_scores),
-            )
-        mapped_score_differences: gpd.GeoDataFrame = gpd.GeoDataFrame(
-            model_score_differences,
-            geometry="geometry",
-            crs=getattr(model_score_differences, "crs", None),
-        )
-        difference_values: np.ndarray = pd.to_numeric(
-            mapped_score_differences["KGE_difference"], errors="coerce"
-        ).to_numpy(dtype=float)
-        valid_values: np.ndarray = difference_values[np.isfinite(difference_values)]
-        if valid_values.size == 0:
-            continue
-        visible_limit: float = max(float(np.nanpercentile(abs(valid_values), 95)), 0.05)
-        output_suffix: str = re.sub(r"[^a-z0-9]+", "_", model_name.lower()).strip("_")
-        _draw_score_maps(
-            mapped_station_scores=mapped_score_differences,
+        basemap_cache = _draw_score_maps(
+            mapped_station_scores=model_score_differences.to_crs("EPSG:3857"),
             metric_configs=(
                 {
                     "col": "KGE_difference",
-                    "label": "KGE difference (-)",
+                    "label": f"ΔKGE (GEB − {model_name})",
                     "cmap": "RdBu",
-                    "vmin": -visible_limit,
-                    "vmax": visible_limit,
+                    "vmin": -1.0,
+                    "vmax": 1.0,
                 },
             ),
-            output_path=maps_folder / f"skill_score_difference_map_{output_suffix}",
-            region_geom=region_geom,
+            output_path=maps_folder
+            / f"skill_score_difference_map_{model_name.lower()}",
+            region_geom=projected_region,
+            basemap_cache=basemap_cache,
+            dpi=dpi,
         )
         logger.info("Saved skill score difference map for %s.", model_name)
 
@@ -1010,7 +1003,9 @@ def _draw_score_maps(
     metric_configs: tuple[dict[str, object], ...],
     output_path: Path,
     region_geom: gpd.GeoDataFrame,
-) -> None:
+    basemap_cache: tuple[np.ndarray, tuple[float, float, float, float]] | None = None,
+    dpi: int = 150,
+) -> tuple[np.ndarray, tuple[float, float, float, float]] | None:
     """Draw station scores on satellite maps using one or four panels.
 
     Each panel reserves separate space for its map and colorbar so fixed map
@@ -1021,14 +1016,27 @@ def _draw_score_maps(
         metric_configs: One or four column, label, colormap, and color-limit settings.
         output_path: Output filename without extension; saves SVG.
         region_geom: Region boundary in any projected or geographic CRS.
+        basemap_cache: Optional cached (image, extent) tuple to avoid redundant tile fetches.
+        dpi: Output resolution for rasterized basemap tiles embedded in the SVG (dots per inch).
+
+    Returns:
+        Cached (image, extent) tuple for reuse in subsequent map renders.
 
     Raises:
         ValueError: If the number of metrics is not one or four.
     """
     if len(metric_configs) not in (1, 4):
         raise ValueError("Score maps require one or four metrics.")
-    stations: gpd.GeoDataFrame = mapped_station_scores.to_crs("EPSG:3857")
-    region: gpd.GeoDataFrame = region_geom.to_crs("EPSG:3857")
+    stations: gpd.GeoDataFrame = (
+        mapped_station_scores
+        if mapped_station_scores.crs == "EPSG:3857"
+        else mapped_station_scores.to_crs("EPSG:3857")
+    )
+    region: gpd.GeoDataFrame = (
+        region_geom
+        if region_geom.crs == "EPSG:3857"
+        else region_geom.to_crs("EPSG:3857")
+    )
     multiple: bool = len(metric_configs) == 4
     figure: plt.Figure = plt.figure(figsize=(15, 12) if multiple else (10, 9))
     grid: GridSpec = figure.add_gridspec(
@@ -1044,6 +1052,7 @@ def _draw_score_maps(
     axis: plt.Axes
     config: dict[str, object]
     panel_index: int
+    panel_axes: list[tuple[plt.Axes, plt.Axes]] = []
     try:
         for panel_index, config in enumerate(metric_configs):
             panel_grid: GridSpecFromSubplotSpec = grid[panel_index].subgridspec(
@@ -1051,6 +1060,7 @@ def _draw_score_maps(
             )
             axis = figure.add_subplot(panel_grid[0, 0])
             colorbar_axis: plt.Axes = figure.add_subplot(panel_grid[0, 1])
+            panel_axes.append((axis, colorbar_axis))
             values: pd.Series = pd.to_numeric(
                 stations[str(config["col"])], errors="coerce"
             )
@@ -1092,13 +1102,40 @@ def _draw_score_maps(
                     label="No data",
                 )
                 axis.legend(fontsize=8, loc="lower right", framealpha=0.8)
-            ctx.add_basemap(
-                axis,
-                crs="EPSG:3857",
-                source=ctx.providers.Esri.WorldImagery,  # ty:ignore[unresolved-attribute]
-                attribution=False,
-                zoom="auto",
-            )
+
+            if basemap_cache is not None:
+                img: np.ndarray = basemap_cache[0]
+                ext: tuple[float, float, float, float] = basemap_cache[1]
+                axis.imshow(img, extent=ext, zorder=1)
+            else:
+                w: float
+                e: float
+                s: float
+                n: float
+                w, e = axis.get_xlim()
+                s, n = axis.get_ylim()
+                try:
+                    fetched_img: np.ndarray
+                    fetched_ext: tuple[float, float, float, float]
+                    fetched_img, fetched_ext = ctx.bounds2img(
+                        w,
+                        s,
+                        e,
+                        n,
+                        source=ctx.providers.Esri.WorldImagery,  # ty:ignore[unresolved-attribute]
+                        use_cache=True,
+                    )
+                    basemap_cache = (fetched_img, fetched_ext)
+                    axis.imshow(fetched_img, extent=fetched_ext, zorder=1)
+                except Exception:
+                    ctx.add_basemap(
+                        axis,
+                        crs="EPSG:3857",
+                        source=ctx.providers.Esri.WorldImagery,  # ty:ignore[unresolved-attribute]
+                        attribution=False,
+                        zoom="auto",
+                    )
+
             colorbar: Colorbar = figure.colorbar(
                 plt.cm.ScalarMappable(norm=norm, cmap=cmap),
                 cax=colorbar_axis,
@@ -1121,21 +1158,25 @@ def _draw_score_maps(
                     bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.8},
                     zorder=6,
                 )
-            # Match the colorbar height to the map after enforcing its aspect ratio.
-            figure.canvas.draw()
-            colorbar_axis.set_position(
+
+        # Align colorbar heights once after all subplots have been created.
+        figure.canvas.draw()
+        for axis_item, colorbar_axis_item in panel_axes:
+            colorbar_axis_item.set_position(
                 (
-                    colorbar_axis.get_position().x0,
-                    axis.get_position().y0,
-                    colorbar_axis.get_position().width,
-                    axis.get_position().height,
+                    colorbar_axis_item.get_position().x0,
+                    axis_item.get_position().y0,
+                    colorbar_axis_item.get_position().width,
+                    axis_item.get_position().height,
                 )
             )
+
         # All panels share an extent, so one scale bar is sufficient.
         _add_map_scale_bar(axis)
         extension: str
         for extension in ("svg",):
-            figure.savefig(f"{output_path}.{extension}", bbox_inches="tight", dpi=300)
+            figure.savefig(f"{output_path}.{extension}", bbox_inches="tight", dpi=dpi)
+        return basemap_cache
     finally:
         plt.close(figure)
 

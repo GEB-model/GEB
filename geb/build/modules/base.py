@@ -145,12 +145,6 @@ class BuildModelBase(ABC):
         """Abstract property for report directory."""
         pass
 
-    @report_dir.setter
-    @abstractmethod
-    def report_dir(self, value: Path) -> None:
-        """Abstract setter for report directory."""
-        pass
-
     @abstractmethod
     def set_table(self, table: pd.DataFrame, name: str, write: bool = True) -> None:
         """Abstract method to set a table."""
@@ -204,12 +198,6 @@ class BuildModelBase(ABC):
         """Abstract method to get region geometry."""
         pass
 
-    @region.setter
-    @abstractmethod
-    def region(self, value: gpd.GeoDataFrame) -> None:
-        """Abstract setter for region geometry."""
-        pass
-
     @abstractmethod
     def full_like(
         self,
@@ -252,22 +240,10 @@ class BuildModelBase(ABC):
         """Abstract method to get start date."""
         pass
 
-    @start_date.setter
-    @abstractmethod
-    def start_date(self, value: datetime.datetime) -> None:
-        """Abstract setter for start date."""
-        pass
-
     @property
     @abstractmethod
     def end_date(self) -> datetime.datetime:
         """Abstract method to get end date."""
-        pass
-
-    @end_date.setter
-    @abstractmethod
-    def end_date(self, value: datetime.datetime) -> None:
-        """Abstract setter for end date."""
         pass
 
     @property
@@ -276,20 +252,8 @@ class BuildModelBase(ABC):
         """Abstract method to get ISIMIP SSP scenario."""
         pass
 
-    @ISIMIP_ssp.setter
-    @abstractmethod
-    def ISIMIP_ssp(self, value: str) -> None:
-        """Abstract setter for ISIMIP SSP scenario."""
-        pass
-
     @property
     @abstractmethod
     def ssp(self) -> str:
         """Abstract method to get SSP scenario."""
-        pass
-
-    @ssp.setter
-    @abstractmethod
-    def ssp(self, value: str) -> None:
-        """Abstract setter for SSP scenario."""
         pass

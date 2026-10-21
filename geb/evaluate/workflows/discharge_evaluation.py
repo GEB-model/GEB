@@ -36,7 +36,7 @@ from geb.evaluate.workflows.discharge_metrics import (
     DischargeMetrics,
     calculate_discharge_metrics,
     calculate_seasonal_discharge_metrics,
-    use_daily_discharge_scores,
+    use_native_discharge_scores,
 )
 from geb.evaluate.workflows.discharge_station_checks import (
     find_dashboard_excluded_stations,
@@ -409,6 +409,7 @@ def evaluate_discharge(
                 "discharge_observations_country_code": station_metadata.get(
                     "discharge_observations_country_code", ""
                 ),
+                "observation_frequency": frequency_label,
                 **{
                     f"{metric_name}_{frequency_label}": metric_value
                     for metric_name, metric_value in station_metrics.items()
@@ -502,6 +503,7 @@ def evaluate_discharge(
                 "snapping_method",
                 "timezone_utc_offset",
                 "discharge_observations_country_code",
+                "observation_frequency",
                 *DISCHARGE_SCORE_COLUMNS,
             ],
             index=pd.Index([], name="station_ID"),
@@ -583,7 +585,7 @@ def evaluate_discharge(
             rivers=dashboard_geometries.rivers,
             run_output_folder=run_output_folder,
         )
-        use_daily_discharge_scores(dashboard_station_scores)
+        use_native_discharge_scores(dashboard_station_scores)
         dashboard_characteristics: pd.DataFrame | None = (
             discharge_characteristics.load_dashboard_catchment_characteristics(
                 mapped_station_scores=dashboard_station_scores,
@@ -600,6 +602,11 @@ def evaluate_discharge(
             chart_bundles=chart_bundles,
             station_bundle_indices=station_bundle_indices,
             waterbodies=dashboard_geometries.waterbodies,
+            reservoir_period=(
+                self.model.config["general"]["spinup_time"].year,
+                self.model.config["general"]["start_time"].year,
+                self.model.config["general"]["end_time"].year,
+            ),
             station_characteristics=dashboard_characteristics,
             excluded_stations=excluded_stations,
             chart_timeline=chart_timelines,

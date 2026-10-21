@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 
 import geopandas as gpd
 import numpy as np
+import pandas as pd
 
 from geb.geb_types import Array, ArrayBool, ArrayFloat32, ArrayFloat64, ArrayInt32
 from geb.module import Module
@@ -38,88 +39,6 @@ if TYPE_CHECKING:
 OFF: int = 0
 LAKE: int = 1
 RESERVOIR: int = 2
-LAKE_CONTROL: int = 3  # currently modelled as normal lake
-
-
-GRAVITY: np.float32 = np.float32(9.81)
-SHAPE: str = "parabola"
-# http://rcswww.urz.tu-dresden.de/~daigner/pdf/ueberf.pdf
-
-if SHAPE == "rectangular":
-    overflow_coefficient_mu: np.float32 = np.float32(0.577)
-
-    def estimate_lake_outflow(
-        lake_factor: ArrayFloat32,
-        height_above_outflow: ArrayFloat32,
-    ) -> ArrayFloat32:
-        """Estimates the outflow from a lake given its height above the outflow for a rectangular shape.
-
-        References:
-            http://rcswww.urz.tu-dresden.de/~daigner/pdf/ueberf.pdf
-
-        Args:
-            lake_factor: A lake-specific constant factor used in the lake outflow equations.
-            height_above_outflow: Height of the lake above elevation of the outflow [m]
-
-        Returns:
-            Outflow in m3/s
-        """
-        return lake_factor * height_above_outflow**1.5
-
-    def outflow_to_height_above_outflow(
-        lake_factor: ArrayFloat32, outflow: ArrayFloat32
-    ) -> ArrayFloat32:
-        """Inverse function of estimate_lake_outflow for a rectangular shape.
-
-        Args:
-            lake_factor: A lake-specific constant factor used in the lake outflow equations.
-            outflow: Outflow in m3/s
-
-        Returns:
-            Height of the lake above elevation of the outflow [m]
-        """
-        return (outflow / lake_factor) ** np.float32((2 / 3))
-
-elif SHAPE == "parabola":
-    overflow_coefficient_mu: np.float32 = np.float32(0.612)
-
-    def estimate_lake_outflow(
-        lake_factor: ArrayFloat32,
-        height_above_outflow: ArrayFloat32,
-    ) -> ArrayFloat32:
-        """Estimates the outflow from a lake given its height above the outflow for a parabolic shape.
-
-        References:
-            http://rcswww.urz.tu-dresden.de/~daigner/pdf/ueberf.pdf
-
-        Args:
-            lake_factor: A lake-specific constant factor used in the lake outflow equations.
-            height_above_outflow: Height of the lake above the outflow [m]
-
-        Returns:
-            Outflow in m3/s
-        """
-        return lake_factor * height_above_outflow**2
-
-    def outflow_to_height_above_outflow(
-        lake_factor: ArrayFloat32, outflow: ArrayFloat32
-    ) -> ArrayFloat32:
-        """Inverse function of estimate_lake_outflow for a parabolic shape.
-
-        References:
-            http://rcswww.urz.tu-dresden.de/~daigner/pdf/ueberf.pdf
-
-        Args:
-            lake_factor: A lake-specific constant factor used in the lake outflow equations.
-            outflow: Outflow in m3/s
-
-        Returns:
-            Height of the lake above the outflow [m]
-        """
-        return np.sqrt(outflow / lake_factor)
-
-else:
-    raise ValueError("Invalid shape")
 
 
 def get_lake_height_from_bottom(
@@ -180,124 +99,21 @@ def get_lake_height_above_outflow(
     return height_above_outflow
 
 
-def get_river_width(
-    average_discharge: ArrayFloat32,
-) -> ArrayFloat32:
-    """Estimate river width at lake outflow from average discharge using an empirical relationship.
-
-    TODO: Check if this can be improved using river width data from the hydrological model.
-
-    Args:
-        average_discharge: Average discharge in m3/s
-
-    Returns:
-        Estimated river width in m
-    """
-    return np.float32(7.1) * np.power(average_discharge, np.float32(0.539))
-
-
-def get_lake_factor(
-    river_width: ArrayFloat32,
-    overflow_coefficient_mu: np.float32,
-    lake_a_factor: np.float32,
-) -> ArrayFloat32:
-    """A lake-constant factor that is used in the equations for lake outflow.
-
-    Pre-calculated to save computation time.
-
-    References:
-        http://rcswww.urz.tu-dresden.de/~daigner/pdf/ueberf.pdf
-
-    Args:
-        river_width: Width of the river in m
-        overflow_coefficient_mu: Overflow coefficient, depends on the shape of the lake outflow
-        lake_a_factor: Calibration factor for the lake outflow
-
-    Returns:
-        A lake-specific constant factor used in the lake outflow equations.
-    """
-    return (
-        lake_a_factor
-        * overflow_coefficient_mu
-        * np.float32((2 / 3))
-        * river_width
-        * np.float32((2 * GRAVITY) ** 0.5)
-    )
-
-
-def estimate_outflow_height(
-    lake_capacity: ArrayFloat64,
-    lake_factor: ArrayFloat32,
-    lake_area: ArrayFloat32,
-    avg_outflow: ArrayFloat32,
-) -> ArrayFloat32:
-    """Estimate the outflow height of a lake given its capacity, lake factor, area, and average outflow.
-
-    Args:
-        lake_capacity: Capacity of the lake in m3
-        lake_factor: Factor for the Modified Puls approach to calculate retention of the lake
-        lake_area: Area of the lake in m2
-        avg_outflow: Average outflow in m3/s
-
-    Returns:
-        outflow_height: Height of the outflow in m above the bottom of the lake in m (assuming a rectangular lake)
-
-    """
-    height_above_outflow = outflow_to_height_above_outflow(lake_factor, avg_outflow)
-    lake_height_when_full = get_lake_height_from_bottom(lake_capacity, lake_area)
-    outflow_height = lake_height_when_full - height_above_outflow
-    outflow_height[outflow_height < 0] = 0
-    return outflow_height
-
-
-def get_lake_outflow(
-    dt: float,
-    storage: ArrayFloat64,
-    lake_factor: ArrayFloat32,
-    lake_area: ArrayFloat32,
-    outflow_height: ArrayFloat32,
-) -> tuple[ArrayFloat32, ArrayFloat32]:
-    """Calculate outflow and storage for a lake using the Modified Puls method.
-
-    Args:
-        dt: Time step in seconds
-        storage: Current storage in m3
-        lake_factor: Factor for the Modified Puls approach to calculate retention of the lake
-        lake_area: Area of the lake in m2
-        outflow_height: Height of the outflow in m above the bottom of the lake in m (assuming a rectangular lake)
-
-    Returns:
-        outflow_m3: Outflow in m3.
-        height_above_outflow: Height of the lake above the outflow in m.
-    """
-    height_above_outflow = get_lake_height_above_outflow(
-        lake_storage=storage, lake_area=lake_area, outflow_height=outflow_height
-    )
-    storage_above_outflow = height_above_outflow * lake_area
-    storage_above_outflow = np.minimum(storage_above_outflow, storage)
-
-    outflow_m3_s = estimate_lake_outflow(lake_factor, height_above_outflow)
-    outflow_m3 = outflow_m3_s * dt
-
-    outflow_m3 = np.minimum(outflow_m3, storage_above_outflow)
-
-    assert (outflow_m3 <= storage).all()
-    return outflow_m3, height_above_outflow
-
-
 class WaterBodyVariables(Bucket):
     """Variables for the Lakes and Reservoirs module."""
 
     waterbodies: gpd.GeoDataFrame
     storage: ArrayFloat64
     lake_area: ArrayFloat32
-    lake_factor: ArrayFloat32
     waterbody_mapping: ArrayInt32
     average_discharge_m3_per_s: ArrayFloat32
     capacity: ArrayFloat64
     waterbody_type: ArrayInt32
     outflow_height: ArrayFloat32
     waterbody_outflow_linear_mapping: ArrayInt32
+    construction_year: ArrayInt32
+    all_waterbody_ids: ArrayInt32
+    active: ArrayBool
 
 
 class WaterBodies(Module):
@@ -324,9 +140,6 @@ class WaterBodies(Module):
 
         self.HRU = hydrology.HRU
         self.grid = hydrology.grid
-        self.hydrological_year_start_month = self.model.config["general"][
-            "hydrological_year_start_month"
-        ]
         if self.model.in_spinup:
             self.spinup()
 
@@ -340,20 +153,16 @@ class WaterBodies(Module):
         return "hydrology.waterbodies"
 
     def spinup(self) -> None:
-        """Spinup part to initialize lakes and reservoirs.
+        """Load waterbody parameters and initialize storage for spinup.
 
-        This function is called during the spinup phase of the model to set up lakes and reservoirs.
+        Map source IDs to consecutive model IDs, locate outlets, and estimate
+        lake outflow parameters. Start built reservoirs at half capacity and
+        lakes at their outlet level. Future reservoirs start empty, with their
+        cells treated as rivers until their construction year.
 
-        Steps:
-        1. Load the water bodies map and create a mapping of water body IDs.
-        2. Set discharge to NaN for all cells that are not part of a water body.
-        3. Identify outflow points for each water body.
-        4. Load water body data from a Parquet file and filter it based on the water bodies present in the grid.
-        5. Extract relevant attributes such as water body type, area, capacity, and average discharge.
-        6. Calculate river width and lake factor for each water body.
-        7. Initialize storage for lakes and reservoirs, setting initial values based on capacity.
-        8. Estimate outflow height for each water body.
-
+        Raises:
+            ValueError: If saved waterbody types are invalid or still use the
+                HydroLAKES controlled-lake code; rebuild setup_waterbodies.
         """
         # load lakes/reservoirs map with a single ID for each lake/reservoir
         waterbody_id_unmapped: np.ndarray = self.grid.load2d(
@@ -363,6 +172,11 @@ class WaterBodies(Module):
         waterbody_data_raw: gpd.GeoDataFrame = read_geom(
             self.model.files["geom"]["waterbodies/waterbody_data"],
         ).set_index("waterbody_id")  # ty:ignore[invalid-assignment]
+
+        if not waterbody_data_raw["waterbody_type"].isin((OFF, LAKE, RESERVOIR)).all():
+            raise ValueError(
+                "Waterbody types must be off, lake, or reservoir. Rebuild setup_waterbodies."
+            )
 
         # Identify active waterbodies (filter out OFF waterbodies during loading)
         active_wb_mask = waterbody_data_raw["waterbody_type"] != OFF
@@ -401,12 +215,9 @@ class WaterBodies(Module):
             self.grid.var.waterbody_outflow_points != -1
         )[0].astype(np.int32)
 
-        assert (
-            self.map_to_grid_outflow(np.arange(self.n), fill_value=-1)
-            == self.grid.var.waterbody_outflow_points
-        ).all()
-
-        waterbody_data = waterbody_data_raw.loc[order_of_waterbodies_in_grid]
+        waterbody_data: gpd.GeoDataFrame = waterbody_data_raw.loc[
+            order_of_waterbodies_in_grid
+        ]
         bankfull_river_elev: ArrayFloat32 = self.grid.load2d(
             self.model.files["grid"]["routing/bankfull_river_elevation_m"]
         )
@@ -414,10 +225,29 @@ class WaterBodies(Module):
             self.var.waterbody_outflow_linear_mapping
         ].astype(np.float32)
         self.var.waterbodies = waterbody_data
+        # Reservoirs with unknown years stay active.
+        self.var.construction_year = (
+            waterbody_data.get(
+                "gdw_construction_year", pd.Series(0, index=waterbody_data.index)
+            )
+            .fillna(0)
+            .to_numpy(dtype=np.int32)
+        )
+        self.var.all_waterbody_ids = self.grid.var.waterbody_ids.copy()
 
-        self.var.waterbody_type = waterbody_data["waterbody_type"].values.copy()
-        # change water body type to LAKE if it is a control lake, thus currently modelled as normal lake
-        self.var.waterbody_type[self.var.waterbody_type == LAKE_CONTROL] = LAKE
+        self.var.waterbody_type = waterbody_data["waterbody_type"].to_numpy(
+            dtype=np.int32, copy=True
+        )
+
+        # Natural lakes stay active regardless of the dam year.
+        self.var.construction_year[self.var.waterbody_type != RESERVOIR] = 0
+        self.var.active = np.ones(self.n, dtype=bool)
+        dated_reservoirs: ArrayBool = self.var.construction_year > 0
+        if dated_reservoirs.any():
+            self.var.active[dated_reservoirs] = (
+                self.var.construction_year[dated_reservoirs]
+                <= self.model.current_time.year
+            )
 
         assert (np.isin(self.var.waterbody_type, [LAKE, RESERVOIR])).all()
 
@@ -431,46 +261,47 @@ class WaterBodies(Module):
             self.var.capacity, fill_value=0
         )
 
-        # lake discharge at outlet to calculate alpha: parameter of channel width, gravity and weir coefficient
-        # Lake parameter A (suggested  value equal to outflow width in [m])
-        average_discharge = np.maximum(
-            self.var.average_discharge_m3_per_s,
-            0.1,
-        )
-
-        # channel width in [m]
-        river_width: ArrayFloat32 = get_river_width(average_discharge)
-
-        self.var.lake_factor = get_lake_factor(
-            river_width,
-            overflow_coefficient_mu,
-            self.model.config["parameters"]["lake_outflow_multiplier"],
-        )
-
         self.var.storage = np.zeros_like(self.var.capacity, dtype=np.float64)
 
-        # initialize storage to 50% of the capacity. This is arbitrary, but
+        # initialize reservoir storage to 50% of the capacity. This is arbitrary, but
         # ok since we use a spinup period
         self.reservoir_storage = self.reservoir_capacity * 0.5
-        self.var.outflow_height = estimate_outflow_height(
-            self.var.capacity,
-            self.var.lake_factor,
-            self.var.lake_area,
-            average_discharge,
-        )
+        self.var.outflow_height = np.zeros_like(self.var.capacity, dtype=np.float32)
 
-        # initialize lake storage to exactly the level of the outflow height
-        self.lake_storage = get_lake_storage_from_height_above_bottom(
-            self.var.outflow_height[self.is_lake], self.var.lake_area[self.is_lake]
+        # Before construction, keep storage empty and route water as a river.
+        self.var.storage[~self.is_active] = 0
+        self.set_active_waterbody_maps()
+        self.hydrology.routing.var.discharge_in_rivers_m3_s_substep[
+            (self.var.all_waterbody_ids != -1) & (self.grid.var.waterbody_ids == -1)
+        ] = 0
+
+    @property
+    def is_active(self) -> ArrayBool:
+        """Return which waterbodies are active this year.
+
+        Returns:
+            True for lakes and built reservoirs, including those with unknown years.
+        """
+        return self.var.active
+
+    def set_active_waterbody_maps(self) -> None:
+        """Update waterbody maps for the reservoirs operating this year.
+
+        Future reservoirs use river routing; waterbody IDs stay unchanged.
+        """
+        # River cells have ID -1 and use the last (False) entry.
+        active_cells: ArrayBool = np.append(self.is_active, False)[
+            self.var.all_waterbody_ids
+        ]
+        self.grid.var.waterbody_ids = np.where(
+            active_cells, self.var.all_waterbody_ids, -1
         )
-        assert (
-            get_lake_height_above_outflow(
-                self.lake_storage,
-                self.var.lake_area[self.is_lake],
-                self.var.outflow_height[self.is_lake],
-            )
-            < 1e-5
-        ).all()
+        self.grid.var.waterbody_outflow_points = self.map_to_grid_outflow(
+            np.arange(self.n, dtype=np.int32), fill_value=-1
+        )
+        self.grid.var.capacity = self.map_to_grid_outflow(
+            self.var.capacity, fill_value=0
+        )
 
     def map_waterbody_ids(
         self, waterbody_id_unmapped: ArrayInt32, order_of_waterbodies: ArrayInt32
@@ -790,15 +621,16 @@ class WaterBodies(Module):
         fill_value: float | int = np.nan,
         out: Array | None = None,
     ) -> Array:
-        """Maps values at the outflow points to the full grid.
+        """Map values at active waterbody outlets to the full grid.
 
         Args:
-            values_at_outflow_points: An array containing values at the outflow points of the water bodies.
-            fill_value: The value to fill in for grid cells that are not outflow points. Only used if out is None.
-            out: An optional array to write the output to. If None, a new array will be created.
+            values_at_outflow_points: One value per waterbody, including inactive ones.
+            fill_value: Value for cells without an active outlet when out is None.
+            out: Grid array to update, or None to create one.
 
         Returns:
-            An array of the same shape as the grid, where the values at the outflow points are filled in and the rest is 0.
+            The grid array with active outlets filled. Other cells keep their
+            previous values when out is supplied, or use fill_value otherwise.
         """
         if out is None:
             out: Array = np.full(
@@ -806,17 +638,37 @@ class WaterBodies(Module):
                 fill_value,
                 dtype=values_at_outflow_points.dtype,
             )
-        out[self.var.waterbody_outflow_linear_mapping] = values_at_outflow_points
+        out[self.var.waterbody_outflow_linear_mapping[self.is_active]] = (
+            values_at_outflow_points[self.is_active]
+        )
         return out
 
     def step(self) -> None:
-        """Dynamic part set lakes and reservoirs for each year."""
-        # if first timestep, or beginning of new year
-        if self.model.current_timestep == 1 or (
-            self.model.current_time.month == self.hydrological_year_start_month
-            and self.model.current_time.day == 1
-        ):
-            if self.hydrology.dynamic_waterbodies:
-                raise NotImplementedError("dynamic_waterbodies not implemented yet")
+        """Activate reservoirs from January 1 of their construction year.
+
+        Keep existing water storage when reservoirs start operating.
+        """
+        active: ArrayBool = self.var.construction_year <= self.model.current_time.year
+        if not np.array_equal(active, self.is_active):
+            river_storage_m3: ArrayFloat64 = self.hydrology.routing.var.river_storage_m3
+            self.var.active = active
+            previous_waterbody_ids: ArrayInt32 = self.grid.var.waterbody_ids
+            self.set_active_waterbody_maps()
+            new_reservoir_cells: ArrayBool = (previous_waterbody_ids == -1) & (
+                self.grid.var.waterbody_ids != -1
+            )
+            # Keep the river water when the reservoir starts operating.
+            self.var.storage += np.bincount(
+                self.grid.var.waterbody_ids[new_reservoir_cells],
+                weights=river_storage_m3[new_reservoir_cells],
+                minlength=self.n,
+            )
+            self.hydrology.routing.var.discharge_in_rivers_m3_s_substep[
+                new_reservoir_cells
+            ] = np.nan
+            river_storage_m3[new_reservoir_cells] = 0
+            # The solver caches river connections and waterbody boundaries.
+            self.hydrology.routing.update_river_cells()
+            self.hydrology.routing.set_router(initialize_storage=False)
 
         self.report(locals())

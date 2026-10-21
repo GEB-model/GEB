@@ -25,11 +25,11 @@ from geb.model import GEBModel
 from geb.runner import parse_config, run_model_with_method
 from geb.workflows.io import WorkingDirectory, read_geom, read_zarr
 
-from ...testconfig import IN_GITHUB_ACTIONS, tmp_folder
+from ...testconfig import IN_GITHUB_ACTIONS, output_folder, tmp_folder
 
 working_directory: Path = tmp_folder / "model"
 TEST_MODEL_NAME: str = "test_model"
-SFINCS_PLOT_FOLDER = tmp_folder / "SFINCS_plots"
+SFINCS_PLOT_FOLDER: Path = output_folder / "sfincs"
 SFINCS_PLOT_FOLDER.mkdir(exist_ok=True, parents=True)
 
 logger = logging.getLogger(__name__)

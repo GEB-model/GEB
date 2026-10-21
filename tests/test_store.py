@@ -527,6 +527,7 @@ def test_store_checkpoint_metadata() -> None:
     import datetime
     import json
 
+    from geb import __version__
     from geb.store import Store
 
     class DummyModel:
@@ -539,7 +540,11 @@ def test_store_checkpoint_metadata() -> None:
             self.logger = type(
                 "DummyLogger",
                 (),
-                {"debug": lambda *args: None, "info": lambda *args: None},
+                {
+                    "debug": lambda *args: None,
+                    "info": lambda *args: None,
+                    "warning": lambda *args: None,
+                },
             )()
 
         def get_checkpoint_path(self, dt: datetime.datetime | None = None) -> Path:
@@ -566,6 +571,7 @@ def test_store_checkpoint_metadata() -> None:
     assert meta["timestamp"] == "1985-06-15T00:00:00"
     assert meta["run_name"] == "test_run"
     assert meta["in_spinup"] is False
+    assert meta["model_version"] == __version__
 
     # Load store from checkpoint_dir
     new_model = DummyModel()
@@ -577,6 +583,114 @@ def test_store_checkpoint_metadata() -> None:
     assert np.array_equal(var_bucket.my_val, np.array([10, 20, 30]))
 
     shutil.rmtree(checkpoint_dir)
+
+
+def test_store_version_check_model_newer_than_store(tmp_path: Path) -> None:
+    """Test RuntimeError when current model version is newer than store version."""
+    import json
+    from typing import Any, cast
+
+    import pytest
+
+    from geb.model import GEBModel
+    from geb.store import Store
+
+    class DummyModel:
+        def __init__(self) -> None:
+            self.simulate_hydrology: bool = False
+            self.config: dict[str, Any] = {"hazards": {"floods": {"simulate": False}}}
+            self.logger: Any = type(
+                "DummyLogger",
+                (),
+                {
+                    "debug": lambda *args: None,
+                    "info": lambda *args: None,
+                    "warning": lambda *args: None,
+                },
+            )()
+
+    store_dir: Path = tmp_path / "checkpoint_older"
+    store_dir.mkdir(parents=True, exist_ok=True)
+    metadata_path: Path = store_dir / "checkpoint.json"
+    with open(metadata_path, "w") as f:
+        json.dump({"model_version": "0.0.1"}, f)
+
+    model: DummyModel = DummyModel()
+    store: Store = Store(cast(GEBModel, model))
+    with pytest.raises(RuntimeError, match="older model version"):
+        store.load(store_dir)
+
+
+def test_store_version_check_store_newer_than_model(tmp_path: Path) -> None:
+    """Test RuntimeError when store version is newer than current model version."""
+    import json
+    from typing import Any, cast
+
+    import pytest
+
+    from geb.model import GEBModel
+    from geb.store import Store
+
+    class DummyModel:
+        def __init__(self) -> None:
+            self.simulate_hydrology: bool = False
+            self.config: dict[str, Any] = {"hazards": {"floods": {"simulate": False}}}
+            self.logger: Any = type(
+                "DummyLogger",
+                (),
+                {
+                    "debug": lambda *args: None,
+                    "info": lambda *args: None,
+                    "warning": lambda *args: None,
+                },
+            )()
+
+    store_dir: Path = tmp_path / "checkpoint_newer"
+    store_dir.mkdir(parents=True, exist_ok=True)
+    metadata_path: Path = store_dir / "checkpoint.json"
+    with open(metadata_path, "w") as f:
+        json.dump({"model_version": "999.0.0"}, f)
+
+    model: DummyModel = DummyModel()
+    store: Store = Store(cast(GEBModel, model))
+    with pytest.raises(RuntimeError, match="newer model version"):
+        store.load(store_dir)
+
+
+def test_store_version_check_missing_version(tmp_path: Path) -> None:
+    """Test RuntimeError when model version is not available from the store."""
+    import json
+    from typing import Any, cast
+
+    import pytest
+
+    from geb.model import GEBModel
+    from geb.store import Store
+
+    class DummyModel:
+        def __init__(self) -> None:
+            self.simulate_hydrology: bool = False
+            self.config: dict[str, Any] = {"hazards": {"floods": {"simulate": False}}}
+            self.logger: Any = type(
+                "DummyLogger",
+                (),
+                {
+                    "debug": lambda *args: None,
+                    "info": lambda *args: None,
+                    "warning": lambda *args: None,
+                },
+            )()
+
+    store_dir: Path = tmp_path / "checkpoint_no_version"
+    store_dir.mkdir(parents=True, exist_ok=True)
+    metadata_path: Path = store_dir / "checkpoint.json"
+    with open(metadata_path, "w") as f:
+        json.dump({"run_name": "test"}, f)
+
+    model: DummyModel = DummyModel()
+    store: Store = Store(cast(GEBModel, model))
+    with pytest.raises(RuntimeError, match="Model version is not available"):
+        store.load(store_dir)
 
 
 def test_model_checkpoint_helpers(tmp_path: Path) -> None:

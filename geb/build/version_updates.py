@@ -15,6 +15,9 @@ if TYPE_CHECKING:
 VERSION_UPDATES: dict[str, list[str]] = {
     "1.0.0b37": [
         "[update-method;setup_gtsm_station_data]",
+        "[update-method;setup_hydrography]",
+        "[update-method;setup_floodplains]",
+        "[update-method;setup_waterbodies]",
     ],
     "1.0.0b36": [
         "[update-method;setup_karst]",
