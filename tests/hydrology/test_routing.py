@@ -7613,3 +7613,71 @@ def test_load_rivers_prunes_starved_channels_and_updates_represented_in_grid(
     assert len(rivers.loc[20, "hydrography_upstream_area_m2"]) == 0
     # The river IDs grid must have had the reach pruned to -1
     assert (river_ids_comp == -1).all()
+
+
+@pytest.mark.parametrize("reservoir_active", [False, True])
+def test_routing_with_future_reservoirs(reservoir_active: bool) -> None:
+    """Keep solver arrays aligned when reservoir IDs are absent from the grid.
+
+    Args:
+        reservoir_active: Whether reservoir 1 is active; reservoir 0 stays inactive.
+
+    Returns:
+        None.
+
+    Raises:
+        AssertionError: If routing loses water or changes the waterbody array size.
+    """  # noqa: DOC202, DOC502
+    river_network: pyflwdir.FlwdirRaster = create_river_network(
+        np.array([[2], [5]], dtype=np.uint8),
+        np.ones((2, 1), dtype=bool),
+        transform=Affine.identity(),
+    )
+    router: LocalInertial = _make_local_inertial(
+        dt=3600,
+        river_network=river_network,
+        river_length=np.full(2, 1000.0, dtype=np.float32),
+        river_width=np.full(2, 10.0, dtype=np.float32),
+        waterbody_ids=np.array([-1, 1 if reservoir_active else -1], dtype=np.int32),
+        river_ids=np.array([0, -1 if reservoir_active else 0], dtype=np.int32),
+        is_waterbody_outflow=np.array([False, reservoir_active]),
+        bankfull_river_elevation_m=np.array([10.0, 0.0], dtype=np.float32),
+        rivers_gdf=gpd.GeoDataFrame(
+            {"downstream_ID": [-1], "slope": [0.001]}, index=[0]
+        ),
+        waterbody_lake_area=np.full(2, 1e6, dtype=np.float32),
+    )
+    river_storage_m3: np.ndarray
+    waterbody_storage_m3: np.ndarray
+    waterbody_inflow_m3: np.ndarray
+    outflow_at_pits_m3: np.float32
+    (
+        _,
+        river_storage_m3,
+        _,
+        _,
+        waterbody_storage_m3,
+        waterbody_inflow_m3,
+        outflow_at_pits_m3,
+        _,
+        _,
+        _,
+    ) = router.step(
+        Q_prev_m3_s=np.zeros(2, dtype=np.float32),
+        river_storage_m3=np.array([5000.0, 0.0], dtype=np.float64),
+        sideflow_m3=np.zeros(2, dtype=np.float32),
+        evaporation_m3=np.zeros(2, dtype=np.float32),
+        waterbody_storage_m3=np.zeros(2, dtype=np.float64),
+        outflow_per_waterbody_m3=np.zeros(2, dtype=np.float32),
+        retention_storage_m3=np.zeros(0, dtype=np.float32),
+        retention_activation_threshold_m3_s=np.zeros(0, dtype=np.float32),
+    )
+    assert waterbody_storage_m3.shape == waterbody_inflow_m3.shape == (2,)
+    assert waterbody_storage_m3[0] == waterbody_inflow_m3[0] == 0.0
+    assert np.isfinite(river_storage_m3).all()
+    assert np.isclose(
+        river_storage_m3.sum() + waterbody_storage_m3.sum() + outflow_at_pits_m3,
+        5000.0,
+        atol=1e-3,
+        rtol=0,
+    )

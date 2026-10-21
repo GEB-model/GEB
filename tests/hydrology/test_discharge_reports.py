@@ -72,7 +72,7 @@ def test_recorded_layout(source: str, recorded_branches: int, tmp_path: Path) ->
 
 
 def test_missing_report() -> None:
-    """Keep missing discharge explicit rather than silently skipping a river.
+    """Raise when a river has no discharge report.
 
     Returns:
         None.

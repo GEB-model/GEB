@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 VERSION_UPDATES: dict[str, list[str]] = {
     "1.0.0b37": [
         "[update-method;setup_waterbodies]",
-        "[manual] Rerun spinup and simulation after rebuilding waterbodies for GDW and AMBER classification and reservoir construction years.",
+        "[manual] Rerun spinup and simulation after rebuilding waterbodies for GDW reservoir data and construction years.",
     ],
     "1.0.0b36": [
         "[update-method;setup_karst]",

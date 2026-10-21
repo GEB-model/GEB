@@ -5,11 +5,12 @@ for most models.
 
 ## Default setup
 
-GEB reads lakes from HydroLAKES and dam data from Global Dam Watch (GDW). It:
+GEB reads lakes from HydroLAKES and reservoir data from Global Dam Watch (GDW).
+It:
 
-- keeps waterbodies inside the model region;
+- keeps waterbodies that intersect the model region;
 - links GDW dams to HydroLAKES waterbodies;
-- adds missing GDW reservoirs when possible;
+- adds GDW reservoirs missing from HydroLAKES;
 - creates waterbody and command-area grids; and
 - stores waterbody data and GDW checks.
 
@@ -19,7 +20,8 @@ The main outputs are:
 - `waterbodies/command_area` and `waterbodies/subcommand_areas`;
 - `waterbodies/waterbody_data`;
 - `waterbodies/gdw_checks`; and
-- `reports/waterbodies/gdw_checks.csv`.
+- `waterbodies/gdw_checks.csv` in the build report directory
+  (`output/build` by default).
 
 Grid cells without a waterbody or command area have the value `-1`.
 
@@ -53,16 +55,16 @@ to it and GDW provides a valid capacity. The dam must be inside the lake and its
 lake ID must not conflict. The check table marks this as
 `changed_to_reservoir`.
 
-GEB can also add an unmatched GDW dam as a reservoir. It needs a valid capacity,
-area, discharge, and either an outline or a usable river cell. Other unmatched
-dam points remain in the diagnostic table.
+GEB can also add an unmatched GDW dam as a reservoir. The dam must intersect a
+GDW outline and have positive, finite capacity, area, and average discharge.
+The outline must not intersect an existing waterbody. If only another GDW
+reservoir's outline covers the dam, GEB places it on one river cell rather than
+using that other reservoir's outline. Other unmatched dams remain in the check
+table; this method does not add standalone river barriers.
 
 Sources: [GDW v1.0](https://figshare.com/articles/dataset/25988293) and the
 [GDW publication](https://doi.org/10.1038/s41597-024-03752-9). GDW uses the
 CC BY 4.0 licence.
-
-AMBER dams intersecting exactly one natural or controlled lake promote it to a
-reservoir when HydroLAKES provides a positive, finite volume (m³).
 
 ## Construction year
 
@@ -103,8 +105,7 @@ setup_waterbodies: {}
 
 ## Controlled lakes without GDW data
 
-The build classifies controlled lakes as lakes unless a suitable linked GDW
-dam qualifies them as reservoirs. A missing GDW match does not justify
-reservoir classification. Saved `waterbody_type` values are 1 (lake) or 2 (reservoir);
-`hydrolakes_type` preserves the original source classification. Rebuild
+Controlled lakes use lake behavior unless GDW identifies them as
+reservoirs under the rules above. Saved `waterbody_type` values are 1 (lake) or
+2 (reservoir); `hydrolakes_type` preserves the original classification. Rebuild
 `setup_waterbodies` for existing inputs that still contain type 3.

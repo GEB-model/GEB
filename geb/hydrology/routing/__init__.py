@@ -45,7 +45,7 @@ def get_discharge_per_river(
     folder: Path | None = None,
     variables_to_report: dict[str, Any] | None = None,
 ) -> pd.DataFrame:
-    """Read recorded river discharge, keeping the reporting-time branch layout.
+    """Read discharge using the river branches saved in the reports.
 
     Notes:
         Reservoir activation can change the representative cells of a river.
@@ -53,7 +53,8 @@ def get_discharge_per_river(
 
     Args:
         rivers: Rivers to read, indexed by integer river ID.
-        all_rivers: Full river network, retained for caller compatibility.
+        all_rivers: Full river network. Kept for compatibility; saved report
+            names determine which branches to sum.
         source: Whether to read files or in-memory report buffers.
         folder: Directory containing consolidated or legacy discharge files.
         variables_to_report: In-memory discharge report buffers (m³/s).
@@ -443,7 +444,8 @@ class Routing(Module):
         Args:
             model: The GEB model instance.
             hydrology: The hydrology submodel instance.
-        """  # noqa: DOC502
+
+        """
         super().__init__(model)
 
         self.config = model.config["hydrology"]["routing"]
@@ -550,7 +552,7 @@ class Routing(Module):
         grid_linear_mapping: TwoDArrayInt32,
         active_waterbody_ids: ArrayInt32 | None = None,
     ) -> tuple[gpd.GeoDataFrame, ArrayInt32, ArrayInt32]:
-        """Load river geometries with only currently active waterbodies removed.
+        """Load river geometries, excluding active waterbody cells.
 
         Args:
             grid_linear_mapping: A 2D array mapping grid cells to linear indices.
@@ -680,8 +682,11 @@ class Routing(Module):
     def update_river_cells(self) -> None:
         """Update river cells when reservoirs become active.
 
-        Reload the river cells, but keep saved discharge statistics and water storage.
-        """
+        Keep saved discharge statistics and water storage.
+
+        Returns:
+            None. Updates the river geometries and cell indices.
+        """  # noqa: DOC202
         active_waterbody_ids: ArrayInt32 = (
             self.hydrology.waterbodies.var.waterbodies.index.to_numpy(dtype=np.int32)[
                 self.hydrology.waterbodies.is_active
@@ -1240,19 +1245,12 @@ class Routing(Module):
         return bankfull_depth_m
 
     def set_router(self, initialize_storage: bool = True) -> None:
-        """Initialize the local inertial routing algorithm with derived river geometry.
+        """Set up routing geometry, connections, and water levels.
 
-        Derives cross-sectional channel geometry (bankfull width, depth via hydraulic continuity
-        or geomorphic power law, shape exponent, and floodplain width) and instantiates the
-        LocalInertial solver with waterbody and retention basin boundary conditions. Then seeds
-        or synchronizes the solver's internal stage and storage states.
-
-        Notes:
-            Called during model setup after checkpoint loading (self.store.load)
-            and waterbody initialization, but before simulation stepping begins. This ensures
-            that waterbody footprints are flattened and state variables (either synthesized during
-            spinup or restored from checkpoint storage) are available before deriving
-            setting up the local inertial routing solver.
+        Derive channel dimensions from discharge and observed widths, then
+        create the solver using the active waterbody and retention-basin maps.
+        Call after waterbody initialization or checkpoint loading so the solver
+        uses the current storage and connections.
 
         Args:
             initialize_storage: Initialize river storage during spinup. Set False
@@ -1837,7 +1835,7 @@ class Routing(Module):
                 minlength=self.hydrology.waterbodies.n,
             )
             # Future reservoirs have no cells or evaporation.
-            potential_evaporation_per_waterbody_m3 = (
+            potential_evaporation_per_waterbody_m3: ArrayFloat64 = (
                 np.divide(
                     evaporation_sum_m,
                     waterbody_cell_count,
@@ -1984,6 +1982,7 @@ class Routing(Module):
             self.var.water_stage_m = self.router.get_water_stage(
                 out=self.var.water_stage_m
             )
+
             if not (actual_evaporation_in_rivers_m3_per_hour >= 0.0).all():
                 raise ValueError(
                     f"Negative evaporation detected, min evaporation: {actual_evaporation_in_rivers_m3_per_hour.min()}, min discharge: {self.var.discharge_in_rivers_m3_s_substep.min()}. "
@@ -1991,7 +1990,7 @@ class Routing(Module):
 
             assert (actual_evaporation_in_rivers_m3_per_hour >= 0.0).all()
 
-            # Dam operators need past river flows when the reservoir opens.
+            # Use pre-construction river flow to initialize reservoir inflow history.
             operator_inflow_m3: ArrayFloat32 = waterbody_inflow_m3.copy()
             future_reservoirs: ArrayBool = ~self.hydrology.waterbodies.is_active
             operator_inflow_m3[future_reservoirs] = (
@@ -2042,6 +2041,7 @@ class Routing(Module):
             assert not np.isnan(discharge_m3_s_substep[self.var.river_ids != -1]).any()
 
             self.var.discharge_m3_s_per_substep[hour, :] = discharge_m3_s_substep
+
             retention_basin_storage_m3_substep = self.grid.full_compressed(
                 0, dtype=np.float32
             )

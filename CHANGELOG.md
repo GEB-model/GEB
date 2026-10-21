@@ -1,5 +1,6 @@
 # dev
-- Enrich HydroLAKES with GDW reservoirs and AMBER lake classifications; activate reservoirs from their construction year while preserving water storage and recorded discharge layouts. Rebuild `setup_waterbodies`, then rerun spinup and simulation.
+- Add GDW reservoirs and use GDW dams to classify HydroLAKES waterbodies. Rebuild `setup_waterbodies`, then rerun spinup and simulation.
+- Activate reservoirs in their GDW construction year. Before construction, their cells route water as rivers; activation preserves existing water storage.
 - Stop when automatic input migrations fail.
 
 # v1.0.0b36

@@ -58,14 +58,14 @@ where $r$ is the channel shape exponent ($r = 0.5$ for a parabolic cross-section
 
 Lakes and reservoirs are integrated using HydroLAKES[@messager2016estimating]. Natural lake outflows follow a parabolic head-discharge relationship[@aigner2008dresdner; @burek2020development], whereas controlled reservoirs are managed via agent-based operational rules (see [Reservoir Operators](../agents/reservoir_operators.md)).
 
-## Code
-
-::: geb.hydrology.routing
-
-
 ## Reservoir construction years
 
 Reservoir cells route water as rivers before January 1 of their GDW construction
-year. Activation transfers existing river water into reservoir storage and
-rebuilds routing connections. Lakes and reservoirs with unknown years remain
-active. Rebuild `setup_waterbodies`, then rerun spinup and simulation.
+year. When a reservoir activates, existing river water transfers into reservoir
+storage and routing connections are rebuilt. Lakes and reservoirs with unknown
+years remain active. See [Waterbody setup](../getting_started/build/waterbodies.md)
+for input preparation. Rebuild `setup_waterbodies`, then rerun spinup and simulation.
+
+## Code
+
+::: geb.hydrology.routing

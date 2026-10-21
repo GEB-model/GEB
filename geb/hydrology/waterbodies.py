@@ -340,20 +340,12 @@ class WaterBodies(Module):
         return "hydrology.waterbodies"
 
     def spinup(self) -> None:
-        """Spinup part to initialize lakes and reservoirs.
+        """Load waterbody parameters and initialize storage for spinup.
 
-        This function is called during the spinup phase of the model to set up lakes and reservoirs.
-
-        Steps:
-        1. Load the water bodies map and create a mapping of water body IDs.
-        2. Set discharge to NaN for all cells that are not part of a water body.
-        3. Identify outflow points for each water body.
-        4. Load water body data from a Parquet file and filter it based on the water bodies present in the grid.
-        5. Extract relevant attributes such as water body type, area, capacity, and average discharge.
-        6. Calculate river width and lake factor for each water body.
-        7. Initialize storage for lakes and reservoirs, setting initial values based on capacity.
-        8. Estimate outflow height for each water body.
-        9. Leave future reservoirs empty and route their cells as rivers.
+        Map source IDs to consecutive model IDs, locate outlets, and estimate
+        lake outflow parameters. Start built reservoirs at half capacity and
+        lakes at their outlet level. Future reservoirs start empty, with their
+        cells treated as rivers until their construction year.
 
         Returns:
             None.
@@ -521,7 +513,10 @@ class WaterBodies(Module):
         """Route future reservoir cells as rivers.
 
         Keep IDs unchanged so saved states and command areas still match.
-        """
+
+        Returns:
+            None. Updates the grid's active waterbody IDs, outlets, and capacities.
+        """  # noqa: DOC202
         # River cells have ID -1 and use the last (False) entry.
         active_cells: ArrayBool = np.append(self.is_active, False)[
             self.var.all_waterbody_ids
@@ -879,8 +874,12 @@ class WaterBodies(Module):
     def step(self) -> None:
         """Activate reservoirs from January 1 of their construction year.
 
-        Start with the water already in the river, then fill from inflow.
-        """
+        Transfer existing river water into reservoir storage before rebuilding
+        routing connections. Later inflows fill the remaining capacity.
+
+        Returns:
+            None. Updates reservoir storage and routing when a reservoir activates.
+        """  # noqa: DOC202
         if hasattr(self.var, "construction_year"):
             active: ArrayBool = (
                 self.var.construction_year <= self.model.current_time.year

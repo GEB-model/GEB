@@ -1,4 +1,4 @@
-"""Link GDW dams to HydroLAKES lakes and compare their classifications."""
+"""Build lake and reservoir inputs from HydroLAKES and GDW."""
 
 from collections.abc import Hashable
 
@@ -41,24 +41,27 @@ def load_and_enrich_waterbodies(
     region: gpd.GeoDataFrame,
     mode: str,
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
-    """Load lakes, add GDW data, and classify lakes with AMBER dams.
+    """Load HydroLAKES waterbodies and add GDW reservoir data.
 
     Args:
-        data_catalog: Catalog for reading HydroLAKES, GDW, and AMBER.
+        data_catalog: Catalog for reading HydroLAKES and GDW.
         region: Model boundary with a coordinate reference system.
-        mode: 'off' returns no waterbodies. Other modes load all waterbodies;
-            setup_waterbodies applies the lake/reservoir filter later.
+        mode: Waterbody mode: 'on', 'off', 'lakes_only', or 'reservoirs_only'.
+            Only 'off' is applied here; setup_waterbodies filters the other modes.
 
     Returns:
         Waterbody outlines with GDW data, plus each dam's linked lake and any
         differences in their IDs, locations, or lake/reservoir classifications.
-        AMBER dams can promote natural and controlled lakes to reservoirs,
-        retaining HydroLAKES volume (m3) as capacity. Area and discharge use
-        m2 and m3/s.
+        Capacity, area, and discharge use m3, m2, and m3/s.
 
     Raises:
-        ValueError: If waterbody IDs, types, or coordinate systems are invalid.
+        ValueError: If the mode, waterbody IDs, types, or coordinate systems
+            are invalid.
     """  # noqa: DOC502
+    if mode not in ("on", "off", "lakes_only", "reservoirs_only"):
+        raise ValueError(f"Invalid waterbody mode: {mode}")
+    if region.crs is None:
+        raise ValueError("The model region must have a CRS.")
     region = region.to_crs(4326)
     region_shape: BaseGeometry = region.union_all()
     waterbodies: gpd.GeoDataFrame = data_catalog.fetch("hydrolakes").read(
@@ -92,78 +95,7 @@ def load_and_enrich_waterbodies(
         reservoir_shapes=reservoir_shapes,
         region_shape=region_shape,
     )
-    if not waterbodies.empty:
-        # A lake can extend beyond the model boundary, with its dam outside it.
-        amber_points: gpd.GeoDataFrame = data_catalog.fetch("amber_barriers").read(
-            bbox=tuple(waterbodies.to_crs(4326).total_bounds)
-        )
-        waterbodies = promote_lakes_with_amber_dams(waterbodies, amber_points)
     return waterbodies, dam_checks
-
-
-def promote_lakes_with_amber_dams(
-    waterbodies: gpd.GeoDataFrame,
-    amber_points: gpd.GeoDataFrame,
-) -> gpd.GeoDataFrame:
-    """Promote HydroLAKES lakes intersected by AMBER dams to reservoirs.
-
-    Match points inside or on polygon edges, accepting only dams intersecting
-    exactly one waterbody. Several unambiguous dams may identify the same lake.
-    Existing reservoirs retain their classification and capacity. The original
-    HydroLAKES type remains available in hydrolakes_type.
-
-    Args:
-        waterbodies: GDW-enriched waterbodies with volume_total in m3.
-        amber_points: AMBER points with dam_type and a coordinate system.
-
-    Returns:
-        Copied waterbodies with amber_dam_count and amber_changed_to_reservoir
-        fields. Promoted reservoirs retain their lake volume as capacity (m3),
-        because AMBER supplies no reservoir capacity.
-
-    Raises:
-        ValueError: If either coordinate system is missing or waterbody IDs
-            are missing or duplicated.
-    """
-    if waterbodies.crs is None or amber_points.crs is None:
-        raise ValueError("Waterbodies and AMBER points must have a CRS.")
-    if (
-        waterbodies["waterbody_id"].isna().any()
-        or not waterbodies["waterbody_id"].is_unique
-    ):
-        raise ValueError("Waterbody IDs must be present and unique.")
-    waterbodies = waterbodies.copy()
-    dams: gpd.GeoDataFrame = (
-        amber_points.loc[
-            amber_points["dam_type"].str.strip().str.casefold().eq("dam"), ["geometry"]
-        ]
-        .to_crs(waterbodies.crs)
-        .reset_index(drop=True)
-    )
-    # Match against all waterbodies so a shared boundary cannot select a lake
-    # merely because the other waterbody is already a reservoir.
-    matches: gpd.GeoDataFrame = gpd.sjoin(
-        dams,
-        waterbodies[["waterbody_id", "geometry"]],
-        how="inner",
-        predicate="intersects",
-    )
-    matches = matches.loc[~matches.index.duplicated(keep=False)]
-    dam_counts: pd.Series = matches["waterbody_id"].value_counts()
-    waterbodies["amber_dam_count"] = (
-        waterbodies["waterbody_id"].map(dam_counts).fillna(0).astype(np.int32)
-    )
-    # A reservoir needs usable storage; never infer capacity from dam height.
-    use_as_reservoir: pd.Series = (
-        waterbodies["waterbody_type"].eq(LAKE)
-        & waterbodies["hydrolakes_type"].isin((1, 3))
-        & waterbodies["amber_dam_count"].gt(0)
-        & np.isfinite(waterbodies["volume_total"])
-        & waterbodies["volume_total"].gt(0)
-    )
-    waterbodies["amber_changed_to_reservoir"] = use_as_reservoir
-    waterbodies.loc[use_as_reservoir, "waterbody_type"] = RESERVOIR
-    return waterbodies
 
 
 def enrich_waterbodies(
@@ -174,17 +106,9 @@ def enrich_waterbodies(
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
     """Add GDW dam data and missing reservoirs to HydroLAKES.
 
-    Match GDW's hydrolakes_id to waterbody_id first. If that ID is not found,
-    the dam must lie inside or on the edge of exactly one lake. Keep ID matches
-    outside the lake, but flag them for review.
-
-    With linked GDW dams, type-3 lakes become reservoirs only with one matching
-    'Dam' or 'Lake Control Dam', a recognized lake-control flag (including
-    'Maybe'), positive capacity, and no location or ID conflict.
-    Remaining controlled lakes become lakes, including those without GDW
-    matches. Preserve original types in hydrolakes_type.
-    New reservoirs need non-overlapping outlines and positive, finite capacity,
-    area, and discharge.
+    Match by lake ID, then by location. Flag conflicting matches for review.
+    Convert controlled lakes only when one suitable dam has valid capacity
+    and no ID or location conflict. Other controlled lakes remain lakes.
 
     Args:
         waterbodies: HydroLAKES polygons with original types and unique IDs.
@@ -200,8 +124,8 @@ def enrich_waterbodies(
         Volumes use m3, areas use m2, and discharges use m3/s.
 
     Raises:
-        ValueError: If lake IDs are missing or duplicated, a lake type is unknown, or a new ID
-            is already used or too large for int32 rasters.
+        ValueError: If IDs or coordinate systems are missing, IDs are duplicated,
+            a lake type is unknown, or a new ID exceeds the int32 range.
     """
     if not waterbodies["waterbody_type"].isin((1, 2, 3)).all():
         raise ValueError("Unknown or missing HydroLAKES waterbody type.")
@@ -211,6 +135,8 @@ def enrich_waterbodies(
     ):
         raise ValueError("Waterbody IDs must be present and unique.")
 
+    if waterbodies.crs is None or barriers.crs is None:
+        raise ValueError("Waterbodies and GDW dams must have a CRS.")
     waterbodies = waterbodies.copy().reset_index(drop=True)
     # Keep the original type and volume so changes can be checked later.
     waterbodies["hydrolakes_type"] = waterbodies["waterbody_type"].astype("Int64")
@@ -219,7 +145,6 @@ def enrich_waterbodies(
     dam_checks: gpd.GeoDataFrame = (
         barriers.to_crs(waterbodies.crs).copy().reset_index(drop=True)
     )
-    # A missing ID means this barrier has not been linked to a lake.
     dam_checks["waterbody_id"] = pd.Series(pd.NA, index=dam_checks.index, dtype="Int64")
     dam_checks["match_method"] = "unmatched"
     dam_checks["point_outside_lake"] = False
@@ -237,7 +162,6 @@ def enrich_waterbodies(
     ]
     dam_checks.loc[matched_by_id, "match_method"] = "id"
 
-    # Without an ID match, accept only points inside or on the edge of exactly one lake.
     point_matches: gpd.GeoDataFrame = gpd.sjoin(
         dam_checks.loc[~matched_by_id, ["geometry"]],
         waterbodies[["waterbody_id", "geometry"]],
@@ -290,7 +214,6 @@ def enrich_waterbodies(
         elif dam_type == "Dam" and lake_type == 3 and lake_control == "":
             type_check = "controlled_lake_with_dam"
         else:
-            # Keep unclear classifications in the report for review.
             type_check = "review_barrier_type"
         dam_checks.at[row_index, "type_check"] = type_check
 
@@ -299,7 +222,6 @@ def enrich_waterbodies(
     waterbodies["gdw_count"] = (
         waterbodies["waterbody_id"].map(dam_counts).fillna(0).astype("int32")
     )
-    # Keep this warning separate from the final lake or reservoir decision.
     conflicting_lake_ids: pd.Series = dam_checks.loc[
         dam_checks["type_check"].eq("lake_control_differs"), "waterbody_id"
     ]
@@ -353,7 +275,6 @@ def enrich_waterbodies(
         waterbodies.loc[use_as_reservoir, "volume_total"] = waterbodies.loc[
             use_as_reservoir, "gdw_capacity_m3"
         ]
-    # All controlled lakes not approved above use lake behavior.
     waterbodies.loc[waterbodies["waterbody_type"].eq(3), "waterbody_type"] = LAKE
     waterbodies["waterbody_type"] = waterbodies["waterbody_type"].astype(np.int32)
     dam_checks["changed_to_reservoir"] = dam_checks["waterbody_id"].isin(reservoir_ids)
@@ -378,10 +299,9 @@ def _add_missing_gdw_reservoirs(
 ) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
     """Add GDW reservoirs missing from HydroLAKES.
 
-    Require an unmatched dam with positive, finite area, capacity, and discharge.
-    Points outside GDW outlines are handled as weirs instead.
-    Outlines must not touch another waterbody.
-    Skip locks and lake-control dams. Record why each skipped dam was left out.
+    Require an unmatched dam inside a GDW outline, with positive, finite area,
+    capacity, and discharge. Outlines must not touch an existing waterbody.
+    Skip locks and lake-control dams, and record why each dam was left out.
 
     Args:
         waterbodies: HydroLAKES waterbodies with GDW attributes.
@@ -392,13 +312,13 @@ def _add_missing_gdw_reservoirs(
     Returns:
         Waterbodies with new reservoirs, plus the dam table showing which
         reservoirs were added or why they were skipped.
-        New IDs are 2,000,000 plus GDW ID. Area, volume, and discharge use m2, m3, and m3/s.
+        New IDs are 2,000,000 plus GDW ID. Area, volume, and discharge use
+        m2, m3, and m3/s.
 
     Raises:
         ValueError: If a new ID is already used or is too large for int32 rasters.
     """
     reservoir_shapes = reservoir_shapes.to_crs(waterbodies.crs)
-    # Check all polygons, including their edges.
     points_in_polygons: np.ndarray = reservoir_shapes.sindex.query(
         dam_checks.geometry, predicate="intersects"
     )[0]
@@ -409,10 +329,10 @@ def _add_missing_gdw_reservoirs(
     dam_checks["addition_reason"] = "already_matched"
     used_ids: set[int] = set(waterbodies["waterbody_id"])
     row_index: int
-    # isna() selects barriers with no linked lake. Adding linked ones would duplicate it.
+    # Only unmatched dams can add a reservoir without duplicating a waterbody.
     for row_index in dam_checks.index[dam_checks["waterbody_id"].isna()]:
         if not dam_checks.at[row_index, "inside_gdw_polygon"]:
-            dam_checks.at[row_index, "addition_reason"] = "weir"
+            dam_checks.at[row_index, "addition_reason"] = "outside_gdw_polygon"
             continue
         gdw_id: int = int(dam_checks.at[row_index, "gdw_id"])
         reservoir_shape: BaseGeometry = (
@@ -437,7 +357,6 @@ def _add_missing_gdw_reservoirs(
         if dam_type != "Dam" or lake_control in ("Yes", "Maybe", "Enlarged"):
             dam_checks.at[row_index, "addition_reason"] = "review_barrier_type"
             continue
-        # Routing needs a known, positive capacity, area, and average discharge.
         reservoir_values: pd.Series = dam_checks.loc[
             row_index, ["capacity_m3", "area_m2", "average_discharge_m3_per_s"]
         ].astype(float)
@@ -497,13 +416,16 @@ def snap_waterbody_points(
     Args:
         waterbodies: Reservoir data and geometry, updated in place.
         waterbody_id: Waterbody IDs on the model grid, updated in place.
-        rivers: River segments used by the existing snapping method.
+        rivers: River segments with model-cell coordinates and upstream areas.
         upstream_area_grid: Model grid drainage area (m2).
         upstream_area_subgrid: Original drainage area (m2).
 
+    Returns:
+        None. Updates the waterbody geometries and ID grid in place.
+
     Raises:
         ValueError: If snapping fails or the river cell already has a waterbody.
-    """
+    """  # noqa: DOC202
     row_index: int
     reservoir: pd.Series
     for row_index, reservoir in waterbodies.loc[

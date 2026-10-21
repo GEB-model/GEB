@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 from zipfile import ZipFile
 
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 
 from geb.workflows.io import fetch_and_save, write_geom
@@ -42,7 +43,10 @@ def prepare_gdw(data: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     if (
         data["gdw_id"].isna().any()
         or not data["gdw_id"].is_unique
+        or not pd.api.types.is_numeric_dtype(data["gdw_id"])
+        or not np.isfinite(data["gdw_id"]).all()
         or (data["gdw_id"] <= 0).any()
+        or (data["gdw_id"] % 1 != 0).any()
     ):
         raise ValueError("GDW IDs must be unique positive integers.")
 

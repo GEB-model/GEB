@@ -44,9 +44,9 @@ Lakes and reservoirs without a known construction year are always active.
 
 ## Data and setup
 
-GEB uses HydroLAKES for lake outlines, Global Dam Watch (GDW) for dam data, and
-AMBER for European barriers. These data help decide which waterbodies are lakes
-and which are reservoirs.
+GEB uses HydroLAKES for lake outlines and Global Dam Watch (GDW) for dam and
+reservoir data. GDW records help classify controlled lakes and provide reservoir
+construction years.
 
 See [Waterbody setup](../getting_started/build/waterbodies.md) for info on how the waterbodies are build. 
 

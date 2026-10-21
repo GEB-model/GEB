@@ -1,4 +1,4 @@
-"""Tests for GDW reservoir outlines and weir classification."""
+"""Tests for GDW reservoir matching and classification."""
 
 import geopandas as gpd
 import numpy as np
@@ -75,7 +75,7 @@ def test_add_reservoir(capacity: float, has_polygon: bool) -> None:
     result, checks = _add_missing_gdw_reservoirs(waterbodies, dams, outlines)
     if not has_polygon:
         assert len(result) == 1
-        assert checks.iloc[0].addition_reason == "weir"
+        assert checks.iloc[0].addition_reason == "outside_gdw_polygon"
     elif capacity == 0:
         assert len(result) == 1
         assert checks.iloc[0].addition_reason == "missing_model_values"
@@ -161,7 +161,7 @@ def test_snap_reservoir(case: str) -> None:
 def test_controlled_lake_conversion(
     dam_type: str, lake_control: str | None, case: str, volume_dtype: str
 ) -> None:
-    """Convert recognized controlled lakes while retaining matching safeguards.
+    """Classify controlled lakes from dam type, capacity, and location.
 
     Args:
         dam_type: GDW barrier classification.

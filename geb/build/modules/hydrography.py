@@ -1594,14 +1594,9 @@ class Hydrography(BuildModelBase):
     ) -> None:
         """Set up waterbodies, reservoirs, and command areas.
 
-        Configure waterbodies and their associated command areas for the model grid.
-        GDW adds dam data and missing reservoirs. Unmatched GDW points remain available in the diagnostic table. It flags differences
-        between its dam types and HydroLAKES lake/reservoir classifications.
-        AMBER dams intersecting one lake polygon promote natural or controlled
-        lakes to reservoirs, using positive HydroLAKES volume as capacity (m3).
-        This includes rasterizing lake and reservoir identifiers, optionally
-        assigning command areas from preset data or by deriving them from the river
-        routing network, and updating reservoir storage capacities.
+        Combine HydroLAKES with Global Dam Watch (GDW) reservoir data.
+        Save waterbody IDs, capacities, construction years, and
+        command areas on the model grid. GDW matching results are saved for review.
 
         Args:
             mode: Whether to enable waterbodies ("on"), disable them ("off"),
@@ -1654,7 +1649,7 @@ class Hydrography(BuildModelBase):
         )
         if mode != "off":
             self.set_geom(dam_checks, name="waterbodies/gdw_checks")
-            checks_path: Path = self.root / "reports" / "waterbodies" / "gdw_checks.csv"
+            checks_path: Path = self.report_dir / "waterbodies" / "gdw_checks.csv"
             checks_path.parent.mkdir(parents=True, exist_ok=True)
             dam_checks.drop(columns="geometry").to_csv(checks_path, index=False)
             self.logger.info(
