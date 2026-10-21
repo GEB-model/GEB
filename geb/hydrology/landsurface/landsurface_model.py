@@ -1097,7 +1097,7 @@ class LandSurface(Module):
     """Land surface module for GEB."""
 
     var: LandSurfaceVariables
-    delta_z: TwoDArrayFloat32
+    _delta_z: TwoDArrayFloat32 | None
 
     def __init__(self, model: GEBModel, hydrology: Hydrology) -> None:
         """Initialize the potential evaporation module.
@@ -1111,9 +1111,32 @@ class LandSurface(Module):
 
         self.HRU = hydrology.HRU
         self.grid = hydrology.grid
+        self._delta_z = None
 
         if self.model.in_spinup:
             self.spinup()
+
+    @property
+    def delta_z(self) -> TwoDArrayFloat32:
+        """Get pre-computed soil layer interface distances.
+
+        Returns:
+            Two-dimensional float32 array of shape (num_cells, N_SOIL_LAYERS - 1)
+            representing interface distance between adjacent soil layers (meters).
+        """
+        if self._delta_z is None:
+            self._delta_z = np.ascontiguousarray(
+                (
+                    self.HRU.var.soil_layer_height_m[:, :-1]
+                    + self.HRU.var.soil_layer_height_m[:, 1:]
+                )
+                / 2
+            )
+        return self._delta_z
+
+    @delta_z.setter
+    def delta_z(self, value: TwoDArrayFloat32) -> None:
+        self._delta_z = value
 
     @property
     def name(self) -> str:
