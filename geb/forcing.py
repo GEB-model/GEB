@@ -874,6 +874,7 @@ class Forcing(Module):
             model.files["other"]["climate/elevation_forcing"], ndim=2
         )
         self._initialize_loaders()
+        self.time_offset: timedelta | None = None
 
     def _initialize_loaders(self) -> None:
         """Initialize loaders."""
@@ -984,7 +985,26 @@ class Forcing(Module):
         """
         if dt is None:
             dt = self.model.current_time + timedelta(hours=1)
+            if self.time_offset is not None:
+                dt = dt - self.time_offset
         return self[name].load(dt)
+
+    def set_time_offset(self, offset: timedelta) -> None:
+        """Shift all subsequent default-dt loads back in time by `offset`.
+
+        Used by the government agent's hypothetical adaptation (see
+        Government.hypothetical_implementation) so that the alternate-universe
+        simulation replays recent past weather instead of the real future
+        forcing data
+
+        Args:
+            offset: how far back in time to shift default-dt loads.
+        """
+        self.time_offset = offset
+
+    def unset_time_offset(self) -> None:
+        """Clear a time offset set by set_time_offset, restoring normal behavior."""
+        self.time_offset = None
 
     @property
     def loaders(self) -> dict[str, CO2 | ForcingLoader]:

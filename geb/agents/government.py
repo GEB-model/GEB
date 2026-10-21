@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import csv
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -309,7 +309,7 @@ class Government(AgentBaseClass):
             reforestation_cost_per_m2 = self.config["adaptation_costs"].get(
                 "reforestation_cost_per_m2"
             )
-            available_budget = self.config["adaptation_costs"].get("initial_budget")
+            available_budget = self.config["adaptation_costs"].get("budget")
             affordable_area_m2 = (
                 available_budget / reforestation_cost_per_m2
                 if (suitable_area_m2 > 0 and reforestation_cost_per_m2)
@@ -603,7 +603,7 @@ class Government(AgentBaseClass):
                 "Supported modes are 'cba' and 'pathway'."
             )
 
-        budget = self.config["adaptation_costs"].get("initial_budget")
+        budget = self.config["adaptation_costs"].get("budget")
 
         EAD: float
         raw_EAD: float
@@ -708,6 +708,9 @@ class Government(AgentBaseClass):
         """
 
         def do_function() -> None:
+            # Replay the last n_timesteps of actual weather instead of the
+            # real future forcing data
+            self.model.forcing.set_time_offset(timedelta(days=n_timesteps))
             self.apply_adaptation(budget, measure)
 
         def collect_function() -> dict[str, Any]:
@@ -765,6 +768,8 @@ class Government(AgentBaseClass):
             do_function=do_function,
             collect_function=collect_function,
         )
+
+        self.model.forcing.unset_time_offset()
 
         self.cumulative_reforested_area_m2 = (
             cumulative_reforested_area_m2_before_hypothetical
@@ -1432,8 +1437,26 @@ class Government(AgentBaseClass):
             )
 
         if adaptation_measure_to_implement == "risk_communication":
+            households = self.agents.households
+
+            # same at-risk definition as floodproofing: households in buildings
+            # inside the highest return period flood map (1/1000)
+            if "flooded" not in households.buildings.columns:
+                households.update_building_attributes()
+
+            flooded_building_ids = set(
+                households.buildings.loc[
+                    households.buildings["flooded"] == True, "id"
+                ].astype(int)
+            )
+            households_at_risk = np.where(
+                pd.Series(households.var.building_id_of_household.data).isin(
+                    flooded_building_ids
+                )
+            )[0]
+
             n_affordable = int(budget / communication_cost_per_household)
-            share = min(n_affordable / self.agents.households.n, 1.0)
+            n_to_communicate = min(n_affordable, len(households_at_risk))
             base_seed = self.config.get("risk_communication", {}).get("seed", 42)
 
             rc_config = self.config.get("risk_communication", {})
@@ -1442,7 +1465,11 @@ class Government(AgentBaseClass):
             )
 
             rng = np.random.default_rng(base_seed + self.model.current_time.year)
-            eligible_mask = rng.random(self.agents.households.n) < share
+            selected_households = rng.choice(
+                households_at_risk, size=n_to_communicate, replace=False
+            )
+            eligible_mask = np.zeros(households.n, dtype=bool)
+            eligible_mask[selected_households] = True
 
             # Uses the decay-aware variant so the boost survives until the
             # household's next decision moment and fades out over subsequent
@@ -1455,10 +1482,10 @@ class Government(AgentBaseClass):
             )
 
             self.model.logger.info(
-                "Government applied risk communication to %d of %d households (%.1f%%).",
-                eligible_mask.sum(),
-                self.agents.households.n,
-                100.0 * eligible_mask.mean(),
+                "Government applied risk communication to %d of %d households at risk (1/%d flood zone).",
+                n_to_communicate,
+                len(households_at_risk),
+                households.return_periods.max(),
             )
 
         if adaptation_measure_to_implement == "reforestation":

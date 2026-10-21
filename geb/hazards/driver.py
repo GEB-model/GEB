@@ -199,62 +199,66 @@ class HazardDriver(Module):
                                 f"Flood detected at {self.model.current_time}, discharge = {discharge_location:.2f} m3/s"
                             )
 
-                            start_time = self.model.current_time - timedelta(
-                                days=5
-                            )  # Here we assume a flood duration of 10 days
-                            end_time = self.model.current_time + timedelta(days=5)
+                            # do not save the event in a hypothetical universe
+                            if self.model.multiverse_name is None:
+                                start_time = self.model.current_time - timedelta(
+                                    days=5
+                                )  # Here we assume a flood duration of 10 days
+                                end_time = self.model.current_time + timedelta(days=5)
 
-                            new_event_mem = {
-                                "start_time": start_time,
-                                "end_time": end_time,
-                            }
+                                new_event_mem = {
+                                    "start_time": start_time,
+                                    "end_time": end_time,
+                                }
 
-                            new_event_yaml = {
-                                "start_time": start_time,
-                                "end_time": end_time,
-                            }
+                                new_event_yaml = {
+                                    "start_time": start_time,
+                                    "end_time": end_time,
+                                }
 
-                            hazards_cfg = self.model.config.setdefault("hazards", {})
-                            floods_cfg = hazards_cfg.setdefault("floods", {})
-                            events_mem = floods_cfg.setdefault("events", [])
+                                hazards_cfg = self.model.config.setdefault(
+                                    "hazards", {}
+                                )
+                                floods_cfg = hazards_cfg.setdefault("floods", {})
+                                events_mem = floods_cfg.setdefault("events", [])
 
-                            event_exists_mem = any(
-                                e["start_time"] == new_event_mem["start_time"]
-                                and e["end_time"] == new_event_mem["end_time"]
-                                for e in events_mem
-                            )
+                                event_exists_mem = any(
+                                    e["start_time"] == new_event_mem["start_time"]
+                                    and e["end_time"] == new_event_mem["end_time"]
+                                    for e in events_mem
+                                )
 
-                            if not event_exists_mem:
-                                events_mem.append(new_event_mem)
-                                print("Flood event added to in-memory config.")
-                            else:
-                                print("Flood event already in in-memory config.")
+                                if not event_exists_mem:
+                                    events_mem.append(new_event_mem)
+                                    print("Flood event added to in-memory config.")
+                                else:
+                                    print("Flood event already in in-memory config.")
 
-                            config_path = Path.cwd() / "model.yml"
+                                config_path = Path.cwd() / "model.yml"
 
-                            with open(config_path, "r") as f:
-                                config_yaml = yaml.safe_load(f) or {}
+                                with open(config_path, "r") as f:
+                                    config_yaml = yaml.safe_load(f) or {}
 
-                            hazards_yaml = config_yaml.setdefault("hazards", {})
-                            floods_yaml = hazards_yaml.setdefault("floods", {})
-                            events_yaml = floods_yaml.setdefault("events", [])
+                                hazards_yaml = config_yaml.setdefault("hazards", {})
+                                floods_yaml = hazards_yaml.setdefault("floods", {})
+                                events_yaml = floods_yaml.setdefault("events", [])
 
-                            event_exists_yaml = any(
-                                e.get("start_time") == new_event_yaml["start_time"]
-                                and e.get("end_time") == new_event_yaml["end_time"]
-                                for e in events_yaml
-                            )
+                                event_exists_yaml = any(
+                                    e.get("start_time") == new_event_yaml["start_time"]
+                                    and e.get("end_time") == new_event_yaml["end_time"]
+                                    for e in events_yaml
+                                )
 
-                            if not event_exists_yaml:
-                                events_yaml.append(new_event_yaml)
+                                if not event_exists_yaml:
+                                    events_yaml.append(new_event_yaml)
 
-                                tmp_path = config_path.with_suffix(".tmp")
-                                with open(tmp_path, "w") as f:
-                                    yaml.safe_dump(config_yaml, f, sort_keys=False)
+                                    tmp_path = config_path.with_suffix(".tmp")
+                                    with open(tmp_path, "w") as f:
+                                        yaml.safe_dump(config_yaml, f, sort_keys=False)
 
-                                tmp_path.replace(config_path)
-                            else:
-                                print("Flood event already in model.yml.")
+                                    tmp_path.replace(config_path)
+                                else:
+                                    print("Flood event already in model.yml.")
 
                             self.next_detection_time = (
                                 self.model.current_time + timedelta(days=10)

@@ -102,7 +102,7 @@ agent_settings:
       equity: 0.33
       ecosystem_health: 0.33
     adaptation_costs:
-      initial_budget: 4560000
+      budget: 4560000
       floodproofing_cost_per_household: 2000
       reforestation_cost_per_m2: 10000
       communication_cost_per_household: 1000 
@@ -167,7 +167,7 @@ agent_settings:
       interest_rate: 0.2
       loan_duration: 2
       loss_threshold: 25
-    return_fraction: 0.4842507612277536
+    return_fraction: 0.5
     social_network:
       radius: 5000 # m
       size: 10 # nr of neighbors
@@ -229,7 +229,7 @@ agent_settings:
   reservoir_operators:
     ruleset: no-adaptation
     equal_abstraction: false
-    reservoir_M_factor: 0.269206612958037
+    reservoir_M_factor: 0.1
   sensitivity_analysis:
     risk_aversion_factor: 1
     discount_rate_factor: 1
@@ -261,9 +261,9 @@ report:
   _outflow_points: true
 
 parameters:
-  mannings_n_multiplier: 1.3301492077945163
-  crop_factor_multiplier: 1.8165784105807516
-  saturated_hydraulic_conductivity_multiplier: 1.6450687614037252
+  mannings_n_multiplier: 1.0
+  crop_factor_multiplier: 1.0
+  saturated_hydraulic_conductivity_multiplier: 1.0
   reservoir_release_factor: 0.1
   lake_outflow_multiplier: 1.0
   interflow_multiplier: 1.0

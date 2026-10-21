@@ -700,7 +700,7 @@ class Households(AgentBaseClass):
         self.var.years_since_last_flood.data += 1
 
         # Here we update flood risk perception based on actual floods that have happened and whether a household was flooded (yes/no)
-        if self.config["adapt_to_actual_floods"]:
+        if self.config["adapt_to_actual_floods"] and self.model.multiverse_name is None:
             # Find the flood event that corresponds to the current time (in the model)
             for event in self.flood_events:
                 end: datetime = event["end_time"]
